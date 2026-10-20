@@ -33,13 +33,15 @@ import {
   readExecutionState,
   registerCatalogEntity,
   resolveHarnessDir,
+  resolveProcessHarnessDir,
 } from '@mstar-harness/engine'
 import type { ExecutionCaller, ExecutionContext, ExecutionSessionRef } from '@mstar-harness/engine'
 import { readAgentFlow } from '../src/gates/agent-flow.ts'
 import { readWorkflowSessionBinding, updateWorkflowSessionBinding } from '../src/engine-status-store.ts'
 import type { WorkflowSessionBinding } from '../src/engine-status-store.ts'
 import { clearExecutionBinding, resolveExecutionLedgerTarget } from '../src/gates/workflow-selection.ts'
-import { executionBindingRootOf, resetExecutionBindingRootsForTests } from '../src/gates/execution-binding-roots.ts'
+import { adoptionRecoveryText } from '../src/gates/native-commands.ts'
+import { executionBindingRootOf, recordExecutionBindingRoot, resetExecutionBindingRootsForTests } from '../src/gates/execution-binding-roots.ts'
 import { awaitWorkflowLedgerIdle, setWorkflowLedgerLogger } from '../src/gates/workflow-ledger.ts'
 import { bootApp, type BootResult } from './harness.ts'
 
@@ -677,7 +679,7 @@ describe('native binding adoption — a native plan bind persists the executionB
     // The adopted reference is the engine's own mint — the canonical C1
     // binding naming the carrying session, not a dsh-invented record.
     expect(binding?.executionBinding?.version).toBe(1)
-    expect(binding?.executionBinding?.harnessRoot).toBe(app.harnessDir)
+    expect(binding?.executionBinding?.harnessRoot).toBe(realpathSync(app.harnessDir))
     expect(binding?.executionBinding?.session.workflowId).toBe(WORKFLOW_ID)
     expect(binding?.executionBinding?.session.sessionId).toBe(CHILD_ID)
     expect(binding?.executionBinding?.session.role).toBe('coordinator')
@@ -1246,18 +1248,28 @@ describe('native binding adoption — a native plan bind persists the executionB
     expect(refused.committed).toBe(true)
     // The refusal carries what its own recovery needs, in the input shapes the
     // caller hands straight back.
-    const data = refused.data as { resumeRef?: string; workflowId?: string; harness?: string } | undefined
+    const data = refused.data as { resumeRef?: string; workflowId?: string; harness?: string; recordedCwd?: string } | undefined
     expect(typeof data?.resumeRef).toBe('string')
     expect(data?.workflowId).toBe(WORKFLOW_ID)
+    // `harness` is the root the engine BIND committed in, not a re-derived
+    // adoption root.
     expect(data?.harness).toBe(harnessB)
+    // The durable key is (session, workspace), so the refusal must carry the
+    // workspace the session's records are actually keyed to — otherwise its
+    // own "run from the recorded workspace" recovery is undiscoverable.
+    expect(typeof data?.recordedCwd).toBe('string')
+    expect(data?.recordedCwd).toBe(recordedWorkspace)
     const carried = decodeExecutionSessionRef(data!.resumeRef!)
     // The carried value IS the engine-minted reference, not a fabrication.
     expect(state.data.workflows[0]!.coordinator).toEqual(carried)
-    // The recovery text names the reference it carries and the same harness.
+    // The recovery text names the reference it carries, the same harness, and
+    // the recorded workspace it is to be run from.
     const recovery = String((refused.details as { recovery?: string } | undefined)?.recovery ?? '')
     expect(recovery).toContain('BOUND')
     expect(recovery).toContain('`data.resumeRef`')
     expect(recovery).toContain('SAME `harness`')
+    expect(recovery).toContain('`data.recordedCwd`')
+    expect(recovery).toContain(recordedWorkspace)
     // Nothing was adopted for the CURRENT workspace (the store refused that
     // key), which is why the reference exists nowhere but this refusal.
     expect(executionBindingRootOf(CHILD_ID, app.root)).toBeUndefined()
@@ -1266,24 +1278,25 @@ describe('native binding adoption — a native plan bind persists the executionB
       reason: 'cwd-mismatch',
     })
 
-    // The advertised recovery, performed with the carried values only: the
-    // carried `resumeRef` + the same `harness`, from the workspace the durable
-    // selection is recorded under. It re-adopts the slot there and records the
-    // receipt for that root.
-    const recorded = agentOf(CHILD_ID, recordedWorkspace)
+    // The advertised recovery, performed with the CARRIED values only: the
+    // carried `resumeRef` + the same `harness`, from the recorded workspace
+    // the refusal names (derived from the refusal, not from this test's own
+    // bookkeeping). It re-adopts the slot there and records the receipt for
+    // that root.
+    const recorded = agentOf(CHILD_ID, data!.recordedCwd!)
     const recovered = envelopeOf(await run(app.ctx, 'mstar_plan_bind', recorded, {
       resumeRef: data!.resumeRef!,
       harness: data!.harness!,
     }))
     expect(recovered.status).toBe('ok')
-    const binding = storedBinding(harnessB, recordedWorkspace)
+    const binding = storedBinding(harnessB, data!.recordedCwd!)
     expect(binding?.executionBinding?.session).toEqual(carried)
     expect(binding?.executionBinding?.harnessRoot).toBe(harnessB)
     // The user selection and exclusion floor the store keyed to that workspace
     // survive the adoption unchanged.
     expect(binding?.selectedWorkflowId).toBe(WORKFLOW_ID)
     expect(binding?.excludedBeforeSeq).toBe(4)
-    expect(executionBindingRootOf(CHILD_ID, recordedWorkspace)).toBe(harnessB)
+    expect(executionBindingRootOf(CHILD_ID, data!.recordedCwd!)).toBe(harnessB)
   })
 
   it('keeps the workspace-root path unchanged: a bind without an explicit harness attributes and clears through the workspace harness', async () => {
@@ -1300,7 +1313,7 @@ describe('native binding adoption — a native plan bind persists the executionB
 
     const target = await resolveExecutionLedgerTarget(CHILD_ID, app.root)
     expect(target?.workflowId).toBe(WORKFLOW_ID)
-    expect(target?.harnessDir).toBe(app.harnessDir)
+    expect(target?.harnessDir).toBe(realpathSync(app.harnessDir))
     expect(target?.workflowDir !== undefined &&
       realpathSync(target.workflowDir) === realpathSync(join(app.harnessDir, 'workflows', WORKFLOW_ID))).toBe(true)
 
@@ -1309,6 +1322,74 @@ describe('native binding adoption — a native plan bind persists the executionB
     expect(storedBinding(app.harnessDir, app.root)?.executionBinding ?? null).toBeNull()
     expect(await resolveExecutionLedgerTarget(CHILD_ID, app.root)).toBeNull()
   })
+
+  it('adopts an implicit-harness bind from a SUBDIRECTORY session in the root the engine bound in', () => withoutHarnessEnv(async () => {
+    // REGRESSION: the adoption re-derived its target from the plugin's
+    // workspace-only probe, whose boundary is the session cwd itself. For a
+    // session whose cwd is a SUBDIRECTORY of the repository that declares the
+    // control harness, that probe answers null while the shared admission
+    // (git top-level / main worktree) answers the parent root. The engine bind
+    // has already committed THERE, so the old branch answered a bare
+    // post-commit `binding.no-harness` telling the caller to re-run a bind the
+    // engine refuses (a live ACTIVE holder) — no supported way out.
+    const app = await bootedWithFixture({ harnessDir: null })
+    const subdirectory = join(app.root, 'packages', 'app')
+    await mkdir(subdirectory, { recursive: true })
+    // The premise: the plugin probe answers null for this workspace…
+    expect(resolveHarnessDir(subdirectory, { workspaceRoot: subdirectory })).toBeNull()
+    // …while the shared admission's own resolution answers the root the
+    // repository declares (git top level → `.mstarc` → `harness/`).
+    const engineRoot = resolveProcessHarnessDir(subdirectory)!
+    expect(engineRoot).toBe(realpathSync(app.harnessDir))
+
+    const child = agentOf(CHILD_ID, subdirectory)
+    const bound = envelopeOf(await run(app.ctx, 'mstar_plan_bind', child, {
+      execution: true,
+      coordinator: true,
+      workflow: WORKFLOW_ID,
+    }))
+    // The code first: the pre-fix refusal names this exact branch.
+    expect(bound.code).not.toBe('binding.no-harness')
+    expect(bound.status).toBe('ok')
+    // The durable slot and the adoption receipt both name the engine's root,
+    // keyed by the session's own workspace.
+    const binding = storedBinding(app.harnessDir, subdirectory)
+    expect(binding?.executionBinding?.harnessRoot).toBe(engineRoot)
+    expect(binding?.executionBinding?.session.sessionId).toBe(CHILD_ID)
+    expect(executionBindingRootOf(CHILD_ID, subdirectory)).toBe(engineRoot)
+    // The seat the engine bound and the slot the adoption wrote are one store.
+    const state = await readExecutionState({ harnessDir: app.harnessDir })
+    expect(state.data.workflows[0]?.coordinator?.sessionId).toBe(CHILD_ID)
+  }))
+
+  it('adopts an implicit-harness bind in the ENGINE bind root even when the workspace probes a NESTED harness', () => withoutHarnessEnv(async () => {
+    // REGRESSION: when both probes resolve, the plugin's workspace probe
+    // can answer a NESTED harness while the shared admission answers the
+    // repository root (a linked worktree, or a workspace declaring its own
+    // `.mstar`). The adoption used to target the probe's root, so its engine
+    // resume failed and `data.harness` named the WRONG store. The recorded
+    // adoption root must be the root the engine bind committed in.
+    const app = await bootedWithFixture({ harnessDir: null })
+    const nested = join(app.root, 'nested')
+    await mkdir(join(nested, '.mstar'), { recursive: true })
+    // Both resolutions answer, and they disagree — the divergence premise.
+    expect(resolveHarnessDir(nested, { workspaceRoot: nested })).toBe(join(nested, '.mstar'))
+    const engineRoot = resolveProcessHarnessDir(nested)!
+    expect(engineRoot).toBe(realpathSync(app.harnessDir))
+    expect(engineRoot).not.toBe(join(nested, '.mstar'))
+
+    const child = agentOf(CHILD_ID, nested)
+    const bound = envelopeOf(await run(app.ctx, 'mstar_plan_bind', child, {
+      execution: true,
+      coordinator: true,
+      workflow: WORKFLOW_ID,
+    }))
+    expect(bound.status).toBe('ok')
+    // The recorded harness is the engine's bind root, never the nested probe.
+    const binding = storedBinding(app.harnessDir, nested)
+    expect(binding?.executionBinding?.harnessRoot).toBe(engineRoot)
+    expect(executionBindingRootOf(CHILD_ID, nested)).toBe(engineRoot)
+  }))
 })
 
 // ---------------------------------------------------------------------------
@@ -1416,5 +1497,82 @@ describe('native execution clear — the replacement reachability for clearExecu
     const details = refused.details as { recovery?: string; helpRoute?: string } | undefined
     expect(typeof details?.recovery).toBe('string')
     expect((details?.recovery ?? '').length).toBeGreaterThan(0)
+  })
+
+  it('carries the recorded workspace in the store refusal when this session is keyed to another cwd', async () => {
+    // REGRESSION: the clear's store refusal used to say "the durable binding
+    // record must be readable and writable for this session and its exact
+    // cwd" — a key the caller cannot see. The durable record IS keyed to
+    // another workspace, so the refusal now carries that workspace and names
+    // it in the recovery.
+    const app = await bootedWithFixture()
+    const rootB = await mkdtemp(join(tmpdir(), 'native-commands-harness-b-'))
+    roots.push(rootB)
+    const harnessB = join(rootB, '.mstar')
+    const recordedWorkspace = await mkdtemp(join(tmpdir(), 'native-commands-workspace-'))
+    roots.push(recordedWorkspace)
+    await seedUnboundWorkflow(harnessB, CHILD_ID)
+    // A durable record for this session exists, keyed to another workspace…
+    expect(updateWorkflowSessionBinding(harnessB, CHILD_ID, recordedWorkspace, {
+      selectedWorkflowId: WORKFLOW_ID,
+      excludedBeforeSeq: 2,
+    }).kind).toBe('written')
+    // …and the in-process receipt points the clear at that store for the
+    // CURRENT workspace, so the store refuses the key it is asked for.
+    recordExecutionBindingRoot(CHILD_ID, app.root, harnessB)
+
+    const refused = envelopeOf(await run(app.ctx, 'mstar_execution_clear', agentOf(CHILD_ID, app.root), {}))
+    expect(refused.status).toBe('refused')
+    expect(refused.code).toBe('execution.clear.store-refused')
+    expect(refused.data).toEqual({ recordedCwd: recordedWorkspace })
+    const recovery = String((refused.details as { recovery?: string } | undefined)?.recovery ?? '')
+    expect(recovery).toContain('`data.recordedCwd`')
+    expect(recovery).toContain(recordedWorkspace)
+    // Nothing was cleared: the record at the recorded workspace is untouched.
+    expect(storedBinding(harnessB, recordedWorkspace)?.executionBinding ?? null).toBeNull()
+  })
+})
+
+// ---------------------------------------------------------------------------
+// (g) The stage of a POST-COMMIT adoption failure decides the recovery: an
+// engine-resume refusal rejects the very reference a resume re-bind would
+// carry, so promising re-adoption there advertises a loop. The deterministic
+// trigger for the slot arm is the public regression above; the engine-resume
+// arm has no public trigger (the reference was minted by the bind that just
+// succeeded), so the pure selection is asserted directly.
+// ---------------------------------------------------------------------------
+
+describe('post-commit adoption recovery — the failing stage selects the route', () => {
+  it('does not promise a resume re-bind after the ENGINE resume refused the reference', () => {
+    const recovery = adoptionRecoveryText('resume', 'store.stale-epoch')
+    // The engine refused this very reference: the recovery must not instruct
+    // the caller to re-run the resume re-bind it rejected, nor promise that
+    // that re-bind re-adopts the slot.
+    expect(recovery).not.toContain('The resume re-adopts the binding slot')
+    expect(recovery).not.toContain('re-run the native bind as a resume carrying')
+    // The seat is bound and the slot was not written…
+    expect(recovery).toContain('BOUND')
+    expect(recovery).toContain('NOT written')
+    // …and the actual cause plus the engine's own coordinator recovery route
+    // are named.
+    expect(recovery).toContain('store.stale-epoch')
+    expect(recovery).toContain('mstar session recover')
+    expect(recovery).toContain('--prior-session')
+  })
+
+  it('keeps the resume re-bind as the recovery when only the durable slot write failed', () => {
+    const recovery = adoptionRecoveryText('durable-slot', 'store.authority-unreadable')
+    expect(recovery).toContain('`data.resumeRef` as `resumeRef`')
+    expect(recovery).toContain('SAME `harness`')
+    expect(recovery).toContain('re-adopts')
+    // Without a recorded-workspace fact the recovery only describes the
+    // condition (there is no `data.recordedCwd` to point at).
+    expect(recovery).not.toContain('`data.recordedCwd`')
+  })
+
+  it('names the recorded workspace in the slot-write recovery when the store answered cwd-mismatch', () => {
+    const recovery = adoptionRecoveryText('durable-slot', 'store.authority-unreadable', '/recorded/workspace')
+    expect(recovery).toContain('`data.recordedCwd`')
+    expect(recovery).toContain('/recorded/workspace')
   })
 })

@@ -43,11 +43,17 @@
  * removed execution-session command enforced, restored on this surface (the
  * engine has no leaf concept, so this dsh-side check is the sole enforcement).
  */
-import { resolve } from 'node:path'
 import { type Context } from '@deepseek-ai/cordis'
 import { defineTool } from '@deepseek-ai/dsh-tools'
 import type { ToolExecution } from '@deepseek-ai/dsh-tools'
-import { encodeExecutionSessionRef, executionContextFor, resumeExecutionSession } from '@mstar-harness/engine'
+import {
+  decodeExecutionSessionRef,
+  encodeExecutionSessionRef,
+  executionContextFor,
+  readDshSessionBinding,
+  resolveProcessHarnessDir,
+  resumeExecutionSession,
+} from '@mstar-harness/engine'
 import type { ExecutionSessionRef } from '@mstar-harness/engine'
 import { executeCommand, getCommandDefinitions, getCommandSchemas, refusalEnvelope } from '@mstar-harness/commands'
 import type {
@@ -406,29 +412,71 @@ function bindReceiptRefOf(envelope: CommandEnvelope): ExecutionSessionRef | unde
 }
 
 /**
- * The facts a POST-COMMIT adoption refusal must carry for its own recovery to
- * be performable: the engine-minted session reference, in the wire shape the
- * bind accepts straight back as `resumeRef`, plus the workflow it names and the
- * control root the adoption attempted (the `harness` to pass back). This is
- * exactly the path where the durable slot was NOT written, so the reference
- * exists nowhere else the caller can reach.
+ * The workflow a `plan.bind` call addressed, for a refusal whose bind receipt
+ * could not be read: the explicit `workflow` selector, else the workflow named
+ * by the caller-supplied `resumeRef` (both bind arms require one of the two,
+ * and the shared admission decodes the reference before committing).
+ */
+function bindWorkflowIdOf(input: Record<string, unknown>): string | undefined {
+  if (typeof input.workflow === 'string' && input.workflow.trim() !== '') return input.workflow
+  if (typeof input.resumeRef !== 'string') return undefined
+  try {
+    return decodeExecutionSessionRef(input.resumeRef).workflowId
+  } catch {
+    return undefined
+  }
+}
+
+/**
+ * The workspace the session's durable records are keyed to, when the store
+ * answered `cwd-mismatch` — one extra engine read on the adoption's FAILURE
+ * path only (the successful path never pays it). The recorded fact is what
+ * makes "run the resume re-bind from the workspace the durable selection is
+ * recorded under" a fact the caller can act on instead of a condition it
+ * cannot see.
+ */
+function recordedCwdOf(harnessDir: string, sessionId: string, cwd: string): string | undefined {
+  const read = readDshSessionBinding({ harnessDir }, sessionId, cwd)
+  return read.kind === 'unavailable' && read.reason === 'cwd-mismatch' ? read.recordedCwd : undefined
+}
+
+/**
+ * The stage of the POST-COMMIT adoption that refused. Both run only after the
+ * shared `plan.bind` returned `ok`, so the engine seat is bound either way —
+ * but the two failures have DIFFERENT recoveries and must never be conflated:
+ * a refused resume rejects the very reference the resume re-bind would carry,
+ * while a refused slot write leaves a resumable seat behind.
+ */
+export type AdoptionFailureStage = 'resume' | 'durable-slot'
+
+/**
+ * The facts a POST-COMMIT adoption refusal carries under `data`, so the
+ * recovery it names is performable without the durable slot it could not
+ * write. Every member is optional because each refusal knows a different
+ * subset: the minted reference is absent when the bind envelope itself was
+ * unreadable, and the control root is absent when the adoption could not
+ * resolve one (a defensive branch no committed bind reaches).
  */
 type AdoptionRefusalFacts = Readonly<{
-  ref: ExecutionSessionRef
-  workflowId: string
-  harness: string
+  /** The engine-minted session reference, in the wire shape the bind accepts back as `resumeRef`. */
+  ref?: ExecutionSessionRef
+  workflowId?: string
+  /** The control root the engine bind committed in — `plan.bind`'s own root, never the plugin's probe. */
+  harness?: string
+  /** The workspace the session's durable records are keyed to, when the store answered `cwd-mismatch`. */
+  recordedCwd?: string
 }>
 
 /**
  * The dsh-side adoption refusal: the engine coordinator seat the bind
- * committed stays bound, the durable slot is NOT written, and the message
- * names the cause plus the recovery (the resume re-bind re-adopts — a plain
- * re-execution bind cannot replace the live ACTIVE holder). A refusal built
- * AFTER the commit additionally states that the seat is bound (`committed`)
- * and carries {@link AdoptionRefusalFacts} under `data`, so the recovery it
- * names is performable without the slot it could not write. The extra members
- * sit beside the shared refusal shape — the shared `CommandEnvelope` contract
- * and every other command's refusals are untouched.
+ * committed stays bound, the durable slot is NOT written, and the text names
+ * the actual cause plus the recovery for the stage that failed (see
+ * {@link adoptionRecoveryText}). A refusal built AFTER the commit additionally
+ * states that the seat is bound (`committed`) and carries
+ * {@link AdoptionRefusalFacts} under `data`, so the recovery it names is
+ * performable without the slot it could not write. The extra members sit
+ * beside the shared refusal shape — the shared `CommandEnvelope` contract and
+ * every other command's refusals are untouched.
  */
 function adoptionRefusal(
   code: string,
@@ -438,17 +486,52 @@ function adoptionRefusal(
 ): CommandEnvelope<never> {
   const refusal = refusalEnvelope({ command: 'plan.bind', status: 'refused', code, exitCode: 1, message, recovery })
   if (facts === undefined) return refusal
+  const data = {
+    ...(facts.ref === undefined ? {} : { resumeRef: encodeExecutionSessionRef(facts.ref) }),
+    ...(facts.workflowId === undefined ? {} : { workflowId: facts.workflowId }),
+    ...(facts.harness === undefined ? {} : { harness: facts.harness }),
+    ...(facts.recordedCwd === undefined ? {} : { recordedCwd: facts.recordedCwd }),
+  }
   return Object.assign(
     refusal as CommandEnvelope<never> & { committed?: true; data?: unknown },
-    {
-      committed: true as const,
-      data: {
-        resumeRef: encodeExecutionSessionRef(facts.ref),
-        workflowId: facts.workflowId,
-        harness: facts.harness,
-      },
-    },
+    { committed: true as const, ...(Object.keys(data).length === 0 ? {} : { data }) },
   )
+}
+
+/**
+ * The recovery of a POST-COMMIT adoption refusal, selected by the stage that
+ * failed. Pure and exported for the stage regression: the two arms must not
+ * advertise the same route.
+ *
+ * - `resume`: the engine refused its own minted reference (or the resumed
+ *   reference did not match the caller). Re-running the same resume re-bind
+ *   presents exactly that refused value, so it loops — the engine's own
+ *   coordinator recovery (`mstar session recover`, which replaces a recorded
+ *   stopped/stale holder after operator attestation) is the way out.
+ * - `durable-slot`: the engine resume succeeded and only the dsh slot write
+ *   failed, so the resume re-bind re-adopts. When the store reported
+ *   `cwd-mismatch`, the recovery names the RECORDED workspace (the durable key
+ *   is the session id AND the workspace), as carried in `data.recordedCwd`.
+ */
+export function adoptionRecoveryText(
+  stage: AdoptionFailureStage,
+  causeCode: string,
+  recordedCwd?: string,
+): string {
+  if (stage === 'resume') {
+    return 'The engine coordinator seat from the bind stays BOUND, but the durable execution binding slot was NOT written: ' +
+      `the engine refused to resume this session reference (${causeCode}), so the resume re-bind that re-adopts is not available. ` +
+      'Recover the seat through the engine\'s own coordinator recovery: run `mstar session recover --workflow <workflow-id> ' +
+      '--prior-session <session-id> --reason <text> --attestation <path> --expect <token> --operation <id>` ' +
+      '(both ids are carried in this refusal\'s `data.resumeRef`; use `--unowned=true` instead of `--prior-session` when the ' +
+      'workflow records no coordinator row), then re-run the bind.'
+  }
+  const workspace = recordedCwd === undefined
+    ? 'run from the session workspace the durable selection is recorded under'
+    : `run from the RECORDED workspace carried in \`data.recordedCwd\` (${recordedCwd}) — the workspace this session's durable records are keyed to`
+  return 'The engine coordinator seat from the bind stays BOUND and a plain re-execution bind is refused (a live ACTIVE holder is never replaced). ' +
+    'Recovery: re-run the native bind as a resume carrying this refusal\'s `data.resumeRef` as `resumeRef`, with the SAME `harness` selection ' +
+    `(\`data.harness\` names the control root the engine bound in) — ${workspace}. The resume re-adopts the binding slot.`
 }
 
 /**
@@ -465,17 +548,21 @@ function adoptionRefusal(
  * scope-mismatched reference is refused and never adopted), and the write
  * goes through `adoptExecutionBinding` — the session's user selection is
  * preserved and the exclusion floor merges by max. The adoption target is the
- * harness the bind selected (the explicit per-call `harness` when present, the
- * workspace harness otherwise), so a bind naming a different control root
- * resumes and persists its slot in THAT root. An adoption failure
- * returns a refused envelope carrying the engine's own code/message verbatim
- * plus the recovery; the command itself already committed engine-side.
+ * root the SHARED ADMISSION bound in — `resolveProcessHarnessDir(cwd,
+ * callHarness)`, the one resolution both `plan.bind` arms perform before
+ * committing (the explicit per-call `harness` when non-blank, the
+ * git-top-level/workspace probe otherwise) — never the plugin's own
+ * workspace-only probe: the two answers can differ (a session whose cwd is a
+ * subdirectory of the repository declaring the harness, or a linked worktree),
+ * and the adoption must resume and persist its slot in the store the engine
+ * actually wrote. An adoption failure returns a refused envelope carrying the
+ * engine's own code/message verbatim plus the recovery for the stage that
+ * failed; the command itself already committed engine-side.
  */
 async function adoptNativeExecutionBinding(
   envelope: CommandEnvelope,
   input: Record<string, unknown>,
   exec: ToolExecution,
-  resolver: { forAgent(agent: unknown): string | null },
 ): Promise<CommandEnvelope> {
   // A refused (or usage) bind IS the engine's verdict — a stale epoch, a
   // foreign store, a scope mismatch, a missing coordinator seat — and the
@@ -488,41 +575,72 @@ async function adoptNativeExecutionBinding(
   // input never reaches the envelope's bind arms, so this narrow check is
   // exact.
   if (input.execution !== true && input.resumeRef === undefined) return envelope
+  // `exec.agent.id` is guaranteed by `invocationContextOf` (it throws before
+  // any admission without one); every refusal below names the holder it is
+  // actually leaving bound.
+  const sessionId = callerSessionIdOf(exec)
   const ref = bindReceiptRefOf(envelope)
   if (ref === undefined) {
+    // POST-COMMIT: the engine bind committed, but its envelope carried no
+    // readable reference, so the durable slot cannot be written and the
+    // resume re-bind has nothing to carry. A plain re-execution bind is
+    // refused while the live holder exists — the engine's own coordinator
+    // recovery is the way out (it replaces the recorded holder after operator
+    // attestation). The workflow is still derivable from the bind input.
+    const workflowId = bindWorkflowIdOf(input)
+    const workflow = workflowId ?? '<workflow-id>'
     return adoptionRefusal(
       'binding.receipt-unrecognizable',
       'the plan bind envelope carried no recognizable execution session reference — the execution binding was NOT adopted',
-      'Re-run the bind; if it repeats, run `mstar plan bind --execution true --coordinator true --workflow <workflow-id>` through the CLI and report the envelope.',
+      'The engine coordinator seat from the bind stays BOUND (a live ACTIVE holder is never replaced by a bind), but the durable execution binding slot was NOT written: ' +
+        'this build could not read the minted reference back out of the bind receipt. ' +
+        `Recover the seat through the engine's own coordinator recovery: run \`mstar session recover --workflow ${workflow} ` +
+        `--prior-session ${sessionId} --reason <text> --attestation <path> --expect <token> --operation <id>\` ` +
+        '(use `--unowned=true` instead of `--prior-session` when the workflow records no coordinator row), then re-run the bind.',
+      { ...(workflowId === undefined ? {} : { workflowId }) },
     )
   }
-  // The adoption target is the harness the bind ACTUALLY selected: the shared
-  // admission executes a call carrying an explicit `harness` in that named
-  // root — the engine bind commits THERE — so the adoption's engine resume and
-  // the durable slot write MUST resolve the same root. The workspace harness
-  // only backs a call without an explicit selector. The non-blank gate mirrors
-  // the shared admission's own `callHarness` narrowing (definitions.ts).
-  //
-  // A RELATIVE selector is resolved against the SAME cwd base the shared
-  // admission used (`resolveProcessHarnessDir(context.cwd, input.harness)` is
-  // `resolve(cwd, input.harness)` for a non-blank value; `context.cwd` is this
-  // session workspace). Recording the raw relative string instead would make
-  // the receipt root — and every consumer that resolves through it — disagree
-  // with the store the engine actually bound.
+  // The adoption target is the root the shared admission bound in. Both
+  // `plan.bind` arms resolve it as `resolveProcessHarnessDir(cwd,
+  // input.harness)` and refuse `null` BEFORE committing, so a committed bind
+  // has a non-null root and this call answers the same one: an explicit
+  // non-blank `harness` is resolved against the same cwd base (the shared
+  // `callHarness` narrowing), and the implicit arm uses the engine's
+  // git-top-level/main-worktree probe (which also honours `MSTAR_HARNESS_DIR`)
+  // — NOT the plugin's workspace-only probe, whose null answer for a
+  // subdirectory session used to turn a committed bind into a bare
+  // `binding.no-harness` refusal. A relative selector keeps resolving to the
+  // same absolute root the engine recorded.
   const cwd = sessionCwdOf(exec.agent)
-  const callHarness = input.harness
-  const explicitHarness = cwd === undefined || typeof callHarness !== 'string' || callHarness.trim() === ''
-    ? undefined
-    : resolve(cwd, callHarness)
-  const harnessDir = explicitHarness ?? (cwd === undefined ? null : resolver.forAgent(exec.agent))
+  const callHarness = typeof input.harness === 'string' && input.harness.trim() !== '' ? input.harness : undefined
+  let harnessDir: string | null = null
+  try {
+    harnessDir = cwd === undefined ? null : resolveProcessHarnessDir(cwd, callHarness)
+  } catch {
+    // The same resolution that could throw here (the linked-checkout Git
+    // verdict) would have thrown in the shared admission instead of committing,
+    // so reaching this is the defensive case below — answer the refusal that
+    // carries the minted reference rather than escaping as a tool error.
+    harnessDir = null
+  }
   if (harnessDir === null || cwd === undefined) {
+    // DEFENSIVE, not part of the normal contract: the shared admission refuses
+    // a null root before committing, so a committed bind reaches this branch
+    // only when the root facts changed between the bind and this adoption (the
+    // variable removed, a `.mstar`/`.mstarc` declaration created or removed,
+    // or the git worktree changed). It therefore must not tell the caller to
+    // "re-run the bind" — that bind is refused — so it carries the minted
+    // reference and names the engine's coordinator recovery instead.
     return adoptionRefusal(
       'binding.no-harness',
-      'the carrying session has no resolved harness dir or workspace — the execution binding was NOT adopted',
-      'Open the session in the workspace that declares the control harness (.mstar/ or .mstarc) and re-run the bind.',
+      'the carrying session has no resolved control root or workspace — the execution binding was NOT adopted',
+      'The engine coordinator seat from the bind stays BOUND, but the durable execution binding slot was NOT written: this adoption could not resolve the control root the shared bind committed in. ' +
+        `Recover the seat through the engine's own coordinator recovery: run \`mstar session recover --workflow ${ref.workflowId} ` +
+        `--prior-session ${ref.sessionId} --reason <text> --attestation <path> --expect <token> --operation <id>\` ` +
+        '(use `--unowned=true` instead of `--prior-session` when the workflow records no coordinator row), then re-run the bind.',
+      { ref, workflowId: ref.workflowId },
     )
   }
-  const sessionId = callerSessionIdOf(exec)
   // The reference names the carrying session — the same first check the slash
   // adoption made, before any engine round-trip.
   if (ref.sessionId !== sessionId) {
@@ -532,6 +650,10 @@ async function adoptNativeExecutionBinding(
       'Run the bind as the carrying session itself; a reference to another session is never adoptable.',
     )
   }
+  // Which post-commit step failed decides the recovery: the engine resume
+  // rejecting the reference cannot be recovered by presenting that same
+  // reference again.
+  let stage: AdoptionFailureStage = 'resume'
   try {
     // The engine resume succeeds BEFORE the slot write: a copied store id, a
     // stale epoch or a scope mismatch refuses here and NOTHING is adopted.
@@ -542,6 +664,7 @@ async function adoptNativeExecutionBinding(
     if (resumed.data.sessionId !== sessionId || resumed.data.workflowId !== ref.workflowId) {
       throw new Error('the resumed execution session did not match the carrying session')
     }
+    stage = 'durable-slot'
     const adopted = adoptExecutionBinding(
       harnessDir,
       sessionId,
@@ -556,21 +679,23 @@ async function adoptNativeExecutionBinding(
     // copied into the workspace root. Only a successful adoption records.
     recordExecutionBindingRoot(sessionId, cwd, harnessDir)
   } catch (error) {
-    // The engine's own refusal code/message surface verbatim; the seat the
-    // bind committed stays bound, so the RESUME re-bind (the reference this
-    // refusal carries + the same harness) re-adopts — a plain re-execution
-    // bind is refused (a live ACTIVE holder is never replaced by a bind).
-    // The durable slot is exactly what this path failed to write, so the
-    // refusal itself must carry the minted reference: otherwise its own
-    // recovery ("pass the original session reference") is unperformable.
+    // The engine's own refusal code/message surface verbatim. The seat the
+    // bind committed stays bound and the durable slot is exactly what this
+    // path failed to write, so the refusal must carry the minted reference —
+    // otherwise its own recovery is unperformable. The recovery itself depends
+    // on the stage (see `adoptionRecoveryText`).
     const { code, message } = refusalOf(error)
-    return adoptionRefusal(
-      code,
-      message,
-      'The engine coordinator seat from the bind stays BOUND and a plain re-execution bind is refused (a live ACTIVE holder is never replaced). ' +
-        'Recovery: re-run the native bind as a resume carrying this refusal\'s `data.resumeRef` as `resumeRef`, with the SAME `harness` selection (`data.harness` names the control root the adoption targeted), run from the session workspace the durable selection is recorded under — the durable binding is keyed by the session id AND that workspace. The resume re-adopts the binding slot.',
-      { ref, workflowId: ref.workflowId, harness: harnessDir },
-    )
+    // One extra engine read, on this failure path only, to learn the workspace
+    // the durable records are keyed to when the store refused the pair: the
+    // refusal's recovery can then name it instead of describing a condition
+    // the caller cannot see.
+    const recordedCwd = stage === 'durable-slot' ? recordedCwdOf(harnessDir, sessionId, cwd) : undefined
+    return adoptionRefusal(code, message, adoptionRecoveryText(stage, code, recordedCwd), {
+      ref,
+      workflowId: ref.workflowId,
+      harness: harnessDir,
+      ...(recordedCwd === undefined ? {} : { recordedCwd }),
+    })
   }
   return envelope
 }
@@ -620,7 +745,7 @@ function nativeCommandTool(
         // Task 3 (#527): on a successful bind, persist the durable
         // executionBinding slot (the adoption the slash command performed);
         // every other command returns its envelope untouched.
-        return toCanonicalValue(await adoptNativeExecutionBinding(envelope, commandInput, exec, resolver))
+        return toCanonicalValue(await adoptNativeExecutionBinding(envelope, commandInput, exec))
       }
       return toCanonicalValue(envelope)
     },
@@ -767,14 +892,25 @@ function executionClearTool(
         return toCanonicalValue(executionClearOk())
       }
       if (outcome.kind === 'no-binding') return toCanonicalValue(executionClearNoBinding())
-      return toCanonicalValue(refusalEnvelope({
+      // The store refused the durable record. When the cause is a workspace
+      // mismatch the read already knows the RECORDED workspace, so this
+      // failure path spends one extra engine read to carry it: "the record must
+      // be readable for this session and its exact cwd" was a key the caller
+      // could not see. Every other store refusal keeps its unchanged text.
+      const recordedCwd = outcome.reason === 'cwd-mismatch' ? recordedCwdOf(harnessDir, sessionId, cwd) : undefined
+      const refused = refusalEnvelope({
         command: EXECUTION_CLEAR_COMMAND,
         status: 'refused',
         code: 'execution.clear.store-refused',
         exitCode: 1,
         message: `no clearable execution binding (${outcome.reason})`,
-        recovery: 'Resolve the store refusal named in the message (the durable binding record must be readable and writable for this session and its exact cwd), then re-run the clear.',
-      }))
+        recovery: recordedCwd === undefined
+          ? 'Resolve the store refusal named in the message (the durable binding record must be readable and writable for this session and its exact cwd), then re-run the clear.'
+          : `This session's durable records are keyed to the workspace carried in \`data.recordedCwd\` (${recordedCwd}), not the workspace this clear runs from — the durable key is the session id AND the session workspace. Run the clear from that workspace (reopen the session there), or from a session whose workspace is that one, then re-run the clear.`,
+      })
+      return toCanonicalValue(recordedCwd === undefined
+        ? refused
+        : Object.assign(refused as CommandEnvelope<never> & { data?: unknown }, { data: { recordedCwd } }))
     },
   })
 }
