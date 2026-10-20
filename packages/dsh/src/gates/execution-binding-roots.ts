@@ -13,7 +13,7 @@
  * `mstar_execution_clear` tool) only hold the carrying session's
  * `(sessionId, cwd)` — reading the workspace harness there answers "no row",
  * because the slot was never written there and MUST NOT be written there
- * (the round-5 two-root regression pins root A untouched).
+ * (a cross-root bind must leave the workspace root untouched).
  *
  * This module is that missing discovery channel: the adoption records the
  * session's selected harness root at adopt time, and the consumers read it

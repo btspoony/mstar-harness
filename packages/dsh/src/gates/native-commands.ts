@@ -460,13 +460,12 @@ async function adoptNativeExecutionBinding(
       'Re-run the bind; if it repeats, run `mstar plan bind --execution true --coordinator true --workflow <workflow-id>` through the CLI and report the envelope.',
     )
   }
-  // The adoption target is the harness the bind ACTUALLY selected (the
-  // must-fix review finding): the shared admission executes a call carrying an
-  // explicit `harness` in that named root — the engine bind commits THERE — so
-  // the adoption's engine resume and the durable slot write MUST resolve the
-  // same root. The workspace harness only backs a call without an explicit
-  // selector. The non-blank gate mirrors the shared admission's own
-  // `callHarness` narrowing (definitions.ts).
+  // The adoption target is the harness the bind ACTUALLY selected: the shared
+  // admission executes a call carrying an explicit `harness` in that named
+  // root — the engine bind commits THERE — so the adoption's engine resume and
+  // the durable slot write MUST resolve the same root. The workspace harness
+  // only backs a call without an explicit selector. The non-blank gate mirrors
+  // the shared admission's own `callHarness` narrowing (definitions.ts).
   //
   // A RELATIVE selector is resolved against the SAME cwd base the shared
   // admission used (`resolveProcessHarnessDir(context.cwd, input.harness)` is
@@ -603,6 +602,26 @@ function executionClearOk(): CommandEnvelope {
 }
 
 /**
+ * The named no-harness refusal of the clear: the remaining case is a session
+ * with no workspace at all, or one with NEITHER an adoption receipt NOR a
+ * workspace-declared harness. The recovery names both supported routes — open
+ * the session in a workspace that declares the harness, and (for a receipt
+ * lost with the host process) the resume re-bind that re-records the selected
+ * root — because no durable binding can be reached through either root here.
+ */
+function executionClearNoHarness(): CommandEnvelope<never> {
+  return refusalEnvelope({
+    command: EXECUTION_CLEAR_COMMAND,
+    status: 'refused',
+    code: 'execution.clear.no-harness',
+    exitCode: 1,
+    message: 'the carrying session has no resolved harness dir or workspace — the execution binding could not be read for the clear',
+    recovery: 'Open the session in the workspace that declares the control harness (.mstar/ or .mstarc) and re-run the clear. ' +
+      'If this session adopted a binding in another control root before a host restart (no receipt survives it), re-run the bind as a resume carrying the original session reference and the same `harness`, then re-run the clear.',
+  })
+}
+
+/**
  * Task 5 (#530): the native `mstar_execution_clear` tool — the replacement
  * reachability for `clearExecutionBinding` after the removal of the slash
  * command whose `clear` arm was its only caller. It wraps
@@ -647,26 +666,25 @@ function executionClearTool(
       if (isLeafSeatHeader(sessionHeaderOf(exec))) {
         return toCanonicalValue(leafSeatRefusal(EXECUTION_CLEAR_COMMAND))
       }
-      const workspaceHarness = resolver.forAgent(exec.agent)
+      // Only the workspace PRESENCE is checked first; the root itself is
+      // resolved AFTER the adoption receipt (below).
       const cwd = sessionCwdOf(exec.agent)
-      if (workspaceHarness === null || cwd === undefined) {
-        return toCanonicalValue(refusalEnvelope({
-          command: EXECUTION_CLEAR_COMMAND,
-          status: 'refused',
-          code: 'execution.clear.no-harness',
-          exitCode: 1,
-          message: 'the carrying session has no resolved harness dir or workspace — the execution binding could not be read for the clear',
-          recovery: 'Open the session in the workspace that declares the control harness (.mstar/ or .mstarc) and re-run the clear.',
-        }))
+      if (cwd === undefined) {
+        return toCanonicalValue(executionClearNoHarness())
       }
       // The clear resolves the session's SELECTED harness (the root the bind
-      // adoption recorded), not the workspace harness — clearing a binding
-      // adopted into another control root must act on THAT root, never
-      // misreport `no-binding` against the workspace or clear a stale slot
-      // there. A session with no adoption receipt clears through the
-      // workspace root, the unchanged pre-existing path.
+      // adoption recorded) BEFORE any workspace probe: a bind naming another
+      // control root recorded that root for this session, and clearing it must
+      // act on THAT root. Probing the workspace first refuses `no-harness` for
+      // a session that validly bound from a workspace declaring no harness —
+      // and no other clear route reaches that slot. The workspace harness only
+      // backs a session that never selected an explicit root: the unchanged
+      // pre-existing path.
       const sessionId = callerSessionIdOf(exec)
-      const harnessDir = executionBindingRootOf(sessionId, cwd) ?? workspaceHarness
+      const harnessDir = executionBindingRootOf(sessionId, cwd) ?? resolver.forAgent(exec.agent)
+      if (harnessDir === null) {
+        return toCanonicalValue(executionClearNoHarness())
+      }
       const outcome = await clearExecutionSessionBinding(harnessDir, sessionId, cwd)
       if (outcome.kind === 'cleared') {
         // Drop the adoption receipt: the slot is gone, so a later clear

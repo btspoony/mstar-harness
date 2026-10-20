@@ -22,7 +22,7 @@ import { execFileSync } from 'node:child_process'
 import { readdirSync, realpathSync } from 'node:fs'
 import { mkdir, mkdtemp, rename, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
-import { isAbsolute, join } from 'node:path'
+import { join, resolve } from 'node:path'
 import type { ToolCallId } from '@deepseek-ai/dsh-llm'
 import {
   createExecutionWorkflow,
@@ -106,6 +106,25 @@ function storedBinding(harnessDir: string, cwd: string): WorkflowSessionBinding 
   const read = readWorkflowSessionBinding(harnessDir, CHILD_ID, cwd)
   if (read.kind !== 'ok') throw new Error(`the binding slot read failed: ${read.reason}`)
   return read.binding
+}
+
+/**
+ * Run one case with `MSTAR_HARNESS_DIR` removed, restoring the previous value
+ * (present or absent) afterwards. `resolveHarnessDir` honours that environment
+ * override ahead of any probe, so a case whose PREMISE is "the workspace
+ * declares no harness" must not silently change meaning when a developer's
+ * shell exports one — with the override in place the premise is wrong and the
+ * assertion below fails on the developer's environment, never on the behavior.
+ */
+async function withoutHarnessEnv<T>(body: () => Promise<T>): Promise<T> {
+  const saved = process.env.MSTAR_HARNESS_DIR
+  delete process.env.MSTAR_HARNESS_DIR
+  try {
+    return await body()
+  } finally {
+    if (saved === undefined) delete process.env.MSTAR_HARNESS_DIR
+    else process.env.MSTAR_HARNESS_DIR = saved
+  }
 }
 
 /**
@@ -197,7 +216,7 @@ async function gitFixtureRoot(): Promise<{ root: string; worktree: string; sourc
 }
 
 /** Boot the composed app and seed the synthetic lifecycle for the CHILD session. */
-async function bootedWithFixture(options: { sessions?: 'fake' } = {}): Promise<BootResult & {
+async function bootedWithFixture(options: { sessions?: 'fake'; harnessDir?: null } = {}): Promise<BootResult & {
   featureWorktree: string
   sourceSha: string
   baseSha: string
@@ -210,6 +229,12 @@ async function bootedWithFixture(options: { sessions?: 'fake' } = {}): Promise<B
     // consumer wiring (the two-root ledger-consumer regressions drive real
     // `tool-workflow/*` rows through it); absent, the consumer is disabled.
     ...(options.sessions === undefined ? {} : { sessionsService: options.sessions }),
+    // `harnessDir: null` omits the boot-time config key, so the plugin's
+    // resolver probes each session's workspace instead of answering one
+    // constant. The default configured root would mask every
+    // workspace-first workspace resolution defect: the resolver answers it
+    // regardless of the carrying session's cwd.
+    ...(options.harnessDir === undefined ? {} : { harnessDir: options.harnessDir }),
   })
   await seedUnboundWorkflow(app.harnessDir, CHILD_ID)
   // The evidence files live in the plan's own SDD area (the engine accepts
@@ -746,11 +771,11 @@ describe('native binding adoption — a native plan bind persists the executionB
   })
 
   it('adopts into the harness the bind itself selected (explicit per-call harness), never the workspace harness', async () => {
-    // REGRESSION (the must-fix review finding): the bind's explicit `harness`
-    // names the control root the engine bind commits in — the adoption's
-    // engine resume and the durable slot write MUST land in THAT root. The old
-    // behavior derived the adoption target from the workspace resolver only,
-    // so the resume ran against (or the slot landed under) the wrong root.
+    // REGRESSION: the bind's explicit `harness` names the control root the
+    // engine bind commits in — the adoption's engine resume and the durable
+    // slot write MUST land in THAT root. Deriving the adoption target from the
+    // workspace resolver alone runs the resume against (or lands the slot
+    // under) the wrong root.
     const app = await bootedWithFixture()
     // Root B: a second, distinct control harness with its own store + lifecycle.
     const rootB = await mkdtemp(join(tmpdir(), 'native-commands-harness-b-'))
@@ -785,11 +810,12 @@ describe('native binding adoption — a native plan bind persists the executionB
   })
 
   it('resolves a RELATIVE explicit harness to an absolute root before the adoption and the receipt', async () => {
-    // REGRESSION (round-8 must-fix): the shared admission resolves an explicit
-    // `harness` with `resolve(context.cwd, input.harness)` and the engine bind
-    // commits in that ABSOLUTE root, but the adoption used to record the RAW
-    // relative string — the stored `harnessRoot`, the receipt root and the
-    // ledger target then disagreed with the store the bind actually wrote.
+    // REGRESSION: the shared admission resolves an explicit `harness` with
+    // `resolve(context.cwd, input.harness)` and the engine bind commits in that
+    // ABSOLUTE root, so the adoption must record the same absolute root.
+    // Recording the RAW relative string makes the stored `harnessRoot`, the
+    // receipt root and the ledger target disagree with the store the bind
+    // actually wrote.
     const app = await bootedWithFixture()
     // The carrying workspace holds the control harness BELOW it, selected
     // relatively — resolved against the same lexical base the shared admission
@@ -811,21 +837,22 @@ describe('native binding adoption — a native plan bind persists the executionB
     expect(bound.status).toBe('ok')
 
     // The stored binding, the receipt root and the ledger target all name the
-    // ONE absolute root the engine bound in.
-    expect(isAbsolute(harnessRoot)).toBe(true)
-    expect(storedBinding(harnessRoot, workspace)?.executionBinding?.harnessRoot).toBe(harnessRoot)
-    expect(executionBindingRootOf(CHILD_ID, workspace)).toBe(harnessRoot)
+    // ONE absolute root the engine bound in — the resolved RELATIVE selector,
+    // never the raw string the call passed.
+    const expectedRoot = resolve(workspace, relativeHarness)
+    expect(storedBinding(harnessRoot, workspace)?.executionBinding?.harnessRoot).toBe(expectedRoot)
+    expect(executionBindingRootOf(CHILD_ID, workspace)).toBe(expectedRoot)
     const target = await resolveExecutionLedgerTarget(CHILD_ID, workspace)
-    expect(target?.harnessDir).toBe(harnessRoot)
+    expect(target?.harnessDir).toBe(expectedRoot)
     expect(target?.workflowId).toBe(WORKFLOW_ID)
   })
 
   it('resolves the FULL consumer chain from the harness the bind selected: attribution and clear act on root B, root A is never written', async () => {
-    // REGRESSION (the round-6 must-fix): the adoption writes the durable slot
-    // into the harness the bind selected, but the CONSUMERS re-derived the
-    // harness from the workspace — the ledger attribution resolved root A and
-    // dropped the binding, and the native clear answered `no-binding` against
-    // A while B held the slot. The chain below is the fixed behavior: bind to
+    // REGRESSION: the adoption writes the durable slot into the harness the
+    // bind selected, so the CONSUMERS must resolve that root instead of
+    // re-deriving the harness from the workspace. Re-deriving resolves root A,
+    // drops the binding in attribution, and answers `no-binding` against A
+    // while B holds the slot. The chain below is the fixed behavior: bind to
     // B → the ledger attribution resolves FROM B → the native clear clears B
     // → root A is never written at any step.
     const app = await bootedWithFixture()
@@ -881,12 +908,12 @@ describe('native binding adoption — a native plan bind persists the executionB
   })
 
   it('feeds real rows through the ledger CONSUMER from the SELECTED root: the B floor governs gate, bound and append; the A floor never filters', async () => {
-    // REGRESSION (round-7 must-fix): the ledger's binding guard and
-    // exclusion floor used to resolve the WORKSPACE harness while the append
-    // went to the adoption receipt's root — root A's floor filtered root B's
-    // events. The consumer below is the plugin's real wiring
-    // (bootApp sessionsService:'fake' → registerWorkflowLedger) and the rows
-    // are real `tool-workflow/*` envelopes; the floors are DIFFERENT per root.
+    // REGRESSION: the ledger's binding guard and exclusion floor must resolve
+    // the same root the append goes to; re-deriving them from the WORKSPACE
+    // root filtered root B's events through root A's floor. The consumer below
+    // is the plugin's real wiring (bootApp sessionsService:'fake' →
+    // registerWorkflowLedger) and the rows are real `tool-workflow/*`
+    // envelopes; the floors are DIFFERENT per root.
     const app = await bootedWithFixture({ sessions: 'fake' })
     const rootB = await mkdtemp(join(tmpdir(), 'native-commands-harness-b-'))
     roots.push(rootB)
@@ -1006,12 +1033,12 @@ describe('native binding adoption — a native plan bind persists the executionB
     }
   })
 
-  it('attributes real ledger rows from the adoption receipt when the workspace declares NO harness', async () => {
-    // REGRESSION (round-8 must-fix): the ledger target resolver probed the
-    // carrying WORKSPACE before reading the adoption receipt, so a native bind
-    // into another control root from a workspace with no harness at all
-    // answered null at the probe and every ledger row of the valid binding was
-    // dropped. Below: bind into B from such a workspace, then drive a real
+  it('attributes real ledger rows from the adoption receipt when the workspace declares NO harness', () => withoutHarnessEnv(async () => {
+    // REGRESSION: the ledger target resolver must read the adoption receipt
+    // BEFORE probing the carrying WORKSPACE; probing first answers null for a
+    // native bind into another control root from a workspace with no harness at
+    // all, and every ledger row of the valid binding is then dropped. Below:
+    // bind into B from such a workspace, then drive a real
     // `tool-workflow/run-start` row through the plugin's real consumer.
     const app = await bootedWithFixture({ sessions: 'fake' })
     const rootB = await mkdtemp(join(tmpdir(), 'native-commands-harness-b-'))
@@ -1063,6 +1090,61 @@ describe('native binding adoption — a native plan bind persists the executionB
     // beside it, and root A's ledger gains no row either.
     expect(readdirSync(workspace)).toEqual([])
     expect(readAgentFlow(join(app.harnessDir, 'workflows', WORKFLOW_ID), WORKFLOW_ID)?.events ?? []).toEqual([])
+  }))
+
+  it('clears a binding adopted in another control root when the workspace declares NO harness', async () => {
+    // REGRESSION: the clear must read the adoption receipt BEFORE the workspace
+    // probe. The workspace-first order refused `execution.clear.no-harness` for
+    // every session that validly bound into another control root from a
+    // workspace declaring no harness — and no other supported clear route can
+    // reach that durable slot. The app is booted WITHOUT a configured harness
+    // dir: a configured root would answer the resolver for every workspace and
+    // mask the order entirely.
+    const app = await bootedWithFixture({ harnessDir: null })
+    const rootB = await mkdtemp(join(tmpdir(), 'native-commands-harness-b-'))
+    roots.push(rootB)
+    const harnessB = join(rootB, '.mstar')
+    await seedUnboundWorkflow(harnessB, CHILD_ID)
+    await mkdir(join(harnessB, 'workflows', WORKFLOW_ID), { recursive: true })
+    // The carrying workspace declares NO harness: no `.mstar` / `.agents` /
+    // `.plans` / `.mstarc` under it, so both the engine's probe and the
+    // plugin's unconfigured resolver answer null for this cwd.
+    const workspace = await mkdtemp(join(tmpdir(), 'native-commands-workspace-'))
+    roots.push(workspace)
+
+    const child = agentOf(CHILD_ID, workspace)
+    const bound = envelopeOf(await run(app.ctx, 'mstar_plan_bind', child, {
+      execution: true,
+      coordinator: true,
+      workflow: WORKFLOW_ID,
+      harness: harnessB,
+    }))
+    expect(bound.status).toBe('ok')
+    expect(storedBinding(harnessB, workspace)?.executionBinding?.harnessRoot).toBe(harnessB)
+    expect(executionBindingRootOf(CHILD_ID, workspace)).toBe(harnessB)
+
+    // The clear reaches B through the receipt and drops the durable slot AFTER
+    // the real clear; the selection survives (the clear's contract).
+    const cleared = envelopeOf(await run(app.ctx, 'mstar_execution_clear', child, {}))
+    // The code first: a workspace-first order answers the no-harness refusal
+    // here, and this assertion names that exact refusal when it regresses.
+    expect(cleared.code).toBe('execution.clear.ok')
+    expect(cleared.status).toBe('ok')
+    expect(cleared.command).toBe('execution.clear')
+    const bindingB = storedBinding(harnessB, workspace)
+    expect(bindingB?.executionBinding ?? null).toBeNull()
+    expect(bindingB?.selectedWorkflowId).toBe(WORKFLOW_ID)
+
+    // The receipt is dropped with the slot: the selected root is no longer
+    // resolvable for this session, so the second clear cannot reach B again —
+    // it answers the no-harness refusal, NOT `no-binding` (a surviving receipt
+    // would have resolved B's cleared slot and answered `no-binding`). That is
+    // the receipt-drop observable available when the workspace resolves no
+    // fallback root of its own.
+    expect(executionBindingRootOf(CHILD_ID, workspace)).toBeUndefined()
+    const again = envelopeOf(await run(app.ctx, 'mstar_execution_clear', child, {}))
+    expect(again.status).toBe('refused')
+    expect(again.code).toBe('execution.clear.no-harness')
   })
 
   it('recovers a lost adoption receipt through the RESUME re-bind with the same harness; a plain re-execution bind still refuses', async () => {
