@@ -466,7 +466,9 @@ describe("MCP harness root", () => {
       const cwdDocument = path.join(fixture.cwdRoot, "sdd", "_reviews", `${PERSIST_PROBE_KEY}.json`);
       const refused = await toolEnvelope(client, "mstar_persist", withAction("persist.delete", { kind: "review", key: PERSIST_PROBE_KEY, harness: fixture.cwdRoot }));
       expect(refused).toMatchObject({ status: "usage", code: "command.invalid-input" });
-      expect((refused.details as { field?: string }).field).toBe("harness");
+      // The aggregated contract: `details.fields` is an array of every rejected
+      // key, in the order the caller supplied them.
+      expect(refused.details?.fields).toEqual(["harness"]);
       expect(existsSync(pinnedDocument)).toBe(true);
       expect(existsSync(cwdDocument)).toBe(true);
     } finally {
