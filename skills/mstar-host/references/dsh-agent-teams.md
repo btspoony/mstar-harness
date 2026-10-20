@@ -166,9 +166,24 @@ cheap escape once the roster is full.
   roster stays untouched.
 - **Budget the width before the first spawn.** `tracks + reserved recovery ≤
   maxMembers`; leave at least one free slot so a genuinely failed track can be
-  re-seated. If the plan needs more tracks than that, run them in waves (a second
-  wave reuses freed capacity only after its seats are genuinely idle) and record
-  the waves on the plan row.
+  re-seated.
+- **A wave does NOT free capacity — it moves an existing member.** Idle is not
+  freed: `maxMembers` counts created teammates and the roster has no removal
+  operation, so waiting for a wave to finish never yields a new seat. When a plan
+  has more writable tracks than `maxMembers - reserved`, the supported move is to
+  **reassign an idle member to the later track** and tell it the new address:
+  1. `list_agents` → pick a teammate that is `inactive` and whose track is
+     genuinely finished (its board task is `complete`).
+  2. `team_task_get` the later track's board task, then `team_task_update`
+     `reassign` it to that member (that row's owner is the migration record).
+  3. `send_message` that member with the later track's **absolute checkout
+     path, branch and the full `## Assignment` header** — the steer is the later
+     task's gated carrier (§ Exactly one gated carrier per Assignment), so a
+     header-free wake-up would leave the task ungated.
+  Record the migration on the plan row. If no member is free, the remaining
+  tracks wait; if they cannot wait, run their read-only work as `workflow` seats
+  and record the cap as the reason the remaining writable rows are not
+  dispatched.
 - **When the cap is reached, the recovery is documented, not manual.** Keep the
   remaining rows on their existing track owners, or run them as `workflow`
   read-only work, and record the cap as the reason in the plan row — never a

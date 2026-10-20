@@ -215,7 +215,7 @@ Assignment).
 **Seats are budgeted per track, not per task.** The roster is finite and has no
 removal operation, so one durable teammate per writable track (reused via
 `send_message`) is the plan shape; task reviewers are fresh-context `workflow`
-children that never join the roster. Budget, waves, and the at-cap recovery →
+children that never join the roster. Budget, member migration between tracks (a wave frees no capacity), and the at-cap recovery →
 `references/dsh-agent-teams.md` § Capacity.
 
 **Mounting decides the starting channel.** The shipped Agent Teams profile layer
