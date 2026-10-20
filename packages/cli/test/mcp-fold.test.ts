@@ -152,14 +152,28 @@ describe("folded MCP command families", () => {
           expect(properties[key]).toBeDefined();
         }
       }
-      // First declaration wins on a shared key, byte-for-byte.
-      const shared = Object.keys((memberInputs[0]!.properties ?? {}) as Record<string, unknown>)
-        .find((key) => memberInputs.slice(1).some((input) => key in ((input.properties ?? {}) as Record<string, unknown>)));
-      if (shared !== undefined) {
-        const first = (memberInputs[0]!.properties as Record<string, unknown>)[shared];
-        expect(properties[shared]).toEqual(first);
-      }
     }
+  });
+
+  /**
+   * A key two members declare differently is published ONCE, and which
+   * declaration wins is a merge detail — so this pins the CALLER contract over a
+   * real collision instead (`issue.id` is a bare string on `add` and
+   * `minLength(1)` on `show`): the folded index advertises the key, and
+   * admission still validates the SELECTED member's own schema, so a value the
+   * later action refuses is a refusal naming that field, never a wrong result.
+   */
+  test("a key two actions declare differently is published once and admitted per action", async () => {
+    const members = [definitions.find((definition) => definition.id === "issue.add")!, definitions.find((definition) => definition.id === "issue.show")!];
+    await withClient(async (client) => {
+      const published = (await client.listTools()).tools.find((tool) => tool.name === "mstar_issue");
+      if (published === undefined) throw new Error("unpublished family tool: mstar_issue");
+      expect((published.inputSchema.properties ?? {}).id).toMatchObject({ type: "string" });
+      const refused = envelope(await call(client, "mstar_issue", { action: "show", id: "" }));
+      expect(refused).toMatchObject({ status: "usage", code: "command.invalid-input" });
+      const paths = (refused.details?.diagnostics ?? []).map((entry) => (entry as { path?: string }).path);
+      expect(paths).toContain("id");
+    }, {}, members);
   });
 
   /**
