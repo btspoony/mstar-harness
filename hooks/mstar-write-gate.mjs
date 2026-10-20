@@ -16823,6 +16823,7 @@ init_coordination_transitions();
 init_execution_store();
 init_issue();
 init_path();
+init_dispatch();
 init_execution_session();
 init_coordination_write();
 init_execution_store();

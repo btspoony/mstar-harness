@@ -113,13 +113,27 @@ async function runInit(options: InitOptions) {
     // Any verified difference is skew: a checkout ahead of the selected CLI is as
     // far apart as one behind it, so neither is reported as success.
     const pluginMismatched = installedPluginVersion !== undefined && installedPluginVersion !== chosenCli;
-    const globalFailed = globalResult.action === "failed" && (installedPluginVersion ?? packageVersion) !== packageVersion;
+    // A failed update matters when it was meant to move the CLI forward: PATH
+    // then stays on the running version instead of the one this run promised.
+    // No plugin version enters this: an adapter that installs no plugin and
+    // ignores initFlags never reports one, and that is no reason to report a
+    // failed update as configured.
+    const globalFailed = globalResult.action === "failed" && chosenCli !== packageVersion;
     if (pluginMismatched || globalFailed) {
+      // Each refusal states the cause that actually happened and the route that
+      // repairs it: a plugin at a known version is realigned, a failed global
+      // install is retried, and either can be sidestepped on the running version.
+      const causes = [
+        ...(pluginMismatched ? [`The host plugin is at ${installedPluginVersion}, while this run targets ${chosenCli}.`] : []),
+        ...(globalFailed ? [`The global install of ${globalResult.spec} failed, so the CLI on PATH stays at ${packageVersion}.`] : []),
+      ];
+      const recoveries = [
+        ...(pluginMismatched ? [`realign the plugin (\`git -C ~/.mstar/harness pull --ff-only\` then re-run init, or install the published plugin at ${chosenCli})`] : []),
+        ...(globalFailed ? [`fix the global install (\`npm i -g @mstar-harness/cli@${chosenCli}\`)`] : []),
+      ];
       throw new Error(
-        `The host plugin is at ${installedPluginVersion ?? "an unconfirmed version"}, while this run targets ${chosenCli}` +
-          `${globalResult.action === "failed" ? ` and the global CLI could not be updated (${globalResult.spec}), so the CLI on PATH stays at ${packageVersion}` : ""}.\n` +
-          `Recovery: realign the plugin (\`git -C ~/.mstar/harness pull --ff-only\` then re-run init, or install the published plugin at ${chosenCli}), ` +
-          `or re-run with --no-global-cli to stay on the running version ${packageVersion}.`,
+        `${causes.join(" ")}\n` +
+          `Recovery: ${recoveries.join(", or ")}, or re-run with --no-global-cli to stay on the running version ${packageVersion}.`,
       );
     }
     console.log(`Next: npx @mstar-harness/cli doctor --target ${target}${scope === "project" ? "" : " --scope global"}`);

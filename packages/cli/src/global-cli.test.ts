@@ -187,12 +187,13 @@ describe("defaultDetectVersion", () => {
 // ---------------------------------------------------------------------------
 // Task 2 wiring — end-to-end `init` harness. Spawns the real CLI entry
 // (src/index.ts) in a sandboxed temp dir with the file-scoped fake-bin dir
-// (fake `npm` / `dsh` / `mstar-harness` binaries, prepended to the child
-// PATH) so the commander `--no-global-cli` boundary and both runInit return
-// paths (install-mode + config-mode) are exercised without touching a real
-// registry, adapter install, or user config. The fake `mstar-harness`
-// reports a non-matching version so the install path is always taken
-// deterministically.
+// (fake `npm` / `dsh` / `kimi` / `mstar-harness` binaries, prepended to the
+// child PATH) so the commander `--no-global-cli` boundary, both runInit return
+// paths (install-mode + config-mode, the install-mode one with and without a
+// reported plugin version) and the global-update refusals are exercised
+// without touching a real registry, adapter install, or user config. The fake
+// `mstar-harness` reports a non-matching version so the install path is always
+// taken deterministically.
 // ---------------------------------------------------------------------------
 
 const CLI_ENTRY = path.join(import.meta.dir, "index.ts");
@@ -260,6 +261,13 @@ describe("init wiring (end-to-end CLI harness)", () => {
    * config-mode init for the opencode target. */
   function fakeOpencode(): void {
     writeFakeBin("opencode", `echo "opencode v2.0.26"\nexit 0`);
+  }
+
+  /** Fake kimi CLI: the install-mode target whose adapter installs the plugin
+   * through the host TUI and swallows initFlags, so its install result carries
+   * no plugin version at all. */
+  function fakeKimi(): void {
+    writeFakeBin("kimi", `exit 0`);
   }
 
   /** Fake mstar-harness reporting a version; default non-matching so the
@@ -433,6 +441,32 @@ exit 0`);
     expect(result.status).not.toBe(0);
     expect(result.stderr).toContain("--no-global-cli");
     expect(result.stderr).toContain(SYNTH_PUBLISHED_LATER);
+  });
+
+  test("config mode refuses a failed global install of a newer published CLI", () => {
+    fakeNpmReportingLatestThenFailInstall(SYNTH_PUBLISHED_LATER);
+    fakeMstarHarness(PACKAGE_VERSION);
+    fakeOpencode();
+    const configPath = path.join(tmp, "opencode.json");
+    const result = runInitCli(["--yes", "--target", "opencode", "--output", configPath], cliEnv());
+    expect(result.status).not.toBe(0);
+    expect(result.stderr).toContain("Recovery:");
+    expect(result.stderr).toContain(`npm i -g @mstar-harness/cli@${SYNTH_PUBLISHED_LATER}`);
+  });
+
+  test("install mode with no plugin version refuses a failed newer-version global update (I-000688)", () => {
+    // kimi reports no plugin version, so the refusal must key off the failed
+    // global install alone — and name that install as its cause, not plugin skew.
+    fakeNpmReportingLatestThenFailInstall(SYNTH_PUBLISHED_LATER);
+    fakeMstarHarness(PACKAGE_VERSION);
+    fakeKimi();
+    const result = runInitCli(["--yes", "--target", "kimi"], cliEnv());
+    expect(result.status).not.toBe(0);
+    expect(result.stderr).toContain("Recovery:");
+    expect(result.stderr).toContain(`npm i -g @mstar-harness/cli@${SYNTH_PUBLISHED_LATER}`);
+    expect(result.stderr).toContain("--no-global-cli");
+    // Not reported as a successful init: no post-install next-step line.
+    expect(result.stdout).not.toContain("Next: npx");
   });
 
   test("--no-global-cli skips the global install entirely", () => {
