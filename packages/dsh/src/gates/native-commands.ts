@@ -43,6 +43,7 @@
  * removed execution-session command enforced, restored on this surface (the
  * engine has no leaf concept, so this dsh-side check is the sole enforcement).
  */
+import { resolve } from 'node:path'
 import { type Context } from '@deepseek-ai/cordis'
 import { defineTool } from '@deepseek-ai/dsh-tools'
 import type { ToolExecution } from '@deepseek-ai/dsh-tools'
@@ -466,10 +467,19 @@ async function adoptNativeExecutionBinding(
   // same root. The workspace harness only backs a call without an explicit
   // selector. The non-blank gate mirrors the shared admission's own
   // `callHarness` narrowing (definitions.ts).
-  const callHarness = input.harness
-  const explicitHarness = typeof callHarness === 'string' && callHarness.trim() !== '' ? callHarness : undefined
-  const harnessDir = explicitHarness ?? resolver.forAgent(exec.agent)
+  //
+  // A RELATIVE selector is resolved against the SAME cwd base the shared
+  // admission used (`resolveProcessHarnessDir(context.cwd, input.harness)` is
+  // `resolve(cwd, input.harness)` for a non-blank value; `context.cwd` is this
+  // session workspace). Recording the raw relative string instead would make
+  // the receipt root — and every consumer that resolves through it — disagree
+  // with the store the engine actually bound.
   const cwd = sessionCwdOf(exec.agent)
+  const callHarness = input.harness
+  const explicitHarness = cwd === undefined || typeof callHarness !== 'string' || callHarness.trim() === ''
+    ? undefined
+    : resolve(cwd, callHarness)
+  const harnessDir = explicitHarness ?? (cwd === undefined ? null : resolver.forAgent(exec.agent))
   if (harnessDir === null || cwd === undefined) {
     return adoptionRefusal(
       'binding.no-harness',

@@ -708,16 +708,22 @@ function ledgerTargetDir(root: string, workflowId: string): string | null {
  * workspace's: a native bind carrying an explicit `harness` adopts its
  * binding into THAT control root (the adoption receipt), and the returned
  * target carries the same root so the ledger's write path (scan bound, event
- * append) acts on the store the binding lives in. A session with no adoption
- * receipt resolves the workspace harness — the unchanged pre-existing path.
+ * append) acts on the store the binding lives in.
+ *
+ * Resolution ORDER: the receipt is read FIRST and the workspace probe runs
+ * only for a session that never selected an explicit root. The receipt names
+ * a root the carrying workspace may not even declare (a bind into another
+ * control root from a workspace with no harness at all); probing the
+ * workspace first would answer `null` there and drop every ledger event of a
+ * perfectly valid binding.
  */
 export async function resolveExecutionLedgerTarget(sessionId: string, cwd: string): Promise<WorkflowLedgerTarget | null> {
   if (sessionId === '' || cwd === '') return null
-  const workspaceHarness = resolveHarnessDir(cwd, { workspaceRoot: cwd })
-  if (workspaceHarness === null) return null
   // The selected root first (the bind adoption receipt); the workspace
   // harness only backs a session that never selected an explicit root.
-  const harnessDir = executionBindingRootOf(sessionId, cwd) ?? workspaceHarness
+  const receiptRoot = executionBindingRootOf(sessionId, cwd)
+  const harnessDir = receiptRoot ?? resolveHarnessDir(cwd, { workspaceRoot: cwd })
+  if (harnessDir === null) return null
   const binding = readWorkflowSessionBinding(harnessDir, sessionId, cwd)
   if (binding.kind === 'unavailable') return null
   const executionBinding = binding.binding?.executionBinding

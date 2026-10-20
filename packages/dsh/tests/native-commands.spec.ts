@@ -19,10 +19,10 @@
  */
 import { afterEach, describe, expect, it } from 'bun:test'
 import { execFileSync } from 'node:child_process'
-import { realpathSync } from 'node:fs'
+import { readdirSync, realpathSync } from 'node:fs'
 import { mkdir, mkdtemp, rename, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
-import { join } from 'node:path'
+import { isAbsolute, join } from 'node:path'
 import type { ToolCallId } from '@deepseek-ai/dsh-llm'
 import {
   createExecutionWorkflow,
@@ -31,6 +31,7 @@ import {
   readDshScanBound,
   readExecutionState,
   registerCatalogEntity,
+  resolveHarnessDir,
 } from '@mstar-harness/engine'
 import type { ExecutionCaller, ExecutionContext, ExecutionSessionRef } from '@mstar-harness/engine'
 import { readAgentFlow } from '../src/gates/agent-flow.ts'
@@ -783,6 +784,42 @@ describe('native binding adoption — a native plan bind persists the executionB
     expect(stateA.data.workflows[0]?.coordinator ?? null).toBeNull()
   })
 
+  it('resolves a RELATIVE explicit harness to an absolute root before the adoption and the receipt', async () => {
+    // REGRESSION (round-8 must-fix): the shared admission resolves an explicit
+    // `harness` with `resolve(context.cwd, input.harness)` and the engine bind
+    // commits in that ABSOLUTE root, but the adoption used to record the RAW
+    // relative string — the stored `harnessRoot`, the receipt root and the
+    // ledger target then disagreed with the store the bind actually wrote.
+    const app = await bootedWithFixture()
+    // The carrying workspace holds the control harness BELOW it, selected
+    // relatively — resolved against the same lexical base the shared admission
+    // uses (the session workspace).
+    const workspace = await mkdtemp(join(tmpdir(), 'native-commands-relative-'))
+    roots.push(workspace)
+    const relativeHarness = join('control', '.mstar')
+    const harnessRoot = join(workspace, relativeHarness)
+    await seedUnboundWorkflow(harnessRoot, CHILD_ID)
+    await mkdir(join(harnessRoot, 'workflows', WORKFLOW_ID), { recursive: true })
+
+    const child = agentOf(CHILD_ID, workspace)
+    const bound = envelopeOf(await run(app.ctx, 'mstar_plan_bind', child, {
+      execution: true,
+      coordinator: true,
+      workflow: WORKFLOW_ID,
+      harness: relativeHarness,
+    }))
+    expect(bound.status).toBe('ok')
+
+    // The stored binding, the receipt root and the ledger target all name the
+    // ONE absolute root the engine bound in.
+    expect(isAbsolute(harnessRoot)).toBe(true)
+    expect(storedBinding(harnessRoot, workspace)?.executionBinding?.harnessRoot).toBe(harnessRoot)
+    expect(executionBindingRootOf(CHILD_ID, workspace)).toBe(harnessRoot)
+    const target = await resolveExecutionLedgerTarget(CHILD_ID, workspace)
+    expect(target?.harnessDir).toBe(harnessRoot)
+    expect(target?.workflowId).toBe(WORKFLOW_ID)
+  })
+
   it('resolves the FULL consumer chain from the harness the bind selected: attribution and clear act on root B, root A is never written', async () => {
     // REGRESSION (the round-6 must-fix): the adoption writes the durable slot
     // into the harness the bind selected, but the CONSUMERS re-derived the
@@ -844,7 +881,7 @@ describe('native binding adoption — a native plan bind persists the executionB
   })
 
   it('feeds real rows through the ledger CONSUMER from the SELECTED root: the B floor governs gate, bound and append; the A floor never filters', async () => {
-    // REGRESSION (round-7 must-fix, I-000769): the ledger's binding guard and
+    // REGRESSION (round-7 must-fix): the ledger's binding guard and
     // exclusion floor used to resolve the WORKSPACE harness while the append
     // went to the adoption receipt's root — root A's floor filtered root B's
     // events. The consumer below is the plugin's real wiring
@@ -912,7 +949,7 @@ describe('native binding adoption — a native plan bind persists the executionB
   })
 
   it('keeps attribution alive when the WORKSPACE root\'s binding store is unreadable and the selected root stays healthy', async () => {
-    // REGRESSION (I-000769, the guard half): the pre-fix ledger read its
+    // REGRESSION (the guard half): the pre-fix ledger read its
     // binding guard from the workspace harness, so an unreadable A store
     // paused attribution for a valid B binding.
     //
@@ -969,8 +1006,67 @@ describe('native binding adoption — a native plan bind persists the executionB
     }
   })
 
+  it('attributes real ledger rows from the adoption receipt when the workspace declares NO harness', async () => {
+    // REGRESSION (round-8 must-fix): the ledger target resolver probed the
+    // carrying WORKSPACE before reading the adoption receipt, so a native bind
+    // into another control root from a workspace with no harness at all
+    // answered null at the probe and every ledger row of the valid binding was
+    // dropped. Below: bind into B from such a workspace, then drive a real
+    // `tool-workflow/run-start` row through the plugin's real consumer.
+    const app = await bootedWithFixture({ sessions: 'fake' })
+    const rootB = await mkdtemp(join(tmpdir(), 'native-commands-harness-b-'))
+    roots.push(rootB)
+    const harnessB = join(rootB, '.mstar')
+    await seedUnboundWorkflow(harnessB, CHILD_ID)
+    await mkdir(join(harnessB, 'workflows', WORKFLOW_ID), { recursive: true })
+    // The carrying workspace declares NO harness: no `.mstar` / `.agents` /
+    // `.plans` / `.mstarc` under it, so the engine's own probe answers null.
+    const workspace = await mkdtemp(join(tmpdir(), 'native-commands-workspace-'))
+    roots.push(workspace)
+    expect(resolveHarnessDir(workspace, { workspaceRoot: workspace })).toBeNull()
+
+    const child = agentOf(CHILD_ID, workspace)
+    const bound = envelopeOf(await run(app.ctx, 'mstar_plan_bind', child, {
+      execution: true,
+      coordinator: true,
+      workflow: WORKFLOW_ID,
+      harness: harnessB,
+    }))
+    expect(bound.status).toBe('ok')
+
+    // (a) The target resolves from the receipt alone — the workspace probe has
+    // nothing to answer.
+    const target = await resolveExecutionLedgerTarget(CHILD_ID, workspace)
+    expect(target?.harnessDir).toBe(harnessB)
+    expect(target?.workflowId).toBe(WORKFLOW_ID)
+
+    // (b) A real row through the REAL consumer lands in B's ledger and
+    // advances B's scan bound.
+    const session = {
+      header: { id: CHILD_ID, cwd: workspace, createdAt: 1_700_000_000_200 },
+      seq: 1,
+      inheritedEventCount: 0,
+      eventAt: (seq: number) => seq === 0
+        ? { type: 'tool-workflow/run-start', seq: 0, time: 1_700_000_000_201, data: { runId: 'b-no-workspace-harness', name: 'b-no-workspace-harness' } }
+        : undefined,
+    }
+    ;(app.ctx.get('sessions') as unknown as { register(session: unknown): void }).register(session)
+    app.ctx.events.emit({}, 'session/event', session, session.eventAt(0))
+    await awaitWorkflowLedgerIdle()
+
+    const ledgerB = join(harnessB, 'workflows', WORKFLOW_ID)
+    expect(readAgentFlow(ledgerB, WORKFLOW_ID)?.events.map((event) => event.kind === 'workflow-run' ? event.runId : event.kind))
+      .toEqual(['b-no-workspace-harness'])
+    expect(readDshScanBound({ harnessDir: harnessB }, WORKFLOW_ID, CHILD_ID)).toMatchObject({ next: 1 })
+
+    // (c) The workspace stays untouched: nothing is ever written into it or
+    // beside it, and root A's ledger gains no row either.
+    expect(readdirSync(workspace)).toEqual([])
+    expect(readAgentFlow(join(app.harnessDir, 'workflows', WORKFLOW_ID), WORKFLOW_ID)?.events ?? []).toEqual([])
+  })
+
   it('recovers a lost adoption receipt through the RESUME re-bind with the same harness; a plain re-execution bind still refuses', async () => {
-    // REGRESSION (I-000770): the module note and the adoption refusal used to
+    // REGRESSION: the module note and the adoption refusal used to
     // name "re-run the bind" as the receipt-loss recovery — but a live ACTIVE
     // holder is never replaced by a bind (coordination.identity-mismatch).
     // The real recovery is a resume re-bind carrying the ORIGINAL session
