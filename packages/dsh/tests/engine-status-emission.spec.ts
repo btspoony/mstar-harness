@@ -86,7 +86,7 @@ describe('engine-status emission — written at the real change-driven emission'
     )
   })
 
-  it('keeps ONE row per session: an unchanged step emits nothing and a real change replaces the emission', async () => {
+  it('keeps ONE row per session: an unchanged step emits nothing, and a panel-only change replaces the emission without spending a row', async () => {
     // TTL 0 rebuilds the payload at every step, so a change is visible
     // immediately — and an UNCHANGED rebuild (whose only difference is the
     // emission's own store-revision write) must still emit nothing.
@@ -107,17 +107,21 @@ describe('engine-status emission — written at the real change-driven emission'
     const sameTurn = readDshStatusEmission({ harnessDir: app.harnessDir }, 'ses_alpha', app.root)
     expect(sameTurn.kind === 'ok' && sameTurn.emission?.turn).toBe(7)
 
-    // A REAL change (a newly open issue changes the panel projection) is the
-    // emission trigger: the row is replaced with the new turn.
+    // A PANEL-ONLY change (a newly open issue moves the projection the compact
+    // row does not render) replaces the stored emission payload — the panel is
+    // never stale — but appends no model row and does not relabel the
+    // freshness turn (the model last saw a row in turn 7).
     await seedOpenIssue(app.harnessDir, { title: 'a newly opened issue', severity: 'high', operationId: 'op-emission-turn' })
-    const changed = await app.ctx.waterfall(
+    const panelOnly = await app.ctx.waterfall(
       'agent/pre-step',
       stepPayloadOf('ses_alpha', app.root, inbox, 8, 1),
       defaultEnter(inbox),
     )
-    expect(changed.kind === 'enter' && changed.messages.length).toBe(inbox.length + 1)
+    expect(panelOnly.kind === 'enter' && panelOnly.messages.length).toBe(inbox.length)
     const nextTurn = readDshStatusEmission({ harnessDir: app.harnessDir }, 'ses_alpha', app.root)
-    expect(nextTurn.kind === 'ok' && nextTurn.emission?.turn).toBe(8)
+    expect(nextTurn.kind === 'ok' && nextTurn.emission?.turn).toBe(7)
+    const stored = nextTurn.kind === 'ok' ? JSON.parse(nextTurn.emission!.payloadJson) as { state: { residuals: unknown } } : undefined
+    expect(stored?.state.residuals).toEqual([{ severity: 'high', count: 1 }])
   })
 
   it('writes the replacement generation only for a real change, and refuses a write carrying the retired generation', async () => {
@@ -150,17 +154,19 @@ describe('engine-status emission — written at the real change-driven emission'
     const afterReplacement = readDshStatusEmission({ harnessDir: app.harnessDir }, 'ses_generation', app.root)
     expect(afterReplacement.kind === 'ok' && afterReplacement.emission).toBeUndefined()
 
-    // A REAL change in the replacement generation emits with the CURRENT
-    // generation: the row lands, keyed by the new turn.
+    // A REAL change in the replacement generation lands an emission with the
+    // CURRENT generation. The change here is panel-only (a new issue moves the
+    // projection the compact row does not render), so the stored row appears
+    // again while the freshness turn stays the one the model saw a row in.
     await seedOpenIssue(app.harnessDir, { title: 'a replacement-generation issue', severity: 'medium', operationId: 'op-emission-generation' })
     const changed = await app.ctx.waterfall(
       'agent/pre-step',
       stepPayloadOf('ses_generation', app.root, inbox, 3),
       defaultEnter(inbox),
     )
-    expect(changed.kind === 'enter' && changed.messages.length).toBe(inbox.length + 1)
+    expect(changed.kind === 'enter' && changed.messages.length).toBe(inbox.length)
     const writtenRead = readDshStatusEmission({ harnessDir: app.harnessDir }, 'ses_generation', app.root)
-    expect(writtenRead.kind === 'ok' && writtenRead.emission?.turn).toBe(3)
+    expect(writtenRead.kind === 'ok' && writtenRead.emission?.turn).toBe(1)
 
     // The guard still refuses a write that carries the retired generation —
     // a cached payload can never resurrect the previous authority's row.

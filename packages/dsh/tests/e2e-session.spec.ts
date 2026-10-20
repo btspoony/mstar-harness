@@ -440,22 +440,23 @@ describe('agent/pre-step — one unified engine-status row (iteration gate + sta
     })
 
     // The composed session log carries the model-facing block: the wrapper +
-    // the iteration-gate / workspace-state lines, never the watermark trio
-    // (those facts live in the payload and in the always-on system prompt).
+    // ONE compact delta line (workflow + non-Done plans + branch anchors + the
+    // phase-gate verdict), never the watermark trio (those facts live in the
+    // payload and in the always-on system prompt) and never the payload-only
+    // facts (residual rollup, row scopes, policy, knowledge, direction, flow).
     const text = row?.content[0]?.type === 'text' ? row.content[0].text : ''
     expect(text).toContain('<mstar_engine_status>')
     expect(text).not.toContain('mstar version:')
     expect(text).not.toContain('harness dir:')
     expect(text).not.toContain('enforcement:')
-    expect(text).toContain('iteration: e2e-iter')
-    expect(text).toContain('transition: phase-2-execute')
-    expect(text).toContain('gate: PASS')
+    expect(text).toContain('workflow: e2e-iter (active)')
     expect(text).toContain('plans: fixture-plan-1(Todo)')
-    // No issue/catalog authority exists in this workspace: the row discloses
-    // the refusal instead of claiming there are no open issues.
-    expect(text).toContain('residuals: none open')
     expect(text).toContain('branch: dev-dsh → dev-dsh')
-    expect(text).toContain('row scope: none recorded')
+    expect(text).toContain('gate: PASS (phase-2-execute)')
+    // The payload-only facts are absent from the row by label.
+    for (const dropped of ['residuals:', 'row scope:', 'policy:', 'knowledge:', 'direction:', 'agent flow:', 'store:']) {
+      expect(text).not.toContain(dropped)
+    }
   })
 })
 

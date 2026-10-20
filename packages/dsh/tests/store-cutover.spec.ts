@@ -255,7 +255,7 @@ describe('store cutover — the authority is the store, never the retired files'
     expect(state.storeFacts?.diagnostic).toContain('projection unavailable')
   })
 
-  it('renders the DB rollup through the async pre-read (the row the model actually sees)', async () => {
+  it('renders the compact delta from the async pre-read (the row the model actually sees)', async () => {
     const { app, harnessDir } = await storeApp()
     await seedActiveWorkflow(harnessDir, 'wf-store', [], {}, 'seed-wf-store', app.root)
     await seedOpenIssue(harnessDir, { title: 'critical from the DB', severity: 'critical', operationId: 'op-c' })
@@ -266,10 +266,16 @@ describe('store cutover — the authority is the store, never the retired files'
     if (decision.kind !== 'enter') return
     const row = decision.messages[decision.messages.length - 1]!
     const text = row.content[0]?.type === 'text' ? row.content[0].text : ''
-    expect(text).toContain('residuals: critical 1')
-    // The projection disclosure rides along — the row never presents the
-    // projected views as if they were built.
-    expect(text).toContain('store: projection unavailable')
+    expect(text).toContain('workflow: wf-store (active)')
+    // The DB rollup and its projection disclosure are PAYLOAD facts: the panel
+    // renders them and the compact row does not restate either.
+    expect(text).not.toContain('residuals:')
+    expect(text).not.toContain('store: projection unavailable')
+    // The rollup the row omits is really the DB's own (read back from the same
+    // async pre-read the listener used).
+    const payload = await buildCatalogPayloadWithStore(app.ctx, harnessDir)
+    expect(payload.state?.residuals).toEqual([{ severity: 'critical', count: 1 }])
+    expect(payload.state?.storeFacts?.diagnostic).toContain('projection unavailable')
   })
 })
 
