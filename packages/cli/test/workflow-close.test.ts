@@ -483,6 +483,55 @@ describe("mstar status workflow-close — prerequisite refusals", () => {
   }, 30_000);
 });
 
+describe("mstar status workflow-close — the report-only row reaches Done without prepare", () => {
+  /**
+   * A standalone `verification/report-only` row that was never prepared: prepare
+   * does not apply to a row with no feature working branch, so the documented
+   * route (`progress` → `complete` → close) must reach Done and close on its own,
+   * and the refusal a caller hits BEFORE the policy fulfilment is recorded must
+   * name the command that records it.
+   */
+  test("a report-only row goes progress → complete → close", async () => {
+    const fixture = await activeFixture("mstar-close-report-only");
+    await registerAndBind(fixture);
+
+    const started = join(fixture.root, "progress-report-only.json");
+    writeJson(started, { status: "InProgress", summary: "report-only delivery in progress", evidence_paths: [fixture.qcReport] });
+    const moved = runCli(["plan", "progress", "--plan", PLAN_ID, "--file", started, "--harness", fixture.harness], fixture.root, identityEnv());
+    expect(moved.exitCode, moved.stdout).toBe(0);
+
+    // The completion carries no source/Git identity: a report-only row has none,
+    // and the three evidence bodies are absolute paths inside the plan area.
+    const completion = join(fixture.root, "completion-report-only.json");
+    writeJson(completion, {
+      qc: { decision: "Approve", reports: [fixture.qcReport], consolidated: fixture.qcConsolidated },
+      qa: { gate: "mandatory", decision: "pass", report: fixture.qaReport },
+    });
+
+    // Nothing is recorded yet: the refusal names the command that records the
+    // registered policy's fulfilment, which is the only way forward here.
+    const early = runCli(["plan", "complete", "--plan", PLAN_ID, "--file", completion, "--harness", fixture.harness], fixture.root, identityEnv());
+    expect(early.exitCode).toBe(1);
+    expect(envelope(early).code).toBe("coordination.invalid-transition");
+    expect(message(early)).toContain("mstar workflow evidence");
+    expect(recoveryOf(early)).toContain("mstar workflow evidence");
+
+    const delivery = join(fixture.root, "delivery-report-only.json");
+    writeJson(delivery, { completion: { policy: COMPLETION_POLICY, evidence: "acceptance/plan-close/report.md" } });
+    const recorded = runCli(["workflow", "evidence", "--workflow", WORKFLOW_ID, "--file", delivery, "--harness", fixture.harness], fixture.root, identityEnv());
+    expect(recorded.exitCode, recorded.stdout).toBe(0);
+
+    const completed = runCli(["plan", "complete", "--plan", PLAN_ID, "--file", completion, "--harness", fixture.harness], fixture.root, identityEnv());
+    expect(completed.exitCode, completed.stdout).toBe(0);
+    expect(dataOf(completed)).toMatchObject({ data: { plan: { status: "Done" } } });
+
+    const closed = runCli(closeArgs(fixture, ["--reason", "report-only delivery complete"]), fixture.root, identityEnv());
+    expect(closed.exitCode, closed.stdout).toBe(0);
+    expect((await storedHeader(fixture)).status).toBe("completed");
+    expect(await servedRoot(fixture)).toHaveLength(0);
+  }, 30_000);
+});
+
 describe("mstar status workflow-close — usage and the retired file transports", () => {
   test("missing workflow selector is a usage refusal", async () => {
     const fixture = await activeFixture("mstar-close-usage");

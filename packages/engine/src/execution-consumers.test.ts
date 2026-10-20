@@ -662,7 +662,7 @@ describe("retained evidence path checks across the authority switch", () => {
 
     // The direct completion boundary checks the plan's own configured areas.
     const input = readCompletionEvidence(completionRequest(bodies));
-    expect(() => assertEvidenceInsidePlanArea(planAreaRoots(context.harnessDir, RETAINED_PLAN), input.evidence_paths)).not.toThrow();
+    expect(() => assertEvidenceInsidePlanArea(planAreaRoots(context.harnessDir, RETAINED_PLAN), input.evidence_refs)).not.toThrow();
 
 
     // No blanket blob conversion: the bodies are files, and the active store —
@@ -686,11 +686,46 @@ describe("retained evidence path checks across the authority switch", () => {
     rmSync(bodies.qc);
 
     // Evidence must exist when it is submitted.
-    expect(refusalCodeOf(() => assertEvidenceInsidePlanArea(roots, [bodies.qc]))).toBe("coordination.invalid-input");
+    expect(refusalCodeOf(() => assertEvidenceInsidePlanArea(roots, [{ field: "qc.reports[0]", path: bodies.qc }])))
+      .toBe("coordination.invalid-input");
     // Validated completion paths still go through the real existence boundary.
     expect(refusalCodeOf(() => assertEvidenceInsidePlanArea(
-      roots, readCompletionEvidence(completionRequest(bodies)).evidence_paths,
+      roots, readCompletionEvidence(completionRequest(bodies)).evidence_refs,
     ))).toBe("coordination.invalid-input");
+  });
+
+  test("retained evidence path containment names the offending field, its value and the allowed roots", async () => {
+    const context = await activeGraph("retained-evidence-path-field");
+    const bodies = retainedBodies(context.harnessDir);
+    writeBody(bodies.qc, QC_BODY);
+    writeBody(bodies.consolidated, CONSOLIDATED_BODY);
+    writeBody(bodies.qa, QA_BODY);
+    const roots = planAreaRoots(context.harnessDir, RETAINED_PLAN);
+    // A prose string in qc.consolidated is not a path at all. The refusal has to
+    // say WHICH field carried it and WHERE evidence may live, so the caller fixes
+    // the payload instead of guessing which of the four path members was wrong.
+    const input = readCompletionEvidence({
+      ...completionRequest(bodies),
+      qc: { decision: "Approve", reports: [bodies.qc], consolidated: "the reviewer approved everything" },
+    });
+    const refusal = (() => {
+      try {
+        assertEvidenceInsidePlanArea(roots, input.evidence_refs);
+      } catch (error) {
+        return error as { code?: unknown; message?: unknown; details?: Record<string, unknown> };
+      }
+      throw new Error("expected a refusal");
+    })();
+    const message = String(refusal.message);
+    expect(refusal.code).toBe("coordination.invalid-input");
+    expect(message).toContain("qc.consolidated");
+    expect(message).toContain("the reviewer approved everything");
+    for (const root of roots) expect(message).toContain(root);
+    expect(refusal.details).toMatchObject({
+      field: "qc.consolidated",
+      value: "the reviewer approved everything",
+      allowed: roots,
+    });
   });
 
   test("retained evidence path containment refuses a symlink escape", async () => {
@@ -709,7 +744,8 @@ describe("retained evidence path checks across the authority switch", () => {
     writeBody(outside, outsideText);
     const escaped = join(resolveSddDir(context.harnessDir, RETAINED_PLAN), "escaped.md");
     symlinkSync(outside, escaped);
-    expect(refusalCodeOf(() => assertEvidenceInsidePlanArea(roots, [escaped]))).toBe("coordination.path-mismatch");
+    expect(refusalCodeOf(() => assertEvidenceInsidePlanArea(roots, [{ field: "qc.reports[0]", path: escaped }])))
+      .toBe("coordination.path-mismatch");
   });
 });
 

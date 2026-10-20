@@ -955,7 +955,10 @@ export async function progressExecutionPlan(
         progress.track_branches,
       );
     }
-    assertEvidenceInsidePlanArea(planAreas, progress.evidence_paths);
+    assertEvidenceInsidePlanArea(
+      planAreas,
+      progress.evidence_paths.map((path, index) => ({ field: `progress.evidence_paths[${index}]`, path })),
+    );
 
     const metadata = { ...(isPlainObject(plan.metadata) ? plan.metadata : {}) };
     const nextMetadata =
@@ -1314,7 +1317,7 @@ function assertReportOnlyCompletionEvidence(snapshot: WorkflowSnapshot, planId: 
   if (failure !== undefined) {
     throw new CoordinationError(
       "coordination.invalid-transition",
-      "The transition requires matching report-only completion evidence; inspect the workflow with mstar status validate.",
+      "The report-only route completes only after its registered completion policy is RECORDED as fulfilled. Record that fulfilment with mstar workflow evidence --workflow <id> --file <absolute-json>, then retry plan complete.",
       {
         message: failure.message,
         plan_id: planId,
@@ -1731,7 +1734,7 @@ async function captureCompletionWitnesses(
   const prepared = effectivePrepareConfig(before.data);
   assertCompletionReviewDecision(evidence, read.planId, prepared.qa_gate);
   const planAreas = planAreaRoots(controlHarnessRoot(context), read.planId);
-  assertEvidenceInsidePlanArea(planAreas, evidence.evidence_paths);
+  assertEvidenceInsidePlanArea(planAreas, evidence.evidence_refs);
   const evidenceRefs = completionEvidenceRefs(evidence);
   if (route === "report-only") {
     assertReportOnlyCompletionEvidence(snapshot, read.planId);
@@ -1797,7 +1800,7 @@ function completeInTransaction(
   assertCompletionReviewDecision(evidence, planId, prepared.qa_gate);
   // Revalidate aliases/existence after the proof gap, before committing captured
   // evidence. Body hashes stay outside SQLite ownership and committed replays.
-  assertEvidenceInsidePlanArea(witnesses.planAreas, evidence.evidence_paths);
+  assertEvidenceInsidePlanArea(witnesses.planAreas, evidence.evidence_refs);
   const refs = witnesses.evidenceRefs;
   const scope = route === "report-only" ? null : planScopeOf(witness.view, planId);
   const record: CompletionRecord = {

@@ -32,21 +32,29 @@ const evidencePayloadSchema = z.record(z.string(), z.unknown());
  * contract. The engine re-validates the same fields (hashed `EvidenceRef`s,
  * accepted QC decisions, QA `pass`) — this schema is transport shaping, never
  * the authority.
+ *
+ * Every evidence member carries a PATH VALUE the engine resolves: each must be
+ * an absolute path to an EXISTING file inside the plan's own area — `{PLAN_DIR}`
+ * or `{SDD_DIR}/<plan-id>`. The engine refuses a relative path, a missing file
+ * and any path outside those roots, naming the offending field.
  */
+const EVIDENCE_PATH_DESCRIPTION =
+  "Absolute path to an existing evidence file inside the plan area ({PLAN_DIR} or {SDD_DIR}/<plan-id>); " +
+  "a relative path, a missing file or a path outside the plan area is refused with the offending field. Inspect the plan scope with mstar plan show.";
 const completionEvidenceSchema = z.object({
   source_sha: z.string().min(1).optional(),
   review_base: z.string().min(1).optional(),
   review_head: z.string().min(1).optional(),
-  evidence_paths: z.array(z.string()).optional(),
+  evidence_paths: z.array(z.string()).optional().describe(`Additional evidence files: ${EVIDENCE_PATH_DESCRIPTION}`),
   qc: z.object({
     decision: z.enum(["Approve", "Approve with residuals"]),
-    reports: z.array(z.string().min(1)).min(1),
-    consolidated: z.string().min(1),
+    reports: z.array(z.string().min(1)).min(1).describe(`QC seat reports: ${EVIDENCE_PATH_DESCRIPTION}`),
+    consolidated: z.string().min(1).describe(`The consolidated QC decision report: ${EVIDENCE_PATH_DESCRIPTION}`),
   }).passthrough(),
   qa: z.object({
     gate: z.enum(["mandatory", "pm-acceptance"]),
     decision: z.literal("pass"),
-    report: z.string().min(1),
+    report: z.string().min(1).describe(`The QA or PM acceptance report: ${EVIDENCE_PATH_DESCRIPTION}`),
   }).passthrough(),
 }).passthrough();
 const inputSchema = z.object({
@@ -96,25 +104,40 @@ function failure(id: string, error: unknown): CommandEnvelope<never> {
   return refusalEnvelope({
     command: id, status: "refused", code, exitCode: 1, message,
     ...(details === undefined ? {} : { details }),
-   recovery: id === "plan.complete" && code === "coordination.scope-mismatch"
-        ? details !== undefined && "expected" in details && "actual" in details
-          ? "The recorded working branch does not match the workflow's registered delivery source. Correct the registered anchor with mstar workflow delivery-anchors, or re-record the row scope with mstar plan prepare."
-          // No recorded scope at all: there is no anchor to compare, so the repair
-          // is to record the row's worktree and branch, not to re-register one.
-          : "The plan records no worktree/branch scope. Record the plan worktree and feature branch with mstar plan prepare --workflow <workflow-id> --plan <plan-id> --worktree-path <absolute-path> --working-branch <branch>, then retry."
-        : id === "plan.bind"
-        ? "The registered workflow and current coordinator identity must match; a first bind needs the execution route and an existing binding is resumed through its active session reference. Run mstar plan bind --execution true --coordinator true --workflow <workflow-id>, or mstar plan bind --resume-ref <session-ref>."
-        : id === "plan.show"
-          ? "Select a registered workflow and plan id from the execution authority. Run mstar plan show --workflow <workflow-id> --plan <plan-id>."
-          : id === "plan.prepare"
-            ? "Correct the absolute feature-worktree path, feature branch, and Prepare gate values. Run mstar plan prepare --workflow <workflow-id> --plan <plan-id> --worktree-path <absolute-path> --working-branch <branch>."
-            : id === "plan.progress"
-              ? "The progress value must be the JSON progress object (status, summary, evidence_paths) and the plan revision must be current. Run mstar plan progress --workflow <workflow-id> --plan <plan-id> --progress <json-progress-object>."
-              : id === "plan.issue-add"
-                ? "Valid issue entries and the current revision for the addressed plan are required. Run mstar plan issue-add --workflow <workflow-id> --plan <plan-id> --entries <issues-file>."
-                : id === "plan.issue-close"
-                  ? "The addressed plan issue needs its current revision and a supported disposition. Run mstar plan issue-close --workflow <workflow-id> --plan <plan-id> --issue <issue-id> --disposition <disposition>."
-                  : "Delivery-route evidence and QC/QA proof for this plan are required. Run mstar plan complete --workflow <workflow-id> --plan <plan-id> --file <absolute-evidence.json>."});
+    // Rule #341 class 3 requires a statically provable recovery per refusal
+    // branch, so this stays an inline chain of literal sentences rather than a
+    // helper call. The two plan.complete branches that name ANOTHER verb are the
+    // ones where re-running `plan complete` cannot succeed.
+    recovery: id === "plan.complete" && code === "coordination.invalid-transition" && details?.code === "PHASE6_DELIVERY_KIND_UNREGISTERED"
+      ? "The workflow declares no delivery kind, and the kind is fixed at registration. Close it honestly with mstar workflow lifecycle --workflow <workflow-id> --status failed --reason <text>, then register a replacement workflow with the correct declared delivery kind."
+      : id === "plan.complete" && code === "coordination.invalid-transition"
+        // A report-only completion needs the policy fulfilment RECORDED first; no
+        // amount of correct QC/QA evidence substitutes for it.
+        ? "Record the missing delivery evidence — for a report-only route the fulfilment of its registered completion policy — with mstar workflow evidence --workflow <workflow-id> --file <absolute-json>, then retry plan complete. Read the workflow's own state with mstar status validate."
+        : (id === "plan.complete" || id === "plan.progress") && typeof details?.field === "string"
+          // The refusal names which payload field carried the bad value; the plan's
+          // own area is what that value must sit inside.
+          ? "Correct the evidence values named by the refusal's field details: each must be an absolute path to an existing file inside the plan area. Read the plan's area with mstar plan show, then retry."
+          : id === "plan.complete" && code === "coordination.scope-mismatch"
+            ? details !== undefined && "expected" in details && "actual" in details
+              ? "The recorded working branch does not match the workflow's registered delivery source. Correct the registered anchor with mstar workflow delivery-anchors, or re-record the row scope with mstar plan prepare."
+              // No recorded scope at all: there is no anchor to compare, so the repair
+              // is to record the row's worktree and branch, not to re-register one.
+              : "The plan records no worktree/branch scope. Record the plan worktree and feature branch with mstar plan prepare --workflow <workflow-id> --plan <plan-id> --worktree-path <absolute-path> --working-branch <branch>, then retry."
+            : id === "plan.bind"
+              ? "The registered workflow and current coordinator identity must match; a first bind needs the execution route and an existing binding is resumed through its active session reference. Run mstar plan bind --execution true --coordinator true --workflow <workflow-id>, or mstar plan bind --resume-ref <session-ref>."
+              : id === "plan.show"
+                ? "Select a registered workflow and plan id from the execution authority. Run mstar plan show --workflow <workflow-id> --plan <plan-id>."
+                : id === "plan.prepare"
+                  ? "Correct the absolute feature-worktree path, feature branch, and Prepare gate values. Run mstar plan prepare --workflow <workflow-id> --plan <plan-id> --worktree-path <absolute-path> --working-branch <branch>."
+                  : id === "plan.progress"
+                    ? "The progress value must be the JSON progress object (status, summary, evidence_paths) and the plan revision must be current. Run mstar plan progress --workflow <workflow-id> --plan <plan-id> --progress <json-progress-object>."
+                    : id === "plan.issue-add"
+                      ? "Valid issue entries and the current revision for the addressed plan are required. Run mstar plan issue-add --workflow <workflow-id> --plan <plan-id> --entries <issues-file>."
+                      : id === "plan.issue-close"
+                        ? "The addressed plan issue needs its current revision and a supported disposition. Run mstar plan issue-close --workflow <workflow-id> --plan <plan-id> --issue <issue-id> --disposition <disposition>."
+                        : "Delivery-route evidence and QC/QA proof for this plan are required. Run mstar plan complete --workflow <workflow-id> --plan <plan-id> --file <absolute-evidence.json>.",
+  });
 }
 function command<I, O>(definition: CommandDefinition<I, O>): CommandDefinition<I, O> {
   return definition;
@@ -380,6 +403,14 @@ function optionHelpFor(verb: (typeof commandNames)[number]): Partial<Record<stri
     // The value is the JSON progress object, not a bare status word: the accepted
     // shape is the engine's `validatePlanProgress` contract, published as PlanProgress.
     progress: "JSON progress object with status (InProgress|InReview|Blocked), summary and evidence_paths; read the shape with mstar schema PlanProgress",
+    expect: PLAN_EXPECT_HELP,
+    sessionRef: `optional session transport: ${SESSION_REF_SUPPLIES}`,
+  };
+  if (verb === "complete") return {
+    // Both transports validate this exact schema, so the rule it encodes is the
+    // one a file payload and an inline --evidence value meet.
+    evidence: `Completion evidence JSON object (--file <absolute-json> or inline). ${EVIDENCE_PATH_DESCRIPTION}`,
+    file: `Completion evidence JSON file (absolute path); its qc.reports[], qc.consolidated, qa.report and evidence_paths[] values are evidence paths. ${EVIDENCE_PATH_DESCRIPTION}`,
     expect: PLAN_EXPECT_HELP,
     sessionRef: `optional session transport: ${SESSION_REF_SUPPLIES}`,
   };

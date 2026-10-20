@@ -15686,8 +15686,12 @@ function readCompletionEvidence(value, route = "integration") {
   if (!Array.isArray(extra) || !extra.every(isNonEmptyString)) {
     throw new CoordinationError("coordination.invalid-input", "Invalid evidence_paths: provide an array of absolute evidence paths. Inspect workflow state with mstar status validate.");
   }
-  const paths = new Set([...qc.reports, qc.consolidated, ...extra]);
-  paths.add(qaReport);
+  const evidenceRefs = [
+    ...qc.reports.map((path2, index2) => ({ field: `qc.reports[${index2}]`, path: path2 })),
+    { field: "qc.consolidated", path: qc.consolidated },
+    { field: "qa.report", path: qaReport },
+    ...extra.map((path2, index2) => ({ field: `evidence_paths[${index2}]`, path: path2 }))
+  ];
   return {
     source_sha: sourceSha,
     review_base: reviewBase,
@@ -15698,7 +15702,7 @@ function readCompletionEvidence(value, route = "integration") {
     qa_gate: qaGate,
     qa_decision: "pass",
     qa_report: qaReport,
-    evidence_paths: [...paths]
+    evidence_refs: evidenceRefs
   };
 }
 function assertCompletionReviewDecision(evidence, planId, qaGate) {
@@ -17102,17 +17106,19 @@ function planAreaRoots(harnessRoot, planId) {
     canonicalizeNearestExisting(resolveSddDir(harnessRoot, planId))
   ];
 }
-function assertEvidenceInsidePlanArea(roots, paths) {
-  for (const path2 of paths) {
+function assertEvidenceInsidePlanArea(roots, refs) {
+  const allowed = roots.join(" or ");
+  for (const { field, path: path2 } of refs) {
+    const details = { field, value: path2, allowed: roots };
     if (!isAbsolute8(path2)) {
-      throw invalidInput2("Evidence path must be absolute and inside the plan area. Inspect the plan scope with mstar plan show. Pass the plan id registered in the workflow row.", { path: path2 });
+      throw invalidInput2(`Evidence value in ${field} is not an absolute path: ${JSON.stringify(path2)}; evidence must be an absolute path inside ${allowed}`, details);
     }
     const abs = canonicalizeNearestExisting(path2);
     if (!roots.some((root) => isWithin(root, abs))) {
-      throw new CoordinationError("coordination.path-mismatch", "Evidence path is outside the plan's plan/SDD area. Inspect the plan scope with mstar plan show. Pass the plan id registered in the workflow row.", { path: abs, allowed: roots });
+      throw new CoordinationError("coordination.path-mismatch", `Evidence value in ${field} is outside the plan area: ${JSON.stringify(abs)}; evidence must be an absolute path inside ${allowed}`, { ...details, value: abs });
     }
     if (!existsSync13(abs)) {
-      throw new CoordinationError("coordination.invalid-input", "Evidence path does not exist inside the plan's plan/SDD area. Inspect the plan scope with mstar plan show. Pass the plan id registered in the workflow row.", { path: abs });
+      throw new CoordinationError("coordination.invalid-input", `Evidence value in ${field} does not exist: ${JSON.stringify(abs)}; record the evidence inside ${allowed} first`, { ...details, value: abs });
     }
   }
 }
@@ -26764,7 +26770,7 @@ async function progressExecutionPlan(context, request) {
         plans: [plan, ...witness.siblings.map((sibling) => sibling.plan)]
       }, progress.track_branches);
     }
-    assertEvidenceInsidePlanArea(planAreas, progress.evidence_paths);
+    assertEvidenceInsidePlanArea(planAreas, progress.evidence_paths.map((path2, index2) => ({ field: `progress.evidence_paths[${index2}]`, path: path2 })));
     const metadata = { ...isPlainObject(plan.metadata) ? plan.metadata : {} };
     const nextMetadata = progress.track_branches !== undefined ? { ...metadata, track_branches: [...progress.track_branches] } : metadata;
     const nextState = { ...state, status: progress.status };
@@ -26951,7 +26957,7 @@ async function readWorkflowSnapshot2(context, workflowId) {
 function assertReportOnlyCompletionEvidence(snapshot, planId) {
   const failure = consultDeliveryEvidence(snapshot).find((entry) => !entry.ok);
   if (failure !== undefined) {
-    throw new CoordinationError("coordination.invalid-transition", "The transition requires matching report-only completion evidence; inspect the workflow with mstar status validate.", {
+    throw new CoordinationError("coordination.invalid-transition", "The report-only route completes only after its registered completion policy is RECORDED as fulfilled. Record that fulfilment with mstar workflow evidence --workflow <id> --file <absolute-json>, then retry plan complete.", {
       message: failure.message,
       plan_id: planId,
       code: failure.code
@@ -27111,7 +27117,7 @@ async function captureCompletionWitnesses(context, read, operation) {
   const prepared = effectivePrepareConfig(before.data);
   assertCompletionReviewDecision(evidence, read.planId, prepared.qa_gate);
   const planAreas = planAreaRoots(controlHarnessRoot(context), read.planId);
-  assertEvidenceInsidePlanArea(planAreas, evidence.evidence_paths);
+  assertEvidenceInsidePlanArea(planAreas, evidence.evidence_refs);
   const evidenceRefs = completionEvidenceRefs(evidence);
   if (route === "report-only") {
     assertReportOnlyCompletionEvidence(snapshot, read.planId);
@@ -27153,7 +27159,7 @@ function completeInTransaction(witness, tx, at, read, operation, witnesses) {
   const evidence = readCompletionEvidence(operation.evidence, rowValidationRoute(snapshot, row));
   const prepared = effectivePrepareConfig(witness.view);
   assertCompletionReviewDecision(evidence, planId, prepared.qa_gate);
-  assertEvidenceInsidePlanArea(witnesses.planAreas, evidence.evidence_paths);
+  assertEvidenceInsidePlanArea(witnesses.planAreas, evidence.evidence_refs);
   const refs = witnesses.evidenceRefs;
   const scope = route === "report-only" ? null : planScopeOf(witness.view, planId);
   const record = {
