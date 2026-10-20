@@ -47,6 +47,10 @@ describe("host-state store domain", () => {
         kind: "unavailable",
         reason: expect.stringContaining("reviewed activation"),
       });
+      // The recorded-cwd detail is specific to `cwd-mismatch`: every other
+      // unavailable reason (staged authority here) carries no such fact.
+      const staged = readDshSessionBinding(context, "s", "/cwd");
+      expect("recordedCwd" in staged).toBe(false);
       expect(readDshStatusEmission(context, "s", "/cwd")).toMatchObject({
         kind: "unavailable",
         reason: expect.stringContaining("reviewed activation"),
@@ -269,7 +273,11 @@ describe("host-state store domain", () => {
       });
       expect(writeDshSessionBinding(context, "other", "/other", { selectedWorkflowId: "wf-c", excludedBeforeSeq: 1 })).toEqual({ kind: "written" });
       expect(readDshSessionBinding(context, "s", "/cwd")).toMatchObject({ kind: "ok", binding: { selectedWorkflowId: "wf-a", executionBinding: "bind-a", excludedBeforeSeq: 9 } });
-      expect(readDshSessionBinding(context, "s", "/other")).toMatchObject({ kind: "unavailable", reason: "cwd-mismatch" });
+      // A mismatched read names the workspace the session's row is keyed to:
+      // the key is the pair, so the recovery cannot be derived without it.
+      expect(readDshSessionBinding(context, "s", "/other")).toEqual({
+        kind: "unavailable", reason: "cwd-mismatch", recordedCwd: "/cwd",
+      });
       expect(readDshSessionBinding(context, "other", "/other")).toMatchObject({ kind: "ok", binding: { selectedWorkflowId: "wf-c", excludedBeforeSeq: 1 } });
       expect(recordDshStatusEmission(context, "s", "/cwd", 1, "first")).toEqual({ kind: "written" });
       expect(recordDshStatusEmission(context, "s", "/cwd", 2, "second")).toEqual({ kind: "written" });

@@ -37,11 +37,22 @@ function insertion(tx: DshWriteTransaction, workflowId: string, lineJson: string
   ).run(workflowId, eventId ?? null, lineJson, now());
 }
 
+/**
+ * One session's durable binding read for the exact `(sessionId, cwd)` key.
+ *
+ * `unavailable` with reason `cwd-mismatch` additionally carries `recordedCwd`:
+ * the workspace that key is actually recorded under. The durable key is the
+ * pair, so a caller told only "mismatch" cannot name the workspace that owns
+ * the record — and the recovery ("run from the workspace the records are keyed
+ * to") would be a condition the caller cannot see. The read already looks the
+ * row up, so the fact costs no extra query there; every other unavailable
+ * reason (authority absent/staged/corrupt/schema) stays exactly as it was.
+ */
 export function readDshSessionBinding(
   context: StoreContext,
   sessionId: string,
   cwd: string,
-): { kind: "ok"; binding?: DshSessionBinding } | { kind: "unavailable"; reason: string } {
+): { kind: "ok"; binding?: DshSessionBinding } | { kind: "unavailable"; reason: string; recordedCwd?: string } {
   try {
     return withExecutionReadGuard(context, (db) => {
       const row = db.prepare(
@@ -57,9 +68,11 @@ export function readDshSessionBinding(
       } | undefined;
       if (!row) {
         const otherCwd = db.prepare(
-          "select 1 from dsh_session_bindings where session_id = ? limit 1",
-        ).get(sessionId);
-        return otherCwd ? { kind: "unavailable", reason: "cwd-mismatch" } : { kind: "ok" };
+          "select cwd from dsh_session_bindings where session_id = ? limit 1",
+        ).get(sessionId) as { cwd?: string } | undefined;
+        return otherCwd
+          ? { kind: "unavailable", reason: "cwd-mismatch", recordedCwd: otherCwd.cwd! }
+          : { kind: "ok" };
       }
       return {
         kind: "ok",
