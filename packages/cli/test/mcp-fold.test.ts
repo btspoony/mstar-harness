@@ -393,7 +393,7 @@ describe("folded MCP command families", () => {
       // The field list is CAPPED; `mstar_schema` is the full answer past it.
       const capped = envelope(await call(client, "mstar_issue", { action: "add", bogus: 1 }));
       expect(capped.details?.field).toBe("bogus");
-      expect(capped.message).toContain(", …");
+      expect(capped.message).toContain(", ...");
       expect((capped.details?.acceptedFields ?? []).length).toBeGreaterThan(12);
     });
   });

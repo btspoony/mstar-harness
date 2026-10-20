@@ -329,12 +329,12 @@ function undeclaredSelectorRefusal(
  */
 const ACCEPTED_FIELD_LIST_CAP = 12;
 
-/** `a, b, …` for a field list, truncated after {@link ACCEPTED_FIELD_LIST_CAP}. */
+/** `a, b, ...` for a field list, truncated after {@link ACCEPTED_FIELD_LIST_CAP}. */
 function cappedFieldList(fields: readonly string[]): string {
   if (fields.length === 0) return "no fields";
   return fields.length <= ACCEPTED_FIELD_LIST_CAP
     ? fields.join(", ")
-    : `${fields.slice(0, ACCEPTED_FIELD_LIST_CAP).join(", ")}, …`;
+    : `${fields.slice(0, ACCEPTED_FIELD_LIST_CAP).join(", ")}, ...`;
 }
 
 /**
