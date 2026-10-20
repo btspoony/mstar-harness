@@ -1163,12 +1163,27 @@ describe('mstar-engine-status catalog — compact delta plans join cap (spec D4)
     return { text: textOf(row), state }
   }
 
-  it('empty (0) → `plans: none` and no `row scope:` segment in the row (payload keeps the aggregates)', async () => {
+  it('empty (0) → `plans: none registered` and no `row scope:` segment in the row (payload keeps the aggregates)', async () => {
     const { text, state } = await catalogFor(0)
-    expect(plansOf(text)).toBe('plans: none')
+    expect(plansOf(text)).toBe('plans: none registered')
     expect(text).not.toContain('row scope:')
     expect(state.plans).toEqual([])
     expect(state.rowScopes).toEqual([])
+  })
+
+  it('all Done (2) → `plans: all done` — an empty registry and a finished workflow never share one text', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'dsh-mstar-catalog-cap-done-'))
+    const harnessDir = join(root, 'harness')
+    await seedActiveWorkflow(harnessDir, 'wf-cap', [
+      { ...capRow(0), status: 'Done' },
+      { ...capRow(1), status: 'Done' },
+    ], {}, SESSION_ID, root, 'wf-cap')
+    const app = booted = await bootApp({ root, harnessDir })
+    const decision = await app.ctx.waterfall('agent/pre-step', stepPayload([]), defaultEnter([]))
+    const { row } = catalogRowOf(decision)
+    expect(plansOf(textOf(row))).toBe('plans: all done')
+    // The Done rows are still payload facts (the panel renders the registry).
+    expect((await buildCatalogPayloadWithStore(app.ctx, harnessDir)).state?.plans).toHaveLength(2)
   })
 
   it('singleton (1) → full join, no overflow token, byte-identical to the uncapped rendering', async () => {
@@ -1272,8 +1287,9 @@ Pick.
     expect(textOf(rowA1)).toContain('plan-a(Todo)')
     expect(textOf(rowA1)).not.toContain('plan-b')
     expect(textOf(rowB1)).toContain('workflow: wf-b (active)')
-    // wf-b's only plan is Done: the delta renders no pending plan for it.
-    expect(textOf(rowB1)).toContain('plans: none')
+    // wf-b's only plan is Done: the delta renders no pending plan for it, and
+    // the segment names the finished registry rather than an empty one.
+    expect(textOf(rowB1)).toContain('plans: all done')
     expect(textOf(rowB1)).not.toContain('plan-a')
     // Each session persisted its OWN selection's payload (the panel side of D4).
     const persistedPlansOf = (sessionId: string): unknown => {

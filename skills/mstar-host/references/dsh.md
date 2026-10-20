@@ -234,24 +234,34 @@ rollbacks. Hard gates are never a global default.
 
 A composed agent step carries ONE **`<mstar_engine_status>`** catalog
 message when the row is emitted. The row is a compact DELTA, not a snapshot:
-ONE line carrying the selected `workflow`, its non-Done `plans`, the `branch`
-anchors, and — when a steering compass resolved — the iteration phase `gate`
-verdict with its transition and violation codes. When no lifecycle is selected
-it renders `workflow selection: ERROR (<code>) <message>` in place of that
-line, and that message names the execution authority plus a real recovery
-(`mstar workflow register` / `mstar iteration register`, or picking a
-registered lifecycle for this session) rather than a retired `status.json`
-path.
+ONE delta line carrying the selected `workflow`, its non-Done `plans`, the
+`branch` anchors, and — when a steering compass resolved — the iteration phase
+`gate` verdict with its transition and violation codes. A `workflow warning:
+<code> <message>` line follows that delta line when the selection carries a
+warning (the registration-less fallback adds the watermark trio above it), so
+the block is one delta line plus those disclosures. `plans:` distinguishes an
+empty registry (`plans: none registered`) from a workflow whose every plan row
+is Done (`plans: all done`); the non-Done rows are listed otherwise. When no
+lifecycle is selected it renders `workflow selection: ERROR (<code>) <message>`
+in place of that line, and that message names the execution authority plus a
+real recovery (`mstar workflow register` / `mstar iteration register`, or
+picking a registered lifecycle for this session) rather than a retired
+`status.json` path.
 
 Everything else the payload carries — the open-issue rollup and its detail
-rows, the branch policy, plan row scopes (a recorded scope, never a lease), the
-knowledge digest, the compass direction and the agent-flow ledger — is
-deliberately NOT in the row. Those facts stay in `MstarEngineStatusPayload`
-(the panel renders them from the persisted emission) and in the engine
-authorities behind it; `mstar status` is the on-demand authority a model reads
-instead of waiting for a row. The row is a projection of the payload, never the
-authority for it: treat the row as a change notice and re-read the authority
-when a decision needs the full state.
+rows, the branch policy, the spec-integration branch anchor, plan row scopes (a
+recorded scope, never a lease), the knowledge digest, the compass direction and
+the agent-flow ledger — is deliberately NOT in the row. Those facts stay in
+`MstarEngineStatusPayload` (the panel renders them from the persisted emission)
+and in the engine authorities behind it; there is no single `status` command
+that serves them, so read the concrete one per fact: `mstar status tech-debt`
+for the open-issue rollup, `mstar roadmap show` and the compass document
+(`{ITERATION_DIR}/<id>/delivery-compass.md`) for direction, branch policy and
+the spec-integration anchor, `mstar plan show` for plan rows and their recorded
+scopes, `{KNOWLEDGE_DIR}` for the knowledge documents, and the persisted
+`dsh_status_emissions` snapshot for the agent-flow ledger. The row is a
+projection of the payload, never the authority for it: treat the row as a
+change notice and re-read the authority when a decision needs the full state.
 
 Emission is change-driven per session+workspace, and the two sides are gated
 separately. The MODEL row is keyed on its own rendered text: first emission,
@@ -277,9 +287,14 @@ freshness footer `turn` / `at` name the last MODEL-row emission, so a
 panel-only persist updates the payload without claiming the model saw a new
 row. The row is not periodically re-anchored, so after host-side context
 compaction it may be absent until the next rendered change — the system-prompt
-digest still carries the version, the active workflow and its non-Done plans,
-and `mstar status` re-reads everything else on demand. The build behind it is
-one per-workspace TTL cache (`catalogTtlMs`, default 60 s).
+digest still carries the version, the active workflow, its non-Done plans, the
+`branch` anchors (when the payload resolved both) and the phase-`gate` verdict
+(when a steering compass gated the iteration). The remaining facts are read on
+demand: `mstar status tech-debt` for the open-issue rollup,
+`mstar iteration gate --workflow <id> --compass <path>` for a fresh gate
+evaluation, and the compass / plan documents for direction, policy and row
+scopes. The build behind it is one per-workspace TTL cache (`catalogTtlMs`,
+default 60 s).
 
 ### Execution authority in this host (source state)
 

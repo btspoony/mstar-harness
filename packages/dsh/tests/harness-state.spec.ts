@@ -98,7 +98,7 @@ describe('mstar-engine-status — open-issue facts come from the store', () => {
     // renders no residual rollup at all (a "none open" row line would restate
     // a fact the panel already owns).
     expect(textOf(row)).not.toContain('residuals:')
-    expect(textOf(row)).toContain('workflow: wf-1 (active) | plans: none')
+    expect(textOf(row)).toContain('workflow: wf-1 (active) | plans: none registered')
   })
 })
 

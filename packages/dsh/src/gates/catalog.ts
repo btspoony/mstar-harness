@@ -8,8 +8,12 @@
  * panel-only change still persists the payload without spending a model row on
  * it. The block is a PROJECTION of the payload — the open-item rollup, the
  * branch policy, plan row scopes, the knowledge digest, the compass direction
- * and the agent-flow ledger stay payload-only (the panel renders them, and
- * `mstar status` is the authority), while the version / harness-dir /
+ * and the agent-flow ledger stay payload-only (the panel renders them from the
+ * persisted emission), and each dropped fact is read on demand from its own
+ * authority: `mstar status tech-debt` for the open-issue rollup,
+ * `mstar roadmap show` / the compass document for direction and branch policy,
+ * `{KNOWLEDGE_DIR}` for the knowledge documents. There is no single
+ * `status` command that serves them. The version / harness-dir /
  * enforcement watermark stays in the payload and in the always-on system
  * prompt — never in the row text. A workspace with no resolved
  * `{HARNESS_DIR}` composes no row at all. The per-workspace TTL cache
@@ -43,7 +47,8 @@
  * `DEFAULT_CATALOG_TTL_MS`, `CatalogCacheEntry` / `EmissionDigest`,
  * `PreStepCatalogOptions`, `panelDigestOf`, `renderEngineStatusCatalog`,
  * `createCatalogInvalidation` / `CatalogInvalidation`) are entry-internal, and
- * the two renderers/projections are exported so both modes are unit-testable.
+ * the two renderers/projections — plus the `gateSegment` they share with the
+ * always-on digest — are exported so both modes are unit-testable.
  */
 import { existsSync, readFileSync, realpathSync } from 'node:fs'
 import { basename, isAbsolute, join, relative, sep } from 'node:path'
@@ -491,6 +496,10 @@ const DONE_PLAN_STATUS = 'Done'
  * (`mstar:engine-status` digest + `mstar:harness-rules`), so the steady-state
  * row does not repeat it.
  *
+ * The row is ONE delta line, plus the `workflow warning:` disclosure when the
+ * selection carries a warning (and the watermark trio on the
+ * registration-less fallback) — never more.
+ *
  * The row text is also the emission comparison key's model half
  * ({@link preStepCatalogListener}): dropping a field here drops it from the
  * re-emission trigger too, which is what stops an incidental count change from
@@ -529,9 +538,17 @@ export function renderEngineStatusCatalog(
       const segments = [`workflow: ${state.selection.workflowId} (${state.selection.kind})`]
       // Non-Done rows only: a completed plan is not a decision the next step
       // makes, and the always-on digest (`system-prompt.ts`) renders the same
-      // non-Done filter — the two surfaces never duplicate a Done row.
+      // non-Done filter — the two surfaces never duplicate a Done row. An
+      // EMPTY registry and an all-Done workflow must not share one text: "none
+      // registered" (nothing to pick up yet) and "all done" (nothing left) are
+      // different states for the next step.
       const pending = state.plans.filter((plan) => plan.status !== DONE_PLAN_STATUS)
-      segments.push(`plans: ${pending.length === 0 ? 'none' : joinCapped(pending, CATALOG_STATE_JOIN_LIMIT, ' ', (plan) => `${plan.id}(${plan.status})`)}`)
+      const plans = state.plans.length === 0
+        ? 'none registered'
+        : pending.length === 0
+          ? 'all done'
+          : joinCapped(pending, CATALOG_STATE_JOIN_LIMIT, ' ', (plan) => `${plan.id}(${plan.status})`)
+      segments.push(`plans: ${plans}`)
       if (state.iterationBaseBranch !== null && state.targetBranch !== null) {
         segments.push(`branch: ${state.iterationBaseBranch} → ${state.targetBranch}`)
       }
@@ -551,9 +568,13 @@ export function renderEngineStatusCatalog(
 /**
  * The compact `gate:` segment: verdict + the phase transition it points at,
  * plus the violation codes on a FAIL (a bare FAIL would name no cause).
+ *
+ * Exported because the always-on `mstar:engine-status` digest
+ * (`system-prompt.ts`) carries the SAME segment after compaction — one format,
+ * not two drifting copies (`system-prompt.ts` already imports this module).
  * @param gate - the evaluated iteration phase gate.
  */
-function gateSegment(gate: IterationGateView): string {
+export function gateSegment(gate: IterationGateView): string {
   if (gate.ok) return `gate: PASS (${gate.transition})`
   const codes = gate.violations.map((violation) => violation.code).join(', ')
   return codes === '' ? `gate: FAIL (${gate.transition})` : `gate: FAIL (${gate.transition}): ${codes}`
