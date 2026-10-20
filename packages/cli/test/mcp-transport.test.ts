@@ -29,6 +29,15 @@ async function withClient(definitions: readonly CommandDefinition[], run: (clien
   }
 }
 
+/** The folded tool one command id publishes under, and the `action` selecting it. */
+function folded(id: string): { name: string; action: string } {
+  const dot = id.indexOf(".");
+  return {
+    name: `mstar_${(dot === -1 ? id : id.slice(0, dot)).replace(/[.-]/g, "_")}`,
+    action: dot === -1 ? id : id.slice(dot + 1),
+  };
+}
+
 function definition(id: string): CommandDefinition {
   const found = getCommandDefinitions().find((entry) => entry.id === id);
   if (found === undefined) throw new Error(`missing command definition: ${id}`);
@@ -90,11 +99,14 @@ describe("registered MCP transport consumers", () => {
   test("qc report discovery and omitted/supplied calls agree at the actual SDK boundary", async () => {
     await withClient([definition("qc.validate-report")], async (client, cwd) => {
       const { tools } = await client.listTools();
-      const tool = tools.find((entry) => entry.name === "mstar_qc_validate_report");
-      expect(tool?.inputSchema.required).toContain("reportFile");
-      expect(tool?.inputSchema.properties).toMatchObject({ reportFile: { type: "string" } });
+      const tool = tools.find((entry) => entry.name === "mstar_qc");
+      expect(tool?.inputSchema.required).toEqual(["action"]);
+      expect(tool?.inputSchema.properties).toMatchObject({
+        action: { enum: ["validate-report"] },
+        reportFile: { type: "string" },
+      });
 
-      const omitted = await client.callTool({ name: "mstar_qc_validate_report", arguments: {} });
+      const omitted = await client.callTool({ name: "mstar_qc", arguments: { action: "validate-report" } });
       expect(omitted.isError).toBe(true);
       expect(omitted.structuredContent).toBeUndefined();
       const refusal = envelope(omitted);
@@ -103,15 +115,15 @@ describe("registered MCP transport consumers", () => {
       expect(refusal.details).toMatchObject({ helpRoute: "mstar qc validate-report --help", recovery: expect.stringContaining("mstar qc validate-report --help") });
 
       const forgedAdmission = envelope(await client.callTool({
-        name: "mstar_qc_validate_report",
-        arguments: { success: true, data: { reportFile: "unvalidated.md" }, definition: { id: "report" } },
+        name: "mstar_qc",
+        arguments: { action: "validate-report", success: true, data: { reportFile: "unvalidated.md" }, definition: { id: "report" } },
       }));
       expect(forgedAdmission).toMatchObject({ command: "qc.validate-report", status: "usage", code: "command.invalid-input" });
       expect(diagnostics(forgedAdmission)).toContainEqual(expect.objectContaining({ path: "reportFile", received: "undefined" }));
 
       const reportFile = join(cwd, "invalid-report.md");
       writeFileSync(reportFile, "# Incomplete seat report\n");
-      const supplied = await client.callTool({ name: "mstar_qc_validate_report", arguments: { reportFile } });
+      const supplied = await client.callTool({ name: "mstar_qc", arguments: { action: "validate-report", reportFile } });
       const domain = envelope(supplied);
       expect(supplied.isError).toBe(true);
       expect(domain).toMatchObject({ status: "refused", code: "qcreview.report.missing-frontmatter", exitCode: 1 });
@@ -129,7 +141,7 @@ generated_at: 2026-01-02
 
 **Verdict**: Approve
 `);
-      const valid = await client.callTool({ name: "mstar_qc_validate_report", arguments: { reportFile: validReport } });
+      const valid = await client.callTool({ name: "mstar_qc", arguments: { action: "validate-report", reportFile: validReport } });
       expect(valid.isError).not.toBe(true);
       expect(envelope(valid)).toMatchObject({ status: "ok", code: "qc.validate-report.ok", data: { ok: true, violations: [] } });
     });
@@ -139,28 +151,33 @@ generated_at: 2026-01-02
   test("defaulted conditional payloads and optional identity survive real publication and admission", async () => {
     await withClient([evaluate], async (client) => {
       const { tools } = await client.listTools();
-      const schema = tools.find((entry) => entry.name === "mstar_fixture_evaluate")!.inputSchema;
+      const schema = tools.find((entry) => entry.name === "mstar_fixture")!.inputSchema;
+      expect(schema.required).toEqual(["action"]);
+      expect(schema.properties).toMatchObject({
+        action: { enum: ["evaluate"] },
+        mode: { enum: ["sum", "label"] },
+        sessionId: { type: "string" },
+      });
+      // Per-action defaults and nested payload shapes are `mstar_schema`
+      // detail: the family contract is the field index, not one action's
+      // conditional requirements.
       expect(schema.required ?? []).not.toContain("payload");
       expect(schema.required ?? []).not.toContain("label");
       expect(schema.required ?? []).not.toContain("sessionId");
-      expect(schema.properties).toMatchObject({
-        payload: { type: "object", required: ["numbers"] },
-        mode: { default: "sum" }, base: { default: 10 }, sessionId: { type: "string" },
-      });
 
-      const defaulted = await client.callTool({ name: "mstar_fixture_evaluate", arguments: { payload: { numbers: [2, 3] } } });
+      const defaulted = await client.callTool({ name: "mstar_fixture", arguments: { action: "evaluate", payload: { numbers: [2, 3] } } });
       expect(defaulted.isError).not.toBe(true);
       expect(envelope(defaulted)).toMatchObject({ status: "ok", data: { total: 15, owner: "anonymous" } });
-      const labeled = await client.callTool({ name: "mstar_fixture_evaluate", arguments: { mode: "label", label: "hello", sessionId: "caller-seat" } });
+      const labeled = await client.callTool({ name: "mstar_fixture", arguments: { action: "evaluate", mode: "label", label: "hello", sessionId: "caller-seat" } });
       expect(labeled.isError).not.toBe(true);
       expect(envelope(labeled)).toMatchObject({ status: "ok", data: { label: "HELLO", owner: "caller-seat" } });
 
-      const missing = envelope(await client.callTool({ name: "mstar_fixture_evaluate", arguments: {} }));
+      const missing = envelope(await client.callTool({ name: "mstar_fixture", arguments: { action: "evaluate" } }));
       expect(diagnostics(missing)).toContainEqual(expect.objectContaining({ path: "payload", expected: "present", received: "undefined" }));
       expect(diagnostics(missing).some((entry) => entry.path === "label")).toBe(false);
-      const wrongBranch = envelope(await client.callTool({ name: "mstar_fixture_evaluate", arguments: { mode: "label", payload: { numbers: [1] } } }));
+      const wrongBranch = envelope(await client.callTool({ name: "mstar_fixture", arguments: { action: "evaluate", mode: "label", payload: { numbers: [1] } } }));
       expect(diagnostics(wrongBranch)).toContainEqual(expect.objectContaining({ path: "label", expected: "present", received: "undefined" }));
-      const emptyIdentity = envelope(await client.callTool({ name: "mstar_fixture_evaluate", arguments: { payload: { numbers: [1] }, sessionId: " " } }));
+      const emptyIdentity = envelope(await client.callTool({ name: "mstar_fixture", arguments: { action: "evaluate", payload: { numbers: [1] }, sessionId: " " } }));
       expect(diagnostics(emptyIdentity)).toContainEqual(expect.objectContaining({ path: "sessionId", expected: "non-empty string" }));
     });
   });
@@ -171,7 +188,7 @@ generated_at: 2026-01-02
       // source; the runtime value is the same credential-shaped string the
       // redaction contract must withhold.
       const secret = ["sk", "live-consumer-secret"].join("-");
-      const result = await client.callTool({ name: "mstar_fixture_evaluate", arguments: { payload: { numbers: [secret, null] } } });
+      const result = await client.callTool({ name: "mstar_fixture", arguments: { action: "evaluate", payload: { numbers: [secret, null] } } });
       expect(result.isError).toBe(true);
       expect(JSON.stringify(result)).not.toContain(secret);
       const refusal = envelope(result);
@@ -187,17 +204,19 @@ generated_at: 2026-01-02
   test("PR seat-prompt publishes and consumes conditional accepted-value facts through MCP", async () => {
     await withClient([definition("pr-review.seat-prompt")], async (client, cwd) => {
       const { tools } = await client.listTools();
-      const tool = tools.find((entry) => entry.name === "mstar_pr_review_seat_prompt")!;
-      expect(tool.description).toContain("allowed values: \"1\" | \"2\"");
+      const tool = tools.find((entry) => entry.name === "mstar_pr_review")!;
+      expect(tool.inputSchema.properties).toMatchObject({ action: { enum: expect.arrayContaining(["seat-prompt"]) } });
+      // The family description lists each action's unconditional required
+      // fields; conditional accepted-value facts live in the command contract
+      // that `mstar_schema` serves.
+      expect(tool.description).toContain("- seat-prompt: stage, domain, seat");
       expect(tool.inputSchema["x-mstar-requirements"]).toEqual(expect.arrayContaining([
-        expect.objectContaining({ name: "stage", allowedValues: ["1", "2"] }),
-        expect.objectContaining({ name: "stage", condition: { field: "collectFolded", equals: true }, allowedValues: ["2"] }),
-        expect.objectContaining({ name: "diffFile", condition: { field: "collectFolded", equals: true }, required: true }),
+        expect.objectContaining({ name: "action" }),
       ]));
 
       const ordinary = await client.callTool({
-        name: "mstar_pr_review_seat_prompt",
-        arguments: { stage: "1", domain: "cli", seat: "reviewer", collectFolded: false },
+        name: "mstar_pr_review",
+        arguments: { action: "seat-prompt", stage: "1", domain: "cli", seat: "reviewer", collectFolded: false },
       });
       expect(envelope(ordinary).status).toBe("ok");
 
@@ -205,8 +224,8 @@ generated_at: 2026-01-02
       // literal in source for scanners to flag.
       const secret = ["sk", "live-consumer-secret"].join("-");
       const rejected = await client.callTool({
-        name: "mstar_pr_review_seat_prompt",
-        arguments: { stage: secret, domain: "cli", seat: "reviewer" },
+        name: "mstar_pr_review",
+        arguments: { action: "seat-prompt", stage: secret, domain: "cli", seat: "reviewer" },
       });
       expect(rejected.isError).toBe(true);
       expect(JSON.stringify(rejected)).not.toContain(secret);
@@ -215,8 +234,8 @@ generated_at: 2026-01-02
       }));
 
       const aggregate = await client.callTool({
-        name: "mstar_pr_review_seat_prompt",
-        arguments: { stage: secret, domain: { secret }, seat: "reviewer", collectFolded: true, security: true },
+        name: "mstar_pr_review",
+        arguments: { action: "seat-prompt", stage: secret, domain: { secret }, seat: "reviewer", collectFolded: true, security: true },
       });
       expect(aggregate.isError).toBe(true);
       expect(JSON.stringify(aggregate)).not.toContain(secret);
@@ -232,7 +251,7 @@ generated_at: 2026-01-02
 
   test("large SDK rejection keeps all safe diagnostics and a bounded truthful summary", async () => {
     await withClient([definition("worktree.qc-alignment")], async (client) => {
-      const result = await client.callTool({ name: "mstar_worktree_qc_alignment", arguments: { files: Array(5000).fill(42) } });
+      const result = await client.callTool({ name: "mstar_worktree", arguments: { action: "qc-alignment", files: Array(5000).fill(42) } });
       expect(result.isError).toBe(true);
       const refusal = envelope(result);
       expect(diagnostics(refusal)).toHaveLength(5000);
@@ -255,8 +274,8 @@ generated_at: 2026-01-02
       const planFile = join(cwd, "plan.md");
       writeFileSync(planFile, "# Plan\n\n### Task 1: first task\n\n- [ ] step one\n");
       const result = await client.callTool({
-        name: "mstar_sdd_task_brief",
-        arguments: { planFile, taskNumber: "9", outfile: join(cwd, "task-9-brief.md") },
+        name: "mstar_sdd",
+        arguments: { action: "task-brief", planFile, taskNumber: "9", outfile: join(cwd, "task-9-brief.md") },
       });
       expect(result.isError).toBe(true);
       const refusal = envelope(result);
@@ -271,22 +290,29 @@ generated_at: 2026-01-02
   });
 
   test("domain payloads stay constructible while pathname and kind-keyed contracts keep their actual transport", async () => {
-    await withClient([definition("issue.add"), definition("workflow.execution-policy"), definition("persist.write")], async (client) => {
+    await withClient([definition("issue.add"), definition("workflow.execution-policy"), definition("persist.write"), definition("schema")], async (client) => {
       const { tools } = await client.listTools();
-      const issue = tools.find((entry) => entry.name === "mstar_issue_add")!.inputSchema;
-      expect(issue.properties).toMatchObject({ payload: { type: "object", required: expect.arrayContaining(["rootCauseKey"]), properties: { title: expect.any(Object) } } });
+      // The family contract is the field index: the domain payload shape is
+      // one action's detail, served by `mstar_schema` instead of being
+      // repeated inside every family schema.
+      const issue = tools.find((entry) => entry.name === "mstar_issue")!.inputSchema;
+      expect(issue.properties).toMatchObject({ action: { enum: expect.arrayContaining(["add"]) }, payload: {} });
+      const detail = envelope(await client.callTool({
+        name: "mstar_schema", arguments: { action: "schema", command: "issue.add" },
+      }));
+      expect(JSON.stringify(detail)).toContain("rootCauseKey");
       const malformed = envelope(await client.callTool({
-        name: "mstar_issue_add", arguments: { payload: {}, operationId: "fixture-capture", actor: "project-manager" },
+        name: "mstar_issue", arguments: { action: "add", payload: {}, operationId: "fixture-capture", actor: "project-manager" },
       }));
       expect(malformed).toMatchObject({ status: "usage", code: "command.invalid-input", exitCode: 2 });
       expect(diagnostics(malformed)).toContainEqual(expect.objectContaining({ path: "payload.rootCauseKey", received: "undefined" }));
 
-      const policy = tools.find((entry) => entry.name === "mstar_workflow_execution_policy")!.inputSchema;
+      const policy = tools.find((entry) => entry.name === "mstar_workflow")!.inputSchema;
       expect(policy.properties).toMatchObject({ file: { type: "string" } });
-      const wrongTransport = envelope(await client.callTool({ name: "mstar_workflow_execution_policy", arguments: { file: { policy: "fixture" } } }));
+      const wrongTransport = envelope(await client.callTool({ name: "mstar_workflow", arguments: { action: "execution-policy", file: { policy: "fixture" } } }));
       expect(diagnostics(wrongTransport)).toContainEqual(expect.objectContaining({ path: "file", expected: "string", received: "object" }));
 
-      const persist = tools.find((entry) => entry.name === "mstar_persist_write")!.inputSchema;
+      const persist = tools.find((entry) => entry.name === "mstar_persist")!.inputSchema;
       const properties = persist.properties as Record<string, unknown>;
       expect(properties).toHaveProperty("input");
       expect(properties).toHaveProperty("file");
@@ -313,8 +339,8 @@ generated_at: 2026-01-02
       await server.connect(serverEnd);
       await client.connect(clientEnd);
       const result = await client.callTool({
-        name: "mstar_fixture_evaluate",
-        arguments: { payload: { numbers: [2, 3] }, sessionId: "caller-seat" },
+        name: "mstar_fixture",
+        arguments: { action: "evaluate", payload: { numbers: [2, 3] }, sessionId: "caller-seat" },
       });
       expect(result.isError).not.toBe(true);
       // The handler observed the schema-validated value and the admitted
@@ -333,17 +359,22 @@ generated_at: 2026-01-02
   test("the actual schema tool admits each selector alternative and preserves invalid-input recovery", async () => {
     await withClient([definition("schema")], async (client) => {
       const { tools } = await client.listTools();
-      expect(tools.find((entry) => entry.name === "mstar_schema")?.inputSchema.anyOf).toHaveLength(3);
-      const family = envelope(await client.callTool({ name: "mstar_schema", arguments: { family: "worktree" } }));
+      // A union input (`schema` is three strict selector alternatives) still
+      // publishes every alternative's fields on its folded tool.
+      const tool = tools.find((entry) => entry.name === "mstar_schema")!.inputSchema;
+      expect(tool.properties).toMatchObject({
+        action: { enum: ["schema"] }, command: { type: "string" }, family: { type: "string" }, type: { type: "string" },
+      });
+      const family = envelope(await client.callTool({ name: "mstar_schema", arguments: { action: "schema", family: "worktree" } }));
       expect(family).toMatchObject({ status: "ok", data: { kind: "family", family: "worktree" } });
-      const leaf = envelope(await client.callTool({ name: "mstar_schema", arguments: { command: "qc.validate-report" } }));
+      const leaf = envelope(await client.callTool({ name: "mstar_schema", arguments: { action: "schema", command: "qc.validate-report" } }));
       expect(leaf).toMatchObject({ status: "ok", data: { kind: "command", descriptor: { required: ["reportFile"] } } });
-      const payload = envelope(await client.callTool({ name: "mstar_schema", arguments: { type: "CaptureInput" } }));
+      const payload = envelope(await client.callTool({ name: "mstar_schema", arguments: { action: "schema", type: "CaptureInput" } }));
       expect(payload).toMatchObject({ status: "ok", data: { type: "CaptureInput" } });
-      const empty = envelope(await client.callTool({ name: "mstar_schema", arguments: {} }));
+      const empty = envelope(await client.callTool({ name: "mstar_schema", arguments: { action: "schema" } }));
       expect(empty).toMatchObject({ status: "usage", code: "command.invalid-input", exitCode: 2 });
       expect(empty.details?.helpRoute).toBe("mstar schema --help");
-      const collision = envelope(await client.callTool({ name: "mstar_schema", arguments: { command: "qc.validate-report", family: "worktree" } }));
+      const collision = envelope(await client.callTool({ name: "mstar_schema", arguments: { action: "schema", command: "qc.validate-report", family: "worktree" } }));
       expect(collision).toMatchObject({ status: "usage", code: "command.invalid-input", exitCode: 2 });
     });
   });

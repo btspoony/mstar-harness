@@ -298,17 +298,11 @@ export function renderCommandContract(
   if (route === "cli" && definition.cli.options.some((option) => option.context === "sessionId")) {
     lines.push("Session identity resolves --session-id first, then the launched session's minted MSTAR_EXECUTION_IDENTITY, then DSH_SESSION_ID, then the ambient MSTAR_HOST_SESSION_ID (empty/whitespace ignored), else unset. For token-authorized writes it is transport-resolved attribution, not authorization: the acquired coordinator session/binding authorizes the write, and an explicit session reference is a checked constraint.");
   }
-  if (route === "mcp") {
-    // The CLI route prints this same syntax as commander's Usage line, built
-    // from the same `cli` table; MCP descriptions carry it explicitly.
-    const argumentTokens = descriptor.cli.arguments
-      .map((argument) => argument.required
-        ? ` <${argument.key}${argument.variadic ? "..." : ""}>`
-        : ` [${argument.key}${argument.variadic ? "..." : ""}]`)
-      .join("");
-    const optionTokens = descriptor.cli.options.map((option) => ` ${option.flags}`).join("");
-    lines.push(`CLI: mstar ${descriptor.cli.path.join(" ")}${argumentTokens}${optionTokens}`);
-  }
+  // No `CLI: mstar …` usage line is emitted on either route: the CLI route
+  // already prints commander's Usage from the same `cli` table, and a tool
+  // caller cannot run the CLI, so on the MCP route the line was pure payload
+  // cost. Field, requirement, alternative and payload lines stay: they are the
+  // contract a caller actually needs.
   const sessionSelector = definition.cli.options.find((option) => option.context === "sessionId")?.key;
   const requiredInputs = route === "mcp" && sessionSelector !== undefined
     ? descriptor.required.filter((field) => field !== sessionSelector)

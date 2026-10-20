@@ -1,9 +1,10 @@
 import type { McpServer, StandardSchemaWithJSON } from "@modelcontextprotocol/server";
-import { admitCommandInput, getCommandSchemas, isPayloadPlaceholder } from "@mstar-harness/commands";
+import { admitCommandInput, getCommandSchemas, isPayloadPlaceholder, refusalEnvelope } from "@mstar-harness/commands";
 import { z } from "zod";
-import type { CommandAdmission, CommandDefinition, CommandSchemaDescriptor, InvocationContext } from "@mstar-harness/commands";
+import type { CommandAdmission, CommandDefinition, CommandEnvelope, CommandSchemaDescriptor, InvocationContext } from "@mstar-harness/commands";
 import { createMcpEffects, type McpEffects } from "./effects.js";
-import { renderCommandContract, surfaceAssignmentRecovery } from "../command-adapter.js";
+import { definitionForAction, foldFamilyTools, type FoldedFamilyTool } from "./fold.js";
+import { surfaceAssignmentRecovery } from "../command-adapter.js";
 import { validateCommandOutcome } from "./outcome.js";
 /**
  * Resolve the invocation context for one admitted call. It receives only the
@@ -67,10 +68,6 @@ export type ResolveContext = {
 export type ResolveContextCall = Readonly<{
   readonly harness?: string;
 }>;
-
-export function mcpToolName(commandId: string): string {
-  return `mstar_${commandId.replace(/[.-]/g, "_")}`;
-}
 
 /**
  * The descriptor a LOCKED connection publishes: the identity is the
@@ -230,6 +227,47 @@ function strippedSessionInput(definition: CommandDefinition, input: unknown, loc
   return normalized;
 }
 
+/**
+ * An admitted call bound to the definition its `action` selected. The
+ * transport carries that definition alongside the immutable admission so the
+ * handler validates the outcome and renders the assignment recovery with the
+ * SELECTED command's identity, never the family tool's name.
+ */
+type FoldedAdmission = Extract<CommandAdmission, { success: true }> & Readonly<{ definition: CommandDefinition }>;
+
+/**
+ * Remove the family `action` selector before admission: it names the member,
+ * it is not one of the member's fields, and a strict member schema would
+ * refuse it as unknown. The caller's object is never mutated.
+ */
+function strippedActionInput(input: unknown): unknown {
+  if (input === null || typeof input !== "object" || Array.isArray(input)) return input;
+  const { action: _action, ...rest } = input as Record<string, unknown>;
+  return rest;
+}
+
+/**
+ * The refusal a folded tool returns when `action` names no member. It carries
+ * the family's real action list plus the supported recovery — the family tool
+ * itself and `mstar_schema` for field detail — so the caller can retry without
+ * a second discovery round.
+ */
+function unknownActionRefusal(family: FoldedFamilyTool, action: unknown): CommandEnvelope<never> {
+  const listed = family.actions.map((entry) => JSON.stringify(entry)).join(" | ");
+  const received = typeof action === "string" ? JSON.stringify(action) : action === undefined ? "undefined" : typeof action;
+  return refusalEnvelope({
+    command: family.toolName,
+    status: "usage",
+    code: "command.invalid-input",
+    exitCode: 2,
+    message: `unknown action ${received} for ${family.toolName}; available actions: ${family.actions.join(", ")}`,
+    helpRoute: `mstar schema --family ${family.family}`,
+    recovery: `call ${family.toolName} with "action" set to one of the available actions; for one action's fields call mstar_schema {"family":"${family.family}"} and then {"command":"<member id>"}`,
+    diagnostics: [{ path: "action", code: "not_allowed", message: `action must be one of ${listed}`, expected: listed, received }],
+    details: { actions: family.actions },
+  });
+}
+
 export function registerMcpCommands(
   server: McpServer,
   definitions: readonly CommandDefinition[],
@@ -238,56 +276,76 @@ export function registerMcpCommands(
   onToolsRegistered?: (names: readonly string[]) => void,
 ): void {
   const connectionEffects = createMcpEffects(services);
-  const tools = definitions.map((definition) => ({ definition, name: mcpToolName(definition.id) }));
-  const names = new Set<string>();
-
-  for (const { definition, name } of tools) {
-    if (names.has(name)) {
-      throw new Error(`MCP tool name collision: ${name} (from command ${definition.id})`);
-    }
-    names.add(name);
-  }
-  onToolsRegistered?.([...names]);
-
-  for (const { definition, name } of tools) {
-    const identityLocked = resolveContext.identityLocked === true;
+  const identityLocked = resolveContext.identityLocked === true;
+  // One lock-adjusted view per member feeds every published surface: the
+  // family schema, `x-mstar-requirements` and the description all agree that a
+  // locked connection owns the identity. Admission keeps using the unwrapped
+  // descriptor and the composed schema, exactly as the per-command route did.
+  const prepared = new Map<string, {
+    definition: CommandDefinition;
+    descriptor: CommandSchemaDescriptor;
+    contract: ReturnType<typeof mcpInputContract>;
+    harnessDefault: boolean;
+  }>();
+  const members = definitions.map((definition) => {
     const descriptor = getCommandSchemas([definition])[0]!;
     const selector = definition.cli.options.find((option) => option.context === "sessionId");
-    // One lock-adjusted view feeds every published surface: the tool schema,
-    // `x-mstar-requirements` and the rendered description all agree that a
-    // locked connection owns the identity.
     const published = identityLocked && selector !== undefined ? lockedDescriptor(descriptor, selector.key) : descriptor;
     const contract = mcpInputContract(definition, published, identityLocked);
-    const harnessDefault = declaresHarness(contract);
+    prepared.set(definition.id, { definition, descriptor, contract, harnessDefault: declaresHarness(contract) });
+    return {
+      definition,
+      // The descriptor's `required` is the published authority (it also
+      // carries the lock filter); the input schema's own copy predates it.
+      input: { ...(published.input as Readonly<Record<string, unknown>>), required: published.required },
+      ...(identityLocked || selector === undefined ? {} : { selector: { key: selector.key } }),
+    };
+  });
+  const families = foldFamilyTools(members);
+  onToolsRegistered?.(families.map((family) => family.toolName));
+
+  for (const family of families) {
     // The SDK owns its isError/text rejection protocol. One Standard Schema
     // issue carries the complete safe refusal, not a lossy generic Zod message.
     // Successful validation hands the admitted value to the executor: no
     // second input parse or descriptor conversion in the handler.
-    const inputSchema: StandardSchemaWithJSON<unknown, Extract<CommandAdmission, { success: true }>> = {
+    const inputSchema: StandardSchemaWithJSON<unknown, FoldedAdmission> = {
       "~standard": {
         version: 1,
         vendor: "mstar-harness",
-        jsonSchema: { input: () => contract.jsonSchema, output: () => contract.jsonSchema },
+        jsonSchema: { input: () => family.descriptorView, output: () => family.descriptorView },
         validate(input) {
-          const identityLocked = resolveContext.identityLocked === true;
+          const record = input !== null && typeof input === "object" && !Array.isArray(input) ? input as Record<string, unknown> : undefined;
+          const action = record?.action;
+          const definition = typeof action === "string" ? definitionForAction(family, action) : undefined;
+          if (definition === undefined) {
+            return { issues: [{ message: JSON.stringify(unknownActionRefusal(family, action)) }] };
+          }
+          const entry = prepared.get(definition.id)!;
+          const locked = resolveContext.identityLocked === true;
           const defaultSessionId = resolveContext.defaultSessionId;
-          const defaultHarness = harnessDefault ? resolveContext.defaultHarness : undefined;
+          const defaultHarness = entry.harnessDefault ? resolveContext.defaultHarness : undefined;
           const admitted = admitCommandInput(
             definition,
-            normalizedBlankHarness(strippedSessionInput(definition, input, identityLocked), defaultHarness),
-            descriptor,
-            contract.schema,
+            normalizedBlankHarness(strippedSessionInput(definition, strippedActionInput(input), locked), defaultHarness),
+            entry.descriptor,
+            entry.contract.schema,
             (data) => handlerInput(definition, data, defaultHarness),
             defaultSessionId === undefined ? undefined : { sessionId: defaultSessionId },
           );
-          return admitted.success ? { value: admitted } : { issues: [{ message: JSON.stringify(admitted.envelope) }] };
+          return admitted.success ? { value: { ...admitted, definition } } : { issues: [{ message: JSON.stringify(admitted.envelope) }] };
         },
       },
     };
-    server.registerTool(name, {
-      description: renderCommandContract(definition, "mcp", published),
+    // No `outputSchema` is published: one family tool serves every member's
+    // output contract, and repeating the shared command envelope per tool would
+    // restore most of the payload this fold removes. The per-call contract is
+    // still enforced — `validateCommandOutcome` validates each response against
+    // the SELECTED definition's own output schema — and the envelope shape a
+    // caller needs is in the response it gets back.
+    server.registerTool(family.toolName, {
+      description: family.description,
       inputSchema,
-      outputSchema: definition.output,
     }, async (admitted, extra) => {
       // The resolver and the context consume only the primitive session
       // selector and the per-call root selector; the handler value itself
@@ -295,6 +353,7 @@ export function registerMcpCommands(
       // selector is always undefined (stripped before admission), so the
       // connection identity below is the only identity this call can run
       // under.
+      const { definition } = admitted;
       const resolved = await resolveContext(definition, admitted.sessionId, extra.mcpReq.signal, services, connectionEffects, { harness: admitted.harness });
       const sessionId = admitted.sessionId ?? resolved.sessionId;
       const requestContext: InvocationContext = Object.freeze({

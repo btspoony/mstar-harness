@@ -192,21 +192,27 @@ test("T4: stdio MCP chain — no-id register, injected binds, per-role identity,
     server.notify("notifications/initialized", {});
     const tools = await server.request("tools/list", {});
     const byName = new Map(tools.result.tools.map((tool) => [tool.name, tool]));
-    for (const name of ["mstar_workflow_register", "mstar_plan_bind", "mstar_plan_prepare", "mstar_plan_progress", "mstar_worktree_check"]) {
-      assert.ok(byName.has(name), `tools/list advertises ${name}`);
+    // The published surface is one tool per command family, selected by
+    // `action`; the family's enum lists the actions the injector relies on.
+    const actionsOf = (name) => byName.get(name)?.inputSchema.properties?.action?.enum ?? [];
+    assert.ok(actionsOf("mstar_workflow").includes("register"), "mstar_workflow advertises register");
+    for (const action of ["bind", "prepare", "progress"]) {
+      assert.ok(actionsOf("mstar_plan").includes(action), `mstar_plan advertises ${action}`);
     }
+    assert.ok(actionsOf("mstar_worktree").includes("check"), "mstar_worktree advertises check");
     // sessionId-capable schemas declare the parameter.
-    for (const name of ["mstar_workflow_register", "mstar_plan_bind", "mstar_plan_prepare", "mstar_plan_progress"]) {
+    for (const name of ["mstar_workflow", "mstar_plan"]) {
       assert.ok(
         Object.hasOwn(byName.get(name).inputSchema.properties ?? {}, "sessionId"),
         `${name} declares sessionId`,
       );
     }
-    assert.equal(byName.has("mstar_lease_verify_integration"), false, "retired lease verify-integration is not exposed; use worktree check");
+    assert.equal(byName.has("mstar_lease"), false, "retired lease family is not exposed; use worktree check");
 
     // --- register: NO sessionId anywhere on this call ------------------------
     const rootToken = await tokenOf(fixture.harness, {});
-    const registered = await callTool(server, "mstar_workflow_register", {
+    const registered = await callTool(server, "mstar_workflow", {
+      action: "register",
       workflow: WORKFLOW_ID,
       planId: PLAN_ID,
       planTitle: PLAN_TITLE,
@@ -224,7 +230,8 @@ test("T4: stdio MCP chain — no-id register, injected binds, per-role identity,
 
     // --- coordinator bind: sessionId=A adopts the unowned workflow -----------
     const coordinatorToken = await tokenOf(fixture.harness, { workflowId: WORKFLOW_ID });
-    const bound = await callTool(server, "mstar_plan_bind", {
+    const bound = await callTool(server, "mstar_plan", {
+      action: "bind",
       execution: true,
       workflow: WORKFLOW_ID,
       coordinator: true,
@@ -239,7 +246,8 @@ test("T4: stdio MCP chain — no-id register, injected binds, per-role identity,
 
     // --- prepare: the coordinator states the plan it addresses ---------------
     const prePrepareToken = await tokenOf(fixture.harness, { workflowId: WORKFLOW_ID, planId: PLAN_ID });
-    const prepared = await callTool(server, "mstar_plan_prepare", {
+    const prepared = await callTool(server, "mstar_plan", {
+      action: "prepare",
       workflow: WORKFLOW_ID,
       plan: PLAN_ID,
       worktreePath,
@@ -257,7 +265,8 @@ test("T4: stdio MCP chain — no-id register, injected binds, per-role identity,
     // --- progress: the SAME native coordinator session advances the row ------
     // The ordinary start record first: prepare preserves row status.
     const startToken = await tokenOf(fixture.harness, { workflowId: WORKFLOW_ID, planId: PLAN_ID });
-    const started = await callTool(server, "mstar_plan_progress", {
+    const started = await callTool(server, "mstar_plan", {
+      action: "progress",
       workflow: WORKFLOW_ID,
       plan: PLAN_ID,
       file: startPath,
@@ -269,7 +278,8 @@ test("T4: stdio MCP chain — no-id register, injected binds, per-role identity,
     assert.equal(started.data.data.plan.status, "InProgress");
 
     const progressToken = await tokenOf(fixture.harness, { workflowId: WORKFLOW_ID, planId: PLAN_ID });
-    const progressed = await callTool(server, "mstar_plan_progress", {
+    const progressed = await callTool(server, "mstar_plan", {
+      action: "progress",
       workflow: WORKFLOW_ID,
       plan: PLAN_ID,
       file: progressPath,

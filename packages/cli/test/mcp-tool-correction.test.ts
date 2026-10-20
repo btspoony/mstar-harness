@@ -194,11 +194,13 @@ describe("MCP tool correction", () => {
       });
       await clientTransport.send({ jsonrpc: "2.0", method: "notifications/initialized" });
 
-      const response = await request("tools/call", { name: "mstar_plan_issue", arguments: {} });
+      // The published catalog is the folded family surface, so the nearest
+      // name a caller can actually reach is the family tool.
+      const response = await request("tools/call", { name: "mstar_plane", arguments: {} });
       expect(response).toMatchObject({
         error: {
           code: -32602,
-          message: expect.stringContaining("Did you mean mstar_plan_issue_add?"),
+          message: expect.stringContaining("Did you mean mstar_plan?"),
         },
       });
     } finally {
