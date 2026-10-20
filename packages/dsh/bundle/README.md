@@ -89,16 +89,18 @@ derives paths from its working directory (`audit.scaffold` deriving
 `{REVIEW_DIR}` without `--reviews-dir`, a relative `--dir` or findings path)
 lands under the pinned harness rather than the launch cwd. `--identity-env`
 declares the connection's identity channel: the named environment variable
-supplies the session id every call on the connection runs under, and the
-connection is identity-LOCKED — the tools publish no session selector and a
-caller-supplied `sessionId` is stripped before admission (the ADR
-`dsh-native-identity-channels`), so the declared identity is the only identity
-the connection can run under. Per-caller identity is therefore a per-mount
-fact: each caller's row launches its own scoped mount with its own
-`--identity-env`. A connection launched WITHOUT the flag keeps the generic
-behavior, where a per-call `sessionId` still selects the identity. Because a
-patch replaces the row's whole `config`, such an override restates the
-`command` too.
+supplies the session id every call on the connection runs under. A declared
+channel whose variable resolves a non-blank session id LOCKS the connection —
+the tools publish no session selector and a caller-supplied `sessionId` is
+stripped before admission (the ADR `dsh-native-identity-channels`), so the
+declared identity is the only identity the connection can run under. A
+declared channel that resolves nothing keeps the connection generic and names
+the variable, the cause and the recoveries at launch, so the per-call
+`sessionId` selector remains the identity channel; a connection launched
+WITHOUT the flag is that same generic connection without the launch line.
+Per-caller identity is therefore a per-mount fact: each caller's row launches
+its own scoped mount with its own `--identity-env`. Because a patch replaces
+the row's whole `config`, such an override restates the `command` too.
 
 ## Config surface
 
