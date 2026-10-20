@@ -111,6 +111,8 @@ const MSTAR_ROW: RowFixture = {
 /**
  * An unrelated `@deepseek-ai/dsh-mcp-client` row: a different MCP server a
  * profile may enable — different id, server name, command, args and env.
+ * The env entry is a synthetic row marker, not a credential: this fixture
+ * proves the unrelated row's config never rides along into a per-agent mount.
  */
 const UNRELATED_ROW: RowFixture = {
   id: 'other-server-mcp',
@@ -121,7 +123,7 @@ const UNRELATED_ROW: RowFixture = {
       transport: 'stdio',
       command: 'uvx',
       args: ['other-server', '--stdio'],
-      env: { OTHER_MCP_TOKEN: 'unrelated-server-token' },
+      env: { OTHER_MCP_ROW_MARKER: 'unrelated-server-row' },
     },
   },
   disabled: false,
@@ -269,6 +271,9 @@ describe('scoped MCP mount — per-agent registration', () => {
       // The unrelated server's launch surface appears nowhere in the mount.
       expect(JSON.stringify(config)).not.toContain('uvx')
       expect(JSON.stringify(config)).not.toContain('other-server')
+      // Nor does its env row marker (key or value) ride along.
+      expect(JSON.stringify(config)).not.toContain('OTHER_MCP_ROW_MARKER')
+      expect(JSON.stringify(config)).not.toContain('unrelated-server-row')
     } finally {
       restore()
       await ctx.fiber.dispose().catch(() => {})
@@ -297,6 +302,9 @@ describe('scoped MCP mount — per-agent registration', () => {
       expect(config.env).toEqual(envFor('agent-row'))
       expect(JSON.stringify(config)).not.toContain('uvx')
       expect(JSON.stringify(config)).not.toContain('other-server')
+      // The unrelated row's env marker never leaks into the shipped-row mirror.
+      expect(JSON.stringify(config)).not.toContain('OTHER_MCP_ROW_MARKER')
+      expect(JSON.stringify(config)).not.toContain('unrelated-server-row')
     } finally {
       restore()
       await ctx.fiber.dispose().catch(() => {})
