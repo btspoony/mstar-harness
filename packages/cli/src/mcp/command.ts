@@ -46,7 +46,7 @@ export function registerMcpCommand(program: Command): void {
     )
     .option(
       "--seat <seat>",
-      'declare the connection\'s seat: "leaf" refuses the coordinator-seat commands for this connection before execution, with the named cause and recovery, while every other command stays reachable. Those commands are the two classes that need a coordinator seat: those that establish or replace one (bind or complete a plan, recover a session, launch a child under a minted coordinator identity) and the workflow-scope writes (delivery evidence, lifecycle, close, adoption, coordinator notes, iteration registration). The set is derived from the command layer (`coordinator-seat.ts` in @mstar-harness/commands), which both this connection and the dsh host guard read, so it is not restated here',
+      'declare the connection\'s seat: "leaf" refuses the coordinator-seat commands for this connection before execution, with the named cause and recovery. Those commands are the two classes that need a coordinator seat: those that establish or replace one (bind or complete a plan, recover a session, launch a child under a minted coordinator identity) and the workflow-scope writes (delivery evidence, lifecycle, close, adoption, coordinator notes, iteration registration). The set is derived from the command layer (`coordinator-seat.ts` in @mstar-harness/commands), which both this connection and the dsh host guard read, so it is not restated here. The remaining commands are not additionally restricted by this seat filter; each keeps its own input and authorization requirements',
       seatValue,
     )
     .action(async (options: McpCommandOptions) => {
