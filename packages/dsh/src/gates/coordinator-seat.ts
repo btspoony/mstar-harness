@@ -2,15 +2,15 @@
  * The dsh-side coordinator-seat derivation — the host guard's own instance of
  * the rule `packages/commands/src/coordinator-seat.ts` owns.
  *
- * Why a copy instead of that module's exports: an installed dsh resolves
- * `@mstar-harness/commands` from the published peer (`^4.0.3`, external in the
- * build), and that package is private and never published. A named import that
- * the released peer does not carry fails at ESM instantiation, before `apply`
- * runs, so the boundary may only carry symbols the peer already had:
- * `getCommandDefinitions` and the `CommandDefinition` type. The seat set is
- * therefore derived HERE from the same definitions the CLI server derives it
- * from — one rule, two consumers, not two lists. `tests/leaf-seat.spec.ts`
- * pins this derivation to the commands one over the whole corpus.
+ * Why a copy instead of that module's exports: it was written while
+ * `@mstar-harness/commands` was an external of this build, so the import
+ * surface had to stay at the two symbols every resolvable copy carried —
+ * `getCommandDefinitions` and the `CommandDefinition` type. The package is
+ * inlined into this artifact now, so the copy is a duplicate rather than a
+ * resolution requirement: the seat set is derived HERE from the same
+ * definitions the CLI server derives it from — one rule, two consumers, not
+ * two lists. `tests/leaf-seat.spec.ts` pins this derivation to the commands
+ * one over the whole corpus; unify the two when this file is next touched.
  *
  * The rule (identical on both sides): a command is a coordinator-seat command
  * when it establishes or replaces a seat (`plan.bind`, `plan.complete`,
