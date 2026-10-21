@@ -361,15 +361,22 @@ describe("folded MCP command families", () => {
         const refusal = envelope(await call(client, "mstar_host", args));
         expect(refusal).toMatchObject({ status: "usage", code: "command.invalid-input", exitCode: 2 });
         const paths = (refusal.details?.diagnostics ?? []).map((entry) => (entry as { path?: string }).path);
-        expect(paths[0]).toBe("action");
+        // Containment, not order: the contract is one response carrying every
+        // problem (`packages/cli/AGENTS.md`), not a diagnostic sequence.
+        expect(paths).toContain("action");
         for (const key of Object.keys(args).filter((key) => key !== "action")) {
           expect(paths).toContain(key);
           expect(refusal.message).toContain(key);
         }
         expect(refusal.details?.actions).toEqual(["detect", "skill-root"]);
         expect(refusal.details?.recovery).toContain("mstar_schema");
-        expect(refusal.details?.recovery).toContain("drop");
       }
+
+      // The recovery's own next step must run: read the family's real fields
+      // with the route the refusal names (the second step, a valid action on
+      // the family tool itself, is the `accepted` case below).
+      const shape = envelope(await call(client, "mstar_schema", { action: "schema", family: "host" }));
+      expect(shape).toMatchObject({ status: "ok", data: { kind: "family", family: "host" } });
 
       // A key a real member accepts is only one action's business: the unknown
       // action is the whole refusal, and `skill` is never called invalid.
