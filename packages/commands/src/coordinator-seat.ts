@@ -2,12 +2,19 @@ import { getCommandDefinitions } from "./definitions.js";
 import type { CommandDefinition } from "./types.js";
 
 /**
- * The coordinator-seat command set — the ONE derivation both leaf guards read:
- * `packages/dsh/src/gates/leaf-seat.ts` on the host's `tools/pre-execute`
- * boundary, and `packages/cli/src/mcp/server.ts` for a `--seat leaf` stdio
- * connection. Neither layer keeps its own list: a hand list in each is how the
- * two came to refuse different sets, and why every new coordinator action
- * reopened the same hole.
+ * The coordinator-seat command set — the ONE rule both leaf guards read, from
+ * here for `packages/cli/src/mcp/server.ts` (a `--seat leaf` stdio connection)
+ * and as the mirrored derivation in `packages/dsh/src/gates/coordinator-seat.ts`
+ * on the host's `tools/pre-execute` boundary. Neither layer keeps its own
+ * hand-written list: a list in each is how the two came to refuse different
+ * sets, and why every new coordinator action reopened the same hole.
+ *
+ * The dsh side cannot import this module: its dependency on
+ * `@mstar-harness/commands` is a PUBLISHED peer, which predates this file, so a
+ * named import would fail at ESM instantiation in an installed deployment. It
+ * derives the set from `getCommandDefinitions()` with the rule below, and
+ * `packages/dsh/tests/leaf-seat.spec.ts` pins that derivation to this one over
+ * the whole corpus — a seat change made on either side fails there.
  *
  * Derivation. The authority is the coordinator identity the command layer
  * builds from the caller-supplied session

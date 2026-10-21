@@ -13,16 +13,18 @@
  *   fail-closed, before any admission or engine round-trip;
  * - the `tools/pre-execute` boundary below — the folded MCP surface's
  *   coordinator-seat commands refuse a leaf seat before the MCP client child
- *   ever executes, on EVERY connection. The refused set is derived in
- *   `@mstar-harness/commands` (`coordinator-seat.ts`) and consumed by the CLI
- *   server's `--seat leaf` filter too, so the two layers cannot refuse
- *   different actions. The scoped mount's `--seat leaf` launch is defence in
- *   depth for the per-agent connection; the profile-wide `mstar-mcp` row is
- *   generic (no identity, no seat), so the server-side restriction alone never
- *   covered a leaf naming a bound coordinator session there.
+ *   ever executes, on EVERY connection. The refused set comes from this
+ *   package's own `coordinator-seat.ts`, which follows the rule — not a new
+ *   export — that `packages/commands/src/coordinator-seat.ts` owns for the CLI
+ *   server's `--seat leaf` filter, so the two layers refuse the same actions
+ *   (pinned by `tests/leaf-seat.spec.ts`). The scoped mount's `--seat leaf`
+ *   launch is defence in depth for the per-agent connection; the profile-wide
+ *   `mstar-mcp` row is generic (no identity, no seat), so the server-side
+ *   restriction alone never covered a leaf naming a bound coordinator session
+ *   there.
  */
 import type { PreToolDecision, ToolExecution } from '@deepseek-ai/dsh-tools'
-import { coordinatorSeatCommandFor } from '@mstar-harness/commands'
+import { coordinatorSeatCommandFor } from './coordinator-seat.ts'
 
 export function isLeafSeatHeader(header: unknown): boolean {
   if (typeof header !== 'object' || header === null) return false
@@ -63,7 +65,8 @@ function sessionHeaderOf(agent: unknown): unknown {
  * `ToolExecution.arguments` — the same field the dispatch gate reads, so the
  * guard runs before the MCP child ever sees the call. The set of refused
  * commands is NOT listed here: `coordinatorSeatCommandFor` derives it from the
- * command layer, which is the same authority the CLI server's leaf seat uses.
+ * command definitions, following the same rule the CLI server's leaf seat
+ * applies.
  * The recovery names the supported route (run it from the coordinating session)
  * and the actions this seat may run.
  */
