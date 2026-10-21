@@ -16,7 +16,13 @@ import { redactSecrets } from "@mstar-harness/engine/src/audit";
 import { z } from "zod";
 import type { RefusalDiagnostic } from "./envelope.js";
 
-function redactInputScalar(value: string): string {
+/**
+ * Sanitize one caller-supplied scalar for a diagnostic. Exported because a
+ * transport that reports a caller-supplied OBJECT KEY (a rejected field name)
+ * needs the same treatment as a rejected value: the key is caller-controlled
+ * text and can be credential-shaped.
+ */
+export function sanitizeInputScalar(value: string): string {
   return redactSecrets(value).text
     .replace(/\[REDACTED [^\]\r\n]+\]/g, "[REDACTED]")
     .replace(/\bsk-[A-Za-z0-9-]+\b/g, "[REDACTED]");
@@ -24,7 +30,7 @@ function redactInputScalar(value: string): string {
 
 /** Render a rejected scalar without leaking secret-shaped input. */
 export function safeReceivedValue(value: unknown): string {
-  if (typeof value === "string") return JSON.stringify(redactInputScalar(value));
+  if (typeof value === "string") return JSON.stringify(sanitizeInputScalar(value));
   if (value === null) return "null";
   if (value === undefined) return "undefined";
   if (typeof value === "boolean" || typeof value === "number") return JSON.stringify(value);
@@ -40,7 +46,7 @@ function issueMessageSanitizer(input: unknown): (message: string) => string {
   const replacements: Record<string, string> = {};
   const visit = (value: unknown): void => {
     if (typeof value === "string") {
-      const redacted = redactInputScalar(value);
+      const redacted = sanitizeInputScalar(value);
       if (redacted !== value && replacements[value] === undefined) replacements[value] = redacted;
     } else if (Array.isArray(value)) {
       for (const item of value) visit(item);
@@ -89,7 +95,7 @@ function rejectionFacts(issue: z.ZodError["issues"][number], input: unknown): { 
   const value = inputValueAtPath(input, issue.path);
   const received = value === undefined ? "undefined" : value === null ? "null" :
     typeof value === "object" ? Array.isArray(value) ? "array" : "object" :
-      typeof value === "string" ? redactInputScalar(value) : String(value);
+      typeof value === "string" ? sanitizeInputScalar(value) : String(value);
   return { expected, received };
 }
 

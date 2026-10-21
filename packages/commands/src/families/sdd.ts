@@ -76,7 +76,19 @@ async function execute(id: string, input: SddInput, invocation: InvocationContex
   try {
     const verb = id.slice("sdd.".length);
     if (verb === "workspace") {
-      return ok(id, { sddDir: sddWorkspace(required(input.planId, "PLAN_ID"), input.controlRoot ? { controlRoot: input.controlRoot } : {}) });
+      // Root precedence: the caller's explicit control root, then the
+      // server-owned invocation context (the session workspace a mounted MCP
+      // server was launched with, plus its exact harness pin), then the
+      // engine's process probe. Without the middle rung a host process serving
+      // a session in another workspace created the SDD tree in its own cwd.
+      // An explicit caller root is the strongest fact, so the server pin does
+      // not override its harness resolution.
+      const serverHarness = input.controlRoot === undefined ? invocation.harnessPin : undefined;
+      return ok(id, { sddDir: sddWorkspace(required(input.planId, "PLAN_ID"), {
+        cwd: invocation.cwd,
+        ...(input.controlRoot === undefined ? {} : { controlRoot: input.controlRoot }),
+        ...(serverHarness === undefined ? {} : { harnessDir: serverHarness }),
+      }) });
     }
     if (verb === "task-brief") {
       const planFile = required(input.planFile, "PLAN_FILE");

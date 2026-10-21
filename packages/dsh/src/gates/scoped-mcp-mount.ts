@@ -9,10 +9,29 @@
  * ADR constraint (teams' name-target addressing is not a shell identity
  * channel): the scoped mount exists BECAUSE a child process can only be
  * attributed by the environment it is launched with — per-agent env is the
- * one per-caller identity channel the stdio MCP route has. The leaf-seat
- * skip list is the shared leaf-seat contract (`isLeafSeatHeader` in
- * `leaf-seat.ts`; ADR `docs/adr/dsh-native-identity-channels.md`): a
- * known leaf can never own a binding, so it never gets a child process.
+ * one per-caller identity channel the stdio MCP route has.
+ *
+ * Server-owned session context: the same launch is the only channel through
+ * which the stdio server can learn WHICH workspace the caller belongs to. The
+ * mount therefore launches every child with the session workspace
+ * (`config.cwd` plus the `--workspace` launch arg) and, when the resolver
+ * selects one, the session harness (`--harness`) beside the identity env/args.
+ * Without them a host process running in repo A served a session in repo B and
+ * every root-sensitive MCP command resolved A.
+ *
+ * Leaf seats (the shared `isLeafSeatHeader` contract in `leaf-seat.ts`; ADR
+ * `docs/adr/dsh-native-identity-channels.md`) get a RESTRICTED mount instead
+ * of no mount: the same launch, marked `--seat leaf`, so the leaf keeps the
+ * writable subset it may use (`issue.add` / `issue.close` / `plan.prepare` /
+ * `plan.progress`) while the server refuses the coordinator-seat commands
+ * (`plan.bind` / `plan.complete`) before any execution — a leaf can never
+ * bind or complete a plan, adopt a credential, or clear a binding.
+ *
+ * Defence in depth, not the sole enforcement: this mount only covers the
+ * per-agent scoped connection, while the profile-wide `mstar-mcp` row is
+ * generic (no identity, no `--seat`). The `tools/pre-execute` leaf-seat
+ * boundary (`leaf-seat.ts`) refuses that same coordinator arm for a known leaf
+ * on EVERY connection, before this scoped server's own restriction is reached.
  *
  * Optional-by-presence (the degradation posture of the rest of the plugin):
  * `@deepseek-ai/dsh-mcp-client` is NOT a dependency of this plugin — when
@@ -38,6 +57,7 @@
  * agent is untouched, and a disposed id may mount again.
  */
 import type { Context } from '@deepseek-ai/cordis'
+import { sessionCwdOf } from './_shared.ts'
 import { isLeafSeatHeader } from './leaf-seat.ts'
 
 /** Logger label for the scoped MCP mount (dsh logger naming: `<scope>/<subject>`). */
@@ -53,6 +73,18 @@ export const MSTAR_HOST_SESSION_ID = 'MSTAR_HOST_SESSION_ID'
  * so a per-agent env alone would never reach the connection).
  */
 const IDENTITY_ENV_FLAG = '--identity-env'
+
+/** The launch arg carrying the exact harness root the resolver selected for the session. */
+const HARNESS_FLAG = '--harness'
+
+/** The launch arg carrying the session workspace (the child's launch cwd alone is not enough when a harness is pinned). */
+const WORKSPACE_FLAG = '--workspace'
+
+/** The launch arg declaring the connection's seat to the server. */
+const SEAT_FLAG = '--seat'
+
+/** The leaf seat value; the server refuses coordinator-seat commands for this connection. */
+const LEAF_SEAT = 'leaf'
 
 /** The package the mount reuses (one string literal; never a static import — optional-by-presence). */
 const MCP_CLIENT_PACKAGE = '@deepseek-ai/dsh-mcp-client'
@@ -89,26 +121,47 @@ export function scopedMountEnvFor(sessionId: string): Record<string, string> {
 }
 
 /**
- * The args one scoped instance launches its server child with: the base
- * args with the identity-env declaration appended — the per-agent `env`
- * only delivers the value if the server is TOLD to read that variable.
- * A base row that already declares `--identity-env` is NORMALIZED to the
- * per-agent variable (the mount injects exactly `MSTAR_HOST_SESSION_ID`,
- * so a row carrying another name would keep reading an env the mount
- * never sets); a config whose `args` is not an array is passed through
- * untouched.
+ * The per-agent launch facts the mount overlays on a row's args. Every member
+ * is optional by presence: a session with no workspace or no resolved harness
+ * simply ships fewer args (the server then keeps its own probe).
  */
-export function scopedMountArgsFor(args: unknown): unknown {
-  if (!Array.isArray(args)) return args
-  const declared = args.indexOf(IDENTITY_ENV_FLAG)
+export interface ScopedMountContext {
+  /** The caller is a known leaf seat — launch a restricted connection. */
+  readonly leaf?: boolean
+  /** The resolver-selected harness root for the caller's session workspace. */
+  readonly harness?: string
+  /** The caller's session workspace. */
+  readonly workspace?: string
+}
+
+/** Replace one flag's value, or append the pair when the row does not declare it. */
+function withFlag(args: readonly unknown[], flag: string, value: string): unknown[] {
+  const declared = args.indexOf(flag)
   if (declared >= 0 && declared + 1 < args.length) {
     const normalized = [...args]
-    normalized[declared + 1] = MSTAR_HOST_SESSION_ID
+    normalized[declared + 1] = value
     return normalized
   }
-  // No declaration (or a dangling flag with no value slot): append the
-  // full declaration pair.
-  return [...args, IDENTITY_ENV_FLAG, MSTAR_HOST_SESSION_ID]
+  return [...args, flag, value]
+}
+
+/**
+ * The args one scoped instance launches its server child with: the base args
+ * plus the identity-env declaration, the leaf seat marker, and the
+ * server-owned session context (workspace + harness) — the per-agent `env`
+ * only delivers the identity if the server is TOLD to read that variable, and
+ * the workspace/harness are only known to the child through its launch.
+ * A base row that already declares one of these flags is NORMALIZED to the
+ * per-agent value (the session context is more specific than a deployment
+ * default); a config whose `args` is not an array is passed through untouched.
+ */
+export function scopedMountArgsFor(args: unknown, context: ScopedMountContext = {}): unknown {
+  if (!Array.isArray(args)) return args
+  let next = withFlag(args, IDENTITY_ENV_FLAG, MSTAR_HOST_SESSION_ID)
+  if (context.leaf === true) next = withFlag(next, SEAT_FLAG, LEAF_SEAT)
+  if (context.workspace !== undefined) next = withFlag(next, WORKSPACE_FLAG, context.workspace)
+  if (context.harness !== undefined) next = withFlag(next, HARNESS_FLAG, context.harness)
+  return next
 }
 
 /** Consumer log levels the module sink understands. */
@@ -255,6 +308,8 @@ const defaultProvider: McpClientModuleProvider = async () => {
 export interface ScopedMcpMountOptions {
   /** The module resolver (production default resolves the optional package; tests inject a fake). */
   provider?: McpClientModuleProvider
+  /** The per-session harness resolver (`HarnessResolver.forAgent`); the mount pins the resolved root on the child. */
+  resolver?: { forAgent(agent: unknown): string | null }
 }
 
 /**
@@ -269,21 +324,25 @@ interface ScopedPluginFiber {
 
 /**
  * Register the scoped MCP mount: an `agent/created` listener (root and
- * children alike fire — the leaf filter lives inside, the plan-mode-bridge
+ * children alike fire — the leaf arm lives inside, the plan-mode-bridge
  * registration pattern) that mounts ONE scoped `@deepseek-ai/dsh-mcp-client`
- * instance per non-leaf agent, its stdio `env` carrying
- * `MSTAR_HOST_SESSION_ID = agent.id`.
+ * instance per agent, its stdio `env` carrying
+ * `MSTAR_HOST_SESSION_ID = agent.id` and its launch carrying the session
+ * workspace and the resolver-selected harness.
  *
  * Ordering per event: leaf check → identity check → dedupe (one mount per
  * agent id per apply — a repeat event never spawns a second child process)
  * → module resolve (shared one-shot promise; absent → silent, the one-time
  * probe below owns the single debug) → `ctx.plugin(module, config)` with the
- * row-config base + the per-agent env and identity-env args, the returned
- * fiber RETAINED under the agent id. The paired `agent/disposed` listener
- * disposes and deletes the retained fiber, so a closed agent's MCP child
- * process dies with it and its id may mount again. Every step is
- * try/catch-contained: a failure logs one warn and the agent proceeds
- * without its mount (never a boot or session failure).
+ * row-config base + the per-agent env, the identity-env args and the
+ * server-owned session context (workspace + harness), the returned fiber
+ * RETAINED under the agent id. A known leaf mounts the SAME launch with the
+ * `--seat leaf` marker: the server refuses the coordinator-seat commands for
+ * that connection instead of leaving the leaf with no writable route. The
+ * paired `agent/disposed` listener disposes and deletes the retained fiber,
+ * so a closed agent's MCP child process dies with it and its id may mount
+ * again. Every step is try/catch-contained: a failure logs one warn and the
+ * agent proceeds without its mount (never a boot or session failure).
  *
  * The one-time absence probe resolves the module once at registration and
  * logs ONE debug when the package is not installed — the whole degrade
@@ -291,7 +350,7 @@ interface ScopedPluginFiber {
  * already reported the disabled state).
  *
  * @param ctx - the plugin's registrant context (the app composition root).
- * @param options - optional overrides (tests inject the module provider).
+ * @param options - optional overrides (tests inject the module provider and the per-session resolver).
  */
 export function registerScopedMcpMount(ctx: Context, options: ScopedMcpMountOptions = {}): void {
   const provider = options.provider ?? defaultProvider
@@ -328,9 +387,10 @@ export function registerScopedMcpMount(ctx: Context, options: ScopedMcpMountOpti
   const mount = async (agent: unknown): Promise<void> => {
     try {
       // Leaf seats first (cheap + synchronous): the shared leaf-seat
-      // contract — a known leaf never owns a binding, never gets a mount.
+      // contract — a known leaf never owns a binding. It still needs the
+      // writable command surface, so it gets a RESTRICTED mount below.
       const header = (agent as { session?: { header?: unknown } } | null | undefined)?.session?.header
-      if (isLeafSeatHeader(header)) return
+      const leaf = isLeafSeatHeader(header)
       // Identity is required and never guessed: no usable id → no mount.
       const id = (agent as { id?: unknown } | null | undefined)?.id
       if (typeof id !== 'string' || id.trim() === '') return
@@ -356,13 +416,29 @@ export function registerScopedMcpMount(ctx: Context, options: ScopedMcpMountOpti
       // The scoped instance: one cordis child fiber per agent, RETAINED so
       // the `agent/disposed` edge can dispose it when the agent closes. The
       // config is the row-config base (deployment row when readable, else
-      // the shipped-row mirror) plus the identity-env args and exactly the
-      // per-agent identity env.
+      // the shipped-row mirror) plus the identity-env args, the server-owned
+      // session context (workspace + resolved harness), exactly the per-agent
+      // identity env, and — for a leaf — the restricted seat marker.
       const base = loaderRowConfig(ctx) ?? DEFAULT_ROW_CONFIG
+      const workspace = sessionCwdOf(agent)
+      // The harness pin is a convenience, not a gate: a resolver failure or a
+      // workspace with no harness must never cost the agent its mount. The
+      // workspace cwd below still anchors the server's own probe.
+      let harness: string | null = null
+      try {
+        harness = options.resolver?.forAgent(agent) ?? null
+      } catch {
+        harness = null
+      }
       const config: Record<string, unknown> = {
         ...base,
-        args: scopedMountArgsFor(base.args),
+        args: scopedMountArgsFor(base.args, {
+          leaf,
+          ...(workspace === undefined ? {} : { workspace }),
+          ...(harness === null ? {} : { harness }),
+        }),
         env: { ...((base.env as Record<string, string> | undefined) ?? {}), ...scopedMountEnvFor(id) },
+        ...(workspace === undefined ? {} : { cwd: workspace }),
       }
       claim.fiber = ctx.plugin(mod as unknown as Parameters<Context['plugin']>[0], config)
     } catch (error) {

@@ -216,7 +216,7 @@ function worktreeFixture(root: string, branches: readonly string[]): Map<string,
  * ========================================================================== */
 
 describe('pre-step iteration gate — catalog composition (REAL-composition boot)', () => {
-  it('boot with an ACTIVE workflow + compass → pre-step appends the iteration-gate row after the engine-status row (Task 1 tool result shape)', async () => {
+  it('boot with an ACTIVE workflow + compass → pre-step appends ONE engine-status row whose gate: segment carries the iteration gate (compact contract)', async () => {
     const root = await mkdtemp(join(tmpdir(), 'dsh-mstar-wt-l2-gate-'))
     fixtureRoots.push(root)
     await seedIteration(root, [PLAN_TODO], COMPASS_ACTIVE)
@@ -258,14 +258,17 @@ describe('pre-step iteration gate — catalog composition (REAL-composition boot
     const exitCodes = payload.iteration!.gate.exit.violations.map((v) => v.code)
     expect(exitCodes).toContain('EXIT_BRANCH_UNVERIFIABLE')
     expect(exitCodes).toContain('EXIT_PR_BASE_UNVERIFIABLE')
-    // The composed session log carries the model-facing gate lines.
+    // The composed session log carries the model-facing compact delta line:
+    // the workflow id, its pending plans, the branch anchors, and the gate
+    // verdict + transition as the trailing `gate:` segment. The expanded
+    // `iteration:` / `transition:` / `all plans done:` lines the pre-compaction
+    // row emitted are gone (one row, one line — the payload keeps the detail).
     expect(row?.content[0]?.type).toBe('text')
     const text = row?.content[0]?.type === 'text' ? row.content[0].text : ''
     expect(text).toContain('<mstar_engine_status>')
-    expect(text).toContain('iteration: iter-00000808-wt')
-    expect(text).toContain('transition: phase-2-execute')
-    expect(text).toContain('all plans done: false')
-    expect(text).toContain('gate: PASS')
+    expect(text).toContain('workflow: iter-00000808-wt (active)')
+    expect(text).toContain('plans: fixture-plan-1(Todo)')
+    expect(text).toContain('gate: PASS (phase-2-execute)')
   })
 
   it('failing gate fixture → row renders FAIL with the violation codes (phase-3-close)', async () => {

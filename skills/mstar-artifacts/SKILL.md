@@ -1,6 +1,6 @@
 ---
 name: mstar-artifacts
-description: "Morning Star plan artifacts: main plans, durable review summaries, ephemeral QC/QA bundles, workflow state/configuration/progress/completion evidence, issue capture and residual severity. Read when authoring these artifacts, mapping QC severity, or reading/writing workflow state. PM QC orchestration belongs to mstar-review-qc; leaf verdict methods belong to mstar-roles."
+description: "Plan artifacts: main plans, durable review summaries, QC/QA bundles, workflow state/config/progress/evidence, issue capture, residual severity. Read when authoring or mapping them."
 ---
 
 ## Load order

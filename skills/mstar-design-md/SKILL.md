@@ -1,6 +1,6 @@
 ---
 name: mstar-design-md
-description: DESIGN.md design system specification for Morning Star projects. Create, audit, and maintain project-level design tokens (Colors, Typography, Spacing, Elevation, Motion, Shapes, Components, Voice & Content) using Vercel Geist as reference template. Three-level completeness checklist (MVP/Standard/Production) with built-in upgrade placeholders. Supports light/dark dual-theme via DESIGN.md + DESIGN.dark.md sharing same token names with different values. Prepare 阶段由 @architect 主责创建，@product-manager 提供设计需求；@frontend-dev / @fullstack-dev 实现 UI 时消费；@qc-specialist / @qa-engineer 审查 UI 对齐 DESIGN.md。Read when PM assigns DESIGN.md creation in Prepare, initiating a new UI project, @architect defining a design system, implementing styled components, auditing UI against design spec, adding dark theme, or user mentions "DESIGN.md" / "design tokens" / "design system". Phase gate → **mstar-phase-gates**; paths → **mstar-conventions**.
+description: DESIGN.md 设计系统规范：创建/审计/维护 design tokens、三级完整性清单、light/dark 双主题（DESIGN.dark.md）。用户提到 DESIGN.md / design tokens / design system，或实现、审查 UI 时读取。
 ---
 
 ## Load order

@@ -2,12 +2,12 @@
  * The durable execution binding's clear internals (#530).
  *
  * The slash command that used to host the clear arm is removed (#530) —
- * the native path is its replacement: `mstar_plan_bind` adopts (the Task 3
- * native adoption in `native-commands.ts`), and the `mstar_execution_clear`
- * tool wraps {@link clearExecutionSessionBinding} — the readable-record guard,
- * the nothing-to-clear guard, and the slash clear's `selectedGeneration` read,
- * kept together here so the native clear validates exactly what the slash
- * clear validated.
+ * the native path is its replacement: `mstar_plan_bind` adopts (the native
+ * adoption in `native-commands.ts`), and the `mstar_execution_clear` tool
+ * wraps {@link clearExecutionSessionBinding} — the readable-record guard, the
+ * nothing-to-clear guard, and the slash clear's `selectedGeneration` read, kept
+ * together here so the native clear validates exactly what the slash clear
+ * validated.
  */
 import { clearExecutionBinding, readExecutionWorkflowSource } from './workflow-selection.ts'
 import { readWorkflowSessionBinding } from '../engine-status-store.ts'

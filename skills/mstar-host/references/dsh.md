@@ -25,17 +25,22 @@ or a custom profile).
   **`/amazing-test-audit`**. Each
   command steers its command body into the receiving agent as a USER-source
   message (the mstar workflow prompt — the model executes it as a task, not
-  injected context), returning a success result. Alongside that mirror the
-  plugin registers the **writable mstar command surface as native tools**
-  (`mstar_plan_bind` … `mstar_issue_close` plus `mstar_execution_clear` —
-  § The native command surface below).
+  injected context), returning a success result. The plugin registers **no
+  duplicated** mstar command tools: the writable mstar command surface on this
+  host is the scoped **MCP** route (§ The native command surface below), and the
+  only native tools are the three the MCP route cannot replace.
 - **No `sessionStart.skill`** — enter PM manually via the `pm` skill (the
   `mstar-roles` load path), then **Read next** → `mstar-harness-core` →
   `project-manager.md`.
-- Model-facing tools: the plugin registers **`mstar_sdd_workspace`**,
-  **`mstar_sdd_task_brief`**, **`mstar_iteration_gate`**, and the seam
-  validators **`mstar_design_md_validate`** / **`mstar_audit_validate`** /
-  **`mstar_compound_validate`** / **`mstar_roles_validate`** on `ctx.tools`.
+- Model-facing tools: the plugin registers exactly **three** tools on
+  `ctx.tools` — **`mstar_plan_bind`** (the durable-slot producer),
+  **`mstar_audit_validate`** (no MCP twin) and **`mstar_execution_clear`** (no
+  shared command); the membership rule and each tool's unique contribution are
+  in § The native command surface. Every other mstar capability is an MCP tool of
+  the scoped mount, published one tool per command family
+  (`mcp__mstar__mstar_plan`, `mstar_workflow`, `mstar_issue`, `mstar_sdd`,
+  `mstar_iteration`, `mstar_design_md`, `mstar_audit`, `mstar_compound`,
+  `mstar_roles`, …) with an `action` argument selecting the member command.
 - Web client plugin (workflow panel): the same `mstar` bundle row carries a
   browser client half (`dsh.client` + `exports["./client"]`) discovered
   automatically by `ClientModuleHostService` — no separate profile layer or
@@ -157,9 +162,10 @@ or a custom profile).
 | **`subagent`** / **`subagent_fork`** | Direct-delegation channel — one Assignment per invoke, returned at activation start (default `toolName`; a renamed instance must be declared via Config `dispatchTools`). The default channel on a profile WITHOUT the Team layer; also a one-off seat the board does not track. `subagent_fork` is the variant that seeds the child with the completed conversation (§ Delegation channels) |
 | **`spawn_teammate`** / **`team_task_create`** / `team_task_list` / `team_task_get` / `team_task_update` / **`wait_agent`** / **`send_message`** / `list_agents` / `interrupt_agent` | Agent Teams — the DEFAULT dispatch channel whenever the Team layer is mounted (one board task per Assignment, one teammate per track). Protocol → `references/dsh-agent-teams.md` |
 | **`workflow`** | Read-only fan-out — one run, one conversation `workflow-run` node. N≥3 is its design width; a one-seat read-only run is supported when no direct delegation can carry it (§ Read-only fan-out via the `workflow` tool; scripts → `references/dsh-workflow-scripts.md`) |
-| **`mstar_iteration_gate`** | Evaluate the iteration phase gate in-app (`evaluatePhaseGate` — `mstar iteration gate` parity) |
-| **`mstar_sdd_workspace`** / **`mstar_sdd_task_brief`** | SDD workspace resolve + task brief extraction (`mstar sdd …` parity) |
-| **`mstar_*_validate`** | On-demand seam validators (design-md / audit / compound / roles) |
+| **`mcp__mstar__mstar_<family>`** | The writable mstar command surface — one MCP tool per command family with an `action` argument (`mstar_plan` → `bind`/`prepare`/`progress`/`complete`, `mstar_workflow` → `register`, `mstar_issue` → `add`/`close`, `mstar_sdd` → `workspace`/`task-brief`, `mstar_iteration` → `gate`, `mstar_design_md` / `mstar_compound` / `mstar_roles` → `validate`, `mstar_audit` → `scaffold`/`secret-scan`/`supply-chain`). Identity comes from the scoped mount's `--identity-env`, so the server acts as the calling agent (§ The native command surface) |
+| **`mstar_plan_bind`** | Native bind — the only producer of the dsh-local durable record: it binds the engine coordinator row AND writes the session's `executionBinding` slot plus the adoption receipt that ledger attribution reads (§ The native command surface). A coordinating session that wants dsh-local ledger attribution uses this tool, not the MCP action |
+| **`mstar_audit_validate`** | Native report validator — the review-report credential scan (`mstar-audit` Hard Rule 4); the `mstar_audit` family publishes no report validator, so this capability has no MCP action |
+| **`mstar_execution_clear`** | Clear the calling session's own durable execution binding — no shared `execution.clear` command exists. No parameters, identity from `exec.agent.id`, leaf seats refused fail-closed |
 | **bash / read / write / edit / grep / glob / web_search** | Standard agent tools — evidence per `mstar-coding-behavior` |
 
 ### `subagent` dispatch shape
@@ -258,21 +264,47 @@ and a retired path is not a lookup. Config / `.mstarc` `soft` are the local
 rollbacks. Hard gates are never a global default.
 
 A composed agent step carries ONE **`<mstar_engine_status>`** catalog
-message when the row is emitted: the iteration phase-gate section when a
-steering compass resolved, and the workspace-state digest section (plan
-registry, open issues from the store rollup, branch/policy anchors, plan row
-scopes — a recorded scope, not a lease — knowledge digest, compass direction)
-when the workspace has harness authority (store.db registry). When no
-lifecycle is selected the row renders `workflow selection: ERROR (<code>)
-<message>` instead of those state lines, and that message names the execution
-authority plus a real recovery (`mstar workflow register` /
-`mstar iteration register`, or picking a registered lifecycle for this
-session) rather than a retired `status.json` path. Emission is
-change-driven per session+workspace: first emission, then only when the
-rendered row or the panel-relevant payload projection changes — the start of
-a turn is not a trigger, so a long unchanged session does not accumulate
-copies, and a workspace with no resolved `{HARNESS_DIR}` composes no row at
-all. The block is a projection of the payload: the version / harness dir /
+message when the row is emitted. The row is a compact DELTA, not a snapshot:
+ONE delta line carrying the selected `workflow`, its non-Done `plans`, the
+`branch` anchors, and — when a steering compass resolved — the iteration phase
+`gate` verdict with its transition and violation codes. A `workflow warning:
+<code> <message>` line follows that delta line when the selection carries a
+warning (the registration-less fallback adds the watermark trio above it), so
+the block is one delta line plus those disclosures. `plans:` distinguishes an
+empty registry (`plans: none registered`) from a workflow whose every plan row
+is Done (`plans: all done`); the non-Done rows are listed otherwise. When no
+lifecycle is selected it renders `workflow selection: ERROR (<code>) <message>`
+in place of that line, and that message names the execution authority plus a
+real recovery (`mstar workflow register` / `mstar iteration register`, or
+picking a registered lifecycle for this session) rather than a retired
+`status.json` path.
+
+Everything else the payload carries — the open-issue rollup and its detail
+rows, the branch policy, the spec-integration branch anchor, plan row scopes (a
+recorded scope, never a lease), the knowledge digest, the compass direction and
+the agent-flow ledger — is deliberately NOT in the row. Those facts stay in
+`MstarEngineStatusPayload` (the panel renders them from the persisted emission)
+and in the engine authorities behind it; there is no single `status` command
+that serves them, so read the concrete one per fact: `mstar status tech-debt`
+for the open-issue rollup, `mstar roadmap show` and the compass document
+(`{ITERATION_DIR}/<id>/delivery-compass.md`) for direction, branch policy and
+the spec-integration anchor, `mstar plan show` for plan rows and their recorded
+scopes, `{KNOWLEDGE_DIR}` for the knowledge documents, and the persisted
+`dsh_status_emissions` snapshot for the agent-flow ledger. The row is a
+projection of the payload, never the authority for it: treat the row as a
+change notice and re-read the authority when a decision needs the full state.
+
+Emission is change-driven per session+workspace, and the two sides are gated
+separately. The MODEL row is keyed on its own rendered text: first emission,
+then only when that line changes — so a residual count, a ledger event, a
+knowledge digest or a row scope moving does not append an identical-looking
+row, and a long unchanged session does not accumulate stale copies. The PANEL
+is keyed on the full payload projection: a change to any payload-only fact
+still persists the new payload for the panel (the freshness footer keeps the
+turn the model last saw a row). The start of a turn is neither trigger, and a
+workspace with no resolved `{HARNESS_DIR}` composes no row at all.
+
+The block is a projection of the payload: the version / harness dir /
 enforcement watermark stays in the payload (the panel meta dock renders
 version + harness dir from it) and stays model-visible once in the always-on
 system prompt (`mstar:engine-status` digest + `mstar:harness-rules`), never
@@ -281,12 +313,19 @@ repeated in the row. The one exception is a composition without
 exists, so the row falls back to re-rendering the trio itself (the listener's
 `showWatermark` option, taken from that registration verdict) — the watermark
 is never absent from the model's context. The newest per-session emission
-persists in the control-root `store.db` (`dsh_status_emissions`), so its
-freshness footer `turn` / `at` mean the last emission, not the current turn;
-the row is not periodically re-anchored, so after host-side context compaction
-it may be absent until the next change — the system-prompt digest still
-carries the version, the active workflow and its non-Done plans. The build
-behind it is one per-workspace TTL cache (`catalogTtlMs`, default 60 s).
+persists in the control-root `store.db` (`dsh_status_emissions`); its
+freshness footer `turn` / `at` name the last MODEL-row emission, so a
+panel-only persist updates the payload without claiming the model saw a new
+row. The row is not periodically re-anchored, so after host-side context
+compaction it may be absent until the next rendered change — the system-prompt
+digest still carries the version, the active workflow, its non-Done plans, the
+`branch` anchors (when the payload resolved both) and the phase-`gate` verdict
+(when a steering compass gated the iteration). The remaining facts are read on
+demand: `mstar status tech-debt` for the open-issue rollup,
+`mstar iteration gate --workflow <id> --compass <path>` for a fresh gate
+evaluation, and the compass / plan documents for direction, policy and row
+scopes. The build behind it is one per-workspace TTL cache (`catalogTtlMs`,
+default 60 s).
 
 ### Execution authority in this host (source state)
 
@@ -305,10 +344,13 @@ answers, and no tool argument or config key selects one:
   an execution route: coordination documents have no file fallback there
   (`execution.not-active` — the file route is retired), and the
   register kind stays under its own document validator.
-- The host-native execution entry is the **native command tool surface**, not
-  a command: the writable mstar commands are dsh tools registered over
-  `ctx.tools.register`, plus one dsh-native clear tool (§ The native command
-  surface below).
+- The host-native execution entry is the **scoped MCP mount**, not a command and
+  not a native duplicate: the writable mstar commands arrive as MCP tools
+  (`mcp__mstar__mstar_<family>` with an `action`). Three dsh-native tools ride
+  beside them, and only for what the MCP route cannot do — `mstar_plan_bind`
+  (the durable-slot producer), `mstar_audit_validate` (no MCP twin) and
+  `mstar_execution_clear` (no shared command); the rule is in § The native
+  command surface below.
 
 ### Concurrent lifecycles and workflow selection
 
@@ -344,21 +386,88 @@ several lifecycles by naming the plan each call.
 
 ### The native command surface
 
-The writable mstar commands are native dsh tools — `mstar_plan_bind`,
-`mstar_plan_prepare`, `mstar_plan_progress`, `mstar_plan_complete`,
-`mstar_workflow_register`, `mstar_issue_add`, `mstar_issue_close` — plus the
-one dsh-native `mstar_execution_clear`. Each calls the shared
-`@mstar-harness/commands` implementation in-process (no shell anywhere in the
-path) and carries the caller identity from `exec.agent.id` — a session id
-argument is stripped before admission, so identity is never model-choosable.
-A known leaf seat (`header.origin === 'subagent'` or `delegationDepth > 0`)
-is refused fail-closed on the coordinator-seat-capable tools
-(`mstar_plan_bind`, `mstar_plan_complete`, `mstar_execution_clear`) before
-any admission or engine round-trip. The former plugin-owned command
-**`/mstar-execution`** was removed: its rationale is superseded by this
-native path — see `docs/adr/dsh-native-identity-channels.md`
-(§ Superseded rationale). Tool semantics live in the dsh README
-(`packages/dsh/README.md`, § Native command surface).
+The writable mstar command surface on this host is the **MCP route**: the
+plugin's bundle patch inserts one `mstar-mcp` row (`npx @mstar-harness/cli mcp`
+over stdio, § MCP delivery) and registers one **scoped mount per agent** carrying
+`--identity-env`, so the CLI process acts as the calling session — the agent's
+`sessionId` reaches the shared admission on every call without a model-supplied
+field. Each MCP tool is one command FAMILY with an `action` argument —
+`mstar_plan` (`bind` / `prepare` / `progress` / `complete`), `mstar_workflow`
+(`register`), `mstar_issue` (`add` / `close`), `mstar_sdd` (`workspace` /
+`task-brief`), `mstar_iteration` (`gate`), `mstar_design_md` / `mstar_compound` /
+`mstar_roles` (`validate`), `mstar_audit` (`scaffold` / `secret-scan` /
+`supply-chain`), plus every other family. An unknown or missing `action` refuses
+with that family's real action list, and a missing required field refuses with
+the shared aggregated message naming every missing field — validation, refusal
+aggregation and payload composition are the shared command layer's, unchanged.
+
+**The native-surface rule** (memorize this instead of a list): a command is a
+dsh-native tool only when it
+
+1. **produces a dsh-local durable record the MCP route cannot write**, or
+2. **exposes a capability the MCP surface does not publish at all**.
+
+Everything else is MCP. Three tools satisfy the rule today:
+
+- **`mstar_plan_bind`** — rule 1. It binds the engine coordinator row *and*
+  persists the dsh plugin's own durable state: the session's `executionBinding`
+  slot in the control root's `store.db` plus the in-process adoption receipt the
+  workflow-ledger attribution resolver and `mstar_execution_clear` read. Shape:
+  the shared `plan.bind` parameters mirrored mechanically from the published
+  schema (the session selector is not one of them — identity comes from
+  `exec.agent.id`), engine refusals returned verbatim, a known leaf seat refused
+  fail-closed before admission.
+- **`mstar_audit_validate`** — rule 2. It validates one review report under
+  `{REVIEW_DIR}`: the credential scan of `mstar-audit` Hard Rule 4, the validator
+  behind `mstar audit scaffold`. The `mstar_audit` family publishes `scaffold` /
+  `secret-scan` / `supply-chain`; none of them validates an existing report file,
+  so folding this one into the family would have dropped the capability.
+- **`mstar_execution_clear`** — rule 2. It clears that same dsh-local
+  `executionBinding` slot, and there is no shared `execution.clear` command for
+  the MCP route to carry. No parameters at all: identity comes from
+  `exec.agent.id`, so a `sessionId` argument (or any other argument) is ignored
+  and only the caller's own binding is reachable; the user's workflow selection
+  and exclusion floor are preserved. A known leaf seat
+  (`header.origin === 'subagent'` or `delegationDepth > 0`) is refused
+  fail-closed before the store read. Refusals: `execution.clear.no-harness` names
+  the two routes that exist (open the session in a workspace declaring
+  `.mstar/`/`.mstarc`, or point the plugin's `harnessDir` config at the control
+  root); `execution.clear.no-binding` names the `harnessDir` config route for a
+  binding recorded in another control root and states the no-action case;
+  `execution.clear.store-refused` names the store's own reason and, when this
+  session is keyed to another workspace, carries that workspace under
+  `data.recordedCwd`.
+
+**The two bind routes are NOT equivalent.** MCP `mstar_plan` with
+`action: "bind"` binds the engine row and stops there. The native
+**`mstar_plan_bind`** binds the engine row *and* writes the dsh adoption receipt
+plus the durable slot. A coordinating session on this host therefore uses the
+**native** tool whenever it wants dsh-local ledger attribution (workflow-ledger
+rows and the clear both resolve through that record); the MCP action remains the
+route for any other bind caller, including every non-dsh host.
+
+**Holding an old tool name?** Any `mstar_<family>_<action>` spelling of a
+command — the former plan / workflow / issue / sdd / iteration / design-md /
+compound / roles mirrors, twelve tools in all — is gone with no alias and no
+compatibility tool. Those twelve duplicated an MCP tool 1:1, so two identical
+surfaces competed for the same call and the whole set cost ~10k characters of
+fixed context per request. **One exception to that 1:1 phrasing:** the dsh
+compound-validate mirror also published a dsh-only `repo_root` parameter for
+reference-existence checks (the compound-refresh Phase 2 check), and
+`compound.validate` in `packages/commands/src/families/validation.ts` carries
+neither that parameter nor that check — so the capability went with the tool and
+has no MCP twin. Recovery: call the folded family instead —
+`mcp__mstar__mstar_plan` with `action: "prepare"` where an older document spells
+the prepare mirror natively, and so on — and read the family's real actions and
+parameters with `mcp__mstar__mstar_schema` (`family: <name>`, or
+`command: <command-id>` for one leaf contract) instead of guessing from the old
+name. For the knowledge-doc checks use MCP `mstar_compound` with
+`action: "validate"` (or the CLI `mstar compound validate`) without `repo_root`;
+the reference-existence half is the `mstar-compound-refresh` knowledge-write
+seam's job, not an on-demand tool. The former plugin-owned command
+**`/mstar-execution`** stays removed; the
+ADR `docs/adr/dsh-native-identity-channels.md` (§ Superseded rationale) explains
+why identity lives on the mount and the clear rather than on a command.
 
 ## Agent-flow ledger
 
@@ -471,15 +580,15 @@ tab's `EventLogPage` log page are pure consumers of this evidence.
   run without a `localAgent` produces none, so a dispatch may legitimately
   have no link row.
 - **Catalog**: `state.agentFlow` carries the ledger view (`events` ≤ 50,
-  latest-first, + `summary`); the model-facing `<mstar_engine_status>` text
-  renders ONE compact `agent flow: …` line only when events > 0 (role totals
-  top-5 + latest dispatch with HH:MM — the event detail lives in the
-  structured source, never the model text). A ledger record
-  (dispatch/settle/link) invalidates the affected workspace's TTL cache entry
-  IMMEDIATELY (apply-scoped `harnessDir → cache key` reverse map +
-  invalidation closure) → the next pre-step rebuilds and (rendered-text or
-  panel-projection change) re-injects the row — the 60 s TTL no longer bounds ledger-change latency; it
-  still bounds non-ledger staleness.
+  latest-first, + `summary`) for the panel — the compact
+  `<mstar_engine_status>` row does NOT render a ledger line (a ledger event is
+  not a lifecycle delta the model acts on, and it kept spending a full row).
+  A ledger record (dispatch/settle/link) invalidates the affected workspace's
+  TTL cache entry IMMEDIATELY (apply-scoped `harnessDir → cache key` reverse
+  map + invalidation closure) → the next pre-step rebuilds, persists the new
+  payload for the panel and re-injects a row only if a RENDERED fact moved.
+  The 60 s TTL no longer bounds ledger-change latency for the panel; it still
+  bounds non-ledger staleness.
 - **Explicit ledger target (ACTIVE authority)**: each event boundary resolves
   the session's selected native target and validates its current store identity,
   epoch and workflow scope. Missing, stale, revoked, corrupt or mismatched
@@ -488,9 +597,10 @@ tab's `EventLogPage` log page are pure consumers of this evidence.
   whether authority persistence is available.
 - **Maintainer view**: change the ledger shape (event schema, bounds, settle
   seam) and update the projections together — `gates/agent-flow.ts` (record /
-  read / settle / catalog-join listeners), `gates/catalog.ts` (agent-flow line
-  + `source` view) and `client/panel/graph/project-graph.ts` (the ZoneView
-  flow/agents projection) — the panel renders ONLY what the evidence shows.
+  read / settle / catalog-join listeners), `gates/catalog.ts` (the `agentFlow`
+  payload view + the panel-projection emission key) and
+  `client/panel/graph/project-graph.ts` (the ZoneView flow/agents projection) —
+  the panel renders ONLY what the evidence shows.
 
 ## PM dispatch
 

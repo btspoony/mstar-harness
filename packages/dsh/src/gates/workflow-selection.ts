@@ -61,6 +61,9 @@ import type { ExecutionBinding, ExecutionPlanView, ExecutionRead, ExecutionState
 import type { WorkflowSelectionView } from '../types.ts'
 import { STATUS_FILE, asRecord } from './_shared.ts'
 import type { WorkflowLedgerTarget } from './workflow-ledger.ts'
+// The bind adoption receipt names the session's SELECTED harness root: the
+// binding guard and the exclusion floor read through it too (the same root
+// `resolveExecutionLedgerTarget` appends through), never the workspace root.
 import { executionBindingRootOf } from './execution-binding-roots.ts'
 import { readWorkflowSessionBinding, updateWorkflowSessionBinding } from '../engine-status-store.ts'
 

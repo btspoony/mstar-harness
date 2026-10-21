@@ -1,12 +1,13 @@
-import { existsSync, readFileSync, readdirSync, statSync } from "node:fs";
+import { existsSync, readFileSync, readdirSync, realpathSync, statSync } from "node:fs";
 import path from "node:path";
 import {
   assertDefaultBranchProtected,
-  assertIndexRows,
+  assertKnowledgeCatalogCompleteness,
   assertLightDarkParity,
   assertQcAlignment,
   assertSddTddTriple,
   assertTriIdentity,
+  catalogRootDir,
   classifySkillLint,
   activeLifecyclePlanId,
   completenessLevel,
@@ -134,6 +135,10 @@ function activeGraphLifecycleBranches(graph: ExecutionState): ActiveLifecycleBra
   return [...branches.values()];
 }
 function absolute(_cwd: string, input: string): string { return resolveCliPath(input); }
+/** Physical path when the target exists, lexical `resolve` otherwise — a caller may name a directory that is not created yet, and a symlinked or `./`-spelled equal path must compare equal. */
+function canonicalPath(target: string): string {
+  try { return realpathSync(target); } catch { return path.resolve(target); }
+}
 
 const codeExtensions: Record<string, true> = Object.fromEntries([".ts", ".tsx", ".mts", ".cts", ".js", ".jsx", ".mjs", ".cjs", ".py", ".go", ".rs", ".sh", ".bash", ".zsh", ".rb", ".java", ".kt", ".swift"].map((ext) => [ext, true]));
 const provenanceExtensions: Record<string, true> = { ".md": true, ".ts": true };
@@ -379,7 +384,65 @@ async function execute(id: string, input: Input, context: InvocationContext): Pr
         const violations: Violation[] = [...validateSchemaYaml(readFileSync(docPath, "utf8")).violations];
         if (input.knowledgeDir !== undefined) {
           const knowledgeDir = absolute(context.cwd, input.knowledgeDir);
-          violations.push(...assertIndexRows(knowledgeDir).violations, ...scopeGuard(docPath, [knowledgeDir]).violations);
+          // Catalog completeness is a store.db query, so the check needs the
+          // process harness this invocation belongs to: the root the launcher
+          // pinned for the session first (a pinned MCP server must not fall back
+          // to the cwd's harness), then the same process probe the CLI performs.
+          // FAIL-CLOSED: without a resolvable root — or with a store the engine
+          // refuses (missing / staged / corrupt) — report the refusal instead of
+          // a completeness verdict the command cannot make.
+          const harnessDir = context.controlRoot ?? resolveProcessHarnessDir(context.cwd);
+          if (harnessDir === null) {
+            violations.push({
+              ok: false,
+              severity: "high",
+              code: "compound.catalog.unresolved-harness",
+              message: `no {HARNESS_DIR} resolves for this invocation, so the knowledge catalog completeness of ${knowledgeDir} cannot be asserted`,
+              fix: "run this command from a workspace that declares a harness root (.mstar / .agents, MSTAR_HARNESS_DIR), or mount the MCP server with --harness <harness-dir>; catalog completeness is a store.db query",
+            });
+          } else {
+            // The completeness query discovers bodies and matches catalog rows
+            // under ONE root: the harness-resolved knowledge root. Its verdict
+            // is that root's, so it is not a verdict about any other directory
+            // as a knowledge store — answering a caller's other directory with
+            // it reports a different question as if it were the named one's.
+            // Only the configured root ITSELF is proven, normalized: a symlinked
+            // or `./`-spelled equal path compares equal, a subdirectory does not.
+            const configuredRoot = catalogRootDir({ harnessDir }, "knowledge");
+            const named = canonicalPath(knowledgeDir);
+            const root = canonicalPath(configuredRoot);
+            if (named !== root) {
+              violations.push({
+                ok: false,
+                severity: "high",
+                code: "compound.catalog.knowledge-dir-mismatch",
+                message:
+                  `${knowledgeDir} is not the configured knowledge root ${configuredRoot}, so its catalog completeness cannot be asserted — ` +
+                  "completeness is a store.db query that reports the configured root's verdict (the documents registered relative to it), " +
+                  "which is never a verdict about a subdirectory of that root or about another directory as a knowledge store",
+                fix:
+                  `pass --knowledge-dir ${configuredRoot} to validate the configured root (omitting the flag validates only the document schema, with no catalog completeness check); ` +
+                  `or move/declare those documents under ${configuredRoot} and register them there; ` +
+                  "or point the project's knowledge root at that directory (`.mstarc` `[config] knowledge_dir`) and validate that root",
+              });
+            } else {
+              try {
+                violations.push(...(await assertKnowledgeCatalogCompleteness({ harnessDir })).violations);
+              } catch (error) {
+                const code = (error as { code?: unknown } | null | undefined)?.code;
+                violations.push({
+                  ok: false,
+                  severity: "high",
+                  code: "compound.catalog.unavailable",
+                  message:
+                    `the knowledge catalog completeness cannot be evaluated: ` +
+                    `${typeof code === "string" && code !== "" ? `[${code}] ` : ""}${error instanceof Error ? error.message : String(error)}`,
+                  fix: "restore the issue/catalog authority (`mstar store init|upgrade|migrate`) — unavailable catalog data is never read as complete",
+                });
+              }
+            }
+          }
+          violations.push(...scopeGuard(docPath, [knowledgeDir]).violations);
         }
         const gate = { ok: violations.length === 0, violations };
         return gate.ok ? ok(id, gateData(gate)) : rejected(id, gate, "compound.invalid");

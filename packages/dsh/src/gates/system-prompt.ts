@@ -73,7 +73,7 @@ import type { Context } from '@deepseek-ai/cordis'
 import { resolveRepoEnforcement } from '@mstar-harness/engine'
 import type { EnforcementFlag } from '@mstar-harness/engine'
 import type { MstarEngineStatusPayload } from '../types.ts'
-import { DEFAULT_CATALOG_TTL_MS, buildCatalogPayload, buildCatalogPayloadWithStore } from './catalog.ts'
+import { DEFAULT_CATALOG_TTL_MS, buildCatalogPayload, buildCatalogPayloadWithStore, gateSegment } from './catalog.ts'
 import { joinCapped, stripInterpolationHazard, type HarnessResolver } from './_shared.ts'
 
 /** Logger label for the harness-prompt injection (dsh logger naming: `<scope>/<subject>`). */
@@ -393,26 +393,40 @@ const DIGEST_PLAN_CAP = 8
  * The slim `mstar:engine-status` digest (only when the
  * session's workspace has an active workflow
  * (`payload.state.selection.kind === 'active'`) — ONE compact
- * `workflow <id> (<type>) <status> | plans: <id>(<status>) …` line. Idle
- * sessions (empty/absent active set — `state === null`, or a `'terminal'` /
- * `'error'` selection) render the version line alone; the catalog's
- * terminal-mtime history fallback is therefore structurally unreachable
- * from this surface without touching `resolveReadWorkflow`.
+ * `workflow <id> (<type>) <status> | plans: <id>(<status>) … [| branch: <base>
+ * → <target>] [| gate: …]` line. Idle sessions (empty/absent active set —
+ * `state === null`, or a `'terminal'` / `'error'` selection) render the version
+ * line alone; the catalog's terminal-mtime history fallback is therefore
+ * structurally unreachable from this surface without touching
+ * `resolveReadWorkflow`.
  *
  * The plans join is the selected snapshot's non-Done rows
  * (`status !== 'Done'`), in catalog-array order, capped at
  * {@link DIGEST_PLAN_CAP} with a final `+N more` overflow marker when
- * longer; empty after the filter renders `plans: none`. Residuals /
- * leases / direction / harness dir / enforcement / the iteration-gate
- * detail all stay exclusive to the pre-step catalog row.
+ * longer; an empty registry renders `plans: none` and an all-Done workflow
+ * `plans: all done` (two different states, never one text).
+ *
+ * Division of labour with the pre-step catalog row: this always-on digest is
+ * the surface that survives a row-less step AND host-side compaction (the row
+ * is a change-driven DELTA and is not re-anchored per turn), so it carries the
+ * version, the active workflow, its non-Done plans, the `branch` anchors (when
+ * the payload resolved both) and the iteration phase-`gate` verdict (when a
+ * steering compass gated it) — the two facts a post-compaction step still has
+ * to decide on. Residuals / plan row scopes / direction / harness dir /
+ * enforcement / the agent-flow ledger are NOT re-added here: they stay
+ * payload-only (the panel renders them from the persisted emission) and each is
+ * read on demand from its own authority (`mstar status tech-debt`, the compass
+ * document, `mstar roadmap show`, the knowledge tree) — no single `status`
+ * command serves them. Do not restate a dropped row line in this digest: the
+ * two surfaces must not duplicate each other.
  *
  * STRICT-interpolation safety : every operator-
  * controlled value (workflow id, workflow type/status, plan ids, plan
- * statuses) is screened through `stripInterpolationHazard` before embedding
- * — a hostile `{{…}}` in any of them can never throw the renderer.
- * Engine-derived literals (version, `workflow`, `plans:`, `none`, `unknown`,
- * the `+N more` overflow marker) are constants, not operator text, and stay
- * unscreened.
+ * statuses, branch anchors) is screened through `stripInterpolationHazard`
+ * before embedding — a hostile `{{…}}` in any of them can never throw the
+ * renderer. Engine-derived literals (version, `workflow`, `plans:`, `none`,
+ * `all done`, `unknown`, the `+N more` overflow marker) are constants, not
+ * operator text, and stay unscreened.
  */
 function engineStatusSummary(payload: MstarEngineStatusPayload): string {
   const lines = [`mstar engine status: v${payload.version}`]
@@ -421,12 +435,27 @@ function engineStatusSummary(payload: MstarEngineStatusPayload): string {
     const selection = state.selection
     if (selection.kind === 'active') {
       const pending = state.plans.filter((p) => p.status !== 'Done')
-      const plans = pending.length === 0
+      const plans = state.plans.length === 0
         ? 'none'
-        : joinCapped(pending, DIGEST_PLAN_CAP, ' ', (p) => `${stripInterpolationHazard(p.id)}(${stripInterpolationHazard(p.status)})`)
+        : pending.length === 0
+          ? 'all done'
+          : joinCapped(pending, DIGEST_PLAN_CAP, ' ', (p) => `${stripInterpolationHazard(p.id)}(${stripInterpolationHazard(p.status)})`)
       const workflowType = stripInterpolationHazard(state.workflowType ?? 'unknown')
       const workflowStatus = stripInterpolationHazard(state.workflowStatus ?? 'unknown')
-      lines.push(`workflow ${stripInterpolationHazard(selection.workflowId)} (${workflowType}) ${workflowStatus} | plans: ${plans}`)
+      // The ROW's segment order (catalog.ts `renderEngineStatusCatalog`): the
+      // same facts in the same sequence, so a reader comparing the two surfaces
+      // does not have to re-learn a second layout.
+      const segments = [
+        `workflow ${stripInterpolationHazard(selection.workflowId)} (${workflowType}) ${workflowStatus}`,
+        `plans: ${plans}`,
+      ]
+      if (state.iterationBaseBranch !== null && state.targetBranch !== null) {
+        segments.push(`branch: ${stripInterpolationHazard(state.iterationBaseBranch)} → ${stripInterpolationHazard(state.targetBranch)}`)
+      }
+      // The iteration section IS the phase gate: the workflow id it names is
+      // already in the first segment, so only the verdict + transition join.
+      if (payload.iteration !== undefined) segments.push(gateSegment(payload.iteration.gate))
+      lines.push(segments.join(' | '))
     }
   }
   return lines.join('\n')

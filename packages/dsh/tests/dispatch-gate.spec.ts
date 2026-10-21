@@ -24,6 +24,7 @@ import { join } from 'node:path'
 import { Context } from '@deepseek-ai/cordis'
 import type { PreToolDecision, ToolExecution, ToolExecutionToken } from '@deepseek-ai/dsh-tools'
 import { assignmentHeaderRegion } from '@mstar-harness/engine'
+import { foldedFamilyToolName, getCommandDefinitions, isCoordinatorSeatCommand } from '@mstar-harness/commands'
 import { bootApp, seedActiveWorkflow, seedHarness, type BootResult } from './harness.ts'
 import { updateWorkflowSessionBinding } from '../src/engine-status-store.ts'
 import type { DispatchGateAdvisory } from '../src/index.ts'
@@ -913,5 +914,141 @@ describe('dispatch gate — the carrying-session hint is derived ONLY where the 
     await preExecuteListener(app.ctx, resolver, config, adapter, subagentExec(VALID_WRITABLE, agent), defaultAllow)
     expect(warns).toHaveLength(1)
     expect(warns[0]).toContain('mstar store init')
+  })
+})
+
+/* ---------------------------------- leaf-seat tool boundary ---------------------------------- */
+
+/**
+ * PR #558 must-fix 1: the profile-wide `mstar-mcp` row mounts a GENERIC
+ * connection (no `--identity-env`, no `--seat`), so the scoped leaf mount's
+ * server-side restriction never covered it — a known leaf could name a bound
+ * coordinator session on that connection and run `plan.complete`. The guard
+ * lives on `tools/pre-execute`, where the host knows the calling agent is a
+ * leaf, and reads the folded tool's `action` from the call's arguments.
+ */
+
+/** The folded plan tool as the shipped bundle's `mstar` server publishes it. */
+const PLAN_TOOL = 'mcp__mstar__mstar_plan'
+
+/** A known leaf seat: the subagent origin the identity chain reads. */
+const leafAgent = (): unknown => ({ id: 'leaf-session', session: { header: { origin: 'subagent' } } })
+
+/** A known leaf seat by delegation depth (the other shape of the same contract). */
+const depthLeafAgent = (): unknown => ({ id: 'depth-leaf', session: { header: { delegationDepth: 1 } } })
+
+/** The coordinating session on the SAME generic connection. */
+const coordinatingAgent = (): unknown => ({ id: 'coordinator-session', session: { header: { origin: 'user' } } })
+
+/** One folded MCP call: the family tool plus its `action` selector. */
+const foldedCall = (tool: string, args: Record<string, unknown>, agent: unknown): ToolExecution =>
+  toolExec(tool, args, agent)
+
+describe('leaf-seat tool boundary — coordinator actions on the folded MCP surface', () => {
+  it('refuses plan.complete and plan.bind for a known leaf before the MCP child runs', async () => {
+    const app = booted = await bootApp()
+    for (const action of ['complete', 'bind']) {
+      const decision = await app.ctx.waterfall('tools/pre-execute', foldedCall(PLAN_TOOL, { action, plan: 'p', sessionId: 'coordinator-session' }, leafAgent()), defaultAllow)
+      expect(decision.kind).toBe('deny')
+      expect((decision as { reason?: string }).reason).toContain('leaf-seat.coordinator-action')
+      expect((decision as { reason?: string }).reason).toContain(action)
+    }
+  })
+
+  it('refuses the same actions for a leaf recognised by delegation depth', async () => {
+    const app = booted = await bootApp()
+    const decision = await app.ctx.waterfall('tools/pre-execute', foldedCall(PLAN_TOOL, { action: 'complete' }, depthLeafAgent()), defaultAllow)
+    expect(decision.kind).toBe('deny')
+  })
+
+  it('does not refuse the same generic connection for a non-leaf session', async () => {
+    const app = booted = await bootApp()
+    for (const action of ['complete', 'bind']) {
+      expect(await app.ctx.waterfall('tools/pre-execute', foldedCall(PLAN_TOOL, { action }, coordinatingAgent()), defaultAllow))
+        .toEqual({ kind: 'allow' })
+    }
+  })
+
+  it('leaves the leaf’s allowed folded MCP actions reachable', async () => {
+    const app = booted = await bootApp()
+    const allowed: ToolExecution[] = [
+      foldedCall(PLAN_TOOL, { action: 'prepare' }, leafAgent()),
+      foldedCall(PLAN_TOOL, { action: 'progress' }, leafAgent()),
+      foldedCall(PLAN_TOOL, { action: 'show' }, leafAgent()),
+      foldedCall('mcp__mstar__mstar_issue', { action: 'add' }, leafAgent()),
+      // The `workflow-note` family is coordinator-scoped for its WRITE
+      // (`append`); its read action stays reachable, so the guard is not
+      // refusing a whole family it was never asked about.
+      foldedCall('mcp__mstar__mstar_workflow_note', { action: 'coverage', workflow: 'wf-a' }, leafAgent()),
+      foldedCall('mcp__mstar__mstar_sdd', { task_number: 1 }, leafAgent()),
+      foldedCall('mcp__mstar__mstar_schema', { family: 'plan' }, leafAgent()),
+      toolExec('bash', { command: 'ls' }, leafAgent()),
+    ]
+    for (const exec of allowed) {
+      expect(await app.ctx.waterfall('tools/pre-execute', exec, defaultAllow)).toEqual({ kind: 'allow' })
+    }
+  })
+
+  it('refuses the workflow family’s coordinator actions, not only the plan pair', async () => {
+    const app = booted = await bootApp()
+    for (const action of ['evidence', 'delivery-anchors', 'adopt-terminal', 'lifecycle', 'execution-policy']) {
+      const decision = await app.ctx.waterfall(
+        'tools/pre-execute',
+        foldedCall('mcp__mstar__mstar_workflow', { action, workflow: 'wf-a' }, leafAgent()),
+        defaultAllow,
+      )
+      expect(decision.kind).toBe('deny')
+      const reason = (decision as { reason?: string }).reason
+      expect(reason).toContain('leaf-seat.coordinator-action')
+      // The refusal names the command it refused, so a leaf learns which id
+      // belongs to the coordinating session rather than only that it was
+      // refused.
+      expect(reason).toContain(`workflow.${action}`)
+    }
+  })
+
+  it('does not refuse the workflow family for a non-leaf session on the same generic connection', async () => {
+    const app = booted = await bootApp()
+    for (const action of ['evidence', 'delivery-anchors', 'adopt-terminal']) {
+      expect(await app.ctx.waterfall('tools/pre-execute', foldedCall('mcp__mstar__mstar_workflow', { action, workflow: 'wf-a' }, coordinatingAgent()), defaultAllow))
+        .toEqual({ kind: 'allow' })
+    }
+  })
+
+  it('refuses every command the shared coordinator-seat set names', async () => {
+    const app = booted = await bootApp()
+    const seat = getCommandDefinitions().filter((definition) => isCoordinatorSeatCommand(definition.id))
+    // The set is derived from the command corpus; a corpus change that drops
+    // the workflow family out of it must fail here, not pass silently.
+    expect(seat.map((definition) => definition.id)).toContain('workflow.evidence')
+    for (const definition of seat) {
+      const action = definition.id.slice(definition.id.indexOf('.') + 1)
+      const tool = `mcp__mstar__${foldedFamilyToolName(definition.cli.path[0]!)}`
+      const decision = await app.ctx.waterfall('tools/pre-execute', foldedCall(tool, { action }, leafAgent()), defaultAllow)
+      expect(decision.kind).toBe('deny')
+      expect((decision as { reason?: string }).reason).toContain(definition.id)
+    }
+  })
+
+  it('refuses the session actions that establish a seat, including the child-identity launch', async () => {
+    const app = booted = await bootApp()
+    const decision = await app.ctx.waterfall(
+      'tools/pre-execute',
+      foldedCall('mcp__mstar__mstar_session', { action: 'recover', workflow: 'wf-a' }, leafAgent()),
+      defaultAllow,
+    )
+    expect(decision.kind).toBe('deny')
+    expect((decision as { reason?: string }).reason).toContain('session.recover')
+    // The launch (`session.run`) mints a coordinator identity for a CHILD
+    // process and spawns it, so the child binds on that minted seat without
+    // ever passing this boundary: for a leaf that IS seat establishment, not a
+    // way to exercise an existing binding.
+    const launch = await app.ctx.waterfall(
+      'tools/pre-execute',
+      foldedCall('mcp__mstar__mstar_session', { action: 'run', workflow: 'wf-a' }, leafAgent()),
+      defaultAllow,
+    )
+    expect(launch.kind).toBe('deny')
+    expect((launch as { reason?: string }).reason).toContain('session.run')
   })
 })

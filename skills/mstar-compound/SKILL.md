@@ -1,6 +1,6 @@
 ---
 name: mstar-compound
-description: Morning Star 知识结晶 —— 将已解决问题的经验沉淀为结构化知识文档，存入 `{KNOWLEDGE_DIR}`；迭代收口时从 `{ITERATION_DIR}/<iteration-id>/` package 提升 specs/guides。支持 Bug track 与 Knowledge track 双轨。含重叠检测、可发现性检查、CONCEPTS.md 协同。本技能只拥有**执行步骤**（`references/compound-workflow.md`：Q1–Q8 自检 + Phase 1–7 + 产出判据）；由生命周期流程调用（迭代收口、单 plan 交付尾段），触发时机 / 写入面 / 记录面由调用方声明。产出：`{KNOWLEDGE_DIR}/<category>/<slug>.md`；无结晶时以 reasoned `skipped` 结束。
+description: 知识结晶 (compound)：把已解决的问题沉淀为 `{KNOWLEDGE_DIR}` 下的结构化知识文档，迭代收口时提升 specs/guides；双轨 Bug/Knowledge，含重叠与可发现性检查。无结晶时以 reasoned `skipped` 结束。
 ---
 
 # mstar-compound（知识结晶）

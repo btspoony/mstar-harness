@@ -66,6 +66,9 @@ function unresolvedControlRootMessage(cwd: string, cause: string): string {
   );
 }
 
+/** The seat values a launcher can declare; a leaf connection refuses the coordinator-seat commands. */
+export type McpSeat = "leaf";
+
 export interface McpStdioOptions {
   /**
    * Environment variable the launcher declares as the default session-id
@@ -84,9 +87,24 @@ export interface McpStdioOptions {
    * passed per mount rather than inferred from whatever cwd the host chose.
    * A pinned root also becomes the invocation's workspace root (its parent
    * directory), so implicit harness-derived paths anchor on the pinned
-   * harness instead of the launch cwd.
+   * harness instead of the launch cwd — unless `workspace` names another one.
    */
   harnessRoot?: string;
+  /**
+   * Session workspace every call runs from (the invocation `cwd`). A mounted
+   * server is a child process, so the caller's workspace is not its
+   * `process.cwd()`; a host that serves sessions outside its own cwd passes
+   * this. Unset falls back to the pinned harness's parent, else
+   * `process.cwd()`.
+   */
+  workspace?: string;
+  /**
+   * The connection's seat. `leaf` refuses the coordinator-seat commands
+   * (`plan.bind`, `plan.complete`) before execution with the named cause and
+   * recovery; every other command stays reachable, so a leaf session keeps
+   * its writable subset instead of having no route at all.
+   */
+  seat?: McpSeat;
 }
 
 /**
@@ -227,12 +245,17 @@ export function createContextResolver(options: McpStdioOptions = {}): ResolveCon
     // validated by shared admission): the one fact a control-root refusal
     // says is missing, so naming it lifts the refusal for this call.
     const callHarness = call?.harness;
+    // The call's workspace: the explicit session workspace wins over the
+    // pin-derived anchor, because a mounting host knows the caller's workspace
+    // even when the harness it resolved lives outside it. It is also the probe
+    // start for the unpinned root, so `--workspace` alone is coherent.
+    const workspace = options.workspace ?? (options.harnessRoot === undefined ? process.cwd() : dirname(options.harnessRoot));
     let controlRoot: string | null;
     if (options.harnessRoot === undefined) {
-      const probe = probeUnpinnedControlRoot(process.cwd());
+      const probe = probeUnpinnedControlRoot(workspace);
       if (probe.root === null && !NULL_ROOT_BOOTSTRAP_COMMANDS.has(definition.id)) {
         if (callHarness === undefined) {
-          const cwd = process.cwd();
+          const cwd = workspace;
           throw new McpControlRootError(unresolvedControlRootMessage(cwd, probe.cause), { cwd, cause: probe.cause });
         }
         // The caller named the root: hand THIS call that root (the handler
@@ -245,7 +268,7 @@ export function createContextResolver(options: McpStdioOptions = {}): ResolveCon
       controlRoot = options.harnessRoot;
     }
     return {
-      cwd: options.harnessRoot === undefined ? process.cwd() : dirname(options.harnessRoot),
+      cwd: workspace,
       controlRoot,
       // A pin is also the exact harness dir: commands that own root placement
       // (e.g. `harness.scaffold`) must target it verbatim, not re-derive it.
@@ -296,7 +319,7 @@ export function serveMcpStdioOver(transport: Transport, options: McpStdioOptions
   const corrected = withToolCorrection(transport, () => catalog);
   return serveStdio(() => createMcpServer(createContextResolver(options), undefined, (names) => {
     for (const name of names) catalog.add(name);
-  }), { legacy: "serve", transport: corrected });
+  }, options.seat), { legacy: "serve", transport: corrected });
 }
 
 if (import.meta.main) {

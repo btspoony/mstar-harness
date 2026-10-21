@@ -19,6 +19,7 @@ import {
 } from "@mstar-harness/engine";
 import { getCommandDefinitions, type CommandEnvelope, type InvocationContext } from "@mstar-harness/commands";
 import { registerMcpCommands, type ResolveContext } from "../src/mcp/register";
+import { actionOf, familyOf, familyToolName } from "../src/mcp/fold";
 import { registerCliCommands } from "../src/command-adapter";
 import { createMcpServer } from "../src/mcp/server";
 import { createContextResolver, resolveContext } from "../src/mcp/stdio";
@@ -36,6 +37,18 @@ const declaredNodeFloor = (
 ).replace(/^>=\s*/, "").trim();
 /** Injected current runtime: at/above the declared floor. */
 const AT_OR_ABOVE_RUNTIME = `${Number.parseInt(declaredNodeFloor.split(".")[0]!, 10) + 1}.0.0`;
+
+/**
+ * The folded tool one command id publishes under, and the `action` that selects
+ * it. The tool name derives from the definition's authored family segment
+ * (`familyOf(definition)`), never from the id prefix, so the lookup goes
+ * through the definition the id names.
+ */
+function foldedTool(commandId: string): { name: string; action: string } {
+  const definition = getCommandDefinitions().find((entry) => entry.id === commandId);
+  if (definition === undefined) throw new Error(`unknown command id ${JSON.stringify(commandId)}`);
+  return { name: familyToolName(familyOf(definition)), action: actionOf(commandId) };
+}
 
 const effects = {
   async readInput() { return ""; },
@@ -128,7 +141,7 @@ async function registeredMcpCall(
     await server.connect(serverEnd);
     await client.connect(clientEnd);
     const { tools } = await client.listTools();
-    const tool = tools.find((entry) => entry.name === `mstar_${commandId.replace(/[.-]/g, "_")}`);
+    const tool = tools.find((entry) => entry.name === foldedTool(commandId).name);
     const published = (tool?.inputSchema.properties ?? {}) as Record<string, unknown>;
     if (resolver.identityLocked === true) {
       // A locked connection publishes no session selector: the identity is
@@ -139,7 +152,7 @@ async function registeredMcpCall(
       expect(published).toMatchObject({ sessionId: { type: "string" } });
       expect(tool?.inputSchema.required ?? []).not.toContain("sessionId");
     }
-    const result = await client.callTool({ name: `mstar_${commandId.replace(/[.-]/g, "_")}`, arguments: payload });
+    const result = await client.callTool({ name: foldedTool(commandId).name, arguments: { action: foldedTool(commandId).action, ...payload } });
     if (result.structuredContent !== undefined) return result.structuredContent as CommandEnvelope;
     const text = (result.content ?? []).filter((block) => block.type === "text").map((block) => block.text).join("\n");
     const start = text.indexOf('{"version":1,');
@@ -177,8 +190,8 @@ async function publishedMcpTool(commandId: string, resolver: ResolveContext): Pr
     await server.connect(serverEnd);
     await client.connect(clientEnd);
     const { tools } = await client.listTools();
-    const tool = tools.find((entry) => entry.name === `mstar_${commandId.replace(/[.-]/g, "_")}`);
-    if (tool === undefined) throw new Error(`unlisted tool: ${commandId}`);
+    const tool = tools.find((entry) => entry.name === foldedTool(commandId).name);
+    if (tool === undefined) throw new Error(`unlisted tool: ${foldedTool(commandId).name}`);
     return tool as unknown as PublishedTool;
   } finally {
     await client.close();
@@ -674,11 +687,10 @@ describe("MCP session identity", () => {
       expect(tool.inputSchema.required ?? []).not.toContain("sessionId");
       expect((tool.inputSchema["x-mstar-requirements"] ?? []).map((entry) => entry.name)).not.toContain("sessionId");
       // The rest of the contract is intact: the fix filters the selector, not
-      // the description.
-      expect(tool.description).toContain("CLI: mstar session recover");
-      expect(tool.description).toContain("Caller-supplied:");
+      // the family's action list or the required fields of each action.
+      expect(tool.description).toContain("recover");
+      expect(tool.description).not.toContain("sessionId");
       expect(tool.description).not.toContain("--session-id");
-      expect(tool.description ?? "").not.toMatch(/Caller-supplied:[^\n]*\bsessionId\b/);
     } finally {
       if (previous === undefined) delete process.env[DECLARED_IDENTITY];
       else process.env[DECLARED_IDENTITY] = previous;
@@ -697,8 +709,6 @@ describe("MCP session identity", () => {
       const tool = await publishedMcpTool("session.recover", resolverCapturingStderr(DECLARED_IDENTITY).resolver);
       expect(tool.inputSchema.properties).toMatchObject({ sessionId: { type: "string" } });
       expect((tool.inputSchema["x-mstar-requirements"] ?? []).map((entry) => entry.name)).toContain("sessionId");
-      expect(tool.description).toContain("--session-id");
-      expect(tool.description ?? "").toMatch(/Caller-supplied:[^\n]*\bsessionId\b/);
     } finally {
       if (previous === undefined) delete process.env[DECLARED_IDENTITY];
       else process.env[DECLARED_IDENTITY] = previous;

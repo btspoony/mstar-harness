@@ -44,8 +44,8 @@ import { skillWriteIntentListener } from './gates/skill-lint.ts'
 import type { SkillLintAdvisory } from './gates/skill-lint.ts'
 import { seamWriteIntentListener } from './gates/seams.ts'
 import type { SeamId, SeamLintAdvisory } from './gates/seams.ts'
-import { registerSddIterationTools, registerSeamTools } from './gates/tools.ts'
 import { registerNativeCommandTools } from './gates/native-commands.ts'
+import { leafSeatToolListener } from './gates/leaf-seat.ts'
 import { DshHostAdapter } from './gates/adapter.ts'
 import type { DshHostAdapterOptions } from './gates/adapter.ts'
 import { resolveExecutionLedgerTarget } from './gates/workflow-selection.ts'
@@ -707,23 +707,27 @@ export function apply(ctx: Context, config: Config): void {
   })
   registerPlanModeBridge(ctx, resolver)
 
-  // Scoped MCP mounts (#528): every non-leaf `agent/created` gets ONE scoped
+  // Scoped MCP mounts (#528): every `agent/created` gets ONE scoped
   // `@deepseek-ai/dsh-mcp-client` instance (a `ctx.plugin` child fiber of
   // THIS context) whose stdio `env` carries that agent's own id as
   // `MSTAR_HOST_SESSION_ID` — the per-caller identity channel the stdio MCP
   // route has (ADR: teams' name-target addressing is not a shell identity
-  // channel). Known leaf seats (the scoped-mount leaf contract) get no
-  // mount. Optional-by-presence: the package absent → ONE debug line, no
-  // registrations, boot unaffected. Disposal: the listener is a fiber-scoped
-  // effect and each mount is a child fiber of this context, so the HMR fiber
-  // swap unloads every scoped instance — and its MCP child process — with
-  // the plugin; no explicit disposer is kept here.
+  // channel) — and whose launch carries the session workspace plus the
+  // resolver-selected harness, so the server resolves roots in the CALLER's
+  // workspace, not the host process cwd. A known leaf seat (the scoped-mount
+  // leaf contract) mounts the same launch with `--seat leaf`: the server
+  // refuses the coordinator-seat commands for that connection while the
+  // writable subset stays reachable. Optional-by-presence: the package absent
+  // → ONE debug line, no registrations, boot unaffected. Disposal: the
+  // listener is a fiber-scoped effect and each mount is a child fiber of this
+  // context, so the HMR fiber swap unloads every scoped instance — and its
+  // MCP child process — with the plugin; no explicit disposer is kept here.
   setScopedMcpMountLogger((level, message) => {
     const logger = ctx.logger(SCOPED_MCP_MOUNT_LOGGER)
     if (level === 'debug') logger.debug(message)
     else logger.warn(message)
   })
-  registerScopedMcpMount(ctx)
+  registerScopedMcpMount(ctx, { resolver })
 
   // Background-job settle pairing listens to the exported jobs lifecycle event
   // stream. `settled` carries the registry job id and terminal projection.
@@ -832,6 +836,14 @@ export function apply(ctx: Context, config: Config): void {
   // regardless of order" holds only once the listener is reached.
   ctx.on('tools/pre-execute', (exec, next) => preExecuteListener(ctx, resolver, config, adapter, exec, next), { prepend: true })
 
+  // Leaf-seat tool boundary — the folded MCP surface's coordinator actions
+  // (`plan.bind`, `plan.complete`, `session.recover`) refused for a known leaf
+  // seat before the MCP client child executes, on every connection INCLUDING
+  // the profile-wide generic `mstar-mcp` row (which carries no identity and no
+  // `--seat`, so the scoped mount's server-side restriction never covered it).
+  // Same refusal channel and prepend reachability argument as the gate above.
+  ctx.on('tools/pre-execute', (exec, next) => leafSeatToolListener(exec, next), { prepend: true })
+
   // Role → agent preset channel: an `internal/get`
   // waterfall listener wraps `ctx.subagents` reads so a role-matched
   // `startActivation` — the single start surface in dsh 0.2.1 — selects the
@@ -934,11 +946,10 @@ export function apply(ctx: Context, config: Config): void {
     invalidateSelection: (harnessDir, sessionId) => catalogInvalidation.invalidateSession(harnessDir, sessionId),
   })
 
-  // v2 seams and canonical command tools share the native tools registry.
-  registerSddIterationTools(ctx, resolver)
-  registerSeamTools(ctx, resolver)
-  // The native writable command surface (#526): the named mstar command set as
-  // dsh tools, identity-injected from exec.agent.id — registration and its HMR
-  // disposal both live in the module.
+  // The dsh-native tool surface — three tools, registered and HMR-disposed in
+  // the module: `mstar_plan_bind` (producer of the dsh durable execution
+  // binding + its adoption receipt, which the MCP bind cannot write),
+  // `mstar_audit_validate` (no MCP twin) and `mstar_execution_clear` (no
+  // shared command). Every other command is the scoped MCP mount's action.
   registerNativeCommandTools(ctx, resolver)
 }

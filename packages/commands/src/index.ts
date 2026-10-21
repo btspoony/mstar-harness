@@ -1,7 +1,7 @@
 export * from "./types.js";
 export { refusalEnvelope } from "./envelope.js";
 export type { RefusalDiagnostic, RefusalInput } from "./envelope.js";
-export { decodeInputDiagnostics, safeReceivedValue } from "./input-diagnostics.js";
+export { decodeInputDiagnostics, safeReceivedValue, sanitizeInputScalar } from "./input-diagnostics.js";
 export {
   CommandDefinitionError,
   commandEnvelopeSchema,
@@ -13,6 +13,11 @@ export {
   validateCommandDefinitions,
 } from "./definitions.js";
 export type { AdmittedCommand, CommandAdmission } from "./definitions.js";
+export {
+  coordinatorSeatCommandFor,
+  foldedFamilyToolName,
+  isCoordinatorSeatCommand,
+} from "./coordinator-seat.js";
 export { getPlanCommandDefinitions, PLAN_COMPLETION_EVIDENCE_SCHEMA } from "./families/plan.js";
 export { getSessionCommandDefinitions } from "./families/session.js";
 export { getWorkflowCommandDefinitions } from "./families/workflow.js";

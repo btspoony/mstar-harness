@@ -1,15 +1,20 @@
 /**
- * Task 3 — design-md / audit / compound / roles seams (plan
- * ): artifact-scoped `fs/write-intent` gates
- * (path patterns per artifact; warn+advisory default; hard-mode repair
- * escape on the content-blind listener — the typed `SeamVetoError` lives
- * on the known-document branch) + the on-demand `mstar_*_validate` tools
- * (CLI `mstar design-md validate` / `mstar compound validate` mirrors).
+ * Task 3 — design-md / audit / compound / roles seams: artifact-scoped
+ * `fs/write-intent` gates (path patterns per artifact; warn+advisory default;
+ * hard-mode repair escape on the content-blind listener — the typed
+ * `SeamVetoError` lives on the known-document branch).
+ *
+ * Three of the four on-demand `mstar_*_validate` tool mirrors this file used to
+ * drive were duplicates of the MCP tools (`mstar_design_md` / `mstar_compound`
+ * / `mstar_roles`), so they went away with the rest of the native command
+ * surface; the seam VALIDATORS they wrapped are the same ones the gates below
+ * exercise, which is where their coverage lives now. `mstar_audit_validate`
+ * survives (the `mstar_audit` family publishes no report validator), so its
+ * tool arm is driven at the end of this file.
  *
  * Composition: the app boots the REAL-composition harness with the dsh-tools
- * registry installed from the npm registry (same harness as
- * sdd-iteration-tools.spec), so gate listeners and tool registrations
- * exercise the shipping plugin path.
+ * registry installed from the npm registry, so gate listeners exercise the
+ * shipping plugin path.
  */
 import { describe, expect, it, afterEach } from 'bun:test'
 import { randomBytes } from 'node:crypto'
@@ -18,8 +23,6 @@ import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { Context } from '@deepseek-ai/cordis'
 import type { FsTarget } from '@deepseek-ai/dsh-fs'
-import type { ToolCallId } from '@deepseek-ai/dsh-llm'
-import type { ToolCallView, ToolExecutionResult } from '@deepseek-ai/dsh-tools'
 import * as plugin from '../src/index.ts'
 import {
   SeamVetoError,
@@ -29,7 +32,9 @@ import {
   lintRolesWrite,
   type SeamLintAdvisory,
 } from '../src/index.ts'
-import { bootApp, FakeLoaderRegistry, seedHarness, seedKnowledgeDoc, seedStore, valueOf, type BootResult } from './harness.ts'
+import type { ToolCallId } from '@deepseek-ai/dsh-llm'
+import type { ToolExecutionResult } from '@deepseek-ai/dsh-tools'
+import { bootApp, FakeLoaderRegistry, seedHarness, valueOf, type BootResult } from './harness.ts'
 
 let booted: BootResult | undefined
 
@@ -807,7 +812,7 @@ describe('shared envelope', () => {
 })
 
 // ---------------------------------------------------------------------------
-// On-demand tools — mstar_*_validate (CLI mirrors)
+// mstar_audit_validate — the surviving native validator (no MCP twin)
 // ---------------------------------------------------------------------------
 
 /** Branded call identity for registry executes. */
@@ -826,80 +831,18 @@ function expectGenericCall(view: unknown, rawInput: unknown): void {
   expect(card).toBeDefined()
   expect(card!.card).toBe('generic')
   expect(typeof card!.title).toBe('string')
-
   expect(card!.kind).toBe('other')
   expect(card!.rawInput).toEqual(rawInput)
 }
 
-describe('seam tool registration — real composition', () => {
-  it('registers the four mstar_*_validate tools on ctx.tools', async () => {
-    const app = booted = await bootApp()
-    const names = ['mstar_design_md_validate', 'mstar_audit_validate', 'mstar_compound_validate', 'mstar_roles_validate']
-    const seen = new Set<string>()
-    for (const name of names) {
-      const tool = app.ctx.tools.get(name)
-      expect(tool).toBeDefined()
-
-      expect(seen.has(name)).toBe(false)
-      seen.add(name)
-    }
-  })
-
-  it('presentCall renders a generic card with the primary path', async () => {
-    const app = booted = await bootApp()
-    expectGenericCall(app.ctx.tools.get('mstar_design_md_validate')!.presentCall?.({ dir: '/d' }), '/d')
-    expectGenericCall(app.ctx.tools.get('mstar_audit_validate')!.presentCall?.({ report_path: '/r.md' }), '/r.md')
-    expectGenericCall(app.ctx.tools.get('mstar_compound_validate')!.presentCall?.({ doc_path: '/k.md' }), '/k.md')
-    expectGenericCall(app.ctx.tools.get('mstar_roles_validate')!.presentCall?.({ roles_dir: '/roles' }), '/roles')
-  })
-})
-
-describe('mstar_design_md_validate', () => {
-  it('valid dir → ok true + completeness level', async () => {
-    const app = booted = await bootApp()
-    const dir = join(app.root, 'design')
-    await mkdir(dir, { recursive: true })
-    await writeFile(join(dir, 'DESIGN.md'), DESIGN_VALID)
-    await writeFile(join(dir, 'DESIGN.dark.md'), DESIGN_DARK_VALID)
-
-    const result = await run(app.ctx, 'mstar_design_md_validate', { dir })
-
-    expect(result.isError).toBe(false)
-    if (result.isError) return
-    expect(valueOf(result).ok).toBe(true)
-    expect(valueOf(result).violations).toEqual([])
-    expect(['BELOW_MVP', 'MVP', 'Standard', 'Production']).toContain(valueOf(result).level!)
-    expect(Array.isArray(valueOf(result).level_missing)).toBe(true)
-    expect((result.content[0] as { type: 'text'; text: string }).text).toContain('design-md validate:')
-  })
-
-  it('broken design → ok false + violations', async () => {
-    const app = booted = await bootApp()
-    const dir = join(app.root, 'design')
-    await mkdir(dir, { recursive: true })
-    await writeFile(join(dir, 'DESIGN.md'), DESIGN_BROKEN)
-
-    const result = await run(app.ctx, 'mstar_design_md_validate', { dir })
-
-    expect(result.isError).toBe(false)
-    if (result.isError) return
-    expect(valueOf(result).ok).toBe(false)
-    expect(valueOf(result).violations.map((v: { code: string }) => v.code)).toContain('design-md.tokens.color-format')
-  })
-
-  it('missing DESIGN.md → error result', async () => {
-    const app = booted = await bootApp()
-    const dir = join(app.root, 'empty')
-
-    const result = await run(app.ctx, 'mstar_design_md_validate', { dir })
-
-    expect(result.isError).toBe(true)
-    if (!result.isError) return
-    expect(result.error.message).toContain('design file not found')
-  })
-})
-
 describe('mstar_audit_validate', () => {
+  it('presentCall renders a generic card carrying the report path', async () => {
+    const app = booted = await bootApp()
+    // The surviving validator keeps its presentation arm: the transcript card
+    // names the report it scanned instead of the command that ran.
+    expectGenericCall(app.ctx.tools.get('mstar_audit_validate')!.presentCall?.({ report_path: '/r.md' }), '/r.md')
+  })
+
   it('clean report → ok true', async () => {
     const app = booted = await bootApp()
     const report = reviewReportPath(app.root)
@@ -936,146 +879,5 @@ describe('mstar_audit_validate', () => {
     expect(result.isError).toBe(true)
     if (!result.isError) return
     expect(result.error.message).toContain('report file not found')
-  })
-})
-
-describe('mstar_compound_validate', () => {
-  it('valid doc → ok true', async () => {
-    const app = booted = await bootApp()
-    const doc = join(app.root, 'knowledge', 'good.md')
-    await seedFile(doc, KNOWLEDGE_GOOD)
-
-    const result = await run(app.ctx, 'mstar_compound_validate', { doc_path: doc })
-
-    expect(result.isError).toBe(false)
-    if (result.isError) return
-    expect(valueOf(result).ok).toBe(true)
-    expect(valueOf(result).violations).toEqual([])
-  })
-
-  it('broken doc → schema violations', async () => {
-    const app = booted = await bootApp()
-    const doc = join(app.root, 'knowledge', 'broken.md')
-    await seedFile(doc, KNOWLEDGE_BROKEN)
-
-    const result = await run(app.ctx, 'mstar_compound_validate', { doc_path: doc })
-
-    expect(result.isError).toBe(false)
-    if (result.isError) return
-    expect(valueOf(result).ok).toBe(false)
-    expect(valueOf(result).violations.map((v: { code: string }) => v.code)).toContain('compound.schema.missing-field')
-  })
-
-  it('with knowledge_dir → catalog completeness + scope checks (CLI --knowledge-dir mirror)', async () => {
-    const app = booted = await bootApp()
-    const knowledgeDir = join(app.root, 'knowledge')
-    await mkdir(knowledgeDir, { recursive: true })
-    await writeFile(join(knowledgeDir, 'good.md'), KNOWLEDGE_GOOD)
-    // The doc under validation lives OUTSIDE the knowledge dir.
-    const outside = join(app.root, 'stray.md')
-    await writeFile(outside, KNOWLEDGE_GOOD)
-
-    // No store yet → the catalog completeness query cannot be answered, and
-    // the tool reports it (the retired README index is NOT read as a fallback).
-    const refused = await run(app.ctx, 'mstar_compound_validate', { doc_path: outside, knowledge_dir: knowledgeDir })
-    expect(refused.isError).toBe(false)
-    if (refused.isError) return
-    expect(valueOf(refused).ok).toBe(false)
-    const refusedCodes = valueOf(refused).violations.map((v: { code: string }) => v.code)
-    expect(refusedCodes).toContain('compound.scope.outside')
-    expect(refusedCodes).toContain('store.not-initialized')
-    expect(refusedCodes).not.toContain('compound.index.retired')
-
-    // With the authority ACTIVE and the knowledge doc registered, the same
-    // call passes the catalog half (bodies stay files; the row comes from the
-    // catalog table).
-    await seedStore(app.harnessDir)
-    await seedKnowledgeDoc(app.harnessDir, {
-      id: 'doc-good',
-      relativePath: 'good.md',
-      title: 'Good doc',
-      operationId: 'op-misc-seams',
-    })
-    const registered = await run(app.ctx, 'mstar_compound_validate', { doc_path: outside, knowledge_dir: knowledgeDir })
-    expect(registered.isError).toBe(false)
-    if (registered.isError) return
-    const registeredCodes = valueOf(registered).violations.map((v: { code: string }) => v.code)
-    expect(registeredCodes).toContain('compound.scope.outside')
-    expect(registeredCodes).not.toContain('catalog.discovery.missing-document')
-  })
-
-  it('with repo_root → reference existence checks (compound-refresh Phase 2)', async () => {
-    const app = booted = await bootApp()
-    const doc = join(app.root, 'knowledge', 'refs.md')
-    await seedFile(doc, KNOWLEDGE_MIXED_REF)
-    await seedFile(join(app.root, 'src', 'present.ts'), 'export const ok = true\n')
-
-    const result = await run(app.ctx, 'mstar_compound_validate', { doc_path: doc, repo_root: app.root })
-
-    expect(result.isError).toBe(false)
-    if (result.isError) return
-    expect(valueOf(result).ok).toBe(false)
-    expect(valueOf(result).violations.map((v: { code: string }) => v.code)).toContain('compound.reference.missing-file')
-  })
-
-  it('missing doc → error result', async () => {
-    const app = booted = await bootApp()
-
-    const result = await run(app.ctx, 'mstar_compound_validate', { doc_path: join(app.root, 'nope.md') })
-
-    expect(result.isError).toBe(true)
-    if (!result.isError) return
-    expect(result.error.message).toContain('knowledge doc not found')
-  })
-})
-
-describe('mstar_roles_validate', () => {
-  it('complete roles dir → ok true', async () => {
-    const app = booted = await bootApp()
-    const root = join(app.root, 'skills')
-    await seedRolesDir(root)
-
-    const result = await run(app.ctx, 'mstar_roles_validate', { roles_dir: join(root, 'mstar-roles') })
-
-    expect(result.isError).toBe(false)
-    if (result.isError) return
-    expect(valueOf(result).ok).toBe(true)
-    expect(valueOf(result).violations).toEqual([])
-  })
-
-  it('broken roles dir → violations', async () => {
-    const app = booted = await bootApp()
-    const root = join(app.root, 'skills')
-    await seedRolesDir(root, { missing: ['fullstack-dev-shared.md'] })
-
-    const result = await run(app.ctx, 'mstar_roles_validate', { roles_dir: join(root, 'mstar-roles') })
-
-    expect(result.isError).toBe(false)
-    if (result.isError) return
-    expect(valueOf(result).ok).toBe(false)
-    expect(valueOf(result).violations.map((v: { code: string }) => v.code)).toContain('roles.mapping.reference.missing')
-  })
-
-  it('load-order lint via skills_root (defaults to the sibling dir)', async () => {
-    const app = booted = await bootApp()
-    const root = join(app.root, 'skills')
-    await seedRolesDir(root, { loadOrderOk: false })
-
-    const result = await run(app.ctx, 'mstar_roles_validate', { roles_dir: join(root, 'mstar-roles') })
-
-    expect(result.isError).toBe(false)
-    if (result.isError) return
-    expect(valueOf(result).ok).toBe(false)
-    expect(valueOf(result).violations.map((v: { code: string }) => v.code)).toContain('roles.loadorder.core.missing')
-  })
-
-  it('missing roles dir → error result', async () => {
-    const app = booted = await bootApp()
-
-    const result = await run(app.ctx, 'mstar_roles_validate', { roles_dir: join(app.root, 'nope') })
-
-    expect(result.isError).toBe(true)
-    if (!result.isError) return
-    expect(result.error.message).toContain('roles dir not found')
   })
 })

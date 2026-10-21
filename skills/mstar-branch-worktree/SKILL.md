@@ -1,6 +1,6 @@
 ---
 name: mstar-branch-worktree
-description: "Morning Star Git branch authorization, control/integration/source checkout isolation, L1 cross-plan and L2 within-plan writable tasks, QC/QA checkout alignment and guarded post-merge worktree/branch cleanup. Read when selecting branches, dispatching writable tasks, aligning review scope or performing owned-resource cleanup; not a per-plan identity or claim protocol."
+description: Branch authorization, control/integration/source checkout isolation, L1/L2 writable-task isolation, QC/QA checkout alignment, guarded worktree/branch cleanup after merge.
 ---
 
 ## Load order（必读顺序）

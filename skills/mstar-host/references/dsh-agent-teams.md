@@ -132,6 +132,28 @@ stays idle until someone messages it.
   turn means the member stopped executing; read the plan-row evidence and the
   settlement/close-out result before recording anything as done.
 
+## Report budget
+
+The Lead re-reads every reply it has received on every later turn of its own
+session, so reply volume is a per-turn cost paid for the rest of the run —
+measured: **110 agent-message replies / ~240k characters in one session**. Keep
+the durable material in files, not in replies:
+
+- **A teammate reply carries status + artifact path + at most a short summary.**
+  Findings, transcripts, diffs and reasoning belong in the assigned file; the
+  reply names that file (`path:line`) and states the verdict.
+- **Bound: a report reply stays under ~15 lines / ~1,200 characters** unless the
+  task asks for prose (a written deliverable, or a verdict the Lead explicitly
+  asked to read inline). Over the bound is a defect in the reply, not in the
+  reader: move the excess into the artifact and point at it.
+- **A settlement notice is a signal, not a deliverable channel.**
+  `send_message` / a settle event says that work finished (status + where); it
+  never carries the work, and a short notice is not a reason to restate the
+  artifact inline.
+- **The same bound governs the task board.** A task `description` carries the
+  assignment (up to 16384 characters); an outcome written through
+  `team_task_update` states the result and the artifact path, not the narrative.
+
 ## Capacity
 
 - **The Team layer caps the roster.** The shipped profile sets

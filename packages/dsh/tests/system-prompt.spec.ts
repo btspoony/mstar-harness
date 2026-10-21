@@ -200,12 +200,13 @@ describe('mstar:harness-rules global section + mstar:engine-status context ', ()
     expect(text).not.toContain('done-plan')
   })
 
-  it('(c2) renders plans: none when every active plan is Done', async () => {
+  it('(c2) renders plans: all done when every active plan is Done (distinct from `plans: none`)', async () => {
     const text = await activeDigest([
       { id: 'done-a', title: 'Done A', status: 'Done' },
       { id: 'done-b', title: 'Done B', status: 'Done' },
     ])
-    expect(text).toContain('workflow prompt-digest (plan) running | plans: none')
+    expect(text).toContain('workflow prompt-digest (plan) running | plans: all done')
+    expect(text).not.toContain('plans: none')
   })
 
   it('(c3) caps active plan rendering at eight and reports the overflow count', async () => {
@@ -217,6 +218,43 @@ describe('mstar:harness-rules global section + mstar:engine-status context ', ()
     const text = await activeDigest(plans)
     expect(text).toContain('workflow prompt-digest (plan) running | plans: plan-1(Todo) plan-2(Todo) plan-3(Todo) plan-4(Todo) plan-5(Todo) plan-6(Todo) plan-7(Todo) plan-8(Todo) +1 more')
     expect(text).not.toContain('plan-9')
+  })
+
+  it('(c4) carries the gate verdict and the branch anchors — the always-on channel after compaction', async () => {
+    // The catalog row is a change-driven DELTA and is not re-anchored per turn,
+    // so after host-side context compaction this digest is the only always-on
+    // channel for the two facts a phase-transition / PR-base decision needs.
+    const root = await mkdtemp(join(tmpdir(), 'dsh-system-prompt-gate-'))
+    const harnessDir = join(root, 'harness')
+    const COMPASS_REL = 'iterations/iter-digest/delivery-compass.md'
+    await seedActiveWorkflow(harnessDir, 'iter-digest', [
+      { id: 'plan-todo', title: 'Todo plan', file: 'plans/plan-todo.md', status: 'Todo' },
+    ], { type: 'iteration', compass_ref: COMPASS_REL }, 'seed-iter-digest', root, 'iter-digest')
+    await seedHarness(harnessDir, {
+      [COMPASS_REL]: [
+        '---',
+        'iteration_id: iter-digest',
+        'start_date: 2026-08-19',
+        'status: active',
+        'iteration_base_branch: feature/x',
+        'target_branch: main',
+        'plans:',
+        '  - plan-todo',
+        '---',
+        '',
+        '## Direction lock',
+        '',
+        '- **Problem statement:** Digest gate fixture.',
+        '',
+      ].join('\n'),
+    })
+    booted = await bootApp({ root })
+    const text = (await assembleWithEngineStatus(booted.ctx))
+      .contexts.find((context) => context.name === ENGINE_STATUS_CONTEXT_NAME)!.text
+    expect(text.split('\n')).toEqual([
+      `mstar engine status: v${PLUGIN_VERSION}`,
+      'workflow iter-digest (iteration) running | plans: plan-todo(Todo) | branch: feature/x → main | gate: PASS (phase-2-execute)',
+    ])
   })
 
   it('(d) interpolation safety — neither injected text carries a complete {{...}} group and both render without throwing', async () => {

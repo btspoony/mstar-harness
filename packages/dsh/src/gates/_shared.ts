@@ -259,13 +259,13 @@ export function asRecord(value: unknown): Record<string, unknown> | undefined {
 }
 
 /**
- * Cap on the plan / lease rows joined into the `<mstar_engine_status>`
- * catalog state lines : ONE catalog-owned
- * constant shared by the `plans:` and `row scope:` joins so an oversized
- * workflow snapshot cannot balloon the single-line catalog state section.
+ * Cap on the plan rows joined into the `<mstar_engine_status>` catalog state
+ * line : ONE catalog-owned
+ * constant bounding the compact lifecycle delta, so an oversized workflow
+ * snapshot cannot balloon the single-line catalog state section.
  * Numeric precedent: `DIGEST_PLAN_CAP` in `system-prompt.ts` (digest-side,
- * non-Done-only — intentionally NOT reused here; the catalog renders the
- * full, unfiltered snapshot rows).
+ * non-Done-only). Plan row SCOPES are payload-only (the panel renders them), so
+ * this cap no longer joins a `row scope:` line.
  */
 export const CATALOG_STATE_JOIN_LIMIT = 8
 

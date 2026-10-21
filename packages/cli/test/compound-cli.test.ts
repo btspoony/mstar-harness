@@ -1,10 +1,32 @@
 /** Command-owned CLI subprocess coverage; fixture and assertion contracts are preserved. */
 import { describe, expect, test } from "bun:test";
-import { mkdirSync, writeFileSync } from "node:fs";
+import { mkdirSync, realpathSync, symlinkSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
+import { assertKnowledgeCatalogCompleteness, initializeStore, registerCatalogEntity } from "@mstar-harness/engine";
 import { runCli, withTempDir } from "./harness";
 import { cliEnvelope, violationCodes } from "./support/cli-assertions";
 import { KNOWLEDGE_GOOD } from "./support/cli-content-fixtures";
+
+/**
+ * One workspace whose configured knowledge root is COMPLETE (its only body has
+ * a catalog row), so any later verdict is about the directory the caller named.
+ * Returns the physical root: the engine realpaths its roots and macOS tmpdirs
+ * are symlinked.
+ */
+async function completeKnowledgeRoot(dir: string): Promise<{ root: string; harness: string; configured: string }> {
+  const root = realpathSync(dir);
+  const harness = join(root, ".mstar");
+  const configured = join(harness, "knowledge");
+  mkdirSync(configured, { recursive: true });
+  writeFileSync(join(configured, "registered.md"), KNOWLEDGE_GOOD);
+  const context = { harnessDir: harness };
+  (await initializeStore(context)).close();
+  await registerCatalogEntity(context, {
+    kind: "document", id: "doc-registered", title: "Registered doc", rootKind: "knowledge", relativePath: "registered.md", documentKind: "knowledge",
+  }, { operationId: "fixture-catalog-complete", actor: "compound" });
+  expect((await assertKnowledgeCatalogCompleteness(context)).ok).toBe(true);
+  return { root, harness, configured };
+}
 
 // ---------------------------------------------------------------------------
 // mstar compound validate
@@ -31,18 +53,107 @@ describe("mstar compound validate — knowledge-doc schema / index / scope", () 
     });
   });
 
-  test("--knowledge-dir without README index → compound.index.retired, exit 1", () => {
+  test("--knowledge-dir with no resolvable harness → compound.catalog.unresolved-harness, exit 1", () => {
     withTempDir("mstar-slice4-cli-", (dir) => {
       const doc = join(dir, "doc.md");
       writeFileSync(doc, KNOWLEDGE_GOOD);
       const knowledgeDir = join(dir, "knowledge");
       mkdirSync(knowledgeDir);
-      const result = runCli(["compound", "validate", doc, "--knowledge-dir", knowledgeDir]);
+      // A tree with no harness root: catalog completeness is a store.db query,
+      // so the check refuses instead of passing (the retired README reader is
+      // no longer the answer, and a silently skipped check is not either).
+      const result = runCli(["compound", "validate", doc, "--knowledge-dir", knowledgeDir], { cwd: dir });
       expect(result.exitCode).toBe(1);
-      // The README index is retired in authority (state-projection contract
-      // §4, P4 adjudication): compound.index.missing-readme is superseded by
-      // the actionable retired-reader refusal.
-      expect(cliEnvelope(result, "refused", "compound.index.retired").message).toContain("no longer a register");
+      expect(cliEnvelope(result, "refused", "compound.catalog.unresolved-harness").message).toContain("cannot be asserted");
+    });
+  });
+
+  test("--knowledge-dir with a harness whose store is missing → store.not-initialized, exit 1", () => {
+    withTempDir("mstar-slice4-cli-", (dir) => {
+      const doc = join(dir, "doc.md");
+      writeFileSync(doc, KNOWLEDGE_GOOD);
+      const harness = join(dir, ".mstar");
+      mkdirSync(harness);
+      const knowledgeDir = join(harness, "knowledge");
+      mkdirSync(knowledgeDir);
+      const result = runCli(["compound", "validate", doc, "--knowledge-dir", knowledgeDir], {
+        cwd: dir,
+        env: { MSTAR_HARNESS_DIR: harness },
+      });
+      // Unavailable catalog data is never read as a complete catalog.
+      expect(result.exitCode).toBe(1);
+      expect(violationCodes(result)).toContain("store.not-initialized");
+      expect(violationCodes(result)).not.toContain("compound.index.retired");
+    });
+  });
+
+  test("--knowledge-dir outside the configured root is refused even though the configured catalog is complete", async () => {
+    await withTempDir("mstar-slice4-cli-", async (dir) => {
+      const { root, harness, configured } = await completeKnowledgeRoot(dir);
+      const alternate = join(root, "alternate-knowledge");
+      mkdirSync(alternate, { recursive: true });
+      const unregistered = join(alternate, "unregistered.md");
+      writeFileSync(unregistered, KNOWLEDGE_GOOD);
+
+      const result = runCli(["compound", "validate", unregistered, "--knowledge-dir", alternate], {
+        cwd: root,
+        env: { MSTAR_HARNESS_DIR: harness },
+      });
+      // Inverted assertion (PR #558 review must-fix 2): before the fix this case
+      // was ok / exit 0 — the complete configured catalog vouched for a
+      // directory the completeness query never discovered.
+      expect(result.exitCode).toBe(1);
+      expect(violationCodes(result)).toContain("compound.catalog.knowledge-dir-mismatch");
+      expect(cliEnvelope(result, "refused").message).toContain(configured);
+    });
+  });
+
+  test("a SUBDIRECTORY of the configured root is refused even though the configured catalog is complete", async () => {
+    await withTempDir("mstar-slice4-cli-", async (dir) => {
+      const { root, harness, configured } = await completeKnowledgeRoot(dir);
+      const sub = join(configured, "engineering");
+      mkdirSync(sub);
+      const unregistered = join(sub, "unregistered.md");
+      writeFileSync(unregistered, KNOWLEDGE_GOOD);
+
+      const result = runCli(["compound", "validate", unregistered, "--knowledge-dir", sub], {
+        cwd: root,
+        env: { MSTAR_HARNESS_DIR: harness },
+      });
+      // Inverted assertion (PR #558 review must-fix 2, round 2): the previous
+      // rule accepted any directory at or inside the configured root and
+      // answered it with that root's verdict. The inverted assertion is the
+      // CODE — the refusal must name the directory, not be an accident of the
+      // root's walk happening to reach this body (before the change this
+      // invocation exited 1 with catalog.discovery.missing-document).
+      expect(result.exitCode).toBe(1);
+      expect(violationCodes(result)).toContain("compound.catalog.knowledge-dir-mismatch");
+      expect(violationCodes(result)).not.toContain("catalog.discovery.missing-document");
+      const refusal = cliEnvelope(result, "refused");
+      expect(refusal.message).toContain(configured);
+      expect(refusal.message).toContain("registered relative to");
+    });
+  });
+
+  test("the configured knowledge root still passes, and an equal path spelled differently is not refused", async () => {
+    await withTempDir("mstar-slice4-cli-", async (dir) => {
+      const { root, harness, configured } = await completeKnowledgeRoot(dir);
+      const link = join(root, "knowledge-link");
+      symlinkSync(configured, link);
+
+      for (const [doc, knowledgeDir] of [
+        [join(configured, "registered.md"), configured],
+        [join(configured, "registered.md"), `${harness}/./knowledge/`],
+        // Both sides spelled through the symlink: the scope guard stays lexical.
+        [join(link, "registered.md"), link],
+      ] as const) {
+        const result = runCli(["compound", "validate", doc, "--knowledge-dir", knowledgeDir], {
+          cwd: root,
+          env: { MSTAR_HARNESS_DIR: harness },
+        });
+        expect(result.exitCode).toBe(0);
+        expect(cliEnvelope(result, "ok", "compound.validate.ok").data).toMatchObject({ ok: true, violations: [] });
+      }
     });
   });
 
@@ -52,26 +163,10 @@ describe("mstar compound validate — knowledge-doc schema / index / scope", () 
       writeFileSync(doc, KNOWLEDGE_GOOD);
       const knowledgeDir = join(dir, "knowledge");
       mkdirSync(knowledgeDir);
-      writeFileSync(join(knowledgeDir, "README.md"), "# Knowledge\n\n| Document | Source Plan | Description | Status |\n|---|---|---|---|\n");
-      const result = runCli(["compound", "validate", doc, "--knowledge-dir", knowledgeDir]);
+      const result = runCli(["compound", "validate", doc, "--knowledge-dir", knowledgeDir], { cwd: dir });
       expect(result.exitCode).toBe(1);
+      // The scope guard still runs independently of the catalog query.
       expect(violationCodes(result)).toContain("compound.scope.outside");
-    });
-  });
-
-  test("doc inside --knowledge-dir with index row → README register retired (exit 1, scope still guarded)", () => {
-    withTempDir("mstar-slice4-cli-", (dir) => {
-      const knowledgeDir = join(dir, "knowledge");
-      mkdirSync(knowledgeDir);
-      const doc = join(knowledgeDir, "doc.md");
-      writeFileSync(doc, KNOWLEDGE_GOOD);
-      writeFileSync(join(knowledgeDir, "README.md"), "# Knowledge\n\n| Document | Source Plan | Description | Status |\n|---|---|---|---|\n| [doc](doc.md) | 20260808-x | x | done |\n");
-      const result = runCli(["compound", "validate", doc, "--knowledge-dir", knowledgeDir]);
-      // The retired README reader refuses even when the row exists. The
-      // separate outside-scope case above keeps the scope guard covered.
-      expect(result.exitCode).toBe(1);
-      const envelope = cliEnvelope(result, "refused", "compound.index.retired");
-      expect(envelope.details?.violations?.map(({ code }) => code) ?? [envelope.code]).toEqual(["compound.index.retired"]);
     });
   });
 

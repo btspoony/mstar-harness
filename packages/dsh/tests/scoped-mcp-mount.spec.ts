@@ -1,24 +1,44 @@
 /**
- * Scoped MCP mount per agent (#528) — every non-leaf `agent/created` gets a
- * scoped `@deepseek-ai/dsh-mcp-client` instance (a cordis `ctx.plugin` child
- * fiber) whose stdio `env` carries that agent's own id as
- * `MSTAR_HOST_SESSION_ID`, so two concurrent agents calling mstar MCP tools
- * are attributed to their own ids. Known leaf seats (the shared leaf-seat
- * contract `isLeafSeatHeader` in `leaf-seat.ts` — ADR
- * `docs/adr/dsh-native-identity-channels.md`: `header.origin === 'subagent'`
- * or `delegationDepth > 0`) can never own a binding and get NO mount — a
- * subagent never inherits the parent's id. The mount is optional-by-presence:
- * with `@deepseek-ai/dsh-mcp-client` not installed it registers nothing, logs
- * ONE debug line and never throws. Disposal: each mount is a child fiber of
- * the registering context, so an HMR fiber swap tears down every scoped
- * instance (and its MCP child process) with the plugin.
+ * Scoped MCP mount per agent (#528) — every `agent/created` gets a scoped
+ * `@deepseek-ai/dsh-mcp-client` instance (a cordis `ctx.plugin` child fiber)
+ * whose stdio `env` carries that agent's own id as `MSTAR_HOST_SESSION_ID`, so
+ * two concurrent agents calling mstar MCP tools are attributed to their own
+ * ids. The launch ALSO carries the server-owned session context: the session
+ * workspace (`cwd` + `--workspace`) and the resolver-selected harness
+ * (`--harness`), so the stdio server resolves roots in the caller's workspace
+ * rather than the host process cwd.
+ *
+ * Known leaf seats (the shared leaf-seat contract `isLeafSeatHeader` in
+ * `leaf-seat.ts` — ADR `docs/adr/dsh-native-identity-channels.md`:
+ * `header.origin === 'subagent'` or `delegationDepth > 0`) can never own a
+ * binding, but they still need the writable subset, so they get a RESTRICTED
+ * mount: the same launch marked `--seat leaf`, whose server refuses the
+ * coordinator-seat commands. A subagent never inherits the parent's id.
+ *
+ * The mount is optional-by-presence: with `@deepseek-ai/dsh-mcp-client` not
+ * installed it registers nothing, logs ONE debug line and never throws.
+ * Disposal: each mount is a child fiber of the registering context, so an HMR
+ * fiber swap tears down every scoped instance (and its MCP child process) with
+ * the plugin.
  *
  * The `dsh-mcp-client` package is not a dependency of this plugin (same
  * posture as `dsh-llm-fallbacks`), so the tests drive the module seam through
  * an injected module provider — a fake Object plugin recording the config
  * each scoped instance receives and counting its teardown disposers.
+ *
+ * The mount's PRODUCT behaviour is proven by EXECUTING its launch: the last
+ * describe takes the scoped config the mount produced, spawns it as the real
+ * stdio server and calls one tool over the wire — a mounted call lands in the
+ * session workspace (never the host cwd), and a leaf's coordinator action is
+ * refused on that connection. Comparing the same argv as strings would pass
+ * a server that ignored it.
  */
-import { describe, expect, it } from 'bun:test'
+import { afterEach, describe, expect, it } from 'bun:test'
+import { execFileSync, spawn, type ChildProcessWithoutNullStreams } from 'node:child_process'
+import { existsSync, mkdirSync, mkdtempSync, realpathSync, rmSync } from 'node:fs'
+import os from 'node:os'
+import { join, resolve } from 'node:path'
+import type { CommandEnvelope } from '@mstar-harness/commands'
 import { Context, Service } from '@deepseek-ai/cordis'
 import {
   MSTAR_HOST_SESSION_ID,
@@ -39,9 +59,6 @@ const subagentLeaf = (id: string, parentSession?: string): unknown => ({
   id,
   session: { header: { id, cwd: '/tmp/ws', origin: 'subagent', ...(parentSession === undefined ? {} : { parentSession }) } },
 })
-
-/** A leaf seat by depth (`header.delegationDepth > 0`, origin unset — the same contract's other arm). */
-const deepLeaf = (id: string): unknown => ({ id, session: { header: { id, cwd: '/tmp/ws', delegationDepth: 2 } } })
 
 /**
  * Fake `@deepseek-ai/dsh-mcp-client` module: an Object plugin whose
@@ -79,6 +96,132 @@ function captureLogs(): { lines: string[]; restore: () => void } {
   const lines: string[] = []
   const prior = setScopedMcpMountLogger((level, message) => lines.push(`${level}: ${message}`))
   return { lines, restore: () => setScopedMcpMountLogger(prior) }
+}
+
+/* ------------------------------ mounted-connection driver ------------------------------ */
+
+/** Repo root (this suite lives in packages/dsh/tests). */
+const REPO_ROOT = resolve(import.meta.dir, '../../..')
+/** The real CLI entry the runnable row below points at (the server the mount launches). */
+const CLI_ENTRY = join(REPO_ROOT, 'packages/cli/src/index.ts')
+
+/** Temp workspaces this suite creates; removed after each test. */
+const workspaces: string[] = []
+afterEach(() => { for (const root of workspaces.splice(0)) rmSync(root, { recursive: true, force: true }) })
+
+/** A git workspace with a harness root, canonicalized (the engine realpaths its roots). */
+function workspace(prefix: string): string {
+  const root = realpathSync(mkdtempSync(join(os.tmpdir(), prefix)))
+  execFileSync('git', ['init', '-q'], { cwd: root })
+  mkdirSync(join(root, '.mstar'), { recursive: true })
+  workspaces.push(root)
+  return root
+}
+
+/** The row an offline test deployment can actually run: the local CLI source under this repo's bun. */
+const RUNNABLE_ROW: RowFixture = {
+  id: 'mstar-mcp',
+  options: {
+    name: '@deepseek-ai/dsh-mcp-client',
+    config: { serverName: 'mstar', transport: 'stdio', command: process.execPath, args: ['run', CLI_ENTRY, 'mcp'] },
+  },
+  disabled: false,
+  fiber: {},
+}
+
+/** A spawned server's env: ambient harness pins are stripped (CLI-test convention). */
+function childEnv(overlay: Record<string, string>): Record<string, string> {
+  const env: Record<string, string> = {}
+  for (const [key, value] of Object.entries(process.env)) {
+    if (key === 'MSTAR_HARNESS_DIR' || key === 'MSTAR_CONTROL_ROOT' || key === 'SDD_DIR' || key === 'MSTAR_WORKING_BRANCH') continue
+    if (value !== undefined) env[key] = value
+  }
+  return { ...env, ...overlay }
+}
+
+/** One JSON-RPC channel over the child's stdio (the MCP stdio framing: newline-delimited JSON). */
+function channel(proc: ChildProcessWithoutNullStreams): {
+  request(method: string, params: unknown): Promise<Record<string, unknown>>
+  notify(method: string): void
+} {
+  const pending = new Map<number, (message: Record<string, unknown>) => void>()
+  let buffer = ''
+  proc.stdout.setEncoding('utf8')
+  proc.stdout.on('data', (chunk: string) => {
+    buffer += chunk
+    const lines = buffer.split('\n')
+    buffer = lines.pop() ?? ''
+    for (const line of lines) {
+      if (line.trim() === '') continue
+      const message = JSON.parse(line) as { id?: number }
+      if (message.id !== undefined) pending.get(message.id)?.(message as Record<string, unknown>)
+    }
+  })
+  let seq = 0
+  const send = (payload: Record<string, unknown>): void => { proc.stdin.write(JSON.stringify({ jsonrpc: '2.0', ...payload }) + '\n') }
+  return {
+    notify: (method) => send({ method }),
+    request: (method, params) =>
+      new Promise<Record<string, unknown>>((resolveRequest, reject) => {
+        const id = ++seq
+        const timer = setTimeout(() => reject(new Error(`no MCP response to ${method} within 20s`)), 20_000)
+        pending.set(id, (message) => { clearTimeout(timer); resolveRequest(message) })
+        send({ id, method, params })
+      }),
+  }
+}
+
+/**
+ * Launch the scoped config the mount handed this agent as the MCP server child
+ * it declares, then call one tool over that connection. A launch the server
+ * cannot serve — a connection that resolves the host's workspace, or a leaf
+ * seat that keeps the coordinator commands — fails here.
+ */
+async function mountedCall(agent: unknown, tool: string, args: Record<string, unknown>): Promise<CommandEnvelope> {
+  const ctx = new Context()
+  const loader = new FakeLoaderRegistry(ctx)
+  loader.entriesList = [RUNNABLE_ROW]
+  const fake = new FakeMcpClientModule()
+  const { restore } = captureLogs()
+  let proc: ChildProcessWithoutNullStreams | undefined
+  try {
+    registerScopedMcpMount(ctx, { provider: fake.provider })
+    ctx.events.emit('agent/created', { agent, source: 'fresh' })
+    await settle()
+    const config = fake.configs[0]
+    if (config === undefined) throw new Error('the mount registered no scoped config for this agent')
+    proc = spawn(String(config.command), (config.args as string[] | undefined) ?? [], {
+      cwd: String(config.cwd),
+      env: childEnv((config.env as Record<string, string> | undefined) ?? {}),
+      stdio: ['pipe', 'pipe', 'pipe'],
+    })
+    const connection = channel(proc)
+    await connection.request('initialize', {
+      protocolVersion: '2025-06-18',
+      capabilities: {},
+      clientInfo: { name: 'scoped-mount-consumer', version: '1.0.0' },
+    })
+    connection.notify('notifications/initialized')
+    const answer = await connection.request('tools/call', { name: tool, arguments: args })
+    if (answer.error !== undefined) throw new Error(`mounted ${tool} failed: ${JSON.stringify(answer.error)}`)
+    const result = answer.result as { structuredContent?: CommandEnvelope; content?: Array<{ text?: string }> } | undefined
+    if (result?.structuredContent !== undefined) return result.structuredContent
+    const text = (result?.content ?? []).map((block) => block.text ?? '').join('\n')
+    const start = text.indexOf('{"version":1,')
+    if (start < 0) throw new Error(`no command envelope in the mounted tool result: ${text}`)
+    return JSON.parse(text.slice(start)) as CommandEnvelope
+  } finally {
+    restore()
+    await ctx.fiber.dispose().catch(() => {})
+    if (proc !== undefined) {
+      // The server closes on stdin EOF; a wedged child is killed, never leaked.
+      const closed = new Promise<string>((resolveExit) => proc!.once('exit', () => resolveExit('')))
+      proc.stdin.end()
+      const timer = setTimeout(() => proc!.kill(), 5_000)
+      await closed
+      clearTimeout(timer)
+    }
+  }
 }
 
 /** The mstar-mcp loader row the bundle patch declares (bundle/cordis.patch.yml shape). */
@@ -133,6 +276,12 @@ const UNRELATED_ROW: RowFixture = {
 /** The per-agent identity env the mount must derive for one agent id. */
 const envFor = (id: string): Record<string, string> => ({ [MSTAR_HOST_SESSION_ID]: id })
 
+/** The workspace every fixture agent's session header carries. */
+const WS = '/tmp/ws'
+
+/** The launch args after the mount's overlay: identity channel + session workspace. */
+const argsAfter = (...base: string[]): string[] => [...base, '--identity-env', MSTAR_HOST_SESSION_ID, '--workspace', WS]
+
 describe('scoped MCP mount — per-agent registration', () => {
   it('two fixture agents → two scoped registrations with distinct per-agent env (a)', async () => {
     const ctx = new Context()
@@ -170,8 +319,13 @@ describe('scoped MCP mount — per-agent registration', () => {
       expect(config.command).toBe('npx')
       // The identity-env declaration rides the args: without it the CLI's
       // `registerMcpCommand` reads NO ambient identity, so the per-agent env
-      // key would never reach the connection.
-      expect(config.args).toEqual(['-y', '@mstar-harness/cli', 'mcp', '--identity-env', MSTAR_HOST_SESSION_ID])
+      // key would never reach the connection. The session workspace rides
+      // both the child cwd and the explicit launch arg (a pinned harness would
+      // otherwise relocate the invocation cwd to its parent). This is the one
+      // guard on the SHIPPED default base — the published server launch; what
+      // the launch DOES is proven by the mounted-connection suite below.
+      expect(config.args).toEqual(argsAfter('-y', '@mstar-harness/cli', 'mcp'))
+      expect(config.cwd).toBe(WS)
     } finally {
       restore()
       await ctx.fiber.dispose().catch(() => {})
@@ -202,7 +356,7 @@ describe('scoped MCP mount — per-agent registration', () => {
       expect(fake.configs[0]!.command).toBe('bun')
       // A loader-derived row config gets the identity-env declaration too —
       // the per-agent env is only honored when the server is told to read it.
-      expect(fake.configs[0]!.args).toEqual(['run', 'mcp', '--identity-env', MSTAR_HOST_SESSION_ID])
+      expect(fake.configs[0]!.args).toEqual(argsAfter('run', 'mcp'))
       expect(fake.configs[0]!.env).toEqual(envFor('agent-row'))
     } finally {
       restore()
@@ -236,7 +390,7 @@ describe('scoped MCP mount — per-agent registration', () => {
       await settle()
 
       expect(fake.configs).toHaveLength(1)
-      expect(fake.configs[0]!.args).toEqual(['run', 'mcp', '--identity-env', MSTAR_HOST_SESSION_ID])
+      expect(fake.configs[0]!.args).toEqual(argsAfter('run', 'mcp'))
       expect(fake.configs[0]!.env).toEqual(envFor('agent-row'))
     } finally {
       restore()
@@ -265,7 +419,7 @@ describe('scoped MCP mount — per-agent registration', () => {
       expect(config.transport).toBe('stdio')
       expect(config.command).toBe('npx')
       // The identity-env declaration rides the MStar row's args.
-      expect(config.args).toEqual(['-y', '@mstar-harness/cli', 'mcp', '--identity-env', MSTAR_HOST_SESSION_ID])
+      expect(config.args).toEqual(argsAfter('-y', '@mstar-harness/cli', 'mcp'))
       // Only the per-agent env is overlayed — the unrelated row's env never rides along.
       expect(config.env).toEqual(envFor('agent-row'))
       // The unrelated server's launch surface appears nowhere in the mount.
@@ -298,7 +452,7 @@ describe('scoped MCP mount — per-agent registration', () => {
       expect(config.serverName).toBe('mstar')
       expect(config.transport).toBe('stdio')
       expect(config.command).toBe('npx')
-      expect(config.args).toEqual(['-y', '@mstar-harness/cli', 'mcp', '--identity-env', MSTAR_HOST_SESSION_ID])
+      expect(config.args).toEqual(argsAfter('-y', '@mstar-harness/cli', 'mcp'))
       expect(config.env).toEqual(envFor('agent-row'))
       expect(JSON.stringify(config)).not.toContain('uvx')
       expect(JSON.stringify(config)).not.toContain('other-server')
@@ -338,7 +492,7 @@ describe('scoped MCP mount — per-agent registration', () => {
       expect(fake.configs).toHaveLength(1)
       expect(fake.configs[0]!.serverName).toBe('mstar-pinned')
       expect(fake.configs[0]!.command).toBe('bun')
-      expect(fake.configs[0]!.args).toEqual(['run', 'mcp', '--identity-env', MSTAR_HOST_SESSION_ID])
+      expect(fake.configs[0]!.args).toEqual(argsAfter('run', 'mcp'))
       expect(fake.configs[0]!.env).toEqual(envFor('agent-row'))
     } finally {
       restore()
@@ -346,7 +500,94 @@ describe('scoped MCP mount — per-agent registration', () => {
     }
   })
 
-  it('a subagent never inherits the parent id: root mounts once, the child (leaf) gets nothing', async () => {
+  it('launches the server with the session workspace and the resolver-selected harness', async () => {
+    const ctx = new Context()
+    const fake = new FakeMcpClientModule()
+    const { restore } = captureLogs()
+    // The host process cwd is deliberately not the session workspace: the
+    // resolver selects repo B's harness for the caller, and the mount must
+    // carry BOTH facts on the child's launch.
+    const agent = { id: 'agent-b', session: { header: { id: 'agent-b', cwd: '/tmp/session-b' } } }
+    const asked: unknown[] = []
+    try {
+      registerScopedMcpMount(ctx, {
+        provider: fake.provider,
+        resolver: { forAgent: (value) => { asked.push(value); return '/tmp/session-b/.mstar' } },
+      })
+      ctx.events.emit('agent/created', { agent, source: 'fresh' })
+      await settle()
+
+      expect(asked).toEqual([agent])
+      expect(fake.configs).toHaveLength(1)
+      expect(fake.configs[0]!.cwd).toBe('/tmp/session-b')
+      expect(fake.configs[0]!.args).toEqual([
+        '-y', '@mstar-harness/cli', 'mcp', '--identity-env', MSTAR_HOST_SESSION_ID,
+        '--workspace', '/tmp/session-b', '--harness', '/tmp/session-b/.mstar',
+      ])
+    } finally {
+      restore()
+      await ctx.fiber.dispose().catch(() => {})
+    }
+  })
+
+  it('a row-declared harness/workspace is normalized to the per-session values', async () => {
+    const ctx = new Context()
+    const loader = new FakeLoaderRegistry(ctx)
+    loader.entriesList = [
+      {
+        options: {
+          name: '@deepseek-ai/dsh-mcp-client',
+          config: {
+            serverName: 'mstar', transport: 'stdio', command: 'bun',
+            args: ['run', 'mcp', '--harness', '/deployment/pin/.mstar', '--workspace', '/deployment/cwd'],
+          },
+        },
+        disabled: false,
+        fiber: {},
+      },
+    ]
+    const fake = new FakeMcpClientModule()
+    const { restore } = captureLogs()
+    try {
+      registerScopedMcpMount(ctx, {
+        provider: fake.provider,
+        resolver: { forAgent: () => '/tmp/session-b/.mstar' },
+      })
+      ctx.events.emit('agent/created', { agent: { id: 'agent-b', session: { header: { cwd: '/tmp/session-b' } } }, source: 'fresh' })
+      await settle()
+
+      expect(fake.configs[0]!.args).toEqual([
+        'run', 'mcp', '--harness', '/tmp/session-b/.mstar', '--workspace', '/tmp/session-b',
+        '--identity-env', MSTAR_HOST_SESSION_ID,
+      ])
+    } finally {
+      restore()
+      await ctx.fiber.dispose().catch(() => {})
+    }
+  })
+
+  it('a resolver failure costs the harness pin, never the mount', async () => {
+    const ctx = new Context()
+    const fake = new FakeMcpClientModule()
+    const { restore } = captureLogs()
+    try {
+      registerScopedMcpMount(ctx, {
+        provider: fake.provider,
+        resolver: { forAgent: () => { throw new Error('coordination probe failed') } },
+      })
+      ctx.events.emit('agent/created', { agent: rootAgent('agent-a'), source: 'fresh' })
+      await settle()
+
+      expect(fake.configs).toHaveLength(1)
+      expect(fake.configs[0]!.args).not.toContain('--harness')
+      expect(fake.configs[0]!.cwd).toBe(WS)
+    } finally {
+      restore()
+      await ctx.fiber.dispose().catch(() => {})
+    }
+  })
+
+  it('a subagent never inherits the parent id: the child gets its own RESTRICTED mount', async () => {
     const ctx = new Context()
     const fake = new FakeMcpClientModule()
     const { restore } = captureLogs()
@@ -356,8 +597,13 @@ describe('scoped MCP mount — per-agent registration', () => {
       ctx.events.emit('agent/created', { agent: subagentLeaf('child-1', 'root-1'), source: 'child' })
       await settle()
 
-      expect(fake.configs).toHaveLength(1)
+      // Two mounts: the coordinating session's unrestricted connection and the
+      // leaf's restricted one. The child's env carries its OWN id — never the
+      // parent's. (The launch's effect is proven by the mounted-connection
+      // suite below; this test owns the attribution fact alone.)
+      expect(fake.configs).toHaveLength(2)
       expect(fake.configs[0]!.env).toEqual(envFor('root-1'))
+      expect(fake.configs[1]!.env).toEqual(envFor('child-1'))
       const envValues = Object.values(fake.configs[0]!.env as Record<string, string>)
       expect(envValues).not.toContain('child-1')
     } finally {
@@ -400,38 +646,84 @@ describe('scoped MCP mount — per-agent registration', () => {
   })
 })
 
-describe('scoped MCP mount — leaf-seat skip list', () => {
-  it('an origin-subagent leaf → no mount (b)', async () => {
-    const ctx = new Context()
-    const fake = new FakeMcpClientModule()
-    const { restore } = captureLogs()
+describe('scoped MCP mount — the mounted connection', () => {
+  it('a mounted call lands in the session workspace, never the host cwd', async () => {
+    const host = workspace('mstar-mount-host-')
+    const session = workspace('mstar-mount-session-')
+    const previous = process.cwd()
+    process.chdir(host)
     try {
-      registerScopedMcpMount(ctx, { provider: fake.provider })
-      ctx.events.emit('agent/created', { agent: subagentLeaf('leaf-1'), source: 'child' })
-      await settle()
+      const envelope = await mountedCall(
+        { id: 'agent-b', session: { header: { id: 'agent-b', cwd: session } } },
+        'mstar_sdd',
+        { action: 'workspace', planId: 'session-plan' },
+      )
 
-      expect(fake.configs).toHaveLength(0)
+      expect(envelope).toMatchObject({ command: 'sdd.workspace', status: 'ok', exitCode: 0 })
+      // The resolved root and the written artifact are the CALLER's workspace…
+      expect((envelope as { data?: { sddDir?: string } }).data?.sddDir).toBe(join(session, '.mstar', 'sdd', 'session-plan'))
+      expect(existsSync(join(session, '.mstar', 'sdd', 'session-plan'))).toBe(true)
+      // …and the host process cwd got no tree from the mounted call.
+      expect(existsSync(join(host, '.mstar', 'sdd'))).toBe(false)
     } finally {
-      restore()
-      await ctx.fiber.dispose().catch(() => {})
+      process.chdir(previous)
     }
-  })
+  }, 60_000)
 
-  it('a delegationDepth > 0 leaf (origin unset) → no mount (b)', async () => {
-    const ctx = new Context()
-    const fake = new FakeMcpClientModule()
-    const { restore } = captureLogs()
-    try {
-      registerScopedMcpMount(ctx, { provider: fake.provider })
-      ctx.events.emit('agent/created', { agent: deepLeaf('leaf-2'), source: 'child' })
-      await settle()
+  it('a leaf mount refuses the coordinator action THROUGH the connection (origin subagent)', async () => {
+    const session = workspace('mstar-mount-leaf-origin-')
+    const envelope = await mountedCall(
+      { id: 'leaf-origin', session: { header: { id: 'leaf-origin', cwd: session, origin: 'subagent' } } },
+      'mstar_plan',
+      { action: 'bind' },
+    )
 
-      expect(fake.configs).toHaveLength(0)
-    } finally {
-      restore()
-      await ctx.fiber.dispose().catch(() => {})
-    }
-  })
+    expect(envelope).toMatchObject({ command: 'plan.bind', status: 'refused', code: 'plan.bind.leaf-seat', exitCode: 1 })
+    expect(String(envelope.details?.recovery)).toContain('non-leaf coordinating session')
+  }, 60_000)
+
+  it('a leaf mount refuses the coordinator action THROUGH the connection (delegationDepth)', async () => {
+    const session = workspace('mstar-mount-leaf-depth-')
+    const envelope = await mountedCall(
+      { id: 'leaf-depth', session: { header: { id: 'leaf-depth', cwd: session, delegationDepth: 2 } } },
+      'mstar_plan',
+      { action: 'bind' },
+    )
+
+    expect(envelope).toMatchObject({ command: 'plan.bind', status: 'refused', code: 'plan.bind.leaf-seat', exitCode: 1 })
+  }, 60_000)
+
+  it('a leaf mount refuses session.run THROUGH the connection, and no child is spawned', async () => {
+    const session = workspace('mstar-mount-leaf-spawn-')
+    // `session.run` mints a coordinator identity for a CHILD that never passes
+    // this seat check, so a leaf's launch is a seat escalation: the refusal
+    // must land before the spawn effect. `touch` would have created the marker
+    // had any child run.
+    const marker = join(session, 'spawned-by-leaf')
+    const envelope = await mountedCall(
+      { id: 'leaf-spawn', session: { header: { id: 'leaf-spawn', cwd: session, origin: 'subagent' } } },
+      'mstar_session',
+      { action: 'run', workflow: 'wf-a', role: 'coordinator', argv: ['touch', marker] },
+    )
+
+    expect(envelope).toMatchObject({ command: 'session.run', status: 'refused', code: 'session.run.leaf-seat', exitCode: 1 })
+    expect(existsSync(marker)).toBe(false)
+  }, 60_000)
+
+  it('a non-leaf mounted connection keeps session.run: the child really spawns', async () => {
+    const session = workspace('mstar-mount-root-spawn-')
+    const marker = join(session, 'spawned-by-launcher')
+    const envelope = await mountedCall(
+      { id: 'root-spawn', session: { header: { id: 'root-spawn', cwd: session } } },
+      'mstar_session',
+      { action: 'run', workflow: 'wf-a', role: 'coordinator', argv: ['touch', marker] },
+    )
+
+    // The control arm proves the refusal above is the leaf seat and not a
+    // launch that could never work: the same call is admitted and runs.
+    expect(envelope).toMatchObject({ command: 'session.run', status: 'ok', exitCode: 0 })
+    expect(existsSync(marker)).toBe(true)
+  }, 60_000)
 
   it('isLeafSeatHeader keeps the shared leaf-seat contract shape (leaf-seat.ts / ADR)', () => {
     expect(isLeafSeatHeader({ origin: 'subagent' })).toBe(true)

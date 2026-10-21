@@ -527,12 +527,16 @@ export function referenceExists(repoRoot: string, docText: string): ReferenceChe
 /**
  * RETIRED (state-projection contract §4): the `{KNOWLEDGE_DIR}/README.md` row
  * listed here was a Markdown register, and catalog authority now lives in
- * `store.db`. The export survives only because two consumers outside this
- * module's own scope still import it — `mstar compound validate --knowledge-dir`
- * (`packages/cli/src/index.ts`) and the dsh `mstar_compound_validate` tool
- * (`packages/dsh/src/gates/tools.ts`). It therefore refuses actionably instead
- * of quietly passing; those callers move to `assertKnowledgeCatalogCompleteness`
- * (which needs the harness/store context the README form never had).
+ * `store.db`. It refuses actionably instead of quietly passing, and it has no
+ * product caller left: `compound.validate` (the CLI command and the MCP
+ * `mstar_compound` action `validate`) routes `knowledgeDir` to
+ * `assertKnowledgeCatalogCompleteness`. The export stays published for an
+ * external host hook that still calls it by name.
+ *
+ * No compound surface carries a reference-existence check: that compound-refresh
+ * duty is `referenceExists` in this module, and its only caller outside this
+ * package is the dsh seam gate `validateCompoundDoc`
+ * (`packages/dsh/src/gates/seams.ts`).
  */
 export function assertIndexRows(knowledgeDir: string): GateResult {
   return {

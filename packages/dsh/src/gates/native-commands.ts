@@ -1,48 +1,60 @@
 /**
- * Native writable command tools (#526) — the mstar command surface as dsh tools.
+ * The dsh-native tool surface — the mstar commands that cannot be MCP actions.
  *
- * The named writable set (plan bind/prepare/progress/complete + workflow
- * register + issue add/close) is registered over `ctx.tools.register` with the
- * same `defineTool` style as the read-only tools in `tools.ts`. Each tool
- * calls the shared `@mstar-harness/commands` implementation through its
- * programmatic entry (`executeCommand` — the same admission + execution path
- * the CLI uses) and injects `sessionId` from `exec.agent.id` (ADR
- * `dsh-native-identity-channels` constraints 1–2: `Agent.id` IS the session
- * id, and per-caller identity is available at the tool seam). A session id in
- * the tool arguments is STRIPPED before admission — identity is never
- * model-choosable on this surface.
+ * A command is registered here ONLY when it satisfies one of two rules:
  *
- * Beyond that mapping the surface carries exactly ONE dsh-native tool:
- * `mstar_execution_clear` (Task 5) — the replacement reachability for the
- * durable execution binding's clear after the slash command that hosted it was
- * removed. It wraps the dsh-side clear internals directly (there is no shared
- * `execution.clear` command to map through) and takes no parameters at all —
- * identity comes from `exec.agent.id` the same way.
+ * 1. it is the PRODUCER of a dsh-local durable record the MCP route cannot
+ *    write — `mstar_plan_bind` writes the `executionBinding` slot and the
+ *    in-process adoption receipt that the ledger's attribution resolver and
+ *    `mstar_execution_clear` read. The MCP `mstar_plan` action `bind` binds the
+ *    engine row only; it cannot reach the dsh plugin's own store slot;
+ * 2. it is a capability the MCP surface does not publish at all —
+ *    `mstar_audit_validate` (the review-report credential scan behind
+ *    `mstar audit scaffold`; the `mstar_audit` family publishes `scaffold` /
+ *    `secret-scan` / `supply-chain`, none of which validates a report) and
+ *    `mstar_execution_clear` (there is no shared `execution.clear` command).
+ *
+ * Everything else is the MCP surface (`mcp__mstar__<family>` with an `action`),
+ * which carries the writable commands over the scoped mount
+ * (`scoped-mcp-mount.ts`, one connection per agent with `--identity-env`). The
+ * fourteen 1:1 duplicates that used to shadow those MCP tools here are gone:
+ * two identical model-facing surfaces cost ~10k characters of fixed context
+ * per request and forced the model to choose between them.
+ *
+ * Identity: `mstar_plan_bind` calls the shared `@mstar-harness/commands`
+ * implementation through its programmatic entry (`executeCommand` — the same
+ * admission + execution path the CLI uses) and injects `sessionId` from
+ * `exec.agent.id` (ADR `dsh-native-identity-channels` constraints 1–2:
+ * `Agent.id` IS the session id). A session id in the tool arguments is
+ * STRIPPED before admission — identity is never model-choosable on this
+ * surface. `mstar_execution_clear` takes no parameters at all.
  *
  * No shell anywhere in the path: `executeCommand` runs in-process, and the
  * injected `effects` carry no process/browser/dashboard implementation, so an
  * effect-taking command can only refuse.
  *
- * Engine refusal envelopes surface verbatim: the tool validates nothing
+ * Engine refusal envelopes surface verbatim: the bind tool validates nothing
  * beyond the platform's own parameter schema (mechanically mirrored from the
  * command's published JSON Schema, with the session selector removed) and
  * returns the `CommandEnvelope` it received as the canonical value — no
  * second validation layer, no paraphrase.
  *
- * Module boundary: self-contained for the native adoption (Task 3 bind) and
- * the Task 5 clear — the only imports are the cordis context type, the
- * dsh-tools seam, `@mstar-harness/commands`, the engine's execution-session
- * primitives, the execution-session clear internals, the shared leaf-seat
- * predicate (`leaf-seat.ts`), the adoption-root receipt
- * (`execution-binding-roots.ts`), and the shared cwd reader /
- * workflow-selection resolvers.
+ * Module boundary: self-contained for the bind adoption, the report validator
+ * and the clear — the only imports are the cordis context type, the dsh-tools
+ * seam, `@mstar-harness/commands`, the engine's execution-session primitives,
+ * the seam validator (`seams.ts`) plus the shared violation view, the
+ * execution-session clear internals, the shared leaf-seat predicate
+ * (`leaf-seat.ts`), the adoption-root receipt (`execution-binding-roots.ts`),
+ * and the shared cwd reader / workflow-selection resolvers.
  *
  * Leaf guard: the coordinator-seat-capable tools (`mstar_plan_bind`,
- * `mstar_plan_complete`, `mstar_execution_clear`) refuse a known leaf seat
- * FAIL-CLOSED before any admission or engine round-trip — the named guard the
- * removed execution-session command enforced, restored on this surface (the
- * engine has no leaf concept, so this dsh-side check is the sole enforcement).
+ * `mstar_execution_clear`) refuse a known leaf seat FAIL-CLOSED before any
+ * admission or store read — the named guard the removed execution-session
+ * command enforced, restored on this surface (the engine has no leaf concept,
+ * so this dsh-side check is the sole enforcement).
  */
+import { existsSync, readFileSync } from 'node:fs'
+import { resolve } from 'node:path'
 import { type Context } from '@deepseek-ai/cordis'
 import { defineTool } from '@deepseek-ai/dsh-tools'
 import type { ToolExecution } from '@deepseek-ai/dsh-tools'
@@ -64,22 +76,19 @@ import type {
   CommandSchemaDescriptor,
   InvocationContext,
 } from '@mstar-harness/commands'
-import { sessionCwdOf } from './_shared.ts'
+import { iterationViolationView, sessionCwdOf } from './_shared.ts'
+import { validateAuditDoc } from './seams.ts'
 import { isLeafSeatHeader } from './leaf-seat.ts'
 import { adoptExecutionBinding, refusalOf } from './workflow-selection.ts'
 import { clearExecutionSessionBinding } from './execution-session.ts'
 import { clearExecutionBindingRoot, executionBindingRootOf, recordExecutionBindingRoot } from './execution-binding-roots.ts'
 
-/** The named writable set (issue AC) — the shared command ids that map 1:1 onto tools, in registration order. The surface gains exactly one tool beyond this list: the dsh-native `mstar_execution_clear` (Task 5). */
-const NATIVE_COMMAND_IDS = [
-  'plan.bind',
-  'plan.prepare',
-  'plan.progress',
-  'plan.complete',
-  'workflow.register',
-  'issue.add',
-  'issue.close',
-] as const
+/**
+ * The ONE native command tool. `plan.bind` is here as the PRODUCER of the dsh
+ * durable record (the `executionBinding` slot + the adoption receipt); the
+ * other six writable commands are MCP `action`s and stay there.
+ */
+const NATIVE_COMMAND_ID = 'plan.bind'
 
 /** The tool name for one command id — the same mapping the MCP route uses. */
 export function nativeCommandToolName(commandId: string): string {
@@ -125,14 +134,6 @@ function leafSeatRefusal(command: string): CommandEnvelope<never> {
       'This seat is a leaf (session header origin "subagent" or a delegationDepth > 0); coordinator seats and execution bindings belong to non-leaf sessions — run the operation as the coordinating session itself, or continue without an execution binding.',
   })
 }
-
-/**
- * The commands whose success mints or exercises a coordinator seat: `plan
- * bind` binds one, `plan complete` is the Done write behind it. These refuse a
- * leaf seat fail-closed; the remaining commands run under the caller's own
- * identity and cannot mint a seat.
- */
-const COORDINATOR_SEAT_COMMANDS: ReadonlySet<string> = new Set(['plan.bind', 'plan.complete'])
 
 /**
  * Effects for the native surface: none. The shared implementation owns every
@@ -535,6 +536,73 @@ export function adoptionRecoveryText(
 }
 
 /**
+ * The facts a PRE-SLOT post-commit refusal answers with: each arm is reached
+ * only after the engine bind committed and before the durable slot write, so
+ * every arm leaves the seat BOUND and must carry the facts its own recovery
+ * names.
+ */
+export type PostCommitAdoptionFailure =
+  | { kind: 'receipt-unrecognizable'; sessionId: string; workflowId?: string }
+  | { kind: 'no-harness'; ref: ExecutionSessionRef }
+  | { kind: 'foreign-reference'; ref: ExecutionSessionRef; sessionId: string }
+
+/**
+ * The three refusals of a committed bind that never reached the durable slot
+ * write. Pure and exported for the refusal regression: a real engine mints a
+ * readable reference naming the carrying session, so no fixture can produce
+ * these arms — the selection itself is what the contract is pinned on.
+ */
+export function postCommitAdoptionRefusal(failure: PostCommitAdoptionFailure): CommandEnvelope<never> {
+  if (failure.kind === 'receipt-unrecognizable') {
+    // The engine bind committed, but its envelope carried no readable
+    // reference, so the durable slot cannot be written and the resume re-bind
+    // has nothing to carry. A plain re-execution bind is refused while the
+    // live holder exists — the engine's own coordinator recovery is the way
+    // out (it replaces the recorded holder after operator attestation).
+    const workflow = failure.workflowId ?? '<workflow-id>'
+    return adoptionRefusal(
+      'binding.receipt-unrecognizable',
+      'the plan bind envelope carried no recognizable execution session reference — the execution binding was NOT adopted',
+      'The engine coordinator seat from the bind stays BOUND (a live ACTIVE holder is never replaced by a bind), but the durable execution binding slot was NOT written: ' +
+        'this build could not read the minted reference back out of the bind receipt. ' +
+        `Recover the seat through the engine's own coordinator recovery: run \`mstar session recover --workflow ${workflow} ` +
+        `--prior-session ${failure.sessionId} --reason <text> --attestation <path> --expect <token> --operation <id>\` ` +
+        '(use `--unowned=true` instead of `--prior-session` when the workflow records no coordinator row), then re-run the bind.',
+      { ...(failure.workflowId === undefined ? {} : { workflowId: failure.workflowId }) },
+    )
+  }
+  if (failure.kind === 'no-harness') {
+    // DEFENSIVE, not part of the normal contract: the shared admission refuses
+    // a null root before committing, so a committed bind reaches this arm only
+    // when the root facts changed between the bind and the adoption (the
+    // variable removed, a `.mstar`/`.mstarc` declaration created or removed,
+    // or the git worktree changed). It therefore must not tell the caller to
+    // "re-run the bind" — that bind is refused — so it carries the minted
+    // reference and names the engine's coordinator recovery instead.
+    return adoptionRefusal(
+      'binding.no-harness',
+      'the carrying session has no resolved control root or workspace — the execution binding was NOT adopted',
+      'The engine coordinator seat from the bind stays BOUND, but the durable execution binding slot was NOT written: this adoption could not resolve the control root the shared bind committed in. ' +
+        `Recover the seat through the engine's own coordinator recovery: run \`mstar session recover --workflow ${failure.ref.workflowId} ` +
+        `--prior-session ${failure.ref.sessionId} --reason <text> --attestation <path> --expect <token> --operation <id>\` ` +
+        '(use `--unowned=true` instead of `--prior-session` when the workflow records no coordinator row), then re-run the bind.',
+      { ref: failure.ref, workflowId: failure.ref.workflowId },
+    )
+  }
+  // The reference names a session other than the caller: adopting it would
+  // bind another session's seat, and no re-bind can make it adoptable. It is
+  // still a POST-COMMIT refusal — the engine bind committed — so it states
+  // that fact with no `data`: nothing read here would make a recovery
+  // performable.
+  return adoptionRefusal(
+    'binding.foreign-reference',
+    `the bound session reference names ${failure.ref.sessionId}, not the carrying session ${failure.sessionId} — the execution binding was NOT adopted`,
+    'Run the bind as the carrying session itself; a reference to another session is never adoptable.',
+    {},
+  )
+}
+
+/**
  * Task 3 (#527): persist the durable `executionBinding` slot after a native
  * `plan bind` succeeds — the adoption the removed slash command performed,
  * kept on the native path. The binding order's durable-selection
@@ -581,24 +649,12 @@ async function adoptNativeExecutionBinding(
   const sessionId = callerSessionIdOf(exec)
   const ref = bindReceiptRefOf(envelope)
   if (ref === undefined) {
-    // POST-COMMIT: the engine bind committed, but its envelope carried no
-    // readable reference, so the durable slot cannot be written and the
-    // resume re-bind has nothing to carry. A plain re-execution bind is
-    // refused while the live holder exists — the engine's own coordinator
-    // recovery is the way out (it replaces the recorded holder after operator
-    // attestation). The workflow is still derivable from the bind input.
-    const workflowId = bindWorkflowIdOf(input)
-    const workflow = workflowId ?? '<workflow-id>'
-    return adoptionRefusal(
-      'binding.receipt-unrecognizable',
-      'the plan bind envelope carried no recognizable execution session reference — the execution binding was NOT adopted',
-      'The engine coordinator seat from the bind stays BOUND (a live ACTIVE holder is never replaced by a bind), but the durable execution binding slot was NOT written: ' +
-        'this build could not read the minted reference back out of the bind receipt. ' +
-        `Recover the seat through the engine's own coordinator recovery: run \`mstar session recover --workflow ${workflow} ` +
-        `--prior-session ${sessionId} --reason <text> --attestation <path> --expect <token> --operation <id>\` ` +
-        '(use `--unowned=true` instead of `--prior-session` when the workflow records no coordinator row), then re-run the bind.',
-      { ...(workflowId === undefined ? {} : { workflowId }) },
-    )
+    // POST-COMMIT: the workflow is still derivable from the bind input.
+    return postCommitAdoptionRefusal({
+      kind: 'receipt-unrecognizable',
+      sessionId,
+      workflowId: bindWorkflowIdOf(input),
+    })
   }
   // The adoption target is the root the shared admission bound in. Both
   // `plan.bind` arms resolve it as `resolveProcessHarnessDir(cwd,
@@ -624,31 +680,12 @@ async function adoptNativeExecutionBinding(
     harnessDir = null
   }
   if (harnessDir === null || cwd === undefined) {
-    // DEFENSIVE, not part of the normal contract: the shared admission refuses
-    // a null root before committing, so a committed bind reaches this branch
-    // only when the root facts changed between the bind and this adoption (the
-    // variable removed, a `.mstar`/`.mstarc` declaration created or removed,
-    // or the git worktree changed). It therefore must not tell the caller to
-    // "re-run the bind" — that bind is refused — so it carries the minted
-    // reference and names the engine's coordinator recovery instead.
-    return adoptionRefusal(
-      'binding.no-harness',
-      'the carrying session has no resolved control root or workspace — the execution binding was NOT adopted',
-      'The engine coordinator seat from the bind stays BOUND, but the durable execution binding slot was NOT written: this adoption could not resolve the control root the shared bind committed in. ' +
-        `Recover the seat through the engine's own coordinator recovery: run \`mstar session recover --workflow ${ref.workflowId} ` +
-        `--prior-session ${ref.sessionId} --reason <text> --attestation <path> --expect <token> --operation <id>\` ` +
-        '(use `--unowned=true` instead of `--prior-session` when the workflow records no coordinator row), then re-run the bind.',
-      { ref, workflowId: ref.workflowId },
-    )
+    return postCommitAdoptionRefusal({ kind: 'no-harness', ref })
   }
   // The reference names the carrying session — the same first check the slash
   // adoption made, before any engine round-trip.
   if (ref.sessionId !== sessionId) {
-    return adoptionRefusal(
-      'binding.foreign-reference',
-      `the bound session reference names ${ref.sessionId}, not the carrying session ${sessionId} — the execution binding was NOT adopted`,
-      'Run the bind as the carrying session itself; a reference to another session is never adoptable.',
-    )
+    return postCommitAdoptionRefusal({ kind: 'foreign-reference', ref, sessionId })
   }
   // Which post-commit step failed decides the recovery: the engine resume
   // rejecting the reference cannot be recovered by presenting that same
@@ -729,10 +766,10 @@ function nativeCommandTool(
     // parallel with siblings), matching the read-only tools' registry default.
     isConcurrencySafe: () => false,
     async execute(args, exec) {
-      // Fail-closed leaf guard FIRST: a known leaf seat can never own a
-      // coordinator seat, and these are the commands that would mint one —
-      // refuse before any admission or engine round-trip.
-      if (COORDINATOR_SEAT_COMMANDS.has(commandId) && isLeafSeatHeader(sessionHeaderOf(exec))) {
+      // Fail-closed leaf guard FIRST: `plan bind` is the command that mints a
+      // coordinator seat, and a known leaf seat can never own one — refuse
+      // before any admission or engine round-trip.
+      if (isLeafSeatHeader(sessionHeaderOf(exec))) {
         return toCanonicalValue(leafSeatRefusal(commandId))
       }
       const input = args as Record<string, unknown>
@@ -741,23 +778,19 @@ function nativeCommandTool(
       // context (exec.agent.id) instead of an argument value.
       const { sessionId: _ignored, ...commandInput } = input
       const envelope = await executeCommand(commandId, commandInput, invocationContextOf(exec, resolver))
-      if (commandId === 'plan.bind') {
-        // Task 3 (#527): on a successful bind, persist the durable
-        // executionBinding slot (the adoption the slash command performed);
-        // every other command returns its envelope untouched.
-        return toCanonicalValue(await adoptNativeExecutionBinding(envelope, commandInput, exec))
-      }
-      return toCanonicalValue(envelope)
+      // The durable adoption runs on every bind arm; `adoptNativeExecutionBinding`
+      // returns the envelope untouched when the input carries neither
+      // `execution: true` nor a `resumeRef`, and a refused bind is never rewritten.
+      return toCanonicalValue(await adoptNativeExecutionBinding(envelope, commandInput, exec))
     },
   })
 }
 
 /**
  * The logical command id the native clear reports in its envelope. There is
- * no shared `execution.clear` command to map through `nativeCommandTool` —
- * the clear is a dsh-native tool wrapping the dsh-side binding internals, so
- * its envelope is assembled here with the same shape the shared commands
- * answer.
+ * no shared `execution.clear` command to map through a command tool — the
+ * clear is a dsh-native tool wrapping the dsh-side binding internals, so its
+ * envelope is assembled here with the same shape the shared commands answer.
  */
 const EXECUTION_CLEAR_COMMAND = 'execution.clear'
 
@@ -768,11 +801,10 @@ function executionClearOk(): CommandEnvelope {
 
 /**
  * The named no-harness refusal of the clear: the remaining case is a session
- * with no workspace at all, or one with NEITHER an adoption receipt NOR a
- * workspace-declared harness. The recovery names both supported routes — open
- * the session in a workspace that declares the harness, and (for a receipt
- * lost with the host process) the resume re-bind that re-records the selected
- * root — because no durable binding can be reached through either root here.
+ * with no workspace at all, or one whose workspace declares no harness and
+ * whose plugin config names none. The recovery names both routes that exist in
+ * this build — a workspace that declares the control harness, and the plugin's
+ * own `harnessDir` config (which wins over workspace probing).
  */
 function executionClearNoHarness(): CommandEnvelope<never> {
   return refusalEnvelope({
@@ -781,8 +813,7 @@ function executionClearNoHarness(): CommandEnvelope<never> {
     code: 'execution.clear.no-harness',
     exitCode: 1,
     message: 'the carrying session has no resolved harness dir or workspace — the execution binding could not be read for the clear',
-    recovery: 'Open the session in the workspace that declares the control harness (.mstar/ or .mstarc) and re-run the clear. ' +
-      'If this session adopted a binding in another control root before a host restart (no receipt survives it), re-run the bind as a resume carrying the original session reference and the same `harness`, then re-run the clear.',
+    recovery: 'Open the session in the workspace that declares the control harness (.mstar/ or .mstarc), or point the plugin\'s `harnessDir` config at the control root that holds this session\'s binding, then re-run the clear.',
   })
 }
 
@@ -792,18 +823,15 @@ function executionClearNoHarness(): CommandEnvelope<never> {
  * action:
  *
  * - the resolved root genuinely holds no clearable binding for this session;
- * - the session adopted a binding into ANOTHER control root whose in-process
- *   adoption receipt the host lost (a restart or a plugin reload drops the
- *   receipt, not the durable slot). Reaching that slot requires re-recording
- *   the selected root, and the only supported route that does so is a RESUME
- *   re-bind carrying the binding's original session reference and the same
- *   `harness` — which this recovery names, because no other clear route
- *   reaches a cross-root slot.
+ * - the session's binding was adopted into ANOTHER control root, which the
+ *   workspace probe cannot reach (the durable key is the session id AND the
+ *   session workspace, and the root is whatever the bind selected).
  *
- * A session that never adopted a cross-root binding is the no-action case the
- * recovery also states. (A durable selected-root pointer would remove this
- * cross-root gap; it needs a host-durable per-session store the workspace root
- * must not carry, so it is not part of this refusal's fix.)
+ * The recovery names the route that exists for the second case: the plugin's
+ * `harnessDir` config resolves the control root directly and therefore reaches
+ * a store the workspace probe answers `null` for — while the session keeps the
+ * workspace the durable row is keyed to. A session that never adopted a
+ * cross-root binding is the no-action case the recovery also states.
  */
 function executionClearNoBinding(): CommandEnvelope<never> {
   return refusalEnvelope({
@@ -812,25 +840,21 @@ function executionClearNoBinding(): CommandEnvelope<never> {
     code: 'execution.clear.no-binding',
     exitCode: 1,
     message: 'no clearable execution binding is reachable from the control root resolved here',
-    recovery: 'This clear resolves the control root of the carrying session\'s workspace (or the configured root), and a binding adopted into a DIFFERENT control root is not reachable from it — the in-process adoption receipt that recorded that root does not survive a host restart or a plugin reload. ' +
-      'If this session adopted a binding in another control root, re-run the native bind as a resume carrying that binding\'s ORIGINAL session reference as `resumeRef` and the SAME `harness` selection (this re-records the selected root for the session), then re-run this clear. ' +
+    recovery: 'This clear resolves the control root of the carrying session\'s workspace (or the configured root), and a binding recorded in a DIFFERENT control root is not reachable from it by workspace resolution. ' +
+      'Point the plugin\'s `harnessDir` config at that control root — the durable key is the session id AND the session workspace, which this session keeps — then re-run the clear. ' +
       'If no cross-root binding was ever adopted, there is nothing to clear and no action is needed.',
   })
 }
 
 /**
- * Task 5 (#530): the native `mstar_execution_clear` tool — the replacement
- * reachability for `clearExecutionBinding` after the removal of the slash
- * command whose `clear` arm was its only caller. It wraps
- * `clearExecutionSessionBinding` (the slash clear's validation set: readable
- * record guard, nothing-to-clear guard, and the observed-generation
+ * The native `mstar_execution_clear` tool: the reachability for
+ * `clearExecutionBinding` after the removal of the slash command whose `clear`
+ * arm was its only caller. It wraps `clearExecutionSessionBinding` (the readable
+ * record guard, the nothing-to-clear guard, and the observed-generation
  * `selectedGeneration` read) with the identity from `exec.agent.id` — the
  * parameter face is EMPTY, so identity is never model-choosable. The resolved
- * root is the session's SELECTED harness (the bind adoption's receipt) when
- * one exists, the workspace harness otherwise. The named outcomes surface as
- * envelopes: `cleared` → ok, `no-binding` → the named refusal (which names the
- * cross-root case a lost receipt leaves behind), an unreadable/refused store →
- * refusal carrying the store's own reason.
+ * root is the session's SELECTED harness (the bind adoption's receipt) when one
+ * exists, the workspace harness otherwise.
  */
 function executionClearTool(
   resolver: { forAgent(agent: unknown): string | null },
@@ -838,10 +862,10 @@ function executionClearTool(
   return defineTool({
     name: 'mstar_execution_clear',
     description:
-      "Clear the calling session's own durable mstar execution binding (the one the native mstar_plan_bind tool adopted). " +
+      "Clear the calling session's own durable mstar execution binding — the `executionBinding` slot a successful plan bind recorded in this session's control-root store. " +
       'The session id comes from the calling agent identity (exec.agent.id) — there are no parameters and identity is never model-choosable; ' +
       "the user's workflow selection and exclusion floor are preserved. " +
-      'Clearing a session whose binding is not reachable from the resolved control root is a named refusal (no clearable execution binding) naming the cross-root resume re-bind, ' +
+      'Clearing a session whose binding is not reachable from the resolved control root is a named refusal (no clearable execution binding) naming the `harnessDir` config route, ' +
       'and an unreadable or refused binding record is a refusal carrying the store reason, never a silent no-op.',
     parameters: {},
     output: {
@@ -854,17 +878,16 @@ function executionClearTool(
       kind: 'other',
       rawInput: JSON.stringify(args)?.slice(0, 160) ?? '',
     }),
-    // Mutates the execution authority's binding slot — exclusive, matching
-    // the command tools above.
+    // Mutates the execution authority's binding slot — exclusive.
     isConcurrencySafe: () => false,
     async execute(_args, exec) {
-      // The same fail-closed leaf guard: a leaf seat holds no execution
-      // binding and can never hold one — refuse before reading the store.
+      // The fail-closed leaf guard: a leaf seat holds no execution binding and
+      // can never hold one — refuse before reading the store. `_args` is never
+      // read: the only identity this tool acts on is `exec.agent.id`, so a
+      // model-supplied `sessionId` (or any other argument) has no effect.
       if (isLeafSeatHeader(sessionHeaderOf(exec))) {
         return toCanonicalValue(leafSeatRefusal(EXECUTION_CLEAR_COMMAND))
       }
-      // Only the workspace PRESENCE is checked first; the root itself is
-      // resolved AFTER the adoption receipt (below).
       const cwd = sessionCwdOf(exec.agent)
       if (cwd === undefined) {
         return toCanonicalValue(executionClearNoHarness())
@@ -872,11 +895,10 @@ function executionClearTool(
       // The clear resolves the session's SELECTED harness (the root the bind
       // adoption recorded) BEFORE any workspace probe: a bind naming another
       // control root recorded that root for this session, and clearing it must
-      // act on THAT root. Probing the workspace first refuses `no-harness` for
-      // a session that validly bound from a workspace declaring no harness —
-      // and no other clear route reaches that slot. The workspace harness only
-      // backs a session that never selected an explicit root: the unchanged
-      // pre-existing path.
+      // act on THAT root. Probing the workspace first refuses `no-harness` for a
+      // session that validly bound from a workspace declaring no harness — and
+      // no other clear route reaches that slot. The workspace harness only backs
+      // a session that never selected an explicit root.
       const sessionId = callerSessionIdOf(exec)
       const harnessDir = executionBindingRootOf(sessionId, cwd) ?? resolver.forAgent(exec.agent)
       if (harnessDir === null) {
@@ -884,10 +906,10 @@ function executionClearTool(
       }
       const outcome = await clearExecutionSessionBinding(harnessDir, sessionId, cwd)
       if (outcome.kind === 'cleared') {
-        // Drop the adoption receipt: the slot is gone, so a later clear
-        // resolves the workspace root instead of re-resolving a cleared slot —
-        // it answers `no-binding` when the workspace declares a harness there,
-        // and the named no-harness refusal otherwise.
+        // Drop the adoption receipt: the slot is gone, so a later clear resolves
+        // the workspace root instead of re-resolving a cleared slot — it answers
+        // `no-binding` when the workspace declares a harness there, and the
+        // named no-harness refusal otherwise.
         clearExecutionBindingRoot(sessionId, cwd)
         return toCanonicalValue(executionClearOk())
       }
@@ -915,28 +937,108 @@ function executionClearTool(
   })
 }
 
+/** One violation row of `auditValidateTool`'s output schema — its only consumer, and not a public surface. */
+const AUDIT_VALIDATE_VIOLATION_SCHEMA = {
+  type: 'object',
+  additionalProperties: false,
+  properties: {
+    severity: { type: 'string', required: true, enum: ['critical', 'high', 'medium', 'low', 'nit'] },
+    code: { type: 'string', required: true },
+    message: { type: 'string', required: true },
+    fix: { type: 'string' },
+  },
+} as const
+
 /**
- * Register the native writable command tools. The registrations are deferred
- * with `ctx.inject(['tools'], …)` (the optional-unit pattern, as in
- * `tools.ts`) and each registration's disposer is returned as the inject
- * teardown, so an HMR reload of the plugin fiber unregisters the tools
- * cleanly (a post-dispose lookup finds none).
+ * The native `mstar_audit_validate` tool — the review-report credential scan of
+ * `mstar-audit` Hard Rule 4 (`redactSecrets`), and the validator behind
+ * `mstar audit scaffold`. It has NO MCP twin: the `mstar_audit` family publishes
+ * `scaffold` / `secret-scan` / `supply-chain`, none of which validates a report
+ * document, so removing it would remove the capability instead of folding it.
+ *
+ * It reuses the seam validator (`validateAuditDoc` — the SAME path the
+ * fs-intent seam runs) and layers the findings summary on top: line + type only,
+ * never a secret value (Hard Rule 4). A missing report file is an error result
+ * naming the absolute path, not a manufactured `ok`.
+ */
+
+function auditValidateTool() {
+  return defineTool({
+    name: 'mstar_audit_validate',
+    description:
+      'Validate a review report under {REVIEW_DIR}: the credential scan of mstar-audit Hard ' +
+      'Rule 4 (redactSecrets) — no CLI equivalent, the validator behind `mstar audit scaffold`.',
+    parameters: {
+      report_path: {
+        type: 'string',
+        required: true,
+        description: 'Review report file under `{REVIEW_DIR}`.',
+      },
+    },
+    output: {
+      schema: {
+        type: 'object',
+        additionalProperties: false,
+        properties: {
+          ok: { type: 'boolean', required: true },
+          violations: { type: 'array', required: true, items: AUDIT_VALIDATE_VIOLATION_SCHEMA },
+          secrets: {
+            type: 'array',
+            required: true,
+            items: {
+              type: 'object',
+              additionalProperties: false,
+              properties: {
+                line: { type: 'integer', required: true },
+                type: { type: 'string', required: true },
+              },
+            },
+          },
+        },
+      },
+      render: (_args, value) => [
+        { type: 'text', text: `audit validate: ${value.ok ? 'PASS' : 'FAIL'} (${value.secrets.length} secret finding${value.secrets.length === 1 ? '' : 's'})` },
+      ],
+    },
+    presentCall: args => ({ card: 'generic', title: 'Validate review report', kind: 'other', rawInput: args.report_path }),
+    // Read-only evaluation — exclusive anyway (registry default).
+    isConcurrencySafe: () => false,
+    async execute(args) {
+      const abs = resolve(args.report_path)
+      if (!existsSync(abs)) throw new Error(`report file not found: ${abs}`)
+      const text = readFileSync(abs, 'utf8')
+      // Shared gate validator (validateSeamDoc → gateSeamIntent path): the
+      // credential scan. The tool layers the findings summary (line + type only —
+      // secret values are never reproduced, mstar-audit Hard Rule 4) on top.
+      const result = validateAuditDoc(text, abs)
+      return { ok: result.ok, violations: result.violations.map(iterationViolationView), secrets: result.findings }
+    },
+  })
+}
+
+/**
+ * Register the native tool surface. The registrations are deferred with
+ * `ctx.inject(['tools'], …)` (the optional-unit pattern, as in every tool
+ * module) and each registration's disposer is returned as the inject teardown,
+ * so an HMR reload of the plugin fiber unregisters the tools cleanly (a
+ * post-dispose lookup finds none).
+ *
+ * The surface is exactly three tools (see the module header for the rule):
+ * `mstar_plan_bind` (the durable-slot producer), `mstar_audit_validate` (no MCP
+ * twin) and `mstar_execution_clear` (no shared command).
  * @param ctx - registrant context carrying the tool registry.
  * @param resolver - the per-workspace `{HARNESS_DIR}` resolver (the control
  * root resolves per the calling session's workspace — never the process cwd).
  */
 export function registerNativeCommandTools(ctx: Context, resolver: { forAgent(agent: unknown): string | null }): void {
   ctx.inject(['tools'], (toolsCtx) => {
-    const definitions = getCommandDefinitions()
-    const disposers: Array<() => void> = []
-    for (const commandId of NATIVE_COMMAND_IDS) {
-      const definition = definitions.find((candidate: CommandDefinition) => candidate.id === commandId)
-      if (definition === undefined) throw new Error(`no shared command definition for the native tool: ${commandId}`)
-      disposers.push(toolsCtx.tools.register(nativeCommandTool(definition, resolver)))
-    }
-    // Task 5 (#530): the one dsh-native tool beyond the shared-command mapping
-    // — the surface's total is these 7 command tools + mstar_execution_clear.
-    disposers.push(toolsCtx.tools.register(executionClearTool(resolver)))
+    const definition = getCommandDefinitions().find((candidate: CommandDefinition) => candidate.id === NATIVE_COMMAND_ID)
+    if (definition === undefined) throw new Error(`no shared command definition for the native tool: ${NATIVE_COMMAND_ID}`)
+    const disposers: Array<() => void> = [
+      toolsCtx.tools.register(nativeCommandTool(definition, resolver)),
+      toolsCtx.tools.register(auditValidateTool()),
+      toolsCtx.tools.register(executionClearTool(resolver)),
+    ]
     return () => {
       for (const dispose of disposers.splice(0)) dispose()
     }

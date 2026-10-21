@@ -20,6 +20,7 @@ import {
   validateExecutionIdentity,
   type ExecutionIdentity,
 } from "@mstar-harness/engine";
+import { unionBranchSchemas } from "./schema-branches.js";
 import { captureSddEvidenceFromFile, verifySddEvidence } from "./sdd-evidence.js";
 import { detectInstalledPluginVersion } from "./plugin-version-alignment";
 import type { Scope, Target } from "./types";
@@ -248,17 +249,14 @@ function optionKey(flags: string): string {
 }
 
 function optionJsonSchema(definition: CommandDefinition, key: string): Record<string, unknown> {
+  // The SAME union traversal the folded family index and the payload-field list
+  // use: one input schema, one reading of its alternatives (schema-branches.ts).
   const schemas: Record<string, unknown>[] = [];
-  const pending: unknown[] = [definition.input.toJSONSchema()];
-  while (pending.length > 0) {
-    const schema = pending.pop();
-    if (schema === null || typeof schema !== "object") continue;
-    if ("properties" in schema && schema.properties !== null && typeof schema.properties === "object") {
-      const property = (schema.properties as Record<string, unknown>)[key];
-      if (property !== undefined && typeof property === "object" && property !== null) schemas.push(property as Record<string, unknown>);
-    }
-    if ("anyOf" in schema && Array.isArray(schema.anyOf)) pending.push(...schema.anyOf);
-    if ("oneOf" in schema && Array.isArray(schema.oneOf)) pending.push(...schema.oneOf);
+  for (const branch of unionBranchSchemas(definition.input.toJSONSchema())) {
+    const properties = branch.properties;
+    if (properties === null || typeof properties !== "object") continue;
+    const property = (properties as Record<string, unknown>)[key];
+    if (property !== undefined && typeof property === "object" && property !== null) schemas.push(property as Record<string, unknown>);
   }
   if (schemas.length === 0) return {};
   const unique = [...new Map(schemas.map((schema) => [JSON.stringify(schema), schema])).values()];
@@ -298,17 +296,11 @@ export function renderCommandContract(
   if (route === "cli" && definition.cli.options.some((option) => option.context === "sessionId")) {
     lines.push("Session identity resolves --session-id first, then the launched session's minted MSTAR_EXECUTION_IDENTITY, then DSH_SESSION_ID, then the ambient MSTAR_HOST_SESSION_ID (empty/whitespace ignored), else unset. For token-authorized writes it is transport-resolved attribution, not authorization: the acquired coordinator session/binding authorizes the write, and an explicit session reference is a checked constraint.");
   }
-  if (route === "mcp") {
-    // The CLI route prints this same syntax as commander's Usage line, built
-    // from the same `cli` table; MCP descriptions carry it explicitly.
-    const argumentTokens = descriptor.cli.arguments
-      .map((argument) => argument.required
-        ? ` <${argument.key}${argument.variadic ? "..." : ""}>`
-        : ` [${argument.key}${argument.variadic ? "..." : ""}]`)
-      .join("");
-    const optionTokens = descriptor.cli.options.map((option) => ` ${option.flags}`).join("");
-    lines.push(`CLI: mstar ${descriptor.cli.path.join(" ")}${argumentTokens}${optionTokens}`);
-  }
+  // No `CLI: mstar …` usage line is emitted on either route: the CLI route
+  // already prints commander's Usage from the same `cli` table, and a tool
+  // caller cannot run the CLI, so on the MCP route the line was pure payload
+  // cost. Field, requirement, alternative and payload lines stay: they are the
+  // contract a caller actually needs.
   const sessionSelector = definition.cli.options.find((option) => option.context === "sessionId")?.key;
   const requiredInputs = route === "mcp" && sessionSelector !== undefined
     ? descriptor.required.filter((field) => field !== sessionSelector)
@@ -355,14 +347,10 @@ export function renderCommandContract(
   // `kind` values) exist only to publish per-kind domain schemas — they stay
   // neutrally labeled and make no input-field or transport claim.
   const inputProperties = new Set<string>();
-  const schemas: unknown[] = [descriptor.input];
-  while (schemas.length > 0) {
-    const schema = schemas.pop();
-    if (schema === null || typeof schema !== "object") continue;
-    if ("properties" in schema && schema.properties !== null && typeof schema.properties === "object") {
-      for (const key of Object.keys(schema.properties)) inputProperties.add(key);
-    }
-    if ("anyOf" in schema && Array.isArray(schema.anyOf)) schemas.push(...schema.anyOf);
+  for (const branch of unionBranchSchemas(descriptor.input)) {
+    const properties = branch.properties;
+    if (properties === null || typeof properties !== "object") continue;
+    for (const key of Object.keys(properties as Record<string, unknown>)) inputProperties.add(key);
   }
   const payloadKeys = Object.keys(descriptor.payloadSchemas);
   const payloadFields = payloadKeys.filter((key) => inputProperties.has(key));

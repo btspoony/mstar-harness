@@ -1,6 +1,6 @@
 ---
 name: mstar-harness-core
-description: Morning Star lifecycle and authorization authority — source priority, delivery loop, state machine, Done ownership, task-category routing, engineering safeguards, and topic index. Load selection belongs to mstar-roles; PM and standard routes retain this global entry. Harness lifecycle topics require core-first; the roles hub bootstraps preset selection. Explicit none retains role identity and role-owned methods without waiving authority. Use for lifecycle, authorization, status, Done, routing, or CLI/plugin version drift; detailed Prepare, dispatch, Git, residual, and QC procedures remain in their owning topics.
+description: "Lifecycle and authorization authority: delivery loop, state machine, Done ownership, task-category routing, topic index. Use for lifecycle, authorization, Done, routing, or CLI/plugin version drift."
 ---
 
 # Morning Star Harness Core（晨星核心）

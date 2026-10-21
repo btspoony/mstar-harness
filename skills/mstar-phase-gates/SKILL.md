@@ -1,6 +1,6 @@
 ---
 name: mstar-phase-gates
-description: "Morning Star Spec-Driven 双阶段门禁：Prepare（`specify → clarify → plan`）、Execute（`plan(locked) → tasks → implement`；多 task 默认 `Execution mode: sdd`）。覆盖意图门禁、长期目标优先、分批 roadmap 强制落盘、clarify 纪律、hotfix 压缩路径、可验证编辑、Phase Gate 最小证据。Read when judging Prepare/Execute gates, before first implement dispatch, when product/architect enter Prepare, or to justify not skipping plan/clarify. `@project-manager` 每轮非 hotfix 必读；`@product-manager`/`@architect` 锁规格/plan 必读 Prepare；实现角色读 Execute + hotfix 例外。`quick` 禁豁免规则在 `mstar-harness-core`。"
+description: Spec-Driven 双阶段门禁：Prepare（specify→clarify→plan）、Execute（plan(locked)→tasks→implement，多 task 默认 SDD）；意图门禁、clarify 纪律、hotfix 压缩路径、可验证编辑、Phase Gate 证据。
 ---
 
 ## Load order（必读顺序）

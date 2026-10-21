@@ -1,6 +1,6 @@
 ---
 name: mstar-conventions
-description: Morning Star (晨星) harness 计划目录约定 —— `{HARNESS_DIR}` / `{PLAN_DIR}` / `{SDD_DIR}` / `{ITERATION_DIR}` / `{KNOWLEDGE_DIR}` / `{SPECS_DIR}` / `{WORKFLOW_DIR}` / `{PROJECT_DIR}` / `{REVIEW_DIR}` 发现与初始化（默认 `.mstar/`，兼容 `.agents/`）、`docs` 与 harness 子树边界、review bundle、未启用 plan / 无 ACTIVE store 时的工作方式（对话追踪）、Spec 集成分支与多 Plan 实现分支（显式 base / merge 靶 / PR target）、Morning Star plan-writing path gate、工期预估（agent-oriented）。**必须**在读写 `.mstar/` / `.agents/`、初始化 harness、编排含 plan 的任务、或对齐 `metadata.primary_spec` 时 Read；`@project-manager` 开 plan 任务前必读。plan 文件 / status / residual / review bundle / knowledge → **`mstar-artifacts`**；分支与 QC 检出 → **`mstar-branch-worktree`**。
+description: harness 路径约定：`{HARNESS_DIR}`/`{PLAN_DIR}`/`{SDD_DIR}`/`{ITERATION_DIR}`/`{KNOWLEDGE_DIR}`/`{SPECS_DIR}`/`{REVIEW_DIR}` 等符号的发现与初始化、docs 与 harness 子树边界、Spec 分支模型。读写 `.mstar/` 或开 plan 前必读。
 ---
 
 ## Load order（必读顺序）

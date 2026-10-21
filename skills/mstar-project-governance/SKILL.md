@@ -1,6 +1,6 @@
 ---
 name: mstar-project-governance
-description: Morning Star 项目治理层：项目 roadmap 内容在 `{HARNESS_DIR}/store.db` 的权威读写、reviewed Markdown import / export、revision-guarded replace 与 legacy `roadmap.md` transport；milestone 机制（`mstar milestone`）承载结构化路线目标与 issue 关联；issue capture、迁移历史 residual register、`_default` 项目归属。写/审 roadmap 或 milestone、迭代收口更新项目目标、登记或关闭 issue、判断项目归属时 Read。CLI flags 以 `mstar roadmap --help` / `mstar milestone --help` 为准；路径符号 → `mstar-conventions`。
+description: 项目治理：roadmap 内容在 `{HARNESS_DIR}/store.db` 的权威读写（import/export、revision-guarded replace）、milestone 结构化目标与 issue 关联、issue capture、`_default` 归属。
 ---
 
 # mstar-project-governance（项目治理层：roadmap + register）

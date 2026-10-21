@@ -38,6 +38,7 @@ import {
 import type { ToolExecution, ToolExecutionToken } from '@deepseek-ai/dsh-tools'
 import type { FsTarget } from '@deepseek-ai/dsh-fs'
 import { createUserMessage } from '@deepseek-ai/dsh-llm'
+import { readEngineStatusSnapshot } from '../src/engine-status-store.ts'
 import { buildCatalogPayload, buildCatalogPayloadWithStore } from '../src/gates/catalog.ts'
 import { StatusVetoError, validateStatusValue } from '../src/gates/status.ts'
 import { bootApp, seedActiveWorkflow, seedHarness, seedKnowledgeDoc, seedOpenIssue, seedStore, v2Register, v2ResidualEntry, v2Root, v2Snapshot, v2SnapshotWithPlans, v2WorkflowEntry, type BootResult } from './harness.ts'
@@ -150,10 +151,14 @@ function ralphExec(objective = 'probe the codebase'): ToolExecution {
   return toolExec('ralph', { objective })
 }
 
-/** The pre-step payload the agent loop dispatches (a session id keys the catalog cache). */
-function stepPayload(messages: unknown[]) {
+/**
+ * The pre-step payload the agent loop dispatches: a session id keys the catalog
+ * cache, and the session cwd is the identity the emission is persisted under
+ * (`dsh_status_emissions` is addressed by `(sessionId, cwd)`).
+ */
+function stepPayload(messages: unknown[], cwd: string) {
   return {
-    agent: { session: { header: { id: 's-store-cutover' } } },
+    agent: { session: { header: { id: 's-store-cutover', cwd } } },
     messages,
     turn: 1,
     step: 1,
@@ -255,21 +260,33 @@ describe('store cutover — the authority is the store, never the retired files'
     expect(state.storeFacts?.diagnostic).toContain('projection unavailable')
   })
 
-  it('renders the DB rollup through the async pre-read (the row the model actually sees)', async () => {
+  it('renders the compact delta from the async pre-read (the row the model actually sees)', async () => {
     const { app, harnessDir } = await storeApp()
     await seedActiveWorkflow(harnessDir, 'wf-store', [], {}, 'seed-wf-store', app.root)
     await seedOpenIssue(harnessDir, { title: 'critical from the DB', severity: 'critical', operationId: 'op-c' })
 
     const inbox = [createUserMessage({ source: { kind: 'user' }, content: [{ type: 'text', text: 'hi' }] })]
-    const decision = await app.ctx.waterfall('agent/pre-step', stepPayload(inbox), async () => ({ kind: 'enter' as const, messages: inbox }))
+    const decision = await app.ctx.waterfall('agent/pre-step', stepPayload(inbox, app.root), async () => ({ kind: 'enter' as const, messages: inbox }))
     expect(decision.kind).toBe('enter')
     if (decision.kind !== 'enter') return
     const row = decision.messages[decision.messages.length - 1]!
     const text = row.content[0]?.type === 'text' ? row.content[0].text : ''
-    expect(text).toContain('residuals: critical 1')
-    // The projection disclosure rides along — the row never presents the
-    // projected views as if they were built.
-    expect(text).toContain('store: projection unavailable')
+    expect(text).toContain('workflow: wf-store (active)')
+    // The DB rollup and its projection disclosure are PAYLOAD facts: the panel
+    // renders them and the compact row does not restate either.
+    expect(text).not.toContain('residuals:')
+    expect(text).not.toContain('store: projection unavailable')
+    // The rollup the row omits is really the DB's own — witnessed on the
+    // PERSISTED emission this step wrote (the record the panel serves), not on
+    // a second payload build: a build would only prove the builder reads the
+    // store, not that the listener carried it.
+    const stored = readEngineStatusSnapshot(harnessDir, 's-store-cutover', app.root)
+    expect(stored.kind).toBe('ok')
+    if (stored.kind !== 'ok') return
+    const state = (stored.entry.payload as { state?: { residuals?: unknown; storeFacts?: { diagnostic?: string | null } } }).state
+    expect(state?.residuals).toEqual([{ severity: 'critical', count: 1 }])
+    expect(state?.storeFacts?.diagnostic).toContain('projection unavailable')
+    expect(stored.entry.turn).toBe(1)
   })
 })
 

@@ -210,6 +210,20 @@ async function competingAuthorityRoots(): Promise<{ pinned: string; cwd: string 
   return { pinned, cwd };
 }
 
+/** The folded tool one command id publishes under, and the `action` selecting it. */
+function folded(id: string): { name: string; action: string } {
+  const dot = id.indexOf(".");
+  return {
+    name: `mstar_${(dot === -1 ? id : id.slice(0, dot)).replace(/[.-]/g, "_")}`,
+    action: dot === -1 ? id : id.slice(dot + 1),
+  };
+}
+
+/** Add the folded `action` selector to one command's payload. */
+function withAction(id: string, args: Record<string, unknown> = {}): Record<string, unknown> {
+  return { action: folded(id).action, ...args };
+}
+
 /** Read one tool result back as the command envelope it carries. */
 async function toolEnvelope(client: Client, name: string, args: Record<string, unknown>): Promise<CommandEnvelope> {
   const result = await client.callTool({ name, arguments: args });
@@ -232,8 +246,8 @@ async function callWorktreeCheck(resolver: ResolveContext): Promise<CommandEnvel
     await server.connect(serverEnd);
     await client.connect(clientEnd);
     const result = await client.callTool({
-      name: "mstar_worktree_check",
-      arguments: { workflow: "wf-absent", plan: "p-absent" },
+      name: "mstar_worktree",
+      arguments: withAction("worktree.check", { workflow: "wf-absent", plan: "p-absent" }),
     });
     if (result.structuredContent !== undefined) return result.structuredContent as CommandEnvelope;
     const text = (result.content ?? []).filter((block) => block.type === "text").map((block) => block.text).join("\n");
@@ -256,7 +270,7 @@ async function callCatalogList(resolver: ResolveContext): Promise<CommandEnvelop
   try {
     await server.connect(serverEnd);
     await client.connect(clientEnd);
-    const result = await client.callTool({ name: "mstar_catalog_list", arguments: {} });
+    const result = await client.callTool({ name: "mstar_catalog", arguments: withAction("catalog.list") });
     if (result.structuredContent !== undefined) return result.structuredContent as CommandEnvelope;
     const text = (result.content ?? []).filter((block) => block.type === "text").map((block) => block.text).join("\n");
     const start = text.indexOf('{"version":1,');
@@ -310,7 +324,7 @@ async function callRawTool(resolver: ResolveContext, id: string, args: Record<st
   try {
     await server.connect(serverEnd);
     await client.connect(clientEnd);
-    return await client.callTool({ name: `mstar_${id.replace(/[.-]/g, "_")}`, arguments: args });
+    return await client.callTool({ name: folded(id).name, arguments: withAction(id, args) });
   } finally {
     await client.close();
     await server.close();
@@ -391,10 +405,10 @@ describe("MCP harness root", () => {
       // launch cwd owns a different harness, so a cwd-derived review root would
       // create its run dir there and be visible below.
       const { tools } = await client.listTools();
-      const scaffold = tools.find((entry) => entry.name === "mstar_audit_scaffold")!;
+      const scaffold = tools.find((entry) => entry.name === "mstar_audit")!;
       expect(scaffold.inputSchema.properties).not.toHaveProperty("harness");
 
-      const envelope = await toolEnvelope(client, "mstar_audit_scaffold", { findings: fixture.findings });
+      const envelope = await toolEnvelope(client, "mstar_audit", withAction("audit.scaffold", { findings: fixture.findings }));
       expect(envelope).toMatchObject({ status: "ok", code: "audit.scaffold.ok" });
       const report = envelope.data as { outDir: string; file: string };
       expect(report.outDir.startsWith(`${path.join(fixture.harness, "reviews")}${path.sep}`)).toBe(true);
@@ -409,7 +423,7 @@ describe("MCP harness root", () => {
     }
   });
 
-  test("the persist family always uses the invocation's server root and publishes no per-call harness", async () => {
+  test("the persist family always uses the invocation's server root and refuses a per-call harness", async () => {
     const fixture = await competingPersistRoots();
     const previousCwd = process.cwd();
     const previousHarness = process.env.MSTAR_HARNESS_DIR;
@@ -434,24 +448,28 @@ describe("MCP harness root", () => {
       // could relocate the store would let a client point the write/delete at
       // another harness's protected documents.
       const { tools } = await client.listTools();
-      const persist = tools.find((entry) => entry.name === "mstar_persist_get")!;
+      const persist = tools.find((entry) => entry.name === "mstar_persist")!;
       expect(persist.inputSchema.properties).not.toHaveProperty("harness");
       expect(persist.inputSchema.required ?? []).not.toContain("harness");
 
       // The connection pin (A) wins over the cwd probe (B), so the read act on
       // the pinned root's document.
-      const pinned = await toolEnvelope(client, "mstar_persist_get", { kind: "review", key: PERSIST_PROBE_KEY });
+      const pinned = await toolEnvelope(client, "mstar_persist", withAction("persist.get", { kind: "review", key: PERSIST_PROBE_KEY }));
       expect(pinned).toMatchObject({ status: "ok" });
       expect(persistOrigin(pinned)).toBe("pinned");
 
-      // A client-supplied root is not a capability: an extra `harness` field is
-      // not part of the contract and the server root still decides. The delete
-      // removes the pinned root's document and leaves the cwd's untouched.
+      // A client-supplied root is not a capability: `harness` is not part of
+      // this family's contract, so the transport REFUSES the extra field before
+      // admission rather than stripping it — the store is never reached, and
+      // neither root's document changes.
       const pinnedDocument = path.join(fixture.pinned, "sdd", "_reviews", `${PERSIST_PROBE_KEY}.json`);
       const cwdDocument = path.join(fixture.cwdRoot, "sdd", "_reviews", `${PERSIST_PROBE_KEY}.json`);
-      const deleted = await toolEnvelope(client, "mstar_persist_delete", { kind: "review", key: PERSIST_PROBE_KEY, harness: fixture.cwdRoot });
-      expect(deleted).toMatchObject({ status: "ok", data: { deleted: true } });
-      expect(existsSync(pinnedDocument)).toBe(false);
+      const refused = await toolEnvelope(client, "mstar_persist", withAction("persist.delete", { kind: "review", key: PERSIST_PROBE_KEY, harness: fixture.cwdRoot }));
+      expect(refused).toMatchObject({ status: "usage", code: "command.invalid-input" });
+      // The aggregated contract: `details.fields` is an array of every rejected
+      // key, in the order the caller supplied them.
+      expect(refused.details?.fields).toEqual(["harness"]);
+      expect(existsSync(pinnedDocument)).toBe(true);
       expect(existsSync(cwdDocument)).toBe(true);
     } finally {
       await client.close();
@@ -484,7 +502,7 @@ describe("MCP harness root", () => {
       // after admission. Normalizing blank to the pin before validation makes
       // it read the pinned root (A), whose store holds the fixture's one issue,
       // instead of the uninitialized cwd root (B).
-      const envelope = await toolEnvelope(client, "mstar_status_tech_debt", { harness: "" });
+      const envelope = await toolEnvelope(client, "mstar_status", withAction("status.tech-debt", { harness: "" }));
       expect(envelope.code).not.toBe("command.invalid-input");
       expect(envelope).toMatchObject({ status: "ok", code: "status.ok" });
       expect((envelope.data as { total_open: number }).total_open).toBe(1);
@@ -516,7 +534,7 @@ describe("MCP harness root", () => {
       // `path` is optional, so an omitted value is the implicit-root case: the
       // handler must resolve it from the invocation workspace (the pinned
       // harness's parent), never from the launch process cwd.
-      const envelope = await toolEnvelope(client, "mstar_harness_scaffold", {});
+      const envelope = await toolEnvelope(client, "mstar_harness", withAction("harness.scaffold"));
       expect(envelope).toMatchObject({ status: "ok", code: "harness.scaffold.ok" });
       const scaffolded = envelope.data as { harnessDir: string; projectDir: string; created: string[] };
       expect(path.resolve(scaffolded.harnessDir)).toBe(path.resolve(fixture.pinnedHarness));
@@ -558,7 +576,7 @@ describe("MCP harness root", () => {
       // The pin IS the harness dir and its basename is not `.mstar`. A handler
       // that re-discovers the root from the invocation workspace (the pin's
       // parent) would scaffold `<workspace>/.mstar` and report success.
-      const envelope = await toolEnvelope(client, "mstar_harness_scaffold", {});
+      const envelope = await toolEnvelope(client, "mstar_harness", withAction("harness.scaffold"));
       expect(envelope).toMatchObject({ status: "ok", code: "harness.scaffold.ok" });
       const scaffolded = envelope.data as { harnessDir: string; projectDir: string; created: string[]; skipped: string[] };
       expect(path.resolve(scaffolded.harnessDir)).toBe(path.resolve(fixture.pinned));
@@ -607,7 +625,7 @@ describe("MCP harness root", () => {
       await server.connect(serverEnd);
       await client.connect(clientEnd);
 
-      const envelope = await toolEnvelope(client, "mstar_harness_scaffold", {});
+      const envelope = await toolEnvelope(client, "mstar_harness", withAction("harness.scaffold"));
       expect(envelope).toMatchObject({ status: "ok", code: "harness.scaffold.ok" });
       const scaffolded = envelope.data as { harnessDir: string; projectDir: string };
       expect(path.resolve(scaffolded.harnessDir)).toBe(path.resolve(fixture.pinnedHarness));

@@ -1,6 +1,6 @@
 ---
 name: mstar-dispatch-gates
-description: "Morning Star dispatch gates: PM-only leaf dispatch, executor/delegation identity, anti-recursion, inherited plan paths and coordinator-reference boundary, parallel readiness/worktree isolation, SDD QC tri-review and inline single-seat exceptions. Read before PM dispatch or leaf execution; worktree and SDD procedures belong to their owning skills."
+description: "Dispatch gates: PM-only leaf dispatch, executor/delegation identity, anti-recursion, parallel readiness, SDD QC tri-review, inline single-seat exceptions. Read before dispatch or leaf execution."
 ---
 
 ## Load order（必读顺序）
