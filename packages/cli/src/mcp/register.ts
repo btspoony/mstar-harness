@@ -74,33 +74,41 @@ export type ResolveContextCall = Readonly<{
  * to be payload field names — `persist.write` keys its per-kind contracts by
  * `kind` value — so they are published by the `schema` family alone.
  *
- * `harnessRequired` is the unpinned-connection rule: with no declared root, a
- * command that names a `harness` input cannot rely on a launcher default, so
- * the field is published and admitted as REQUIRED. A model then cannot omit the
- * one fact the root resolution needs. A pinned connection keeps the field
- * optional (the pin is the default).
+ * `unpinnedRootRequired` is the unpinned-connection rule: with no declared root,
+ * a command that resolves its root from a DECLARED selector cannot rely on a
+ * launcher default, so that selector is published and admitted as REQUIRED. A
+ * model then cannot omit the one fact the root resolution needs. A pinned
+ * connection keeps the field optional (the pin is the default).
  *
- * A UNION input (the `issue.close` family of closure actions) names `harness`
- * inside each branch and cannot be rewritten into an object schema without
- * losing the branches' conditional alternatives, so its requirement is published
- * the same way but enforced at admission (`unpinnedHarnessRefusal`) — admission
- * alone would answer the union's "invalid input" without naming the field.
+ * The selector is `rootInputs`, not a field literally named `harness`: the
+ * declaration is the single authority for which inputs are root selectors
+ * (`sdd.workspace` resolves its root from `controlRoot`).
+ *
+ * A UNION input (the `issue.close` family of closure actions) names its root
+ * selector inside each branch and cannot be rewritten into an object schema
+ * without losing the branches' conditional alternatives, so its requirement is
+ * published the same way but enforced at admission (`unpinnedRootRefusal`) —
+ * admission alone would answer the union's "invalid input" without naming the
+ * field.
  */
 function mcpInputContract(
   definition: CommandDefinition,
   descriptor: CommandSchemaDescriptor,
-  options: Readonly<{ harnessRequired: boolean; harnessIsRoot: boolean; publishSelector: boolean }>,
+  options: Readonly<{ unpinnedRootRequired: boolean; rootInputs: readonly string[]; publishSelector: boolean }>,
 ) {
   const input = definition.input;
   const jsonSchema = descriptor.input as Record<string, unknown>;
   const selector = definition.cli.options.find((option) => option.context === "sessionId");
-  const harnessRequired = options.harnessRequired && options.harnessIsRoot;
+  // A command declares ONE root selector today; a command that ever declared
+  // alternatives would need an anyOf (at least one), which this rule cannot
+  // express as a flat `required` list.
+  const requiredRoots = options.unpinnedRootRequired ? options.rootInputs : [];
   if (!(input instanceof z.ZodObject)) {
-    const needsHarness = harnessRequired && inputFields(jsonSchema).has("harness");
+    const gatedRoots = requiredRoots.filter((field) => inputFields(jsonSchema).has(field));
     return {
       schema: input,
-      jsonSchema: needsHarness ? { ...jsonSchema, required: [...descriptor.required, "harness"] } : jsonSchema,
-      unpinnedHarnessGate: needsHarness,
+      jsonSchema: gatedRoots.length === 0 ? jsonSchema : { ...jsonSchema, required: [...descriptor.required, ...gatedRoots] },
+      unpinnedRootGate: gatedRoots,
     };
   }
   const properties = { ...jsonSchema.properties as Record<string, Record<string, unknown>> };
@@ -112,7 +120,7 @@ function mcpInputContract(
   }
   const extended = Object.keys(composed).length === 0 ? input : input.safeExtend(composed);
   const requiredFields = new Set(descriptor.required);
-  if (harnessRequired && Object.hasOwn(properties, "harness")) requiredFields.add("harness");
+  for (const field of requiredRoots) if (Object.hasOwn(properties, field)) requiredFields.add(field);
   const requiredShape: Record<string, z.core.$ZodType> = {};
   for (const field of requiredFields) {
     if (field === selector?.key) continue;
@@ -141,7 +149,7 @@ function mcpInputContract(
       properties,
       "x-mstar-requirements": requirements,
     },
-    unpinnedHarnessGate: false,
+    unpinnedRootGate: [],
   };
 }
 
@@ -226,27 +234,33 @@ function callRootOf(rootInputs: readonly string[], input: unknown): string | und
   return undefined;
 }
 
-/** True when the call supplied a non-blank `harness` (a blank value is not a declaration). */
-function namedHarness(input: unknown): boolean {
+/** True when the call supplied a non-blank value for one root selector (a blank value is not a declaration). */
+function namedRoot(field: string, input: unknown): boolean {
   if (input === null || typeof input !== "object" || Array.isArray(input)) return false;
-  const harness = (input as Record<string, unknown>).harness;
-  return typeof harness === "string" && harness.trim() !== "";
+  const value = (input as Record<string, unknown>)[field];
+  return typeof value === "string" && value.trim() !== "";
 }
 
 /**
- * The refusal for an omitted `harness` on a UNION input. Admission cannot make a
- * branch field required without dropping the branches' conditional alternatives,
- * and its own verdict on a union is "invalid input" — which names neither the
- * missing selector nor a recovery. The envelope and its `required` diagnostic
- * follow the shape every family uses for a mandated field, so a caller reads the
- * same cause through the same route whichever input schema the action has.
+ * The refusal for an omitted root selector on a UNION input. Admission cannot
+ * make a branch field required without dropping the branches' conditional
+ * alternatives, and its own verdict on a union is "invalid input" — which names
+ * neither the missing selector nor a recovery. The envelope and its `required`
+ * diagnostic follow the shape every family uses for a mandated field, so a
+ * caller reads the same cause through the same route whichever input schema the
+ * action has.
+ *
+ * `field` is the selector the command DECLARES (`rootInputs`), never an assumed
+ * `harness`: a command whose root selector is spelled differently must be
+ * refused — and recovered — by that name.
  *
  * Admission's own diagnostics join this one (`admission`): the missing selector
  * must not cost a second attempt to learn the fields the action also refused —
  * report-all is the contract on every route.
  */
-function unpinnedHarnessRefusal(
+function unpinnedRootRefusal(
   definition: CommandDefinition,
+  field: string,
   admission?: Extract<CommandAdmission, { success: false }>,
 ): CommandEnvelope<never> {
   const admissionDiagnostics = (admission?.envelope.details?.diagnostics ?? []) as readonly RefusalDiagnostic[];
@@ -255,13 +269,13 @@ function unpinnedHarnessRefusal(
     status: "usage",
     code: "command.invalid-input",
     exitCode: 2,
-    message: `${definition.id} needs the call's "harness" selector: this MCP connection declared no control root, and the command resolves its store root from that field`,
+    message: `${definition.id} needs the call's "${field}" selector: this MCP connection declared no control root, and the command resolves its root from that field`,
     helpRoute: `mstar schema --command ${definition.id}`,
-    recovery: "pass `harness` naming this call's harness directory (an absolute path, or one relative to the server's launch directory), or declare the root for the whole connection \u2014 `mstar mcp --harness <absolute path>`, or a non-blank MSTAR_HARNESS_DIR in the server environment \u2014 and no call needs the selector",
+    recovery: `pass \`${field}\` naming this call's root directory (an absolute path, or one relative to the server's launch directory), or declare the root for the whole connection \u2014 \`mstar mcp --harness <absolute path>\`, or a non-blank MSTAR_HARNESS_DIR in the server environment \u2014 and no call needs the selector`,
     diagnostics: [{
-      path: "harness",
+      path: field,
       code: "required",
-      message: "harness is required: this connection declared no control root",
+      message: `${field} is required: this connection declared no control root`,
       expected: "present",
       received: "undefined",
     }, ...admissionDiagnostics],
@@ -672,13 +686,17 @@ export function registerMcpCommands(
   onToolsRegistered?: (names: readonly string[]) => void,
 ): void {
   const connectionEffects = createMcpEffects(services);
-  // A connection that declared no root cannot fill a root `harness` from a
-  // launcher default, so every command whose root selector is `harness` must
-  // receive it: publishing it as required is what stops a model from forgetting
-  // the one fact the root resolution needs (and what makes admission refuse the
-  // omission). A harness that is an operation TARGET (`store.execution.*`) is
-  // not a root selector and gains no such requirement.
-  const harnessRequired = resolveContext.defaultHarness === undefined;
+  // A connection that declared no root cannot fill a root selector from a
+  // launcher default, so every command that resolves its root from one must
+  // receive it: publishing that selector as required is what stops a model from
+  // forgetting the one fact the root resolution needs (and what makes admission
+  // refuse the omission). The requirement is keyed on the DECLARED selector
+  // (`rootInputs`), not on a field named `harness` — `sdd.workspace` resolves
+  // its root from `controlRoot`, and advertising that as optional while the
+  // resolver refuses its omission is a contract bug. A `harness` that is an
+  // operation TARGET (`store.execution.*`, `rootInputs: []`) is not a root
+  // selector and gains no such requirement.
+  const unpinnedRootRequired = resolveContext.defaultHarness === undefined;
   // The launcher's explicit opt-in is the ONLY channel through which a
   // caller-declared session id becomes an execution identity. It is off unless
   // the deployment said otherwise (`mstar mcp --trust-caller-session-id`).
@@ -695,12 +713,12 @@ export function registerMcpCommands(
     const selector = definition.cli.options.find((option) => option.context === "sessionId");
     const rootInputs = rootInputsOf(definition, descriptor);
     const harnessIsRoot = rootInputs.includes("harness");
-    const contract = mcpInputContract(definition, descriptor, { harnessRequired, harnessIsRoot, publishSelector: callerIdentity });
+    const contract = mcpInputContract(definition, descriptor, { unpinnedRootRequired, rootInputs, publishSelector: callerIdentity });
     prepared.set(definition.id, { definition, descriptor, contract, harnessDefault: harnessIsRoot, rootInputs });
     return {
       definition,
       // The composed contract's `required` is the published authority: the
-      // command's own required fields plus the unpinned-connection `harness`
+      // command's own required fields plus the unpinned-connection root-selector
       // rule. The input schema's own copy predates both.
       input: { ...(descriptor.input as Readonly<Record<string, unknown>>), required: contract.jsonSchema.required },
       ...(selector === undefined || !callerIdentity ? {} : { selector: { key: selector.key } }),
@@ -766,13 +784,14 @@ export function registerMcpCommands(
           if (unpublishedSelectors.length > 0 || refusedSelectors.length > 0 || rejected.length > 0) {
             return { issues: [{ message: JSON.stringify(undeclaredInputRefusal(family, definition, refusedSelectors, rejected, admitted.success ? undefined : admitted, unpublishedSelectors)) }] };
           }
-          // A union input's `harness` requirement is published and enforced
+          // A union input's root-selector requirement is published and enforced
           // here: admission would accept the call (every branch declares the
           // field as optional so its conditional alternatives survive), and the
           // handler would then re-discover a root from the invocation workspace
           // — the silent cwd probe this rule exists to remove.
-          if (entry.contract.unpinnedHarnessGate && !namedHarness(input)) {
-            return { issues: [{ message: JSON.stringify(unpinnedHarnessRefusal(definition, admitted.success ? undefined : admitted)) }] };
+          const missingRoot = entry.contract.unpinnedRootGate.find((field) => !namedRoot(field, input));
+          if (missingRoot !== undefined) {
+            return { issues: [{ message: JSON.stringify(unpinnedRootRefusal(definition, missingRoot, admitted.success ? undefined : admitted)) }] };
           }
           return admitted.success
             ? { value: { ...admitted, definition, callRoot: callRootOf(entry.rootInputs, rootInput) } }

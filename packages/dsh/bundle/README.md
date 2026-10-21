@@ -93,7 +93,8 @@ root's parent directory, so a command that derives paths from its working
 directory (`audit.scaffold` deriving `{REVIEW_DIR}` without `--reviews-dir`, a
 relative `--dir` or findings path) lands under the harness the call uses rather
 than the launch cwd. Without a pin each call must name its own root through the
-published `harness` field, which is then REQUIRED on every tool whose root is
+root selector the command publishes (`harness`, or `controlRoot` for
+`sdd.workspace`), which is then REQUIRED on every tool whose root is
 not otherwise fixed — and a family that takes no per-call `harness` at all
 (`persist`) has no other way to name one, so it needs the pin. With neither,
 the call is refused with `[mcp.control-root-unresolved]`, naming the cause and

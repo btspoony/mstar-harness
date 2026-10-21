@@ -135,7 +135,15 @@ function activeGraphLifecycleBranches(graph: ExecutionState): ActiveLifecycleBra
   }
   return [...branches.values()];
 }
-function absolute(_cwd: string, input: string): string { return resolveCliPath(input); }
+/**
+ * The project root a path argument belongs to is discovered from the invocation
+ * WORKSPACE (`cwd`), never from this process's own directory: on a shared MCP
+ * connection the process directory is the HOST's launch checkout, so resolving
+ * there read — and linted — a repository the caller never named. The CLI passes
+ * the directory the operator ran from, so its `MSTAR_CLI_PROJECT_ROOT` /
+ * walk-up behavior is unchanged.
+ */
+function absolute(cwd: string, input: string): string { return resolveCliPath(input, cwd); }
 /** Physical path when the target exists, lexical `resolve` otherwise — a caller may name a directory that is not created yet, and a symlinked or `./`-spelled equal path must compare equal. */
 function canonicalPath(target: string): string {
   try { return realpathSync(target); } catch { return path.resolve(target); }
@@ -324,7 +332,20 @@ async function execute(id: string, input: Input, context: InvocationContext): Pr
             }],
           });
         }
-        const assignments: QcAlignmentAssignment[] = files.map((file) => {
+        // Each assignment is a FILE the caller named. On a connection that
+        // declared no workspace the invocation directory is the MCP server's
+        // LAUNCH directory (the host's checkout), so a relative path would be
+        // read from there: every named file must be absolute.
+        const unnamedFiles = launchDirectoryRefusal(id, context, {
+          fields: files.map((file, index) => ({
+            field: `files[${index}]`,
+            subject: files.length === 1 ? "the assignment file" : `assignment file #${index + 1}`,
+            value: file,
+          })),
+        });
+        if (unnamedFiles !== undefined) return unnamedFiles;
+        const assignments: QcAlignmentAssignment[] = files.map((named) => {
+          const file = absolute(context.cwd, named);
           if (!existsSync(file)) throw new Error(`assignment file not found: ${file}`);
           const text = readFileSync(file, "utf8");
           const combined = parseHeaderField(text, "Review range / Diff basis");
@@ -341,7 +362,15 @@ async function execute(id: string, input: Input, context: InvocationContext): Pr
         return gate.ok ? ok(id, { assignments, ...gateData(gate) }) : rejected(id, gate, "qc.alignment.mismatch");
       }
       case "review.seats": {
-        const file = required(input.assignmentFile, "usage: review seats <assignment-file> [--mode sdd|inline|targeted] [--reviewers <role1,role2,...>]");
+        const named = required(input.assignmentFile, "usage: review seats <assignment-file> [--mode sdd|inline|targeted] [--reviewers <role1,role2,...>]");
+        // The seat count is read FROM the caller's assignment, so a relative
+        // path on a connection that declared no workspace would count seats for
+        // the host checkout's file instead of the one the caller named.
+        const unnamedAssignment = launchDirectoryRefusal(id, context, {
+          fields: [{ field: "assignmentFile", subject: "the assignment file", value: input.assignmentFile }],
+        });
+        if (unnamedAssignment !== undefined) return unnamedAssignment;
+        const file = absolute(context.cwd, named);
         if (!existsSync(file)) throw new Error(`assignment file not found: ${file}`);
         const text = readFileSync(file, "utf8");
         const mode = input.mode ?? assignmentExecutionMode(text);

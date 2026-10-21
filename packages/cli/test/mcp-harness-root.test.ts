@@ -347,8 +347,10 @@ describe("MCP harness root", () => {
 
       // Without the flag this launch declares no root, so the resolver refuses
       // instead of adopting the host's directory — and the refusal never names
-      // the fixture root.
-      const unpinned = await callRawTool(createContextResolver(), "sdd.workspace", { planId: "plan-unpinned" });
+      // the fixture root. `status.validate` reads the root and publishes no root
+      // SELECTOR, so the refusal is the resolver's own (a command that declares
+      // one is refused at admission instead, naming the field).
+      const unpinned = await callRawTool(createContextResolver(), "status.validate", {});
       const unpinnedText = rawText(unpinned);
       expect(unpinned.isError).toBe(true);
       expect(unpinnedText).toContain("mcp.control-root-unresolved");
@@ -425,6 +427,64 @@ describe("MCP harness root", () => {
         const { tools } = await pinnedClient.listTools();
         const catalog = tools.find((entry) => entry.name === "mstar_catalog")!;
         expect(catalog.description).toContain("- list: no required fields");
+      } finally {
+        await pinnedClient.close();
+        await pinned.close();
+      }
+    } finally {
+      process.chdir(previousCwd);
+      if (previousHarness === undefined) delete process.env.MSTAR_HARNESS_DIR;
+      else process.env.MSTAR_HARNESS_DIR = previousHarness;
+    }
+  });
+
+  test("the unpinned requirement follows the DECLARED root selector, not a field named harness", async () => {
+    const fixture = await competingCwdHarness();
+    const previousCwd = process.cwd();
+    const previousHarness = process.env.MSTAR_HARNESS_DIR;
+    delete process.env.MSTAR_HARNESS_DIR;
+    process.chdir(fixture.cwd);
+    const definition = getCommandDefinitions().find((entry) => entry.id === "sdd.workspace");
+    if (definition === undefined) throw new Error("missing command: sdd.workspace");
+    try {
+      const unpinned = createMcpServer(createContextResolver(), [definition]);
+      const client = new Client({ name: "harness-root-test-client", version: "1.0.0" });
+      const [clientEnd, serverEnd] = InMemoryTransport.createLinkedPair();
+      try {
+        await unpinned.connect(serverEnd);
+        await client.connect(clientEnd);
+
+        // `sdd.workspace` resolves its root from `controlRoot`, which the
+        // contract declares in `rootInputs`. With no declared root the resolver
+        // refuses a call that omits it, so advertising it as optional would
+        // publish a call this very connection cannot answer.
+        const { tools } = await client.listTools();
+        const sdd = tools.find((entry) => entry.name === "mstar_sdd")!;
+        expect(sdd.description).toContain("- workspace: controlRoot");
+        expect(sdd.inputSchema.required ?? []).not.toContain("controlRoot");
+
+        // A model that omits it is refused BEFORE execution, and the refusal
+        // names the declared selector — not `harness`, which this command does
+        // not publish at all.
+        const omitted = await toolEnvelope(client, "mstar_sdd", withAction("sdd.workspace", { planId: "plan-required" }));
+        expect(omitted).toMatchObject({ status: "usage", code: "command.invalid-input" });
+        expect(omitted.details?.diagnostics).toContainEqual(expect.objectContaining({ path: "controlRoot", code: "invalid_type" }));
+        expect(JSON.stringify(omitted)).not.toContain('"harness"');
+      } finally {
+        await client.close();
+        await unpinned.close();
+      }
+
+      // A pinned connection keeps the selector optional: the pin IS the root.
+      const pinned = createMcpServer(createContextResolver({ harnessRoot: fixture.harness }), [definition]);
+      const pinnedClient = new Client({ name: "harness-root-test-client", version: "1.0.0" });
+      const [pinnedClientEnd, pinnedServerEnd] = InMemoryTransport.createLinkedPair();
+      try {
+        await pinned.connect(pinnedServerEnd);
+        await pinnedClient.connect(pinnedClientEnd);
+        const { tools } = await pinnedClient.listTools();
+        const sdd = tools.find((entry) => entry.name === "mstar_sdd")!;
+        expect(sdd.description).toContain("- workspace: no required fields");
       } finally {
         await pinnedClient.close();
         await pinned.close();
@@ -737,10 +797,11 @@ describe("MCP harness root", () => {
       expect(namedContext.controlRoot).toBe(fixture.harness);
       expect(namedContext.cwd).toBe(path.dirname(fixture.harness));
 
-      // A truly rootless call (no declared root, no per-call harness) refuses
-      // with the cause and every recovery. `sdd.workspace` names no `harness`
-      // input, so the refusal comes from the resolver itself.
-      const rootless = await callRawTool(createContextResolver(), "sdd.workspace", { planId: "plan-rootless" });
+      // A truly rootless call (no declared root, no per-call root selector)
+      // refuses with the cause and every recovery. `status.validate` reads the
+      // control root and publishes no root selector, so the refusal comes from
+      // the resolver itself.
+      const rootless = await callRawTool(createContextResolver(), "status.validate", {});
       const text = rawText(rootless);
       expect(rootless.isError).toBe(true);
       expect(text).toContain("mcp.control-root-unresolved");
@@ -790,7 +851,7 @@ describe("MCP harness root", () => {
       // The launch cwd is the HOST's directory and is never a root candidate:
       // the resolver refuses with the cause and the recoveries instead of
       // letting a command present it as the caller's control root.
-      const result = await callRawTool(createContextResolver(), "sdd.workspace", { planId: "plan-foreign" });
+      const result = await callRawTool(createContextResolver(), "status.validate", {});
       const text = rawText(result);
       expect(result.isError).toBe(true);
       expect(text).toContain("mcp.control-root-unresolved");
@@ -1036,14 +1097,14 @@ const LAUNCH_CWD_DEFAULT: Readonly<Record<string, null | { readonly args: Record
   "pr-review.worktree-cleanup": null,
   "qc.validate-report": { args: { reportFile: "review.md" }, subject: "the report file" },
   "report": null,
-  "review.seats": null,
+  "review.seats": { args: { assignmentFile: "assignment.md" }, subject: "the assignment file" },
   "roles.validate": { args: {}, subject: "the role corpus directory" },
   "schema": null,
   "skill.lint": null,
   "store.execution.export": null,
   "store.execution.restore": null,
   "store.execution.restore-preview": null,
-  "worktree.qc-alignment": null,
+  "worktree.qc-alignment": { args: { files: ["assignment.md"] }, subject: "the assignment file" },
 };
 
 /**
@@ -1398,7 +1459,7 @@ describe("MCP control-root admission class", () => {
 
       // The class is an admission rule, not a bypass: a command that reads the
       // root keeps its named refusal.
-      const rooted = await callRawTool(createContextResolver(), "sdd.workspace", { planId: "plan-class" });
+      const rooted = await callRawTool(createContextResolver(), "status.validate", {});
       expect(rooted.isError).toBe(true);
       expect(rawText(rooted)).toContain("mcp.control-root-unresolved");
     } finally {
@@ -1415,11 +1476,11 @@ describe("MCP control-root admission class", () => {
     delete process.env.MSTAR_HARNESS_DIR;
     process.chdir(fixture.cwd);
     try {
-      const refused = await callRawTool(createContextResolver(), "sdd.workspace", { planId: "plan-recovery-text" });
+      const refused = await callRawTool(createContextResolver(), "status.validate", {});
       const text = rawText(refused);
       expect(text).toContain("--harness");
       expect(text).toContain("MSTAR_HARNESS_DIR");
-      // `sdd.workspace` publishes no `harness` field, so offering the per-call
+      // `status.validate` publishes no `harness` field, so offering the per-call
       // selector as the recovery would offer a call this very command refuses.
       expect(text).toContain("only a command that publishes a `harness` input accepts one");
     } finally {
