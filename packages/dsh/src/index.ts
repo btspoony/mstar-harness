@@ -812,8 +812,9 @@ export function apply(ctx: Context, config: Config): void {
   // Leaf-seat tool boundary — the folded MCP surface's coordinator actions
   // (`plan.bind`, `plan.complete`, `session.recover`) refused for a known leaf
   // seat before the MCP client child executes, on every connection INCLUDING
-  // the profile-wide generic `mstar-mcp` row (which carries no identity and no
-  // `--seat`, so the scoped mount's server-side restriction never covered it).
+  // the profile-wide generic `mstar-mcp` row: that row is launched from the
+  // bundle patch and carries no `--seat`, so the server-side restriction cannot
+  // cover it and this host boundary is what refuses the seat.
   // Same refusal channel and prepend reachability argument as the gate above.
   ctx.on('tools/pre-execute', (exec, next) => leafSeatToolListener(exec, next), { prepend: true })
 
@@ -923,6 +924,7 @@ export function apply(ctx: Context, config: Config): void {
   // the module: `mstar_plan_bind` (producer of the dsh durable execution
   // binding + its adoption receipt, which the MCP bind cannot write),
   // `mstar_audit_validate` (no MCP twin) and `mstar_execution_clear` (no
-  // shared command). Every other command is the scoped MCP mount's action.
+  // shared command). Every other command is an action of the shared MCP
+  // connection.
   registerNativeCommandTools(ctx, resolver)
 }

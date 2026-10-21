@@ -109,8 +109,9 @@ function callerSessionIdOf(exec: ToolExecution): string {
 }
 
 /**
- * The session header the leaf-seat contract reads — the same agent shape the
- * scoped MCP mount consumes (`agent.session.header`).
+ * The session header the leaf-seat contract reads — the agent shape the host
+ * exposes on every tool execution (`agent.session.header`), never a
+ * model-supplied argument.
  */
 function sessionHeaderOf(exec: ToolExecution): unknown {
   return (exec.agent as { session?: { header?: unknown } } | null | undefined)?.session?.header

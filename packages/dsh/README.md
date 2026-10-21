@@ -250,13 +250,13 @@ The bundle patch inserts ONE `mstar-mcp` row, and that row is the whole MCP chan
 **The control root is DECLARED, never inferred.** It resolves in one ordered rule, and the launch cwd is never a candidate — that directory is the HOST's, it says nothing about which workspace a caller belongs to, and adopting it would root writes on an unrelated project:
 
 1. the connection pin — `mstar mcp --harness <absolute path>`, else a non-blank `MSTAR_HARNESS_DIR` in the server environment;
-2. otherwise the root the admitted CALL names through the tool's `harness` field;
-3. `harness.scaffold` alone runs with a null root — establishing one is its own operation;
-4. otherwise the call is refused with `[mcp.control-root-unresolved]`, naming the cause and all three recoveries.
+2. otherwise the root the admitted CALL names through the tool's `harness` field (an absolute path, or one relative to the server's launch directory);
+3. a null root for the commands whose contract reads none — `harness.scaffold` (establishing a root is its own operation) and the root-free class (`schema`, `path.resolve`, `host.*`, `doctor`, and the read-only validators such as `lint` / `skill.lint` / `qc.validate-report`), which only answer from explicit inputs and therefore never resolve an implicit harness path;
+4. otherwise the call is refused with `[mcp.control-root-unresolved]`, naming the cause and every recovery — the two launcher recoveries apply to every command, while the per-call `harness` selector is tool-dependent (a command that does not publish the field cannot accept it).
 
 A pin beats a per-call `harness`, so a caller can never root a call on a workspace the launcher did not declare; the root the call actually used also anchors the invocation workspace at its parent directory, so cwd-derived paths land under that harness rather than the launch cwd. On an **unpinned** connection the published `harness` field is **REQUIRED** on every tool whose root is not otherwise fixed, so a model cannot omit the one fact the resolution needs.
 
-**No connection identity.** The shared connection carries none, and the MCP-only identity wiring is gone: no `--identity-env`, no declared-identity lock, no selector stripping and no connection-wide default session id. A `sessionId` on the wire is exactly what the caller passed. Operations that NEED a session identity are the three dsh-native tools listed above, where identity is `exec.agent.id` — a host fact, never a model-supplied field.
+**No connection identity.** The shared connection carries none, and the MCP-only identity wiring is gone: no `--identity-env`, no declared-identity lock, no selector stripping and no connection-wide default session id. A `sessionId` on the wire is exactly what the caller passed, and a command that needs one takes that per-call selector. The host-proven route for the operations that need a session identity is the three dsh-native tools listed above, where identity is `exec.agent.id` — a host fact, never a model-supplied field.
 
 ## Engine seam mapping
 

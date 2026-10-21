@@ -1,9 +1,11 @@
+import { resolve } from "node:path";
 import type { McpServer, StandardSchemaWithJSON } from "@modelcontextprotocol/server";
 import { admitCommandInput, getCommandSchemas, isPayloadPlaceholder, refusalEnvelope, sanitizeInputScalar } from "@mstar-harness/commands";
 import { z } from "zod";
 import type { CommandAdmission, CommandDefinition, CommandEnvelope, CommandSchemaDescriptor, InvocationContext, RefusalDiagnostic } from "@mstar-harness/commands";
 import { createMcpEffects, type McpEffects } from "./effects.js";
 import { actionOf, definitionForAction, foldFamilyTools, type FoldedFamilyTool } from "./fold.js";
+import { inputFields } from "../schema-branches.js";
 import { surfaceAssignmentRecovery } from "../command-adapter.js";
 import { validateCommandOutcome } from "./outcome.js";
 /**
@@ -68,11 +70,24 @@ export type ResolveContextCall = Readonly<{
  * the field is published and admitted as REQUIRED. A model then cannot omit the
  * one fact the root resolution needs. A pinned connection keeps the field
  * optional (the pin is the default).
+ *
+ * A UNION input (the `issue.close` family of closure actions) names `harness`
+ * inside each branch and cannot be rewritten into an object schema without
+ * losing the branches' conditional alternatives, so its requirement is published
+ * the same way but enforced at admission (`unpinnedHarnessRefusal`) — admission
+ * alone would answer the union's "invalid input" without naming the field.
  */
 function mcpInputContract(definition: CommandDefinition, descriptor: CommandSchemaDescriptor, harnessRequired: boolean) {
   const input = definition.input;
   const jsonSchema = descriptor.input as Record<string, unknown>;
-  if (!(input instanceof z.ZodObject)) return { schema: input, jsonSchema };
+  if (!(input instanceof z.ZodObject)) {
+    const needsHarness = harnessRequired && inputFields(jsonSchema).has("harness");
+    return {
+      schema: input,
+      jsonSchema: needsHarness ? { ...jsonSchema, required: [...descriptor.required, "harness"] } : jsonSchema,
+      unpinnedHarnessGate: needsHarness,
+    };
+  }
   const properties = { ...jsonSchema.properties as Record<string, Record<string, unknown>> };
   const composed: Record<string, z.core.$ZodType> = {};
   for (const [field, payload] of Object.entries(definition.payloads ?? {})) {
@@ -112,21 +127,25 @@ function mcpInputContract(definition: CommandDefinition, descriptor: CommandSche
       properties,
       "x-mstar-requirements": requirements,
     },
+    unpinnedHarnessGate: false,
   };
 }
 
 /**
  * A launcher-pinned root is only a default for a field the tool publishes: an
  * unset `input.harness` is filled from `defaultHarness` when the tool's declared
- * input schema advertises `harness`, and an explicit per-call value is never
- * overridden. A blank or whitespace-only value is not an override: the engine's
- * own root resolution treats it as absent, so treating it as explicit here
- * would silently fall back to the cwd probe. A tool that names no such field
- * receives nothing.
+ * input schema advertises `harness`, and a caller's per-call value is OVERWRITTEN
+ * by the pin — a connection pin is the launcher's declaration for every call, so
+ * a caller can never re-root a command whose handler resolves its own root from
+ * `input.harness`. A tool that names no such field receives nothing.
+ *
+ * The field list is read through `inputFields` so a UNION input (the closure
+ * actions) is classified by the branches' `harness`, exactly like an object
+ * input: reading only `properties` would leave those actions with no pin, and
+ * their handler would then re-discover a root from the invocation workspace.
  */
 function declaresHarness(contract: { jsonSchema: Record<string, unknown> }): boolean {
-  const properties = contract.jsonSchema.properties;
-  return properties !== null && typeof properties === "object" && Object.hasOwn(properties, "harness");
+  return inputFields(contract.jsonSchema).has("harness");
 }
 
 function handlerInput(definition: CommandDefinition, input: unknown, defaultHarness: string | undefined): unknown {
@@ -135,26 +154,70 @@ function handlerInput(definition: CommandDefinition, input: unknown, defaultHarn
   const contextKeys = definition.cli.options.filter((option) => option.context === "sessionId").map((option) => option.key);
   const normalized = { ...record };
   for (const key of contextKeys) delete normalized[key];
-  const explicit = typeof normalized.harness === "string" && normalized.harness.trim() !== "";
-  if (defaultHarness !== undefined && !explicit) normalized.harness = defaultHarness;
+  if (defaultHarness !== undefined) normalized.harness = defaultHarness;
   return normalized;
 }
 
 /**
- * Normalize a blank `harness` BEFORE the tool schema runs. `handlerInput` fills
- * an absent value after admission has already parsed the input, so a `min(1)`
- * harness schema would refuse `""` as a usage error while a bare optional-string
- * schema would accept it — the same call judged differently by two families
- * that resolve the same root. Writing the pinned default over a blank value at
- * the earliest seam makes both uniform, and an explicit non-blank value is
- * untouched. The caller's object is never mutated: a shallow copy carries the
- * normalized field.
+ * Normalize the `harness` selector BEFORE the tool schema runs. Two rules:
+ *
+ * - the connection pin WINS. The resolver already pins `controlRoot`, but a
+ *   command that resolves its own root from `input.harness` would still read the
+ *   caller's value, so the admitted field is overwritten with the pin. This is
+ *   also what lets a `min(1)` harness schema accept a blank value the caller
+ *   sent: writing the pin over it at the earliest seam makes every family judge
+ *   that call the same way.
+ * - a per-call value is resolved to an ABSOLUTE path. The invocation workspace
+ *   is anchored at the root's parent, so a relative value would be re-resolved
+ *   against that anchor by the handler and double-join the path (`x/.mstar`
+ *   under an `x` anchor became `<anchor>/x/x/.mstar`). The launch directory is
+ *   the only base a per-call selector can be relative to.
+ *
+ * A caller's object is never mutated: a shallow copy carries the normalized
+ * field, and an object with no `harness` key is returned untouched (injecting
+ * the field would advertise a capability the tool does not publish).
  */
-function normalizedBlankHarness(input: unknown, defaultHarness: string | undefined): unknown {
-  if (defaultHarness === undefined || input === null || typeof input !== "object" || Array.isArray(input)) return input;
+function normalizedHarness(input: unknown, defaultHarness: string | undefined): unknown {
+  if (input === null || typeof input !== "object" || Array.isArray(input)) return input;
   const record = input as Record<string, unknown>;
-  if (typeof record.harness !== "string" || record.harness.trim() !== "") return input;
-  return { ...record, harness: defaultHarness };
+  if (!Object.hasOwn(record, "harness")) return input;
+  const target = defaultHarness ?? (typeof record.harness === "string" && record.harness.trim() !== "" ? resolve(record.harness) : undefined);
+  if (target === undefined || record.harness === target) return input;
+  return { ...record, harness: target };
+}
+
+/** True when the call supplied a non-blank `harness` (a blank value is not a declaration). */
+function namedHarness(input: unknown): boolean {
+  if (input === null || typeof input !== "object" || Array.isArray(input)) return false;
+  const harness = (input as Record<string, unknown>).harness;
+  return typeof harness === "string" && harness.trim() !== "";
+}
+
+/**
+ * The refusal for an omitted `harness` on a UNION input. Admission cannot make a
+ * branch field required without dropping the branches' conditional alternatives,
+ * and its own verdict on a union is "invalid input" — which names neither the
+ * missing selector nor a recovery. The envelope and its `required` diagnostic
+ * follow the shape every family uses for a mandated field, so a caller reads the
+ * same cause through the same route whichever input schema the action has.
+ */
+function unpinnedHarnessRefusal(definition: CommandDefinition): CommandEnvelope<never> {
+  return refusalEnvelope({
+    command: definition.id,
+    status: "usage",
+    code: "command.invalid-input",
+    exitCode: 2,
+    message: `${definition.id} needs the call's "harness" selector: this MCP connection declared no control root, and the command resolves its store root from that field`,
+    helpRoute: `mstar schema --command ${definition.id}`,
+    recovery: "pass `harness` naming this call's harness directory (an absolute path, or one relative to the server's launch directory), or declare the root for the whole connection — `mstar mcp --harness <absolute path>`, or a non-blank MSTAR_HARNESS_DIR in the server environment — and no call needs the selector",
+    diagnostics: [{
+      path: "harness",
+      code: "required",
+      message: "harness is required: this connection declared no control root",
+      expected: "present",
+      received: "undefined",
+    }],
+  });
 }
 
 /**
@@ -524,13 +587,21 @@ export function registerMcpCommands(
           const defaultHarness = entry.harnessDefault ? resolveContext.defaultHarness : undefined;
           const admitted = admitCommandInput(
             definition,
-            normalizedBlankHarness(strippedActionInput(withoutFields(input, [...refusedSelectors.map((selector) => selector.key), ...rejected])), defaultHarness),
+            normalizedHarness(strippedActionInput(withoutFields(input, [...refusedSelectors.map((selector) => selector.key), ...rejected])), defaultHarness),
             entry.descriptor,
             entry.contract.schema,
             (data) => handlerInput(definition, data, defaultHarness),
           );
           if (refusedSelectors.length > 0 || rejected.length > 0) {
             return { issues: [{ message: JSON.stringify(undeclaredInputRefusal(family, definition, refusedSelectors, rejected, admitted.success ? undefined : admitted)) }] };
+          }
+          // A union input's `harness` requirement is published and enforced
+          // here: admission would accept the call (every branch declares the
+          // field as optional so its conditional alternatives survive), and the
+          // handler would then re-discover a root from the invocation workspace
+          // — the silent cwd probe this rule exists to remove.
+          if (entry.contract.unpinnedHarnessGate && !namedHarness(input)) {
+            return { issues: [{ message: JSON.stringify(unpinnedHarnessRefusal(definition)) }] };
           }
           return admitted.success ? { value: { ...admitted, definition } } : { issues: [{ message: JSON.stringify(admitted.envelope) }] };
         },

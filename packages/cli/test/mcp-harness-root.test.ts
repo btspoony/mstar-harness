@@ -1,18 +1,18 @@
 import { afterEach, describe, expect, test } from "bun:test";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { Command } from "commander";
 import { Client, InMemoryTransport } from "@modelcontextprotocol/client";
 import { McpServer } from "@modelcontextprotocol/server";
 import { captureIssue, initializeStore } from "@mstar-harness/engine";
-import { getCommandDefinitions, type CommandEnvelope } from "@mstar-harness/commands";
+import { getCommandDefinitions, getCommandSchemas, type CommandEnvelope } from "@mstar-harness/commands";
 import { mapParserError } from "../src/command-adapter";
 import { registerMcpCommand } from "../src/mcp/command";
 import { registerMcpCommands, type ResolveContext } from "../src/mcp/register";
 import { createMcpServer } from "../src/mcp/server";
 import { createMcpEffects } from "../src/mcp/effects";
-import { createContextResolver } from "../src/mcp/stdio";
+import { createContextResolver, McpControlRootError } from "../src/mcp/stdio";
 
 const roots: string[] = [];
 afterEach(() => { for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true }); });
@@ -832,6 +832,339 @@ describe("MCP harness root", () => {
       expect(existsSync(scaffolded.harnessDir)).toBe(true);
     } finally {
       process.chdir(previousCwd);
+      if (previousHarness === undefined) delete process.env.MSTAR_HARNESS_DIR;
+      else process.env.MSTAR_HARNESS_DIR = previousHarness;
+    }
+  });
+});
+
+/**
+ * Two initialized roots a status read tells apart: the pinned root holds one
+ * captured issue, the other holds none. Both are complete stores, so only root
+ * SELECTION decides which one answers.
+ */
+async function competingPinnedRoots(): Promise<{ pinned: string; other: string }> {
+  const root = mkdtempSync(path.join(os.tmpdir(), "mcp-harness-root-"));
+  roots.push(root);
+  const pinned = path.join(root, "pinned", ".mstar");
+  const other = path.join(root, "other", ".mstar");
+  mkdirSync(pinned, { recursive: true });
+  mkdirSync(other, { recursive: true });
+  (await initializeStore({ harnessDir: pinned })).close();
+  (await initializeStore({ harnessDir: other })).close();
+  await captureIssue({ harnessDir: pinned }, { ...CAPTURE_INPUT }, { operationId: "mcp-harness-root-pin-vs-call", actor: "project-manager" });
+  return { pinned, other };
+}
+
+/**
+ * A workspace whose harness sits at the MULTI-SEGMENT relative path `x/.mstar`:
+ * the selector the cwd-anchoring regression double-joined, because the resolver
+ * anchored the invocation workspace at `x` and the handler then resolved
+ * `x/.mstar` again against that anchor.
+ */
+async function relativeRootWorkspace(): Promise<{ base: string; harness: string; selector: string }> {
+  const base = mkdtempSync(path.join(os.tmpdir(), "mcp-harness-root-"));
+  roots.push(base);
+  const harness = path.join(base, "x", ".mstar");
+  mkdirSync(harness, { recursive: true });
+  (await initializeStore({ harnessDir: harness })).close();
+  await captureIssue({ harnessDir: harness }, { ...CAPTURE_INPUT }, { operationId: "mcp-harness-root-relative", actor: "project-manager" });
+  return { base, harness, selector: path.join("x", ".mstar") };
+}
+
+/**
+ * The complete control-root admission class of the published catalog, as an
+ * unpinned connection decides it: `none` runs with a null control root because
+ * the command's contract reads none, `root` refuses with
+ * `mcp.control-root-unresolved`.
+ *
+ * This snapshot is the drift guard. Neither failure mode is loud on its own — an
+ * unclassified root-free command is simply refused (the discovery and validation
+ * surface disappears from a shared connection), and an unclassified root
+ * CONSUMER would be silently given a null root and resolve its implicit paths
+ * from the host's launch directory. A command added anywhere therefore fails the
+ * classification test below until its author decides, in the same change, which
+ * class it belongs to and records it here.
+ */
+const CONTROL_ROOT_CLASS: Readonly<Record<string, "root" | "none">> = {
+  "audit.scaffold": "root", "audit.secret-scan": "none", "audit.supply-chain": "none",
+  "catalog.discover": "root", "catalog.export": "root", "catalog.import": "root",
+  "catalog.link": "root", "catalog.list": "root", "catalog.purge-registration": "root",
+  "catalog.reconcile": "root", "catalog.register": "root", "catalog.show": "root",
+  "catalog.update": "root", "compound.validate": "root", "dashboard": "root",
+  "design-md.validate": "none", "dispatch.validate": "none", "doctor": "none",
+  "harness.scaffold": "none", "host.detect": "none", "host.skill-root": "none",
+  "issue.add": "root", "issue.close": "root", "issue.duplicate": "root",
+  "issue.export": "root", "issue.link": "root", "issue.list": "root",
+  "issue.occurrence": "root", "issue.reopen": "root", "issue.show": "root",
+  "issue.supersede": "root", "issue.triage": "root", "issue.waive": "root",
+  "iteration.gate": "root", "iteration.push-cadence": "none", "iteration.register": "root",
+  "lint": "none", "migrate": "root", "milestone.add": "root",
+  "milestone.assign": "root", "milestone.list": "root", "milestone.status": "root",
+  "milestone.update": "root", "path.resolve": "none", "persist.delete": "root",
+  "persist.get": "root", "persist.list": "root", "persist.write": "root",
+  "plan.bind": "root", "plan.complete": "root", "plan.issue-add": "root",
+  "plan.issue-close": "root", "plan.prepare": "root", "plan.progress": "root",
+  "plan.show": "root", "plugin.validate": "none", "pr-review.budget": "none",
+  "pr-review.post": "none", "pr-review.report-path": "root", "pr-review.seat-prompt": "none",
+  "pr-review.size": "none", "pr-review.tally": "none", "pr-review.validate-report": "none",
+  "pr-review.worktree-cleanup": "none", "pr-review.worktree-setup": "none", "qc.validate-report": "none",
+  "report": "none", "review.seats": "none", "roadmap.export": "root",
+  "roadmap.import": "root", "roadmap.replace": "root", "roadmap.show": "root",
+  "roles.validate": "none", "schema": "none", "sdd.check-context": "root",
+  "sdd.evidence.capture": "root", "sdd.evidence.verify": "root", "sdd.exec": "root",
+  "sdd.review-package": "root", "sdd.task-brief": "root", "sdd.workspace": "root",
+  "session.recover": "root", "session.run": "root", "skill.lint": "none",
+  "status.archive-residuals": "root", "status.backlog-close": "root", "status.backlog-register": "root",
+  "status.findings-cleanup": "root", "status.tech-debt": "root", "status.validate": "root",
+  "status.workflow-close": "root", "store.activate": "root", "store.backup": "root",
+  "store.execution.export": "root", "store.execution.restore": "root", "store.execution.restore-preview": "root",
+  "store.init": "root", "store.migrate": "root", "store.retire": "root",
+  "store.upgrade": "root", "workflow-note.append": "root", "workflow-note.coverage": "root",
+  "workflow.adopt-terminal": "root", "workflow.delivery-anchors": "root", "workflow.evidence": "root",
+  "workflow.execution-policy": "root", "workflow.integration-worktree": "root", "workflow.lifecycle": "root",
+  "workflow.phase": "root", "workflow.register": "root", "worktree.check": "root",
+  "worktree.cleanup": "root", "worktree.qc-alignment": "none",
+};
+
+/** The class an unpinned resolver actually gives one definition (throws for `root`). */
+function admitOnUnpinnedConnection(id: string): "root" | "none" {
+  const definition = getCommandDefinitions().find((entry) => entry.id === id);
+  if (definition === undefined) throw new Error(`missing command: ${id}`);
+  try {
+    const context = createContextResolver()(definition, undefined, new AbortController().signal, [], createMcpEffects([])) as
+      | { controlRoot: string | null }
+      | Promise<{ controlRoot: string | null }>;
+    if (context instanceof Promise) throw new Error(`${id}: the default resolver must resolve synchronously`);
+    return context.controlRoot === null ? "none" : "root";
+  } catch (error) {
+    if (error instanceof McpControlRootError) return "root";
+    throw error;
+  }
+}
+
+describe("MCP control-root admission class", () => {
+  test("every published command is classified, and the resolver decides exactly that class", () => {
+    const definitions = getCommandDefinitions();
+    expect(definitions.map((entry) => entry.id).sort()).toEqual(Object.keys(CONTROL_ROOT_CLASS).sort());
+    for (const definition of definitions) {
+      expect([definition.id, admitOnUnpinnedConnection(definition.id)]).toEqual([definition.id, CONTROL_ROOT_CLASS[definition.id]!]);
+    }
+  });
+
+  test("a root-free command declares no harness selector of its own", () => {
+    for (const [id, admitted] of Object.entries(CONTROL_ROOT_CLASS)) {
+      if (admitted !== "none") continue;
+      const definition = getCommandDefinitions().find((entry) => entry.id === id)!;
+      const descriptor = getCommandSchemas([definition])[0]!;
+      const properties = descriptor.input !== null && typeof descriptor.input === "object"
+        ? (descriptor.input as { properties?: Record<string, unknown> }).properties ?? {}
+        : {};
+      // The class exists because a null root is a complete answer. A command
+      // that named a root selector would contradict that, and the contradiction
+      // is what makes this set wrong rather than incomplete.
+      expect([id, Object.hasOwn(properties, "harness"), definition.cli.options.some((option) => option.key === "harness")])
+        .toEqual([id, false, false]);
+    }
+  });
+
+  test("an unpinned connection runs a root-free tool instead of refusing it, and still refuses a root consumer", async () => {
+    const fixture = await plainForeignCwd();
+    const previousCwd = process.cwd();
+    const previousHarness = process.env.MSTAR_HARNESS_DIR;
+    delete process.env.MSTAR_HARNESS_DIR;
+    process.chdir(fixture.cwd);
+    try {
+      // `schema` is the discovery tool every refusal points a caller at, and it
+      // reads no control root: it must answer on the same unpinned connection
+      // that refused the call, or the advertised recovery is itself refused.
+      const discovery = await callRawTool(createContextResolver(), "schema", { command: "lint" });
+      expect(discovery.isError).toBe(false);
+      expect(discovery.structuredContent).toMatchObject({ status: "ok", code: "schema.ok" });
+
+      // The class is an admission rule, not a bypass: a command that reads the
+      // root keeps its named refusal.
+      const rooted = await callRawTool(createContextResolver(), "sdd.workspace", { planId: "plan-class" });
+      expect(rooted.isError).toBe(true);
+      expect(rawText(rooted)).toContain("mcp.control-root-unresolved");
+    } finally {
+      process.chdir(previousCwd);
+      if (previousHarness === undefined) delete process.env.MSTAR_HARNESS_DIR;
+      else process.env.MSTAR_HARNESS_DIR = previousHarness;
+    }
+  });
+
+  test("the refusal names the launcher recoveries as universal and the per-call one as tool-dependent", async () => {
+    const fixture = await plainForeignCwd();
+    const previousCwd = process.cwd();
+    const previousHarness = process.env.MSTAR_HARNESS_DIR;
+    delete process.env.MSTAR_HARNESS_DIR;
+    process.chdir(fixture.cwd);
+    try {
+      const refused = await callRawTool(createContextResolver(), "sdd.workspace", { planId: "plan-recovery-text" });
+      const text = rawText(refused);
+      expect(text).toContain("--harness");
+      expect(text).toContain("MSTAR_HARNESS_DIR");
+      // `sdd.workspace` publishes no `harness` field, so offering the per-call
+      // selector as the recovery would offer a call this very command refuses.
+      expect(text).toContain("only a command that publishes a `harness` input accepts one");
+    } finally {
+      process.chdir(previousCwd);
+      if (previousHarness === undefined) delete process.env.MSTAR_HARNESS_DIR;
+      else process.env.MSTAR_HARNESS_DIR = previousHarness;
+    }
+  });
+
+  test("a connection pin overwrites a per-call harness on a real tool call", async () => {
+    const fixture = await competingPinnedRoots();
+    const previousHarness = process.env.MSTAR_HARNESS_DIR;
+    delete process.env.MSTAR_HARNESS_DIR;
+    try {
+      // `status.tech-debt` resolves its own root from `input.harness`. The call
+      // names the OTHER initialized root, which holds no issue, so a handler that
+      // trusted the caller's value answers 0. The pin must win at the admitted
+      // field, not only at the resolver: the one pinned issue is the answer.
+      const result = await callRawTool(createContextResolver({ harnessRoot: fixture.pinned }), "status.tech-debt", { harness: fixture.other });
+      expect(result.isError).toBe(false);
+      const envelope = result.structuredContent as CommandEnvelope;
+      expect(envelope).toMatchObject({ status: "ok", code: "status.ok" });
+      expect((envelope.data as { total_open: number }).total_open).toBe(1);
+
+      // The same selector on an unpinned connection DOES root the call: the pin
+      // is what overrides, never the field's presence.
+      const unpinned = await callRawTool(createContextResolver(), "status.tech-debt", { harness: fixture.other });
+      expect((unpinned.structuredContent as CommandEnvelope).data as { total_open: number }).toMatchObject({ total_open: 0 });
+    } finally {
+      if (previousHarness === undefined) delete process.env.MSTAR_HARNESS_DIR;
+      else process.env.MSTAR_HARNESS_DIR = previousHarness;
+    }
+  });
+
+  test("MSTAR_HARNESS_DIR wins over a per-call harness on one connection", async () => {
+    const fixture = await competingPinnedRoots();
+    const previousHarness = process.env.MSTAR_HARNESS_DIR;
+    process.env.MSTAR_HARNESS_DIR = fixture.pinned;
+    try {
+      // Both rungs are declarations; the environment one belongs to the
+      // LAUNCHER, so a caller naming another root must not re-root the call —
+      // this is the #557 precedence bug in its environment form, and swapping
+      // the rungs keeps every other suite green.
+      const result = await callRawTool(createContextResolver(), "status.tech-debt", { harness: fixture.other });
+      const envelope = result.structuredContent as CommandEnvelope;
+      expect(envelope).toMatchObject({ status: "ok", code: "status.ok" });
+      expect((envelope.data as { total_open: number }).total_open).toBe(1);
+    } finally {
+      if (previousHarness === undefined) delete process.env.MSTAR_HARNESS_DIR;
+      else process.env.MSTAR_HARNESS_DIR = previousHarness;
+    }
+  });
+
+  test("a relative MSTAR_HARNESS_DIR resolves against the launch directory", async () => {
+    const fixture = await relativeRootWorkspace();
+    const previousCwd = process.cwd();
+    const previousHarness = process.env.MSTAR_HARNESS_DIR;
+    process.chdir(fixture.base);
+    process.env.MSTAR_HARNESS_DIR = fixture.selector;
+    try {
+      const definition = getCommandDefinitions().find((entry) => entry.id === "schema")!;
+      const context = createContextResolver()(definition, undefined, new AbortController().signal, [], createMcpEffects([])) as { controlRoot: string | null };
+      // The environment form has no CLI boundary to refuse a relative value, so
+      // it means "relative to the server's launch directory" — resolved once, so
+      // the workspace anchor below is absolute too. (`process.cwd()` is the
+      // platform realpath, so the expectation is too.)
+      expect(context.controlRoot).toBe(realpathSync(fixture.harness));
+    } finally {
+      process.chdir(previousCwd);
+      if (previousHarness === undefined) delete process.env.MSTAR_HARNESS_DIR;
+      else process.env.MSTAR_HARNESS_DIR = previousHarness;
+    }
+  });
+
+  test("an unpinned connection refuses a root consumer even when the launch cwd owns a harness", async () => {
+    const fixture = await competingReviewRoots();
+    const previousCwd = process.cwd();
+    const previousHarness = process.env.MSTAR_HARNESS_DIR;
+    delete process.env.MSTAR_HARNESS_DIR;
+    process.chdir(fixture.launch);
+    try {
+      // `audit.scaffold` publishes no `harness` field and derives `{REVIEW_DIR}`
+      // from the invocation workspace: a cwd probe would root it on the LAUNCH
+      // workspace's own harness and write a review run there.
+      const refused = await callRawTool(createContextResolver(), "audit.scaffold", { findings: fixture.findings });
+      expect(refused.isError).toBe(true);
+      expect(rawText(refused)).toContain("mcp.control-root-unresolved");
+      expect(readdirSync(fixture.launchHarness)).toEqual([]);
+      expect(existsSync(path.join(fixture.launchHarness, "store.db"))).toBe(false);
+    } finally {
+      process.chdir(previousCwd);
+      if (previousHarness === undefined) delete process.env.MSTAR_HARNESS_DIR;
+      else process.env.MSTAR_HARNESS_DIR = previousHarness;
+    }
+  });
+
+  test("a relative per-call harness resolves once, against the launch directory", async () => {
+    const fixture = await relativeRootWorkspace();
+    const previousCwd = process.cwd();
+    const previousHarness = process.env.MSTAR_HARNESS_DIR;
+    delete process.env.MSTAR_HARNESS_DIR;
+    process.chdir(fixture.base);
+    try {
+      const definition = getCommandDefinitions().find((entry) => entry.id === "status.tech-debt")!;
+      const context = createContextResolver()(definition, undefined, new AbortController().signal, [], createMcpEffects([]), { harness: fixture.selector }) as {
+        controlRoot: string | null;
+        cwd: string;
+      };
+      // The workspace anchor is the root's parent, and the root is absolute: the
+      // handler re-resolves the same selector against that anchor, so a relative
+      // control root would double-join into `<base>/x/x/.mstar`. (`process.cwd()`
+      // is the platform realpath, so the expectation is too.)
+      expect(context.controlRoot).toBe(realpathSync(fixture.harness));
+      expect(context.cwd).toBe(path.dirname(realpathSync(fixture.harness)));
+
+      const result = await callRawTool(createContextResolver(), "status.tech-debt", { harness: fixture.selector });
+      const envelope = result.structuredContent as CommandEnvelope;
+      expect(envelope).toMatchObject({ status: "ok", code: "status.ok" });
+      expect((envelope.data as { total_open: number }).total_open).toBe(1);
+    } finally {
+      process.chdir(previousCwd);
+      if (previousHarness === undefined) delete process.env.MSTAR_HARNESS_DIR;
+      else process.env.MSTAR_HARNESS_DIR = previousHarness;
+    }
+  });
+
+  test("a union-input command publishes and admits harness as required when unpinned", async () => {
+    const fixture = await competingPinnedRoots();
+    const previousHarness = process.env.MSTAR_HARNESS_DIR;
+    delete process.env.MSTAR_HARNESS_DIR;
+    const definition = getCommandDefinitions().find((entry) => entry.id === "issue.close");
+    if (definition === undefined) throw new Error("missing command: issue.close");
+    const server = createMcpServer(createContextResolver(), [definition]);
+    const client = new Client({ name: "harness-root-test-client", version: "1.0.0" });
+    const [clientEnd, serverEnd] = InMemoryTransport.createLinkedPair();
+    try {
+      await server.connect(serverEnd);
+      await client.connect(clientEnd);
+
+      // The union branches keep `harness` optional so their conditional
+      // alternatives survive, so the unpinned requirement is published in the
+      // per-action line and enforced at admission instead of by the schema.
+      const { tools } = await client.listTools();
+      const issue = tools.find((entry) => entry.name === "mstar_issue")!;
+      expect(issue.description).toContain("- close: id, actor, expect, harness");
+
+      const omitted = await toolEnvelope(client, "mstar_issue", withAction("issue.close", { id: "issue-absent", actor: "project-manager", expect: 1 }));
+      expect(omitted).toMatchObject({ status: "usage", code: "command.invalid-input" });
+      expect(omitted.message).toContain("harness");
+      expect((omitted.details?.diagnostics as Array<{ path?: string }>).map((entry) => entry.path)).toContain("harness");
+
+      // Naming the root reaches the command's own verdict: the harness
+      // requirement is satisfied, and no harness diagnostic is reported.
+      const named = await toolEnvelope(client, "mstar_issue", withAction("issue.close", { id: "issue-absent", actor: "project-manager", expect: 1, harness: fixture.pinned }));
+      expect(named.message ?? "").not.toContain("needs the call's `harness` selector");
+      expect((named.details?.diagnostics as Array<{ path?: string }> | undefined ?? []).map((entry) => entry.path)).not.toContain("harness");
+    } finally {
+      await client.close();
+      await server.close();
       if (previousHarness === undefined) delete process.env.MSTAR_HARNESS_DIR;
       else process.env.MSTAR_HARNESS_DIR = previousHarness;
     }

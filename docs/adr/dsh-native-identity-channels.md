@@ -75,16 +75,21 @@ the native path's own documentation replaces it.
 - **No identity-forwarding MCP bridge.** The generic bridge carries only raw
   arguments and cannot rewrite them, so no plugin can inject a caller's
   identity into an MCP call on the model's behalf.
-- **MCP carries no per-caller identity at all** (supersedes the "per-call
-  session selectors or scoped mounts" expectation above). No real command
-  publishes a per-call `sessionId` selector, and the per-agent scoped mount was
-  removed: it spawned one full process per agent and never activated, because
-  its bridge dependency was not on the plugin's resolution chain. Every
-  identity-consuming operation therefore lives on the dsh **native command
-  surface**, where identity is `exec.agent.id`. The shared MCP connection
-  remains for identity-free commands and takes its control root as an explicit
-  input (`--harness`, `MSTAR_HARNESS_DIR`, or the call's `harness` selector) —
-  never from the launch cwd.
+- **The CONNECTION carries no identity** (supersedes the scoped-mount
+  expectation above). The shared MCP connection has no `--identity-env`, no
+  declared-identity lock and no connection-wide default session id: whatever a
+  call puts on the wire is that call's own fact. The per-agent scoped mount was
+  removed because it spawned one full process per agent and never activated
+  (its bridge dependency was not on the plugin's resolution chain).
+  **A command that needs an identity takes the caller's per-call `sessionId`
+  selector** — twelve declarations exist across `plan`, `session`, `workflow`,
+  `status`, `milestone` and the execution ledgers — and the three dsh **native
+  tools** (`mstar_plan_bind`, `mstar_audit_validate`, `mstar_execution_clear`)
+  are the host-proven route where they cover the operation, because there
+  identity is `exec.agent.id` and no argument can override it. The shared
+  connection takes its control root as an explicit input (`--harness`,
+  `MSTAR_HARNESS_DIR`, or the call's `harness` selector) — never from the launch
+  cwd.
 - **Agent-teams `target` / `agent_id` addressing is not a shell identity
   channel.** Delegation addressing and shell/CLI identity stay separate.
 - **`shellEnv` carries only `DSH_*`.** Child environments are registry-built;

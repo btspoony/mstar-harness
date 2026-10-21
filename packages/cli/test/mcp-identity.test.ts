@@ -212,28 +212,43 @@ describe("MCP session identity", () => {
   });
 
   test("absent identity preserves active recovery usage and help", async () => {
+    // The connection DECLARES a root, so this call cannot be refused for a
+    // missing `harness`: the refusal asserted below is the identity one, not the
+    // unpinned-connection requirement wearing the same usage code.
     const root = fixtureRoot();
+    const harness = path.join(root, ".mstar");
+    mkdirSync(harness, { recursive: true });
     const result = await registeredMcpCall(
       "session.recover",
       recoveryInput(writeAttestation(root)),
       context(root),
+      createContextResolver({ harnessRoot: harness }),
     );
     expect(result).toMatchObject({ status: "usage", code: "command.invalid-input" });
     expect(result.details?.helpRoute).toBe("mstar session recover --help");
+    expect((result.details?.diagnostics as Array<{ path?: string }> | undefined) ?? []).not.toContainEqual(
+      expect.objectContaining({ path: "harness" }),
+    );
   });
   test("stdio resolver ignores the legacy environment identity when no parameter is supplied", async () => {
     const previous = process.env.MSTAR_HOST_SESSION_ID;
     process.env.MSTAR_HOST_SESSION_ID = "ambient-session";
     try {
-      const root = fixtureRoot();
+      // The call NAMES its root, so the asserted usage refusal is provably the
+      // identity one: without it the unpinned harness requirement would answer
+      // with the same code and the same help route.
+      const fixture = await initializedHarness();
       const result = await registeredMcpCall(
         "session.recover",
-        recoveryInput(writeAttestation(root)),
-        context(root),
+        { ...recoveryInput(writeAttestation(fixture.root)), harness: fixture.harness },
+        context(fixture.root),
         resolveContext,
       );
       expect(result).toMatchObject({ status: "usage", code: "command.invalid-input" });
       expect(result.details?.helpRoute).toBe("mstar session recover --help");
+      expect((result.details?.diagnostics as Array<{ path?: string }> | undefined) ?? []).not.toContainEqual(
+        expect.objectContaining({ path: "harness" }),
+      );
     } finally {
       if (previous === undefined) delete process.env.MSTAR_HOST_SESSION_ID;
       else process.env.MSTAR_HOST_SESSION_ID = previous;
@@ -264,6 +279,11 @@ describe("MCP session identity", () => {
     const previousDeclared = process.env.MSTAR_TEST_DECLARED_IDENTITY;
     process.env.MSTAR_TEST_DECLARED_IDENTITY = "declared-mcp-session";
     try {
+      // The call names its own root: a declared ROOT is not an identity, and
+      // naming one keeps this test about the identity channel only — otherwise
+      // the unpinned harness requirement answers this call with the same usage
+      // code and the same help route.
+      const fixture = await initializedHarness();
       const resolver = createContextResolver();
       // No connection-level identity exists: the launcher has no channel to
       // declare one and the resolver publishes no default or lock state.
@@ -274,15 +294,17 @@ describe("MCP session identity", () => {
       const tool = await publishedMcpTool("session.recover", resolver);
       expect(tool.inputSchema.properties).toMatchObject({ sessionId: { type: "string" } });
       expect((tool.inputSchema["x-mstar-requirements"] ?? []).map((entry) => entry.name)).toContain("sessionId");
-      const root = fixtureRoot();
       const omitted = await registeredMcpCall(
         "session.recover",
-        recoveryInput(writeAttestation(root)),
-        context(root),
+        { ...recoveryInput(writeAttestation(fixture.root)), harness: fixture.harness },
+        context(fixture.root),
         resolver,
       );
       expect(omitted).toMatchObject({ status: "usage", code: "command.invalid-input" });
       expect(omitted.details?.helpRoute).toBe("mstar session recover --help");
+      expect((omitted.details?.diagnostics as Array<{ path?: string }> | undefined) ?? []).not.toContainEqual(
+        expect.objectContaining({ path: "harness" }),
+      );
     } finally {
       if (previous === undefined) delete process.env.MSTAR_HOST_SESSION_ID;
       else process.env.MSTAR_HOST_SESSION_ID = previous;

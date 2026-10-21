@@ -97,17 +97,20 @@ published `harness` field, which is then REQUIRED on every tool whose root is
 not otherwise fixed — and a family that takes no per-call `harness` at all
 (`persist`) has no other way to name one, so it needs the pin. With neither,
 the call is refused with `[mcp.control-root-unresolved]`, naming the cause and
-the recoveries; `harness.scaffold` keeps its null-root bootstrap exception,
-because establishing a root is its own operation. The launch cwd is **never** a
-root candidate: it is the HOST's directory and says nothing about which
-workspace a caller belongs to.
+the recoveries. Two classes run with a NULL root instead: `harness.scaffold`,
+because establishing a root is its own operation, and the root-free commands
+(`schema`, `path.resolve`, `host.*`, `doctor`, the read-only validators), whose
+contract answers from explicit inputs and never resolves an implicit harness
+path. The launch cwd is **never** a root candidate: it is the HOST's directory
+and says nothing about which workspace a caller belongs to.
 
 **Identity.** The shipped row declares none, and the connection carries none:
 there is no `--identity-env`, no declared-identity lock, no selector stripping
 and no connection-wide default session id (ADR
 `dsh-native-identity-channels`), so a per-call `sessionId` is exactly what the
-caller passed. Operations that NEED a session identity are the dsh-native
-tools, where it is `exec.agent.id`. The shipped row keeps neutral defaults: no
+caller passed, and a command that needs one takes that selector. The
+host-proven route for the operations that need a session identity is the
+dsh-native tools, where it is `exec.agent.id`. The shipped row keeps neutral defaults: no
 path, no identity. Because a patch replaces the row's whole `config`, an
 override restates the `command` and the whole `args` list.
 
