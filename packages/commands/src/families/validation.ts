@@ -421,7 +421,7 @@ async function execute(id: string, input: Input, context: InvocationContext): Pr
                   "completeness is a store.db query that reports the configured root's verdict (the documents registered relative to it), " +
                   "which is never a verdict about a subdirectory of that root or about another directory as a knowledge store",
                 fix:
-                  `drop --knowledge-dir to validate the configured root ${configuredRoot}; ` +
+                  `pass --knowledge-dir ${configuredRoot} to validate the configured root (omitting the flag validates only the document schema, with no catalog completeness check); ` +
                   `or move/declare those documents under ${configuredRoot} and register them there; ` +
                   "or point the project's knowledge root at that directory (`.mstarc` `[config] knowledge_dir`) and validate that root",
               });
