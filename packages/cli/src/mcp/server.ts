@@ -1,17 +1,15 @@
 import { McpServer } from "@modelcontextprotocol/server";
 import cliManifest from "../../package.json" with { type: "json" };
-import { getCommandDefinitions, refusalEnvelope, type CommandDefinition, type CommandEnvelope, type InvocationContext } from "@mstar-harness/commands";
+import {
+  getCommandDefinitions,
+  isCoordinatorSeatCommand,
+  refusalEnvelope,
+  type CommandDefinition,
+  type CommandEnvelope,
+  type InvocationContext,
+} from "@mstar-harness/commands";
 import { registerMcpCommands, type ResolveContext } from "./register.js";
 import type { McpSeat } from "./stdio.js";
-
-/**
- * The coordinator-seat commands a leaf seat can never run: a leaf may not bind
- * a plan (the coordinator seat + the credential adoption) and may not complete
- * one (the sole Done write). Every other command — the writable subset the
- * removed native `issue.add` / `issue.close` / `plan.prepare` / `plan.progress`
- * tools used to carry — stays reachable.
- */
-const LEAF_SEAT_REFUSED_COMMANDS = new Set(["plan.bind", "plan.complete"]);
 
 /** The named leaf-seat refusal: actual cause plus the supported recovery. */
 function leafSeatRefusal(command: string): CommandEnvelope<never> {
@@ -20,7 +18,9 @@ function leafSeatRefusal(command: string): CommandEnvelope<never> {
     status: "refused",
     code: `${command}.leaf-seat`,
     exitCode: 1,
-    message: "known leaf sessions cannot bind or complete a plan, adopt a credential, or clear a binding",
+    message:
+      "known leaf sessions cannot hold a workflow coordinator seat: they cannot bind or complete a plan, recover a session, " +
+      "or write workflow delivery, lifecycle, adoption or ledger state",
     recovery:
       'This connection was launched with --seat leaf (the calling session header carries origin "subagent" or delegationDepth > 0). ' +
       "Coordinator-seat operations belong to the non-leaf coordinating session: run the operation there, or continue with the commands this seat may use (issue.add / issue.close / plan.prepare / plan.progress and every read).",
@@ -33,6 +33,11 @@ function leafSeatRefusal(command: string): CommandEnvelope<never> {
  * refusal, so the tool stays discoverable and every call fails closed BEFORE
  * any engine round-trip or credential adoption — the shared admission still
  * validates the published input first, and nothing mutates.
+ *
+ * The refused set is NOT listed here: `isCoordinatorSeatCommand` derives it from
+ * the command layer, the same authority the dsh host's `tools/pre-execute`
+ * boundary reads (`coordinatorSeatCommandFor`), so the two layers cannot
+ * refuse different commands.
  */
 function seatDefinitions(
   definitions: readonly CommandDefinition[],
@@ -40,7 +45,7 @@ function seatDefinitions(
 ): readonly CommandDefinition[] {
   if (seat !== "leaf") return definitions;
   return definitions.map((definition) =>
-    LEAF_SEAT_REFUSED_COMMANDS.has(definition.id)
+    isCoordinatorSeatCommand(definition.id)
       ? { ...definition, execute: async () => leafSeatRefusal(definition.id) }
       : definition,
   );

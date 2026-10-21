@@ -24,6 +24,7 @@ import { join } from 'node:path'
 import { Context } from '@deepseek-ai/cordis'
 import type { PreToolDecision, ToolExecution, ToolExecutionToken } from '@deepseek-ai/dsh-tools'
 import { assignmentHeaderRegion } from '@mstar-harness/engine'
+import { foldedFamilyToolName, getCommandDefinitions, isCoordinatorSeatCommand } from '@mstar-harness/commands'
 import { bootApp, seedActiveWorkflow, seedHarness, type BootResult } from './harness.ts'
 import { updateWorkflowSessionBinding } from '../src/engine-status-store.ts'
 import type { DispatchGateAdvisory } from '../src/index.ts'
@@ -975,12 +976,57 @@ describe('leaf-seat tool boundary — coordinator actions on the folded MCP surf
       foldedCall(PLAN_TOOL, { action: 'progress' }, leafAgent()),
       foldedCall(PLAN_TOOL, { action: 'show' }, leafAgent()),
       foldedCall('mcp__mstar__mstar_issue', { action: 'add' }, leafAgent()),
+      // The `workflow-note` family is coordinator-scoped for its WRITE
+      // (`append`); its read action stays reachable, so the guard is not
+      // refusing a whole family it was never asked about.
+      foldedCall('mcp__mstar__mstar_workflow_note', { action: 'coverage', workflow: 'wf-a' }, leafAgent()),
       foldedCall('mcp__mstar__mstar_sdd', { task_number: 1 }, leafAgent()),
       foldedCall('mcp__mstar__mstar_schema', { family: 'plan' }, leafAgent()),
       toolExec('bash', { command: 'ls' }, leafAgent()),
     ]
     for (const exec of allowed) {
       expect(await app.ctx.waterfall('tools/pre-execute', exec, defaultAllow)).toEqual({ kind: 'allow' })
+    }
+  })
+
+  it('refuses the workflow family’s coordinator actions, not only the plan pair', async () => {
+    const app = booted = await bootApp()
+    for (const action of ['evidence', 'delivery-anchors', 'adopt-terminal', 'lifecycle', 'execution-policy']) {
+      const decision = await app.ctx.waterfall(
+        'tools/pre-execute',
+        foldedCall('mcp__mstar__mstar_workflow', { action, workflow: 'wf-a' }, leafAgent()),
+        defaultAllow,
+      )
+      expect(decision.kind).toBe('deny')
+      const reason = (decision as { reason?: string }).reason
+      expect(reason).toContain('leaf-seat.coordinator-action')
+      // The refusal names the command it refused, so a leaf learns which id
+      // belongs to the coordinating session rather than only that it was
+      // refused.
+      expect(reason).toContain(`workflow.${action}`)
+    }
+  })
+
+  it('does not refuse the workflow family for a non-leaf session on the same generic connection', async () => {
+    const app = booted = await bootApp()
+    for (const action of ['evidence', 'delivery-anchors', 'adopt-terminal']) {
+      expect(await app.ctx.waterfall('tools/pre-execute', foldedCall('mcp__mstar__mstar_workflow', { action, workflow: 'wf-a' }, coordinatingAgent()), defaultAllow))
+        .toEqual({ kind: 'allow' })
+    }
+  })
+
+  it('refuses every command the shared coordinator-seat set names', async () => {
+    const app = booted = await bootApp()
+    const seat = getCommandDefinitions().filter((definition) => isCoordinatorSeatCommand(definition.id))
+    // The set is derived from the command corpus; a corpus change that drops
+    // the workflow family out of it must fail here, not pass silently.
+    expect(seat.map((definition) => definition.id)).toContain('workflow.evidence')
+    for (const definition of seat) {
+      const action = definition.id.slice(definition.id.indexOf('.') + 1)
+      const tool = `mcp__mstar__${foldedFamilyToolName(definition.cli.path[0]!)}`
+      const decision = await app.ctx.waterfall('tools/pre-execute', foldedCall(tool, { action }, leafAgent()), defaultAllow)
+      expect(decision.kind).toBe('deny')
+      expect((decision as { reason?: string }).reason).toContain(definition.id)
     }
   })
 
