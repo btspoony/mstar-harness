@@ -148,10 +148,10 @@ async function execute(id: string, input: ExecutionInput, invocation: Invocation
     return error instanceof SddScriptError
       ? refusalEnvelope({ command: id, status: "usage", code: "usage", exitCode: 2, message, ...(details === undefined ? {} : { details }) })
       : refusalEnvelope({ command: id, status: "refused", code, exitCode: 1, message, ...(details === undefined ? {} : { details }) , recovery: id === "store.execution.restore-preview"
-          ? "Select a readable execution backup and writable preview destination. Run mstar store execution restore-preview --backup <backup> --out <preview>."
+          ? "Select a readable execution backup and writable preview destination. Run mstar store execution restore-preview --harness <path> --backup <backup> --out <preview>."
           : id === "store.execution.restore"
-            ? "The backup preview or operator authorization does not match the diagnostic. Regenerate a current preview with mstar store execution restore-preview --backup <backup> --out <preview>, then retry restore with the same operator and authorization."
-            : "Choose a writable export destination or omit --out for stdout. Run mstar store execution export."});
+            ? "The backup preview or operator authorization does not match the diagnostic. Regenerate a current preview with mstar store execution restore-preview --harness <path> --backup <backup> --out <preview>, then retry restore with the same operator and authorization."
+            : "Choose a writable export destination or omit --out for stdout. Run mstar store execution export --harness <path>."});
   }
 }
 
@@ -168,7 +168,13 @@ function cliDefinition(id: string): CommandDefinition<ExecutionInput, unknown> {
   };
   const optionKeys = optionsByVerb[verb];
   const shape = Object.fromEntries(optionKeys.map((key) => [key, true])) as { [Key in keyof ExecutionInput]?: true };
-  const options = optionKeys.map((key) => ({ key, flags: flags[key], required: false }));
+  // `harness` is the operation's TARGET and the handler refuses an omitted one
+  // on every route, so it is published as a REQUIRED field (CLI help, `schema`
+  // and the MCP tool contract) instead of advertising an optional call that can
+  // only refuse. `rootInputs: []` still keeps the connection pin from rewriting
+  // it: required is about the caller naming the target, not about which root
+  // this command runs from.
+  const options = optionKeys.map((key) => ({ key, flags: flags[key], required: key === "harness" }));
   return {
     id,
     cli: { path: ["store", "execution", verb], aliases: [], arguments: [], options },

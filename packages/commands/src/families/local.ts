@@ -9,6 +9,7 @@ import {
   hasHarnessRootDeclaration,
   resolveHarnessDir,
   resolveProjectDir,
+  resolveProjectRoot as projectRootFrom,
   resolveReviewDir,
   resolveScaffoldDirs,
   resolveSkillRoot,
@@ -34,8 +35,8 @@ import {
   formatPluginVersionDoctorNote,
   parseOmpPluginList,
   probePathNodeRuntime,
+  projectInstallPath,
   resolveDshProfileDir,
-  resolveProjectRoot,
   validateAgentPlugin,
 } from "../host-health.js";
 import type { CommandDefinition, CommandEnvelope, InvocationContext } from "../types.js";
@@ -114,9 +115,22 @@ function gitWorkspaceRoot(startDir: string): string {
   }
 }
 
-function pluginRoot(explicit: string | undefined): string {
-  if (explicit !== undefined) return path.resolve(explicit);
-  let candidate = resolveProjectRoot();
+/**
+ * The project root this invocation operates on: the workspace the CALLER named
+ * (`context.cwd`), never the directory this process happens to run in. On an MCP
+ * server the two differ exactly when the launcher declared a workspace
+ * (`--workspace`, or a pinned root's parent), and resolving the process-global
+ * project root there would answer about the host's checkout instead. The CLI's
+ * `context.cwd` is the directory the operator ran from, so its behavior is
+ * unchanged.
+ */
+function projectRootAt(workspace: string): string {
+  return projectRootFrom(workspace);
+}
+
+function pluginRoot(explicit: string | undefined, workspace: string): string {
+  if (explicit !== undefined) return path.resolve(workspace, explicit);
+  let candidate = projectRootAt(workspace);
   while (!fs.existsSync(path.join(candidate, "plugin.json"))) {
     const parent = path.dirname(candidate);
     if (parent === candidate) break;
@@ -185,20 +199,20 @@ function diagnoseOpencodeTarget(root: string, generation: OpencodeGeneration | u
   }
 }
 
-async function diagnose(target: (typeof doctorTargets)[number], scope: "global" | "project", generation?: OpencodeGeneration): Promise<{ location: string; errors: string[]; notes: string[]; generations?: OpencodeGeneration[]; generationSource?: string }> {
+async function diagnose(target: (typeof doctorTargets)[number], scope: "global" | "project", generation: OpencodeGeneration | undefined, projectRoot: string): Promise<{ location: string; errors: string[]; notes: string[]; generations?: OpencodeGeneration[]; generationSource?: string }> {
   if (target === "opencode") {
     const root = scope === "global"
       ? path.join(os.homedir(), ".config", "opencode")
-      : resolveProjectRoot();
+      : projectRoot;
     return diagnoseOpencodeTarget(root, generation);
   }
   if (target === "cursor") {
-    const result = diagnoseCursorHost(scope);
+    const result = diagnoseCursorHost(scope, { project: projectInstallPath(projectRoot) });
     return { location: result.location, errors: result.errors, notes: [] };
   }
   if (target === "kimi") return diagnoseKimiHost();
   if (target === "zcode") {
-    const result = diagnoseZcodeHost(scope, { projectRoot: resolveProjectRoot(), harnessRepoPath });
+    const result = diagnoseZcodeHost(scope, { projectRoot, harnessRepoPath });
     return { location: result.location, errors: result.errors, notes: [] };
   }
   if (target === "codex") {
@@ -313,21 +327,23 @@ export function getLocalCommandDefinitions(): readonly CommandDefinition[] {
       effects: ["read"],
       description: "Validate Morning Star setup for one supported host target.",
       async execute(input, context) {
-        // The project-scoped diagnosis reads the project around the invocation
-        // (`resolveProjectRoot`): on a connection that declared no workspace
-        // that is the HOST's checkout, so the report would describe a project
-        // the caller never named. The GLOBAL scope needs no workspace (it reads
-        // the host installation, which is this command's own subject), so only
-        // the project half refuses.
+        // The project-scoped diagnosis reads the project around the invocation:
+        // on a connection that declared no workspace that is the HOST's
+        // checkout, so the report would describe a project the caller never
+        // named. The GLOBAL scope needs no workspace (it reads the host
+        // installation, which is this command's own subject), so only the
+        // project half refuses. A declared workspace (`--workspace`, or a
+        // pinned root's parent) anchors the resolution at `context.cwd`.
         const unnamedProject = input.scope === "project"
           ? launchDirectoryRefusal("doctor", context, { subject: "the project root this diagnosis reads" })
           : undefined;
         if (unnamedProject !== undefined) return unnamedProject;
-        const result = await diagnose(input.target, input.scope, input.generation);
+        const projectRoot = projectRootAt(context.cwd);
+        const result = await diagnose(input.target, input.scope, input.generation, projectRoot);
         // MCP configs are global by default; project-scoped OpenCode uses the
         // project's own opencode.json, while dsh composes rows in its profile.
         const projectOpencodeMcpPath = input.target === "opencode" && input.scope === "project"
-          ? path.join(resolveProjectRoot(), "opencode.json")
+          ? path.join(projectRoot, "opencode.json")
           : undefined;
         const resolvedGenerations = result.generations ?? [];
         // A dual-host config resolves to ["v1","v2"]; the V2 host in that set
@@ -421,7 +437,7 @@ export function getLocalCommandDefinitions(): readonly CommandDefinition[] {
           fields: [{ field: "root", subject: "the plugin package", value: input.root }],
         });
         if (unnamedRoot !== undefined) return unnamedRoot;
-        const root = pluginRoot(input.root);
+        const root = pluginRoot(input.root, context.cwd);
         const result = validateAgentPlugin(root);
         return result.ok
           ? ok("plugin.validate", { root, ...result })

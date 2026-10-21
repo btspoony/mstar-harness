@@ -498,6 +498,14 @@ async function execute(id: string, input: Input, context: InvocationContext): Pr
         return gate.ok ? ok(id, { ...gateData(gate), siblingCount: Object.keys(skillTexts).length, loadOrderChecked: Object.keys(skillTexts).filter((name) => name !== "mstar-harness-core").length }) : rejected(id, gate, "roles.invalid");
       }
       case "qc.validate-report": {
+        // The report path is required but may still be relative: on a
+        // connection that declared no workspace a relative one resolves against
+        // the host's checkout, so the verdict would describe a file the caller
+        // never named. Same rule as `pr-review.validate-report`.
+        const unnamedReport = launchDirectoryRefusal(id, context, {
+          fields: [{ field: "reportFile", subject: "the report file", value: input.reportFile }],
+        });
+        if (unnamedReport !== undefined) return unnamedReport;
         const file = absolute(context.cwd, required(input.reportFile, "report file is required"));
         if (!existsSync(file)) throw new Error(`report file not found: ${file}`);
         const gate = validateQcReport(readFileSync(file, "utf8"));

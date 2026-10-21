@@ -14,6 +14,7 @@ import { registerMcpCommands, type ResolveContext } from "../src/mcp/register";
 import { createMcpServer } from "../src/mcp/server";
 import { createMcpEffects } from "../src/mcp/effects";
 import { createContextResolver, McpControlRootError } from "../src/mcp/stdio";
+import { runCli } from "./harness";
 
 const roots: string[] = [];
 afterEach(() => { for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true }); });
@@ -317,6 +318,19 @@ async function callRawTool(resolver: ResolveContext, id: string, args: Record<st
 /** The flat text of one raw tool result. */
 function rawText(result: { content?: Array<{ type: string; text?: string }> }): string {
   return (result.content ?? []).filter((block) => block.type === "text").map((block) => block.text ?? "").join("\n");
+}
+
+/**
+ * The command envelope one raw tool result carries. An ADMISSION refusal is
+ * reported by the SDK's schema hook, which supplies text but no
+ * `structuredContent`, so the envelope is read back from the text.
+ */
+function rawEnvelope(result: { structuredContent?: unknown; content?: Array<{ type: string; text?: string }> }): CommandEnvelope {
+  if (result.structuredContent !== undefined) return result.structuredContent as CommandEnvelope;
+  const text = rawText(result);
+  const start = text.indexOf('{"version":1,');
+  if (start < 0) throw new Error(`no command envelope in the tool result: ${text}`);
+  return JSON.parse(text.slice(start)) as CommandEnvelope;
 }
 
 describe("MCP harness root", () => {
@@ -1018,9 +1032,9 @@ const LAUNCH_CWD_DEFAULT: Readonly<Record<string, null | { readonly args: Record
   "pr-review.seat-prompt": { args: { stage: "1", domain: "cli", seat: "seat-1" }, subject: "the review worktree" },
   "pr-review.size": { args: { base: "HEAD", head: "HEAD" }, subject: "the repository this size classifies" },
   "pr-review.tally": null,
-  "pr-review.validate-report": null,
+  "pr-review.validate-report": { args: { reportFile: "review.md" }, subject: "the report file" },
   "pr-review.worktree-cleanup": null,
-  "qc.validate-report": null,
+  "qc.validate-report": { args: { reportFile: "review.md" }, subject: "the report file" },
   "report": null,
   "review.seats": null,
   "roles.validate": { args: {}, subject: "the role corpus directory" },
@@ -1053,6 +1067,29 @@ async function launchDirectoryCheckout(): Promise<{ launch: string }> {
   git(["add", "-A"]);
   git(["-c", "user.email=fixture@example.invalid", "-c", "user.name=fixture", "commit", "--quiet", "-m", "fixture launch directory"]);
   return { launch };
+}
+
+/**
+ * A workspace that declares itself: its own `package.json` stops the project
+ * root walk-up AT the workspace, so a project-scoped command that reads this
+ * process's directory instead answers about a different checkout.
+ */
+function declaredWorkspace(): string {
+  const workspace = mkdtempSync(path.join(os.tmpdir(), "mcp-harness-root-workspace-"));
+  roots.push(workspace);
+  writeFileSync(path.join(workspace, "package.json"), JSON.stringify({ name: "caller-workspace", version: "1.0.0" }), "utf8");
+  return workspace;
+}
+
+/** A declared workspace that is also a conformant Agent Plugins package. */
+function declaredPluginWorkspace(): string {
+  const workspace = declaredWorkspace();
+  writeFileSync(path.join(workspace, "plugin.json"), JSON.stringify({
+    $schema: "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json",
+    name: "caller-workspace",
+    version: "1.0.0",
+  }), "utf8");
+  return workspace;
 }
 
 /** The class an unpinned resolver actually gives one definition (throws for `root`). */
@@ -1175,6 +1212,135 @@ describe("MCP control-root admission class", () => {
       if (previousHarness === undefined) delete process.env.MSTAR_HARNESS_DIR;
       else process.env.MSTAR_HARNESS_DIR = previousHarness;
     }
+  });
+
+  test("the declared workspace anchors the project-root commands, not this process's checkout", async () => {
+    const workspace = declaredPluginWorkspace();
+    // The launch process runs from this suite's own checkout, which is exactly
+    // the directory a process-global project-root resolution would answer
+    // about: the declared workspace must win for BOTH project-root readers.
+    const resolver = createContextResolver({ workspace });
+
+    const doctor = await callRawTool(resolver, "doctor", { target: "opencode", scope: "project", generation: "v2" });
+    const doctorEnvelope = doctor.structuredContent as CommandEnvelope;
+    // The project-scoped diagnosis reads the project around the invocation;
+    // with a declared workspace that is the caller's own config.
+    expect(doctorEnvelope.details?.location).toBe(path.join(workspace, "opencode.json"));
+    expect(rawText(doctor)).toContain(path.join(workspace, "opencode.json"));
+
+    const validated = await callRawTool(resolver, "plugin.validate", {});
+    const pluginEnvelope = validated.structuredContent as CommandEnvelope;
+    expect([pluginEnvelope.status, pluginEnvelope.code]).toEqual(["ok", "plugin.validate.ok"]);
+    expect((pluginEnvelope.data as { root: string }).root).toBe(workspace);
+    expect(rawText(validated)).toContain(workspace);
+  });
+
+  test("a relative reportFile is refused on an unnamed workspace instead of validating the host checkout", async () => {
+    const fixture = await launchDirectoryCheckout();
+    // The launch checkout really contains `review.md`, so resolving the
+    // relative path there would answer with a convincing verdict about a file
+    // the caller never named.
+    const previousCwd = process.cwd();
+    const previousHarness = process.env.MSTAR_HARNESS_DIR;
+    delete process.env.MSTAR_HARNESS_DIR;
+    process.chdir(fixture.launch);
+    try {
+      for (const id of ["pr-review.validate-report", "qc.validate-report"]) {
+        const relative = await callRawTool(createContextResolver(), id, { reportFile: "review.md" });
+        expect([id, relative.isError]).toEqual([id, true]);
+        const envelope = rawEnvelope(relative);
+        expect([id, envelope.status, envelope.code]).toEqual([id, "usage", "command.invalid-input"]);
+        expect(envelope.details?.diagnostics).toContainEqual(expect.objectContaining({ path: "reportFile", code: "invalid_type" }));
+        const text = rawText(relative);
+        expect([id, text.includes("LAUNCH directory")]).toEqual([id, true]);
+        expect([id, text.includes(fixture.launch)]).toEqual([id, false]);
+      }
+
+      // The same file, named absolutely, IS answered: the caller named the
+      // directory it belongs to.
+      const named = await callRawTool(createContextResolver(), "pr-review.validate-report", { reportFile: path.join(fixture.launch, "review.md") });
+      expect(rawEnvelope(named).status).not.toBe("usage");
+      expect(rawText(named)).not.toContain("LAUNCH directory");
+    } finally {
+      process.chdir(previousCwd);
+      if (previousHarness === undefined) delete process.env.MSTAR_HARNESS_DIR;
+      else process.env.MSTAR_HARNESS_DIR = previousHarness;
+    }
+  });
+
+  test("one refusal names every unnamed path a call would resolve from the launch directory", async () => {
+    const fixture = await launchDirectoryCheckout();
+    const previousCwd = process.cwd();
+    const previousHarness = process.env.MSTAR_HARNESS_DIR;
+    delete process.env.MSTAR_HARNESS_DIR;
+    process.chdir(fixture.launch);
+    try {
+      // Both seat paths are omitted: one attempt must report both, or the
+      // caller learns them one retry at a time.
+      const refused = await callRawTool(createContextResolver(), "pr-review.seat-prompt", {
+        stage: "1", domain: "cli", seat: "seat-1",
+      });
+      expect(refused.isError).toBe(true);
+      const envelope = rawEnvelope(refused);
+      expect(envelope).toMatchObject({ status: "usage", code: "command.invalid-input" });
+      const paths = (envelope.details?.diagnostics as Array<{ path?: string }>).map((entry) => entry.path);
+      expect(paths).toEqual(["worktree", "skillRoot"]);
+      const text = rawText(refused);
+      expect(text).toContain("the review worktree");
+      expect(text).toContain("the audit skill root");
+      expect(text).not.toContain(fixture.launch);
+    } finally {
+      process.chdir(previousCwd);
+      if (previousHarness === undefined) delete process.env.MSTAR_HARNESS_DIR;
+      else process.env.MSTAR_HARNESS_DIR = previousHarness;
+    }
+  });
+
+  test("store.execution publishes its target as required wherever the handler enforces it", async () => {
+    const definitions = getCommandDefinitions().filter((entry) => entry.id.startsWith("store.execution."));
+    expect(definitions.map((entry) => entry.id).sort()).toEqual([
+      "store.execution.export", "store.execution.restore", "store.execution.restore-preview",
+    ]);
+    for (const definition of definitions) {
+      // `schema`, the folded tool description and the CLI help all render this
+      // one descriptor, so requiring it here fixes the whole published surface.
+      expect([definition.id, getCommandSchemas([definition])[0]!.required]).toEqual([definition.id, ["harness"]]);
+    }
+    const server = createMcpServer(createContextResolver(), definitions);
+    const client = new Client({ name: "harness-root-test-client", version: "1.0.0" });
+    const [clientEnd, serverEnd] = InMemoryTransport.createLinkedPair();
+    try {
+      await server.connect(serverEnd);
+      await client.connect(clientEnd);
+      const { tools } = await client.listTools();
+      const description = tools.find((entry) => entry.name === "mstar_store")!.description;
+      // A call with no target is the call the handler refuses, so the folded
+      // per-action line must not advertise it as fieldless.
+      expect(description).toContain("- execution.export: harness");
+      expect(description).toContain("- execution.restore: harness");
+      expect(description).toContain("- execution.restore-preview: harness");
+    } finally {
+      await client.close();
+      await server.close();
+    }
+
+    // The real tool refuses the call the help no longer advertises.
+    const omitted = await callRawTool(createContextResolver(), "store.execution.export", {});
+    expect(omitted.isError).toBe(true);
+    const envelope = rawEnvelope(omitted);
+    expect(envelope).toMatchObject({ status: "usage", code: "command.invalid-input" });
+    expect(envelope.details?.diagnostics).toContainEqual(expect.objectContaining({ path: "harness" }));
+    expect(envelope.details?.required).toContain("harness");
+
+    // The real child CLI advertises the same field in its help and refuses the
+    // call that omits it.
+    const help = runCli(["store", "execution", "export", "--help"]);
+    expect(help.exitCode).toBe(0);
+    expect(help.stdout).toContain("Required inputs: harness");
+    const call = runCli(["store", "execution", "export"]);
+    expect(call.exitCode).toBe(2);
+    expect(call.stdout).toContain('"message":"harness is required"');
+    expect(call.stdout).toContain('"required":["harness"]');
   });
 
   test("an unpinned no-argument roles.validate does not answer for the host checkout", async () => {
@@ -1584,18 +1750,17 @@ describe("MCP pinned root selectors and operation targets", () => {
     try {
       const resolver = createContextResolver();
       // The launch directory IS a checkout that owns a real store, so a cwd
-      // discovery would find it. The call names no target: it must refuse
+      // discovery would find it. The call names no target: the required field
+      // is refused at admission (the same fact `--help` and `schema` publish)
       // instead of exporting that unrelated project's execution state.
       const omitted = await callRawTool(resolver, "store.execution.export", {});
       expect(omitted.isError).toBe(true);
-      const exported = omitted.structuredContent as CommandEnvelope;
+      const exported = rawEnvelope(omitted);
       expect(exported).toMatchObject({ status: "usage", code: "command.invalid-input" });
-      expect(exported.details?.diagnostics).toContainEqual(expect.objectContaining({ path: "harness", code: "required" }));
-      const text = rawText(omitted);
-      expect(text).toContain("absolute path");
-      expect(text).toContain("mstar schema --command store.execution.export");
+      expect(exported.details?.diagnostics).toContainEqual(expect.objectContaining({ path: "harness" }));
+      expect(exported.details?.required).toContain("harness");
       // Nothing was read: the export artifact never enters the refusal.
-      expect(text).not.toContain("execution-diagnostic-v1");
+      expect(rawText(omitted)).not.toContain("execution-diagnostic-v1");
 
       // A RELATIVE target names the same host directory through the invocation
       // cwd, so it refuses too — the target is an input, never a resolution.
@@ -1613,7 +1778,7 @@ describe("MCP pinned root selectors and operation targets", () => {
         preview: path.join(fixture.rootA, "preview.json"),
       });
       expect(restored.isError).toBe(true);
-      expect(restored.structuredContent).toMatchObject({ status: "usage", code: "command.invalid-input" });
+      expect(rawEnvelope(restored)).toMatchObject({ status: "usage", code: "command.invalid-input" });
       expect(readFileSync(storeFile)).toEqual(before);
     } finally {
       process.chdir(previousCwd);

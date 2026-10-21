@@ -47,6 +47,9 @@ const LAUNCH_DIRECTORY_RECOVERY = "Declare the connection's workspace with `msta
  * Refuse when this invocation runs from a connection's launch directory and
  * `target` would therefore come from it; `undefined` means the caller may
  * proceed (its workspace was named, or every input names its own directory).
+ *
+ * EVERY offending input is reported in one refusal: a call that omits two
+ * unnamed paths must not learn about them one attempt at a time.
  */
 export function launchDirectoryRefusal(
   command: string,
@@ -54,13 +57,12 @@ export function launchDirectoryRefusal(
   target: LaunchDirectoryTarget,
 ): CommandEnvelope<never> | undefined {
   if (context.launchDirectory !== true) return undefined;
-  const offending = target.fields === undefined ? undefined : firstUnnamed(target.fields);
-  if (target.fields !== undefined && offending === undefined) return undefined;
-  const subject = offending?.subject ?? target.subject;
-  const supplied = offending?.value;
-  const reason = supplied === undefined
-    ? `${subject} would come from this invocation's working directory`
-    : `${subject} would resolve against this invocation's working directory`;
+  // The subject form names the checkout a command answers ABOUT; the field form
+  // names every input that would resolve against it.
+  const subjectCauses = target.fields === undefined ? [cause(target.subject, undefined)] : undefined;
+  const offending = target.fields === undefined ? [] : unnamed(target.fields);
+  if (subjectCauses === undefined && offending.length === 0) return undefined;
+  const causes = subjectCauses ?? offending.map((field) => cause(field.subject, field.value));
   // reachability: manual — the recovery names the launcher's `mstar mcp --workspace` / `--harness` declaration, which the command-catalog grammar the linter reads does not model (`mstar mcp` is not a catalog command); the per-field half of the recovery is the emitted diagnostic, and the behavioural suite pins this text.
   return refusalEnvelope({
     command,
@@ -68,31 +70,48 @@ export function launchDirectoryRefusal(
     code: "command.invalid-input",
     exitCode: 2,
     message:
-      `${command}: ${reason}, and this connection declared no workspace: that directory is the MCP server's ` +
+      `${command}: ${causes.join("; ")}, and this connection declared no workspace: that directory is the MCP server's ` +
       "LAUNCH directory (the host's own), which says nothing about the caller's workspace",
-    ...(offending === undefined ? {} : {
-      diagnostics: [{
-        path: offending.field,
-        code: supplied === undefined ? "required" : "invalid_type",
-        message: supplied === undefined
-          ? `${offending.field} is required, as an absolute path: the launch directory is never used as ${subject}`
-          : `${offending.field} must be an absolute path: a relative one would resolve against the launch directory`,
-        expected: "absolute path",
-        received: supplied === undefined ? "undefined" : "relative path",
-      }],
-    }),
+    ...(subjectCauses === undefined ? { diagnostics: offending.map(diagnostic) } : {}),
     recovery: LAUNCH_DIRECTORY_RECOVERY,
   });
 }
 
-/** The first field a launch-directory invocation must not resolve there, if any. */
-function firstUnnamed(fields: readonly LaunchDirectoryField[]): LaunchDirectoryField | undefined {
-  for (const field of fields) {
-    if (field.value === undefined) {
-      if (field.optional === true) continue;
-      return field;
+function cause(subject: string, supplied: string | undefined): string {
+  return supplied === undefined
+    ? `${subject} would come from this invocation's working directory`
+    : `${subject} would resolve against this invocation's working directory`;
+}
+
+function diagnostic(field: LaunchDirectoryField): {
+  path: string;
+  code: "required" | "invalid_type";
+  message: string;
+  expected: string;
+  received: string;
+} {
+  return field.value === undefined
+    ? {
+      path: field.field,
+      code: "required",
+      // Each diagnostic restates the class cause: a refusal with more than one
+      // field replaces the envelope message with the bounded summary, so a
+      // per-field line has to stay self-contained.
+      message: `${field.field} is required, as an absolute path: the LAUNCH directory is never used as ${field.subject}`,
+      expected: "absolute path",
+      received: "undefined",
     }
-    if (!path.isAbsolute(field.value)) return field;
-  }
-  return undefined;
+    : {
+      path: field.field,
+      code: "invalid_type",
+      message: `${field.field} must be an absolute path: a relative one would resolve against the LAUNCH directory, so it cannot name ${field.subject}`,
+      expected: "absolute path",
+      received: "relative path",
+    };
+}
+
+/** Every field a launch-directory invocation must not resolve there. */
+function unnamed(fields: readonly LaunchDirectoryField[]): LaunchDirectoryField[] {
+  return fields.filter((field) =>
+    field.value === undefined ? field.optional !== true : !path.isAbsolute(field.value));
 }

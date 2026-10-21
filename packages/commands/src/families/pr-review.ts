@@ -232,6 +232,13 @@ async function execute(verb: Verb, input: Input, context: InvocationContext): Pr
       return ok(id, { path: prReviewReportPath({ reviewsDir, target: parseTarget(need(input.target, "--target")), ...(stage ? { stage } : {}), ...(input.slug ? { slug: input.slug } : {}), ...(input.date ? { date: input.date } : {}) }) });
     }
     if (verb === "validate-report") {
+      // The report path is REQUIRED but may still be relative: on a connection
+      // that declared no workspace a relative one resolves against the host's
+      // checkout, so the verdict would describe a file the caller never named.
+      const unnamedReport = launchDirectoryRefusal(id, context, {
+        fields: [{ field: "reportFile", subject: "the report file", value: input.reportFile }],
+      });
+      if (unnamedReport !== undefined) return unnamedReport;
       const file = abs(context.cwd, need(input.reportFile, "report file"));
       if (!existsSync(file)) throw new Error(`report file not found: ${file}`);
       const result = validatePrReviewReport(readFileSync(file, "utf8"));
