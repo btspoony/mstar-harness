@@ -81,13 +81,18 @@ the native path's own documentation replaces it.
   call puts on the wire is that call's own fact. The per-agent scoped mount was
   removed because it spawned one full process per agent and never activated
   (its bridge dependency was not on the plugin's resolution chain).
-  **A command that needs an identity takes the caller's per-call `sessionId`
-  selector** — twelve declarations exist across `plan`, `session`, `workflow`,
-  `status`, `milestone` and the execution ledgers — and the three dsh **native
-  tools** (`mstar_plan_bind`, `mstar_audit_validate`, `mstar_execution_clear`)
-  are the host-proven route where they cover the operation, because there
-  identity is `exec.agent.id` and no argument can override it. The shared
-  connection takes its control root as an explicit input (`--harness`,
+  **A command that needs an identity does NOT read it from a caller-declared
+  `sessionId` on the default connection**: a child process cannot prove the
+  caller, so the selector is unpublished and a supplied one is refused with
+  `mcp.caller-identity-unavailable`. An explicit launch opt-in
+  (`mstar mcp --trust-caller-session-id`, OFF in the shipped bundle row) is the
+  only way to publish it, for a deployment that owns that trust boundary. The
+  three dsh **native tools** (`mstar_plan_bind`, `mstar_audit_validate`,
+  `mstar_execution_clear`) are the host-proven route where they cover the
+  operation, because there identity is `exec.agent.id` and no argument can
+  override it; everything else — including `plan prepare`, `plan progress` and
+  `plan complete`, which have no native tool yet — runs through the CLI. The
+  shared connection takes its control root as an explicit input (`--harness`,
   `MSTAR_HARNESS_DIR`, or the call's `harness` selector) — never from the launch
   cwd.
 - **Agent-teams `target` / `agent_id` addressing is not a shell identity

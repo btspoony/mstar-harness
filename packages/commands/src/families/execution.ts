@@ -139,6 +139,10 @@ function cliDefinition(id: string): CommandDefinition<ExecutionInput, unknown> {
     id,
     cli: { path: ["store", "execution", verb], aliases: [], arguments: [], options },
     input: inputSchema.pick(shape),
+    // `harness` names the operation's TARGET store, not the root this command
+    // runs from: the MCP connection pin must not rewrite it (and a target equal
+    // to the connection's control root is the family's own refusal, below).
+    rootInputs: [],
     output: commandEnvelopeSchema,
     effects: writeVerbs[verb] === true ? ["read", "write"] : ["read"],
     description: verb === "export"

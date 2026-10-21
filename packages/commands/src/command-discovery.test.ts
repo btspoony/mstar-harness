@@ -168,7 +168,7 @@ describe("command discovery", () => {
       { name: "name", ownership: "caller", route: "cli" },
       { name: "title", ownership: "caller", route: "cli" },
       { name: "session", ownership: "caller", route: "cli" },
-      { name: "session", ownership: "caller", route: "mcp", help: "when the selected route requires session identity, it must be supplied by the caller (host per call); legacy pre-activation routes do not require it, and legacy `plan bind --resume` refuses declared identity while ignoring ambient environment identity" },
+      { name: "session", ownership: "caller", route: "mcp", help: "MCP: published only on a server launched with --trust-caller-session-id (off by default); a shared connection carries no host-proven caller identity, so use the dsh native tool that covers the operation or run the CLI command from the session's shell" },
     ]);
   });
 

@@ -2,9 +2,16 @@
  * The one supply-naming sentence every identity-missing refusal states: how a
  * caller puts a session identity on the call, per transport. Refusal texts
  * interpolate it verbatim so the recovery is nameable without reading source.
+ *
+ * The MCP clause names the real routes on purpose: a shared MCP server is a
+ * child process with no host-proven caller identity, so a caller-declared
+ * `sessionId` is refused unless the launcher opted in
+ * (`mstar mcp --trust-caller-session-id`, off by default). Only three
+ * operations have a host-proven native tool today; everything else runs
+ * through the CLI, and plan prepare/progress/complete have no native tool yet.
  */
 export const IDENTITY_SUPPLIES =
-  "CLI: pass --session-id or set MSTAR_HOST_SESSION_ID; MCP: the host must pass sessionId per call";
+  "CLI: pass --session-id or set MSTAR_HOST_SESSION_ID; MCP: a shared connection accepts no caller-declared identity by default, so use the dsh native tool that covers the operation (plan bind, audit report validation and execution clear) or run the CLI command from the session's shell \u2014 plan prepare/progress/complete have no native tool yet";
 
 /**
  * Where a caller reads each execution token kind a CLI `--expect` may need, in

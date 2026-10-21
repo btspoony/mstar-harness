@@ -1,11 +1,12 @@
 import { afterEach, describe, expect, test } from "bun:test";
+import { execFileSync } from "node:child_process";
 import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { Command } from "commander";
 import { Client, InMemoryTransport } from "@modelcontextprotocol/client";
 import { McpServer } from "@modelcontextprotocol/server";
-import { captureIssue, initializeStore } from "@mstar-harness/engine";
+import { backupStore, captureIssue, initializeStore } from "@mstar-harness/engine";
 import { getCommandDefinitions, getCommandSchemas, type CommandEnvelope } from "@mstar-harness/commands";
 import { mapParserError } from "../src/command-adapter";
 import { registerMcpCommand } from "../src/mcp/command";
@@ -908,7 +909,7 @@ const CONTROL_ROOT_CLASS: Readonly<Record<string, "root" | "none">> = {
   "plan.show": "root", "plugin.validate": "none", "pr-review.budget": "none",
   "pr-review.post": "none", "pr-review.report-path": "root", "pr-review.seat-prompt": "none",
   "pr-review.size": "none", "pr-review.tally": "none", "pr-review.validate-report": "none",
-  "pr-review.worktree-cleanup": "none", "pr-review.worktree-setup": "none", "qc.validate-report": "none",
+  "pr-review.worktree-cleanup": "none", "pr-review.worktree-setup": "root", "qc.validate-report": "none",
   "report": "none", "review.seats": "none", "roadmap.export": "root",
   "roadmap.import": "root", "roadmap.replace": "root", "roadmap.show": "root",
   "roles.validate": "none", "schema": "none", "sdd.check-context": "root",
@@ -1167,6 +1168,107 @@ describe("MCP control-root admission class", () => {
       await server.close();
       if (previousHarness === undefined) delete process.env.MSTAR_HARNESS_DIR;
       else process.env.MSTAR_HARNESS_DIR = previousHarness;
+    }
+  });
+});
+
+/**
+ * Two REAL Git main worktrees, each owning its own `.mstar`: the engine verifies
+ * the SDD process root through Git, so a control-root regression needs genuine
+ * checkouts rather than bare directories.
+ */
+function twoGitWorkspaces(): { rootA: string; rootB: string; harnessA: string } {
+  const base = mkdtempSync(path.join(os.tmpdir(), "mcp-harness-root-"));
+  roots.push(base);
+  const make = (name: string): string => {
+    const repo = path.join(base, name);
+    mkdirSync(path.join(repo, ".mstar"), { recursive: true });
+    execFileSync("git", ["init", "-q", "-b", "main"], { cwd: repo });
+    execFileSync("git", ["-c", "user.email=t@t", "-c", "user.name=t", "commit", "-q", "--allow-empty", "-m", "init"], { cwd: repo });
+    return repo;
+  };
+  const rootA = make("repo-a");
+  const rootB = make("repo-b");
+  return { rootA, rootB, harnessA: path.join(rootA, ".mstar") };
+}
+
+describe("MCP pinned root selectors and operation targets", () => {
+  test("a pinned connection cannot re-root sdd.workspace through controlRoot", async () => {
+    const fixture = twoGitWorkspaces();
+    // The call names a DIFFERENT real main worktree; the pin must decide. The
+    // selector is removed at the seam, so the handler falls back to the pinned
+    // harness and writes there.
+    const result = await callRawTool(
+      createContextResolver({ harnessRoot: fixture.harnessA }),
+      "sdd.workspace",
+      { planId: "plan-pinned", controlRoot: fixture.rootB },
+    );
+    expect(result.isError).toBe(false);
+    const envelope = result.structuredContent as CommandEnvelope;
+    expect(envelope).toMatchObject({ status: "ok", code: "sdd.workspace.ok" });
+    const sddDir = (envelope.data as { sddDir: string }).sddDir;
+    expect(sddDir).toBe(path.join(realpathSync(fixture.harnessA), "sdd", "plan-pinned"));
+    expect(existsSync(sddDir)).toBe(true);
+    // The other root received NOTHING: no SDD tree, not even its own harness's.
+    expect(existsSync(path.join(fixture.rootB, ".mstar", "sdd", "plan-pinned"))).toBe(false);
+    expect(existsSync(path.join(fixture.rootB, ".mstar", "sdd"))).toBe(false);
+  });
+
+  test("a pinned connection leaves the store.execution target untouched", async () => {
+    const root = mkdtempSync(path.join(os.tmpdir(), "mcp-harness-root-"));
+    roots.push(root);
+    const pinned = path.join(root, "control", ".mstar");
+    const target = path.join(root, "target", ".mstar");
+    mkdirSync(pinned, { recursive: true });
+    mkdirSync(target, { recursive: true });
+    (await initializeStore({ harnessDir: pinned })).close();
+    (await initializeStore({ harnessDir: target })).close();
+    // A recovery point must live inside the root it protects.
+    const backup = path.join(target, "backups", "target-backup.db");
+    mkdirSync(path.dirname(backup), { recursive: true });
+    await backupStore({ harnessDir: target }, { out: backup });
+    const resolver = createContextResolver({ harnessRoot: pinned });
+
+    // `harness` names the FOREIGN store, not this connection's root: all three
+    // actions must reach the target instead of refusing it as the control root.
+    const exportOut = path.join(root, "export.json");
+    const exported = await callRawTool(resolver, "store.execution.export", { harness: target, out: exportOut });
+    expect(exported.isError).toBe(false);
+    expect(exported.structuredContent).toMatchObject({ status: "ok", code: "store.execution.export.ok" });
+    expect(existsSync(exportOut)).toBe(true);
+
+    const previewOut = path.join(root, "preview.json");
+    const preview = await callRawTool(resolver, "store.execution.restore-preview", { harness: target, backup, out: previewOut });
+    expect(preview.isError).toBe(false);
+    expect(preview.structuredContent).toMatchObject({ status: "ok", code: "store.execution.restore-preview.ok" });
+    expect(existsSync(previewOut)).toBe(true);
+
+    const restored = await callRawTool(resolver, "store.execution.restore", {
+      harness: target,
+      preview: previewOut,
+      operator: "ops-engineer",
+      authorization: "test-restore-authorization",
+    });
+    expect(restored.isError).toBe(false);
+    expect(restored.structuredContent).toMatchObject({ status: "ok", code: "store.execution.restore.ok" });
+  });
+
+  test("an unpinned connection refuses pr-review.worktree-setup instead of running it in the host checkout", async () => {
+    const fixture = twoGitWorkspaces();
+    const previousCwd = process.cwd();
+    process.chdir(fixture.rootA);
+    try {
+      // The host checkout IS a usable Git repository, which is exactly the trap:
+      // the command exposes no workspace field, so a null-root call would review
+      // the host's own repository. It must refuse with the named cause instead.
+      const result = await callRawTool(createContextResolver(), "pr-review.worktree-setup", { workingTree: true });
+      expect(result.isError).toBe(true);
+      const text = rawText(result);
+      expect(text).toContain("mcp.control-root-unresolved");
+      expect(text).toContain("--harness");
+      expect(text).toContain("MSTAR_HARNESS_DIR");
+    } finally {
+      process.chdir(previousCwd);
     }
   });
 });

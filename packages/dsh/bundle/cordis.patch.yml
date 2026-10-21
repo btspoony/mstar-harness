@@ -44,15 +44,16 @@
 # identity; an override restates the row's whole `config`, including the
 # `args` list.
 #
-# Identity: this connection carries none. A stdio child is process-level, so a
-# per-connection identity would have to come from the environment the host
-# launches it with, and dsh already has the provable channel: `exec.agent.id`
-# on the native command surface. A command that needs one takes the caller's
-# per-call `sessionId`; the host-proven route for the operations below is the
-# native surface, where no argument can override the identity. The three
-# native tools are `mstar_plan_bind`, `mstar_audit_validate` and
-# `mstar_execution_clear`; plan prepare/progress/complete are MCP `mstar_plan`
-# actions, not native tools.
+# Identity: this connection carries none, and it accepts none by default. A
+# stdio child is process-level, so it has no host-proven caller identity; the
+# per-call `sessionId` selector is therefore unpublished and a call that sends
+# one is refused (`mcp.caller-identity-unavailable`). The row deliberately does
+# NOT pass `--trust-caller-session-id`; that flag is the deployment's explicit
+# opt-in for a trust boundary this server owns. The host-proven routes are the
+# native tools -- `mstar_plan_bind`, `mstar_audit_validate` and
+# `mstar_execution_clear` -- and the CLI. The native surface covers plan bind
+# only of the plan lifecycle actions: plan prepare/progress/complete have no
+# native tool yet and stay CLI-only (tracked follow-up).
 
 - insert:
     - id: mstar

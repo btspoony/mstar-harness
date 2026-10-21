@@ -2,7 +2,7 @@
   "mcpServers": {
     "morning-star": {
       "command": "npx",
-      "args": ["@mstar-harness/cli", "mcp"]
+      "args": ["@mstar-harness/cli", "mcp", "--trust-caller-session-id"]
     }
   }
 }

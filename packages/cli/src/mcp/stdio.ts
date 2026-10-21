@@ -38,7 +38,10 @@ const NULL_ROOT_BOOTSTRAP_COMMANDS = new Set(["harness.scaffold"]);
  *   `compound.validate`'s catalog query, `worktree.check`, …) or derive an
  *   implicit harness path from the invocation workspace (`audit.scaffold`'s
  *   `{REVIEW_DIR}`, `pr-review.report-path`'s default review dir, `sdd.workspace`,
- *   `status.validate`).
+ *   `status.validate`);
+ * - `pr-review.worktree-setup`, which runs its Git discovery in the invocation
+ *   workspace and exposes no workspace field of its own: with a null root it
+ *   would either fail outside a checkout or review the host's repository.
  */
 const ROOT_FREE_COMMANDS: ReadonlySet<string> = new Set([
   "schema",
@@ -65,7 +68,6 @@ const ROOT_FREE_COMMANDS: ReadonlySet<string> = new Set([
   "pr-review.size",
   "pr-review.seat-prompt",
   "pr-review.post",
-  "pr-review.worktree-setup",
   "pr-review.worktree-cleanup",
 ]);
 
@@ -124,6 +126,15 @@ export interface McpStdioOptions {
    * its writable subset instead of having no route at all.
    */
   seat?: McpSeat;
+  /**
+   * Explicit opt-in: trust a caller-declared `sessionId` as an execution
+   * identity (`--trust-caller-session-id`, off by default). An MCP server is a
+   * child process with no host-proven caller identity, so accepting the value
+   * lets any caller address another session's coordinator row. Leave it unset
+   * on a shared connection; the dsh native tools and the CLI are the
+   * host-proven routes.
+   */
+  trustCallerSessionId?: boolean;
 }
 
 /**
@@ -218,6 +229,13 @@ export function createContextResolver(options: McpStdioOptions = {}): ResolveCon
   // an unpinned connection, where the caller must name the root on every call.
   Object.defineProperty(resolver, "defaultHarness", {
     get: () => pinned,
+    enumerable: true,
+  });
+  // Registration reads this to decide whether the per-call `sessionId`
+  // selector exists at all. A construction-time snapshot is right here: the
+  // opt-in is a launch flag, not a mutable fact.
+  Object.defineProperty(resolver, "callerIdentity", {
+    value: options.trustCallerSessionId === true,
     enumerable: true,
   });
   return resolver;

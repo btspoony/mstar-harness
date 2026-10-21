@@ -118,15 +118,17 @@ function commandRequirements(definition: CommandDefinition): readonly CommandReq
     ...hinted,
   ];
   // Route-verified session facts from the adapters: CLI collects the session
-  // selector from argv (with its environment fallback); MCP reads it from the
-  // per-call input, while its context resolver supplies nothing.
+  // selector from argv (with its environment fallback); an MCP connection
+  // publishes the selector only when the launcher trusted caller identity
+  // (`mstar mcp --trust-caller-session-id`, off by default), and otherwise the
+  // caller uses the dsh native tool or the CLI.
   const sessionOption = definition.cli.options.find((option) => option.context === "sessionId");
   if (sessionOption !== undefined) {
     if (!overridden.has(`cli:${sessionOption.key}`)) {
       requirements.push({ name: sessionOption.key, ownership: "caller", route: "cli" });
     }
     if (!overridden.has(`mcp:${sessionOption.key}`)) {
-      requirements.push({ name: sessionOption.key, ownership: "caller", route: "mcp", help: "when the selected route requires session identity, it must be supplied by the caller (host per call); legacy pre-activation routes do not require it, and legacy `plan bind --resume` refuses declared identity while ignoring ambient environment identity" });
+      requirements.push({ name: sessionOption.key, ownership: "caller", route: "mcp", help: "MCP: published only on a server launched with --trust-caller-session-id (off by default); a shared connection carries no host-proven caller identity, so use the dsh native tool that covers the operation or run the CLI command from the session's shell" });
     }
   }
   return requirements;

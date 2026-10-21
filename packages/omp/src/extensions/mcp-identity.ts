@@ -1,10 +1,13 @@
 /**
- * mcp-identity — omp extension: the host's per-call `sessionId` supply for the
+ * mcp-identity - omp extension: the host's per-call `sessionId` supply for the
  * Morning Star MCP tools (issue #383, option (a)).
  *
  * The MCP layer of `@mstar-harness/cli` declares an optional `sessionId`
- * parameter on exactly the tools whose command carries a session identity; the
- * parameter IS the caller identity the engine sees. omp never filled it, so a
+ * parameter on exactly the tools whose command carries a session identity, and
+ * only on a connection the launcher explicitly trusted
+ * (`mcp.json` passes `--trust-caller-session-id`: this host owns the trust that
+ * maps its session manager to the caller). The parameter IS the caller identity
+ * the engine sees. omp never filled it, so a
  * standalone plan workflow registered from an omp primary session could not
  * carry its creator's identity through `workflow register -> coordinator bind
  * -> plan prepare -> plan progress`. This extension closes that gap
@@ -14,7 +17,7 @@
  * Eligibility is schema-aware, and it must be: the host revalidates a
  * `tool_call` input revision against the tool's declared schema, so an added
  * key the tool does not declare is rejected before the call is ever scheduled.
- * The tool's own `ToolInfo.parameters` is the authority — a matching name
+ * The tool's own `ToolInfo.parameters` is the authority - a matching name
  * prefix is a prefilter, never sufficient alone.
  *
  * The revision is additive-only: `{ ...input, sessionId }`. An explicit

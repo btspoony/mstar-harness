@@ -34,6 +34,15 @@ export type ResolveContext = {
     call?: ResolveContextCall,
   ): InvocationContext | Promise<InvocationContext>;
   readonly defaultHarness?: string;
+  /**
+   * True only when the LAUNCHER explicitly trusted a caller-declared
+   * `sessionId` as an execution identity (`mstar mcp --trust-caller-session-id`,
+   * off by default). An MCP server is a child process with no host-proven
+   * caller identity, so the default connection publishes no session selector
+   * and refuses one a caller supplies; the dsh native tools and the CLI are the
+   * host-proven routes.
+   */
+  readonly callerIdentity?: boolean;
 };
 
 /**
@@ -77,9 +86,15 @@ export type ResolveContextCall = Readonly<{
  * the same way but enforced at admission (`unpinnedHarnessRefusal`) — admission
  * alone would answer the union's "invalid input" without naming the field.
  */
-function mcpInputContract(definition: CommandDefinition, descriptor: CommandSchemaDescriptor, harnessRequired: boolean) {
+function mcpInputContract(
+  definition: CommandDefinition,
+  descriptor: CommandSchemaDescriptor,
+  options: Readonly<{ harnessRequired: boolean; harnessIsRoot: boolean; publishSelector: boolean }>,
+) {
   const input = definition.input;
   const jsonSchema = descriptor.input as Record<string, unknown>;
+  const selector = definition.cli.options.find((option) => option.context === "sessionId");
+  const harnessRequired = options.harnessRequired && options.harnessIsRoot;
   if (!(input instanceof z.ZodObject)) {
     const needsHarness = harnessRequired && inputFields(jsonSchema).has("harness");
     return {
@@ -96,7 +111,6 @@ function mcpInputContract(definition: CommandDefinition, descriptor: CommandSche
     properties[field] = descriptor.payloadSchemas[field] as Record<string, unknown>;
   }
   const extended = Object.keys(composed).length === 0 ? input : input.safeExtend(composed);
-  const selector = definition.cli.options.find((option) => option.context === "sessionId");
   const requiredFields = new Set(descriptor.required);
   if (harnessRequired && Object.hasOwn(properties, "harness")) requiredFields.add("harness");
   const requiredShape: Record<string, z.core.$ZodType> = {};
@@ -106,11 +120,11 @@ function mcpInputContract(definition: CommandDefinition, descriptor: CommandSche
     if (declared instanceof z.ZodOptional) requiredShape[field] = declared.unwrap();
   }
   let schema = Object.keys(requiredShape).length === 0 ? extended : extended.safeExtend(requiredShape);
-  // The session selector is the caller's per-call identity channel on this
-  // shared connection; the connection itself carries none. Publishing it only
-  // where a member declares it keeps tools that read no identity from
-  // advertising one.
-  if (selector !== undefined) {
+  // The session selector is the caller's per-call identity channel, and only a
+  // launcher that explicitly trusted caller identity publishes it. On the
+  // default shared connection the field does not exist, so a call that sends
+  // one is refused by name (`callerIdentityRefusal`) instead of vanishing.
+  if (selector !== undefined && options.publishSelector) {
     schema = schema.safeExtend({ [selector.key]: z.string().optional() });
     properties[selector.key] = { type: "string" };
   }
@@ -118,7 +132,7 @@ function mcpInputContract(definition: CommandDefinition, descriptor: CommandSche
     if (properties[field] !== undefined) properties[field] = { ...properties[field], default: value };
   }
   const required = selector === undefined ? [...requiredFields] : [...requiredFields].filter((field) => field !== selector.key);
-  const requirements = descriptor.requirements.filter((entry) => entry.route === "mcp");
+  const requirements = descriptor.requirements.filter((entry) => entry.route === "mcp" && (options.publishSelector || entry.name !== selector?.key));
   return {
     schema,
     jsonSchema: {
@@ -132,58 +146,65 @@ function mcpInputContract(definition: CommandDefinition, descriptor: CommandSche
 }
 
 /**
- * A launcher-pinned root is only a default for a field the tool publishes: an
- * unset `input.harness` is filled from `defaultHarness` when the tool's declared
- * input schema advertises `harness`, and a caller's per-call value is OVERWRITTEN
- * by the pin — a connection pin is the launcher's declaration for every call, so
- * a caller can never re-root a command whose handler resolves its own root from
- * `input.harness`. A tool that names no such field receives nothing.
- *
- * The field list is read through `inputFields` so a UNION input (the closure
- * actions) is classified by the branches' `harness`, exactly like an object
- * input: reading only `properties` would leave those actions with no pin, and
- * their handler would then re-discover a root from the invocation workspace.
+ * The input fields that select this command's ROOT: the command's own
+ * `rootInputs` when it declares them, else the `harness` field it publishes.
+ * A command that only NAMES a harness (`store.execution.*`) declares an empty
+ * list, so its target is never mistaken for the connection's root.
  */
-function declaresHarness(contract: { jsonSchema: Record<string, unknown> }): boolean {
-  return inputFields(contract.jsonSchema).has("harness");
+function rootInputsOf(definition: CommandDefinition, descriptor: CommandSchemaDescriptor): readonly string[] {
+  if (definition.rootInputs !== undefined) return definition.rootInputs;
+  return inputFields(descriptor.input as Record<string, unknown>).has("harness") ? ["harness"] : [];
 }
 
-function handlerInput(definition: CommandDefinition, input: unknown, defaultHarness: string | undefined): unknown {
+function handlerInput(definition: CommandDefinition, input: unknown, defaultHarness: string | undefined, harnessIsRoot: boolean): unknown {
   if (input === null || typeof input !== "object") return input;
   const record = input as Record<string, unknown>;
   const contextKeys = definition.cli.options.filter((option) => option.context === "sessionId").map((option) => option.key);
   const normalized = { ...record };
   for (const key of contextKeys) delete normalized[key];
-  if (defaultHarness !== undefined) normalized.harness = defaultHarness;
+  if (defaultHarness !== undefined && harnessIsRoot) normalized.harness = defaultHarness;
   return normalized;
 }
 
 /**
- * Normalize the `harness` selector BEFORE the tool schema runs. Two rules:
+ * Normalize the ROOT selectors BEFORE the tool schema runs. Two rules:
  *
  * - the connection pin WINS. The resolver already pins `controlRoot`, but a
- *   command that resolves its own root from `input.harness` would still read the
- *   caller's value, so the admitted field is overwritten with the pin. This is
- *   also what lets a `min(1)` harness schema accept a blank value the caller
- *   sent: writing the pin over it at the earliest seam makes every family judge
- *   that call the same way.
+ *   command that resolves its own root from an input field would still read the
+ *   caller's value, so a pinned connection overwrites a `harness` root selector
+ *   with the pin and REMOVES any other root selector (the invocation context
+ *   already carries the pin, and a workspace-root selector such as
+ *   `sdd.workspace`'s `controlRoot` is not the harness dir). This is also what
+ *   lets a `min(1)` harness schema accept a blank value the caller sent: writing
+ *   the pin over it at the earliest seam makes every family judge that call the
+ *   same way.
  * - a per-call value is resolved to an ABSOLUTE path. The invocation workspace
  *   is anchored at the root's parent, so a relative value would be re-resolved
  *   against that anchor by the handler and double-join the path (`x/.mstar`
  *   under an `x` anchor became `<anchor>/x/x/.mstar`). The launch directory is
  *   the only base a per-call selector can be relative to.
  *
- * A caller's object is never mutated: a shallow copy carries the normalized
- * field, and an object with no `harness` key is returned untouched (injecting
- * the field would advertise a capability the tool does not publish).
+ * A field that names an operation TARGET (`rootInputs: []`) is never touched:
+ * the pin governs which store a command EXECUTES AGAINST, not which object an
+ * operation NAMES. A caller's object is never mutated: a shallow copy carries
+ * the normalized fields, and an object naming no root is returned untouched.
  */
-function normalizedHarness(input: unknown, defaultHarness: string | undefined): unknown {
+function normalizedRootInputs(rootInputs: readonly string[], input: unknown, defaultHarness: string | undefined): unknown {
   if (input === null || typeof input !== "object" || Array.isArray(input)) return input;
   const record = input as Record<string, unknown>;
-  if (!Object.hasOwn(record, "harness")) return input;
-  const target = defaultHarness ?? (typeof record.harness === "string" && record.harness.trim() !== "" ? resolve(record.harness) : undefined);
-  if (target === undefined || record.harness === target) return input;
-  return { ...record, harness: target };
+  const named = rootInputs.filter((field) => Object.hasOwn(record, field));
+  if (named.length === 0) return input;
+  const normalized = { ...record };
+  for (const field of named) {
+    if (defaultHarness !== undefined) {
+      if (field === "harness") normalized[field] = defaultHarness;
+      else delete normalized[field];
+      continue;
+    }
+    const value = normalized[field];
+    if (typeof value === "string" && value.trim() !== "") normalized[field] = resolve(value);
+  }
+  return normalized;
 }
 
 /** True when the call supplied a non-blank `harness` (a blank value is not a declaration). */
@@ -218,6 +239,63 @@ function unpinnedHarnessRefusal(definition: CommandDefinition): CommandEnvelope<
       received: "undefined",
     }],
   });
+}
+
+/**
+ * The named refusal for a caller-declared session identity on a connection that
+ * was NOT launched with `--trust-caller-session-id` (the default). An MCP server
+ * is a child process with no host-proven caller identity, so accepting the
+ * value would let any caller address another session's coordinator row.
+ *
+ * The recovery names the routes that really exist: the dsh native tool for the
+ * operations it covers (plan bind, audit report validation, execution clear) and
+ * the CLI for everything else. It is deliberately explicit that plan
+ * prepare/progress/complete have NO native tool yet instead of implying one.
+ * The supplied value is never echoed: a session id is credential-shaped, and a
+ * value copied into a refusal travels wherever the refusal is read.
+ */
+function callerIdentityRefusal(definition: CommandDefinition, selectors: readonly string[]): CommandEnvelope<never> {
+  const cli = `mstar ${definition.cli.path.join(" ")}`;
+  const native = definition.id === "plan.bind"
+    ? "the dsh native tool `mstar_plan_bind` (its identity is the carrying session's `exec.agent.id`)"
+    : undefined;
+  const planGap = ["plan.prepare", "plan.progress", "plan.complete"].includes(definition.id);
+  return refusalEnvelope({
+    command: definition.id,
+    status: "refused",
+    code: "mcp.caller-identity-unavailable",
+    exitCode: 1,
+    message: `${definition.id} cannot run on this MCP connection: a caller-declared session identity was supplied, and this server was not launched with --trust-caller-session-id. `
+      + "An MCP child process has no host-proven caller identity, so a sessionId on the wire cannot become a coordinator identity.",
+    helpRoute: `mstar schema --command ${definition.id}`,
+    recovery: [
+      "Drop `sessionId` on this connection; it is not a published field unless the launcher opts in.",
+      ...(native === undefined ? [] : [`The host-proven route for this operation is ${native}.`]),
+      `Otherwise run \`${cli}\` from the session's shell, which takes --session-id or MSTAR_HOST_SESSION_ID.`,
+      ...(planGap ? ["No dsh native tool covers plan prepare/progress/complete yet; the CLI is the only route for them."] : []),
+    ].join(" "),
+    diagnostics: selectors.map((key) => ({
+      path: key,
+      code: "not_allowed",
+      message: `${key} is not an input of this connection: it carries no host-proven caller identity`,
+      expected: "omitted",
+      received: "supplied",
+    })),
+    details: { selectors, trust: "off" },
+  });
+}
+
+/** The declared session selectors the CALL supplied, for the untrusted-connection refusal. */
+function suppliedSelectors(family: FoldedFamilyTool, input: unknown): readonly string[] {
+  if (input === null || typeof input !== "object" || Array.isArray(input)) return [];
+  const record = input as Record<string, unknown>;
+  const declared = new Set<string>();
+  for (const member of family.definitions) {
+    for (const option of member.cli.options) {
+      if (option.context === "sessionId") declared.add(option.key);
+    }
+  }
+  return [...declared].filter((key) => record[key] !== undefined);
 }
 
 /**
@@ -380,26 +458,30 @@ function cappedFieldList(fields: readonly string[]): string {
  * top-level miss and refuses; a key INSIDE an accepted payload is validated by
  * the action's own payload schema, which reports its own diagnostics.
  */
-function undeclaredFields(family: FoldedFamilyTool, definition: CommandDefinition, input: unknown): readonly string[] {
+function undeclaredFields(family: FoldedFamilyTool, definition: CommandDefinition, input: unknown, callerIdentity: boolean): readonly string[] {
   if (input === null || typeof input !== "object" || Array.isArray(input)) return [];
   const record = input as Record<string, unknown>;
   const accepted = family.acceptedFields.get(actionOf(definition.id)) ?? [];
-  const declared = new Set<string>([...accepted, ...transportFields(family)]);
+  const declared = new Set<string>([...accepted, ...transportFields(family, callerIdentity)]);
   return Object.keys(record).filter((key) => record[key] !== undefined && !declared.has(key));
 }
 
 /**
- * The transport fields of the WHOLE family: `action` plus every member's session
- * selector. Neither is a member input — one selects the member, the other is
- * connection identity — so no action can call them invalid.
+ * The transport fields of the WHOLE family: `action` plus, on a connection that
+ * publishes it, every member's session selector. Neither is a member input -
+ * one selects the member, the other is the opt-in identity channel - so no
+ * action can call them invalid.
  *
  * Read from the family's definitions rather than from `family.selectors`: the
  * published selector list marks a member's own selector, while this set must
  * cover every member's selector so an action that reads none still reports it
- * as a transport field instead of a typo.
+ * as a transport field instead of a typo. On the default connection no session
+ * selector is published at all, so none is exempt: a supplied one reaches the
+ * named caller-identity refusal before this set is consulted.
  */
-function transportFields(family: FoldedFamilyTool): ReadonlySet<string> {
+function transportFields(family: FoldedFamilyTool, callerIdentity: boolean): ReadonlySet<string> {
   const keys = new Set<string>(["action"]);
+  if (!callerIdentity) return keys;
   for (const member of family.definitions) {
     for (const option of member.cli.options) {
       if (option.context === "sessionId") keys.add(option.key);
@@ -426,10 +508,10 @@ function familyAcceptedFields(family: FoldedFamilyTool): readonly string[] {
  * selected-action case belongs to `undeclaredFields` /
  * `undeclaredInputRefusal`.
  */
-function familyWideInvalidFields(family: FoldedFamilyTool, input: unknown): readonly string[] {
+function familyWideInvalidFields(family: FoldedFamilyTool, input: unknown, callerIdentity: boolean): readonly string[] {
   if (input === null || typeof input !== "object" || Array.isArray(input)) return [];
   const record = input as Record<string, unknown>;
-  const declared = new Set<string>([...familyAcceptedFields(family), ...transportFields(family)]);
+  const declared = new Set<string>([...familyAcceptedFields(family), ...transportFields(family, callerIdentity)]);
   return Object.keys(record).filter((key) => record[key] !== undefined && !declared.has(key));
 }
 
@@ -531,29 +613,38 @@ export function registerMcpCommands(
   onToolsRegistered?: (names: readonly string[]) => void,
 ): void {
   const connectionEffects = createMcpEffects(services);
-  // A connection that declared no root cannot fill `harness` from a launcher
-  // default, so every command that names the field must receive it: publishing
-  // it as required is what stops a model from forgetting the one fact the root
-  // resolution needs (and what makes admission refuse the omission).
+  // A connection that declared no root cannot fill a root `harness` from a
+  // launcher default, so every command whose root selector is `harness` must
+  // receive it: publishing it as required is what stops a model from forgetting
+  // the one fact the root resolution needs (and what makes admission refuse the
+  // omission). A harness that is an operation TARGET (`store.execution.*`) is
+  // not a root selector and gains no such requirement.
   const harnessRequired = resolveContext.defaultHarness === undefined;
+  // The launcher's explicit opt-in is the ONLY channel through which a
+  // caller-declared session id becomes an execution identity. It is off unless
+  // the deployment said otherwise (`mstar mcp --trust-caller-session-id`).
+  const callerIdentity = resolveContext.callerIdentity === true;
   const prepared = new Map<string, {
     definition: CommandDefinition;
     descriptor: CommandSchemaDescriptor;
     contract: ReturnType<typeof mcpInputContract>;
     harnessDefault: boolean;
+    rootInputs: readonly string[];
   }>();
   const members = definitions.map((definition) => {
     const descriptor = getCommandSchemas([definition])[0]!;
     const selector = definition.cli.options.find((option) => option.context === "sessionId");
-    const contract = mcpInputContract(definition, descriptor, harnessRequired);
-    prepared.set(definition.id, { definition, descriptor, contract, harnessDefault: declaresHarness(contract) });
+    const rootInputs = rootInputsOf(definition, descriptor);
+    const harnessIsRoot = rootInputs.includes("harness");
+    const contract = mcpInputContract(definition, descriptor, { harnessRequired, harnessIsRoot, publishSelector: callerIdentity });
+    prepared.set(definition.id, { definition, descriptor, contract, harnessDefault: harnessIsRoot, rootInputs });
     return {
       definition,
       // The composed contract's `required` is the published authority: the
       // command's own required fields plus the unpinned-connection `harness`
       // rule. The input schema's own copy predates both.
       input: { ...(descriptor.input as Readonly<Record<string, unknown>>), required: contract.jsonSchema.required },
-      ...(selector === undefined ? {} : { selector: { key: selector.key } }),
+      ...(selector === undefined || !callerIdentity ? {} : { selector: { key: selector.key } }),
     };
   });
   const families = foldFamilyTools(members);
@@ -574,7 +665,16 @@ export function registerMcpCommands(
           const action = record?.action;
           const definition = typeof action === "string" ? definitionForAction(family, action) : undefined;
           if (definition === undefined) {
-            return { issues: [{ message: JSON.stringify(unknownActionRefusal(family, action, familyWideInvalidFields(family, input))) }] };
+            return { issues: [{ message: JSON.stringify(unknownActionRefusal(family, action, familyWideInvalidFields(family, input, callerIdentity))) }] };
+          }
+          // No caller-declared identity exists on this connection unless the
+          // launcher opted in: the selector is unpublished, so a call that
+          // supplies one is refused by name here, before admission and before
+          // any engine round-trip. `plan.progress` with a claimed coordinator id
+          // can therefore not reach the execution ledger.
+          const unpublishedSelectors = callerIdentity ? [] : suppliedSelectors(family, input);
+          if (unpublishedSelectors.length > 0) {
+            return { issues: [{ message: JSON.stringify(callerIdentityRefusal(definition, unpublishedSelectors)) }] };
           }
           // Every input the selected action does not declare is collected
           // first, so one refusal reports all of it: the refused selectors, the
@@ -582,15 +682,19 @@ export function registerMcpCommands(
           // Both groups leave the admitted input, so admission reports only the
           // selected action's declared fields.
           const refusedSelectors = undeclaredSelectors(family, definition, input);
-          const rejected = undeclaredFields(family, definition, input);
+          const rejected = undeclaredFields(family, definition, input, callerIdentity);
           const entry = prepared.get(definition.id)!;
-          const defaultHarness = entry.harnessDefault ? resolveContext.defaultHarness : undefined;
+          // The declared root governs EVERY root selector, not only `harness`:
+          // the pin must remove a `controlRoot` too, so it is read regardless of
+          // which field the command uses. `handlerInput` fills the `harness`
+          // field only when that field is the root (never for a target).
+          const defaultHarness = resolveContext.defaultHarness;
           const admitted = admitCommandInput(
             definition,
-            normalizedHarness(strippedActionInput(withoutFields(input, [...refusedSelectors.map((selector) => selector.key), ...rejected])), defaultHarness),
+            normalizedRootInputs(entry.rootInputs, strippedActionInput(withoutFields(input, [...refusedSelectors.map((selector) => selector.key), ...rejected])), defaultHarness),
             entry.descriptor,
             entry.contract.schema,
-            (data) => handlerInput(definition, data, defaultHarness),
+            (data) => handlerInput(definition, data, defaultHarness, entry.harnessDefault),
           );
           if (refusedSelectors.length > 0 || rejected.length > 0) {
             return { issues: [{ message: JSON.stringify(undeclaredInputRefusal(family, definition, refusedSelectors, rejected, admitted.success ? undefined : admitted)) }] };
@@ -622,7 +726,11 @@ export function registerMcpCommands(
       // never leaves the capability. The connection has no identity of its
       // own, so a session id here is exactly what the caller put on the wire.
       const { definition } = admitted;
-      const resolved = await resolveContext(definition, admitted.sessionId, extra.mcpReq.signal, services, connectionEffects, { harness: admitted.harness });
+      // A harness that names an operation target is not this call's root: only
+      // a declared root selector may select the connection root.
+      const entry = prepared.get(definition.id)!;
+      const callRoot = entry.harnessDefault ? admitted.harness : undefined;
+      const resolved = await resolveContext(definition, admitted.sessionId, extra.mcpReq.signal, services, connectionEffects, { harness: callRoot });
       const sessionId = admitted.sessionId ?? resolved.sessionId;
       const requestContext: InvocationContext = Object.freeze({
         ...resolved,

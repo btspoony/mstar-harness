@@ -107,12 +107,17 @@ and says nothing about which workspace a caller belongs to.
 **Identity.** The shipped row declares none, and the connection carries none:
 there is no `--identity-env`, no declared-identity lock, no selector stripping
 and no connection-wide default session id (ADR
-`dsh-native-identity-channels`), so a per-call `sessionId` is exactly what the
-caller passed, and a command that needs one takes that selector. The
-host-proven route for the operations that need a session identity is the
-dsh-native tools, where it is `exec.agent.id`. The shipped row keeps neutral defaults: no
-path, no identity. Because a patch replaces the row's whole `config`, an
-override restates the `command` and the whole `args` list.
+`dsh-native-identity-channels`). It also does NOT trust a caller-declared
+identity: the per-call `sessionId` selector is unpublished and a call that
+supplies one is refused with `mcp.caller-identity-unavailable`. An operator who
+genuinely owns that trust can add `--trust-caller-session-id` to the row's
+`args` (default OFF; doing so lets any caller that knows a live coordinator
+session id act as it). The host-proven routes are the dsh-native tools, where
+identity is `exec.agent.id`, and the CLI. The native surface covers plan bind,
+audit report validation and execution clear only; plan prepare/progress/complete
+have no native tool yet and are CLI-only. The shipped row keeps neutral
+defaults: no path, no identity. Because a patch replaces the row's whole
+`config`, an override restates the `command` and the whole `args` list.
 
 ## Config surface
 

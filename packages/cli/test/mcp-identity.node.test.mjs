@@ -1,22 +1,24 @@
 /**
- * T4 — issue #383 E2E integration regression: the omp injection contract, over
+ * T4 - issue #383 E2E integration regression: the omp injection contract, over
  * a REAL `mstar mcp` stdio server on a temp harness root with a real ACTIVE
  * execution store (Node; `.node.test.mjs` consumer guard conventions).
  *
  * ## What is real, and what the test supplies
  *
- * - THE BUILT CLI BUNDLE spawned as `mcp` — the exact stdio MCP server a host
- *   launches (`mstar mcp`), addressed with newline-delimited JSON-RPC from this
- *   process. The SHARED connection carries no identity of its own: the launcher
- *   declares none, and `MSTAR_HOST_SESSION_ID` / `MSTAR_EXECUTION_IDENTITY` are
- *   stripped, so the only session identity on the wire is the per-call
- *   `sessionId` parameter a host injects.
+ * - THE BUILT CLI BUNDLE spawned as `mcp --trust-caller-session-id` - the omp
+ *   deployment shape (its `mcp.json` sets the same flag), addressed with
+ *   newline-delimited JSON-RPC from this process. The connection carries no
+ *   identity of its own: `MSTAR_HOST_SESSION_ID` / `MSTAR_EXECUTION_IDENTITY`
+ *   are stripped, so the only session identity on the wire is the per-call
+ *   `sessionId` parameter the host injects. Without the opt-in the server
+ *   publishes no such parameter and refuses one (owned by
+ *   `mcp-identity.test.ts`).
  * - A temp Git workspace whose `.mstar` holds a REAL ACTIVE execution authority
  *   built by the engine's own producers over real `node:sqlite`.
- * - The chain: register (NO id — the NULL-creator contract) -> plan bind
+ * - The chain: register (NO id - the NULL-creator contract) -> plan bind
  *   coordinator (sessionId=A, adopts; receipt reports A) -> plan prepare (A) ->
  *   start record -> progress (all as A) -> lease verify-integration (no
- *   sessionId — its schema declares none; the call stays untouched, no error).
+ *   sessionId - its schema declares none; the call stays untouched, no error).
  *   Assertions come from the authority's own store: creator, the sole active
  *   coordinator session row, and the addressed plan's uncompleted state.
  *
@@ -98,7 +100,7 @@ function startMcpServer(fixture) {
     env[key] = value;
   }
   env.MSTAR_HARNESS_DIR = fixture.harness;
-  const child = spawn(process.execPath, [CLI_ENTRY, "mcp"], { cwd: fixture.root, env, stdio: ["pipe", "pipe", "pipe"] });
+  const child = spawn(process.execPath, [CLI_ENTRY, "mcp", "--trust-caller-session-id"], { cwd: fixture.root, env, stdio: ["pipe", "pipe", "pipe"] });
   const pending = [];
   let buffer = "";
   let stderr = "";
@@ -165,7 +167,7 @@ async function tokenOf(harness, selection) {
  * The chain
  * ------------------------------------------------------------------------ */
 
-test("T4: stdio MCP chain — identity-free shared connection, per-call injected identity, non-capable tool untouched", { timeout: 120_000 }, async () => {
+test("T4: stdio MCP chain - identity-free shared connection, per-call injected identity, non-capable tool untouched", { timeout: 120_000 }, async () => {
   const fixture = await makeActiveWorkspace("mstar-t4-mcp");
   const planPath = join(fixture.harness, "plans", `${PLAN_ID}.md`);
   const sddDir = join(fixture.harness, "sdd", PLAN_ID);

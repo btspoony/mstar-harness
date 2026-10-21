@@ -139,6 +139,18 @@ export interface CommandDefinition<I = unknown, O = unknown> {
   readonly output: ZodType<CommandEnvelope<O>>;
   readonly effects: readonly CommandEffect[];
   readonly description: string;
+  /**
+   * The input fields that select WHICH ROOT this command executes against, in
+   * precedence order. The default is the `harness` field the command publishes.
+   *
+   * Name a different field when a family resolves its own root from it
+   * (`sdd.workspace` takes `controlRoot`), and declare an EMPTY list when the
+   * field only names an operation TARGET rather than the root the command runs
+   * from (`store.execution.*` take the foreign harness they export or restore,
+   * not their own store). The MCP connection pin governs these fields: a pinned
+   * connection overwrites a root selector and leaves a target untouched.
+   */
+  readonly rootInputs?: readonly string[];
   readonly payloads?: Readonly<Record<string, PayloadDescriptor>>;
   readonly requirements?: readonly CommandRequirement[];
   decodeCliInput?(input: Record<string, unknown>): Record<string, unknown> | null;
