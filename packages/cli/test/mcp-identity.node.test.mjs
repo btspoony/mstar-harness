@@ -7,9 +7,10 @@
  *
  * - THE BUILT CLI BUNDLE spawned as `mcp` — the exact stdio MCP server a host
  *   launches (`mstar mcp`), addressed with newline-delimited JSON-RPC from this
- *   process. The server receives NO ambient identity: `MSTAR_HOST_SESSION_ID`
- *   and `MSTAR_EXECUTION_IDENTITY` are stripped, so the ONLY session identity
- *   on the wire is the per-call `sessionId` parameter an omp host would inject.
+ *   process. The SHARED connection carries no identity of its own: the launcher
+ *   declares none, and `MSTAR_HOST_SESSION_ID` / `MSTAR_EXECUTION_IDENTITY` are
+ *   stripped, so the only session identity on the wire is the per-call
+ *   `sessionId` parameter a host injects.
  * - A temp Git workspace whose `.mstar` holds a REAL ACTIVE execution authority
  *   built by the engine's own producers over real `node:sqlite`.
  * - The chain: register (NO id — the NULL-creator contract) -> plan bind
@@ -164,7 +165,7 @@ async function tokenOf(harness, selection) {
  * The chain
  * ------------------------------------------------------------------------ */
 
-test("T4: stdio MCP chain — no-id register, injected binds, per-role identity, non-capable tool untouched", { timeout: 120_000 }, async () => {
+test("T4: stdio MCP chain — identity-free shared connection, per-call injected identity, non-capable tool untouched", { timeout: 120_000 }, async () => {
   const fixture = await makeActiveWorkspace("mstar-t4-mcp");
   const planPath = join(fixture.harness, "plans", `${PLAN_ID}.md`);
   const sddDir = join(fixture.harness, "sdd", PLAN_ID);

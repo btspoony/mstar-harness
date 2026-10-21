@@ -71,33 +71,6 @@ function fixtureRoot(): string {
   return root;
 }
 
-/** The stderr text a factory call writes, captured so a warning is assertable. */
-function stderrWhile(run: () => void): string {
-  const chunks: string[] = [];
-  const write = process.stderr.write;
-  process.stderr.write = ((chunk: unknown) => {
-    chunks.push(typeof chunk === "string" ? chunk : new TextDecoder().decode(chunk as Uint8Array));
-    return true;
-  }) as unknown as typeof process.stderr.write;
-  try {
-    run();
-  } finally {
-    process.stderr.write = write;
-  }
-  return chunks.join("");
-}
-
-/**
- * A resolver created as one launch would create it, plus the stderr its
- * factory wrote: the launch-time warning is part of the declared channel's
- * observable behavior, not an implementation detail.
- */
-function resolverCapturingStderr(identityEnv: string): { resolver: ResolveContext; stderr: string } {
-  let resolver!: ResolveContext;
-  const stderr = stderrWhile(() => { resolver = createContextResolver({ identityEnv }); });
-  return { resolver, stderr };
-}
-
 function writeAttestation(root: string, stoppedSessions: readonly string[] = ["stopped-holder"]): string {
   const attestation: ActivationAttestation = {
     version: ACTIVATION_PROTOCOL_VERSION,
@@ -143,15 +116,10 @@ async function registeredMcpCall(
     const { tools } = await client.listTools();
     const tool = tools.find((entry) => entry.name === foldedTool(commandId).name);
     const published = (tool?.inputSchema.properties ?? {}) as Record<string, unknown>;
-    if (resolver.identityLocked === true) {
-      // A locked connection publishes no session selector: the identity is
-      // the connection's, never model-choosable.
-      expect(published.sessionId).toBeUndefined();
-      expect(tool?.inputSchema.required ?? []).not.toContain("sessionId");
-    } else {
-      expect(published).toMatchObject({ sessionId: { type: "string" } });
-      expect(tool?.inputSchema.required ?? []).not.toContain("sessionId");
-    }
+    // The shared connection carries no identity of its own, so the selector is
+    // always a per-call, caller-supplied field.
+    expect(published).toMatchObject({ sessionId: { type: "string" } });
+    expect(tool?.inputSchema.required ?? []).not.toContain("sessionId");
     const result = await client.callTool({ name: foldedTool(commandId).name, arguments: { action: foldedTool(commandId).action, ...payload } });
     if (result.structuredContent !== undefined) return result.structuredContent as CommandEnvelope;
     const text = (result.content ?? []).filter((block) => block.type === "text").map((block) => block.text).join("\n");
@@ -290,324 +258,36 @@ describe("MCP session identity", () => {
     }
   });
 
-  /**
-   * The declared channel is the only environment identity the stdio resolver
-   * may read, and only when the launcher names it. Each case restores the
-   * variable it touched so the default "ignore ambient identity" cases stay
-   * independent of the host's environment.
-   */
-  const DECLARED_IDENTITY = "MSTAR_TEST_DECLARED_IDENTITY";
-  test("a declared environment channel supplies the default session identity", async () => {
-    const previous = process.env[DECLARED_IDENTITY];
-    process.env[DECLARED_IDENTITY] = "declared-mcp-session";
+  test("the shared connection declares no identity and ignores the ambient one", async () => {
+    const previous = process.env.MSTAR_HOST_SESSION_ID;
+    process.env.MSTAR_HOST_SESSION_ID = "ambient-session";
+    const previousDeclared = process.env.MSTAR_TEST_DECLARED_IDENTITY;
+    process.env.MSTAR_TEST_DECLARED_IDENTITY = "declared-mcp-session";
     try {
-      const fixture = await initializedHarness();
-      const result = await registeredMcpCall(
-        "session.recover",
-        { ...recoveryInput(writeAttestation(fixture.root)), harness: fixture.harness },
-        context(fixture.root),
-        createContextResolver({ identityEnv: DECLARED_IDENTITY }),
-      );
-      expect(result).toMatchObject({ status: "refused", code: "coordination.workflow-not-found" });
-    } finally {
-      if (previous === undefined) delete process.env[DECLARED_IDENTITY];
-      else process.env[DECLARED_IDENTITY] = previous;
-    }
-  });
-
-  /**
-   * The declared default has to survive the production assembly, not only a
-   * direct `registerMcpCommands` binding: `createMcpServer` wraps the resolver
-   * in its own request-context function, so this is the path the real
-   * `mstar mcp` process installs and the only one that proves a required
-   * session selector is satisfied by `--identity-env`.
-   */
-  test("the production server admits a required sessionId from the declared channel", async () => {
-    const previous = process.env[DECLARED_IDENTITY];
-    process.env[DECLARED_IDENTITY] = "declared-mcp-session";
-    try {
-      const fixture = await initializedHarness();
-      const result = await registeredMcpCall(
-        "session.recover",
-        { ...recoveryInput(writeAttestation(fixture.root)), harness: fixture.harness },
-        context(fixture.root),
-        createContextResolver({ identityEnv: DECLARED_IDENTITY }),
-        "server",
-      );
-      expect(result).toMatchObject({ status: "refused", code: "coordination.workflow-not-found" });
-    } finally {
-      if (previous === undefined) delete process.env[DECLARED_IDENTITY];
-      else process.env[DECLARED_IDENTITY] = previous;
-    }
-  });
-
-  test("without --identity-env the same environment variable is still ignored", async () => {
-    const previous = process.env[DECLARED_IDENTITY];
-    process.env[DECLARED_IDENTITY] = "declared-mcp-session";
-    try {
-      const fixture = await initializedHarness();
-      const result = await registeredMcpCall(
-        "session.recover",
-        { ...recoveryInput(writeAttestation(fixture.root)), harness: fixture.harness },
-        context(fixture.root),
-        resolveContext,
-      );
-      expect(result).toMatchObject({ status: "usage", code: "command.invalid-input" });
-      expect(result.details?.helpRoute).toBe("mstar session recover --help");
-    } finally {
-      if (previous === undefined) delete process.env[DECLARED_IDENTITY];
-      else process.env[DECLARED_IDENTITY] = previous;
-    }
-  });
-
-  /**
-   * The lock requires a USABLE identity, not merely a non-blank value. A
-   * locked connection publishes no selector and strips the caller's, so a
-   * declared value the safe-id rule refuses would leave every
-   * identity-consuming call refused at that same guard — a connection nobody
-   * can use and cannot rebind. Such a value therefore resolves no identity:
-   * the connection stays generic exactly like an unset/blank declaration, the
-   * per-call selector remains the identity channel, and the launch line names
-   * the rule and the recovery without echoing the rejected value.
-   */
-  test("an UNSAFE declared value stays unlocked, publishes the selector, and honors the per-call id", async () => {
-    const previous = process.env[DECLARED_IDENTITY];
-    process.env[DECLARED_IDENTITY] = "../declared-session";
-    try {
-      const fixture = await initializedHarness();
-      const { resolver, stderr } = resolverCapturingStderr(DECLARED_IDENTITY);
-      expect(resolver.identityLocked).toBe(false);
-      expect(resolver.defaultSessionId).toBeUndefined();
-      expect(stderr).toContain("[mcp.identity-env-unsafe]");
-      expect(stderr).toContain(`--identity-env ${DECLARED_IDENTITY}`);
-      // The line states the rule (so the launcher can correct the value) and
-      // never repeats the rejected value.
-      expect(stderr).toContain("[A-Za-z0-9._-]+");
-      expect(stderr).toContain("at most 128 characters");
-      expect(stderr).not.toContain("../declared-session");
-      // Both supported escapes are named: correct the variable, or drop the
-      // flag — either way the identity is a launch fact, so relaunch.
-      expect(stderr).toContain(`correct ${DECLARED_IDENTITY}`);
-      expect(stderr).toContain("drop --identity-env");
-      expect(stderr).toContain("relaunch");
-      // The helper asserts the selector is published for an unlocked resolver.
-      // A valid caller id then reaching workflow lookup proves the call ran
-      // under IT: had the unsafe value locked and been stripped in, the shared
-      // guard would have refused the call instead.
-      const result = await registeredMcpCall(
-        "session.recover",
-        { ...recoveryInput(writeAttestation(fixture.root)), harness: fixture.harness, sessionId: "main-session" },
-        context(fixture.root),
-        resolver,
-      );
-      expect(result).toMatchObject({ status: "refused", code: "coordination.workflow-not-found" });
-    } finally {
-      if (previous === undefined) delete process.env[DECLARED_IDENTITY];
-      else process.env[DECLARED_IDENTITY] = previous;
-    }
-  });
-
-  /**
-   * The unsafe-value verdict has to survive the PRODUCTION assembly (the one
-   * `mstar mcp` installs, where `createMcpServer` wraps the resolver): an
-   * unsafe declared value must not lock that path either, and the caller's
-   * valid id must reach the invocation. The old contract proved the opposite
-   * — a locked, unstrippable connection refused at the shared guard.
-   */
-  test("the production server keeps an unsafe declared value unlocked and honors the per-call id", async () => {
-    const previous = process.env[DECLARED_IDENTITY];
-    process.env[DECLARED_IDENTITY] = "../declared-session";
-    try {
-      const fixture = await initializedHarness();
-      const { resolver, stderr } = resolverCapturingStderr(DECLARED_IDENTITY);
-      expect(resolver.identityLocked).toBe(false);
-      expect(resolver.defaultSessionId).toBeUndefined();
-      expect(stderr).toContain("[mcp.identity-env-unsafe]");
-      const result = await registeredMcpCall(
-        "session.recover",
-        { ...recoveryInput(writeAttestation(fixture.root)), harness: fixture.harness, sessionId: "main-session" },
-        context(fixture.root),
-        resolver,
-        "server",
-      );
-      expect(result).toMatchObject({ status: "refused", code: "coordination.workflow-not-found" });
-    } finally {
-      if (previous === undefined) delete process.env[DECLARED_IDENTITY];
-      else process.env[DECLARED_IDENTITY] = previous;
-    }
-  });
-
-  /**
-   * The engine rule has two refusal branches — the path-component shape and
-   * the 128-character ceiling — and both must resolve no identity here: a
-   * value the rule refuses is not a lock. The over-long case is asserted
-   * explicitly so a shape-only reimplementation of the rule in this module
-   * (a plain `[A-Za-z0-9._-]+` match, which 129 `a`s do satisfy) would fail.
-   */
-  test("an over-long declared value resolves no identity and is never echoed", async () => {
-    const previous = process.env[DECLARED_IDENTITY];
-    const overLong = "a".repeat(129);
-    process.env[DECLARED_IDENTITY] = overLong;
-    try {
-      const fixture = await initializedHarness();
-      const { resolver, stderr } = resolverCapturingStderr(DECLARED_IDENTITY);
-      expect(resolver.identityLocked).toBe(false);
-      expect(resolver.defaultSessionId).toBeUndefined();
-      expect(stderr).toContain("[mcp.identity-env-unsafe]");
-      expect(stderr).not.toContain(overLong);
-      const result = await registeredMcpCall(
-        "session.recover",
-        { ...recoveryInput(writeAttestation(fixture.root)), harness: fixture.harness, sessionId: "main-session" },
-        context(fixture.root),
-        resolver,
-      );
-      expect(result).toMatchObject({ status: "refused", code: "coordination.workflow-not-found" });
-    } finally {
-      if (previous === undefined) delete process.env[DECLARED_IDENTITY];
-      else process.env[DECLARED_IDENTITY] = previous;
-    }
-  });
-
-  test("a blank declared identity means no identity at all", async () => {
-    const previous = process.env[DECLARED_IDENTITY];
-    process.env[DECLARED_IDENTITY] = "  \t";
-    try {
+      const resolver = createContextResolver();
+      // No connection-level identity exists: the launcher has no channel to
+      // declare one and the resolver publishes no default or lock state.
+      expect(Object.hasOwn(resolver, "defaultSessionId")).toBe(false);
+      expect(Object.hasOwn(resolver, "identityLocked")).toBe(false);
+      // Neither ambient variable supplies an identity: the tool publishes the
+      // per-call selector, and a call that omits it is a usage refusal.
+      const tool = await publishedMcpTool("session.recover", resolver);
+      expect(tool.inputSchema.properties).toMatchObject({ sessionId: { type: "string" } });
+      expect((tool.inputSchema["x-mstar-requirements"] ?? []).map((entry) => entry.name)).toContain("sessionId");
       const root = fixtureRoot();
-      const result = await registeredMcpCall(
+      const omitted = await registeredMcpCall(
         "session.recover",
         recoveryInput(writeAttestation(root)),
         context(root),
-        // A blank channel warns at launch; the dedicated blank regression
-        // asserts that line, this one only needs the resolver.
-        resolverCapturingStderr(DECLARED_IDENTITY).resolver,
-      );
-      expect(result).toMatchObject({ status: "usage", code: "command.invalid-input" });
-      expect(result.details?.helpRoute).toBe("mstar session recover --help");
-    } finally {
-      if (previous === undefined) delete process.env[DECLARED_IDENTITY];
-      else process.env[DECLARED_IDENTITY] = previous;
-    }
-  });
-
-
-  /**
-   * A declared channel that resolves NO id cannot lock the connection: a
-   * locked connection with no identity publishes no selector and strips the
-   * caller's, so every identity-consuming call would be unreachable. The
-   * connection must stay generic — the per-call selector is then the identity
-   * channel — and the launch must warn once with the cause and the recovery.
-   */
-  test("a declared channel with an UNSET variable stays unlocked and warns with the recovery", async () => {
-    const previous = process.env[DECLARED_IDENTITY];
-    delete process.env[DECLARED_IDENTITY];
-    try {
-      const fixture = await initializedHarness();
-      const { resolver, stderr } = resolverCapturingStderr(DECLARED_IDENTITY);
-      expect(resolver.identityLocked).toBe(false);
-      expect(resolver.defaultSessionId).toBeUndefined();
-      expect(stderr).toContain("[mcp.identity-env-unresolved]");
-      expect(stderr).toContain(`--identity-env ${DECLARED_IDENTITY}`);
-      // The selector is published (the helper asserts it on an unlocked
-      // resolver) and a caller-supplied id reaches the invocation context:
-      // the valid id passes the format gate, so only the workflow lookup can
-      // refuse.
-      const result = await registeredMcpCall(
-        "session.recover",
-        { ...recoveryInput(writeAttestation(fixture.root)), harness: fixture.harness, sessionId: "main-session" },
-        context(fixture.root),
         resolver,
       );
-      expect(result).toMatchObject({ status: "refused", code: "coordination.workflow-not-found" });
+      expect(omitted).toMatchObject({ status: "usage", code: "command.invalid-input" });
+      expect(omitted.details?.helpRoute).toBe("mstar session recover --help");
     } finally {
-      if (previous === undefined) delete process.env[DECLARED_IDENTITY];
-      else process.env[DECLARED_IDENTITY] = previous;
-    }
-  });
-
-  test("a blank declared value counts as unset: unlocked, selector published, warning names the variable", async () => {
-    const previous = process.env[DECLARED_IDENTITY];
-    process.env[DECLARED_IDENTITY] = "  \t";
-    try {
-      const fixture = await initializedHarness();
-      const { resolver, stderr } = resolverCapturingStderr(DECLARED_IDENTITY);
-      expect(resolver.identityLocked).toBe(false);
-      expect(resolver.defaultSessionId).toBeUndefined();
-      expect(stderr).toContain(`--identity-env ${DECLARED_IDENTITY}`);
-      const result = await registeredMcpCall(
-        "session.recover",
-        { ...recoveryInput(writeAttestation(fixture.root)), harness: fixture.harness, sessionId: "main-session" },
-        context(fixture.root),
-        resolver,
-      );
-      expect(result).toMatchObject({ status: "refused", code: "coordination.workflow-not-found" });
-    } finally {
-      if (previous === undefined) delete process.env[DECLARED_IDENTITY];
-      else process.env[DECLARED_IDENTITY] = previous;
-    }
-  });
-
-  test("a declared channel that resolves an id still locks and strips the per-call selector", async () => {
-    const previous = process.env[DECLARED_IDENTITY];
-    process.env[DECLARED_IDENTITY] = "declared-mcp-session";
-    try {
-      const fixture = await initializedHarness();
-      const resolver = createContextResolver({ identityEnv: DECLARED_IDENTITY });
-      expect(resolver.identityLocked).toBe(true);
-      expect(resolver.defaultSessionId).toBe("declared-mcp-session");
-      // The caller's id is malformed on purpose: if it survived admission, the
-      // shared safe-id guard would refuse `coordination.invalid-session-id`.
-      // Reaching workflow lookup proves the strip kept the declared identity.
-      const result = await registeredMcpCall(
-        "session.recover",
-        { ...recoveryInput(writeAttestation(fixture.root)), harness: fixture.harness, sessionId: "../caller-session" },
-        context(fixture.root),
-        resolver,
-      );
-      expect(result).toMatchObject({ status: "refused", code: "coordination.workflow-not-found" });
-    } finally {
-      if (previous === undefined) delete process.env[DECLARED_IDENTITY];
-      else process.env[DECLARED_IDENTITY] = previous;
-    }
-  });
-
-  /**
-   * The declared identity is a LAUNCH fact. A connection whose variable is
-   * removed after startup keeps its lock and its identity; one created before
-   * the variable appears never gains a lock. Either drift would leave the
-   * published tool surface (selector or no selector) disagreeing with the
-   * identity the resolver actually hands the invocation.
-   */
-  test("the declared identity is resolved once at launch and never repartitions mid-life", async () => {
-    const previous = process.env[DECLARED_IDENTITY];
-    process.env[DECLARED_IDENTITY] = "declared-mcp-session";
-    try {
-      const fixture = await initializedHarness();
-      const locked = createContextResolver({ identityEnv: DECLARED_IDENTITY });
-      delete process.env[DECLARED_IDENTITY];
-      expect(locked.identityLocked).toBe(true);
-      expect(locked.defaultSessionId).toBe("declared-mcp-session");
-      const lockedResult = await registeredMcpCall(
-        "session.recover",
-        { ...recoveryInput(writeAttestation(fixture.root)), harness: fixture.harness, sessionId: "../caller-session" },
-        context(fixture.root),
-        locked,
-      );
-      expect(lockedResult).toMatchObject({ status: "refused", code: "coordination.workflow-not-found" });
-
-      const { resolver: generic } = resolverCapturingStderr(DECLARED_IDENTITY);
-      process.env[DECLARED_IDENTITY] = "appeared-after-launch";
-      expect(generic.identityLocked).toBe(false);
-      expect(generic.defaultSessionId).toBeUndefined();
-      const genericResult = await registeredMcpCall(
-        "session.recover",
-        { ...recoveryInput(writeAttestation(fixture.root)), harness: fixture.harness, sessionId: "main-session" },
-        context(fixture.root),
-        generic,
-      );
-      expect(genericResult).toMatchObject({ status: "refused", code: "coordination.workflow-not-found" });
-    } finally {
-      if (previous === undefined) delete process.env[DECLARED_IDENTITY];
-      else process.env[DECLARED_IDENTITY] = previous;
+      if (previous === undefined) delete process.env.MSTAR_HOST_SESSION_ID;
+      else process.env.MSTAR_HOST_SESSION_ID = previous;
+      if (previousDeclared === undefined) delete process.env.MSTAR_TEST_DECLARED_IDENTITY;
+      else process.env.MSTAR_TEST_DECLARED_IDENTITY = previousDeclared;
     }
   });
 
@@ -669,50 +349,6 @@ describe("MCP session identity", () => {
     const after = readFileSync(path.join(fixture.harness, "store.db"));
     expect(wrongSession).toMatchObject({ status: "refused", code: "coordination.identity-mismatch" });
     expect(after).toEqual(before);
-  });
-
-  /**
-   * The lock governs PUBLICATION, not only admission: a locked connection's
-   * identity is the connection's, so neither the `CLI:` usage token, the
-   * `x-mstar-requirements` entries nor a "Caller-supplied" description line
-   * may name the selector. Otherwise the tool tells a model to pass a
-   * parameter it does not publish and silently strips.
-   */
-  test("a locked connection publishes no session selector in the tool metadata", async () => {
-    const previous = process.env[DECLARED_IDENTITY];
-    process.env[DECLARED_IDENTITY] = "declared-mcp-session";
-    try {
-      const tool = await publishedMcpTool("session.recover", createContextResolver({ identityEnv: DECLARED_IDENTITY }));
-      expect(tool.inputSchema.properties ?? {}).not.toHaveProperty("sessionId");
-      expect(tool.inputSchema.required ?? []).not.toContain("sessionId");
-      expect((tool.inputSchema["x-mstar-requirements"] ?? []).map((entry) => entry.name)).not.toContain("sessionId");
-      // The rest of the contract is intact: the fix filters the selector, not
-      // the family's action list or the required fields of each action.
-      expect(tool.description).toContain("recover");
-      expect(tool.description).not.toContain("sessionId");
-      expect(tool.description).not.toContain("--session-id");
-    } finally {
-      if (previous === undefined) delete process.env[DECLARED_IDENTITY];
-      else process.env[DECLARED_IDENTITY] = previous;
-    }
-  });
-
-  /**
-   * The filter is LOCK-scoped, not global: a generic unbound connection keeps
-   * the selector property, its requirement entry and the usage token, because
-   * there the per-call selector is the documented identity channel.
-   */
-  test("a generic connection still publishes the session selector in the tool metadata", async () => {
-    const previous = process.env[DECLARED_IDENTITY];
-    delete process.env[DECLARED_IDENTITY];
-    try {
-      const tool = await publishedMcpTool("session.recover", resolverCapturingStderr(DECLARED_IDENTITY).resolver);
-      expect(tool.inputSchema.properties).toMatchObject({ sessionId: { type: "string" } });
-      expect((tool.inputSchema["x-mstar-requirements"] ?? []).map((entry) => entry.name)).toContain("sessionId");
-    } finally {
-      if (previous === undefined) delete process.env[DECLARED_IDENTITY];
-      else process.env[DECLARED_IDENTITY] = previous;
-    }
   });
 
   test("CLI parses and routes --session-id through the command adapter", async () => {

@@ -3,7 +3,6 @@ import { CommanderError, type Command } from "commander";
 import { serveMcpStdio, type McpSeat } from "./stdio.js";
 
 interface McpCommandOptions {
-  identityEnv?: string;
   harness?: string;
   workspace?: string;
   seat?: string;
@@ -31,17 +30,13 @@ export function registerMcpCommand(program: Command): void {
   program.command("mcp")
     .description("Run the Morning Star MCP server over stdio")
     .option(
-      "--identity-env <NAME>",
-      "read the default session id from environment variable NAME and LOCK the connection identity to it when the variable resolves a usable id (one safe path component under the engine's safe-session-id rule): the tools publish no session selector and a caller-supplied sessionId is stripped before admission, so every call runs under the declared identity. An unset, blank or unsafe value keeps the connection generic and is warned about at launch, with the recovery to correct the variable or drop --identity-env and relaunch. Without it no ambient identity is read and a per-call sessionId selects the identity.",
-    )
-    .option(
       "--harness <path>",
-      "absolute harness root for every call; it also anchors the invocation workspace at its parent, so cwd-derived paths land under the pinned harness. Without it the server probes process.cwd() for one",
+      "absolute harness root that PINS this connection: every call resolves its control root here, and the invocation workspace is anchored at its parent, so cwd-derived paths land under the pinned harness. Without it a non-blank MSTAR_HARNESS_DIR in the server environment pins the same way; without either, every call must name its own root through the published `harness` selector, and a call that names none is refused. The launch cwd is never used as a control root",
       absolutePath("--harness"),
     )
     .option(
       "--workspace <path>",
-      "absolute session workspace every call runs from (the invocation cwd). A mounting host that serves sessions living outside its own cwd passes this so cwd-derived paths resolve in the CALLER's workspace; without it the workspace is the pinned harness's parent when --harness is set, else process.cwd()",
+      "absolute session workspace every call runs from (the invocation cwd), for a mounting host whose caller works outside the harness root's parent. Without it the workspace is the declared control root's parent directory, or the launch cwd for the bootstrap family (harness.scaffold), which has no root yet",
       absolutePath("--workspace"),
     )
     .option(
@@ -51,7 +46,6 @@ export function registerMcpCommand(program: Command): void {
     )
     .action(async (options: McpCommandOptions) => {
       await serveMcpStdio({
-        identityEnv: options.identityEnv,
         harnessRoot: options.harness,
         workspace: options.workspace,
         ...(options.seat === undefined ? {} : { seat: options.seat as McpSeat }),

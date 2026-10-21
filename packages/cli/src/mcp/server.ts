@@ -79,21 +79,12 @@ export function createMcpServer(
     });
     return requestContext;
   };
-  // Admission reads the declared defaults from the resolver this function
-  // receives, so the wrapper must expose them too: registration sees only the
-  // wrapper. Forward the live getters instead of construction snapshots so a
-  // declared channel and a pinned root stay authoritative for the whole
-  // connection.
-  Object.defineProperty(createRequestContext, "defaultSessionId", {
-    get: () => resolveContext.defaultSessionId,
-    enumerable: true,
-  });
+  // Admission reads the declared root from the resolver this function
+  // receives, so the wrapper must expose it too: registration sees only the
+  // wrapper. Forward the live getter instead of a construction snapshot so the
+  // declared root stays authoritative for the whole connection.
   Object.defineProperty(createRequestContext, "defaultHarness", {
     get: () => resolveContext.defaultHarness,
-    enumerable: true,
-  });
-  Object.defineProperty(createRequestContext, "identityLocked", {
-    get: () => resolveContext.identityLocked === true,
     enumerable: true,
   });
   registerMcpCommands(server, seatDefinitions(definitions, seat), createRequestContext, services, onToolsRegistered);

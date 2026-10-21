@@ -6,22 +6,18 @@
  * never own an execution binding or hold a coordinator session.
  *
  * Consumers:
- * - `scoped-mcp-mount.ts` — a known leaf never gets an identity-bearing child
- *   process (there is no binding it could ever attribute);
  * - `native-commands.ts` — the coordinator-seat-capable native tools
  *   (`mstar_plan_bind`, `mstar_execution_clear`) refuse a leaf seat
  *   fail-closed, before any admission or engine round-trip;
  * - the `tools/pre-execute` boundary below — the folded MCP surface's
- *   coordinator-seat commands refuse a leaf seat before the MCP client child
- *   ever executes, on EVERY connection. The refused set comes from this
- *   package's own `coordinator-seat.ts`, which follows the rule — not a new
- *   export — that `packages/commands/src/coordinator-seat.ts` owns for the CLI
- *   server's `--seat leaf` filter, so the two layers refuse the same actions
- *   (pinned by `tests/leaf-seat.spec.ts`). The scoped mount's `--seat leaf`
- *   launch is defence in depth for the per-agent connection; the profile-wide
- *   `mstar-mcp` row is generic (no identity, no seat), so the server-side
- *   restriction alone never covered a leaf naming a bound coordinator session
- *   there.
+ *   coordinator-seat commands refuse a leaf seat before the shared MCP client
+ *   child ever executes. The refused set comes from this package's own
+ *   `coordinator-seat.ts`, which follows the rule — not a new export — that
+ *   `packages/commands/src/coordinator-seat.ts` owns for the CLI server's
+ *   `--seat leaf` filter, so the two layers refuse the same actions (pinned by
+ *   `tests/leaf-seat.spec.ts`). The shared `mstar-mcp` row is one generic
+ *   connection for the whole host, so this host-side boundary is what covers a
+ *   leaf naming a bound coordinator session there.
  */
 import type { PreToolDecision, ToolExecution } from '@deepseek-ai/dsh-tools'
 import { coordinatorSeatCommandFor } from './coordinator-seat.ts'

@@ -920,12 +920,12 @@ describe('dispatch gate — the carrying-session hint is derived ONLY where the 
 /* ---------------------------------- leaf-seat tool boundary ---------------------------------- */
 
 /**
- * PR #558 must-fix 1: the profile-wide `mstar-mcp` row mounts a GENERIC
- * connection (no `--identity-env`, no `--seat`), so the scoped leaf mount's
- * server-side restriction never covered it — a known leaf could name a bound
- * coordinator session on that connection and run `plan.complete`. The guard
- * lives on `tools/pre-execute`, where the host knows the calling agent is a
- * leaf, and reads the folded tool's `action` from the call's arguments.
+ * PR #558 must-fix 1: the profile-wide `mstar-mcp` row mounts ONE GENERIC
+ * connection for the whole host (no identity, no `--seat`), so a known leaf
+ * could name a bound coordinator session on that connection and run
+ * `plan.complete`. The guard lives on `tools/pre-execute`, where the host knows
+ * the calling agent is a leaf, and reads the folded tool's `action` from the
+ * call's arguments.
  */
 
 /** The folded plan tool as the shipped bundle's `mstar` server publishes it. */

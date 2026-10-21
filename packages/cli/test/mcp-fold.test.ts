@@ -73,17 +73,16 @@ function baseContext(cwd: string): InvocationContext {
 /** Register the real definitions and run `run` against a real MCP client. */
 async function withClient(
   run: (client: Client, tools: readonly PublishedTool[]) => Promise<void>,
-  options: { identityLocked?: boolean; defaultSessionId?: string } = {},
   selected: readonly CommandDefinition[] = definitions,
 ): Promise<void> {
   const cwd = mkdtempSync(join(tmpdir(), "mstar-mcp-fold-"));
   const server = new McpServer({ name: "fold-test-server", version: "1.0.0" });
   const client = new Client({ name: "fold-test-client", version: "1.0.0" });
   const [clientEnd, serverEnd] = InMemoryTransport.createLinkedPair();
-  const resolver: ResolveContext = Object.assign(() => baseContext(cwd), {
-    identityLocked: options.identityLocked === true,
-    ...(options.defaultSessionId === undefined ? {} : { defaultSessionId: options.defaultSessionId }),
-  });
+  // A pinned connection (the deployment shape): `harness` stays optional and
+  // the fold suite checks field publication, not the unpinned-required rule
+  // (`test/mcp-harness-root.test.ts` owns that).
+  const resolver: ResolveContext = Object.assign(() => baseContext(cwd), { defaultHarness: join(cwd, ".mstar") });
   try {
     registerMcpCommands(server, selected, resolver);
     await server.connect(serverEnd);
@@ -176,7 +175,7 @@ describe("folded MCP command families", () => {
       expect(refused).toMatchObject({ status: "usage", code: "command.invalid-input" });
       const paths = (refused.details?.diagnostics ?? []).map((entry) => (entry as { path?: string }).path);
       expect(paths).toContain("id");
-    }, {}, members);
+    }, members);
   });
 
   /**
@@ -467,20 +466,6 @@ describe("folded MCP command families", () => {
       const accepted = envelope(await call(client, "mstar_schema", { action: "schema", family: "host" }));
       expect(accepted).toMatchObject({ status: "ok", data: { kind: "family", family: "host" } });
     });
-  });
-
-  test("the session selector follows the identity lock on the folded tools", async () => {
-    await withClient(async (_client, tools) => {
-      const session = tools.find((entry) => entry.name === "mstar_session");
-      expect((session?.inputSchema.properties ?? {}).sessionId).toMatchObject({ type: "string" });
-      expect((session?.inputSchema["x-mstar-requirements"] ?? []).map((entry) => entry.name)).toContain("sessionId");
-    });
-    await withClient(async (_client, tools) => {
-      const session = tools.find((entry) => entry.name === "mstar_session");
-      expect((session?.inputSchema.properties ?? {}).sessionId).toBeUndefined();
-      expect((session?.inputSchema["x-mstar-requirements"] ?? []).map((entry) => entry.name)).not.toContain("sessionId");
-      expect(session?.description).not.toContain("--session-id");
-    }, { identityLocked: true, defaultSessionId: "locked-identity" });
   });
 
   /**

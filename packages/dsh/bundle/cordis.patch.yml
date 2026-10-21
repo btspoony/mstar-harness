@@ -14,38 +14,40 @@
 #
 # The `mstar-mcp` row launches the host-neutral MCP server
 # (`npx @mstar-harness/cli mcp`, stdio) through Cordis's `mcp-client` bridge.
-# It requires the `@deepseek-ai/dsh-mcp-client` plugin in the profile's
-# dependencies (`dsh plugin --profile web add @deepseek-ai/dsh-mcp-client`);
-# app-boot tolerates the row failing to load without the plugin, in which case
-# no mstar MCP tools appear and `mstar-harness doctor --target dsh` reports
-# the mismatch.
+# It requires that bridge package in the profile's dependencies
+# (`dsh plugin --profile web add @deepseek-ai/dsh-mcp-client`); app-boot
+# tolerates the row failing to load without it, in which case no mstar MCP
+# tools appear and `mstar-harness doctor --target dsh` reports the mismatch.
 #
-# Mount contract: a deployment that needs a pinned root or a declared identity
-# launches the server with `mstar mcp --harness <absolute path>` and/or
-# `--identity-env <NAME>`. The pinned root is the server-owned DEFAULT for
-# every registered command's root selection: a command that declares a
-# per-call `harness` accepts an explicit override, while the `persist` family
-# always uses the invocation's server root (the pin, or the cwd probe when
-# unpinned) and takes no per-call harness. The declared identity is the
-# connection's identity channel; a declared channel whose variable resolves a
-# USABLE session id LOCKS the connection (usable under the engine's single
-# safe-session-id rule: one safe path component [A-Za-z0-9._-]+, not "", ".",
-# ".." or a value containing "/" or "\", of at most SESSION_ID_MAX_LENGTH
-# characters): the tools publish no session selector and a caller-supplied
-# sessionId is stripped before admission (ADR dsh-native-identity-channels), so
-# per-caller identity is a per-mount fact — each caller's row carries its own
-# `--identity-env`. A declared channel the rule refuses, or one that is unset
-# or blank, resolves no identity: it keeps the connection generic and names the
-# cause, the rule and the recoveries at launch without echoing the rejected
-# value, so the per-call sessionId selector remains the identity channel; a
-# connection without the flag is that same generic connection without the
-# launch line. The pin ALSO anchors the
-# invocation workspace at
-# the pinned root's parent, so a command that derives paths from its working
-# directory (e.g. `audit.scaffold` deriving `{REVIEW_DIR}` without
-# `--reviews-dir`) writes under the pinned harness, not the launch cwd.
-# The shipped row keeps neutral defaults: no path, no identity declared. An
-# override restates the row's whole `config`, including the `args` list.
+# Shared-only contract: this ONE row is the whole MCP channel for the host.
+# The plugin registers no MCP client of its own — a per-agent MCP instance
+# could not be given per-call arguments (`PreToolDecision` has no
+# argument-rewrite arm), so it would buy nothing but one Node process per
+# agent. Everything a caller needs is on this connection.
+#
+# Control root: every command that needs a harness root must be TOLD one. The
+# server never infers it from the launch cwd — that directory is the HOST's,
+# it says nothing about which workspace a caller belongs to, and adopting it
+# would root writes on an unrelated project. The root is declared by the
+# launch (`mstar mcp --harness <absolute path>`, or a non-blank
+# `MSTAR_HARNESS_DIR` in the server environment), which pins the connection
+# for every call and also anchors the invocation workspace at the pinned
+# root's parent (so a command that derives paths from its cwd — e.g.
+# `audit.scaffold` deriving `{REVIEW_DIR}` — writes under the declared
+# harness, not the launch cwd). Without a connection pin, each call must name
+# its own root through the published `harness` selector; that selector is
+# REQUIRED on an unpinned connection, so a caller cannot forget it. With
+# neither, the call is refused with the cause and the recoveries
+# (`mcp.control-root-unresolved`). The shipped row declares no root and no
+# identity; an override restates the row's whole `config`, including the
+# `args` list.
+#
+# Identity: this connection carries none. A stdio child is process-level, so a
+# per-connection identity would have to come from the environment the host
+# launches it with, and dsh already has the provable channel: `exec.agent.id`
+# on the native command surface. Operations that need a session identity
+# (`mstar_plan_bind` / `_complete` / `_prepare` / `_progress`,
+# `mstar_execution_clear`) are dsh native tools, not MCP actions.
 
 - insert:
     - id: mstar

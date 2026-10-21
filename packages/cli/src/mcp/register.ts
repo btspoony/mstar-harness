@@ -10,27 +10,17 @@ import { validateCommandOutcome } from "./outcome.js";
  * Resolve the invocation context for one admitted call. It receives only the
  * immutable primitive session selector admission already validated — never the
  * handler value — so a resolver cannot reach or replace what the handler will
- * observe.
+ * observe. The shared MCP connection carries no identity of its own: a
+ * `sessionId` on the wire is the caller's per-call selector and nothing here
+ * supplies a connection-wide default.
  *
- * `defaultSessionId` is the identity a launcher declared for every call (the
- * stdio server's `--identity-env` channel). It is read at admission so a
- * required session selector is satisfied by that declared default. On a
- * GENERIC unbound connection the per-call selector still wins; on a connection
- * whose identity the launcher LOCKED (`identityLocked` — a declared channel
- * whose variable resolved a USABLE session id at launch, the engine's single
- * safe-session-id rule: one safe path component `[A-Za-z0-9._-]+`, at most 128
- * characters, the scoped mount), no selector is published and a caller-supplied
- * one is stripped before admission, so the declared identity is the only
- * identity the connection can run under. The lock is set only for a value the
- * engine rule accepts: an invalid declaration is never a default — it is
- * dropped at launch, so the connection stays generic and the launch warning
- * states the rule and the recovery.
- *
- * `defaultHarness` is the root a launcher pinned for every call (the stdio
- * server's `--harness` channel). Commands that resolve their own root from an
- * `input.harness` field never read `controlRoot`, so admission fills that
- * field from this default when the call left it unset or blank; an explicit
- * non-blank per-call value still wins.
+ * `defaultHarness` is the root a launcher declared for every call (the stdio
+ * server's `--harness` pin, or a non-blank `MSTAR_HARNESS_DIR`). Commands that
+ * resolve their own root from an `input.harness` field never read
+ * `controlRoot`, so admission fills that field from this default when the call
+ * left it unset or blank; an explicit non-blank per-call value still wins. When
+ * it is undefined the connection declared no root, and registration publishes
+ * `harness` as REQUIRED on every tool that names such a field.
  */
 export type ResolveContext = {
   (
@@ -41,22 +31,7 @@ export type ResolveContext = {
     effects: McpEffects,
     call?: ResolveContextCall,
   ): InvocationContext | Promise<InvocationContext>;
-  readonly defaultSessionId?: string;
   readonly defaultHarness?: string;
-  /**
-   * True when the launcher locked this connection's identity: a declared
-   * `--identity-env` channel WHOSE VARIABLE RESOLVED a USABLE session id at
-   * launch (one safe path component `[A-Za-z0-9._-]+`, at most 128 characters,
-   * per the engine's single safe-session-id rule; the per-agent scoped mount).
-   * A declared channel the rule refuses, or one that is unset or blank, locks
-   * nothing — the connection stays generic, names the cause, the rule and the
-   * recoveries at launch without echoing the rejected value, and keeps the
-   * per-call selector. On a locked connection the tools publish no session
-   * selector and a caller-supplied selector is stripped BEFORE admission, so
-   * the execution context uses the connection identity; generic unbound
-   * connections keep the selector.
-   */
-  readonly identityLocked?: boolean;
 };
 
 /**
@@ -68,24 +43,6 @@ export type ResolveContext = {
 export type ResolveContextCall = Readonly<{
   readonly harness?: string;
 }>;
-
-/**
- * The descriptor a LOCKED connection publishes: the identity is the
- * connection's, so the session selector is not an input the caller may
- * supply. Publication must agree with the input schema — a `CLI:` usage token,
- * a `required` entry or a "Caller-supplied" requirement naming `--session-id`
- * would advertise a parameter the tool does not publish and silently strips.
- * The shared descriptor is never mutated; the returned shallow view is the
- * only descriptor a locked connection renders or filters requirements from.
- */
-function lockedDescriptor(descriptor: CommandSchemaDescriptor, selectorKey: string): CommandSchemaDescriptor {
-  return {
-    ...descriptor,
-    required: descriptor.required.filter((field) => field !== selectorKey),
-    requirements: descriptor.requirements.filter((entry) => entry.name !== selectorKey),
-    cli: { ...descriptor.cli, options: descriptor.cli.options.filter((option) => option.key !== selectorKey) },
-  };
-}
 
 /**
  * The MCP-facing input shape: the command's own input plus the domain-owned
@@ -106,11 +63,13 @@ function lockedDescriptor(descriptor: CommandSchemaDescriptor, selectorKey: stri
  * to be payload field names — `persist.write` keys its per-kind contracts by
  * `kind` value — so they are published by the `schema` family alone.
  *
- * `descriptor` is the published view: on a locked connection the caller passes
- * the selector-free `lockedDescriptor`, so `x-mstar-requirements` never names
- * the session selector while a generic connection keeps it.
+ * `harnessRequired` is the unpinned-connection rule: with no declared root, a
+ * command that names a `harness` input cannot rely on a launcher default, so
+ * the field is published and admitted as REQUIRED. A model then cannot omit the
+ * one fact the root resolution needs. A pinned connection keeps the field
+ * optional (the pin is the default).
  */
-function mcpInputContract(definition: CommandDefinition, descriptor: CommandSchemaDescriptor, identityLocked: boolean) {
+function mcpInputContract(definition: CommandDefinition, descriptor: CommandSchemaDescriptor, harnessRequired: boolean) {
   const input = definition.input;
   const jsonSchema = descriptor.input as Record<string, unknown>;
   if (!(input instanceof z.ZodObject)) return { schema: input, jsonSchema };
@@ -123,30 +82,27 @@ function mcpInputContract(definition: CommandDefinition, descriptor: CommandSche
   }
   const extended = Object.keys(composed).length === 0 ? input : input.safeExtend(composed);
   const selector = definition.cli.options.find((option) => option.context === "sessionId");
+  const requiredFields = new Set(descriptor.required);
+  if (harnessRequired && Object.hasOwn(properties, "harness")) requiredFields.add("harness");
   const requiredShape: Record<string, z.core.$ZodType> = {};
-  for (const field of descriptor.required) {
+  for (const field of requiredFields) {
     if (field === selector?.key) continue;
     const declared = extended.shape[field];
     if (declared instanceof z.ZodOptional) requiredShape[field] = declared.unwrap();
   }
   let schema = Object.keys(requiredShape).length === 0 ? extended : extended.safeExtend(requiredShape);
-  // The session selector is published ONLY on a generic unbound connection.
-  // A locked connection (a declared `--identity-env` channel whose variable
-  // resolved a USABLE session id at launch — one safe path component
-  // `[A-Za-z0-9._-]+`, at most 128 characters, per the engine's single
-  // safe-session-id rule, the scoped per-agent mount) publishes no selector:
-  // the identity belongs to the connection, and a published field a handler
-  // then strips would invite exactly the override the lock forbids. A declared
-  // channel the rule refuses, or one that is unset or blank, keeps the
-  // connection generic and keeps publishing the selector.
-  if (selector !== undefined && !identityLocked) {
+  // The session selector is the caller's per-call identity channel on this
+  // shared connection; the connection itself carries none. Publishing it only
+  // where a member declares it keeps tools that read no identity from
+  // advertising one.
+  if (selector !== undefined) {
     schema = schema.safeExtend({ [selector.key]: z.string().optional() });
     properties[selector.key] = { type: "string" };
   }
   for (const [field, value] of Object.entries(descriptor.defaults)) {
     if (properties[field] !== undefined) properties[field] = { ...properties[field], default: value };
   }
-  const required = selector === undefined ? descriptor.required : descriptor.required.filter((field) => field !== selector.key);
+  const required = selector === undefined ? [...requiredFields] : [...requiredFields].filter((field) => field !== selector.key);
   const requirements = descriptor.requirements.filter((entry) => entry.route === "mcp");
   return {
     schema,
@@ -199,32 +155,6 @@ function normalizedBlankHarness(input: unknown, defaultHarness: string | undefin
   const record = input as Record<string, unknown>;
   if (typeof record.harness !== "string" || record.harness.trim() !== "") return input;
   return { ...record, harness: defaultHarness };
-}
-
-/**
- * Strip a caller-supplied session selector BEFORE admission when the
- * connection identity is locked. A locked connection (a declared
- * `--identity-env` channel whose variable resolved a USABLE session id at
- * launch per the engine's single safe-session-id rule — one safe path
- * component `[A-Za-z0-9._-]+`, at most 128 characters, the scoped per-agent
- * mount) resolves every execution context from the identity the launcher
- * declared: a caller could otherwise pass a valid foreign session id and have
- * the engine resolve THAT identity's binding and CAS token, mutating within its
- * authority. The selector stays available on generic unbound connections —
- * including a declared channel the rule refuses, or one that is unset or
- * blank, which keeps the connection generic — where it is the documented
- * per-call identity channel. The caller's object is never mutated: a shallow
- * copy carries the stripped fields.
- */
-function strippedSessionInput(definition: CommandDefinition, input: unknown, locked: boolean): unknown {
-  if (!locked || input === null || typeof input !== "object" || Array.isArray(input)) return input;
-  const keys = definition.cli.options.filter((option) => option.context === "sessionId").map((option) => option.key);
-  if (keys.length === 0) return input;
-  const record = input as Record<string, unknown>;
-  if (!keys.some((key) => record[key] !== undefined)) return input;
-  const normalized = { ...record };
-  for (const key of keys) delete normalized[key];
-  return normalized;
 }
 
 /**
@@ -331,17 +261,14 @@ type RefusedSelector = Readonly<{ key: string; acceptingActions: readonly string
  * response. The refusal names the actions that DO accept each selector (that is
  * the discovery fact the family schema cannot publish) and never echoes the
  * supplied value: a session id is a credential-shaped fact, and echoing it into
- * an error the caller may forward adds no recovery. A LOCKED connection is
- * exempt: it publishes no selector at all, and `strippedSessionInput` already
- * owns the deliberate scrape of a caller-supplied one.
+ * an error the caller may forward adds no recovery.
  */
 function undeclaredSelectors(
   family: FoldedFamilyTool,
   definition: CommandDefinition,
   input: unknown,
-  locked: boolean,
 ): readonly RefusedSelector[] {
-  if (locked || input === null || typeof input !== "object" || Array.isArray(input)) return [];
+  if (input === null || typeof input !== "object" || Array.isArray(input)) return [];
   const record = input as Record<string, unknown>;
   const declared = new Set(definition.cli.options.filter((option) => option.context === "sessionId").map((option) => option.key));
   return family.selectors
@@ -381,9 +308,8 @@ function cappedFieldList(fields: readonly string[]): string {
  * (`packages/cli/AGENTS.md`), and a one-key-per-attempt loop is a defect.
  *
  * The family selector keys and `action` are transport fields, not member
- * inputs: `action` selects the member and the selector is owned by
- * `undeclaredSelectors` (and deliberately stripped on a locked connection), so
- * neither reaches this arm.
+ * inputs: `action` selects the member and the session selector is owned by
+ * `undeclaredSelectors`, so neither reaches this arm.
  *
  * Nested `payload` object contents are NOT examined here: a payload contract is
  * member detail that admission owns, and this index only names top-level
@@ -404,9 +330,10 @@ function undeclaredFields(family: FoldedFamilyTool, definition: CommandDefinitio
  * selector. Neither is a member input — one selects the member, the other is
  * connection identity — so no action can call them invalid.
  *
- * Read from the family's definitions rather than from `family.selectors`: a
- * locked connection publishes no selector, so that list is empty there and a
- * supplied one must still be scraped silently, not refused as a typo.
+ * Read from the family's definitions rather than from `family.selectors`: the
+ * published selector list marks a member's own selector, while this set must
+ * cover every member's selector so an action that reads none still reports it
+ * as a transport field instead of a typo.
  */
 function transportFields(family: FoldedFamilyTool): ReadonlySet<string> {
   const keys = new Set<string>(["action"]);
@@ -541,11 +468,11 @@ export function registerMcpCommands(
   onToolsRegistered?: (names: readonly string[]) => void,
 ): void {
   const connectionEffects = createMcpEffects(services);
-  const identityLocked = resolveContext.identityLocked === true;
-  // One lock-adjusted view per member feeds every published surface: the
-  // family schema, `x-mstar-requirements` and the description all agree that a
-  // locked connection owns the identity. Admission keeps using the unwrapped
-  // descriptor and the composed schema, exactly as the per-command route did.
+  // A connection that declared no root cannot fill `harness` from a launcher
+  // default, so every command that names the field must receive it: publishing
+  // it as required is what stops a model from forgetting the one fact the root
+  // resolution needs (and what makes admission refuse the omission).
+  const harnessRequired = resolveContext.defaultHarness === undefined;
   const prepared = new Map<string, {
     definition: CommandDefinition;
     descriptor: CommandSchemaDescriptor;
@@ -555,15 +482,15 @@ export function registerMcpCommands(
   const members = definitions.map((definition) => {
     const descriptor = getCommandSchemas([definition])[0]!;
     const selector = definition.cli.options.find((option) => option.context === "sessionId");
-    const published = identityLocked && selector !== undefined ? lockedDescriptor(descriptor, selector.key) : descriptor;
-    const contract = mcpInputContract(definition, published, identityLocked);
+    const contract = mcpInputContract(definition, descriptor, harnessRequired);
     prepared.set(definition.id, { definition, descriptor, contract, harnessDefault: declaresHarness(contract) });
     return {
       definition,
-      // The descriptor's `required` is the published authority (it also
-      // carries the lock filter); the input schema's own copy predates it.
-      input: { ...(published.input as Readonly<Record<string, unknown>>), required: published.required },
-      ...(identityLocked || selector === undefined ? {} : { selector: { key: selector.key } }),
+      // The composed contract's `required` is the published authority: the
+      // command's own required fields plus the unpinned-connection `harness`
+      // rule. The input schema's own copy predates both.
+      input: { ...(descriptor.input as Readonly<Record<string, unknown>>), required: contract.jsonSchema.required },
+      ...(selector === undefined ? {} : { selector: { key: selector.key } }),
     };
   });
   const families = foldFamilyTools(members);
@@ -586,24 +513,21 @@ export function registerMcpCommands(
           if (definition === undefined) {
             return { issues: [{ message: JSON.stringify(unknownActionRefusal(family, action, familyWideInvalidFields(family, input))) }] };
           }
-          const locked = resolveContext.identityLocked === true;
           // Every input the selected action does not declare is collected
           // first, so one refusal reports all of it: the refused selectors, the
           // rejected top-level keys and the action's own admission diagnostics.
           // Both groups leave the admitted input, so admission reports only the
           // selected action's declared fields.
-          const refusedSelectors = undeclaredSelectors(family, definition, input, locked);
+          const refusedSelectors = undeclaredSelectors(family, definition, input);
           const rejected = undeclaredFields(family, definition, input);
           const entry = prepared.get(definition.id)!;
-          const defaultSessionId = resolveContext.defaultSessionId;
           const defaultHarness = entry.harnessDefault ? resolveContext.defaultHarness : undefined;
           const admitted = admitCommandInput(
             definition,
-            normalizedBlankHarness(strippedSessionInput(definition, strippedActionInput(withoutFields(input, [...refusedSelectors.map((selector) => selector.key), ...rejected])), locked), defaultHarness),
+            normalizedBlankHarness(strippedActionInput(withoutFields(input, [...refusedSelectors.map((selector) => selector.key), ...rejected])), defaultHarness),
             entry.descriptor,
             entry.contract.schema,
             (data) => handlerInput(definition, data, defaultHarness),
-            defaultSessionId === undefined ? undefined : { sessionId: defaultSessionId },
           );
           if (refusedSelectors.length > 0 || rejected.length > 0) {
             return { issues: [{ message: JSON.stringify(undeclaredInputRefusal(family, definition, refusedSelectors, rejected, admitted.success ? undefined : admitted)) }] };
@@ -624,10 +548,8 @@ export function registerMcpCommands(
     }, async (admitted, extra) => {
       // The resolver and the context consume only the primitive session
       // selector and the per-call root selector; the handler value itself
-      // never leaves the capability. On a locked connection the admitted
-      // selector is always undefined (stripped before admission), so the
-      // connection identity below is the only identity this call can run
-      // under.
+      // never leaves the capability. The connection has no identity of its
+      // own, so a session id here is exactly what the caller put on the wire.
       const { definition } = admitted;
       const resolved = await resolveContext(definition, admitted.sessionId, extra.mcpReq.signal, services, connectionEffects, { harness: admitted.harness });
       const sessionId = admitted.sessionId ?? resolved.sessionId;

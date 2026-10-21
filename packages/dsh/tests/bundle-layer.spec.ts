@@ -116,6 +116,19 @@ describe('profile bundle layer (Task 4)', () => {
     expect(config.args).toEqual(['-y', '@mstar-harness/cli', 'mcp'])
   })
 
+  it('ships exactly one MCP row: only the shared mstar-mcp row names the client package', () => {
+    const pkg = JSON.parse(readFileSync(join(PKG_DIR, 'package.json'), 'utf8'))
+    // The shared `mstar-mcp` row is the whole MCP channel. A second ROW naming
+    // the client — a scoped/per-agent mount — would mean two channels.
+    const mcpRows = bundleRows().filter((entry) => JSON.stringify(entry).includes('@deepseek-ai/dsh-mcp-client'))
+    expect(mcpRows.map((entry) => entry.id)).toEqual(['mstar-mcp'])
+    // The plugin never declares the client as its own dependency: it mounts no
+    // MCP instance, the Loader mounts the row.
+    expect(pkg.dependencies?.['@deepseek-ai/dsh-mcp-client']).toBeUndefined()
+    expect(pkg.devDependencies?.['@deepseek-ai/dsh-mcp-client']).toBeUndefined()
+    expect(pkg.peerDependencies?.['@deepseek-ai/dsh-mcp-client']).toBeUndefined()
+  })
+
   it('defaults Enforcement OFF and ships no deployment-owned config keys', () => {
     const config = mstarRow().config as Record<string, unknown>
     expect(config).toBeDefined()

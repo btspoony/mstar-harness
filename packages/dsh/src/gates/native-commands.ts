@@ -15,13 +15,14 @@
  *    `mstar_execution_clear` (there is no shared `execution.clear` command).
  *
  * Everything else is the MCP surface (`mcp__mstar__<family>` with an `action`),
- * which carries the writable commands over the scoped mount
- * (`scoped-mcp-mount.ts`, one connection per agent with `--identity-env`). The
- * fourteen 1:1 duplicates that used to shadow those MCP tools here are gone:
- * two identical model-facing surfaces cost ~10k characters of fixed context
- * per request and forced the model to choose between them.
+ * carried over the ONE shared `mstar-mcp` connection the bundle mounts for the
+ * whole host. The fourteen 1:1 duplicates that used to shadow those MCP tools
+ * here are gone: two identical model-facing surfaces cost ~10k characters of
+ * fixed context per request and forced the model to choose between them.
  *
- * Identity: `mstar_plan_bind` calls the shared `@mstar-harness/commands`
+ * Identity: this native surface is the ONLY identity path — the shared MCP
+ * connection carries none, and no MCP tool can supply one on a caller's behalf.
+ * `mstar_plan_bind` calls the shared `@mstar-harness/commands`
  * implementation through its programmatic entry (`executeCommand` — the same
  * admission + execution path the CLI uses) and injects `sessionId` from
  * `exec.agent.id` (ADR `dsh-native-identity-channels` constraints 1–2:

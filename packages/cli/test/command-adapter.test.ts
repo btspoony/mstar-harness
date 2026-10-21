@@ -91,8 +91,12 @@ test("mcp is a top-level CLI command and documents its stdio server purpose", as
   expect(result.status).toBe(0);
   expect(result.stdout).toContain("Usage: mstar mcp");
   expect(result.stdout).toContain("Run the Morning Star MCP server over stdio");
-  expect(result.stdout).toContain("--identity-env <NAME>");
   expect(result.stdout).toContain("--harness <path>");
+  // The shared connection has no identity channel: the retired flag must not
+  // be advertised anywhere.
+  expect(result.stdout).not.toContain("--identity-env");
+  expect(result.stdout).toContain("PINS this connection");
+  expect(result.stdout).toContain("MSTAR_HARNESS_DIR");
 });
 
 /**
