@@ -19,16 +19,18 @@ import { FAMILY_PURPOSE, actionOf, familyOf, familyToolName, foldFamilyTools } f
  * for the payload-composed input view), and it also published 154,471
  * characters of output schemas — 327,811 characters in total, over 90k tokens.
  * The fold publishes the descriptor field index instead of payload composition
- * and drops output schemas, so the after figure is 32,749 characters of
- * description + input schema (~9.1k tokens; the payload schemas published for
+ * and drops output schemas, so the after figure is 33,274 characters of
+ * description + input schema (~9.2k tokens; the payload schemas published for
  * `plan.issue-add` and `workflow.execution-policy` are sanctioned contract
- * detail, not per-command republishing): 33,000 keeps a small but real margin
+ * detail, not per-command republishing): 33,500 keeps a small but real margin
  * while a regression that starts republishing per-command contracts inside
  * family descriptions — or that lets per-action tools creep back — reddens
  * here. A published discovery example must carry every field the tool
- * REQUIRES (`"action":"schema"`), so the margin absorbs that cost too.
+ * REQUIRES (`"action":"schema"`), and a family that publishes an identity
+ * selector also publishes the per-action `x-mstar-selectors` index a host-side
+ * injector reads, so the margin absorbs both.
  */
-const PUBLISHED_SURFACE_BUDGET_CHARS = 33_000;
+const PUBLISHED_SURFACE_BUDGET_CHARS = 33_500;
 
 type PublishedTool = Readonly<{
   name: string;
@@ -37,6 +39,7 @@ type PublishedTool = Readonly<{
     required?: readonly string[];
     properties?: Readonly<Record<string, unknown>>;
     "x-mstar-requirements"?: readonly Readonly<{ name: string }>[];
+    "x-mstar-selectors"?: readonly Readonly<{ key: string; actions: readonly string[] }>[];
   }>;
 }>;
 
@@ -480,6 +483,11 @@ describe("folded MCP command families", () => {
    * call silently runs under the connection identity. The transport refuses
    * before admission instead, names the accepting actions, and never echoes
    * the supplied identity.
+   *
+   * The published `x-mstar-selectors` index must state exactly what the refusal
+   * enforces: a host-side injector reads it to decide whether it may fill the
+   * selector for the SELECTED action, and an index that disagreed with the
+   * transport would either drop the identity or inject one the call refuses.
    */
   test("a session selector the selected action does not read refuses before admission", async () => {
     const cases = [
@@ -494,6 +502,7 @@ describe("folded MCP command families", () => {
       for (const entry of cases) {
         const published = tools.find((tool) => tool.name === entry.tool);
         expect((published?.inputSchema.properties ?? {}).sessionId).toMatchObject({ type: "string" });
+        expect(published?.inputSchema["x-mstar-selectors"]).toEqual([{ key: "sessionId", actions: [...entry.accepting] }]);
         const refusal = envelope(await call(client, entry.tool, { action: entry.action, sessionId: value }));
         expect(refusal).toMatchObject({ command: entry.id, status: "usage", code: "command.invalid-input", exitCode: 2 });
         expect(refusal.details?.selectors).toEqual([{ key: "sessionId", acceptingActions: [...entry.accepting] }]);
@@ -501,6 +510,15 @@ describe("folded MCP command families", () => {
         expect(refusal.details?.recovery).toContain("drop");
         expect(JSON.stringify(refusal)).not.toContain(value);
       }
+      // The same actions WITHOUT a selector are not refused for one: this is
+      // the shape a host sends after the action-scoped check, and the sibling
+      // action completes end to end.
+      for (const entry of cases) {
+        const clean = envelope(await call(client, entry.tool, { action: entry.action }));
+        expect(clean.details?.selectors).toBeUndefined();
+      }
+      const coverage = envelope(await call(client, "mstar_workflow_note", { action: "coverage", workflow: "wf-1" }));
+      expect(coverage).toMatchObject({ command: "workflow-note.coverage", status: "ok" });
     });
   });
 

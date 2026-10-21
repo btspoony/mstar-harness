@@ -150,6 +150,7 @@ type PublishedTool = Readonly<{
     properties?: Readonly<Record<string, unknown>>;
     required?: readonly string[];
     "x-mstar-requirements"?: readonly Readonly<{ name: string }>[];
+    "x-mstar-selectors"?: readonly Readonly<{ key: string; actions: readonly string[] }>[];
   }>;
 }>;
 
@@ -299,6 +300,9 @@ describe("MCP session identity", () => {
       const tool = await publishedMcpTool("session.recover", resolver);
       expect(tool.inputSchema.properties ?? {}).not.toHaveProperty("sessionId");
       expect((tool.inputSchema["x-mstar-requirements"] ?? []).map((entry) => entry.name)).not.toContain("sessionId");
+      // No per-action selector index either: an injector reading one while the
+      // property is unpublished would add a key the tool does not declare.
+      expect(tool.inputSchema).not.toHaveProperty("x-mstar-selectors");
 
       // A call that puts one on the wire is refused by name, with the cause and
       // the routes that really work; the claimed value is never echoed.
@@ -391,6 +395,9 @@ describe("MCP session identity", () => {
     const trusted = await publishedMcpTool("session.recover", createContextResolver({ harnessRoot: fixture.harness, trustCallerSessionId: true }));
     expect(trusted.inputSchema.properties).toMatchObject({ sessionId: { type: "string" } });
     expect((trusted.inputSchema["x-mstar-requirements"] ?? []).map((entry) => entry.name)).toContain("sessionId");
+    // The wire carries the per-action fact a host-side injector needs: this
+    // action is the one that declares the selector.
+    expect(trusted.inputSchema["x-mstar-selectors"]).toEqual([{ key: "sessionId", actions: ["recover"] }]);
     // The same launch without the opt-in publishes nothing, and the flag maps
     // to the resolver fact registration reads.
     const shipped = createContextResolver({ harnessRoot: fixture.harness });
