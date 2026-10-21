@@ -347,6 +347,46 @@ describe("folded MCP command families", () => {
   });
 
   /**
+   * A key NO action of the family accepts is invalid before an action is
+   * chosen, so it belongs in the SAME refusal as the unknown/missing action:
+   * reporting the action first and the key on the next attempt is the
+   * one-field-per-attempt loop `packages/cli/AGENTS.md` forbids. A key at least
+   * one member accepts is NOT reported — it is not invalid until an action that
+   * does not declare it is selected — so `skill` stays out of the arm below.
+   */
+  test("an unknown or missing action also reports keys no member accepts", async () => {
+    await withClient(async (client) => {
+      const cases = [{ action: "detect-signals", bogus: 1 }, { bogus: 1, extra: 2 }];
+      for (const args of cases) {
+        const refusal = envelope(await call(client, "mstar_host", args));
+        expect(refusal).toMatchObject({ status: "usage", code: "command.invalid-input", exitCode: 2 });
+        const paths = (refusal.details?.diagnostics ?? []).map((entry) => (entry as { path?: string }).path);
+        expect(paths[0]).toBe("action");
+        for (const key of Object.keys(args).filter((key) => key !== "action")) {
+          expect(paths).toContain(key);
+          expect(refusal.message).toContain(key);
+        }
+        expect(refusal.details?.actions).toEqual(["detect", "skill-root"]);
+        expect(refusal.details?.recovery).toContain("mstar_schema");
+        expect(refusal.details?.recovery).toContain("drop");
+      }
+
+      // A key a real member accepts is only one action's business: the unknown
+      // action is the whole refusal, and `skill` is never called invalid.
+      const accepted = envelope(await call(client, "mstar_host", { action: "detect-signals", skill: "mstar-harness-core" }));
+      expect(accepted.details?.fields).toBeUndefined();
+      expect((accepted.details?.diagnostics ?? []).map((entry) => (entry as { path?: string }).path)).toEqual(["action"]);
+
+      // The same sanitizer the selected-action refusal uses: a credential-shaped
+      // key never travels with the refusal.
+      const secret = ["sk", "live-fold-wild"].join("-");
+      const redacted = envelope(await call(client, "mstar_host", { action: "detect-signals", [secret]: 1 }));
+      expect(JSON.stringify(redacted)).not.toContain(secret);
+      expect(JSON.stringify(redacted)).toContain("[REDACTED]");
+    });
+  });
+
+  /**
    * A refusal is a response the caller may forward or a session may record, so
    * a caller-supplied selector value never travels with it — the same rule
    * the selector refusal states for a session id. Only its shape is

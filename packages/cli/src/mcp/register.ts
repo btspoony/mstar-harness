@@ -264,7 +264,10 @@ function withoutFields(input: unknown, fields: readonly string[]): unknown {
  * The refusal a folded tool returns when `action` names no member. It carries
  * the family's real action list plus the supported recovery — the family tool
  * itself and `mstar_schema` for field detail — so the caller can retry without
- * a second discovery round.
+ * a second discovery round, together with every supplied key NO member accepts
+ * (`familyWideInvalidFields`): those are invalid whatever action is chosen, so
+ * reporting the action first and them second is the one-key-per-attempt loop
+ * `packages/cli/AGENTS.md` forbids.
  *
  * The supplied selector is NEVER echoed, for the same reason
  * the refusal builders never echo one: any caller-controlled scalar can
@@ -272,20 +275,39 @@ function withoutFields(input: unknown, fields: readonly string[]): unknown {
  * is forwarded wherever the refusal is read or recorded. Only its shape is
  * reported; both `mstar_schema` examples are runnable verbatim, selector
  * included — a published next step that the tool refuses is not a recovery.
+ * A rejected KEY is caller-controlled text too, so it goes through the shipped
+ * input sanitizer exactly as `undeclaredInputRefusal` does.
  */
-function unknownActionRefusal(family: FoldedFamilyTool, action: unknown): CommandEnvelope<never> {
+function unknownActionRefusal(family: FoldedFamilyTool, action: unknown, rejected: readonly string[]): CommandEnvelope<never> {
   const listed = family.actions.map((entry) => JSON.stringify(entry)).join(" | ");
   const received = typeof action === "string" ? "supplied" : action === undefined ? "undefined" : typeof action;
+  const keys = rejected.map(sanitizeInputScalar);
+  const dropped = keys.map((key) => JSON.stringify(key)).join(", ");
+  const accepted = cappedFieldList(familyAcceptedFields(family));
   return refusalEnvelope({
     command: family.toolName,
     status: "usage",
     code: "command.invalid-input",
     exitCode: 2,
-    message: `unknown action for ${family.toolName}; available actions: ${family.actions.join(", ")}`,
+    message: `unknown action for ${family.toolName}; available actions: ${family.actions.join(", ")}`
+      + (keys.length === 0 ? "" : `; no action of this family accepts the field${keys.length === 1 ? "" : "s"} ${dropped}`),
     helpRoute: `mstar schema --family ${family.family}`,
-    recovery: `call ${family.toolName} with "action" set to one of the available actions; for one action's fields call mstar_schema {"action":"schema","family":"${family.family}"} and then {"action":"schema","command":"${family.definitions[0]!.id}"}`,
-    diagnostics: [{ path: "action", code: "not_allowed", message: `action must be one of ${listed}`, expected: listed, received }],
-    details: { actions: family.actions },
+    recovery: `call ${family.toolName} with "action" set to one of the available actions; for one action's fields call mstar_schema {"action":"schema","family":"${family.family}"} and then {"action":"schema","command":"${family.definitions[0]!.id}"}`
+      + (keys.length === 0 ? "" : `; drop ${dropped}`),
+    diagnostics: [
+      { path: "action", code: "not_allowed", message: `action must be one of ${listed}`, expected: listed, received },
+      ...keys.map((key) => ({
+        path: key,
+        code: "not_allowed",
+        message: `${key} is not an input of ${family.toolName}; no action of this family accepts it`,
+        expected: accepted,
+        received: "supplied",
+      })),
+    ],
+    details: {
+      actions: family.actions,
+      ...(keys.length === 0 ? {} : { fields: keys }),
+    },
   });
 }
 
@@ -373,17 +395,51 @@ function undeclaredFields(family: FoldedFamilyTool, definition: CommandDefinitio
   if (input === null || typeof input !== "object" || Array.isArray(input)) return [];
   const record = input as Record<string, unknown>;
   const accepted = family.acceptedFields.get(actionOf(definition.id)) ?? [];
-  // Transport fields, never member inputs: read them from the family's
-  // definitions rather than from `family.selectors`: a locked connection
-  // publishes no selector, so that list is empty there and a supplied one must
-  // still be scraped silently, not refused as a typo.
-  const transport = new Set<string>(["action"]);
+  const declared = new Set<string>([...accepted, ...transportFields(family)]);
+  return Object.keys(record).filter((key) => record[key] !== undefined && !declared.has(key));
+}
+
+/**
+ * The transport fields of the WHOLE family: `action` plus every member's session
+ * selector. Neither is a member input — one selects the member, the other is
+ * connection identity — so no action can call them invalid.
+ *
+ * Read from the family's definitions rather than from `family.selectors`: a
+ * locked connection publishes no selector, so that list is empty there and a
+ * supplied one must still be scraped silently, not refused as a typo.
+ */
+function transportFields(family: FoldedFamilyTool): ReadonlySet<string> {
+  const keys = new Set<string>(["action"]);
   for (const member of family.definitions) {
     for (const option of member.cli.options) {
-      if (option.context === "sessionId") transport.add(option.key);
+      if (option.context === "sessionId") keys.add(option.key);
     }
   }
-  const declared = new Set<string>([...accepted, ...transport]);
+  return keys;
+}
+
+/** Every top-level field at least one action of the family accepts, in declaration order. */
+function familyAcceptedFields(family: FoldedFamilyTool): readonly string[] {
+  const accepted = new Set<string>();
+  for (const fields of family.acceptedFields.values()) for (const field of fields) accepted.add(field);
+  return [...accepted];
+}
+
+/**
+ * The top-level keys NO action of the family accepts and no transport field
+ * owns. Being accepted by no member is decidable without selecting an action,
+ * so the unknown/missing-action refusal reports such a key in the same
+ * response instead of spending a second round trip on it.
+ *
+ * A key at least ONE action accepts is NOT reported here: it is not invalid
+ * until an action that does not declare it is selected, and that
+ * selected-action case belongs to `undeclaredFields` /
+ * `undeclaredInputRefusal`.
+ */
+function familyWideInvalidFields(family: FoldedFamilyTool, input: unknown): readonly string[] {
+  if (input === null || typeof input !== "object" || Array.isArray(input)) return [];
+  const record = input as Record<string, unknown>;
+  const declared = new Set<string>([...familyAcceptedFields(family), ...transportFields(family)]);
   return Object.keys(record).filter((key) => record[key] !== undefined && !declared.has(key));
 }
 
@@ -528,7 +584,7 @@ export function registerMcpCommands(
           const action = record?.action;
           const definition = typeof action === "string" ? definitionForAction(family, action) : undefined;
           if (definition === undefined) {
-            return { issues: [{ message: JSON.stringify(unknownActionRefusal(family, action)) }] };
+            return { issues: [{ message: JSON.stringify(unknownActionRefusal(family, action, familyWideInvalidFields(family, input))) }] };
           }
           const locked = resolveContext.identityLocked === true;
           // Every input the selected action does not declare is collected
