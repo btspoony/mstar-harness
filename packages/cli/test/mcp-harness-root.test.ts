@@ -1172,6 +1172,40 @@ describe("MCP control-root admission class", () => {
       else process.env.MSTAR_HARNESS_DIR = previousHarness;
     }
   });
+
+  test("an unpinned union call reports the missing harness together with the fields admission refused", async () => {
+    const previousHarness = process.env.MSTAR_HARNESS_DIR;
+    delete process.env.MSTAR_HARNESS_DIR;
+    const definition = getCommandDefinitions().find((entry) => entry.id === "issue.close");
+    if (definition === undefined) throw new Error("missing command: issue.close");
+    const server = createMcpServer(createContextResolver(), [definition]);
+    const client = new Client({ name: "harness-root-test-client", version: "1.0.0" });
+    const [clientEnd, serverEnd] = InMemoryTransport.createLinkedPair();
+    try {
+      await server.connect(serverEnd);
+      await client.connect(clientEnd);
+      // The call names no harness AND none of the fields the action requires:
+      // the root requirement and admission's own diagnostics must arrive in ONE
+      // refusal, so a second attempt is not needed to learn the rest.
+      const refused = await toolEnvelope(client, "mstar_issue", withAction("issue.close", {}));
+      expect(refused).toMatchObject({ status: "usage", code: "command.invalid-input" });
+      // The refusal's message is the shared diagnostic summary once more than
+      // one field is refused, so the root requirement is still the FIRST cause
+      // in it; the harness recovery stays the envelope's recovery.
+      expect(refused.message).toContain("harness");
+      expect(refused.details?.recovery).toContain("mstar mcp --harness");
+      const paths = (refused.details?.diagnostics as Array<{ path?: string }>).map((entry) => entry.path);
+      expect(paths[0]).toBe("harness");
+      expect(paths).toContain("id");
+      expect(paths).toContain("actor");
+      expect(paths).toContain("payload");
+    } finally {
+      await client.close();
+      await server.close();
+      if (previousHarness === undefined) delete process.env.MSTAR_HARNESS_DIR;
+      else process.env.MSTAR_HARNESS_DIR = previousHarness;
+    }
+  });
 });
 
 /**
@@ -1214,6 +1248,34 @@ describe("MCP pinned root selectors and operation targets", () => {
     // The other root received NOTHING: no SDD tree, not even its own harness's.
     expect(existsSync(path.join(fixture.rootB, ".mstar", "sdd", "plan-pinned"))).toBe(false);
     expect(existsSync(path.join(fixture.rootB, ".mstar", "sdd"))).toBe(false);
+  });
+
+  test("an unpinned connection resolves sdd.workspace from the controlRoot the call names", async () => {
+    const fixture = twoGitWorkspaces();
+    const previousHarness = process.env.MSTAR_HARNESS_DIR;
+    delete process.env.MSTAR_HARNESS_DIR;
+    try {
+      // No launcher pin: the selector the call names IS its root, and it must
+      // reach the resolver as the call root. Forwarding only a `harness`
+      // selector refused this call with `mcp.control-root-unresolved` although
+      // it named a real root.
+      const result = await callRawTool(
+        createContextResolver(),
+        "sdd.workspace",
+        { planId: "plan-unpinned-root", controlRoot: fixture.rootB },
+      );
+      expect(result.isError).toBe(false);
+      const envelope = result.structuredContent as CommandEnvelope;
+      expect(envelope).toMatchObject({ status: "ok", code: "sdd.workspace.ok" });
+      const sddDir = (envelope.data as { sddDir: string }).sddDir;
+      expect(sddDir).toBe(path.join(realpathSync(path.join(fixture.rootB, ".mstar")), "sdd", "plan-unpinned-root"));
+      expect(existsSync(sddDir)).toBe(true);
+      // The workspace the call did NOT name received nothing.
+      expect(existsSync(path.join(fixture.rootA, ".mstar", "sdd"))).toBe(false);
+    } finally {
+      if (previousHarness === undefined) delete process.env.MSTAR_HARNESS_DIR;
+      else process.env.MSTAR_HARNESS_DIR = previousHarness;
+    }
   });
 
   test("a pinned connection leaves the store.execution target untouched", async () => {

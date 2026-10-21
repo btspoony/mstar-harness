@@ -207,6 +207,25 @@ function normalizedRootInputs(rootInputs: readonly string[], input: unknown, def
   return normalized;
 }
 
+/**
+ * The root the ADMITTED call named: the first root selector the command
+ * declares with a non-blank value, read from the input BEYOND admission (a
+ * handler value never leaves the capability, so a non-`harness` selector such as
+ * `sdd.workspace`'s `controlRoot` has no other route to the resolver). Pinned
+ * behaviour is unchanged by construction: the seam already replaced `harness`
+ * with the pin and removed every other root selector, and the resolver prefers
+ * the pin over any call root.
+ */
+function callRootOf(rootInputs: readonly string[], input: unknown): string | undefined {
+  if (input === null || typeof input !== "object") return undefined;
+  const record = input as Record<string, unknown>;
+  for (const field of rootInputs) {
+    const value = record[field];
+    if (typeof value === "string" && value.trim() !== "") return value;
+  }
+  return undefined;
+}
+
 /** True when the call supplied a non-blank `harness` (a blank value is not a declaration). */
 function namedHarness(input: unknown): boolean {
   if (input === null || typeof input !== "object" || Array.isArray(input)) return false;
@@ -221,8 +240,16 @@ function namedHarness(input: unknown): boolean {
  * missing selector nor a recovery. The envelope and its `required` diagnostic
  * follow the shape every family uses for a mandated field, so a caller reads the
  * same cause through the same route whichever input schema the action has.
+ *
+ * Admission's own diagnostics join this one (`admission`): the missing selector
+ * must not cost a second attempt to learn the fields the action also refused —
+ * report-all is the contract on every route.
  */
-function unpinnedHarnessRefusal(definition: CommandDefinition): CommandEnvelope<never> {
+function unpinnedHarnessRefusal(
+  definition: CommandDefinition,
+  admission?: Extract<CommandAdmission, { success: false }>,
+): CommandEnvelope<never> {
+  const admissionDiagnostics = (admission?.envelope.details?.diagnostics ?? []) as readonly RefusalDiagnostic[];
   return refusalEnvelope({
     command: definition.id,
     status: "usage",
@@ -237,7 +264,7 @@ function unpinnedHarnessRefusal(definition: CommandDefinition): CommandEnvelope<
       message: "harness is required: this connection declared no control root",
       expected: "present",
       received: "undefined",
-    }],
+    }, ...admissionDiagnostics],
   });
 }
 
@@ -303,9 +330,14 @@ function suppliedSelectors(family: FoldedFamilyTool, input: unknown): readonly s
  * An admitted call bound to the definition its `action` selected. The
  * transport carries that definition alongside the immutable admission so the
  * handler validates the outcome and renders the assignment recovery with the
- * SELECTED command's identity, never the family tool's name.
+ * SELECTED command's identity, never the family tool's name. `callRoot` is the
+ * root selector the call named (see `callRootOf`), resolved once at validation
+ * so the handler never re-reads the handler value.
  */
-type FoldedAdmission = Extract<CommandAdmission, { success: true }> & Readonly<{ definition: CommandDefinition }>;
+type FoldedAdmission = Extract<CommandAdmission, { success: true }> & Readonly<{
+  definition: CommandDefinition;
+  callRoot: string | undefined;
+}>;
 
 /**
  * Remove the family `action` selector before admission: it names the member,
@@ -719,9 +751,14 @@ export function registerMcpCommands(
           // which field the command uses. `handlerInput` fills the `harness`
           // field only when that field is the root (never for a target).
           const defaultHarness = resolveContext.defaultHarness;
+          const rootInput = normalizedRootInputs(
+            entry.rootInputs,
+            strippedActionInput(withoutFields(declaredInput, [...refusedSelectors.map((selector) => selector.key), ...rejected])),
+            defaultHarness,
+          );
           const admitted = admitCommandInput(
             definition,
-            normalizedRootInputs(entry.rootInputs, strippedActionInput(withoutFields(declaredInput, [...refusedSelectors.map((selector) => selector.key), ...rejected])), defaultHarness),
+            rootInput,
             entry.descriptor,
             entry.contract.schema,
             (data) => handlerInput(definition, data, defaultHarness, entry.harnessDefault),
@@ -735,9 +772,11 @@ export function registerMcpCommands(
           // handler would then re-discover a root from the invocation workspace
           // — the silent cwd probe this rule exists to remove.
           if (entry.contract.unpinnedHarnessGate && !namedHarness(input)) {
-            return { issues: [{ message: JSON.stringify(unpinnedHarnessRefusal(definition)) }] };
+            return { issues: [{ message: JSON.stringify(unpinnedHarnessRefusal(definition, admitted.success ? undefined : admitted)) }] };
           }
-          return admitted.success ? { value: { ...admitted, definition } } : { issues: [{ message: JSON.stringify(admitted.envelope) }] };
+          return admitted.success
+            ? { value: { ...admitted, definition, callRoot: callRootOf(entry.rootInputs, rootInput) } }
+            : { issues: [{ message: JSON.stringify(admitted.envelope) }] };
         },
       },
     };
@@ -755,11 +794,10 @@ export function registerMcpCommands(
       // selector and the per-call root selector; the handler value itself
       // never leaves the capability. The connection has no identity of its
       // own, so a session id here is exactly what the caller put on the wire.
-      const { definition } = admitted;
+      const { definition, callRoot } = admitted;
       // A harness that names an operation target is not this call's root: only
-      // a declared root selector may select the connection root.
-      const entry = prepared.get(definition.id)!;
-      const callRoot = entry.harnessDefault ? admitted.harness : undefined;
+      // a declared root selector may select the connection root, and a pinned
+      // connection's selectors were already replaced or removed at the seam.
       const resolved = await resolveContext(definition, admitted.sessionId, extra.mcpReq.signal, services, connectionEffects, { harness: callRoot });
       const sessionId = admitted.sessionId ?? resolved.sessionId;
       const requestContext: InvocationContext = Object.freeze({
