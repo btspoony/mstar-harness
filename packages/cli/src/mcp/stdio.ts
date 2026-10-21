@@ -33,6 +33,17 @@ const NULL_ROOT_BOOTSTRAP_COMMANDS = new Set(["harness.scaffold"]);
  * fails that suite instead of silently inheriting a refusal (or silently
  * inheriting a null root).
  *
+ * Admission is only half the contract. A null root leaves the invocation
+ * `workspace` at this server's launch directory (`launchDirectory: true`),
+ * so a member that DEFAULTS a path input to it — or takes the checkout itself as
+ * its subject — would read, or worse write, the HOST's own checkout. Such a
+ * member is admitted here and then refuses per call (`families/launch-workspace.ts`)
+ * with the cause and the recoveries, exactly as `path.resolve` does; the same
+ * suite pins which members those are. A write never lands in a directory the
+ * caller did not name: `harness.scaffold` keeps its null-root bootstrap
+ * exception but requires an explicit root instead of adopting the launch
+ * directory.
+ *
  * Excluded on purpose, each because it derives something from a root:
  * - every command whose `harness` input or flag is its ROOT selector (the root
  *   is its own input, and admission requires it on an unpinned connection);
@@ -124,8 +135,11 @@ export interface McpStdioOptions {
   /**
    * Session workspace every call runs from (the invocation `cwd`). Unset
    * anchors it on the declared root's parent directory, so cwd-derived paths
-   * land under the declared harness. The launch process cwd is used only by the
-   * bootstrap family, which has no root yet to anchor on.
+   * land under the declared harness. The launch process cwd is used only when
+   * the connection declared neither, and the invocation is then marked
+   * `launchDirectory: true`: a root-free command may not default a path from it
+   * (it is the HOST's checkout), so declaring this flag is also how a mounting
+   * host names the directory `harness.scaffold` may bootstrap.
    */
   workspace?: string;
   /**
@@ -192,7 +206,10 @@ function declaredRoot(options: McpStdioOptions): string | undefined {
  * `--reviews-dir`), a relative `--dir` / findings path — follows the root the
  * call actually uses instead of the host's directory. The null-root paths (the
  * bootstrap exception and the root-free class) keep `process.cwd()`: they have
- * no root to anchor on, and a root-free command anchors nothing.
+ * no root to anchor on, so the workspace is marked `launchDirectory: true` and
+ * the commands that would default a path from it refuse instead of reading or
+ * writing the host's checkout. A launcher that declares the workspace itself
+ * (`--workspace`) names that directory, so the marker is absent.
  *
  * The `--harness` pin is also published as `harnessPin` (the exact harness dir,
  * not its parent), so a command that owns root placement — `harness.scaffold`
@@ -222,6 +239,12 @@ export function createContextResolver(options: McpStdioOptions = {}): ResolveCon
     return {
       cwd: options.workspace ?? (controlRoot === null ? process.cwd() : dirname(controlRoot)),
       controlRoot,
+      // `cwd` is a NAMED directory only when the launcher declared the workspace
+      // itself (`--workspace`) or a root was resolved: then it is that root's
+      // parent. Otherwise it is this server's own launch directory, which is the
+      // HOST's checkout and says nothing about the caller's workspace, so a
+      // command may neither default a path input from it nor answer about it.
+      ...(options.workspace === undefined && controlRoot === null ? { launchDirectory: true as const } : {}),
       // A flag pin is also the exact harness dir: commands that own root
       // placement (e.g. `harness.scaffold`) must target it verbatim, not
       // re-derive it. An environment-declared root needs no separate pin: the

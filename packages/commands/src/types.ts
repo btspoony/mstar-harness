@@ -106,6 +106,15 @@ export interface InvocationContext {
    * Unpinned MCP servers and the CLI probe never set it.
    */
   readonly harnessPin?: string;
+  /**
+   * Set only when `cwd` is an MCP server's LAUNCH directory: the connection
+   * declared no workspace, so the directory is the HOST's checkout and says
+   * nothing about the caller's. Absent everywhere else, including the CLI,
+   * whose `cwd` is the directory the caller ran the command from. A command
+   * that would default a path input from it, or take the checkout itself as its
+   * subject, refuses instead (`launch-workspace.ts`).
+   */
+  readonly launchDirectory?: true;
   readonly host?: string;
   readonly sessionId?: string;
   readonly sessionIdSource?: "flag" | "env";

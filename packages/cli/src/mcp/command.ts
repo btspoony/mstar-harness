@@ -32,12 +32,12 @@ export function registerMcpCommand(program: Command): void {
     .description("Run the Morning Star MCP server over stdio")
     .option(
       "--harness <path>",
-      "absolute harness root that PINS this connection: every call resolves its control root here, and the invocation workspace is anchored at its parent, so cwd-derived paths land under the pinned harness. Without it a non-blank MSTAR_HARNESS_DIR in the server environment pins the same way (resolved against the server's launch directory, because an environment value has no CLI boundary to refuse a relative path). Without either, a call to a command that needs a root must name its own through the published `harness` selector, and a call that names none is refused; commands that need no root (schema, path.resolve, host.*, the read-only validators) run either way. The launch cwd is never used as a control root",
+      "absolute harness root that PINS this connection: every call resolves its control root here, and the invocation workspace is anchored at its parent, so cwd-derived paths land under the pinned harness. Without it a non-blank MSTAR_HARNESS_DIR in the server environment pins the same way (resolved against the server's launch directory, because an environment value has no CLI boundary to refuse a relative path). Without either, a call to a command that needs a root must name its own through the published `harness` selector, and a call that names none is refused; commands that need no root (schema, path.resolve, host.*, the read-only validators) run either way. The launch cwd is never used as a control root, and a root-free command may not default a path input from it either: with no declared workspace the input becomes required (harness.scaffold's path, roles.validate's rolesDir, audit.secret-scan's path, ...), and the report/scan actions whose subject IS the checkout (pr-review.post, pr-review.size) are refused",
       absolutePath("--harness"),
     )
     .option(
       "--workspace <path>",
-      "absolute session workspace every call runs from (the invocation cwd), for a mounting host whose caller works outside the harness root's parent. Without it the workspace is the declared control root's parent directory, or the launch cwd for the bootstrap family (harness.scaffold), which has no root yet",
+      "absolute session workspace every call runs from (the invocation cwd), for a mounting host whose caller works outside the harness root's parent. Without it the workspace is the declared control root's parent directory; a connection that declares no root instead runs from its own launch directory, which a root-free command may not read or write by default, so declaring this flag is also how a mounting host names the directory harness.scaffold may bootstrap",
       absolutePath("--workspace"),
     )
     .option(

@@ -10,6 +10,7 @@ import { z } from "zod";
 import { commandEnvelopeSchema } from "../definitions.js";
 import { refusalEnvelope, type RefusalDiagnostic } from "../envelope.js";
 import { engineErrorFacts } from "./family-refusal.js";
+import { launchDirectoryRefusal } from "./launch-workspace.js";
 import { decodeInputDiagnostics } from "../input-diagnostics.js";
 import type { CommandDefinition, CommandEnvelope, InvocationContext } from "../types.js";
 
@@ -237,6 +238,12 @@ async function execute(verb: Verb, input: Input, context: InvocationContext): Pr
       return result.ok ? ok(id, result) : refusalEnvelope({ command: id, status: "refused", code: `${id}.invalid`, exitCode: 1, message: "PR-review report validation failed", details: { violations: result.violations } , recovery: "Correct each listed violation in the saved report. Run mstar pr-review validate-report <report-file>."});
     }
     if (verb === "post") {
+      // `gh` resolves the repository from the directory it runs in, so on a
+      // connection that declared no workspace this call would resolve the HOST
+      // checkout's repository and post a review to it. The subject is the
+      // caller's repository, which only a declared workspace names.
+      const unnamedRepository = launchDirectoryRefusal(id, context, { subject: "the repository this review is posted to" });
+      if (unnamedRepository !== undefined) return unnamedRepository;
       if (!/^\d+$/.test(need(input.pr, "--pr")) || Number(input.pr) < 1) throw new UsageError("--pr requires a positive integer");
       const bodyFile = abs(context.cwd, need(input.bodyFile, "--body-file"));
       if (!existsSync(bodyFile)) throw new Error(`body file not found: ${bodyFile}`);
@@ -307,6 +314,11 @@ async function execute(verb: Verb, input: Input, context: InvocationContext): Pr
       return ok(id, { removed: worktreePath, branch: branch || null });
     }
     if (verb === "size") {
+      // The classified repository is the one `git` discovers from the invocation
+      // directory, and this action publishes no field that names it: on a
+      // connection that declared no workspace that is the HOST's checkout.
+      const unnamedRepository = launchDirectoryRefusal(id, context, { subject: "the repository this size classifies" });
+      if (unnamedRepository !== undefined) return unnamedRepository;
       const base = need(input.base, "--base"); const head = need(input.head, "--head");
       const rootResult = await spawn(context, ["git", "rev-parse", "--show-toplevel"]);
       if (rootResult.exitCode !== 0 || rootResult.signal !== null) throw new Error(rootResult.stderr || "not a git repository");
@@ -328,6 +340,17 @@ async function execute(verb: Verb, input: Input, context: InvocationContext): Pr
       if (input.stage !== "1" && input.stage !== "2") throw new UsageError("--stage must be 1 or 2");
       if (input.tier !== undefined && !["quick", "default", "deep"].includes(input.tier)) throw new UsageError("--tier must be quick | default | deep");
       if (input.remainingMinutes !== undefined && !/^-?\d+(?:\.\d+)?$/.test(input.remainingMinutes)) throw new UsageError("--remaining-minutes must be a number of minutes");
+      // Both defaults are paths in the checkout: the worktree IS the invocation
+      // directory, and the skill root is a repo-relative corpus. On a connection
+      // that declared no workspace they would name the HOST's checkout in the
+      // prompt, so they are required, absolute inputs instead.
+      const unnamedSeatPaths = launchDirectoryRefusal(id, context, {
+        fields: [
+          { field: "worktree", subject: "the review worktree", value: input.worktree },
+          { field: "skillRoot", subject: "the audit skill root", value: input.skillRoot },
+        ],
+      });
+      if (unnamedSeatPaths !== undefined) return unnamedSeatPaths;
       const skillRoot = abs(context.cwd, input.skillRoot ?? "skills/mstar-audit");
       return ok(id, { prompt: prReviewSeatPrompt({ stage: input.stage === "1" ? 1 : 2, domain: need(input.domain, "--domain"), seat: need(input.seat, "--seat"), skillRoot, worktreePath: path.resolve(input.worktree ?? context.cwd), reconFacts: input.recon ?? [], ...(input.security ? { securitySeat: true } : {}), ...(input.tier ? { tier: input.tier as "quick" | "default" | "deep" } : {}), ...(input.diffFile ? { diffFile: abs(context.cwd, input.diffFile) } : {}), ...(input.collectFolded ? { collectFolded: true } : {}), ...(input.remainingMinutes !== undefined ? { budgetRemainingMinutes: Number(input.remainingMinutes) } : {}) }) });
     }

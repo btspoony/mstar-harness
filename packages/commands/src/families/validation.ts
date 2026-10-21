@@ -50,6 +50,7 @@ import {
 import { refusalEnvelope } from "../envelope.js";
 import { z } from "zod";
 import { resolveCliPath } from "../host-health.js";
+import { launchDirectoryRefusal } from "./launch-workspace.js";
 import { commandEnvelopeSchema } from "../envelope.js";
 import type { CommandDefinition, CommandEnvelope, InvocationContext, PayloadDescriptor } from "../types.js";
 
@@ -460,6 +461,22 @@ async function execute(id: string, input: Input, context: InvocationContext): Pr
         return gate.ok ? ok(id, { ...gateData(gate), exempt: profile.mode === null }) : rejected(id, gate, "skill.lint.invalid");
       }
       case "roles.validate": {
+        // The no-argument form validates the CHECKOUT's own corpus: its
+        // defaults are the relative `skills/mstar-roles` and that directory's
+        // parent. Those only exist in a directory somebody named, so on a
+        // connection that declared no workspace (whose invocation directory is
+        // the MCP server's launch directory, i.e. the HOST's checkout) the
+        // directories are required inputs instead of defaults: a clean verdict
+        // about the host's repository is a silent wrong answer.
+        const unnamedCorpus = launchDirectoryRefusal(id, context, {
+          fields: [
+            { field: "rolesDir", subject: "the role corpus directory", value: input.rolesDir },
+            // An omitted skillsDir is the roles dir's PARENT, i.e. derived from the
+            // directory the caller named above, so only a relative value is refused.
+            { field: "skillsDir", subject: "the skills root", value: input.skillsDir, optional: true },
+          ],
+        });
+        if (unnamedCorpus !== undefined) return unnamedCorpus;
         const rolesDir = absolute(context.cwd, input.rolesDir ?? "skills/mstar-roles");
         const skillsRoot = absolute(context.cwd, input.skillsDir ?? path.dirname(rolesDir));
         const violations: Violation[] = [...validateRoleMapping(rolesDir).violations];

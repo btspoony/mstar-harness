@@ -814,30 +814,84 @@ describe("MCP harness root", () => {
     }
   });
 
-  test("harness.scaffold still bootstraps a workspace whose cwd probe resolves to no harness", async () => {
+  test("an unpinned no-argument harness.scaffold is refused and writes nothing into the launch directory", async () => {
     const fixture = await plainForeignCwd();
+    // A directory a scaffold would visibly change: it owns a .gitignore the
+    // canonical snippet would be appended to, and a file of its own.
+    const launchGitignore = path.join(fixture.cwd, ".gitignore");
+    writeFileSync(launchGitignore, "# launch workspace marker\nnode_modules/\n", "utf8");
+    writeFileSync(path.join(fixture.cwd, "keep.txt"), "untouched\n", "utf8");
+    const before = snapshotTree(fixture.cwd);
     const previousCwd = process.cwd();
     const previousHarness = process.env.MSTAR_HARNESS_DIR;
     delete process.env.MSTAR_HARNESS_DIR;
     process.chdir(fixture.cwd);
     try {
-      // A null root is harness.scaffold's premise, not a misresolution: the
-      // bootstrap command alone keeps the launch cwd as its workspace so a
-      // fresh workspace can establish its own harness through MCP.
+      // A null root is harness.scaffold's premise, but the launch directory is
+      // the HOST's checkout, not a directory the caller named: the bootstrap
+      // exception makes the null root admissible, never that directory.
       const result = await callRawTool(createContextResolver(), "harness.scaffold", {});
-      expect(result.isError).toBe(false);
+      expect(result.isError).toBe(true);
       const envelope = result.structuredContent as CommandEnvelope;
-      expect(envelope).toMatchObject({ status: "ok", code: "harness.scaffold.ok" });
-      const scaffolded = envelope.data as { harnessDir: string };
-      expect(path.resolve(scaffolded.harnessDir)).toBe(path.join(realpathSync(fixture.cwd), ".mstar"));
-      expect(existsSync(scaffolded.harnessDir)).toBe(true);
+      expect(envelope).toMatchObject({ status: "usage", code: "command.invalid-input" });
+      expect(envelope.details?.diagnostics).toContainEqual(expect.objectContaining({ path: "path", code: "required" }));
+      const text = rawText(result);
+      expect(text).toContain("LAUNCH directory");
+      expect(text).toContain("--workspace");
+      expect(text).toContain("--harness");
+
+      // The proof the brief asks for: the launch directory is byte-identical,
+      // so the refusal created no .mstar and appended nothing to .gitignore.
+      expect(snapshotTree(fixture.cwd)).toEqual(before);
+      expect(existsSync(path.join(fixture.cwd, ".mstar"))).toBe(false);
     } finally {
       process.chdir(previousCwd);
       if (previousHarness === undefined) delete process.env.MSTAR_HARNESS_DIR;
       else process.env.MSTAR_HARNESS_DIR = previousHarness;
     }
   });
+
+  test("harness.scaffold still bootstraps the workspace the launcher DECLARED", async () => {
+    const fixture = await plainForeignCwd();
+    const previousHarness = process.env.MSTAR_HARNESS_DIR;
+    delete process.env.MSTAR_HARNESS_DIR;
+    try {
+      // `--workspace` names the directory, so the bootstrap keeps working for a
+      // mounting host: the exception is about the UNNAMED directory, not about
+      // disabling the fresh-workspace channel.
+      const result = await callRawTool(createContextResolver({ workspace: fixture.cwd }), "harness.scaffold", {});
+      expect(result.isError).toBe(false);
+      const envelope = result.structuredContent as CommandEnvelope;
+      expect(envelope).toMatchObject({ status: "ok", code: "harness.scaffold.ok" });
+      const scaffolded = envelope.data as { harnessDir: string };
+      expect(realpathSync(scaffolded.harnessDir)).toBe(path.join(realpathSync(fixture.cwd), ".mstar"));
+      expect(existsSync(scaffolded.harnessDir)).toBe(true);
+    } finally {
+      if (previousHarness === undefined) delete process.env.MSTAR_HARNESS_DIR;
+      else process.env.MSTAR_HARNESS_DIR = previousHarness;
+    }
+  });
 });
+
+/**
+ * Every path under `dir` with its bytes (directories as a trailing slash), so a
+ * write ANYWHERE in it shows up as a diff. Read-only: builds nothing.
+ */
+function snapshotTree(dir: string): Record<string, string> {
+  const snapshot: Record<string, string> = {};
+  const visit = (current: string): void => {
+    for (const entry of readdirSync(current, { withFileTypes: true })) {
+      const full = path.join(current, entry.name);
+      const relative = path.relative(dir, full);
+      if (entry.isDirectory()) {
+        snapshot[`${relative}/`] = "";
+        visit(full);
+      } else snapshot[relative] = readFileSync(full, "base64");
+    }
+  };
+  visit(dir);
+  return snapshot;
+}
 
 /**
  * Two initialized roots a status read tells apart: the pinned root holds one
@@ -928,6 +982,79 @@ const CONTROL_ROOT_CLASS: Readonly<Record<string, "root" | "none">> = {
   "worktree.cleanup": "root", "worktree.qc-alignment": "none",
 };
 
+/**
+ * The SECOND axis of the root-free classification, pinned to the same catalog:
+ * does the command's contract DEFAULT a path from the invocation directory, or
+ * take that checkout itself as its subject?
+ *
+ * A null root is only half of an admitted answer: it also leaves the invocation
+ * `cwd` at this server's LAUNCH directory, which is the HOST's checkout. An
+ * entry here therefore refuses per call (cause + recoveries) instead of reading,
+ * or writing, a directory the caller never named; its `args` are the minimal
+ * call that reaches that refusal and its `subject` is what the refusal must
+ * name. `null` means every path and every subject is an explicit input, so a
+ * null root is a complete answer.
+ *
+ * This is the drift guard for that half: an id added or removed without a
+ * decision here fails the keys assertion, and every entry is then exercised
+ * through a real tool call. The classification is hand-made for the same reason
+ * the root class is — only the handler knows whether it defaults a path.
+ */
+const LAUNCH_CWD_DEFAULT: Readonly<Record<string, null | { readonly args: Record<string, unknown>; readonly subject: string }>> = {
+  "audit.secret-scan": { args: {}, subject: "the repository to scan" },
+  "audit.supply-chain": { args: {}, subject: "the repository to check" },
+  "design-md.validate": null,
+  "dispatch.validate": null,
+  "doctor": { args: { target: "omp" }, subject: "the project root this diagnosis reads" },
+  "harness.scaffold": { args: {}, subject: "the scaffold root" },
+  "host.detect": null,
+  "host.skill-root": null,
+  "iteration.push-cadence": null,
+  "lint": null,
+  "path.resolve": { args: {}, subject: "the start directory" },
+  "plugin.validate": { args: {}, subject: "the plugin package" },
+  "pr-review.budget": null,
+  "pr-review.post": { args: { pr: "1", bodyFile: path.join(os.tmpdir(), "mstar-mcp-root-unread-review.md") }, subject: "the repository this review is posted to" },
+  "pr-review.seat-prompt": { args: { stage: "1", domain: "cli", seat: "seat-1" }, subject: "the review worktree" },
+  "pr-review.size": { args: { base: "HEAD", head: "HEAD" }, subject: "the repository this size classifies" },
+  "pr-review.tally": null,
+  "pr-review.validate-report": null,
+  "pr-review.worktree-cleanup": null,
+  "qc.validate-report": null,
+  "report": null,
+  "review.seats": null,
+  "roles.validate": { args: {}, subject: "the role corpus directory" },
+  "schema": null,
+  "skill.lint": null,
+  "store.execution.export": null,
+  "store.execution.restore": null,
+  "store.execution.restore-preview": null,
+  "worktree.qc-alignment": null,
+};
+
+/**
+ * A launch directory that LOOKS like a working checkout: a Git repository with
+ * one commit, the repo-relative `skills/` path `roles.validate` defaults to, and
+ * a review body. Every root-free member that defaults a path from the
+ * invocation directory answers confidently here — which is exactly the silent
+ * wrong answer the refusal exists to prevent.
+ */
+async function launchDirectoryCheckout(): Promise<{ launch: string }> {
+  const root = mkdtempSync(path.join(os.tmpdir(), "mcp-harness-root-"));
+  roots.push(root);
+  const launch = path.join(root, "launch");
+  mkdirSync(path.join(launch, "skills"), { recursive: true });
+  writeFileSync(path.join(launch, "tracked.txt"), "no credentials here\n", "utf8");
+  writeFileSync(path.join(launch, "review.md"), "## Review\n", "utf8");
+  const git = (args: string[]): void => {
+    execFileSync("git", args, { cwd: launch, stdio: ["ignore", "ignore", "ignore"] });
+  };
+  git(["init", "--quiet"]);
+  git(["add", "-A"]);
+  git(["-c", "user.email=fixture@example.invalid", "-c", "user.name=fixture", "commit", "--quiet", "-m", "fixture launch directory"]);
+  return { launch };
+}
+
 /** The class an unpinned resolver actually gives one definition (throws for `root`). */
 function admitOnUnpinnedConnection(id: string): "root" | "none" {
   const definition = getCommandDefinitions().find((entry) => entry.id === id);
@@ -968,6 +1095,124 @@ describe("MCP control-root admission class", () => {
       const rootInputs = definition.rootInputs
         ?? (Object.hasOwn(properties, "harness") || definition.cli.options.some((option) => option.key === "harness") ? ["harness"] : []);
       expect([id, rootInputs]).toEqual([id, []]);
+    }
+  });
+
+  test("a root-free command declares whether it takes a path from the invocation directory", () => {
+    const rootFree = Object.entries(CONTROL_ROOT_CLASS)
+      .filter(([, admitted]) => admitted === "none")
+      .map(([id]) => id)
+      .sort();
+    expect(Object.keys(LAUNCH_CWD_DEFAULT).sort()).toEqual(rootFree);
+  });
+
+  test("a root-free command that defaults a path from the invocation directory refuses on an unpinned connection", async () => {
+    const fixture = await launchDirectoryCheckout();
+    const previousCwd = process.cwd();
+    const previousHarness = process.env.MSTAR_HARNESS_DIR;
+    delete process.env.MSTAR_HARNESS_DIR;
+    process.chdir(fixture.launch);
+    try {
+      for (const [id, claimed] of Object.entries(LAUNCH_CWD_DEFAULT)) {
+        if (claimed === null) continue;
+        const result = await callRawTool(createContextResolver(), id, claimed.args);
+        const envelope = result.structuredContent as CommandEnvelope;
+        // Every failure names the entry: one broken member must not read as an
+        // unexplained suite failure.
+        if (envelope === undefined) throw new Error(`${id}: the tool result carries no envelope: ${rawText(result)}`);
+        expect([id, result.isError]).toEqual([id, true]);
+        expect([id, envelope.status, envelope.code]).toEqual([id, "usage", "command.invalid-input"]);
+        const text = rawText(result);
+        expect([id, text.includes("LAUNCH directory")]).toEqual([id, true]);
+        expect([id, text.includes(claimed.subject)]).toEqual([id, true]);
+        // The recovery is the launcher declaration, not a guess about the host.
+        expect([id, text.includes("--workspace")]).toEqual([id, true]);
+        // Nothing was answered ABOUT the directory it refused: the launch
+        // directory is not even echoed back.
+        expect([id, text.includes(fixture.launch)]).toEqual([id, false]);
+      }
+    } finally {
+      process.chdir(previousCwd);
+      if (previousHarness === undefined) delete process.env.MSTAR_HARNESS_DIR;
+      else process.env.MSTAR_HARNESS_DIR = previousHarness;
+    }
+  });
+
+  test("doctor keeps its host-side scope: only the project half needs a workspace", async () => {
+    const fixture = await plainForeignCwd();
+    const previousCwd = process.cwd();
+    const previousHarness = process.env.MSTAR_HARNESS_DIR;
+    delete process.env.MSTAR_HARNESS_DIR;
+    process.chdir(fixture.cwd);
+    try {
+      // The refusal is scoped to what actually reads the invocation directory,
+      // so the tool keeps a reachable path on the same connection: the host
+      // installation diagnosis never consults a workspace.
+      const hosted = await callRawTool(createContextResolver(), "doctor", { target: "omp", scope: "global" });
+      expect(rawText(hosted)).not.toContain("LAUNCH directory");
+    } finally {
+      process.chdir(previousCwd);
+      if (previousHarness === undefined) delete process.env.MSTAR_HARNESS_DIR;
+      else process.env.MSTAR_HARNESS_DIR = previousHarness;
+    }
+  });
+
+  test("the declaration is what lifts the refusal: the same call then reads the named directory", async () => {
+    const fixture = await launchDirectoryCheckout();
+    const previousHarness = process.env.MSTAR_HARNESS_DIR;
+    delete process.env.MSTAR_HARNESS_DIR;
+    try {
+      // `--workspace` names the directory every call runs from, so the default
+      // is no longer the host's: the same no-argument scan that refused above
+      // answers about the DECLARED checkout instead.
+      const declared = createContextResolver({ workspace: fixture.launch });
+      const scanned = await callRawTool(declared, "audit.secret-scan", {});
+      expect(scanned.isError).toBe(false);
+      expect((scanned.structuredContent as CommandEnvelope).data).toMatchObject({ findings: [] });
+      expect(((scanned.structuredContent as CommandEnvelope).data as { filesScanned: number }).filesScanned).toBeGreaterThan(0);
+      expect(rawText(scanned)).not.toContain("LAUNCH directory");
+    } finally {
+      if (previousHarness === undefined) delete process.env.MSTAR_HARNESS_DIR;
+      else process.env.MSTAR_HARNESS_DIR = previousHarness;
+    }
+  });
+
+  test("an unpinned no-argument roles.validate does not answer for the host checkout", async () => {
+    const fixture = await launchDirectoryCheckout();
+    // A corpus OUTSIDE the launch directory, so the second half proves the
+    // refusal is about the UNNAMED directory rather than the command becoming
+    // unreachable.
+    const corpus = mkdtempSync(path.join(os.tmpdir(), "mcp-harness-root-corpus-"));
+    roots.push(corpus);
+    const rolesDir = path.join(corpus, "skills", "mstar-roles");
+    mkdirSync(rolesDir, { recursive: true });
+    const previousCwd = process.cwd();
+    const previousHarness = process.env.MSTAR_HARNESS_DIR;
+    delete process.env.MSTAR_HARNESS_DIR;
+    process.chdir(fixture.launch);
+    try {
+      const refused = await callRawTool(createContextResolver(), "roles.validate", {});
+      expect(refused.isError).toBe(true);
+      const envelope = refused.structuredContent as CommandEnvelope;
+      expect(envelope).toMatchObject({ status: "usage", code: "command.invalid-input" });
+      expect(envelope.details?.diagnostics).toContainEqual(expect.objectContaining({ path: "rolesDir", code: "required" }));
+      const text = rawText(refused);
+      expect(text).not.toContain(fixture.launch);
+      // Not a verdict: the envelope carries no sibling count harvested from the
+      // host's corpus.
+      expect(envelope.data).toBeUndefined();
+
+      const named = await callRawTool(createContextResolver(), "roles.validate", { rolesDir });
+      const namedEnvelope = named.structuredContent as CommandEnvelope;
+      // The named corpus is answered (its own mapping violations), and the
+      // answer talks about that directory, never about the launch directory.
+      expect(namedEnvelope.status).not.toBe("usage");
+      expect(rawText(named)).toContain(corpus);
+      expect(rawText(named)).not.toContain(fixture.launch);
+    } finally {
+      process.chdir(previousCwd);
+      if (previousHarness === undefined) delete process.env.MSTAR_HARNESS_DIR;
+      else process.env.MSTAR_HARNESS_DIR = previousHarness;
     }
   });
 

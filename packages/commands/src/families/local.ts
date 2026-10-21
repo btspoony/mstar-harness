@@ -39,6 +39,7 @@ import {
   validateAgentPlugin,
 } from "../host-health.js";
 import type { CommandDefinition, CommandEnvelope, InvocationContext } from "../types.js";
+import { launchDirectoryRefusal } from "./launch-workspace.js";
 import {
   classifyOpencodeProbeError,
   diagnoseOpencodeV2Host,
@@ -245,6 +246,15 @@ export function getLocalCommandDefinitions(): readonly CommandDefinition[] {
       effects: ["write"],
       description: "Create the harness directories and default project; then run mstar store init to activate execution authority.",
       async execute(input, context) {
+        // A scaffold WRITES, so it may only land in a directory somebody named:
+        // the explicit `path`, the declared workspace, or the pinned harness. On
+        // a connection that declared no workspace the invocation directory is
+        // the server's launch directory (the HOST's checkout), and the null-root
+        // bootstrap exception does not make it a target.
+        const unnamedRoot = launchDirectoryRefusal("harness.scaffold", context, {
+          fields: [{ field: "path", subject: "the scaffold root", value: input.path }],
+        });
+        if (unnamedRoot !== undefined) return unnamedRoot;
         // An omitted path is the invocation workspace: a pinned server owns
         // that workspace, and the launch process cwd is not it. A pinned
         // server also names the exact harness dir, which the scaffold must
@@ -303,6 +313,16 @@ export function getLocalCommandDefinitions(): readonly CommandDefinition[] {
       effects: ["read"],
       description: "Validate Morning Star setup for one supported host target.",
       async execute(input, context) {
+        // The project-scoped diagnosis reads the project around the invocation
+        // (`resolveProjectRoot`): on a connection that declared no workspace
+        // that is the HOST's checkout, so the report would describe a project
+        // the caller never named. The GLOBAL scope needs no workspace (it reads
+        // the host installation, which is this command's own subject), so only
+        // the project half refuses.
+        const unnamedProject = input.scope === "project"
+          ? launchDirectoryRefusal("doctor", context, { subject: "the project root this diagnosis reads" })
+          : undefined;
+        if (unnamedProject !== undefined) return unnamedProject;
         const result = await diagnose(input.target, input.scope, input.generation);
         // MCP configs are global by default; project-scoped OpenCode uses the
         // project's own opencode.json, while dsh composes rows in its profile.
@@ -392,7 +412,15 @@ export function getLocalCommandDefinitions(): readonly CommandDefinition[] {
       input: z.object({ root: z.string().optional() }),
       effects: ["validate"],
       description: "Validate a plugin package against Agent Plugins v1.0.0.",
-      async execute(input) {
+      async execute(input, context) {
+        // An omitted root is the project around the invocation, which only
+        // exists in a directory somebody named: on a connection that declared
+        // no workspace it is the HOST's checkout, and validating the host's own
+        // package as the caller's answer is a silent wrong answer.
+        const unnamedRoot = launchDirectoryRefusal("plugin.validate", context, {
+          fields: [{ field: "root", subject: "the plugin package", value: input.root }],
+        });
+        if (unnamedRoot !== undefined) return unnamedRoot;
         const root = pluginRoot(input.root);
         const result = validateAgentPlugin(root);
         return result.ok
@@ -406,29 +434,15 @@ export function getLocalCommandDefinitions(): readonly CommandDefinition[] {
       effects: ["read"],
       description: "Resolve harness, specs, workflow, project, and review directories from a start directory.",
       async execute(input, context) {
-        // No control root means the invocation workspace is the MCP server's
-        // LAUNCH directory (the host's checkout), which says nothing about the
-        // caller's workspace: deriving harness/workflow/project/review paths
-        // from it would answer about an unrelated project. The start directory
-        // is then a required input, refused with a recovery instead.
-        if (input.path === undefined && context.controlRoot === null) {
-          return refusalEnvelope({
-            command: "path.resolve",
-            status: "usage",
-            code: "command.invalid-input",
-            exitCode: 2,
-            message: "path.resolve needs a starting `path`: this invocation declared no control root, so its working directory is the host's launch directory and is never used as a starting point",
-            helpRoute: "mstar path resolve --help",
-            recovery: "mstar path resolve, or pin the MCP connection with --harness=<abs> (or a non-blank MSTAR_HARNESS_DIR).",
-            diagnostics: [{
-              path: "path",
-              code: "required",
-              message: "path is required: this invocation has no control root to resolve from",
-              expected: "present",
-              received: "undefined",
-            }],
-          });
-        }
+        // On a connection that declared no workspace the invocation directory is
+        // the MCP server's LAUNCH directory (the host's checkout), which says
+        // nothing about the caller's workspace: deriving harness/workflow/
+        // project/review paths from it would answer about an unrelated project.
+        // The start directory is then a required, absolute input.
+        const unnamedStart = launchDirectoryRefusal("path.resolve", context, {
+          fields: [{ field: "path", subject: "the start directory", value: input.path }],
+        });
+        if (unnamedStart !== undefined) return unnamedStart;
         const startDir = input.path === undefined ? context.cwd : path.resolve(context.cwd, input.path);
         // `controlRoot` is a HARNESS dir, not a workspace boundary; feeding it
         // as `workspaceRoot` makes the resolver refuse the very harness it
