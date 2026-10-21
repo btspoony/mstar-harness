@@ -120,6 +120,24 @@ describe('registry peer contract (npm, no link farm)', () => {
     expect(pkg.scripts.prepare).toBeUndefined()
   })
 
+  it('every @mstar-harness/* peer is a package the release actually publishes', () => {
+    // A peer on a private workspace package resolves to nothing for a consumer:
+    // npm never installs it and the ESM import fails before the plugin's `apply`
+    // runs. `@mstar-harness/commands` was exactly that — private and bundled
+    // instead — so the peer set may only name publishable siblings.
+    const mstarPeers = Object.keys(pkg.peerDependencies ?? {})
+      .filter((name) => name.startsWith('@mstar-harness/'))
+      .sort()
+    expect(mstarPeers.length).toBeGreaterThan(0)
+    for (const name of mstarPeers) {
+      const manifest = JSON.parse(
+        readFileSync(join(repoRoot, 'packages', name.slice('@mstar-harness/'.length), 'package.json'), 'utf8'),
+      ) as { name: string; private?: boolean }
+      expect(manifest.name, `${name} workspace package`).toBe(name)
+      expect(manifest.private, `${name} is private and can never be installed as a peer`).toBeUndefined()
+    }
+  })
+
   it('package is tagged dsh / dsh-plugin for npm discovery', () => {
     expect(pkg.keywords).toContain('dsh')
     expect(pkg.keywords).toContain('dsh-plugin')
