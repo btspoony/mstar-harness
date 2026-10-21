@@ -693,6 +693,38 @@ describe('scoped MCP mount — the mounted connection', () => {
     expect(envelope).toMatchObject({ command: 'plan.bind', status: 'refused', code: 'plan.bind.leaf-seat', exitCode: 1 })
   }, 60_000)
 
+  it('a leaf mount refuses session.run THROUGH the connection, and no child is spawned', async () => {
+    const session = workspace('mstar-mount-leaf-spawn-')
+    // `session.run` mints a coordinator identity for a CHILD that never passes
+    // this seat check, so a leaf's launch is a seat escalation: the refusal
+    // must land before the spawn effect. `touch` would have created the marker
+    // had any child run.
+    const marker = join(session, 'spawned-by-leaf')
+    const envelope = await mountedCall(
+      { id: 'leaf-spawn', session: { header: { id: 'leaf-spawn', cwd: session, origin: 'subagent' } } },
+      'mstar_session',
+      { action: 'run', workflow: 'wf-a', role: 'coordinator', argv: ['touch', marker] },
+    )
+
+    expect(envelope).toMatchObject({ command: 'session.run', status: 'refused', code: 'session.run.leaf-seat', exitCode: 1 })
+    expect(existsSync(marker)).toBe(false)
+  }, 60_000)
+
+  it('a non-leaf mounted connection keeps session.run: the child really spawns', async () => {
+    const session = workspace('mstar-mount-root-spawn-')
+    const marker = join(session, 'spawned-by-launcher')
+    const envelope = await mountedCall(
+      { id: 'root-spawn', session: { header: { id: 'root-spawn', cwd: session } } },
+      'mstar_session',
+      { action: 'run', workflow: 'wf-a', role: 'coordinator', argv: ['touch', marker] },
+    )
+
+    // The control arm proves the refusal above is the leaf seat and not a
+    // launch that could never work: the same call is admitted and runs.
+    expect(envelope).toMatchObject({ command: 'session.run', status: 'ok', exitCode: 0 })
+    expect(existsSync(marker)).toBe(true)
+  }, 60_000)
+
   it('isLeafSeatHeader keeps the shared leaf-seat contract shape (leaf-seat.ts / ADR)', () => {
     expect(isLeafSeatHeader({ origin: 'subagent' })).toBe(true)
     expect(isLeafSeatHeader({ origin: 'main', delegationDepth: 1 })).toBe(true)
