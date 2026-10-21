@@ -27,7 +27,7 @@ or a custom profile).
   message (the mstar workflow prompt — the model executes it as a task, not
   injected context), returning a success result. The plugin registers **no
   duplicated** mstar command tools: the writable mstar command surface on this
-  host is the scoped **MCP** route (§ The native command surface below), and the
+  host is the **MCP** route (§ The native command surface below), and the
   only native tools are the three the MCP route cannot replace.
 - **No `sessionStart.skill`** — enter PM manually via the `pm` skill (the
   `mstar-roles` load path), then **Read next** → `mstar-harness-core` →
@@ -37,7 +37,7 @@ or a custom profile).
   **`mstar_audit_validate`** (no MCP twin) and **`mstar_execution_clear`** (no
   shared command); the membership rule and each tool's unique contribution are
   in § The native command surface. Every other mstar capability is an MCP tool of
-  the scoped mount, published one tool per command family
+  the one shared connection, published one tool per command family
   (`mcp__mstar__mstar_plan`, `mstar_workflow`, `mstar_issue`, `mstar_sdd`,
   `mstar_iteration`, `mstar_design_md`, `mstar_audit`, `mstar_compound`,
   `mstar_roles`, …) with an `action` argument selecting the member command.
@@ -143,6 +143,7 @@ or a custom profile).
 
 - **Native install and loading**: install `@mstar-harness/dsh` in the `web` profile (`dsh plugin --profile web add @mstar-harness/dsh`; `dsh-llm-fallbacks` remains a separate optional plugin). DSH config is a Cordis YAML row, not `mcp.json`: the shipped bundle patch (`packages/dsh/bundle/cordis.patch.yml`) inserts an `mstar-mcp` row that launches `npx @mstar-harness/cli mcp` over stdio through Cordis's `@deepseek-ai/dsh-mcp-client` bridge (`serverName: mstar`). The row loads only when the bridge plugin is in the profile's dependencies (`dsh plugin --profile web add @deepseek-ai/dsh-mcp-client`); app-boot tolerates the row failing without it — no mstar MCP tools appear until it is installed. The CLI process requires **Node >=24.18.0**; the dsh plugin itself remains Bun-hosted.
 - **Context boundary**: optional `host` is validated context selection, not a role or authority grant. `sessionId` is the main conversation session. MCP does not require or perform per-call child-agent attribution; shared handler workflow ownership, path, state-transition and CAS checks remain authoritative.
+- **One shared connection, declared control root**: that `mstar-mcp` row is the WHOLE MCP channel — the plugin registers no MCP client of its own and no per-agent mount exists, so a subagent shares the parent's connection. The control root is DECLARED, never inferred: the launch pin (`mstar mcp --harness <absolute path>`, else a non-blank `MSTAR_HARNESS_DIR`) wins, then the admitted call's `harness` field; `harness.scaffold` keeps its null-root bootstrap exception, and every other rootless call is refused with `[mcp.control-root-unresolved]` plus its recoveries. The launch cwd is the HOST's directory and is never a root candidate; a pin beats a per-call `harness`, and on an unpinned connection `harness` is published as REQUIRED on every tool whose root is not otherwise fixed. The connection carries **no identity of its own** (no `--identity-env`, no locked identity, no selector stripping, no connection-wide default session id) — operations that need one are the native tools in § The native command surface, where identity is `exec.agent.id`.
 - **Doctor and evidence**: `mstar-harness doctor --target dsh` parses the profile's Cordis sources (`cordis.yml` plus the installed bundle patch) structurally and reports the `mstar-mcp` row as `aligned` only when the `@deepseek-ai/dsh-mcp-client` bridge package is installed in the profile; a configured row without the bridge is a `mismatch`, no composed sources or no row is `unavailable`. It does not open `store.db`. An aligned config does not establish installed-host behavior; live verification is separately authorized.
 
 ## Skill loading
@@ -162,7 +163,7 @@ or a custom profile).
 | **`subagent`** / **`subagent_fork`** | Direct-delegation channel — one Assignment per invoke, returned at activation start (default `toolName`; a renamed instance must be declared via Config `dispatchTools`). The default channel on a profile WITHOUT the Team layer; also a one-off seat the board does not track. `subagent_fork` is the variant that seeds the child with the completed conversation (§ Delegation channels) |
 | **`spawn_teammate`** / **`team_task_create`** / `team_task_list` / `team_task_get` / `team_task_update` / **`wait_agent`** / **`send_message`** / `list_agents` / `interrupt_agent` | Agent Teams — the DEFAULT dispatch channel whenever the Team layer is mounted (one board task per Assignment, one teammate per track). Protocol → `references/dsh-agent-teams.md` |
 | **`workflow`** | Read-only fan-out — one run, one conversation `workflow-run` node. N≥3 is its design width; a one-seat read-only run is supported when no direct delegation can carry it (§ Read-only fan-out via the `workflow` tool; scripts → `references/dsh-workflow-scripts.md`) |
-| **`mcp__mstar__mstar_<family>`** | The writable mstar command surface — one MCP tool per command family with an `action` argument (`mstar_plan` → `bind`/`prepare`/`progress`/`complete`, `mstar_workflow` → `register`, `mstar_issue` → `add`/`close`, `mstar_sdd` → `workspace`/`task-brief`, `mstar_iteration` → `gate`, `mstar_design_md` / `mstar_compound` / `mstar_roles` → `validate`, `mstar_audit` → `scaffold`/`secret-scan`/`supply-chain`). Identity comes from the scoped mount's `--identity-env`, so the server acts as the calling agent (§ The native command surface) |
+| **`mcp__mstar__mstar_<family>`** | The writable mstar command surface — one MCP tool per command family with an `action` argument (`mstar_plan` → `bind`/`prepare`/`progress`/`complete`, `mstar_workflow` → `register`, `mstar_issue` → `add`/`close`, `mstar_sdd` → `workspace`/`task-brief`, `mstar_iteration` → `gate`, `mstar_design_md` / `mstar_compound` / `mstar_roles` → `validate`, `mstar_audit` → `scaffold`/`secret-scan`/`supply-chain`). The one shared connection carries no identity; a call may name the control root through `harness` when the connection is unpinned. An operation needing a session identity uses the native tool instead (§ The native command surface) |
 | **`mstar_plan_bind`** | Native bind — the only producer of the dsh-local durable record: it binds the engine coordinator row AND writes the session's `executionBinding` slot plus the adoption receipt that ledger attribution reads (§ The native command surface). A coordinating session that wants dsh-local ledger attribution uses this tool, not the MCP action |
 | **`mstar_audit_validate`** | Native report validator — the review-report credential scan (`mstar-audit` Hard Rule 4); the `mstar_audit` family publishes no report validator, so this capability has no MCP action |
 | **`mstar_execution_clear`** | Clear the calling session's own durable execution binding — no shared `execution.clear` command exists. No parameters, identity from `exec.agent.id`, leaf seats refused fail-closed |
@@ -344,7 +345,7 @@ answers, and no tool argument or config key selects one:
   an execution route: coordination documents have no file fallback there
   (`execution.not-active` — the file route is retired), and the
   register kind stays under its own document validator.
-- The host-native execution entry is the **scoped MCP mount**, not a command and
+- The host-native execution entry is the **shared MCP connection**, not a command and
   not a native duplicate: the writable mstar commands arrive as MCP tools
   (`mcp__mstar__mstar_<family>` with an `action`). Three dsh-native tools ride
   beside them, and only for what the MCP route cannot do — `mstar_plan_bind`
@@ -387,11 +388,15 @@ several lifecycles by naming the plan each call.
 ### The native command surface
 
 The writable mstar command surface on this host is the **MCP route**: the
-plugin's bundle patch inserts one `mstar-mcp` row (`npx @mstar-harness/cli mcp`
-over stdio, § MCP delivery) and registers one **scoped mount per agent** carrying
-`--identity-env`, so the CLI process acts as the calling session — the agent's
-`sessionId` reaches the shared admission on every call without a model-supplied
-field. Each MCP tool is one command FAMILY with an `action` argument —
+plugin's bundle patch inserts ONE `mstar-mcp` row (`npx @mstar-harness/cli mcp`
+over stdio, § MCP delivery) and that row is the whole MCP channel — no
+per-agent mount exists, so a subagent shares the connection its parent already
+has. The connection carries **no identity and no control root of its own**: the
+root is declared at launch (`--harness`, else a non-blank `MSTAR_HARNESS_DIR`)
+or named per call through `harness` (REQUIRED while the connection is
+unpinned), and an operation that needs a session identity is a dsh-native tool
+where it comes from `exec.agent.id` (§ MCP delivery). Each MCP tool is one
+command FAMILY with an `action` argument —
 `mstar_plan` (`bind` / `prepare` / `progress` / `complete`), `mstar_workflow`
 (`register`), `mstar_issue` (`add` / `close`), `mstar_sdd` (`workspace` /
 `task-brief`), `mstar_iteration` (`gate`), `mstar_design_md` / `mstar_compound` /
