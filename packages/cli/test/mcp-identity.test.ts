@@ -334,6 +334,37 @@ describe("MCP session identity", () => {
     }
   });
 
+  test("a claimed identity, a rejected field and the missing inputs arrive in ONE refusal", async () => {
+    const fixture = await initializedHarness();
+    const claimed = "live-coordinator-session";
+    const refused = await registeredMcpCall(
+      "session.recover",
+      // Three different problems in one call: an identity claim this connection
+      // cannot admit, a key no action accepts, and the action's own missing
+      // required inputs. The caller must see all of them at once instead of
+      // spending an attempt per problem.
+      { sessionId: claimed, unknownKey: "typo" },
+      context(fixture.root),
+      createContextResolver({ harnessRoot: fixture.harness }),
+    );
+    // The identity frame is kept: the security fact is why the call cannot run.
+    expect(refused).toMatchObject({ status: "refused", code: "mcp.caller-identity-unavailable" });
+    const diagnostics = ((refused.details?.diagnostics ?? []) as Array<{ path?: string; code?: string }>);
+    const paths = diagnostics.map((entry) => entry.path);
+    expect(paths).toContain("sessionId");
+    expect(paths).toContain("unknownKey");
+    // Admission's own verdict for the fields the action requires.
+    expect(diagnostics).toContainEqual(expect.objectContaining({ path: "workflow" }));
+    expect(diagnostics).toContainEqual(expect.objectContaining({ path: "attestation" }));
+    // The identity cause and recovery still travel with the aggregated refusal.
+    expect(refused.message).toContain("--trust-caller-session-id");
+    expect(String(refused.details?.recovery ?? "")).toContain("mstar session recover");
+    // The claimed value is never echoed, and the identity is recorded as its
+    // own group rather than being reported as a typo.
+    expect(JSON.stringify(refused)).not.toContain(claimed);
+    expect(refused.details?.identity).toMatchObject({ selectors: ["sessionId"], trust: "off" });
+  });
+
   test("plan.progress with a claimed coordinator id refuses before the execution ledger", async () => {
     const fixture = await initializedHarness();
     const before = readFileSync(path.join(fixture.harness, "store.db"));

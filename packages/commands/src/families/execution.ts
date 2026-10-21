@@ -4,7 +4,6 @@ import {
   SddScriptError,
   exportExecutionState,
   previewExecutionRestore,
-  resolveProcessHarnessDir,
   restoreExecutionBackup,
   type ExecutionRecoveryPreview,
   type StoreContext,
@@ -58,13 +57,44 @@ function requireInputs(input: ExecutionInput, fields: readonly (keyof ExecutionI
     );
   }
 }
-function executionContext(input: ExecutionInput, invocation: InvocationContext, verb: string): StoreContext {
-  const harness = absolute(input.harness, "--harness");
-  const root = resolveProcessHarnessDir(invocation.cwd, harness);
-  if (root === null) throw new SddScriptError(`${verb}: no target harness was resolved; pass --harness <absolute-path>`, 2);
-  if (invocation.controlRoot !== null && path.resolve(root) === path.resolve(invocation.controlRoot)) {
+/**
+ * The refusal for an operation target the call did not name as an absolute
+ * path.
+ *
+ * These actions run ROOT-FREE (`ROOT_FREE_COMMANDS`): with no connection root
+ * the invocation workspace stays at the MCP server's launch directory, which is
+ * the HOST's checkout. Discovering a store from it is exactly the launch-cwd
+ * rooting the connection rule removes, and `restore` WRITES to the store it
+ * finds, so the target is a required INPUT here and is never discovered.
+ */
+function targetRefusal(id: string, supplied: string): CommandEnvelope {
+  const relative = supplied !== "";
+  return refusalEnvelope({
+    command: id,
+    status: "usage",
+    code: "command.invalid-input",
+    exitCode: 2,
+    message: relative
+      ? `${id}: the operation target must be an absolute path; a relative "harness" would resolve against the invocation directory instead of naming the store this call reads or restores`
+      : `${id} needs the operation's target: it names the store this call reads or restores, and this action never discovers one from the invocation directory`,
+    helpRoute: `mstar schema --command ${id}`,
+    recovery: "Pass `harness` naming the harness directory this operation targets, as an ABSOLUTE path. A pinned MCP connection still takes the target from that field, never from its control root.",
+    diagnostics: [{
+      path: "harness",
+      code: relative ? "invalid_type" : "required",
+      message: relative ? "harness must be an absolute path" : "harness is required: the operation target is never discovered from the invocation directory",
+      expected: "absolute path",
+      received: relative ? "relative path" : "undefined",
+    }],
+  });
+}
+function executionContext(target: string, invocation: InvocationContext, verb: string): StoreContext {
+  // `target` is an absolute path (validated by the caller): resolving an
+  // absolute value never consults the invocation directory.
+  const root = path.resolve(target);
+  if (invocation.controlRoot !== null && root === path.resolve(invocation.controlRoot)) {
     throw new SddScriptError(
-      `${verb}: the resolved target ${path.resolve(root)} is this invocation's control root, and a control root is not an admitted execution target. `
+      `${verb}: the resolved target ${root} is this invocation's control root, and a control root is not an admitted execution target. `
       + "Pass --harness <absolute-path> naming a harness other than this control root, or invoke from a checkout where no control root is discovered. "
       + "To back up or move a control root's own store, use mstar store backup.",
       2,
@@ -77,9 +107,13 @@ function document<T>(value: string | undefined, flag: string): T {
 }
 
 async function execute(id: string, input: ExecutionInput, invocation: InvocationContext): Promise<CommandEnvelope> {
+  const verb = id.slice("store.execution.".length);
+  // The target is a required absolute INPUT, not a discovery: a blank or
+  // relative value refuses here, before any store is opened.
+  const target = typeof input.harness === "string" ? input.harness.trim() : "";
+  if (target === "" || !path.isAbsolute(target)) return targetRefusal(id, target);
   try {
-    const verb = id.slice("store.execution.".length);
-    const context = executionContext(input, invocation, `store execution ${verb}`);
+    const context = executionContext(target, invocation, `store execution ${verb}`);
     if (verb === "restore-preview") {
       const backupPath = absolute(required(input.backup, "--backup"), "--backup")!;
       const preview = await previewExecutionRestore(context, backupPath);

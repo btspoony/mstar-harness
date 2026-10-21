@@ -11,8 +11,8 @@
  * standalone plan workflow registered from an omp primary session could not
  * carry its creator's identity through `workflow register -> coordinator bind
  * -> plan prepare -> plan progress`. This extension closes that gap
- * host-side: every eligible `mcp__morning_star_mstar_*` call whose input lacks
- * `sessionId` is revised to include the calling session's own native id.
+ * host-side: every eligible `mcp__morning_star_mstar_*` call is revised to
+ * carry the calling session's own native id.
  *
  * Eligibility is schema-aware, and it must be: the host revalidates a
  * `tool_call` input revision against the tool's declared schema, so an added
@@ -20,10 +20,15 @@
  * The tool's own `ToolInfo.parameters` is the authority - a matching name
  * prefix is a prefilter, never sufficient alone.
  *
- * The revision is additive-only: `{ ...input, sessionId }`. An explicit
- * caller-supplied id is never overridden, `block` is never set, and the id is
- * read per event from `ctx.sessionManager.getSessionId()`, so leaf sessions
- * carry their own id and never their parent's.
+ * The revision is `{ ...input, sessionId }` with the HOST's id: the host
+ * session ALWAYS wins, so a caller-supplied `sessionId` is deliberately
+ * REPLACED, never honored. On the opted-in connection that value becomes the
+ * execution identity (`packages/cli/src/mcp/register.ts` admits the wire
+ * `sessionId`), so deferring to a caller's claim would let any agent act as
+ * another live coordinator session — the host is the only identity authority
+ * here. `block` is never set, and the id is read per event from
+ * `ctx.sessionManager.getSessionId()`, so leaf sessions carry their own id and
+ * never their parent's.
  */
 import type { ExtensionAPI, ExtensionContext, ToolCallEvent, ToolCallEventResult } from "@oh-my-pi/pi-coding-agent";
 
@@ -55,8 +60,9 @@ export function toolDeclaresSessionId(parameters: unknown): boolean {
 /**
  * The pure injection decision for one `tool_call`, factored so the tests can
  * pin each rule against real tool metadata: `undefined` leaves the call
- * untouched; a result revises the executed input additively and never blocks.
- * `toolDeclaresSessionId` is the resolved schema answer for `event.toolName`.
+ * untouched; a result revises the executed input so the host's id is the one
+ * the tool receives. `toolDeclaresSessionId` is the resolved schema answer for
+ * `event.toolName`.
  */
 export function mcpIdentityInjection(
   event: Pick<ToolCallEvent, "toolName" | "input">,
@@ -68,8 +74,8 @@ export function mcpIdentityInjection(
   // read it as the plain record it is at runtime.
   const input: unknown = event.input;
   if (!isInputRecord(input)) return undefined;
-  if (input.sessionId !== undefined) return undefined;
   if (!toolDeclaresSessionId) return undefined;
+  // The caller's value, if any, is overwritten on purpose: see the header.
   return { input: { ...input, sessionId } };
 }
 
@@ -86,8 +92,7 @@ export default function mcpIdentity(pi: ExtensionAPI): void {
   pi.on("tool_call", (event: ToolCallEvent, ctx: ExtensionContext) => {
     // Prefilter first: only Morning Star MCP tool names can ever be eligible.
     if (!event.toolName.startsWith(MSTAR_TOOL_PREFIX)) return undefined;
-    const input: unknown = event.input;
-    if (!isInputRecord(input) || input.sessionId !== undefined) return undefined;
+    if (!isInputRecord(event.input)) return undefined;
     // Schema-aware eligibility from the host's own tool metadata: a tool the
     // registry cannot resolve (or an unreadable registry) is never eligible.
     const declares = registryDeclaresSessionId(pi, event.toolName);

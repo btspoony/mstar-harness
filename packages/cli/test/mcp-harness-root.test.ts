@@ -1264,6 +1264,91 @@ describe("MCP pinned root selectors and operation targets", () => {
     expect(existsSync(unpinnedOut)).toBe(true);
   });
 
+  test("an unpinned connection refuses a store.execution target instead of discovering the host checkout's store", async () => {
+    const fixture = twoGitWorkspaces();
+    const hostHarness = path.join(fixture.rootA, ".mstar");
+    (await initializeStore({ harnessDir: hostHarness })).close();
+    const storeFile = path.join(hostHarness, "store.db");
+    const before = readFileSync(storeFile);
+    const previousCwd = process.cwd();
+    const previousHarness = process.env.MSTAR_HARNESS_DIR;
+    delete process.env.MSTAR_HARNESS_DIR;
+    process.chdir(fixture.rootA);
+    try {
+      const resolver = createContextResolver();
+      // The launch directory IS a checkout that owns a real store, so a cwd
+      // discovery would find it. The call names no target: it must refuse
+      // instead of exporting that unrelated project's execution state.
+      const omitted = await callRawTool(resolver, "store.execution.export", {});
+      expect(omitted.isError).toBe(true);
+      const exported = omitted.structuredContent as CommandEnvelope;
+      expect(exported).toMatchObject({ status: "usage", code: "command.invalid-input" });
+      expect(exported.details?.diagnostics).toContainEqual(expect.objectContaining({ path: "harness", code: "required" }));
+      const text = rawText(omitted);
+      expect(text).toContain("absolute path");
+      expect(text).toContain("mstar schema --command store.execution.export");
+      // Nothing was read: the export artifact never enters the refusal.
+      expect(text).not.toContain("execution-diagnostic-v1");
+
+      // A RELATIVE target names the same host directory through the invocation
+      // cwd, so it refuses too — the target is an input, never a resolution.
+      const relative = await callRawTool(resolver, "store.execution.export", { harness: ".mstar" });
+      expect(relative.isError).toBe(true);
+      expect(relative.structuredContent).toMatchObject({ status: "usage", code: "command.invalid-input" });
+      expect((relative.structuredContent as CommandEnvelope).details?.diagnostics)
+        .toContainEqual(expect.objectContaining({ path: "harness", code: "invalid_type" }));
+
+      // `restore` is the WRITE path: with no target it must refuse before the
+      // store is opened, leaving the host checkout's store byte-identical.
+      const restored = await callRawTool(resolver, "store.execution.restore", {
+        operator: "ops-engineer",
+        authorization: "audit-reference",
+        preview: path.join(fixture.rootA, "preview.json"),
+      });
+      expect(restored.isError).toBe(true);
+      expect(restored.structuredContent).toMatchObject({ status: "usage", code: "command.invalid-input" });
+      expect(readFileSync(storeFile)).toEqual(before);
+    } finally {
+      process.chdir(previousCwd);
+      if (previousHarness === undefined) delete process.env.MSTAR_HARNESS_DIR;
+      else process.env.MSTAR_HARNESS_DIR = previousHarness;
+    }
+  });
+
+  test("an unpinned connection refuses to resolve paths from the host checkout by default", async () => {
+    const fixture = twoGitWorkspaces();
+    const hostHarness = path.join(fixture.rootA, ".mstar");
+    (await initializeStore({ harnessDir: hostHarness })).close();
+    const previousCwd = process.cwd();
+    const previousHarness = process.env.MSTAR_HARNESS_DIR;
+    delete process.env.MSTAR_HARNESS_DIR;
+    process.chdir(fixture.rootA);
+    try {
+      // With no control root the invocation workspace is the host's launch
+      // directory: answering "here is the harness" would describe an unrelated
+      // project. The start directory is a required input instead.
+      const omitted = await callRawTool(createContextResolver(), "path.resolve", {});
+      expect(omitted.isError).toBe(true);
+      const refused = omitted.structuredContent as CommandEnvelope;
+      expect(refused).toMatchObject({ status: "usage", code: "command.invalid-input" });
+      expect(refused.details?.diagnostics).toContainEqual(expect.objectContaining({ path: "path", code: "required" }));
+      const text = rawText(omitted);
+      expect(text).toContain("--harness");
+      expect(text).toContain("MSTAR_HARNESS_DIR");
+      expect(text).not.toContain(hostHarness);
+
+      // A caller-named start directory is still a complete answer.
+      const named = await callRawTool(createContextResolver(), "path.resolve", { path: fixture.rootA });
+      expect(named.isError).toBe(false);
+      const resolved = (named.structuredContent as CommandEnvelope).data as { harnessDir: string };
+      expect(realpathSync(resolved.harnessDir)).toBe(realpathSync(hostHarness));
+    } finally {
+      process.chdir(previousCwd);
+      if (previousHarness === undefined) delete process.env.MSTAR_HARNESS_DIR;
+      else process.env.MSTAR_HARNESS_DIR = previousHarness;
+    }
+  });
+
   test("an unpinned connection refuses pr-review.worktree-setup instead of running it in the host checkout", async () => {
     const fixture = twoGitWorkspaces();
     const previousCwd = process.cwd();

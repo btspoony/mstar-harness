@@ -406,6 +406,29 @@ export function getLocalCommandDefinitions(): readonly CommandDefinition[] {
       effects: ["read"],
       description: "Resolve harness, specs, workflow, project, and review directories from a start directory.",
       async execute(input, context) {
+        // No control root means the invocation workspace is the MCP server's
+        // LAUNCH directory (the host's checkout), which says nothing about the
+        // caller's workspace: deriving harness/workflow/project/review paths
+        // from it would answer about an unrelated project. The start directory
+        // is then a required input, refused with a recovery instead.
+        if (input.path === undefined && context.controlRoot === null) {
+          return refusalEnvelope({
+            command: "path.resolve",
+            status: "usage",
+            code: "command.invalid-input",
+            exitCode: 2,
+            message: "path.resolve needs a starting `path`: this invocation declared no control root, so its working directory is the host's launch directory and is never used as a starting point",
+            helpRoute: "mstar path resolve --help",
+            recovery: "Pass `path` naming the directory to resolve from. To anchor the whole connection instead, launch it with `mstar mcp --harness <absolute path>` or a non-blank MSTAR_HARNESS_DIR.",
+            diagnostics: [{
+              path: "path",
+              code: "required",
+              message: "path is required: this invocation has no control root to resolve from",
+              expected: "present",
+              received: "undefined",
+            }],
+          });
+        }
         const startDir = input.path === undefined ? context.cwd : path.resolve(context.cwd, input.path);
         // `controlRoot` is a HARNESS dir, not a workspace boundary; feeding it
         // as `workspaceRoot` makes the resolver refuse the very harness it

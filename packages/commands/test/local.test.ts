@@ -90,7 +90,9 @@ describe("shared host-health helpers", () => {
     const definition = getLocalCommandDefinitions().find(({ id }) => id === "path.resolve");
     expect(definition).toBeDefined();
     if (!definition) return;
-    const result = await definition.execute({}, {
+    // No control root, so the start directory is an explicit input: the
+    // invocation cwd is then the host's launch directory, never a default.
+    const result = await definition.execute({ path: root }, {
       cwd: root,
       controlRoot: null,
       versions: { engine: null, cli: null, plugin: null, host: null, platform: null },

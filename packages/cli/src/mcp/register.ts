@@ -123,7 +123,7 @@ function mcpInputContract(
   // The session selector is the caller's per-call identity channel, and only a
   // launcher that explicitly trusted caller identity publishes it. On the
   // default shared connection the field does not exist, so a call that sends
-  // one is refused by name (`callerIdentityRefusal`) instead of vanishing.
+  // one is refused by name (`callerIdentityFacts`) instead of vanishing.
   if (selector !== undefined && options.publishSelector) {
     schema = schema.safeExtend({ [selector.key]: z.string().optional() });
     properties[selector.key] = { type: "string" };
@@ -242,32 +242,34 @@ function unpinnedHarnessRefusal(definition: CommandDefinition): CommandEnvelope<
 }
 
 /**
- * The named refusal for a caller-declared session identity on a connection that
- * was NOT launched with `--trust-caller-session-id` (the default). An MCP server
- * is a child process with no host-proven caller identity, so accepting the
- * value would let any caller address another session's coordinator row.
+ * The textual facts of the caller-declared-identity refusal: cause, recovery
+ * and diagnostics. Shared by the ONE input refusal below, which frames them
+ * either alone (the identity problem is the only one) or aggregated with the
+ * rejected fields and the action's own admission diagnostics — one response,
+ * every problem, one retry.
  *
- * The recovery names the routes that really exist: the dsh native tool for the
- * operations it covers (plan bind, audit report validation, execution clear) and
- * the CLI for everything else. It is deliberately explicit that plan
- * prepare/progress/complete have NO native tool yet instead of implying one.
- * The supplied value is never echoed: a session id is credential-shaped, and a
- * value copied into a refusal travels wherever the refusal is read.
+ * An MCP server is a child process with no host-proven caller identity, so
+ * accepting the value would let any caller address another session's
+ * coordinator row. The recovery names the routes that really exist: the dsh
+ * native tool for the operations it covers (plan bind, audit report validation,
+ * execution clear) and the CLI for everything else. It is deliberately explicit
+ * that plan prepare/progress/complete have NO native tool yet instead of
+ * implying one. The supplied value is never echoed: a session id is
+ * credential-shaped, and a value copied into a refusal travels wherever the
+ * refusal is read.
  */
-function callerIdentityRefusal(definition: CommandDefinition, selectors: readonly string[]): CommandEnvelope<never> {
+function callerIdentityFacts(
+  definition: CommandDefinition,
+  selectors: readonly string[],
+): Readonly<{ message: string; recovery: string; diagnostics: readonly RefusalDiagnostic[] }> {
   const cli = `mstar ${definition.cli.path.join(" ")}`;
   const native = definition.id === "plan.bind"
     ? "the dsh native tool `mstar_plan_bind` (its identity is the carrying session's `exec.agent.id`)"
     : undefined;
   const planGap = ["plan.prepare", "plan.progress", "plan.complete"].includes(definition.id);
-  return refusalEnvelope({
-    command: definition.id,
-    status: "refused",
-    code: "mcp.caller-identity-unavailable",
-    exitCode: 1,
+  return {
     message: `${definition.id} cannot run on this MCP connection: a caller-declared session identity was supplied, and this server was not launched with --trust-caller-session-id. `
       + "An MCP child process has no host-proven caller identity, so a sessionId on the wire cannot become a coordinator identity.",
-    helpRoute: `mstar schema --command ${definition.id}`,
     recovery: [
       "Drop `sessionId` on this connection; it is not a published field unless the launcher opts in.",
       ...(native === undefined ? [] : [`The host-proven route for this operation is ${native}.`]),
@@ -281,8 +283,7 @@ function callerIdentityRefusal(definition: CommandDefinition, selectors: readonl
       expected: "omitted",
       received: "supplied",
     })),
-    details: { selectors, trust: "off" },
-  });
+  };
 }
 
 /** The declared session selectors the CALL supplied, for the untrusted-connection refusal. */
@@ -521,6 +522,12 @@ function familyWideInvalidFields(family: FoldedFamilyTool, input: unknown, calle
  * selected action's own admission also refuses the remaining input,
  * admission's diagnostics — one response, every problem, one retry.
  *
+ * A caller-declared identity on an unopted connection joins the same response
+ * (`unpublished`): the identity diagnostic, the rejected fields and the
+ * admission diagnostics are one answer, not two attempts. The envelope keeps
+ * the identity frame in that case, because the security fact is the reason the
+ * call cannot run at all.
+ *
  * The refusal names the actions that accept each refused selector, the fields
  * the action DOES accept (capped; `mstar_schema` is the full answer) and the
  * sibling actions a rejected key belongs to. It never echoes a caller-supplied
@@ -535,12 +542,14 @@ function undeclaredInputRefusal(
   selectors: readonly RefusedSelector[],
   rejected: readonly string[],
   admission: Extract<CommandAdmission, { success: false }> | undefined,
+  unpublished: readonly string[] = [],
 ): CommandEnvelope<never> {
   const action = actionOf(definition.id);
   const accepted = family.acceptedFields.get(action) ?? [];
   const acceptedList = cappedFieldList(accepted);
   const keys = rejected.map(sanitizeInputScalar);
   const dropped = keys.map((key) => JSON.stringify(key)).join(", ");
+  const identity = unpublished.length === 0 ? undefined : callerIdentityFacts(definition, unpublished);
   const selectorClauses = selectors.map((selector) => {
     const key = sanitizeInputScalar(selector.key);
     return `${JSON.stringify(key)} (accepted by: ${selector.acceptingActions.join(", ")})`;
@@ -555,54 +564,72 @@ function undeclaredInputRefusal(
     ? "; nested payload contents belong to the action's own payload schema, not to this field index"
     : "";
   const message = [
+    ...(identity === undefined ? [] : [identity.message]),
     selectors.length === 0 ? "" :
       `action ${JSON.stringify(action)} of ${family.toolName} does not declare the selector${selectors.length === 1 ? "" : "s"} ${selectorClauses.join(", ")}`,
     rejected.length === 0 ? "" :
       `it does not accept the field${keys.length === 1 ? "" : "s"} ${dropped}; it accepts: ${acceptedList}${payloadNote}`,
   ].filter(Boolean).join("; ");
   const recovery = [
+    ...(identity === undefined ? [] : [identity.recovery]),
     selectors.length === 0 ? "" :
       `drop ${selectorNames} to run ${definition.id} under the connection identity, or call ${family.toolName} with "action" set to one of: ${selectorActions.join(", ")}`,
     rejected.length === 0 ? "" :
       `drop ${dropped}${acceptingActions.length === 0 ? "" : ` (the action(s) that accept it: ${acceptingActions.join(", ")})`}, or call mstar_schema {"action":"schema","command":${JSON.stringify(definition.id)}} for this action's real input shape`,
   ].filter(Boolean).join("; ");
-  return refusalEnvelope({
-    command: definition.id,
-    status: "usage",
-    code: "command.invalid-input",
-    exitCode: 2,
-    message,
-    helpRoute: `mstar schema --family ${family.family}`,
-    recovery,
-    diagnostics: [
-      ...selectors.map((selector) => {
-        const key = sanitizeInputScalar(selector.key);
-        return {
-          path: key,
-          code: "not_allowed",
-          message: `${key} is not an input of ${definition.id}; the actions that accept it: ${selector.acceptingActions.join(", ")}`,
-          expected: selector.acceptingActions.map((entry) => JSON.stringify(entry)).join(" | "),
-          received: "supplied",
-        };
-      }),
-      ...keys.map((key) => ({
+  const diagnostics = [
+    ...(identity?.diagnostics ?? []),
+    ...selectors.map((selector) => {
+      const key = sanitizeInputScalar(selector.key);
+      return {
         path: key,
         code: "not_allowed",
-        message: `${key} is not an input of ${definition.id}; the fields it accepts: ${acceptedList}`,
-        expected: acceptedList,
+        message: `${key} is not an input of ${definition.id}; the actions that accept it: ${selector.acceptingActions.join(", ")}`,
+        expected: selector.acceptingActions.map((entry) => JSON.stringify(entry)).join(" | "),
         received: "supplied",
-      })),
-      ...admissionDiagnostics,
-    ],
-    details: {
-      action: definition.id,
-      ...(selectors.length === 0 ? {} : {
-        selectors: selectors.map((selector) => ({ key: sanitizeInputScalar(selector.key), acceptingActions: selector.acceptingActions })),
-      }),
-      ...(rejected.length === 0 ? {} : { fields: keys, acceptedFields: accepted }),
-      ...(acceptingActions.length === 0 ? {} : { acceptingActions }),
-    },
-  });
+      };
+    }),
+    ...keys.map((key) => ({
+      path: key,
+      code: "not_allowed",
+      message: `${key} is not an input of ${definition.id}; the fields it accepts: ${acceptedList}`,
+      expected: acceptedList,
+      received: "supplied",
+    })),
+    ...admissionDiagnostics,
+  ];
+  const details = {
+    action: definition.id,
+    ...(identity === undefined ? {} : { identity: { selectors: unpublished, trust: "off" } }),
+    ...(selectors.length === 0 ? {} : {
+      selectors: selectors.map((selector) => ({ key: sanitizeInputScalar(selector.key), acceptingActions: selector.acceptingActions })),
+    }),
+    ...(rejected.length === 0 ? {} : { fields: keys, acceptedFields: accepted }),
+    ...(acceptingActions.length === 0 ? {} : { acceptingActions }),
+  };
+  return identity === undefined
+    ? refusalEnvelope({
+      command: definition.id,
+      status: "usage",
+      code: "command.invalid-input",
+      exitCode: 2,
+      message,
+      helpRoute: `mstar schema --family ${family.family}`,
+      recovery,
+      diagnostics,
+      details,
+    })
+    : refusalEnvelope({
+      command: definition.id,
+      status: "refused",
+      code: "mcp.caller-identity-unavailable",
+      exitCode: 1,
+      message,
+      helpRoute: `mstar schema --command ${definition.id}`,
+      recovery,
+      diagnostics,
+      details,
+    });
 }
 
 export function registerMcpCommands(
@@ -669,20 +696,23 @@ export function registerMcpCommands(
           }
           // No caller-declared identity exists on this connection unless the
           // launcher opted in: the selector is unpublished, so a call that
-          // supplies one is refused by name here, before admission and before
-          // any engine round-trip. `plan.progress` with a claimed coordinator id
-          // can therefore not reach the execution ledger.
+          // supplies one is refused by name. `plan.progress` with a claimed
+          // coordinator id can therefore not reach the execution ledger. The
+          // fact is NOT answered on its own: it joins the rejected fields and
+          // the action's own admission diagnostics in one refusal, so a second
+          // attempt is never needed to surface the rest.
           const unpublishedSelectors = callerIdentity ? [] : suppliedSelectors(family, input);
-          if (unpublishedSelectors.length > 0) {
-            return { issues: [{ message: JSON.stringify(callerIdentityRefusal(definition, unpublishedSelectors)) }] };
-          }
+          // The identity keys leave the input before the field index reads it:
+          // otherwise the same key is reported twice (as an identity claim and
+          // as a typo) instead of once with its real cause.
+          const declaredInput = withoutFields(input, unpublishedSelectors);
           // Every input the selected action does not declare is collected
           // first, so one refusal reports all of it: the refused selectors, the
           // rejected top-level keys and the action's own admission diagnostics.
           // Both groups leave the admitted input, so admission reports only the
           // selected action's declared fields.
-          const refusedSelectors = undeclaredSelectors(family, definition, input);
-          const rejected = undeclaredFields(family, definition, input, callerIdentity);
+          const refusedSelectors = undeclaredSelectors(family, definition, declaredInput);
+          const rejected = undeclaredFields(family, definition, declaredInput, callerIdentity);
           const entry = prepared.get(definition.id)!;
           // The declared root governs EVERY root selector, not only `harness`:
           // the pin must remove a `controlRoot` too, so it is read regardless of
@@ -691,13 +721,13 @@ export function registerMcpCommands(
           const defaultHarness = resolveContext.defaultHarness;
           const admitted = admitCommandInput(
             definition,
-            normalizedRootInputs(entry.rootInputs, strippedActionInput(withoutFields(input, [...refusedSelectors.map((selector) => selector.key), ...rejected])), defaultHarness),
+            normalizedRootInputs(entry.rootInputs, strippedActionInput(withoutFields(declaredInput, [...refusedSelectors.map((selector) => selector.key), ...rejected])), defaultHarness),
             entry.descriptor,
             entry.contract.schema,
             (data) => handlerInput(definition, data, defaultHarness, entry.harnessDefault),
           );
-          if (refusedSelectors.length > 0 || rejected.length > 0) {
-            return { issues: [{ message: JSON.stringify(undeclaredInputRefusal(family, definition, refusedSelectors, rejected, admitted.success ? undefined : admitted)) }] };
+          if (unpublishedSelectors.length > 0 || refusedSelectors.length > 0 || rejected.length > 0) {
+            return { issues: [{ message: JSON.stringify(undeclaredInputRefusal(family, definition, refusedSelectors, rejected, admitted.success ? undefined : admitted, unpublishedSelectors)) }] };
           }
           // A union input's `harness` requirement is published and enforced
           // here: admission would accept the call (every branch declares the

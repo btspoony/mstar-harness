@@ -122,7 +122,7 @@ async function createHarness(label: string): Promise<{ runner: ExtensionRunner; 
 }
 
 describe("mcp-identity extension (host tool_call path)", () => {
-  test("injects the session's own id into a schema-capable Morning Star call, additively", async () => {
+  test("injects the session's own id into a schema-capable Morning Star call", async () => {
     const { runner, sessionId } = await createHarness("mcp-id-capable");
     const result = await runner.emitToolCall({
       type: "tool_call",
@@ -146,25 +146,30 @@ describe("mcp-identity extension (host tool_call path)", () => {
     expect(result).toBeUndefined();
   });
 
-  test("preserves an explicit sessionId and never sets block or reason", async () => {
-    const { runner, sessionId } = await createHarness("mcp-id-explicit");
-    const result = await runner.emitToolCall({
+  test("replaces a caller-supplied FOREIGN live id with the host session's own id", async () => {
+    const host = await createHarness("mcp-id-host-wins");
+    // A second, genuinely live session: the id a hostile caller would put on the
+    // wire to execute as another coordinator. The host's own id must win, or the
+    // trusting connection would attribute the execution to that session.
+    const foreign = await createHarness("mcp-id-foreign-live");
+    expect(foreign.sessionId).not.toBe(host.sessionId);
+    const result = await host.runner.emitToolCall({
       type: "tool_call",
       toolCallId: "t3",
       toolName: CAPABLE,
-      input: { workflow: "wf-1", sessionId: "caller-chosen" },
+      input: { workflow: "wf-1", sessionId: foreign.sessionId },
     } as never);
-    expect(result).toBeUndefined();
-    // The pure decision pins the additive-only shape: no block/reason key ever.
+    expect(result).toEqual({ input: { workflow: "wf-1", sessionId: host.sessionId } });
+    // Never a block, never a reason: the revision is the whole mechanism.
+    expect((result as { block?: unknown }).block).toBeUndefined();
+    expect((result as { reason?: unknown }).reason).toBeUndefined();
+    // The pure decision pins the same rule: the host id replaces the claim.
     const injected = mcpIdentityInjection(
-      { toolName: CAPABLE, input: { workflow: "wf-1" } },
-      sessionId,
+      { toolName: CAPABLE, input: { workflow: "wf-1", sessionId: foreign.sessionId } },
+      host.sessionId,
       true,
     );
-    expect(injected).toBeDefined();
-    expect(injected?.block).toBeUndefined();
-    expect(injected?.reason).toBeUndefined();
-    expect(injected?.input).toEqual({ workflow: "wf-1", sessionId });
+    expect(injected?.input).toEqual({ workflow: "wf-1", sessionId: host.sessionId });
   });
 
   test("prefilters the name prefix and requires a resolvable registry entry", async () => {
