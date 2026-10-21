@@ -242,6 +242,36 @@ function namedRoot(field: string, input: unknown): boolean {
 }
 
 /**
+ * The facts of the unpinned-connection root requirement: cause, recovery and its
+ * one `required` diagnostic. The two refusals that report it — the one that
+ * reports it alone and the one that aggregates it with the refused selectors,
+ * the rejected fields and admission's diagnostics — read the same facts here, so
+ * an omitted selector means the same thing and recovers through the same routes
+ * on either. It is not a helper the refusals may skip: a message that names the
+ * selector without the recovery leaves the caller guessing at the same cost.
+ *
+ * `field` is the selector the command DECLARES (`rootInputs`), never an assumed
+ * `harness`: a command whose root selector is spelled differently must be
+ * refused — and recovered — by that name.
+ */
+function unpinnedRootFacts(
+  definition: CommandDefinition,
+  field: string,
+): Readonly<{ message: string; recovery: string; diagnostic: RefusalDiagnostic }> {
+  return {
+    message: `${definition.id} needs the call's "${field}" selector: this MCP connection declared no control root, and the command resolves its root from that field`,
+    recovery: `pass \`${field}\` naming this call's root directory (an absolute path, or one relative to the server's launch directory), or declare the root for the whole connection \u2014 \`mstar mcp --harness <absolute path>\`, or a non-blank MSTAR_HARNESS_DIR in the server environment \u2014 and no call needs the selector`,
+    diagnostic: {
+      path: field,
+      code: "required",
+      message: `${field} is required: this connection declared no control root`,
+      expected: "present",
+      received: "undefined",
+    },
+  };
+}
+
+/**
  * The refusal for an omitted root selector on a UNION input. Admission cannot
  * make a branch field required without dropping the branches' conditional
  * alternatives, and its own verdict on a union is "invalid input" — which names
@@ -249,10 +279,6 @@ function namedRoot(field: string, input: unknown): boolean {
  * diagnostic follow the shape every family uses for a mandated field, so a
  * caller reads the same cause through the same route whichever input schema the
  * action has.
- *
- * `field` is the selector the command DECLARES (`rootInputs`), never an assumed
- * `harness`: a command whose root selector is spelled differently must be
- * refused — and recovered — by that name.
  *
  * Admission's own diagnostics join this one (`admission`): the missing selector
  * must not cost a second attempt to learn the fields the action also refused —
@@ -263,22 +289,17 @@ function unpinnedRootRefusal(
   field: string,
   admission?: Extract<CommandAdmission, { success: false }>,
 ): CommandEnvelope<never> {
+  const facts = unpinnedRootFacts(definition, field);
   const admissionDiagnostics = (admission?.envelope.details?.diagnostics ?? []) as readonly RefusalDiagnostic[];
   return refusalEnvelope({
     command: definition.id,
     status: "usage",
     code: "command.invalid-input",
     exitCode: 2,
-    message: `${definition.id} needs the call's "${field}" selector: this MCP connection declared no control root, and the command resolves its root from that field`,
+    message: facts.message,
     helpRoute: `mstar schema --command ${definition.id}`,
-    recovery: `pass \`${field}\` naming this call's root directory (an absolute path, or one relative to the server's launch directory), or declare the root for the whole connection \u2014 \`mstar mcp --harness <absolute path>\`, or a non-blank MSTAR_HARNESS_DIR in the server environment \u2014 and no call needs the selector`,
-    diagnostics: [{
-      path: field,
-      code: "required",
-      message: `${field} is required: this connection declared no control root`,
-      expected: "present",
-      received: "undefined",
-    }, ...admissionDiagnostics],
+    recovery: facts.recovery,
+    diagnostics: [facts.diagnostic, ...admissionDiagnostics],
   });
 }
 
@@ -574,6 +595,12 @@ function familyWideInvalidFields(family: FoldedFamilyTool, input: unknown, calle
  * the identity frame in that case, because the security fact is the reason the
  * call cannot run at all.
  *
+ * An omitted root selector on an unpinned connection joins it too
+ * (`missingRoot`): the requirement is computed before this branch is chosen, so
+ * a call that also carries a rejected key never learns the root requirement one
+ * retry later. Its diagnostic leads the list — the connection-wide requirement
+ * is the fact this refusal is the ONLY place to learn.
+ *
  * The refusal names the actions that accept each refused selector, the fields
  * the action DOES accept (capped; `mstar_schema` is the full answer) and the
  * sibling actions a rejected key belongs to. It never echoes a caller-supplied
@@ -589,12 +616,14 @@ function undeclaredInputRefusal(
   rejected: readonly string[],
   admission: Extract<CommandAdmission, { success: false }> | undefined,
   unpublished: readonly string[] = [],
+  missingRoot?: string,
 ): CommandEnvelope<never> {
   const action = actionOf(definition.id);
   const accepted = family.acceptedFields.get(action) ?? [];
   const acceptedList = cappedFieldList(accepted);
   const keys = rejected.map(sanitizeInputScalar);
   const dropped = keys.map((key) => JSON.stringify(key)).join(", ");
+  const root = missingRoot === undefined ? undefined : unpinnedRootFacts(definition, missingRoot);
   const identity = unpublished.length === 0 ? undefined : callerIdentityFacts(definition, unpublished);
   const selectorClauses = selectors.map((selector) => {
     const key = sanitizeInputScalar(selector.key);
@@ -610,6 +639,7 @@ function undeclaredInputRefusal(
     ? "; nested payload contents belong to the action's own payload schema, not to this field index"
     : "";
   const message = [
+    ...(root === undefined ? [] : [root.message]),
     ...(identity === undefined ? [] : [identity.message]),
     selectors.length === 0 ? "" :
       `action ${JSON.stringify(action)} of ${family.toolName} does not declare the selector${selectors.length === 1 ? "" : "s"} ${selectorClauses.join(", ")}`,
@@ -617,6 +647,7 @@ function undeclaredInputRefusal(
       `it does not accept the field${keys.length === 1 ? "" : "s"} ${dropped}; it accepts: ${acceptedList}${payloadNote}`,
   ].filter(Boolean).join("; ");
   const recovery = [
+    ...(root === undefined ? [] : [root.recovery]),
     ...(identity === undefined ? [] : [identity.recovery]),
     selectors.length === 0 ? "" :
       `drop ${selectorNames} to run ${definition.id} under the connection identity, or call ${family.toolName} with "action" set to one of: ${selectorActions.join(", ")}`,
@@ -624,6 +655,7 @@ function undeclaredInputRefusal(
       `drop ${dropped}${acceptingActions.length === 0 ? "" : ` (the action(s) that accept it: ${acceptingActions.join(", ")})`}, or call mstar_schema {"action":"schema","command":${JSON.stringify(definition.id)}} for this action's real input shape`,
   ].filter(Boolean).join("; ");
   const diagnostics = [
+    ...(root === undefined ? [] : [root.diagnostic]),
     ...(identity?.diagnostics ?? []),
     ...selectors.map((selector) => {
       const key = sanitizeInputScalar(selector.key);
@@ -781,15 +813,18 @@ export function registerMcpCommands(
             entry.contract.schema,
             (data) => handlerInput(definition, data, defaultHarness, entry.harnessDefault),
           );
-          if (unpublishedSelectors.length > 0 || refusedSelectors.length > 0 || rejected.length > 0) {
-            return { issues: [{ message: JSON.stringify(undeclaredInputRefusal(family, definition, refusedSelectors, rejected, admitted.success ? undefined : admitted, unpublishedSelectors)) }] };
-          }
-          // A union input's root-selector requirement is published and enforced
-          // here: admission would accept the call (every branch declares the
-          // field as optional so its conditional alternatives survive), and the
-          // handler would then re-discover a root from the invocation workspace
-          // — the silent cwd probe this rule exists to remove.
+          // The union input's root-selector requirement is computed BEFORE the
+          // refusal branch is chosen, so it joins every refusal that fires: a
+          // call that also carries a rejected key learns the requirement in the
+          // same response instead of one retry later. Admission cannot enforce
+          // it — every branch declares the field as optional so its conditional
+          // alternatives survive — and the handler would then re-discover a root
+          // from the invocation workspace, the silent cwd probe this rule exists
+          // to remove.
           const missingRoot = entry.contract.unpinnedRootGate.find((field) => !namedRoot(field, input));
+          if (unpublishedSelectors.length > 0 || refusedSelectors.length > 0 || rejected.length > 0) {
+            return { issues: [{ message: JSON.stringify(undeclaredInputRefusal(family, definition, refusedSelectors, rejected, admitted.success ? undefined : admitted, unpublishedSelectors, missingRoot)) }] };
+          }
           if (missingRoot !== undefined) {
             return { issues: [{ message: JSON.stringify(unpinnedRootRefusal(definition, missingRoot, admitted.success ? undefined : admitted)) }] };
           }

@@ -1645,7 +1645,7 @@ describe("MCP control-root admission class", () => {
     }
   });
 
-  test("an unpinned union call reports the missing harness together with the fields admission refused", async () => {
+  test("an unpinned union call reports the missing harness with the undeclared key and the fields admission refused", async () => {
     const previousHarness = process.env.MSTAR_HARNESS_DIR;
     delete process.env.MSTAR_HARNESS_DIR;
     const definition = getCommandDefinitions().find((entry) => entry.id === "issue.close");
@@ -1656,18 +1656,27 @@ describe("MCP control-root admission class", () => {
     try {
       await server.connect(serverEnd);
       await client.connect(clientEnd);
-      // The call names no harness AND none of the fields the action requires:
-      // the root requirement and admission's own diagnostics must arrive in ONE
-      // refusal, so a second attempt is not needed to learn the rest.
-      const refused = await toolEnvelope(client, "mstar_issue", withAction("issue.close", {}));
+      // The call names no harness, carries a key the action does not declare
+      // AND none of the fields it requires: all three groups must arrive in ONE
+      // refusal. The root requirement is the one fact only this refusal can
+      // teach, so an early refusal on the undeclared key would cost the caller a
+      // second attempt to learn it.
+      const refused = await toolEnvelope(client, "mstar_issue", withAction("issue.close", { bogus: 1 }));
       expect(refused).toMatchObject({ status: "usage", code: "command.invalid-input" });
       // The refusal's message is the shared diagnostic summary once more than
       // one field is refused, so the root requirement is still the FIRST cause
       // in it; the harness recovery stays the envelope's recovery.
-      expect(refused.message).toContain("harness");
+      expect(refused.message.split("\n")[1]).toContain("harness");
+      expect(refused.message).toContain("bogus");
       expect(refused.details?.recovery).toContain("mstar mcp --harness");
       const paths = (refused.details?.diagnostics as Array<{ path?: string }>).map((entry) => entry.path);
       expect(paths[0]).toBe("harness");
+      expect((refused.details?.diagnostics as Array<{ path?: string; code?: string; message?: string }>)[0]).toMatchObject({ path: "harness", code: "required" });
+      expect((refused.details?.diagnostics as Array<{ message?: string }>)[0]?.message).toContain("declared no control root");
+      // The undeclared key is still a field refusal, not an admission failure.
+      expect((refused.details?.diagnostics as Array<{ path?: string; code?: string }>)[1]).toMatchObject({ path: "bogus", code: "not_allowed" });
+      expect(refused.details?.fields).toEqual(["bogus"]);
+      // Admission's own facts follow in the same response.
       expect(paths).toContain("id");
       expect(paths).toContain("actor");
       expect(paths).toContain("payload");
