@@ -90,10 +90,10 @@ function unresolvedControlRootMessage(cwd: string): string {
   return (
     `[mcp.control-root-unresolved] No control root was DECLARED for this MCP connection. ` +
     `The launch cwd (${cwd}) is the HOST's directory and is never used as one: it says nothing about which workspace a caller belongs to, so adopting it would root writes on an unrelated project. ` +
-    "Recovery — the two launcher recoveries work for EVERY command: " +
+    "Recovery \u2014 the two launcher recoveries work for EVERY command: " +
     "launch the server with `mstar mcp --harness <absolute path>`; " +
     "set MSTAR_HARNESS_DIR in the server environment to the harness directory. " +
-    "The per-call recovery is tool-dependent: only a command that publishes a `harness` input accepts one, so pass the call's `harness` selector naming the workspace's harness — or use `mstar_schema` to pick a command that does not need a root at all."
+    "The per-call recovery is tool-dependent: only a command that publishes a `harness` input accepts one, so pass the call's `harness` selector naming the workspace's harness \u2014 or use `mstar_schema` to pick a command that does not need a root at all."
   );
 }
 

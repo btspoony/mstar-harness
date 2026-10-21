@@ -209,7 +209,7 @@ function unpinnedHarnessRefusal(definition: CommandDefinition): CommandEnvelope<
     exitCode: 2,
     message: `${definition.id} needs the call's "harness" selector: this MCP connection declared no control root, and the command resolves its store root from that field`,
     helpRoute: `mstar schema --command ${definition.id}`,
-    recovery: "pass `harness` naming this call's harness directory (an absolute path, or one relative to the server's launch directory), or declare the root for the whole connection — `mstar mcp --harness <absolute path>`, or a non-blank MSTAR_HARNESS_DIR in the server environment — and no call needs the selector",
+    recovery: "pass `harness` naming this call's harness directory (an absolute path, or one relative to the server's launch directory), or declare the root for the whole connection \u2014 `mstar mcp --harness <absolute path>`, or a non-blank MSTAR_HARNESS_DIR in the server environment \u2014 and no call needs the selector",
     diagnostics: [{
       path: "harness",
       code: "required",
