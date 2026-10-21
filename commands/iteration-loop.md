@@ -1,103 +1,29 @@
 ---
 name: iteration-loop
-description: "Autonomous full iteration loop for cloud agents — Phase 1 (code-first direction lock, retained design prototype, compass/plans and selected Review & Edit) through Phase 2–6 (execute → close → PR → merge-ready → post-merge close). Optional args: direction, scale (S|M|L|XL, default M). Not Done until Phase 6 post-merge close. Explicit autonomous opt-in; no routine human confirmation or grill-me."
+description: "Run a whole iteration Phase 1→6 autonomously — code-first direction lock with a retained prototype, then execute → close → PR → merge-ready → post-merge close. Optional direction hint and scale S|M|L|XL; explicit autonomous opt-in, no grill-me, no routine confirmation."
 agent: project-manager
 input: "[direction] [scale]"
 ---
 
 # Iteration Loop
 
-Run a **full** Morning Star iteration with minimal human intervention. **Done = Phase 6 post-merge close §6.1–§6.4 完成** — not Phase 1 lock, not Phase 3 close, not Phase 4 PR open, not Phase 5 merge-ready exit.
+The whole lifecycle with an **autonomous** direction lock: this command's explicit autonomous opt-in replaces the interactive direction dialogue. Sibling entries: `/iteration-start` locks interactively and `/iteration-drive` resumes a locked iteration. **Done = Phase 6 post-merge close.**
 
-**vs other commands:**
+## Args
 
-| Command | Scope |
-| `iteration-start` | Phase 1 (**grill-me** with user) → **auto-continue** Phase 2→6（`pause` 止于 Phase 1） |
-| `iteration-drive` | Phase 2→6 re-entry / resume on an already locked iteration |
-| **`iteration-loop`** | Phase 1→6 end-to-end; **autonomous** direction lock |
-
-Phase route + gate SSOT → **`mstar-iteration`** **Phase route map** + **Phase transition gates** table. This command is a **consumer**; it does not redefine skill semantics.
-
-## Args（最多 2 个）
-
-```text
-/iteration-loop [direction] [scale]
-```
-
-| Arg | Meaning | Default |
-|-----|---------|---------|
-| `direction` | Iteration direction / feedback constraint (free text) | Code-first research → **auto-lock recommended** |
-| `scale` | `S` \| `M` \| `L` \| `XL` | **`M`** |
-
-**Scale budget**（写入 compass；约束 **业务** plan 数量）→ **`mstar-iteration/references/phase-1-prepare.md`** §1.2 + `references/autonomous-direction-lock.md`：
-
-- **S** → 1 business plan
-- **M** → 2–3 business plans
-- **L** → 3–4 business plans（上限 4）
-- **XL** → **>4** business plans（5+；适合大范围 autonomous 迭代）
-
-**HARD**：budget **只计**实际业务交付 plan；不计 harness 流程（Review、QC/QA、compound、close、PR、merge-ready、compass / DB register 维护）。门禁仍执行，不占业务名额，也不得作为 process plan 凑数。
-
-Parse: if the last token is exactly `S`/`M`/`L`/`XL` (case-insensitive), treat it as `scale`; remaining text is `direction`. If only one token and it is `S`/`M`/`L`/`XL`, that is `scale` with empty `direction`.
-
-## Phase flow（禁止跳步）
-
-`Phase 1: Autonomous start → Phase 2: Autonomous Execute → Phase 3: close → Phase 4: PR → Phase 5: merge-ready → Phase 6: post-merge close`。Transition gates（HARD）→ **`mstar-iteration`** **Phase transition gates** table。
-
-## Continuous execution（HARD — Phase 1 lock 后至 Phase 5 exit）
-
-Execute **`mstar-iteration` §2.6**（Continuous execution SSOT）+ **`mstar-iteration/references/command-shared-invariants.md`** STOP list（branch metadata 缺失 / **`Blocked`** / 用户显式打断 — 不在本命令重复）。**Loop 特有 STOP**：branch metadata 按 **`mstar-iteration`** autonomous resolve 顺序仍无法确定（**禁止**静默默认 `main`/`master`）；代码/roadmap **无可信候选**且无 `direction` 参数。**Turn 收束纪律**：最后一条内容必须是 **in-flight 动作**（invoke 已发出或下一 Assignment），**不得**以确认问句结尾。
-
-**Do not** Read `skills/grill-me/SKILL.md` for this command.
+`/iteration-loop [direction] [scale]` — a trailing token exactly `S` / `M` / `L` / `XL` (case-insensitive) is `scale`, default `M`; the remaining text is `direction` (a lone scale token means an empty direction). Scale budgets the iteration's **business** plans only (`S` 1 / `M` 2–3 / `L` 3–4 / `XL` >4) — budget rules and what stays outside it → **`mstar-iteration/references/autonomous-direction-lock.md`** § Scale budget.
 
 ## Boot
 
-按 **`mstar-iteration`** Load order 加载（`mstar-harness-core` → `mstar-roles` → `references/project-manager.md` → `mstar-iteration`（按当前 Phase 查 route map，只加载一行 detail）+ `command-shared-invariants.md` → `mstar-dispatch-gates` → `mstar-phase-gates` → `mstar-conventions` / `mstar-artifacts` → `mstar-host` → `mstar-compound`（Phase 3 前）→ **`mstar-sdd`**（first implement 前）→ `mstar-review-qc`（first QC 前）→ `mstar-branch-worktree` → **`mstar-iteration/references/phase-2-worktree-lease.md`**）。完整 load list → **`mstar-roles`**。
+`mstar-harness-core` → `mstar-roles` → `references/project-manager.md` → `mstar-iteration` (route map: **start** → `references/phase-1-prepare.md`) → **`mstar-iteration/references/command-shared-invariants.md`**.
 
-**Session todos（loop 专属；Phase 2–5 共享 rows → `command-shared-invariants.md`）**：
+## Execute
 
-| Todo id | 何时追加 | 何时可勾掉 |
-|---------|----------|------------|
-| `phase-1-autonomous-start` | Boot | compass `locked` + integration branch pushed（§6） |
+1. **Phase 1 — autonomous start** → execute **`mstar-iteration/references/phase-1-prepare.md`** §1.1–§1.6 with `Direction lock mode: autonomous` (ranking, branch resolve, prototype disposition → **`references/autonomous-direction-lock.md`**). Retain a prototype (HTML, Markdown or JSON) with format rationale and autonomous disposition; never fabricate user approval. **Do not read `skills/grill-me/SKILL.md`** for this entry.
+   Host Plan-mode permissions still apply — use the active host bridge's supported resume. Print the §1.6 Phase 1 completion checklist: clear the pre-integration items before the §2.3 integration step and mark the integration item after the branch push; loop session todo `phase-1-autonomous-start` closes when the compass is locked and the integration branch is pushed.
+2. **No credible candidate and no `direction`** → STOP and escalate; never invent a direction or default the branch policy.
+3. **Phase 2→6** → continue through **`iteration-drive`** exactly (same route map, gates, phase headers and report). Continuous execution and STOP rules → **`mstar-iteration` §2.6** plus **`command-shared-invariants.md`**.
 
-## Phase 1: Autonomous start
+## Report
 
-Execute **`mstar-iteration/references/phase-1-prepare.md`**（§1.1–§1.6；**autonomous** direction lock + scale budget + branch resolve SSOT → `references/autonomous-direction-lock.md`）：
-
-### 1–4. Research → Explore → Lock → Prototype → Write
-
-Survey structured harness dirs and planning artifacts as prescribed by §1.1 → scope **2–4** candidates → **autonomous** lock (`direction` constrains; retain rationale, success criteria, non-goals, scale budget and resolved branch policy; never silently default `main`/`master`; **STOP** if no credible candidate and no `direction`) → persist the **§1.2.5 prototype** → write formal compass/plans/guides/specs per §1.3–§1.5 → register the workflow and acquire this session's coordinator seat → execute `direction-lock` → proceed to Review & Edit.
-
-This command is explicit autonomous opt-in: choose **HTML, Markdown or JSON** to suit the design and retain it in **`{ITERATION_DIR}/<iteration-id>/prototypes/`**, with format rationale and autonomous disposition. Record path/revision and disposition in compass `## Prototype baseline`; plans trace it through existing `metadata.iteration_refs`. PM may invoke product-manager / architect for prototype contributions. Do not demand HTML or routine human confirmation, and do not fabricate user approval. Actual host Plan write/dispatch permissions still apply; use the active host bridge's supported resume when restricted.
-
-### 5. Review & Edit Chain（HARD GATE）
-
-Execute **`mstar-iteration/references/phase-1-prepare.md` §1.6**: record PM include/skip reasons for product-manager / architect using complexity, remaining gaps and reusable prototype contributions; invoke selected roles sequentially in product-manager → architect order, then **mandatory writing-specialist last** → PM lock. No fake skip receipts, skipped-role markers or unresolved blocking questions; reassess selection for new gaps and return to prototype design for material changes. No `{KNOWLEDGE_DIR}/` additions; corpus hygiene and **Assignment preflight** (`command-shared-invariants.md`) remain required.
-
-**Pre-integration checklist**（print before §6；all `[x]`）：
-
-- [ ] Autonomous direction lock rationale recorded（**not** grill-me）
-- [ ] Prototype retained in iteration package with format rationale, autonomous disposition and traceability; no invented human approval
-- [ ] Scale budget applied（business plan 按 S/M/L/XL 名额）
-- [ ] Branch policy locked：`iteration_base_branch` / `spec_integration_branch` / `target_branch` recorded
-- [ ] Compass + authored plans ready; `mstar iteration register` created the running ACTIVE workflow with branch anchors (store.db)
-- [ ] This session acquired the workflow's coordinator seat, then executed `direction-lock` before the Review & Edit chain
-- [ ] Role selection reasons recorded; selected invokes returned sequentially, mandatory writer last; no fake skip receipts / skipped-role markers / blocking questions; no `{KNOWLEDGE_DIR}/` additions
-- [ ] PM final lock：compass `status: locked` + Prepare gates pass
-- [ ] **THEN**（§6 按 §2.3 checklist step 7 执行）：integration worktree 已建立，新建的 `iteration/<iteration-id>` 分支已 push —— Phase 1 的全部写入目标（compass / plans / `<iteration-id>/` package，specs 在 `<iteration-id>/specs/`）均为默认 gitignored 的本地 `.mstar/` 工件；全局 `{SPECS_DIR}` 在 Phase 3 iteration-close 提升时写入
-
-### 6. Integration Branch
-
-Per **`mstar-iteration/references/phase-2-worktree-lease.md` §2.3**（create from `iteration_base_branch`；register branch fields；push the new branch —— Phase 1 的全部写入目标均为默认 gitignored 的本地工件，全局 `{SPECS_DIR}` 在 Phase 3 iteration-close 提升时写入）。**STOP** if base/target missing。**Immediately** print `## Phase 2: Autonomous Execute` → continue（勾掉 `phase-1-autonomous-start`）。
-
----
-
-## Phase 2–6: Execute → close → PR → merge-ready → post-merge close
-
-Delegate to **`iteration-drive`**（Phase 2 → §2、Phase 3 → §3 + `references/phase-3-iteration-close.md`、Phase 4/5 → §4–§5 + `references/phase-4-5-pr-delivery.md`、Phase 5 helper discovery → `phase5-helper-discovery.md`、Phase 6 → `references/phase-6-post-merge-close.md` §6.1–§6.4）。**Assignment preflight** per **`command-shared-invariants.md`**。
-
-**Loop 特有**：Phase 5 push cadence（HARD）→ **`mstar-iteration/references/phase-4-5-pr-delivery.md`** §5.1a；exit checklist → §5.2（同 reference）；Phase 6 → **`mstar-iteration/references/phase-6-post-merge-close.md`** §6.1–§6.4（PR **merged** 后；todo `phase-6-post-merge-close`）。
-
-**Then** report: iteration id, locked direction + scale, plans completed, compound summary, PR link, merge-ready evidence, post-merge close evidence（store workflow `completed` + DB root unregister）。
-
-PR merge itself may remain manual unless user authorized auto-merge.
+The Phase 6 close report: iteration id, locked direction and scale, plans completed, compound summary, PR link, merge-ready and post-merge close evidence.
