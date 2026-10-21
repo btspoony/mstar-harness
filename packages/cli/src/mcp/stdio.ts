@@ -19,9 +19,11 @@ const NULL_ROOT_BOOTSTRAP_COMMANDS = new Set(["harness.scaffold"]);
  * not depend on WHICH workspace the call belongs to, because every path they
  * touch is either an explicit input or the query's own subject. A null root is
  * a complete answer for them, so admitting one is not a misresolution — refusing
- * it would deny discovery and validation over a shared connection, and the
- * refusal's own recovery (`pass the call's harness selector`) is unavailable to
- * every one of them, since none publishes a `harness` field.
+ * it would deny discovery and validation over a shared connection, and for most
+ * of them the refusal's own recovery (`pass the call's harness selector`) is
+ * unavailable, since they publish no such field. The one exception, the
+ * `store.execution.*` family, publishes a `harness` that names the operation
+ * TARGET: the target is the object, not the root the command executes against.
  *
  * The classification is a CONTRACT fact, not a handler accident, so it cannot be
  * derived from a definition: a command's handler is the only place that knows
@@ -32,8 +34,8 @@ const NULL_ROOT_BOOTSTRAP_COMMANDS = new Set(["harness.scaffold"]);
  * inheriting a null root).
  *
  * Excluded on purpose, each because it derives something from a root:
- * - every command that declares a `harness` input or flag (the root is its own
- *   input, and admission requires it on an unpinned connection);
+ * - every command whose `harness` input or flag is its ROOT selector (the root
+ *   is its own input, and admission requires it on an unpinned connection);
  * - commands that read `invocation.controlRoot` (`persist.*`, `dashboard`,
  *   `compound.validate`'s catalog query, `worktree.check`, …) or derive an
  *   implicit harness path from the invocation workspace (`audit.scaffold`'s
@@ -69,6 +71,13 @@ const ROOT_FREE_COMMANDS: ReadonlySet<string> = new Set([
   "pr-review.seat-prompt",
   "pr-review.post",
   "pr-review.worktree-cleanup",
+  // Their only `harness` field is the operation TARGET they export or restore,
+  // not a root they execute against: with no connection root they still have
+  // every fact their contract needs, and the family's own target==control-root
+  // guard simply has no control root to protect on such a connection.
+  "store.execution.export",
+  "store.execution.restore-preview",
+  "store.execution.restore",
 ]);
 
 /**

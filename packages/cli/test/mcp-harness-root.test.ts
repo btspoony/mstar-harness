@@ -919,7 +919,7 @@ const CONTROL_ROOT_CLASS: Readonly<Record<string, "root" | "none">> = {
   "status.archive-residuals": "root", "status.backlog-close": "root", "status.backlog-register": "root",
   "status.findings-cleanup": "root", "status.tech-debt": "root", "status.validate": "root",
   "status.workflow-close": "root", "store.activate": "root", "store.backup": "root",
-  "store.execution.export": "root", "store.execution.restore": "root", "store.execution.restore-preview": "root",
+  "store.execution.export": "none", "store.execution.restore": "none", "store.execution.restore-preview": "none",
   "store.init": "root", "store.migrate": "root", "store.retire": "root",
   "store.upgrade": "root", "workflow-note.append": "root", "workflow-note.coverage": "root",
   "workflow.adopt-terminal": "root", "workflow.delivery-anchors": "root", "workflow.evidence": "root",
@@ -953,7 +953,7 @@ describe("MCP control-root admission class", () => {
     }
   });
 
-  test("a root-free command declares no harness selector of its own", () => {
+  test("a root-free command declares no ROOT selector of its own", () => {
     for (const [id, admitted] of Object.entries(CONTROL_ROOT_CLASS)) {
       if (admitted !== "none") continue;
       const definition = getCommandDefinitions().find((entry) => entry.id === id)!;
@@ -962,10 +962,12 @@ describe("MCP control-root admission class", () => {
         ? (descriptor.input as { properties?: Record<string, unknown> }).properties ?? {}
         : {};
       // The class exists because a null root is a complete answer. A command
-      // that named a root selector would contradict that, and the contradiction
-      // is what makes this set wrong rather than incomplete.
-      expect([id, Object.hasOwn(properties, "harness"), definition.cli.options.some((option) => option.key === "harness")])
-        .toEqual([id, false, false]);
+      // that named a ROOT selector would contradict that; a `harness` that only
+      // names an operation target (`store.execution.*`) does not, because the
+      // command executes against the target itself.
+      const rootInputs = definition.rootInputs
+        ?? (Object.hasOwn(properties, "harness") || definition.cli.options.some((option) => option.key === "harness") ? ["harness"] : []);
+      expect([id, rootInputs]).toEqual([id, []]);
     }
   });
 
@@ -1251,6 +1253,15 @@ describe("MCP pinned root selectors and operation targets", () => {
     });
     expect(restored.isError).toBe(false);
     expect(restored.structuredContent).toMatchObject({ status: "ok", code: "store.execution.restore.ok" });
+
+    // With NO connection root these actions are still complete: the target is
+    // the whole object, so the same export succeeds on an unpinned connection
+    // instead of being refused as a root consumer.
+    const unpinnedOut = path.join(root, "export-unpinned.json");
+    const unpinned = await callRawTool(createContextResolver(), "store.execution.export", { harness: target, out: unpinnedOut });
+    expect(unpinned.isError).toBe(false);
+    expect(unpinned.structuredContent).toMatchObject({ status: "ok", code: "store.execution.export.ok" });
+    expect(existsSync(unpinnedOut)).toBe(true);
   });
 
   test("an unpinned connection refuses pr-review.worktree-setup instead of running it in the host checkout", async () => {
