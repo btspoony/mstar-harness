@@ -108,15 +108,36 @@ describe("mstar compound validate — knowledge-doc schema / index / scope", () 
     });
   });
 
+  test("a SUBDIRECTORY of the configured root is refused even though the configured catalog is complete", async () => {
+    await withTempDir("mstar-slice4-cli-", async (dir) => {
+      const { root, harness, configured } = await completeKnowledgeRoot(dir);
+      const sub = join(configured, "engineering");
+      mkdirSync(sub);
+      const unregistered = join(sub, "unregistered.md");
+      writeFileSync(unregistered, KNOWLEDGE_GOOD);
+
+      const result = runCli(["compound", "validate", unregistered, "--knowledge-dir", sub], {
+        cwd: root,
+        env: { MSTAR_HARNESS_DIR: harness },
+      });
+      // Inverted assertion (PR #558 review must-fix 2, round 2): the previous
+      // rule accepted any directory at or inside the configured root and
+      // answered it with that root's verdict. The inverted assertion is the
+      // CODE — the refusal must name the directory, not be an accident of the
+      // root's walk happening to reach this body (before the change this
+      // invocation exited 1 with catalog.discovery.missing-document).
+      expect(result.exitCode).toBe(1);
+      expect(violationCodes(result)).toContain("compound.catalog.knowledge-dir-mismatch");
+      expect(violationCodes(result)).not.toContain("catalog.discovery.missing-document");
+      const refusal = cliEnvelope(result, "refused");
+      expect(refusal.message).toContain(configured);
+      expect(refusal.message).toContain("registered relative to");
+    });
+  });
+
   test("the configured knowledge root still passes, and an equal path spelled differently is not refused", async () => {
     await withTempDir("mstar-slice4-cli-", async (dir) => {
       const { root, harness, configured } = await completeKnowledgeRoot(dir);
-      const category = join(configured, "engineering");
-      mkdirSync(category);
-      writeFileSync(join(category, "nested.md"), KNOWLEDGE_GOOD);
-      await registerCatalogEntity({ harnessDir: harness }, {
-        kind: "document", id: "doc-nested", title: "Nested doc", rootKind: "knowledge", relativePath: "engineering/nested.md", documentKind: "knowledge",
-      }, { operationId: "fixture-catalog-nested", actor: "compound" });
       const link = join(root, "knowledge-link");
       symlinkSync(configured, link);
 
@@ -125,8 +146,6 @@ describe("mstar compound validate — knowledge-doc schema / index / scope", () 
         [join(configured, "registered.md"), `${harness}/./knowledge/`],
         // Both sides spelled through the symlink: the scope guard stays lexical.
         [join(link, "registered.md"), link],
-        // A directory inside the configured root is proven by the same verdict.
-        [join(category, "nested.md"), category],
       ] as const) {
         const result = runCli(["compound", "validate", doc, "--knowledge-dir", knowledgeDir], {
           cwd: root,

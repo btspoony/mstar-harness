@@ -402,25 +402,28 @@ async function execute(id: string, input: Input, context: InvocationContext): Pr
             });
           } else {
             // The completeness query discovers bodies and matches catalog rows
-            // under ONE root: the harness-resolved knowledge root. Running it
-            // for a caller's other directory would report that root's verdict as
-            // if it were the named directory's, so a schema-valid unregistered
-            // body over there would pass. Only a path at or inside the
-            // configured root is proven by the configured-root verdict.
+            // under ONE root: the harness-resolved knowledge root. Its verdict
+            // is that root's, so it is not a verdict about any other directory
+            // as a knowledge store — answering a caller's other directory with
+            // it reports a different question as if it were the named one's.
+            // Only the configured root ITSELF is proven, normalized: a symlinked
+            // or `./`-spelled equal path compares equal, a subdirectory does not.
             const configuredRoot = catalogRootDir({ harnessDir }, "knowledge");
             const named = canonicalPath(knowledgeDir);
             const root = canonicalPath(configuredRoot);
-            if (named !== root && !named.startsWith(root + path.sep)) {
+            if (named !== root) {
               violations.push({
                 ok: false,
                 severity: "high",
                 code: "compound.catalog.knowledge-dir-mismatch",
                 message:
-                  `${knowledgeDir} is not inside the configured knowledge root ${configuredRoot}, so its catalog completeness cannot be asserted — ` +
-                  "catalog completeness is a store.db query over the configured root, and no catalog row is registered against another directory",
+                  `${knowledgeDir} is not the configured knowledge root ${configuredRoot}, so its catalog completeness cannot be asserted — ` +
+                  "completeness is a store.db query that reports the configured root's verdict (the documents registered relative to it), " +
+                  "which is never a verdict about a subdirectory of that root or about another directory as a knowledge store",
                 fix:
-                  `validate the configured root instead (drop --knowledge-dir), or move the declaration into ${configuredRoot}; ` +
-                  "to validate a directory elsewhere, point the project's knowledge root at it (`.mstarc` `[config] knowledge_dir` or MSTAR_HARNESS_DIR) and validate there",
+                  `drop --knowledge-dir to validate the configured root ${configuredRoot}; ` +
+                  `or move/declare those documents under ${configuredRoot} and register them there; ` +
+                  "or point the project's knowledge root at that directory (`.mstarc` `[config] knowledge_dir`) and validate that root",
               });
             } else {
               try {
