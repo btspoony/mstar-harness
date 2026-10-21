@@ -255,7 +255,7 @@ bundle 补丁只插入**一行** `mstar-mcp`，而这一行就是整个宿主的
 
 连接钉优先于按调用的 `harness`，因此调用方绝不可能把某次调用钉在启动方未声明的工作区上；这次调用实际使用的那个根还会把调用工作区锚定在其父目录，因此由 cwd 派生的路径落在那份 harness 下，而不是启动 cwd。在**未钉**的连接上，凡是根不另有来源的工具，其公布的 `harness` 字段都是**必填**，模型无法漏掉解析所需的这唯一事实。
 
-**连接不携带身份。** 共享连接自身无身份，且仅属 MCP 的身份接线已移除：没有 `--identity-env`、没有已声明身份锁、没有选择器剥离，也没有连接级默认 session id——线上的 `sessionId` 就是调用方自己传的那个，需要身份的命令就取这个按调用的选择器。需要会话身份的**操作**，其宿主可证的路线是上文列出的三个 dsh 原生工具，其身份为 `exec.agent.id`——宿主事实，绝不是模型提供的字段。
+**连接不携带身份，默认也不接受调用方声明的身份。** 共享连接自身无身份，且仅属 MCP 的身份接线已移除：没有 `--identity-env`、没有已声明身份锁、没有选择器剥离，也没有连接级默认 session id。按调用的 `sessionId` 选择器不发布；传入它的调用以 `mcp.caller-identity-unavailable` 被拒绝，只有显式启动开关（`mstar mcp --trust-caller-session-id`，随发行的行中为 OFF）才会发布它。需要会话身份的**操作**，其宿主可证的路线是上文列出的三个 dsh 原生工具（身份为 `exec.agent.id`——宿主事实，绝不是模型提供的字段），或走 CLI。这三个原生工具只覆盖 plan bind、审计报告校验与 execution clear；plan prepare/progress/complete 尚无原生工具，只能走 CLI。
 
 ## Engine seam mapping
 
