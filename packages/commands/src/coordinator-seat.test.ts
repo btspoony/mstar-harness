@@ -26,6 +26,7 @@ describe("coordinator-seat derivation", () => {
       "plan.bind",
       "plan.complete",
       "session.recover",
+      "session.run",
       "status.workflow-close",
       "workflow-note.append",
       "iteration.register",
@@ -34,14 +35,13 @@ describe("coordinator-seat derivation", () => {
     }
   });
 
-  test("keeps the leaf's plan-row route and the child-identity launch reachable", () => {
+  test("keeps the leaf's plan-row route and the reads reachable", () => {
     for (const id of [
       "plan.prepare",
       "plan.progress",
       "plan.show",
       "plan.issue-add",
       "plan.issue-close",
-      "session.run",
       "workflow-note.coverage",
       "issue.add",
       "schema",

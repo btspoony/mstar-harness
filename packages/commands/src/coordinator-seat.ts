@@ -14,8 +14,11 @@ import type { CommandDefinition } from "./types.js";
  * (`grep -n 'role: *"coordinator"' packages/commands/src`): a command belongs
  * here when it works under that identity and
  *
- * - establishes or replaces a seat over an EXISTING workflow (`plan.bind`,
- *   `session.recover`), or
+ * - establishes or replaces a seat: over an EXISTING workflow (`plan.bind`,
+ *   `session.recover`), or by minting a coordinator identity for a CHILD
+ *   process that can then bind with it (`session.run` — the seat lands on the
+ *   child, and the child never passes this caller's seat check, so allowing a
+ *   leaf to launch it hands a leaf the seat), or
  * - writes workflow-scope delivery, lifecycle, adoption or coordinator ledger
  *   state: every action of the `workflow` family (`evidence`,
  *   `delivery-anchors`, `adopt-terminal`, `phase`, `lifecycle`,
@@ -31,9 +34,8 @@ import type { CommandDefinition } from "./types.js";
  *
  * A command that merely acts THROUGH an existing binding mints no seat and
  * keeps the leaf's route: `plan.prepare` / `plan.progress` / `plan.show` /
- * `plan.issue-add` / `plan.issue-close` (the plan-row work a leaf does),
- * `session.run` (it mints an identity for a CHILD process, never a seat for
- * this caller) and `workflow-note.coverage` (a read).
+ * `plan.issue-add` / `plan.issue-close` (the plan-row work a leaf does) and
+ * `workflow-note.coverage` (a read).
  *
  * A new command that needs a seat is added HERE, once; both guards follow. The
  * colocated suite asserts every covered id resolves back through its published
@@ -45,7 +47,7 @@ const SEAT_FAMILIES: readonly string[] = ["workflow"];
 /** Family → the coordinator-seat actions of an otherwise leaf-reachable family. */
 const SEAT_ACTIONS: Readonly<Record<string, readonly string[]>> = {
   plan: ["bind", "complete"],
-  session: ["recover"],
+  session: ["recover", "run"],
   status: ["workflow-close"],
   "workflow-note": ["append"],
   iteration: ["register"],

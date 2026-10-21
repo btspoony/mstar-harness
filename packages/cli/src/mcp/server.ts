@@ -20,7 +20,7 @@ function leafSeatRefusal(command: string): CommandEnvelope<never> {
     exitCode: 1,
     message:
       "known leaf sessions cannot hold a workflow coordinator seat: they cannot bind or complete a plan, recover a session, " +
-      "or write workflow delivery, lifecycle, adoption or ledger state",
+      "launch a child under a minted coordinator identity, or write workflow delivery, lifecycle, adoption or ledger state",
     recovery:
       'This connection was launched with --seat leaf (the calling session header carries origin "subagent" or delegationDepth > 0). ' +
       "Coordinator-seat operations belong to the non-leaf coordinating session: run the operation there, or continue with the commands this seat may use (issue.add / issue.close / plan.prepare / plan.progress and every read).",

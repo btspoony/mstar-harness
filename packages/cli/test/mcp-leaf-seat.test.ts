@@ -18,7 +18,7 @@
  * refused BEFORE any engine round-trip. A non-leaf connection is unaffected.
  */
 import { describe, expect, test } from "bun:test";
-import { mkdtempSync, rmSync } from "node:fs";
+import { existsSync, mkdtempSync, rmSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { Client, InMemoryTransport } from "@modelcontextprotocol/client";
@@ -37,6 +37,7 @@ const SELECTED = [
   "plan.bind",
   "plan.complete",
   "plan.prepare",
+  "session.run",
   "workflow.evidence",
   "workflow.delivery-anchors",
   "workflow.adopt-terminal",
@@ -174,6 +175,47 @@ describe("MCP leaf seat", () => {
       );
       expect(envelope.command).toBe("plan.prepare");
       expect(envelope.code).not.toBe("plan.prepare.leaf-seat");
+    } finally {
+      fixture.dispose();
+    }
+  });
+
+  test("the leaf cannot launch a child under a minted coordinator identity, and no child is spawned", async () => {
+    const fixture = harnessFixture();
+    const marker = path.join(path.dirname(fixture.harness), "spawned-by-leaf");
+    try {
+      // The launch mints a coordinator identity and hands it to a CHILD that
+      // never passes this seat check, so the seat is established for the child:
+      // the refusal must land before the spawn effect, and `touch` would have
+      // created the marker had any child run.
+      const envelope = await envelopeOf(
+        { harnessRoot: fixture.harness, seat: "leaf" },
+        "mstar_session",
+        { action: "run", workflow: "wf-a", role: "coordinator", argv: ["touch", marker] },
+      );
+      expect(envelope).toMatchObject({
+        command: "session.run",
+        status: "refused",
+        code: "session.run.leaf-seat",
+        exitCode: 1,
+      });
+      expect(existsSync(marker)).toBe(false);
+    } finally {
+      fixture.dispose();
+    }
+  });
+
+  test("a non-leaf launcher still runs the child under the minted identity", async () => {
+    const fixture = harnessFixture();
+    const marker = path.join(path.dirname(fixture.harness), "spawned-by-launcher");
+    try {
+      const envelope = await envelopeOf(
+        { harnessRoot: fixture.harness },
+        "mstar_session",
+        { action: "run", workflow: "wf-a", role: "coordinator", argv: ["touch", marker] },
+      );
+      expect(envelope).toMatchObject({ command: "session.run", status: "ok", exitCode: 0 });
+      expect(existsSync(marker)).toBe(true);
     } finally {
       fixture.dispose();
     }

@@ -1030,7 +1030,7 @@ describe('leaf-seat tool boundary — coordinator actions on the folded MCP surf
     }
   })
 
-  it('refuses the session recovery that binds the caller as the replacing coordinator', async () => {
+  it('refuses the session actions that establish a seat, including the child-identity launch', async () => {
     const app = booted = await bootApp()
     const decision = await app.ctx.waterfall(
       'tools/pre-execute',
@@ -1039,9 +1039,16 @@ describe('leaf-seat tool boundary — coordinator actions on the folded MCP surf
     )
     expect(decision.kind).toBe('deny')
     expect((decision as { reason?: string }).reason).toContain('session.recover')
-    // The launch (`session.run`) mints an identity for a CHILD process, never
-    // a seat for this caller — it stays reachable.
-    expect(await app.ctx.waterfall('tools/pre-execute', foldedCall('mcp__mstar__mstar_session', { action: 'run' }, leafAgent()), defaultAllow))
-      .toEqual({ kind: 'allow' })
+    // The launch (`session.run`) mints a coordinator identity for a CHILD
+    // process and spawns it, so the child binds on that minted seat without
+    // ever passing this boundary: for a leaf that IS seat establishment, not a
+    // way to exercise an existing binding.
+    const launch = await app.ctx.waterfall(
+      'tools/pre-execute',
+      foldedCall('mcp__mstar__mstar_session', { action: 'run', workflow: 'wf-a' }, leafAgent()),
+      defaultAllow,
+    )
+    expect(launch.kind).toBe('deny')
+    expect((launch as { reason?: string }).reason).toContain('session.run')
   })
 })
