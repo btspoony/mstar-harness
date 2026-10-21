@@ -233,4 +233,19 @@ Before compass lock, review the **local ignored per-edit attribution record** ag
 
 **Anti-patterns**: authoring formal documents before the prototype checkpoint; treating an old approval as approval of changed design; using autonomous mode without opt-in; omitting a required specialist despite a remaining gap; fabricating skip receipts; PM replacing selected specialist edits/the mandatory writer without invoke; or parallelizing shared-document rounds.
 
-**Phase 1 完成 anchor（`phase-1-lock`）不在本文件触发**：compass `status: locked` 只是它的前置之一 —— 它只在 integration worktree 已建立（并记录 `integration_worktree_path`）、新建的 `spec_integration_branch` 已 push（branch push；Phase 1 的写入目标均为 gitignored 本地工件，全局 `{SPECS_DIR}` 在 Phase 3 提升时写入）之后才执行，因此其 marker 由 **`phase-2-worktree-lease.md` §2.3**「Integration worktree (Phase 2 entry) + control root」checklist tail 承载（Phase 1 路线经 `iteration-start` §6 走到该 checklist）。
+### Phase 1 completion checklist（入口在 integration 步骤前打印）
+
+Pre-integration gate — every `[x]` before walking §2.3:
+
+- [ ] Direction lock recorded in compass — interactive grill or the host plan-mode feedback loop plus its deferred grill; `autonomous` only with an explicit opt-in
+- [ ] Prototype at its approved current revision: package path/revision plus the genuine confirmation (or reasoned autonomous disposition) recorded, with feedback revisions retained
+- [ ] Running ACTIVE workflow registered from the ready compass and authored plans, branch anchors present; this session holds the coordinator seat and executed the `direction-lock` host action
+- [ ] product-manager / architect include/skip reasons recorded; every selected role returned, writing-specialist last; no fake skip receipts, omitted-role markers or unresolved blocking questions; no `{KNOWLEDGE_DIR}/` additions
+- [ ] PM final lock: compass `status: locked` and each plan's Prepare gate passes (blocked plans documented)
+- [ ] Branch policy locked (`iteration_base_branch` / `spec_integration_branch` / `target_branch`) in the compass and the ACTIVE workflow; never a silent `main`/`master`
+
+**Then** walk **`phase-2-worktree-lease.md` §2.3** checklist steps 1–7 and mark the closing item once the branch push has happened:
+
+- [ ] Integration worktree created and the new `spec_integration_branch` pushed — Phase 1 writes stay gitignored local artifacts, global `{SPECS_DIR}` is promoted at iteration-close, never in the primary checkout
+
+**Phase 1 完成 anchor（`phase-1-lock`）不在本文件触发**：compass `status: locked` 只是它的前置之一 —— 它只在 integration worktree 已建立（并记录 `integration_worktree_path`）、新建的 `spec_integration_branch` 已 push（branch push；Phase 1 的写入目标均为 gitignored 本地工件，全局 `{SPECS_DIR}` 在 Phase 3 提升时写入）之后才执行，因此其 marker 由 **`phase-2-worktree-lease.md` §2.3**「Integration worktree (Phase 2 entry) + control root」checklist tail 承载（Phase 1 路线经 `iteration-start` 的 Execute 步骤 5 走到该 checklist）。

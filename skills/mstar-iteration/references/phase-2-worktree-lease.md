@@ -15,7 +15,7 @@ serial cross-plan **implement** scheduling while checkout isolation, atomic coor
 and workflow-wide serial integration safety remain required.
 
 Phase 1 Review & Edit may edit uncommitted docs on the primary checkout under the Prepare policy (bounded exception; the main worktree never switches branch). The integration-worktree safety gate
-starts at **Phase 2 entry** — Phase 1 did walk §2.3's integration-worktree checklist once at its end (`iteration-start` §6, which carries the `phase-1-lock` marker), but the gate those steps guard opens only when Phase 2's per-plan loop begins.
+starts at **Phase 2 entry** — Phase 1 did walk §2.3's integration-worktree checklist once at its end (`iteration-start`'s integration-branch step, which carries the `phase-1-lock` marker), but the gate those steps guard opens only when Phase 2's per-plan loop begins.
 
 **Phase scope**：本参考仅约束 **Phase 2**（含 serial integration merge 与「control root / integration worktree 禁止产品编辑 / 每 plan feature worktree」）。**Phase 5** PR merge-ready 修复同样 **不**直接在 integration checkout 上改——产品修复走独立 fix feature worktree，review 后 merge 回 integration worktree → **`phase-4-5-pr-delivery.md`** §5.0。
 
@@ -57,7 +57,7 @@ Phase/gate 转换按 **`mstar-host`**「Phase-transition todo refresh (host-agno
 
 ## 2.3 Branch anchors + integration branch + integration worktree（Phase 2 入口）
 
-本节的 integration-worktree checklist **也被 Phase 1 路线复用**（`iteration-start` §6）—— 在该路线上它承载 `phase-1-lock` marker，且**不**触发 `phase-2-entry`。
+本节的 integration-worktree checklist **也被 Phase 1 路线复用**（`iteration-start` 的 integration-branch 步骤）—— 在该路线上它承载 `phase-1-lock` marker，且**不**触发 `phase-2-entry`。
 
 **Branch anchors 解析顺序**（任一环节缺失则 STOP，**禁止**默认 `main`/`master`）：
 
@@ -149,7 +149,7 @@ Before writable dispatch, verify the actual source checkout/branch against ordin
 <!-- host-hook: phase-2-entry -->
 > Execute the active host reference's `## Host hooks` declaration for `phase-2-entry`; this file defines no host action.
 >
-> 这是 **Phase 2 execute/resume entry**：§2.0 五道闸与 §2.3 的 branch / worktree 解析之后的第一个 Phase 2 动作，位于 per-plan loop 之前。Phase 1 的 `iteration-start` §6 只**复用** §2.3 的 integration-worktree 步骤，**不**触发本 anchor。
+> 这是 **Phase 2 execute/resume entry**：§2.0 五道闸与 §2.3 的 branch / worktree 解析之后的第一个 Phase 2 动作，位于 per-plan loop 之前。Phase 1 路线的 `iteration-start` integration-branch 步骤只**复用** §2.3 的 integration-worktree 步骤，**不**触发本 anchor。
 
 ## 2.4 Per-plan loop（直到全部 Done）
 

@@ -2,9 +2,9 @@
 
 本文件是 `commands/iteration-*.md`（`iteration-start` / `iteration-drive` / `iteration-loop`）**重叠内容**的单一共享副本（SSOT）。**只收录出现在 ≥2 个命令中的行**；命令专属内容保留在命令正文，**不**复制进本文件：
 
-- `iteration-start` Phase 1 Review & Edit: optional product/architect rounds selected with rationale, sequential shared edits and mandatory final writer; selection/closure authority → `phase-1-prepare.md` §1.6 — start-specific
+- `iteration-start` interactive direction lock via the bundled `grill-me`, the host Plan-mode Phase 1 path and `pause` semantics — start-specific
 - `iteration-loop`「Do not Read `skills/grill-me/SKILL.md`」— loop 专属
-- `iteration-loop` session todo `phase-1-autonomous-start`（Boot → compass `locked` + integration branch pushed（§6））— loop 专属
+- `iteration-loop` session todo `phase-1-autonomous-start`（Boot → compass `locked` + integration branch pushed）— loop 专属
 
 命令正文经一行指针引用本文件，不重复定义以下 invariants / preflight / todos / STOP。
 

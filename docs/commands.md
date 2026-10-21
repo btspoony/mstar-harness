@@ -83,7 +83,7 @@ iteration-start locks interactively, iteration-drive resumes an already locked i
 
 **Args** — `direction` is a free-text hint that narrows the candidate scope and seeds `grill-me`; it is not a lock, and the lock stays interactive. A token that is exactly `pause` (case-insensitive) is the flag; the remaining tokens join into `direction`, so `/iteration-start pause` is a pause with an empty hint.
 
-**Hosts** — Cursor Plan mode takes the alternate Phase 1 path (empty CreatePlan scaffold → feedback loop → deferred grill) instead of the sections below; every other host runs the plain path. It is the only command that reads the bundled, non-`mstar-*` `skills/grill-me/` skill.
+**Hosts** — Cursor Plan mode takes the alternate Phase 1 path (empty CreatePlan scaffold → feedback loop → deferred grill) instead of the plain path; every other host runs the plain path. It is the only command that reads the bundled, non-`mstar-*` `skills/grill-me/` skill.
 
 **Defined in** — [`commands/iteration-start.md`](../commands/iteration-start.md); semantics → `mstar-iteration` (`references/phase-1-prepare.md` for Phase 1 detail, `references/command-shared-invariants.md` for the Phase 2–5 shared invariants); host dispatch → `mstar-host`.
 
@@ -135,14 +135,14 @@ Runtime sequence → `mstar-iteration/references/phase-2-worktree-lease.md`; fie
 ## /codebase-audit
 
 ```text
-/codebase-audit [simplify]
+/codebase-audit [quick|deep] [category|simplify|branch|next|roadmap]
 ```
 
 **Purpose** — a read-only survey of a codebase as a senior advisor, producing a prioritized, evidence-backed review report under the review tree (`{REVIEW_DIR}/<date>-codebase-<level>-<round>/`). No source edits, no state machine, no commits: the audit is advisory and its output is a review report.
 
 **When** — before `/iteration-start`, to discover what is worth doing; or standalone, to build a prioritized backlog. `/amazing-pr-review` reviews an existing change rather than surveying the codebase, `/amazing-test-audit` audits the test suite rather than the whole codebase, and `/amazing-e2e-check` verifies behaviour rather than reading code.
 
-**Args** — an optional keyword narrows the pass (a category focus such as `bug`, `security`, `perf`, `tech-debt`); the `simplify` variant runs a debt-focused deep pass over dead, duplicated, speculative and over-built surfaces.
+**Args** — `quick` / `deep` set the effort level; an optional scope keyword narrows the pass (a category focus such as `bug`, `security`, `perf`, `tech-debt`, or the `branch` / `next` / `roadmap` scopes); the `simplify` variant runs a debt-focused deep pass over dead, duplicated, speculative and over-built surfaces.
 
 **Hosts** — on dsh, the large-repo fan-out runs through the native `workflow` tool rather than `subagent`; other hosts keep their own invoke tool.
 
@@ -162,7 +162,7 @@ Runtime sequence → `mstar-iteration/references/phase-2-worktree-lease.md`; fie
 
 **Hosts** — the lane fan-out follows `/codebase-audit`: read-only `scout` / `explore` seats per lane under the assignment's read-only delegation grant; each host keeps its own invoke tool (no native dsh `workflow` script ships for this entry).
 
-**Defined in** — [`commands/amazing-test-audit.md`](../commands/amazing-test-audit.md); procedure → `mstar-audit` (common core in the skill, test-suite detail in `references/test-audit.md`); lane fan-out routing → `commands/amazing-test-audit.md` (Routing, mirrors `/codebase-audit`).
+**Defined in** — [`commands/amazing-test-audit.md`](../commands/amazing-test-audit.md); procedure → `mstar-audit` (common core in the skill, test-suite detail in `references/test-audit.md`); lane fan-out routing → `mstar-audit/references/test-audit.md` §6 + `mstar-roles/references/code-reviewer.md` (Mode B).
 
 ## /amazing-pr-review
 
