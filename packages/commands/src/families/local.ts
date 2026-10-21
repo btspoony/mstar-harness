@@ -419,7 +419,7 @@ export function getLocalCommandDefinitions(): readonly CommandDefinition[] {
             exitCode: 2,
             message: "path.resolve needs a starting `path`: this invocation declared no control root, so its working directory is the host's launch directory and is never used as a starting point",
             helpRoute: "mstar path resolve --help",
-            recovery: "Pass `path` naming the directory to resolve from. To anchor the whole connection instead, launch it with `mstar mcp --harness <absolute path>` or a non-blank MSTAR_HARNESS_DIR.",
+            recovery: "mstar path resolve, or pin the MCP connection with --harness=<abs> (or a non-blank MSTAR_HARNESS_DIR).",
             diagnostics: [{
               path: "path",
               code: "required",

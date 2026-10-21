@@ -78,7 +78,7 @@ function targetRefusal(id: string, supplied: string): CommandEnvelope {
       ? `${id}: the operation target must be an absolute path; a relative "harness" would resolve against the invocation directory instead of naming the store this call reads or restores`
       : `${id} needs the operation's target: it names the store this call reads or restores, and this action never discovers one from the invocation directory`,
     helpRoute: `mstar schema --command ${id}`,
-    recovery: "Pass `harness` naming the harness directory this operation targets, as an ABSOLUTE path. A pinned MCP connection still takes the target from that field, never from its control root.",
+    recovery: "mstar store execution export --harness=<abs>, and the same --harness flag names the target on restore and restore-preview. A pinned MCP connection still takes the target from that field, never from its control root.",
     diagnostics: [{
       path: "harness",
       code: relative ? "invalid_type" : "required",
