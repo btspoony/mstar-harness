@@ -28,6 +28,7 @@ import { realpathSync } from 'node:fs'
 import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
+import type { Context } from '@deepseek-ai/cordis'
 import type { ToolCallId } from '@deepseek-ai/dsh-llm'
 import {
   bindExecutionSession,
@@ -40,6 +41,16 @@ import {
 } from '@mstar-harness/engine'
 import type { ExecutionCaller, ExecutionContext, ExecutionSessionRef, StoreHandle } from '@mstar-harness/engine'
 import { adoptExecutionBinding, resolveExecutionLedgerTarget } from '../src/gates/workflow-selection.ts'
+import {
+  executionBindingRootOf,
+  recordExecutionBindingRoot,
+  resetExecutionBindingRootsForTests,
+} from '../src/gates/execution-binding-roots.ts'
+import {
+  EXECUTION_BINDING_ROOTS_LOGGER,
+  installExecutionBindingRootStore,
+  type ExecutionBindingRootStore,
+} from '../src/gates/execution-binding-roots-domain.ts'
 import { adoptionRecoveryText, postCommitAdoptionRefusal } from '../src/gates/native-commands.ts'
 import { readWorkflowSessionBinding, updateWorkflowSessionBinding } from '../src/engine-status-store.ts'
 import type { WorkflowSessionBinding } from '../src/engine-status-store.ts'
@@ -103,6 +114,8 @@ const roots: string[] = []
 const storeHandles: StoreHandle[] = []
 
 afterEach(async () => {
+  for (const dispose of seamDisposers.splice(0)) dispose()
+  resetExecutionBindingRootsForTests()
   for (const handle of storeHandles.splice(0)) handle.close()
   await booted?.dispose()
   booted = undefined
@@ -548,6 +561,216 @@ describe('mstar_execution_clear — the native-only clear', () => {
     expect(recovery).toContain(recordedWorkspace)
     // Nothing was cleared: the record at the recorded workspace is untouched.
     expect(storedBinding(app.harnessDir, recordedWorkspace)?.executionBinding ?? null).toBeNull()
+  })
+})
+
+// ---------------------------------------------------------------------------
+// The DURABLE adopted-root seam — the receipt outlives the process
+//
+// A native bind carrying an explicit `harness` selects another control root
+// and records the receipt for the carrying session; the plugin's durable seam
+// mirrors that receipt into the host's storage domain, so the ledger
+// attribution and the native clear still resolve the ADOPTED root after a
+// restart. The restart is modelled over ONE fake medium: the seam is installed
+// over an in-memory map, the in-process overlay is cleared, and a fresh seam is
+// installed over the SAME map — exactly what a new process meeting the same
+// durable state sees. The storage domain itself is the brief's stub facility
+// (`open(spec)` resolving `{ table, close }`): no storage backend is involved.
+// ---------------------------------------------------------------------------
+
+/** The durable medium behind the seam's store contract — the fake table one medium serves. */
+function rootTableOf(medium: Map<string, string>): ExecutionBindingRootStore {
+  return {
+    get: (key) => medium.get(key),
+    put: async (key, value) => { medium.set(key, value) },
+    delete: async (key) => {
+      const had = medium.has(key)
+      medium.delete(key)
+      return had
+    },
+  }
+}
+
+/** Every seam this suite installs, disposed in cleanup (the installed seam is process-global). */
+const seamDisposers: Array<() => void> = []
+
+/** One tick for the apply child's `open` to resolve and the seam to install. */
+const settleSeam = () => new Promise<void>((resolve) => { setTimeout(resolve, 10) })
+
+let providerSeq = 0
+
+/**
+ * Mount a stub `storageDomain` facility as a plugin row: the plugin's own
+ * `ctx.inject(['storageDomain'], …)` child opens it and installs the seam the
+ * way the real host does. Returns the row's disposal, which runs the child's
+ * disposer — the seam uninstall followed by the domain close.
+ */
+async function mountStorageDomain(app: BootResult, facility: unknown): Promise<{ dispose(): Promise<void> }> {
+  const row = {
+    name: `stub-storage-domain-${++providerSeq}`,
+    apply(ctx: Context) {
+      (ctx as unknown as { provide(name: string, value: unknown): () => void }).provide('storageDomain', facility)
+    },
+  }
+  const provider = app.ctx.plugin(row as unknown as Parameters<Context['plugin']>[0])
+  await provider
+  await settleSeam()
+  return provider as unknown as { dispose(): Promise<void> }
+}
+
+/** The stub facility over one medium: `open` resolves the `{ table, close }` handle shape. */
+function stubFacilityOf(medium: Map<string, string>): unknown {
+  return { open: async () => ({ table: () => rootTableOf(medium), close: async () => {} }) }
+}
+
+/**
+ * The restart shape: drop the in-process receipts, KEEP the medium, install a
+ * fresh seam over it. `previous` is the seam the dying process held (omitted
+ * for the first install).
+ */
+function restartSeam(medium: Map<string, string>, previous?: () => void): () => void {
+  previous?.()
+  resetExecutionBindingRootsForTests()
+  const uninstall = installExecutionBindingRootStore(rootTableOf(medium))
+  seamDisposers.push(uninstall)
+  return uninstall
+}
+
+/**
+ * The cross-root fixture: boot on the git root, seed the ADOPTED root's own
+ * unbound lifecycle, install the durable seam through the stub facility, and
+ * run the native bind with an explicit `harness` selector.
+ */
+async function crossRootBindFixture(): Promise<{
+  app: BootResult
+  adoptedRoot: string
+  medium: Map<string, string>
+  provider: { dispose(): Promise<void> }
+}> {
+  const app = await bootedWithFixture()
+  const adoptedRoot = await mkdtemp(join(tmpdir(), 'native-adopted-root-'))
+  roots.push(adoptedRoot)
+  await seedUnboundWorkflow(adoptedRoot, CHILD_ID)
+  await mkdir(join(adoptedRoot, 'workflows', WORKFLOW_ID), { recursive: true })
+  const medium = new Map<string, string>()
+  const provider = await mountStorageDomain(app, stubFacilityOf(medium))
+  // The cross-root native bind: the explicit `harness` selector names root B.
+  const bound = envelopeOf(await run(app.ctx, BIND_TOOL, agentOf(CHILD_ID, app.root), {
+    execution: true,
+    coordinator: true,
+    workflow: WORKFLOW_ID,
+    harness: adoptedRoot,
+  }))
+  if (bound.status !== 'ok') throw new Error(`the cross-root native bind was refused: ${String(bound.code)}`)
+  await settleSeam()
+  return { app, adoptedRoot, medium, provider }
+}
+
+describe('durable adopted-root seam — a cross-root bind survives a restart', () => {
+  it('resolves the adopted root for BOTH the ledger target and the clear after a restart, with no resume re-bind', async () => {
+    const { app, adoptedRoot, medium, provider } = await crossRootBindFixture()
+    // The bind's receipt reached the DURABLE medium, not only the overlay.
+    expect(executionBindingRootOf(CHILD_ID, app.root)).toBe(adoptedRoot)
+    expect(medium.size).toBe(1)
+
+    // ---- the restart: the seam and the in-process receipts die, the medium does not ----
+    await provider.dispose()
+    restartSeam(medium)
+
+    // Ledger attribution: the slot lives in the ADOPTED root, and the target
+    // names that root (the receipt outranks the workspace harness).
+    const target = await resolveExecutionLedgerTarget(CHILD_ID, app.root)
+    expect(target).not.toBeNull()
+    expect(target?.workflowId).toBe(WORKFLOW_ID)
+    expect(target?.harnessDir).toBe(adoptedRoot)
+    expect(target?.workflowDir).toBe(realpathSync(join(adoptedRoot, 'workflows', WORKFLOW_ID)))
+
+    // The native clear resolves the same root and clears THAT slot — with no
+    // resume re-bind: an ok envelope carries no recovery route at all.
+    const cleared = envelopeOf(await run(app.ctx, CLEAR_TOOL, agentOf(CHILD_ID, app.root), {}))
+    expect(cleared.status).toBe('ok')
+    expect(cleared.code).toBe('execution.clear.ok')
+    expect(recoveryOf(cleared)).toBe('')
+    expect(adoptedBindingOf(adoptedRoot, app.root, CHILD_ID)).toBeNull()
+    // A cross-root bind never writes the workspace root.
+    expect(adoptedBindingOf(app.harnessDir, app.root, CHILD_ID)).toBeNull()
+  })
+
+  it('a clear removes the durable record: a second clear after another restart answers no-binding instead of re-resolving the adopted root', async () => {
+    const { app, adoptedRoot, medium, provider } = await crossRootBindFixture()
+    // The slot the clear must reach, read before it is cleared.
+    const adoptedSlot = storedBinding(adoptedRoot, app.root)?.executionBinding
+    if (adoptedSlot === undefined || adoptedSlot === null) throw new Error('the cross-root bind wrote no durable slot')
+
+    await provider.dispose()
+    const uninstall = restartSeam(medium)
+    expect(envelopeOf(await run(app.ctx, CLEAR_TOOL, agentOf(CHILD_ID, app.root), {})).code).toBe('execution.clear.ok')
+    await settleSeam()
+    // The durable record is GONE: the medium holds no receipt for the pair.
+    expect(medium.size).toBe(0)
+
+    // Re-populate the ADOPTED root's slot: a stale receipt would clear THIS.
+    expect(updateWorkflowSessionBinding(adoptedRoot, CHILD_ID, app.root, {
+      executionBinding: adoptedSlot,
+      excludedBeforeSeq: 0,
+    }).kind).toBe('written')
+
+    // ---- another restart: the cleared receipt must not come back ----
+    restartSeam(medium, uninstall)
+    const second = envelopeOf(await run(app.ctx, CLEAR_TOOL, agentOf(CHILD_ID, app.root), {}))
+    expect(second.status).toBe('refused')
+    expect(second.code).toBe('execution.clear.no-binding')
+    // The adopted root was never reached: its re-populated slot is intact.
+    expect(adoptedBindingOf(adoptedRoot, app.root, CHILD_ID)).not.toBeNull()
+  })
+
+  it('the absence path: with no storage domain the receipt stays per-process, so a restart drops it and the plugin still mounts', async () => {
+    const app = booted = await bootApp()
+    // No seam is installed — the composition carries no `storageDomain`
+    // service, so the apply child never opens a domain.
+    await recordExecutionBindingRoot(CHILD_ID, app.root, '/synthetic/adopted-root')
+    expect(executionBindingRootOf(CHILD_ID, app.root)).toBe('/synthetic/adopted-root')
+    // Today's fallback: the receipt is gone with the process.
+    resetExecutionBindingRootsForTests()
+    expect(executionBindingRootOf(CHILD_ID, app.root)).toBeUndefined()
+    // The plugin still mounts, and the clear answers its unchanged
+    // workspace-route refusal (the durable seam never installed).
+    storeHandles.push(await initializeStore({ harnessDir: app.harnessDir }))
+    const refused = envelopeOf(await run(app.ctx, CLEAR_TOOL, agentOf(CHILD_ID, app.root), {}))
+    expect(refused.status).toBe('refused')
+    expect(refused.code).toBe('execution.clear.no-binding')
+    expect(app.ctx.tools.get(BIND_TOOL)).toBeDefined()
+  })
+
+  it('a refused storage-domain open degrades to the same receipt — ONE warning names the cause, nothing is installed, the plugin still mounts', async () => {
+    const app = booted = await bootApp()
+    const logged: Array<{ name: string; type: string; args: unknown[] }> = []
+    const stopLogging = (app.ctx.logger as unknown as { exporter(exporter: unknown): () => void }).exporter({
+      levels: { default: 2 },
+      export: (message: { name: string; type: string; args: unknown[] }) => logged.push(message),
+    })
+    const before = logged.length
+    const provider = await mountStorageDomain(app, {
+      open: async () => {
+        throw Object.assign(new Error('domain mstar_execution_binding_roots is already open'), { code: 'already-open' })
+      },
+    })
+    // ONE warning, carrying the refused cause.
+    const added = logged.slice(before).filter((row) => row.name === EXECUTION_BINDING_ROOTS_LOGGER)
+    expect(added).toHaveLength(1)
+    expect(added[0]!.type).toBe('warn')
+    expect(String(added[0]!.args[0])).toContain('already-open')
+    // Nothing was installed: the receipt is the per-process map again.
+    await recordExecutionBindingRoot(CHILD_ID, app.root, '/synthetic/adopted-root')
+    expect(executionBindingRootOf(CHILD_ID, app.root)).toBe('/synthetic/adopted-root')
+    resetExecutionBindingRootsForTests()
+    expect(executionBindingRootOf(CHILD_ID, app.root)).toBeUndefined()
+    // The plugin still mounts and answers today's fallback.
+    storeHandles.push(await initializeStore({ harnessDir: app.harnessDir }))
+    const refused = envelopeOf(await run(app.ctx, CLEAR_TOOL, agentOf(CHILD_ID, app.root), {}))
+    expect(refused.code).toBe('execution.clear.no-binding')
+    stopLogging()
+    await provider.dispose()
   })
 })
 

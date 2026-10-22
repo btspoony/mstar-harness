@@ -52,7 +52,8 @@
  * (the ledger ROW's display name is capped separately).
  */
 import { describe, expect, it, afterEach } from 'bun:test'
-import { mkdir, mkdtemp, rm } from 'node:fs/promises'
+import { realpathSync } from 'node:fs'
+import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { Context } from '@deepseek-ai/cordis'
@@ -66,12 +67,26 @@ import { readAgentFlow } from '../src/gates/agent-flow.ts'
 import { awaitWorkflowLedgerIdle, registerWorkflowLedger, setWorkflowLedgerLogger } from '../src/gates/workflow-ledger.ts'
 import { HarnessResolver } from '../src/gates/_shared.ts'
 import { resolveExecutionLedgerTarget } from '../src/gates/workflow-selection.ts'
+import {
+  recordExecutionBindingRoot,
+  resetExecutionBindingRootsForTests,
+} from '../src/gates/execution-binding-roots.ts'
+import {
+  installExecutionBindingRootStore,
+  type ExecutionBindingRootStore,
+} from '../src/gates/execution-binding-roots-domain.ts'
 import type { AgentFlowView } from '../src/types.ts'
 import type { WorkflowAskCache } from '../src/gates/workflow-policy.ts'
 
 let booted: BootResult | undefined
+const roots: string[] = []
+/** Every seam this suite installs, disposed in cleanup (the installed seam is process-global). */
+const seamDisposers: Array<() => void> = []
 
 afterEach(async () => {
+  for (const dispose of seamDisposers.splice(0)) dispose()
+  resetExecutionBindingRootsForTests()
+  for (const root of roots.splice(0)) await rm(root, { recursive: true, force: true })
   if (booted !== undefined) {
     await booted.dispose()
     booted = undefined
@@ -669,6 +684,70 @@ describe('workflow gate — P-b lease attribution', () => {
     const unbound = await app.ctx.waterfall('tools/pre-execute', workflowExecFrom('deploy-x', ws), defaultAllow)
     expect(unbound).toEqual({ kind: 'allow' })
     expect(warns.length - unboundWarnSnapshot).toBe(1)
+  })
+})
+
+/* ------------------- the durable adopted-root seam (ledger target after a restart) ------------------- */
+
+/** The durable medium behind the seam's store contract — one fake table for one medium. */
+function rootTableOf(medium: Map<string, string>): ExecutionBindingRootStore {
+  return {
+    get: (key) => medium.get(key),
+    put: async (key, value) => { medium.set(key, value) },
+    delete: async (key) => {
+      const had = medium.has(key)
+      medium.delete(key)
+      return had
+    },
+  }
+}
+
+/**
+ * The restart shape: drop the in-process receipts, KEEP the medium, install a
+ * fresh seam over it. `previous` is the seam the dying process held (omitted
+ * for the first install).
+ */
+function restartSeam(medium: Map<string, string>, previous?: () => void): () => void {
+  previous?.()
+  resetExecutionBindingRootsForTests()
+  const uninstall = installExecutionBindingRootStore(rootTableOf(medium))
+  seamDisposers.push(uninstall)
+  return uninstall
+}
+
+describe('workflow ledger — the adopted-root receipt survives a restart', () => {
+  it('resolves the adopted control root from the durable record after a restart, not the workspace harness', async () => {
+    const SESSION = 'sess-durable-adopted-root'
+    const ws = await makeHarnessWorkspace('dsh-ws-durable-adopted-root-')
+    roots.push(ws)
+    const adoptedRoot = await mkdtemp(join(tmpdir(), 'dsh-adopted-root-'))
+    roots.push(adoptedRoot)
+    // The ADOPTED root carries the store, the lifecycle, the bind and the C1
+    // slot for (SESSION, ws) — the state a cross-root native bind leaves there.
+    await seedActiveWorkflow(adoptedRoot, 'wf-adopted', [], {}, SESSION, ws, 'wf-adopted')
+    // The fixture points ws/.mstarc at the adopted root; the workspace declares
+    // its OWN harness instead, so the two resolution routes disagree and the
+    // assertion below discriminates between them.
+    await writeFile(join(ws, '.mstarc'), `[config]\nharness_dir=${join(ws, '.agents')}\n`)
+
+    // The receipt, recorded durably; then the restart that keeps only the medium.
+    const medium = new Map<string, string>()
+    const firstSeam = restartSeam(medium)
+    await recordExecutionBindingRoot(SESSION, ws, adoptedRoot)
+    expect(medium.size).toBe(1)
+    restartSeam(medium, firstSeam)
+
+    const target = await resolveExecutionLedgerTarget(SESSION, ws)
+    expect(target).not.toBeNull()
+    expect(target?.workflowId).toBe('wf-adopted')
+    expect(target?.harnessDir).toBe(adoptedRoot)
+    expect(target?.workflowDir).toBe(realpathSync(join(adoptedRoot, 'workflows/wf-adopted')))
+
+    // Control: with the durable record gone the workspace harness is what the
+    // resolver falls back to — and it holds no binding for this session.
+    medium.clear()
+    resetExecutionBindingRootsForTests()
+    expect(await resolveExecutionLedgerTarget(SESSION, ws)).toBeNull()
   })
 })
 
