@@ -927,11 +927,12 @@ export function apply(ctx: Context, config: Config): void {
       showWatermark: () => harnessPromptRegistrationsActive === 0,
     }))
 
-  // Panel channel — the host half of the engine-status endpoint
-  // (`/api/mstar/engineStatus`): the `mstar` service + its invocation
-  // descriptor on the host's SHARED `/api` typert gateway, serving the
-  // snapshot the pre-step emission persisted above, plus the `selectWorkflow`
-  // UI control (a durable, session-scoped pick).
+  // Picker write channel — the `mstar` service + its invocation descriptor on
+  // the host's SHARED `/api` typert gateway, serving ONE thing: the
+  // `mstar/selectWorkflow` UI control (a durable, session-scoped pick). The
+  // emission snapshot read that used to live here is retired; the panel's read
+  // is the store-backed `mstar/panelSnapshot` installed below
+  // (`panel/panel-snapshot-endpoint.ts`), not the last emission persisted above.
   //
   // Both units are OPTIONAL (see `installEngineStatusEndpoint`): the service
   // is deduped per context, and the descriptor is registered inside
