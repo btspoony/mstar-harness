@@ -61,6 +61,7 @@ __export(exports_engine, {
   KNOWLEDGE_SEVERITIES: () => KNOWLEDGE_SEVERITIES,
   LEGACY_ARCHIVE_SKILL: () => LEGACY_ARCHIVE_SKILL,
   LEGACY_WORKTREE_PATH_CODE: () => LEGACY_WORKTREE_PATH_CODE,
+  MAX_DASHBOARD_SEARCH_LENGTH: () => MAX_DASHBOARD_SEARCH_LENGTH,
   MAX_STATUS_CONTENT_LENGTH: () => MAX_STATUS_CONTENT_LENGTH,
   MAX_SYMLINK_HOPS: () => MAX_SYMLINK_HOPS,
   MERGE_CLASSES: () => MERGE_CLASSES,
@@ -188,6 +189,8 @@ __export(exports_engine, {
   createFsStore: () => createFsStore,
   createLocalExecutionIdentity: () => createLocalExecutionIdentity,
   currentAuthorityHandle: () => currentAuthorityHandle,
+  dashboardFailure: () => dashboardFailure,
+  dashboardFilters: () => dashboardFilters,
   decodeExecutionSessionRef: () => decodeExecutionSessionRef,
   deliveryBranchOf: () => deliveryBranchOf,
   deliveryEvidenceViolations: () => deliveryEvidenceViolations,
@@ -289,6 +292,7 @@ __export(exports_engine, {
   queryMilestones: () => queryMilestones,
   readCatalogCompleteness: () => readCatalogCompleteness,
   readCatalogRevisions: () => readCatalogRevisions,
+  readDashboardView: () => readDashboardView,
   readDeclaredNodeFloor: () => readDeclaredNodeFloor,
   readDshLedgerWindow: () => readDshLedgerWindow,
   readDshScanBound: () => readDshScanBound,
@@ -313,11 +317,13 @@ __export(exports_engine, {
   recoverExecutionCoordinator: () => recoverExecutionCoordinator,
   referenceExists: () => referenceExists,
   refreshProjections: () => refreshProjections,
+  refuse: () => refuse,
   registerCatalogEntity: () => registerCatalogEntity,
   registerShippedCatalogExecution: () => registerShippedCatalogExecution,
   reopenIssue: () => reopenIssue,
   reopenIssueOn: () => reopenIssueOn,
   replaceRoadmapAuthority: () => replaceRoadmapAuthority,
+  requireSafeId: () => requireSafeId,
   resolveArtifactPath: () => resolveArtifactPath,
   resolveAssetPath: () => resolveAssetPath,
   resolveCompassEnforcement: () => resolveCompassEnforcement,
@@ -28445,6 +28451,98 @@ async function registerShippedCatalogExecution(context, input) {
   request.expectedCatalogRevision = resolved.catalogRevision;
   return commitExecutionRegistration(context, { ...request, expected: resolved.expected });
 }
+function refuse(message) {
+  throw new SddScriptError(message, 2);
+}
+function requireSafeId(label, value) {
+  if (value === "" || value === "." || value === ".." || /[/\\\u0000]/.test(value)) {
+    refuse(`${label} must be a single safe id`);
+  }
+  return value;
+}
+function queryValue(params, field) {
+  const value = params[field];
+  if (value === undefined || value === "")
+    return;
+  return value;
+}
+function parsePageInteger(raw, field, max) {
+  if (raw === undefined)
+    return;
+  if (!/^[0-9]+$/.test(raw))
+    refuse(`${field} must be a nonnegative integer`);
+  const value = Number(raw);
+  if (max !== undefined && (value < 1 || value > max))
+    refuse(`${field} must be an integer between 1 and ${max}`);
+  return value;
+}
+function dashboardFilters(view, params = {}, id) {
+  const accepted = VIEW_QUERY_FIELDS[view];
+  if (!Array.isArray(accepted))
+    refuse(`unknown dashboard view ${JSON.stringify(String(view))}`);
+  for (const field of Object.keys(params)) {
+    if (!accepted.includes(field))
+      refuse(`${JSON.stringify(field)} is not a supported ${view} query parameter`);
+  }
+  const limit = parsePageInteger(queryValue(params, "limit"), "limit", 200);
+  const offset = parsePageInteger(queryValue(params, "offset"), "offset");
+  const project2 = queryValue(params, "project");
+  const scoped = project2 === undefined ? undefined : requireSafeId("project", project2);
+  if (view === "issues") {
+    const disposition = queryValue(params, "disposition");
+    if (disposition !== undefined && DISPOSITIONS3[disposition] !== true) {
+      refuse(`disposition must be one of ${Object.keys(DISPOSITIONS3).join(", ")}`);
+    }
+    const kind = queryValue(params, "kind");
+    if (kind !== undefined && KINDS2[kind] !== true)
+      refuse(`kind must be one of ${Object.keys(KINDS2).join(", ")}`);
+    const severity = queryValue(params, "severity");
+    if (severity !== undefined && SEVERITIES2[severity] !== true) {
+      refuse(`severity must be one of ${Object.keys(SEVERITIES2).join(", ")}`);
+    }
+    const search2 = queryValue(params, "q");
+    if (search2 !== undefined && search2.length > MAX_DASHBOARD_SEARCH_LENGTH) {
+      refuse(`q must be at most ${MAX_DASHBOARD_SEARCH_LENGTH} characters`);
+    }
+    const issue = {
+      ...scoped === undefined ? {} : { projectId: scoped },
+      ...disposition === undefined ? {} : { disposition },
+      ...kind === undefined ? {} : { kind },
+      ...severity === undefined ? {} : { severity },
+      ...search2 === undefined ? {} : { query: search2 },
+      ...limit === undefined ? {} : { limit },
+      ...offset === undefined ? {} : { offset }
+    };
+    return { issue };
+  }
+  if (view === "issue-detail" || view === "workflow-detail" || view === "iteration-detail") {
+    if (id === undefined)
+      refuse(`the ${view} route requires an id`);
+    return { id: requireSafeId(`${view} id`, id) };
+  }
+  if (view === "roadmap" && scoped === undefined) {
+    refuse("the roadmap view requires a project query parameter");
+  }
+  return {
+    ...scoped === undefined ? {} : { projectId: scoped },
+    ...limit === undefined ? {} : { limit },
+    ...offset === undefined ? {} : { offset }
+  };
+}
+async function readDashboardView(input) {
+  const filters = dashboardFilters(input.view, input.params ?? {}, input.id);
+  const query = queryDashboard(input.view, filters);
+  return withStoreRead(input.context, query);
+}
+function dashboardFailure(error) {
+  if (error instanceof SddScriptError)
+    return { code: "usage", message: error.message };
+  const code2 = error?.code;
+  if (typeof code2 === "string" && code2 !== "") {
+    return { code: code2, message: error instanceof Error ? error.message : String(error) };
+  }
+  return { code: "internal-error", message: error instanceof Error ? error.message : String(error) };
+}
 function sha256Bytes4(bytes) {
   return createHash19("sha256").update(bytes).digest("hex");
 }
@@ -30815,7 +30913,7 @@ drop table issue_transitions_v12_stage;
   select issues.registered_at as ts
   union all select o.discovered_at from occurrences o where o.issue_id = issues.id
   union all select t.occurred_at from issue_transitions t where t.issue_id = issues.id
-))`, ISSUE_ORDER_SQL, TERMINAL_DISPOSITIONS = "'resolved', 'waived', 'duplicate', 'superseded'", IDENTITY_COLUMNS = "kind, id, title, description, root_kind, relative_path, document_kind, lifecycle, revision, registered_at, updated_at", completeWitnessGapForTest, workflowWitnessGapForTest, RECOVER_COORDINATOR_OPERATION = "recoverExecutionCoordinator", COMMIT_REGISTRATION_OPERATION = "commitExecutionRegistration", REGISTRATION_SEMANTICS, MIGRATION_MANIFEST_VERSION = 1, LEGACY_ISSUE_KIND = "review-obligation", StoreMigrationError, MIGRATION_VOCABULARY, LEGACY_REQUIRED_FIELDS, HISTORY_ONLY_ABSENT_FIELDS, EXECUTION_LEDGER_ERROR_CODES, ExecutionLedgerError, NOTE_KEYS, NOTE_KEY_ORDER, UNRECOGNIZED_LINE, EXECUTION_RECOVERY_PROTOCOL_VERSION = 3, ExecutionRecoveryError, EXECUTION_MIGRATION_VERSION2, CATALOG_MIGRATION_VERSION, PROVENANCE_ORIGIN_MIGRATION_VERSION, ROADMAP_MIGRATION_VERSION, EXECUTION_COVERAGE_MIGRATION_VERSION, MILESTONE_MIGRATION_VERSION, DSH_MIGRATION_VERSION, EXECUTION_COORDINATOR_ONLY_MIGRATION_VERSION, DSH_LEGACY_PROVENANCE_MIGRATION_VERSION, AUTHORITY_TABLES, REPLACEMENT_ORDER, DATABASE_HEADER_BYTES2 = 100, WAL_FILE_FORMAT_VERSION2 = 2, RESTORE_SCRATCH_NAME, RESTORE_SCRATCH_SIDECARS, REDACTED_KEYS;
+))`, ISSUE_ORDER_SQL, TERMINAL_DISPOSITIONS = "'resolved', 'waived', 'duplicate', 'superseded'", IDENTITY_COLUMNS = "kind, id, title, description, root_kind, relative_path, document_kind, lifecycle, revision, registered_at, updated_at", completeWitnessGapForTest, workflowWitnessGapForTest, RECOVER_COORDINATOR_OPERATION = "recoverExecutionCoordinator", COMMIT_REGISTRATION_OPERATION = "commitExecutionRegistration", REGISTRATION_SEMANTICS, MAX_DASHBOARD_SEARCH_LENGTH = 200, VIEW_QUERY_FIELDS, DISPOSITIONS3, KINDS2, SEVERITIES2, MIGRATION_MANIFEST_VERSION = 1, LEGACY_ISSUE_KIND = "review-obligation", StoreMigrationError, MIGRATION_VOCABULARY, LEGACY_REQUIRED_FIELDS, HISTORY_ONLY_ABSENT_FIELDS, EXECUTION_LEDGER_ERROR_CODES, ExecutionLedgerError, NOTE_KEYS, NOTE_KEY_ORDER, UNRECOGNIZED_LINE, EXECUTION_RECOVERY_PROTOCOL_VERSION = 3, ExecutionRecoveryError, EXECUTION_MIGRATION_VERSION2, CATALOG_MIGRATION_VERSION, PROVENANCE_ORIGIN_MIGRATION_VERSION, ROADMAP_MIGRATION_VERSION, EXECUTION_COVERAGE_MIGRATION_VERSION, MILESTONE_MIGRATION_VERSION, DSH_MIGRATION_VERSION, EXECUTION_COORDINATOR_ONLY_MIGRATION_VERSION, DSH_LEGACY_PROVENANCE_MIGRATION_VERSION, AUTHORITY_TABLES, REPLACEMENT_ORDER, DATABASE_HEADER_BYTES2 = 100, WAL_FILE_FORMAT_VERSION2 = 2, RESTORE_SCRATCH_NAME, RESTORE_SCRATCH_SIDECARS, REDACTED_KEYS;
 var init_engine = __esm(() => {
   __defProp2 = Object.defineProperty;
   init_coordination_write = __esm2(() => {
@@ -35656,6 +35754,27 @@ var init_engine = __esm(() => {
   init_recovery_intent();
   init_workflow();
   REGISTRATION_SEMANTICS = ["actor", "workflow", "delta"];
+  VIEW_QUERY_FIELDS = {
+    issues: ["project", "disposition", "kind", "severity", "q", "limit", "offset"],
+    "issue-detail": [],
+    workflows: ["project", "limit", "offset"],
+    "workflow-detail": [],
+    iterations: ["project", "limit", "offset"],
+    "iteration-detail": [],
+    roadmap: ["project"],
+    "issue-flow": ["project"],
+    projects: []
+  };
+  DISPOSITIONS3 = { open: true, resolved: true, waived: true, duplicate: true, superseded: true };
+  KINDS2 = {
+    bug: true,
+    risk: true,
+    improvement: true,
+    request: true,
+    decision: true,
+    "review-obligation": true
+  };
+  SEVERITIES2 = { critical: true, high: true, medium: true, low: true, nit: true };
   init_catalog_import();
   init_catalog();
   init_store_db();
