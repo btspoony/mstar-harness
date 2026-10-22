@@ -20,7 +20,10 @@ contribution cannot reintroduce a bypass without confronting them.
    Source: `@deepseek-ai/dsh-agent` — `Agent.id`.
 2. **Every tool execution receives `exec.agent`.** Per-call caller identity is
    available at the tool seam; a tool that needs the caller's identity reads it
-   from the execution handle, never from model-supplied arguments.
+   from the execution handle, never from model-supplied arguments. (The shared
+   MCP connection is a different surface, covered in Consequences: there the
+   caller-declared per-call `sessionId` is published, but it is an attribution
+   declaration, never the authorization for a write.)
    Source: `@deepseek-ai/dsh-tools` — tool execution receives `exec.agent`.
 3. **`tools/pre-execute` returns `allow | deny | cancel | ask` only.** Hook
    verdicts cannot rewrite arguments, so the omp pattern of injecting a
@@ -67,11 +70,13 @@ the native path's own documentation replaces it.
 
 ## Consequences
 
-- **No model-supplied identity.** Identity always comes from the carrying
-  native session (`exec.agent.id`); a model argument or environment key can
-  never override it.
-- **No argument rewriting.** A dsh gate cannot inject a session id into call
-  arguments the way omp does; identity must flow through the execution handle.
+- **No model-supplied identity on the native handle.** Identity there always
+  comes from the carrying native session (`exec.agent.id`); a model argument or
+  environment key can never override it.
+- **No argument rewriting by the host.** A dsh gate cannot inject a session id
+  into call arguments the way omp does; on the native path identity flows
+  through the execution handle, and on the MCP surface the caller names the
+  calling session's id itself.
 - **No identity-forwarding MCP bridge.** The generic bridge carries only raw
   arguments and cannot rewrite them, so no plugin can inject a caller's
   identity into an MCP call on the model's behalf.
@@ -81,20 +86,25 @@ the native path's own documentation replaces it.
   call puts on the wire is that call's own fact. The per-agent scoped mount was
   removed because it spawned one full process per agent and never activated
   (its bridge dependency was not on the plugin's resolution chain).
-  **A command that needs an identity does NOT read it from a caller-declared
-  `sessionId` on the default connection**: a child process cannot prove the
-  caller, so the selector is unpublished and a supplied one is refused with
-  `mcp.caller-identity-unavailable`. An explicit launch opt-in
-  (`mstar mcp --trust-caller-session-id`, OFF in the shipped bundle row) is the
-  only way to publish it, for a deployment that owns that trust boundary. The
-  three dsh **native tools** (`mstar_plan_bind`, `mstar_audit_validate`,
-  `mstar_execution_clear`) are the host-proven route where they cover the
-  operation, because there identity is `exec.agent.id` and no argument can
-  override it; everything else — including `plan prepare`, `plan progress` and
-  `plan complete`, which have no native tool yet — runs through the CLI. The
-  shared connection takes its control root as an explicit input (`--harness`,
-  `MSTAR_HARNESS_DIR`, or the call's `harness` selector) — never from the launch
-  cwd.
+  **A command that needs an identity reads it from the caller-declared
+  `sessionId`, which IS published** on every command whose CLI declares it. The
+  value is the calling session's id (`DSH_SESSION_ID` on dsh). It is a BEARER
+  identity on this transport: `executionContextFor` turns it into
+  `context.caller`, and the engine resolves the caller's OWN coordinator binding
+  from it, so knowing a live session id is enough to act as that session.
+  Authorization is unchanged — that binding row plus the `--expect` CAS token —
+  and no binding lookup or CAS check is weakened. The trust domain is the local stdio
+  connection itself: the host launches the child and only its model calls it.
+  Exposing the server beyond the local host would need authentication at the
+  transport, not an unpublished field. The three dsh **native tools**
+  (`mstar_plan_bind`, `mstar_audit_validate`, `mstar_execution_clear`) are the
+  host-proven route where they cover the operation, because there identity is
+  `exec.agent.id` and no argument can override it; everything else — including
+  `plan prepare`, `plan progress` and `plan complete`, which have no native tool
+  — runs on the shared MCP connection by passing the calling session's
+  `sessionId`, or through the CLI. The shared connection takes its control root
+  as an explicit input (`--harness`, `MSTAR_HARNESS_DIR`, or the call's
+  `harness` selector) — never from the launch cwd.
 - **Agent-teams `target` / `agent_id` addressing is not a shell identity
   channel.** Delegation addressing and shell/CLI identity stay separate.
 - **`shellEnv` carries only `DSH_*`.** Child environments are registry-built;

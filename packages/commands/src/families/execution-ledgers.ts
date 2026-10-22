@@ -55,6 +55,7 @@ import { commandEnvelopeSchema } from "../definitions.js";
 import { refusalEnvelope } from "../envelope.js";
 import { decodeInputDiagnostics } from "../input-diagnostics.js";
 import { engineErrorFacts } from "./family-refusal.js";
+import { IDENTITY_SUPPLIES } from "../identity-supplies.js";
 import type { CommandDefinition, CommandEnvelope, InvocationContext } from "../types.js";
 
 const APPEND_ID = "workflow-note.append";
@@ -186,12 +187,12 @@ export function getExecutionLedgerCommandDefinitions(): readonly CommandDefiniti
         { name: "ts", ownership: "caller", route: "cli", required: false, constraint: "defaults to current time when omitted" },
         { name: "ts", ownership: "caller", route: "mcp", required: false, constraint: "defaults to current time when omitted" },
         { name: "sessionId", ownership: "caller", route: "cli", required: true, constraint: "acquired coordinator identity via flag or MSTAR_HOST_SESSION_ID" },
-        { name: "sessionId", ownership: "caller", route: "mcp", required: true, constraint: "host-proven acquired coordinator identity: the dsh native tool or the CLI; a shared MCP connection accepts none by default" },
+        { name: "sessionId", ownership: "caller", route: "mcp", required: true, constraint: "acquired coordinator identity: the calling session's own id, which selects the caller's coordinator binding; a dsh native tool where one covers the operation" },
       ],
       description: "Append one note to the addressed workflow's retained notes ledger. Requires acquired coordinator identity and a matching active coordinator session reference; the engine proves the bound session is current immediately before the fsynced append, so a stale, revoked or foreign session refuses and no byte is written. The ledger is a plain append log, so a repeated id is a new record, not a replay.",
       async execute(raw, context) {
         if (context.sessionId === undefined || context.sessionId.trim() === "") {
-          return usage(APPEND_ID, "appending a workflow note requires an acquired coordinator identity (CLI: pass --session-id or set MSTAR_HOST_SESSION_ID; MCP: no caller-declared identity is accepted by default \u2014 run this command from the session's shell).", "sessionId");
+          return usage(APPEND_ID, `appending a workflow note requires an acquired coordinator identity (${IDENTITY_SUPPLIES}).`, "sessionId");
         }
         const parsed = appendInput.safeParse(raw);
         if (!parsed.success) return decodeUsage(APPEND_ID, parsed.error, raw);

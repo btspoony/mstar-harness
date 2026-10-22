@@ -86,14 +86,11 @@ async function withClient(
   const server = new McpServer({ name: "fold-test-server", version: "1.0.0" });
   const client = new Client({ name: "fold-test-client", version: "1.0.0" });
   const [clientEnd, serverEnd] = InMemoryTransport.createLinkedPair();
-  // A pinned connection that opted in to caller-declared identity: `harness`
-  // stays optional and the selector channel is published, so the fold suite
-  // checks field publication (`test/mcp-harness-root.test.ts` owns the
-  // unpinned-required rule and `test/mcp-identity.test.ts` the default-off
-  // identity rule).
+  // A pinned connection: `harness` stays optional and every member's session
+  // selector is published, so the fold suite checks field publication
+  // (`test/mcp-harness-root.test.ts` owns the unpinned-required rule).
   const resolver: ResolveContext = Object.assign(() => baseContext(cwd), {
     defaultHarness: join(cwd, ".mstar"),
-    callerIdentity: true,
   });
   try {
     registerMcpCommands(server, selected, resolver);

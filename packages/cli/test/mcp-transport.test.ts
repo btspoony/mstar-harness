@@ -21,12 +21,10 @@ async function withClient(
   const client = new Client({ name: "independent-command-consumer", version: "1.0.0" });
   const [clientEnd, serverEnd] = InMemoryTransport.createLinkedPair();
   try {
-    // This consumer suite exercises the published selector, which exists only
-    // on a connection whose launcher trusted caller identity.
-    registerMcpCommands(server, definitions, Object.assign((_definition, _sessionId, signal, _services, effects): InvocationContext => ({
+    registerMcpCommands(server, definitions, (_definition, _sessionId, signal, _services, effects): InvocationContext => ({
       cwd, controlRoot: options.controlRoot ?? null, signal, effects,
       versions: { engine: null, cli: null, plugin: null, host: null, platform: null },
-    }), { callerIdentity: true }));
+    }));
     await server.connect(serverEnd);
     await client.connect(clientEnd);
     await run(client, cwd);
@@ -346,7 +344,7 @@ generated_at: 2026-01-02
     const client = new Client({ name: "selection-consumer", version: "1.0.0" });
     const [clientEnd, serverEnd] = InMemoryTransport.createLinkedPair();
     try {
-      registerMcpCommands(server, [evaluate], Object.assign((_definition, sessionId, signal, _services, effects): InvocationContext => {
+      registerMcpCommands(server, [evaluate], (_definition, sessionId, signal, _services, effects): InvocationContext => {
         selections.push({ sessionId });
         return {
           cwd, controlRoot: null, signal, effects,
@@ -354,7 +352,7 @@ generated_at: 2026-01-02
           // A resolver default the admitted selector must override.
           sessionId: "resolver-default",
         };
-      }, { callerIdentity: true }));
+      });
       await server.connect(serverEnd);
       await client.connect(clientEnd);
       const result = await client.callTool({

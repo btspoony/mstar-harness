@@ -170,13 +170,14 @@ describe("command discovery", () => {
       { name: "title", ownership: "caller", route: "cli" },
       { name: "session", ownership: "caller", route: "cli" },
     ]);
-    // The MCP entry carries the fact a caller acts on -- the opt-in that
-    // publishes it and that the default connection is off -- not the prose that
-    // states it: the wording lives in the definition, and pinning it here made
-    // one sentence a second source of truth.
+    // The MCP entry names the value to pass and its role. The wording lives in
+    // the definition; this pins the facts a caller acts on rather than the whole
+    // sentence, which would be a second source of truth.
     expect(mcpSession).toMatchObject({ name: "session", ownership: "caller", route: "mcp" });
-    expect(mcpSession?.help).toContain("--trust-caller-session-id");
-    expect(mcpSession?.help).toContain("off by default");
+    expect(mcpSession?.help).toContain("sessionId");
+    expect(mcpSession?.help).toContain("DSH_SESSION_ID");
+    expect(mcpSession?.help).toContain("bearer identity on this transport");
+    expect(mcpSession?.help).not.toContain("--trust-caller-session-id");
   });
 
   test("schema command publishes family and leaf selections through the engine", async () => {

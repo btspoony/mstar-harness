@@ -41,19 +41,20 @@
 # `host.*`, `doctor`, the read-only validators) and `harness.scaffold` run with
 # a null root; any other call is refused with the cause and the recoveries
 # (`mcp.control-root-unresolved`). The shipped row declares no root and no
-# identity; an override restates the row's whole `config`, including the
-# `args` list.
+# connection-wide identity; an override restates the row's whole `config`,
+# including the `args` list.
 #
-# Identity: this connection carries none, and it accepts none by default. A
-# stdio child is process-level, so it has no host-proven caller identity; the
-# per-call `sessionId` selector is therefore unpublished and a call that sends
-# one is refused (`mcp.caller-identity-unavailable`). The row deliberately does
-# NOT pass `--trust-caller-session-id`; that flag is the deployment's explicit
-# opt-in for a trust boundary this server owns. The host-proven routes are the
-# native tools -- `mstar_plan_bind`, `mstar_audit_validate` and
-# `mstar_execution_clear` -- and the CLI. The native surface covers plan bind
-# only of the plan lifecycle actions: plan prepare/progress/complete have no
-# native tool yet and stay CLI-only (tracked follow-up).
+# Identity: the per-call `sessionId` selector IS published, on every command
+# whose CLI declares it. It is a BEARER identity on this transport: it names the
+# calling session (`DSH_SESSION_ID` on dsh) and the engine resolves that
+# session's OWN coordinator binding from it, so knowing a live id is enough to
+# act as it. Authorization stays what it always was -- that binding row plus the
+# `--expect` CAS token. The trust domain is this local stdio
+# connection itself: the host launches the child and only its model calls it.
+# Exposing the server beyond the local host needs authentication at the
+# transport, not an unpublished field. The native tools (`mstar_plan_bind`,
+# `mstar_audit_validate`, `mstar_execution_clear`) remain the dsh-local routes
+# where the plugin owns state of its own.
 
 - insert:
     - id: mstar

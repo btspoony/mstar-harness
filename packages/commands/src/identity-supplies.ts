@@ -3,15 +3,14 @@
  * caller puts a session identity on the call, per transport. Refusal texts
  * interpolate it verbatim so the recovery is nameable without reading source.
  *
- * The MCP clause names the real routes on purpose: a shared MCP server is a
- * child process with no host-proven caller identity, so a caller-declared
- * `sessionId` is refused unless the launcher opted in
- * (`mstar mcp --trust-caller-session-id`, off by default). Only three
- * operations have a host-proven native tool today; everything else runs
- * through the CLI, and plan prepare/progress/complete have no native tool yet.
+ * Both transports take the same value: the calling session's own id. On dsh the
+ * host exports it as `DSH_SESSION_ID`, which the CLI reads directly; an MCP
+ * call passes it as the per-call `sessionId` field. The identity only
+ * ATTRIBUTES the write to that session; the coordinator binding plus the
+ * scope's `--expect` execution token authorize it.
  */
 export const IDENTITY_SUPPLIES =
-  "CLI: pass --session-id or set MSTAR_HOST_SESSION_ID; MCP: a shared connection accepts no caller-declared identity by default, so use the dsh native tool that covers the operation (plan bind, audit report validation and execution clear) or run the CLI command from the session's shell \u2014 plan prepare/progress/complete have no native tool yet";
+  "CLI: pass --session-id or set MSTAR_HOST_SESSION_ID (dsh shells already export DSH_SESSION_ID); MCP: pass sessionId \u2014 the calling session's id. The identity only attributes the write; the coordinator binding plus the --expect token authorize it";
 
 /**
  * Where a caller reads each execution token kind a CLI `--expect` may need, in
