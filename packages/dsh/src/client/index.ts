@@ -24,6 +24,7 @@ import type {} from '@deepseek-ai/dsh-client-ui-renderer/client'
 import type {} from '@deepseek-ai/dsh-client-ui-sidebar-right/client'
 import { MSTAR_PANEL_ID, mstarPanelDefinition } from './panel/definition.ts'
 import { MstarEngineStatusClient, type MstarEngineStatusConnection } from './panel/engine-status-client.ts'
+import { MstarPanelSnapshotClient } from './panel/panel-snapshot-client.ts'
 import { MstarPanelTitle } from './panel/MstarPanelTitle.tsx'
 import { en, NS, zh } from './panel/locale.ts'
 import { createPanelStore } from './panel/panel-store.ts'
@@ -39,10 +40,13 @@ import { PanelView } from './panel/PanelView.tsx'
 export const inject = ['slots', 'sessions', 'locale', 'connection', 'sidebarRightTabs']
 
 export function apply(ctx: ClientContext): void {
-  const engineStatus = new MstarEngineStatusClient(
-    (ctx as unknown as { connection?: MstarEngineStatusConnection }).connection,
-  )
+  const connection = (ctx as unknown as { connection?: MstarEngineStatusConnection }).connection
+  const engineStatus = new MstarEngineStatusClient(connection)
   ctx.effect(() => () => engineStatus.dispose(), 'ui-mstar-panel: engine-status client')
+  // The store-backed read: the panel polls `mstar/panelSnapshot` while its tab
+  // is visible (the hook drives start/stop), replacing the emission relay.
+  const panelSnapshot = new MstarPanelSnapshotClient(connection)
+  ctx.effect(() => () => panelSnapshot.dispose(), 'ui-mstar-panel: panel-snapshot client')
   const t = ctx.locale.bind(NS)
   ctx.effect(() => ctx.locale.register(NS, { zh, en }), 'ui-mstar-panel: dictionaries')
   ctx.effect(
@@ -62,7 +66,7 @@ export function apply(ctx: ClientContext): void {
       key: MSTAR_PANEL_ID,
       locale: NS,
       store: panelStore,
-    }, (props: Parameters<typeof PanelView>[0]) => PanelView({ ...props, engineStatus }))),
+    }, (props: Parameters<typeof PanelView>[0]) => PanelView({ ...props, engineStatus, panelSnapshot }))),
     'ui-mstar-panel: panel body',
   )
   ctx.effect(

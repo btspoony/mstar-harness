@@ -1,35 +1,41 @@
 /**
- * Workspace-state section (spec panel-zones §5): plan board (≤5 in spec §3
- * time-desc order + `+N more`), open residual findings (≤10 — R# + severity
- * chip + title/planId + overflow hint), policy anchors with enforcement
- * FIRST (from `source.enforcement` — top level, not state), lease anchors,
- * knowledge digest and the direction one-liner. Pure render with per-field
- * degradation — missing fields render `none` / `unknown`, empty lists render
- * `none`, never crash.
+ * Workspace-state digest (the sidebar block at the end of the panel's scroll
+ * body): this session's workflow selection with its picker, the plan list, the
+ * open-residual counts, the enforcement flag, the knowledge rollup and the
+ * roadmap direction.
  *
- * The branches block was removed from the sidebar in this task (moved to the
- * iteration zone); the branch anchor fields
- * stay in the catalog source (the iteration zone consumes them).
+ * DATA PATH: every row reads the polled `PanelSnapshot` (and the projection
+ * built from it) — the digest is store-backed like the pages. Nothing here
+ * reads the retired emission relay, so a row and a page can never disagree.
+ *
+ * Degradation is per row: an unreadable authority renders that row's muted
+ * `state.none` seat, never a guessed value and never a fabricated zero.
+ *
+ * The session-selection seat (`selection` / `pick` / `select`) still rides its
+ * own client until its read path retires; it is rendered here, never merged
+ * into the snapshot rows.
  */
 
 import * as React from 'react'
 import type { TranslateNS } from '@deepseek-ai/dsh-client-ui-slots'
-import type { MstarEngineStatusPayload, MstarHarnessState, WorkflowSelectionView } from '../../types.ts'
+import type { WorkflowSelectionView } from '../../types.ts'
+import type { PanelSnapshot } from '../../panel/panel-snapshot.ts'
+import type { ZoneView } from './graph/project-graph.ts'
 import css from './panel.module.css'
 import { bool, count, str } from './guards.ts'
 import type { MstarSelectionState } from './engine-status-client.ts'
-import { FINDINGS_CAP, PLAN_CAP, sortPlans } from './plan-sort.ts'
+import { FINDINGS_CAP, PLAN_CAP } from './plan-sort.ts'
 
 /**
- * The picker seat (D4): the selection the panel SHOWS, this session's own
- * commit state, and the commit seat itself. Handed down as one unit from the
- * hook result to the section that renders it.
+ * The picker seat: the selection the panel SHOWS, this session's own commit
+ * state, and the commit seat itself. Handed down as one unit from the hook
+ * result to the section that renders it.
  */
 export interface MstarSelectionSeat {
   /**
    * This session's CURRENT selection: the host's live control-state `binding`
-   * when the response carries one, else the last emission's own record
-   * (`state.selection`). `null` renders the unknown arm rather than throwing.
+   * when the response carries one, else the last emission's own record.
+   * `null` renders the unknown arm rather than throwing.
    */
   readonly selection: WorkflowSelectionView | null
   /** This session's picker state (control feedback, never a selection source). */
@@ -44,19 +50,16 @@ export interface MstarSelectionSeat {
 
 export interface StateSectionProps extends MstarSelectionSeat {
   t: TranslateNS<'mstar-panel'>
-  state: MstarHarnessState
-  /** Top-level enforcement flag (spec §2.1) — NOT part of the state digest. */
-  enforcement: MstarEngineStatusPayload['enforcement']
+  /** The projection of the same snapshot the pages render. */
+  view: ZoneView
+  snapshot: PanelSnapshot
 }
 
 /** No picker candidates — one shared reference (stable across renders). */
 const NO_IDS: readonly string[] = []
 
-/** Enforcement flag label: hard/soft (+ provenance source), unknown when missing (spec §2.1). */
-function enforcementLabel(
-  t: TranslateNS<'mstar-panel'>,
-  enforcement: MstarEngineStatusPayload['enforcement'],
-): string {
+/** Enforcement flag label: hard/soft (+ provenance source), unknown when missing. */
+function enforcementLabel(t: TranslateNS<'mstar-panel'>, enforcement: PanelSnapshot['enforcement']): string {
   if (enforcement === null || enforcement === undefined || typeof enforcement !== 'object') {
     return t('panel.unknown')
   }
@@ -70,20 +73,16 @@ function enforcementLabel(
  * Does the picker acknowledgement still stand in for the served selection?
  *
  * The acknowledgement is a BRIDGE for the window between committing a pick and
- * the refreshed host binding that reflects it (`engine-status-client`'s
- * per-session fence), never a permanent override. It therefore applies only
- * while the served verdict still names the picked lifecycle as an active
- * candidate: an unbound `error` whose `activeWorkflowIds` list it (the verdict
- * from BEFORE the pick, or a host that has not caught up), or no verdict at
- * all (loading / unavailable — no evidence to contradict it).
+ * the refreshed host binding that reflects it, never a permanent override. It
+ * therefore applies only while the served verdict still names the picked
+ * lifecycle as an active candidate: an unbound `error` whose `activeWorkflowIds`
+ * list it (the verdict from BEFORE the pick, or a host that has not caught up),
+ * or no verdict at all (loading / unavailable — no evidence to contradict it).
  *
  * The moment the verdict proves the picked lifecycle is gone — an unbound
  * `error` that no longer lists it, a `terminal` history view, an `active`
  * selection that names a different lifecycle, a candidate-less error — the
- * acknowledgement is dropped so the resolver's own verdict renders (the
- * unbound picker for the lifecycles that remain, or the terminal history).
- * @param selection - the selection the panel would render without the ack.
- * @param workflowId - the acknowledged pick.
+ * acknowledgement is dropped so the resolver's own verdict renders.
  */
 function ackStandsFor(selection: WorkflowSelectionView | null, workflowId: string): boolean {
   if (selection === null) return true
@@ -92,38 +91,27 @@ function ackStandsFor(selection: WorkflowSelectionView | null, workflowId: strin
   return false
 }
 
-export function StateSection({ t, state, enforcement, selection, pick, select }: StateSectionProps) {
-  const plans = Array.isArray(state?.plans) ? state.plans : []
-  // Spec §3 order (doneAt digitized DESC → id-date DESC → id lex DESC), cap 5.
-  const sortedPlans = sortPlans(plans)
-  const visiblePlans = sortedPlans.slice(0, PLAN_CAP)
-  const hiddenPlans = sortedPlans.length - visiblePlans.length
-  // Open residual findings detail (catalog already severity-orders + caps at
-  // 10 — the render cap is defensive parity); null (root key unreadable) and
-  // [] (no open entries) both degrade to `none`.
-  const findings = Array.isArray(state?.residualFindings) ? state.residualFindings : null
-  const visibleFindings = findings === null ? null : findings.slice(0, FINDINGS_CAP)
-  const hiddenFindings = findings === null ? 0 : Math.max(0, findings.length - FINDINGS_CAP)
-  const rowScopes = Array.isArray(state?.rowScopes) ? state.rowScopes : []
-  const knowledge = state?.knowledge ?? null
-  // The served binding outranks the last emission's own record; an
-  // acknowledged pick outranks a served binding that has not caught up yet
-  // (the client is this session's only binding writer, and the acknowledgement
-  // is durable) — but ONLY while that binding still names the picked
-  // lifecycle as an active candidate ({@link ackStandsFor}). Once it stops
-  // naming it, the resolver's real verdict renders instead: the unbound error
-  // with its picker for the lifecycles that remain, or the terminal history
-  // when every lifecycle ended.
+/** The plan rows of the projection, in kanban order (Done already plan-sorted). */
+function planRows(view: ZoneView): { id: string; status: string }[] {
+  return view.tasks.columns.flatMap((column) => column.plans)
+}
+
+export function StateSection({ t, view, snapshot, selection, pick, select }: StateSectionProps) {
+  const rows = planRows(view)
+  const visiblePlans = rows.slice(0, PLAN_CAP)
+  const hiddenPlans = rows.length - visiblePlans.length
+  const residuals = view.project.openResiduals.slice(0, FINDINGS_CAP)
+  const hiddenResiduals = Math.max(0, view.project.openResiduals.length - FINDINGS_CAP)
+  const knowledge = (snapshot.retained.knowledge ?? null) as { docCount?: unknown; categories?: unknown } | null
+  // The served binding outranks the last emission's own record; an acknowledged
+  // pick outranks a served binding that has not caught up yet — but ONLY while
+  // that binding still names the picked lifecycle as an active candidate.
   const acked = pick.state === 'selected' && ackStandsFor(selection, pick.workflowId) ? pick.workflowId : null
   const activeId = selection?.kind === 'active' ? selection.workflowId : acked
   const activeWarning = selection?.kind === 'active' ? selection.warning : undefined
-  // The error arm's own fields (an error that is neither active nor terminal).
   const errorView = selection?.kind === 'error' ? selection : null
-  // The picker: an unbound multi-active selection names its candidate ids, and a
-  // pick is only offered when the panel can actually commit one.
   const unbound = selection?.kind === 'error' && (selection.activeWorkflowIds?.length ?? 0) > 0 ? selection : null
   const candidates = unbound?.activeWorkflowIds ?? NO_IDS
-  // Captured const: a narrowing that survives into the click closure.
   const commit = select
   return (
     <section className={css.section} data-mstar-section="state">
@@ -183,9 +171,11 @@ export function StateSection({ t, state, enforcement, selection, pick, select }:
         : (
           <ul className={css.planList}>
             {visiblePlans.map((plan, i) => (
-              <li key={str(plan.id) ?? `plan-${i}`} data-plan-id={str(plan.id) ?? 'unknown'} data-plan-status={str(plan.status) ?? 'unknown'}>
-                <span className={css.planStatus} data-status={str(plan.status) ?? 'unknown'}>{str(plan.status) ?? t('panel.unknown')}</span>
-                <span className={css.planId}>{str(plan.id) ?? t('panel.unknown')}</span>
+              <li key={plan.id === '' ? `plan-${i}` : plan.id} data-plan-id={plan.id === '' ? 'unknown' : plan.id} data-plan-status={plan.status === '' ? 'unknown' : plan.status}>
+                <span className={css.planStatus} data-status={plan.status === '' ? 'unknown' : plan.status}>
+                  {plan.status === '' ? t('panel.unknown') : plan.status}
+                </span>
+                <span className={css.planId}>{plan.id === '' ? t('panel.unknown') : plan.id}</span>
               </li>
             ))}
           </ul>
@@ -195,64 +185,41 @@ export function StateSection({ t, state, enforcement, selection, pick, select }:
         : null}
 
       <h3 className={css.subTitle}>{t('state.residuals')}</h3>
-      {visibleFindings === null || visibleFindings.length === 0
+      {residuals.length === 0
         ? <p className={css.empty} data-mstar-empty="no-residuals">{t('state.none')}</p>
         : (
           <ul className={css.residualList}>
-            {visibleFindings.map((finding, i) => (
+            {residuals.map((residual) => (
               <li
-                key={str(finding.id) ?? `finding-${i}`}
+                key={residual.severity}
                 data-residual-finding
-                data-residual-finding-id={str(finding.id) ?? 'unknown'}
-                data-residual-finding-severity={str(finding.severity) ?? 'unknown'}
-                data-residual-finding-plan={str(finding.planId) ?? 'unknown'}
+                data-residual-finding-severity={residual.severity}
+                data-residual-finding-count={residual.count}
               >
-                <span className={css.findingSeverity} data-severity={str(finding.severity) ?? 'unknown'}>{str(finding.severity) ?? t('panel.unknown')}</span>
-                <span className={css.findingTitle}>{str(finding.title) ?? t('panel.unknown')}</span>
-                {str(finding.planId) !== null ? <span className={css.findingPlan}>{finding.planId}</span> : null}
+                <span className={css.findingSeverity} data-severity={residual.severity}>
+                  {residual.severity === '' ? t('panel.unknown') : residual.severity}
+                </span>
+                <span className={css.findingTitle}>{residual.count}</span>
               </li>
             ))}
           </ul>
         )}
-      {hiddenFindings > 0
-        ? <p className={css.truncated} data-residual-truncated>{t('state.residual.more', { count: String(hiddenFindings) })}</p>
+      {hiddenResiduals > 0
+        ? <p className={css.truncated} data-residual-truncated>{t('state.residual.more', { count: String(hiddenResiduals) })}</p>
         : null}
 
       <h3 className={css.subTitle}>{t('state.policy')}</h3>
       <dl className={css.defList}>
         <dt className={css.defTerm}>{t('state.enforcement')}</dt>
-        <dd className={css.defValue} data-field="enforcement">{enforcementLabel(t, enforcement)}</dd>
-        <dt className={css.defTerm}>{t('state.policy.push')}</dt>
-        <dd className={css.defValue} data-field="push-policy">{str(state?.pushPolicy) ?? t('state.none')}</dd>
-        <dt className={css.defTerm}>{t('state.policy.worktree')}</dt>
-        <dd className={css.defValue} data-field="worktree-mode">{str(state?.worktreeMode) ?? t('state.none')}</dd>
-        <dt className={css.defTerm}>{t('state.policy.integration-worktree')}</dt>
-        <dd className={css.defValue} data-field="integration-worktree-path">{str(state?.integrationWorktreePath) ?? t('state.none')}</dd>
+        <dd className={css.defValue} data-field="enforcement">{enforcementLabel(t, snapshot.enforcement)}</dd>
       </dl>
-
-      <h3 className={css.subTitle}>{t('state.rowScope')}</h3>
-      {rowScopes.length === 0
-        ? <p className={css.empty} data-mstar-empty="no-row-scope">{t('state.none')}</p>
-        : (
-          <ul className={css.leaseList}>
-            {rowScopes.map((scope, i) => (
-              <li key={str(scope.planId) ?? `scope-${i}`} data-row-scope-plan={str(scope.planId) ?? 'unknown'}>
-                <span className={css.leasePlan}>{str(scope.planId) ?? t('panel.unknown')}</span>
-                <span className={css.leaseHolder}>{str(scope.workingBranch) ?? t('panel.unknown')}</span>
-                {str(scope.worktreePath) !== null
-                  ? <span className={css.leaseWorktree}>{scope.worktreePath}</span>
-                  : null}
-              </li>
-            ))}
-          </ul>
-        )}
 
       <h3 className={css.subTitle}>{t('state.knowledge')}</h3>
       {knowledge === null
         ? <p className={css.empty} data-mstar-empty="no-knowledge">{t('state.none')}</p>
         : (
           <p className={css.knowledge} data-knowledge-docs={count(knowledge.docCount) === null ? 'unknown' : String(knowledge.docCount)}>
-            <span>{t('state.knowledge.docs', { count: count(knowledge.docCount) === null ? t('panel.unknown') : String(knowledge.docCount) })}</span>
+            <span>{t('state.knowledge.docs', { count: count(knowledge.docCount) === null ? t('panel.unknown') : String(count(knowledge.docCount)) })}</span>
             {Array.isArray(knowledge.categories) && knowledge.categories.length > 0
               ? <span className={css.knowledgeCategories}>
                 {knowledge.categories.filter((category): category is string => typeof category === 'string').join(' · ')}
@@ -262,7 +229,7 @@ export function StateSection({ t, state, enforcement, selection, pick, select }:
         )}
 
       <h3 className={css.subTitle}>{t('state.direction')}</h3>
-      <p className={css.direction} data-direction>{str(state?.direction) ?? t('state.none')}</p>
+      <p className={css.direction} data-direction>{view.roadmap.direction ?? t('state.none')}</p>
     </section>
   )
 }

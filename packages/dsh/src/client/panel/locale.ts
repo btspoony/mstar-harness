@@ -1,128 +1,23 @@
 /**
- * `mstar-panel` locale namespace (spec §4.3): en (default) + zh, registered
- * via `ctx.locale.register(NS, { zh, en })` at plugin apply. The key union is
- * merged into the ui-slots `LocaleNamespaceMap` so the framework synthesizes
- * a typed `t` seat for the panel component (dictionary keys are checked
- * against the union by `LocaleDictOf`).
+ * `mstar-panel` locale namespace: en (default) + zh, registered via
+ * `ctx.locale.register(NS, { zh, en })` at plugin apply. The key union is
+ * merged into the ui-slots `LocaleNamespaceMap` so the framework synthesizes a
+ * typed `t` seat for the panel component (dictionary keys are checked against
+ * the union by `LocaleDictOf`).
  *
- * (spec panel-zones §2): the react-flow
- * graph is replaced by the zone dashboard — the `graph.phase.*` /
- * `graph.state.*` / react-flow `graph.legend.*` key families are gone with
- * the graph library; only `graph.pass` / `graph.fail` remain (the
- * gate-verdict labels reused by the IterationTaskPage head), and
- * the new `zone.*` family covers the three zone titles/placeholders + the
- * zone-semantic legend. The `flow.*` key family (agent-flow event dock) is
- * unchanged. The old footer's violations copy (`graph.violations` /
- * `graph.no-violations`) is carried by the event-log plan — it adds its own
- * dedicated keys when that page lands, NOT reserved in this union.
+ * Families:
+ * - `tab.*` — the three section tabs (任务迭代 / 项目路线图 / 事件记录). The
+ *   agents tab is retired with the emission-mediated read path;
+ * - `zone.*` — the tasks page's iteration stepper, branch panel and kanban;
+ * - `roadmap.*` — the roadmap page, INCLUDING one copy line per absence state
+ *   (`not-applicable` / `absent` / `no-milestones` / `unavailable`), so a
+ *   degraded read is never mistakable for an empty roadmap;
+ * - `event-log.*` — the single merged event flow (流转 / 结算 / 违规 rows);
+ * - `state.*` / `freshness.*` / `empty.*` — the workspace digest, the snapshot
+ *   freshness stamp and the panel's own empty/degraded states.
  *
- * (spec panel-zones §3): the iteration zone is filled in — `zone.phase.*`
- * (the 5 PHASE_IDS names, the `graph.phase.*` wording moved into the zone
- * namespace), `zone.iteration.*` (Step N/5 label, Step N badge, step-state
- * chips) and `zone.branches.*` (the branch panel
- * moved from the sidebar). `zone.iteration.placeholder` is gone with the
- * placeholder.
- *
- * (spec panel-zones §3): the task board kanban is filled in —
- * `zone.state.*` (the 5 PLAN_STATE_IDS column names — en is the raw status
- * word, zh the localized name; `blocked-unknown` is the merged
- * Blocked/unknown column),
- * `zone.tasks.total` (zone header plan total), `zone.tasks.no-plans` (the
- * muted empty note), `zone.tasks.more` (the per-column `+N more` expand
- * affordance) and `zone.tasks.collapse` (the 「收起」 collapse label).
- * `zone.tasks.placeholder` is gone with the placeholder.
- *
- * (spec panel-zones §4): the agents
- * zone is filled in — `zone.agents.summary` (`N executing · M pending`).
- * `zone.agents.placeholder` is gone with the placeholder; the dashed
- * "待执行" chip (`pending-label`) and the animated next-edge label (`next`)
- * keys were removed with the AgentFlowZone (the free canvas renders neither,
- * so they had zero consumers).
- *
- * (same plan): the dock is collapsible (the frame is a native <details>,
- * header = <summary>) and the legend gains the entity-status swatches —
- * `zone.legend.agent-running` / `zone.legend.agent-settled` (the status-dot
- * treatments of the entity cards; the `zone.agents.*` family itself stays
- * minimal — title/summary, both rendered by the canvas, so no
- * `zone.agents.status.*` family is added: a status TEXT on the cards would be
- * dead strings, the spec §4 card shows a status point, and reusing `flow.*`
- * would conflate event status words (dispatched/settled ok) with entity
- * status words).
- *
- * (spec panel-tabs §2/§6.1): the panel is
- * re-laid-out as Tabs + Content — `tab.*` covers the 3 fixed MenuTab labels
- * (任务迭代 / 代理执行 / 事件记录) and `page.*.placeholder` the muted
- * placeholder copy for the agents/events tabs (the real pages land with the
- * agent-canvas / event-log plans; Task 3 refines the placeholders).
- *
- * (spec panel-tabs §3): the
- * IterationTaskPage head copy — `page.iteration.*` (the collapsed one-line
- * "not started" note + the expand/collapse toggle hints). The head reuses the
- * existing `zone.iteration.*` (step badge / Step n/5 label / step-state
- * chips), `zone.phase.*` (the 5 PHASE_IDS names) and `zone.branches.*`
- * (branch panel) keys; the kanban reuses `zone.tasks.*` / `zone.state.*`.
- *
- * (spec panel-tabs §4): the
- * legend re-mounts on the agent canvas — `zone.legend.agent-idle` (the idle
- * card treatment) joins the swatch family and the collaboration-edge labels
- * (flow-expected / flow-actual / general) now describe the canvas rendering
- * (dashed/solid lines + the general bucket — plan
- *  replaced the former flow-unexpected entry)
- * instead of the retired zone-dashboard stages; `flow.settle-only` is the
- * distinct muted copy for the settle-only canvas note (review T2-Imp-2
- * restored the old zone's separate anchor).
- *
- * T2 : the general bucket has NO column
- * of its own anymore — `zone.agents.general` is REPURPOSED as the small
- * in-bucket label on the general card (which sinks to the bottom of the
- * `sdd-implement` column — the value stays the user-fixed literal 'general'
- * in both locales); `zone.legend.general` rewords to the sink semantics
- * (「general 位于 sdd-implement 桶内底部」).
- *
- * (the layout rework
- * supersedes the earlier sink): the general bucket moves to its OWN rightmost
- * UNKNOWN column — `zone.agents.unknown` (the column label, 未知 / unknown);
- * the in-bucket general tag is gone (the general card's title + the unknown
- * column label carry it), so `zone.agents.general` is REMOVED. The
- * `sdd-implement` column splits into sub-buckets — `zone.agents.bucket.*`
- * (implementor / sdd-reviewer caption labels); `zone.agents.on-demand`
- * re-keys as the on-demand BADGE (the implementor-sub-bucket roles, the
- * standalone on-demand column is removed). The legend entries gain
- * `zone.legend.sub-bucket` / `zone.legend.supervise` / `zone.legend.unknown`
- * (the former 'general' entry is replaced by 'unknown'); `zone.legend.general`
- * is REMOVED and `zone.legend.on-demand` rewords to the badge semantics.
- *
- * (the 2026-08-12 edge
- * rework supersedes the Task-2 unknown COLUMN): the standalone rightmost
- * unknown column is REMOVED (user feedback #3 — FOUR columns total) — the
- * general bucket sinks into an unknown SUB-PARTITION at the bottom of the
- * LAST column, so `zone.agents.unknown` (the old column label) is REMOVED
- * and `zone.agents.unknown-sub` (「unknown / 未匹配角色」) is the sub-partition
- * caption. The legend drops the expected / next entries (both edges are
- * REMOVED, design doc §2.2) and gains `zone.legend.port` (the hover-visible
- * card ports, design doc §2.5); `zone.legend.flow-actual` / `supervise` /
- * `unknown` reword to the bezier / port-anchored / side-gap / sub-partition
- * semantics.
- *
- * T3 : the no-harness branch
- * renders a CENTERED inactive-state card (icon + title + hint, no tabs /
- * no sidebar) instead of the left-aligned hint — `empty.no-harness-hint`
- * is the explanatory secondary copy under the reused `empty.no-harness`
- * title.
- *
- * (图例精简): the
- * legend narrows to the 3 role-card status entries —
- * `zone.legend.flow-actual` / `port` / `group` / `sub-bucket` / `supervise` /
- * `on-demand` / `unknown` are REMOVED (the collaboration-edge / layout tech
- * entries; the canvas itself keeps the edges / ports / partitions — only the
- * legend copy drops them). `zone.legend.agent-running` / `agent-settled` /
- * `agent-idle` remain.
- *
- * (the unresolved continuation state): the entity-status union gains `unresolved` —
- * an Assignment-shaped team dispatch whose latest ledger fact is the explicit
- * `continuation`/`unresolved` row is a DISTINCT non-running entity, never
- * phantom running and never counted in `executing`.
- * `zone.legend.agent-unresolved` is its legend-family label (zh + en).
+ * The former agents page and canvas-legend key families are GONE with those
+ * surfaces.
  */
 
 import type { LocaleDictOf } from '@deepseek-ai/dsh-client-ui-slots'
@@ -135,26 +30,22 @@ export type PanelKey =
   | 'view.mstar-workflow'
   | 'guide.description'
   | 'tab.tasks'
-  | 'tab.agents'
+  | 'tab.roadmap'
   | 'tab.events'
   | 'page.iteration.not-started'
   | 'page.iteration.expand'
   | 'page.iteration.collapse'
-  | 'event-log.section.events'
-  | 'event-log.section.violations'
+  | 'event-log.title'
   | 'event-log.empty'
-  | 'event-log.empty.events'
-  | 'event-log.empty.violations'
+  | 'event-log.ledger-unavailable'
   | 'event-log.field.role'
   | 'event-log.field.agent'
-  | 'event-log.field.stage'
   | 'event-log.field.plan'
   | 'event-log.field.task'
   | 'event-log.field.category'
   | 'event-log.field.time'
   | 'event-log.field.kind'
   | 'event-log.field.status'
-  | 'event-log.field.expected'
   | 'event-log.field.settled'
   | 'event-log.field.duration'
   | 'event-log.field.child-id'
@@ -168,8 +59,21 @@ export type PanelKey =
   | 'event-log.field.message'
   | 'event-log.kind.dispatch'
   | 'event-log.kind.settle'
+  | 'event-log.kind.violation'
   | 'event-log.yes'
   | 'event-log.no'
+  | 'roadmap.title'
+  | 'roadmap.direction'
+  | 'roadmap.goals'
+  | 'roadmap.milestones'
+  | 'roadmap.expand'
+  | 'roadmap.collapse'
+  | 'roadmap.not-applicable'
+  | 'roadmap.absent'
+  | 'roadmap.no-milestones'
+  | 'roadmap.unavailable'
+  | 'roadmap.unassigned'
+  | 'roadmap.milestone.no-issues'
   | 'empty.waiting'
   | 'empty.loading'
   | 'empty.unavailable'
@@ -181,11 +85,6 @@ export type PanelKey =
   | 'panel.unknown'
   | 'graph.pass'
   | 'graph.fail'
-  | 'zone.legend.title'
-  | 'zone.legend.agent-running'
-  | 'zone.legend.agent-settled'
-  | 'zone.legend.agent-unresolved'
-  | 'zone.legend.agent-idle'
   | 'zone.iteration.step-label'
   | 'zone.iteration.step-badge'
   | 'zone.iteration.step.current'
@@ -219,18 +118,6 @@ export type PanelKey =
   | 'zone.state.InReview'
   | 'zone.state.Done'
   | 'zone.state.blocked-unknown'
-  | 'zone.agents.title'
-  | 'zone.agents.summary'
-  | 'zone.agents.on-demand'
-  | 'zone.agents.unknown-sub'
-  | 'zone.agents.bucket.implementor'
-  | 'zone.agents.bucket.reviewer'
-  | 'zone.agents.group.phase-1'
-  | 'zone.agents.group.phase-2'
-  | 'zone.agents.group.phase-n'
-  | 'zone.agents.group.plan'
-  | 'zone.agents.group.no-plan'
-  | 'zone.agents.group.plan-more'
   | 'flow.empty'
   | 'flow.settle-only'
   | 'flow.link-only'
@@ -250,19 +137,15 @@ export type PanelKey =
   | 'state.selection.failed'
   | 'state.plans'
   | 'state.residuals'
-  | 'state.policy'
-  | 'state.rowScope'
   | 'state.knowledge'
   | 'state.direction'
   | 'state.none'
+  | 'state.policy'
   | 'state.enforcement'
   | 'state.enforcement.hard'
   | 'state.enforcement.soft'
   | 'state.plans.more'
   | 'state.residual.more'
-  | 'state.policy.push'
-  | 'state.policy.worktree'
-  | 'state.policy.integration-worktree'
   | 'state.knowledge.docs'
   | 'freshness.last-updated'
   | 'freshness.refresh-note'
@@ -278,26 +161,22 @@ export const zh: LocaleDictOf<'mstar-panel'> = {
   'view.mstar-workflow': '晨星工作流',
   'guide.description': '查看工作区状态、计划与迭代进度',
   'tab.tasks': '任务迭代',
-  'tab.agents': '代理执行',
+  'tab.roadmap': '项目路线图',
   'tab.events': '事件记录',
   'page.iteration.not-started': '迭代未启动',
   'page.iteration.expand': '展开',
   'page.iteration.collapse': '收拢',
-  'event-log.section.events': 'Agent 流转事件',
-  'event-log.section.violations': '违规记录',
+  'event-log.title': '事件记录',
   'event-log.empty': '暂无记录',
-  'event-log.empty.events': '暂无流转事件',
-  'event-log.empty.violations': '暂无违规记录',
+  'event-log.ledger-unavailable': '事件账本不可读，无法展示流转记录',
   'event-log.field.role': '执行角色',
   'event-log.field.agent': 'Agent（会话）',
-  'event-log.field.stage': '阶段',
   'event-log.field.plan': '计划',
   'event-log.field.task': '任务',
   'event-log.field.category': '任务类别',
   'event-log.field.time': '时间',
   'event-log.field.kind': '类型',
   'event-log.field.status': '状态',
-  'event-log.field.expected': '预期角色',
   'event-log.field.settled': '已结算',
   'event-log.field.duration': '耗时',
   'event-log.field.child-id': '子会话 ID',
@@ -311,8 +190,21 @@ export const zh: LocaleDictOf<'mstar-panel'> = {
   'event-log.field.message': '信息',
   'event-log.kind.dispatch': '派发',
   'event-log.kind.settle': '结算',
+  'event-log.kind.violation': '违规',
   'event-log.yes': '是',
   'event-log.no': '否',
+  'roadmap.title': '项目路线图',
+  'roadmap.direction': '方向',
+  'roadmap.goals': '目标',
+  'roadmap.milestones': '里程碑',
+  'roadmap.expand': '展开',
+  'roadmap.collapse': '收起',
+  'roadmap.not-applicable': '未解析到项目，路线图不可用',
+  'roadmap.absent': '该项目尚无路线图',
+  'roadmap.no-milestones': '路线图已存在，但尚无里程碑',
+  'roadmap.unavailable': '路线图读取失败：{reason}',
+  'roadmap.unassigned': '未归属议题：{count}',
+  'roadmap.milestone.no-issues': '无未关闭议题',
   'empty.waiting': '等待首条 engine-status catalog…',
   'empty.loading': '正在读取该会话的 engine-status 快照…',
   'empty.unavailable': 'engine-status 快照不可用（{reason}）',
@@ -324,11 +216,6 @@ export const zh: LocaleDictOf<'mstar-panel'> = {
   'panel.unknown': '未知',
   'graph.pass': 'PASS',
   'graph.fail': 'FAIL',
-  'zone.legend.title': '图例',
-  'zone.legend.agent-running': '执行中实体（发光）',
-  'zone.legend.agent-settled': '已完成实体（独立绿框 + ✓；off 阶段不显示）',
-  'zone.legend.agent-unresolved': '未决实体（派发已被记录，但其延续无法配对；灰点，不计执行中）',
-  'zone.legend.agent-idle': '未工作实体（虚线）',
   'zone.iteration.step-label': '{n}/{total}',
   'zone.iteration.step-badge': '{n}',
   'zone.iteration.step.current': '当前',
@@ -362,18 +249,6 @@ export const zh: LocaleDictOf<'mstar-panel'> = {
   'zone.state.InReview': '审查中',
   'zone.state.Done': '已完成',
   'zone.state.blocked-unknown': '受阻/未知',
-  'zone.agents.title': '代理执行',
-  'zone.agents.summary': '{executing} 执行中 · {pending} 待执行',
-  'zone.agents.on-demand': '按需执行',
-  'zone.agents.unknown-sub': 'unknown / 未匹配角色',
-  'zone.agents.bucket.implementor': 'implementor',
-  'zone.agents.bucket.reviewer': 'sdd-reviewer',
-  'zone.agents.group.phase-1': 'Phase 1 · 顺序完成（review-edit-chain）',
-  'zone.agents.group.phase-2': 'Phase 2 · 循环迭代 plans',
-  'zone.agents.group.phase-n': 'Phase {n}',
-  'zone.agents.group.plan': 'plan: {plan}',
-  'zone.agents.group.no-plan': '无进行中 plan',
-  'zone.agents.group.plan-more': '+{n} 更多',
   'flow.empty': '暂无实际派发（记录自 agent-flow plan 合并起生效）',
   'flow.settle-only': '仅有结算记录（无派发证据）',
   'flow.link-only': '仅有身份记录（无派发证据）',
@@ -393,19 +268,15 @@ export const zh: LocaleDictOf<'mstar-panel'> = {
   'state.selection.failed': '选择失败：{reason}',
   'state.plans': '计划',
   'state.residuals': '未决残留',
-  'state.policy': '策略',
-  'state.rowScope': '行范围',
   'state.knowledge': '知识',
   'state.direction': '方向',
   'state.none': '无',
+  'state.policy': '策略',
   'state.enforcement': '执行策略',
   'state.enforcement.hard': 'hard',
   'state.enforcement.soft': 'soft',
   'state.plans.more': '+{count} 更多',
   'state.residual.more': '+{count} 更多',
-  'state.policy.push': 'push',
-  'state.policy.worktree': 'worktree',
-  'state.policy.integration-worktree': 'integration worktree',
   'state.knowledge.docs': '{count} 篇文档',
   'freshness.last-updated': '快照 {time} · 第 {turn} 轮',
   'freshness.refresh-note': '该会话已存储的快照——不是实时值',
@@ -416,26 +287,22 @@ export const en: LocaleDictOf<'mstar-panel'> = {
   'view.mstar-workflow': 'Morning Star Workflow',
   'guide.description': 'Workspace state, plans, and iteration progress',
   'tab.tasks': 'Task Iteration',
-  'tab.agents': 'Agent Run',
+  'tab.roadmap': 'Roadmap',
   'tab.events': 'Event Log',
   'page.iteration.not-started': 'iteration not started',
   'page.iteration.expand': 'expand',
   'page.iteration.collapse': 'collapse',
-  'event-log.section.events': 'Agent flow events',
-  'event-log.section.violations': 'Violations',
+  'event-log.title': 'Event Log',
   'event-log.empty': 'No records yet',
-  'event-log.empty.events': 'No flow events yet',
-  'event-log.empty.violations': 'No violations yet',
+  'event-log.ledger-unavailable': 'The event ledger is unreadable — no flow records can be shown',
   'event-log.field.role': 'Role',
   'event-log.field.agent': 'Agent (session)',
-  'event-log.field.stage': 'Stage',
   'event-log.field.plan': 'Plan',
   'event-log.field.task': 'Task',
   'event-log.field.category': 'Category',
   'event-log.field.time': 'Time',
   'event-log.field.kind': 'Kind',
   'event-log.field.status': 'Status',
-  'event-log.field.expected': 'Expected role',
   'event-log.field.settled': 'Settled',
   'event-log.field.duration': 'Duration',
   'event-log.field.child-id': 'Child session ID',
@@ -449,8 +316,21 @@ export const en: LocaleDictOf<'mstar-panel'> = {
   'event-log.field.message': 'Message',
   'event-log.kind.dispatch': 'dispatch',
   'event-log.kind.settle': 'settle',
+  'event-log.kind.violation': 'violation',
   'event-log.yes': 'yes',
   'event-log.no': 'no',
+  'roadmap.title': 'Project roadmap',
+  'roadmap.direction': 'Direction',
+  'roadmap.goals': 'Goals',
+  'roadmap.milestones': 'Milestones',
+  'roadmap.expand': 'expand',
+  'roadmap.collapse': 'collapse',
+  'roadmap.not-applicable': 'No project resolved — the roadmap is not applicable',
+  'roadmap.absent': 'This project has no roadmap yet',
+  'roadmap.no-milestones': 'The roadmap exists, with no milestones yet',
+  'roadmap.unavailable': 'Roadmap read failed: {reason}',
+  'roadmap.unassigned': 'Unassigned issues: {count}',
+  'roadmap.milestone.no-issues': 'No open issues',
   'empty.waiting': 'Waiting for the first engine-status catalog…',
   'empty.loading': 'Reading this session’s engine-status snapshot…',
   'empty.unavailable': 'Engine-status snapshot unavailable ({reason})',
@@ -462,11 +342,6 @@ export const en: LocaleDictOf<'mstar-panel'> = {
   'panel.unknown': 'unknown',
   'graph.pass': 'PASS',
   'graph.fail': 'FAIL',
-  'zone.legend.title': 'Legend',
-  'zone.legend.agent-running': 'agent running (glow)',
-  'zone.legend.agent-settled': 'settled agent (green done frame + ✓; off-tier roles show neither)',
-  'zone.legend.agent-unresolved': 'unresolved agent (dispatch observed, its continuation unpaired; muted dot, not executing)',
-  'zone.legend.agent-idle': 'idle agent (dashed)',
   'zone.iteration.step-label': '{n}/{total}',
   'zone.iteration.step-badge': '{n}',
   'zone.iteration.step.current': 'current',
@@ -500,18 +375,6 @@ export const en: LocaleDictOf<'mstar-panel'> = {
   'zone.state.InReview': 'InReview',
   'zone.state.Done': 'Done',
   'zone.state.blocked-unknown': 'Blocked / Unknown',
-  'zone.agents.title': 'Agent Flow',
-  'zone.agents.summary': '{executing} executing · {pending} pending',
-  'zone.agents.on-demand': 'On-demand',
-  'zone.agents.unknown-sub': 'unknown / unmatched roles',
-  'zone.agents.bucket.implementor': 'implementor',
-  'zone.agents.bucket.reviewer': 'sdd-reviewer',
-  'zone.agents.group.phase-1': 'Phase 1 · sequential (review-edit-chain)',
-  'zone.agents.group.phase-2': 'Phase 2 · iterative plan loop',
-  'zone.agents.group.phase-n': 'Phase {n}',
-  'zone.agents.group.plan': 'plan: {plan}',
-  'zone.agents.group.no-plan': 'no in-progress plan',
-  'zone.agents.group.plan-more': '+{n} more',
   'flow.empty': 'No actual dispatches yet (recording starts at agent-flow plan merge)',
   'flow.settle-only': 'Settle records only (no dispatch evidence)',
   'flow.link-only': 'Identity records only (no dispatch evidence)',
@@ -531,19 +394,15 @@ export const en: LocaleDictOf<'mstar-panel'> = {
   'state.selection.failed': 'Pick failed: {reason}',
   'state.plans': 'Plans',
   'state.residuals': 'Open residuals',
-  'state.policy': 'Policy',
-  'state.rowScope': 'Row scope',
   'state.knowledge': 'Knowledge',
   'state.direction': 'Direction',
   'state.none': 'none',
+  'state.policy': 'Policy',
   'state.enforcement': 'enforcement',
   'state.enforcement.hard': 'hard',
   'state.enforcement.soft': 'soft',
   'state.plans.more': '+{count} more',
   'state.residual.more': '+{count} more',
-  'state.policy.push': 'push',
-  'state.policy.worktree': 'worktree',
-  'state.policy.integration-worktree': 'integration worktree',
   'state.knowledge.docs': '{count} docs',
   'freshness.last-updated': 'snapshot {time} · turn {turn}',
   'freshness.refresh-note': 'the stored snapshot for this session — never a live value',
