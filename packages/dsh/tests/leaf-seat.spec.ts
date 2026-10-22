@@ -81,7 +81,8 @@ describe('the dsh coordinator-seat derivation mirrors the commands rule', () => 
  * `mstar-mcp` row carries no `--seat`, so this host boundary is the only layer
  * that refuses a leaf there.
  */
-const leafAgent = (): unknown => ({ session: { header: { origin: 'subagent' } } })
+const leafAgent = (): NonNullable<Parameters<typeof leafSeatCoordinatorRefusal>[0]['agent']> =>
+  ({ session: { header: { origin: 'subagent' } } }) as NonNullable<Parameters<typeof leafSeatCoordinatorRefusal>[0]['agent']>
 
 function refusalOf(name: string, action: string): string | undefined {
   return leafSeatCoordinatorRefusal({ name, arguments: { action }, agent: leafAgent() })
