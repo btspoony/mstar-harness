@@ -1,8 +1,9 @@
 import { afterAll, describe, expect, test } from "bun:test";
 import { spawn } from "node:child_process";
-import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { DatabaseSync } from "node:sqlite";
 import { appendDshLedgerRow, appendDshWorkflowEvent, advanceDshScanBound, importDshHostStateRows, readDshLedgerWindow, readDshScanBound, readDshSessionBinding, readDshStatusEmission, recordDshStatusEmission, writeDshSessionBinding } from "./host-state-store.js";
 import { initializeStore, openStore, withDshWriteTransaction } from "./store-db.js";
 
@@ -17,6 +18,27 @@ async function fresh(label: string) {
 
 function count(db: { prepare(sql: string): { get(): unknown } }, sql: string): number {
   return (db.prepare(sql).get() as { n: number }).n;
+}
+
+/** The logical store content a refused read must leave untouched: the shared revision and one session's emission row. */
+function logicalContentOf(db: DatabaseSync, sessionId: string, cwd: string): { revision: number; emission: string | null } {
+  const revision = (db.prepare("select revision from store_meta where id = 1").get() as { revision: number }).revision;
+  const row = db.prepare(
+    "select turn, emitted_at, payload_json from dsh_status_emissions where session_id = ? and cwd = ?",
+  ).get(sessionId, cwd);
+  return { revision, emission: row === undefined ? null : JSON.stringify(row) };
+}
+
+/** The logical element whose value differs between two snapshots, or null when they match. */
+function changedContent(
+  before: { revision: number; emission: string | null },
+  after: { revision: number; emission: string | null },
+): string | null {
+  if (before.revision !== after.revision) return `store_meta.revision changed: ${before.revision} -> ${after.revision}`;
+  if (before.emission !== after.emission) {
+    return `the recorded dsh_status_emissions row changed: ${before.emission ?? "absent"} -> ${after.emission ?? "absent"}`;
+  }
+  return null;
 }
 
 describe("host-state store domain", () => {
@@ -60,20 +82,29 @@ describe("host-state store domain", () => {
     }
   });
 
-  test("a schema- or content-refused store answers unavailable with its own cause and unchanged bytes", async () => {
+  test("a schema- or content-refused store answers unavailable with its own cause and unchanged content", async () => {
     const { context, handle } = await fresh("refused-read");
     recordDshStatusEmission(context, "s", "/cwd", 4, "kept");
     // A hole in the recorded migrations (version 4 dropped, later ones kept) is
     // an observable schema verdict with its own recovery — never the no-row answer.
     handle.db.exec("delete from schema_version where version = 4");
     handle.close();
-    const dbPath = join(context.harnessDir, "store.db");
-    const before = readFileSync(dbPath);
-    expect(readDshStatusEmission(context, "s", "/cwd")).toMatchObject({
-      kind: "unavailable",
-      reason: expect.stringContaining("store.schema-drift"),
-    });
-    expect(readFileSync(dbPath).equals(before)).toBe(true);
+    // ONE raw connection, held across the read: a read-only open cannot create
+    // the journal a WAL store needs, so the snapshot connection is the store's
+    // live reader here rather than a second probe of a just-closed store.
+    const reader = new DatabaseSync(join(context.harnessDir, "store.db"));
+    try {
+      const before = logicalContentOf(reader, "s", "/cwd");
+      expect(readDshStatusEmission(context, "s", "/cwd")).toMatchObject({
+        kind: "unavailable",
+        reason: expect.stringContaining("store.schema-drift"),
+      });
+      // The refused read is a READ: it may not bump the shared revision nor
+      // touch the emission row. The failure names the element that moved.
+      expect(changedContent(before, logicalContentOf(reader, "s", "/cwd"))).toBeNull();
+    } finally {
+      reader.close();
+    }
 
     // An existing store that cannot be read refuses by its own cause, never as
     // an absent authority.
