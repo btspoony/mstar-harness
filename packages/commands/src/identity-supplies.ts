@@ -5,12 +5,14 @@
  *
  * Both transports take the same value: the calling session's own id. On dsh the
  * host exports it as `DSH_SESSION_ID`, which the CLI reads directly; an MCP
- * call passes it as the per-call `sessionId` field. The identity only
- * ATTRIBUTES the write to that session; the coordinator binding plus the
- * scope's `--expect` execution token authorize it.
+ * call passes it as the per-call `sessionId` field. It is a bearer identity on
+ * that transport: it selects that session's own coordinator binding. This
+ * sentence names ONLY the supply, so it stays true for every command that
+ * interpolates it — authorization inputs differ per command (`--expect` on some,
+ * a required `sessionRef` on others) and belong in each command's own refusal.
  */
 export const IDENTITY_SUPPLIES =
-  "CLI: pass --session-id or set MSTAR_HOST_SESSION_ID (dsh shells already export DSH_SESSION_ID); MCP: pass sessionId \u2014 the calling session's id. The identity only attributes the write; the coordinator binding plus the --expect token authorize it";
+  "CLI: pass --session-id or set MSTAR_HOST_SESSION_ID (dsh shells already export DSH_SESSION_ID); MCP: pass sessionId \u2014 the calling session's id, which selects that session's own coordinator binding";
 
 /**
  * Where a caller reads each execution token kind a CLI `--expect` may need, in

@@ -120,15 +120,15 @@ function commandRequirements(definition: CommandDefinition): readonly CommandReq
   // Route-verified session facts from the adapters: CLI collects the session
   // selector from argv (with its environment fallback), and MCP publishes the
   // same selector as a per-call field. It is a bearer identity on this
-  // transport: it selects the caller's own coordinator binding, while that
-  // binding row plus the `--expect` CAS token authorize the write.
+  // transport: it selects the caller's own coordinator binding, while each
+  // command's own authorization inputs decide the write.
   const sessionOption = definition.cli.options.find((option) => option.context === "sessionId");
   if (sessionOption !== undefined) {
     if (!overridden.has(`cli:${sessionOption.key}`)) {
       requirements.push({ name: sessionOption.key, ownership: "caller", route: "cli" });
     }
     if (!overridden.has(`mcp:${sessionOption.key}`)) {
-      requirements.push({ name: sessionOption.key, ownership: "caller", route: "mcp", help: "MCP: pass the call's `sessionId` \u2014 the calling session's id (on dsh, `DSH_SESSION_ID`). It is a bearer identity on this transport: it selects the caller's own coordinator binding, and that binding row plus the `--expect` CAS token authorize the write" });
+      requirements.push({ name: sessionOption.key, ownership: "caller", route: "mcp", help: "MCP: pass the call's `sessionId` \u2014 the calling session's id (on dsh, `DSH_SESSION_ID`). It is a bearer identity on this transport: it selects the caller's own coordinator binding, and the command's own authorization inputs decide the write" });
     }
   }
   return requirements;
