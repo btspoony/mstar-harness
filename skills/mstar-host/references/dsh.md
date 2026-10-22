@@ -179,20 +179,38 @@ or a custom profile).
 Two direct-delegation surfaces can be mounted at once, and they do NOT share a
 roster. Read the live toolset, never the profile name:
 
-| `spawn_teammate` | `subagent` | Use |
+| `spawn_teammate` | `subagent` / `subagent_fork` | Use |
 |---|---|---|
 | yes | no | Agent Teams only (§ Delegation channels) |
-| yes | **yes** | Agent Teams for anything writable or addressable; `subagent` only for a one-off read-only seat whose result needs no follow-up |
-| no | yes | `subagent` (the fallback profile) |
-| no | no | no delegation surface — `workflow` when mounted, else report `Blocked` |
+| yes | **yes** | Agent Teams for anything writable or addressable; a direct child only for a one-off read-only seat whose result needs no follow-up |
+| no | yes | the direct channel (the fallback profile) |
+| no | no | no delegation surface — read-only work may fan out through `workflow`; anything else uses the recovery below |
 
-**Coexistence is the trap.** `list_agents`, `send_message` and `interrupt_agent`
-are the TEAM tools: they resolve roster targets only. A `subagent` child is not on
-that roster, so it cannot be listed, messaged or interrupted, and its result
-arrives only through the settlement notice. A refusal such as
-`active teammate "<id>" not found` (`TEAM_MEMBER_NOT_FOUND`) against a `subagent`
-id states exactly that: do not retry it, do not rename it, and do not spawn a
-second child for the same work.
+**When neither surface is mounted**, `workflow` carries READ-ONLY fan-out only —
+writable work must not route there (§ Read-only fan-out via the `workflow` tool).
+Read-only work fans out through it when mounted; writable work runs inline in the
+coordinator. When a task genuinely requires a delegation surface, recover through
+the host profile instead of reporting a bare refusal. Enumerate first —
+`dsh --profile <name> --dump-config` prints the composed loader tree, disabled
+rows included, so it names the missing row. Then install the bundle that supplies
+it: `dsh plugin --profile <name> add
+@deepseek-ai/dsh-experimental-agent-team-profile` for the Team tools (the direct
+rows ship in `@deepseek-ai/dsh-base`), or `dsh --patch <file.yml>` to add a
+patch-list overlay when the row exists but is disabled. These take effect at the
+NEXT boot — the composition is re-read at launch, not in a running session — so
+the current session keeps its toolset: keep executing inline, or report `Blocked`
+naming the missing tool and that recovery only after it fails.
+
+**Coexistence is the trap.** On a profile that mounts the Team layer, the names
+`list_agents` / `send_message` / `interrupt_agent` belong to the TEAM tools and
+resolve roster targets only. A `subagent` child is not on that roster, so it
+cannot be listed, messaged or interrupted, and its result arrives only through
+the settlement notice. A refusal such as `active teammate "<id>" not found`
+(`TEAM_MEMBER_NOT_FOUND`) against a `subagent` id states exactly that: do not
+retry it, do not rename it, and do not spawn a second child for the same work.
+On a direct-only profile those three names belong to
+`dsh-tool-subagent-control` and do reach a direct child (`send_message` takes
+`agent_id` there, not `target`), so a child you started stays steerable.
 
 **Activation is not failure.** `started subagent <id>` proves the child started;
 absence from `list_agents` proves nothing. Wait for the settlement notice, and
@@ -230,8 +248,9 @@ body-quoted examples never leak into header fields.
 
 ## Delegation channels
 
-dsh exposes three delegation surfaces. **Mounting decides which channel you
-start from, not which work is allowed.** When the Agent Teams layer is
+dsh exposes three delegation surfaces. **The live toolset decides which channel
+you start from, not which work is allowed** (§ Pick the delegation channel
+before you delegate). When the Agent Teams layer is
 installed it is the default delegation channel — a multi-task plan belongs on
 its board — and `subagent` is the fallback for a profile without it. `workflow`
 rides alongside both as the read-only fan-out surface.
