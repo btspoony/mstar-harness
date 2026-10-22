@@ -227,7 +227,7 @@ mstar 技能通过 dsh skill-filesystem 提供者以**单一规范挂载**接入
 
 ## Native command surface
 
-本宿主的可写 mstar 命令面是 **MCP 路线**：整个宿主**共享一条** `mstar-mcp` 连接（即 bundle 行——见 § Shared MCP connection），每个命令家族一个工具（`mcp__mstar__mstar_<family>` + `action` 参数）。该连接**自身不携带任何身份**，但随发行的行以 `--trust-caller-session-id` opt-in，因此需要会话身份的操作在这条连接上传 `sessionId`（未 opt-in 的连接不发布选择器并拒绝传入的 id）。下列三个 dsh 原生工具只留给拥有插件本地状态的操作，身份来自 `exec.agent.id`。
+本宿主的可写 mstar 命令面是 **MCP 路线**：整个宿主**共享一条** `mstar-mcp` 连接（即 bundle 行——见 § Shared MCP connection），每个命令家族一个工具（`mcp__mstar__mstar_<family>` + `action` 参数）。该连接**自身不携带任何身份**，但随发行的行以 `--trust-caller-session-id` opt-in，因此需要会话身份的操作在这条连接上传 `sessionId`（未 opt-in 的连接不发布选择器并拒绝传入的 id）。下列三个 dsh 原生工具只留给本 MCP 面做不到的事——写不了的插件本地状态，或没有发布的能力；那里身份来自 `exec.agent.id`。
 
 **成员规则**——记住它而不是记清单：一个命令只有在满足下列之一时才是 dsh 原生工具
 
@@ -255,7 +255,7 @@ bundle 补丁只插入**一行** `mstar-mcp`，而这一行就是整个宿主的
 
 连接钉优先于按调用的 `harness`，因此调用方绝不可能把某次调用钉在启动方未声明的工作区上；这次调用实际使用的那个根还会把调用工作区锚定在其父目录，因此由 cwd 派生的路径落在那份 harness 下，而不是启动 cwd。在**未钉**的连接上，凡是根不另有来源的工具，其**声明**的根选择器都是**必填**——用 `harness` 指明根的命令就是该字段，`sdd.workspace` 则是 `controlRoot`——模型无法漏掉解析所需的这唯一事实，`tools/list` 也绝不会把解析器拒绝省去的字段公布为可选。只读校验器（`review.seats`、`worktree.qc-alignment`、`lint`、`skill.lint`、`roles.validate`、`design-md.validate`、`compound.validate`、`dispatch.validate`、`qc.validate-report`）的相对路径参数按**已声明的工作区**解析，因此 `--workspace /caller` 读的是 `/caller` 下的文件，而不是宿主检出的；未声明工作区时相对路径一律被拒绝。
 
-**连接自身不携带身份；随发行的行信任调用方声明的 `sessionId`。** 共享连接自身无身份，且仅属 MCP 的身份接线已移除：没有 `--identity-env`、没有已声明身份锁、没有选择器剥离，也没有连接级默认 session id。按调用的 `sessionId` 选择器只在启动方显式 opt-in（`mstar mcp --trust-caller-session-id`）的连接上发布；随发行的行会传这个开关，未 opt-in 的连接仍以 `mcp.caller-identity-unavailable` 拒绝传入的 id。在 opt-in 连接上该值是 bearer 身份：`executionContextFor` 把它变成 `context.caller`，引擎据此解析调用方**自己**的 coordinator 绑定，因此知道一个活跃会话的 id 就足以以它行事——授权仍是那条绑定行加上可选的 `--expect` CAS 令牌。需要会话身份的**操作**，其宿主可证的路线是上文列出的三个 dsh 原生工具（身份为 `exec.agent.id`——宿主事实，绝不是模型提供的字段），或走 CLI。
+**连接自身不携带身份；随发行的行信任调用方声明的 `sessionId`。** 共享连接自身无身份，且仅属 MCP 的身份接线已移除：没有 `--identity-env`、没有已声明身份锁、没有选择器剥离，也没有连接级默认 session id。按调用的 `sessionId` 选择器只在启动方显式 opt-in（`mstar mcp --trust-caller-session-id`）的连接上发布；随发行的行会传这个开关，未 opt-in 的连接仍以 `mcp.caller-identity-unavailable` 拒绝传入的 id。在 opt-in 连接上该值是 bearer 身份：`executionContextFor` 把它变成 `context.caller`，引擎据此解析调用方**自己**的 coordinator 绑定，因此知道一个活跃会话的 id 就足以以它行事——授权仍是那条绑定行加上可选的 `--expect` CAS 令牌。需要会话身份的**操作**在**本条连接**上传 `sessionId` 运行——包括 `plan progress`、`plan complete`、`workflow register/evidence/phase`、`session recover`、`workflow-note.append`。上文列出的三个 dsh 原生工具只留给本 MCP 面做不到的事，那里身份是 `exec.agent.id`——宿主事实，绝不是模型提供的字段。未 opt-in 的连接没有调用方声明通道，那里才走原生工具或 CLI。
 
 ## Engine seam mapping
 
