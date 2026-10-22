@@ -95,6 +95,7 @@ Max **3** tasks per micro-batch without user override. See `project-manager.md` 
 | **Cursor** | `Task` with `resume: <host_agent_id>` — **`mstar-host/references/cursor.md`** § SDD sticky |
 | **OpenCode** | Resume only if task tool supports it; else micro-batch or `fresh` per task |
 | **Codex** | Thread resume only when callable multi-agent tool documents agent id; else micro-batch or `fresh` |
+| **dsh** | Continue the SAME delegation target with `send_message` — the Team teammate's `target`, or a direct `subagent` child's `agent_id` on a direct-only profile; no resume token exists, and a second child is never spawned for the same work — **`mstar-host/references/dsh.md`** § Pick the delegation channel before you delegate |
 
 ## PM NEVER (sticky)
 
