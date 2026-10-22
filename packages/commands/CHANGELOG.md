@@ -6,6 +6,18 @@ The monorepo root [CHANGELOG.md](../../CHANGELOG.md) summarizes cross-surface re
 
 ## [Unreleased]
 
+## [4.0.5] - 2026-10-22
+
+### Changed
+
+- **`plan issue-add` publishes its entry array as a typed schema.** The `entries` payload is now the engine's `CaptureInput` registry as an array item (minus the plan-derived `projectId`) instead of an array of free-form objects, so `mstar schema --command plan.issue-add` states every per-entry field, its enum values and its requiredness. One inline `--entries` value with several incomplete entries is refused once, naming every missing field of every entry (`entries[<i>].<field>`) in a single usage envelope; `--file` keeps the engine's aggregated per-entry problems.
+- **`workflow execution-policy` publishes its policy document.** The command now declares the `policy` payload — the transport mirror of the engine's `WorkflowExecutionPolicy` (`plan_parallelism`, `worktree_mode`, `push_policy`, all optional) — so `mstar schema --command workflow.execution-policy` shows the shape `--file` accepts, and the `--file` help names that lookup. The engine's `coordination.forbidden-field` guard on unknown keys remains the authority.
+- **The unused generic `input`/`policy` payload records are removed** from the workflow family's publication path; a workflow payload key is now published from a declared schema or not at all.
+
+- Version alignment with harness **4.0.5**.
+
+See root [CHANGELOG.md](../../CHANGELOG.md) **4.0.5**.
+
 ## [4.0.4] - 2026-10-20
 
 ### Changed
