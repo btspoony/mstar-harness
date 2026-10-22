@@ -37,3 +37,14 @@ export const MSTAR_ENGINE_STATUS_METHOD = 'engineStatus'
 export const MSTAR_SELECT_WORKFLOW_METHOD = 'selectWorkflow'
 /** The endpoint path the client calls for a workflow pick. */
 export const SELECT_WORKFLOW_ENDPOINT = `${MSTAR_ENGINE_STATUS_NAMESPACE}/${MSTAR_SELECT_WORKFLOW_METHOD}`
+/**
+ * Wire namespace of the panel-snapshot read. The panel keeps the `mstar`
+ * namespace (one plugin, one address family) while serving the snapshot from
+ * its own host service, so retiring the engine-status READ path cannot
+ * withdraw this one.
+ */
+export const MSTAR_PANEL_SNAPSHOT_NAMESPACE = 'mstar'
+/** Wire method of the store-backed panel read → `/api/mstar/panelSnapshot`. */
+export const MSTAR_PANEL_SNAPSHOT_METHOD = 'panelSnapshot'
+/** The endpoint path the panel calls on every poll tick. */
+export const PANEL_SNAPSHOT_ENDPOINT = `${MSTAR_PANEL_SNAPSHOT_NAMESPACE}/${MSTAR_PANEL_SNAPSHOT_METHOD}`
