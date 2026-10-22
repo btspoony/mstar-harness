@@ -69,6 +69,7 @@ Topic skills, grouped by what they own:
 | `mstar-strategy` | `STRATEGY.md` direction |
 | `mstar-skill-authoring` | Skill authoring gate |
 | `mstar-audit` | Read-only audit variants: codebase, tests, PR review |
+| `mstar-pr-loop` | Opt-in PR review → fix loop until `ship it`; not part of plan/iteration flow |
 | `mstar-e2e` | Explicit E2E, browser, device, and installed-deployment verification |
 | `mstar-use-cli` | CLI reference: families, flags, exit and refusal codes |
 | `mstar-engine-legacy` | Engine-absent safety archive; conditional contract fallback |
