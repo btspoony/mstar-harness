@@ -72,6 +72,9 @@
     "bun": ">=1.4.0",
     "node": ">=24.18.0"
   },
+  "dependencies": {
+    "zod": "^4.2.0"
+  },
   "peerDependencies": {
     "@deepseek-ai/cordis": "^4.0.5",
     "@deepseek-ai/dsh-agent": "^0.2.1-rc.2",
