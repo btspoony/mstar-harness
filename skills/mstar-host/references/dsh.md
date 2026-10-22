@@ -190,13 +190,16 @@ roster. Read the live toolset, never the profile name:
 writable work must not route there (§ Read-only fan-out via the `workflow` tool).
 Read-only work fans out through it when mounted; writable work runs inline in the
 coordinator. When a task genuinely requires a delegation surface, recover through
-the host profile instead of reporting a bare refusal: `dsh --dump-config` prints
-what the active profile mounts, `dsh --patch <file.yml>` applies an extra overlay,
-and `dsh plugin --profile <name> …` installs the bundle that provides the missing
-row. These take effect at the NEXT boot — the composition is re-read at launch,
-not in a running session — so the current session keeps its toolset: keep
-executing inline, or report `Blocked` naming the missing tool and that recovery
-only after it fails.
+the host profile instead of reporting a bare refusal. Enumerate first —
+`dsh --profile <name> --dump-config` prints the composed loader tree, disabled
+rows included, so it names the missing row. Then install the bundle that supplies
+it: `dsh plugin --profile <name> add
+@deepseek-ai/dsh-experimental-agent-team-profile` for the Team tools (the direct
+rows ship in `@deepseek-ai/dsh-base`), or `dsh --patch <file.yml>` to add a
+patch-list overlay when the row exists but is disabled. These take effect at the
+NEXT boot — the composition is re-read at launch, not in a running session — so
+the current session keeps its toolset: keep executing inline, or report `Blocked`
+naming the missing tool and that recovery only after it fails.
 
 **Coexistence is the trap.** On a profile that mounts the Team layer, the names
 `list_agents` / `send_message` / `interrupt_agent` belong to the TEAM tools and
