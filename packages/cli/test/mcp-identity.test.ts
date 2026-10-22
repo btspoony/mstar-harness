@@ -526,4 +526,34 @@ describe("MCP surface — store-level commands stay on the CLI", () => {
     // A runtime family still publishes, so the assertion above is not vacuous.
     expect(tools.map((tool) => tool.name)).toContain(familyToolName("plan"));
   });
+
+  test("mstar_schema reports those commands as CLI-only through the MCP surface", async () => {
+    // The tool is gone but the COMMAND still exists, so discovery must not send
+    // an agent toward an MCP route that cannot be invoked: the surviving schema
+    // tool answers with the transport fact on both the family and leaf paths.
+    const server = new McpServer({ name: "schema-surface-server", version: "1.0.0" });
+    const client = new Client({ name: "schema-surface-client", version: "1.0.0" });
+    const [clientEnd, serverEnd] = InMemoryTransport.createLinkedPair();
+    try {
+      registerMcpCommands(server, getCommandDefinitions(), createContextResolver());
+      await server.connect(serverEnd);
+      await client.connect(clientEnd);
+      const family = await client.callTool({ name: "mstar_schema", arguments: { action: "schema", family: "store" } });
+      const members = (JSON.parse(String((family.content[0] as { text: string }).text)) as {
+        data: { members: Array<{ id: string; transport?: string }> };
+      }).data.members;
+      expect(members.length).toBeGreaterThan(0);
+      expect(members.every((member) => member.transport === "cli")).toBe(true);
+
+      const leaf = await client.callTool({
+        name: "mstar_schema",
+        arguments: { action: "schema", command: "store.execution.export" },
+      });
+      expect((JSON.parse(String((leaf.content[0] as { text: string }).text)) as { data: { transport?: string } })
+        .data.transport).toBe("cli");
+    } finally {
+      await client.close();
+      await server.close();
+    }
+  });
 });

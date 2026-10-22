@@ -227,7 +227,7 @@ mstar 技能通过 dsh skill-filesystem 提供者以**单一规范挂载**接入
 
 ## Native command surface
 
-本宿主的可写 mstar 命令面是 **MCP 路线**：整个宿主**共享一条** `mstar-mcp` 连接（即 bundle 行——见 § Shared MCP connection），每个命令家族一个工具（`mcp__mstar__mstar_<family>` + `action` 参数）。该连接**自身不携带任何身份**；需要会话身份的操作是下列三个 dsh 原生工具，身份来自 `exec.agent.id`。
+本宿主的可写 mstar 命令面是 **MCP 路线**：整个宿主**共享一条** `mstar-mcp` 连接（即 bundle 行——见 § Shared MCP connection），每个命令家族一个工具（`mcp__mstar__mstar_<family>` + `action` 参数）。该连接**自身不携带任何身份**，但随发行的行以 `--trust-caller-session-id` opt-in，因此需要会话身份的操作在这条连接上传 `sessionId`（未 opt-in 的连接不发布选择器并拒绝传入的 id）。下列三个 dsh 原生工具只留给拥有插件本地状态的操作，身份来自 `exec.agent.id`。
 
 **成员规则**——记住它而不是记清单：一个命令只有在满足下列之一时才是 dsh 原生工具
 

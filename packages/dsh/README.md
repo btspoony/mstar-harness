@@ -228,7 +228,7 @@ The plugin registers the bundled mstar commands (omp/opencode parity surface) on
 
 ## Native command surface
 
-The writable mstar command surface on this host is the **MCP route**: ONE shared `mstar-mcp` connection for the whole host (the bundle row — § Shared MCP connection), publishing one tool per command family (`mcp__mstar__mstar_<family>` with an `action` argument). That connection carries **no identity of its own**; the operations that need a session identity are the three dsh-native tools below, where the identity is `exec.agent.id`.
+The writable mstar command surface on this host is the **MCP route**: ONE shared `mstar-mcp` connection for the whole host (the bundle row — § Shared MCP connection), publishing one tool per command family (`mcp__mstar__mstar_<family>` with an `action` argument). That connection carries **no identity of its own**, but the shipped row opts in with `--trust-caller-session-id`, so an operation that needs a session identity passes `sessionId` on it (a connection launched without the flag publishes no selector and refuses one). The three dsh-native tools below are reserved for the operations that own plugin-local state, where the identity is `exec.agent.id`.
 
 **The membership rule** — memorize it instead of a list: a command is a dsh-native tool only when it
 
