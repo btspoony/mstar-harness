@@ -115,7 +115,10 @@ describe('profile bundle layer (Task 4)', () => {
     expect(config.serverName).toBe('mstar')
     expect(config.transport).toBe('stdio')
     expect(config.command).toBe('npx')
-    expect(config.args).toEqual(['-y', '@mstar-harness/cli', 'mcp'])
+    // The row opts in to caller session identity: without this flag the shared
+    // connection publishes no `sessionId` selector and every identity-bearing
+    // MCP action refuses.
+    expect(config.args).toEqual(['-y', '@mstar-harness/cli', 'mcp', '--trust-caller-session-id'])
   })
 
   it('ships exactly one MCP row: only the shared mstar-mcp row names the client package', () => {
