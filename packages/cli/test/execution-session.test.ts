@@ -2153,3 +2153,44 @@ describe("status validate — public authority reads", () => {
     expect(JSON.stringify(payload)).not.toContain(identity.sessionId);
   });
 });
+
+/**
+ * `terminalAdoptions` is a SIBLING of `authority`, so a redaction that walks
+ * only the authority subtree leaves `actor_session_id` readable — the third
+ * omission of that shape. This fixture records an adoption and pins the whole
+ * envelope.
+ */
+describe("status validate — adopted workflows", () => {
+  test("redacts the adopter session id on the sibling terminalAdoptions key", async () => {
+    const fixture = await activeFixture("mstar-status-adoption");
+    const handle = await openStore(fixture.context, "write");
+    try {
+      handle.db.prepare(
+        "insert into execution_workflows(workflow_id, revision, creator_session_id, state_json, created_at, updated_at) values (?, 1, null, ?, ?, ?)",
+      ).run("wf-adopted-legacy", JSON.stringify({
+        id: "wf-adopted-legacy",
+        schema_version: 1,
+        type: "plan",
+        status: "stopped",
+        started_at: "2026-10-01T00:00:00.000Z",
+        ended_at: "2026-10-01T01:00:00.000Z",
+        updated_at: "2026-10-01T01:00:00.000Z",
+        lifecycle_adopted_at: "2026-10-02T00:00:00.000Z",
+        adopt_reason: "legacy closeout",
+        adoption_actor_session_id: "session-adopter-live",
+        adoption_operation_id: "op-adopt-1",
+      }), "2026-10-01T00:00:00.000Z", "2026-10-01T01:00:00.000Z");
+    } finally {
+      handle.close();
+    }
+
+    const result = runCli(["status", "validate"], fixture);
+    expect(result.exitCode, result.stdout).toBe(0);
+    const payload = JSON.parse(result.stdout) as { data?: { terminalAdoptions?: Array<Record<string, unknown>> } };
+    expect(payload.data?.terminalAdoptions?.[0]).toMatchObject({
+      actor_session_id: "[redacted]",
+      adopt_reason: "legacy closeout",
+    });
+    expect(JSON.stringify(payload)).not.toContain("session-adopter-live");
+  });
+});
