@@ -9,11 +9,6 @@
  *   - the TaskBoard kanban (five stacked groups, reused in flow by
  *     IterationTaskPage — plan sidebar §L4.2).
  *
- * Still present but with no consumer since the agents page was deleted: the
- * three `.swatchAgent*` entity-status rules below (they styled that page's
- * rows). Left in place rather than removed with the Legend — deleting them is
- * a separate cleanup, not part of the Legend deletion.
- *
  * Hard metrics (spec §1.2/§7): spacing from the --mstar-space-* ramp (defined
  * at the panel root) only; EVERY color is a verified --dsw-* alias token —
  * zero bare hex/rgb, so dark mode is the host token flip; motion ≤200ms
@@ -54,22 +49,6 @@
   margin: 0;
   color: var(--dsw-alias-label-caption);
   font: var(--dsw-font-xxxs-11);
-}
-
-/* Entity-status swatches: no consumer left since the agents page was deleted (see the file header). */
-.swatchAgentRunning {
-  background: var(--dsw-alias-state-business-primary);
-  border-radius: 999px;
-  box-shadow: 0 0 0 1px var(--dsw-alias-bg-layer-1), 0 0 0 2px var(--dsw-alias-state-business-primary);
-}
-
-.swatchAgentSettled {
-  background: var(--dsw-alias-state-success-primary);
-  border-radius: 999px;
-}
-
-.swatchAgentIdle {
-  border: 1px dashed var(--dsw-alias-label-caption);
 }
 
 /* --- task board kanban (spec §3/§5/§7): five STACKED groups + count badges + plan cards + dim flow
