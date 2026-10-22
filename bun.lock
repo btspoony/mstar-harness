@@ -62,6 +62,9 @@
     "packages/dsh": {
       "name": "@mstar-harness/dsh",
       "version": "4.0.4",
+      "dependencies": {
+        "zod": "^4.2.0",
+      },
       "devDependencies": {
         "@deepseek-ai/dsh-session-format-v3-to-v4": "0.2.1-rc.2",
         "@deepseek-ai/dsh-util-code-language": "0.2.1-rc.2",

@@ -1,8 +1,8 @@
 /**
- * The in-process receipt of the control root that a native `mstar_plan_bind`
- * call carrying an explicit per-call `harness` adopts its durable execution
- * binding into. The consumers (the workflow-ledger attribution resolver and
- * the native `mstar_execution_clear` tool) hold only the carrying session's
+ * The receipt of the control root that a native `mstar_plan_bind` call carrying
+ * an explicit per-call `harness` adopts its durable execution binding into. The
+ * consumers (the workflow-ledger attribution resolver and the native
+ * `mstar_execution_clear` tool) hold only the carrying session's
  * `(sessionId, cwd)` and must not re-derive the root from the workspace.
  *
  * A native `mstar_plan_bind` call carrying an explicit per-call `harness`
@@ -22,15 +22,21 @@
  * addressable for another session or workspace, and the workspace-root path
  * (no explicit `harness`) is unchanged: no record, workspace resolution.
  *
- * Scope note: this is a per-host-process receipt, not a durable channel. A
- * host restart (or a plugin-fiber reload) drops it, and the consumers then
- * answer exactly as they did before this module existed (attribution null,
- * clear `no-binding`). The named recovery for both is a RESUME re-bind:
- * re-run the native bind carrying the ORIGINAL session reference (the
- * `resumeRef` the first bind's receipt minted — still durable in the
- * binding slot's `executionBinding.session`) and the SAME `harness`
- * selection; the engine resumes the still-bound coordinator seat and the
- * adoption re-records the root here. When the ADOPTION itself failed after
+ * Durability: when the plugin's storage-domain seam is installed (see
+ * `execution-binding-roots-domain.ts`), every record and clear is mirrored into
+ * a durable table under the same `keyOf` key, so the receipt survives a host
+ * restart. The store installs asynchronously, so an adoption may land first;
+ * installing then replays this module's overlay into the table, and a cleared
+ * tombstone (`null`) is deleted from the table instead of being written back as
+ * a root. With no seam — the host service is absent, its open refused, or a
+ * bare module instance in a test — the receipt is exactly the per-process map
+ * it has always been, and the consumers answer as they did before this module
+ * existed (attribution null, clear `no-binding`). The named recovery for that
+ * degraded case is a RESUME re-bind: re-run the native bind carrying the
+ * ORIGINAL session reference (the `resumeRef` the first bind's receipt minted —
+ * still durable in the binding slot's `executionBinding.session`) and the SAME
+ * `harness` selection; the engine resumes the still-bound coordinator seat and
+ * the adoption re-records the root here. When the ADOPTION itself failed after
  * the engine bind committed, the slot never received that reference: the
  * refusal then carries it as `data.resumeRef` (with the workflow id and the
  * adoption's `harness` root), so the same resume re-bind stays performable.
@@ -38,10 +44,26 @@
  * replaced by a bind — the bind is refused (`coordination.identity-mismatch`
  * for a live current-epoch holder, `execution.session-unavailable` once the
  * row's epoch is behind the store's) and adopts nothing.
+ *
+ * Read order: the in-process overlay is FIRST. A key this process has observed
+ * answers from the overlay — the recorded root, or the cleared tombstone — and
+ * only a key never observed is read from the durable table. Durable-first would
+ * resurrect a just-cleared root: the domain mutates its memory only after the
+ * backend write lands, so the delete is still queued when the read happens.
  */
+import {
+  deleteDurableExecutionBindingRoot,
+  durableExecutionBindingRootOf,
+  putDurableExecutionBindingRoot,
+  registerExecutionBindingRootReplay,
+} from './execution-binding-roots-domain.ts'
 
-/** One record: the selected root for one exact `(sessionId, cwd)` pair. */
-const selectedRoots = new Map<string, string>()
+/**
+ * One observed record: the selected root for one exact `(sessionId, cwd)` pair,
+ * or `null` for a cleared tombstone (observed-and-cleared, so the durable table
+ * is never consulted for that key again in this process).
+ */
+const observedRoots = new Map<string, string | null>()
 
 /** The map key — the session/cwd identity pair, delimiter-joined. */
 function keyOf(sessionId: string, cwd: string): string {
@@ -51,22 +73,29 @@ function keyOf(sessionId: string, cwd: string): string {
 /**
  * Record the harness root a native bind adoption wrote its durable binding
  * into, for the carrying `(sessionId, cwd)` pair. Only a successful adoption
- * records: a refused envelope never rewrites the session's selection.
+ * records: a refused envelope never rewrites the session's selection. The
+ * receipt is synchronous and the returned promise is the queued durable
+ * write — it never rejects, so a store failure cannot reach the bind path.
  */
-export function recordExecutionBindingRoot(sessionId: string, cwd: string, harnessRoot: string): void {
-  if (sessionId === '' || cwd === '' || harnessRoot === '') return
-  selectedRoots.set(keyOf(sessionId, cwd), harnessRoot)
+export function recordExecutionBindingRoot(sessionId: string, cwd: string, harnessRoot: string): Promise<void> {
+  if (sessionId === '' || cwd === '' || harnessRoot === '') return Promise.resolve()
+  const key = keyOf(sessionId, cwd)
+  observedRoots.set(key, harnessRoot)
+  return putDurableExecutionBindingRoot(key, harnessRoot)
 }
 
 /**
  * The harness root this session's native bind selected, or `undefined` when
- * the session has no in-process adoption receipt (a bind without an explicit
- * `harness`, a fresh host process after a restart, a reload) — the caller
- * resolves the workspace harness, the unchanged pre-existing path.
+ * the session has no adoption receipt (a bind without an explicit `harness`, a
+ * cleared receipt, a failed durable read) — the caller resolves the workspace
+ * harness, the unchanged pre-existing path. Synchronous: a key this process
+ * never observed reads the open domain table's in-memory state.
  */
 export function executionBindingRootOf(sessionId: string, cwd: string): string | undefined {
   if (sessionId === '' || cwd === '') return undefined
-  return selectedRoots.get(keyOf(sessionId, cwd))
+  const key = keyOf(sessionId, cwd)
+  if (observedRoots.has(key)) return observedRoots.get(key) ?? undefined
+  return durableExecutionBindingRootOf(key)
 }
 
 /**
@@ -74,18 +103,37 @@ export function executionBindingRootOf(sessionId: string, cwd: string): string |
  * the binding in the selected root, so a later clear resolves the workspace
  * root instead of re-resolving a cleared slot: it answers `no-binding` when
  * the workspace declares a harness there, and the named no-harness refusal
- * otherwise.
+ * otherwise. The tombstone is synchronous (a read before the durable delete
+ * lands answers `undefined`) and the returned promise is the queued durable
+ * delete; like the record, it never rejects.
  */
-export function clearExecutionBindingRoot(sessionId: string, cwd: string): void {
-  if (sessionId === '' || cwd === '') return
-  selectedRoots.delete(keyOf(sessionId, cwd))
+export function clearExecutionBindingRoot(sessionId: string, cwd: string): Promise<void> {
+  if (sessionId === '' || cwd === '') return Promise.resolve()
+  const key = keyOf(sessionId, cwd)
+  // A tombstone changes an answer only for a key that could otherwise answer:
+  // an overlay entry this process recorded, or a durable record the queued
+  // delete has not landed over. An unobserved, durably absent key stays
+  // unobserved, so the overlay never grows for keys nothing has ever stored.
+  if (observedRoots.has(key) || durableExecutionBindingRootOf(key) !== undefined) observedRoots.set(key, null)
+  return deleteDurableExecutionBindingRoot(key)
 }
 
 /**
- * Test-only reset: a suite sharing one module instance clears every receipt
- * between cases (production callers never need this — records are keyed by
- * the session/cwd pair and expire with the host process).
+ * Test-only reset: a suite sharing one module instance clears every in-process
+ * receipt between cases (the durable table is untouched — a fresh seam over the
+ * same medium is how the restart shape is modelled).
  */
 export function resetExecutionBindingRootsForTests(): void {
-  selectedRoots.clear()
+  observedRoots.clear()
 }
+
+// The store installs asynchronously (the plugin's deferred child), so an
+// adoption can precede it: installing replays every observed entry into the
+// table — the recorded roots, and the cleared tombstones as deletes rather than
+// roots — so no receipt is readable in-process yet absent after a restart.
+registerExecutionBindingRootReplay(() => {
+  for (const [key, root] of observedRoots) {
+    if (root === null) void deleteDurableExecutionBindingRoot(key)
+    else void putDurableExecutionBindingRoot(key, root)
+  }
+})
