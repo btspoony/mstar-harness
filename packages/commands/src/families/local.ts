@@ -9,6 +9,7 @@ import {
   hasHarnessRootDeclaration,
   resolveHarnessDir,
   resolveProjectDir,
+  resolveProjectRoot as projectRootFrom,
   resolveReviewDir,
   resolveScaffoldDirs,
   resolveSkillRoot,
@@ -34,11 +35,12 @@ import {
   formatPluginVersionDoctorNote,
   parseOmpPluginList,
   probePathNodeRuntime,
+  projectInstallPath,
   resolveDshProfileDir,
-  resolveProjectRoot,
   validateAgentPlugin,
 } from "../host-health.js";
 import type { CommandDefinition, CommandEnvelope, InvocationContext } from "../types.js";
+import { launchDirectoryRefusal } from "./launch-workspace.js";
 import {
   classifyOpencodeProbeError,
   diagnoseOpencodeV2Host,
@@ -113,9 +115,22 @@ function gitWorkspaceRoot(startDir: string): string {
   }
 }
 
-function pluginRoot(explicit: string | undefined): string {
-  if (explicit !== undefined) return path.resolve(explicit);
-  let candidate = resolveProjectRoot();
+/**
+ * The project root this invocation operates on: the workspace the CALLER named
+ * (`context.cwd`), never the directory this process happens to run in. On an MCP
+ * server the two differ exactly when the launcher declared a workspace
+ * (`--workspace`, or a pinned root's parent), and resolving the process-global
+ * project root there would answer about the host's checkout instead. The CLI's
+ * `context.cwd` is the directory the operator ran from, so its behavior is
+ * unchanged.
+ */
+function projectRootAt(workspace: string): string {
+  return projectRootFrom(workspace);
+}
+
+function pluginRoot(explicit: string | undefined, workspace: string): string {
+  if (explicit !== undefined) return path.resolve(workspace, explicit);
+  let candidate = projectRootAt(workspace);
   while (!fs.existsSync(path.join(candidate, "plugin.json"))) {
     const parent = path.dirname(candidate);
     if (parent === candidate) break;
@@ -184,20 +199,20 @@ function diagnoseOpencodeTarget(root: string, generation: OpencodeGeneration | u
   }
 }
 
-async function diagnose(target: (typeof doctorTargets)[number], scope: "global" | "project", generation?: OpencodeGeneration): Promise<{ location: string; errors: string[]; notes: string[]; generations?: OpencodeGeneration[]; generationSource?: string }> {
+async function diagnose(target: (typeof doctorTargets)[number], scope: "global" | "project", generation: OpencodeGeneration | undefined, projectRoot: string): Promise<{ location: string; errors: string[]; notes: string[]; generations?: OpencodeGeneration[]; generationSource?: string }> {
   if (target === "opencode") {
     const root = scope === "global"
       ? path.join(os.homedir(), ".config", "opencode")
-      : resolveProjectRoot();
+      : projectRoot;
     return diagnoseOpencodeTarget(root, generation);
   }
   if (target === "cursor") {
-    const result = diagnoseCursorHost(scope);
+    const result = diagnoseCursorHost(scope, { project: projectInstallPath(projectRoot) });
     return { location: result.location, errors: result.errors, notes: [] };
   }
   if (target === "kimi") return diagnoseKimiHost();
   if (target === "zcode") {
-    const result = diagnoseZcodeHost(scope, { projectRoot: resolveProjectRoot(), harnessRepoPath });
+    const result = diagnoseZcodeHost(scope, { projectRoot, harnessRepoPath });
     return { location: result.location, errors: result.errors, notes: [] };
   }
   if (target === "codex") {
@@ -245,6 +260,15 @@ export function getLocalCommandDefinitions(): readonly CommandDefinition[] {
       effects: ["write"],
       description: "Create the harness directories and default project; then run mstar store init to activate execution authority.",
       async execute(input, context) {
+        // A scaffold WRITES, so it may only land in a directory somebody named:
+        // the explicit `path`, the declared workspace, or the pinned harness. On
+        // a connection that declared no workspace the invocation directory is
+        // the server's launch directory (the HOST's checkout), and the null-root
+        // bootstrap exception does not make it a target.
+        const unnamedRoot = launchDirectoryRefusal("harness.scaffold", context, {
+          fields: [{ field: "path", subject: "the scaffold root", value: input.path }],
+        });
+        if (unnamedRoot !== undefined) return unnamedRoot;
         // An omitted path is the invocation workspace: a pinned server owns
         // that workspace, and the launch process cwd is not it. A pinned
         // server also names the exact harness dir, which the scaffold must
@@ -303,11 +327,23 @@ export function getLocalCommandDefinitions(): readonly CommandDefinition[] {
       effects: ["read"],
       description: "Validate Morning Star setup for one supported host target.",
       async execute(input, context) {
-        const result = await diagnose(input.target, input.scope, input.generation);
+        // The project-scoped diagnosis reads the project around the invocation:
+        // on a connection that declared no workspace that is the HOST's
+        // checkout, so the report would describe a project the caller never
+        // named. The GLOBAL scope needs no workspace (it reads the host
+        // installation, which is this command's own subject), so only the
+        // project half refuses. A declared workspace (`--workspace`, or a
+        // pinned root's parent) anchors the resolution at `context.cwd`.
+        const unnamedProject = input.scope === "project"
+          ? launchDirectoryRefusal("doctor", context, { subject: "the project root this diagnosis reads" })
+          : undefined;
+        if (unnamedProject !== undefined) return unnamedProject;
+        const projectRoot = projectRootAt(context.cwd);
+        const result = await diagnose(input.target, input.scope, input.generation, projectRoot);
         // MCP configs are global by default; project-scoped OpenCode uses the
         // project's own opencode.json, while dsh composes rows in its profile.
         const projectOpencodeMcpPath = input.target === "opencode" && input.scope === "project"
-          ? path.join(resolveProjectRoot(), "opencode.json")
+          ? path.join(projectRoot, "opencode.json")
           : undefined;
         const resolvedGenerations = result.generations ?? [];
         // A dual-host config resolves to ["v1","v2"]; the V2 host in that set
@@ -392,8 +428,16 @@ export function getLocalCommandDefinitions(): readonly CommandDefinition[] {
       input: z.object({ root: z.string().optional() }),
       effects: ["validate"],
       description: "Validate a plugin package against Agent Plugins v1.0.0.",
-      async execute(input) {
-        const root = pluginRoot(input.root);
+      async execute(input, context) {
+        // An omitted root is the project around the invocation, which only
+        // exists in a directory somebody named: on a connection that declared
+        // no workspace it is the HOST's checkout, and validating the host's own
+        // package as the caller's answer is a silent wrong answer.
+        const unnamedRoot = launchDirectoryRefusal("plugin.validate", context, {
+          fields: [{ field: "root", subject: "the plugin package", value: input.root }],
+        });
+        if (unnamedRoot !== undefined) return unnamedRoot;
+        const root = pluginRoot(input.root, context.cwd);
         const result = validateAgentPlugin(root);
         return result.ok
           ? ok("plugin.validate", { root, ...result })
@@ -406,6 +450,15 @@ export function getLocalCommandDefinitions(): readonly CommandDefinition[] {
       effects: ["read"],
       description: "Resolve harness, specs, workflow, project, and review directories from a start directory.",
       async execute(input, context) {
+        // On a connection that declared no workspace the invocation directory is
+        // the MCP server's LAUNCH directory (the host's checkout), which says
+        // nothing about the caller's workspace: deriving harness/workflow/
+        // project/review paths from it would answer about an unrelated project.
+        // The start directory is then a required, absolute input.
+        const unnamedStart = launchDirectoryRefusal("path.resolve", context, {
+          fields: [{ field: "path", subject: "the start directory", value: input.path }],
+        });
+        if (unnamedStart !== undefined) return unnamedStart;
         const startDir = input.path === undefined ? context.cwd : path.resolve(context.cwd, input.path);
         // `controlRoot` is a HARNESS dir, not a workspace boundary; feeding it
         // as `workspaceRoot` makes the resolver refuse the very harness it

@@ -321,23 +321,21 @@ describe("OpenCode MCP doctor health", () => {
     writeFileSync(join(projectRoot, "opencode.json"), JSON.stringify(V2_CONFIG));
     writeMcpConfig(homeRoot, V2_CONFIG);
 
-    const previousProjectRoot = process.env.MSTAR_CLI_PROJECT_ROOT;
-    process.env.MSTAR_CLI_PROJECT_ROOT = projectRoot;
     const home = spyOn(os, "homedir").mockReturnValue(homeRoot);
     try {
       const doctor = getLocalCommandDefinitions().find(({ id }) => id === "doctor");
       expect(doctor).toBeDefined();
       if (!doctor) return;
+      // The project scope reads the workspace the INVOCATION names: the context
+      // carries it (`cwd`), never this process's directory.
       const result = await doctor.execute(
         { target: "opencode", scope: "project", generation: "v2" },
-        { versions: { cli: "test" }, effects: {} },
+        { cwd: projectRoot, controlRoot: null, versions: { cli: "test" }, effects: {} },
       );
       expect(result).toMatchObject({ status: "ok" });
       expect(result.data.mcpHealth.status).toBe("aligned");
     } finally {
       home.mockRestore();
-      if (previousProjectRoot === undefined) delete process.env.MSTAR_CLI_PROJECT_ROOT;
-      else process.env.MSTAR_CLI_PROJECT_ROOT = previousProjectRoot;
     }
   });
   test("timed-out doctor version probe refuses even when stdout contains a valid version", async () => {
@@ -351,9 +349,7 @@ describe("OpenCode MCP doctor health", () => {
     writeFileSync(fakeOpencode, "#!/bin/sh\nprintf 'opencode v2.0.24\\n'\nsleep 30\n");
     chmodSync(fakeOpencode, 0o755);
 
-    const previousProjectRoot = process.env.MSTAR_CLI_PROJECT_ROOT;
     const previousPath = process.env.PATH;
-    process.env.MSTAR_CLI_PROJECT_ROOT = projectRoot;
     process.env.PATH = `${binRoot}${path.delimiter}${previousPath ?? ""}`;
     const home = spyOn(os, "homedir").mockReturnValue(homeRoot);
     try {
@@ -362,15 +358,13 @@ describe("OpenCode MCP doctor health", () => {
       if (!doctor) return;
       const result = await doctor.execute(
         { target: "opencode", scope: "project" },
-        { versions: { cli: "test" }, effects: {} },
+        { cwd: projectRoot, controlRoot: null, versions: { cli: "test" }, effects: {} },
       );
       expect(result.status).toBe("refused");
       expect(result.details.errors.join(" ")).toContain("--opencode-generation <v1|v2>");
       expect(result.details.errors.join(" ").toLowerCase()).toContain("timeout");
     } finally {
       home.mockRestore();
-      if (previousProjectRoot === undefined) delete process.env.MSTAR_CLI_PROJECT_ROOT;
-      else process.env.MSTAR_CLI_PROJECT_ROOT = previousProjectRoot;
       if (previousPath === undefined) delete process.env.PATH;
       else process.env.PATH = previousPath;
     }

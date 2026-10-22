@@ -3,10 +3,10 @@ import { CommanderError, type Command } from "commander";
 import { serveMcpStdio, type McpSeat } from "./stdio.js";
 
 interface McpCommandOptions {
-  identityEnv?: string;
   harness?: string;
   workspace?: string;
   seat?: string;
+  trustCallerSessionId?: boolean;
 }
 
 /** A relative root is a usage refusal, never a cwd-relative guess. */
@@ -31,17 +31,13 @@ export function registerMcpCommand(program: Command): void {
   program.command("mcp")
     .description("Run the Morning Star MCP server over stdio")
     .option(
-      "--identity-env <NAME>",
-      "read the default session id from environment variable NAME and LOCK the connection identity to it when the variable resolves a usable id (one safe path component under the engine's safe-session-id rule): the tools publish no session selector and a caller-supplied sessionId is stripped before admission, so every call runs under the declared identity. An unset, blank or unsafe value keeps the connection generic and is warned about at launch, with the recovery to correct the variable or drop --identity-env and relaunch. Without it no ambient identity is read and a per-call sessionId selects the identity.",
-    )
-    .option(
       "--harness <path>",
-      "absolute harness root for every call; it also anchors the invocation workspace at its parent, so cwd-derived paths land under the pinned harness. Without it the server probes process.cwd() for one",
+      "absolute harness root that PINS this connection: every call resolves its control root here, and the invocation workspace is anchored at its parent, so cwd-derived paths land under the pinned harness. Without it a non-blank MSTAR_HARNESS_DIR in the server environment pins the same way (resolved against the server's launch directory, because an environment value has no CLI boundary to refuse a relative path). Without either, a call to a command that needs a root must name its own through the published `harness` selector, and a call that names none is refused; commands that need no root (schema, path.resolve, host.*, the read-only validators) run either way. The launch cwd is never used as a control root, and a root-free command may not default a path input from it either: with no declared workspace the input becomes required (harness.scaffold's path, roles.validate's rolesDir, audit.secret-scan's path, ...), and the report/scan actions whose subject IS the checkout (pr-review.post, pr-review.size) are refused",
       absolutePath("--harness"),
     )
     .option(
       "--workspace <path>",
-      "absolute session workspace every call runs from (the invocation cwd). A mounting host that serves sessions living outside its own cwd passes this so cwd-derived paths resolve in the CALLER's workspace; without it the workspace is the pinned harness's parent when --harness is set, else process.cwd()",
+      "absolute session workspace every call runs from (the invocation cwd), for a mounting host whose caller works outside the harness root's parent. Without it the workspace is the declared control root's parent directory; a connection that declares no root instead runs from its own launch directory, which a root-free command may not read or write by default, so declaring this flag is also how a mounting host names the directory harness.scaffold may bootstrap",
       absolutePath("--workspace"),
     )
     .option(
@@ -49,12 +45,16 @@ export function registerMcpCommand(program: Command): void {
       'declare the connection\'s seat: "leaf" refuses the coordinator-seat commands for this connection before execution, with the named cause and recovery. Those commands are the two classes that need a coordinator seat: those that establish or replace one (bind or complete a plan, recover a session, launch a child under a minted coordinator identity) and the workflow-scope writes (delivery evidence, lifecycle, close, adoption, coordinator notes, iteration registration). The set is derived from the command layer (`coordinator-seat.ts` in @mstar-harness/commands), which both this connection and the dsh host guard read, so it is not restated here. The remaining commands are not additionally restricted by this seat filter; each keeps its own input and authorization requirements',
       seatValue,
     )
+    .option(
+      "--trust-caller-session-id",
+      "DANGEROUS, default OFF: trust a caller-declared `sessionId` as an execution identity on this connection. An MCP server is a child process with no host-proven caller identity, so the default connection publishes no session selector and refuses a supplied one; enabling this lets any caller that knows a live coordinator session id act as it. Enable it only for a deployment whose callers are already authenticated by a channel this server owns. The host-proven routes stay available either way: the dsh native tools (plan bind, audit report validation, execution clear) and the CLI",
+    )
     .action(async (options: McpCommandOptions) => {
       await serveMcpStdio({
-        identityEnv: options.identityEnv,
         harnessRoot: options.harness,
         workspace: options.workspace,
         ...(options.seat === undefined ? {} : { seat: options.seat as McpSeat }),
+        ...(options.trustCallerSessionId === true ? { trustCallerSessionId: true } : {}),
       });
     });
 }

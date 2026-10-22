@@ -2012,7 +2012,7 @@ function recoverableIntegrationClaim(
   if (cause === null) return claim;
   if (!input.required) return null;
   throw invalidWorkflowTransition(
-    "The workflow cannot renew predecessor recovery; the current binding and claim are unchanged. A renewal requires a fresh operation id and complete stop evidence whose instant covers the named predecessor's claim and is not in the future. Inspect the claim and scope with mstar status validate; for an absent claim plan, inspect the backup with mstar store execution restore-preview before any restore.",
+    "The workflow cannot renew predecessor recovery; the current binding and claim are unchanged. A renewal requires a fresh operation id and complete stop evidence whose instant covers the named predecessor's claim and is not in the future. Inspect the claim and scope with mstar status validate; for an absent claim plan, inspect the backup with mstar store execution restore-preview --harness=<abs> before any restore.",
     {
       workflow_id: workflowId, session_id: callerId, prior_session_id: priorSessionId,
       claim: claim ?? null, registered_source: isPlainObject(metadata) ? metadata.working_branch ?? null : null,

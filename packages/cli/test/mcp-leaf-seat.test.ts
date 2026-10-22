@@ -1,10 +1,10 @@
 /**
- * The leaf seat keeps a writable route (PR #558 review, findings 1 and 2). The
- * dsh scoped mount launches a leaf session's MCP connection with `--seat leaf`;
- * the server then refuses the coordinator-seat commands with a named cause and
- * recovery while every other command stays reachable — the writable subset the
- * removed native `issue.add` / `issue.close` / `plan.prepare` /
- * `plan.progress` tools used to carry.
+ * The leaf seat keeps a writable route (PR #558 review, findings 1 and 2). A
+ * launcher that knows it is serving a leaf session starts the shared MCP
+ * connection with `--seat leaf`; the server then refuses the coordinator-seat
+ * commands with a named cause and recovery while every other command stays
+ * reachable — the writable subset the removed native `issue.add` /
+ * `issue.close` / `plan.prepare` / `plan.progress` tools used to carry.
  *
  * The refused set is the ONE derivation `@mstar-harness/commands`
  * (`coordinator-seat.ts`) exports, which the dsh host's `tools/pre-execute`

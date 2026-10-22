@@ -10,25 +10,31 @@ import { inputFields } from "../src/schema-branches";
 import { FAMILY_PURPOSE, actionOf, familyOf, familyToolName, foldFamilyTools } from "../src/mcp/fold";
 
 /**
- * The design budget for the whole published surface: every folded tool's
+ * The approved CEILING for the whole published surface: every folded tool's
  * description plus its input JSON schema, read back from `tools/list`.
  *
- * This is a ceiling, not a repository fact. `tools/list` is paid on every
- * request of every session. On the same probe the per-command surface this
+ * This literal is an APPROVED CEILING, not a measurement of this tree: nothing
+ * derives it from the repository, and it is not a figure any suite recomputes.
+ * `tools/list` is paid on every request of every session, so the number is a
+ * design limit a change must argue for, not a value to edit until the suite is
+ * green again; a raise belongs with a re-measured before/after in the same
+ * change. For reference, on the probe that set it the per-command surface this
  * replaces measured 173,340 characters of description + input schema (189,881
- * for the payload-composed input view), and it also published 154,471
- * characters of output schemas — 327,811 characters in total, over 90k tokens.
- * The fold publishes the descriptor field index instead of payload composition
- * and drops output schemas, so the after figure is 32,749 characters of
- * description + input schema (~9.1k tokens; the payload schemas published for
- * `plan.issue-add` and `workflow.execution-policy` are sanctioned contract
- * detail, not per-command republishing): 33,000 keeps a small but real margin
- * while a regression that starts republishing per-command contracts inside
- * family descriptions — or that lets per-action tools creep back — reddens
- * here. A published discovery example must carry every field the tool
- * REQUIRES (`"action":"schema"`), so the margin absorbs that cost too.
+ * for the payload-composed input view) and also published 154,471 characters of
+ * output schemas — 327,811 characters in total, over 90k tokens. The fold
+ * publishes the descriptor field index instead of payload composition and drops
+ * output schemas, so the after figure was 33,274 characters of description +
+ * input schema (~9.2k tokens; the payload schemas published for `plan.issue-add`
+ * and `workflow.execution-policy` are sanctioned contract detail, not
+ * per-command republishing): 33,500 keeps a small but real margin while a
+ * regression that starts republishing per-command contracts inside family
+ * descriptions — or that lets per-action tools creep back — reddens here. A
+ * published discovery example must carry every field the tool REQUIRES
+ * (`"action":"schema"`), and a family that publishes an identity selector also
+ * publishes the per-action `x-mstar-selectors` index a host-side injector reads,
+ * so the margin absorbs both.
  */
-const PUBLISHED_SURFACE_BUDGET_CHARS = 33_000;
+const PUBLISHED_SURFACE_CEILING_CHARS = 33_500;
 
 type PublishedTool = Readonly<{
   name: string;
@@ -37,6 +43,7 @@ type PublishedTool = Readonly<{
     required?: readonly string[];
     properties?: Readonly<Record<string, unknown>>;
     "x-mstar-requirements"?: readonly Readonly<{ name: string }>[];
+    "x-mstar-selectors"?: readonly Readonly<{ key: string; actions: readonly string[] }>[];
   }>;
 }>;
 
@@ -73,16 +80,20 @@ function baseContext(cwd: string): InvocationContext {
 /** Register the real definitions and run `run` against a real MCP client. */
 async function withClient(
   run: (client: Client, tools: readonly PublishedTool[]) => Promise<void>,
-  options: { identityLocked?: boolean; defaultSessionId?: string } = {},
   selected: readonly CommandDefinition[] = definitions,
 ): Promise<void> {
   const cwd = mkdtempSync(join(tmpdir(), "mstar-mcp-fold-"));
   const server = new McpServer({ name: "fold-test-server", version: "1.0.0" });
   const client = new Client({ name: "fold-test-client", version: "1.0.0" });
   const [clientEnd, serverEnd] = InMemoryTransport.createLinkedPair();
+  // A pinned connection that opted in to caller-declared identity: `harness`
+  // stays optional and the selector channel is published, so the fold suite
+  // checks field publication (`test/mcp-harness-root.test.ts` owns the
+  // unpinned-required rule and `test/mcp-identity.test.ts` the default-off
+  // identity rule).
   const resolver: ResolveContext = Object.assign(() => baseContext(cwd), {
-    identityLocked: options.identityLocked === true,
-    ...(options.defaultSessionId === undefined ? {} : { defaultSessionId: options.defaultSessionId }),
+    defaultHarness: join(cwd, ".mstar"),
+    callerIdentity: true,
   });
   try {
     registerMcpCommands(server, selected, resolver);
@@ -176,7 +187,7 @@ describe("folded MCP command families", () => {
       expect(refused).toMatchObject({ status: "usage", code: "command.invalid-input" });
       const paths = (refused.details?.diagnostics ?? []).map((entry) => (entry as { path?: string }).path);
       expect(paths).toContain("id");
-    }, {}, members);
+    }, members);
   });
 
   /**
@@ -469,20 +480,6 @@ describe("folded MCP command families", () => {
     });
   });
 
-  test("the session selector follows the identity lock on the folded tools", async () => {
-    await withClient(async (_client, tools) => {
-      const session = tools.find((entry) => entry.name === "mstar_session");
-      expect((session?.inputSchema.properties ?? {}).sessionId).toMatchObject({ type: "string" });
-      expect((session?.inputSchema["x-mstar-requirements"] ?? []).map((entry) => entry.name)).toContain("sessionId");
-    });
-    await withClient(async (_client, tools) => {
-      const session = tools.find((entry) => entry.name === "mstar_session");
-      expect((session?.inputSchema.properties ?? {}).sessionId).toBeUndefined();
-      expect((session?.inputSchema["x-mstar-requirements"] ?? []).map((entry) => entry.name)).not.toContain("sessionId");
-      expect(session?.description).not.toContain("--session-id");
-    }, { identityLocked: true, defaultSessionId: "locked-identity" });
-  });
-
   /**
    * A family publishes its session selector ONCE for the whole tool, so the
    * published schema says every action accepts it. Only the listed actions
@@ -490,6 +487,11 @@ describe("folded MCP command families", () => {
    * call silently runs under the connection identity. The transport refuses
    * before admission instead, names the accepting actions, and never echoes
    * the supplied identity.
+   *
+   * The published `x-mstar-selectors` index must state exactly what the refusal
+   * enforces: a host-side injector reads it to decide whether it may fill the
+   * selector for the SELECTED action, and an index that disagreed with the
+   * transport would either drop the identity or inject one the call refuses.
    */
   test("a session selector the selected action does not read refuses before admission", async () => {
     const cases = [
@@ -504,6 +506,7 @@ describe("folded MCP command families", () => {
       for (const entry of cases) {
         const published = tools.find((tool) => tool.name === entry.tool);
         expect((published?.inputSchema.properties ?? {}).sessionId).toMatchObject({ type: "string" });
+        expect(published?.inputSchema["x-mstar-selectors"]).toEqual([{ key: "sessionId", actions: [...entry.accepting] }]);
         const refusal = envelope(await call(client, entry.tool, { action: entry.action, sessionId: value }));
         expect(refusal).toMatchObject({ command: entry.id, status: "usage", code: "command.invalid-input", exitCode: 2 });
         expect(refusal.details?.selectors).toEqual([{ key: "sessionId", acceptingActions: [...entry.accepting] }]);
@@ -511,6 +514,15 @@ describe("folded MCP command families", () => {
         expect(refusal.details?.recovery).toContain("drop");
         expect(JSON.stringify(refusal)).not.toContain(value);
       }
+      // The same actions WITHOUT a selector are not refused for one: this is
+      // the shape a host sends after the action-scoped check, and the sibling
+      // action completes end to end.
+      for (const entry of cases) {
+        const clean = envelope(await call(client, entry.tool, { action: entry.action }));
+        expect(clean.details?.selectors).toBeUndefined();
+      }
+      const coverage = envelope(await call(client, "mstar_workflow_note", { action: "coverage", workflow: "wf-1" }));
+      expect(coverage).toMatchObject({ command: "workflow-note.coverage", status: "ok" });
     });
   });
 
@@ -637,11 +649,11 @@ describe("folded MCP command families", () => {
     });
   });
 
-  test("the whole published surface stays inside the design budget", async () => {
+  test("the whole published surface stays inside the approved ceiling", async () => {
     await withClient(async (_client, tools) => {
       const surface = tools.reduce((total, tool) =>
         total + JSON.stringify(tool.inputSchema).length + (tool.description ?? "").length, 0);
-      expect(surface).toBeLessThanOrEqual(PUBLISHED_SURFACE_BUDGET_CHARS);
+      expect(surface).toBeLessThanOrEqual(PUBLISHED_SURFACE_CEILING_CHARS);
     });
   });
 });

@@ -14,7 +14,7 @@ dsh 应用如何使用本插件——安装路径、配置、挂载时发生什�
 
 ### Install paths
 
-本包以 workspace 包形式发布（`workspaces: ["packages/*"]`），构建时把 engine 打进 `dist/`（`bun run build`；dist 已被 gitignore）。安装途径是 **profile bundle**，装进现成的 `web` profile（`dsh --profile web`——开箱即用的 web 应用 profile，即 `dsh web`），经 `dsh.bundle.patch` 清单——一个叠在 dsh-base 默认层之上的补丁层。该补丁还挂载一行宿主中立的 MCP 服务器；需要固定 harness 根或声明身份的部署用 `mstar mcp --harness <绝对路径>` 和/或 `--identity-env <NAME>` 启动它（挂载契约见 [`bundle/README.md`](bundle/README.md)）。
+本包以 workspace 包形式发布（`workspaces: ["packages/*"]`），构建时把 engine 打进 `dist/`（`bun run build`；dist 已被 gitignore）。安装途径是 **profile bundle**，装进现成的 `web` profile（`dsh --profile web`——开箱即用的 web 应用 profile，即 `dsh web`），经 `dsh.bundle.patch` 清单——一个叠在 dsh-base 默认层之上的补丁层。该补丁还挂载**一行**宿主中立的 MCP 服务器——即整个宿主共享的 `mstar-mcp` 连接；需要固定 harness 根的部署用 `mstar mcp --harness <绝对路径>` 启动它（挂载契约见 [`bundle/README.md`](bundle/README.md)）。
 
 **一条命令的 CLI 入口（推荐）**——`npx @mstar-harness/cli init --target dsh` 一次性装齐全量能力：它按序运行下面两条 `dsh plugin --profile web add` 安装（先 mstar bundle，再 `dsh-llm-fallbacks`），并可用 `npx @mstar-harness/cli doctor --target dsh` 逐行报告 `uninstalled` / `disabled` / `mounted` / `drifted`（`drifted` = fallbacks 行的安装版本不等于 pin；`init --target dsh` 会按 pin 重新 add，在此之前 `doctor` 以非零退出）。它编排的仍是同一条双命令安装；`--no-fallbacks` 跳过第二行（连带跳过 seeded 角色——见下文「零配置获得什么」）。
 
@@ -102,7 +102,7 @@ profile bundle 组合出以下行——注册表行来自 `@deepseek-ai/dsh-base
 - **派发闸门**——`tools/pre-execute` 监听器作用于委派工具，通过 engine 的单一 `composeDispatchGate` 组合（字段闸门、反递归预检、默认分支闸门——与 opencode/omp/CLI 对齐，违规码按构造即相同）校验 subagent Assignment 文本，外加 dsh 租约闸门与 worktree L1/L2 检查。
 - **技能撰写 lint**——已配置技能根下的 `SKILL.md` 写入运行 engine 技能撰写 lint（`lintFrontmatter` + `lintFiveQuestion`）。
 - **seam lint**——harness 下 `DESIGN.md` / 评审报告（`{REVIEW_DIR}` = `{HARNESS_DIR}/reviews/`）/ 知识文档 / roles 目录的写入运行各自的 artifact 级 engine lint。
-- **模型可见工具**——`ctx.tools` 上恰好注册**三个**工具，且只覆盖 scoped MCP 面做不到的事：**`mstar_plan_bind`**（持久槽生产者——dsh 本地 `executionBinding` 槽及其采纳收据的唯一写入者）、**`mstar_audit_validate`**（评审报告凭据扫描，`mstar_audit` 家族没有任何 action 提供）与 **`mstar_execution_clear`**（不存在共享的 `execution.clear` 命令）。其余所有 mstar 能力都走 MCP 家族：每个家族一个工具 + `action` 参数。成员规则与各工具的独有贡献见 § Native command surface。
+- **模型可见工具**——`ctx.tools` 上恰好注册**三个**工具，且只覆盖 MCP 面做不到的事：**`mstar_plan_bind`**（持久槽生产者——dsh 本地 `executionBinding` 槽及其采纳收据的唯一写入者）、**`mstar_audit_validate`**（评审报告凭据扫描，`mstar_audit` 家族没有任何 action 提供）与 **`mstar_execution_clear`**（不存在共享的 `execution.clear` 命令）。其余所有 mstar 能力都走 MCP 家族：每个家族一个工具 + `action` 参数。成员规则与各工具的独有贡献见 § Native command surface。
 - **bundled 命令**——向 `ctx.commands` 注册 `/iteration-start`、`/iteration-drive`、`/iteration-loop`、`/codebase-audit`（来自打包的 `harness-commands/` 镜像；每条声明 frontmatter `input` hint，使 web 客户端 claim `/name ` 并等待用户后续输入而非立即执行；handler 把命令正文 + 用户输入 steer 进接收 agent）。
 - **原生执行绑定路径**——持久执行绑定由成功的原生 `mstar_plan_bind`（两个 bind 臂，均在引擎只读 C1 session resume 成功之后）自动采纳，并按需用 `mstar_execution_clear` 工具清除：身份来自 `exec.agent.id`（无参数、无模型可选面），清除会保留本会话自己的用户选择与排除下限，未绑定会话或不可读的 binding 记录会得到命名拒绝及其恢复路径，而不是静默写入。这条路径上没有任何斜杠命令——操作者绑定或清除执行会话，用的就是这两个原生工具。
 - **pre-step catalog 行**——一个咨询式 `agent/pre-step` 监听器追加**一条**统一的 `mstar-engine` catalog 消息，只携带**一条 delta 行**（`workflow` / 非 Done `plans` / `branch` 锚点 / 解析到 steering compass 时的相位 `gate` 判定），选中项带警告时再附 `workflow warning` 披露行。residuals 汇总、branch policy、spec 集成锚点、row scope、知识摘要、compass 方向与 agent-flow ledger 均为 payload-only（面板 + engine 权威）——见 § Engine-status catalog。发射按会话+工作区变更驱动——首次发射之后，仅当渲染出的行或面板相关 payload 变化时才追加；turn 开始本身从不触发，未解析到 `{HARNESS_DIR}` 的工作区不会组合该行。其背后的构建共享同一份内存 TTL 缓存（`catalogTtlMs`，默认 60 秒）；每会话最新发射持久化到 control 根的 `store.db`（`dsh_status_emissions`），而非文件缓存。
@@ -227,7 +227,7 @@ mstar 技能通过 dsh skill-filesystem 提供者以**单一规范挂载**接入
 
 ## Native command surface
 
-本宿主的可写 mstar 命令面是 **MCP 路线**：每个命令家族一个工具（`mcp__mstar__mstar_<family>` + `action` 参数），按非叶 agent 挂载，并把这个 agent 自己的身份注入挂载的环境变量（`--identity-env`，见 § Scoped MCP mounts），因此共享准入无需模型提供字段即可拿到调用方 session id。
+本宿主的可写 mstar 命令面是 **MCP 路线**：整个宿主**共享一条** `mstar-mcp` 连接（即 bundle 行——见 § Shared MCP connection），每个命令家族一个工具（`mcp__mstar__mstar_<family>` + `action` 参数）。该连接**自身不携带任何身份**；需要会话身份的操作是下列三个 dsh 原生工具，身份来自 `exec.agent.id`。
 
 **成员规则**——记住它而不是记清单：一个命令只有在满足下列之一时才是 dsh 原生工具
 
@@ -242,11 +242,20 @@ mstar 技能通过 dsh skill-filesystem 提供者以**单一规范挂载**接入
 
 其余命令全部走 MCP；旧的 `mstar_<family>_<action>` 工具名不会以别名复活：用家族 + `action` 调用，并用 `mcp__mstar__mstar_schema`（`family: <name>`，或单个叶子契约的 `command: <command-id>`）读取家族真实的 action 与字段。这个表面上的身份、准入与 fail-closed 叶席位拒绝遵循 ADR `docs/adr/dsh-native-identity-channels.md`。
 
-### Scoped MCP mounts（每 agent 身份）
+### Shared MCP connection（显式声明的 control 根）
 
-在共享的 `mstar-mcp` bundle 行之外，插件为每个 agent（`agent/created`）挂载一个 scoped 的 `@deepseek-ai/dsh-mcp-client` 实例：该 scoped 实例以与 shipped bundle 行相同的服务器命令（`npx -y @mstar-harness/cli mcp`，stdio）启动，并在子进程 `env` 中携带 `MSTAR_HOST_SESSION_ID = agent.id`，因此每个 agent 的 MCP 工具调用都归因到它自己的 session id——subagent 永远不会继承父级的 id。已知的叶席位（`header.origin === 'subagent'` 或 `delegationDepth > 0`——scoped-mount 叶契约）永远不能拥有绑定，因此得到的是受限挂载：同一条 scoped 连接加 `--seat leaf` 启动，其服务器拒绝协调席位这一「类」命令——席位建立或替换（绑定与完成 plan、恢复会话、发起 run），以及 workflow 范围的投递、生命周期、采纳与协调流水线状态写入——可写子集仍然可达。这些类覆盖哪些命令由命令定义推导而来，不在此列清单：权威是 `packages/commands/src/coordinator-seat.ts`，本宿主的镜像在 `packages/dsh/src/gates/coordinator-seat.ts`。挂载是 optional-by-presence：未安装 `@deepseek-ai/dsh-mcp-client` 时不注册任何东西，只记录一条 debug 日志。每个 scoped 实例都是插件 context 的子 fiber，因此 HMR 重载会连同它的服务器子进程一起卸载。
+bundle 补丁只插入**一行** `mstar-mcp`，而这一行就是整个宿主的全部 MCP 通道：插件不自行注册任何 MCP client，不存在按 agent 挂载，subagent 共用父级已有的那一条连接。按 agent 的实例本来也拿不到按调用参数（`PreToolDecision` 没有改写参数的通道），因此它换不来任何能力——只会每个 agent 多一个 Node 进程。
 
-**每 agent 进程成本。** 身份归因的代价是每个 agent 一个 stdio 子进程：插件运行期间创建的每个 agent 都会增加一个 `npx @mstar-harness/cli mcp` 子进程（一个完整的 Node 进程——它的内存占用加上 `npx` 解析/启动延迟——存活时间与该 agent 的挂载一致），因此子进程数量随并发 agent 数线性增长，且一次 HMR 重载会把它们全部重启。叶席位的受限挂载是同一个子进程；未部署 `@deepseek-ai/dsh-mcp-client` 的部署与从不创建 agent 的会话没有额外成本。不需要每 agent 归因的部署继续使用单一共享的 `mstar-mcp` bundle 行即可——scoped mount 换来的是身份归因，而不是免费的工具面。
+**control 根是「声明」出来的，绝不推断。** 它按一条有序规则解析，启动 cwd 从不是候选——那个目录属于**宿主**，它说不出调用方属于哪个工作区，采用它会把写入落到不相干的项目上：
+
+1. 连接钉——`mstar mcp --harness <绝对路径>`，否则服务器环境中非空的 `MSTAR_HARNESS_DIR`；
+2. 否则由被准入的**这次调用**通过工具的 `harness` 字段指名根（绝对路径，或相对于服务器启动目录的路径）；
+3. 契约不读取任何根的**无根命令类**以空根运行——`harness.scaffold`（建立根本身就是它的操作），以及 `schema`、`path.resolve`、`host.*`、`doctor` 与 `lint` / `skill.lint` / `qc.validate-report` 之类的只读校验器：它们只按显式输入作答，因此从不解析隐式 harness 路径；
+4. 否则该调用以 `[mcp.control-root-unresolved]` 被拒绝，并点名原因与全部恢复路径——两条启动方恢复路径对任何命令都成立，而按调用的 `harness` 选择器是**依工具而定的**（不发布该字段的命令无法接受它）。
+
+连接钉优先于按调用的 `harness`，因此调用方绝不可能把某次调用钉在启动方未声明的工作区上；这次调用实际使用的那个根还会把调用工作区锚定在其父目录，因此由 cwd 派生的路径落在那份 harness 下，而不是启动 cwd。在**未钉**的连接上，凡是根不另有来源的工具，其**声明**的根选择器都是**必填**——用 `harness` 指明根的命令就是该字段，`sdd.workspace` 则是 `controlRoot`——模型无法漏掉解析所需的这唯一事实，`tools/list` 也绝不会把解析器拒绝省去的字段公布为可选。只读校验器（`review.seats`、`worktree.qc-alignment`、`lint`、`skill.lint`、`roles.validate`、`design-md.validate`、`compound.validate`、`dispatch.validate`、`qc.validate-report`）的相对路径参数按**已声明的工作区**解析，因此 `--workspace /caller` 读的是 `/caller` 下的文件，而不是宿主检出的；未声明工作区时相对路径一律被拒绝。
+
+**连接不携带身份，默认也不接受调用方声明的身份。** 共享连接自身无身份，且仅属 MCP 的身份接线已移除：没有 `--identity-env`、没有已声明身份锁、没有选择器剥离，也没有连接级默认 session id。按调用的 `sessionId` 选择器不发布；传入它的调用以 `mcp.caller-identity-unavailable` 被拒绝，只有显式启动开关（`mstar mcp --trust-caller-session-id`，随发行的行中为 OFF）才会发布它。需要会话身份的**操作**，其宿主可证的路线是上文列出的三个 dsh 原生工具（身份为 `exec.agent.id`——宿主事实，绝不是模型提供的字段），或走 CLI。这三个原生工具只覆盖 plan bind、审计报告校验与 execution clear；plan prepare/progress/complete 尚无原生工具，只能走 CLI。
 
 ## Engine seam mapping
 

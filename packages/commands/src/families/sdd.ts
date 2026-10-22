@@ -81,8 +81,9 @@ async function execute(id: string, input: SddInput, invocation: InvocationContex
       // server was launched with, plus its exact harness pin), then the
       // engine's process probe. Without the middle rung a host process serving
       // a session in another workspace created the SDD tree in its own cwd.
-      // An explicit caller root is the strongest fact, so the server pin does
-      // not override its harness resolution.
+      // The MCP transport removes a caller's control root on a pinned
+      // connection (`rootInputs`): there the connection pin decides, so this
+      // handler only sees an explicit root from a launcher that declared none.
       const serverHarness = input.controlRoot === undefined ? invocation.harnessPin : undefined;
       return ok(id, { sddDir: sddWorkspace(required(input.planId, "PLAN_ID"), {
         cwd: invocation.cwd,
@@ -166,6 +167,9 @@ function cliDefinition(verb: (typeof verbs)[number]): CommandDefinition<SddInput
     id,
     cli: { path: shape.path, aliases: [], arguments: shape.arguments, options: shape.options },
     input: inputSchemas[verb],
+    // `workspace` resolves its own root from `controlRoot`, not from a
+    // `harness` field: name the real selector so the MCP pin governs it.
+    ...(verb === "workspace" ? { rootInputs: ["controlRoot"] } : {}),
     ...(payloads[verb] === undefined ? {} : { payloads: payloads[verb] }),
     output: commandEnvelopeSchema,
     effects: shape.effects,

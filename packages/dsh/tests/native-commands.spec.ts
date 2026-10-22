@@ -8,8 +8,8 @@
  * Fourteen mstar commands used to be registered here and in `gates/tools.ts` as
  * dsh tools, each duplicating an MCP tool of the SAME name 1:1 (two identical
  * model-facing surfaces, ~10k characters of fixed context per request). The
- * scoped MCP mount is the writable command surface on this host and covers all
- * of them, so those tools are gone and this suite pins their ABSENCE beside the
+ * shared MCP connection is the writable command surface on this host and covers
+ * all of them, so those tools are gone and this suite pins their ABSENCE beside the
  * surviving tools' contracts: identity from `exec.agent.id` (never
  * model-supplied), the fail-closed leaf-seat guard, the durable adoption a
  * native bind performs, and the named refusals with their `data.recordedCwd`
@@ -311,8 +311,8 @@ describe('native tool surface — three tools, no MCP duplicates', () => {
     for (const name of NATIVE_SURFACE) expect(app.ctx.tools.get(name), name).toBeDefined()
     for (const name of REMOVED_TOOLS) {
       // The duplicate surface is gone with no alias and no compatibility tool:
-      // every one of these commands is reached through the scoped MCP mount
-      // (`mcp__mstar__<family>` with an `action`).
+      // every one of these commands is reached through the shared MCP
+      // connection (`mcp__mstar__<family>` with an `action`).
       expect(app.ctx.tools.get(name), name).toBeUndefined()
     }
   })

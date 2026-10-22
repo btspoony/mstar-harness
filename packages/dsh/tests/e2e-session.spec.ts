@@ -20,7 +20,7 @@
  *     into the step messages (AC-7 "full mstar-gated session");
  *  7. the one dsh-native tool — `mstar_execution_clear` registers on the booted
  *     app (the fourteen command duplicates are gone; the writable command
- *     surface is the scoped MCP mount);
+ *     surface is the shared MCP connection);
  *  8. bundledSkillDir — explicit relative roots resolve from an isolated
  *     launch cwd, independently of the app workspace and test-runner cwd.
  *
@@ -215,7 +215,7 @@ describe('full dsh app boot — fixture cordis.yml composition', () => {
     // Host adapter service attached (boot settled).
     expect(booted.ctx.dshHostAdapter).toBeInstanceOf(DshHostAdapter)
     // The one dsh-native tool is registered on ctx.tools; the fourteen command
-    // duplicates are gone (the writable surface is the scoped MCP mount).
+    // duplicates are gone (the writable surface is the shared MCP connection).
     expect(booted.ctx.tools.get('mstar_execution_clear')).toBeDefined()
     // The mirror skills/ mount is live through ctx.skills.
     const skills = await booted.ctx.skills.list()

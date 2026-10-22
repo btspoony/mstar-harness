@@ -20,6 +20,7 @@ import { resolveCliPath } from "../host-health.js";
 import { commandEnvelopeSchema } from "../definitions.js";
 import { refusalEnvelope } from "../envelope.js";
 import { engineErrorFacts } from "./family-refusal.js";
+import { launchDirectoryRefusal } from "./launch-workspace.js";
 import { decodeInputDiagnostics } from "../input-diagnostics.js";
 import type { CommandDefinition, CommandEffect, CommandEnvelope, InvocationContext } from "../types.js";
 
@@ -193,6 +194,16 @@ async function execute(verb: Verb, input: Input, context: InvocationContext): Pr
       }
       return ok(id, result);
     }
+    // Both verbs take the checkout itself as their subject (`path` defaults to
+    // the invocation directory). On a connection that declared no workspace
+    // that directory is the MCP server's launch directory (the HOST's
+    // checkout), so the repository is a required, absolute input: scanning or
+    // checking the host's repository and reporting it as the caller's answer
+    // would be a silent wrong answer.
+    const unnamedRepository = launchDirectoryRefusal(id, context, {
+      fields: [{ field: "path", subject: verb === "secret-scan" ? "the repository to scan" : "the repository to check", value: input.path }],
+    });
+    if (unnamedRepository !== undefined) return unnamedRepository;
     const root = resolvePath(context.cwd, input.path ?? ".");
     if (!existsSync(root) || !statSync(root).isDirectory()) throw new SddScriptError(`not a directory: ${root}`, 2);
     if (verb === "secret-scan") {

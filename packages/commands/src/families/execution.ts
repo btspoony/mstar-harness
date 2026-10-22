@@ -4,7 +4,6 @@ import {
   SddScriptError,
   exportExecutionState,
   previewExecutionRestore,
-  resolveProcessHarnessDir,
   restoreExecutionBackup,
   type ExecutionRecoveryPreview,
   type StoreContext,
@@ -58,13 +57,44 @@ function requireInputs(input: ExecutionInput, fields: readonly (keyof ExecutionI
     );
   }
 }
-function executionContext(input: ExecutionInput, invocation: InvocationContext, verb: string): StoreContext {
-  const harness = absolute(input.harness, "--harness");
-  const root = resolveProcessHarnessDir(invocation.cwd, harness);
-  if (root === null) throw new SddScriptError(`${verb}: no target harness was resolved; pass --harness <absolute-path>`, 2);
-  if (invocation.controlRoot !== null && path.resolve(root) === path.resolve(invocation.controlRoot)) {
+/**
+ * The refusal for an operation target the call did not name as an absolute
+ * path.
+ *
+ * These actions run ROOT-FREE (`ROOT_FREE_COMMANDS`): with no connection root
+ * the invocation workspace stays at the MCP server's launch directory, which is
+ * the HOST's checkout. Discovering a store from it is exactly the launch-cwd
+ * rooting the connection rule removes, and `restore` WRITES to the store it
+ * finds, so the target is a required INPUT here and is never discovered.
+ */
+function targetRefusal(id: string, supplied: string): CommandEnvelope {
+  const relative = supplied !== "";
+  return refusalEnvelope({
+    command: id,
+    status: "usage",
+    code: "command.invalid-input",
+    exitCode: 2,
+    message: relative
+      ? `${id}: the operation target must be an absolute path; a relative "harness" would resolve against the invocation directory instead of naming the store this call reads or restores`
+      : `${id} needs the operation's target: it names the store this call reads or restores, and this action never discovers one from the invocation directory`,
+    helpRoute: `mstar schema --command ${id}`,
+    recovery: "mstar store execution export --harness=<abs>, and the same --harness flag names the target on restore and restore-preview. A pinned MCP connection still takes the target from that field, never from its control root.",
+    diagnostics: [{
+      path: "harness",
+      code: relative ? "invalid_type" : "required",
+      message: relative ? "harness must be an absolute path" : "harness is required: the operation target is never discovered from the invocation directory",
+      expected: "absolute path",
+      received: relative ? "relative path" : "undefined",
+    }],
+  });
+}
+function executionContext(target: string, invocation: InvocationContext, verb: string): StoreContext {
+  // `target` is an absolute path (validated by the caller): resolving an
+  // absolute value never consults the invocation directory.
+  const root = path.resolve(target);
+  if (invocation.controlRoot !== null && root === path.resolve(invocation.controlRoot)) {
     throw new SddScriptError(
-      `${verb}: the resolved target ${path.resolve(root)} is this invocation's control root, and a control root is not an admitted execution target. `
+      `${verb}: the resolved target ${root} is this invocation's control root, and a control root is not an admitted execution target. `
       + "Pass --harness <absolute-path> naming a harness other than this control root, or invoke from a checkout where no control root is discovered. "
       + "To back up or move a control root's own store, use mstar store backup.",
       2,
@@ -77,9 +107,13 @@ function document<T>(value: string | undefined, flag: string): T {
 }
 
 async function execute(id: string, input: ExecutionInput, invocation: InvocationContext): Promise<CommandEnvelope> {
+  const verb = id.slice("store.execution.".length);
+  // The target is a required absolute INPUT, not a discovery: a blank or
+  // relative value refuses here, before any store is opened.
+  const target = typeof input.harness === "string" ? input.harness.trim() : "";
+  if (target === "" || !path.isAbsolute(target)) return targetRefusal(id, target);
   try {
-    const verb = id.slice("store.execution.".length);
-    const context = executionContext(input, invocation, `store execution ${verb}`);
+    const context = executionContext(target, invocation, `store execution ${verb}`);
     if (verb === "restore-preview") {
       const backupPath = absolute(required(input.backup, "--backup"), "--backup")!;
       const preview = await previewExecutionRestore(context, backupPath);
@@ -114,10 +148,10 @@ async function execute(id: string, input: ExecutionInput, invocation: Invocation
     return error instanceof SddScriptError
       ? refusalEnvelope({ command: id, status: "usage", code: "usage", exitCode: 2, message, ...(details === undefined ? {} : { details }) })
       : refusalEnvelope({ command: id, status: "refused", code, exitCode: 1, message, ...(details === undefined ? {} : { details }) , recovery: id === "store.execution.restore-preview"
-          ? "Select a readable execution backup and writable preview destination. Run mstar store execution restore-preview --backup <backup> --out <preview>."
+          ? "Select a readable execution backup and writable preview destination. Run mstar store execution restore-preview --harness <path> --backup <backup> --out <preview>."
           : id === "store.execution.restore"
-            ? "The backup preview or operator authorization does not match the diagnostic. Regenerate a current preview with mstar store execution restore-preview --backup <backup> --out <preview>, then retry restore with the same operator and authorization."
-            : "Choose a writable export destination or omit --out for stdout. Run mstar store execution export."});
+            ? "The backup preview or operator authorization does not match the diagnostic. Regenerate a current preview with mstar store execution restore-preview --harness <path> --backup <backup> --out <preview>, then retry restore with the same operator and authorization."
+            : "Choose a writable export destination or omit --out for stdout. Run mstar store execution export --harness <path>."});
   }
 }
 
@@ -134,11 +168,21 @@ function cliDefinition(id: string): CommandDefinition<ExecutionInput, unknown> {
   };
   const optionKeys = optionsByVerb[verb];
   const shape = Object.fromEntries(optionKeys.map((key) => [key, true])) as { [Key in keyof ExecutionInput]?: true };
-  const options = optionKeys.map((key) => ({ key, flags: flags[key], required: false }));
+  // `harness` is the operation's TARGET and the handler refuses an omitted one
+  // on every route, so it is published as a REQUIRED field (CLI help, `schema`
+  // and the MCP tool contract) instead of advertising an optional call that can
+  // only refuse. `rootInputs: []` still keeps the connection pin from rewriting
+  // it: required is about the caller naming the target, not about which root
+  // this command runs from.
+  const options = optionKeys.map((key) => ({ key, flags: flags[key], required: key === "harness" }));
   return {
     id,
     cli: { path: ["store", "execution", verb], aliases: [], arguments: [], options },
     input: inputSchema.pick(shape),
+    // `harness` names the operation's TARGET store, not the root this command
+    // runs from: the MCP connection pin must not rewrite it (and a target equal
+    // to the connection's control root is the family's own refusal, below).
+    rootInputs: [],
     output: commandEnvelopeSchema,
     effects: writeVerbs[verb] === true ? ["read", "write"] : ["read"],
     description: verb === "export"

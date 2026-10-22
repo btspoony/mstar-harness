@@ -1,21 +1,24 @@
 /**
- * T4 — issue #383 E2E integration regression: the omp injection contract, over
+ * T4 - issue #383 E2E integration regression: the omp injection contract, over
  * a REAL `mstar mcp` stdio server on a temp harness root with a real ACTIVE
  * execution store (Node; `.node.test.mjs` consumer guard conventions).
  *
  * ## What is real, and what the test supplies
  *
- * - THE BUILT CLI BUNDLE spawned as `mcp` — the exact stdio MCP server a host
- *   launches (`mstar mcp`), addressed with newline-delimited JSON-RPC from this
- *   process. The server receives NO ambient identity: `MSTAR_HOST_SESSION_ID`
- *   and `MSTAR_EXECUTION_IDENTITY` are stripped, so the ONLY session identity
- *   on the wire is the per-call `sessionId` parameter an omp host would inject.
+ * - THE BUILT CLI BUNDLE spawned as `mcp --trust-caller-session-id` - the omp
+ *   deployment shape (its `mcp.json` sets the same flag), addressed with
+ *   newline-delimited JSON-RPC from this process. The connection carries no
+ *   identity of its own: `MSTAR_HOST_SESSION_ID` / `MSTAR_EXECUTION_IDENTITY`
+ *   are stripped, so the only session identity on the wire is the per-call
+ *   `sessionId` parameter the host injects. Without the opt-in the server
+ *   publishes no such parameter and refuses one (owned by
+ *   `mcp-identity.test.ts`).
  * - A temp Git workspace whose `.mstar` holds a REAL ACTIVE execution authority
  *   built by the engine's own producers over real `node:sqlite`.
- * - The chain: register (NO id — the NULL-creator contract) -> plan bind
+ * - The chain: register (NO id - the NULL-creator contract) -> plan bind
  *   coordinator (sessionId=A, adopts; receipt reports A) -> plan prepare (A) ->
  *   start record -> progress (all as A) -> lease verify-integration (no
- *   sessionId — its schema declares none; the call stays untouched, no error).
+ *   sessionId - its schema declares none; the call stays untouched, no error).
  *   Assertions come from the authority's own store: creator, the sole active
  *   coordinator session row, and the addressed plan's uncompleted state.
  *
@@ -90,14 +93,19 @@ async function makeActiveWorkspace(label) {
  * The MCP stdio client: newline-delimited JSON-RPC over the child's stdio
  * ------------------------------------------------------------------------ */
 
-function startMcpServer(fixture) {
+/**
+ * The stdio child. `trustCallerSessionId` is the ONE launcher difference between
+ * the deployed omp shape (opted in) and the shipped default connection (off, the
+ * shape a shared host row launches), so the identity contract is proven on both.
+ */
+function startMcpServer(fixture, { trustCallerSessionId = true } = {}) {
   const env = {};
   for (const [key, value] of Object.entries(process.env)) {
     if (STRIPPED_ENV.includes(key)) continue;
     env[key] = value;
   }
   env.MSTAR_HARNESS_DIR = fixture.harness;
-  const child = spawn(process.execPath, [CLI_ENTRY, "mcp"], { cwd: fixture.root, env, stdio: ["pipe", "pipe", "pipe"] });
+  const child = spawn(process.execPath, [CLI_ENTRY, "mcp", ...(trustCallerSessionId ? ["--trust-caller-session-id"] : [])], { cwd: fixture.root, env, stdio: ["pipe", "pipe", "pipe"] });
   const pending = [];
   let buffer = "";
   let stderr = "";
@@ -164,7 +172,7 @@ async function tokenOf(harness, selection) {
  * The chain
  * ------------------------------------------------------------------------ */
 
-test("T4: stdio MCP chain — no-id register, injected binds, per-role identity, non-capable tool untouched", { timeout: 120_000 }, async () => {
+test("T4: stdio MCP chain - identity-free shared connection, per-call injected identity, non-capable tool untouched", { timeout: 120_000 }, async () => {
   const fixture = await makeActiveWorkspace("mstar-t4-mcp");
   const planPath = join(fixture.harness, "plans", `${PLAN_ID}.md`);
   const sddDir = join(fixture.harness, "sdd", PLAN_ID);
@@ -314,6 +322,50 @@ test("T4: stdio MCP chain — no-id register, injected binds, per-role identity,
     } finally {
       db.close();
     }
+  } finally {
+    await server.close();
+  }
+});
+
+test("default connection: a real child publishes no identity and refuses a caller-declared session id", { timeout: 120_000 }, async () => {
+  // The shipped, default connection: no `--trust-caller-session-id`. A host that
+  // mounts one generic stdio row for the whole profile gets exactly this shape,
+  // so the in-memory proof is not enough — the published surface and the refusal
+  // have to hold on the process boundary a real host sees.
+  const fixture = await makeActiveWorkspace("mstar-t4-mcp-default");
+  const server = startMcpServer(fixture, { trustCallerSessionId: false });
+  try {
+    const initialized = await server.request("initialize", {
+      protocolVersion: "2025-06-18",
+      capabilities: {},
+      clientInfo: { name: "t4-default-identity", version: "0.0.0" },
+    });
+    assert.equal(initialized.result?.serverInfo?.name, "mstar-harness", "server initialize handshake");
+    server.notify("notifications/initialized", {});
+
+    // The per-call selector is not published: a caller reading `tools/list`
+    // learns that this connection carries no identity channel.
+    const listed = await server.request("tools/list", {});
+    const sessionTool = listed.result.tools.find((tool) => tool.name === "mstar_session");
+    assert.ok(sessionTool, "mstar_session is published");
+    assert.equal(
+      Object.hasOwn(sessionTool.inputSchema.properties ?? {}, "sessionId"),
+      false,
+      "the default connection publishes no sessionId selector",
+    );
+
+    // A call that puts one on the wire anyway is refused by name, with the
+    // opt-in that would admit it, and the claimed value is never echoed.
+    const claimed = "live-coordinator-session";
+    const refused = await server.request("tools/call", {
+      name: "mstar_session",
+      arguments: { action: "recover", workflow: "wf-default-identity", sessionId: claimed },
+    });
+    const text = (refused.result?.content ?? []).map((block) => block.text ?? "").join("\n");
+    assert.equal(refused.result?.isError, true, `the call is refused:\n${text}`);
+    assert.match(text, /mcp\.caller-identity-unavailable/, "the refusal names the identity cause");
+    assert.match(text, /--trust-caller-session-id/, "the refusal names the opt-in that admits an identity");
+    assert.equal(text.includes(claimed), false, "the claimed value is never echoed");
   } finally {
     await server.close();
   }

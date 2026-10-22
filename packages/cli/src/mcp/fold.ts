@@ -113,10 +113,12 @@ export type FoldMember = Readonly<{
 
 /**
  * A selector a family publishes ONCE while only some of its actions read it.
- * The published schema is family-wide, so the fact that an action does not
- * accept it cannot be expressed there; the transport needs this map to refuse
- * a supplied selector instead of letting the action's schema strip it
- * silently, and to name the actions that do accept it in the recovery.
+ * The `properties` union is family-wide, so the fact that an action does not
+ * accept it cannot be expressed there: this map is published as the
+ * `x-mstar-selectors` index (a host-side injector must not fill a selector the
+ * selected action does not declare), and the transport reads it to refuse a
+ * supplied selector instead of letting the action's schema strip it silently,
+ * and to name the actions that do accept it in the recovery.
  */
 export type FamilySelector = Readonly<{
   key: string;
@@ -133,8 +135,9 @@ export type FoldedFamilyTool = Readonly<{
   definitions: readonly CommandDefinition[];
   /**
    * Every selector the family publishes, with the actions that accept it. A
-   * key listed here is published on the family tool; a key whose action list
-   * does not contain the selected action must be refused before admission.
+   * key listed here is published on the family tool (properties AND the
+   * `x-mstar-selectors` index); a key whose action list does not contain the
+   * selected action must be refused before admission.
    */
   selectors: readonly FamilySelector[];
   /**
@@ -344,18 +347,23 @@ export function foldFamilyTools(members: readonly FoldMember[]): readonly Folded
     // union schema rather than published with one action's declaration: the
     // description names it and `mstar_schema` carries the per-action shape.
     for (const key of perAction) delete properties[key];
+    // Derived once: the transport refuses a supplied selector by this map, and
+    // the published index states the same per-action fact to a host that fills
+    // the selector before the call.
+    const familySelectors = [...selectors].map(([key, accepting]) => ({ key, actions: accepting }));
     tools.push({
       family,
       toolName,
       actions,
       definitions: group.map((member) => member.definition),
-      selectors: [...selectors].map(([key, accepting]) => ({ key, actions: accepting })),
+      selectors: familySelectors,
       acceptedFields,
       descriptorView: {
         type: "object",
         properties,
         required: ["action"],
         "x-mstar-requirements": requirements,
+        ...(familySelectors.length === 0 ? {} : { "x-mstar-selectors": familySelectors }),
       },
       description: familyDescription(family, group, actions, [...perAction]),
     });

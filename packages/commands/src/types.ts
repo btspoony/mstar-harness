@@ -106,6 +106,15 @@ export interface InvocationContext {
    * Unpinned MCP servers and the CLI probe never set it.
    */
   readonly harnessPin?: string;
+  /**
+   * Set only when `cwd` is an MCP server's LAUNCH directory: the connection
+   * declared no workspace, so the directory is the HOST's checkout and says
+   * nothing about the caller's. Absent everywhere else, including the CLI,
+   * whose `cwd` is the directory the caller ran the command from. A command
+   * that would default a path input from it, or take the checkout itself as its
+   * subject, refuses instead (`launch-workspace.ts`).
+   */
+  readonly launchDirectory?: true;
   readonly host?: string;
   readonly sessionId?: string;
   readonly sessionIdSource?: "flag" | "env";
@@ -139,6 +148,18 @@ export interface CommandDefinition<I = unknown, O = unknown> {
   readonly output: ZodType<CommandEnvelope<O>>;
   readonly effects: readonly CommandEffect[];
   readonly description: string;
+  /**
+   * The input fields that select WHICH ROOT this command executes against, in
+   * precedence order. The default is the `harness` field the command publishes.
+   *
+   * Name a different field when a family resolves its own root from it
+   * (`sdd.workspace` takes `controlRoot`), and declare an EMPTY list when the
+   * field only names an operation TARGET rather than the root the command runs
+   * from (`store.execution.*` take the foreign harness they export or restore,
+   * not their own store). The MCP connection pin governs these fields: a pinned
+   * connection overwrites a root selector and leaves a target untouched.
+   */
+  readonly rootInputs?: readonly string[];
   readonly payloads?: Readonly<Record<string, PayloadDescriptor>>;
   readonly requirements?: readonly CommandRequirement[];
   decodeCliInput?(input: Record<string, unknown>): Record<string, unknown> | null;

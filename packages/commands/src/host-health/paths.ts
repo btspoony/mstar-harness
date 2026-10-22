@@ -44,19 +44,34 @@ function declaresWorkspaces(manifest: Record<string, unknown>): boolean {
   );
 }
 
+/** The project root discovered by walking up from one START directory. */
+function projectRootFrom(startDir: string): string {
+  const monorepoRoot = findUpPackageRoot(startDir, declaresWorkspaces);
+  if (monorepoRoot) return monorepoRoot;
+  const packageRoot = findUpPackageRoot(startDir, () => true);
+  if (packageRoot) return packageRoot;
+  return path.resolve(startDir);
+}
+
 function resolveCliProjectRoot(): string {
   const override = process.env.MSTAR_CLI_PROJECT_ROOT;
   if (override && override.trim()) return path.resolve(override);
-  const monorepoRoot = findUpPackageRoot(process.cwd(), declaresWorkspaces);
-  if (monorepoRoot) return monorepoRoot;
-  const packageRoot = findUpPackageRoot(process.cwd(), () => true);
-  if (packageRoot) return packageRoot;
-  return process.cwd();
+  return projectRootFrom(process.cwd());
 }
 
-/** Resolve a relative CLI path argument from the project root; absolute arguments pass through unchanged. */
-export function resolveCliPath(userPath: string): string {
+/**
+ * Resolve a relative CLI path argument from the project root; absolute arguments
+ * pass through unchanged.
+ *
+ * `base` is the invocation WORKSPACE: a transport serving another directory (an
+ * MCP server launched with `--workspace`, or pinned to a root whose parent
+ * anchors the workspace) passes it, so a relative argument is discovered from
+ * that checkout instead of this process's own. The CLI passes it too — its
+ * `context.cwd` already carries the `MSTAR_CLI_PROJECT_ROOT` override — so the
+ * environment pin is read only on the process-global route.
+ */
+export function resolveCliPath(userPath: string, base?: string): string {
   if (path.isAbsolute(userPath)) return userPath;
-  const root = resolveCliProjectRoot();
+  const root = base === undefined ? resolveCliProjectRoot() : projectRootFrom(base);
   return root.endsWith(path.sep) ? root + userPath : root + path.sep + userPath;
 }

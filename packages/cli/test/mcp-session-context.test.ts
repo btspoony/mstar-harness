@@ -26,6 +26,29 @@ import { KNOWLEDGE_GOOD } from "./support/cli-content-fixtures";
 const roots: string[] = [];
 afterEach(() => { for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true }); });
 
+/** An Assignment whose `Execution mode` header drives the QC seat count. */
+const ASSIGNMENT_SDD = `## Assignment
+
+**Execute as**: fullstack-dev
+**Delegation**: forbidden
+**Task category**: logic
+**Execution mode**: sdd
+**Working branch**: feature/foo
+`;
+
+/** One QC Assignment carrying the three byte-identical alignment fields. */
+function qcAssignment(planId: string, range: string): string {
+  return `## Assignment
+**Execute as**: qc-specialist
+**Task category**: logic
+**plan_id**: ${planId}
+**Review range / Diff basis**: ${range}
+`;
+}
+
+/** A STRATEGY.md that passes `lint` with no violations. */
+const STRATEGY_GOOD = ["# Strategy", "", "## Vision", "## What we build", "## What we don't build", "## Guiding Principles", "## Technology Direction", "## Decision Log", ""].join("\n");
+
 async function workspaceRoot(prefix: string): Promise<string> {
   const root = mkdtempSync(path.join(os.tmpdir(), prefix));
   roots.push(root);
@@ -112,6 +135,44 @@ describe("MCP session context", () => {
       const codes = (envelope.details?.violations as Array<{ code: string }> | undefined)?.map((entry) => entry.code) ?? [];
       expect(codes).toContain("catalog.discovery.missing-document");
       expect(JSON.stringify(envelope.details?.violations ?? [])).toContain("knowledge/good.md");
+    } finally {
+      process.chdir(previousCwd);
+    }
+  });
+
+  test("a relative path argument resolves under the declared workspace", async () => {
+    const repoA = await workspaceRoot("mstar-session-ctx-a-");
+    const repoB = await workspaceRoot("mstar-session-ctx-b-");
+    // Every file lives in B, the DECLARED workspace; A (the host process's own
+    // checkout) holds none of them. A relative path read from the launch
+    // directory would therefore fail to find its subject, and one resolved
+    // against A's project root would read A's tree instead.
+    writeFileSync(path.join(repoB, "assignment.md"), ASSIGNMENT_SDD, "utf8");
+    writeFileSync(path.join(repoB, "qc1.md"), qcAssignment("plan-b", "merge-base: main + tip: HEAD"), "utf8");
+    writeFileSync(path.join(repoB, "qc2.md"), qcAssignment("plan-b", "merge-base: main + tip: HEAD"), "utf8");
+    writeFileSync(path.join(repoB, "STRATEGY.md"), STRATEGY_GOOD, "utf8");
+    const previousCwd = process.cwd();
+    process.chdir(repoA);
+    try {
+      // The seat count is read FROM the assignment: 3 is B's `sdd` mode.
+      const seats = await callFolded({ workspace: repoB }, "mstar_review", { action: "seats", assignmentFile: "assignment.md" });
+      expect(seats).toMatchObject({ command: "review.seats", status: "ok", code: "review.seats.ok" });
+      expect((seats.data as { n: number }).n).toBe(3);
+
+      // Both alignment subjects are B's files, byte-identical there.
+      const alignment = await callFolded({ workspace: repoB }, "mstar_worktree", { action: "qc-alignment", files: ["qc1.md", "qc2.md"] });
+      expect(alignment).toMatchObject({ command: "worktree.qc-alignment", status: "ok", code: "worktree.qc-alignment.ok" });
+      expect((alignment.data as { assignments: unknown[] }).assignments).toHaveLength(2);
+
+      // The same rule covers the rest of the validation family: `lint` resolves
+      // its relative target from the workspace, not from this process's root.
+      const linted = await callFolded({ workspace: repoB }, "mstar_lint", { action: "lint", target: "STRATEGY.md" });
+      expect(linted).toMatchObject({ command: "lint", status: "ok", code: "lint.ok" });
+      expect((linted.data as { results: Array<{ file: string }> }).results[0]?.file).toBe(path.join(repoB, "STRATEGY.md"));
+
+      // Nothing was read from, or written to, the host checkout.
+      expect(existsSync(path.join(repoA, "assignment.md"))).toBe(false);
+      expect(existsSync(path.join(repoA, "STRATEGY.md"))).toBe(false);
     } finally {
       process.chdir(previousCwd);
     }

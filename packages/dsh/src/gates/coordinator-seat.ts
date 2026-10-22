@@ -73,6 +73,18 @@ function seatIndex(): SeatIndex {
 }
 
 /**
+ * Every family tool name that carries a seat — the KNOWN published names the
+ * host guard matches a folded MCP tool name against. A server name is
+ * deployment-owned (it may contain the `__` separator, and a character the
+ * client replaces or a name over its length limit turns the folded name into a
+ * truncated collision form), so the guard never splits the name; it matches
+ * these.
+ */
+export function coordinatorSeatToolNames(): readonly string[] {
+  return [...seatIndex().keys()]
+}
+
+/**
  * The coordinator-seat command id one folded MCP call selects, or undefined
  * when the call is not one.
  */

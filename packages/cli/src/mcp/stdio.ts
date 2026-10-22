@@ -1,5 +1,4 @@
-import { dirname } from "node:path";
-import { SESSION_ID_MAX_LENGTH, assertSafeSessionId, resolveProcessHarnessDir } from "@mstar-harness/engine";
+import { dirname, resolve } from "node:path";
 import { serveStdio, StdioServerTransport, type StdioServerHandle } from "@modelcontextprotocol/server/stdio";
 import type { Transport } from "@modelcontextprotocol/server";
 import { withToolCorrection } from "./correction.js";
@@ -10,59 +9,113 @@ import type { ResolveContext, ResolveContextCall } from "./register.js";
 /**
  * Commands whose own operation establishes a harness root in a workspace that
  * has none: a null control root is their premise, not a misresolution, so the
- * unpinned resolver keeps the launch-cwd fallback for them alone (the
- * bootstrap channel a fresh workspace uses to establish its harness over MCP).
+ * resolver admits them without one (the bootstrap channel a fresh workspace
+ * uses to establish its harness over MCP).
  */
 const NULL_ROOT_BOOTSTRAP_COMMANDS = new Set(["harness.scaffold"]);
 
 /**
- * The named refusal for an unpinned server whose launch cwd resolves to no
- * harness root (#533): the resolver refuses with the cause and the recovery
- * instead of letting a command present the launch cwd as the caller's control
- * root. The stdio transport surfaces the message as a tool error.
+ * Commands whose CONTRACT reads no control root: the answer they produce does
+ * not depend on WHICH workspace the call belongs to, because every path they
+ * touch is either an explicit input or the query's own subject. A null root is
+ * a complete answer for them, so admitting one is not a misresolution — refusing
+ * it would deny discovery and validation over a shared connection, and for most
+ * of them the refusal's own recovery (`pass the call's harness selector`) is
+ * unavailable, since they publish no such field. The one exception, the
+ * `store.execution.*` family, publishes a `harness` that names the operation
+ * TARGET: the target is the object, not the root the command executes against.
+ *
+ * The classification is a CONTRACT fact, not a handler accident, so it cannot be
+ * derived from a definition: a command's handler is the only place that knows
+ * whether it resolves a harness / review / specs / workflow / project directory.
+ * It is therefore hand-classified, and the whole catalog's classification is
+ * pinned by `test/mcp-harness-root.test.ts` — a command added without a decision
+ * fails that suite instead of silently inheriting a refusal (or silently
+ * inheriting a null root).
+ *
+ * Admission is only half the contract. A null root leaves the invocation
+ * `workspace` at this server's launch directory (`launchDirectory: true`),
+ * so a member that DEFAULTS a path input to it — or takes the checkout itself as
+ * its subject — would read, or worse write, the HOST's own checkout. Such a
+ * member is admitted here and then refuses per call (`families/launch-workspace.ts`)
+ * with the cause and the recoveries, exactly as `path.resolve` does; the same
+ * suite pins which members those are. A write never lands in a directory the
+ * caller did not name: `harness.scaffold` keeps its null-root bootstrap
+ * exception but requires an explicit root instead of adopting the launch
+ * directory.
+ *
+ * Excluded on purpose, each because it derives something from a root:
+ * - every command whose `harness` input or flag is its ROOT selector (the root
+ *   is its own input, and admission requires it on an unpinned connection);
+ * - commands that read `invocation.controlRoot` (`persist.*`, `dashboard`,
+ *   `compound.validate`'s catalog query, `worktree.check`, …) or derive an
+ *   implicit harness path from the invocation workspace (`audit.scaffold`'s
+ *   `{REVIEW_DIR}`, `pr-review.report-path`'s default review dir, `sdd.workspace`,
+ *   `status.validate`);
+ * - `pr-review.worktree-setup`, which runs its Git discovery in the invocation
+ *   workspace and exposes no workspace field of its own: with a null root it
+ *   would either fail outside a checkout or review the host's repository.
+ */
+const ROOT_FREE_COMMANDS: ReadonlySet<string> = new Set([
+  "schema",
+  "path.resolve",
+  "host.detect",
+  "host.skill-root",
+  "doctor",
+  "plugin.validate",
+  "report",
+  "lint",
+  "design-md.validate",
+  "skill.lint",
+  "roles.validate",
+  "qc.validate-report",
+  "review.seats",
+  "dispatch.validate",
+  "worktree.qc-alignment",
+  "iteration.push-cadence",
+  "audit.secret-scan",
+  "audit.supply-chain",
+  "pr-review.tally",
+  "pr-review.budget",
+  "pr-review.validate-report",
+  "pr-review.size",
+  "pr-review.seat-prompt",
+  "pr-review.post",
+  "pr-review.worktree-cleanup",
+  // Their only `harness` field is the operation TARGET they export or restore,
+  // not a root they execute against: with no connection root they still have
+  // every fact their contract needs, and the family's own target==control-root
+  // guard simply has no control root to protect on such a connection.
+  "store.execution.export",
+  "store.execution.restore-preview",
+  "store.execution.restore",
+]);
+
+/**
+ * The named refusal for a call on a connection that DECLARED no control root
+ * and named none itself: the resolver refuses with the cause and every recovery
+ * instead of letting the host's launch directory stand in for the caller's
+ * workspace. The stdio transport surfaces the message as a tool error.
  */
 export class McpControlRootError extends Error {
   readonly code = "mcp.control-root-unresolved";
   constructor(
     message: string,
-    readonly details: { cwd: string; cause: string },
+    readonly details: { cwd: string },
   ) {
     super(message);
     this.name = "McpControlRootError";
   }
 }
 
-/** The unpinned control-root probe outcome: a root, or the named cause. */
-type UnpinnedProbe = { root: string; cause: null } | { root: null; cause: string };
-
-/**
- * Probe the process cwd the way the unpinned branch always has, but keep the
- * probe's verdict instead of collapsing it: a null answer and a refusing probe
- * (`coordination.not-in-git`) are distinct named causes for the resolver's
- * refusal, never a root to hand a command.
- *
- * The probe runs through the engine's own resolution, which honours a
- * non-blank `MSTAR_HARNESS_DIR` — the recovery the refusal advertises — as the
- * explicit root BEFORE Git discovery, so the variable answers in every
- * probe-failure case, including a linked checkout whose main worktree cannot
- * be read.
- */
-function probeUnpinnedControlRoot(cwd: string): UnpinnedProbe {
-  try {
-    const root = resolveProcessHarnessDir(cwd);
-    if (root !== null) return { root, cause: null };
-    return { root: null, cause: "no harness directory found within the workspace boundary of the launch cwd" };
-  } catch (error) {
-    return { root: null, cause: error instanceof Error ? error.message : String(error) };
-  }
-}
-
-function unresolvedControlRootMessage(cwd: string, cause: string): string {
+function unresolvedControlRootMessage(cwd: string): string {
   return (
-    `[mcp.control-root-unresolved] This MCP server was launched from ${cwd}, which resolves to no harness root (${cause}). ` +
-    "The server cannot know which workspace a caller belongs to, so it refuses instead of probing a root the caller never named. " +
-    "Recovery: launch the server with `mstar mcp --harness <absolute path>` (or set MSTAR_HARNESS_DIR for the server process) to pin the root, " +
-    "or launch the host from the session workspace so the cwd probe resolves that workspace's root."
+    `[mcp.control-root-unresolved] No control root was DECLARED for this MCP connection. ` +
+    `The launch cwd (${cwd}) is the HOST's directory and is never used as one: it says nothing about which workspace a caller belongs to, so adopting it would root writes on an unrelated project. ` +
+    "Recovery \u2014 the two launcher recoveries work for EVERY command: " +
+    "launch the server with `mstar mcp --harness <absolute path>`; " +
+    "set MSTAR_HARNESS_DIR in the server environment to the harness directory. " +
+    "The per-call recovery is tool-dependent: only a command that publishes a `harness` input accepts one, so pass the call's `harness` selector naming the workspace's harness \u2014 or use `mstar_schema` to pick a command that does not need a root at all."
   );
 }
 
@@ -71,31 +124,22 @@ export type McpSeat = "leaf";
 
 export interface McpStdioOptions {
   /**
-   * Environment variable the launcher declares as the default session-id
-   * channel. Unset means the server reads no ambient identity at all: an MCP
-   * connection is process-level, so any same-host process can set a variable;
-   * a launcher that mounts a scoped server declares the channel explicitly.
-   * A declared variable that is unset, blank, or holds a value the engine's
-   * safe-session-id rule refuses resolves no identity, so the connection stays
-   * generic (a launch-time warning names the cause and the recovery) instead of
-   * locking an identity it does not have.
-   */
-  identityEnv?: string;
-  /**
-   * Harness root the mounting process owns. Unset keeps the `process.cwd()`
-   * probe: the plugin is installed once for many repositories, so a root is
-   * passed per mount rather than inferred from whatever cwd the host chose.
-   * A pinned root also becomes the invocation's workspace root (its parent
-   * directory), so implicit harness-derived paths anchor on the pinned
-   * harness instead of the launch cwd — unless `workspace` names another one.
+   * Harness root the launcher DECLARES for the whole connection (`--harness`).
+   * It pins every call's `controlRoot` and is the admission default for any
+   * command that resolves its own root from `input.harness`. A non-blank
+   * `MSTAR_HARNESS_DIR` in the server environment is the same declaration when
+   * this option is unset; a call's own `harness` selector is used only when the
+   * launch declared neither. The launch cwd is never a root candidate.
    */
   harnessRoot?: string;
   /**
-   * Session workspace every call runs from (the invocation `cwd`). A mounted
-   * server is a child process, so the caller's workspace is not its
-   * `process.cwd()`; a host that serves sessions outside its own cwd passes
-   * this. Unset falls back to the pinned harness's parent, else
-   * `process.cwd()`.
+   * Session workspace every call runs from (the invocation `cwd`). Unset
+   * anchors it on the declared root's parent directory, so cwd-derived paths
+   * land under the declared harness. The launch process cwd is used only when
+   * the connection declared neither, and the invocation is then marked
+   * `launchDirectory: true`: a root-free command may not default a path from it
+   * (it is the HOST's checkout), so declaring this flag is also how a mounting
+   * host names the directory `harness.scaffold` may bootstrap.
    */
   workspace?: string;
   /**
@@ -105,197 +149,129 @@ export interface McpStdioOptions {
    * its writable subset instead of having no route at all.
    */
   seat?: McpSeat;
+  /**
+   * Explicit opt-in: trust a caller-declared `sessionId` as an execution
+   * identity (`--trust-caller-session-id`, off by default). An MCP server is a
+   * child process with no host-proven caller identity, so accepting the value
+   * lets any caller address another session's coordinator row. Leave it unset
+   * on a shared connection; the dsh native tools and the CLI are the
+   * host-proven routes.
+   */
+  trustCallerSessionId?: boolean;
 }
 
 /**
- * The launch verdict for one declared identity channel: the id the connection
- * locks to, or no id plus the one-line warning that names why.
+ * The root the launch declared for the whole connection, or undefined when it
+ * declared none. The `--harness` flag wins over `MSTAR_HARNESS_DIR`: both are
+ * launcher facts, and the explicit flag is the stronger one; neither is
+ * overridable by a caller. A blank variable is not a declaration.
+ *
+ * Both forms are resolved to an absolute path here: `--harness` already refuses
+ * a relative value at the CLI boundary (it is a usage error, not a guess), while
+ * the ENVIRONMENT form is a launcher fact with no CLI boundary to refuse it, so a
+ * relative `MSTAR_HARNESS_DIR` means "relative to the server's launch directory".
+ * Resolving once, at the seam, is what keeps every downstream `dirname` anchor
+ * absolute. Read ONCE when the factory runs — the declared root is a launch fact.
  */
-type DeclaredIdentity =
-  | { readonly sessionId: string; readonly warning: null }
-  | { readonly sessionId: undefined; readonly warning: string | null };
-
-function resolveDeclaredIdentity(identityEnv: string | undefined): DeclaredIdentity {
-  if (identityEnv === undefined) return { sessionId: undefined, warning: null };
-  const value = process.env[identityEnv];
-  if (typeof value !== "string" || value.trim() === "") {
-    return { sessionId: undefined, warning: unresolvedIdentityChannelWarning(identityEnv) };
-  }
-  try {
-    // The engine's single safe-session-id rule owns what a session id may be.
-    // A value it refuses could never reach an identity-consuming command, so
-    // locking it would make the connection unusable rather than bound: it
-    // resolves no identity, exactly like an unset/blank declaration.
-    assertSafeSessionId(value, `--identity-env ${identityEnv}`);
-  } catch {
-    return { sessionId: undefined, warning: unsafeIdentityChannelWarning(identityEnv) };
-  }
-  return { sessionId: value, warning: null };
-}
-
-/**
- * The one-line cause + recovery for a declared identity channel whose variable
- * holds a value the safe-session-id rule refuses. An unsafe value cannot lock
- * the connection — a locked connection publishes no selector and strips the
- * caller's, so every identity-consuming call would be refused at the same guard
- * with no supported way to change the connection's identity. The connection
- * stays generic and this line names the rule and the two escapes. The rejected
- * value is NEVER echoed: the engine rule deliberately withholds it, and this
- * line reaches stderr, where a value the launcher mistyped has no business.
- */
-function unsafeIdentityChannelWarning(identityEnv: string): string {
-  return (
-    `[mcp.identity-env-unsafe] --identity-env ${identityEnv} resolved to a value that is not a valid session id ` +
-    `(the rule: one safe path component [A-Za-z0-9._-]+ of at most ${SESSION_ID_MAX_LENGTH} characters, ` +
-    'not "", ".", "..", or containing "/" or "\\"; the rejected value is not echoed), ' +
-    "so this connection stays unlocked and the per-call sessionId selector remains the identity channel. " +
-    `Recovery: correct ${identityEnv} to a valid session id, or drop --identity-env to declare a generic connection explicitly, then relaunch the server (the identity is a launch fact).`
-  );
-}
-
-/**
- * The one-line cause + recovery for a declared identity channel that resolved
- * no session id at launch. A declared-but-empty channel cannot lock the
- * connection — a locked connection with no identity offers no supported way to
- * establish one — so the connection stays generic and this line names what the
- * launcher can do about it. Written to `process.stderr`: this module owns no
- * log sink, and the stdio transport's stdout carries the protocol.
- */
-function unresolvedIdentityChannelWarning(identityEnv: string): string {
-  return (
-    `[mcp.identity-env-unresolved] --identity-env ${identityEnv} resolved to no session id (the variable is unset or blank), ` +
-    "so this connection stays unlocked and the per-call sessionId selector remains the identity channel. " +
-    `Recovery: set ${identityEnv} to the session id before launch, or drop --identity-env to declare a generic connection explicitly.`
-  );
+function declaredRoot(options: McpStdioOptions): string | undefined {
+  if (options.harnessRoot !== undefined) return resolve(options.harnessRoot);
+  const fromEnv = process.env.MSTAR_HARNESS_DIR;
+  return typeof fromEnv === "string" && fromEnv.trim() !== "" ? resolve(fromEnv) : undefined;
 }
 
 /**
  * Build the stdio context resolver for one launch. The exported `resolveContext`
- * below is this factory with no options, so the unparameterized server keeps
- * reading no ambient identity and probing `process.cwd()` for its harness root.
+ * below is this factory with no options: a generic shared connection that
+ * declares no root and carries no identity.
  *
- * A declared identity channel that RESOLVES a usable session id LOCKS the
- * connection: `registerMcpCommands` publishes no session selector on such a
- * connection and strips a caller-supplied selector before admission, so every
- * call runs under the declared identity — a caller can never choose one
- * (`identityLocked` below). "Usable" is the engine's single safe-session-id
- * rule, not mere non-blankness: a declared value the rule refuses cannot lock,
- * because a locked connection with an unusable identity publishes no selector
- * and strips the caller's, leaving every identity-consuming call refused at
- * that same guard. Such a value resolves no identity and the connection stays
- * generic. The identity is resolved ONCE, when this factory runs: the lock
- * state is a launch fact, so a variable that appears or disappears while the
- * connection lives never changes which identity it can run under. A declared
- * channel that resolves NO id (the variable is unset, blank, or an unsafe
- * value) does not lock the connection: it stays the generic connection, warns
- * once at launch with the cause and the recovery, and keeps the per-call
- * `sessionId` selector as its identity channel. An UNDECLARED channel is that
- * same generic connection without a warning. The rejected value is never
- * echoed, and the rule itself is not reimplemented here — the engine owns it
- * and this module only asks; the launch line quotes it so a launcher can
- * correct the value.
+ * Root selection is one ordered rule, and the launch cwd is never a candidate:
  *
- * An explicit `harnessRoot` is used verbatim as `controlRoot`; it is never
- * rebased or discovered, because the mounting process owns the root. The same
- * root is also the admission default for any command that resolves its own root
- * from `input.harness`, so a pinned server cannot fall back to the process cwd's
- * harness.
+ * 1. the connection pin — `--harness`, else a non-blank `MSTAR_HARNESS_DIR`;
+ * 2. the root the ADMITTED CALL named (`harness` selector, validated by shared
+ *    admission), resolved to an absolute path;
+ * 3. a null root for the commands whose contract needs none — the bootstrap
+ *    exception (`harness.scaffold`, which establishes a root) and the
+ *    root-free class (`ROOT_FREE_COMMANDS`);
+ * 4. otherwise the call is REFUSED (`mcp.control-root-unresolved`) with the
+ *    cause and every recovery.
  *
- * The pin also anchors the invocation's **workspace**: `cwd` becomes the pinned
- * root's parent directory, not `process.cwd()`. Every implicit harness-derived
- * path then follows the pin — a command that derives its review root from the
- * cwd (e.g. `audit.scaffold` without `--reviews-dir`), a relative `--dir` /
- * findings path, and `resolveProcessHarnessDir(cwd)` — so a pinned call cannot
- * write into the launch cwd's harness. Unpinned keeps today's behavior: `cwd`
- * is `process.cwd()` and the control root is its probe — but only while that
- * probe ANSWERS a root. A launch cwd that resolves to no harness root cannot
- * be silently adopted as the caller's control root (#533): commands would fall
- * back to the launch cwd as the store root and report `store.not-initialized`
- * for a workspace the caller never named. The resolver refuses instead with
- * the cause and the recovery (`mcp.control-root-unresolved`), except in two
- * named cases. A bootstrap command's own operation establishes a harness in a
- * workspace that has none. And a call that NAMES its root — the admitted
- * `harness` selector (`ResolveContextCall`) — is never refused: the caller
- * supplied the one fact the refusal says is missing, so that call's
- * `controlRoot` is the named root (the same semantics a pinned launch has for
- * every call) and the handler validates it. The `MSTAR_HARNESS_DIR` recovery
- * the refusal names is real for every probe-failure cause: the engine's own
- * resolution honours a non-blank variable as the explicit root BEFORE Git
- * discovery, so even a linked checkout whose main worktree cannot be read
- * resolves the pinned root instead of refusing.
+ * A connection pin always beats a per-call selector, so a caller can never root
+ * a call on a workspace the launcher did not declare. The order matters:
+ * testing the call selector before `MSTAR_HARNESS_DIR` would let a caller
+ * override a launcher-declared pin — the bug this rule exists to prevent.
  *
- * The pin is also published as `harnessPin` (the exact harness dir, not its
- * parent), so a command that owns root placement — `harness.scaffold` with no
- * explicit path — initializes the pinned harness itself instead of
- * re-discovering a root from the workspace anchor.
+ * The rule the resolution uses also anchors the invocation **workspace**: `cwd`
+ * is the root's parent directory, never `process.cwd()`, so every implicit
+ * harness-derived path — a command's review root (e.g. `audit.scaffold` without
+ * `--reviews-dir`), a relative `--dir` / findings path — follows the root the
+ * call actually uses instead of the host's directory. The null-root paths (the
+ * bootstrap exception and the root-free class) keep `process.cwd()`: they have
+ * no root to anchor on, so the workspace is marked `launchDirectory: true` and
+ * the commands that would default a path from it refuse instead of reading or
+ * writing the host's checkout. A launcher that declares the workspace itself
+ * (`--workspace`) names that directory, so the marker is absent.
+ *
+ * The declared root — `--harness`, else `MSTAR_HARNESS_DIR` — is also published
+ * as `harnessPin` (the exact harness dir, not its parent), so a command that
+ * owns root placement — `harness.scaffold` with no explicit path — initializes
+ * the pinned harness itself instead of re-discovering a root from the workspace
+ * anchor. It is the root RESOLVED at this seam, whichever launcher fact declared
+ * it: a relative `MSTAR_HARNESS_DIR` re-read against the workspace anchor (the
+ * resolved root's parent) would resolve a second time and name that root's CHILD.
  */
 export function createContextResolver(options: McpStdioOptions = {}): ResolveContext {
-  // The declared identity is a LAUNCH fact: resolve it once here, so neither
-  // the lock state nor the default identity can change while the connection
-  // lives. A channel that resolves nothing locks nothing — it warns with the
-  // cause and the recovery instead of locking an identity the connection does
-  // not have, which would leave every identity-consuming call unreachable.
-  const declared = resolveDeclaredIdentity(options.identityEnv);
-  const declaredIdentity = declared.sessionId;
-  const identityLocked = declaredIdentity !== undefined;
-  if (declared.warning !== null) process.stderr.write(`${declared.warning}\n`);
+  const pinned = declaredRoot(options);
   const resolver: ResolveContext = (definition, _sessionId, signal, _services, effects: McpEffects, call?: ResolveContextCall) => {
-    const sessionId = declaredIdentity;
-    // The root the ADMITTED CALL named (a non-blank `harness` field,
-    // validated by shared admission): the one fact a control-root refusal
-    // says is missing, so naming it lifts the refusal for this call.
-    const callHarness = call?.harness;
-    // The call's workspace: the explicit session workspace wins over the
-    // pin-derived anchor, because a mounting host knows the caller's workspace
-    // even when the harness it resolved lives outside it. It is also the probe
-    // start for the unpinned root, so `--workspace` alone is coherent.
-    const workspace = options.workspace ?? (options.harnessRoot === undefined ? process.cwd() : dirname(options.harnessRoot));
+    // The root the ADMITTED CALL named. A blank value is not a declaration:
+    // the command resolvers treat it as absent, so it must not become a root
+    // candidate here either. It is resolved against the launch directory for
+    // the same reason the pin is: `cwd` below is derived from `dirname(root)`,
+    // so a relative root would be re-resolved against its own parent and
+    // double-join the path.
+    const callHarness = typeof call?.harness === "string" && call.harness.trim() !== "" ? resolve(call.harness) : undefined;
     let controlRoot: string | null;
-    if (options.harnessRoot === undefined) {
-      const probe = probeUnpinnedControlRoot(workspace);
-      if (probe.root === null && !NULL_ROOT_BOOTSTRAP_COMMANDS.has(definition.id)) {
-        if (callHarness === undefined) {
-          const cwd = workspace;
-          throw new McpControlRootError(unresolvedControlRootMessage(cwd, probe.cause), { cwd, cause: probe.cause });
-        }
-        // The caller named the root: hand THIS call that root (the handler
-        // validates it) instead of refusing a call that is not rootless.
-        controlRoot = callHarness;
-      } else {
-        controlRoot = probe.root;
-      }
-    } else {
-      controlRoot = options.harnessRoot;
+    if (pinned !== undefined) controlRoot = pinned;
+    else if (callHarness !== undefined) controlRoot = callHarness;
+    else if (NULL_ROOT_BOOTSTRAP_COMMANDS.has(definition.id)) controlRoot = null;
+    else if (ROOT_FREE_COMMANDS.has(definition.id)) controlRoot = null;
+    else {
+      const cwd = process.cwd();
+      throw new McpControlRootError(unresolvedControlRootMessage(cwd), { cwd });
     }
     return {
-      cwd: workspace,
+      cwd: options.workspace ?? (controlRoot === null ? process.cwd() : dirname(controlRoot)),
       controlRoot,
-      // A pin is also the exact harness dir: commands that own root placement
-      // (e.g. `harness.scaffold`) must target it verbatim, not re-derive it.
-      ...(options.harnessRoot === undefined ? {} : { harnessPin: options.harnessRoot }),
-      ...(sessionId === undefined ? {} : { sessionId }),
+      // `cwd` is a NAMED directory only when the launcher declared the workspace
+      // itself (`--workspace`) or a root was resolved: then it is that root's
+      // parent. Otherwise it is this server's own launch directory, which is the
+      // HOST's checkout and says nothing about the caller's workspace, so a
+      // command may neither default a path input from it nor answer about it.
+      ...(options.workspace === undefined && controlRoot === null ? { launchDirectory: true as const } : {}),
+      // The declared root is also the exact harness dir: commands that own root
+      // placement (e.g. `harness.scaffold`) must target it verbatim, not
+      // re-derive it. Published from the RESOLVED pin, not the raw launcher
+      // fact: a handler that re-read a relative MSTAR_HARNESS_DIR against this
+      // invocation's workspace would resolve it against its own parent and
+      // create a SECOND harness. No declaration, no pin.
+      ...(pinned === undefined ? {} : { harnessPin: pinned }),
       versions: { engine: null, cli: null, plugin: null, host: null, platform: null },
       signal,
       effects,
     };
   };
-  // Admission reads these before the handler resolves the context, so a
-  // launcher-declared default satisfies a required session selector, fills an
-  // unset root input, and — on a locked connection — strips a caller-supplied
-  // selector before admission (the connection identity is locked). The harness
-  // getter stays a live read of the launch options; the identity ones report
-  // the launch snapshot, so the lock cannot outlive the identity it locks or
-  // appear after the connection became generic.
-  Object.defineProperty(resolver, "defaultSessionId", {
-    get: () => declaredIdentity,
-    enumerable: true,
-  });
+  // The declared root is the connection's default for admission: a command that
+  // resolves its own root from `input.harness` has that field filled from it,
+  // and registration publishes `harness` as REQUIRED when this is undefined —
+  // an unpinned connection, where the caller must name the root on every call.
   Object.defineProperty(resolver, "defaultHarness", {
-    get: () => options.harnessRoot,
+    get: () => pinned,
     enumerable: true,
   });
-  Object.defineProperty(resolver, "identityLocked", {
-    get: () => identityLocked,
+  // Registration reads this to decide whether the per-call `sessionId`
+  // selector exists at all. A construction-time snapshot is right here: the
+  // opt-in is a launch flag, not a mutable fact.
+  Object.defineProperty(resolver, "callerIdentity", {
+    value: options.trustCallerSessionId === true,
     enumerable: true,
   });
   return resolver;

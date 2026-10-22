@@ -298,7 +298,9 @@ describe("store and execution command surface", () => {
     expect(refused).toMatchObject({ status: "refused", code: "execution.migration-conflict" });
     expect(refused.message).toContain("loss-payload version 2");
     const recovery = refused.status === "refused" ? refused.details?.recovery : undefined;
-    expect(recovery).toContain("mstar store execution restore-preview --backup <backup> --out <preview>");
+    // The target is a required field, so a recovery that omits `--harness`
+    // would name a command this build refuses.
+    expect(recovery).toContain("mstar store execution restore-preview --harness <path> --backup <backup> --out <preview>");
     expect(recovery).not.toContain("status validate");
     // The refusal changed nothing.
     expect(await storeSnapshot(harness)).toEqual(before);

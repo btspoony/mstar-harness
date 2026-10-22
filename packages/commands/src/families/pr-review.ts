@@ -10,6 +10,7 @@ import { z } from "zod";
 import { commandEnvelopeSchema } from "../definitions.js";
 import { refusalEnvelope, type RefusalDiagnostic } from "../envelope.js";
 import { engineErrorFacts } from "./family-refusal.js";
+import { launchDirectoryRefusal, launchDirectoryDiagnostics } from "./launch-workspace.js";
 import { decodeInputDiagnostics } from "../input-diagnostics.js";
 import type { CommandDefinition, CommandEnvelope, InvocationContext } from "../types.js";
 
@@ -52,7 +53,7 @@ const ok = (id: string, data: unknown): CommandEnvelope => ({ version: 1, comman
  */
 export const failure = (id: string, error: unknown): CommandEnvelope<never> => {
   const message = error instanceof Error ? error.message : String(error);
-  if (error instanceof UsageError) return refusalEnvelope({ command: id, status: "usage", code: "command.invalid-input", exitCode: 2, message, ...(error.diagnostics === undefined ? {} : { diagnostics: error.diagnostics }) });
+  if (error instanceof UsageError) return refusalEnvelope({ command: id, status: "usage", code: "command.invalid-input", exitCode: 2, message, ...(error.diagnostics === undefined ? {} : { diagnostics: error.diagnostics }), ...(error.recovery === undefined ? {} : { recovery: error.recovery }) });
   const { code, details, recovery } = engineErrorFacts(error);
   if (code === undefined) return { version: 1, command: id, status: "error", code: `${id}.failed`, exitCode: 1, message };
   return refusalEnvelope({
@@ -62,9 +63,11 @@ export const failure = (id: string, error: unknown): CommandEnvelope<never> => {
   });
 };
 /** A caller-correctable input error; `diagnostics` carries one entry per
- * invalid field so a refusal can report all of them at once. */
+ * invalid field so a refusal can report all of them at once, and `recovery`
+ * keeps a class-specific way out (the launcher declaration) when the
+ * aggregation includes that class. */
 class UsageError extends Error {
-  constructor(message: string, readonly diagnostics?: readonly RefusalDiagnostic[]) { super(message); }
+  constructor(message: string, readonly diagnostics?: readonly RefusalDiagnostic[], readonly recovery?: string) { super(message); }
 }
 const abs = (cwd: string, file: string) => path.isAbsolute(file) ? file : path.resolve(cwd, file);
 const need = (value: string | undefined, name: string): string => { if (value === undefined || value === "") throw new UsageError(`${name} is required`); return value; };
@@ -105,7 +108,14 @@ async function execute(verb: Verb, input: Input, context: InvocationContext): Pr
   const id = idFor(verb);
   try {
     if (verb === "tally") {
-      const file = abs(context.cwd, need(input.findings, "--findings"));
+      // The findings payload is what the verdict is computed FROM, so a
+      // relative path read out of the HOST's checkout would settle a review of
+      // the wrong run: the same rule the sibling verbs apply. This fault joins
+      // the collection phase below instead of returning early, so the same
+      // refusal also reports the run facts the caller left out.
+      const unnamedFindings = launchDirectoryDiagnostics(context, {
+        fields: [{ field: "findings", subject: "the findings file", value: input.findings }],
+      });
  // One collection phase for every tally input: the findings payload, the
  // four run facts and the three counts all append diagnostics, and a single
  // refusal carries all of them, so one call reports every invalid field
@@ -113,10 +123,17 @@ async function execute(verb: Verb, input: Input, context: InvocationContext): Pr
  // § Aggregated validation). The run facts feed the derivation in
  // `resolvePrReviewSettlement`; nothing about elapsed time is an input, so a
  // run past its tier clock with complete coverage still settles.
-      const diagnostics: RefusalDiagnostic[] = [];
+      const diagnostics: RefusalDiagnostic[] = [...(unnamedFindings?.diagnostics ?? [])];
       const allowed: readonly string[] = ["must-fix", "should-fix", "nit"];
       let findings: { mergeClass: MergeClass }[] = [];
-      if (!existsSync(file)) {
+      const file = input.findings === undefined || input.findings === "" ? undefined : abs(context.cwd, input.findings);
+      if (file === undefined || unnamedFindings !== undefined) {
+        // An unnamed connection has no directory to read the payload from: its
+        // own diagnostic says why, and reading it would judge the HOST checkout.
+        // `--findings` is required at admission, so a direct call gets the same
+        // answer from this collection phase.
+        if (file === undefined && unnamedFindings === undefined) diagnostics.push({ path: "findings", code: "required", message: "--findings is required", expected: "present", received: "undefined" });
+      } else if (!existsSync(file)) {
         diagnostics.push({ path: "findings", code: "invalid", message: `findings file not found: ${file}` });
       } else {
         // An unparseable file is the same caller-correctable class as the
@@ -202,7 +219,7 @@ async function execute(verb: Verb, input: Input, context: InvocationContext): Pr
       });
       const unmetAcUnsafe = count(input.unmetAcUnsafe, "--unmet-ac-unsafe", "unmetAcUnsafe");
       const unmetAcSafe = count(input.unmetAcSafe, "--unmet-ac-safe", "unmetAcSafe");
-      if (diagnostics.length > 0) throw new UsageError(diagnostics[0]!.message, diagnostics);
+      if (diagnostics.length > 0) throw new UsageError(diagnostics[0]!.message, diagnostics, unnamedFindings?.recovery);
       // The trigger list lives in the engine (one implementation): the CLI
       // only reports the run's facts, and the derived cause/scope travels in
       // the unchanged `incomplete` field of the tally envelope.
@@ -231,12 +248,25 @@ async function execute(verb: Verb, input: Input, context: InvocationContext): Pr
       return ok(id, { path: prReviewReportPath({ reviewsDir, target: parseTarget(need(input.target, "--target")), ...(stage ? { stage } : {}), ...(input.slug ? { slug: input.slug } : {}), ...(input.date ? { date: input.date } : {}) }) });
     }
     if (verb === "validate-report") {
+      // The report path is REQUIRED but may still be relative: on a connection
+      // that declared no workspace a relative one resolves against the host's
+      // checkout, so the verdict would describe a file the caller never named.
+      const unnamedReport = launchDirectoryRefusal(id, context, {
+        fields: [{ field: "reportFile", subject: "the report file", value: input.reportFile }],
+      });
+      if (unnamedReport !== undefined) return unnamedReport;
       const file = abs(context.cwd, need(input.reportFile, "report file"));
       if (!existsSync(file)) throw new Error(`report file not found: ${file}`);
       const result = validatePrReviewReport(readFileSync(file, "utf8"));
       return result.ok ? ok(id, result) : refusalEnvelope({ command: id, status: "refused", code: `${id}.invalid`, exitCode: 1, message: "PR-review report validation failed", details: { violations: result.violations } , recovery: "Correct each listed violation in the saved report. Run mstar pr-review validate-report <report-file>."});
     }
     if (verb === "post") {
+      // `gh` resolves the repository from the directory it runs in, so on a
+      // connection that declared no workspace this call would resolve the HOST
+      // checkout's repository and post a review to it. The subject is the
+      // caller's repository, which only a declared workspace names.
+      const unnamedRepository = launchDirectoryRefusal(id, context, { subject: "the repository this review is posted to" });
+      if (unnamedRepository !== undefined) return unnamedRepository;
       if (!/^\d+$/.test(need(input.pr, "--pr")) || Number(input.pr) < 1) throw new UsageError("--pr requires a positive integer");
       const bodyFile = abs(context.cwd, need(input.bodyFile, "--body-file"));
       if (!existsSync(bodyFile)) throw new Error(`body file not found: ${bodyFile}`);
@@ -275,6 +305,13 @@ async function execute(verb: Verb, input: Input, context: InvocationContext): Pr
       return ok(id, { posted: true, comments: "posted", review_url: reviewUrl || "(gh response)" });
     }
     if (verb === "worktree-cleanup") {
+      // This action DELETES the worktree and branch the setup sidecar records,
+      // so a relative path taken from an undeclared workspace would aim it at
+      // the HOST's checkout: the caller must name the directory.
+      const unnamedWorktree = launchDirectoryRefusal(id, context, {
+        fields: [{ field: "worktreePath", subject: "the review worktree to remove", value: input.worktreePath }],
+      });
+      if (unnamedWorktree !== undefined) return unnamedWorktree;
       const worktreePath = path.resolve(abs(context.cwd, need(input.worktreePath, "--path")));
       const sidecarPath = path.join(path.dirname(worktreePath), `.${path.basename(worktreePath)}.prreview.json`);
       if (!existsSync(sidecarPath)) throw new Error(`no setup sidecar found at ${sidecarPath} - run pr-review worktree-setup first`);
@@ -307,6 +344,11 @@ async function execute(verb: Verb, input: Input, context: InvocationContext): Pr
       return ok(id, { removed: worktreePath, branch: branch || null });
     }
     if (verb === "size") {
+      // The classified repository is the one `git` discovers from the invocation
+      // directory, and this action publishes no field that names it: on a
+      // connection that declared no workspace that is the HOST's checkout.
+      const unnamedRepository = launchDirectoryRefusal(id, context, { subject: "the repository this size classifies" });
+      if (unnamedRepository !== undefined) return unnamedRepository;
       const base = need(input.base, "--base"); const head = need(input.head, "--head");
       const rootResult = await spawn(context, ["git", "rev-parse", "--show-toplevel"]);
       if (rootResult.exitCode !== 0 || rootResult.signal !== null) throw new Error(rootResult.stderr || "not a git repository");
@@ -328,6 +370,20 @@ async function execute(verb: Verb, input: Input, context: InvocationContext): Pr
       if (input.stage !== "1" && input.stage !== "2") throw new UsageError("--stage must be 1 or 2");
       if (input.tier !== undefined && !["quick", "default", "deep"].includes(input.tier)) throw new UsageError("--tier must be quick | default | deep");
       if (input.remainingMinutes !== undefined && !/^-?\d+(?:\.\d+)?$/.test(input.remainingMinutes)) throw new UsageError("--remaining-minutes must be a number of minutes");
+      // Both defaults are paths in the checkout: the worktree IS the invocation
+      // directory, and the skill root is a repo-relative corpus. On a connection
+      // that declared no workspace they would name the HOST's checkout in the
+      // prompt, so they are required, absolute inputs instead. The folded-diff
+      // path is optional (only a collect-folded seat uses it), so only a
+      // RELATIVE value is refused: it too would name a host-checkout file.
+      const unnamedSeatPaths = launchDirectoryRefusal(id, context, {
+        fields: [
+          { field: "worktree", subject: "the review worktree", value: input.worktree },
+          { field: "skillRoot", subject: "the audit skill root", value: input.skillRoot },
+          { field: "diffFile", subject: "the review diff file", value: input.diffFile, optional: true },
+        ],
+      });
+      if (unnamedSeatPaths !== undefined) return unnamedSeatPaths;
       const skillRoot = abs(context.cwd, input.skillRoot ?? "skills/mstar-audit");
       return ok(id, { prompt: prReviewSeatPrompt({ stage: input.stage === "1" ? 1 : 2, domain: need(input.domain, "--domain"), seat: need(input.seat, "--seat"), skillRoot, worktreePath: path.resolve(input.worktree ?? context.cwd), reconFacts: input.recon ?? [], ...(input.security ? { securitySeat: true } : {}), ...(input.tier ? { tier: input.tier as "quick" | "default" | "deep" } : {}), ...(input.diffFile ? { diffFile: abs(context.cwd, input.diffFile) } : {}), ...(input.collectFolded ? { collectFolded: true } : {}), ...(input.remainingMinutes !== undefined ? { budgetRemainingMinutes: Number(input.remainingMinutes) } : {}) }) });
     }

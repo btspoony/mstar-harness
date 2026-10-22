@@ -76,35 +76,49 @@ semantics, not a merge).
 
 ## MCP mount contract
 
-The `mstar-mcp` row launches the host-neutral server with neutral defaults: no
-pinned root and no declared identity. A deployment that needs either overrides
-the row's `args` to launch `mstar mcp --harness <absolute path>` and/or
-`--identity-env <NAME>`. The pinned root is the **server-owned default** for
-every registered command's root selection, not only the invocation context: a
-command that declares a per-call `harness` accepts an explicit override, while
-the `persist` family always uses the invocation's server root (the pin, or the
-cwd probe when unpinned) and takes no per-call harness. The pin also anchors
-the **invocation workspace** at the pinned root's parent, so a command that
-derives paths from its working directory (`audit.scaffold` deriving
-`{REVIEW_DIR}` without `--reviews-dir`, a relative `--dir` or findings path)
-lands under the pinned harness rather than the launch cwd. `--identity-env`
-declares the connection's identity channel: the named environment variable
-supplies the session id every call on the connection runs under. A declared
-channel whose variable resolves a USABLE session id LOCKS the connection —
-usable under the engine's single safe-session-id rule: one safe path component
-`[A-Za-z0-9._-]+`, not `""`, `.`, `..` or a value containing `/` or `\`, of at
-most the engine's `SESSION_ID_MAX_LENGTH` characters — the tools publish no
-session selector and a caller-supplied `sessionId` is stripped before admission
-(the ADR `dsh-native-identity-channels`), so the declared identity is the only
-identity the connection can run under. A declared channel the rule refuses, or
-one that is unset or blank, resolves no identity: it keeps the connection
-generic and names the cause, the rule and the recoveries at launch without
-echoing the rejected value, so the per-call `sessionId` selector remains the
-identity channel; a connection launched WITHOUT the flag is that same generic
-connection without the launch line.
-Per-caller identity is therefore a per-mount fact: each caller's row launches
-its own scoped mount with its own `--identity-env`. Because a patch replaces
-the row's whole `config`, such an override restates the `command` too.
+The `mstar-mcp` row launches the host-neutral server, and this ONE row is the
+whole MCP channel for the host: the plugin registers no MCP client of its own
+and no per-agent mount exists, so every caller — subagents included — shares
+the one connection. A per-agent instance could not be given per-call arguments
+(`PreToolDecision` has no argument-rewrite arm), so it would buy no capability,
+only one Node process per agent.
+
+**Control root.** A deployment that needs a pinned root overrides the row's
+`args` to launch `mstar mcp --harness <absolute path>`; a non-blank
+`MSTAR_HARNESS_DIR` in the server environment is the same declaration. Either
+one pins every call on the connection, and a pin beats the `harness` a call
+names, so a caller can never relocate a call the launcher rooted. Whichever
+root a call actually uses also anchors the **invocation workspace** at that
+root's parent directory, so a command that derives paths from its working
+directory (`audit.scaffold` deriving `{REVIEW_DIR}` without `--reviews-dir`, a
+relative `--dir` or findings path) lands under the harness the call uses rather
+than the launch cwd. Without a pin each call must name its own root through the
+root selector the command publishes (`harness`, or `controlRoot` for
+`sdd.workspace`), which is then REQUIRED on every tool whose root is
+not otherwise fixed — and a family that takes no per-call `harness` at all
+(`persist`) has no other way to name one, so it needs the pin. With neither,
+the call is refused with `[mcp.control-root-unresolved]`, naming the cause and
+the recoveries. Two classes run with a NULL root instead: `harness.scaffold`,
+because establishing a root is its own operation, and the root-free commands
+(`schema`, `path.resolve`, `host.*`, `doctor`, the read-only validators), whose
+contract answers from explicit inputs and never resolves an implicit harness
+path. The launch cwd is **never** a root candidate: it is the HOST's directory
+and says nothing about which workspace a caller belongs to.
+
+**Identity.** The shipped row declares none, and the connection carries none:
+there is no `--identity-env`, no declared-identity lock, no selector stripping
+and no connection-wide default session id (ADR
+`dsh-native-identity-channels`). It also does NOT trust a caller-declared
+identity: the per-call `sessionId` selector is unpublished and a call that
+supplies one is refused with `mcp.caller-identity-unavailable`. An operator who
+genuinely owns that trust can add `--trust-caller-session-id` to the row's
+`args` (default OFF; doing so lets any caller that knows a live coordinator
+session id act as it). The host-proven routes are the dsh-native tools, where
+identity is `exec.agent.id`, and the CLI. The native surface covers plan bind,
+audit report validation and execution clear only; plan prepare/progress/complete
+have no native tool yet and are CLI-only. The shipped row keeps neutral
+defaults: no path, no identity. Because a patch replaces the row's whole
+`config`, an override restates the `command` and the whole `args` list.
 
 ## Config surface
 

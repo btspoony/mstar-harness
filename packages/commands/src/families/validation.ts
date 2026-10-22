@@ -50,6 +50,7 @@ import {
 import { refusalEnvelope } from "../envelope.js";
 import { z } from "zod";
 import { resolveCliPath } from "../host-health.js";
+import { launchDirectoryRefusal, type LaunchDirectoryField } from "./launch-workspace.js";
 import { commandEnvelopeSchema } from "../envelope.js";
 import type { CommandDefinition, CommandEnvelope, InvocationContext, PayloadDescriptor } from "../types.js";
 
@@ -134,10 +135,87 @@ function activeGraphLifecycleBranches(graph: ExecutionState): ActiveLifecycleBra
   }
   return [...branches.values()];
 }
-function absolute(_cwd: string, input: string): string { return resolveCliPath(input); }
+/**
+ * The project root a path argument belongs to is discovered from the invocation
+ * WORKSPACE (`cwd`), never from this process's own directory: on a shared MCP
+ * connection the process directory is the HOST's launch checkout, so resolving
+ * there read — and linted — a repository the caller never named. The CLI passes
+ * the directory the operator ran from, so its `MSTAR_CLI_PROJECT_ROOT` /
+ * walk-up behavior is unchanged.
+ */
+function absolute(cwd: string, input: string): string { return resolveCliPath(input, cwd); }
 /** Physical path when the target exists, lexical `resolve` otherwise — a caller may name a directory that is not created yet, and a symlinked or `./`-spelled equal path must compare equal. */
 function canonicalPath(target: string): string {
   try { return realpathSync(target); } catch { return path.resolve(target); }
+}
+
+/** One input this family reads as a path, declared once for the whole family. */
+type PathInput = Readonly<{
+  field: keyof Input;
+  /** What the field names, for the refusal cause and the diagnostic. */
+  subject: string;
+  /** Omission is derived from another NAMED input, so only a relative value is refused. */
+  optional?: true;
+  /** The value is an ARRAY of paths: every entry is refused on its own. */
+  each?: true;
+}>;
+/**
+ * Every path input the validation family reads, declared ONCE:
+ * `launchDirectoryPaths` applies the same rule to all of them, before any
+ * handler branch runs.
+ *
+ * On a connection that declared no workspace the invocation directory is the
+ * MCP server's LAUNCH directory (the host's own checkout), so a relative value
+ * would read an artifact the caller never named and answer with a convincing
+ * verdict for the wrong project. The CLI never trips the rule: its `cwd` is the
+ * directory the operator ran from.
+ *
+ * `worktree.check` and `compound.validate` declare none: both read the
+ * invocation control root, so the resolver refuses them on such a connection
+ * before a launch-directory workspace exists.
+ */
+const pathInputs: Record<(typeof verbs)[number], readonly PathInput[]> = {
+  "dispatch.validate": [{ field: "assignmentFile", subject: "the assignment file" }],
+  "worktree.check": [],
+  "worktree.qc-alignment": [{ field: "files", subject: "the assignment file", each: true }],
+  "review.seats": [{ field: "assignmentFile", subject: "the assignment file" }],
+  lint: [{ field: "target", subject: "the lint target" }],
+  "design-md.validate": [{ field: "dir", subject: "the design directory" }],
+  "compound.validate": [],
+  "skill.lint": [{ field: "skillDir", subject: "the skill directory" }],
+  "roles.validate": [
+    { field: "rolesDir", subject: "the role corpus directory" },
+    // An omitted skillsDir is the roles dir's PARENT, i.e. derived from the
+    // directory the caller named above, so only a relative value is refused.
+    { field: "skillsDir", subject: "the skills root", optional: true },
+  ],
+  "qc.validate-report": [{ field: "reportFile", subject: "the report file" }],
+};
+/**
+ * The family's ONE application of the launch-directory rule: with no declared
+ * workspace, every path this validator reads must be absolute, and every
+ * offending input is reported in one refusal. A named workspace keeps
+ * resolving the relative path UNDER it, unchanged.
+ */
+function launchDirectoryPaths(command: (typeof verbs)[number], input: Input, context: InvocationContext): CommandEnvelope<never> | undefined {
+  const fields = pathInputs[command].flatMap((entry): LaunchDirectoryField[] => {
+    const value: unknown = input[entry.field];
+    if (entry.each === true) {
+      const paths = Array.isArray(value) ? value.filter((file): file is string => typeof file === "string") : [];
+      return paths.map((file, index) => ({
+        field: `${entry.field}[${index}]`,
+        subject: paths.length === 1 ? entry.subject : `${entry.subject} #${index + 1}`,
+        value: file,
+      }));
+    }
+    return [{
+      field: entry.field,
+      subject: entry.subject,
+      value: typeof value === "string" ? value : undefined,
+      ...(entry.optional === true ? { optional: true as const } : {}),
+    }];
+  });
+  return fields.length === 0 ? undefined : launchDirectoryRefusal(command, context, { fields });
 }
 
 const codeExtensions: Record<string, true> = Object.fromEntries([".ts", ".tsx", ".mts", ".cts", ".js", ".jsx", ".mjs", ".cjs", ".py", ".go", ".rs", ".sh", ".bash", ".zsh", ".rb", ".java", ".kt", ".swift"].map((ext) => [ext, true]));
@@ -202,6 +280,9 @@ function lintOne(file: string, type?: LintType, prVariant = false): { violations
 
 async function execute(id: string, input: Input, context: InvocationContext): Promise<CommandEnvelope> {
   try {
+    // One rule for the whole family, before any handler branch reads a path.
+    const unnamedPaths = launchDirectoryPaths(id as (typeof verbs)[number], input, context);
+    if (unnamedPaths !== undefined) return unnamedPaths;
     switch (id) {
       case "dispatch.validate": {
         const file = absolute(context.cwd, required(input.assignmentFile, "usage: dispatch validate <assignment-file> [--branch <branch>]"));
@@ -323,7 +404,10 @@ async function execute(id: string, input: Input, context: InvocationContext): Pr
             }],
           });
         }
-        const assignments: QcAlignmentAssignment[] = files.map((file) => {
+        // Each assignment is a FILE the caller named: `launchDirectoryPaths`
+        // already refused every relative one on an unnamed workspace.
+        const assignments: QcAlignmentAssignment[] = files.map((named) => {
+          const file = absolute(context.cwd, named);
           if (!existsSync(file)) throw new Error(`assignment file not found: ${file}`);
           const text = readFileSync(file, "utf8");
           const combined = parseHeaderField(text, "Review range / Diff basis");
@@ -340,7 +424,10 @@ async function execute(id: string, input: Input, context: InvocationContext): Pr
         return gate.ok ? ok(id, { assignments, ...gateData(gate) }) : rejected(id, gate, "qc.alignment.mismatch");
       }
       case "review.seats": {
-        const file = required(input.assignmentFile, "usage: review seats <assignment-file> [--mode sdd|inline|targeted] [--reviewers <role1,role2,...>]");
+        const named = required(input.assignmentFile, "usage: review seats <assignment-file> [--mode sdd|inline|targeted] [--reviewers <role1,role2,...>]");
+        // The seat count is read FROM the caller's assignment, whose path the
+        // shared rule already required to be absolute on an unnamed workspace.
+        const file = absolute(context.cwd, named);
         if (!existsSync(file)) throw new Error(`assignment file not found: ${file}`);
         const text = readFileSync(file, "utf8");
         const mode = input.mode ?? assignmentExecutionMode(text);
@@ -460,6 +547,10 @@ async function execute(id: string, input: Input, context: InvocationContext): Pr
         return gate.ok ? ok(id, { ...gateData(gate), exempt: profile.mode === null }) : rejected(id, gate, "skill.lint.invalid");
       }
       case "roles.validate": {
+        // The no-argument form validates the CHECKOUT's own corpus (the relative
+        // `skills/mstar-roles` default and that directory's parent): the shared
+        // rule requires both directories on an unnamed workspace instead, since
+        // a clean verdict about the host's repository is a silent wrong answer.
         const rolesDir = absolute(context.cwd, input.rolesDir ?? "skills/mstar-roles");
         const skillsRoot = absolute(context.cwd, input.skillsDir ?? path.dirname(rolesDir));
         const violations: Violation[] = [...validateRoleMapping(rolesDir).violations];
@@ -481,6 +572,8 @@ async function execute(id: string, input: Input, context: InvocationContext): Pr
         return gate.ok ? ok(id, { ...gateData(gate), siblingCount: Object.keys(skillTexts).length, loadOrderChecked: Object.keys(skillTexts).filter((name) => name !== "mstar-harness-core").length }) : rejected(id, gate, "roles.invalid");
       }
       case "qc.validate-report": {
+        // The report path is required but may still be relative: the shared rule
+        // already refused a relative one on an unnamed workspace.
         const file = absolute(context.cwd, required(input.reportFile, "report file is required"));
         if (!existsSync(file)) throw new Error(`report file not found: ${file}`);
         const gate = validateQcReport(readFileSync(file, "utf8"));

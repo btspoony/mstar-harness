@@ -164,12 +164,19 @@ describe("command discovery", () => {
     });
     const selection = selectCommandSchema({ command: "plan.note" }, [routed]);
     if (selection.kind !== "command") throw new Error(`expected command selection, got ${selection.kind}`);
-    expect(selection.descriptor.requirements).toEqual([
+    const [name, title, cliSession, mcpSession] = selection.descriptor.requirements;
+    expect([name, title, cliSession]).toEqual([
       { name: "name", ownership: "caller", route: "cli" },
       { name: "title", ownership: "caller", route: "cli" },
       { name: "session", ownership: "caller", route: "cli" },
-      { name: "session", ownership: "caller", route: "mcp", help: "when the selected route requires session identity, it must be supplied by the caller (host per call); legacy pre-activation routes do not require it, and legacy `plan bind --resume` refuses declared identity while ignoring ambient environment identity" },
     ]);
+    // The MCP entry carries the fact a caller acts on -- the opt-in that
+    // publishes it and that the default connection is off -- not the prose that
+    // states it: the wording lives in the definition, and pinning it here made
+    // one sentence a second source of truth.
+    expect(mcpSession).toMatchObject({ name: "session", ownership: "caller", route: "mcp" });
+    expect(mcpSession?.help).toContain("--trust-caller-session-id");
+    expect(mcpSession?.help).toContain("off by default");
   });
 
   test("schema command publishes family and leaf selections through the engine", async () => {
