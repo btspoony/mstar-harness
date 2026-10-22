@@ -489,11 +489,41 @@ describe("MCP session identity", () => {
  * without making a backup unrestorable. MCP carries the runtime surface only.
  */
 describe("MCP surface — store-level commands stay on the CLI", () => {
-  test("a store-level command publishes no tool, while a runtime command still does", async () => {
-    const resolver = createContextResolver();
-    await expect(publishedMcpTool("store.execution.export", resolver)).rejects.toThrow("unlisted tool");
-    await expect(publishedMcpTool("store.backup", resolver)).rejects.toThrow("unlisted tool");
-    const runtime = await publishedMcpTool("plan.progress", resolver);
-    expect(runtime.name).toBe("mstar_plan");
+  /** Every tool the production assembly publishes, with its description. */
+  async function allPublishedTools(): Promise<Array<{ name: string; description?: string }>> {
+    const server = new McpServer({ name: "surface-test-server", version: "1.0.0" });
+    const client = new Client({ name: "surface-test-client", version: "1.0.0" });
+    const [clientEnd, serverEnd] = InMemoryTransport.createLinkedPair();
+    try {
+      registerMcpCommands(server, getCommandDefinitions(), createContextResolver());
+      await server.connect(serverEnd);
+      await client.connect(clientEnd);
+      const { tools } = await client.listTools();
+      return tools as Array<{ name: string; description?: string }>;
+    } finally {
+      await client.close();
+      await server.close();
+    }
+  }
+
+  test("no command whose id starts with `store.` is reachable through tools/list", async () => {
+    // Enumerated independently of the filter, so a new or misclassified
+    // store command cannot become MCP-readable and keep this test green: the
+    // list comes from the command registry, the assertion from the published
+    // tools.
+    const storeIds = getCommandDefinitions()
+      .map((definition) => definition.id)
+      .filter((id) => id.startsWith("store."));
+    expect(storeIds.length).toBeGreaterThan(0);
+
+    const tools = await allPublishedTools();
+    expect(tools.map((tool) => tool.name)).not.toContain(familyToolName("store"));
+    const surfaces = tools.map((tool) => `${tool.name}\n${tool.description ?? ""}`).join("\n");
+    for (const id of storeIds) {
+      expect([id, surfaces.includes(id)]).toEqual([id, false]);
+    }
+
+    // A runtime family still publishes, so the assertion above is not vacuous.
+    expect(tools.map((tool) => tool.name)).toContain(familyToolName("plan"));
   });
 });

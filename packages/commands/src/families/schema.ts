@@ -3,6 +3,7 @@ import { ISSUE_PAYLOAD_SCHEMAS } from "@mstar-harness/engine";
 import type { IssuePayloadName, PayloadFieldSchema } from "@mstar-harness/engine";
 import { z } from "zod";
 import { commandEnvelopeSchema, getCommandDefinitions } from "../definitions.js";
+import { isCliOnlyCommand } from "../cli-only.js";
 import type { CommandDefinition, CommandEffect, CommandEnvelope, CommandRequirement } from "../types.js";
 
 export type PayloadSchemaQuery = { type: string; fields: ({ name: string } & PayloadFieldSchema)[] };
@@ -61,7 +62,17 @@ export type CommandSchemaSelector = Readonly<{
   type?: string;
 }>;
 
-export type CommandFamilyMember = Readonly<{ id: string; description: string }>;
+/**
+ * `transport: "cli"` means the command is NOT published on the MCP connection
+ * (store-level operations, which move the whole store). Discovery must say so:
+ * an agent that lists the family and then calls the missing tool has no
+ * recovery.
+ */
+export type CommandFamilyMember = Readonly<{
+  id: string;
+  description: string;
+  transport?: "cli";
+}>;
 
 export type CommandSchemaSelection =
   | Readonly<{ kind: "command"; descriptor: CommandSchemaDescriptor }>
@@ -215,7 +226,11 @@ export function selectCommandSchema(
   if (selector.family !== undefined) {
     const members = definitions
       .filter((entry) => entry.cli.path[0] === selector.family)
-      .map((entry) => ({ id: entry.id, description: entry.description }));
+      .map((entry) => ({
+        id: entry.id,
+        description: entry.description,
+        ...(isCliOnlyCommand(entry.id) ? { transport: "cli" as const } : {}),
+      }));
     if (members.length === 0) {
       throw new CommandSchemaSelectionError(
         `unknown family ${JSON.stringify(selector.family)}; available families: ${[...new Set(definitions.map((entry) => entry.cli.path[0]!))].join(", ")}`,

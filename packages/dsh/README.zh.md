@@ -102,7 +102,7 @@ profile bundle 组合出以下行——注册表行来自 `@deepseek-ai/dsh-base
 - **派发闸门**——`tools/pre-execute` 监听器作用于委派工具，通过 engine 的单一 `composeDispatchGate` 组合（字段闸门、反递归预检、默认分支闸门——与 opencode/omp/CLI 对齐，违规码按构造即相同）校验 subagent Assignment 文本，外加 dsh 租约闸门与 worktree L1/L2 检查。
 - **技能撰写 lint**——已配置技能根下的 `SKILL.md` 写入运行 engine 技能撰写 lint（`lintFrontmatter` + `lintFiveQuestion`）。
 - **seam lint**——harness 下 `DESIGN.md` / 评审报告（`{REVIEW_DIR}` = `{HARNESS_DIR}/reviews/`）/ 知识文档 / roles 目录的写入运行各自的 artifact 级 engine lint。
-- **模型可见工具**——`ctx.tools` 上恰好注册**三个**工具，且只覆盖 MCP 面做不到的事：**`mstar_plan_bind`**（持久槽生产者——dsh 本地 `executionBinding` 槽及其采纳收据的唯一写入者）、**`mstar_audit_validate`**（评审报告凭据扫描，`mstar_audit` 家族没有任何 action 提供）与 **`mstar_execution_clear`**（不存在共享的 `execution.clear` 命令）。其余所有 mstar 能力都走 MCP 家族：每个家族一个工具 + `action` 参数。成员规则与各工具的独有贡献见 § Native command surface。
+- **模型可见工具**——`ctx.tools` 上恰好注册**三个**工具，且只覆盖 MCP 面做不到的事：**`mstar_plan_bind`**（持久槽生产者——dsh 本地 `executionBinding` 槽及其采纳收据的唯一写入者）、**`mstar_audit_validate`**（评审报告凭据扫描，`mstar_audit` 家族没有任何 action 提供）与 **`mstar_execution_clear`**（不存在共享的 `execution.clear` 命令）。其余所有运行时能力都走 MCP 家族：每个家族一个工具 + `action` 参数。store 级命令（`store.*`）是刻意的例外：它们搬运整个 store，因此只在 CLI，家族成员以 `transport: "cli"` 发布。成员规则与各工具的独有贡献见 § Native command surface。
 - **bundled 命令**——向 `ctx.commands` 注册 `/iteration-start`、`/iteration-drive`、`/iteration-loop`、`/codebase-audit`（来自打包的 `harness-commands/` 镜像；每条声明 frontmatter `input` hint，使 web 客户端 claim `/name ` 并等待用户后续输入而非立即执行；handler 把命令正文 + 用户输入 steer 进接收 agent）。
 - **原生执行绑定路径**——持久执行绑定由成功的原生 `mstar_plan_bind`（两个 bind 臂，均在引擎只读 C1 session resume 成功之后）自动采纳，并按需用 `mstar_execution_clear` 工具清除：身份来自 `exec.agent.id`（无参数、无模型可选面），清除会保留本会话自己的用户选择与排除下限，未绑定会话或不可读的 binding 记录会得到命名拒绝及其恢复路径，而不是静默写入。这条路径上没有任何斜杠命令——操作者绑定或清除执行会话，用的就是这两个原生工具。
 - **pre-step catalog 行**——一个咨询式 `agent/pre-step` 监听器追加**一条**统一的 `mstar-engine` catalog 消息，只携带**一条 delta 行**（`workflow` / 非 Done `plans` / `branch` 锚点 / 解析到 steering compass 时的相位 `gate` 判定），选中项带警告时再附 `workflow warning` 披露行。residuals 汇总、branch policy、spec 集成锚点、row scope、知识摘要、compass 方向与 agent-flow ledger 均为 payload-only（面板 + engine 权威）——见 § Engine-status catalog。发射按会话+工作区变更驱动——首次发射之后，仅当渲染出的行或面板相关 payload 变化时才追加；turn 开始本身从不触发，未解析到 `{HARNESS_DIR}` 的工作区不会组合该行。其背后的构建共享同一份内存 TTL 缓存（`catalogTtlMs`，默认 60 秒）；每会话最新发射持久化到 control 根的 `store.db`（`dsh_status_emissions`），而非文件缓存。
@@ -240,7 +240,7 @@ mstar 技能通过 dsh skill-filesystem 提供者以**单一规范挂载**接入
 - **`mstar_audit_validate`** —— 规则 2。评审报告凭据扫描（`mstar-audit` Hard Rule 4，即 `mstar audit scaffold` 背后的校验器）；`mstar_audit` 家族只发布 `scaffold` / `secret-scan` / `supply-chain`，都不校验已存在的报告文件。
 - **`mstar_execution_clear`** —— 规则 2。它清除同一个 dsh 本地 `executionBinding` 槽，而 MCP 路线没有可承载的共享 `execution.clear` 命令。它完全不带参数：身份来自 `exec.agent.id`，因此只能触达调用者自己的绑定，并保留用户的工作流选择与排除下限；已知叶席位在读取 store 之前 fail-closed 拒绝。其拒绝（`execution.clear.no-harness` / `no-binding` / `store-refused`）都点名原因与恢复路径。
 
-其余命令全部走 MCP；旧的 `mstar_<family>_<action>` 工具名不会以别名复活：用家族 + `action` 调用，并用 `mcp__mstar__mstar_schema`（`family: <name>`，或单个叶子契约的 `command: <command-id>`）读取家族真实的 action 与字段。这个表面上的身份、准入与 fail-closed 叶席位拒绝遵循 ADR `docs/adr/dsh-native-identity-channels.md`。
+其余运行时命令全部走 MCP——`store.*` 命令只在 CLI，不在此发布；旧的 `mstar_<family>_<action>` 工具名不会以别名复活：用家族 + `action` 调用，并用 `mcp__mstar__mstar_schema`（`family: <name>`，或单个叶子契约的 `command: <command-id>`）读取家族真实的 action 与字段。这个表面上的身份、准入与 fail-closed 叶席位拒绝遵循 ADR `docs/adr/dsh-native-identity-channels.md`。
 
 ### Shared MCP connection（显式声明的 control 根）
 
