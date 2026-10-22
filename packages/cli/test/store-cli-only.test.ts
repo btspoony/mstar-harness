@@ -2,19 +2,33 @@
 import { describe, expect, test } from "bun:test";
 import { runCli } from "./harness";
 
+/**
+ * Each verb keeps its OWN option list (`optionsByVerb`), so a dropped `harness`
+ * entry would remove the field from that verb's help and descriptor while the
+ * handler still refuses the call: a command that advertises an optional target
+ * it cannot run without. Every list is asserted, not one shared construction.
+ */
 describe("store-level commands stay on the CLI", () => {
-  test("store execution export advertises its required target and refuses an omitted one", () => {
-    // The MCP retirement removed the tool, not the command: its CLI contract is
-    // still enforced by the handler and must keep a regression.
-    const help = runCli(["store", "execution", "export", "--help"]);
-    expect(help.exitCode).toBe(0);
-    expect(help.stdout).toContain("Required inputs: harness");
+  for (const verb of ["export", "restore", "restore-preview"] as const) {
+    test(`store execution ${verb} advertises its required target and refuses an omitted one`, () => {
+      const help = runCli(["store", "execution", verb, "--help"]);
+      expect([verb, help.exitCode]).toEqual([verb, 0]);
+      expect(help.stdout).toContain("Required inputs: harness");
 
-    const call = runCli(["store", "execution", "export"]);
-    expect(call.exitCode).toBe(2);
-    expect(call.stdout).toContain('"message":"harness is required"');
-    expect(call.stdout).toContain('"required":["harness"]');
-  });
+      // The published contract, not only the help prose: a regression that
+      // drops `harness` from this verb's option list must fail here.
+      const descriptor = runCli(["schema", "--command", `store.execution.${verb}`]);
+      expect(descriptor.exitCode).toBe(0);
+      const published = (JSON.parse(descriptor.stdout) as { data: { descriptor: { input: { required?: string[] } } } })
+        .data.descriptor.input.required;
+      expect([verb, published]).toEqual([verb, ["harness"]]);
+
+      const call = runCli(["store", "execution", verb]);
+      expect([verb, call.exitCode]).toEqual([verb, 2]);
+      expect(call.stdout).toContain('"message":"harness is required"');
+      expect(call.stdout).toContain('"required":["harness"]');
+    });
+  }
 });
 
 describe("store-level discovery", () => {
