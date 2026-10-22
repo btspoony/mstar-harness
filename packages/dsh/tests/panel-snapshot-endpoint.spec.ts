@@ -213,16 +213,15 @@ describe('panelSnapshot endpoint — server-side harness resolution', () => {
     expect(Number.isNaN(Date.parse(result.snapshot.at))).toBe(false)
   })
 
-  it('answers no-harness-dir for a session whose workspace declares none', async () => {
+  it('answers the no-harness kind for a session whose workspace declares none', async () => {
     const app = (booted = await bootApp({ sessionsService: 'fake', harnessDir: null }))
     const bare = await bareWorkspace()
     liveSession(app, 'ses_bare', bare)
 
-    // The client's `cwd` cannot supply what the workspace does not declare.
-    expect(await endpointOf(app).panelSnapshot('ses_bare', bare)).toEqual({
-      kind: 'unavailable',
-      reason: 'no-harness-dir',
-    })
+    // The client's `cwd` cannot supply what the workspace does not declare, and
+    // the absence travels as its OWN kind (F3) so the panel can tell an
+    // inactive workspace from a store that refused.
+    expect(await endpointOf(app).panelSnapshot('ses_bare', bare)).toEqual({ kind: 'no-harness' })
   })
 
   it('resolves a cold session through the persisted controller read', async () => {
@@ -352,6 +351,91 @@ describe('panelSnapshot endpoint — install', () => {
       service: PANEL_SNAPSHOT_SERVICE,
       namespace: MSTAR_PANEL_SNAPSHOT_NAMESPACE,
       method: MSTAR_PANEL_SNAPSHOT_METHOD,
+    })
+  })
+})
+
+describe('panelSnapshot endpoint — server-side target resolution (F1)', () => {
+  /** Register the catalog rows a real workspace carries (project + iteration). */
+  async function seedCatalog(app: BootResult): Promise<void> {
+    const { registerCatalogEntity } = await import('@mstar-harness/engine')
+    for (const [kind, id, relativePath] of [
+      ['project', '_default', 'projects/_default'],
+      ['iteration', 'iter-solo', 'iterations/iter-solo'],
+    ] as const) {
+      await registerCatalogEntity(
+        { harnessDir: app.harnessDir },
+        { kind, id, title: `${id} title`, rootKind: 'harness', relativePath },
+        { operationId: `op-seed-${id}`, actor: 'panel.spec' },
+      )
+    }
+  }
+
+  it('answers readable workflow/iteration/roadmap members from { sessionId, cwd } alone', async () => {
+    const app = (booted = await bootApp({ sessionsService: 'fake' }))
+    await seedStore(app.harnessDir)
+    await seedActiveWorkflow(app.harnessDir, 'wf-solo', [{ id: 'plan-solo', status: 'Todo' }])
+    await seedCatalog(app)
+    liveSession(app, 'ses_solo', app.root)
+
+    // This is the ENTIRE seat set the browser has: no workflow/iteration/project
+    // id crosses the wire. The three members were permanently `not-applicable`
+    // while resolution was left to the client.
+    const result = await endpointOf(app).panelSnapshot('ses_solo', app.root)
+    expect(result.kind).toBe('ok')
+    if (result.kind !== 'ok') throw new Error('unreachable')
+
+    expect(result.snapshot.workspace.workflow.state).toBe('ok')
+    expect(result.snapshot.workspace.iteration.state).toBe('ok')
+    expect(result.snapshot.workspace.roadmap.state).toBe('ok')
+    expect(result.snapshot.workspace.projects.state).toBe('ok')
+    if (result.snapshot.workspace.workflow.state !== 'ok') throw new Error('unreachable')
+    expect(result.snapshot.workspace.workflow.data?.id).toBe('wf-solo')
+  })
+
+  it('falls back to the store\'s single ACTIVE workflow when the session has no pick', async () => {
+    const app = (booted = await bootApp({ sessionsService: 'fake' }))
+    await seedStore(app.harnessDir)
+    await seedActiveWorkflow(app.harnessDir, 'wf-unpicked', [{ id: 'plan-u', status: 'Todo' }])
+    liveSession(app, 'ses_fresh', app.root)
+
+    // A session that never used the picker has no durable selection at all.
+    expect(readWorkflowSessionBinding(app.harnessDir, 'ses_fresh', app.root)).toEqual({ kind: 'ok' })
+
+    const result = await endpointOf(app).panelSnapshot('ses_fresh', app.root)
+    expect(result.kind).toBe('ok')
+    if (result.kind !== 'ok') throw new Error('unreachable')
+    expect(result.snapshot.workspace.workflow.state).toBe('ok')
+    if (result.snapshot.workspace.workflow.state !== 'ok') throw new Error('unreachable')
+    expect(result.snapshot.workspace.workflow.data?.id).toBe('wf-unpicked')
+  })
+})
+
+describe('panelSnapshot endpoint — carrier cancellation (F5)', () => {
+  it('answers aborted instead of reading the store when the carrier is already cancelled', async () => {
+    const app = (booted = await bootApp({ sessionsService: 'fake' }))
+    await seedStore(app.harnessDir)
+    await seedActiveWorkflow(app.harnessDir, 'wf-abort', [{ id: 'plan-a', status: 'Todo' }])
+    liveSession(app, 'ses_abort', app.root)
+
+    // The typert gateway publishes `ctx.invocation` for the duration of a Remote
+    // call; standing in for it here is the only way to hand the endpoint the
+    // carrier's own lifetime. A real client timeout or socket close sets exactly
+    // this signal.
+    const controller = new AbortController()
+    controller.abort()
+    const service = app.ctx.get(PANEL_SNAPSHOT_SERVICE) as { ctx: object }
+    Object.defineProperty(service.ctx, 'invocation', {
+      value: { signal: controller.signal },
+      configurable: true,
+      writable: true,
+    })
+
+    // The read stops before its first view: a cancelled call pays for no store
+    // access and no projection capture.
+    expect(await endpointOf(app).panelSnapshot('ses_abort', app.root)).toEqual({
+      kind: 'unavailable',
+      reason: 'aborted',
     })
   })
 })

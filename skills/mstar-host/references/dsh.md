@@ -62,7 +62,14 @@ or a custom profile).
   `ok` (the authority answered — `data: null` still means "nothing here"),
   `not-applicable` (nothing was read: no target resolved) or `unavailable` (the
   read failed; the store's own message verbatim). The whole snapshot is
-  `unavailable` only when NO view reached the authority.
+  `unavailable` only when NO view reached the authority, and a workspace with no
+  resolvable `{HARNESS_DIR}` answers the separate `no-harness` kind (an inactive
+  workspace, not a failed read).
+  **The browser supplies `{ sessionId, cwd }` and nothing else**: the workflow
+  (the session's durable pick, then the store's single ACTIVE lifecycle), the
+  iteration and the project (`_default`, else the single registered one) resolve
+  SERVER-side on each read, so the roadmap and the stepper are not permanently
+  `not-applicable`.
   **`retained` — the mixed-freshness half, disclosed**: three facts no dashboard
   DTO owns (the iteration gate, the knowledge digest, the resolved workflow
   selection) are REUSED from the apply-scoped catalog payload cache — the same
@@ -73,7 +80,10 @@ or a custom profile).
   **Poll contract**: 5 s while visible, at most ONE request in flight (a slow
   answer never stacks), a 5 s deadline per request, the last good snapshot kept
   while a refresh is out (no flicker), an immediate refetch on a new connection
-  generation, and nothing at all while the tab is not visible.
+  generation, and nothing at all while the tab is not visible. The deadline is a
+  real cancellation: the carrier's signal reaches the host read, which checks it
+  before every view, so a timed-out request stops paying for store reads and
+  projection captures.
   **Morning Star Workflow layout**: a narrow-column shell bound to the
   sidebar pane's definite height — exactly three zones: the **section nav**
   (任务迭代 / 项目路线图 / 事件记录; `data-mstar-tab-nav`), the panel-owned

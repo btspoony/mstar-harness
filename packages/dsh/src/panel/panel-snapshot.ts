@@ -67,6 +67,16 @@ export interface PanelSnapshot {
   readonly ledger: AgentFlowView | null // readAgentFlow
 }
 
+/**
+ * The whole-read answer.
+ * - `ok`          the snapshot composed (its members still degrade individually).
+ * - `no-harness`  no `{HARNESS_DIR}` resolves for this workspace: there is
+ *                 nothing to read and nothing failed. Distinct from
+ *                 `unavailable` on purpose — the panel renders an inactive
+ *                 state here, not a store error.
+ * - `unavailable` a read was attempted and failed; `reason` is explicit.
+ */
 export type PanelSnapshotRead =
   | { readonly kind: 'ok'; readonly snapshot: PanelSnapshot }
+  | { readonly kind: 'no-harness' }
   | { readonly kind: 'unavailable'; readonly reason: string }

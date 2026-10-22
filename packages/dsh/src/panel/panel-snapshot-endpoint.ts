@@ -22,6 +22,17 @@
  * is returned as a value: this endpoint never throws a transport error for a
  * store that refuses.
  *
+ * TARGETS ARE NOT THE CLIENT'S JOB: the browser holds `{ sessionId, cwd }` and
+ * nothing else, so an omitted `workflowId` / `iterationId` / `projectId` is
+ * RESOLVED server-side inside `readPanelSnapshot` (the session's durable pick,
+ * then the harness catalog). An asserted id is still shape-validated here and
+ * still read against the server-resolved harness root — a client claim can
+ * never redirect the read to another workspace.
+ *
+ * A WORKSPACE WITH NO HARNESS ANSWERS `no-harness`: that is a state of the
+ * workspace, not a failed read, so it travels as its own kind instead of an
+ * `unavailable` token the panel would have to decode.
+ *
  * @module @mstar-harness/dsh/panel/panel-snapshot-endpoint
  */
 
@@ -106,7 +117,9 @@ function isUnsafeId(value: string): boolean {
 
 /**
  * One optional id's argument-shape refusal, or undefined when it is usable.
- * An ABSENT id is legal (the corresponding view answers `not-applicable`).
+ * An ABSENT id is legal: the service resolves it from the session's pick and
+ * the harness catalog, and only an unresolvable one leaves its member
+ * `not-applicable`.
  */
 function refusedId(value: unknown, name: string): string | undefined {
   if (value === undefined || value === null) return undefined
@@ -145,10 +158,14 @@ export class MstarPanelSnapshotGateway extends TypertRemoteService {
    * documented in the module header.
    * @param sessionId - the session whose snapshot is requested (client-asserted).
    * @param cwd - the session workspace the client believes it is reading (client-asserted).
-   * @param workflowId - the workflow the panel has selected, when it has one.
-   * @param iterationId - the iteration the panel has selected, when it has one.
-   * @param projectId - the project the roadmap view is scoped to, when resolved.
-   * @returns the snapshot, or the explicit unavailable state with a reason.
+   * @param workflowId - an asserted workflow id; resolved from the session's
+   *   durable pick when omitted (the browser never supplies one).
+   * @param iterationId - an asserted iteration id; resolved from the harness
+   *   catalog when omitted.
+   * @param projectId - an asserted project id; resolved from the harness catalog
+   *   (`_default`, else the single project) when omitted.
+   * @returns the snapshot, the `no-harness` kind, or the explicit unavailable
+   *   state with a reason (`aborted` when the carrier cancelled).
    */
   async panelSnapshot(
     sessionId: string,
@@ -169,6 +186,16 @@ export class MstarPanelSnapshotGateway extends TypertRemoteService {
     }
   }
 
+  /**
+   * The carrier cancellation of THIS call, when the gateway is serving one.
+   * `ctx.invocation` is set by the typert gateway for the duration of a Remote
+   * call and absent otherwise (an in-process caller), so this reads the real
+   * client timeout / socket close rather than a second timeout of our own.
+   */
+  private carrierSignal(): AbortSignal | undefined {
+    return (this.ctx as { invocation?: { signal?: AbortSignal } }).invocation?.signal
+  }
+
   /** The validation chain itself (contained by {@link panelSnapshot}). */
   private async serve(
     sessionId: unknown,
@@ -177,6 +204,7 @@ export class MstarPanelSnapshotGateway extends TypertRemoteService {
     iterationId: unknown,
     projectId: unknown,
   ): Promise<PanelSnapshotRead> {
+    const signal = this.carrierSignal()
     // (1) Argument shape — before anything reads the store.
     const sid = nonEmptyString(sessionId)
     if (sid === undefined) return unavailable('invalid-session-id')
@@ -195,9 +223,10 @@ export class MstarPanelSnapshotGateway extends TypertRemoteService {
     const session = await this.resolveSessionCwd(sid)
     if (session.kind !== 'ok') return unavailable(session.reason)
 
-    // (3) The store root comes from the SERVER-side cwd (or the boot root).
+    // (3) The store root comes from the SERVER-side cwd (or the boot root). A
+    // workspace with no harness is NOT an error: `readPanelSnapshot` answers the
+    // `no-harness` kind, which the panel renders as its inactive state.
     const harnessDir = this.bootHarnessDir ?? this.resolver.forWorkspace(session.cwd)
-    if (harnessDir === null || harnessDir === '') return unavailable('no-harness-dir')
 
     // (4) The asserted cwd must be the resolved session's own — never a
     // close match, and never a claim onto another session's workspace.
@@ -205,6 +234,9 @@ export class MstarPanelSnapshotGateway extends TypertRemoteService {
 
     return readPanelSnapshot({
       harnessDir,
+      // The carrier's own lifetime: a client timeout or a closed socket stops
+      // the read before its next view instead of leaving it running unpaid.
+      ...(signal === undefined ? {} : { signal }),
       // The catalog cache is keyed by harness dir + the session's OWN identity +
       // cwd: the validated session supplies all three, never the client's claim.
       sessionId: sid,

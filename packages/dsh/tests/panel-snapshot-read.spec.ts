@@ -12,7 +12,7 @@ import { afterEach, describe, expect, it, spyOn } from 'bun:test'
 import { readFileSync } from 'node:fs'
 import { mkdir, mkdtemp, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
-import { join } from 'node:path'
+import { dirname, join } from 'node:path'
 import { initializeStore, readDashboardView, type DashboardView } from '@mstar-harness/engine'
 // Namespace import of the engine: the fault cases interpose a call-through
 // wrapper on ONE exported function, so the production service still reads the
@@ -47,7 +47,9 @@ async function activeHarness(): Promise<string> {
 
 /** The snapshot of an `ok` read; fails the case when the read degraded. */
 function snapshotOf(result: PanelSnapshotRead): PanelSnapshot {
-  if (result.kind !== 'ok') throw new Error(`expected an ok snapshot, got unavailable: ${result.reason}`)
+  if (result.kind !== 'ok') {
+    throw new Error(`expected an ok snapshot, got ${result.kind === 'no-harness' ? 'no-harness' : result.reason}`)
+  }
   return result.snapshot
 }
 
@@ -205,11 +207,11 @@ describe('readPanelSnapshot — degradation', () => {
     expect(snapshot.workspace.projects).toMatchObject({ state: 'ok' })
   })
 
-  it('answers the whole snapshot unavailable when no harness dir resolved', async () => {
-    expect(await readPanelSnapshot({ harnessDir: null, workflowId: 'wf-1' })).toEqual({
-      kind: 'unavailable',
-      reason: 'no-harness-dir',
-    })
+  it('answers the dedicated no-harness state when no harness dir resolved', async () => {
+    // F3: an inactive workspace is its own state, not a store failure — the
+    // panel renders locale copy here instead of a wire token.
+    expect(await readPanelSnapshot({ harnessDir: null, workflowId: 'wf-1' })).toEqual({ kind: 'no-harness' })
+    expect(await readPanelSnapshot({ harnessDir: '' })).toEqual({ kind: 'no-harness' })
   })
 
   it('answers the whole snapshot unavailable when a store refusal fails every view', async () => {
@@ -342,9 +344,127 @@ describe('readPanelSnapshot — retained catalog facts', () => {
     spy.mockRestore()
 
     // A miss rebuilds the catalog payload, which can refresh store projections:
-    // it must come after the last view, never between two of them.
-    expect(trace.slice(0, 5)).toEqual(['workflow-detail', 'iteration-detail', 'roadmap', 'issues', 'projects'])
-    expect(trace.at(-1)).toBe('retained')
+    // it must come after the last view, never between two of them. `projects`
+    // and `iterations` lead because they RESOLVE the targets (asserted here, so
+    // `iterations` is skipped) — nothing is read before them.
+    expect(trace).toEqual(['projects', 'workflow-detail', 'iteration-detail', 'roadmap', 'issues', 'retained'])
     expect(snapshot.retained.iterationGate).not.toBeNull()
+  })
+})
+
+describe('readPanelSnapshot — target resolution (F1)', () => {
+  it('resolves the selected workflow from the durable pick when the caller asserts nothing', async () => {
+    const harnessDir = await activeHarness()
+    const { seedActiveWorkflow } = await import('./harness.ts')
+    await seedActiveWorkflow(harnessDir, 'wf-resolved', [{ id: 'plan-1', status: 'Todo' }])
+
+    // Exactly what the browser sends: no workflow/iteration/project id.
+    const snapshot = snapshotOf(await readPanelSnapshot({
+      harnessDir,
+      sessionId: 'ses_resolve',
+      cwd: dirname(harnessDir),
+    }))
+
+    // The store's single ACTIVE lifecycle is the answer (`selectActiveWorkflow`'s
+    // own fallback) — the member is READ, never `not-applicable`.
+    expect(snapshot.workspace.workflow.state).toBe('ok')
+    if (snapshot.workspace.workflow.state !== 'ok') throw new Error('unreachable')
+    expect(snapshot.workspace.workflow.data?.id).toBe('wf-resolved')
+  })
+
+  it('resolves the project from the catalog and scopes the roadmap to it', async () => {
+    const harnessDir = await activeHarness()
+    const { registerCatalogEntity } = await import('@mstar-harness/engine')
+    await registerCatalogEntity(
+      { harnessDir },
+      { kind: 'project', id: '_default', title: 'Default', rootKind: 'harness', relativePath: 'projects/_default' },
+      { operationId: 'op-seed-project', actor: 'panel.spec' },
+    )
+
+    const snapshot = snapshotOf(await readPanelSnapshot({ harnessDir, sessionId: 'ses_p', cwd: dirname(harnessDir) }))
+    // The `_default` project is the fallback identity: the roadmap is scoped to
+    // it instead of answering `not-applicable` for every panel session.
+    expect(snapshot.workspace.roadmap.state).toBe('ok')
+    if (snapshot.workspace.roadmap.state !== 'ok') throw new Error('unreachable')
+    expect(snapshot.workspace.roadmap.data?.projectId).toBe('_default')
+  })
+})
+
+describe('readPanelSnapshot — carrier cancellation (F5)', () => {
+  it('runs no view at all when the carrier is already cancelled', async () => {
+    const harnessDir = await activeHarness()
+    const trace: string[] = []
+    const real = engine.readDashboardView
+    const spy = spyOn(engine, 'readDashboardView').mockImplementation(async (input) => {
+      trace.push(input.view)
+      return await real(input)
+    })
+    const controller = new AbortController()
+    controller.abort()
+
+    const result = await readPanelSnapshot({ harnessDir, signal: controller.signal })
+    spy.mockRestore()
+
+    // Cancelled before the first read: the store is never touched.
+    expect(result).toEqual({ kind: 'unavailable', reason: 'aborted' })
+    expect(trace).toEqual([])
+  })
+
+  it('stops before the NEXT view when the client gives up mid-read', async () => {
+    const harnessDir = await activeHarness()
+    const controller = new AbortController()
+    const trace: string[] = []
+    const real = engine.readDashboardView
+    const spy = spyOn(engine, 'readDashboardView').mockImplementation(async (input) => {
+      trace.push(input.view)
+      const envelope = await real(input)
+      // The caller's timeout lands while this view was in flight.
+      controller.abort()
+      return envelope
+    })
+
+    const result = await readPanelSnapshot({ harnessDir, signal: controller.signal })
+    spy.mockRestore()
+
+    expect(result).toEqual({ kind: 'unavailable', reason: 'aborted' })
+    // One view paid for; nothing after it did (a second read here would also
+    // have paid for a projection refresh nobody is waiting for).
+    expect(trace).toEqual(['projects'])
+  })
+})
+
+describe('readPanelSnapshot — enforcement degrades in place (F6)', () => {
+  it('keeps the workspace snapshot ok when the enforcement resolver refuses', async () => {
+    const harnessDir = await activeHarness()
+    const spy = spyOn(engine, 'resolveRepoEnforcement').mockImplementation(() => {
+      throw new Error('EACCES: the .mstarc declaration is unreadable')
+    })
+
+    const snapshot = snapshotOf(await readPanelSnapshot({ harnessDir }))
+    spy.mockRestore()
+
+    // The least important field degrades alone: the five store views still
+    // answered, so the snapshot is `ok` with the warn-only flag.
+    expect(snapshot.enforcement).toEqual({ hard: false, source: 'none' })
+    expect(snapshot.workspace.projects).toMatchObject({ state: 'ok' })
+  })
+})
+
+describe('readPanelSnapshot — issue page ceiling (F7)', () => {
+  it('asks the issues view for the full page so the milestone severity join is not truncated', async () => {
+    const harnessDir = await activeHarness()
+    const seen: (Record<string, string | undefined> | undefined)[] = []
+    const real = engine.readDashboardView
+    const spy = spyOn(engine, 'readDashboardView').mockImplementation(async (input) => {
+      if (input.view === 'issues') seen.push(input.params)
+      return await real(input)
+    })
+
+    await readPanelSnapshot({ harnessDir, projectId: 'proj-x' })
+    spy.mockRestore()
+
+    // The engine's documented ceiling, asked for explicitly: the default 50-row
+    // page would silently render every further issue as unknown severity.
+    expect(seen).toEqual([{ project: 'proj-x', limit: '200' }])
   })
 })

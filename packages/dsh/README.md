@@ -354,13 +354,25 @@ the `mstar` gateway keeps only the picker's durable write
 most **one** request in flight (a slow answer never stacks a queue), a 5 s
 deadline per request, the last good snapshot kept on screen while a refresh is
 out (no flicker), an immediate refetch on a new connection generation, and
-nothing at all while the tab is not visible.
+nothing at all while the tab is not visible. The deadline is a real
+cancellation: the carrier's `AbortSignal` reaches the host read, which checks it
+before every view, so a timed-out request stops paying for store reads and
+projection captures instead of completing unpaid.
+
+**The client sends `{ sessionId, cwd }` and nothing else.** The workflow (the
+session's durable picker record, falling back to the store's single ACTIVE
+lifecycle), the iteration and the project (`_default`, else the single
+registered project) are resolved SERVER-side on every read. An asserted id is
+still accepted and still shape-validated, but the harness root always comes from
+the resolved session.
 
 **Three states per view, never a flattened empty**: `ok` (the authority
 answered — `data: null` still means "nothing here"), `not-applicable` (nothing
 was read: no target resolved) and `unavailable` (the read failed, carrying the
 store's own message verbatim). The whole snapshot is `unavailable` only when no
-view reached the authority.
+view reached the authority. A workspace with no resolvable `{HARNESS_DIR}` is the
+separate `no-harness` kind — an inactive workspace, not a store failure, so the
+panel renders its own copy instead of a wire token.
 
 **Two freshness domains, both disclosed**: `PanelSnapshot.at` is the store-read
 instant; `PanelSnapshot.retained.at` is when the catalog payload was BUILT. The
