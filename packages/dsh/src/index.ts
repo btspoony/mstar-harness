@@ -103,6 +103,13 @@ import {
   registerHarnessPrompt,
   setHarnessPromptLogger,
 } from './gates/system-prompt.ts'
+import {
+  EXECUTION_BINDING_ROOTS_LOGGER,
+  executionBindingRootsDomain,
+  executionBindingRootStoreOf,
+  installExecutionBindingRootStore,
+  setExecutionBindingRootsLogger,
+} from './gates/execution-binding-roots-domain.ts'
 
 // Re-export the service type from the package entry: the cordis
 // `Context` augmentation (`ctx.dshMstar`) lives in service.d.ts, so the entry
@@ -371,6 +378,13 @@ function registerMstarCommands(ctx: Context): void {
       })
     }
   })
+}
+
+/** One-line cause of a refused optional unit: the host error's stable `code` when it carries one. */
+function causeOf(error: unknown): string {
+  const code = (error as { code?: unknown } | null)?.code
+  const message = error instanceof Error ? error.message : String(error)
+  return typeof code === 'string' ? `${code}: ${message}` : message
 }
 
 /**
@@ -952,4 +966,59 @@ export function apply(ctx: Context, config: Config): void {
   // shared command). Every other command is an action of the shared MCP
   // connection.
   registerNativeCommandTools(ctx, resolver)
+
+  // Durable adopted control root : install the seam that lets a cross-root
+  // `mstar_plan_bind` adoption survive a host restart. The host's
+  // storage-domain facility is OPTIONAL — this row's static inject stays
+  // `['loader']` (naming it there would pend the whole row, and the boot, on a
+  // composition without the facility), so the unit is a deferred child. Every
+  // failure path — service absent, `open` rejected, an HMR re-apply meeting
+  // `already-open` — logs ONE warning naming the cause and leaves today's
+  // per-process receipt in place; the plugin still mounts. The child's fiber
+  // owns the handle: its disposer uninstalls the seam SYNCHRONOUSLY first (no
+  // consumer may read a closing or closed domain) and only then awaits
+  // `close()`, which drains the queued durable writes.
+  setExecutionBindingRootsLogger((message) => ctx.logger(EXECUTION_BINDING_ROOTS_LOGGER).warn(message))
+  if (ctx.get('storageDomain') === undefined) {
+    ctx.logger(EXECUTION_BINDING_ROOTS_LOGGER).warn(
+      'durable adopted control root unavailable: the storageDomain service is absent, so the selected control root stays a per-process receipt (a resume re-bind re-records it after a restart)',
+    )
+  }
+  ctx.inject(['storageDomain'], async (storageCtx) => {
+    const logger = ctx.logger(EXECUTION_BINDING_ROOTS_LOGGER)
+    try {
+      const domain = await storageCtx.storageDomain.open(executionBindingRootsDomain)
+      const uninstall = installExecutionBindingRootStore(executionBindingRootStoreOf(domain))
+      try {
+        storageCtx.effect(() => async () => {
+          // Synchronous first: a read must never reach a closing or closed domain.
+          uninstall()
+          try {
+            await domain.close()
+          } catch (error) {
+            logger.warn(`durable adopted control root store close failed during disposal (${causeOf(error)})`)
+          }
+        }, 'mstar:execution-binding-roots durable store')
+      } catch (error) {
+        // The child fiber was torn down while `open` was still in flight and
+        // refuses a new effect (INACTIVE_EFFECT). Drop the seam and close the
+        // handle right here — the facility would otherwise keep the name open
+        // and the next apply would meet `already-open` instead of regaining
+        // durability.
+        uninstall()
+        try {
+          await domain.close()
+        } catch (closeError) {
+          logger.warn(`durable adopted control root store close failed after a disposed apply (${causeOf(closeError)})`)
+        }
+        logger.warn(
+          `durable adopted control root store discarded: its apply fiber was already disposed when open resolved (${causeOf(error)}) — durability returns on a later apply or boot`,
+        )
+      }
+    } catch (error) {
+      logger.warn(
+        `durable adopted control root unavailable (${causeOf(error)}) — the selected control root stays a per-process receipt; durability returns on a later apply or boot`,
+      )
+    }
+  })
 }

@@ -55,7 +55,10 @@ export interface ExecutionBindingRootStore {
 /** The installed seam; `undefined` while no store is open (today's behaviour). */
 let installedStore: ExecutionBindingRootStore | undefined
 
-/** Module-level warning sink — bound by `apply` to `ctx.logger('mstar/execution-binding-roots')` (module-sink pattern). */
+/** Logger label for the durable seam (dsh logger naming: `<scope>/<subject>`). */
+export const EXECUTION_BINDING_ROOTS_LOGGER = 'mstar/execution-binding-roots'
+
+/** Module-level warning sink — bound by `apply` to `ctx.logger(EXECUTION_BINDING_ROOTS_LOGGER)` (module-sink pattern). */
 export type ExecutionBindingRootsLogSink = (message: string) => void
 
 /** The unbound default: the warning still reaches the host's own console. */
@@ -65,7 +68,7 @@ let logSink: ExecutionBindingRootsLogSink = defaultLogSink
 
 /**
  * Bind the module warning sink (the entry `apply` binds it to
- * `ctx.logger('mstar/execution-binding-roots')`). Returns the PRIOR sink so a
+ * `ctx.logger(EXECUTION_BINDING_ROOTS_LOGGER)`). Returns the PRIOR sink so a
  * caller can restore it (the package's module-sink pattern).
  */
 export function setExecutionBindingRootsLogger(sink: ExecutionBindingRootsLogSink): ExecutionBindingRootsLogSink {
@@ -82,7 +85,7 @@ export function setExecutionBindingRootsLogger(sink: ExecutionBindingRootsLogSin
  */
 function warn(message: string, error: unknown): void {
   try {
-    logSink(`mstar/execution-binding-roots: ${message}: ${error instanceof Error ? error.message : String(error)}`)
+    logSink(`${EXECUTION_BINDING_ROOTS_LOGGER}: ${message}: ${error instanceof Error ? error.message : String(error)}`)
   } catch {
     // Never-throws invariant (module log-sink pattern).
   }
