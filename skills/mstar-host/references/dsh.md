@@ -174,6 +174,30 @@ or a custom profile).
 4. Load topic skills on demand per the role reference (skill **names** —
    never app-cwd `skills/<name>/…`).
 
+## Pick the delegation channel before you delegate
+
+Two direct-delegation surfaces can be mounted at once, and they do NOT share a
+roster. Read the live toolset, never the profile name:
+
+| `spawn_teammate` | `subagent` | Use |
+|---|---|---|
+| yes | no | Agent Teams only (§ Delegation channels) |
+| yes | **yes** | Agent Teams for anything writable or addressable; `subagent` only for a one-off read-only seat whose result needs no follow-up |
+| no | yes | `subagent` (the fallback profile) |
+| no | no | no delegation surface — `workflow` when mounted, else report `Blocked` |
+
+**Coexistence is the trap.** `list_agents`, `send_message` and `interrupt_agent`
+are the TEAM tools: they resolve roster targets only. A `subagent` child is not on
+that roster, so it cannot be listed, messaged or interrupted, and its result
+arrives only through the settlement notice. A refusal such as
+`active teammate "<id>" not found` (`TEAM_MEMBER_NOT_FOUND`) against a `subagent`
+id states exactly that: do not retry it, do not rename it, and do not spawn a
+second child for the same work.
+
+**Activation is not failure.** `started subagent <id>` proves the child started;
+absence from `list_agents` proves nothing. Wait for the settlement notice, and
+never replace a running child with a second spawn because you could not see it.
+
 ## Tools map
 
 | dsh tool | Harness use |
@@ -243,14 +267,16 @@ removal operation, so one durable teammate per writable track (reused via
 children that never join the roster. Budget, member migration between tracks (a wave frees no capacity), and the at-cap recovery →
 `references/dsh-agent-teams.md` § Capacity.
 
-**Mounting decides the starting channel.** The shipped Agent Teams profile layer
-(`@deepseek-ai/dsh-experimental-agent-team-profile`) inserts the Team rows and
-**disables** the direct `subagent` / `subagent_fork` rows, so that profile
-exposes exactly one direct-delegation surface. A profile that mounts both (a
-custom composition) starts from Agent Teams and keeps `subagent` for a seat the
-board does not track. When `spawn_teammate` is absent from the toolset the Team
-layer is not mounted — use `subagent` and never attempt the Team protocol.
-`workflow` rides alongside both.
+**The live toolset decides the starting channel, never the profile name.** The
+shipped Agent Teams profile layer
+(`@deepseek-ai/dsh-experimental-agent-team-profile`) disables the direct
+`subagent` / `subagent_fork` rows, but an agent preset layered after it can
+re-insert them (`dsh-web-app`'s `cordis` preset does exactly that), so one profile
+can expose BOTH surfaces. When `spawn_teammate` is mounted, Agent Teams is the
+starting channel and a `subagent` child is a one-off seat the board does not track
+— see § Pick the delegation channel before you delegate for the coexistence
+limits. When `spawn_teammate` is absent the Team layer is not mounted — use
+`subagent` and never attempt the Team protocol. `workflow` rides alongside both.
 
 Team protocol — roster naming, plan-row ⇄ team-task mirroring, wake
 discipline, capacity, and worktree hand-off — → **`references/dsh-agent-teams.md`**.
