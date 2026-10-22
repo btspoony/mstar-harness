@@ -1,736 +1,255 @@
 /**
- * Data-path tests for the workflow-viz panel (spec §5): the
- * `useMstarEngineStatus({ useChat, useSessions, sessionId, engineStatus })`
- * hook finds the latest engine-status ANCHOR row (`kind === 'context'` +
- * `form === 'catalog'` + the producer-owned `source.kind === 'mstar-engine'`,
- * or a legacy kind lifted by the dsh V3→V4 migration — `plugin:mstar-engine`
- * or `plugin:mstar-engine-status` persisted by shipped builds before
- * 2026-09-11), reads
- * the session's workspace directory from the session standard kit, and pulls
- * that session's snapshot from the host's shared `/api` typert gateway.
+ * Data-path tests for the workflow panel's snapshot channel: the
+ * `useMstarPanelSnapshot({ visible, client, sessionId, cwd })` hook polls
+ * `connection.rpc.call('/api', 'mstar/panelSnapshot', { args: { sessionId, cwd } })`
+ * while the sidebar tab is visible, and renders the store-backed answer as the
+ * closed `MstarPanelView` union.
  *
- * The anchor row does not carry the payload (the persisted source is the
- * locked two-member catalog source), so these specs stub THE CHANNEL: a gateway stub
- * records the literal `connection.rpc.call('/api', 'mstar/engineStatus',
- * { args: { sessionId, cwd } })` request and answers with the transport
- * envelope the host produces. The hook runs through real renders
- * (`renderToStaticMarkup`) — a first pass issues the call, the settled pass
- * renders the validated answer.
+ * The channel is stubbed (`gateway-stub.ts`) so these specs assert the WIRE
+ * contract the host half registers — never a React internal. Renders go
+ * through `renderToStaticMarkup`: the first pass starts the poll, the settled
+ * pass renders the answer.
  *
- * Coverage:
- * - the anchor discriminator (latest row wins; the migrated legacy kinds still
- *   anchor; an unknown kind is NOT an anchor → `waiting`);
- * - the request shape: exactly one `/api` + `mstar/engineStatus` call per
- *   (session, anchor row), carrying the session id and the session's cwd;
- * - a new anchor row (snapshot bump = refresh signal) asks again and serves
- *   the newer snapshot;
- * - every degraded path is EXPLICIT: no anchor row → `waiting`, no answer yet
- *   → `loading`, transport failure / malformed envelope / foreign session id /
- *   unknown cwd / a foreign workspace / no connection → `unavailable` WITH a
- *   reason (never a silently-empty payload);
- * - session A's request can never render session B's data;
- * - a valid snapshot that says "empty" still renders as data;
- * - the client store's own mechanics (dedupe, per-anchor refetch, generation
- *   invalidation, teardown, listener isolation).
+ * Coverage (the plan's five T4 bullets, one named case each):
+ * 1. no visible tab → no request is issued;
+ * 2. a visible tab polls at the declared interval;
+ * 3. a slow answer never stacks a second in-flight request;
+ * 4. a ledger invalidation refreshes immediately, outside the interval;
+ * 5. a failed transport degrades to `unavailable` with a reason while the last
+ *    good snapshot stays `previous` — and the hook never throws.
  */
 
-import { describe, expect, it } from 'bun:test'
+import { afterEach, describe, expect, it } from 'bun:test'
 import { createElement } from 'react'
 import { renderToStaticMarkup } from 'react-dom/server'
-import type { SessionId } from '@deepseek-ai/dsh-session'
-import type { SnapshotSelectorHook } from '@deepseek-ai/dsh-client-ui-slots'
-import type { ChatSnapshot } from '@deepseek-ai/dsh-client-ui-chat/client'
-import type { ConversationNode } from '@deepseek-ai/dsh-client-ui-conversation/client'
-import { MstarEngineStatusClient, type MstarEngineStatusConnection } from '../src/client/panel/engine-status-client'
-import { useMstarEngineStatus, type MstarEngineStatusHook, type MstarEngineStatusView } from '../src/client/panel/use-mstar-engine-status'
-import { ENGINE_STATUS_ENDPOINT, SELECT_WORKFLOW_ENDPOINT } from '../src/engine-status-wire.ts'
-import type { MstarEngineStatusPayload } from '../src/types'
+import type { PanelSnapshot } from '../src/panel/panel-snapshot.ts'
 import {
-  anchorSnapshot,
-  anchorStore,
-  bindUseChat,
-  bindUseSessions,
-  chatSnapshot,
-  gatewayError,
-  gatewayOk,
-  okResult,
-  otherKindCatalogRow,
-  SESSION,
-  SESSION_CWD,
-  SESSION_ID,
-  servedSnapshot,
-  stubGateway,
-  unavailableResult,
-  userNode,
-} from './gateway-stub.ts'
+  MstarPanelSnapshotClient,
+  PANEL_POLL_INTERVAL_MS,
+  type MstarPanelSnapshotConnection,
+} from '../src/client/panel/panel-snapshot-client.ts'
+import {
+  useMstarPanelSnapshot,
+  type MstarPanelSnapshotSeats,
+  type MstarPanelView,
+} from '../src/client/panel/use-mstar-panel-snapshot.ts'
+import { gatewayError, gatewayOk, SESSION_CWD, SESSION_ID, stubGateway } from './gateway-stub.ts'
 
-/** A distinguishable payload fixture (the panel renders `version` in the meta dock). */
-function payload(version: string): MstarEngineStatusPayload {
+/** Every client a spec starts is disposed afterwards (no dangling poll timers). */
+const started: MstarPanelSnapshotClient[] = []
+afterEach(() => {
+  while (started.length > 0) started.pop()!.dispose()
+})
+
+function clientOf(
+  connection: MstarPanelSnapshotConnection | undefined,
+  options: { pollIntervalMs?: number; timeoutMs?: number } = {},
+): MstarPanelSnapshotClient {
+  const client = new MstarPanelSnapshotClient(connection, options)
+  started.push(client)
+  return client
+}
+
+/** A minimal valid snapshot: the four read states, the retained block, no ledger. */
+function snapshot(at: string, over: Partial<PanelSnapshot> = {}): PanelSnapshot {
   return {
-    version,
+    at,
+    version: '4.0.4',
     harnessDir: '/proj/.mstar',
-    enforcement: { hard: false, source: 'iteration compass' },
-    state: null,
-  } as unknown as MstarEngineStatusPayload
+    enforcement: { hard: false, source: 'test' },
+    workspace: {
+      workflow: { state: 'not-applicable', reason: 'no selected workflow' },
+      iteration: { state: 'not-applicable', reason: 'no selected iteration' },
+      roadmap: { state: 'not-applicable', reason: 'no project resolved' },
+      issues: { state: 'ok', data: { items: [], total: 0, storeRevision: 7 } },
+      projects: { state: 'ok', data: { items: [], total: 0 } },
+    },
+    retained: { iterationGate: null, knowledge: null, selection: null },
+    ledger: null,
+    ...over,
+  } as unknown as PanelSnapshot
+}
+
+/** The endpoint's `PanelSnapshotRead` answer for one snapshot. */
+function readOk(value: PanelSnapshot) {
+  return { kind: 'ok', snapshot: value }
+}
+
+/** Let the client's microtask + resolved-promise continuations run. */
+async function settle(times = 4): Promise<void> {
+  for (let i = 0; i < times; i++) await new Promise((resolve) => setTimeout(resolve, 0))
+}
+
+/** One render pass; the probe records the view the hook returned. */
+const captured: { view: MstarPanelView | null } = { view: null }
+
+function Probe({ seats }: { seats: MstarPanelSnapshotSeats }) {
+  captured.view = useMstarPanelSnapshot(seats)
+  return createElement('span', { 'data-state': captured.view.state })
 }
 
 /**
- * Legacy anchor source: rows emitted by shipped builds before 2026-09-11
- * persist `plugin: 'mstar-engine-status'` in their V3 logs, and the dsh
- * V3→V4 migration lifts the wrapper to `kind: 'plugin:mstar-engine-status'`.
- * They keep anchoring their sessions — data compat for persisted session
- * logs, not a code-compat layer.
+ * ONE render pass of the hook over the given seats.
+ *
+ * The first pass also starts the poll (the hook's gate), so a spec that wants
+ * the SETTLED answer renders once, lets the microtask + interval run, and
+ * renders again — exactly what a React re-render does when the client publishes
+ * its snapshot.
  */
-const LEGACY_ANCHOR_SOURCE = { kind: 'plugin:mstar-engine-status', form: 'catalog' } as const
-
-/**
- * One anchor row with an explicit source (the legacy and unknown-identity
- * fixtures; the shared `anchorRow` always seeds the current identity).
- */
-function rowWithSource(source: unknown, time: number) {
-  return {
-    kind: 'context',
-    seq: 2,
-    time,
-    content: [],
-    source,
-    form: 'catalog',
-  } as unknown as ConversationNode
+function render(seats: MstarPanelSnapshotSeats): MstarPanelView {
+  captured.view = null
+  renderToStaticMarkup(createElement(Probe, { seats }))
+  if (captured.view === null) throw new Error('probe rendered no view')
+  return captured.view
 }
 
-/** The seats under test, over one anchor store + one gateway stub. */
+/** Seats over one client, visible by default. */
 function seats(
-  store: { getSnapshot(): ChatSnapshot },
-  gateway: ReturnType<typeof stubGateway>,
-  over: {
-    sessionId?: SessionId | undefined
-    cwd?: string | null
-    engineStatus?: MstarEngineStatusClient | undefined
-  } = {},
-) {
-  return {
-    useChat: bindUseChat(store),
-    useSessions: bindUseSessions(String(over.sessionId ?? SESSION_ID), over.cwd === undefined ? SESSION_CWD : over.cwd),
-    sessionId: 'sessionId' in over ? over.sessionId : SESSION,
-    engineStatus: 'engineStatus' in over ? over.engineStatus : new MstarEngineStatusClient(gateway.connection),
-  }
+  client: MstarPanelSnapshotClient | undefined,
+  over: Partial<MstarPanelSnapshotSeats> = {},
+): MstarPanelSnapshotSeats {
+  return { visible: true, client, sessionId: SESSION_ID, cwd: SESSION_CWD, ...over }
 }
 
-/** One render pass of the hook through a probe component (the hook's real consumer). */
-function renderHook(seatsUnderTest: ReturnType<typeof seats>): MstarEngineStatusView {
-  return renderSeat(seatsUnderTest).view
-}
+describe('useMstarPanelSnapshot — visibility-gated polling (T4)', () => {
+  it('1. no visible tab → no request is issued', async () => {
+    const gateway = stubGateway(gatewayOk(readOk(snapshot('2026-10-22T01:00:00.000Z'))))
+    const client = clientOf(gateway.connection, { pollIntervalMs: 5 })
 
-/** One render pass of the full hook result (view + picker seat). */
-function renderSeat(seatsUnderTest: ReturnType<typeof seats>): MstarEngineStatusHook {
-  let captured: MstarEngineStatusHook | null = null
-  const Probe = (): null => {
-    captured = useMstarEngineStatus(seatsUnderTest)
-    return null
-  }
-  renderToStaticMarkup(createElement(Probe))
-  return captured as unknown as MstarEngineStatusHook
-}
+    const view = render(seats(client, { visible: false }))
+    await settle()
 
-/** Issue the request (first pass), let the answer land, then read the settled view. */
-async function settleView(seatsUnderTest: ReturnType<typeof seats>): Promise<MstarEngineStatusView> {
-  renderHook(seatsUnderTest)
-  await new Promise((resolve) => setTimeout(resolve, 0))
-  return renderHook(seatsUnderTest)
-}
-
-describe('useMstarEngineStatus — anchor row selection (spec §2.4, §5)', () => {
-  it('reads the LATEST anchor row and serves that session snapshot over the /api gateway', async () => {
-    const store = anchorStore(1_720_001_000_000)
-    const gateway = stubGateway(servedSnapshot(payload('2.0.4')))
-    const view = await settleView(seats(store, gateway))
-    expect(view.state).toBe('ok')
-    expect(view.anchorTime).toBe(1_720_001_000_000)
-    expect(gateway.calls).toHaveLength(1)
-  })
-
-  it('calls exactly /api + mstar/engineStatus with one args object keyed by the declared parameters', async () => {
-    const store = anchorStore(1_720_001_000_000)
-    const gateway = stubGateway(servedSnapshot(payload('2.0.4')))
-    await settleView(seats(store, gateway))
-    expect(gateway.calls).toHaveLength(1)
-    expect(gateway.calls[0]!.channel).toBe('/api')
-    expect(gateway.calls[0]!.endpoint).toBe('mstar/engineStatus')
-    expect(gateway.calls[0]!.payload).toEqual({ args: { sessionId: SESSION_ID, cwd: SESSION_CWD } })
-  })
-
-  it('serves the snapshot shape: payload + the served `at` (the freshness marker), never the row time', async () => {
-    const store = anchorStore(1_720_001_000_000)
-    const gateway = stubGateway(servedSnapshot(payload('2.0.4'), { at: '2024-07-03T09:23:20.000Z' }))
-    const view = await settleView(seats(store, gateway))
-    expect(view.state).toBe('ok')
-    if (view.state !== 'ok') throw new Error('expected ok')
-    expect(view.at).toBe('2024-07-03T09:23:20.000Z')
-    expect(view.at).not.toBe(new Date(1_720_001_000_000).toISOString())
-    expect(view.payload.version).toBe('2.0.4')
-  })
-
-  it('a new anchor row (snapshot bump = refresh signal) asks again and serves the newer snapshot', async () => {
-    const store = anchorStore(1_720_001_000_000)
-    const gateway = stubGateway(
-      servedSnapshot(payload('2.0.4'), { at: '2024-07-03T09:23:20.000Z' }),
-      servedSnapshot(payload('2.0.5'), { at: '2024-07-03T09:24:20.000Z' }),
-    )
-    expect((await settleView(seats(store, gateway))).state).toBe('ok')
-
-    // Server re-emission appends a newer anchor row → snapshot bump → re-scan
-    // → the newest anchor asks for the newest snapshot.
-    store.set(anchorSnapshot(1_720_002_000_000))
-    const after = await settleView(seats(store, gateway))
-    expect(gateway.calls).toHaveLength(2)
-    expect(after.state).toBe('ok')
-    if (after.state !== 'ok') throw new Error('expected ok')
-    expect(after.payload.version).toBe('2.0.5')
-    expect(after.at).toBe('2024-07-03T09:24:20.000Z')
-  })
-
-  it('a migrated `plugin:mstar-engine` anchor row (current identity, written by a released V3 build) still anchors', async () => {
-    const store = {
-      getSnapshot: () =>
-        chatSnapshot([userNode(), rowWithSource({ kind: 'plugin:mstar-engine', form: 'catalog' }, 1_720_001_000_000)]),
-    }
-    const gateway = stubGateway(servedSnapshot(payload('2.0.4')))
-    const view = await settleView(seats(store, gateway))
-    expect(view.state).toBe('ok')
-    expect(view.anchorTime).toBe(1_720_001_000_000)
-    expect(gateway.calls).toHaveLength(1)
-  })
-
-  it('a legacy `mstar-engine-status` anchor row (persisted by shipped builds before the identity rename) still anchors', async () => {
-    const store = { getSnapshot: () => chatSnapshot([userNode(), rowWithSource(LEGACY_ANCHOR_SOURCE, 1_720_001_000_000)]) }
-    const gateway = stubGateway(servedSnapshot(payload('2.0.4')))
-    const view = await settleView(seats(store, gateway))
-    expect(view.state).toBe('ok')
-    expect(view.anchorTime).toBe(1_720_001_000_000)
-    expect(gateway.calls).toHaveLength(1)
-  })
-})
-
-describe('useMstarEngineStatus — explicit empty and degraded states (spec §3, §5)', () => {
-  it('no anchor row → waiting, and NO gateway call is made', async () => {
-    const gateway = stubGateway(servedSnapshot(payload('2.0.4')))
-    const view = await settleView(seats(anchorStore(null), gateway))
-    expect(view).toEqual({ state: 'waiting', anchorTime: null, payload: null, at: null, turn: null, reason: null })
-    expect(gateway.calls).toHaveLength(0)
-  })
-
-  it('catalog rows of other plugin kinds → waiting (the anchor discriminator is the plugin identity)', async () => {
-    const store = { getSnapshot: () => chatSnapshot([userNode(), otherKindCatalogRow()]) }
-    const gateway = stubGateway(servedSnapshot(payload('2.0.4')))
-    expect((await settleView(seats(store, gateway))).state).toBe('waiting')
-    expect(gateway.calls).toHaveLength(0)
-  })
-
-  it('an unknown anchor kind → waiting, never data', async () => {
-    // Same row shape as the anchor — the ONLY discriminator is the kind.
-    const store = {
-      getSnapshot: () =>
-        chatSnapshot([userNode(), rowWithSource({ kind: 'other-thing', form: 'catalog' }, 1_720_001_000_000)]),
-    }
-    const gateway = stubGateway(servedSnapshot(payload('2.0.4')))
-    expect((await settleView(seats(store, gateway))).state).toBe('waiting')
-    expect(gateway.calls).toHaveLength(0)
-  })
-
-  it('anchor seen but no answer yet → loading (pending is never rendered as data)', () => {
-    const store = anchorStore(1_720_001_000_000)
-    const gateway = stubGateway(servedSnapshot(payload('2.0.4')))
-    // First pass only: the request is in flight and nothing is rendered yet.
-    const view = renderHook(seats(store, gateway))
-    expect(view.state).toBe('loading')
-    if (view.state !== 'loading') throw new Error('expected loading')
-    expect(view.payload).toBeNull()
-    expect(view.at).toBeNull()
-    // The call WAS issued by that same render (the hook's own trigger).
-    expect(gateway.calls).toHaveLength(1)
-  })
-
-  it('transport failure → unavailable with the transport reason, never silently empty', async () => {
-    const gateway = stubGateway(gatewayError('timeout', 'gateway unreachable'))
-    const view = await settleView(seats(anchorStore(), gateway))
-    expect(view.state).toBe('unavailable')
-    if (view.state !== 'unavailable') throw new Error('expected unavailable')
-    expect(view.reason).toBe('transport-error:timeout')
-    expect(view.payload).toBeNull()
-    expect(view.at).toBeNull()
-  })
-
-  it('the host reason is surfaced verbatim (no snapshot for the session / unknown sv)', async () => {
-    const gateway = stubGateway(gatewayOk(unavailableResult('store-unknown-sv')))
-    const view = await settleView(seats(anchorStore(), gateway))
-    expect(view.state).toBe('unavailable')
-    if (view.state !== 'unavailable') throw new Error('expected unavailable')
-    expect(view.reason).toBe('store-unknown-sv')
-  })
-
-  it('a malformed envelope degrades to unavailable — never a half-parsed view', async () => {
-    const cases: readonly unknown[] = [
-      undefined,
-      'not-an-envelope',
-      { ok: true },
-      { ok: true, value: 'not-a-result' },
-      { ok: true, value: { status: 'weird' } },
-      gatewayOk({ status: 'ok', sessionId: SESSION_ID, cwd: SESSION_CWD, turn: 1, payload: {} }), // no `at`
-      gatewayOk({ status: 'ok', sessionId: SESSION_ID, cwd: SESSION_CWD, at: 'x', turn: 1, payload: 'nope' }),
-    ]
-    for (const raw of cases) {
-      const gateway = stubGateway(raw)
-      const view = await settleView(seats(anchorStore(), gateway))
-      expect(view.state).toBe('unavailable')
-      if (view.state !== 'unavailable') throw new Error('expected unavailable')
-      expect(view.reason.length).toBeGreaterThan(0)
-    }
-  })
-
-  it('an unknown session workspace directory → unavailable (the cwd is never guessed), and nothing is called', () => {
-    const gateway = stubGateway(servedSnapshot(payload('2.0.4')))
-    const view = renderHook(seats(anchorStore(), gateway, { cwd: null }))
-    expect(view.state).toBe('unavailable')
-    if (view.state !== 'unavailable') throw new Error('expected unavailable')
-    expect(view.reason).toBe('session-cwd-unknown')
-    expect(gateway.calls).toHaveLength(0)
-  })
-
-  it('a composition with no connection → unavailable(no-connection), never a crash', () => {
-    const gateway = stubGateway(servedSnapshot(payload('2.0.4')))
-    const view = renderHook(seats(anchorStore(), gateway, { engineStatus: undefined }))
-    expect(view.state).toBe('unavailable')
-    if (view.state !== 'unavailable') throw new Error('expected unavailable')
-    expect(view.reason).toBe('no-connection')
-  })
-
-  it('a throwing session seat → waiting, never a crash (the hook never throws)', () => {
-    const gateway = stubGateway(servedSnapshot(payload('2.0.4')))
-    const throwing = (() => { throw new Error('session exploded') }) as unknown as SnapshotSelectorHook<ChatSnapshot>
-    const view = renderHook({ ...seats(anchorStore(), gateway), useChat: throwing })
     expect(view.state).toBe('waiting')
+    expect(gateway.calls).toHaveLength(0)
+  })
+
+  it('2. a visible tab polls at the declared interval', async () => {
+    const gateway = stubGateway(gatewayOk(readOk(snapshot('2026-10-22T01:00:00.000Z'))))
+    const client = clientOf(gateway.connection, { pollIntervalMs: 5 })
+
+    render(seats(client))
+    await settle()
+    expect(gateway.calls).toHaveLength(1)
+    expect(render(seats(client)).state).toBe('ok')
+
+    // The poll is self-chained on completion: a few intervals produce more reads.
+    await new Promise((resolve) => setTimeout(resolve, 40))
+    expect(gateway.calls.length).toBeGreaterThan(1)
+    // The request shape: the shared `/api` gateway + the panel-snapshot method.
+    expect(gateway.calls[0]!.channel).toBe('/api')
+    expect(gateway.calls[0]!.endpoint).toBe('mstar/panelSnapshot')
+    expect(gateway.calls[0]!.payload).toEqual({ args: { sessionId: SESSION_ID, cwd: SESSION_CWD } })
+    // The production interval is the one named constant.
+    expect(PANEL_POLL_INTERVAL_MS).toBe(5_000)
+  })
+
+  it('3. a slow answer never stacks a second in-flight request', async () => {
+    const gateway = stubGateway()
+    gateway.replyWith(() => new Promise(() => {}))
+    const client = clientOf(gateway.connection, { pollIntervalMs: 5 })
+
+    render(seats(client))
+    await new Promise((resolve) => setTimeout(resolve, 40))
+
+    expect(gateway.calls).toHaveLength(1)
+    expect(render(seats(client)).state).toBe('loading')
+  })
+
+  it('4. a ledger invalidation refreshes immediately, outside the interval', async () => {
+    const gateway = stubGateway(gatewayOk(readOk(snapshot('2026-10-22T01:00:00.000Z'))))
+    // A one-minute interval: only the invalidation can explain a second read.
+    const client = clientOf(gateway.connection, { pollIntervalMs: 60_000 })
+
+    render(seats(client))
+    await settle()
+    expect(gateway.calls).toHaveLength(1)
+
+    client.invalidate()
+    await settle()
+    expect(gateway.calls).toHaveLength(2)
+  })
+
+  it('5. a failed transport degrades to unavailable while keeping the last snapshot', async () => {
+    const good = snapshot('2026-10-22T01:00:00.000Z')
+    const gateway = stubGateway(gatewayOk(readOk(good)))
+    const client = clientOf(gateway.connection, { pollIntervalMs: 0 })
+
+    render(seats(client))
+    await settle()
+    expect(render(seats(client)).state).toBe('ok')
+
+    // The next read fails: the refresh in flight keeps the last good snapshot
+    // as `previous`, so the render never blanks to an empty panel.
+    gateway.replyWith(() => gatewayError('gateway-down', 'the gateway is unreachable'))
+    client.invalidate()
+    const during = client.getSnapshot()
+    expect(during.state).toBe('loading')
+    if (during.state !== 'loading') throw new Error('expected loading')
+    expect(during.previous?.at).toBe(good.at)
+
+    await settle()
+    const after = render(seats(client))
+    expect(after.state).toBe('unavailable')
+    if (after.state !== 'unavailable') throw new Error('expected unavailable')
+    expect(after.reason).toBe('the gateway is unreachable')
+    expect(after.snapshot).toBeNull()
   })
 })
 
-describe('useMstarEngineStatus — per-session answer isolation (spec §5)', () => {
-  it('an answer for the same session but another workspace → unavailable(cwd-mismatch)', async () => {
-    // The host echoes the STORED record's cwd; a same-session answer naming a
-    // different workspace describes a moved/foreign read, not this panel's.
-    const gateway = stubGateway(servedSnapshot(payload('2.0.4'), { cwd: '/proj/other' }))
-    const view = await settleView(seats(anchorStore(), gateway))
+describe('useMstarPanelSnapshot — total degradation (T4)', () => {
+  it('a composition with no client renders waiting, never a throw', () => {
+    expect(render(seats(undefined)).state).toBe('waiting')
+  })
+
+  it('an unknown workspace directory polls nothing', async () => {
+    const gateway = stubGateway(gatewayOk(readOk(snapshot('2026-10-22T01:00:00.000Z'))))
+    const client = clientOf(gateway.connection, { pollIntervalMs: 5 })
+
+    expect(render(seats(client, { cwd: null })).state).toBe('waiting')
+    await settle()
+    expect(gateway.calls).toHaveLength(0)
+  })
+
+  it('a throwing transport becomes an unavailable reason, not a crash', async () => {
+    const throwing: MstarPanelSnapshotConnection = {
+      rpc: {
+        call(): Promise<never> {
+          throw new Error('socket gone')
+        },
+      },
+    }
+    const client = clientOf(throwing, { pollIntervalMs: 0 })
+
+    render(seats(client))
+    await settle()
+    const view = render(seats(client))
     expect(view.state).toBe('unavailable')
     if (view.state !== 'unavailable') throw new Error('expected unavailable')
-    expect(view.reason).toBe('cwd-mismatch')
-    // The payload of the foreign workspace is nowhere in this panel's state.
-    expect(view.payload).toBeNull()
+    expect(view.reason).toContain('socket gone')
   })
 
-  it("session A's request can never render session B's snapshot", async () => {
-    // The gateway answers with B's snapshot for A's request (a foreign answer).
-    const gateway = stubGateway(servedSnapshot(payload('B-version'), { sessionId: 's-B' }))
-    const view = await settleView(seats(anchorStore(), gateway))
-    expect(view.state).toBe('unavailable')
-    if (view.state !== 'unavailable') throw new Error('expected unavailable')
-    expect(view.reason).toBe('session-mismatch')
-    // …and B's payload is nowhere in A's render state (no half-parsed view).
-    expect(view.payload).toBeNull()
-    expect(JSON.stringify(view)).not.toContain('B-version')
-  })
+  it('a valid snapshot that says "empty" is DATA, never unavailable', async () => {
+    const empty = snapshot('2026-10-22T01:00:00.000Z')
+    const gateway = stubGateway(gatewayOk(readOk(empty)))
+    const client = clientOf(gateway.connection, { pollIntervalMs: 0 })
 
-  it('two sessions keep separate entries: one client serves each its own answer', async () => {
-    const gateway = stubGateway()
-    const client = new MstarEngineStatusClient(gateway.connection)
-    gateway.replyWith((sessionId) => servedSnapshot(payload(`${sessionId}-version`), { sessionId }))
-
-    for (const id of ['s-A', 's-B']) {
-      await settleView(seats(anchorStore(), gateway, { sessionId: id as SessionId, engineStatus: client }))
-    }
-    const entries = client.getSnapshot().entries
-    expect([...entries.keys()].sort()).toEqual(['s-A', 's-B'])
-    for (const id of ['s-A', 's-B']) {
-      const fetch = entries.get(id)!.fetch
-      expect(fetch.status).toBe('ok')
-      if (fetch.status !== 'ok') throw new Error('expected ok')
-      expect(fetch.payload.version).toBe(`${id}-version`)
-    }
-  })
-
-  it('a valid snapshot that says "empty" is DATA (distinct from "no snapshot")', async () => {
-    const empty = payload('2.0.4')
-    const gateway = stubGateway(servedSnapshot(empty))
-    const view = await settleView(seats(anchorStore(), gateway))
+    render(seats(client))
+    await settle()
+    const view = render(seats(client))
     expect(view.state).toBe('ok')
     if (view.state !== 'ok') throw new Error('expected ok')
-    expect(view.payload).toBe(empty)
-    // The no-anchor case stays a DIFFERENT state — the distinction survives.
-    expect((await settleView(seats(anchorStore(null), gateway))).state).toBe('waiting')
-  })
-})
-
-describe('MstarEngineStatusClient — store mechanics', () => {
-  it('dedupes one in-flight request per (session, anchor row)', async () => {
-    const gateway = stubGateway(servedSnapshot(payload('2.0.4')))
-    const client = new MstarEngineStatusClient(gateway.connection)
-    client.ensure(SESSION_ID, SESSION_CWD, 1)
-    client.ensure(SESSION_ID, SESSION_CWD, 1)
-    expect(gateway.calls).toHaveLength(1)
-    await new Promise((resolve) => setTimeout(resolve, 0))
-    expect(client.getSnapshot().entries.get(SESSION_ID)?.anchorTime).toBe(1)
+    expect(view.snapshot.at).toBe(empty.at)
   })
 
-  it('a new anchor row asks again; an already-answered anchor does not', async () => {
-    const gateway = stubGateway(servedSnapshot(payload('2.0.4')), servedSnapshot(payload('2.0.5')))
-    const client = new MstarEngineStatusClient(gateway.connection)
-    client.ensure(SESSION_ID, SESSION_CWD, 1)
-    await new Promise((resolve) => setTimeout(resolve, 0))
-    client.ensure(SESSION_ID, SESSION_CWD, 1) // already answered → no second call
-    expect(gateway.calls).toHaveLength(1)
-    client.ensure(SESSION_ID, SESSION_CWD, 2) // newer anchor → one more call
-    expect(gateway.calls).toHaveLength(2)
-  })
+  it('the host refusal is surfaced verbatim', async () => {
+    const gateway = stubGateway(gatewayOk({ kind: 'unavailable', reason: 'store.not-active: store is staged' }))
+    const client = clientOf(gateway.connection, { pollIntervalMs: 0 })
 
-  it('a new connection generation invalidates the cache (wire data is repulled)', async () => {
-    const gateway = stubGateway(servedSnapshot(payload('2.0.4')))
-    let onGeneration: (() => void) | null = null
-    const client = new MstarEngineStatusClient({
-      ...gateway.connection,
-      generation: { subscribe: (listener: () => void) => { onGeneration = listener; return () => {} } },
-    })
-    client.ensure(SESSION_ID, SESSION_CWD, 1)
-    await new Promise((resolve) => setTimeout(resolve, 0))
-    expect(client.getSnapshot().entries.size).toBe(1)
-    expect(onGeneration).not.toBeNull()
-    ;(onGeneration as unknown as () => void)()
-    expect(client.getSnapshot().entries.size).toBe(0)
-    // …and the panel asks again after the generation change.
-    client.ensure(SESSION_ID, SESSION_CWD, 1)
-    expect(gateway.calls).toHaveLength(2)
-  })
-
-  it('a disposed client stops accepting answers (plugin teardown)', async () => {
-    const gateway = stubGateway(servedSnapshot(payload('2.0.4')))
-    const client = new MstarEngineStatusClient(gateway.connection)
-    client.ensure(SESSION_ID, SESSION_CWD, 1)
-    client.dispose()
-    await new Promise((resolve) => setTimeout(resolve, 0))
-    expect(client.getSnapshot().entries.size).toBe(0)
-  })
-
-  it('a listener that throws never breaks the store', async () => {
-    const gateway = stubGateway(servedSnapshot(payload('2.0.4')))
-    const client = new MstarEngineStatusClient(gateway.connection)
-    client.subscribe(() => { throw new Error('broken subscriber') })
-    let notifications = 0
-    client.subscribe(() => { notifications += 1 })
-    client.ensure(SESSION_ID, SESSION_CWD, 1)
-    await new Promise((resolve) => setTimeout(resolve, 0))
-    expect(notifications).toBeGreaterThan(0)
-    // The throwing listener did not stop the write.
-    expect(client.getSnapshot().entries.size).toBe(1)
-  })
-})
-
-describe('MstarEngineStatusClient — connection generation fence', () => {
-  /**
-   * A gateway whose answers are released by the test: `calls` records the
-   * request, and the answer is delivered only when the returned `release()` is
-   * invoked — so the "generation changed WHILE a request was in flight" ordering
-   * is exercised exactly, not simulated.
-   */
-  function deferredGateway(envelope: unknown): { connection: MstarEngineStatusConnection; calls: number; release(): void } {
-    const state = { calls: 0, release: (): void => {} }
-    const connection = {
-      rpc: {
-        call(): Promise<unknown> {
-          state.calls += 1
-          return new Promise((resolve) => { state.release = () => { resolve(envelope) } })
-        },
-      },
-    } as unknown as MstarEngineStatusConnection
-    return {
-      connection,
-      get calls() { return state.calls },
-      release: () => { state.release() },
-    }
-  }
-
-  it('drops an in-flight answer issued before a new connection generation', async () => {
-    const gateway = deferredGateway(servedSnapshot(payload('2.0.4')))
-    let onGeneration: (() => void) | null = null
-    const client = new MstarEngineStatusClient({
-      ...gateway.connection,
-      generation: { subscribe: (listener: () => void) => { onGeneration = listener; return () => {} } },
-    })
-    client.ensure(SESSION_ID, SESSION_CWD, 1)
-    expect(gateway.calls).toBe(1)
-    // The generation changes while that request is still on the wire (the
-    // reconnect case): the answer belongs to the connection that is gone.
-    ;(onGeneration as unknown as () => void)()
-    gateway.release()
-    await new Promise((resolve) => setTimeout(resolve, 0))
-    // Nothing landed, so the panel is NOT showing pre-reconnect data as `ok`…
-    expect(client.getSnapshot().entries.size).toBe(0)
-    // …and the next render really re-issues the request (the repull the
-    // invalidation exists to force is not suppressed by the stale answer).
-    client.ensure(SESSION_ID, SESSION_CWD, 1)
-    expect(gateway.calls).toBe(2)
-  })
-
-  it('keeps the answer of the current generation', async () => {
-    const gateway = deferredGateway(servedSnapshot(payload('2.0.4')))
-    const client = new MstarEngineStatusClient(gateway.connection)
-    client.ensure(SESSION_ID, SESSION_CWD, 1)
-    gateway.release()
-    await new Promise((resolve) => setTimeout(resolve, 0))
-    const entry = client.getSnapshot().entries.get(SESSION_ID)
-    expect(entry?.anchorTime).toBe(1)
-    expect(entry?.fetch.status).toBe('ok')
-    client.dispose()
-  })
-})
-
-describe('MstarEngineStatusClient — bounded request and explicit refresh', () => {
-  it('degrades to an explicit timeout reason when the gateway never answers', async () => {
-    // A gateway that never resolves: without a deadline the panel would stay
-    // `loading` for the rest of the turn.
-    const connection = { rpc: { call: () => new Promise<never>(() => {}) } } as unknown as MstarEngineStatusConnection
-    const client = new MstarEngineStatusClient(connection, { timeoutMs: 10, refreshIntervalMs: 0 })
-    client.ensure(SESSION_ID, SESSION_CWD, 1)
-    await new Promise((resolve) => setTimeout(resolve, 40))
-    const entry = client.getSnapshot().entries.get(SESSION_ID)
-    expect(entry?.fetch.status).toBe('unavailable')
-    if (entry?.fetch.status !== 'unavailable') throw new Error('expected unavailable')
-    expect(entry.fetch.reason).toContain('timeout')
-    client.dispose()
-  })
-
-  it('re-pulls a served snapshot after the refresh interval, without a new anchor row', async () => {
-    const gateway = stubGateway(
-      servedSnapshot(payload('2.0.4'), { at: '2024-07-03T09:23:20.000Z' }),
-      servedSnapshot(payload('2.0.5'), { at: '2024-07-03T09:24:20.000Z' }),
-    )
-    // The interval drives it; disabling the timer for the seeding phase keeps
-    // the assertion about WHICH call is the refresh exact.
-    const client = new MstarEngineStatusClient(gateway.connection, { refreshIntervalMs: 0 })
-    client.ensure(SESSION_ID, SESSION_CWD, 1)
-    await new Promise((resolve) => setTimeout(resolve, 0))
-    expect(gateway.calls).toHaveLength(1)
-    // A refresh pass with the interval elapsed asks AGAIN for the same anchor.
-    const refreshing = new MstarEngineStatusClient(gateway.connection, { refreshIntervalMs: 1 })
-    refreshing.ensure(SESSION_ID, SESSION_CWD, 1)
-    await new Promise((resolve) => setTimeout(resolve, 0))
-    // The interval fires on its own from here.
-    await new Promise((resolve) => setTimeout(resolve, 30))
-    expect(gateway.calls.length).toBeGreaterThanOrEqual(3)
-    const entry = refreshing.getSnapshot().entries.get(SESSION_ID)
-    // Same anchor row, newer snapshot: the panel sees the re-emission without
-    // waiting for the host to append another row.
-    expect(entry?.anchorTime).toBe(1)
-    if (entry?.fetch.status !== 'ok') throw new Error('expected ok')
-    expect(entry.fetch.payload.version).toBe('2.0.5')
-    client.dispose()
-    refreshing.dispose()
-  })
-
-  it('refresh() is the interval body: it re-pulls once the clock has passed', async () => {
-    const gateway = stubGateway(servedSnapshot(payload('2.0.4')), servedSnapshot(payload('2.0.5')))
-    const client = new MstarEngineStatusClient(gateway.connection, { refreshIntervalMs: 1 })
-    client.ensure(SESSION_ID, SESSION_CWD, 1)
-    await new Promise((resolve) => setTimeout(resolve, 0))
-    const before = gateway.calls.length
-    await new Promise((resolve) => setTimeout(resolve, 5))
-    client.refresh()
-    await new Promise((resolve) => setTimeout(resolve, 0))
-    expect(gateway.calls.length).toBeGreaterThan(before)
-    client.dispose()
-  })
-
-  it('does not refresh a snapshot younger than the interval, and stops when disposed', async () => {
-    const gateway = stubGateway(servedSnapshot(payload('2.0.4')), servedSnapshot(payload('2.0.5')))
-    const client = new MstarEngineStatusClient(gateway.connection, { refreshIntervalMs: 60_000 })
-    client.ensure(SESSION_ID, SESSION_CWD, 1)
-    await new Promise((resolve) => setTimeout(resolve, 0))
-    client.refresh()
-    await new Promise((resolve) => setTimeout(resolve, 0))
-    expect(gateway.calls).toHaveLength(1)
-    client.dispose()
-    client.refresh()
-    await new Promise((resolve) => setTimeout(resolve, 0))
-    expect(gateway.calls).toHaveLength(1)
-  })
-})
-
-describe('MstarEngineStatusClient — a refresh never publishes a superseded anchor', () => {
-  /**
-   * A gateway whose answers are released by the test IN REQUEST ORDER (index 0
-   * is the first request the client issued), so the ordering that makes the
-   * hazard real is exercised exactly rather than simulated: a refresh issued
-   * for the anchor it saw, and its answer landing after a newer anchor row has
-   * already been answered.
-   */
-  function deferredGateway(): {
-    connection: MstarEngineStatusConnection
-    calls: Array<{ sessionId: string; cwd: string }>
-    answer(callIndex: number, snapshot: unknown): void
-  } {
-    const pending: Array<{ resolve(envelope: unknown): void }> = []
-    const calls: Array<{ sessionId: string; cwd: string }> = []
-    const connection = {
-      rpc: {
-        call(_channel: string, _endpoint: string, request: { args: { sessionId: string; cwd: string } }): Promise<unknown> {
-          calls.push(request.args)
-          const slot: { resolve(envelope: unknown): void } = { resolve: () => {} }
-          pending.push(slot)
-          return new Promise((resolve) => { slot.resolve = resolve })
-        },
-      },
-    } as unknown as MstarEngineStatusConnection
-    return {
-      connection,
-      calls,
-      answer: (callIndex, snapshot) => {
-        const slot = pending[callIndex]
-        if (slot === undefined) throw new Error(`no pending request at index ${callIndex}`)
-        slot.resolve(snapshot)
-      },
-    }
-  }
-
-  /**
-   * One refresh pass with the interval treated as elapsed for every entry.
-   * `refresh()` is public as the interval's deterministic body, so the pass runs
-   * under a deliberately advanced clock while the client's own timer stays
-   * inert — the interval below is far longer than any real elapsed test time,
-   * so no stray pass can slip in across the `await`s.
-   */
-  function refreshPass(client: MstarEngineStatusClient, intervalMs: number): void {
-    const realNow = Date.now
-    Date.now = (): number => realNow() + intervalMs
-    try {
-      client.refresh()
-    } finally {
-      Date.now = realNow
-    }
-  }
-
-  /** One settled pass: let every already-resolved response continuation run. */
-  const settle = (): Promise<void> => new Promise((resolve) => setTimeout(resolve, 0))
-
-  /** The refresh interval every case uses: a day, so only the seam pass can fire. */
-  const REFRESH_INTERVAL_MS = 24 * 60 * 60 * 1000
-
-  it('drops a refresh answer that arrives after the anchor moved (the in-flight case)', async () => {
-    const gateway = deferredGateway()
-    const client = new MstarEngineStatusClient(gateway.connection, { refreshIntervalMs: REFRESH_INTERVAL_MS })
-    client.ensure(SESSION_ID, SESSION_CWD, 1)
-    gateway.answer(0, servedSnapshot(payload('anchor-1'), { at: '2024-07-03T09:23:20.000Z' }))
+    render(seats(client))
     await settle()
-    expect(client.getSnapshot().entries.get(SESSION_ID)?.anchorTime).toBe(1)
-
-    // The refresh for anchor 1 is issued first (nothing has moved yet)…
-    refreshPass(client, REFRESH_INTERVAL_MS)
-    expect(gateway.calls).toHaveLength(2)
-    // …then the newer anchor row's own request is issued while it is in flight.
-    client.ensure(SESSION_ID, SESSION_CWD, 2)
-    expect(gateway.calls).toHaveLength(3)
-
-    // The newer anchor is answered first, and the stale refresh answer arrives
-    // only afterwards: it must not roll the cache back to anchor 1 under a
-    // refreshed cache clock and with no staleness marker.
-    gateway.answer(2, servedSnapshot(payload('anchor-2'), { at: '2024-07-03T09:24:20.000Z' }))
-    await settle()
-    expect(client.getSnapshot().entries.get(SESSION_ID)?.anchorTime).toBe(2)
-    gateway.answer(1, servedSnapshot(payload('refresh-of-anchor-1'), { at: '2024-07-03T09:25:20.000Z' }))
-    await settle()
-    const entry = client.getSnapshot().entries.get(SESSION_ID)
-    expect(entry?.anchorTime).toBe(2)
-    if (entry?.fetch.status !== 'ok') throw new Error('expected ok')
-    expect(entry.fetch.payload.version).toBe('anchor-2')
-    // The superseded anchor is not requeued behind the answer either: a later
-    // render asking for anchor 2 is already satisfied by the cache.
-    client.ensure(SESSION_ID, SESSION_CWD, 2)
-    await settle()
-    expect(gateway.calls).toHaveLength(3)
-    client.dispose()
+    const view = render(seats(client))
+    expect(view.state).toBe('unavailable')
+    if (view.state !== 'unavailable') throw new Error('expected unavailable')
+    expect(view.reason).toBe('store.not-active: store is staged')
   })
 })
-
-describe('useMstarEngineStatus — picker seat (D4)', () => {
-  const UNBOUND = {
-    kind: 'error' as const,
-    code: 'workflow.selection.unbound-multi-active',
-    message: 'pick one',
-    activeWorkflowIds: ['wf-a', 'wf-b'],
-  }
-
-  it('surfaces the served binding as selection and exposes select', async () => {
-    const gateway = stubGateway(gatewayOk({
-      ...okResult(payload('2.0.4')),
-      binding: { selection: UNBOUND },
-    }))
-    const seatsUnderTest = seats(anchorStore(), gateway)
-    renderHook(seatsUnderTest)
-    await new Promise((resolve) => setTimeout(resolve, 0))
-    const seat = renderSeat(seatsUnderTest)
-    expect(seat.view.state).toBe('ok')
-    expect(seat.selection).toEqual(UNBOUND)
-    expect(seat.pick).toEqual({ state: 'idle' })
-    expect(typeof seat.select).toBe('function')
-  })
-})
-
-describe('MstarEngineStatusClient — selectWorkflow (D4)', () => {
-  it('refuses a second submission while one is pending', async () => {
-    const pending = new Map<string, (value: unknown) => void>()
-    const connection = {
-      rpc: {
-        call(_channel: string, endpoint: string): Promise<unknown> {
-          const { promise, resolve } = Promise.withResolvers<unknown>()
-          pending.set(endpoint, resolve)
-          return promise
-        },
-      },
-    } as unknown as MstarEngineStatusConnection
-    const client = new MstarEngineStatusClient(connection, { refreshIntervalMs: 0, timeoutMs: 0 })
-    const first = client.selectWorkflow(SESSION_ID, SESSION_CWD, 'wf-a')
-    expect(client.getSnapshot().selections.get(SESSION_ID)).toEqual({ state: 'pending' })
-    expect(await client.selectWorkflow(SESSION_ID, SESSION_CWD, 'wf-b')).toEqual({
-      status: 'unavailable',
-      reason: 'selection-pending',
-    })
-    pending.get(SELECT_WORKFLOW_ENDPOINT)!({
-      ok: true,
-      value: { status: 'selected', sessionId: SESSION_ID, workflowId: 'wf-a' },
-    })
-    expect(await first).toEqual({ status: 'selected', sessionId: SESSION_ID, workflowId: 'wf-a' })
-    expect(client.getSnapshot().selections.get(SESSION_ID)).toEqual({ state: 'selected', workflowId: 'wf-a' })
-    client.dispose()
-  })
-
-  it('a late pre-pick engineStatus answer cannot overwrite post-pick state', async () => {
-    const pending = new Map<string, (value: unknown) => void>()
-    const connection = {
-      rpc: {
-        call(_channel: string, endpoint: string): Promise<unknown> {
-          const { promise, resolve } = Promise.withResolvers<unknown>()
-          pending.set(endpoint, resolve)
-          return promise
-        },
-      },
-    } as unknown as MstarEngineStatusConnection
-    const client = new MstarEngineStatusClient(connection, { refreshIntervalMs: 0, timeoutMs: 0 })
-    client.ensure(SESSION_ID, SESSION_CWD, 1)
-    const pick = client.selectWorkflow(SESSION_ID, SESSION_CWD, 'wf-a')
-    pending.get(SELECT_WORKFLOW_ENDPOINT)!({
-      ok: true,
-      value: { status: 'selected', sessionId: SESSION_ID, workflowId: 'wf-a' },
-    })
-    expect(await pick).toEqual({ status: 'selected', sessionId: SESSION_ID, workflowId: 'wf-a' })
-    pending.get(ENGINE_STATUS_ENDPOINT)!(servedSnapshot(payload('pre-pick')))
-    await new Promise((resolve) => setTimeout(resolve, 0))
-    expect(client.getSnapshot().entries.get(SESSION_ID)).toBeUndefined()
-    expect(client.getSnapshot().selections.get(SESSION_ID)).toEqual({ state: 'selected', workflowId: 'wf-a' })
-    client.dispose()
-  })
-})
-
