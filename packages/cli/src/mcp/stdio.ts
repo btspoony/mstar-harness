@@ -211,11 +211,13 @@ function declaredRoot(options: McpStdioOptions): string | undefined {
  * writing the host's checkout. A launcher that declares the workspace itself
  * (`--workspace`) names that directory, so the marker is absent.
  *
- * The `--harness` pin is also published as `harnessPin` (the exact harness dir,
- * not its parent), so a command that owns root placement — `harness.scaffold`
- * with no explicit path — initializes the pinned harness itself instead of
- * re-discovering a root from the workspace anchor. An environment-declared root
- * needs no separate pin: the command's own resolution reads the same variable.
+ * The declared root — `--harness`, else `MSTAR_HARNESS_DIR` — is also published
+ * as `harnessPin` (the exact harness dir, not its parent), so a command that
+ * owns root placement — `harness.scaffold` with no explicit path — initializes
+ * the pinned harness itself instead of re-discovering a root from the workspace
+ * anchor. It is the root RESOLVED at this seam, whichever launcher fact declared
+ * it: a relative `MSTAR_HARNESS_DIR` re-read against the workspace anchor (the
+ * resolved root's parent) would resolve a second time and name that root's CHILD.
  */
 export function createContextResolver(options: McpStdioOptions = {}): ResolveContext {
   const pinned = declaredRoot(options);
@@ -245,11 +247,13 @@ export function createContextResolver(options: McpStdioOptions = {}): ResolveCon
       // HOST's checkout and says nothing about the caller's workspace, so a
       // command may neither default a path input from it nor answer about it.
       ...(options.workspace === undefined && controlRoot === null ? { launchDirectory: true as const } : {}),
-      // A flag pin is also the exact harness dir: commands that own root
+      // The declared root is also the exact harness dir: commands that own root
       // placement (e.g. `harness.scaffold`) must target it verbatim, not
-      // re-derive it. An environment-declared root needs no separate pin: the
-      // command's own resolution reads the same variable.
-      ...(options.harnessRoot === undefined ? {} : { harnessPin: resolve(options.harnessRoot) }),
+      // re-derive it. Published from the RESOLVED pin, not the raw launcher
+      // fact: a handler that re-read a relative MSTAR_HARNESS_DIR against this
+      // invocation's workspace would resolve it against its own parent and
+      // create a SECOND harness. No declaration, no pin.
+      ...(pinned === undefined ? {} : { harnessPin: pinned }),
       versions: { engine: null, cli: null, plugin: null, host: null, platform: null },
       signal,
       effects,

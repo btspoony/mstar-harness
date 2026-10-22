@@ -106,6 +106,13 @@ async function execute(verb: Verb, input: Input, context: InvocationContext): Pr
   const id = idFor(verb);
   try {
     if (verb === "tally") {
+      // The findings payload is what the verdict is computed FROM, so a
+      // relative path read out of the HOST's checkout would settle a review of
+      // the wrong run: the same rule the sibling verbs apply.
+      const unnamedFindings = launchDirectoryRefusal(id, context, {
+        fields: [{ field: "findings", subject: "the findings file", value: input.findings }],
+      });
+      if (unnamedFindings !== undefined) return unnamedFindings;
       const file = abs(context.cwd, need(input.findings, "--findings"));
  // One collection phase for every tally input: the findings payload, the
  // four run facts and the three counts all append diagnostics, and a single
@@ -289,6 +296,13 @@ async function execute(verb: Verb, input: Input, context: InvocationContext): Pr
       return ok(id, { posted: true, comments: "posted", review_url: reviewUrl || "(gh response)" });
     }
     if (verb === "worktree-cleanup") {
+      // This action DELETES the worktree and branch the setup sidecar records,
+      // so a relative path taken from an undeclared workspace would aim it at
+      // the HOST's checkout: the caller must name the directory.
+      const unnamedWorktree = launchDirectoryRefusal(id, context, {
+        fields: [{ field: "worktreePath", subject: "the review worktree to remove", value: input.worktreePath }],
+      });
+      if (unnamedWorktree !== undefined) return unnamedWorktree;
       const worktreePath = path.resolve(abs(context.cwd, need(input.worktreePath, "--path")));
       const sidecarPath = path.join(path.dirname(worktreePath), `.${path.basename(worktreePath)}.prreview.json`);
       if (!existsSync(sidecarPath)) throw new Error(`no setup sidecar found at ${sidecarPath} - run pr-review worktree-setup first`);
@@ -350,11 +364,14 @@ async function execute(verb: Verb, input: Input, context: InvocationContext): Pr
       // Both defaults are paths in the checkout: the worktree IS the invocation
       // directory, and the skill root is a repo-relative corpus. On a connection
       // that declared no workspace they would name the HOST's checkout in the
-      // prompt, so they are required, absolute inputs instead.
+      // prompt, so they are required, absolute inputs instead. The folded-diff
+      // path is optional (only a collect-folded seat uses it), so only a
+      // RELATIVE value is refused: it too would name a host-checkout file.
       const unnamedSeatPaths = launchDirectoryRefusal(id, context, {
         fields: [
           { field: "worktree", subject: "the review worktree", value: input.worktree },
           { field: "skillRoot", subject: "the audit skill root", value: input.skillRoot },
+          { field: "diffFile", subject: "the review diff file", value: input.diffFile, optional: true },
         ],
       });
       if (unnamedSeatPaths !== undefined) return unnamedSeatPaths;

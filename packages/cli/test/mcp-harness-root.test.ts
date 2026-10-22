@@ -755,6 +755,51 @@ describe("MCP harness root", () => {
     }
   });
 
+  test("a relative MSTAR_HARNESS_DIR is resolved ONCE: the scaffold lands on the pin, not its child", async () => {
+    // The environment form is the launcher fact with no CLI boundary to refuse
+    // a relative value, so it means "relative to the launch directory" and the
+    // resolver resolves it there. The pin it publishes must be that RESOLVED
+    // path: a handler that re-reads the variable against the workspace this
+    // root anchors (its own parent) resolves `sub/.mstar` a second time and
+    // scaffolds a DIFFERENT harness at `<pin>/sub`.
+    // The resolved root is compare-able only by its canonical path: the
+    // launcher's `resolve` sees the physical directory `chdir` reports.
+    const host = realpathSync(mkdtempSync(path.join(os.tmpdir(), "mcp-harness-root-")));
+    roots.push(host);
+    mkdirSync(path.join(host, "sub"), { recursive: true });
+    const pinnedHarness = path.join(host, "sub", ".mstar");
+    const doubleResolved = path.join(host, "sub", "sub", ".mstar");
+    const previousCwd = process.cwd();
+    const previousHarness = process.env.MSTAR_HARNESS_DIR;
+    process.env.MSTAR_HARNESS_DIR = path.join("sub", ".mstar");
+    process.chdir(host);
+    const definition = getCommandDefinitions().find((entry) => entry.id === "harness.scaffold");
+    if (definition === undefined) throw new Error("missing command: harness.scaffold");
+    const server = createMcpServer(createContextResolver(), [definition]);
+    const client = new Client({ name: "harness-root-test-client", version: "1.0.0" });
+    const [clientEnd, serverEnd] = InMemoryTransport.createLinkedPair();
+    try {
+      await server.connect(serverEnd);
+      await client.connect(clientEnd);
+
+      const envelope = await toolEnvelope(client, "mstar_harness", withAction("harness.scaffold"));
+      expect(envelope).toMatchObject({ status: "ok", code: "harness.scaffold.ok" });
+      const scaffolded = envelope.data as { harnessDir: string; projectDir: string };
+      expect(path.resolve(scaffolded.harnessDir)).toBe(pinnedHarness);
+      expect(path.resolve(scaffolded.projectDir)).toBe(path.join(pinnedHarness, "projects"));
+      expect(existsSync(path.join(pinnedHarness, "projects", "_default"))).toBe(true);
+      // The child of the pin is a second harness nobody declared: no AGENTS.md,
+      // no project tree, and the scaffold did not report landing there.
+      expect(existsSync(doubleResolved)).toBe(false);
+    } finally {
+      await client.close();
+      await server.close();
+      process.chdir(previousCwd);
+      if (previousHarness === undefined) delete process.env.MSTAR_HARNESS_DIR;
+      else process.env.MSTAR_HARNESS_DIR = previousHarness;
+    }
+  });
+
   test("a relative --harness is a usage refusal naming the absolute requirement", async () => {
     const program = new Command();
     program.name("mstar").exitOverride();
@@ -1094,11 +1139,22 @@ const LAUNCH_CWD_DEFAULT: Readonly<Record<string, null | { readonly args: Record
   "plugin.validate": { args: {}, subject: "the plugin package" },
   "pr-review.budget": null,
   "pr-review.post": { args: { pr: "1", bodyFile: path.join(os.tmpdir(), "mstar-mcp-root-unread-review.md") }, subject: "the repository this review is posted to" },
-  "pr-review.seat-prompt": { args: { stage: "1", domain: "cli", seat: "seat-1" }, subject: "the review worktree" },
+  // The worktree and skill root are named ABSOLUTELY here so the relative
+  // diffFile is the one input left offending: each of the three seat paths has
+  // its own assertion (the omitted pair is covered by its own test).
+  "pr-review.seat-prompt": {
+    args: {
+      stage: "1", domain: "cli", seat: "seat-1",
+      worktree: path.join(os.tmpdir(), "mstar-mcp-root-unread-worktree"),
+      skillRoot: path.join(os.tmpdir(), "mstar-mcp-root-unread-skills"),
+      diffFile: "diff.patch",
+    },
+    subject: "the review diff file",
+  },
   "pr-review.size": { args: { base: "HEAD", head: "HEAD" }, subject: "the repository this size classifies" },
-  "pr-review.tally": null,
+  "pr-review.tally": { args: { findings: "findings.json" }, subject: "the findings file" },
   "pr-review.validate-report": { args: { reportFile: "review.md" }, subject: "the report file" },
-  "pr-review.worktree-cleanup": null,
+  "pr-review.worktree-cleanup": { args: { worktreePath: "worktrees/review", branch: "review/x" }, subject: "the review worktree to remove" },
   "qc.validate-report": { args: { reportFile: "review.md" }, subject: "the report file" },
   "report": null,
   "review.seats": { args: { assignmentFile: "assignment.md" }, subject: "the assignment file" },
