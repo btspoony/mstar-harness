@@ -46,6 +46,32 @@ function engineCode(error: unknown, fallback: string): string {
   }
   return fallback;
 }
+const REDACTED_SESSION_ID = "[redacted]";
+
+/**
+ * A public read must not hand out a live coordinator's session id. On an
+ * opted-in MCP connection that id is a bearer credential for coordinator-scoped
+ * writes, and `status validate` needs no identity to run, so echoing it turned
+ * one unauthenticated read into a working identity. The holder stays visible by
+ * role and epoch; a recovery reads the id from the holder session's own
+ * context.
+ */
+function redactCoordinatorSessionIds(value: unknown): unknown {
+  if (Array.isArray(value)) return value.map(redactCoordinatorSessionIds);
+  if (value === null || typeof value !== "object") return value;
+  const record = value as Record<string, unknown>;
+  const out: Record<string, unknown> = {};
+  for (const [key, entry] of Object.entries(record)) {
+    if (key === "coordinator" && entry !== null && typeof entry === "object" && !Array.isArray(entry)) {
+      const ref = entry as Record<string, unknown>;
+      out[key] = "sessionId" in ref ? { ...ref, sessionId: REDACTED_SESSION_ID } : ref;
+      continue;
+    }
+    out[key] = redactCoordinatorSessionIds(entry);
+  }
+  return out;
+}
+
 function authorityRecoveryHint(code: string): string {
   if (code === "store.busy") return "Wait for the competing store writer to finish, then retry `status validate`.";
   if (code === "store.corrupt") return "Preserve the corrupt database and legacy sources; restore through a supported recovery process or provide the full refusal to the store recovery owner. An unreadable live store cannot be recovered by online restore-preview.";
@@ -135,7 +161,7 @@ export function getStatusCommandDefinitions(): readonly CommandDefinition[] {
             const authority = await resolveCurrentAuthority({ harnessDir });
             const read = await readExecutionAuthority({ harnessDir });
             return ok("status.validate", {
-              authority: read.data,
+              authority: redactCoordinatorSessionIds(read.data),
               token: read.token,
               workflows: "workflows" in read.data ? read.data.workflows.map((entry) => ({ id: entry.state.id, token: entry.workflowToken })) : [],
               terminalUnregistered: "terminalUnregistered" in read.data ? read.data.terminalUnregistered : [],
