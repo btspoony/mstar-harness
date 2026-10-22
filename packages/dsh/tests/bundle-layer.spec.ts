@@ -120,9 +120,10 @@ describe('profile bundle layer (Task 4)', () => {
     // MCP action refuses. Assert the fact, not one exact argv: an equivalent
     // launch (extra/renamed no-op options) must not fail this test, while a
     // regression that drops the opt-in must.
-    expect(config.args).toContain('--trust-caller-session-id')
-    expect(config.args.slice(0, 2)).toEqual(['-y', '@mstar-harness/cli'])
-    expect(config.args[2]).toBe('mcp')
+    const args = config.args as string[]
+    expect(args).toContain('--trust-caller-session-id')
+    expect(args.slice(0, 2)).toEqual(['-y', '@mstar-harness/cli'])
+    expect(args[2]).toBe('mcp')
   })
 
   it('ships exactly one MCP row: only the shared mstar-mcp row names the client package', () => {
