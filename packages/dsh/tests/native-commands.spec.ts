@@ -724,6 +724,91 @@ describe('durable adopted-root seam — a cross-root bind survives a restart', (
     expect(adoptedBindingOf(adoptedRoot, app.root, CHILD_ID)).not.toBeNull()
   })
 
+  it('disposal removes the seam: a read falls back to the in-process receipt, nothing reaches the closed domain, and the medium survives', async () => {
+    const app = booted = await bootApp()
+    const medium = new Map<string, string>()
+    let closed = 0
+    let closing = false
+    let readsAfterClose = 0
+    let duringClose: string | undefined
+    const provider = await mountStorageDomain(app, {
+      open: async () => ({
+        table: () => ({
+          get: (key: string) => {
+            if (closing) readsAfterClose += 1
+            return medium.get(key)
+          },
+          put: async (key: string, value: string) => { medium.set(key, value) },
+          delete: async (key: string) => {
+            const had = medium.has(key)
+            medium.delete(key)
+            return had
+          },
+        }),
+        close: async () => {
+          closing = true
+          // The ordering assertion: a key backed ONLY by the seam must already
+          // answer `undefined` here — i.e. the uninstall ran before the close.
+          duringClose = executionBindingRootOf(PARENT_ID, app.root)
+          closed += 1
+        },
+      }),
+    })
+    await recordExecutionBindingRoot(CHILD_ID, app.root, '/synthetic/adopted-root')
+    await recordExecutionBindingRoot(PARENT_ID, app.root, '/synthetic/parent-root')
+    await settleSeam()
+    // With the overlay out of the way both keys answer through the seam.
+    resetExecutionBindingRootsForTests()
+    expect(executionBindingRootOf(CHILD_ID, app.root)).toBe('/synthetic/adopted-root')
+    expect(executionBindingRootOf(PARENT_ID, app.root)).toBe('/synthetic/parent-root')
+    // Overlay receipt for the child only; the parent's key still reads the seam.
+    await recordExecutionBindingRoot(CHILD_ID, app.root, '/synthetic/adopted-root')
+
+    // Dispose the composition's provider: the child's disposer uninstalls the
+    // seam synchronously BEFORE closing the domain.
+    await provider.dispose()
+    expect(closed).toBe(1)
+    expect(duringClose).toBeUndefined()
+    expect(readsAfterClose).toBe(0)
+    // The read falls back to the in-process receipt — the disposal kept it — and
+    // the seam-backed key does not answer through a closed domain.
+    expect(executionBindingRootOf(CHILD_ID, app.root)).toBe('/synthetic/adopted-root')
+    expect(executionBindingRootOf(PARENT_ID, app.root)).toBeUndefined()
+    // The durable state itself survived the close (the next process reads it).
+    const fresh = installExecutionBindingRootStore(rootTableOf(medium))
+    seamDisposers.push(fresh)
+    expect(executionBindingRootOf(PARENT_ID, app.root)).toBe('/synthetic/parent-root')
+  })
+
+  it('a fiber torn down while open is in flight contains the inactive-effect throw, drops the just-installed seam and closes the late handle once', async () => {
+    const app = booted = await bootApp()
+    const gate = Promise.withResolvers<unknown>()
+    let closedLate = 0
+    await mountStorageDomain(app, { open: () => gate.promise })
+    // Tear the plugin row down while its child is still awaiting `open`. The
+    // disposal settles only after that child's apply returns, so the gate is
+    // resolved without awaiting it first.
+    const disposing = (app.pluginFiber as unknown as { dispose(): Promise<void> }).dispose()
+    await settleSeam()
+    gate.resolve({
+      // A leaked seam would answer this fake root; a removed one answers nothing.
+      table: () => ({
+        get: () => '/late-leaked-root',
+        put: async () => {},
+        delete: async () => false,
+      }),
+      close: async () => { closedLate += 1 },
+    })
+    // The throw is CONTAINED: the disposal resolves instead of rejecting.
+    await disposing
+    await settleSeam()
+    // The late handle was closed exactly once — the next apply cannot meet `already-open`.
+    expect(closedLate).toBe(1)
+    // The just-installed seam was removed: no read can reach the late handle.
+    resetExecutionBindingRootsForTests()
+    expect(executionBindingRootOf(CHILD_ID, app.root)).toBeUndefined()
+  })
+
   it('the absence path: with no storage domain the receipt stays per-process, so a restart drops it and the plugin still mounts', async () => {
     const app = booted = await bootApp()
     // No seam is installed — the composition carries no `storageDomain`

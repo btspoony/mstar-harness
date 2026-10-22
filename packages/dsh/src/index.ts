@@ -978,14 +978,20 @@ export function apply(ctx: Context, config: Config): void {
   // owns the handle: its disposer uninstalls the seam SYNCHRONOUSLY first (no
   // consumer may read a closing or closed domain) and only then awaits
   // `close()`, which drains the queued durable writes.
-  setExecutionBindingRootsLogger((message) => ctx.logger(EXECUTION_BINDING_ROOTS_LOGGER).warn(message))
+  // Cordis invokes exporters unguarded: a throwing log sink must never make
+  // this apply throw, so every seam warning takes the house guarded shape.
+  const warnExecutionBindingRoots = (message: string): void => {
+    try {
+      ctx.logger(EXECUTION_BINDING_ROOTS_LOGGER).warn(message)
+    } catch {}
+  }
+  setExecutionBindingRootsLogger(warnExecutionBindingRoots)
   if (ctx.get('storageDomain') === undefined) {
-    ctx.logger(EXECUTION_BINDING_ROOTS_LOGGER).warn(
-      'durable adopted control root unavailable: the storageDomain service is absent, so the selected control root stays a per-process receipt (a resume re-bind re-records it after a restart)',
+    warnExecutionBindingRoots(
+      'durable adopted control root unavailable: the storageDomain service is absent at this apply, so the selected control root starts as a per-process receipt',
     )
   }
   ctx.inject(['storageDomain'], async (storageCtx) => {
-    const logger = ctx.logger(EXECUTION_BINDING_ROOTS_LOGGER)
     try {
       const domain = await storageCtx.storageDomain.open(executionBindingRootsDomain)
       const uninstall = installExecutionBindingRootStore(executionBindingRootStoreOf(domain))
@@ -996,7 +1002,7 @@ export function apply(ctx: Context, config: Config): void {
           try {
             await domain.close()
           } catch (error) {
-            logger.warn(`durable adopted control root store close failed during disposal (${causeOf(error)})`)
+            warnExecutionBindingRoots(`durable adopted control root store close failed during disposal (${causeOf(error)})`)
           }
         }, 'mstar:execution-binding-roots durable store')
       } catch (error) {
@@ -1009,15 +1015,15 @@ export function apply(ctx: Context, config: Config): void {
         try {
           await domain.close()
         } catch (closeError) {
-          logger.warn(`durable adopted control root store close failed after a disposed apply (${causeOf(closeError)})`)
+          warnExecutionBindingRoots(`durable adopted control root store close failed after a disposed apply (${causeOf(closeError)})`)
         }
-        logger.warn(
+        warnExecutionBindingRoots(
           `durable adopted control root store discarded: its apply fiber was already disposed when open resolved (${causeOf(error)}) — durability returns on a later apply or boot`,
         )
       }
     } catch (error) {
-      logger.warn(
-        `durable adopted control root unavailable (${causeOf(error)}) — the selected control root stays a per-process receipt; durability returns on a later apply or boot`,
+      warnExecutionBindingRoots(
+        `durable adopted control root unavailable: open refused (${causeOf(error)}); the selected control root stays a per-process receipt`,
       )
     }
   })
