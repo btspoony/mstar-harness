@@ -5,14 +5,14 @@
  *
  * ## What is real, and what the test supplies
  *
- * - THE BUILT CLI BUNDLE spawned as plain `mcp` - the one connection shape every
- *   host launches (omp's `mcp.json` and the dsh bundle row both pass no identity
- *   flag), addressed with newline-delimited JSON-RPC from this process. The
- *   connection carries no identity of its own: `MSTAR_HOST_SESSION_ID` /
- *   `MSTAR_EXECUTION_IDENTITY` are stripped, so the only session identity on the
- *   wire is the per-call `sessionId` parameter, which the server publishes on
- *   every command whose CLI declares it and admits as an attribution
- *   declaration (never as an authorization token).
+ * - THE BUILT CLI BUNDLE spawned as `mcp --trust-caller-session-id` - the omp
+ *   deployment shape (its `mcp.json` sets the same flag), addressed with
+ *   newline-delimited JSON-RPC from this process. The connection carries no
+ *   identity of its own: `MSTAR_HOST_SESSION_ID` / `MSTAR_EXECUTION_IDENTITY`
+ *   are stripped, so the only session identity on the wire is the per-call
+ *   `sessionId` parameter the host injects. Without the opt-in the server
+ *   publishes no such parameter and refuses one (owned by
+ *   `mcp-identity.test.ts`).
  * - A temp Git workspace whose `.mstar` holds a REAL ACTIVE execution authority
  *   built by the engine's own producers over real `node:sqlite`.
  * - The chain: register (NO id - the NULL-creator contract) -> plan bind
@@ -94,18 +94,18 @@ async function makeActiveWorkspace(label) {
  * ------------------------------------------------------------------------ */
 
 /**
- * The stdio child, launched with no identity option: there is none to pass, so
- * every host row - omp's `mcp.json`, the dsh bundle row, a hand-run `mstar mcp` -
- * gets the same identity contract.
+ * The stdio child. `trustCallerSessionId` is the ONE launcher difference between
+ * the deployed omp shape (opted in) and the shipped default connection (off, the
+ * shape a shared host row launches), so the identity contract is proven on both.
  */
-function startMcpServer(fixture) {
+function startMcpServer(fixture, { trustCallerSessionId = true } = {}) {
   const env = {};
   for (const [key, value] of Object.entries(process.env)) {
     if (STRIPPED_ENV.includes(key)) continue;
     env[key] = value;
   }
   env.MSTAR_HARNESS_DIR = fixture.harness;
-  const child = spawn(process.execPath, [CLI_ENTRY, "mcp"], { cwd: fixture.root, env, stdio: ["pipe", "pipe", "pipe"] });
+  const child = spawn(process.execPath, [CLI_ENTRY, "mcp", ...(trustCallerSessionId ? ["--trust-caller-session-id"] : [])], { cwd: fixture.root, env, stdio: ["pipe", "pipe", "pipe"] });
   const pending = [];
   let buffer = "";
   let stderr = "";
@@ -327,13 +327,13 @@ test("T4: stdio MCP chain - identity-free shared connection, per-call injected i
   }
 });
 
-test("default connection: a real child publishes the selector and admits a caller-declared session id", { timeout: 120_000 }, async () => {
-  // The shipped connection: plain `mstar mcp`. A host that mounts one generic
-  // stdio row for the whole profile gets exactly this shape, so the in-memory
-  // proof is not enough - the published selector and its admission have to hold
-  // on the process boundary a real host sees.
+test("default connection: a real child publishes no identity and refuses a caller-declared session id", { timeout: 120_000 }, async () => {
+  // The shipped, default connection: no `--trust-caller-session-id`. A host that
+  // mounts one generic stdio row for the whole profile gets exactly this shape,
+  // so the in-memory proof is not enough — the published surface and the refusal
+  // have to hold on the process boundary a real host sees.
   const fixture = await makeActiveWorkspace("mstar-t4-mcp-default");
-  const server = startMcpServer(fixture);
+  const server = startMcpServer(fixture, { trustCallerSessionId: false });
   try {
     const initialized = await server.request("initialize", {
       protocolVersion: "2025-06-18",
@@ -343,33 +343,29 @@ test("default connection: a real child publishes the selector and admits a calle
     assert.equal(initialized.result?.serverInfo?.name, "mstar-harness", "server initialize handshake");
     server.notify("notifications/initialized", {});
 
-    // The per-call selector IS published: a caller reading `tools/list` learns
-    // that this connection takes the calling session's id.
+    // The per-call selector is not published: a caller reading `tools/list`
+    // learns that this connection carries no identity channel.
     const listed = await server.request("tools/list", {});
     const sessionTool = listed.result.tools.find((tool) => tool.name === "mstar_session");
     assert.ok(sessionTool, "mstar_session is published");
     assert.equal(
       Object.hasOwn(sessionTool.inputSchema.properties ?? {}, "sessionId"),
-      true,
-      "the default connection publishes the sessionId selector",
+      false,
+      "the default connection publishes no sessionId selector",
     );
 
-    // The call puts one on the wire: no identity refusal exists to answer it, so
-    // the response is the action's own missing-input verdict and says nothing
-    // about the selector.
+    // A call that puts one on the wire anyway is refused by name, with the
+    // opt-in that would admit it, and the claimed value is never echoed.
     const claimed = "live-coordinator-session";
-    const answered = await server.request("tools/call", {
+    const refused = await server.request("tools/call", {
       name: "mstar_session",
       arguments: { action: "recover", workflow: "wf-default-identity", sessionId: claimed },
     });
-    const text = (answered.result?.content ?? []).map((block) => block.text ?? "").join("\n");
-    assert.equal(answered.result?.isError, true, `the call is answered on its own missing input:\n${text}`);
-    const envelope = answered.result?.structuredContent ?? JSON.parse(text.slice(text.indexOf('{"version":1,')));
-    assert.equal(envelope.code, "command.invalid-input", "the refusal is the action's own usage verdict");
-    const paths = (envelope.details?.diagnostics ?? []).map((entry) => entry.path);
-    assert.equal(paths.includes("sessionId"), false, "the admitted selector is not a diagnostic");
-    assert.equal(envelope.details?.selectors, undefined, "the action declares the selector, so nothing is refused");
-    assert.equal(text.includes(claimed), false, "the admitted value is never echoed");
+    const text = (refused.result?.content ?? []).map((block) => block.text ?? "").join("\n");
+    assert.equal(refused.result?.isError, true, `the call is refused:\n${text}`);
+    assert.match(text, /mcp\.caller-identity-unavailable/, "the refusal names the identity cause");
+    assert.match(text, /--trust-caller-session-id/, "the refusal names the opt-in that admits an identity");
+    assert.equal(text.includes(claimed), false, "the claimed value is never echoed");
   } finally {
     await server.close();
   }

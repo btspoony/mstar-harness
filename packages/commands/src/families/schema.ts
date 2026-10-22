@@ -118,17 +118,17 @@ function commandRequirements(definition: CommandDefinition): readonly CommandReq
     ...hinted,
   ];
   // Route-verified session facts from the adapters: CLI collects the session
-  // selector from argv (with its environment fallback), and MCP publishes the
-  // same selector as a per-call field. It is a bearer identity on this
-  // transport: it selects the caller's own coordinator binding, while each
-  // command's own authorization inputs decide the write.
+  // selector from argv (with its environment fallback); an MCP connection
+  // publishes the selector only when the launcher trusted caller identity
+  // (`mstar mcp --trust-caller-session-id`, off by default), and otherwise the
+  // caller uses the dsh native tool or the CLI.
   const sessionOption = definition.cli.options.find((option) => option.context === "sessionId");
   if (sessionOption !== undefined) {
     if (!overridden.has(`cli:${sessionOption.key}`)) {
       requirements.push({ name: sessionOption.key, ownership: "caller", route: "cli" });
     }
     if (!overridden.has(`mcp:${sessionOption.key}`)) {
-      requirements.push({ name: sessionOption.key, ownership: "caller", route: "mcp", help: "MCP: pass the call's `sessionId` \u2014 the calling session's id (on dsh, `DSH_SESSION_ID`). It is a bearer identity on this transport: it selects the caller's own coordinator binding, and the command's own authorization inputs decide the write" });
+      requirements.push({ name: sessionOption.key, ownership: "caller", route: "mcp", help: "MCP: published on a connection launched with --trust-caller-session-id \u2014 the shipped dsh and omp launcher rows pass it; there it is a bearer identity selecting the caller's own coordinator binding. A connection that did not opt in carries no caller identity: use the dsh native tool that covers the operation or run the CLI command (on dsh the CLI reads DSH_SESSION_ID)" });
     }
   }
   return requirements;

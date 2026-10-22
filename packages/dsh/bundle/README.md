@@ -105,23 +105,20 @@ contract answers from explicit inputs and never resolves an implicit harness
 path. The launch cwd is **never** a root candidate: it is the HOST's directory
 and says nothing about which workspace a caller belongs to.
 
-**Identity.** The shipped row declares none, and the connection carries none of
-its own: there is no `--identity-env`, no declared-identity lock, no selector
+**Identity.** The shipped row passes `--trust-caller-session-id` and declares
+no path: there is no `--identity-env`, no declared-identity lock, no selector
 stripping and no connection-wide default session id (ADR
-`dsh-native-identity-channels`). The per-call `sessionId` selector IS published,
-on every command whose CLI declares it, and the value is the calling session's
-id (dsh exports it as `DSH_SESSION_ID`). It is a bearer identity on this
-transport: it selects the caller's own coordinator binding, so knowing a live
-session id is enough to act as that session, while authorization stays that
-binding row plus the `--expect` CAS token. The trust domain is the
-local stdio connection itself; exposing the server beyond the local host would
-need authentication at the transport, not an unpublished field. The dsh-native
-tools, where identity is `exec.agent.id`, remain the routes that own plugin
-state; everything else — including plan prepare/progress/complete, which have no
-native tool — runs on this connection with `sessionId`, or through the CLI. The
-shipped row keeps neutral defaults: no path, no connection identity. Because a
-patch replaces the row's whole `config`, an override restates the `command` and
-the whole `args` list.
+`dsh-native-identity-channels`). The flag is the deployment's explicit
+statement that it owns this connection's trust boundary; without it the
+per-call `sessionId` selector is unpublished and a call that supplies one is
+refused with `mcp.caller-identity-unavailable`. With it, the selector is
+published and the value is a bearer identity: it selects the caller's own
+coordinator binding, so any caller that knows a live coordinator session id can
+act as it, while authorization stays that binding row plus the optional
+`--expect` CAS token. Remove the flag for a deployment whose callers are not
+trusted; the host-attested routes are then the dsh-native tools, where identity
+is `exec.agent.id`, and the CLI. Because a patch replaces the row's whole
+`config`, an override restates the `command` and the whole `args` list.
 
 ## Config surface
 

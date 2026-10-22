@@ -103,8 +103,9 @@ export type FoldMember = Readonly<{
    */
   input: Readonly<Record<string, unknown>>;
   /**
-   * The per-call identity selector this member publishes, present only when the
-   * member declares one. It is a transport field, not a member input field,
+   * The per-call identity selector this member publishes on a GENERIC
+   * connection, present only when the member declares one and the connection
+   * identity is not locked. It is a transport field, not a member input field,
    * so it is injected here exactly as the per-command route did.
    */
   selector?: Readonly<{ key: string }>;

@@ -3,16 +3,15 @@
  * caller puts a session identity on the call, per transport. Refusal texts
  * interpolate it verbatim so the recovery is nameable without reading source.
  *
- * Both transports take the same value: the calling session's own id. On dsh the
- * host exports it as `DSH_SESSION_ID`, which the CLI reads directly; an MCP
- * call passes it as the per-call `sessionId` field. It is a bearer identity on
- * that transport: it selects that session's own coordinator binding. This
- * sentence names ONLY the supply, so it stays true for every command that
- * interpolates it — authorization inputs differ per command (`--expect` on some,
- * a required `sessionRef` on others) and belong in each command's own refusal.
+ * The MCP clause names the real routes on purpose: a shared MCP server is a
+ * child process with no host-proven caller identity, so a caller-declared
+ * `sessionId` is refused unless the launcher opted in
+ * (`mstar mcp --trust-caller-session-id`, off by default). Only three
+ * operations have a host-proven native tool today; everything else runs
+ * through the CLI, and plan prepare/progress/complete have no native tool yet.
  */
 export const IDENTITY_SUPPLIES =
-  "CLI: pass --session-id or set MSTAR_HOST_SESSION_ID (dsh shells already export DSH_SESSION_ID); MCP: pass sessionId \u2014 the calling session's id, which selects that session's own coordinator binding";
+  "CLI: pass --session-id or set MSTAR_HOST_SESSION_ID (dsh shells also export DSH_SESSION_ID, which the CLI reads); MCP: pass sessionId on a connection launched with --trust-caller-session-id \u2014 the shipped dsh and omp launcher rows pass it, and there the value is a bearer identity that selects the caller's own coordinator binding; on a connection that did not opt in, use the dsh native tool that covers the operation (plan bind, audit report validation and execution clear) or run the CLI command";
 
 /**
  * Where a caller reads each execution token kind a CLI `--expect` may need, in

@@ -4,7 +4,10 @@
  *
  * The MCP layer of `@mstar-harness/cli` declares an optional `sessionId`
  * parameter on exactly the tools whose command carries a session identity, and
- * admits the value as the caller identity the engine sees. omp never filled it, so a
+ * only on a connection the launcher explicitly trusted
+ * (`mcp.json` passes `--trust-caller-session-id`: this host owns the trust that
+ * maps its session manager to the caller). The parameter IS the caller identity
+ * the engine sees. omp never filled it, so a
  * standalone plan workflow registered from an omp primary session could not
  * carry its creator's identity through `workflow register -> coordinator bind
  * -> plan prepare -> plan progress`. This extension closes that gap
@@ -28,15 +31,13 @@
  *
  * The revision is `{ ...input, sessionId }` with the HOST's id: the host
  * session ALWAYS wins, so a caller-supplied `sessionId` is deliberately
- * REPLACED, never honored. That value is the ATTRIBUTION the engine records
- * (`packages/cli/src/mcp/register.ts` admits the wire
- * `sessionId`) — it names the session whose coordinator binding the write is
- * attributed to, and authorization stays that binding plus the `--expect` CAS
- * token. Deferring to a caller's claim would let any agent attribute a write to
- * another live coordinator session — the host is the only authority for that
- * attribution here. A caller-supplied id on an action that declares no selector
- * is left alone: that call is refused by the CLI before admission, so the claim
- * never reaches the engine. `block` is never set, and the id is read per event from
+ * REPLACED, never honored. On the opted-in connection that value becomes the
+ * execution identity (`packages/cli/src/mcp/register.ts` admits the wire
+ * `sessionId`), so deferring to a caller's claim would let any agent act as
+ * another live coordinator session - the host is the only identity authority
+ * here. A caller-supplied id on an action that declares no selector is left
+ * alone: that call is refused by the CLI before admission, so the claim never
+ * reaches the engine. `block` is never set, and the id is read per event from
  * `ctx.sessionManager.getSessionId()`, so leaf sessions carry their own id and
  * never their parent's.
  */

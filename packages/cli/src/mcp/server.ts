@@ -87,6 +87,13 @@ export function createMcpServer(
     get: () => resolveContext.defaultHarness,
     enumerable: true,
   });
+  // The caller-identity opt-in is a launch fact of the wrapped resolver: the
+  // wrapper must publish the same truth or registration would decide selector
+  // publication from a missing property and silently trust every caller.
+  Object.defineProperty(createRequestContext, "callerIdentity", {
+    get: () => resolveContext.callerIdentity === true,
+    enumerable: true,
+  });
   registerMcpCommands(server, seatDefinitions(definitions, seat), createRequestContext, services, onToolsRegistered);
   return server;
 }

@@ -40,21 +40,22 @@
 # cannot forget it. Commands that read no root (`schema`, `path.resolve`,
 # `host.*`, `doctor`, the read-only validators) and `harness.scaffold` run with
 # a null root; any other call is refused with the cause and the recoveries
-# (`mcp.control-root-unresolved`). The shipped row declares no root and no
-# connection-wide identity; an override restates the row's whole `config`,
-# including the `args` list.
+# (`mcp.control-root-unresolved`). The shipped row declares no root; an
+# override restates the row's whole `config`, including the `args` list.
 #
-# Identity: the per-call `sessionId` selector IS published, on every command
-# whose CLI declares it. It is a BEARER identity on this transport: it names the
-# calling session (`DSH_SESSION_ID` on dsh) and the engine resolves that
-# session's OWN coordinator binding from it, so knowing a live id is enough to
-# act as it. Authorization stays what it always was -- that binding row plus the
-# `--expect` CAS token. The trust domain is this local stdio
-# connection itself: the host launches the child and only its model calls it.
-# Exposing the server beyond the local host needs authentication at the
-# transport, not an unpublished field. The native tools (`mstar_plan_bind`,
-# `mstar_audit_validate`, `mstar_execution_clear`) remain the dsh-local routes
-# where the plugin owns state of its own.
+# Identity: the row passes `--trust-caller-session-id`. A stdio child has no
+# host-proven caller identity, so this flag is the deployment's explicit
+# statement that it owns this connection's trust boundary -- without it the
+# per-call `sessionId` selector stays unpublished and a call that sends one is
+# refused (`mcp.caller-identity-unavailable`). With it, the selector is
+# published and its value is a BEARER identity: `executionContextFor` turns it
+# into `context.caller` and the engine resolves the caller's OWN coordinator
+# binding from it, so knowing a live session id is enough to act as that
+# session. Authorization is still that binding row plus the optional `--expect`
+# CAS token. A deployment that connects callers it does not trust must remove
+# the flag (or add transport authentication); the refusal then names the
+# host-proven routes -- the native tools `mstar_plan_bind`,
+# `mstar_audit_validate`, `mstar_execution_clear` and the CLI.
 
 - insert:
     - id: mstar
@@ -66,4 +67,4 @@
         serverName: mstar
         transport: stdio
         command: npx
-        args: ['-y', '@mstar-harness/cli', 'mcp']
+        args: ['-y', '@mstar-harness/cli', 'mcp', '--trust-caller-session-id']

@@ -3616,7 +3616,7 @@ function unresolvedOwnSession(address: SessionAddress, rows: readonly SessionRow
     `the trusted caller is coordinator session ${address.sessionId} of workflow ${address.workflowId}`,
     holder === undefined
       ? `workflow ${address.workflowId} records no coordinator session ${address.sessionId} and holds no ACTIVE coordinator session`
-      : `workflow ${address.workflowId} holds the ACTIVE coordinator session ${holder.ref.sessionId} (epoch ${holder.ref.epoch})`,
+      : `workflow ${address.workflowId} holds an ACTIVE coordinator session at epoch ${holder.ref.epoch}`,
   ];
   const problem: RecoveryProblem = {
     component: "session",
@@ -3630,7 +3630,7 @@ function unresolvedOwnSession(address: SessionAddress, rows: readonly SessionRow
     needed:
       holder === undefined
         ? `a binding this identity can resume: bind coordinator session ${address.sessionId} to workflow ${address.workflowId}`
-        : `the stop/recovery decision for the live coordinator ${holder.ref.sessionId}: the named coordinator recovery with ` +
+        : `the stop/recovery decision for the live coordinator: the named coordinator recovery with ` +
           `stop evidence for that holder`,
     withheldEffect:
       `only this identity's own session binding and reference \u2014 no row was written, and the coordinator scope of ` +
@@ -3651,7 +3651,7 @@ function unresolvedOwnSession(address: SessionAddress, rows: readonly SessionRow
     workflow_id: address.workflowId,
     role: address.role,
     session_id: address.sessionId,
-    ...(holder === undefined ? {} : { holder: holder.ref.sessionId }),
+    ...(holder === undefined ? {} : { holder_epoch: holder.ref.epoch }),
     sources_tried: problem.sourcesTried,
     current_facts: problem.currentFacts,
     available_work: problem.availableWork,

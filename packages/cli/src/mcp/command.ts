@@ -47,13 +47,14 @@ export function registerMcpCommand(program: Command): void {
     )
     .option(
       "--trust-caller-session-id",
-      "deprecated no-op: caller-declared `sessionId` is always admitted now, so this flag changes nothing. It stays accepted so a launcher row published before that change (e.g. an older omp `mcp.json`) still starts this server instead of failing on an unknown option",
+      "DANGEROUS, default OFF: trust a caller-declared `sessionId` as an execution identity on this connection. An MCP server is a child process with no host-proven caller identity, so the default connection publishes no session selector and refuses a supplied one; enabling this lets any caller that knows a live coordinator session id act as it. Enable it only for a deployment whose callers are already authenticated by a channel this server owns. The host-proven routes stay available either way: the dsh native tools (plan bind, audit report validation, execution clear) and the CLI",
     )
     .action(async (options: McpCommandOptions) => {
       await serveMcpStdio({
         harnessRoot: options.harness,
         workspace: options.workspace,
         ...(options.seat === undefined ? {} : { seat: options.seat as McpSeat }),
+        ...(options.trustCallerSessionId === true ? { trustCallerSessionId: true } : {}),
       });
     });
 }

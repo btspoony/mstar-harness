@@ -149,6 +149,15 @@ export interface McpStdioOptions {
    * its writable subset instead of having no route at all.
    */
   seat?: McpSeat;
+  /**
+   * Explicit opt-in: trust a caller-declared `sessionId` as an execution
+   * identity (`--trust-caller-session-id`, off by default). An MCP server is a
+   * child process with no host-proven caller identity, so accepting the value
+   * lets any caller address another session's coordinator row. Leave it unset
+   * on a shared connection; the dsh native tools and the CLI are the
+   * host-proven routes.
+   */
+  trustCallerSessionId?: boolean;
 }
 
 /**
@@ -173,7 +182,7 @@ function declaredRoot(options: McpStdioOptions): string | undefined {
 /**
  * Build the stdio context resolver for one launch. The exported `resolveContext`
  * below is this factory with no options: a generic shared connection that
- * declares no root and holds no identity of its own.
+ * declares no root and carries no identity.
  *
  * Root selection is one ordered rule, and the launch cwd is never a candidate:
  *
@@ -256,6 +265,13 @@ export function createContextResolver(options: McpStdioOptions = {}): ResolveCon
   // an unpinned connection, where the caller must name the root on every call.
   Object.defineProperty(resolver, "defaultHarness", {
     get: () => pinned,
+    enumerable: true,
+  });
+  // Registration reads this to decide whether the per-call `sessionId`
+  // selector exists at all. A construction-time snapshot is right here: the
+  // opt-in is a launch flag, not a mutable fact.
+  Object.defineProperty(resolver, "callerIdentity", {
+    value: options.trustCallerSessionId === true,
     enumerable: true,
   });
   return resolver;
