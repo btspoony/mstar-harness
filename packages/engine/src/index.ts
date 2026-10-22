@@ -886,6 +886,20 @@ export {
   resolveExecutionReadRoute,
   withStoreRead,
 } from "./store-read.js";
+// Dashboard view layer: the generic request half of the dashboard read
+// transport -- a view name becomes validated `DashboardFilters`, then one
+// `withStoreRead` envelope. It carries no transport knowledge, so the CLI's
+// loopback HTTP server and the dsh panel endpoint each keep their own argument
+// surface and call this one implementation, which makes the refusal messages
+// and the read-boundary semantics identical for both. ADDITIVE export.
+export {
+  MAX_DASHBOARD_SEARCH_LENGTH,
+  dashboardFailure,
+  dashboardFilters,
+  readDashboardView,
+  refuse,
+  requireSafeId,
+} from "./dashboard-view.js";
 // Read-only migration planner plus the staged apply/receipt/replay half: the
 // migration transport of the store migration protocol (issue contract §7). It
 // enumerates the legacy residual registers through the configured project
