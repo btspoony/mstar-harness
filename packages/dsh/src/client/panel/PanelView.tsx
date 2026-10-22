@@ -110,6 +110,40 @@ function sessionCwd(useSessions: UseSessions | undefined, sessionId: SessionId |
   return typeof cwd === 'string' && cwd !== '' ? cwd : null
 }
 
+/**
+ * The "no harness" card: a CENTERED inactive-state card (glyph + main copy +
+ * hint) for the one situation where there is nothing to read — the workspace
+ * declares no resolvable `{HARNESS_DIR}`. Rendered by BOTH the `no-harness`
+ * view state (no snapshot) and an `ok` snapshot that reports no harness
+ * directory, so the two paths can never drift apart.
+ */
+function NoHarnessCard({ t }: { t: TranslateNS<'mstar-panel'> }) {
+  return (
+    <div className={css.noHarnessCard} data-mstar-empty-card>
+      <svg
+        className={css.noHarnessIcon}
+        data-mstar-empty-icon
+        width="32"
+        height="32"
+        viewBox="0 0 24 24"
+        fill="none"
+        stroke="currentColor"
+        strokeWidth="1.5"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+        aria-hidden="true"
+      >
+        {/* Muted folder glyph — the harness directory is not detected. */}
+        <path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z" />
+        <path d="M9.7 9.4a2.4 2 0 1 1 3.4 2.2c-.7.3-1 .8-1 1.5" />
+        <circle cx="12" cy="16.4" r="0.6" />
+      </svg>
+      <p className={css.noHarnessTitle} data-mstar-empty="no-harness">{t('empty.no-harness')}</p>
+      <p className={css.noHarnessHint}>{t('empty.no-harness-hint')}</p>
+    </div>
+  )
+}
+
 export function PanelView(props: MstarPanelBodyProps) {
   const { t, useSessions, sessionId, picker, panelSnapshot, useTabInfo, useStore, actions } = props
   const tabInfo = useTabInfo()
@@ -143,6 +177,16 @@ export function PanelView(props: MstarPanelBodyProps) {
     return (
       <div className={css.emptyRoot} data-mstar-panel="waiting">
         <p className={css.empty} data-mstar-empty="waiting">{t('empty.waiting')}</p>
+      </div>
+    )
+  }
+  if (snapshotView.state === 'no-harness') {
+    // No harness root resolved: its own state and card — never a wire reason.
+    return (
+      <div className={css.root} data-mstar-panel="no-harness">
+        <div className={css.scroll} data-mstar-scroll data-mstar-graph>
+          <NoHarnessCard t={t} />
+        </div>
       </div>
     )
   }
@@ -188,34 +232,12 @@ export function PanelView(props: MstarPanelBodyProps) {
     </footer>
   )
   if (snapshot.harnessDir === null) {
-    // No harness → no tabs / no digest / no meta dock: a CENTERED inactive-state
-    // card (icon + main copy + hint) with the freshness footer, in the shell's
-    // single scroll zone.
+    // An `ok` snapshot whose harness directory is absent still renders the
+    // dedicated card (the store normally answers the `no-harness` kind instead).
     return (
       <div className={css.root} data-mstar-panel="no-harness">
         <div className={css.scroll} data-mstar-scroll data-mstar-graph>
-          <div className={css.noHarnessCard} data-mstar-empty-card>
-            <svg
-              className={css.noHarnessIcon}
-              data-mstar-empty-icon
-              width="32"
-              height="32"
-              viewBox="0 0 24 24"
-              fill="none"
-              stroke="currentColor"
-              strokeWidth="1.5"
-              strokeLinecap="round"
-              strokeLinejoin="round"
-              aria-hidden="true"
-            >
-              {/* Muted folder glyph — the harness directory is not detected. */}
-              <path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z" />
-              <path d="M9.7 9.4a2.4 2.4 0 1 1 3.4 2.2c-.7.3-1 .8-1 1.5" />
-              <circle cx="12" cy="16.4" r="0.6" />
-            </svg>
-            <p className={css.noHarnessTitle} data-mstar-empty="no-harness">{t('empty.no-harness')}</p>
-            <p className={css.noHarnessHint}>{t('empty.no-harness-hint')}</p>
-          </div>
+          <NoHarnessCard t={t} />
           {freshness}
         </div>
       </div>

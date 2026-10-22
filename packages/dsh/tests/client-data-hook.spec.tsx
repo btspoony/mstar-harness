@@ -129,7 +129,9 @@ describe('useMstarPanelSnapshot — visibility-gated polling (T4)', () => {
 
     render(seats(client))
     await settle()
-    expect(gateway.calls).toHaveLength(1)
+    // Under a loaded event loop the 5 ms interval can already have ticked again,
+    // so this counts "at least the first read", not "exactly one".
+    expect(gateway.calls.length).toBeGreaterThanOrEqual(1)
     expect(render(seats(client)).state).toBe('ok')
 
     // The poll is self-chained on completion: a few intervals produce more reads.
@@ -193,6 +195,116 @@ describe('useMstarPanelSnapshot — visibility-gated polling (T4)', () => {
     if (after.state !== 'unavailable') throw new Error('expected unavailable')
     expect(after.reason).toBe('the gateway is unreachable')
     expect(after.snapshot).toBeNull()
+  })
+})
+
+/**
+ * The in-flight guard (QC round 1, F2): a refresh demanded DURING a request
+ * must survive it. Dropping the demand left the panel with no timer and no
+ * request — frozen on a snapshot it should no longer show.
+ */
+describe('useMstarPanelSnapshot — the in-flight guard never swallows a refresh (F2)', () => {
+  /** A gateway whose FIRST answer hangs until the spec releases it. */
+  function heldGateway(firstAnswer: { resolve(value: unknown): void }): ReturnType<typeof stubGateway> {
+    const gateway = stubGateway()
+    let calls = 0
+    gateway.replyWith(() => {
+      calls += 1
+      return calls === 1
+        ? new Promise((resolve) => { firstAnswer.resolve = resolve })
+        : gatewayOk(readOk(snapshot('2026-10-22T02:00:00.000Z')))
+    })
+    return gateway
+  }
+
+  it('(a) a refresh demanded during a read is served on settle (collapse → expand)', async () => {
+    const hold: { resolve(value: unknown): void } = { resolve: () => {} }
+    const gateway = heldGateway(hold)
+    const client = clientOf(gateway.connection, { pollIntervalMs: 60_000 })
+
+    // Read #1 goes out and stays in flight.
+    render(seats(client))
+    await settle()
+    expect(gateway.calls).toHaveLength(1)
+
+    // The sidebar collapses and expands in one tap: stop() → start().
+    client.stop()
+    render(seats(client, { visible: false }))
+    render(seats(client))
+    await settle()
+    // The guard kept the second demand from stacking a request…
+    expect(gateway.calls).toHaveLength(1)
+
+    // …and read #1 now lands on a STALE target: discarded, but it must not
+    // take the demanded refresh with it.
+    hold.resolve(gatewayOk(readOk(snapshot('2026-10-22T02:00:00.000Z'))))
+    await settle()
+    expect(gateway.calls).toHaveLength(2)
+
+    // And the panel is live again: the new answer is rendered.
+    const view = render(seats(client))
+    expect(view.state).toBe('ok')
+    if (view.state !== 'ok') throw new Error('expected ok')
+    expect(view.snapshot.at).toBe('2026-10-22T02:00:00.000Z')
+  })
+
+  it('(b) a session switch mid-read asks for the NEW target and never renders the old data', async () => {
+    const mine = snapshot('2026-10-22T01:00:00.000Z')
+    const other = snapshot('2026-10-22T02:00:00.000Z')
+    const hold: { resolve(value: unknown): void } = { resolve: () => {} }
+    const gateway = stubGateway()
+    let phase = 0
+    gateway.replyWith(() => {
+      phase += 1
+      if (phase === 1) return gatewayOk(readOk(mine))
+      if (phase === 2) return new Promise((resolve) => { hold.resolve = resolve })
+      return gatewayOk(readOk(other))
+    })
+    const client = clientOf(gateway.connection, { pollIntervalMs: 60_000 })
+
+    // Session A's workspace renders.
+    render(seats(client))
+    await settle()
+    expect(render(seats(client)).state).toBe('ok')
+
+    // A second read (session A) hangs.
+    client.invalidate()
+    await settle()
+    expect(gateway.calls).toHaveLength(2)
+
+    // The tab now belongs to session B while read #2 is still out.
+    render(seats(client, { sessionId: 's-2' }))
+    await settle()
+    // The previous session's snapshot is NOT renderable: the view was reset.
+    const during = client.getSnapshot()
+    expect(during.state).toBe('loading')
+    if (during.state !== 'loading') throw new Error('expected loading')
+    expect(during.previous).toBeNull()
+
+    // Read #2 lands for the OLD target: discarded, and the refresh it blocked
+    // is issued for session B.
+    hold.resolve(gatewayOk(readOk(mine)))
+    await settle()
+
+    expect(gateway.calls).toHaveLength(3)
+    expect(gateway.calls[2]!.payload).toEqual({ args: { sessionId: 's-2', cwd: SESSION_CWD } })
+    const view = render(seats(client, { sessionId: 's-2' }))
+    expect(view.state).toBe('ok')
+    if (view.state !== 'ok') throw new Error('expected ok')
+    expect(view.snapshot.at).toBe(other.at)
+  })
+})
+
+describe('useMstarPanelSnapshot — no harness is its own state (F3)', () => {
+  it('a no-harness answer renders no-harness, never an unavailable reason token', async () => {
+    const gateway = stubGateway(gatewayOk({ kind: 'no-harness' }))
+    const client = clientOf(gateway.connection, { pollIntervalMs: 0 })
+
+    render(seats(client))
+    await settle()
+    const view = render(seats(client))
+    expect(view.state).toBe('no-harness')
+    expect(view.snapshot).toBeNull()
   })
 })
 

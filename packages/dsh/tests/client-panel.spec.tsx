@@ -17,9 +17,16 @@
  */
 
 import { describe, expect, it } from 'bun:test'
+import { Context } from '@deepseek-ai/cordis'
 import { createElement } from 'react'
 import { renderToStaticMarkup } from 'react-dom/server'
 import type { TranslateNS } from '@deepseek-ai/dsh-client-ui-slots'
+import type { LocaleRuntime } from '@deepseek-ai/dsh-client-locale/client'
+import { clientExports } from './client-bundles.ts'
+import { bindUseSessions, gatewayOk, SESSION, settleRender, stubGateway, visibleTabKit } from './gateway-stub.ts'
+import { en, NS, zh } from '../src/client/panel/locale.ts'
+import { MstarPanelSnapshotClient } from '../src/client/panel/panel-snapshot-client.ts'
+import { PanelView } from '../src/client/panel/PanelView.tsx'
 import type { PanelSnapshot } from '../src/panel/panel-snapshot.ts'
 import { projectGraph } from '../src/client/panel/graph/project-graph.ts'
 import { EventLogPage } from '../src/client/panel/pages/EventLogPage.tsx'
@@ -228,5 +235,42 @@ describe('section routing (T6)', () => {
     expect(html(createElement(PanelContent, { section: 'events', view: projectGraph(degraded), t }))).toContain('data-event-log-ledger')
     // The tasks page keeps rendering its board from the workspace DTOs.
     expect(html(createElement(PanelContent, { section: 'tasks', view: projectGraph(degraded), t }))).toContain('data-mstar-page="tasks"')
+  })
+})
+
+/* ------------------------------- 5. no-harness (F3) ------------------------------- */
+
+type LocaleClientExports = typeof import('@deepseek-ai/dsh-client-locale/client')
+const { LocaleRuntime: LocaleRuntimeCtor } = clientExports('@deepseek-ai/dsh-client-locale') as unknown as
+  Pick<LocaleClientExports, 'LocaleRuntime'>
+
+describe('panel — no harness is its own render (F3)', () => {
+  it('a no-harness answer renders data-mstar-panel="no-harness" with the locale copy', async () => {
+    const locale: LocaleRuntime = new LocaleRuntimeCtor(new Context())
+    locale.register(NS, { zh, en })
+    locale.setLocale('en')
+    const gateway = stubGateway(gatewayOk({ kind: 'no-harness' }))
+    const client = new MstarPanelSnapshotClient(gateway.connection, { pollIntervalMs: 0 })
+    const kit = visibleTabKit()
+    const seats = {
+      sessionId: SESSION,
+      useSessions: bindUseSessions(),
+      t: locale.bind(NS),
+      panelSnapshot: client,
+      ...kit,
+    }
+    const markup = await settleRender(() => renderToStaticMarkup(createElement(PanelView, seats as never)))
+    client.dispose()
+
+    // Its OWN state and card…
+    expect(markup).toContain('data-mstar-panel="no-harness"')
+    expect(markup).toContain('data-mstar-empty="no-harness"')
+    // …with the localized copy, NOT the wire token that used to leak.
+    expect(markup).toContain(en['empty.no-harness'])
+    expect(markup).toContain(en['empty.no-harness-hint'])
+    expect(markup).not.toContain('no-harness-dir')
+    // The no-harness card renders no tabs, no digest and no meta dock.
+    expect(markup).not.toContain('data-mstar-tab-nav')
+    expect(markup).not.toContain('data-mstar-meta')
   })
 })

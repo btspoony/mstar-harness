@@ -37,7 +37,13 @@
  *   (`dispatch` / `settle` / `violation`) plus the ledger kind verbatim.
  */
 
-import type { PanelSnapshot } from '../../../panel/panel-snapshot.ts'
+import type { PanelSnapshot, PanelWorkspaceView } from '../../../panel/panel-snapshot.ts'
+import type { IterationPlanDTO, WorkflowPlanDTO } from '@mstar-harness/engine'
+import type {
+  AgentFlowContinuationEventView,
+  AgentFlowEventView,
+  IterationGateViolationView,
+} from '../../../types.ts'
 import { bool, count, str } from '../guards.ts'
 import { PLAN_CAP, sortPlans } from '../plan-sort.ts'
 import {
@@ -230,33 +236,40 @@ export interface ZoneView {
 
 /* ------------------------------ projection helpers ------------------------------ */
 
-/** Structural view of one workspace member (`{state, data}` / `{state, reason}`). */
-interface WorkspaceMember {
-  state: 'ok' | 'not-applicable' | 'unavailable'
-  data: unknown
-  reason: string | null
+/*
+ * The snapshot members are read through their DECLARED types (`PanelSnapshot`'s
+ * own members, `PanelWorkspaceView<T>`), never through a stringly-keyed record:
+ * a member rename is a compile error here instead of a silent `undefined`. The
+ * unknown-byte convergence lives at the wire parse boundary
+ * (`parsePanelSnapshotRead`) and, below, in the FIELD guards on a DTO's own
+ * members — a host that leaves a field out still degrades that field, never the
+ * panel.
+ */
+
+/** A workspace read's state; a MISSING member reads as `unavailable`. */
+function stateOf(view: PanelWorkspaceView<unknown> | null | undefined): 'ok' | 'not-applicable' | 'unavailable' {
+  return view === null || view === undefined ? 'unavailable' : view.state
 }
 
-/** Guarded read of one `workspace.*` member; a missing member is `unavailable`. */
-function memberOf(workspace: Record<string, unknown> | null, key: string): WorkspaceMember {
-  const raw = workspace?.[key] as { state?: unknown; data?: unknown; reason?: unknown } | null | undefined
-  if (raw === null || typeof raw !== 'object') return { state: 'unavailable', data: null, reason: 'missing-view' }
-  const state = raw.state === 'ok' || raw.state === 'not-applicable' || raw.state === 'unavailable'
-    ? raw.state
-    : 'unavailable'
-  return { state, data: state === 'ok' ? raw.data : null, reason: str(raw.reason) }
+/** The answered payload of one workspace read, or null when it did not answer. */
+function dataOf<T>(view: PanelWorkspaceView<T> | null | undefined): T | null {
+  return view !== null && view !== undefined && view.state === 'ok' ? view.data : null
 }
 
-/** The snapshot's workspace block (null when the snapshot itself is null). */
-function workspaceOf(snapshot: PanelSnapshot | null): Record<string, unknown> | null {
-  const workspace = (snapshot as { workspace?: unknown } | null | undefined)?.workspace
-  return workspace !== null && typeof workspace === 'object' ? workspace as Record<string, unknown> : null
+/** The store's own reason for a non-ok read; `missing-view` when the member is absent. */
+function reasonOf(view: PanelWorkspaceView<unknown> | null | undefined): string | null {
+  if (view === null || view === undefined) return 'missing-view'
+  return view.state === 'ok' ? null : str(view.reason) ?? ''
 }
 
-/** The snapshot's retained catalog facts (null-ish when absent). */
-function retainedOf(snapshot: PanelSnapshot | null): Record<string, unknown> | null {
-  const retained = (snapshot as { retained?: unknown } | null | undefined)?.retained
-  return retained !== null && typeof retained === 'object' ? retained as Record<string, unknown> : null
+/**
+ * The object rows of a WIRE-DERIVED array: a `null` hole is dropped, never
+ * dereferenced. The parse boundary validates the snapshot's envelope, not every
+ * element inside a DTO array, so an element can still be absent — the
+ * projection degrades it away instead of throwing.
+ */
+function rowsOf<T>(value: readonly (T | null | undefined)[] | null | undefined): T[] {
+  return Array.isArray(value) ? value.filter((row): row is T => row !== null && typeof row === 'object') : []
 }
 
 /** The default (unlit) iteration step — schema-only, evidence lights it later. */
@@ -271,16 +284,18 @@ interface PlanRow {
   doneAt: string | null
 }
 
-/** One guarded plan row from a workflow/iteration plan DTO. */
-function planRowOf(raw: unknown): PlanRow {
-  const row = raw as { planId?: unknown; id?: unknown; status?: unknown; doneAt?: unknown; execution?: unknown } | null | undefined
-  const execution = row?.execution as { status?: unknown; doneAt?: unknown } | null | undefined
+/**
+ * One plan row from a workflow or an iteration plan DTO. The two shapes differ:
+ * the workflow row carries `status`/`doneAt` itself, the iteration row nests
+ * them under `execution` (null = the plan never started).
+ */
+function planRowOf(row: WorkflowPlanDTO | IterationPlanDTO | null | undefined): PlanRow {
+  if (row === null || row === undefined) return { id: '', status: '', doneAt: null }
+  const execution = 'execution' in row ? row.execution : null
   return {
-    id: str(row?.planId) ?? str(row?.id) ?? '',
-    // The workflow DTO carries the status at the row; the iteration DTO nests
-    // it under `execution` (null = the plan never started).
-    status: str(row?.status) ?? str(execution?.status) ?? '',
-    doneAt: str(row?.doneAt) ?? str(execution?.doneAt),
+    id: str(row.planId) ?? '',
+    status: str('status' in row ? row.status : null) ?? str(execution?.status) ?? '',
+    doneAt: str('doneAt' in row ? row.doneAt : null) ?? str(execution?.doneAt),
   }
 }
 
@@ -298,12 +313,10 @@ function planBucket(status: string): PlanStateId {
 }
 
 /** The plan rows of the snapshot, plus whether the authority was readable at all. */
-function planRowsOf(workspace: Record<string, unknown> | null): { rows: PlanRow[]; readable: boolean } {
-  const workflow = memberOf(workspace, 'workflow')
-  const workflowPlans = (workflow.data as { plans?: unknown } | null | undefined)?.plans
+function planRowsOf(workspace: PanelSnapshot['workspace'] | null): { rows: PlanRow[]; readable: boolean } {
+  const workflowPlans = dataOf(workspace?.workflow)?.plans
   if (Array.isArray(workflowPlans)) return { rows: workflowPlans.map(planRowOf), readable: true }
-  const iteration = memberOf(workspace, 'iteration')
-  const iterationPlans = (iteration.data as { plans?: unknown } | null | undefined)?.plans
+  const iterationPlans = dataOf(workspace?.iteration)?.plans
   if (Array.isArray(iterationPlans)) return { rows: iterationPlans.map(planRowOf), readable: true }
   return { rows: [], readable: false }
 }
@@ -328,106 +341,116 @@ function badgeOf(ledgerKind: string): FlowEventKind {
   return ledgerKind === 'settle' ? 'settle' : 'dispatch'
 }
 
-/**
- * One guarded ledger row. Every field degrades individually; a row WITHOUT a
- * kind is unclassifiable and skipped (never guessed).
- */
-function flowEventOf(raw: unknown, index: number): FlowEventView | null {
-  const row = raw as {
-    ts?: unknown; kind?: unknown; role?: unknown; planId?: unknown; taskId?: unknown
-    taskCategory?: unknown; agent?: unknown; verdict?: unknown; outcome?: unknown; durationMs?: unknown
-    paired?: unknown; callId?: unknown
-    runId?: unknown; name?: unknown; seq?: unknown; label?: unknown; phase?: unknown; childId?: unknown
-    taskRef?: unknown; stopReason?: unknown; state?: unknown; reason?: unknown
-  } | null | undefined
-  const ledgerKind = str(row?.kind)
-  if (ledgerKind === null) return null
-  const ts = count(row?.ts) ?? 0
-  const role = str(row?.role) ?? ''
-  const callId = str(row?.callId)
-  const childId = str(row?.childId)
-  const taskRef = str(row?.taskRef)
-  const base = {
-    id: `${ts}-${ledgerKind}-${index}`,
+/** The shared prefix of every projected ledger row. */
+function flowBaseOf(
+  row: { readonly kind: string; readonly ts: number; readonly agent: string | null; readonly role: string; readonly planId: string | null; readonly taskId: string | null },
+  index: number,
+): Pick<FlowEventView, 'id' | 'ts' | 'kind' | 'ledgerKind' | 'role' | 'planId' | 'taskId' | 'agent'> {
+  const ts = count(row.ts) ?? 0
+  return {
+    id: `${ts}-${row.kind}-${index}`,
     ts,
-    kind: badgeOf(ledgerKind),
-    ledgerKind,
-    role,
-    planId: str(row?.planId),
-    taskId: str(row?.taskId),
-    agent: str(row?.agent),
-    ...(callId !== null ? { callId } : {}),
+    kind: badgeOf(row.kind),
+    ledgerKind: row.kind,
+    role: str(row.role) ?? '',
+    planId: str(row.planId),
+    taskId: str(row.taskId),
+    agent: str(row.agent),
   }
-  if (ledgerKind === 'dispatch') {
-    return {
-      ...base,
-      taskCategory: str(row?.taskCategory),
-      status: dispatchStatus(row?.verdict),
-      settled: false,
-      durationMs: count(row?.durationMs),
+}
+
+/**
+ * One ledger row of the dispatch / settle / link / workflow kinds. Every field
+ * degrades individually; a row without a readable kind is unclassifiable and
+ * skipped (never guessed).
+ */
+function flowEventOf(row: AgentFlowEventView | null | undefined, index: number): FlowEventView | null {
+  if (row === null || row === undefined) return null
+  if (str(row.kind) === null) return null
+  const base = flowBaseOf(row, index)
+  const childId = str(row.childId)
+  const taskRef = str(row.taskRef)
+  const callId = str(row.callId)
+  const withCall = callId === null ? {} : { callId }
+  switch (row.kind) {
+    case 'dispatch':
+      return {
+        ...base,
+        ...withCall,
+        taskCategory: str(row.taskCategory),
+        status: dispatchStatus(row.verdict),
+        settled: false,
+        durationMs: count(row.durationMs),
+      }
+    case 'settle':
+      return {
+        ...base,
+        ...withCall,
+        taskCategory: str(row.taskCategory),
+        status: settleStatus(row.outcome),
+        settled: false,
+        durationMs: count(row.durationMs),
+        ...(row.paired === true ? { paired: true } : {}),
+        ...(childId !== null ? { childId } : {}),
+        ...(taskRef !== null ? { taskRef } : {}),
+      }
+    case 'subagent-link':
+      return {
+        ...base,
+        ...withCall,
+        taskCategory: null,
+        status: 'unknown',
+        settled: false,
+        durationMs: null,
+        ...(childId !== null ? { childId } : {}),
+        ...(taskRef !== null ? { taskRef } : {}),
+      }
+    default: {
+      // The workflow kinds: a generic row with the run identity when carried.
+      const runId = str(row.runId)
+      const name = str(row.name)
+      const seq = count(row.seq)
+      const label = str(row.label)
+      const phase = str(row.phase)
+      const stopReason = str(row.stopReason)
+      return {
+        ...base,
+        ...withCall,
+        taskCategory: null,
+        status: 'unknown',
+        settled: false,
+        durationMs: null,
+        ...(runId !== null ? { runId } : {}),
+        ...(row.kind === 'workflow-run' && name !== null ? { name } : {}),
+        ...(row.kind === 'workflow-agent' ? {
+          ...(seq !== null ? { seq } : {}),
+          ...(label !== null ? { label } : {}),
+          ...(phase !== null ? { phase } : {}),
+          ...(childId !== null ? { childId } : {}),
+        } : {}),
+        ...(row.kind === 'workflow-run-end' && stopReason !== null ? { stopReason } : {}),
+      }
     }
   }
-  if (ledgerKind === 'settle') {
-    return {
-      ...base,
-      taskCategory: str(row?.taskCategory),
-      status: settleStatus(row?.outcome),
-      settled: false,
-      durationMs: count(row?.durationMs),
-      ...(row?.paired === true ? { paired: true } : {}),
-      ...(childId !== null ? { childId } : {}),
-      ...(taskRef !== null ? { taskRef } : {}),
-    }
-  }
-  if (ledgerKind === 'subagent-link') {
-    return {
-      ...base,
-      taskCategory: null,
-      status: 'unknown',
-      settled: false,
-      durationMs: null,
-      ...(childId !== null ? { childId } : {}),
-      ...(taskRef !== null ? { taskRef } : {}),
-    }
-  }
-  if (ledgerKind === 'continuation') {
-    const continuationState = str(row?.state)
-    const reason = str(row?.reason)
-    return {
-      ...base,
-      taskCategory: null,
-      status: 'unknown',
-      settled: false,
-      durationMs: null,
-      ...(continuationState === 'unresolved' ? { state: 'unresolved' as const } : {}),
-      ...(reason !== null ? { reason } : {}),
-    }
-  }
-  // Workflow kinds + unknown kinds: a generic row with the run identity when carried.
-  const runId = str(row?.runId)
-  const name = str(row?.name)
-  const seq = count(row?.seq)
-  const label = str(row?.label)
-  const phase = str(row?.phase)
-  const stopReason = str(row?.stopReason)
+}
+
+/**
+ * One unresolved-continuation row (`continuation`): a NONTERMINAL marker, so it
+ * carries no verdict, no duration and no settle state.
+ */
+function continuationEventOf(row: AgentFlowContinuationEventView, index: number): FlowEventView {
+  const base = flowBaseOf(row, index)
+  const callId = str(row.callId)
+  const reason = str(row.reason)
   return {
     ...base,
-    role: '',
-    planId: null,
-    taskId: null,
+    ...(callId !== null ? { callId } : {}),
     taskCategory: null,
     status: 'unknown',
     settled: false,
     durationMs: null,
-    ...(runId !== null ? { runId } : {}),
-    ...(ledgerKind === 'workflow-run' && name !== null ? { name } : {}),
-    ...(ledgerKind === 'workflow-agent' ? {
-      ...(seq !== null ? { seq } : {}),
-      ...(label !== null ? { label } : {}),
-      ...(phase !== null ? { phase } : {}),
-      ...(childId !== null ? { childId } : {}),
-    } : {}),
-    ...(ledgerKind === 'workflow-run-end' && stopReason !== null ? { stopReason } : {}),
+    state: 'unresolved',
+    ...(reason !== null ? { reason } : {}),
   }
 }
 
@@ -467,9 +490,8 @@ export function pairSettleIndexes(rows: readonly PairingRow[]): ReadonlySet<numb
   return record
 }
 
-/** One guarded gate violation row. */
-function violationEventOf(raw: unknown, index: number): FlowEventView {
-  const row = raw as { severity?: unknown; code?: unknown; message?: unknown } | null | undefined
+/** One gate violation row; a missing field degrades to the 「—」 seat. */
+function violationEventOf(row: IterationGateViolationView | null | undefined, index: number): FlowEventView {
   return {
     id: `violation-${index}`,
     // A gate violation carries no timestamp: 0 renders「—」, never a made-up time.
@@ -496,22 +518,22 @@ function violationEventOf(raw: unknown, index: number): FlowEventView {
  * sort last — the order never invents one.
  */
 function projectEvents(snapshot: PanelSnapshot | null): { events: FlowEventView[]; degraded: boolean } {
-  const ledger = (snapshot as { ledger?: unknown } | null | undefined)?.ledger as { events?: unknown } | null | undefined
-  const rawEvents = ledger !== null && typeof ledger === 'object' ? ledger.events : null
-  const degraded = !Array.isArray(rawEvents)
+  const ledger = snapshot?.ledger ?? null
+  // Absent ledger = the read did not answer. An EMPTY ledger is data.
+  const degraded = ledger === null
   const events: FlowEventView[] = []
-  if (Array.isArray(rawEvents)) {
-    const windowed = rawEvents.slice(0, FLOW_EVENT_WINDOW)
+  if (ledger !== null) {
+    const windowed = ledger.events.slice(0, FLOW_EVENT_WINDOW)
     // Pre-count the member rows per runId so the workflow-run row can carry it.
     const memberCounts = new Map<string, number>()
-    for (const raw of windowed) {
-      const row = raw as { kind?: unknown; runId?: unknown } | null | undefined
-      if (row?.kind !== 'workflow-agent') continue
+    for (const row of windowed) {
+      if (row === null || typeof row !== 'object' || row.kind !== 'workflow-agent') continue
       const runId = str(row.runId)
       if (runId !== null) memberCounts.set(runId, (memberCounts.get(runId) ?? 0) + 1)
     }
-    windowed.forEach((raw, i) => {
-      const view = flowEventOf(raw, i)
+    windowed.forEach((row, i) => {
+      if (row === null || typeof row !== 'object') return
+      const view = row.kind === 'continuation' ? continuationEventOf(row, i) : flowEventOf(row, i)
       if (view === null) return
       const runId = view.runId
       const members = runId === undefined ? undefined : memberCounts.get(runId)
@@ -530,11 +552,9 @@ function projectEvents(snapshot: PanelSnapshot | null): { events: FlowEventView[
     })))
     for (const i of paired) events[i]!.settled = true
   }
-  const gate = retainedOf(snapshot)?.iterationGate as { gate?: { violations?: unknown } } | null | undefined
-  const rawViolations = gate?.gate?.violations
-  if (Array.isArray(rawViolations)) {
-    rawViolations.forEach((raw, i) => events.push(violationEventOf(raw, i)))
-  }
+  // The gate's own violations join the SAME flow.
+  rowsOf(snapshot?.retained.iterationGate?.gate.violations)
+    .forEach((violation, i) => events.push(violationEventOf(violation, i)))
   // Time-descending across all three kinds (violations, ts 0, stay last).
   events.sort((a, b) => b.ts - a.ts)
   return { events, degraded }
@@ -542,80 +562,59 @@ function projectEvents(snapshot: PanelSnapshot | null): { events: FlowEventView[
 
 /* ---------------------------------- roadmap projection ---------------------------------- */
 
-/** Guarded string array access. */
-function listOf(value: unknown): unknown[] {
-  return Array.isArray(value) ? value : []
-}
-
 /** The roadmap zone: three read states, plus the two `ok` sub-states. */
 function projectRoadmap(snapshot: PanelSnapshot | null): RoadmapZoneView {
-  const workspace = workspaceOf(snapshot)
-  const view = memberOf(workspace, 'roadmap')
+  const view = snapshot?.workspace.roadmap
   const empty = { present: false, direction: null, goals: [], milestones: [], unassignedIssues: 0 }
-  if (view.state === 'not-applicable') {
-    return { ...empty, state: 'not-applicable', reason: view.reason }
+  if (stateOf(view) === 'not-applicable') {
+    return { ...empty, state: 'not-applicable', reason: reasonOf(view) }
   }
-  if (view.state === 'unavailable') {
-    return { ...empty, state: 'unavailable', reason: view.reason }
+  if (stateOf(view) !== 'ok') {
+    return { ...empty, state: 'unavailable', reason: reasonOf(view) }
   }
-  const dto = view.data as {
-    content?: { direction?: unknown; goals?: unknown } | null
-    milestones?: { milestones?: unknown; issues?: unknown; unassignedIssues?: unknown } | null
-  } | null | undefined
-  if (dto === null || typeof dto !== 'object') {
+  const dto = dataOf(view)
+  if (dto === null) {
     // `ok` with `data: null` — the authority has no roadmap row for the project.
     return { ...empty, state: 'ok', reason: null }
   }
-  const content = dto.content as { direction?: unknown; goals?: unknown } | null | undefined
-  const direction = str(content?.direction)
-  const goals: RoadmapGoalView[] = listOf(content?.goals).map((raw) => {
-    const goal = raw as { ordinal?: unknown; parentOrdinal?: unknown; checked?: unknown; title?: unknown } | null | undefined
-    return {
-      ordinal: count(goal?.ordinal) ?? 0,
-      parentOrdinal: count(goal?.parentOrdinal),
-      checked: bool(goal?.checked) ?? false,
-      title: str(goal?.title) ?? '',
-    }
-  })
+  // A content-less roadmap is a SUPPORTED state (milestones without Markdown).
+  const content = dto.content
+  const direction = content === null ? null : str(content.direction)
+  const goals: RoadmapGoalView[] = rowsOf(content?.goals).map((goal) => ({
+    ordinal: count(goal.ordinal) ?? 0,
+    parentOrdinal: count(goal.parentOrdinal),
+    checked: bool(goal.checked) ?? false,
+    title: str(goal.title) ?? '',
+  }))
   // Issue severity lives on the issues view; the roadmap's milestone membership
   // carries only id/title/disposition, so the severity is joined by id.
   const issueRows = new Map<string, { severity: string; disposition: string }>()
-  const issuesMember = memberOf(workspace, 'issues')
-  const issueItems = (issuesMember.data as { items?: unknown } | null | undefined)?.items
-  for (const raw of listOf(issueItems)) {
-    const item = raw as { id?: unknown; severity?: unknown; disposition?: unknown } | null | undefined
-    const id = str(item?.id)
+  const issueItems = dataOf(snapshot?.workspace.issues)?.items
+  for (const item of rowsOf(issueItems)) {
+    const id = str(item.id)
     if (id === null) continue
-    issueRows.set(id, { severity: str(item?.severity) ?? '', disposition: str(item?.disposition) ?? '' })
+    issueRows.set(id, { severity: str(item.severity) ?? '', disposition: str(item.disposition) ?? '' })
   }
-  const milestoneData = dto.milestones as { milestones?: unknown; issues?: unknown; unassignedIssues?: unknown } | null | undefined
+  const milestoneData = dto.milestones
   const milestoneIssues = new Map<string, RoadmapMilestoneIssueView[]>()
-  for (const raw of listOf(milestoneData?.issues)) {
-    const issue = raw as { id?: unknown; title?: unknown; milestoneId?: unknown; disposition?: unknown } | null | undefined
-    const id = str(issue?.id)
-    const milestoneId = str(issue?.milestoneId)
+  for (const issue of rowsOf(milestoneData?.issues)) {
+    const id = str(issue.id)
+    const milestoneId = str(issue.milestoneId)
     if (id === null || milestoneId === null) continue
-    const disposition = str(issue?.disposition) ?? ''
     // Membership is the OPEN issues of the milestone.
-    if (disposition !== 'open') continue
+    if ((str(issue.disposition) ?? '') !== 'open') continue
     const joined = issueRows.get(id)
-    const row = { id, title: str(issue?.title) ?? '', severity: joined?.severity ?? '' }
+    const row = { id, title: str(issue.title) ?? '', severity: joined?.severity ?? '' }
     const rows = milestoneIssues.get(milestoneId)
     if (rows === undefined) milestoneIssues.set(milestoneId, [row])
     else rows.push(row)
   }
-  const milestones: RoadmapMilestoneView[] = listOf(milestoneData?.milestones).map((raw) => {
-    const milestone = raw as {
-      milestoneId?: unknown; name?: unknown; target?: unknown; status?: unknown
-    } | null | undefined
-    const id = str(milestone?.milestoneId) ?? ''
-    return {
-      name: str(milestone?.name) ?? '',
-      target: str(milestone?.target),
-      status: str(milestone?.status),
-      issues: milestoneIssues.get(id) ?? [],
-    }
-  })
+  const milestones: RoadmapMilestoneView[] = rowsOf(milestoneData?.milestones).map((milestone) => ({
+    name: str(milestone.name) ?? '',
+    target: str(milestone.target),
+    status: str(milestone.status),
+    issues: milestoneIssues.get(str(milestone.milestoneId) ?? '') ?? [],
+  }))
   return {
     state: 'ok',
     present: true,
@@ -631,7 +630,6 @@ function projectRoadmap(snapshot: PanelSnapshot | null): RoadmapZoneView {
 
 /** The additive rollup: milestone names, the roadmap source verdict and open-issue severity counts. */
 function projectRollup(snapshot: PanelSnapshot | null, roadmap: RoadmapZoneView): ProjectRollupZoneView {
-  const workspace = workspaceOf(snapshot)
   const milestones = roadmap.state === 'ok' ? roadmap.milestones.map((m) => m.name).filter((name) => name !== '') : []
   // The roadmap source verdict, from the same read state the roadmap zone uses.
   const roadmapSource: RoadmapSourceView = roadmap.state === 'unavailable'
@@ -640,12 +638,11 @@ function projectRollup(snapshot: PanelSnapshot | null, roadmap: RoadmapZoneView)
       ? { kind: 'absent', absentProjectIds: [], diagnostic: null }
       : { kind: 'present', absentProjectIds: [], diagnostic: null }
   // Open issues by severity, from the issues view (zero-count severities omitted).
-  const issues = memberOf(workspace, 'issues').data as { items?: unknown } | null | undefined
+  const issueItems = dataOf(snapshot?.workspace.issues)?.items
   const counts = new Map<string, number>()
-  for (const raw of listOf(issues?.items)) {
-    const item = raw as { severity?: unknown; disposition?: unknown } | null | undefined
-    if ((str(item?.disposition) ?? '') !== 'open') continue
-    const severity = str(item?.severity) ?? 'unknown'
+  for (const item of rowsOf(issueItems)) {
+    if ((str(item.disposition) ?? '') !== 'open') continue
+    const severity = str(item.severity) ?? 'unknown'
     counts.set(severity, (counts.get(severity) ?? 0) + 1)
   }
   const openResiduals = Array.from(counts, ([severity, count]) => ({ severity, count }))
@@ -656,8 +653,7 @@ function projectRollup(snapshot: PanelSnapshot | null, roadmap: RoadmapZoneView)
 /* ---------------------------------- projectGraph ---------------------------------- */
 
 export function projectGraph(snapshot: PanelSnapshot | null): ZoneView {
-  const workspace = workspaceOf(snapshot)
-  const retained = retainedOf(snapshot)
+  const workspace = snapshot === null ? null : snapshot.workspace
   const degraded = { iteration: false, state: false, plans: false, ledger: false }
 
   // --- iteration zone: the gate transition lights the 5-step skeleton ---
@@ -669,18 +665,14 @@ export function projectGraph(snapshot: PanelSnapshot | null): ZoneView {
   let violationCount: number | null = null
   let branches: ZoneView['iteration']['branches'] = null
 
-  const gateView = retained?.iterationGate as {
-    iterationId?: unknown
-    compassStatus?: unknown
-    gate?: { transition?: unknown; ok?: unknown; violations?: unknown } | null
-  } | null | undefined
-  const gate = gateView?.gate
-  const transition = gate !== null && typeof gate === 'object' ? str(gate.transition) : null
+  const gateView = snapshot?.retained.iterationGate ?? null
+  const gate = gateView?.gate ?? null
+  const transition = gate === null ? null : str(gate.transition)
   const phaseId = transition === null || !Object.hasOwn(TRANSITION_TO_PHASE, transition)
     ? undefined
     : TRANSITION_TO_PHASE[transition]
   iterationId = str(gateView?.iterationId)
-    ?? str((memberOf(workspace, 'iteration').data as { iterationId?: unknown } | null | undefined)?.iterationId)
+    ?? str(dataOf(snapshot?.workspace.iteration)?.iterationId)
   if (phaseId !== undefined) {
     active = true
     const phaseIndex = PHASE_IDS.indexOf(phaseId)
@@ -698,21 +690,20 @@ export function projectGraph(snapshot: PanelSnapshot | null): ZoneView {
       current.state = 'current'
       // Completed steps must not read as idle while a later one is current.
       for (let i = 0; i < phaseIndex; i++) steps[i]!.state = 'done'
-      const ok = gate !== null && typeof gate === 'object' ? bool(gate.ok) : null
+      const ok = gate === null ? null : bool(gate.ok)
       current.verdict = ok === null ? 'unknown' : ok ? 'pass' : 'fail'
-      const rawViolations = gate !== null && typeof gate === 'object' && Array.isArray(gate.violations) ? gate.violations : null
-      violationCount = rawViolations === null ? null : rawViolations.length
+      const violations = gate !== null && Array.isArray(gate.violations) ? gate.violations : null
+      violationCount = violations === null ? null : violations.length
       verdict = current.verdict
       const forward = PHASE_EDGES.find((e) => e.source === phaseId && e.kind === 'forward')
       if (forward !== undefined) steps[PHASE_IDS.indexOf(forward.target)]!.state = 'next'
     }
     // Branch anchors come from the workflow DTO; projected only while active.
-    const branch = (memberOf(workspace, 'workflow').data as { branch?: unknown } | null | undefined)?.branch as
-      { base?: unknown; source?: unknown; integration?: unknown; target?: unknown } | null | undefined
+    const branch = dataOf(snapshot?.workspace.workflow)?.branch ?? null
     branches = {
       iterationBase: str(branch?.base),
       target: str(branch?.target),
-      specIntegration: str(branch?.integration ?? branch?.source),
+      specIntegration: str(branch?.integration) ?? str(branch?.source),
     }
   }
   degraded.iteration = !active
@@ -743,9 +734,7 @@ export function projectGraph(snapshot: PanelSnapshot | null): ZoneView {
 
   // `state` degrades when NEITHER workspace authority could be read (a global
   // absence); one failed view never blanks the others.
-  const workflowState = memberOf(workspace, 'workflow').state
-  const iterationState = memberOf(workspace, 'iteration').state
-  degraded.state = workflowState !== 'ok' && iterationState !== 'ok'
+  degraded.state = stateOf(workspace?.workflow) !== 'ok' && stateOf(workspace?.iteration) !== 'ok'
 
   const roadmap = projectRoadmap(snapshot)
   const project = projectRollup(snapshot, roadmap)

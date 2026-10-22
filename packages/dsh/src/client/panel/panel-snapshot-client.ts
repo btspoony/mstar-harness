@@ -12,8 +12,10 @@
  * THE POLL CONTRACT (this is the panel's ONE refresh mechanism):
  * - a request is issued only while the panel is VISIBLE (`start()` /
  *   `stop()` are the visibility gate the hook drives);
- * - at most ONE request is in flight — a tick during a slow answer is a no-op,
- *   so a degraded gateway can never stack a queue of reads;
+ * - at most ONE request is in flight — a tick during a slow answer never stacks
+ *   a queue of reads, but it is NOT dropped either: the demand is remembered
+ *   and served the moment the request settles (a collapse→expand or a session
+ *   switch must not dead-end on a slow gateway);
  * - every answer REPLACES the view, and a failed fetch degrades to
  *   `unavailable` with a reason while the last good snapshot stays available
  *   as `loading`'s `previous` (the render keeps painting it — no flicker);
@@ -41,11 +43,16 @@ export { PANEL_SNAPSHOT_ENDPOINT }
 /**
  * The panel's view: a closed set — no shape can be both data and empty.
  * `loading` carries the last good snapshot so a refresh never blanks the panel.
+ *
+ * `no-harness` is ITS OWN state, not a failure: the workspace declares no
+ * resolvable `{HARNESS_DIR}`, so there is nothing to read. It renders the
+ * dedicated "no harness" card instead of a wire reason token.
  */
 export type MstarPanelView =
   | { readonly state: 'waiting'; readonly reason: null; readonly snapshot: null }
   | { readonly state: 'loading'; readonly previous: PanelSnapshot | null; readonly snapshot: null }
   | { readonly state: 'ok'; readonly snapshot: PanelSnapshot }
+  | { readonly state: 'no-harness'; readonly snapshot: null }
   | { readonly state: 'unavailable'; readonly reason: string; readonly snapshot: null }
 
 /** Stable `waiting` reference (referentially stable across renders). */
@@ -117,6 +124,9 @@ export function parsePanelSnapshotRead(value: unknown): PanelSnapshotRead {
     }
     return { kind: 'ok', snapshot: snapshot as PanelSnapshot }
   }
+  // No harness root resolved: its OWN kind, so the client renders the
+  // dedicated card rather than leaking a wire reason token into the UI.
+  if (row.kind === 'no-harness') return { kind: 'no-harness' }
   if (row.kind === 'unavailable') return { kind: 'unavailable', reason: str(row.reason) ?? 'malformed-answer' }
   return { kind: 'unavailable', reason: 'malformed-answer' }
 }
@@ -136,6 +146,8 @@ export class MstarPanelSnapshotClient {
   private target: PanelSnapshotTarget | null = null
   private timer: ReturnType<typeof setTimeout> | null = null
   private inFlight = false
+  /** A refresh was demanded while a request was in flight — served on settle. */
+  private pending = false
   private disposed = false
   /** The last `ok` snapshot — the `previous` a refresh keeps painting. */
   private lastOk: PanelSnapshot | null = null
@@ -165,25 +177,37 @@ export class MstarPanelSnapshotClient {
    * Begin polling `target` — idempotent, and a NO-OP for an unchanged target
    * (a re-render must not restart the interval). Called from the render path,
    * so it schedules its store write as a microtask instead of writing here.
+   *
+   * A target CHANGE drops the stored view before the read starts: the old
+   * snapshot is another session's workspace (or another session's selection)
+   * and must not stay renderable while the new read is out.
    */
   start(target: PanelSnapshotTarget): void {
-    if (this.disposed) return
-    const same = this.target !== null
+    if (this.disposed || this.sameTarget(target)) return
+    this.target = target
+    this.lastOk = null
+    this.clearTimer()
+    void Promise.resolve().then(() => {
+      if (this.disposed || this.target !== target) return
+      this.write({ state: 'loading', previous: null, snapshot: null })
+      void this.refresh()
+    })
+  }
+
+  /** Is `target` the one already being polled? */
+  private sameTarget(target: PanelSnapshotTarget): boolean {
+    return this.target !== null
       && this.target.sessionId === target.sessionId
       && this.target.cwd === target.cwd
       && this.target.workflowId === target.workflowId
       && this.target.iterationId === target.iterationId
       && this.target.projectId === target.projectId
-    if (same) return
-    this.target = target
-    this.lastOk = null
-    this.clearTimer()
-    void Promise.resolve().then(() => { void this.refresh() })
   }
 
   /** Stop polling (the panel left the viewport). In-flight answers still land. */
   stop(): void {
     this.target = null
+    this.pending = false
     this.clearTimer()
   }
 
@@ -207,7 +231,16 @@ export class MstarPanelSnapshotClient {
 
   /** One poll tick / explicit refresh. Never stacks, never throws. */
   async refresh(): Promise<void> {
-    if (this.disposed || this.target === null || this.inFlight) return
+    if (this.disposed || this.target === null) return
+    if (this.inFlight) {
+      // The request already out may be the last one the transport gives us
+      // (a slow store, a hung gateway): REMEMBER the demand and serve it on
+      // settle instead of dropping it. Dropping it is what froze the panel
+      // after a collapse→expand, because the settle path then found a
+      // different target and rescheduled nothing.
+      this.pending = true
+      return
+    }
     this.inFlight = true
     const target = this.target
     this.write(this.lastOk === null
@@ -219,6 +252,8 @@ export class MstarPanelSnapshotClient {
       if (read.kind === 'ok') {
         this.lastOk = read.snapshot
         this.write({ state: 'ok', snapshot: read.snapshot })
+      } else if (read.kind === 'no-harness') {
+        this.write({ state: 'no-harness', snapshot: null })
       } else {
         this.write({ state: 'unavailable', reason: read.reason, snapshot: null })
       }
@@ -228,7 +263,17 @@ export class MstarPanelSnapshotClient {
       this.write({ state: 'unavailable', reason: `transport-error: ${String(error)}`, snapshot: null })
     } finally {
       this.inFlight = false
-      if (!this.disposed && this.target === target) this.schedule()
+      if (this.disposed) return
+      if (this.pending) {
+        // A demand that arrived mid-flight (a target change, a collapse→expand,
+        // an invalidation) is answered NOW — for whatever target is current.
+        this.pending = false
+        void this.refresh()
+        return
+      }
+      // Only the CURRENT target may keep the interval alive; a stale target's
+      // answer already returned above.
+      if (this.target === target) this.schedule()
     }
   }
 
