@@ -54,7 +54,7 @@ import {
 import { adoptionRecoveryText, postCommitAdoptionRefusal } from '../src/gates/native-commands.ts'
 import { readWorkflowSessionBinding, updateWorkflowSessionBinding } from '../src/engine-status-store.ts'
 import type { WorkflowSessionBinding } from '../src/engine-status-store.ts'
-import { bootApp, type BootResult } from './harness.ts'
+import { bootApp, restartSeam, rootTableOf, seamDisposers, type BootResult } from './harness.ts'
 
 const TS = '2026-09-21T00:00:00.000Z'
 const WORKFLOW_ID = 'wf-native-surface'
@@ -578,24 +578,64 @@ describe('mstar_execution_clear — the native-only clear', () => {
 // (`open(spec)` resolving `{ table, close }`): no storage backend is involved.
 // ---------------------------------------------------------------------------
 
-/** The durable medium behind the seam's store contract — the fake table one medium serves. */
-function rootTableOf(medium: Map<string, string>): ExecutionBindingRootStore {
+/**
+ * One opened stub domain: the fake table over the medium plus its close. The
+ * plugin builds its store from `table()` and installs the seam in the next
+ * synchronous statement, so `table()` is also the fixture-visible install point.
+ */
+type StubDomainHandle = { table(): ExecutionBindingRootStore; close(): Promise<void> }
+
+/** The standard stub handle over one medium (a no-op close: disposal never owns the medium). */
+const stubHandleOf = (medium: Map<string, string>): StubDomainHandle => ({
+  table: () => rootTableOf(medium),
+  close: async () => {},
+})
+
+/**
+ * A stub `storageDomain` facility whose `open` waits on a gate the FIXTURE
+ * settles — no wall-clock wait. `opened` resolves from inside `open`, so a
+ * fixture can order against the child's registered continuation (settle the
+ * gate, or dispose the row while it is still pending); `installed` resolves
+ * from `table()`, in the install path itself.
+ */
+function stubFacilityOf(handle: StubDomainHandle): {
+  facility: { open(): Promise<StubDomainHandle> }
+  opened: Promise<void>
+  installed: Promise<void>
+  settle(): void
+} {
+  const gate = Promise.withResolvers<StubDomainHandle>()
+  const opened = Promise.withResolvers<void>()
+  const installed = Promise.withResolvers<void>()
   return {
-    get: (key) => medium.get(key),
-    put: async (key, value) => { medium.set(key, value) },
-    delete: async (key) => {
-      const had = medium.has(key)
-      medium.delete(key)
-      return had
+    facility: {
+      open: () => {
+        // The child registers its continuation on `gate.promise` after this
+        // returns, so resolving `opened` here gives the fixture that order.
+        opened.resolve()
+        return gate.promise
+      },
     },
+    opened: opened.promise,
+    installed: installed.promise,
+    settle: () => gate.resolve({
+      table: () => {
+        installed.resolve()
+        return handle.table()
+      },
+      close: () => handle.close(),
+    }),
   }
 }
 
-/** Every seam this suite installs, disposed in cleanup (the installed seam is process-global). */
-const seamDisposers: Array<() => void> = []
-
-/** One tick for the apply child's `open` to resolve and the seam to install. */
-const settleSeam = () => new Promise<void>((resolve) => { setTimeout(resolve, 10) })
+/**
+ * Let every continuation queued on an already-settled promise run: the
+ * production path queues its durable put/delete without awaiting it (and the
+ * fake table applies each operation at call time), so this is a microtask
+ * flush — never a wait on wall-clock time. Call it after settling a gate whose
+ * continuation the fixture has already been ordered behind.
+ */
+const flushQueuedContinuations = async (): Promise<void> => { await Promise.resolve() }
 
 let providerSeq = 0
 
@@ -614,26 +654,7 @@ async function mountStorageDomain(app: BootResult, facility: unknown): Promise<{
   }
   const provider = app.ctx.plugin(row as unknown as Parameters<Context['plugin']>[0])
   await provider
-  await settleSeam()
   return provider as unknown as { dispose(): Promise<void> }
-}
-
-/** The stub facility over one medium: `open` resolves the `{ table, close }` handle shape. */
-function stubFacilityOf(medium: Map<string, string>): unknown {
-  return { open: async () => ({ table: () => rootTableOf(medium), close: async () => {} }) }
-}
-
-/**
- * The restart shape: drop the in-process receipts, KEEP the medium, install a
- * fresh seam over it. `previous` is the seam the dying process held (omitted
- * for the first install).
- */
-function restartSeam(medium: Map<string, string>, previous?: () => void): () => void {
-  previous?.()
-  resetExecutionBindingRootsForTests()
-  const uninstall = installExecutionBindingRootStore(rootTableOf(medium))
-  seamDisposers.push(uninstall)
-  return uninstall
 }
 
 /**
@@ -653,7 +674,12 @@ async function crossRootBindFixture(): Promise<{
   await seedUnboundWorkflow(adoptedRoot, CHILD_ID)
   await mkdir(join(adoptedRoot, 'workflows', WORKFLOW_ID), { recursive: true })
   const medium = new Map<string, string>()
-  const provider = await mountStorageDomain(app, stubFacilityOf(medium))
+  const stub = stubFacilityOf(stubHandleOf(medium))
+  const provider = await mountStorageDomain(app, stub.facility)
+  // The fixture owns the open gate: settle it, then await the product's own
+  // install point instead of waiting on the clock.
+  stub.settle()
+  await stub.installed
   // The cross-root native bind: the explicit `harness` selector names root B.
   const bound = envelopeOf(await run(app.ctx, BIND_TOOL, agentOf(CHILD_ID, app.root), {
     execution: true,
@@ -662,16 +688,20 @@ async function crossRootBindFixture(): Promise<{
     harness: adoptedRoot,
   }))
   if (bound.status !== 'ok') throw new Error(`the cross-root native bind was refused: ${String(bound.code)}`)
-  await settleSeam()
+  // The bind's durable put is fire-and-forget; flush its queued continuation.
+  await flushQueuedContinuations()
   return { app, adoptedRoot, medium, provider }
 }
 
 describe('durable adopted-root seam — a cross-root bind survives a restart', () => {
   it('resolves the adopted root for BOTH the ledger target and the clear after a restart, with no resume re-bind', async () => {
     const { app, adoptedRoot, medium, provider } = await crossRootBindFixture()
-    // The bind's receipt reached the DURABLE medium, not only the overlay.
+    // The bind's receipt reached the DURABLE medium, not only the overlay:
+    // with the in-process receipts dropped, the installed seam still answers
+    // the adopted root.
     expect(executionBindingRootOf(CHILD_ID, app.root)).toBe(adoptedRoot)
-    expect(medium.size).toBe(1)
+    resetExecutionBindingRootsForTests()
+    expect(executionBindingRootOf(CHILD_ID, app.root)).toBe(adoptedRoot)
 
     // ---- the restart: the seam and the in-process receipts die, the medium does not ----
     await provider.dispose()
@@ -705,9 +735,9 @@ describe('durable adopted-root seam — a cross-root bind survives a restart', (
     await provider.dispose()
     const uninstall = restartSeam(medium)
     expect(envelopeOf(await run(app.ctx, CLEAR_TOOL, agentOf(CHILD_ID, app.root), {})).code).toBe('execution.clear.ok')
-    await settleSeam()
-    // The durable record is GONE: the medium holds no receipt for the pair.
-    expect(medium.size).toBe(0)
+    // The clear's durable delete is fire-and-forget; flush its queued
+    // continuation. That the record is GONE is proven by the restart below.
+    await flushQueuedContinuations()
 
     // Re-populate the ADOPTED root's slot: a stale receipt would clear THIS.
     expect(updateWorkflowSessionBinding(adoptedRoot, CHILD_ID, app.root, {
@@ -724,39 +754,41 @@ describe('durable adopted-root seam — a cross-root bind survives a restart', (
     expect(adoptedBindingOf(adoptedRoot, app.root, CHILD_ID)).not.toBeNull()
   })
 
-  it('disposal removes the seam: a read falls back to the in-process receipt, nothing reaches the closed domain, and the medium survives', async () => {
+  it('disposal removes the seam: a read falls back to the in-process receipt and nothing reaches the closed domain', async () => {
     const app = booted = await bootApp()
     const medium = new Map<string, string>()
     let closed = 0
     let closing = false
     let readsAfterClose = 0
     let duringClose: string | undefined
-    const provider = await mountStorageDomain(app, {
-      open: async () => ({
-        table: () => ({
-          get: (key: string) => {
-            if (closing) readsAfterClose += 1
-            return medium.get(key)
-          },
-          put: async (key: string, value: string) => { medium.set(key, value) },
-          delete: async (key: string) => {
-            const had = medium.has(key)
-            medium.delete(key)
-            return had
-          },
-        }),
-        close: async () => {
-          closing = true
-          // The ordering assertion: a key backed ONLY by the seam must already
-          // answer `undefined` here — i.e. the uninstall ran before the close.
-          duringClose = executionBindingRootOf(PARENT_ID, app.root)
-          closed += 1
+    const stub = stubFacilityOf({
+      table: () => ({
+        get: (key: string) => {
+          if (closing) readsAfterClose += 1
+          return medium.get(key)
+        },
+        put: async (key: string, value: string) => { medium.set(key, value) },
+        delete: async (key: string) => {
+          const had = medium.has(key)
+          medium.delete(key)
+          return had
         },
       }),
+      close: async () => {
+        closing = true
+        // The ordering assertion: a key backed ONLY by the seam must already
+        // answer `undefined` here — i.e. the uninstall ran before the close.
+        duringClose = executionBindingRootOf(PARENT_ID, app.root)
+        closed += 1
+      },
     })
+    const provider = await mountStorageDomain(app, stub.facility)
+    stub.settle()
+    await stub.installed
+    // Both returned promises are the durable writes: awaiting them means the
+    // seam already holds both keys — no clock involved.
     await recordExecutionBindingRoot(CHILD_ID, app.root, '/synthetic/adopted-root')
     await recordExecutionBindingRoot(PARENT_ID, app.root, '/synthetic/parent-root')
-    await settleSeam()
     // With the overlay out of the way both keys answer through the seam.
     resetExecutionBindingRootsForTests()
     expect(executionBindingRootOf(CHILD_ID, app.root)).toBe('/synthetic/adopted-root')
@@ -774,7 +806,8 @@ describe('durable adopted-root seam — a cross-root bind survives a restart', (
     // the seam-backed key does not answer through a closed domain.
     expect(executionBindingRootOf(CHILD_ID, app.root)).toBe('/synthetic/adopted-root')
     expect(executionBindingRootOf(PARENT_ID, app.root)).toBeUndefined()
-    // The durable state itself survived the close (the next process reads it).
+    // The record is still on the medium: a fresh seam — what the next process
+    // installs — reads it.
     const fresh = installExecutionBindingRootStore(rootTableOf(medium))
     seamDisposers.push(fresh)
     expect(executionBindingRootOf(PARENT_ID, app.root)).toBe('/synthetic/parent-root')
@@ -782,26 +815,30 @@ describe('durable adopted-root seam — a cross-root bind survives a restart', (
 
   it('a fiber torn down while open is in flight contains the inactive-effect throw, drops the just-installed seam and closes the late handle once', async () => {
     const app = booted = await bootApp()
-    const gate = Promise.withResolvers<unknown>()
+    const lateClose = Promise.withResolvers<void>()
     let closedLate = 0
-    await mountStorageDomain(app, { open: () => gate.promise })
-    // Tear the plugin row down while its child is still awaiting `open`. The
-    // disposal settles only after that child's apply returns, so the gate is
-    // resolved without awaiting it first.
-    const disposing = (app.pluginFiber as unknown as { dispose(): Promise<void> }).dispose()
-    await settleSeam()
-    gate.resolve({
+    const stub = stubFacilityOf({
       // A leaked seam would answer this fake root; a removed one answers nothing.
       table: () => ({
         get: () => '/late-leaked-root',
         put: async () => {},
         delete: async () => false,
       }),
-      close: async () => { closedLate += 1 },
+      close: async () => {
+        closedLate += 1
+        lateClose.resolve()
+      },
     })
-    // The throw is CONTAINED: the disposal resolves instead of rejecting.
+    await mountStorageDomain(app, stub.facility)
+    // The child is suspended on `open` (its continuation is registered): tear
+    // the plugin row down while it is still in flight, then settle the gate.
+    await stub.opened
+    const disposing = (app.pluginFiber as unknown as { dispose(): Promise<void> }).dispose()
+    stub.settle()
     await disposing
-    await settleSeam()
+    // Wait for the late handle's close — the observable end of the contained
+    // apply, not a wall-clock wait.
+    await lateClose.promise
     // The late handle was closed exactly once — the next apply cannot meet `already-open`.
     expect(closedLate).toBe(1)
     // The just-installed seam was removed: no read can reach the late handle.
@@ -835,11 +872,19 @@ describe('durable adopted-root seam — a cross-root bind survives a restart', (
       export: (message: { name: string; type: string; args: unknown[] }) => logged.push(message),
     })
     const before = logged.length
+    // The fixture owns the refusal: `open` returns a gate, the fixture awaits
+    // the child's registered continuation, then rejects it. No clock involved.
+    const gate = Promise.withResolvers<StubDomainHandle>()
+    const opened = Promise.withResolvers<void>()
     const provider = await mountStorageDomain(app, {
-      open: async () => {
-        throw Object.assign(new Error('domain mstar_execution_binding_roots is already open'), { code: 'already-open' })
+      open: () => {
+        opened.resolve()
+        return gate.promise
       },
     })
+    await opened.promise
+    gate.reject(Object.assign(new Error('domain mstar_execution_binding_roots is already open'), { code: 'already-open' }))
+    await flushQueuedContinuations()
     // ONE warning, carrying the refused cause.
     const added = logged.slice(before).filter((row) => row.name === EXECUTION_BINDING_ROOTS_LOGGER)
     expect(added).toHaveLength(1)

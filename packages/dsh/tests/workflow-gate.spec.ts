@@ -60,7 +60,7 @@ import { Context } from '@deepseek-ai/cordis'
 import type { PreToolDecision, ToolExecution, ToolExecutionToken } from '@deepseek-ai/dsh-tools'
 import { SEVERITY_ORDER } from '@mstar-harness/engine'
 import { iterationViolationView } from '../src/gates/_shared.ts'
-import { bootApp, seedHarness, seedActiveWorkflow, FakeSessionsRegistry, type BootResult } from './harness.ts'
+import { bootApp, restartSeam, seamDisposers, seedHarness, seedActiveWorkflow, FakeSessionsRegistry, type BootResult } from './harness.ts'
 import type { DispatchGateAdvisory } from '../src/index.ts'
 import { DISPATCH_LOGGER } from '../src/gates/dispatch.ts'
 import { readAgentFlow } from '../src/gates/agent-flow.ts'
@@ -68,20 +68,15 @@ import { awaitWorkflowLedgerIdle, registerWorkflowLedger, setWorkflowLedgerLogge
 import { HarnessResolver } from '../src/gates/_shared.ts'
 import { resolveExecutionLedgerTarget } from '../src/gates/workflow-selection.ts'
 import {
+  executionBindingRootOf,
   recordExecutionBindingRoot,
   resetExecutionBindingRootsForTests,
 } from '../src/gates/execution-binding-roots.ts'
-import {
-  installExecutionBindingRootStore,
-  type ExecutionBindingRootStore,
-} from '../src/gates/execution-binding-roots-domain.ts'
 import type { AgentFlowView } from '../src/types.ts'
 import type { WorkflowAskCache } from '../src/gates/workflow-policy.ts'
 
 let booted: BootResult | undefined
 const roots: string[] = []
-/** Every seam this suite installs, disposed in cleanup (the installed seam is process-global). */
-const seamDisposers: Array<() => void> = []
 
 afterEach(async () => {
   for (const dispose of seamDisposers.splice(0)) dispose()
@@ -689,32 +684,6 @@ describe('workflow gate — P-b lease attribution', () => {
 
 /* ------------------- the durable adopted-root seam (ledger target after a restart) ------------------- */
 
-/** The durable medium behind the seam's store contract — one fake table for one medium. */
-function rootTableOf(medium: Map<string, string>): ExecutionBindingRootStore {
-  return {
-    get: (key) => medium.get(key),
-    put: async (key, value) => { medium.set(key, value) },
-    delete: async (key) => {
-      const had = medium.has(key)
-      medium.delete(key)
-      return had
-    },
-  }
-}
-
-/**
- * The restart shape: drop the in-process receipts, KEEP the medium, install a
- * fresh seam over it. `previous` is the seam the dying process held (omitted
- * for the first install).
- */
-function restartSeam(medium: Map<string, string>, previous?: () => void): () => void {
-  previous?.()
-  resetExecutionBindingRootsForTests()
-  const uninstall = installExecutionBindingRootStore(rootTableOf(medium))
-  seamDisposers.push(uninstall)
-  return uninstall
-}
-
 describe('workflow ledger — the adopted-root receipt survives a restart', () => {
   it('resolves the adopted control root from the durable record after a restart, not the workspace harness', async () => {
     const SESSION = 'sess-durable-adopted-root'
@@ -734,7 +703,10 @@ describe('workflow ledger — the adopted-root receipt survives a restart', () =
     const medium = new Map<string, string>()
     const firstSeam = restartSeam(medium)
     await recordExecutionBindingRoot(SESSION, ws, adoptedRoot)
-    expect(medium.size).toBe(1)
+    // The receipt reached the DURABLE medium, not only the overlay: with the
+    // in-process receipts dropped, the installed seam still answers it.
+    resetExecutionBindingRootsForTests()
+    expect(executionBindingRootOf(SESSION, ws)).toBe(adoptedRoot)
     restartSeam(medium, firstSeam)
 
     const target = await resolveExecutionLedgerTarget(SESSION, ws)

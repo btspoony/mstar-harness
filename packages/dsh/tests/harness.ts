@@ -40,6 +40,11 @@ import type { JobDoneSnapshot } from '../src/gates/agent-flow.ts'
 import type { LoaderEntryView } from '../src/gates/fallbacks-probe.ts'
 import type { SubagentsServiceView } from '../src/gates/role-persona.ts'
 import { updateWorkflowSessionBinding } from '../src/engine-status-store.ts'
+import { resetExecutionBindingRootsForTests } from '../src/gates/execution-binding-roots.ts'
+import {
+  installExecutionBindingRootStore,
+  type ExecutionBindingRootStore,
+} from '../src/gates/execution-binding-roots-domain.ts'
 import { ENGINE_STATUS_CONTEXT_NAME, HARNESS_RULES_SECTION_NAME } from '../src/gates/system-prompt.ts'
 import * as plugin from '../src/index.ts'
 
@@ -1413,4 +1418,35 @@ export interface ToolResultValue {
 export function valueOf(result: import('@deepseek-ai/dsh-tools').ToolExecutionResult): ToolResultValue {
   if (result.isError) throw new Error(`tool call failed: ${result.error?.message ?? 'unknown error'}`)
   return result.value as ToolResultValue
+}
+
+/* ------------------------ durable execution-binding root seam ------------------------ */
+
+/** The durable medium behind the seam's store contract — one fake table for one medium. */
+export function rootTableOf(medium: Map<string, string>): ExecutionBindingRootStore {
+  return {
+    get: (key) => medium.get(key),
+    put: async (key, value) => { medium.set(key, value) },
+    delete: async (key) => {
+      const had = medium.has(key)
+      medium.delete(key)
+      return had
+    },
+  }
+}
+
+/** Every seam a suite installs, disposed in cleanup (an installed seam is process-global). */
+export const seamDisposers: Array<() => void> = []
+
+/**
+ * The restart shape: drop the in-process receipts, KEEP the medium, install a
+ * fresh seam over it. `previous` is the seam the dying process held (omitted
+ * for the first install).
+ */
+export function restartSeam(medium: Map<string, string>, previous?: () => void): () => void {
+  previous?.()
+  resetExecutionBindingRootsForTests()
+  const uninstall = installExecutionBindingRootStore(rootTableOf(medium))
+  seamDisposers.push(uninstall)
+  return uninstall
 }

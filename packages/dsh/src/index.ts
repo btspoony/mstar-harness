@@ -1018,7 +1018,7 @@ export function apply(ctx: Context, config: Config): void {
           warnExecutionBindingRoots(`durable adopted control root store close failed after a disposed apply (${causeOf(closeError)})`)
         }
         warnExecutionBindingRoots(
-          `durable adopted control root store discarded: its apply fiber was already disposed when open resolved (${causeOf(error)}) — durability returns on a later apply or boot`,
+          `durable adopted control root store discarded: its apply fiber was already disposed when open resolved (${causeOf(error)}) — the late handle was closed; the next apply may re-open the domain`,
         )
       }
     } catch (error) {
