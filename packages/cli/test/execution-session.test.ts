@@ -2106,3 +2106,50 @@ describe("mstar milestone assign — acquired identity CLI smoke", () => {
     expect(jsonOf(stale).status).toBe("refused");
   });
 });
+
+/**
+ * The public authority read must not hand out a bearer identity. On an opted-in
+ * MCP connection a caller-declared id selects that session's coordinator
+ * binding, so `status validate` — which needs no identity to run — would
+ * otherwise answer any caller with a working credential for coordinator-scoped
+ * writes. This pins the field name the read used to expose, and the facts that
+ * must survive the redaction.
+ */
+describe("status validate — public authority reads", () => {
+  test("reports the coordinator by role and epoch, never its session id", async () => {
+    const fixture = await activeFixture("mstar-status-redaction");
+    const identity: ExecutionIdentity = {
+      source: "local",
+      sessionId: "session-status-redaction",
+      workflowId: WORKFLOW_ID,
+      role: "coordinator",
+    };
+    const rootToken = (await readExecutionAuthority(fixture.context)).token;
+    registerThroughAuthority(fixture, identity, rootToken);
+    const workflowToken = (await tokensOf(fixture)).workflow;
+    const bound = spawnCli(
+      [
+        "plan", "bind", "--execution", "--workflow", WORKFLOW_ID, "--coordinator",
+        "--expect", workflowToken, "--operation", "bind-redaction", "--harness", fixture.harnessDir,
+      ],
+      fixture,
+      cliEnv(fixture, identity),
+    );
+    expect(bound.exitCode, bound.stdout).toBe(0);
+
+    // No `--harness`: `status validate` takes no such option and must answer
+    // from the launch cwd's control root, exactly as an operator runs it.
+    const result = runCli(["status", "validate"], fixture);
+    expect(result.exitCode, result.stdout).toBe(0);
+    const payload = JSON.parse(result.stdout) as { data?: { authority?: { workflows?: Array<Record<string, unknown>> } } };
+    const workflow = payload.data?.authority?.workflows?.find(
+      (entry) => (entry.state as Record<string, unknown> | undefined)?.id === WORKFLOW_ID,
+    );
+    expect(workflow).toBeDefined();
+    expect(workflow?.coordinator).toMatchObject({ role: "coordinator", sessionId: "[redacted]" });
+    expect(typeof (workflow?.coordinator as Record<string, unknown>).epoch).toBe("number");
+    // Nothing else in the payload may echo it either: the read is the whole
+    // discoverability surface, not one field.
+    expect(JSON.stringify(payload)).not.toContain(identity.sessionId);
+  });
+});

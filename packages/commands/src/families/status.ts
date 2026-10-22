@@ -47,27 +47,47 @@ function engineCode(error: unknown, fallback: string): string {
   return fallback;
 }
 const REDACTED_SESSION_ID = "[redacted]";
+/**
+ * Every field name the authority payload family uses to carry a session id.
+ * Redacting by NAME (`coordinator`) is not enough: the same logical value
+ * appears as `prepared_by` on a plan's coordination block, as `session_id` /
+ * `prior_session_id` / `stopped_session_ids[]` on an identity recovery, and as
+ * `actor_session_id` on a terminal adoption. One missed name leaves the read
+ * that this helper exists to close fully open.
+ */
+const SESSION_ID_FIELDS = new Set([
+  "sessionId",
+  "session_id",
+  "prepared_by",
+  "completed_by",
+  "actor_session_id",
+  "prior_session_id",
+]);
+const SESSION_ID_ARRAY_FIELDS = new Set(["stopped_session_ids"]);
 
 /**
- * A public read must not hand out a live coordinator's session id. On an
- * opted-in MCP connection that id is a bearer credential for coordinator-scoped
- * writes, and `status validate` needs no identity to run, so echoing it turned
- * one unauthenticated read into a working identity. The holder stays visible by
- * role and epoch; a recovery reads the id from the holder session's own
+ * A public read must not hand out a live session id. On an opted-in MCP
+ * connection a caller-declared id is a bearer credential for coordinator-scoped
+ * writes, and `status validate` needs no identity to run, so echoing one turned
+ * a single unauthenticated read into a working identity. Holders stay visible
+ * by role and epoch; a recovery reads the id from the holder session's own
  * context.
  */
-function redactCoordinatorSessionIds(value: unknown): unknown {
-  if (Array.isArray(value)) return value.map(redactCoordinatorSessionIds);
+function redactSessionIds(value: unknown): unknown {
+  if (Array.isArray(value)) return value.map(redactSessionIds);
   if (value === null || typeof value !== "object") return value;
   const record = value as Record<string, unknown>;
   const out: Record<string, unknown> = {};
   for (const [key, entry] of Object.entries(record)) {
-    if (key === "coordinator" && entry !== null && typeof entry === "object" && !Array.isArray(entry)) {
-      const ref = entry as Record<string, unknown>;
-      out[key] = "sessionId" in ref ? { ...ref, sessionId: REDACTED_SESSION_ID } : ref;
+    if (SESSION_ID_FIELDS.has(key) && typeof entry === "string" && entry.trim() !== "") {
+      out[key] = REDACTED_SESSION_ID;
       continue;
     }
-    out[key] = redactCoordinatorSessionIds(entry);
+    if (SESSION_ID_ARRAY_FIELDS.has(key) && Array.isArray(entry)) {
+      out[key] = entry.map(() => REDACTED_SESSION_ID);
+      continue;
+    }
+    out[key] = redactSessionIds(entry);
   }
   return out;
 }
@@ -161,7 +181,7 @@ export function getStatusCommandDefinitions(): readonly CommandDefinition[] {
             const authority = await resolveCurrentAuthority({ harnessDir });
             const read = await readExecutionAuthority({ harnessDir });
             return ok("status.validate", {
-              authority: redactCoordinatorSessionIds(read.data),
+              authority: redactSessionIds(read.data),
               token: read.token,
               workflows: "workflows" in read.data ? read.data.workflows.map((entry) => ({ id: entry.state.id, token: entry.workflowToken })) : [],
               terminalUnregistered: "terminalUnregistered" in read.data ? read.data.terminalUnregistered : [],
