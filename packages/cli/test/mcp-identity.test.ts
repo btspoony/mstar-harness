@@ -481,3 +481,19 @@ describe("MCP session identity", () => {
   });
 
 });
+
+/**
+ * Store-level operations belong to the local CLI: their payload is the whole
+ * execution store, including `execution_sessions` rows, so publishing them on a
+ * shared connection would hand out bearer ids that no redaction can remove
+ * without making a backup unrestorable. MCP carries the runtime surface only.
+ */
+describe("MCP surface — store-level commands stay on the CLI", () => {
+  test("a store-level command publishes no tool, while a runtime command still does", async () => {
+    const resolver = createContextResolver();
+    await expect(publishedMcpTool("store.execution.export", resolver)).rejects.toThrow("unlisted tool");
+    await expect(publishedMcpTool("store.backup", resolver)).rejects.toThrow("unlisted tool");
+    const runtime = await publishedMcpTool("plan.progress", resolver);
+    expect(runtime.name).toBe("mstar_plan");
+  });
+});

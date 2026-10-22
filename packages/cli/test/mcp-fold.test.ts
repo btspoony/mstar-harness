@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Client, InMemoryTransport, type CallToolResult } from "@modelcontextprotocol/client";
 import { McpServer } from "@modelcontextprotocol/server";
-import { getCommandDefinitions, getCommandSchemas, type CommandDefinition, type CommandEnvelope, type InvocationContext } from "@mstar-harness/commands";
+import { getCommandDefinitions, getCommandSchemas, isCliOnlyCommand, type CommandDefinition, type CommandEnvelope, type InvocationContext } from "@mstar-harness/commands";
 import { registerMcpCommands, type ResolveContext } from "../src/mcp/register";
 import { inputFields } from "../src/schema-branches";
 import { FAMILY_PURPOSE, actionOf, familyOf, familyToolName, foldFamilyTools } from "../src/mcp/fold";
@@ -134,6 +134,8 @@ describe("folded MCP command families", () => {
   test("one published tool per family, carrying the family's real action list", async () => {
     const families = new Map<string, string[]>();
     for (const definition of definitions) {
+      // Store-level commands are CLI-only and are not published here.
+      if (isCliOnlyCommand(definition.id)) continue;
       const family = familyOf(definition);
       families.set(family, [...(families.get(family) ?? []), actionOf(definition.id)]);
     }
