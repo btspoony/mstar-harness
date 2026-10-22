@@ -106,7 +106,11 @@ export function executionBindingRootOf(sessionId: string, cwd: string): string |
 export function clearExecutionBindingRoot(sessionId: string, cwd: string): Promise<void> {
   if (sessionId === '' || cwd === '') return Promise.resolve()
   const key = keyOf(sessionId, cwd)
-  observedRoots.set(key, null)
+  // A tombstone changes an answer only for a key that could otherwise answer:
+  // an overlay entry this process recorded, or a durable record the queued
+  // delete has not landed over. An unobserved, durably absent key stays
+  // unobserved, so the overlay never grows for keys nothing has ever stored.
+  if (observedRoots.has(key) || durableExecutionBindingRootOf(key) !== undefined) observedRoots.set(key, null)
   return deleteDurableExecutionBindingRoot(key)
 }
 

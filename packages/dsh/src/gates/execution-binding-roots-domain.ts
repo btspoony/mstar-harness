@@ -55,9 +55,37 @@ export interface ExecutionBindingRootStore {
 /** The installed seam; `undefined` while no store is open (today's behaviour). */
 let installedStore: ExecutionBindingRootStore | undefined
 
-/** The seam has no `ctx`: a durable failure must be visible, never silent. */
+/** Module-level warning sink — bound by `apply` to `ctx.logger('mstar/execution-binding-roots')` (module-sink pattern). */
+export type ExecutionBindingRootsLogSink = (message: string) => void
+
+/** The unbound default: the warning still reaches the host's own console. */
+const defaultLogSink: ExecutionBindingRootsLogSink = (message) => console.warn(message)
+
+let logSink: ExecutionBindingRootsLogSink = defaultLogSink
+
+/**
+ * Bind the module warning sink (the entry `apply` binds it to
+ * `ctx.logger('mstar/execution-binding-roots')`). Returns the PRIOR sink so a
+ * caller can restore it (the package's module-sink pattern).
+ */
+export function setExecutionBindingRootsLogger(sink: ExecutionBindingRootsLogSink): ExecutionBindingRootsLogSink {
+  const prior = logSink
+  logSink = sink
+  return prior
+}
+
+/**
+ * Log one contained durable failure. Never-throws invariant: the whole sink call
+ * is inside the guard, so neither the default console write nor a throwing bound
+ * sink can re-enter the caller — a contained read failure stays a read failure
+ * and a contained write rejection stays a resolved promise.
+ */
 function warn(message: string, error: unknown): void {
-  console.warn(`mstar/execution-binding-roots: ${message}: ${error instanceof Error ? error.message : String(error)}`)
+  try {
+    logSink(`mstar/execution-binding-roots: ${message}: ${error instanceof Error ? error.message : String(error)}`)
+  } catch {
+    // Never-throws invariant (module log-sink pattern).
+  }
 }
 
 /**
