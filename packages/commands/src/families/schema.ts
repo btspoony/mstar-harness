@@ -75,7 +75,7 @@ export type CommandFamilyMember = Readonly<{
 }>;
 
 export type CommandSchemaSelection =
-  | Readonly<{ kind: "command"; descriptor: CommandSchemaDescriptor }>
+  | Readonly<{ kind: "command"; descriptor: CommandSchemaDescriptor; transport?: "cli" }>
   | Readonly<{ kind: "family"; family: string; members: readonly CommandFamilyMember[] }>
   | Readonly<{ kind: "payload"; schema: PayloadSchemaQuery }>;
 
@@ -221,7 +221,15 @@ export function selectCommandSchema(
         ["command"],
       );
     }
-    return { kind: "command", descriptor: commandSchemaDescriptor(definition) };
+    // The leaf query is the shortest discovery path and the one the refusal
+    // recovery recommends, so it must carry the same transport fact the family
+    // query does: without it the descriptor looks callable on a connection that
+    // does not publish the tool.
+    return {
+      kind: "command",
+      descriptor: commandSchemaDescriptor(definition),
+      ...(isCliOnlyCommand(definition.id) ? { transport: "cli" as const } : {}),
+    };
   }
   if (selector.family !== undefined) {
     const members = definitions
