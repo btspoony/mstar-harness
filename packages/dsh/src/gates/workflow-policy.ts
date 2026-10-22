@@ -36,7 +36,7 @@
  * Cache-key normalization (the congruence fix): every key — the gate's `metaName` (composed through
  * {@link normalizeWorkflowName} in dispatch.ts `workflowGateInputOf`), the
  * run-start observation's `runName` (workflow-ledger.ts), and the explicit
- * `record()` / `markAsked()` APIs (which normalize internally, F-302) — is
+ * `record()` / `markAsked()` APIs (which normalize internally) — is
  * the ASCII-control-char-stripped, UNCAPPED name. One shared function, both
  * seams; a control-char name (`au\u0000dit`) gates and observes under the
  * same normalized key (`audit`), and the length is never capped on the
@@ -168,7 +168,8 @@ export class WorkflowAskCache {
    * Record the approval-flow outcome for `name` (the ask's ANSWER — the
    * answerer integration's seam; see the module doc). Subsequent same-name
    * calls under `ask` reuse the cached decision without re-asking. The key
-   * is normalized internally (F-302).
+   * is normalized internally, so a raw spelling records under the key the gate
+   * reads.
    */
   record(name: string, decision: WorkflowAskCacheDecision): void {
     this.decisions.set(normalizeWorkflowName(name), decision)

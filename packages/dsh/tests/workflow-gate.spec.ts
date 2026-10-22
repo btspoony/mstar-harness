@@ -1099,11 +1099,11 @@ describe('workflow gate — Task 4 ledger integration (verdict rows + P-c observ
     expect(second.kind).toBe('ask')
   })
 
-  it('(17) WorkflowAskCache record + markAsked normalize keys internally (F-302 doc contract; wasAsked matches raw spellings)', async () => {
+  it('(17) WorkflowAskCache record + markAsked normalize keys internally (the explicit record seam stores the stripped key; wasAsked matches raw spellings)', async () => {
     const app = booted = await bootApp({ workflowGate: 'ask', seedV2: true })
     const cache = app.ctx.dshHostAdapter.workflowAskCache
 
-    // F-302: the explicit record() seam stores under the STRIPPED key — a
+    // The explicit record() seam stores under the STRIPPED key — a
     // raw-key record is never consulted by the normalized gate lookups.
     cache.record('au\u0000dit', 'allow')
     expect(cache.get('audit')).toBe('allow')
