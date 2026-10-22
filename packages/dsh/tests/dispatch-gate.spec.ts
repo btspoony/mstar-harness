@@ -1051,4 +1051,35 @@ describe('leaf-seat tool boundary — coordinator actions on the folded MCP surf
     expect(launch.kind).toBe('deny')
     expect((launch as { reason?: string }).reason).toContain('session.run')
   })
+
+  it('refuses the same actions when the deployment server name contains the separator', async () => {
+    // The server name is deployment-owned: a row named `mstar__prod` publishes
+    // `mcp__mstar__prod__mstar_plan`. A separator count cannot recover the raw
+    // name, and the shared row carries no `--seat` to refuse it server-side, so
+    // this boundary has to reach the same refusal.
+    const app = booted = await bootApp()
+    for (const [tool, action, commandId] of [
+      ['mcp__mstar__prod__mstar_plan', 'complete', 'plan.complete'],
+      ['mcp__ops__mstar__mstar_workflow', 'evidence', 'workflow.evidence'],
+    ] as const) {
+      const decision = await app.ctx.waterfall('tools/pre-execute', foldedCall(tool, { action }, leafAgent()), defaultAllow)
+      expect(decision.kind).toBe('deny')
+      const reason = (decision as { reason?: string }).reason
+      expect(reason).toContain('leaf-seat.coordinator-action')
+      expect(reason).toContain(commandId)
+    }
+  })
+
+  it('fails closed on a seat action whose published name the client truncated', async () => {
+    // `dsh-mcp-client` appends `_<12 hex>` to a name it had to replace or
+    // truncate. A truncated name keeps only the head of the family name, so the
+    // guard refuses rather than letting an unattributable name through.
+    const app = booted = await bootApp()
+    const truncated = `${'mcp__'}${'x'.repeat(40)}__msta_0123456789ab`
+    const decision = await app.ctx.waterfall('tools/pre-execute', foldedCall(truncated, { action: 'evidence' }, leafAgent()), defaultAllow)
+    expect(decision.kind).toBe('deny')
+    const reason = (decision as { reason?: string }).reason
+    expect(reason).toContain('leaf-seat.unattributed-tool')
+    expect(reason).toContain('serverName: mstar')
+  })
 })

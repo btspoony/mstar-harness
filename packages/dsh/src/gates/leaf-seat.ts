@@ -20,7 +20,7 @@
  *   leaf naming a bound coordinator session there.
  */
 import type { PreToolDecision, ToolExecution } from '@deepseek-ai/dsh-tools'
-import { coordinatorSeatCommandFor } from './coordinator-seat.ts'
+import { coordinatorSeatCommandFor, coordinatorSeatToolNames } from './coordinator-seat.ts'
 
 export function isLeafSeatHeader(header: unknown): boolean {
   if (typeof header !== 'object' || header === null) return false
@@ -32,20 +32,49 @@ export function isLeafSeatHeader(header: unknown): boolean {
 export const LEAF_SEAT_COORDINATOR_CAUSE = 'leaf-seat.coordinator-action'
 
 /**
- * The raw name of the folded mstar tool one model-facing MCP tool name selects,
- * or undefined for any other tool. `@deepseek-ai/dsh-mcp-client` publishes
- * `mcp__<serverName>__<rawName>` (publicToolName, its lib/index.js), and the
- * server name is deployment-owned, so the raw name is what follows the LAST `__`
- * (both the family tool names and its actions are short ASCII identifiers, so
- * the last separator is the raw-name boundary even for a `__`-bearing server
- * name).
+ * The cause for a seat-shaped call whose published tool name the MCP client
+ * normalized or truncated into its collision form: the family cannot be
+ * attributed, so the guard refuses instead of letting an unattributable name
+ * through.
  */
-function foldedRawName(toolName: string): string | undefined {
-  const separator = '__'
-  if (!toolName.startsWith('mcp__')) return undefined
-  const close = toolName.lastIndexOf(separator)
-  if (close < 'mcp__'.length) return undefined
-  return toolName.slice(close + separator.length)
+export const LEAF_SEAT_UNATTRIBUTED_CAUSE = 'leaf-seat.unattributed-tool'
+
+/**
+ * The collision suffix `@deepseek-ai/dsh-mcp-client` appends to a folded name it
+ * could not publish verbatim (`publicToolName`, its lib/index.js): a character
+ * outside `[A-Za-z0-9_-]` or a name over 64 characters makes the client rewrite
+ * the joined name and return `<51-char prefix>_<12 hex of sha256(identity)>`.
+ */
+const COLLISION_SUFFIX = /_[0-9a-f]{12}$/
+
+/**
+ * The known family tools one model-facing MCP tool name can select, or an empty
+ * list when the name selects none.
+ *
+ * The published name is `mcp__<serverName>__<rawName>` and the server name is
+ * deployment-owned: it may itself contain `__`, and the client's replacement or
+ * truncation turns the name into the collision form above. Counting separators
+ * therefore cannot recover the raw name — and a name this guard cannot
+ * attribute must not pass silently, because the shared `mstar-mcp` row carries
+ * no `--seat` to refuse it on the server side. So the name is matched against
+ * the KNOWN folded family names instead: exactly when the raw name survived
+ * (including a `__`-bearing server name and a normalized-but-untruncated
+ * collision form), and by prefix when the client truncated the family name
+ * (`mstar_pl` keeps only the head of `mstar_plan`).
+ */
+function foldedSeatTools(toolName: string): readonly string[] {
+  if (!toolName.startsWith('mcp__')) return []
+  const plain = toolName.replace(COLLISION_SUFFIX, '')
+  const tools = coordinatorSeatToolNames()
+  const exact = tools.filter((tool) => plain.endsWith(`__${tool}`))
+  if (exact.length > 0) return exact
+  // No collision suffix: an unmatched name is another server's tool, not an
+  // mstar family.
+  if (plain === toolName) return []
+  const boundary = plain.lastIndexOf('__')
+  if (boundary < 'mcp__'.length) return []
+  const head = plain.slice(boundary + 2)
+  return head === '' ? [] : tools.filter((tool) => tool.startsWith(head))
 }
 
 /** The session header the leaf-seat contract reads (`agent.session.header`). */
@@ -67,19 +96,31 @@ function sessionHeaderOf(agent: unknown): unknown {
  * and the actions this seat may run.
  */
 export function leafSeatCoordinatorRefusal(exec: Pick<ToolExecution, 'name' | 'arguments' | 'agent'>): string | undefined {
-  const rawName = foldedRawName(exec.name)
-  if (rawName === undefined) return undefined
+  const tools = foldedSeatTools(exec.name)
+  if (tools.length === 0) return undefined
   const args = exec.arguments
   if (typeof args !== 'object' || args === null || Array.isArray(args)) return undefined
   const action = (args as { action?: unknown }).action
-  const commandId = coordinatorSeatCommandFor(rawName, action)
+  const commandId = tools.map((tool) => coordinatorSeatCommandFor(tool, action)).find((id) => id !== undefined)
   if (commandId === undefined) return undefined
   if (!isLeafSeatHeader(sessionHeaderOf(exec.agent))) return undefined
+  const leafCause =
+    'this seat is a leaf (session header origin "subagent" or a delegationDepth > 0), and coordinator seats belong to the ' +
+    'non-leaf coordinating session: run the operation from that session, or use the actions this seat may run ' +
+    '(plan.prepare / plan.progress / plan.show / plan.issue-add / plan.issue-close / issue.* / sdd.* / schema).'
+  if (tools.length === 1) {
+    return (
+      `${LEAF_SEAT_COORDINATOR_CAUSE}: ${exec.name} action "${String(action)}" (${commandId}) establishes or exercises a workflow coordinator seat, ` +
+      `and ${leafCause}`
+    )
+  }
+  // A truncated name keeps only the head of the family name, so more than one
+  // family could be the one this call selected: refuse rather than guess.
   return (
-    `${LEAF_SEAT_COORDINATOR_CAUSE}: ${exec.name} action "${String(action)}" (${commandId}) establishes or exercises a workflow coordinator seat, ` +
-    'and this seat is a leaf (session header origin "subagent" or a delegationDepth > 0). ' +
-    'Coordinator seats belong to the non-leaf coordinating session: run the operation from that session, ' +
-    'or use the actions this seat may run (plan.prepare / plan.progress / plan.show / plan.issue-add / plan.issue-close / issue.* / sdd.* / schema).'
+    `${LEAF_SEAT_UNATTRIBUTED_CAUSE}: ${exec.name} action "${String(action)}" is a workflow coordinator action of ${tools.join(' / ')}, ` +
+    'and the published tool name was rewritten or truncated by the MCP client (a server name with a replaced character or over 64 ' +
+    `characters), so the family it selects cannot be attributed; ${leafCause} ` +
+    'A connection whose server name needs neither replacement nor truncation (e.g. `serverName: mstar`) keeps every folded name attributable.'
   )
 }
 

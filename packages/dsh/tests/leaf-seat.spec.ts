@@ -19,6 +19,7 @@ import {
   isCoordinatorSeatCommand,
 } from '@mstar-harness/commands'
 import { coordinatorSeatCommandFor } from '../src/gates/coordinator-seat.ts'
+import { leafSeatCoordinatorRefusal } from '../src/gates/leaf-seat.ts'
 
 const SRC = join(import.meta.dir, '..', 'src')
 const SEAT_SYMBOLS = ['coordinatorSeatCommandFor', 'isCoordinatorSeatCommand'] as const
@@ -68,5 +69,57 @@ describe('the dsh coordinator-seat derivation mirrors the commands rule', () => 
 
   test('the local derivation reads the definitions and nothing else from the peer', () => {
     expect(peerImports(join(SRC, 'gates', 'coordinator-seat.ts')).sort()).toEqual(['CommandDefinition', 'getCommandDefinitions'])
+  })
+})
+
+/**
+ * The published-name parse. `@deepseek-ai/dsh-mcp-client` publishes
+ * `mcp__<serverName>__<rawName>`, and the server name is deployment-owned, so
+ * the name is matched against the known family tools instead of being split on a
+ * separator. The collision form (replaced character or over 64 characters ->
+ * `<51-char prefix>_<12 hex of sha256(identity)>`) must not fail OPEN: the shared
+ * `mstar-mcp` row carries no `--seat`, so this host boundary is the only layer
+ * that refuses a leaf there.
+ */
+const leafAgent = (): unknown => ({ session: { header: { origin: 'subagent' } } })
+
+function refusalOf(name: string, action: string): string | undefined {
+  return leafSeatCoordinatorRefusal({ name, arguments: { action }, agent: leafAgent() })
+}
+
+describe('the folded tool name resolves to its family whatever the server name is', () => {
+  test('reads the family through a server name that contains the separator', () => {
+    for (const [name, action, commandId] of [
+      ['mcp__mstar__prod__mstar_plan', 'complete', 'plan.complete'],
+      ['mcp__ops__mstar__mstar_workflow', 'evidence', 'workflow.evidence'],
+      ['mcp__a__b__c__mstar_session', 'recover', 'session.recover'],
+    ]) {
+      const refusal = refusalOf(name, action)
+      expect([name, refusal?.includes('leaf-seat.coordinator-action'), refusal?.includes(commandId!)]).toEqual([name, true, true])
+    }
+  })
+
+  test('refuses a seat action whose published name carries the collision suffix', () => {
+    // A replaced character keeps the raw name readable: only the suffix is added.
+    const normalized = refusalOf('mcp__mstar.prod__mstar_plan_0123456789ab', 'bind')
+    expect(normalized).toContain('leaf-seat.coordinator-action')
+    expect(normalized).toContain('plan.bind')
+    // A truncated name keeps only the HEAD of the family name, so more than one
+    // family could be the one this call selected: fail closed instead of guessing.
+    const truncated = `${'mcp__'}${'x'.repeat(40)}__msta_0123456789ab`
+    const refusal = refusalOf(truncated, 'evidence')
+    expect(refusal).toContain('leaf-seat.unattributed-tool')
+    expect(refusal).toContain('serverName: mstar')
+  })
+
+  test('leaves a name that selects no mstar family, or no seat action, alone', () => {
+    for (const [name, action] of [
+      ['mcp__github__create_issue', 'run'],
+      ['mcp__mstar__mstar_issue', 'add'],
+      ['mcp__mstar__mstar_plan', 'show'],
+      ['mcp__mstar__mstar_workflow_note', 'coverage'],
+    ]) {
+      expect([name, refusalOf(name, action)]).toEqual([name, undefined])
+    }
   })
 })
