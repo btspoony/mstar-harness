@@ -13,6 +13,12 @@ channels.
   and teammates — receives the same nine definitions; the domain service
   enforces Lead-only creation and interruption, so the toolset is not the
   authority boundary.
+- **The nine tools address TEAM MEMBERS, not every subagent.** `list_agents`,
+  `send_message` and `interrupt_agent` resolve roster targets. A child started
+  through the direct `subagent` tool is not on that roster, so on a profile that
+  mounts both surfaces it is invisible here and a `send_message` /
+  `interrupt_agent` call on its id refuses with `TEAM_MEMBER_NOT_FOUND`. Channel
+  choice → `dsh.md` § Pick the delegation channel before you delegate.
 - **Any root session is the implicit Lead**; a teammate is a continuable
   subagent child of that Lead. `spawn_teammate` sends the initial task
   unchanged, `send_message` steers a running member at its nearest step
