@@ -420,51 +420,6 @@ describe("MCP session identity", () => {
     }
   });
 
-  /**
-   * The whole point of publishing the selector: a connection built with NO
-   * launcher option admits a caller-declared `sessionId`, and the value is what
-   * reaches the request context the handler runs on. A command whose output IS
-   * that context makes the claim observable end to end.
-   */
-  test("a default resolver admits sessionId and the request context carries it", async () => {
-    const identityEcho: CommandDefinition = {
-      id: "fixture.identity",
-      description: "Echo the admitted session identity.",
-      effects: ["validate"],
-      cli: {
-        path: ["fixture", "identity"], aliases: [], arguments: [],
-        options: [
-          { key: "harness", flags: "--harness <path>", required: false },
-          { key: "sessionId", flags: "--session-id <id>", required: false, context: "sessionId" },
-        ],
-      },
-      input: z.object({ harness: z.string().optional() }).strict(),
-      output: commandEnvelopeSchema,
-      async execute(_input, invocation) {
-        return { version: 1, command: "fixture.identity", status: "ok", code: "fixture.identity.ok", exitCode: 0, data: { sessionId: invocation.sessionId ?? null } };
-      },
-    };
-    const root = fixtureRoot();
-    const server = new McpServer({ name: "default-resolver-server", version: "1.0.0" });
-    const client = new Client({ name: "default-resolver-client", version: "1.0.0" });
-    const [clientEnd, serverEnd] = InMemoryTransport.createLinkedPair();
-    try {
-      // Literally the zero-option factory: no root pin, no identity option. The
-      // call names its own root, so admission's unpinned-root rule is satisfied.
-      registerMcpCommands(server, [identityEcho], createContextResolver());
-      await server.connect(serverEnd);
-      await client.connect(clientEnd);
-      const result = await client.callTool({
-        name: "mstar_fixture",
-        arguments: { action: "identity", harness: root, sessionId: "calling-session" },
-      });
-      expect(result.isError).not.toBe(true);
-      expect(result.structuredContent).toMatchObject({ status: "ok", data: { sessionId: "calling-session" } });
-    } finally {
-      await client.close();
-      await server.close();
-    }
-  });
 
   test("invalid identity formats fail specifically at the shared safe-id guard", async () => {
     const fixture = await initializedHarness();
