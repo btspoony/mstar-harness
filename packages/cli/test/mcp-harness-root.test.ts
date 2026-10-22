@@ -1131,34 +1131,40 @@ const LAUNCH_QC_ASSIGNMENT = `## Assignment
 `;
 
 /**
- * A launch directory that LOOKS like a working checkout: a Git repository with
- * one commit, every file the root-free validators read (a clean lintable source
- * file, an Assignment, aligned QC assignments, a valid DESIGN.md, a valid
- * SKILL.md), and a review body. Every root-free member that reads a relative
- * path from the invocation directory answers confidently here — which is
- * exactly the silent wrong answer the refusal exists to prevent.
+ * A launch directory and a DIFFERENT declared workspace, each LOOKING like a
+ * working checkout: a Git repository with one commit, every file the root-free
+ * validators read (a clean lintable source file, an Assignment, aligned QC
+ * assignments, a valid DESIGN.md, a valid SKILL.md), and a review body. Every
+ * root-free member that reads a relative path from the invocation directory
+ * answers confidently in either one — which is exactly the silent wrong answer
+ * the refusal exists to prevent. The two are SIBLINGS, so a resolution that
+ * fell back to the process directory names the launch copy, and a
+ * declared-workspace assertion on the path can tell the two apart.
  */
-async function launchDirectoryCheckout(): Promise<{ launch: string }> {
+async function launchDirectoryCheckout(): Promise<{ launch: string; workspace: string }> {
   const root = mkdtempSync(path.join(os.tmpdir(), "mcp-harness-root-"));
   roots.push(root);
   const launch = path.join(root, "launch");
-  mkdirSync(path.join(launch, "skills", "mstar-harness-core"), { recursive: true });
-  mkdirSync(path.join(launch, "design"), { recursive: true });
-  writeFileSync(path.join(launch, "tracked.txt"), "no credentials here\n", "utf8");
-  writeFileSync(path.join(launch, "review.md"), "## Review\n", "utf8");
-  writeFileSync(path.join(launch, "app.ts"), "export const tracked = true;\n", "utf8");
-  writeFileSync(path.join(launch, "assignment.md"), LAUNCH_ASSIGNMENT, "utf8");
-  writeFileSync(path.join(launch, "qc1.md"), LAUNCH_QC_ASSIGNMENT, "utf8");
-  writeFileSync(path.join(launch, "qc2.md"), LAUNCH_QC_ASSIGNMENT, "utf8");
-  writeFileSync(path.join(launch, "design", "DESIGN.md"), DESIGN_LEVEL1, "utf8");
-  writeFileSync(path.join(launch, "skills", "mstar-harness-core", "SKILL.md"), SKILL_GOOD, "utf8");
-  const git = (args: string[]): void => {
-    execFileSync("git", args, { cwd: launch, stdio: ["ignore", "ignore", "ignore"] });
-  };
-  git(["init", "--quiet"]);
-  git(["add", "-A"]);
-  git(["-c", "user.email=fixture@example.invalid", "-c", "user.name=fixture", "commit", "--quiet", "-m", "fixture launch directory"]);
-  return { launch };
+  const workspace = path.join(root, "workspace");
+  for (const checkout of [launch, workspace]) {
+    mkdirSync(path.join(checkout, "skills", "mstar-harness-core"), { recursive: true });
+    mkdirSync(path.join(checkout, "design"), { recursive: true });
+    writeFileSync(path.join(checkout, "tracked.txt"), "no credentials here\n", "utf8");
+    writeFileSync(path.join(checkout, "review.md"), "## Review\n", "utf8");
+    writeFileSync(path.join(checkout, "app.ts"), "export const tracked = true;\n", "utf8");
+    writeFileSync(path.join(checkout, "assignment.md"), LAUNCH_ASSIGNMENT, "utf8");
+    writeFileSync(path.join(checkout, "qc1.md"), LAUNCH_QC_ASSIGNMENT, "utf8");
+    writeFileSync(path.join(checkout, "qc2.md"), LAUNCH_QC_ASSIGNMENT, "utf8");
+    writeFileSync(path.join(checkout, "design", "DESIGN.md"), DESIGN_LEVEL1, "utf8");
+    writeFileSync(path.join(checkout, "skills", "mstar-harness-core", "SKILL.md"), SKILL_GOOD, "utf8");
+    const git = (args: string[]): void => {
+      execFileSync("git", args, { cwd: checkout, stdio: ["ignore", "ignore", "ignore"] });
+    };
+    git(["init", "--quiet"]);
+    git(["add", "-A"]);
+    git(["-c", "user.email=fixture@example.invalid", "-c", "user.name=fixture", "commit", "--quiet", "-m", "fixture checkout"]);
+  }
+  return { launch, workspace };
 }
 
 /**
@@ -1267,6 +1273,51 @@ describe("MCP control-root admission class", () => {
     }
   });
 
+  test("an array path input names EVERY relative member in one refusal, and only the relative ones", async () => {
+    const fixture = await launchDirectoryCheckout();
+    const previousCwd = process.cwd();
+    const previousHarness = process.env.MSTAR_HARNESS_DIR;
+    delete process.env.MSTAR_HARNESS_DIR;
+    process.chdir(fixture.launch);
+    try {
+      type Diagnostic = { path?: string; code?: string; expected?: string; received?: string };
+      const diagnosticsOf = (result: Awaited<ReturnType<typeof callRawTool>>): Diagnostic[] =>
+        (rawEnvelope(result).details?.diagnostics ?? []) as Diagnostic[];
+
+      // Two relative members: both are refused TOGETHER, each under its own
+      // index. A regression that reports only `files[0]` leaves the caller
+      // learning the second one on a later attempt.
+      const both = await callRawTool(createContextResolver(), "worktree.qc-alignment", { files: ["qc1.md", "qc2.md"] });
+      expect(both.isError).toBe(true);
+      expect(rawEnvelope(both)).toMatchObject({ status: "usage", code: "command.invalid-input" });
+      expect(diagnosticsOf(both).map((entry) => entry.path)).toEqual(["files[0]", "files[1]"]);
+      expect(diagnosticsOf(both).map((entry) => [entry.code, entry.expected, entry.received])).toEqual([
+        ["invalid_type", "absolute path", "relative path"],
+        ["invalid_type", "absolute path", "relative path"],
+      ]);
+      const bothText = rawText(both);
+      expect(bothText).toContain("the assignment file #1");
+      expect(bothText).toContain("the assignment file #2");
+      expect(bothText).not.toContain(fixture.launch);
+
+      // Absolute first, relative second: the absolute member is accepted, so
+      // exactly one diagnostic remains, and its index still points at the
+      // member that actually offends.
+      const mixed = await callRawTool(createContextResolver(), "worktree.qc-alignment", {
+        files: [path.join(fixture.launch, "qc1.md"), "qc2.md"],
+      });
+      expect(mixed.isError).toBe(true);
+      expect(diagnosticsOf(mixed).map((entry) => entry.path)).toEqual(["files[1]"]);
+      const mixedText = rawText(mixed);
+      expect(mixedText).toContain("the assignment file #2");
+      expect(mixedText).not.toContain("the assignment file #1");
+    } finally {
+      process.chdir(previousCwd);
+      if (previousHarness === undefined) delete process.env.MSTAR_HARNESS_DIR;
+      else process.env.MSTAR_HARNESS_DIR = previousHarness;
+    }
+  });
+
   test("a validator's relative path resolves under the DECLARED workspace, and an absolute one needs no declaration", async () => {
     const fixture = await launchDirectoryCheckout();
     const previousCwd = process.cwd();
@@ -1277,11 +1328,13 @@ describe("MCP control-root admission class", () => {
     process.chdir(fixture.launch);
     try {
       // The same relative target the class loop refuses, now under the workspace
-      // the launcher named (round 9's rule, kept).
-      const declared = await callRawTool(createContextResolver({ workspace: fixture.launch }), "lint", { target: "app.ts" });
+      // the launcher named (round 9's rule, kept). The launch checkout holds the
+      // SAME clean app.ts, so a resolution that fell back to `process.cwd()`
+      // would answer with the launch copy's path.
+      const declared = await callRawTool(createContextResolver({ workspace: fixture.workspace }), "lint", { target: "app.ts" });
       expect(rawEnvelope(declared)).toMatchObject({ status: "ok", code: "lint.ok" });
       const linted = (rawEnvelope(declared).data as { results: Array<{ file: string }> }).results;
-      expect(linted[0]?.file).toBe(path.join(fixture.launch, "app.ts"));
+      expect(linted[0]?.file).toBe(path.join(fixture.workspace, "app.ts"));
 
       // The other family path inputs take the same workspace route and still
       // answer on their clean fixtures (the aligned pair proves the indexed
@@ -1292,16 +1345,16 @@ describe("MCP control-root admission class", () => {
         ["dispatch.validate", { assignmentFile: "assignment.md" }],
         ["worktree.qc-alignment", { files: ["qc1.md", "qc2.md"] }],
       ] as const) {
-        const answered = await callRawTool(createContextResolver({ workspace: fixture.launch }), id, args);
+        const answered = await callRawTool(createContextResolver({ workspace: fixture.workspace }), id, args);
         expect([id, rawEnvelope(answered).status]).toEqual([id, "ok"]);
         expect([id, rawText(answered).includes("LAUNCH directory")]).toEqual([id, false]);
       }
 
       // An absolute path was always legal on the unnamed connection: the caller
       // named the directory itself.
-      const absolute = await callRawTool(createContextResolver(), "lint", { target: path.join(fixture.launch, "app.ts") });
+      const absolute = await callRawTool(createContextResolver(), "lint", { target: path.join(fixture.workspace, "app.ts") });
       expect(rawEnvelope(absolute)).toMatchObject({ status: "ok", code: "lint.ok" });
-      expect((rawEnvelope(absolute).data as { results: Array<{ file: string }> }).results[0]?.file).toBe(path.join(fixture.launch, "app.ts"));
+      expect((rawEnvelope(absolute).data as { results: Array<{ file: string }> }).results[0]?.file).toBe(path.join(fixture.workspace, "app.ts"));
     } finally {
       process.chdir(previousCwd);
       if (previousHarness === undefined) delete process.env.MSTAR_HARNESS_DIR;
@@ -1336,7 +1389,7 @@ describe("MCP control-root admission class", () => {
       // `--workspace` names the directory every call runs from, so the default
       // is no longer the host's: the same no-argument scan that refused above
       // answers about the DECLARED checkout instead.
-      const declared = createContextResolver({ workspace: fixture.launch });
+      const declared = createContextResolver({ workspace: fixture.workspace });
       const scanned = await callRawTool(declared, "audit.secret-scan", {});
       expect(scanned.isError).toBe(false);
       expect((scanned.structuredContent as CommandEnvelope).data).toMatchObject({ findings: [] });
@@ -1509,6 +1562,29 @@ describe("MCP control-root admission class", () => {
       expect(namedEnvelope.status).not.toBe("usage");
       expect(rawText(named)).toContain(corpus);
       expect(rawText(named)).not.toContain(fixture.launch);
+
+      // `skillsDir` is OPTIONAL because omitting it derives the parent of the
+      // roles dir the caller named — but a relative value names no directory at
+      // all, so only that input is refused.
+      const relativeSkills = await callRawTool(createContextResolver(), "roles.validate", { rolesDir, skillsDir: "skills" });
+      expect(relativeSkills.isError).toBe(true);
+      const relativeEnvelope = relativeSkills.structuredContent as CommandEnvelope;
+      expect(relativeEnvelope).toMatchObject({ status: "usage", code: "command.invalid-input" });
+      expect(relativeEnvelope.details?.diagnostics).toEqual([
+        expect.objectContaining({ path: "skillsDir", code: "invalid_type", expected: "absolute path", received: "relative path" }),
+      ]);
+      expect(relativeEnvelope.data).toBeUndefined();
+      const relativeText = rawText(relativeSkills);
+      expect(relativeText).toContain("the skills root");
+      expect(relativeText).not.toContain(corpus);
+
+      // The same field, named absolutely, is accepted: the refusal above was
+      // the launch-directory rule, not `skillsDir` being required.
+      const absoluteSkills = await callRawTool(createContextResolver(), "roles.validate", {
+        rolesDir,
+        skillsDir: path.join(corpus, "skills"),
+      });
+      expect((absoluteSkills.structuredContent as CommandEnvelope).status).not.toBe("usage");
     } finally {
       process.chdir(previousCwd);
       if (previousHarness === undefined) delete process.env.MSTAR_HARNESS_DIR;
