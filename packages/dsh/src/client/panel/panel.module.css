@@ -446,9 +446,9 @@
  * state machine), the render layer only styles it (honest — no UI
  * guesswork). A quiet "passed/visited" treatment: the badge keeps its
  * pure number (plan Item 1) with a success border + tint, the chip text
- * dims to muted and gains a leading ✓ (the panel's settled glyph — cf.
- * zone.legend.agent-settled). Clearly apart from idle (no ✓, no success
- * tint) and from current (no business glow / ring / bold). */
+ * dims to muted and gains a leading ✓ (the panel's settled glyph). Clearly
+ * apart from idle (no ✓, no success tint) and from current (no business
+ * glow / ring / bold). */
 [data-step-state='done'] .iterationStepBadge {
   border-color: var(--dsw-alias-state-success-primary);
   color: var(--dsw-alias-state-success-primary);

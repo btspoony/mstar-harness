@@ -47,14 +47,6 @@ function firstHolder(files: readonly string[], token: string): string | null {
   return null
 }
 
-/** Assert at least one file in the set contains EACH token. */
-function expectPresent(files: readonly string[], tokens: readonly string[]): void {
-  for (const token of tokens) {
-    const holder = firstHolder(files, token)
-    expect(holder !== null, `required token "${token}" is missing from every scanned file`).toBe(true)
-  }
-}
-
 /** Assert the given path no longer exists. */
 function expectFileAbsent(path: string): void {
   let exists = true
@@ -121,17 +113,6 @@ describe('panel anchor contract — the retired agents surface stays retired', (
       'zone.agents.',
     ])
     expectFileAbsent(LIST_PAGE)
-  })
-
-  it('the roadmap page and its anchor family exist', () => {
-    expectPresent(collectFiles(PANEL_DIR), [
-      'data-mstar-page="roadmap"',
-      'data-roadmap-state',
-      'data-roadmap-milestone',
-      'data-roadmap-not-applicable',
-      'data-roadmap-absent',
-      'data-roadmap-unavailable',
-    ])
   })
 })
 

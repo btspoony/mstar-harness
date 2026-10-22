@@ -1,11 +1,8 @@
 /**
  * Zone component styles — what the components mounted today use, and nothing
- * else. Both retired surfaces are gone from here: the WorkflowCanvas zone
- * dashboard (canvas/scroll/zones grid, footer bar, vertical IterationZone
- * stepper, AgentFlowZone stage pipeline) and the Legend. The event-row dock
- * styles moved to `pages/event-log.module.css` with the merged event log.
- * What remains:
- *   - the shared `.zone` frame and the zone-level empty/emphasis classes,
+ * else. What remains:
+ *   - the shared `.zone` frame and `.zoneEmpty` (a zone whose data did not
+ *     answer), used by the TaskBoard and the project rollup,
  *   - the TaskBoard kanban (five stacked groups, reused in flow by
  *     IterationTaskPage — plan sidebar §L4.2).
  *
