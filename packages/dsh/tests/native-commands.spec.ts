@@ -42,6 +42,7 @@ import {
 import type { ExecutionCaller, ExecutionContext, ExecutionSessionRef, StoreHandle } from '@mstar-harness/engine'
 import { adoptExecutionBinding, resolveExecutionLedgerTarget } from '../src/gates/workflow-selection.ts'
 import {
+  clearExecutionBindingRoot,
   executionBindingRootOf,
   recordExecutionBindingRoot,
   resetExecutionBindingRootsForTests,
@@ -754,6 +755,39 @@ describe('durable adopted-root seam — a cross-root bind survives a restart', (
     expect(adoptedBindingOf(adoptedRoot, app.root, CHILD_ID)).not.toBeNull()
   })
 
+  it('an adoption that lands before the store installs is back-filled at install and survives a restart', async () => {
+    const app = await bootedWithFixture()
+    const adoptedRoot = await mkdtemp(join(tmpdir(), 'native-adopted-root-'))
+    roots.push(adoptedRoot)
+    await seedUnboundWorkflow(adoptedRoot, CHILD_ID)
+    await mkdir(join(adoptedRoot, 'workflows', WORKFLOW_ID), { recursive: true })
+    const medium = new Map<string, string>()
+    const stub = stubFacilityOf(stubHandleOf(medium))
+    const provider = await mountStorageDomain(app, stub.facility)
+    // The facility's `open` is still pending when the bind adopts root B: the
+    // receipt is recorded in-process, and its durable write has no store to
+    // reach yet.
+    await stub.opened
+    const bound = envelopeOf(await run(app.ctx, BIND_TOOL, agentOf(CHILD_ID, app.root), {
+      execution: true,
+      coordinator: true,
+      workflow: WORKFLOW_ID,
+      harness: adoptedRoot,
+    }))
+    expect(bound.status).toBe('ok')
+
+    // The install back-fills the overlay: the receipt predates the store and
+    // still reaches the table (the restart below is what proves it).
+    stub.settle()
+    await stub.installed
+    await flushQueuedContinuations()
+
+    // ---- the restart: the seam and the in-process receipts die, the medium does not ----
+    await provider.dispose()
+    restartSeam(medium)
+    expect(executionBindingRootOf(CHILD_ID, app.root)).toBe(adoptedRoot)
+  })
+
   it('disposal removes the seam: a read falls back to the in-process receipt and nothing reaches the closed domain', async () => {
     const app = booted = await bootApp()
     const medium = new Map<string, string>()
@@ -901,6 +935,114 @@ describe('durable adopted-root seam — a cross-root bind survives a restart', (
     expect(refused.code).toBe('execution.clear.no-binding')
     stopLogging()
     await provider.dispose()
+  })
+
+  it('a rejected durable put is contained: the bind still completes, the cause is logged once, and the receipt still answers', async () => {
+    const app = await bootedWithFixture()
+    const adoptedRoot = await mkdtemp(join(tmpdir(), 'native-adopted-root-'))
+    roots.push(adoptedRoot)
+    await seedUnboundWorkflow(adoptedRoot, CHILD_ID)
+    await mkdir(join(adoptedRoot, 'workflows', WORKFLOW_ID), { recursive: true })
+    const logged: Array<{ name: string; type: string; args: unknown[] }> = []
+    const stopLogging = (app.ctx.logger as unknown as { exporter(exporter: unknown): () => void }).exporter({
+      levels: { default: 2 },
+      export: (message: { name: string; type: string; args: unknown[] }) => logged.push(message),
+    })
+    const before = logged.length
+    const stub = stubFacilityOf({
+      table: () => ({
+        get: () => undefined,
+        put: async () => { throw new Error('durable table refused the write') },
+        delete: async () => false,
+      }),
+      close: async () => {},
+    })
+    const provider = await mountStorageDomain(app, stub.facility)
+    stub.settle()
+    await stub.installed
+    // The receipt's durable write is fire-and-forget; its rejection must never
+    // reach the native bind.
+    const bound = envelopeOf(await run(app.ctx, BIND_TOOL, agentOf(CHILD_ID, app.root), {
+      execution: true,
+      coordinator: true,
+      workflow: WORKFLOW_ID,
+      harness: adoptedRoot,
+    }))
+    await flushQueuedContinuations()
+    expect(bound.status).toBe('ok')
+    expect(executionBindingRootOf(CHILD_ID, app.root)).toBe(adoptedRoot)
+    const warned = logged.slice(before).filter((row) => row.name === EXECUTION_BINDING_ROOTS_LOGGER)
+    expect(warned).toHaveLength(1)
+    expect(warned[0]!.type).toBe('warn')
+    expect(String(warned[0]!.args[0])).toContain('durable table refused the write')
+    // The returned promise itself is contained: awaiting it cannot reject.
+    await recordExecutionBindingRoot(PARENT_ID, app.root, '/synthetic/parent-root')
+    expect(executionBindingRootOf(PARENT_ID, app.root)).toBe('/synthetic/parent-root')
+    expect(logged.slice(before).filter((row) => row.name === EXECUTION_BINDING_ROOTS_LOGGER)).toHaveLength(2)
+    stopLogging()
+    await provider.dispose()
+  })
+
+  it('a rejected durable delete is contained: the clear resolves and the tombstone hides the root while the durable record survives', async () => {
+    const app = booted = await bootApp()
+    const logged: Array<{ name: string; type: string; args: unknown[] }> = []
+    const stopLogging = (app.ctx.logger as unknown as { exporter(exporter: unknown): () => void }).exporter({
+      levels: { default: 2 },
+      export: (message: { name: string; type: string; args: unknown[] }) => logged.push(message),
+    })
+    const medium = new Map<string, string>()
+    const uninstall = installExecutionBindingRootStore({
+      get: (key) => medium.get(key),
+      put: async (key, value) => { medium.set(key, value) },
+      delete: async () => { throw new Error('durable table refused the delete') },
+    })
+    seamDisposers.push(uninstall)
+    await recordExecutionBindingRoot(CHILD_ID, app.root, '/synthetic/adopted-root')
+
+    const before = logged.length
+    await clearExecutionBindingRoot(CHILD_ID, app.root)
+    // The tombstone answers at once, even though the backend never removed the record.
+    expect(executionBindingRootOf(CHILD_ID, app.root)).toBeUndefined()
+    // With no in-process knowledge left, the durable record still answers: the
+    // failed delete lost nothing.
+    resetExecutionBindingRootsForTests()
+    expect(executionBindingRootOf(CHILD_ID, app.root)).toBe('/synthetic/adopted-root')
+    const warned = logged.slice(before).filter((row) => row.name === EXECUTION_BINDING_ROOTS_LOGGER)
+    expect(warned).toHaveLength(1)
+    expect(String(warned[0]!.args[0])).toContain('durable table refused the delete')
+    stopLogging()
+  })
+
+  it('a delayed durable delete never blocks the read: the tombstone answers while the delete is in flight', async () => {
+    const app = booted = await bootApp()
+    const medium = new Map<string, string>()
+    const backend = Promise.withResolvers<boolean>()
+    let deletes = 0
+    let landed = 0
+    const uninstall = installExecutionBindingRootStore({
+      get: (key) => medium.get(key),
+      put: async (key, value) => { medium.set(key, value) },
+      delete: async (key) => {
+        deletes += 1
+        const had = await backend.promise
+        medium.delete(key)
+        landed += 1
+        return had
+      },
+    })
+    seamDisposers.push(uninstall)
+    await recordExecutionBindingRoot(CHILD_ID, app.root, '/synthetic/adopted-root')
+
+    const clearing = clearExecutionBindingRoot(CHILD_ID, app.root)
+    // The tombstone is synchronous: the read never waits on the backend.
+    expect(deletes).toBe(1)
+    expect(executionBindingRootOf(CHILD_ID, app.root)).toBeUndefined()
+    // The durable delete has not landed — the read answered anyway.
+    expect(landed).toBe(0)
+    backend.resolve(true)
+    await clearing
+    expect(landed).toBe(1)
+    expect(executionBindingRootOf(CHILD_ID, app.root)).toBeUndefined()
   })
 })
 

@@ -55,14 +55,26 @@ export interface ExecutionBindingRootStore {
 /** The installed seam; `undefined` while no store is open (today's behaviour). */
 let installedStore: ExecutionBindingRootStore | undefined
 
+/**
+ * The overlay replay the sibling module registers at load and every install
+ * runs once: a receipt recorded while no store existed reaches the table then,
+ * so an adoption made before the facility's `open` resolved is not lost.
+ */
+let replayObservedRoots: (() => void) | undefined
+
+/** Register the replay `installExecutionBindingRootStore` runs (module-load wiring in the sibling). */
+export function registerExecutionBindingRootReplay(replay: () => void): void {
+  replayObservedRoots = replay
+}
+
 /** Logger label for the durable seam (dsh logger naming: `<scope>/<subject>`). */
 export const EXECUTION_BINDING_ROOTS_LOGGER = 'mstar/execution-binding-roots'
 
 /** Module-level warning sink — bound by `apply` to `ctx.logger(EXECUTION_BINDING_ROOTS_LOGGER)` (module-sink pattern). */
 export type ExecutionBindingRootsLogSink = (message: string) => void
 
-/** The unbound default: the warning still reaches the host's own console. */
-const defaultLogSink: ExecutionBindingRootsLogSink = (message) => console.warn(message)
+/** The unbound default: the warning still reaches the host's own console, with the label no logger scope supplies. */
+const defaultLogSink: ExecutionBindingRootsLogSink = (message) => console.warn(`${EXECUTION_BINDING_ROOTS_LOGGER}: ${message}`)
 
 let logSink: ExecutionBindingRootsLogSink = defaultLogSink
 
@@ -81,11 +93,13 @@ export function setExecutionBindingRootsLogger(sink: ExecutionBindingRootsLogSin
  * Log one contained durable failure. Never-throws invariant: the whole sink call
  * is inside the guard, so neither the default console write nor a throwing bound
  * sink can re-enter the caller — a contained read failure stays a read failure
- * and a contained write rejection stays a resolved promise.
+ * and a contained write rejection stays a resolved promise. The message carries
+ * no label: the sink owns it — the default console sink prefixes it, while the
+ * bound `ctx.logger(EXECUTION_BINDING_ROOTS_LOGGER)` scope already labels it.
  */
 function warn(message: string, error: unknown): void {
   try {
-    logSink(`${EXECUTION_BINDING_ROOTS_LOGGER}: ${message}: ${error instanceof Error ? error.message : String(error)}`)
+    logSink(`${message}: ${error instanceof Error ? error.message : String(error)}`)
   } catch {
     // Never-throws invariant (module log-sink pattern).
   }
@@ -95,11 +109,14 @@ function warn(message: string, error: unknown): void {
  * Install the durable reader/writer and return its disposer. One seam per
  * process: a second install replaces the first, and a disposer restores the
  * seam that was installed before it (tests boot several apps in one process).
- * Installing never drops an in-process receipt this host already holds.
+ * Installing never drops an in-process receipt this host already holds: it
+ * replays them into the new store, so an adoption made before the seam existed
+ * becomes durable here.
  */
 export function installExecutionBindingRootStore(store: ExecutionBindingRootStore): () => void {
   const previous = installedStore
   installedStore = store
+  replayObservedRoots?.()
   return () => {
     if (installedStore === store) installedStore = previous
   }

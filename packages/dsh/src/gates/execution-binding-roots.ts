@@ -25,7 +25,10 @@
  * Durability: when the plugin's storage-domain seam is installed (see
  * `execution-binding-roots-domain.ts`), every record and clear is mirrored into
  * a durable table under the same `keyOf` key, so the receipt survives a host
- * restart. With no seam — the host service is absent, its open refused, or a
+ * restart. The store installs asynchronously, so an adoption may land first;
+ * installing then replays this module's overlay into the table, and a cleared
+ * tombstone (`null`) is deleted from the table instead of being written back as
+ * a root. With no seam — the host service is absent, its open refused, or a
  * bare module instance in a test — the receipt is exactly the per-process map
  * it has always been, and the consumers answer as they did before this module
  * existed (attribution null, clear `no-binding`). The named recovery for that
@@ -52,6 +55,7 @@ import {
   deleteDurableExecutionBindingRoot,
   durableExecutionBindingRootOf,
   putDurableExecutionBindingRoot,
+  registerExecutionBindingRootReplay,
 } from './execution-binding-roots-domain.ts'
 
 /**
@@ -122,3 +126,14 @@ export function clearExecutionBindingRoot(sessionId: string, cwd: string): Promi
 export function resetExecutionBindingRootsForTests(): void {
   observedRoots.clear()
 }
+
+// The store installs asynchronously (the plugin's deferred child), so an
+// adoption can precede it: installing replays every observed entry into the
+// table — the recorded roots, and the cleared tombstones as deletes rather than
+// roots — so no receipt is readable in-process yet absent after a restart.
+registerExecutionBindingRootReplay(() => {
+  for (const [key, root] of observedRoots) {
+    if (root === null) void deleteDurableExecutionBindingRoot(key)
+    else void putDurableExecutionBindingRoot(key, root)
+  }
+})
