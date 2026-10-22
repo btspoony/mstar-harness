@@ -15,6 +15,7 @@ import { createMcpServer } from "../src/mcp/server";
 import { createMcpEffects } from "../src/mcp/effects";
 import { createContextResolver, McpControlRootError } from "../src/mcp/stdio";
 import { runCli } from "./harness";
+import { DESIGN_LEVEL1, SKILL_GOOD } from "./support/cli-content-fixtures";
 
 const roots: string[] = [];
 afterEach(() => { for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true }); });
@@ -1059,33 +1060,36 @@ const CONTROL_ROOT_CLASS: Readonly<Record<string, "root" | "none">> = {
 
 /**
  * The SECOND axis of the root-free classification, pinned to the same catalog:
- * does the command's contract DEFAULT a path from the invocation directory, or
- * take that checkout itself as its subject?
+ * does the command's contract default a path from the invocation directory,
+ * accept a path input that would resolve against it, or take that checkout
+ * itself as its subject?
  *
  * A null root is only half of an admitted answer: it also leaves the invocation
  * `cwd` at this server's LAUNCH directory, which is the HOST's checkout. An
  * entry here therefore refuses per call (cause + recoveries) instead of reading,
  * or writing, a directory the caller never named; its `args` are the minimal
  * call that reaches that refusal and its `subject` is what the refusal must
- * name. `null` means every path and every subject is an explicit input, so a
- * null root is a complete answer.
+ * name. A caller-supplied RELATIVE path is one of those inputs: it is explicit
+ * about the file but not about the directory it lives in. `null` means no path
+ * the command reads resolves against the invocation directory, so a null root
+ * is a complete answer.
  *
  * This is the drift guard for that half: an id added or removed without a
  * decision here fails the keys assertion, and every entry is then exercised
  * through a real tool call. The classification is hand-made for the same reason
- * the root class is — only the handler knows whether it defaults a path.
+ * the root class is — only the handler knows whether it reads a path.
  */
 const LAUNCH_CWD_DEFAULT: Readonly<Record<string, null | { readonly args: Record<string, unknown>; readonly subject: string }>> = {
   "audit.secret-scan": { args: {}, subject: "the repository to scan" },
   "audit.supply-chain": { args: {}, subject: "the repository to check" },
-  "design-md.validate": null,
-  "dispatch.validate": null,
+  "design-md.validate": { args: { dir: "design" }, subject: "the design directory" },
+  "dispatch.validate": { args: { assignmentFile: "assignment.md" }, subject: "the assignment file" },
   "doctor": { args: { target: "omp" }, subject: "the project root this diagnosis reads" },
   "harness.scaffold": { args: {}, subject: "the scaffold root" },
   "host.detect": null,
   "host.skill-root": null,
   "iteration.push-cadence": null,
-  "lint": null,
+  "lint": { args: { target: "app.ts" }, subject: "the lint target" },
   "path.resolve": { args: {}, subject: "the start directory" },
   "plugin.validate": { args: {}, subject: "the plugin package" },
   "pr-review.budget": null,
@@ -1100,27 +1104,54 @@ const LAUNCH_CWD_DEFAULT: Readonly<Record<string, null | { readonly args: Record
   "review.seats": { args: { assignmentFile: "assignment.md" }, subject: "the assignment file" },
   "roles.validate": { args: {}, subject: "the role corpus directory" },
   "schema": null,
-  "skill.lint": null,
+  "skill.lint": { args: { skillDir: "skills/mstar-harness-core" }, subject: "the skill directory" },
   "store.execution.export": null,
   "store.execution.restore": null,
   "store.execution.restore-preview": null,
-  "worktree.qc-alignment": { args: { files: ["assignment.md"] }, subject: "the assignment file" },
+  "worktree.qc-alignment": { args: { files: ["qc1.md", "qc2.md"] }, subject: "the assignment file" },
 };
+
+/** An Assignment both `dispatch.validate` and `review.seats` accept. */
+const LAUNCH_ASSIGNMENT = `## Assignment
+
+**Execute as**: fullstack-dev
+**Delegation**: forbidden
+**Task category**: logic
+**Execution mode**: sdd
+**Working branch**: feature/fixture
+**Task budget (implement / ops rounds)**: S - one focused implementer round
+`;
+
+/** Two byte-identical QC assignments, so `worktree.qc-alignment` aligns them. */
+const LAUNCH_QC_ASSIGNMENT = `## Assignment
+**Execute as**: qc-specialist
+**Task category**: logic
+**plan_id**: plan-fireplace
+**Review range / Diff basis**: merge-base: main + tip: HEAD
+`;
 
 /**
  * A launch directory that LOOKS like a working checkout: a Git repository with
- * one commit, the repo-relative `skills/` path `roles.validate` defaults to, and
- * a review body. Every root-free member that defaults a path from the
- * invocation directory answers confidently here — which is exactly the silent
- * wrong answer the refusal exists to prevent.
+ * one commit, every file the root-free validators read (a clean lintable source
+ * file, an Assignment, aligned QC assignments, a valid DESIGN.md, a valid
+ * SKILL.md), and a review body. Every root-free member that reads a relative
+ * path from the invocation directory answers confidently here — which is
+ * exactly the silent wrong answer the refusal exists to prevent.
  */
 async function launchDirectoryCheckout(): Promise<{ launch: string }> {
   const root = mkdtempSync(path.join(os.tmpdir(), "mcp-harness-root-"));
   roots.push(root);
   const launch = path.join(root, "launch");
-  mkdirSync(path.join(launch, "skills"), { recursive: true });
+  mkdirSync(path.join(launch, "skills", "mstar-harness-core"), { recursive: true });
+  mkdirSync(path.join(launch, "design"), { recursive: true });
   writeFileSync(path.join(launch, "tracked.txt"), "no credentials here\n", "utf8");
   writeFileSync(path.join(launch, "review.md"), "## Review\n", "utf8");
+  writeFileSync(path.join(launch, "app.ts"), "export const tracked = true;\n", "utf8");
+  writeFileSync(path.join(launch, "assignment.md"), LAUNCH_ASSIGNMENT, "utf8");
+  writeFileSync(path.join(launch, "qc1.md"), LAUNCH_QC_ASSIGNMENT, "utf8");
+  writeFileSync(path.join(launch, "qc2.md"), LAUNCH_QC_ASSIGNMENT, "utf8");
+  writeFileSync(path.join(launch, "design", "DESIGN.md"), DESIGN_LEVEL1, "utf8");
+  writeFileSync(path.join(launch, "skills", "mstar-harness-core", "SKILL.md"), SKILL_GOOD, "utf8");
   const git = (args: string[]): void => {
     execFileSync("git", args, { cwd: launch, stdio: ["ignore", "ignore", "ignore"] });
   };
@@ -1204,7 +1235,7 @@ describe("MCP control-root admission class", () => {
     expect(Object.keys(LAUNCH_CWD_DEFAULT).sort()).toEqual(rootFree);
   });
 
-  test("a root-free command that defaults a path from the invocation directory refuses on an unpinned connection", async () => {
+  test("a root-free command that reads a path from the invocation directory refuses on an unpinned connection", async () => {
     const fixture = await launchDirectoryCheckout();
     const previousCwd = process.cwd();
     const previousHarness = process.env.MSTAR_HARNESS_DIR;
@@ -1229,6 +1260,48 @@ describe("MCP control-root admission class", () => {
         // directory is not even echoed back.
         expect([id, text.includes(fixture.launch)]).toEqual([id, false]);
       }
+    } finally {
+      process.chdir(previousCwd);
+      if (previousHarness === undefined) delete process.env.MSTAR_HARNESS_DIR;
+      else process.env.MSTAR_HARNESS_DIR = previousHarness;
+    }
+  });
+
+  test("a validator's relative path resolves under the DECLARED workspace, and an absolute one needs no declaration", async () => {
+    const fixture = await launchDirectoryCheckout();
+    const previousCwd = process.cwd();
+    const previousHarness = process.env.MSTAR_HARNESS_DIR;
+    delete process.env.MSTAR_HARNESS_DIR;
+    // The launch checkout is where the unpinned refusal above stood: resolution
+    // must not come from this process directory.
+    process.chdir(fixture.launch);
+    try {
+      // The same relative target the class loop refuses, now under the workspace
+      // the launcher named (round 9's rule, kept).
+      const declared = await callRawTool(createContextResolver({ workspace: fixture.launch }), "lint", { target: "app.ts" });
+      expect(rawEnvelope(declared)).toMatchObject({ status: "ok", code: "lint.ok" });
+      const linted = (rawEnvelope(declared).data as { results: Array<{ file: string }> }).results;
+      expect(linted[0]?.file).toBe(path.join(fixture.launch, "app.ts"));
+
+      // The other family path inputs take the same workspace route and still
+      // answer on their clean fixtures (the aligned pair proves the indexed
+      // array spelling too).
+      for (const [id, args] of [
+        ["design-md.validate", { dir: "design" }],
+        ["skill.lint", { skillDir: "skills/mstar-harness-core" }],
+        ["dispatch.validate", { assignmentFile: "assignment.md" }],
+        ["worktree.qc-alignment", { files: ["qc1.md", "qc2.md"] }],
+      ] as const) {
+        const answered = await callRawTool(createContextResolver({ workspace: fixture.launch }), id, args);
+        expect([id, rawEnvelope(answered).status]).toEqual([id, "ok"]);
+        expect([id, rawText(answered).includes("LAUNCH directory")]).toEqual([id, false]);
+      }
+
+      // An absolute path was always legal on the unnamed connection: the caller
+      // named the directory itself.
+      const absolute = await callRawTool(createContextResolver(), "lint", { target: path.join(fixture.launch, "app.ts") });
+      expect(rawEnvelope(absolute)).toMatchObject({ status: "ok", code: "lint.ok" });
+      expect((rawEnvelope(absolute).data as { results: Array<{ file: string }> }).results[0]?.file).toBe(path.join(fixture.launch, "app.ts"));
     } finally {
       process.chdir(previousCwd);
       if (previousHarness === undefined) delete process.env.MSTAR_HARNESS_DIR;
