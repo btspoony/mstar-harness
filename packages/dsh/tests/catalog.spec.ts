@@ -63,7 +63,8 @@ import {
   panelDigestOf,
   renderEngineStatusCatalog,
 } from '../src/gates/catalog.ts'
-import { readEngineStatusSnapshot, updateWorkflowSessionBinding } from '../src/engine-status-store.ts'
+import { readDshStatusEmission } from '@mstar-harness/engine'
+import { updateWorkflowSessionBinding } from '../src/engine-status-store.ts'
 import { bootApp, FakeLoaderRegistry, seedActiveWorkflow, seedHarness, seedKnowledgeDoc, seedOpenIssue, seedStore, selectedGenerationFor, type BootResult } from './harness.ts'
 
 let booted: BootResult | undefined
@@ -185,6 +186,26 @@ async function corruptStore(harnessDir: string): Promise<void> {
 /** The loop's default pre-step decision: enter the step with the inbox messages. */
 const defaultEnter = (messages: UserMessage[]): (() => Promise<PreStepDecision>) =>
   () => Promise.resolve<PreStepDecision>({ kind: 'enter', messages })
+
+/** A persisted emission row, read through the ENGINE's own verb (the authority
+ * that wrote it) — the panel-side witness of a rebuild. The plugin keeps no
+ * emission reader any more.
+ */
+const emissionRow = (harnessDir: string, sessionId: string, cwd: string) => {
+  const read = readDshStatusEmission({ harnessDir }, sessionId, cwd)
+  if (read.kind !== 'ok' || read.emission === undefined) {
+    throw new Error(`no persisted emission for ${sessionId}: ${read.kind === 'unavailable' ? read.reason : 'no row'}`)
+  }
+  return read.emission
+}
+/** A persisted emission's payload — the PANEL-side witness of a rebuild. */
+const emissionOf = (harnessDir: string, sessionId: string, cwd: string): Record<string, unknown> =>
+  JSON.parse(emissionRow(harnessDir, sessionId, cwd).payloadJson) as Record<string, unknown>
+/** The agent-flow roles of a persisted emission payload (the ledger witness). */
+const flowRolesOf = (payload: Record<string, unknown>): string[] => {
+  const state = payload.state as { agentFlow: { events: { role: string }[] } | null } | null
+  return (state?.agentFlow?.events ?? []).map((event) => event.role)
+}
 
 /** The session every simulated step carries (the durable catalog-cache key). */
 const SESSION_ID = 's-catalog'
@@ -531,12 +552,10 @@ describe('mstar-engine-status catalog — watermark-free projection + change-dri
 
     // …the PANEL payload still moved: the persist is a separate obligation and
     // its projection is sensitive to the issue facts.
-    const stored = readEngineStatusSnapshot(harnessDir, SESSION_ID, root)
-    expect(stored.kind).toBe('ok')
-    if (stored.kind !== 'ok') throw new Error('unreachable')
-    expect(stored.entry.payload.state).toMatchObject({ residuals: [{ severity: 'high', count: 1 }] })
+    const stored = emissionOf(harnessDir, SESSION_ID, root)
+    expect(stored.state).toMatchObject({ residuals: [{ severity: 'high', count: 1 }] })
     // The persisted freshness turn stays the one the model saw a row in.
-    expect(stored.entry.turn).toBe(1)
+    expect(emissionRow(harnessDir, SESSION_ID, root).turn).toBe(1)
   })
 
   it('a panel-visible change with identical rendered text persists the payload without appending a row (the split gate + revision exclusion, D2)', async () => {
@@ -556,11 +575,9 @@ describe('mstar-engine-status catalog — watermark-free projection + change-dri
     expect(second.kind === 'enter' && second.messages).toEqual([])
     // …but the panel's payload DID move (the persisted emission carries the new
     // facts) and its freshness turn still names the emission the model saw.
-    const stored = readEngineStatusSnapshot(app.harnessDir, SESSION_ID, app.root)
-    expect(stored.kind).toBe('ok')
-    if (stored.kind !== 'ok') throw new Error('unreachable')
-    expect(stored.entry.payload.state).toMatchObject({ residuals: [{ severity: 'high', count: 1 }] })
-    expect(stored.entry.turn).toBe(1)
+    const stored = emissionOf(app.harnessDir, SESSION_ID, app.root)
+    expect(stored.state).toMatchObject({ residuals: [{ severity: 'high', count: 1 }] })
+    expect(emissionRow(app.harnessDir, SESSION_ID, app.root).turn).toBe(1)
 
     // A third step with NO change neither appends nor writes: the second step's
     // own store write bumped the revision, which the projection normalizes away.
@@ -1002,17 +1019,6 @@ Implement the invalidation.
     return harnessDir
   }
 
-  /** A persisted emission's payload — the PANEL-side witness of a rebuild. */
-  const emissionOf = (harnessDir: string, sessionId: string, cwd: string): Record<string, unknown> => {
-    const read = readEngineStatusSnapshot(harnessDir, sessionId, cwd)
-    if (read.kind !== 'ok') throw new Error(`no persisted emission for ${sessionId}: ${read.kind === 'unavailable' ? read.reason : 'unexpected state'}`)
-    return read.entry.payload
-  }
-  /** The agent-flow roles of a persisted emission payload (the ledger witness). */
-  const flowRolesOf = (payload: Record<string, unknown>): string[] => {
-    const state = payload.state as { agentFlow: { events: { role: string }[] } | null } | null
-    return (state?.agentFlow?.events ?? []).map((event) => event.role)
-  }
 
   it('a ledger change within the TTL invalidates the cache — the next pre-step rebuilds and the PANEL emission carries the new facts (AC-2)', async () => {
     const root = await mkdtemp(join(tmpdir(), 'dsh-mstar-catalog-invalidate-'))
@@ -1049,11 +1055,8 @@ Implement the invalidation.
     // payload with the recorded dispatch event (had the cached build been
     // served, the window would still be empty), and its freshness turn still
     // names the step the model actually saw a row in.
-    const rebuilt = readEngineStatusSnapshot(harnessDir, SESSION_ID, root)
-    expect(rebuilt.kind).toBe('ok')
-    if (rebuilt.kind !== 'ok') throw new Error('unreachable')
-    expect(flowRolesOf(rebuilt.entry.payload)).toEqual(['fullstack-dev'])
-    expect(rebuilt.entry.turn).toBe(1)
+    expect(flowRolesOf(emissionOf(harnessDir, SESSION_ID, root))).toEqual(['fullstack-dev'])
+    expect(emissionRow(harnessDir, SESSION_ID, root).turn).toBe(1)
   })
 
   it('cross-workspace isolation: a ledger record in workspace A invalidates ONLY A — B\'s cached entry survives within the TTL ', async () => {
@@ -1332,11 +1335,8 @@ Pick.
     expect(textOf(rowB1)).toContain('plans: all done')
     expect(textOf(rowB1)).not.toContain('plan-a')
     // Each session persisted its OWN selection's payload (the panel side of D4).
-    const persistedPlansOf = (sessionId: string): unknown => {
-      const read = readEngineStatusSnapshot(harnessDir, sessionId, root)
-      if (read.kind !== 'ok') throw new Error(`no persisted emission for ${sessionId}`)
-      return (read.entry.payload.state as { plans: unknown }).plans
-    }
+    const persistedPlansOf = (sessionId: string): unknown =>
+      (emissionOf(harnessDir, sessionId, root).state as { plans: unknown }).plans
     expect(persistedPlansOf('s-A')).toEqual([{ id: 'plan-a', status: 'Todo', doneAt: null, iterationRefs: [] }])
     expect(persistedPlansOf('s-B')).toEqual([{ id: 'plan-b', status: 'Done', doneAt: null, iterationRefs: [] }])
 
@@ -1349,12 +1349,8 @@ Pick.
     expect(afterA.kind === 'enter' && afterA.messages).toEqual([])
     expect(afterB.kind === 'enter' && afterB.messages).toEqual([])
     /** The agent-flow roles of one session's persisted emission payload. */
-    const persistedRolesOf = (sessionId: string): string[] => {
-      const read = readEngineStatusSnapshot(harnessDir, sessionId, root)
-      if (read.kind !== 'ok') throw new Error(`no persisted emission for ${sessionId}`)
-      const state = read.entry.payload.state as { agentFlow: { events: { role: string }[] } | null } | null
-      return (state?.agentFlow?.events ?? []).map((event) => event.role)
-    }
+    const persistedRolesOf = (sessionId: string): string[] =>
+      flowRolesOf(emissionOf(harnessDir, sessionId, root))
     expect(persistedRolesOf('s-A')).toEqual([])
     expect(persistedRolesOf('s-B')).toEqual([])
 

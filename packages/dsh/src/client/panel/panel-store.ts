@@ -1,6 +1,5 @@
 /**
- * The workflow panel's entry store (plan sidebar §L2.4): the selected
- * internal section, keyed by the sidebar tab record's id.
+ * The workflow panel's entry store: the selected internal section, keyed by the sidebar tab record's id.
  *
  * Why a slot store and not `useState`: a docked sidebar body is UNMOUNTED
  * whenever another tab in the pane becomes active (and the sidebar layout is
@@ -15,7 +14,16 @@
 import { defineStore } from '@deepseek-ai/dsh-client-store'
 
 /** The panel's three internal sections (one sidebar tab, three sections). */
-export type PanelSection = 'tasks' | 'agents' | 'events'
+export type PanelSection = 'tasks' | 'roadmap' | 'events'
+
+/**
+ * Is this string a legal panel section? The store's `select` refuses anything
+ * else, so a stale or hand-written `'agents'` (the retired tab) can never be
+ * written into the state and never reaches a render.
+ */
+export function isPanelSection(value: unknown): value is PanelSection {
+  return value === 'tasks' || value === 'roadmap' || value === 'events'
+}
 
 /** The entry-store state: the selected section per sidebar tab record. */
 export interface PanelStoreState {
@@ -32,6 +40,8 @@ export function createPanelStore() {
     init: (): PanelStoreState => ({ byTab: {} }),
     actions: {
       select(d, tabId: string, section: PanelSection): void {
+        // A refused id leaves the previous section untouched (never a blank body).
+        if (!isPanelSection(section)) return
         d.byTab[tabId] = section
       },
     },

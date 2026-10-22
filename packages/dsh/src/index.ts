@@ -35,9 +35,12 @@ import {
   preStepCatalogListener,
   createCatalogInvalidation,
   DEFAULT_CATALOG_TTL_MS,
+  readCatalogPayload,
+  selectionHintFor,
 } from './gates/catalog.ts'
 import type { CatalogCacheEntry, EmissionDigest } from './gates/catalog.ts'
 import { installEngineStatusEndpoint } from './engine-status-endpoint.ts'
+import { installPanelSnapshotEndpoint } from './panel/panel-snapshot-endpoint.ts'
 import { writeIntentListener, editIntentListener } from './gates/status.ts'
 import type { StatusGateAdvisory } from './gates/status.ts'
 import { skillWriteIntentListener } from './gates/skill-lint.ts'
@@ -898,11 +901,12 @@ export function apply(ctx: Context, config: Config): void {
       showWatermark: () => harnessPromptRegistrationsActive === 0,
     }))
 
-  // Panel channel — the host half of the engine-status endpoint
-  // (`/api/mstar/engineStatus`): the `mstar` service + its invocation
-  // descriptor on the host's SHARED `/api` typert gateway, serving the
-  // snapshot the pre-step emission persisted above, plus the `selectWorkflow`
-  // UI control (a durable, session-scoped pick).
+  // Picker write channel — the `mstar` service + its invocation descriptor on
+  // the host's SHARED `/api` typert gateway, serving ONE thing: the
+  // `mstar/selectWorkflow` UI control (a durable, session-scoped pick). The
+  // emission snapshot read that used to live here is retired; the panel's read
+  // is the store-backed `mstar/panelSnapshot` installed below
+  // (`panel/panel-snapshot-endpoint.ts`), not the last emission persisted above.
   //
   // Both units are OPTIONAL (see `installEngineStatusEndpoint`): the service
   // is deduped per context, and the descriptor is registered inside
@@ -918,6 +922,27 @@ export function apply(ctx: Context, config: Config): void {
     // catalog payload + digest so the next pre-step rebuilds from the
     // acknowledged binding (the other sessions' keys stay untouched).
     invalidateSelection: (harnessDir, sessionId) => catalogInvalidation.invalidateSession(harnessDir, sessionId),
+  })
+  // The panel's store-backed read: its own service under the shared `mstar`
+  // wire namespace (its descriptor rides the contribution above — typert admits
+  // one per package face). The `retained` facts (the iteration gate, the
+  // knowledge digest and the selection no dashboard DTO carries) are REUSED
+  // from the cache above through the same reader and the same hint fold the
+  // pre-step uses — one key rule, one TTL rule, no second catalog build.
+  installPanelSnapshotEndpoint(ctx, {
+    resolver,
+    bootHarnessDir,
+    readRetained: (harnessDir, sessionId, cwd) =>
+      readCatalogPayload(
+        ctx,
+        catalogCache,
+        catalogInvalidation,
+        harnessDir,
+        sessionId,
+        cwd,
+        selectionHintFor(harnessDir, { sessionId, cwd }),
+        ttlMs,
+      ),
   })
 
   // The dsh-native tool surface — three tools, registered and HMR-disposed in

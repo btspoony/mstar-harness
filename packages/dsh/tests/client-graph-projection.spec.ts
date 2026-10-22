@@ -1,2788 +1,369 @@
 /**
- * Pure projection tests for `projectGraph` (spec panel-zones §3 + §8): the
- * total function maps an `mstar-engine-status` catalog source to a `ZoneView`
- * — iteration zone (5 PHASE_IDS steps + Step N + current/next/done/idle +
- * verdict + branches + disabled determination), tasks zone (5 kanban columns
- * + status bucketing with Blocked/unknown merged into `blocked-unknown` +
- * shared plan-sort key on Done + per-column cap reported as `capped` +
- * truncated), agents skeleton (EXPECTED_ROLE_FLOW pending stages +
- * degraded/empty from `state.agentFlow` presence), and the migrated top-level
- * verdict / violations / events / unexpected / degraded.
+ * Projection tests for the store-backed panel: `projectGraph(snapshot)` maps
+ * one `PanelSnapshot` onto the zone view model.
  *
- * Degradation contract (spec §8): missing/illegal fields set the matching
- * `degraded` flag and render as skeleton/unknown — the function NEVER throws
- * and NEVER fabricates values; `degraded.iteration ⟺ !active` (the old
- * `degraded.transition` is merged into `iteration.active === false`);
- * Step 5 stays schema-only (the engine gate never emits that transition —
- * a known limitation, not a defect, spec §2.3). Plan
- *  Task 1 (spec panel-f4 §2.3 R9 / §5 D5):
- * `iteration.compassStatus` re-derives the current step during Phase 1 —
- * `'active'` → Step 1 (iteration-start) current + verdict unknown (Phase 1
- * has no gate evaluation → no PASS/FAIL badge) + next Step 2; `'locked'` or
- * missing/non-union → the existing transition-driven logic (Step 2→4 + gate
- * verdict). `active` semantics unchanged — Step 1 is reached ONLY via the
- * compass-status branch, never via a gate transition.
- *
- * The shared plan-sort rule lives in `plan-sort.ts` (its own unit tests stay
- * untouched); this file adds the projection-side integration: the Done column
- * applies `sortPlans` (no slice — every row is KEPT, plan
- *  Task 1), every column reports `capped` (PLAN_CAP)
- * when it overflows, and `tasks.truncated` = any column rows > 5.
- *
- * No React / ReactFlow imports — the projection is DOM-free and fully
- * unit-testable (spec §2.1).
+ * The suite pins the T5 contract's bullets, one named case each:
+ * 1. the agents zone is GONE (runtime key + type-level member assertion);
+ * 2. the roadmap zone keeps its three READ states apart — and its two `ok`
+ *    sub-states (no roadmap row / a roadmap with zero milestones);
+ * 3. the roadmap renders direction + goals + milestones with nested issues;
+ * 4. the event flow is ONE time-descending list carrying dispatch, settle and
+ *    violation rows;
+ * 5. a missing ledger degrades the events zone ALONE (the task board still
+ *    renders from the workspace DTOs);
+ * 6. a refused roadmap read keeps the other zones intact;
+ * 7. the projection is total: a null snapshot and garbage members degrade,
+ *    never throw.
  */
 
 import { describe, expect, it } from 'bun:test'
-import type { MstarEngineStatusPayload } from '../src/types'
-import type { AgentFlowEventView, AgentFlowView } from '../src/types'
-import type { EnforcementSource } from '@mstar-harness/engine'
-import { pairSettleIndexes, projectGraph, type ZoneView } from '../src/client/panel/graph/project-graph'
-import { eventLogEntries, type EventLogEntry } from '../src/client/panel/graph/event-log'
-import {
-  EXPECTED_ROLE_FLOW, KNOWN_AGENTS, PHASE_IDS, PLAN_STATE_IDS,
-  type PhaseId, type PlanStateId,
-} from '../src/client/panel/graph/schema'
-import { PLAN_CAP, sortPlans } from '../src/client/panel/plan-sort'
+import type { PanelSnapshot } from '../src/panel/panel-snapshot.ts'
+import { projectGraph, type ZoneView } from '../src/client/panel/graph/project-graph.ts'
+import { parsePanelSnapshotRead } from '../src/client/panel/panel-snapshot-client.ts'
 
-/** Full fixture: every evidence field populated (spec §3). */
-const fullSource: MstarEngineStatusPayload = {
-  version: '2.1.1',
-  harnessDir: '/proj/.mstar',
-  enforcement: { hard: true, source: 'iteration compass' as EnforcementSource },
-  iteration: {
-    iterationId: 'iter-00000810-panel-zones',
-    compassPath: '/proj/.mstar/iterations/iter-00000810-example/delivery-compass.md',
+/* ------------------------------- fixtures ------------------------------- */
+
+type Member = { state: 'ok'; data: unknown } | { state: 'not-applicable' | 'unavailable'; reason: string }
+
+/** One guarded workspace member. */
+function ok(data: unknown): Member {
+  return { state: 'ok', data }
+}
+
+const NOT_APPLICABLE = (reason: string): Member => ({ state: 'not-applicable', reason })
+const UNAVAILABLE = (reason: string): Member => ({ state: 'unavailable', reason })
+
+const NO_PROJECT = NOT_APPLICABLE('no project resolved')
+
+/** A full snapshot with every workspace member defaulted to a readable answer. */
+function snapshot(over: {
+  workflow?: Member
+  iteration?: Member
+  roadmap?: Member
+  issues?: Member
+  projects?: Member
+  retained?: unknown
+  ledger?: unknown
+} = {}): PanelSnapshot {
+  return {
+    at: '2026-10-22T01:00:00.000Z',
+    version: '4.0.4',
+    harnessDir: '/proj/.mstar',
+    enforcement: { hard: true, source: 'compass' },
+    workspace: {
+      workflow: over.workflow ?? ok({
+        id: 'wf-1',
+        status: 'running',
+        branch: { base: 'main', source: 'feature/x', integration: 'feature/x', target: 'main' },
+        plans: [
+          { planId: 'p-todo', status: 'Todo', doneAt: null },
+          { planId: 'p-run', status: 'InProgress', doneAt: null },
+          { planId: 'p-done-old', status: 'Done', doneAt: '2026-01-01' },
+          { planId: 'p-done-new', status: 'Done', doneAt: '2026-09-30' },
+          { planId: 'p-blocked', status: 'Blocked', doneAt: null },
+          { planId: 'p-weird', status: 'Paused', doneAt: null },
+        ],
+      }),
+      iteration: over.iteration ?? ok({ iterationId: 'iter-1', compass: { status: 'active' }, plans: [] }),
+      roadmap: over.roadmap ?? NO_PROJECT,
+      issues: over.issues ?? ok({ items: [], total: 0, storeRevision: 1 }),
+      projects: over.projects ?? ok({ items: [], total: 0 }),
+    },
+    retained: over.retained ?? {
+      iterationGate: {
+        iterationId: 'iter-1',
+        compassPath: 'iterations/iter-1/delivery-compass.md',
+        compassStatus: 'locked',
+        gate: { transition: 'phase-2-execute', ok: false, violations: [] },
+      },
+      knowledge: null,
+      selection: null,
+    },
+    ledger: over.ledger === undefined ? { events: [], summary: [] } : over.ledger,
+  } as unknown as PanelSnapshot
+}
+
+/** A roadmap DTO (the engine's `RoadmapDTO`, structurally). */
+function roadmapDto(over: { direction?: string | null; goals?: unknown[]; milestones?: unknown[]; issues?: unknown[] } = {}) {
+  return ok({
+    projectId: 'proj-1',
+    authority: { state: 'present', revision: 3, contentHash: 'h' },
+    content: {
+      contentMarkdown: '# roadmap',
+      frontmatter: {},
+      direction: over.direction === undefined ? 'ship the store-backed panel' : over.direction,
+      goals: over.goals ?? [
+        { ordinal: 1, parentOrdinal: null, checked: true, title: 'retire the relay', body: '' },
+        { ordinal: 2, parentOrdinal: 1, checked: false, title: 'three tabs', body: '' },
+      ],
+      milestones: [],
+      sections: [],
+    },
+    milestones: {
+      projectId: 'proj-1',
+      milestones: over.milestones ?? [
+        {
+          milestoneId: 'm-1', projectId: 'proj-1', name: 'Store reads', target: '2026-11-01', status: 'active',
+          ordinal: 1, revision: 1, createdAt: '', updatedAt: '',
+          totalIssues: 2, openIssues: 1, resolvedIssues: 1, otherRetiredIssues: 0,
+        },
+      ],
+      issues: over.issues ?? [
+        { id: 'i-1', title: 'panel empty', acceptance: 'renders', disposition: 'open', revision: 1, milestoneId: 'm-1' },
+        { id: 'i-2', title: 'already fixed', acceptance: 'renders', disposition: 'resolved', revision: 1, milestoneId: 'm-1' },
+      ],
+      unassignedIssues: 2,
+    },
+  })
+}
+
+/** The issues view the roadmap joins severity from. */
+const ISSUES = ok({
+  items: [
+    { id: 'i-1', title: 'panel empty', severity: 'high', disposition: 'open', projectId: 'proj-1' },
+    { id: 'i-2', title: 'already fixed', severity: 'low', disposition: 'resolved', projectId: 'proj-1' },
+    { id: 'i-3', title: 'other bug', severity: 'high', disposition: 'open', projectId: 'proj-1' },
+  ],
+  total: 3,
+  storeRevision: 4,
+})
+
+/* ------------------------------- 1. agents gone ------------------------------- */
+
+describe('projectGraph — the agents zone is retired (T5)', () => {
+  it('1. ZoneView carries no agents member, at runtime and at the type level', () => {
+    const view = projectGraph(snapshot())
+    expect(Object.hasOwn(view, 'agents')).toBe(false)
+    // Type-level assertion: if `agents` ever returns to ZoneView this line stops compiling.
+    const hasAgents: 'agents' extends keyof ZoneView ? true : false = false
+    expect(hasAgents).toBe(false)
+  })
+})
+
+/* ------------------------------- 2. roadmap read states ------------------------------- */
+
+describe('projectGraph — roadmap zone: four distinct absence states (T5)', () => {
+  it('2a. no project resolved → not-applicable with its reason, and NOT "no roadmap"', () => {
+    const view = projectGraph(snapshot({ roadmap: NOT_APPLICABLE('no project resolved') }))
+    expect(view.roadmap.state).toBe('not-applicable')
+    expect(view.roadmap.reason).toBe('no project resolved')
+    expect(view.roadmap.present).toBe(false)
+    expect(view.project.roadmapSource.kind).toBe('absent')
+  })
+
+  it('2b. project resolved, no roadmap row → ok with data null', () => {
+    const view = projectGraph(snapshot({ roadmap: ok(null) }))
+    expect(view.roadmap.state).toBe('ok')
+    expect(view.roadmap.present).toBe(false)
+    expect(view.roadmap.direction).toBeNull()
+    expect(view.roadmap.milestones).toEqual([])
+  })
+
+  it('2c. a roadmap with zero milestones is a DIFFERENT state from "no roadmap"', () => {
+    const view = projectGraph(snapshot({
+      roadmap: roadmapDto({ goals: [], milestones: [] }),
+      issues: ISSUES,
+    }))
+    expect(view.roadmap.state).toBe('ok')
+    expect(view.roadmap.present).toBe(true)
+    expect(view.roadmap.milestones).toEqual([])
+    expect(view.roadmap.direction).toBe('ship the store-backed panel')
+  })
+
+  it('2d. a refused read → unavailable carrying the store reason', () => {
+    const view = projectGraph(snapshot({ roadmap: UNAVAILABLE('store.not-active: store is staged') }))
+    expect(view.roadmap.state).toBe('unavailable')
+    expect(view.roadmap.reason).toBe('store.not-active: store is staged')
+    expect(view.project.roadmapSource.kind).toBe('unavailable')
+    expect(view.project.roadmapSource.diagnostic).toBe('store.not-active: store is staged')
+  })
+})
+
+/* ------------------------------- 3. roadmap content ------------------------------- */
+
+describe('projectGraph — roadmap content (T5)', () => {
+  it('3. renders direction, goals (with nesting) and milestones with their OPEN issues', () => {
+    const view = projectGraph(snapshot({ roadmap: roadmapDto(), issues: ISSUES }))
+
+    expect(view.roadmap.direction).toBe('ship the store-backed panel')
+    expect(view.roadmap.goals).toEqual([
+      { ordinal: 1, parentOrdinal: null, checked: true, title: 'retire the relay' },
+      { ordinal: 2, parentOrdinal: 1, checked: false, title: 'three tabs' },
+    ])
+    expect(view.roadmap.milestones).toHaveLength(1)
+    expect(view.roadmap.milestones[0]).toEqual({
+      name: 'Store reads',
+      target: '2026-11-01',
+      status: 'active',
+      // Only OPEN membership; severity joined from the issues view by id.
+      issues: [{ id: 'i-1', title: 'panel empty', severity: 'high' }],
+    })
+    expect(view.roadmap.unassignedIssues).toBe(2)
+    // The rollup mirrors the milestone names.
+    expect(view.project.milestones).toEqual(['Store reads'])
+    // Open residuals are counted from the issues view (zero counts omitted).
+    expect(view.project.openResiduals).toEqual([{ severity: 'high', count: 2 }])
+  })
+})
+
+/** The retained block with one gate violation (the merged flow's third kind). */
+const RETAINED_WITH_VIOLATION = {
+  iterationGate: {
+    iterationId: 'iter-1',
+    compassPath: 'iterations/iter-1/delivery-compass.md',
+    compassStatus: 'locked',
     gate: {
       transition: 'phase-2-execute',
-      all_plans_done: false,
-      ok: true,
-      entry: { ok: true, violations: [] },
-      exit: { ok: true, violations: [] },
-      violations: [
-        { severity: 'medium', code: 'PLAN-3', message: 'plan not complete' },
-        { severity: 'low', code: 'EXIT-1', message: 'compass wording drift' },
-      ],
+      ok: false,
+      violations: [{ severity: 'high', code: 'gate.x', message: 'nope' }],
     },
   },
-  state: {
-    selection: { kind: 'active', workflowId: 'wf-1', dir: 'workflows/wf-1' },
-    workflowType: 'plan',
-    workflowStatus: 'running',
-    plans: [
-      { id: 'plan-a', status: 'Todo', doneAt: null, iterationRefs: [] },
-      { id: 'plan-b', status: 'InProgress', doneAt: null, iterationRefs: [] },
-      { id: 'plan-c', status: 'Done', doneAt: '2026-08-08', iterationRefs: [] },
-      { id: 'plan-d', status: 'Blocked', doneAt: null, iterationRefs: [] },
-      { id: 'plan-e', status: 'custom-stalled', doneAt: null, iterationRefs: [] },
-    ],
-    residuals: [],
-    residualFindings: null,
-    project: { milestones: [], roadmapSource: { kind: 'absent', absentProjectIds: [], diagnostic: null }, openResiduals: [] },
-    iterationBaseBranch: 'dev-dsh',
-    targetBranch: 'dev-dsh',
-    specIntegrationBranch: 'iteration/iter-00000810-panel-zones',
-    pushPolicy: 'push authorized',
-    worktreeMode: 'feature-worktree',
-    integrationWorktreePath: '/proj',
-    rowScopes: [],
-    knowledge: null,
-    direction: null,
-    agentFlow: null,
-  },
+  knowledge: null,
+  selection: null,
 }
 
-/** Transition at Phase 4 → current step 4, next = merge-ready (Phase 5 as NEXT is legal). */
-const prDeliverySource: MstarEngineStatusPayload = {
-  ...fullSource,
-  iteration: {
-    ...fullSource.iteration!,
-    gate: { ...fullSource.iteration!.gate, transition: 'phase-4-pr-delivery' },
-  },
-}
+/* ------------------------------- 4. merged event flow ------------------------------- */
 
-/** `state` null + no iteration ⇒ the no-harness predicate, but projection stays total. */
-const noHarnessSource: MstarEngineStatusPayload = {
-  version: '2.1.1',
-  harnessDir: null,
-  enforcement: { hard: false, source: 'iteration compass' as EnforcementSource },
-  state: null,
-}
+describe('projectGraph — one merged event flow (T5)', () => {
+  it('4. dispatch + settle + violation rows share ONE time-descending list', () => {
+    const view = projectGraph(snapshot({
+      retained: RETAINED_WITH_VIOLATION,
+      ledger: {
+        summary: [],
+        events: [
+          { ts: 3_000, kind: 'settle', agent: 's-1', role: 'frontend-dev', planId: 'p', taskId: '1', outcome: 'ok', durationMs: 12, paired: true },
+          { ts: 1_000, kind: 'dispatch', agent: 's-1', role: 'frontend-dev', planId: 'p', taskId: '1', taskCategory: 'visual', verdict: 'ok' },
+          { ts: 2_000, kind: 'workflow-run', runId: 'run-1', name: 'panel rework' },
+        ],
+      },
+    }))
+    expect(view.events.map((e) => [e.kind, e.ts])).toEqual([
+      ['settle', 3_000],
+      ['dispatch', 2_000],
+      ['dispatch', 1_000],
+      ['violation', 0],
+    ])
+    // The badge is merged; the ledger kind stays verbatim for the row detail.
+    expect(view.events.map((e) => e.ledgerKind)).toEqual(['settle', 'workflow-run', 'dispatch', ''])
+    // The violation row carries the gate's own evidence and NO invented time.
+    expect(view.events[3]).toMatchObject({ severity: 'high', code: 'gate.x', message: 'nope' })
+    // The dispatch paired with the settle is marked settled.
+    expect(view.events[2]!.settled).toBe(true)
+    expect(view.events[3]!.ts).toBe(0)
+  })
+})
 
-/* ---------------------------------------------------------------------------
- * Iteration zone (spec §3): steps / Step N / current/next/done/idle / verdict /
- * branches / disabled determination.
- * ------------------------------------------------------------------------- */
+/* ------------------------------- 5/6. per-zone degradation ------------------------------- */
 
-describe('projectGraph — iteration zone (spec §3)', () => {
-  const view = projectGraph(fullSource)
-
-  it('emits the fixed 5 steps in PHASE_IDS order with 1-based step numbers', () => {
-    expect(view.iteration.steps.map((s) => s.id)).toEqual([...PHASE_IDS])
-    expect(view.iteration.steps.map((s) => s.step)).toEqual([1, 2, 3, 4, 5])
+describe('projectGraph — per-zone degradation (T5)', () => {
+  it('5. a missing ledger degrades ONLY the events zone', () => {
+    const view = projectGraph(snapshot({ ledger: null }))
+    expect(view.degraded.ledger).toBe(true)
+    expect(view.events).toEqual([])
+    // The task board still rendered from the workspace DTOs.
+    expect(view.degraded.plans).toBe(false)
+    expect(view.tasks.total).toBe(6)
+    expect(view.tasks.columns.find((c) => c.id === 'InProgress')!.count).toBe(1)
   })
 
-  it('lights the transition step as current, its forward target as next, and completed steps before it as done', () => {
-    const byId = new Map(view.iteration.steps.map((s) => [s.id, s]))
-    expect(byId.get('autonomous-execute')!.state).toBe('current')
-    expect(byId.get('iteration-close')!.state).toBe('next')
-    // Steps BEFORE the current step are `done` (plan
-    // A completed Step 1 must
-    // not read as idle「待命」); only post-current schema-only steps stay idle
-    // (Phase 5 never lights — the engine gate emits 2→3→4 only).
-    expect(byId.get('iteration-start')!.state).toBe('done')
-    expect(byId.get('pr-delivery')!.state).toBe('idle')
-    expect(byId.get('merge-ready')!.state).toBe('idle')
+  it('5b. an empty (but present) ledger is DATA, not degradation', () => {
+    const view = projectGraph(snapshot({ ledger: { events: [], summary: [] } }))
+    expect(view.degraded.ledger).toBe(false)
+    expect(view.events).toEqual([])
   })
 
-  it('projects gate.ok/violations onto the CURRENT step only (PASS + count)', () => {
-    const current = view.iteration.steps.find((s) => s.state === 'current')!
-    expect(current.verdict).toBe('pass')
-    // Other steps carry no verdict.
-    for (const step of view.iteration.steps) {
-      if (step.state !== 'current') expect(step.verdict).toBe('unknown')
-    }
-    expect(view.iteration.verdict).toBe('pass')
-    expect(view.iteration.violationCount).toBe(2)
-    // Top-level verdict mirrors the iteration verdict (footer gate summary).
-    expect(view.verdict).toBe('pass')
-  })
-
-  it('carries the iteration id, active flag, Step N and branches on a full source', () => {
+  it('6. a refused roadmap read keeps the iteration and task zones intact', () => {
+    const view = projectGraph(snapshot({ roadmap: UNAVAILABLE('boom') }))
+    expect(view.roadmap.state).toBe('unavailable')
     expect(view.iteration.active).toBe(true)
-    expect(view.iteration.iterationId).toBe('iter-00000810-panel-zones')
-    expect(view.iteration.currentStep).toBe(2) // phase-2-execute → autonomous-execute
-    expect(view.iteration.branches).toEqual({
-      iterationBase: 'dev-dsh',
-      target: 'dev-dsh',
-      specIntegration: 'iteration/iter-00000810-panel-zones',
-    })
-    expect(view.degraded).toEqual({ iteration: false, state: false, plans: false })
-  })
-
-  it('Phase 4 transition → current step 4, next lands on merge-ready (never current)', () => {
-    const v = projectGraph(prDeliverySource)
-    const byId = new Map(v.iteration.steps.map((s) => [s.id, s]))
-    expect(byId.get('pr-delivery')!.state).toBe('current')
-    expect(byId.get('merge-ready')!.state).toBe('next')
-    expect(v.iteration.currentStep).toBe(4)
-  })
-
-  it('FAIL gate → current step verdict fail with violation count', () => {
-    const v = projectGraph({
-      ...fullSource,
-      iteration: {
-        ...fullSource.iteration!,
-        gate: {
-          ...fullSource.iteration!.gate,
-          ok: false,
-          violations: [
-            { severity: 'high', code: 'EXIT-3', message: 'exit gate not satisfied' },
-            { severity: 'low', code: 'EXIT-4', message: 'wording drift' },
-            { severity: 'low', code: 'EXIT-5', message: 'more drift' },
-          ],
-        },
-      },
-    })
-    const current = v.iteration.steps.find((s) => s.state === 'current')!
-    expect(current.verdict).toBe('fail')
-    expect(v.iteration.verdict).toBe('fail')
-    expect(v.verdict).toBe('fail')
-    expect(v.iteration.violationCount).toBe(3)
-  })
-
-  it('non-boolean gate.ok → verdict unknown, count still from a real violations array (active unchanged)', () => {
-    const v = projectGraph({
-      ...fullSource,
-      iteration: {
-        ...fullSource.iteration!,
-        gate: { ...fullSource.iteration!.gate, ok: 'yes' },
-      } as unknown as MstarEngineStatusPayload['iteration'],
-    })
-    expect(v.iteration.active).toBe(true)
-    expect(v.iteration.currentStep).toBe(2)
-    expect(v.iteration.verdict).toBe('unknown')
-    expect(v.verdict).toBe('unknown')
-    expect(v.iteration.violationCount).toBe(2)
-  })
-
-  it('gate.violations non-array → no violation count/list, verdict still from gate.ok', () => {
-    const v = projectGraph({
-      ...fullSource,
-      iteration: {
-        ...fullSource.iteration!,
-        gate: { ...fullSource.iteration!.gate, violations: 'nope' },
-      } as unknown as MstarEngineStatusPayload['iteration'],
-    })
-    const current = v.iteration.steps.find((s) => s.state === 'current')!
-    expect(current.verdict).toBe('pass')
-    expect(v.iteration.violationCount).toBeNull()
-    expect(v.violations).toEqual([])
-    expect(v.iteration.active).toBe(true)
-  })
-
-  it('iterationId missing → iteration.iterationId null (active still resolved from the transition)', () => {
-    const v = projectGraph({
-      ...fullSource,
-      iteration: { ...fullSource.iteration!, iterationId: undefined },
-    } as unknown as MstarEngineStatusPayload)
-    expect(v.iteration.active).toBe(true)
-    expect(v.iteration.iterationId).toBeNull()
-  })
-
-  it('compassStatus active → Step 1 (iteration-start) current, verdict unknown, next Step 2 — Phase 1 has no gate verdict (spec panel-f4 §2.3 R9 / §5 D5)', () => {
-    const v = projectGraph({
-      ...fullSource,
-      iteration: { ...fullSource.iteration!, compassStatus: 'active' },
-    })
-    const byId = new Map(v.iteration.steps.map((s) => [s.id, s]))
-    expect(byId.get('iteration-start')!.state).toBe('current')
-    expect(byId.get('autonomous-execute')!.state).toBe('next')
-    // The re-derived current step — the SAME PHASE_EDGES forward rule the
-    // locked path uses (iteration-start → autonomous-execute).
-    expect(v.iteration.currentStep).toBe(1)
-    expect(byId.get('iteration-start')!.verdict).toBe('unknown')
-    // No gate-derived badge data in Phase 1: summary + step verdict unknown,
-    // no violation count, no violation list.
-    expect(v.iteration.verdict).toBe('unknown')
-    expect(v.verdict).toBe('unknown')
-    expect(v.iteration.violationCount).toBeNull()
-    expect(v.violations).toEqual([])
-    // `active` semantics unchanged — the transition still resolved (engine
-    // emits phase-2-execute + ok:true during Phase 1); only the current step
-    // re-derives. Branches still project in the active state.
-    expect(v.iteration.active).toBe(true)
-    expect(v.degraded.iteration).toBe(false)
-    expect(v.iteration.branches).toEqual({
-      iterationBase: 'dev-dsh',
-      target: 'dev-dsh',
-      specIntegration: 'iteration/iter-00000810-panel-zones',
-    })
-  })
-
-  it('compassStatus active + transition past phase-2-execute (inconsistent window) → the Phase-1 override does NOT fire: transition-driven Step 3 + REAL gate verdict ', () => {
-    const v = projectGraph({
-      ...fullSource,
-      iteration: {
-        ...fullSource.iteration!,
-        compassStatus: 'active',
-        gate: { ...fullSource.iteration!.gate, transition: 'phase-3-close' },
-      },
-    })
-    const byId = new Map(v.iteration.steps.map((s) => [s.id, s]))
-    // Compass and gate are mutually inconsistent — compass still `active`
-    // while the gate advanced past Phase 2 (e.g. all compass-registered plans
-    // Done but the compass not yet locked). The Phase-1 override is restricted
-    // to `phase-2-execute` , so the gate wins: Step 3 current +
-    // the REAL ok/violations verdict — no verdict suppression.
-    expect(byId.get('iteration-close')!.state).toBe('current')
-    expect(byId.get('pr-delivery')!.state).toBe('next')
-    expect(v.iteration.currentStep).toBe(3)
-    expect(byId.get('iteration-close')!.verdict).toBe('pass')
-    expect(v.iteration.verdict).toBe('pass')
-    expect(v.iteration.violationCount).toBe(2)
-    expect(v.violations).toHaveLength(2)
-    expect(v.iteration.active).toBe(true)
-  })
-
-  it('compassStatus locked → the existing gate-transition-driven logic (Step 2 current + gate verdict)', () => {
-    const v = projectGraph({
-      ...fullSource,
-      iteration: { ...fullSource.iteration!, compassStatus: 'locked' },
-    })
-    expect(v.iteration.currentStep).toBe(2)
-    const byId = new Map(v.iteration.steps.map((s) => [s.id, s]))
-    expect(byId.get('autonomous-execute')!.state).toBe('current')
-    expect(byId.get('iteration-close')!.state).toBe('next')
-    expect(byId.get('autonomous-execute')!.verdict).toBe('pass')
-    expect(v.iteration.verdict).toBe('pass')
-    expect(v.iteration.violationCount).toBe(2)
-    expect(v.iteration.active).toBe(true)
-  })
-
-  it('compassStatus missing → existing transition-driven behavior (optional field, backward compatible — spec D5)', () => {
-    // `fullSource` carries NO compassStatus — old catalog rows / typed
-    // fixtures keep compiling and project exactly as before.
-    const v = projectGraph(fullSource)
-    expect(v.iteration.active).toBe(true)
-    expect(v.iteration.currentStep).toBe(2)
-    expect(v.iteration.verdict).toBe('pass')
-    expect(v.iteration.violationCount).toBe(2)
-  })
-
-  it('compassStatus non-union garbage → guard degrade to the transition-driven behavior (Total-function, never throws)', () => {
-    const v = projectGraph({
-      ...fullSource,
-      iteration: { ...fullSource.iteration!, compassStatus: 'completed' },
-    } as unknown as MstarEngineStatusPayload)
-    expect(v.iteration.active).toBe(true)
-    expect(v.iteration.currentStep).toBe(2)
-    expect(v.iteration.verdict).toBe('pass')
-    expect(v.degraded.iteration).toBe(false)
+    expect(view.iteration.currentStep).toBe(2)
+    expect(view.tasks.total).toBe(6)
   })
 })
 
-describe('projectGraph — iteration steps done state ', () => {
-  /** The 5 step states of a PROJECTED view, in PHASE_IDS order. */
-  const statesOf = (view: ZoneView): string[] => view.iteration.steps.map((s) => s.state)
+/* ------------------------------- 7. totality ------------------------------- */
 
-  it('phase-2-execute + locked → [done, current, next, idle, idle] (a completed Step 1 shows done, not idle)', () => {
-    const v = projectGraph({
-      ...fullSource,
-      iteration: { ...fullSource.iteration!, compassStatus: 'locked' },
-    })
-    expect(statesOf(v)).toEqual(['done', 'current', 'next', 'idle', 'idle'])
-    expect(v.iteration.currentStep).toBe(2)
-    // Done steps are not the current step → they carry no verdict.
-    expect(v.iteration.steps.find((s) => s.id === 'iteration-start')!.verdict).toBe('unknown')
+describe('projectGraph — total function (T5)', () => {
+  it('7. a null snapshot degrades every zone without throwing', () => {
+    const view = projectGraph(null)
+    expect(view.iteration.active).toBe(false)
+    expect(view.iteration.steps).toHaveLength(5)
+    expect(view.tasks.total).toBe(0)
+    expect(view.tasks.columns).toHaveLength(5)
+    expect(view.roadmap.state).toBe('unavailable')
+    expect(view.events).toEqual([])
+    expect(view.degraded.ledger).toBe(true)
+    expect(view.degraded.plans).toBe(true)
   })
 
-  it('phase-3-close → [done, done, current, next, idle]', () => {
-    const v = projectGraph({
-      ...fullSource,
-      iteration: {
-        ...fullSource.iteration!,
-        gate: { ...fullSource.iteration!.gate, transition: 'phase-3-close' },
+  it('7b. garbage members and ledger rows degrade field by field', () => {
+    const view = projectGraph({
+      at: 'x',
+      workspace: {
+        workflow: { state: 'ok', data: { plans: [null, {}, { planId: 7, status: 9 }] } },
+        iteration: { state: 'ok', data: null },
+        roadmap: { state: 'ok', data: { content: 'not-an-object', milestones: 'nope' } },
+        issues: { state: 'ok', data: { items: [null, { id: 'i', severity: 5, disposition: 'open' }] } },
+        projects: { state: 'ok', data: {} },
       },
-    })
-    expect(statesOf(v)).toEqual(['done', 'done', 'current', 'next', 'idle'])
-    expect(v.iteration.currentStep).toBe(3)
-  })
-
-  it('phase-4-pr-delivery → [done, done, done, current, next]', () => {
-    const v = projectGraph(prDeliverySource)
-    expect(statesOf(v)).toEqual(['done', 'done', 'done', 'current', 'next'])
-    expect(v.iteration.currentStep).toBe(4)
-  })
-
-  it('Phase 1 in flight (compassStatus active + phase-2-execute) → [current, next, idle, idle, idle] — no done (nothing precedes Step 1)', () => {
-    const v = projectGraph({
-      ...fullSource,
-      iteration: { ...fullSource.iteration!, compassStatus: 'active' },
-    })
-    expect(statesOf(v)).toEqual(['current', 'next', 'idle', 'idle', 'idle'])
-    expect(v.iteration.currentStep).toBe(1)
-  })
-
-  it('no iteration → all 5 steps stay idle (no done without a resolved transition)', () => {
-    const v = projectGraph({
-      ...fullSource,
-      iteration: undefined,
-    } as unknown as MstarEngineStatusPayload)
-    expect(statesOf(v)).toEqual(['idle', 'idle', 'idle', 'idle', 'idle'])
+      retained: { iterationGate: { gate: { transition: 'phase-9-nope' } } },
+      ledger: { events: [null, {}, { ts: 'x', kind: 'settle' }] },
+    } as unknown as PanelSnapshot)
+    expect(view.iteration.active).toBe(false)
+    expect(view.tasks.total).toBe(3)
+    expect(view.roadmap.state).toBe('ok')
+    expect(view.roadmap.milestones).toEqual([])
+    // A settle row with no identity still renders (degraded fields, never dropped).
+    expect(view.events).toHaveLength(1)
+    expect(view.events[0]!.kind).toBe('settle')
   })
 })
 
-describe('projectGraph — iteration disabled determination (spec §3 / §8)', () => {
-  it('iteration absent → active false, 5 idle steps, degraded.iteration (never guessed)', () => {
-    const v = projectGraph({
-      ...fullSource,
-      iteration: undefined,
-    } as unknown as MstarEngineStatusPayload)
-    expect(v.iteration.active).toBe(false)
-    expect(v.iteration.currentStep).toBeNull()
-    expect(v.iteration.iterationId).toBeNull()
-    expect(v.iteration.branches).toBeNull()
-    expect(v.iteration.verdict).toBe('unknown')
-    expect(v.iteration.violationCount).toBeNull()
-    expect(v.iteration.steps).toHaveLength(5)
-    expect(v.iteration.steps.every((s) => s.state === 'idle' && s.verdict === 'unknown')).toBe(true)
-    expect(v.verdict).toBe('unknown')
-    expect(v.violations).toEqual([])
-    expect(v.degraded.iteration).toBe(true)
-    expect(v.degraded.state).toBe(false)
-    // Plans still project without an iteration (state is independent).
-    expect(v.tasks.columns.find((c) => c.id === 'InProgress')!.count).toBe(1)
-  })
-
-  it('missing transition → active false (old degraded.transition merged into degraded.iteration)', () => {
-    const v = projectGraph({
-      ...fullSource,
-      iteration: {
-        ...fullSource.iteration!,
-        gate: { ...fullSource.iteration!.gate, transition: undefined },
-      } as unknown as MstarEngineStatusPayload['iteration'],
-    })
-    expect(v.iteration.active).toBe(false)
-    expect(v.iteration.currentStep).toBeNull()
-    expect(v.iteration.steps.every((s) => s.state === 'idle')).toBe(true)
-    expect(v.degraded.iteration).toBe(true)
-    // The merged semantics: no separate transition flag any more.
-    expect(v.degraded).toEqual({ iteration: true, state: false, plans: false })
-  })
-
-  it('illegal transition string → same disabled treatment', () => {
-    const v = projectGraph({
-      ...fullSource,
-      iteration: {
-        ...fullSource.iteration!,
-        gate: { ...fullSource.iteration!.gate, transition: 'phase-9-bogus' },
-      } as unknown as MstarEngineStatusPayload['iteration'],
-    })
-    expect(v.iteration.active).toBe(false)
-    expect(v.iteration.currentStep).toBeNull()
-    expect(v.degraded.iteration).toBe(true)
-  })
-
-  it('missing gate → same disabled treatment', () => {
-    const v = projectGraph({
-      ...fullSource,
-      iteration: { ...fullSource.iteration!, gate: undefined },
-    } as unknown as MstarEngineStatusPayload)
-    expect(v.iteration.active).toBe(false)
-    expect(v.degraded.iteration).toBe(true)
-  })
-
-  it('gate present but not an object → disabled, steps idle (never guessed)', () => {
-    const v = projectGraph({
-      ...fullSource,
-      iteration: { ...fullSource.iteration!, gate: 42 },
-    } as unknown as MstarEngineStatusPayload)
-    expect(v.iteration.active).toBe(false)
-    expect(v.iteration.currentStep).toBeNull()
-    expect(v.iteration.steps.every((s) => s.state === 'idle')).toBe(true)
-    expect(v.degraded.iteration).toBe(true)
-  })
-})
-
-/* ---------------------------------------------------------------------------
- * Tasks zone (spec §3): 5 columns / status bucketing (Blocked + unknown merged)
- * / shared sort key / per-column cap / truncated / total.
- * ------------------------------------------------------------------------- */
-
-describe('projectGraph — tasks zone (spec §3)', () => {
-  const view = projectGraph(fullSource)
-
-  it('emits the fixed 5 columns in PLAN_STATE_IDS order', () => {
-    expect(view.tasks.columns.map((c) => c.id)).toEqual([...PLAN_STATE_IDS])
-    expect(view.tasks.columns.map((c) => c.id)).toEqual(['Todo', 'InProgress', 'InReview', 'Done', 'blocked-unknown'])
-  })
-
-  it('buckets each plan row: Blocked AND any non-matching status both land in the merged blocked-unknown column', () => {
-    const byId = new Map(view.tasks.columns.map((c) => [c.id, c]))
-    expect(byId.get('Todo')!.plans).toEqual([{ id: 'plan-a', status: 'Todo' }])
-    expect(byId.get('InProgress')!.plans).toEqual([{ id: 'plan-b', status: 'InProgress' }])
-    expect(byId.get('Done')!.plans).toEqual([{ id: 'plan-c', status: 'Done' }])
-    expect(byId.get('InReview')!.plans).toEqual([])
-    // The merged column keeps the raw status string as-is (not translated,
-    // not guessed) — input order preserved (Blocked then the catch-all row).
-    expect(byId.get('blocked-unknown')!.plans).toEqual([
-      { id: 'plan-d', status: 'Blocked' },
-      { id: 'plan-e', status: 'custom-stalled' },
-    ])
-  })
-
-  it('counts every column (full, pre-cap) and totals plans including the merged column', () => {
-    const byId = new Map(view.tasks.columns.map((c) => [c.id, c]))
-    expect(byId.get('Todo')!.count).toBe(1)
-    expect(byId.get('InProgress')!.count).toBe(1)
-    expect(byId.get('Done')!.count).toBe(1)
-    expect(byId.get('InReview')!.count).toBe(0)
-    // Merged count = blocked (1) + unknown (1).
-    expect(byId.get('blocked-unknown')!.count).toBe(2)
-    expect(view.tasks.total).toBe(5)
-  })
-
-  it('no overflow on the full fixture → capped null, truncated false', () => {
-    for (const column of view.tasks.columns) expect(column.capped).toBeNull()
-    expect(view.tasks.truncated).toBe(false)
-  })
-
-  it('state null → 5-column skeleton (count 0) + degraded.state (+ plans)', () => {
-    const v = projectGraph(noHarnessSource)
-    expect(v.tasks.columns).toHaveLength(5)
-    expect(v.tasks.columns.every((c) => c.plans.length === 0 && c.count === 0 && c.capped === null)).toBe(true)
-    expect(v.tasks.total).toBe(0)
-    expect(v.tasks.truncated).toBe(false)
-    expect(v.degraded.state).toBe(true)
-    expect(v.degraded.plans).toBe(true)
-  })
-
-  it('state.plans missing/non-array → skeleton columns + degraded.plans', () => {
-    const v = projectGraph({
-      ...fullSource,
-      state: { ...fullSource.state!, plans: undefined },
-    } as unknown as MstarEngineStatusPayload)
-    expect(v.tasks.columns.every((c) => c.plans.length === 0 && c.count === 0)).toBe(true)
-    expect(v.tasks.total).toBe(0)
-    expect(v.degraded.plans).toBe(true)
-    expect(v.degraded.state).toBe(false)
-  })
-
-  it('non-string / missing plan status → merged column, no fabricated status value', () => {
-    const v = projectGraph({
-      ...fullSource,
-      state: {
-        ...fullSource.state!,
-        plans: [
-          { id: 'plan-x', status: 42 },
-          { id: 'plan-y' },
-          { id: 'plan-z', status: 'Done' },
-        ],
-      } as unknown as MstarEngineStatusPayload['state'],
-    })
-    const merged = v.tasks.columns.find((c) => c.id === 'blocked-unknown')!
-    // Raw non-string statuses degrade to an empty display string (never a guessed label).
-    expect(merged.plans).toEqual([
-      { id: 'plan-x', status: '' },
-      { id: 'plan-y', status: '' },
-    ])
-    expect(v.tasks.columns.find((c) => c.id === 'Done')!.plans).toEqual([{ id: 'plan-z', status: 'Done' }])
-  })
-})
-
-describe('projectGraph — Done column sort + per-column cap (spec §3, shared plan-sort key)', () => {
-  /** A source whose Done column carries the given rows (id → doneAt). */
-  function doneSource(rows: { id: string; doneAt: string | null }[]): MstarEngineStatusPayload {
-    return {
-      ...fullSource,
-      state: {
-        ...fullSource.state!,
-        plans: rows.map((r) => ({ id: r.id, status: 'Done', doneAt: r.doneAt, iterationRefs: [] })),
-      },
-    }
-  }
-
-  it('sorts the Done column with the shared plan-sort key (doneAt digitized DESC)', () => {
-    const v = projectGraph(doneSource([
-      { id: 'plan-old', doneAt: '2026-08-01' },
-      { id: 'plan-new', doneAt: '2026-08-10' },
-      { id: 'plan-mid', doneAt: '2026-07-20' },
-    ]))
-    expect(v.tasks.columns.find((c) => c.id === 'Done')!.plans.map((p) => p.id)).toEqual(['plan-new', 'plan-old', 'plan-mid'])
-  })
-
-  it('doneAt missing/garbage sorts last; id-date fallback + id tie-break still apply (integration with plan-sort)', () => {
-    const rows = [
-      { id: 'plan-b', doneAt: '2026-08-08' },
-      { id: '00000810-x', doneAt: null },
-      { id: 'plan-a', doneAt: '2026-08-10' },
-      { id: '00000809-y', doneAt: null },
-      { id: 'plan-z', doneAt: 'garbage-date' },
-    ]
-    const v = projectGraph(doneSource(rows))
-    const got = v.tasks.columns.find((c) => c.id === 'Done')!.plans.map((p) => p.id)
-    // The projection applies sortPlans — assert the same order the shared
-    // module produces (single implementation, no drift).
-    expect(got).toEqual(sortPlans(rows).map((r) => r.id))
-    expect(got).toEqual(['plan-a', 'plan-b', '00000810-x', '00000809-y', 'plan-z'])
-  })
-
-  it('cap 5: 7 Done plans → ALL 7 kept (no slice), count 7, capped 5, truncated true, total 7', () => {
-    const rows = Array.from({ length: 7 }, (_, i) => ({ id: `202608${String(i + 1).padStart(2, '0')}-p${i}`, doneAt: null }))
-    const v = projectGraph(doneSource(rows))
-    const done = v.tasks.columns.find((c) => c.id === 'Done')!
-    // Task 1: the projection NEVER drops rows — `plans` = the FULL sorted
-    // column; the render truncates to PLAN_CAP. `capped` is the render's
-    // overflow signal.
-    expect(done.plans).toHaveLength(7)
-    expect(done.count).toBe(7)
-    expect(done.capped).toBe(PLAN_CAP)
-    expect(v.tasks.truncated).toBe(true)
-    expect(v.tasks.total).toBe(7)
-    // Full sort order preserved (id-date DESC here), no silent slice.
-    expect(done.plans.map((p) => p.id)).toEqual(sortPlans(rows).map((r) => r.id))
-  })
-
-  it('cap boundary: exactly 5 Done plans → all shown, capped null, truncated false', () => {
-    const rows = Array.from({ length: 5 }, (_, i) => ({ id: `plan-${i}`, doneAt: null }))
-    const v = projectGraph(doneSource(rows))
-    const done = v.tasks.columns.find((c) => c.id === 'Done')!
-    expect(done.plans).toHaveLength(5)
-    expect(done.count).toBe(5)
-    expect(done.capped).toBeNull()
-    expect(v.tasks.truncated).toBe(false)
-  })
-
-  it('non-Done columns keep input order (only Done sorts); ≤PLAN_CAP → capped null', () => {
-    const v = projectGraph({
-      ...fullSource,
-      state: {
-        ...fullSource.state!,
-        plans: [
-          { id: 'todo-2', status: 'Todo', doneAt: null, iterationRefs: [] },
-          { id: 'todo-1', status: 'Todo', doneAt: null, iterationRefs: [] },
-          { id: 'todo-3', status: 'Todo', doneAt: '2026-08-08', iterationRefs: [] },
-        ],
-      },
-    })
-    const todo = v.tasks.columns.find((c) => c.id === 'Todo')!
-    expect(todo.plans.map((p) => p.id)).toEqual(['todo-2', 'todo-1', 'todo-3']) // input order
-    expect(todo.capped).toBeNull()
-    expect(todo.count).toBe(3)
-    expect(v.tasks.truncated).toBe(false)
-  })
-
-  it('a non-Done column overflow (7 blocked/unknown plans) sets capped + truncated true, all rows kept in input order', () => {
-    const v = projectGraph({
-      ...fullSource,
-      state: {
-        ...fullSource.state!,
-        plans: [
-          { id: 'blocked-1', status: 'Blocked', doneAt: null, iterationRefs: [] },
-          { id: 'blocked-2', status: 'Blocked', doneAt: null, iterationRefs: [] },
-          { id: 'blocked-3', status: 'Blocked', doneAt: null, iterationRefs: [] },
-          { id: 'unknown-1', status: 'Paused', doneAt: null, iterationRefs: [] },
-          { id: 'unknown-2', status: 'Stalled', doneAt: null, iterationRefs: [] },
-          { id: 'unknown-3', status: 'Weird', doneAt: null, iterationRefs: [] },
-          { id: 'unknown-4', status: 'Other', doneAt: null, iterationRefs: [] },
-        ],
-      },
-    })
-    const merged = v.tasks.columns.find((c) => c.id === 'blocked-unknown')!
-    // Merged column keeps every row in INPUT order (Blocked first, then the
-    // catch-all statuses), NOT sorted, NOT sliced.
-    expect(merged.plans.map((p) => p.id)).toEqual([
-      'blocked-1', 'blocked-2', 'blocked-3', 'unknown-1', 'unknown-2', 'unknown-3', 'unknown-4',
-    ])
-    expect(merged.count).toBe(7)
-    expect(merged.capped).toBe(PLAN_CAP)
-    expect(v.tasks.truncated).toBe(true)
-    expect(v.tasks.total).toBe(7)
-  })
-})
-
-/* ---------------------------------------------------------------------------
- * Agents zone skeleton (spec §4 — plan 2): pending stages + degraded/empty
- * from `state.agentFlow` presence.
- * ------------------------------------------------------------------------- */
-
-/** One dispatch row as the T1 ledger view emits it (spec §2.2). */
-function dispatchRow(over: {
-  ts: number
-  role: string
-  agent?: string
-  planId?: string
-  taskId?: string
-  callId?: string
-  verdict?: 'ok' | 'advisory' | 'denied'
-}): AgentFlowEventView {
-  return {
-    ts: over.ts,
-    kind: 'dispatch',
-    agent: over.agent ?? null,
-    role: over.role,
-    planId: over.planId ?? null,
-    taskId: over.taskId ?? null,
-    taskCategory: null,
-    ...(over.callId !== undefined ? { callId: over.callId } : {}),
-    ...(over.verdict !== undefined ? { verdict: over.verdict } : {}),
-  }
-}
-
-/** One settle row as the T1 ledger view emits it (spec §2.2 — carries the PAIRED dispatch identity when `role` is given,). */
-function settleRow(over: {
-  ts: number
-  agent?: string
-  outcome?: 'ok' | 'error' | 'denied'
-  durationMs?: number
-  role?: string
-  planId?: string
-  taskId?: string
-  callId?: string
-  childId?: string
-  taskRef?: string
-}): AgentFlowEventView {
-  return {
-    ts: over.ts,
-    kind: 'settle',
-    agent: over.agent ?? null,
-    // Identity presence: the server writes `role` on every PAIRED settle
-    // ('' for an empty-role identity) — the client pairs on it exactly.
-    role: over.role ?? '',
-    planId: over.planId ?? null,
-    taskId: over.taskId ?? null,
-    taskCategory: null,
-    ...(over.role !== undefined ? { paired: true } : {}),
-    ...(over.outcome !== undefined ? { outcome: over.outcome } : {}),
-    ...(over.durationMs !== undefined ? { durationMs: over.durationMs } : {}),
-    ...(over.childId !== undefined ? { childId: over.childId } : {}),
-    ...(over.taskRef !== undefined ? { taskRef: over.taskRef } : {}),
-    ...(over.callId !== undefined ? { callId: over.callId } : {}),
-  }
-}
-
-/** One nonterminal `subagent-link` row as the ledger view emits it. */
-function linkRow(over: {
-  ts: number
-  agent?: string
-  role: string
-  planId?: string
-  taskId?: string
-  childId: string
-  taskRef?: string
-}): AgentFlowEventView {
-  return {
-    ts: over.ts,
-    kind: 'subagent-link',
-    agent: over.agent ?? null,
-    role: over.role,
-    planId: over.planId ?? null,
-    taskId: over.taskId ?? null,
-    taskCategory: null,
-    childId: over.childId,
-    ...(over.taskRef !== undefined ? { taskRef: over.taskRef } : {}),
-  }
-}
-
-/** A full source whose `state.agentFlow` carries the given events (latest-first). */
-function flowSource(events: readonly unknown[]): MstarEngineStatusPayload {
-  return {
-    ...fullSource,
-    state: {
-      ...fullSource.state!,
-      // The ledger view type is satisfied by the projection's guarded reads;
-      // garbage rows are passed through the unknown-typed events array.
-      agentFlow: { events, summary: [] } as unknown as AgentFlowView,
-    },
-  }
-}
+/* --------------------- the wire envelope the projection needs --------------------- */
 
 /**
- * The expected idle tail (spec §6.2): KNOWN_AGENTS members WITHOUT role
- * evidence project as idle cards — this mirrors the projection's suppression
- * rule so assertions can compute the expected roster tail.
+ * QC round 2: the projection reads its members through their declared types with
+ * no optional chaining on the members themselves, so the WIRE PARSE BOUNDARY must
+ * refuse an `ok` answer that omits them. Otherwise `{kind:'ok', snapshot:{at:'x'}}`
+ * reaches `projectGraph` and the whole panel throws.
  */
-function idleRosterIds(evidencedRoles: readonly string[]): string[] {
-  return KNOWN_AGENTS.filter((a) => !evidencedRoles.includes(a.id)).map((a) => a.id)
-}
-
-describe('projectGraph — agents zone skeleton (spec §4, plan 2)', () => {
-  it('agentFlow null (ledger absent) → degraded skeleton + full idle roster (spec §6.2)', () => {
-    const agents = projectGraph(fullSource).agents
-    expect(agents.degraded).toBe(true)
-    expect(agents.empty).toBe(false)
-    expect(agents.stages).toHaveLength(4)
-    expect(agents.stages.map((s) => s.id)).toEqual([
-      'iteration-start:review-edit-chain',
-      'autonomous-execute:sdd-implement',
-      'autonomous-execute:qc-tri',
-      'autonomous-execute:qa-gate',
-    ])
-    expect(agents.stages[0]!.roles).toEqual(['product-manager', 'architect', 'writing-specialist'])
-  })
-
-  it('source null / state null → same degraded skeleton (total function)', () => {
-    expect(projectGraph(null).agents.degraded).toBe(true)
-    expect(projectGraph(noHarnessSource).agents.degraded).toBe(true)
-  })
-
-  it('agentFlow empty view (0 events) → empty, NOT degraded (a MISSING ledger file now reads as this empty view — the panel shows the no-dispatches-yet state)', () => {
-    const agents = projectGraph(flowSource([])).agents
-    expect(agents.degraded).toBe(false)
-    expect(agents.empty).toBe(true)
-    expect(agents.stages).toHaveLength(4)
-  })
-
-  it('unreadable agentFlow (non-object / events non-array) → degraded, never throws', () => {
-    const project = (agentFlow: unknown) => projectGraph({
-      ...fullSource,
-      state: { ...fullSource.state!, agentFlow },
-    } as unknown as MstarEngineStatusPayload).agents
-    for (const bad of [42, 'nope', [], { events: 'nope' }, { events: 42 }, { no: 'events' }]) {
-      expect(() => project(bad)).not.toThrow()
-      expect(project(bad).degraded).toBe(true)
-      expect(project(bad).empty).toBe(false)
-      expect(project(bad).stages).toHaveLength(4)
-    }
-  })
-
-  it('agentFlow with events → plain skeleton (degraded false, empty false; entities/edges land in this plan)', () => {
-    const agents = projectGraph(flowSource([dispatchRow({ ts: 1, role: 'fullstack-dev' })])).agents
-    expect(agents.degraded).toBe(false)
-    expect(agents.empty).toBe(false)
-    expect(agents.stages).toHaveLength(4)
-  })
-})
-
-/* ---------------------------------------------------------------------------
- * Agents zone entities (spec §4): aggregation / fallback key / card fields /
- * status derivation (verdict priority → paired settle → running).
- * ------------------------------------------------------------------------- */
-
-describe('projectGraph — agents zone entities (spec §4, plan f3 — per-role aggregation)', () => {
-  it('aggregates the same ROLE across sessions: one card, count + latest ts (the user-facing fix)', () => {
-    const view = projectGraph(flowSource([
-      dispatchRow({ ts: 6, role: 'fullstack-dev', agent: 'a1', planId: 'plan-x', taskId: 'T2' }),
-      dispatchRow({ ts: 4, role: 'fullstack-dev', agent: 'a2', planId: 'plan-x', taskId: 'T1' }),
-      dispatchRow({ ts: 2, role: 'fullstack-dev', agent: 'a3' }),
-    ]))
-    const lit = view.agents.entities.find((e) => e.key === 'fullstack-dev')!
-    expect(lit.count).toBe(3)
-    expect(lit.ts).toBe(6)
-    expect(lit.idle).toBe(false)
-  })
-
-  it('the same agent dispatched under DIFFERENT roles → one card PER ROLE (no role hidden behind the session)', () => {
-    const view = projectGraph(flowSource([
-      dispatchRow({ ts: 6, role: 'fullstack-dev', agent: 'a1' }),
-      dispatchRow({ ts: 4, role: 'qc-specialist', agent: 'a1' }),
-      dispatchRow({ ts: 2, role: 'generalPurpose', agent: 'a1' }),
-    ]))
-    const byKey = new Map(view.agents.entities.map((e) => [e.key, e]))
-    // fullstack-dev + qc-specialist keep their own cards; generalPurpose folds
-    // into the general bucket — three separate entities from ONE session.
-    expect(byKey.get('fullstack-dev')!.count).toBe(1)
-    expect(byKey.get('qc-specialist')!.count).toBe(1)
-    expect(byKey.get('general')!.count).toBe(1)
-    expect(byKey.get('general')!.role).toBe('general')
-  })
-
-  it('card identity fields come from the LATEST dispatch (name/role/task/stage/ts)', () => {
-    const view = projectGraph(flowSource([
-      dispatchRow({ ts: 6, role: 'fullstack-dev', agent: 'a1', planId: 'plan-x', taskId: 'T2' }),
-      dispatchRow({ ts: 4, role: 'fullstack-dev', agent: 'a2', planId: 'plan-x', taskId: 'T1' }),
-    ]))
-    const lit = view.agents.entities.find((e) => e.key === 'fullstack-dev')!
-    expect(lit.name).toBe('a1') // agent ?? role — the latest dispatch identity
-    expect(lit.agent).toBe('a1')
-    expect(lit.role).toBe('fullstack-dev')
-    expect(lit.task).toBe('plan-x#T2')
-    expect(lit.stage).toEqual({ phase: 'autonomous-execute', stage: 'sdd-implement' })
-  })
-
-  it('a missing agent id still keys by the ROLE (no role+ts fallback anymore)', () => {
-    const view = projectGraph(flowSource([
-      dispatchRow({ ts: 5, role: 'fullstack-dev' }),
-      dispatchRow({ ts: 3, role: 'fullstack-dev' }),
-    ]))
-    const idleTail = idleRosterIds(['fullstack-dev'])
-    expect(view.agents.entities.map((e) => e.key)).toEqual(['fullstack-dev', ...idleTail])
-    expect(view.agents.entities.map((e) => e.name)).toEqual(['fullstack-dev', ...idleTail])
-    expect(view.agents.entities.map((e) => e.agent)).toEqual([null, ...idleTail.map(() => null)])
-    expect(view.agents.entities[0]!.count).toBe(2)
-  })
-
-  it('equal-ts same-role dispatches aggregate into one card', () => {
-    const view = projectGraph(flowSource([
-      dispatchRow({ ts: 5, role: 'fullstack-dev', agent: 'a1' }),
-      dispatchRow({ ts: 5, role: 'fullstack-dev', agent: 'a2' }),
-    ]))
-    // 1 evidence card + the 12 un-evidenced KNOWN_AGENTS idle cards (spec §6.2).
-    expect(view.agents.entities).toHaveLength(1 + idleRosterIds(['fullstack-dev']).length)
-    expect(view.agents.entities[0]!.key).toBe('fullstack-dev')
-    expect(view.agents.entities[0]!.count).toBe(2)
-    expect(view.agents.entities[0]!.idle).toBe(false)
-  })
-
-  it('task tag: planId#taskId; planId alone when taskId missing; null when planId missing', () => {
-    const view = projectGraph(flowSource([
-      dispatchRow({ ts: 3, role: 'fullstack-dev', agent: 'a1', planId: 'plan-x', taskId: 'T1' }),
-      dispatchRow({ ts: 2, role: 'qc-specialist', agent: 'a2', planId: 'plan-x' }),
-      dispatchRow({ ts: 1, role: 'qa-engineer', agent: 'a3' }),
-    ]))
-    const byKey = new Map(view.agents.entities.map((e) => [e.key, e]))
-    expect(byKey.get('fullstack-dev')!.task).toBe('plan-x#T1')
-    expect(byKey.get('qc-specialist')!.task).toBe('plan-x')
-    expect(byKey.get('qa-engineer')!.task).toBeNull()
-  })
-})
-
-describe('projectGraph — agents zone status derivation (spec §4)', () => {
-  it('latest-dispatch verdict denied wins even with a paired settle', () => {
-    const view = projectGraph(flowSource([
-      settleRow({ ts: 8, agent: 'a1', outcome: 'ok', role: 'fullstack-dev' }),
-      dispatchRow({ ts: 7, role: 'fullstack-dev', agent: 'a1', verdict: 'denied' }),
-    ]))
-    expect(view.agents.entities.find((e) => e.key === 'fullstack-dev')!.status).toBe('denied')
-  })
-
-  it('advisory verdict is NOT terminal — with a paired ok settle it projects settled ', () => {
-    const view = projectGraph(flowSource([
-      settleRow({ ts: 8, agent: 'a1', outcome: 'ok', role: 'fullstack-dev' }),
-      dispatchRow({ ts: 7, role: 'fullstack-dev', agent: 'a1', verdict: 'advisory' }),
-    ]))
-    expect(view.agents.entities.find((e) => e.key === 'fullstack-dev')!.status).toBe('settled')
-  })
-
-  it('advisory verdict with a paired error settle → error (the settle decides, not the advisory verdict)', () => {
-    const view = projectGraph(flowSource([
-      settleRow({ ts: 8, agent: 'a1', outcome: 'error', role: 'fullstack-dev' }),
-      dispatchRow({ ts: 7, role: 'fullstack-dev', agent: 'a1', verdict: 'advisory' }),
-    ]))
-    expect(view.agents.entities.find((e) => e.key === 'fullstack-dev')!.status).toBe('error')
-  })
-
-  it('advisory verdict without a settle → running (not a terminal advisory state)', () => {
-    const view = projectGraph(flowSource([
-      dispatchRow({ ts: 7, role: 'fullstack-dev', agent: 'a1', verdict: 'advisory' }),
-    ]))
-    expect(view.agents.entities.find((e) => e.key === 'fullstack-dev')!.status).toBe('running')
-  })
-
-  it('paired settle ok → settled (identity-paired: agent + role + plan/task)', () => {
-    const view = projectGraph(flowSource([
-      settleRow({ ts: 8, agent: 'a1', outcome: 'ok', role: 'fullstack-dev', planId: 'plan-x', taskId: 'T2' }),
-      dispatchRow({ ts: 7, role: 'fullstack-dev', agent: 'a1', planId: 'plan-x', taskId: 'T2' }),
-    ]))
-    expect(view.agents.entities.find((e) => e.key === 'fullstack-dev')!.status).toBe('settled')
-  })
-
-  it('paired settle error → error; settle outcome denied → settled at the ENTITY level', () => {
-    const errorView = projectGraph(flowSource([
-      settleRow({ ts: 8, agent: 'a1', outcome: 'error', role: 'fullstack-dev' }),
-      dispatchRow({ ts: 7, role: 'fullstack-dev', agent: 'a1' }),
-    ]))
-    expect(errorView.agents.entities.find((e) => e.key === 'fullstack-dev')!.status).toBe('error')
-    const deniedView = projectGraph(flowSource([
-      settleRow({ ts: 8, agent: 'a2', outcome: 'denied', role: 'frontend-dev' }),
-      dispatchRow({ ts: 7, role: 'frontend-dev', agent: 'a2' }),
-    ]))
-    expect(deniedView.agents.entities.find((e) => e.key === 'frontend-dev')!.status).toBe('settled')
-  })
-
-  it('no paired settle → running; a dispatch after the last settle is running again', () => {
-    const running = projectGraph(flowSource([
-      dispatchRow({ ts: 7, role: 'fullstack-dev', agent: 'a1' }),
-    ]))
-    expect(running.agents.entities.find((e) => e.key === 'fullstack-dev')!.status).toBe('running')
-    // File order: D(t9) → S(t8) → D(t7). The settle pairs the OLDER same-identity
-    // dispatch (most recent matching dispatch before it in file order); the latest
-    // dispatch (t9) has no pair → running (honest).
-    const again = projectGraph(flowSource([
-      dispatchRow({ ts: 9, role: 'fullstack-dev', agent: 'a1' }),
-      settleRow({ ts: 8, agent: 'a1', outcome: 'ok', role: 'fullstack-dev' }),
-      dispatchRow({ ts: 7, role: 'fullstack-dev', agent: 'a1' }),
-    ]))
-    expect(again.agents.entities.find((e) => e.key === 'fullstack-dev')!.status).toBe('running')
-  })
-
-  it('different agents never pair; the settle-only agent stays running', () => {
-    const view = projectGraph(flowSource([
-      settleRow({ ts: 8, agent: 'a2', outcome: 'ok', role: 'fullstack-dev' }),
-      dispatchRow({ ts: 7, role: 'fullstack-dev', agent: 'a1' }),
-    ]))
-    expect(view.agents.entities.find((e) => e.key === 'fullstack-dev')!.status).toBe('running')
-  })
-
-  it('settle-only flow → no settle-derived cards; the full KNOWN_AGENTS roster shows idle', () => {
-    const agents = projectGraph(flowSource([
-      settleRow({ ts: 8, agent: 'a1', outcome: 'ok' }),
-      settleRow({ ts: 7, agent: 'a2', outcome: 'error' }),
-    ])).agents
-    // Settle rows never produce cards (spec §4), but the known roster is never
-    // hidden: every known agent projects as an idle card (spec §6.2).
-    expect(agents.degraded).toBe(false)
-    expect(agents.empty).toBe(false)
-    expect(agents.entities).toHaveLength(KNOWN_AGENTS.length)
-    expect(agents.entities.every((e) => e.idle && e.status === 'idle')).toBe(true)
-    expect(agents.executing).toBe(0)
-  })
-})
-
-/* ---------------------------------------------------------------------------
- * Agents zone unresolved continuation: an Assignment-shaped team
- * dispatch (`team_task_create` / `team_task_update` / `send_message`) whose
- * latest ledger fact is the explicit `continuation`/`unresolved` row renders
- * the DISTINCT non-running `unresolved` state — never phantom running, never
- * counted in `executing` — while a dispatch with NO events after it stays
- * honestly running. The event log lists the continuation row with its reason.
- * ------------------------------------------------------------------------- */
-
-/** One nonterminal `continuation`/`unresolved` row as the projected ledger view emits it (the row carries the paired dispatch identity). */
-function continuationRow(over: {
-  ts: number
-  agent?: string
-  role: string
-  planId?: string
-  taskId?: string
-  callId?: string
-  reason: string
-}) {
-  return {
-    ts: over.ts,
-    kind: 'continuation',
-    agent: over.agent ?? null,
-    role: over.role,
-    planId: over.planId ?? null,
-    taskId: over.taskId ?? null,
-    taskCategory: null,
-    ...(over.callId !== undefined ? { callId: over.callId } : {}),
-    state: 'unresolved',
-    reason: over.reason,
-  }
-}
-
-describe('projectGraph — agents zone unresolved continuation', () => {
-  it('(a) a team_task_create dispatch whose latest fact is an unresolved continuation → status unresolved, NOT executing', () => {
-    const view = projectGraph(flowSource([
-      continuationRow({ ts: 8, agent: 'a1', role: 'fullstack-dev', reason: 'the created member is not resolvable in the roster' }),
-      dispatchRow({ ts: 7, role: 'fullstack-dev', agent: 'a1', verdict: 'ok' }),
-    ]))
-    const entity = view.agents.entities.find((e) => e.key === 'fullstack-dev')!
-    expect(entity.status).toBe('unresolved')
-    expect(entity.idle).toBe(false)
-    // The distinct non-running state never inflates the "N executing" summary.
-    expect(view.agents.executing).toBe(0)
-  })
-
-  it('(b) a dispatch with NO events after it still renders running (honest in-flight)', () => {
-    const view = projectGraph(flowSource([
-      dispatchRow({ ts: 7, role: 'fullstack-dev', agent: 'a1' }),
-    ]))
-    expect(view.agents.entities.find((e) => e.key === 'fullstack-dev')!.status).toBe('running')
-    expect(view.agents.executing).toBe(1)
-  })
-
-  it('(c) the event log lists the continuation row with its reason', () => {
-    const view = projectGraph(flowSource([
-      continuationRow({ ts: 8, agent: 'a1', role: 'fullstack-dev', reason: 'the roster does not list the created member' }),
-      dispatchRow({ ts: 7, role: 'fullstack-dev', agent: 'a1' }),
-    ]))
-    // Latest-first preserved: the continuation row precedes its dispatch.
-    expect(view.events.map((e) => e.kind)).toEqual(['continuation', 'dispatch'])
-    const row = view.events.find((e) => e.kind === 'continuation')!
-    expect(row.state).toBe('unresolved')
-    expect(row.reason).toBe('the roster does not list the created member')
-    expect(row.agent).toBe('a1')
-    expect(row.role).toBe('fullstack-dev')
-    // A continuation carries no gate verdict/outcome — honest unknown status.
-    expect(row.status).toBe('unknown')
-    // The event log entry assembly passes the row through as a generic event.
-    const entry = eventLogEntries(view).find((entry) => entry.kind === 'event' && entry.eventKind === 'continuation')
-    expect(entry).toMatchObject({ kind: 'event', role: 'fullstack-dev', agent: 'a1', status: 'unknown' })
-  })
-
-  it('a paired settle beats an unresolved continuation on the same dispatch (completion is the stronger fact)', () => {
-    const view = projectGraph(flowSource([
-      settleRow({ ts: 8, agent: 'a1', outcome: 'ok', role: 'fullstack-dev' }),
-      continuationRow({ ts: 75, agent: 'a1', role: 'fullstack-dev', reason: 'pairing window ended' }),
-      dispatchRow({ ts: 7, role: 'fullstack-dev', agent: 'a1' }),
-    ]))
-    expect(view.agents.entities.find((e) => e.key === 'fullstack-dev')!.status).toBe('settled')
-  })
-
-  it('an agent-less continuation never pairs (exact identity, no guessing) — the dispatch stays running', () => {
-    const view = projectGraph(flowSource([
-      continuationRow({ ts: 8, role: 'fullstack-dev', reason: 'no attributable member turn' }),
-      dispatchRow({ ts: 7, role: 'fullstack-dev', agent: 'a1' }),
-    ]))
-    expect(view.agents.entities.find((e) => e.key === 'fullstack-dev')!.status).toBe('running')
-  })
-
-  it('two concurrent same-identity dispatches: a continuation pairs onto ITS OWN call (call-scoped key), never the later same-identity dispatch', () => {
-    // The continuation belongs to the EARLIER call (call-a); the later
-    // same-identity dispatch (call-b) is the entity's LATEST fact. Under the
-    // old identity-only key the continuation landed on call-b and the entity
-    // read unresolved; the call-scoped key keeps the attribution exact, so the
-    // entity stays honestly running (call-b carries no terminal fact).
-    const view = projectGraph(flowSource([
-      continuationRow({ ts: 10, agent: 'a1', role: 'fullstack-dev', reason: 'pairing window ended', callId: 'call-a' }),
-      dispatchRow({ ts: 9, role: 'fullstack-dev', agent: 'a1', callId: 'call-b' }),
-      dispatchRow({ ts: 8, role: 'fullstack-dev', agent: 'a1', callId: 'call-a' }),
-    ]))
-    expect(view.agents.entities.find((e) => e.key === 'fullstack-dev')!.status).toBe('running')
-  })
-
-  it('(d) an existing subagent dispatch/settle pair renders unchanged alongside an unresolved-continuation entity', () => {
-    const view = projectGraph(flowSource([
-      continuationRow({ ts: 9, agent: 'a2', role: 'frontend-dev', reason: 'pairing window ended' }),
-      dispatchRow({ ts: 8, role: 'frontend-dev', agent: 'a2' }),
-      settleRow({ ts: 7, agent: 'a1', outcome: 'ok', role: 'fullstack-dev' }),
-      dispatchRow({ ts: 6, role: 'fullstack-dev', agent: 'a1' }),
-    ]))
-    expect(view.agents.entities.find((e) => e.key === 'frontend-dev')!.status).toBe('unresolved')
-    expect(view.agents.entities.find((e) => e.key === 'fullstack-dev')!.status).toBe('settled')
-    expect(view.agents.executing).toBe(0)
-  })
-})
-
-/* ---------------------------------------------------------------------------
- * Agents zone current-iteration filter: entities/actual edges derive ONLY from the current iteration's dispatch
- * rows — a cross-iteration plan's events produce no entity/edge, the roster
- * still renders all KNOWN_AGENTS (cross-iteration roles fall back to idle);
- * `projectFlowEvents` (view.events) stays unfiltered.
- * ------------------------------------------------------------------------- */
-
-describe('projectGraph — agents current-iteration filter ', () => {
-  /** A source with the given plans + events, keeping `fullSource`'s ACTIVE
-   * iteration (iterationId 'iter-00000810-panel-zones' → the compass branch). */
-  function iterSource(plans: readonly unknown[], events: readonly unknown[]): MstarEngineStatusPayload {
-    return {
-      ...fullSource,
-      state: {
-        ...fullSource.state!,
-        plans: plans as never,
-        agentFlow: { events, summary: [] } as unknown as AgentFlowView,
-      },
-    }
+describe('projectGraph — the parse boundary owns the envelope', () => {
+  /** A complete, well-formed `ok` answer — the control. */
+  function completeSnapshot(): PanelSnapshot {
+    return snapshot({})
   }
 
-  it('a cross-iteration plan\'s dispatch produces no entity; the current plan\'s does (roster never hidden)', () => {
-    const source = iterSource(
-      [
-        { id: 'plan-current', status: 'InProgress', doneAt: null, iterationRefs: ['iter-00000810-panel-zones'] },
-        { id: 'plan-old', status: 'Done', doneAt: '2026-08-08', iterationRefs: ['iter-00000801-old'] },
-      ],
-      [
-        dispatchRow({ ts: 5, role: 'fullstack-dev', agent: 'a1', planId: 'plan-current' }),
-        dispatchRow({ ts: 4, role: 'qc-specialist', agent: 'a2', planId: 'plan-old' }),
-      ],
-    )
-    const view = projectGraph(source)
-    const byKey = new Map(view.agents.entities.map((e) => [e.key, e]))
-    // The current-plan dispatch lights fullstack-dev; the cross-iteration
-    // qc-specialist dispatch is filtered → its card falls back to idle.
-    expect(byKey.get('fullstack-dev')!.idle).toBe(false)
-    expect(byKey.get('qc-specialist')!.idle).toBe(true)
-    expect(byKey.get('qc-specialist')!.status).toBe('idle')
-    // The full roster is never hidden.
-    expect(view.agents.entities).toHaveLength(KNOWN_AGENTS.length)
-    // The event-log tab is UNFILTERED — both dispatches still appear.
-    expect(view.events).toHaveLength(2)
+  it('a member-less ok answer parses to unavailable, never a half-parsed snapshot', () => {
+    const parsed = parsePanelSnapshotRead({ kind: 'ok', snapshot: { at: '2026-10-22T00:00:00.000Z' } })
+    expect(parsed.kind).toBe('unavailable')
+    expect(parsed.kind === 'unavailable' ? parsed.reason : null).toBe('malformed-answer')
+    // …so the panel renders the degraded branch: the projection gets null, not junk.
+    expect(() => projectGraph(parsed.kind === 'ok' ? parsed.snapshot : null)).not.toThrow()
   })
 
-  it('no compass → the most-recent iteration (max 8-digit id date prefix) + empty-refs standalone plans are current', () => {
-    const source = {
-      ...fullSource,
-      iteration: undefined,
-      state: {
-        ...fullSource.state!,
-        plans: [
-          { id: '00000813-standalone', status: 'InProgress', doneAt: null, iterationRefs: [] },
-          { id: '00000812-recent', status: 'Done', doneAt: '2026-08-12', iterationRefs: ['iter-00000812'] },
-          { id: '00000810-old', status: 'Done', doneAt: '2026-08-10', iterationRefs: ['iter-00000810'] },
-        ],
-        agentFlow: {
-          events: [
-            dispatchRow({ ts: 3, role: 'frontend-dev', agent: 'a1', planId: '00000813-standalone' }),
-            dispatchRow({ ts: 2, role: 'fullstack-dev', agent: 'a2', planId: '00000812-recent' }),
-            dispatchRow({ ts: 1, role: 'qc-specialist', agent: 'a3', planId: '00000810-old' }),
-          ],
-          summary: [],
-        } as unknown as AgentFlowView,
-      },
-    } as unknown as MstarEngineStatusPayload
-    const byKey = new Map(projectGraph(source).agents.entities.map((e) => [e.key, e]))
-    // most-recent iteration = iter-00000812 (plan id date prefix 00000812 is the
-    // max) → fullstack-dev () is lit; the older iter-00000810 is
-    // cross → qc-specialist idle; the empty-refs standalone plan is never
-    // hidden → frontend-dev lit.
-    expect(byKey.get('fullstack-dev')!.idle).toBe(false)
-    expect(byKey.get('frontend-dev')!.idle).toBe(false)
-    expect(byKey.get('qc-specialist')!.idle).toBe(true)
-  })
-
-  it('tie-break: two plans share the SAME 8-digit id date prefix → the max-doneAt iteration wins (Clarify口径)', () => {
-    const source = {
-      ...fullSource,
-      iteration: undefined,
-      state: {
-        ...fullSource.state!,
-        plans: [
-          { id: '00000812-old', status: 'Done', doneAt: '2026-08-12', iterationRefs: ['iter-00000812-old'] },
-          { id: '00000812-new', status: 'Done', doneAt: '2026-08-14', iterationRefs: ['iter-00000812-new'] },
-        ],
-        agentFlow: {
-          events: [
-            dispatchRow({ ts: 2, role: 'qc-specialist', agent: 'a1', planId: '00000812-new' }),
-            dispatchRow({ ts: 1, role: 'fullstack-dev', agent: 'a2', planId: '00000812-old' }),
-          ],
-          summary: [],
-        } as unknown as AgentFlowView,
-      },
-    } as unknown as MstarEngineStatusPayload
-    const byKey = new Map(projectGraph(source).agents.entities.map((e) => [e.key, e]))
-    // Same 8-digit date prefix (00000812): the more-recent doneAt (2026-08-14)
-    // names the current iteration → qc-specialist (new) lit; fullstack-dev (old)
-    // is cross-iteration → idle.
-    expect(byKey.get('qc-specialist')!.idle).toBe(false)
-    expect(byKey.get('fullstack-dev')!.idle).toBe(true)
-  })
-
-  it('compass active but no plan references it → empty set → roster idle, no lit entities (graceful, never throws)', () => {
-    const source = iterSource(
-      [{ id: 'plan-a', status: 'InProgress', doneAt: null, iterationRefs: ['iter-some-other'] }],
-      [dispatchRow({ ts: 1, role: 'fullstack-dev', agent: 'a1', planId: 'plan-a' })],
-    )
-    const agents = projectGraph(source).agents
-    // plan-a references a DIFFERENT iteration → the current set is empty → the
-    // dispatch is cross-iteration noise → every known agent is idle.
-    expect(agents.entities.every((e) => e.idle && e.status === 'idle')).toBe(true)
-    expect(agents.executing).toBe(0)
-  })
-
-  // QC F-3 — the compass-active kept-branches of the decision tree: a plan
-  // with EMPTY iterationRefs carries no cross-iteration signal, so its
-  // dispatch survives the filter even while the compass names a different id.
-  it('compass active keeps a plan with EMPTY iterationRefs (standalone plan never hidden)', () => {
-    const source = iterSource(
-      [{ id: 'plan-standalone', status: 'InProgress', doneAt: null, iterationRefs: [] }],
-      [dispatchRow({ ts: 1, role: 'fullstack-dev', agent: 'a1', planId: 'plan-standalone' })],
-    )
-    const byKey = new Map(projectGraph(source).agents.entities.map((e) => [e.key, e]))
-    // The compass is active (fullSource iterationId), but plan-standalone has
-    // EMPTY refs → nothing provably cross-iteration → the dispatch is kept.
-    expect(byKey.get('fullstack-dev')!.idle).toBe(false)
-    expect(byKey.get('fullstack-dev')!.status).toBe('running')
-  })
-
-  // QC F-3 — the plan-less branch: `planId: null` is never cross-iteration.
-  it('compass active keeps a plan-less dispatch (planId null → never cross-iteration)', () => {
-    const source = iterSource(
-      [{ id: 'plan-current', status: 'InProgress', doneAt: null, iterationRefs: ['iter-00000810-panel-zones'] }],
-      // `dispatchRow` leaves planId null by default — no plan identity at all.
-      [dispatchRow({ ts: 1, role: 'fullstack-dev', agent: 'a1' })],
-    )
-    const byKey = new Map(projectGraph(source).agents.entities.map((e) => [e.key, e]))
-    expect(byKey.get('fullstack-dev')!.idle).toBe(false)
-  })
-
-  // QC F-3 — settle pairing is exact-identity (agent, role, planId, taskId):
-  // a settle from a CROSS-ITERATION plan never settles a same-role current
-  // dispatch, even with the same agent (the planId leg differs).
-  it("a settle from a cross-iteration plan stays UNPAIRED (does not settle the same-role current dispatch)", () => {
-    const source = iterSource(
-      [
-        { id: 'plan-current', status: 'InProgress', doneAt: null, iterationRefs: ['iter-00000810-panel-zones'] },
-        { id: 'plan-old', status: 'Done', doneAt: '2026-08-08', iterationRefs: ['iter-00000801-old'] },
-      ],
-      [
-        dispatchRow({ ts: 3, role: 'fullstack-dev', agent: 'a1', planId: 'plan-current' }),
-        settleRow({ ts: 4, role: 'fullstack-dev', agent: 'a1', planId: 'plan-old', outcome: 'ok' }),
-      ],
-    )
-    const byKey = new Map(projectGraph(source).agents.entities.map((e) => [e.key, e]))
-    expect(byKey.get('fullstack-dev')!.idle).toBe(false)
-    // The current dispatch has NO paired settle → honest 'running', not a
-    // fabricated completion from the cross-iteration settle.
-    expect(byKey.get('fullstack-dev')!.status).toBe('running')
-  })
-
-  // QC F-3 — aggregation runs on the FILTERED rows: a NEWER cross-iteration
-  // dispatch cannot overwrite an already-lit role's ts/verdict/identity.
-  it("a newer cross-iteration dispatch does not overwrite an already-lit role's ts/verdict", () => {
-    const source = iterSource(
-      [
-        { id: 'plan-current', status: 'InProgress', doneAt: null, iterationRefs: ['iter-00000810-panel-zones'] },
-        { id: 'plan-old', status: 'Done', doneAt: '2026-08-08', iterationRefs: ['iter-00000801-old'] },
-      ],
-      [
-        // The cross-iteration dispatch is NEWER (ts 5) — filtered out BEFORE
-        // aggregation, so the entity keeps the current dispatch's identity.
-        dispatchRow({ ts: 5, role: 'fullstack-dev', agent: 'a-old', planId: 'plan-old' }),
-        dispatchRow({ ts: 3, role: 'fullstack-dev', agent: 'a-current', planId: 'plan-current' }),
-      ],
-    )
-    const byKey = new Map(projectGraph(source).agents.entities.map((e) => [e.key, e]))
-    const entity = byKey.get('fullstack-dev')!
-    expect(entity.idle).toBe(false)
-    expect(entity.ts).toBe(3) // the cross-iteration ts 5 did NOT overwrite
-    expect(entity.agent).toBe('a-current')
-    expect(entity.status).toBe('running') // verdict falls through → no pair → running
-  })
-})
-
-/* ---------------------------------------------------------------------------
- * Agents zone counts + the spec §8 degradation matrix (never throw, never
- * guess: degraded → no claims; empty / settle-only → full pending skeleton).
- * ------------------------------------------------------------------------- */
-
-describe('projectGraph — agents zone counts (spec §4)', () => {
-  it('executing = running entity count; settled/error/denied are not executing', () => {
-    const view = projectGraph(flowSource([
-      settleRow({ ts: 20, agent: 's1', outcome: 'ok', role: 'frontend-dev' }),
-      dispatchRow({ ts: 19, role: 'frontend-dev', agent: 's1' }),
-      dispatchRow({ ts: 18, role: 'fullstack-dev', agent: 'r1' }),
-      settleRow({ ts: 17, agent: 'e1', outcome: 'error', role: 'generalPurpose' }),
-      dispatchRow({ ts: 16, role: 'generalPurpose', agent: 'e1' }),
-      dispatchRow({ ts: 15, role: 'qc-specialist', agent: 'd1', verdict: 'denied' }),
-    ]))
-    const byKey = new Map(view.agents.entities.map((e) => [e.key, e.status]))
-    expect(byKey.get('frontend-dev')).toBe('settled') // paired settle ok
-    expect(byKey.get('fullstack-dev')).toBe('running') // no pair
-    expect(byKey.get('general')).toBe('error') // generalPurpose folds into the general bucket
-    expect(byKey.get('qc-specialist')).toBe('denied')
-    expect(view.agents.executing).toBe(1)
-  })
-
-  it('pending = expected roles of stages with NO dispatch evidence', () => {
-    // Evidence: fullstack-dev (sdd-implement, 3 roles); generalPurpose is now
-    // OFF the pipeline (general bucket) → it evidences no stage. Total
-    // expected roles = 10 (4 stages) → pending 7.
-    const agents = projectGraph(flowSource([
-      dispatchRow({ ts: 2, role: 'fullstack-dev', agent: 'a1' }),
-      dispatchRow({ ts: 1, role: 'generalPurpose', agent: 'a2' }),
-    ])).agents
-    expect(agents.pending).toBe(7)
-    expect(agents.executing).toBe(2)
-  })
-
-  it('evidence comes from ALL dispatch rows, per role (each role lights its own stage)', () => {
-    // a1 dispatched as fullstack-dev (t1) then qc-specialist (t3) — BOTH
-    // stages stay evidenced (per-role aggregation lights each stage).
-    const agents = projectGraph(flowSource([
-      dispatchRow({ ts: 3, role: 'qc-specialist', agent: 'a1' }),
-      dispatchRow({ ts: 1, role: 'fullstack-dev', agent: 'a1' }),
-    ])).agents
-    expect(agents.pending).toBe(10 - 3 - 3) // 4
-  })
-
-  it('stage.evidenced flags the SAME stages as the pending count (render placeholder decision)', () => {
-    // Evidence: fullstack-dev (sdd-implement) + qc-specialist (qc-tri).
-    const agents = projectGraph(flowSource([
-      dispatchRow({ ts: 3, role: 'qc-specialist', agent: 'a1' }),
-      dispatchRow({ ts: 1, role: 'fullstack-dev', agent: 'a1' }),
-    ])).agents
-    const byId = new Map(agents.stages.map((s) => [s.id, s.evidenced]))
-    expect(byId.get('autonomous-execute:sdd-implement')).toBe(true)
-    expect(byId.get('autonomous-execute:qc-tri')).toBe(true)
-    for (const id of ['iteration-start:review-edit-chain', 'autonomous-execute:qa-gate']) {
-      expect(byId.get(id)).toBe(false)
+  it('every mandatory member is enforced — dropping any ONE parses to unavailable', () => {
+    const full = completeSnapshot()
+    const variants: Record<string, unknown> = {
+      'no workspace': { ...full, workspace: undefined },
+      'workspace not an object': { ...full, workspace: 'nope' },
+      'one workspace member missing': { ...full, workspace: { ...full.workspace, issues: undefined } },
+      'one workspace member is not a read': { ...full, workspace: { ...full.workspace, projects: { state: 'boom' } } },
+      'no retained': { ...full, retained: undefined },
+      'retained not an object': { ...full, retained: 'nope' },
+      'no ledger key': { ...full, ledger: undefined },
+      'ledger without its events array': { ...full, ledger: { events: 'nope' } },
+      'no timestamp': { ...full, at: '' },
     }
-    // The count equals the sum of un-evidenced stage roles (no drift).
-    const unEvidenced = agents.stages.filter((s) => !s.evidenced).reduce((sum, s) => sum + s.roles.length, 0)
-    expect(unEvidenced).toBe(agents.pending)
-  })
-})
-
-describe('projectGraph — agents zone degradation matrix (spec §8)', () => {
-  it('degraded (agentFlow null / unreadable) → full idle roster, NO executing/pending claims (0/0)', () => {
-    const degraded = projectGraph(fullSource).agents // agentFlow: null
-    expect(degraded.degraded).toBe(true)
-    // The known roster is never hidden (spec §6.2): all 14 KNOWN_AGENTS show idle.
-    expect(degraded.entities).toHaveLength(KNOWN_AGENTS.length)
-    expect(degraded.entities.every((e) => e.idle && e.status === 'idle' && e.count === 0 && e.ts === 0)).toBe(true)
-    expect(degraded.executing).toBe(0)
-    expect(degraded.pending).toBe(0)
-    // No evidence claims on a degraded skeleton either (render shows no
-    // pending placeholders — spec §8).
-    expect(degraded.stages.every((s) => !s.evidenced)).toBe(true)
-  })
-
-  it('empty ledger → empty + full idle roster + full pending skeleton (0 executing, 11 pending)', () => {
-    const agents = projectGraph(flowSource([])).agents
-    expect(agents.empty).toBe(true)
-    expect(agents.degraded).toBe(false)
-    expect(agents.entities).toHaveLength(KNOWN_AGENTS.length)
-    expect(agents.entities.every((e) => e.idle && e.status === 'idle')).toBe(true)
-    expect(agents.executing).toBe(0)
-    // 3 + 4 (sdd-implement incl. code-reviewer — plan f5 Task 1) + 3 + 1 = 11.
-    expect(agents.pending).toBe(11)
-  })
-
-  it('only-settle ledger → idle roster + full pending skeleton (摘要 0 执行中 · M 待执行)', () => {
-    const agents = projectGraph(flowSource([
-      settleRow({ ts: 8, agent: 'a1', outcome: 'ok' }),
-      settleRow({ ts: 7, agent: 'a2', outcome: 'error' }),
-    ])).agents
-    expect(agents.degraded).toBe(false)
-    expect(agents.empty).toBe(false)
-    // Settles never produce cards; the known roster still shows idle.
-    expect(agents.entities).toHaveLength(KNOWN_AGENTS.length)
-    expect(agents.entities.every((e) => e.idle && e.status === 'idle')).toBe(true)
-    expect(agents.executing).toBe(0)
-    // 11 expected roles across the 4 stages (sdd-implement now incl. code-reviewer).
-    expect(agents.pending).toBe(11)
-    expect(agents.stages).toHaveLength(4)
-    // The projection classifies the ledger — settle rows but no
-    // dispatch rows → the settle-only note (never UI-inferred).
-    expect(agents.note).toBe('settle-only')
-  })
-
-  it('the canvas note is PROJECTED — empty (0 events) / settle-only (rows but no dispatch) / null (dispatch evidence)', () => {
-    // 0 events → 'empty'.
-    expect(projectGraph(flowSource([])).agents.note).toBe('empty')
-    // Events but NO dispatch row (settle rows only) → 'settle-only'.
-    expect(projectGraph(flowSource([
-      settleRow({ ts: 8, agent: 'a1', outcome: 'ok' }),
-    ])).agents.note).toBe('settle-only')
-    // Any dispatch row → null (real evidence; anonymous rows count too —
-    // they are dispatch activity, not a settle-only ledger).
-    expect(projectGraph(flowSource([
-      dispatchRow({ ts: 1, role: 'fullstack-dev', agent: 'a1' }),
-    ])).agents.note).toBeNull()
-    expect(projectGraph(flowSource([{ kind: 'dispatch' }])).agents.note).toBeNull()
-    // Unreadable / absent ledger → null note (the `degraded` flag is the signal).
-    expect(projectGraph(fullSource).agents.note).toBeNull()
-    expect(projectGraph(null).agents.note).toBeNull()
-    expect(projectGraph(noHarnessSource).agents.note).toBeNull()
-  })
-
-  it('a garbage-only ledger never fakes evidence — note settle-only (no dispatch rows to show)', () => {
-    // All rows unclassifiable (kind ∉ dispatch|settle) → no dispatch
-    // evidence at all → the honest settle-only note (the old UI-side
-    // allIdle heuristic produced the same anchor; the projection now owns it).
-    const agents = projectGraph(flowSource([42, null, 'garbage', { kind: 'banana' }])).agents
-    expect(agents.degraded).toBe(false)
-    expect(agents.empty).toBe(false)
-    expect(agents.note).toBe('settle-only')
-    expect(agents.entities.every((e) => e.idle)).toBe(true)
-    // Mixing garbage with a REAL dispatch row → evidence wins, no note.
-    const mixed = projectGraph(flowSource([
-      42,
-      'garbage',
-      dispatchRow({ ts: 1, role: 'fullstack-dev', agent: 'a1' }),
-    ])).agents
-    expect(mixed.note).toBeNull()
-    expect(mixed.entities.some((e) => !e.idle)).toBe(true)
-  })
-
-  it('anonymous dispatch rows (no agent, no role) fold into the general bucket — never ghost cards', () => {
-    const view = projectGraph(flowSource([
-      { kind: 'dispatch', ts: 9, role: 42 }, // garbage role → '' → anonymous → general
-      { kind: 'dispatch', ts: 8 },           // fully anonymous → general
-      dispatchRow({ ts: 6, role: 'fullstack-dev', agent: 'a1' }),
-    ]))
-    // a1's role card (lit) + the general bucket card (lit, ×2 anonymous rows)
-    // + the 12 un-evidenced known roles (idle) — anonymous rows are dispatch
-    // evidence and belong to the general bucket (user decision, plan f3).
-    expect(view.agents.entities.map((e) => e.key)).toEqual(['general', 'fullstack-dev', ...idleRosterIds(['fullstack-dev', 'general'])])
-    expect(view.agents.entities.find((e) => e.key === 'general')!.count).toBe(2)
-    expect(view.agents.executing).toBe(2)
-    expect(view.agents.entities.filter((e) => e.idle).every((e) => e.status === 'idle')).toBe(true)
-  })
-
-  it('all-garbage agent-flow rows → total function: a valid-kind anonymous dispatch lights the general card, never throws', () => {
-    const agents = projectGraph(flowSource([42, null, 'garbage', { kind: 'banana' }, { kind: 'dispatch' }])).agents
-    expect(agents.degraded).toBe(false)
-    // { kind: 'dispatch' } is a valid dispatch row (role '' → general bucket);
-    // every OTHER row is unclassifiable → 1 lit general + 13 idle = 14.
-    expect(agents.entities).toHaveLength(KNOWN_AGENTS.length)
-    expect(agents.entities.find((e) => e.key === 'general')!.idle).toBe(false)
-    expect(agents.entities.filter((e) => e.idle).every((e) => e.status === 'idle')).toBe(true)
-    expect(agents.executing).toBe(1)
-  })
-})
-
-/* ---------------------------------------------------------------------------
- * KNOWN_AGENTS full roster (spec §4 / §6.2 / decision point D3 + plan
- *  Task
- * 1): exactly 14 roles — every EXPECTED_ROLE_FLOW role (11, incl. the SDD L2
- * task reviewer `code-reviewer` — v2.1.1, the former `generalPurpose` seat)
- * + ops-engineer / prompt-engineer (off-pipeline, on-demand zone —
- * implementor-sub-bucket members, plan f5 Task 1) + `general` (the general
- * bucket — the unmatched/anonymous catch-all; zone 'general'); project-manager
- * is EXCLUDED (the primary orchestration agent, never an assignable subagent
- * — F2 plan Item 2) and `explore` is EXCLUDED too (scout adjunct, no
- * presentation value); stages pinned to the flow (first
- * constant-order match), null for the off-pipeline roles with an explicit
- * `zone` ('on-demand' / 'general').
- * ------------------------------------------------------------------------- */
-
-describe('projectGraph — KNOWN_AGENTS full roster (spec §4 / §6.2 / D3)', () => {
-  it('is exactly the 14 spec roles in spec §4 order, no duplicates, no project-manager, no explore', () => {
-    expect(KNOWN_AGENTS).toHaveLength(14)
-    expect(KNOWN_AGENTS.map((a) => a.id)).toEqual([
-      'product-manager', 'architect', 'fullstack-dev', 'fullstack-dev-2',
-      'frontend-dev', 'code-reviewer', 'qa-engineer', 'qc-specialist', 'qc-specialist-2', 'qc-specialist-3',
-      'ops-engineer', 'writing-specialist', 'prompt-engineer', 'general',
-    ])
-    expect(new Set(KNOWN_AGENTS.map((a) => a.id)).size).toBe(14)
-    // project-manager is the PRIMARY orchestration
-    // agent — NOT an assignable subagent, so it is not in the roster.
-    expect(KNOWN_AGENTS.some((a) => a.id === 'project-manager')).toBe(false)
-    // explore is a scout adjunct with no presentation
-    // value — removed from the roster (a stray dispatch folds into `general`).
-    expect(KNOWN_AGENTS.some((a) => a.id === 'explore')).toBe(false)
-    expect(KNOWN_AGENTS.some((a) => a.id === 'generalPurpose')).toBe(false)
-  })
-
-  it('covers every EXPECTED_ROLE_FLOW role (11) plus the 3 off-pipeline roles', () => {
-    const flowRoles = EXPECTED_ROLE_FLOW.flatMap((s) => [...s.roles])
-    expect(flowRoles).toHaveLength(11)
-    for (const role of flowRoles) {
-      expect(KNOWN_AGENTS.some((a) => a.id === role)).toBe(true)
+    for (const [name, shape] of Object.entries(variants)) {
+      const parsed = parsePanelSnapshotRead({ kind: 'ok', snapshot: shape })
+      expect({ name, kind: parsed.kind }).toEqual({ name, kind: 'unavailable' })
     }
-    // The off-pipeline gaps: on-demand ops / table-only prompt / general bucket.
-    for (const role of ['ops-engineer', 'prompt-engineer', 'general']) {
-      expect(KNOWN_AGENTS.some((a) => a.id === role)).toBe(true)
-    }
+    // The control is ACCEPTED, so the cases above fail for the reason they name.
+    expect(parsePanelSnapshotRead({ kind: 'ok', snapshot: full }).kind).toBe('ok')
   })
 
-  it('stage = the first constant-order EXPECTED_ROLE_FLOW match; null for off-pipeline roles', () => {
-    const firstStage = (role: string) => {
-      for (const s of EXPECTED_ROLE_FLOW) {
-        if (s.roles.includes(role)) return { phase: s.phase, stage: s.stage }
-      }
-      return null
-    }
-    for (const known of KNOWN_AGENTS) {
-      expect(known.stage ?? null).toEqual(firstStage(known.id))
-    }
-    expect(KNOWN_AGENTS.find((a) => a.id === 'ops-engineer')!.stage ?? null).toBeNull()
-    expect(KNOWN_AGENTS.find((a) => a.id === 'prompt-engineer')!.stage ?? null).toBeNull()
-    expect(KNOWN_AGENTS.find((a) => a.id === 'general')!.stage ?? null).toBeNull()
-  })
-
-  it('off-pipeline zones (plan f3): ops-engineer/prompt-engineer → on-demand; general → general (bucket)', () => {
-    expect(KNOWN_AGENTS.find((a) => a.id === 'ops-engineer')!.zone).toBe('on-demand')
-    expect(KNOWN_AGENTS.find((a) => a.id === 'prompt-engineer')!.zone).toBe('on-demand')
-    expect(KNOWN_AGENTS.find((a) => a.id === 'general')!.zone).toBe('general')
-  })
-
-  it('code-reviewer joins the sdd-implement stage (plan f5 Task 1 — v2.1.1 SDD L2 task reviewer)', () => {
-    const c = KNOWN_AGENTS.find((a) => a.id === 'code-reviewer')!
-    expect(c.stage).toEqual({ phase: 'autonomous-execute', stage: 'sdd-implement' })
-    expect(c.zone ?? null).toBeNull() // staged → no off-pipeline zone
-  })
-
-  it('general = the unmatched/anonymous catch-all bucket (the SDD per-task reviewer seat is now the pipeline role code-reviewer): stage null, zone general', () => {
-    const g = KNOWN_AGENTS.find((a) => a.id === 'general')!
-    expect(g.stage ?? null).toBeNull()
-    expect(g.zone).toBe('general')
-  })
-})
-
-/* ---------------------------------------------------------------------------
- * Agents roster full coverage (spec §6.2): every KNOWN_AGENTS member has an
- * entity — lit when dispatch-evidenced, idle otherwise — across degraded /
- * empty / evidence states; idle never counts into `executing`.
- * ------------------------------------------------------------------------- */
-
-describe('projectGraph — agents roster full coverage (spec §6.2)', () => {
-  it('every KNOWN_AGENTS member has an entity (idle or lit) across degraded / empty / evidence states', () => {
-    for (const agents of [
-      projectGraph(fullSource).agents, // degraded: agentFlow null
-      projectGraph(flowSource([])).agents, // empty: 0 events
-      projectGraph(flowSource([dispatchRow({ ts: 1, role: 'fullstack-dev', agent: 'a1' })])).agents,
-    ]) {
-      // A lit member's card is keyed by session id — match on the ROLE field
-      // (idle cards carry role = id, lit cards carry role = the known id).
-      for (const known of KNOWN_AGENTS) {
-        expect(agents.entities.some((e) => e.role === known.id)).toBe(true)
-      }
-    }
-  })
-
-  it('no evidence → the whole roster is idle cards (idle true, status idle, count 0, ts 0, agent null)', () => {
-    const agents = projectGraph(flowSource([])).agents
-    expect(agents.entities).toHaveLength(KNOWN_AGENTS.length)
-    for (const e of agents.entities) {
-      expect(e.status).toBe('idle')
-      expect(e.idle).toBe(true)
-      expect(e.count).toBe(0)
-      expect(e.ts).toBe(0)
-      expect(e.agent).toBeNull()
-      expect(e.task).toBeNull()
-      expect(e.name).toBe(e.role)
-    }
-    expect(agents.executing).toBe(0)
-  })
-
-  it('idle cards carry the KNOWN_AGENTS stage (null for off-pipeline roles)', () => {
-    const agents = projectGraph(flowSource([])).agents
-    const byId = new Map(agents.entities.map((e) => [e.key, e]))
-    for (const known of KNOWN_AGENTS) {
-      expect(byId.get(known.id)!.stage ?? null).toEqual(known.stage ?? null)
-    }
-  })
-
-  it('dispatch evidence lights the known agent (idle false) and suppresses its idle card', () => {
-    const agents = projectGraph(flowSource([
-      dispatchRow({ ts: 2, role: 'generalPurpose', agent: 'a1' }), // → general bucket
-      dispatchRow({ ts: 1, role: 'fullstack-dev', agent: 'a2' }),
-    ])).agents
-    const byKey = new Map(agents.entities.map((e) => [e.key, e]))
-    expect(byKey.get('fullstack-dev')!.idle).toBe(false)
-    expect(byKey.get('fullstack-dev')!.status).toBe('running')
-    expect(byKey.get('general')!.idle).toBe(false)
-    expect(byKey.get('general')!.role).toBe('general')
-    // Lit roles never ALSO appear as idle cards (evidence suppresses the idle twin).
-    expect(agents.entities.filter((e) => e.idle && e.key === 'general')).toHaveLength(0)
-    // The other 12 known roles are idle (roster 14 − 2 evidenced slots).
-    const idle = agents.entities.filter((e) => e.idle)
-    expect(idle).toHaveLength(12)
-    expect(idle.every((e) => e.status === 'idle')).toBe(true)
-  })
-
-  it('evidence via an agent-less dispatch row (role present) still lights the role', () => {
-    const agents = projectGraph(flowSource([
-      dispatchRow({ ts: 1, role: 'ops-engineer' }), // no agent id → key = the role
-    ])).agents
-    const keys = agents.entities.map((e) => e.key)
-    expect(keys).toContain('ops-engineer')
-    expect(agents.entities.filter((e) => e.idle).map((e) => e.key)).not.toContain('ops-engineer')
-  })
-
-  it('executing counts running evidence entities only — idle never counts', () => {
-    const agents = projectGraph(flowSource([
-      dispatchRow({ ts: 1, role: 'frontend-dev', agent: 'a1' }),
-    ])).agents
-    expect(agents.entities).toHaveLength(KNOWN_AGENTS.length)
-    expect(agents.executing).toBe(1)
-  })
-})
-
-/* ---------------------------------------------------------------------------
- * Off-pipeline zones : the projected
- * `entity.zone` is the ONLY column authority the render layer consumes —
- * ops-engineer / prompt-engineer dispatches stay stage-null but project as
- * 'on-demand'; scout / unregistered / anonymous roles project as 'general'
- * (the bucket — the former 'unexpected' zone); idle cards inherit the
- * KnownAgent zone. The event-log `expected` flag follows the
- * EXPECTED_ROLE_FLOW union unchanged: ops-engineer dispatches are
- * off-pipeline (expected false) — the pre-existing "pipeline-out =
- * unexpected badge" convention, not a defect.
- * ------------------------------------------------------------------------- */
-
-describe('projectGraph — off-pipeline zones ', () => {
-  it('on-demand dispatch (ops-engineer) → stage null + zone on-demand + event expected false (off-pipeline)', () => {
-    const view = projectGraph(flowSource([dispatchRow({ ts: 10, role: 'ops-engineer', agent: 'a1' })]))
-    const lit = view.agents.entities.find((e) => e.key === 'ops-engineer')!
-    expect(lit.stage).toBeNull()
-    expect(lit.zone).toBe('on-demand')
-    expect(lit.idle).toBe(false)
-    // The event-log `expected` semantic is unchanged (expected ⟺ role ∈
-    // EXPECTED_ROLE_FLOW union): ops-engineer left the union → off-pipeline.
-    expect(view.events[0]!.expected).toBe(false)
-    expect(view.events[0]!.stage).toBeNull()
-  })
-
-  it('general-bucket role (scout) → stage null + zone general; unregistered roles never get on-demand', () => {
-    const view = projectGraph(flowSource([dispatchRow({ ts: 10, role: 'scout', agent: 's1' })]))
-    const general = view.agents.entities.find((e) => e.key === 'general')!
-    expect(general.zone).toBe('general')
-    expect(general.stage).toBeNull()
-    expect(general.role).toBe('general') // display role normalized
-  })
-
-  it('idle cards carry the roster zone: on-demand for ops-engineer/prompt-engineer, general for the bucket, flow for staged roles', () => {
-    const agents = projectGraph(flowSource([])).agents
-    const byId = new Map(agents.entities.map((e) => [e.key, e]))
-    expect(byId.get('ops-engineer')!.zone).toBe('on-demand')
-    expect(byId.get('prompt-engineer')!.zone).toBe('on-demand')
-    expect(byId.get('general')!.zone).toBe('general')
-    expect(byId.get('fullstack-dev')!.zone).toBe('flow')
-    expect(byId.get('product-manager')!.zone).toBe('flow')
-  })
-
-  it('a staged role never lands in on-demand, even when its session id collides with an on-demand roster id', () => {
-    // Lit card keyed 'fullstack-dev' (the ROLE — the session id 'ops-engineer'
-    // is only a record field): the ROLE decides the zone — flow, not on-demand.
-    const agents = projectGraph(flowSource([
-      dispatchRow({ ts: 7, role: 'fullstack-dev', agent: 'ops-engineer' }),
-    ])).agents
-    const lit = agents.entities.find((e) => e.key === 'fullstack-dev')!
-    expect(lit.zone).toBe('flow')
-    expect(lit.stage).toEqual({ phase: 'autonomous-execute', stage: 'sdd-implement' })
-    expect(lit.agent).toBe('ops-engineer')
-    // No ops-engineer dispatch evidence → its idle card still exists (one per key).
-    expect(agents.entities.filter((e) => e.key === 'ops-engineer')).toHaveLength(1)
-    expect(agents.entities.find((e) => e.key === 'ops-engineer')!.idle).toBe(true)
-  })
-})
-
-/* ---------------------------------------------------------------------------
- * SDD sub-buckets : every entity
- * carries a projected `bucket` — 'implementor' (SDD_BUCKET_ROLES.implementor:
- * the implementer roles PLUS the on-demand ops-engineer / prompt-engineer),
- * 'reviewer' (SDD_BUCKET_ROLES.reviewer: code-reviewer) or null (every other
- * role — qc/qa/review-edit-chain/general). Bucket membership is a LAYOUT
- * dimension ORTHOGONAL to expectedness: on-demand roles carry bucket
- * 'implementor' while their `zone` stays 'on-demand' (the on-demand badge
- * data) and their events stay `unexpected`.
- * ------------------------------------------------------------------------- */
-
-describe('projectGraph — SDD sub-buckets ', () => {
-  it('idle cards derive the bucket from SDD_BUCKET_ROLES: implementor/reviewer roles bucketed, everything else null', () => {
-    const agents = projectGraph(flowSource([])).agents
-    const byId = new Map(agents.entities.map((e) => [e.key, e]))
-    // Reviewer: code-reviewer (idle — no evidence yet) sits in the sdd-implement
-    // stage column's reviewer sub-bucket (zone flow — staged).
-    const reviewer = byId.get('code-reviewer')!
-    expect(reviewer.idle).toBe(true)
-    expect(reviewer.bucket).toBe('reviewer')
-    expect(reviewer.zone).toBe('flow')
-    expect(reviewer.stage).toEqual({ phase: 'autonomous-execute', stage: 'sdd-implement' })
-    // Implementor: the three implementer roles + the on-demand roles.
-    for (const id of ['fullstack-dev', 'fullstack-dev-2', 'frontend-dev']) {
-      expect(byId.get(id)!.bucket).toBe('implementor')
-    }
-    expect(byId.get('ops-engineer')!.bucket).toBe('implementor')
-    expect(byId.get('prompt-engineer')!.bucket).toBe('implementor')
-    // On-demand zone is UNCHANGED (the render's on-demand badge data — the
-    // standalone on-demand column is removed by Task 2, not by the zone).
-    expect(byId.get('ops-engineer')!.zone).toBe('on-demand')
-    expect(byId.get('prompt-engineer')!.zone).toBe('on-demand')
-    // Every other role (review-edit-chain / qc / qa / general bucket) → null.
-    for (const id of ['product-manager', 'architect', 'writing-specialist', 'qa-engineer',
-      'qc-specialist', 'qc-specialist-2', 'qc-specialist-3', 'general']) {
-      expect(byId.get(id)!.bucket).toBeNull()
-    }
-    expect(byId.get('general')!.zone).toBe('general')
-  })
-
-  it('code-reviewer dispatch → bucket reviewer + zone flow (expected pipeline role); its event turns expected', () => {
-    const view = projectGraph(flowSource([dispatchRow({ ts: 10, role: 'code-reviewer', agent: 'r1' })]))
-    const lit = view.agents.entities.find((e) => e.key === 'code-reviewer')!
-    expect(lit.idle).toBe(false)
-    expect(lit.bucket).toBe('reviewer')
-    expect(lit.zone).toBe('flow')
-    expect(lit.stage).toEqual({ phase: 'autonomous-execute', stage: 'sdd-implement' })
-    // v2.1.1: the SDD L2 task reviewer is a routine pipeline role — its
-    // dispatch event is EXPECTED (union member since plan f5 T1).
-    expect(view.events[0]!.expected).toBe(true)
-    expect(view.events[0]!.stage).toEqual({ phase: 'autonomous-execute', stage: 'sdd-implement' })
-    expect(view.unexpected).toEqual([])
-  })
-
-  it('on-demand dispatches (ops-engineer / prompt-engineer) → bucket implementor + zone on-demand + event still unexpected (orthogonality)', () => {
-    const view = projectGraph(flowSource([
-      dispatchRow({ ts: 10, role: 'ops-engineer', agent: 'o1' }),
-      dispatchRow({ ts: 9, role: 'prompt-engineer', agent: 'p1' }),
-    ]))
-    for (const id of ['ops-engineer', 'prompt-engineer']) {
-      const lit = view.agents.entities.find((e) => e.key === id)!
-      expect(lit.idle).toBe(false)
-      expect(lit.bucket).toBe('implementor') // implementor-sub-bucket member
-      expect(lit.zone).toBe('on-demand')    // but the on-demand badge data stays
-      expect(lit.stage).toBeNull()
-    }
-    // REGRESSION (compass Non-Goal — no event-log classification change): the
-    // on-demand roles stay OUT of the EXPECTED_ROLE_FLOW union, so their
-    // dispatch events keep the `unexpected` badge even inside the implementor
-    // bucket.
-    expect(view.unexpected.map((e) => e.role).sort()).toEqual(['ops-engineer', 'prompt-engineer'])
-    expect(view.events.every((e) => e.expected === false)).toBe(true)
-  })
-
-  it('general-bucket dispatch → bucket null + zone general (unmatched/anonymous catch-all)', () => {
-    const view = projectGraph(flowSource([dispatchRow({ ts: 10, role: 'scout', agent: 's1' })]))
-    const general = view.agents.entities.find((e) => e.key === 'general')!
-    expect(general.idle).toBe(false)
-    expect(general.bucket).toBeNull()
-    expect(general.zone).toBe('general')
-    expect(general.stage).toBeNull()
-    // The general bucket is NOT in the union → its events stay unexpected.
-    expect(view.unexpected.map((e) => e.role)).toEqual(['scout'])
-  })
-
-  it('bucket follows the ROLE, never the session id (a code-reviewer session id under another role stays null/other)', () => {
-    // The session id 'code-reviewer' is only a record field — the ROLE decides
-    // the bucket: a fullstack-dev dispatch carries bucket implementor.
-    const agents = projectGraph(flowSource([
-      dispatchRow({ ts: 7, role: 'fullstack-dev', agent: 'code-reviewer' }),
-    ])).agents
-    const lit = agents.entities.find((e) => e.key === 'fullstack-dev')!
-    expect(lit.bucket).toBe('implementor')
-    expect(lit.agent).toBe('code-reviewer')
-  })
-})
-
-/* ---------------------------------------------------------------------------
- * Agent emphasis tiers (design
- * doc §3): the TIME dimension — the iteration's current phase
- * (`currentStep` → PHASE_IDS rank) vs the entity's pipeline-stage phase.
- * Derived from projected fields only (zero new catalog reads): current /
- * next / off / null (no iteration → no override). The design doc's example
- * table (design doc §3.3) is the expectation oracle.
- * ------------------------------------------------------------------------- */
-
-/** A source at the given gate transition (phase 2/3/4) with the ledger events. */
-function phaseSource(
-  transition: 'phase-2-execute' | 'phase-3-close' | 'phase-4-pr-delivery',
-  events: readonly unknown[] = [],
-): MstarEngineStatusPayload {
-  return {
-    ...flowSource(events),
-    iteration: { ...fullSource.iteration!, gate: { ...fullSource.iteration!.gate, transition } },
-  }
-}
-
-describe('projectGraph — agents emphasis tiers ', () => {
-  /** entity key → emphasis (the projection is the only source of truth). */
-  const emphasisByKey = (view: ZoneView) =>
-    new Map(view.agents.entities.map((e) => [e.key, e.emphasis]))
-  /** The 8 autonomous-execute pipeline roles (design doc §3.3 example). */
-  const EXECUTE_ROLES = ['fullstack-dev', 'fullstack-dev-2', 'frontend-dev', 'code-reviewer', 'qc-specialist', 'qc-specialist-2', 'qc-specialist-3', 'qa-engineer']
-  /** The 3 review-edit-chain roles (design doc §3.3 example). */
-  const REVIEW_ROLES = ['product-manager', 'architect', 'writing-specialist']
-
-  it('Phase 1 (currentStep 1): review-edit-chain current, autonomous-execute next, on-demand/general off', () => {
-    const view = projectGraph({
-      ...flowSource([dispatchRow({ ts: 1, role: 'product-manager', agent: 'pm1' })]),
-      iteration: { ...fullSource.iteration!, compassStatus: 'active' },
-    })
-    expect(view.iteration.currentStep).toBe(1)
-    const byKey = emphasisByKey(view)
-    for (const role of REVIEW_ROLES) expect(byKey.get(role)).toBe('current') // lit + idle parity
-    for (const role of EXECUTE_ROLES) expect(byKey.get(role)).toBe('next')
-    for (const role of ['ops-engineer', 'prompt-engineer', 'general']) expect(byKey.get(role)).toBe('off')
-  })
-
-  it('Phase 2 (currentStep 2): autonomous-execute current, review-edit-chain + on-demand/general off', () => {
-    const view = projectGraph(flowSource([dispatchRow({ ts: 1, role: 'fullstack-dev', agent: 'a1' })]))
-    expect(view.iteration.currentStep).toBe(2)
-    const byKey = emphasisByKey(view)
-    for (const role of EXECUTE_ROLES) expect(byKey.get(role)).toBe('current')
-    for (const role of [...REVIEW_ROLES, 'ops-engineer', 'prompt-engineer', 'general']) {
-      expect(byKey.get(role)).toBe('off')
-    }
-  })
-
-  it('Phase 3 (currentStep 3): Phase 3+ dispatch no EXPECTED_ROLE_FLOW stages → the whole 14-roster goes off (design doc §3.2 note)', () => {
-    const view = projectGraph(phaseSource('phase-3-close', [dispatchRow({ ts: 1, role: 'fullstack-dev' })]))
-    expect(view.iteration.currentStep).toBe(3)
-    expect(view.agents.entities).toHaveLength(KNOWN_AGENTS.length)
-    for (const e of view.agents.entities) expect(e.emphasis).toBe('off')
-  })
-
-  it('Phase 4 (currentStep 4): the same all-off (pr-delivery)', () => {
-    const view = projectGraph(prDeliverySource)
-    expect(view.iteration.currentStep).toBe(4)
-    for (const e of view.agents.entities) expect(e.emphasis).toBe('off')
-  })
-
-  it('no iteration / no plan (currentStep null): every entity emphasis null — NO override (design doc §3.1)', () => {
-    for (const source of [null, noHarnessSource] as const) {
-      const view = projectGraph(source)
-      expect(view.iteration.currentStep).toBeNull()
-      expect(view.agents.entities.length).toBeGreaterThan(0)
-      for (const e of view.agents.entities) expect(e.emphasis).toBeNull()
-    }
-  })
-
-  it('running on-demand card (stage null) during Phase 2 → off, status stays running — emphasis × status ORTHOGONAL', () => {
-    const view = projectGraph(flowSource([dispatchRow({ ts: 10, role: 'ops-engineer', agent: 'o1' })]))
-    const ops = view.agents.entities.find((e) => e.key === 'ops-engineer')!
-    expect(ops.stage).toBeNull()
-    expect(ops.status).toBe('running')
-    expect(ops.emphasis).toBe('off')
-  })
-
-  it('totality: emphasis is projected per entity on garbage branches too (never throws)', () => {
-    const view = projectGraph({ garbage: true } as unknown as MstarEngineStatusPayload)
-    expect(view.agents.entities.length).toBeGreaterThan(0)
-    for (const e of view.agents.entities) expect(e.emphasis).toBeNull()
-  })
-})
-
-/* ---------------------------------------------------------------------------
- * The current-plan annotation: the projection exposes the FIRST
- * `state.plans[]` InProgress row (`activePlanId`, catalog order) + the full
- * InProgress count (`activePlanCount`) — the render annotates the Phase 2
- * group with the current plan (and an honest `+N more` when several plans
- * run in parallel). Total function: state / plans missing or no InProgress
- * row → null / 0, never fabricated.
- * ------------------------------------------------------------------------- */
-
-describe('projectGraph — agents activePlanId / activePlanCount ', () => {
-  /** A ledger-evidence source whose state.plans carries the given rows. */
-  function planRowsSource(rows: readonly { id?: string; status?: string }[]): MstarEngineStatusPayload {
-    return {
-      ...flowSource([dispatchRow({ ts: 1, role: 'fullstack-dev', agent: 'a1' })]),
-      state: { ...fullSource.state!, plans: rows as never },
-    }
-  }
-
-  it('the first InProgress plan id + the full InProgress count (catalog order)', () => {
-    const view = projectGraph(planRowsSource([
-      { id: 'plan-a', status: 'Done' },
-      { id: 'plan-b', status: 'InProgress' },
-      { id: 'plan-c', status: 'InProgress' },
-      { id: 'plan-d', status: 'Todo' },
-    ]))
-    expect(view.agents.activePlanId).toBe('plan-b')
-    expect(view.agents.activePlanCount).toBe(2)
-  })
-
-  it('no InProgress row → null / 0 (never fabricated)', () => {
-    const view = projectGraph(planRowsSource([
-      { id: 'plan-a', status: 'Done' },
-      { id: 'plan-d', status: 'Todo' },
-      { id: 'plan-e', status: 'Blocked' },
-    ]))
-    expect(view.agents.activePlanId).toBeNull()
-    expect(view.agents.activePlanCount).toBe(0)
-  })
-
-  it('state null / plans missing / non-array → null / 0 (total function)', () => {
-    expect(projectGraph({ ...fullSource, state: null }).agents.activePlanId).toBeNull()
-    expect(projectGraph({ ...fullSource, state: null }).agents.activePlanCount).toBe(0)
-    const missing = projectGraph({ ...fullSource, state: { ...fullSource.state!, plans: undefined } } as unknown as MstarEngineStatusPayload)
-    expect(missing.agents.activePlanId).toBeNull()
-    expect(missing.agents.activePlanCount).toBe(0)
-    const garbage = projectGraph({ ...fullSource, state: { ...fullSource.state!, plans: 'nope' } } as unknown as MstarEngineStatusPayload)
-    expect(garbage.agents.activePlanId).toBeNull()
-  })
-
-  it('degraded / empty ledger branches include the note too — it rides state.plans, not the ledger', () => {
-    // agentFlow null → the degraded branch; the InProgress plan still projects.
-    const degraded = projectGraph({
-      ...planRowsSource([{ id: 'plan-x', status: 'InProgress' }]),
-      state: { ...planRowsSource([{ id: 'plan-x', status: 'InProgress' }]).state!, agentFlow: null },
-    })
-    expect(degraded.agents.degraded).toBe(true)
-    expect(degraded.agents.activePlanId).toBe('plan-x')
-    expect(degraded.agents.activePlanCount).toBe(1)
-    // Empty ledger (0 events) + no InProgress → null.
-    const empty = projectGraph({
-      ...flowSource([]),
-      state: { ...flowSource([]).state!, plans: [{ id: 'plan-d', status: 'Todo', doneAt: null, iterationRefs: [] }] },
-    })
-    expect(empty.agents.empty).toBe(true)
-    expect(empty.agents.activePlanId).toBeNull()
-  })
-})
-
-/* ---------------------------------------------------------------------------
- * Entity key uniqueness: keys are ROLE-based (not session ids), the
- * collision class moved from "session id vs roster id" to "lit `general` key
- * vs the idle roster `general` member": a NON-roster dispatch (scout,
- * anonymous, the former generalPurpose) produces a lit card keyed `general`
- * while the roster `general` id stays un-evidenced — the idle twin must be
- * suppressed by the lit key set, so the render layer's entity `key` space
- * never collides and `executing` stays consistent with the visible rows.
- * ------------------------------------------------------------------------- */
-
-describe('projectGraph — agents entity key uniqueness', () => {
-  it('a non-roster dispatch produces a lit `general` key; the idle general twin is suppressed', () => {
-    // role 'scout' is not a KNOWN_AGENTS id → the general bucket card; the
-    // roster `general` member has no literal evidence → without the litKeys
-    // guard the projection would emit TWO `general` keys.
-    const agents = projectGraph(flowSource([
-      dispatchRow({ ts: 7, role: 'scout', agent: 's1' }),
-    ])).agents
-    // No duplicate keys (the invariant the render layer depends on).
-    const keys = agents.entities.map((e) => e.key)
-    expect(new Set(keys).size).toBe(keys.length)
-    // The lit bucket card exists, is running, and carries the honest role.
-    const lit = agents.entities.find((e) => e.key === 'general')!
-    expect(lit.idle).toBe(false)
-    expect(lit.status).toBe('running')
-    expect(lit.role).toBe('general')
-    // Exactly ONE card per key — no React duplicate-key twin.
-    expect(agents.entities.filter((e) => e.key === 'general')).toHaveLength(1)
-    // The suppressed idle twin: the roster `general` id never appears idle.
-    const idleKeys = agents.entities.filter((e) => e.idle).map((e) => e.key)
-    expect(idleKeys).not.toContain('general')
-    // 1 lit + 13 idle = 14 unique cards (roster 14; the general slot is lit).
-    expect(agents.entities).toHaveLength(KNOWN_AGENTS.length)
-    // `executing` matches the visible cards (1 running lit card — no hidden
-    // duplicate to disagree with the summary).
-    expect(agents.executing).toBe(1)
-  })
-
-  it('the general bucket aggregates heterogeneous non-roster dispatches into ONE card', () => {
-    // generalPurpose (legacy non-roster id) + anonymous + scout → one `general`
-    // entity — the bucket is the unmatched/anonymous catch-all (the SDD
-    // per-task reviewer seat is the pipeline role `code-reviewer`, plan f5 T1).
-    const agents = projectGraph(flowSource([
-      dispatchRow({ ts: 9, role: 'scout', agent: 's1' }),
-      { kind: 'dispatch', ts: 8 }, // anonymous → general
-      dispatchRow({ ts: 7, role: 'generalPurpose', agent: 'g1' }),
-    ])).agents
-    const keys = agents.entities.map((e) => e.key)
-    expect(new Set(keys).size).toBe(keys.length)
-    expect(agents.entities.filter((e) => e.key === 'general')).toHaveLength(1)
-    expect(agents.entities.find((e) => e.key === 'general')!.count).toBe(3)
-    expect(agents.entities.find((e) => e.key === 'general')!.idle).toBe(false)
-    expect(agents.executing).toBe(1)
-  })
-
-  it('key-uniqueness invariant holds across degraded / empty / evidence / general states', () => {
-    for (const agents of [
-      projectGraph(fullSource).agents, // degraded: agentFlow null
-      projectGraph(flowSource([])).agents, // empty: 0 events
-      projectGraph(flowSource([dispatchRow({ ts: 1, role: 'fullstack-dev', agent: 'a1' })])).agents,
-      projectGraph(flowSource([dispatchRow({ ts: 7, role: 'scout', agent: 's1' })])).agents,
-      projectGraph(flowSource([{ kind: 'dispatch' }])).agents, // anonymous → general
-    ]) {
-      const keys = agents.entities.map((e) => e.key)
-      expect(new Set(keys).size).toBe(keys.length)
-    }
-  })
-})
-
-/* ---------------------------------------------------------------------------
- * Top-level events / unexpected (spec §3 — migrated from flow.events /
- * flow.unexpected; FlowEventView projection unchanged).
- * ------------------------------------------------------------------------- */
-
-describe('projectGraph — events / unexpected (spec §3 migration)', () => {
-  it('agentFlow null → no events, no unexpected (the degraded marker lives on agents)', () => {
-    const view = projectGraph(fullSource)
-    expect(view.events).toEqual([])
-    expect(view.unexpected).toEqual([])
-  })
-
-  it('source null → same empty event seats (total function)', () => {
-    const view = projectGraph(null)
-    expect(view.events).toEqual([])
-    expect(view.unexpected).toEqual([])
-  })
-
-  it('projects events latest-first with status coloring and the stage mapping', () => {
-    const view = projectGraph(flowSource([
-      dispatchRow({ ts: 6, role: 'fullstack-dev', verdict: 'ok' }),
-      dispatchRow({ ts: 5, role: 'fullstack-dev', verdict: 'advisory' }),
-      dispatchRow({ ts: 4, role: 'fullstack-dev', verdict: 'denied' }),
-      settleRow({ ts: 3, outcome: 'ok' }),
-      settleRow({ ts: 2, outcome: 'error' }),
-      settleRow({ ts: 1, outcome: 'denied' }),
-    ]))
-    expect(view.events.map((e) => e.status)).toEqual(['dispatched', 'advisory', 'denied', 'ok', 'error', 'denied'])
-    const implement = view.events.find((e) => e.role === 'fullstack-dev')!
-    expect(implement.stage).toEqual({ phase: 'autonomous-execute', stage: 'sdd-implement' })
-    expect(implement.expected).toBe(true)
-    expect(view.unexpected).toEqual([])
-  })
-
-  it('settle rows carry no role: they never flag unexpected', () => {
-    const view = projectGraph(flowSource([
-      dispatchRow({ ts: 3, role: 'frontend-dev', agent: 'a1' }),
-      settleRow({ ts: 2, agent: 'a1', outcome: 'ok' }),
-      dispatchRow({ ts: 1, role: 'scout' }), // off-pipeline dispatch → unexpected
-    ]))
-    const settle = view.events.find((e) => e.kind === 'settle')!
-    expect(settle.role).toBe('')
-    expect(settle.expected).toBe(false)
-    // unexpected = off-pipeline-role DISPATCHES only — settles never appear.
-    expect(view.unexpected.map((e) => e.role)).toEqual(['scout'])
-  })
-
-  it('keeps only the latest 50 events, latest-first', () => {
-    const events = Array.from({ length: 60 }, (_, i) => dispatchRow({ ts: 60 - i, role: 'fullstack-dev' }))
-    const view = projectGraph(flowSource(events))
-    expect(view.events).toHaveLength(50)
-    expect(view.events[0]!.ts).toBe(60)
-    expect(view.events[49]!.ts).toBe(11)
-  })
-
-  it('id = `${ts}-${kind}-${index}` — unique even for equal ts+kind, stable across projections', () => {
-    const events = [
-      dispatchRow({ ts: 5, role: 'fullstack-dev' }),
-      dispatchRow({ ts: 5, role: 'fullstack-dev' }),
-      settleRow({ ts: 5 }),
-    ]
-    const ids = projectGraph(flowSource(events)).events.map((e) => e.id)
-    expect(ids).toEqual(['5-dispatch-0', '5-dispatch-1', '5-settle-2'])
-    // Same source → same ids (React keys stay stable).
-    expect(projectGraph(flowSource(events)).events.map((e) => e.id)).toEqual(ids)
-  })
-
-  it('unexpected list preserves the latest-first event order', () => {
-    const view = projectGraph(flowSource([
-      dispatchRow({ ts: 4, role: 'scout' }),
-      dispatchRow({ ts: 3, role: 'general' }),
-      dispatchRow({ ts: 2, role: 'fullstack-dev' }),
-      settleRow({ ts: 1 }),
-    ]))
-    expect(view.unexpected.map((e) => e.ts)).toEqual([4, 3])
-  })
-
-  it('unexpected semantics regression (plan f5 T1 — union extended by code-reviewer ONLY): ops-engineer / prompt-engineer / general stay unexpected, code-reviewer turns expected', () => {
-    const view = projectGraph(flowSource([
-      dispatchRow({ ts: 5, role: 'code-reviewer' }),
-      dispatchRow({ ts: 4, role: 'ops-engineer' }),
-      dispatchRow({ ts: 3, role: 'prompt-engineer' }),
-      dispatchRow({ ts: 2, role: 'general' }),
-      dispatchRow({ ts: 1, role: 'fullstack-dev' }),
-    ]))
-    // code-reviewer joined the EXPECTED_ROLE_FLOW union (sdd-implement) →
-    // its dispatch is now EXPECTED (was the former generalPurpose seat,
-    // v2.1.1). Compass Non-Goal honored: ops-engineer / prompt-engineer /
-    // general are NOT in the union → their badges stay `unexpected`.
-    expect(view.unexpected.map((e) => e.role)).toEqual(['ops-engineer', 'prompt-engineer', 'general'])
-    const byRole = new Map(view.events.map((e) => [e.role, e]))
-    expect(byRole.get('code-reviewer')!.expected).toBe(true)
-    expect(byRole.get('ops-engineer')!.expected).toBe(false)
-    expect(byRole.get('prompt-engineer')!.expected).toBe(false)
-    expect(byRole.get('general')!.expected).toBe(false)
-    expect(byRole.get('fullstack-dev')!.expected).toBe(true)
-  })
-})
-
-/* ---------------------------------------------------------------------------
- * Workflow rows  the three
- * workflow kinds project as workflow rows (run identity — name / member
- * count / stopReason — no gate status), UNKNOWN kinds degrade to GENERIC
- * rows (never dropped, never guessed); workflow rows never become agent
- * entities / unexpected entries.
- * ------------------------------------------------------------------------- */
-
-/** One workflow-run row as the ledger view emits it (W-B2 view schema). */
-function workflowRunRow(over: { ts: number; runId?: string; name?: string; agent?: string }): AgentFlowEventView {
-  return {
-    ts: over.ts,
-    kind: 'workflow-run',
-    agent: over.agent ?? null,
-    role: '',
-    planId: null,
-    taskId: null,
-    taskCategory: null,
-    ...(over.runId !== undefined ? { runId: over.runId } : {}),
-    ...(over.name !== undefined ? { name: over.name } : {}),
-  }
-}
-
-/** One workflow-agent row as the ledger view emits it (W-B2 view schema). */
-function workflowAgentRow(over: {
-  ts: number
-  runId?: string
-  seq?: number
-  label?: string
-  phase?: string
-  childId?: string
-}): AgentFlowEventView {
-  return {
-    ts: over.ts,
-    kind: 'workflow-agent',
-    agent: null,
-    role: '',
-    planId: null,
-    taskId: null,
-    taskCategory: null,
-    ...(over.runId !== undefined ? { runId: over.runId } : {}),
-    ...(over.seq !== undefined ? { seq: over.seq } : {}),
-    ...(over.label !== undefined ? { label: over.label } : {}),
-    ...(over.phase !== undefined ? { phase: over.phase } : {}),
-    ...(over.childId !== undefined ? { childId: over.childId } : {}),
-  }
-}
-
-/** One workflow-run-end row as the ledger view emits it (W-B2 view schema). */
-function workflowEndRow(over: { ts: number; runId?: string; stopReason?: 'completed' | 'cancelled' | 'error' }): AgentFlowEventView {
-  return {
-    ts: over.ts,
-    kind: 'workflow-run-end',
-    agent: null,
-    role: '',
-    planId: null,
-    taskId: null,
-    taskCategory: null,
-    ...(over.runId !== undefined ? { runId: over.runId } : {}),
-    ...(over.stopReason !== undefined ? { stopReason: over.stopReason } : {}),
-  }
-}
-
-describe('projectGraph — workflow rows + unknown-kind degradation ', () => {
-  it('projects the three workflow kinds with the run identity; status unknown; never unexpected; no agent entities', () => {
-    const view = projectGraph(flowSource([
-      workflowEndRow({ ts: 6, runId: 'run-1', stopReason: 'completed' }),
-      workflowAgentRow({ ts: 5, runId: 'run-1', seq: 2, label: 'worker', phase: 'implement', childId: 'child-2' }),
-      workflowAgentRow({ ts: 4, runId: 'run-1', seq: 1, label: 'worker', childId: 'child-1' }),
-      workflowRunRow({ ts: 3, runId: 'run-1', name: 'fan-out', agent: 'sess-1' }),
-    ]))
-    expect(view.events.map((e) => e.kind)).toEqual(['workflow-run-end', 'workflow-agent', 'workflow-agent', 'workflow-run'])
-    const [end, agent2, agent1, run] = view.events
-    expect(run).toMatchObject({ kind: 'workflow-run', runId: 'run-1', name: 'fan-out', agent: 'sess-1', status: 'unknown', expected: false, stage: null })
-    expect(agent1).toMatchObject({ kind: 'workflow-agent', runId: 'run-1', seq: 1, label: 'worker', childId: 'child-1', status: 'unknown' })
-    expect(agent2).toMatchObject({ kind: 'workflow-agent', runId: 'run-1', seq: 2, phase: 'implement', childId: 'child-2', status: 'unknown' })
-    expect(end).toMatchObject({ kind: 'workflow-run-end', runId: 'run-1', stopReason: 'completed', status: 'unknown' })
-    // Workflow rows are NOT dispatches — never unexpected, never lit entities.
-    expect(view.unexpected).toEqual([])
-    expect(view.agents.entities.filter((e) => !e.idle)).toHaveLength(0)
-    // Rows but no dispatch → the settle-only canvas note (unchanged — the
-    // note classifies dispatch EVIDENCE, not workflow activity).
-    expect(view.agents.note).toBe('settle-only')
-  })
-
-  it('the workflow-run row carries the run member count (the window\'s workflow-agent rows for that runId)', () => {
-    const view = projectGraph(flowSource([
-      workflowRunRow({ ts: 9, runId: 'run-1', name: 'fan-out' }),
-      workflowAgentRow({ ts: 8, runId: 'run-1', seq: 2, label: 'worker', childId: 'child-2' }),
-      workflowAgentRow({ ts: 7, runId: 'run-1', seq: 1, label: 'worker', childId: 'child-1' }),
-      workflowRunRow({ ts: 6, runId: 'run-2', name: 'audit' }),
-    ]))
-    const run1 = view.events.find((e) => e.kind === 'workflow-run' && e.runId === 'run-1')!
-    const run2 = view.events.find((e) => e.kind === 'workflow-run' && e.runId === 'run-2')!
-    expect(run1.memberCount).toBe(2)
-    // No member rows in the window → the count is ABSENT (degrade, never a 0 guess).
-    expect(run2.memberCount).toBeUndefined()
-  })
-
-  it('an UNKNOWN kind renders as a generic row — never dropped, never guessed', () => {
-    const view = projectGraph(flowSource([
-      { kind: 'workflow-pause', ts: 5, runId: 'run-9' },
-    ]))
-    expect(view.events).toHaveLength(1)
-    expect(view.events[0]).toMatchObject({
-      kind: 'workflow-pause',
-      ts: 5,
-      role: '',
-      status: 'unknown',
-      expected: false,
-      stage: null,
-      settled: false,
-      durationMs: null,
-      runId: 'run-9',
-    })
-    expect(view.unexpected).toEqual([]) // generic rows are not dispatch → never unexpected
-    expect(view.events[0]!.id).toBe('5-workflow-pause-0')
-  })
-
-  it('garbage workflow rows degrade per field (missing/illegal run identity → omitted, never fabricated)', () => {
-    const view = projectGraph(flowSource([
-      { kind: 'workflow-run', ts: 'nope', runId: 42 } as unknown,
-      { kind: 'workflow-run-end', ts: 7, stopReason: 42 } as unknown,
-    ]))
-    const [run, end] = view.events
-    expect(run).toMatchObject({ kind: 'workflow-run', ts: 0, status: 'unknown' })
-    expect(run.runId).toBeUndefined()
-    expect(run.name).toBeUndefined()
-    expect(end).toMatchObject({ kind: 'workflow-run-end', ts: 7, status: 'unknown' })
-    expect(end.stopReason).toBeUndefined()
-  })
-})
-
-describe('projectGraph — settle pairing (identity-based)', () => {
-  it('a paired settle lands on the most recent same-IDENTITY dispatch BEFORE it in file order', () => {
-    // File order: D1(a1, fullstack-dev, t1) → D2(a1, fullstack-dev, t3) →
-    // S1(a1, fullstack-dev, t4); the catalog is latest-first. The settle
-    // carries the paired identity → exact match, NOT the agent guess.
-    const view = projectGraph(flowSource([
-      settleRow({ ts: 4, agent: 'a1', outcome: 'ok', role: 'fullstack-dev' }),
-      dispatchRow({ ts: 3, role: 'fullstack-dev', agent: 'a1' }),
-      dispatchRow({ ts: 1, role: 'fullstack-dev', agent: 'a1' }),
-    ]))
-    const [s1, d2, d1] = view.events
-    expect(d1!.settled).toBe(false)
-    expect(d2!.settled).toBe(true)
-    expect(s1!.settled).toBe(false) // settle rows are never "settled" themselves
-  })
-
-  it('the shared pure function returns the paired dispatch index set', () => {
-    const rows = [
-      { kind: 'settle' as const, agent: 'a1', role: 'fullstack-dev', paired: true },
-      { kind: 'dispatch' as const, agent: 'a1', role: 'fullstack-dev' },
-      { kind: 'dispatch' as const, agent: 'a1', role: 'fullstack-dev' },
-      { kind: 'dispatch' as const, agent: null, role: 'fullstack-dev' },
-    ]
-    expect(Array.from(pairSettleIndexes(rows)).sort((a, b) => a - b)).toEqual([1])
-  })
-
-  it('different agents never pair; agent-less rows never pair', () => {
-    const view = projectGraph(flowSource([
-      settleRow({ ts: 3, agent: 'a2', outcome: 'ok', role: 'fullstack-dev' }),
-      settleRow({ ts: 2, outcome: 'ok', role: 'fullstack-dev' }), // agent null
-      dispatchRow({ ts: 1, role: 'fullstack-dev' }), // agent null
-    ]))
-    expect(view.events.every((e) => !e.settled)).toBe(true)
-  })
-
-  it('a settle WITHOUT identity (legacy row) never pairs — honest, no fallback guessing (spec R1)', () => {
-    const view = projectGraph(flowSource([
-      settleRow({ ts: 4, agent: 'a1', outcome: 'ok' }), // no role/plan/task → legacy
-      dispatchRow({ ts: 3, role: 'fullstack-dev', agent: 'a1' }),
-    ]))
-    const d = view.events.find((e) => e.kind === 'dispatch')!
-    expect(d.settled).toBe(false)
-    expect(view.agents.entities.find((e) => e.key === 'fullstack-dev')!.status).toBe('running')
-  })
-
-  it('QC tri N=3 concurrent: three settles from ONE session each land on THEIR OWN dispatch (identity key, not agent)', () => {
-    // The spec R1 regression: three concurrent QC reviews dispatched from the
-    // SAME parent session all carry agent 'parent' — the OLD agent-based
-    // pairing would land all three settles on the latest dispatch, leaving
-    // two cards running. The identity key (agent + role + planId + taskId)
-    // lands each settle on ITS dispatch. Latest-first file order.
-    const view = projectGraph(flowSource([
-      settleRow({ ts: 12, agent: 'parent', outcome: 'ok', role: 'qc-specialist', planId: 'plan-x', taskId: 'T1' }),
-      settleRow({ ts: 11, agent: 'parent', outcome: 'ok', role: 'qc-specialist-2', planId: 'plan-x', taskId: 'T2' }),
-      settleRow({ ts: 10, agent: 'parent', outcome: 'ok', role: 'qc-specialist-3', planId: 'plan-x', taskId: 'T3' }),
-      dispatchRow({ ts: 9, role: 'qc-specialist', agent: 'parent', planId: 'plan-x', taskId: 'T1' }),
-      dispatchRow({ ts: 8, role: 'qc-specialist-2', agent: 'parent', planId: 'plan-x', taskId: 'T2' }),
-      dispatchRow({ ts: 7, role: 'qc-specialist-3', agent: 'parent', planId: 'plan-x', taskId: 'T3' }),
-    ]))
-    // Every dispatch pairs with ITS OWN settle — none stuck on running.
-    const byKey = new Map(view.agents.entities.map((e) => [e.key, e.status]))
-    expect(byKey.get('qc-specialist')).toBe('settled')
-    expect(byKey.get('qc-specialist-2')).toBe('settled')
-    expect(byKey.get('qc-specialist-3')).toBe('settled')
-    expect(view.agents.executing).toBe(0)
-    // The events projection marks exactly the three matching dispatches settled.
-    const dispatchEvents = view.events.filter((e) => e.kind === 'dispatch')
-    expect(dispatchEvents.map((e) => e.settled)).toEqual([true, true, true])
-  })
-
-  it('same-identity retries: a settle pairs the MOST RECENT matching dispatch before it, earlier retries stay running', () => {
-    // Two dispatches with the SAME identity (a retried task); the settle pairs
-    // the latest (t3) — the older retry (t1) stays running (honest: the settle
-    // identity alone cannot split two identical dispatch records).
-    const view = projectGraph(flowSource([
-      settleRow({ ts: 4, agent: 'a1', outcome: 'ok', role: 'fullstack-dev', planId: 'plan-x', taskId: 'T2' }),
-      dispatchRow({ ts: 3, role: 'fullstack-dev', agent: 'a1', planId: 'plan-x', taskId: 'T2' }),
-      dispatchRow({ ts: 1, role: 'fullstack-dev', agent: 'a1', planId: 'plan-x', taskId: 'T2' }),
-    ]))
-    expect(view.agents.entities.find((e) => e.key === 'fullstack-dev')!.status).toBe('settled')
-  })
-
-  it('two concurrent same-identity calls (distinct call ids): each settle lands on ITS OWN dispatch (call-scoped key)', () => {
-    // Two dispatches share agent/role/plan/task but carry DIFFERENT live call
-    // ids; each settle carries its own dispatch's call id. The old
-    // identity-only key landed BOTH settles on the latest dispatch, leaving
-    // the earlier one phantom-running; the call-scoped key pairs each exactly.
-    const view = projectGraph(flowSource([
-      settleRow({ ts: 12, agent: 'a1', outcome: 'ok', role: 'fullstack-dev', planId: 'plan-x', taskId: 'T2', callId: 'call-b' }),
-      settleRow({ ts: 11, agent: 'a1', outcome: 'denied', role: 'fullstack-dev', planId: 'plan-x', taskId: 'T2', callId: 'call-a' }),
-      dispatchRow({ ts: 9, role: 'fullstack-dev', agent: 'a1', planId: 'plan-x', taskId: 'T2', callId: 'call-b' }),
-      dispatchRow({ ts: 8, role: 'fullstack-dev', agent: 'a1', planId: 'plan-x', taskId: 'T2', callId: 'call-a' }),
-    ]))
-    expect(view.events.filter((e) => e.kind === 'dispatch').every((d) => d.settled)).toBe(true)
-    expect(view.agents.entities.find((e) => e.key === 'fullstack-dev')!.status).toBe('settled')
-  })
-})
-
-/* ---------------------------------------------------------------------------
- * Child session identity on settle + nonterminal `subagent-link` rows.
- * ------------------------------------------------------------------------- */
-
-describe('projectGraph — subagent-link + settle child identity', () => {
-  it('a link row keeps role/planId/taskId/agent/childId/taskRef and does not fall into the generic branch', () => {
-    const view = projectGraph(flowSource([
-      linkRow({
-        ts: 8,
-        agent: 'parent-sess',
-        role: 'fullstack-dev',
-        planId: 'plan-x',
-        taskId: 'T2',
-        childId: 'child-sess',
-        taskRef: 'background-1',
-      }),
-    ]))
-    expect(view.events).toHaveLength(1)
-    expect(view.events[0]).toMatchObject({
-      kind: 'subagent-link',
-      role: 'fullstack-dev',
-      planId: 'plan-x',
-      taskId: 'T2',
-      agent: 'parent-sess',
-      childId: 'child-sess',
-      taskRef: 'background-1',
-      taskCategory: null,
-      status: 'unknown',
-      settled: false,
-    })
-    expect(view.events[0]!.paired).toBeUndefined()
-    // Link rows are identity records, not dispatches — never unexpected.
-    expect(view.unexpected).toEqual([])
-  })
-
-  it('a link row does not settle a running dispatch and carries no paired marker', () => {
-    const view = projectGraph(flowSource([
-      linkRow({
-        ts: 8,
-        agent: 'a1',
-        role: 'fullstack-dev',
-        planId: 'plan-x',
-        taskId: 'T2',
-        childId: 'child-sess',
-        taskRef: 'background-1',
-      }),
-      dispatchRow({ ts: 7, role: 'fullstack-dev', agent: 'a1', planId: 'plan-x', taskId: 'T2' }),
-    ]))
-    const link = view.events.find((e) => e.kind === 'subagent-link')!
-    const dispatch = view.events.find((e) => e.kind === 'dispatch')!
-    expect(dispatch.settled).toBe(false)
-    expect(link.settled).toBe(false)
-    expect(link.paired).toBeUndefined()
-    expect(view.agents.entities.find((e) => e.key === 'fullstack-dev')!.status).toBe('running')
-  })
-
-  it('a settle carries optional childId/taskRef when present and omits them when absent', () => {
-    const withIds = projectGraph(flowSource([
-      settleRow({
-        ts: 4,
-        agent: 'a1',
-        outcome: 'ok',
-        role: 'fullstack-dev',
-        childId: 'fg-run',
-        taskRef: 'background-9',
-      }),
-    ]))
-    expect(withIds.events[0]).toMatchObject({
-      kind: 'settle',
-      childId: 'fg-run',
-      taskRef: 'background-9',
-    })
-    const legacy = projectGraph(flowSource([
-      settleRow({ ts: 3, agent: 'a1', outcome: 'ok' }),
-    ]))
-    expect(legacy.events[0]!.childId).toBeUndefined()
-    expect(legacy.events[0]!.taskRef).toBeUndefined()
-  })
-
-  it('the workflow-agent child projection is unchanged — unknown kinds still omit childId', () => {
-    const view = projectGraph(flowSource([
-      workflowAgentRow({ ts: 5, runId: 'run-1', seq: 1, label: 'worker', childId: 'child-1' }),
-      { kind: 'future-kind', ts: 4, childId: 'should-not-leak' },
-    ]))
-    const agent = view.events.find((e) => e.kind === 'workflow-agent')!
-    const generic = view.events.find((e) => e.kind === 'future-kind')!
-    expect(agent.childId).toBe('child-1')
-    expect(generic.childId).toBeUndefined()
-  })
-
-  it('a link-only window is not settle-only — identity records are not settlement evidence', () => {
-    const agents = projectGraph(flowSource([
-      linkRow({
-        ts: 8,
-        agent: 'parent-sess',
-        role: 'fullstack-dev',
-        planId: 'plan-x',
-        taskId: 'T2',
-        childId: 'child-sess',
-      }),
-    ])).agents
-    expect(agents.empty).toBe(false)
-    expect(agents.degraded).toBe(false)
-    expect(agents.note).not.toBe('settle-only')
-    expect(agents.note).toBe('link-only')
-    // Genuinely settle-only windows (settles, no dispatch) still classify settle-only.
-    expect(projectGraph(flowSource([
-      settleRow({ ts: 3, agent: 'a1', outcome: 'ok' }),
-    ])).agents.note).toBe('settle-only')
-  })
-})
-
-
-/* ---------------------------------------------------------------------------
- * Totality + the spec §8 degradation matrix (never throw, never guess).
- * ------------------------------------------------------------------------- */
-
-describe('projectGraph — totality (spec §8)', () => {
-  it('source null → legal empty ZoneView, everything degraded, never a throw', () => {
-    const v = projectGraph(null)
-    expect(v.iteration.active).toBe(false)
-    expect(v.iteration.steps).toHaveLength(5)
-    expect(v.iteration.steps.every((s) => s.state === 'idle')).toBe(true)
-    expect(v.iteration.currentStep).toBeNull()
-    expect(v.iteration.branches).toBeNull()
-    expect(v.tasks.columns).toHaveLength(5)
-    expect(v.tasks.columns.every((c) => c.count === 0)).toBe(true)
-    expect(v.tasks.total).toBe(0)
-    expect(v.tasks.truncated).toBe(false)
-    expect(v.agents.degraded).toBe(true)
-    expect(v.verdict).toBe('unknown')
-    expect(v.violations).toEqual([])
-    expect(v.events).toEqual([])
-    expect(v.unexpected).toEqual([])
-    expect(v.degraded).toEqual({ iteration: true, state: true, plans: true })
-  })
-
-  it('never throws on a structurally garbage source (spec §8 full-garbage row)', () => {
-    expect(() => projectGraph({ garbage: true } as unknown as MstarEngineStatusPayload)).not.toThrow()
-    expect(() => projectGraph({ iteration: 'not-an-object', state: 42 } as unknown as MstarEngineStatusPayload)).not.toThrow()
-    expect(() => projectGraph({ iteration: { gate: { transition: { deep: true } } } } as unknown as MstarEngineStatusPayload)).not.toThrow()
-  })
-
-  it('prototype-key transitions (__proto__/constructor/toString/hasOwnProperty) degrade, never crash', () => {
-    // Plain-object lookups hit Object.prototype inherited values (truthy) for these
-    // keys — they must take the illegal-transition path, not the current-step path.
-    for (const key of ['__proto__', 'constructor', 'toString', 'hasOwnProperty']) {
-      const source = {
-        ...fullSource,
-        iteration: {
-          ...fullSource.iteration!,
-          gate: { ...fullSource.iteration!.gate, transition: key },
-        },
-      } as unknown as MstarEngineStatusPayload
-      expect(() => projectGraph(source)).not.toThrow()
-      const v = projectGraph(source)
-      expect(v.iteration.active).toBe(false)
-      expect(v.iteration.currentStep).toBeNull()
-      expect(v.iteration.steps.every((s) => s.state === 'idle')).toBe(true)
-      expect(v.degraded.iteration).toBe(true)
-    }
-  })
-
-  it('never throws on garbage agent-flow rows; kind-less rows are skipped, unknown kinds degrade to generic rows, valid rows still project', () => {
-    const source = flowSource([
-      42,
-      null,
-      'garbage',
-      { kind: 'banana', ts: 9 },                  // UNKNOWN kind (plan W-B2 Task 4) → generic row, never dropped
-      { kind: 'dispatch', role: 42, ts: 8 },      // valid kind, garbage fields → degraded row
-      { kind: 'settle', outcome: 42, ts: 7 },     // valid kind, garbage outcome → base status
-      dispatchRow({ ts: 6, role: 'fullstack-dev', verdict: 'ok' }),
-      settleRow({ ts: 5, outcome: 'error', durationMs: 120 }),
-    ])
-    expect(() => projectGraph(source)).not.toThrow()
-    const view = projectGraph(source)
-    expect(view.events.map((e) => e.ts)).toEqual([9, 8, 7, 6, 5])
-    expect(view.events.map((e) => e.kind)).toEqual(['banana', 'dispatch', 'settle', 'dispatch', 'settle'])
-    // The unknown kind has no verdict/outcome → the honest base status is
-    // `unknown` (never a guessed dispatched/ok).
-    expect(view.events.map((e) => e.status)).toEqual(['unknown', 'dispatched', 'ok', 'dispatched', 'error'])
-    expect(view.events[4]!.durationMs).toBe(120)
-    expect(view.unexpected.map((e) => e.role)).toEqual(['']) // the role-42 dispatch degrades to ''; the banana row is NOT a dispatch → never unexpected
-    expect(view.agents.degraded).toBe(false)
-    expect(view.agents.empty).toBe(false)
-  })
-
-  it('spec §8 matrix: iteration disabled + state null degrades zones independently', () => {
-    // iteration absent + state null (no-harness predicate) → iteration
-    // disabled AND tasks skeleton degraded AND agents skeleton degraded.
-    const v = projectGraph(noHarnessSource)
-    expect(v.iteration.active).toBe(false)
-    expect(v.tasks.columns.every((c) => c.count === 0)).toBe(true)
-    expect(v.degraded).toEqual({ iteration: true, state: true, plans: true })
-  })
-})
-
-/** Compile-time pin: ZoneView fields referenced by the render layer stay stable (spec §3). */
-describe('projectGraph — ZoneView shape (spec §3)', () => {
-  it('types steps/columns as the documented unions', () => {
-    const view = projectGraph(fullSource)
-    const phaseIds: PhaseId[] = view.iteration.steps.map((s) => s.id)
-    const stateIds: PlanStateId[] = view.tasks.columns.map((c) => c.id)
-    expect(phaseIds).toContain('merge-ready')
-    expect(stateIds).toContain('blocked-unknown')
-    expect(view.tasks.columns[0]!.capped).toBeNull()
-    expect(view.iteration.verdict).toBe('pass')
-  })
-})
-
-/* ---------------------------------------------------------------------------
- * Event-log assembly (spec panel-tabs §5
- * Task 1): the pure eventLogEntries(view) → EventLogEntry[] mapping. Consumes
- * ZoneView slices unchanged (zero projection changes); missing fields degrade
- * to '' / 0 / null (the render side shows「—」); unexpected dispatches fold in
- * via `expected: false` (view.unexpected is a re-list — never double-appended).
- * ------------------------------------------------------------------------- */
-
-describe('eventLogEntries — event rows (spec §5, plan event-log Task 1)', () => {
-  it('maps every projected event field onto the entry (dispatch + paired settle)', () => {
-    const view = projectGraph({
-      ...flowSource([
-        // File order is latest-first: the settle (newest, carrying the paired
-        // identity) pairs the dispatch below it exactly.
-        settleRow({ ts: 9, agent: 'a1', outcome: 'ok', durationMs: 120, role: 'fullstack-dev', planId: 'plan-x', taskId: 'T2' }),
-        dispatchRow({ ts: 8, role: 'fullstack-dev', agent: 'a1', planId: 'plan-x', taskId: 'T2' }),
-      ]),
-      iteration: {
-        ...fullSource.iteration!,
-        gate: { ...fullSource.iteration!.gate, violations: [] },
-      },
-    })
-    const entries = eventLogEntries(view)
-    expect(entries).toHaveLength(2)
-    const [settle, dispatch] = entries as EventLogEntry[]
-    expect(settle).toEqual({
-      kind: 'event',
-      id: '9-settle-0',
-      eventKind: 'settle',
-      role: 'fullstack-dev', // the PAIRED dispatch identity 
-      agent: 'a1',
-      stage: 'autonomous-execute:sdd-implement',
-      task: 'plan-x#T2',
-      ts: 9,
-      status: 'ok',
-      settled: false, // settle rows are never "settled" themselves
-      durationMs: 120,
-      expected: true, // the paired role ∈ the EXPECTED_ROLE_FLOW union
-      runId: '', // not a workflow row (plan W-B2 Task 4)
-      name: '',
-    })
-    expect(dispatch).toEqual({
-      kind: 'event',
-      id: '8-dispatch-1',
-      eventKind: 'dispatch',
-      role: 'fullstack-dev',
-      agent: 'a1',
-      stage: 'autonomous-execute:sdd-implement',
-      task: 'plan-x#T2',
-      ts: 8,
-      status: 'dispatched',
-      settled: true, // paired with the settle (exact identity)
-      durationMs: null, // dispatch rows carry no duration
-      expected: true,
-      runId: '', // not a workflow row (plan W-B2 Task 4)
-      name: '',
-    })
-  })
-
-  it("task tag fallbacks: planId alone / #taskId alone / '' when neither present", () => {
-    const view = projectGraph(flowSource([
-      dispatchRow({ ts: 3, role: 'fullstack-dev', agent: 'a1', planId: 'plan-x' }),
-      dispatchRow({ ts: 2, role: 'fullstack-dev', agent: 'a2', taskId: 'T1' }),
-      dispatchRow({ ts: 1, role: 'fullstack-dev', agent: 'a3' }),
-    ]))
-    const events = eventLogEntries(view).filter((e) => e.kind === 'event')
-    expect(events.map((e) => e.task)).toEqual(['plan-x', '#T1', ''])
-  })
-
-  it("degrades missing/illegal fields individually: '' strings, 0 ts, null duration — never fabricated", () => {
-    const view = projectGraph(flowSource([
-      { kind: 'dispatch', ts: 'nope' } as unknown, // garbage row: no role/agent/plan/task
-      { kind: 'settle', outcome: 42 } as unknown, // illegal outcome → base status
-    ]))
-    const entries = eventLogEntries(view)
-    expect(entries[0]).toEqual({
-      kind: 'event',
-      id: '0-dispatch-0',
-      eventKind: 'dispatch',
-      role: '',
-      agent: '',
-      stage: '',
-      task: '',
-      ts: 0,
-      status: 'dispatched',
-      settled: false,
-      durationMs: null,
-      expected: false,
-      runId: '', // not a workflow row (plan W-B2 Task 4)
-      name: '',
-    })
-    expect(entries[1]).toMatchObject({
-      kind: 'event',
-      eventKind: 'settle',
-      role: '',
-      agent: '',
-      ts: 0,
-      status: 'ok', // illegal outcome degrades to base ok — never a guessed error
-      durationMs: null,
-    })
-  })
-})
-
-describe('eventLogEntries — violation rows + mixed empty states (spec §5, plan event-log Task 1)', () => {
-  it('maps gate violations to violation entries after the event rows', () => {
-    const view = projectGraph(fullSource) // agentFlow null → no events; gate carries 2 violations
-    const entries = eventLogEntries(view)
-    expect(entries).toHaveLength(2)
-    expect(entries).toEqual([
-      { kind: 'violation', id: 'violation-0', severity: 'medium', code: 'PLAN-3', message: 'plan not complete' },
-      { kind: 'violation', id: 'violation-1', severity: 'low', code: 'EXIT-1', message: 'compass wording drift' },
-    ])
-  })
-
-  it('mixed empty state: 0 events + violations → violation entries only', () => {
-    const view = projectGraph(fullSource) // events [] (agentFlow null), violations present
-    const entries = eventLogEntries(view)
-    expect(entries.filter((e) => e.kind === 'event')).toHaveLength(0)
-    expect(entries.filter((e) => e.kind === 'violation')).toHaveLength(2)
-  })
-
-  it('mixed empty state: events + 0 violations → event entries only', () => {
-    const view = projectGraph({
-      ...flowSource([dispatchRow({ ts: 3, role: 'fullstack-dev', agent: 'a1' })]),
-      iteration: {
-        ...fullSource.iteration!,
-        gate: { ...fullSource.iteration!.gate, violations: [] },
-      },
-    })
-    const entries = eventLogEntries(view)
-    expect(entries.filter((e) => e.kind === 'event')).toHaveLength(1)
-    expect(entries.filter((e) => e.kind === 'violation')).toHaveLength(0)
-  })
-
-  it('both empty → no entries (the page renders the muted 暂无记录 empty state)', () => {
-    const view = projectGraph({
-      ...flowSource([]),
-      iteration: {
-        ...fullSource.iteration!,
-        gate: { ...fullSource.iteration!.gate, violations: [] },
-      },
-    })
-    expect(eventLogEntries(view)).toEqual([])
-  })
-})
-
-describe('eventLogEntries — unexpected folding + window invariant (spec §5, plan event-log Task 1)', () => {
-  it('folds unexpected (off-pipeline) dispatches in via expected: false — never double-appended', () => {
-    const view = projectGraph(flowSource([
-      dispatchRow({ ts: 4, role: 'scout' }),
-      dispatchRow({ ts: 3, role: 'fullstack-dev', agent: 'a1' }),
-    ]))
-    // Sanity: the projection re-lists the off-pipeline dispatch as `unexpected`.
-    expect(view.unexpected.map((e) => e.role)).toEqual(['scout'])
-    const events = eventLogEntries(view).filter((e) => e.kind === 'event')
-    expect(events).toHaveLength(2) // the unexpected row appears ONCE (via view.events)
-    expect(events[0]).toMatchObject({ role: 'scout', expected: false, stage: '', task: '' })
-    expect(events[1]).toMatchObject({ role: 'fullstack-dev', expected: true, stage: 'autonomous-execute:sdd-implement' })
-  })
-
-  it('entry count = projected events + violations (the ≤50 window lives in the projection, not here)', () => {
-    const events = Array.from({ length: 60 }, (_, i) => dispatchRow({ ts: 60 - i, role: 'fullstack-dev' }))
-    const view = projectGraph(flowSource(events))
-    expect(view.events).toHaveLength(50) // projection window (classifyFlowRows) — NOT re-implemented here
-    const entries = eventLogEntries(view)
-    expect(entries).toHaveLength(50 + view.violations.length)
-    expect(entries.filter((e) => e.kind === 'event')).toHaveLength(50)
-  })
-})
-
-describe('eventLogEntries — workflow rows ', () => {
-  it('carries the workflow run identity; agent/end rows get the run name via the window lookup', () => {
-    const view = projectGraph(flowSource([
-      workflowEndRow({ ts: 9, runId: 'run-1', stopReason: 'completed' }),
-      workflowAgentRow({ ts: 8, runId: 'run-1', seq: 1, label: 'worker', childId: 'child-1' }),
-      workflowRunRow({ ts: 7, runId: 'run-1', name: 'fan-out' }),
-    ]))
-    const events = eventLogEntries(view).filter((e) => e.kind === 'event')
-    expect(events).toHaveLength(3)
-    // The workflow-run row shows its OWN name; the agent/end rows resolve the
-    // run's name from the window's workflow-run row (same runId — honest, the
-    // ledger row itself carries no name).
-    expect(events[0]).toMatchObject({ eventKind: 'workflow-run-end', runId: 'run-1', name: 'fan-out', role: '', status: 'unknown' })
-    expect(events[1]).toMatchObject({ eventKind: 'workflow-agent', runId: 'run-1', name: 'fan-out', role: '' })
-    expect(events[2]).toMatchObject({ eventKind: 'workflow-run', runId: 'run-1', name: 'fan-out', role: '' })
-  })
-
-  it('truncated run row → the agent/end name degrades to "" (never fabricated)', () => {
-    const view = projectGraph(flowSource([
-      workflowEndRow({ ts: 5, runId: 'run-x', stopReason: 'cancelled' }),
-      workflowAgentRow({ ts: 4, runId: 'run-x', seq: 1, label: 'worker', childId: 'c1' }),
-    ]))
-    const events = eventLogEntries(view).filter((e) => e.kind === 'event')
-    expect(events[0]).toMatchObject({ eventKind: 'workflow-run-end', runId: 'run-x', name: '' })
-    expect(events[1]).toMatchObject({ eventKind: 'workflow-agent', runId: 'run-x', name: '' })
-  })
-})
-
-/* ---------------------------------------------------------------------------
- * Project rollup zone (compass
- * AC-4): the ADDITIVE fifth zone — roadmap milestones + open-residual
- * severity counts projected from `state.project`; the four existing
- * ZoneView shapes stay byte-compatible (the fullSource golden is
- * unchanged).
- * ------------------------------------------------------------------------- */
-
-describe('projectGraph — project rollup zone (compass AC-4)', () => {
-  it('projects roadmap milestones + open-residual severity counts from state.project', () => {
-    const source: MstarEngineStatusPayload = {
-      ...fullSource,
-      state: {
-        ...fullSource.state!,
-        project: {
-          milestones: ['P1 foundation', 'P2 migrate + dogfood'],
-          roadmapSource: { kind: 'present', absentProjectIds: ['project-b'], diagnostic: null },
-          openResiduals: [
-            { severity: 'critical', count: 1 },
-            { severity: 'medium', count: 3 },
-          ],
-        },
-      },
-    }
-    const view = projectGraph(source)
-    expect(view.project).toEqual({
-      milestones: ['P1 foundation', 'P2 migrate + dogfood'],
-      roadmapSource: { kind: 'present', absentProjectIds: ['project-b'], diagnostic: null },
-      openResiduals: [
-        { severity: 'critical', count: 1 },
-        { severity: 'medium', count: 3 },
-      ],
-    })
-    // Additive-only: the four existing ZoneView shapes are unchanged.
-    expect(view.tasks.total).toBe(fullSource.state!.plans.length)
-    expect(view.iteration.active).toBe(true)
-  })
-
-  it('degrades to empty aggregates on a missing / malformed state.project (never a throw)', () => {
-    // Missing field (the pre-Task-3 fixtures shape).
-    expect(projectGraph(fullSource).project).toEqual({
-      milestones: [],
-      roadmapSource: { kind: 'absent', absentProjectIds: [], diagnostic: null },
-      openResiduals: [],
-    })
-    // Malformed shapes.
-    const garbage = projectGraph({
-      ...fullSource,
-      state: { ...fullSource.state!, project: { milestones: 'nope', openResiduals: [{ severity: 'nit' }] } },
-    } as unknown as MstarEngineStatusPayload)
-    expect(garbage.project).toEqual({
-      milestones: [],
-      roadmapSource: { kind: 'unavailable', absentProjectIds: [], diagnostic: 'Roadmap source is unavailable.' },
-      openResiduals: [{ severity: 'nit', count: 0 }],
-    })
-    // state null → empty rollup, never a throw.
-    expect(projectGraph(noHarnessSource).project).toEqual({
-      milestones: [],
-      roadmapSource: { kind: 'unavailable', absentProjectIds: [], diagnostic: 'Roadmap source is unavailable.' },
-      openResiduals: [],
-    })
+  it('a null ledger is legal — an advisory read that did not answer is not malformed', () => {
+    const parsed = parsePanelSnapshotRead({ kind: 'ok', snapshot: { ...completeSnapshot(), ledger: null } })
+    expect(parsed.kind).toBe('ok')
   })
 })

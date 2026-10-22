@@ -46,18 +46,47 @@ or a custom profile).
   automatically by `ClientModuleHostService` — no separate profile layer or
   install step. It registers a **right-Sidebar page tab type** (`id:
   '@mstar-harness/dsh'`, `kind: 'mstar-workflow'`, one guide-page capsule at
-  `order: 20`) labeled **"晨星工作流" / "Morning
-  Star Workflow"** rendering the latest `mstar-engine` catalog **anchor** row
-  — the persisted source is the producer-owned catalog source
-  (`{ kind: 'mstar-engine', form: 'catalog' }`, no
-  payload members; the anchor reader also accepts the V3→V4-migrated legacy
-  kinds `plugin:mstar-engine` and `plugin:mstar-engine-status` from persisted logs), and the payload is fetched from the host's
-  `/api/mstar/engineStatus` endpoint (the gateway owns the route; the browser
-  half calls `connection.rpc.call('/api', 'mstar/engineStatus', { args: { sessionId, cwd } })`
-  and renders the session's stored snapshot, or an explicit unavailable
-  reason). **Morning Star Workflow layout**: a narrow-column shell bound to the
+  `order: 20`) labeled **"晨星工作流" / "Morning Star Workflow"**.
+  **Data path**: the panel reads the control-root `store.db` through the host's
+  `mstar/panelSnapshot` endpoint, polled while the tab is visible
+  (`connection.rpc.call('/api', 'mstar/panelSnapshot', { args: { sessionId,
+  cwd, workflowId?, iterationId?, projectId? } })`). The host half composes five
+  engine dashboard views SEQUENTIALLY (`workflow-detail`, `iteration-detail`,
+  `roadmap`, `issues`, `projects` — the store read layer may refresh
+  projections, so two views never overlap) into one `PanelSnapshot`. It does NOT
+  read the model's last emission: the persisted `mstar-engine` catalog row stays
+  as the model-visible anchor, but the panel renders the store. The retired
+  `mstar/engineStatus` read method is gone; the `mstar` gateway keeps only the
+  picker's durable WRITE (`mstar/selectWorkflow`).
+  **Two explicit states, never a flattened empty**: every workspace view answers
+  `ok` (the authority answered — `data: null` still means "nothing here"),
+  `not-applicable` (nothing was read: no target resolved) or `unavailable` (the
+  read failed; the store's own message verbatim). The whole snapshot is
+  `unavailable` only when NO view reached the authority, and a workspace with no
+  resolvable `{HARNESS_DIR}` answers the separate `no-harness` kind (an inactive
+  workspace, not a failed read).
+  **The browser supplies `{ sessionId, cwd }` and nothing else**: the workflow
+  (the session's durable pick, then the store's single ACTIVE lifecycle), the
+  iteration and the project (`_default`, else the single registered one) resolve
+  SERVER-side on each read, so the roadmap and the stepper are not permanently
+  `not-applicable`.
+  **`retained` — the mixed-freshness half, disclosed**: three facts no dashboard
+  DTO owns (the iteration gate, the knowledge digest, the resolved workflow
+  selection) are REUSED from the apply-scoped catalog payload cache — the same
+  entry, key and TTL the pre-step builds — and carry their OWN instant
+  (`retained.at`), shown in the freshness footer separately from the snapshot's
+  store-read time. A catalog fact can therefore be older than the snapshot, and
+  the panel says so instead of implying one freshness.
+  **Poll contract**: 5 s while visible, at most ONE request in flight (a slow
+  answer never stacks), a 5 s deadline per request, the last good snapshot kept
+  while a refresh is out (no flicker), an immediate refetch on a new connection
+  generation, and nothing at all while the tab is not visible. The deadline is a
+  real cancellation: the carrier's signal reaches the host read, which checks it
+  before every view, so a timed-out request stops paying for store reads and
+  projection captures.
+  **Morning Star Workflow layout**: a narrow-column shell bound to the
   sidebar pane's definite height — exactly three zones: the **section nav**
-  (任务迭代 / 代理执行 / 事件记录; `data-mstar-tab-nav`), the panel-owned
+  (任务迭代 / 项目路线图 / 事件记录; `data-mstar-tab-nav`), the panel-owned
   **single scroll body** (`[data-mstar-scroll]` — the ONLY `overflow-y`
   element in the panel; nothing scrolls horizontally; `data-mstar-graph`
   rides it), and the pinned **meta dock** (version + harness dir; never
@@ -65,61 +94,50 @@ or a custom profile).
   open residual findings ≤10 with severity chips + overflow hint, policy
   with **enforcement first** then push / worktree / integration worktree,
   leases, knowledge, direction) renders IN FLOW at the end of the scroll
-  body, closed by the freshness footer (`snapshot {time} · turn {turn}` —
-  the served snapshot's own timestamp + turn, never "live"). The three
-  sections stack in the scroll body: the tasks page (iteration head +
-  **vertical** 5-step stepper with the FOUR-STATE `current` / `next` /
-  `done` / `idle` machine + the branch panel + five stacked status groups
-  — the merged「受阻/未知」/「Blocked / Unknown」column kept, `PLAN_CAP`
+  body, closed by the freshness footer (the store-read `snapshot {time}` plus,
+  when the catalog cache answered, `catalog facts {time}` — two domains, never
+  "live"). The three sections stack in the scroll body: the tasks page
+  (iteration head + **vertical** 5-step stepper with the FOUR-STATE `current` /
+  `next` / `done` / `idle` machine + the branch panel + five stacked status
+  groups — the merged「受阻/未知」/「Blocked / Unknown」column kept, `PLAN_CAP`
   render caps + the clickable 「更多」/「收起」 expand button
   (`data-kanban-more`); the projection keeps ALL plan rows — then the
-  project rollup), the events page (two partitions — Agent 流转事件 /
-  违规记录 — as flow rows, every row an expandable native `<details>`
-  carrying the full catalog fields, missing fields render 「—」 never a
-  guessed value), and the agents page — a **vertical grouped list** (the
-  react-flow canvas, its SVG edge layer, card ports and pointer pan are
-  REMOVED): two Phase groups in constant order (Phase 1 review-edit-chain
-  above; Phase 2 sdd-implement → qc-tri → qa-gate below, its label
-  annotating the CURRENT plan — `data-agent-group-plan` + `+N more`),
-  `sdd-implement` split into implementor / reviewer sub-partitions, the
-  `general` bucket sunk into an `unknown` sub-bucket, the full 14-role
-  roster as full-width flow rows (idle rows dashed muted — the roster is
-  never hidden) with role chip / status point / `×N` count / record line,
-  the `N executing · M pending` summary, and the three-entry legend in
-  flow below the list; rows carry the projected **emphasis tier**
-  (`--mstar-canvas-emphasis-*` chrome alpha mix — never a whole-row
-  `opacity`, so the status point + running glow stay opaque), settled
-  entities get the standalone GREEN done frame + ✓
-  (`data-agent-done="true"`) ONLY when `emphasis ≠ 'off'`; the agents page
-  contains zero `<svg>`, zero `data-agent-port` / `data-canvas-*` anchors
-  and no pan transform. The **iteration info section is shared by the
-  tasks AND agents pages** (one `IterationInfoSection`, both render the
-  same `view.iteration` block). Empty branches are explicit states —
-  `waiting` / `loading` / `unavailable` (with its reason) / no-harness
-  each carry their OWN anchor and copy and render no tabs, no digest and
-  no meta dock; no harness renders a CENTERED inactive-state card that
-  activates automatically once a harness is detected (inside the same
-  single scroll zone). Projection is the pure `projectGraph(source)`
-  function (schema constants vs catalog evidence strictly separated; never
-  throws; explicit degraded states — muted empty states, never orange warn
-  boxes). Refresh follows the session snapshot, no polling — while the
-  main agent is ACTIVELY orchestrating, a ledger record (dispatch/settle)
-  invalidates the workspace's TTL-cached catalog row so the next pre-step
-  rebuilds and (digest text change) re-injects it, and the panel refreshes
-  per step (seconds, not the 60 s TTL); while the main agent IDLES the
-  panel keeps the LAST snapshot — no live push channel. Bundle served at
+  project rollup), the roadmap page (the project authority's direction, goals
+  and milestone↔issue membership, with its FOUR absence states — no project,
+  no roadmap row, no milestones, unavailable — each on its own anchor), and the
+  events page (ONE time-descending flow of dispatch / settle / violation rows,
+  every row an expandable native `<details>` carrying the full catalog fields,
+  missing fields render 「—」 never a guessed value; an unreadable ledger and an
+  empty one are different states). The **iteration info section is shared by the
+  tasks AND roadmap pages** (one `IterationInfoSection`). Empty branches are
+  explicit states — `waiting` / `loading` / `unavailable` (with its reason) /
+  no-harness each carry their OWN anchor and copy and render no tabs, no digest
+  and no meta dock; no harness renders a CENTERED inactive-state card that
+  activates automatically once a harness is detected (inside the same single
+  scroll zone). Projection is the pure `projectGraph(snapshot)` function
+  (schema constants vs catalog evidence strictly separated; never throws;
+  explicit degraded states — muted empty states, never orange warn boxes). The
+  workflow picker (「工作流选择」) commits through `useMstarWorkflowPicker` →
+  `mstar/selectWorkflow`; it is never optimistic, contributes only the commit
+  state, and the selection it renders comes from the next snapshot's
+  `retained.selection` (the host rebuilds it from the same durable binding). Bundle served at
   `/plugins/@mstar-harness/dsh/client.js` (closure-factory CJS with NO
   graph library inlined — react-flow removed; the build asserts the bundle
   contains no `xyflow`/`reactflow` markers, no `@deepseek-ai/*` value
   imports, and no `import.meta` / ESM statements — the loader runs plugin
   bundles as classic scripts). Full realized layout detail:
   `packages/dsh/README.md` (§ Web client plugin). **Known limitations**:
-  the stepper's Step 1 (iteration-start) IS the current step while the
+  a store read happens every 5 s while the tab is visible (five sequential
+  dashboard views on the host; a collapsed tab reads nothing); a cold/expired
+  catalog cache makes the panel rebuild the payload (the pre-step's own rule,
+  TTL-bounded — at most once a minute per open panel), and that build may
+  refresh projections; the stepper's Step 1 (iteration-start) IS the current step while the
   steering compass is `status: active` (Phase 1 in flight — catalog
   `compassStatus` field), carrying NO PASS/FAIL badge (Phase 1 has no gate
   verdict); Step 5 (merge-ready) can never be the CURRENT step — the
   engine phase gate only evaluates Phase 2→3→4; the current step follows
-  the TTL-refreshed `compassStatus` — up to one catalog interval (60 s)
+  the TTL-refreshed `compassStatus` (`retained.at` discloses that age) — up to
+  one catalog interval (60 s)
   behind a mid-session `active`→`locked` flip (bounded, documented
   staleness, never a wrong verdict); the agent-entity status derivation
   pairs a PAIRED settle exactly by its dispatch identity (`agent`, `role`,
@@ -284,7 +302,7 @@ Everything else the payload carries — the open-issue rollup and its detail
 rows, the branch policy, the spec-integration branch anchor, plan row scopes (a
 recorded scope, never a lease), the knowledge digest, the compass direction and
 the agent-flow ledger — is deliberately NOT in the row. Those facts stay in
-`MstarEngineStatusPayload` (the panel renders them from the persisted emission)
+`MstarEngineStatusPayload` (the panel reads the store; the emission row is the model-side anchor)
 and in the engine authorities behind it; there is no single `status` command
 that serves them, so read the concrete one per fact: `mstar status tech-debt`
 for the open-issue rollup, `mstar roadmap show` and the compass document
@@ -482,8 +500,8 @@ why identity lives on the mount and the clear rather than on a command.
 
 The plugin records ACTUAL subagent dispatch and real-completion settle events —
 the evidence of what really happened, distinct from the client-side expected
-role flow. The workflow panel's 代理执行 (agents) page and the 事件记录
-tab's `EventLogPage` log page are pure consumers of this evidence.
+role flow. The workflow panel's 事件记录 tab (`EventLogPage`) and its workspace digest are
+pure consumers of this evidence.
 
 - **Recording point (one core)**: `DshHostAdapter.dispatchGate` is the SINGLE
   record path behind both dispatch surfaces — the `tools/pre-execute` listener

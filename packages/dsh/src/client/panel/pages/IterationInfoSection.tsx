@@ -5,7 +5,7 @@
  * iteration steps stacked VERTICALLY + the branches panel — rendered by BOTH
  * tabs
  * from the SAME `view.iteration` data (the tasks tab inside IterationTaskPage
- * above the board, the agents tab inside AgentListPage above the list).
+ * above the board; the retired agents page mounted it above its list).
  * One implementation, two mounts — 任务迭代与代理执行共用同一迭代信息块.
  *
  * The component is extracted VERBATIM from the former inline head of

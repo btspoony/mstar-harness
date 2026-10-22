@@ -1,0 +1,183 @@
+/**
+ * RoadmapPage styles (the 项目路线图 tab).
+ *
+ * Token discipline: every color is a verified `--dsw-alias-*` token (dark mode
+ * is the host token flip — no bare hex/rgb here); spacing rides the
+ * `--mstar-space-1..6` ramp; fonts ride the `--dsw-font-xxxs-11/xxs-12/xs-13`
+ * ramp; radius is the unified 8px/999px pair. No viewport media query and no
+ * `@container` rule: the page is a single flow column inside the panel's one
+ * scroll body, and long identifiers wrap instead of scrolling sideways
+ * (`overflow-wrap: anywhere`).
+ */
+
+.page {
+  display: flex;
+  flex-direction: column;
+  gap: var(--mstar-space-3);
+  min-width: 0;
+}
+
+.header {
+  display: flex;
+  align-items: center;
+  gap: var(--mstar-space-2);
+}
+
+.title {
+  margin: 0;
+  font-size: var(--dsw-font-xs-13);
+  font-weight: 600;
+  color: var(--dsw-alias-label-primary);
+}
+
+.block {
+  display: flex;
+  flex-direction: column;
+  gap: var(--mstar-space-2);
+  min-width: 0;
+}
+
+.blockTitle {
+  margin: 0;
+  font-size: var(--dsw-font-xxxs-11);
+  font-weight: 600;
+  color: var(--dsw-alias-label-secondary);
+}
+
+.note {
+  margin: 0;
+  font-size: var(--dsw-font-xxs-12);
+  color: var(--dsw-alias-label-caption);
+  overflow-wrap: anywhere;
+}
+
+.direction {
+  margin: 0;
+  font-size: var(--dsw-font-xxs-12);
+  color: var(--dsw-alias-label-primary);
+  overflow-wrap: anywhere;
+}
+
+/* Clamped direction: three lines are the glanceable budget; the toggle opens it. */
+.clamp {
+  display: -webkit-box;
+  -webkit-line-clamp: 3;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+
+.toggle {
+  align-self: flex-start;
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--dsw-alias-state-business-primary);
+  font-size: var(--dsw-font-xxxs-11);
+  cursor: pointer;
+  transition: color 150ms ease;
+}
+
+.toggle:hover {
+  color: var(--dsw-alias-state-business-primary);
+  text-decoration: underline;
+}
+
+.goals,
+.milestones,
+.issues {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--mstar-space-1);
+  min-width: 0;
+}
+
+.goal {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--mstar-space-1);
+  font-size: var(--dsw-font-xxs-12);
+  color: var(--dsw-alias-label-primary);
+  min-width: 0;
+}
+
+.check {
+  color: var(--dsw-alias-label-caption);
+}
+
+.goalTitle {
+  overflow-wrap: anywhere;
+}
+
+.milestone {
+  display: flex;
+  flex-direction: column;
+  gap: var(--mstar-space-1);
+  padding: var(--mstar-space-2);
+  border: 1px solid var(--dsw-alias-border-l1);
+  border-radius: 8px;
+  background: var(--dsw-alias-bg-layer-1);
+  min-width: 0;
+}
+
+.milestoneHead {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: var(--mstar-space-1);
+  min-width: 0;
+}
+
+.milestoneName {
+  font-size: var(--dsw-font-xxs-12);
+  font-weight: 600;
+  color: var(--dsw-alias-label-primary);
+  overflow-wrap: anywhere;
+}
+
+.milestoneTarget,
+.milestoneStatus {
+  font-size: var(--dsw-font-xxxs-11);
+  color: var(--dsw-alias-label-caption);
+}
+
+.milestoneStatus {
+  padding: 0 var(--mstar-space-1);
+  border: 1px solid var(--dsw-alias-border-l2);
+  border-radius: 999px;
+}
+
+.issue {
+  display: flex;
+  align-items: baseline;
+  gap: var(--mstar-space-1);
+  font-size: var(--dsw-font-xxxs-11);
+  color: var(--dsw-alias-label-secondary);
+  min-width: 0;
+}
+
+.issueId {
+  color: var(--dsw-alias-label-caption);
+  font-family: ui-monospace, 'SF Mono', Menlo, Consolas, monospace;
+  white-space: nowrap;
+}
+
+.severity {
+  flex: none;
+  padding: 0 var(--mstar-space-1);
+  border-radius: 999px;
+  border: 1px solid var(--dsw-alias-border-l2);
+  color: var(--dsw-alias-state-warn-label);
+}
+
+.issueTitle {
+  overflow-wrap: anywhere;
+}
+
+.unassigned {
+  margin: 0;
+  font-size: var(--dsw-font-xxxs-11);
+  color: var(--dsw-alias-label-caption);
+}

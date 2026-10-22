@@ -1,5 +1,6 @@
 /**
- * Host-handler spec for `/api/mstar/engineStatus`
+ * Host-handler spec for the `mstar` gateway's WRITE half
+ * (`/api/mstar/selectWorkflow`, the panel's picker commit)
  * (`src/engine-status-endpoint.ts`).
  *
  * Covered: the descriptor + registration path on the host's shared typert
@@ -22,7 +23,7 @@ import { createUserMessage, type UserMessage } from '@deepseek-ai/dsh-llm'
 import type { PreStepDecision } from '@deepseek-ai/dsh-agent'
 import { initializeStore, openStore, storeDbPath } from '@mstar-harness/engine'
 import * as entry from '../src/index.ts'
-import { readWorkflowSessionBinding, writeEngineStatusSnapshot } from '../src/engine-status-store.ts'
+import { readWorkflowSessionBinding } from '../src/engine-status-store.ts'
 // Namespace imports of the two REAL modules the endpoint calls into: the
 // picker-boundary cases interpose a call-through wrapper on ONE exported
 // function per case, so the production handler still reads the real native
@@ -31,12 +32,11 @@ import * as endpointStore from '../src/engine-status-store.ts'
 import * as workflowSelection from '../src/gates/workflow-selection.ts'
 import {
   installEngineStatusEndpoint,
-  MSTAR_ENGINE_STATUS_METHOD,
   MSTAR_ENGINE_STATUS_NAMESPACE,
   MSTAR_SELECT_WORKFLOW_METHOD,
-  type MstarEngineStatusResult,
   type MstarSelectWorkflowResult,
 } from '../src/engine-status-endpoint.ts'
+import { SELECT_WORKFLOW_ENDPOINT } from '../src/engine-status-wire.ts'
 import { bootApp, seedActiveWorkflow, seedHarness, seedStore, v2Root, v2Snapshot, v2WorkflowEntry, type BootResult } from './harness.ts'
 
 let booted: BootResult | undefined
@@ -76,7 +76,6 @@ class FakeSessionController extends Service {
 
 /** Structural view of the endpoint as the gateway dispatches it. */
 interface EndpointView {
-  engineStatus(sessionId: unknown, cwd: unknown): Promise<MstarEngineStatusResult>
   selectWorkflow(sessionId: unknown, cwd: unknown, workflowId: unknown): Promise<MstarSelectWorkflowResult>
 }
 
@@ -99,247 +98,7 @@ function liveSession(app: BootResult, id: string, cwd: string, seq = 0): void {
   sessions.register({ id, header: { cwd }, seq })
 }
 
-/** Seed one stored emission through the store's own writer (creating the store on first use). */
-async function seed(app: BootResult, sessionId: string, cwd: string, marker: number): Promise<void> {
-  if (!existsSync(join(app.harnessDir, 'store.db'))) await seedStore(app.harnessDir)
-  const result = writeEngineStatusSnapshot(app.harnessDir, {
-    sessionId,
-    cwd,
-    turn: marker,
-    payload: { version: '9.9.9', marker },
-  })
-  if (result.kind !== 'written') throw new Error(`seed failed: ${result.reason}`)
-}
-
-describe('engineStatus endpoint — registration on the shared /api gateway', () => {
-  it('contributes mstar/engineStatus to the typert registry when the service appears', async () => {
-    const app = (booted = await bootApp({ sessionsService: 'fake' }))
-    // No typert registry in this composition: the optional unit simply does not
-    // fire, and the service itself is still registered.
-    expect(app.ctx.get('typert')).toBeUndefined()
-    expect(typeof endpointOf(app).engineStatus).toBe('function')
-
-    // The registry arrivals later (the real host composes it as its own row) —
-    // the conditional inject child fires and the endpoint is contributed.
-    await app.ctx.plugin(TypertRegistry)
-    const registry = app.ctx.get('typert') as { local: { get(endpoint: string): unknown } }
-    const descriptor = registry.local.get(`${MSTAR_ENGINE_STATUS_NAMESPACE}/${MSTAR_ENGINE_STATUS_METHOD}`) as
-      | Record<string, unknown>
-      | undefined
-    expect(descriptor).toBeDefined()
-    expect(descriptor).toMatchObject({
-      service: MSTAR_ENGINE_STATUS_NAMESPACE,
-      namespace: MSTAR_ENGINE_STATUS_NAMESPACE,
-      method: MSTAR_ENGINE_STATUS_METHOD,
-      invocation: { kind: 'direct' },
-      result: { mode: 'src-json' },
-    })
-    expect((descriptor?.parameters as Array<{ wire: string }>).map((parameter) => parameter.wire)).toEqual([
-      'sessionId',
-      'cwd',
-    ])
-  })
-
-  it('serves the emitted snapshot end to end: pre-step emission → stored → endpoint', async () => {
-    const app = (booted = await bootApp({ sessionsService: 'fake' }))
-    // The emission is an authority-dependent write: without an ACTIVE store the
-    // workspace truthfully persists nothing (covered by the store spec), so the
-    // end-to-end path needs the store it serves from.
-    await seedStore(app.harnessDir)
-    liveSession(app, 'ses_alpha', app.root)
-    const inbox: UserMessage[] = [
-      createUserMessage({ source: { kind: 'user' }, content: [{ type: 'text', text: 'inbox' }] }),
-    ]
-    const decision = await app.ctx.waterfall(
-      'agent/pre-step',
-      {
-        agent: { session: { header: { id: 'ses_alpha', cwd: app.root } } },
-        messages: inbox,
-        turn: 3,
-        step: 1,
-        signal: new AbortController().signal,
-      } as never,
-      (): Promise<PreStepDecision> => Promise.resolve<PreStepDecision>({ kind: 'enter', messages: inbox }),
-    )
-    expect(decision.kind).toBe('enter')
-
-    const result = await endpointOf(app).engineStatus('ses_alpha', app.root)
-    expect(result.status).toBe('ok')
-    if (result.status !== 'ok') throw new Error('unreachable')
-    expect(result.sessionId).toBe('ses_alpha')
-    expect(result.cwd).toBe(app.root)
-    expect(result.turn).toBe(3)
-    // The served payload is the emitted one (the rendered row's own facts).
-    expect(result.payload).toMatchObject({ version: expect.any(String), harnessDir: app.harnessDir })
-  })
-})
-
-describe('engineStatus endpoint — validation chain', () => {
-  it('accepts a matching session + asserted cwd', async () => {
-    const app = (booted = await bootApp({ sessionsService: 'fake' }))
-    liveSession(app, 'ses_alpha', app.root)
-    await seed(app, 'ses_alpha', app.root, 11)
-    const result = await endpointOf(app).engineStatus('ses_alpha', app.root)
-    expect(result).toMatchObject({ status: 'ok', sessionId: 'ses_alpha', cwd: app.root, turn: 11 })
-  })
-
-  it('rejects a malformed or relative cwd without touching the store', async () => {
-    const app = (booted = await bootApp({ sessionsService: 'fake' }))
-    liveSession(app, 'ses_alpha', app.root)
-    await seed(app, 'ses_alpha', app.root, 11)
-    const endpoint = endpointOf(app)
-    expect(await endpoint.engineStatus('ses_alpha', '')).toEqual({ status: 'unavailable', reason: 'invalid-cwd' })
-    expect(await endpoint.engineStatus('ses_alpha', 'relative/ws')).toEqual({
-      status: 'unavailable',
-      reason: 'cwd-refused',
-    })
-    expect(await endpoint.engineStatus('', app.root)).toEqual({
-      status: 'unavailable',
-      reason: 'invalid-session-id',
-    })
-  })
-
-  it('refuses traversal in the asserted path', async () => {
-    const app = (booted = await bootApp({ sessionsService: 'fake' }))
-    liveSession(app, 'ses_alpha', app.root)
-    await seed(app, 'ses_alpha', app.root, 11)
-    const endpoint = endpointOf(app)
-    const probes = [
-      `${app.root}/../../etc`,
-      `${app.root}/..`,
-      '/proj/../other',
-      `${app.root}/\0evil`,
-    ]
-    for (const probe of probes) {
-      expect(await endpoint.engineStatus('ses_alpha', probe)).toEqual({
-        status: 'unavailable',
-        reason: 'cwd-refused',
-      })
-    }
-  })
-
-  it('answers unavailable when the session is unknown to the host', async () => {
-    const app = (booted = await bootApp({ sessionsService: 'fake' }))
-    await seed(app, 'ses_alpha', app.root, 11)
-    // The snapshot exists, but the session does not: the endpoint never serves
-    // a store row it cannot tie to a real session.
-    expect(await endpointOf(app).engineStatus('ses_alpha', app.root)).toEqual({
-      status: 'unavailable',
-      reason: 'session-absent',
-    })
-  })
-
-  it('preserves absent, staged, corrupt and schema refusal causes at the endpoint', async () => {
-    const app = (booted = await bootApp({ sessionsService: 'fake' }))
-    liveSession(app, 'ses_alpha', app.root)
-    const endpoint = endpointOf(app)
-
-    const absent = await endpoint.engineStatus('ses_alpha', app.root)
-    expect(absent.status === 'unavailable' ? absent.reason : '').toContain('[store.not-initialized]')
-    expect(absent.status === 'unavailable' ? absent.reason : '').toContain('mstar store init')
-
-    let handle = await initializeStore({ harnessDir: app.harnessDir })
-    handle.db.prepare("update execution_meta set authority_state='staged' where id=1").run()
-    handle.close()
-    const staged = await endpoint.engineStatus('ses_alpha', app.root)
-    expect(staged.status === 'unavailable' ? staged.reason : '').toContain('[store.not-active]')
-    expect(staged.status === 'unavailable' ? staged.reason : '').toContain('reviewed activation')
-
-    for (const suffix of ['', '-wal', '-shm']) rmSync(join(app.harnessDir, `store.db${suffix}`), { force: true })
-    await seedStore(app.harnessDir)
-    handle = await openStore({ harnessDir: app.harnessDir }, 'write')
-    handle.db.exec('delete from schema_version where version = 4')
-    handle.close()
-    const schemaPath = join(app.harnessDir, 'store.db')
-    const beforeSchemaRead = readFileSync(schemaPath)
-    const schema = await endpoint.engineStatus('ses_alpha', app.root)
-    expect(schema.status === 'unavailable' ? schema.reason : '').toContain('[store.schema-drift]')
-    expect(schema.status === 'unavailable' ? schema.reason : '').toContain('nothing was modified')
-    expect(readFileSync(schemaPath).equals(beforeSchemaRead)).toBe(true)
-
-    for (const suffix of ['', '-wal', '-shm']) rmSync(join(app.harnessDir, `store.db${suffix}`), { force: true })
-    mkdirSync(join(app.harnessDir, 'store.db'))
-    const corrupt = await endpoint.engineStatus('ses_alpha', app.root)
-    expect(corrupt.status === 'unavailable' ? corrupt.reason : '').toContain('[store.corrupt]')
-  })
-
-  it('never answers with another session data (cross-session probes)', async () => {
-    const app = (booted = await bootApp({ sessionsService: 'fake' }))
-    liveSession(app, 'ses_alpha', app.root)
-    liveSession(app, 'ses_beta', '/proj/other')
-    await seed(app, 'ses_alpha', app.root, 11)
-    await seed(app, 'ses_beta', '/proj/other', 22)
-    const endpoint = endpointOf(app)
-
-    // Both sessions are real and both have snapshots: each read is its own.
-    const alpha = await endpoint.engineStatus('ses_alpha', app.root)
-    const beta = await endpoint.engineStatus('ses_beta', '/proj/other')
-    expect(alpha).toMatchObject({ status: 'ok', turn: 11 })
-    expect(beta).toMatchObject({ status: 'ok', turn: 22 })
-
-    // A session id swapped onto another session's workspace is refused — never
-    // a silently-close match pointing at alpha's row.
-    expect(await endpoint.engineStatus('ses_beta', app.root)).toEqual({
-      status: 'unavailable',
-      reason: 'cwd-mismatch',
-    })
-    // An unknown session id with a valid workspace of another live session.
-    expect(await endpoint.engineStatus('ses_gamma', app.root)).toEqual({
-      status: 'unavailable',
-      reason: 'session-absent',
-    })
-  })
-
-  it('refuses a session whose live cwd no longer matches the stored record', async () => {
-    const app = (booted = await bootApp({ sessionsService: 'fake' }))
-    liveSession(app, 'ses_alpha', '/proj/moved')
-    await seed(app, 'ses_alpha', '/proj/original', 11)
-    // The stored row belongs to the session's PREVIOUS workspace. Emission rows
-    // are addressed by (session, cwd), so the stale row is not even readable
-    // from this workspace: the read answers no-entry instead of serving it as
-    // current (the refusal-vocabulary shift the store cutover records).
-    expect(await endpointOf(app).engineStatus('ses_alpha', '/proj/original')).toEqual({
-      status: 'unavailable',
-      reason: 'store-no-session-entry',
-    })
-  })
-
-  it('falls back to the session controller persisted read for a non-attached session', async () => {
-    const app = (booted = await bootApp({ sessionsService: 'fake' }))
-    const inspected: string[] = []
-    await app.ctx.plugin(FakeSessionController)
-    const service = app.ctx.get('sessionController') as FakeSessionController
-    service.handler = async (sessionId: string) => {
-      inspected.push(sessionId)
-      return { header: { cwd: app.root } }
-    }
-    await seed(app, 'ses_persisted', app.root, 7)
-    const result = await endpointOf(app).engineStatus('ses_persisted', app.root)
-    expect(result).toMatchObject({ status: 'ok', sessionId: 'ses_persisted', turn: 7 })
-    expect(inspected).toEqual(['ses_persisted'])
-  })
-
-  it('answers unavailable when the persisted read throws or has no cwd', async () => {
-    const app = (booted = await bootApp({ sessionsService: 'fake' }))
-    await app.ctx.plugin(FakeSessionController)
-    const service = app.ctx.get('sessionController') as FakeSessionController
-    service.handler = async () => {
-      throw new Error('persistence offline')
-    }
-    await seed(app, 'ses_persisted', app.root, 7)
-    expect(await endpointOf(app).engineStatus('ses_persisted', app.root)).toEqual({
-      status: 'unavailable',
-      reason: 'session-inspect-failed',
-    })
-    service.handler = async () => ({ header: {} })
-    expect(await endpointOf(app).engineStatus('ses_persisted', app.root)).toEqual({
-      status: 'unavailable',
-      reason: 'session-cwd-absent',
-    })
-  })
-})
-
-describe('engineStatus endpoint — multi-fiber dedupe and withdrawal', () => {
+describe('mstar gateway — multi-fiber dedupe and withdrawal', () => {
   /**
    * A sibling-plugin boot (an HMR re-apply, or two plugin instances on one
    * host) applies `installEngineStatusEndpoint` a second time on the SAME
@@ -349,14 +108,14 @@ describe('engineStatus endpoint — multi-fiber dedupe and withdrawal', () => {
    * which no unit case could see.
    */
   interface ServiceView {
-    engineStatus(sessionId: unknown, cwd: unknown): Promise<MstarEngineStatusResult>
+    selectWorkflow(sessionId: unknown, cwd: unknown, workflowId: unknown): Promise<MstarSelectWorkflowResult>
   }
 
-  /** The endpoint owner's answer for a session this host does not know. */
+  /** The endpoint owner's answer for a commit it must refuse (no live session). */
   async function renderOf(ctx: Context): Promise<string | undefined> {
     const service = ctx.get(MSTAR_ENGINE_STATUS_NAMESPACE) as ServiceView | undefined
     if (service === undefined) return undefined
-    const answer = await service.engineStatus('ses_none', '/proj')
+    const answer = await service.selectWorkflow('ses_none', '/proj', 'wf-x')
     return answer.status === 'unavailable' ? answer.reason : answer.status
   }
 
@@ -397,7 +156,7 @@ describe('engineStatus endpoint — multi-fiber dedupe and withdrawal', () => {
     await app.ctx.plugin(TypertRegistry)
     const registry = app.ctx.get('typert') as { local: { get(endpoint: string): unknown } }
     const before = await renderOf(app.ctx)
-    expect(before).toBe('session-absent')
+    expect(before).toBe('session-not-live')
     const ownerOptions = optionsOf(app.ctx)
     expect(ownerOptions).toContain(app.harnessDir)
 
@@ -408,14 +167,14 @@ describe('engineStatus endpoint — multi-fiber dedupe and withdrawal', () => {
     expect(optionsOf(app.ctx)).toBe(ownerOptions)
     expect(await renderOf(app.ctx)).toBe(before)
     // …and the endpoint is still served exactly once.
-    expect(registry.local.get(`${MSTAR_ENGINE_STATUS_NAMESPACE}/${MSTAR_ENGINE_STATUS_METHOD}`)).toBeDefined()
+    expect(registry.local.get(SELECT_WORKFLOW_ENDPOINT)).toBeDefined()
 
     // Withdrawal is scoped to ownership: the sibling registered neither unit,
     // so disposing it must not remove the owner's service or descriptor.
     await fiber.dispose()
     expect(optionsOf(app.ctx)).toBe(ownerOptions)
     expect(await renderOf(app.ctx)).toBe(before)
-    expect(registry.local.get(`${MSTAR_ENGINE_STATUS_NAMESPACE}/${MSTAR_ENGINE_STATUS_METHOD}`)).toBeDefined()
+    expect(registry.local.get(SELECT_WORKFLOW_ENDPOINT)).toBeDefined()
   })
 
   it('takes the admission-test branch on a second install instead of rebuilding the gateway', async () => {
@@ -441,7 +200,7 @@ describe('engineStatus endpoint — multi-fiber dedupe and withdrawal', () => {
       expect(lines.filter((line) => line.includes('gateway already registered'))).toHaveLength(1)
       expect(lines.filter((line) => line.includes('gateway registered concurrently'))).toHaveLength(0)
       // The deduped second install left the live gateway serving.
-      expect(await renderOf(app.ctx)).toBe('session-absent')
+      expect(await renderOf(app.ctx)).toBe('session-not-live')
       await siblingFiber.dispose()
     } finally {
       app.ctx.logger = originalLogger
@@ -455,7 +214,7 @@ describe('engineStatus endpoint — multi-fiber dedupe and withdrawal', () => {
     const hostFiber = app.ctx.plugin(TypertRegistry)
     await new Promise((resolve) => setTimeout(resolve, 0))
     const registry = app.ctx.get('typert') as { local: { get(endpoint: string): unknown } }
-    const endpoint = `${MSTAR_ENGINE_STATUS_NAMESPACE}/${MSTAR_ENGINE_STATUS_METHOD}`
+    const endpoint = SELECT_WORKFLOW_ENDPOINT
     expect(registry.local.get(endpoint)).toBeDefined()
     expect(optionsOf(app.ctx)).toContain(app.harnessDir)
 
@@ -470,7 +229,7 @@ describe('engineStatus endpoint — multi-fiber dedupe and withdrawal', () => {
     const reapplied = await app.ctx.plugin(entry, { harnessDir: app.harnessDir })
     expect(app.ctx.get(MSTAR_ENGINE_STATUS_NAMESPACE)).toBeDefined()
     expect(optionsOf(app.ctx)).toContain(app.harnessDir)
-    expect(await renderOf(app.ctx)).toBe('session-absent')
+    expect(await renderOf(app.ctx)).toBe('session-not-live')
     expect(registry.local.get(endpoint)).toBeDefined()
 
     // The re-applied units belong to the re-applied row: disposing it
@@ -482,18 +241,18 @@ describe('engineStatus endpoint — multi-fiber dedupe and withdrawal', () => {
   })
 })
 
-describe('engineStatus endpoint — optional-unit boot', () => {
+describe('mstar gateway — optional-unit boot', () => {
   it('boots a composition with no typert registry, no sessions and no controller', async () => {    // A base-only profile shape: the endpoint registers nothing web-only, the
     // boot settles (the harness awaits each row — a pended row would hang it),
     // and the plugin surface is still present.
     const app = (booted = await bootApp())
     expect(app.ctx.get('typert')).toBeUndefined()
     expect(app.ctx.get('sessions')).toBeUndefined()
-    expect(typeof endpointOf(app).engineStatus).toBe('function')
+    expect(typeof endpointOf(app).selectWorkflow).toBe('function')
     // Degrades with an explicit reason instead of throwing at the caller.
-    expect(await endpointOf(app).engineStatus('ses_alpha', '/proj')).toEqual({
+    expect(await endpointOf(app).selectWorkflow('ses_alpha', '/proj', 'wf-a')).toEqual({
       status: 'unavailable',
-      reason: 'session-absent',
+      reason: 'session-not-live',
     })
   })
 
@@ -569,7 +328,6 @@ describe('selectWorkflow endpoint — D4 picker commit', () => {
     const app = (booted = await bootApp({ sessionsService: 'fake' }))
     await seedTwoActives(app)
     liveSession(app, 's-A', app.root, 5)
-    await seed(app, 's-A', app.root, 1)
     const endpoint = endpointOf(app)
 
     expect(await endpoint.selectWorkflow('s-A', app.root, 'wf-a')).toEqual({
@@ -593,11 +351,9 @@ describe('selectWorkflow endpoint — D4 picker commit', () => {
       binding: { cwd: app.root, selectedWorkflowId: 'wf-a', executionBinding: null, excludedBeforeSeq: 5 },
     })
 
-    const served = await endpoint.engineStatus('s-A', app.root)
-    expect(served).toMatchObject({
-      status: 'ok',
-      binding: { selection: { kind: 'active', workflowId: 'wf-a', dir: 'workflows/wf-a' } },
-    })
+    // The panel-visible half of a pick (its `retained.selection`) is asserted in
+    // `panel-snapshot-endpoint.spec.ts`: the read path is that endpoint's, and a
+    // commit is only real once a later read resolves the stored binding.
   })
   /**
    * Window 1 — the authority is replaced AFTER the registry read and BEFORE

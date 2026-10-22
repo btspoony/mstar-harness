@@ -1,7 +1,7 @@
 /**
- * TabNav (spec panel-tabs §2/§6.1) —
- * the section nav, the shell's first flex zone (`flex: none`): the three
- * internal sections (任务迭代 / 代理执行 / 事件记录) of the one sidebar tab.
+ * TabNav — the section nav, the shell's first flex zone (`flex: none`): the
+ * three internal sections (任务迭代 / 项目路线图 / 事件记录) of the one sidebar
+ * tab.
  * Section state is owned by the panel entry store (plan sidebar §L2.4 —
  * keyed by the sidebar tab record, default 'tasks', no routing); TabNav is a
  * controlled component receiving `active` + `onChange` (spec §6.1 interface
@@ -33,10 +33,10 @@ export interface TabNavProps {
   t: TranslateNS<'mstar-panel'>
 }
 
-/** Fixed section list: order = 任务迭代 / 代理执行 / 事件记录. */
+/** Fixed section list: order = 任务迭代 / 项目路线图 / 事件记录. */
 const TABS: readonly { id: PanelSection; label: PanelKey }[] = [
   { id: 'tasks', label: 'tab.tasks' },
-  { id: 'agents', label: 'tab.agents' },
+  { id: 'roadmap', label: 'tab.roadmap' },
   { id: 'events', label: 'tab.events' },
 ]
 

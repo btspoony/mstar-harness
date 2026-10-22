@@ -36,6 +36,7 @@ function collectFiles(dir: string): string[] {
 
 const CLIENT_DIR = new URL('../src/client/', import.meta.url).pathname
 const PANEL_DIR = new URL('../src/client/panel/', import.meta.url).pathname
+/** The retired agents page — its absence is the contract. */
 const LIST_PAGE = new URL('../src/client/panel/pages/AgentListPage.tsx', import.meta.url).pathname
 
 /** The first file containing the token (for the failure message), if any. */
@@ -44,6 +45,17 @@ function firstHolder(files: readonly string[], token: string): string | null {
     if (readFileSync(file, 'utf8').includes(token)) return file
   }
   return null
+}
+
+/** Assert the given path no longer exists. */
+function expectFileAbsent(path: string): void {
+  let exists = true
+  try {
+    readFileSync(path, 'utf8')
+  } catch {
+    exists = false
+  }
+  expect(exists, `deleted file ${path} is back`).toBe(false)
 }
 
 /** Assert NO file in the set contains ANY of the tokens. */
@@ -77,13 +89,30 @@ describe('panel anchor contract — the agent canvas stays deleted (plan sidebar
     ])
   })
 
-  it('AgentListPage.tsx carries no geometry/pan/edge code (layoutAgents / edgePath / panDrag / setPointerCapture)', () => {
-    expectAbsent([LIST_PAGE], [
+  it('the panel carries no geometry/pan/edge code (layoutAgents / edgePath / panDrag / setPointerCapture)', () => {
+    expectAbsent(collectFiles(PANEL_DIR), [
       'layoutAgents',
       'edgePath',
       'panDrag',
       'setPointerCapture',
     ])
+  })
+})
+
+describe('panel anchor contract — the retired agents surface stays retired', () => {
+  it('the agents page, its roster anchors, its locale family and its projection member are gone', () => {
+    // The whole vocabulary dies with the surface: no `data-agent-*` anchor, no
+    // agents page route, no agents tab id, no agents locale family, no
+    // `projectAgents` projection member.
+    expectAbsent(collectFiles(CLIENT_DIR), [
+      'data-agent-',
+      'data-mstar-page="agents"',
+      "'tab.agents'",
+      'AgentListPage',
+      'projectAgents',
+      'zone.agents.',
+    ])
+    expectFileAbsent(LIST_PAGE)
   })
 })
 

@@ -1,20 +1,10 @@
 /**
- * Zone component styles (spec panel-zones §2/§7
- * the WorkflowCanvas zone dashboard layout is GONE with the
- * Tabs+Content rework — the canvas/scroll/zones grid, the footer bar
- * (legend + gate summary + violations), the vertical IterationZone stepper
- * AND the AgentFlowZone stage pipeline styles were removed here (the
- * agent-canvas plan deleted the AgentFlowZone component and its css — the
- * entity rows now live in `pages/agent-list.module.css`, the vertical
- * grouped list of plan sidebar §L3). The AgentEventDock and its event-row
- * styles were removed by the event-log plan (spec §5 — 无双份日志: the dock
- * content migrated into `pages/EventLogPage.tsx` + `pages/event-log.module.css`).
- * What remains serves the components mounted today:
- *   - the shared `.zone` frame (TaskBoard),
+ * Zone component styles — what the components mounted today use, and nothing
+ * else. What remains:
+ *   - the shared `.zone` frame and `.zoneEmpty` (a zone whose data did not
+ *     answer), used by the TaskBoard and the project rollup,
  *   - the TaskBoard kanban (five stacked groups, reused in flow by
- *     IterationTaskPage — plan sidebar §L4.2),
- *   - the Legend agent-pipeline + entity-status swatches (mounted on the
- *     AgentListPage).
+ *     IterationTaskPage — plan sidebar §L4.2).
  *
  * Hard metrics (spec §1.2/§7): spacing from the --mstar-space-* ramp (defined
  * at the panel root) only; EVERY color is a verified --dsw-* alias token —
@@ -56,74 +46,6 @@
   margin: 0;
   color: var(--dsw-alias-label-caption);
   font: var(--dsw-font-xxxs-11);
-}
-
-.legend {
-  display: flex;
-  flex-direction: column;
-  gap: var(--mstar-space-1);
-  min-width: 0;
-}
-
-.legendTitle {
-  color: var(--dsw-alias-label-secondary);
-  font: var(--dsw-font-xxs-12);
-  font-weight: 600;
-  letter-spacing: 0.03em;
-  text-transform: uppercase;
-}
-
-.legendList {
-  display: flex;
-  flex-wrap: wrap;
-  gap: var(--mstar-space-1) var(--mstar-space-3);
-  margin: 0;
-  padding: 0;
-  list-style: none;
-  color: var(--dsw-alias-label-caption);
-  font: var(--dsw-font-xxxs-11);
-}
-
-.legendItem {
-  display: inline-flex;
-  align-items: center;
-  gap: var(--mstar-space-1);
-}
-
-.legendSwatch {
-  display: inline-block;
-  width: 10px;
-  height: 10px;
-  border-radius: 2px;
-}
-
-/* Agent-pipeline legend swatches (spec §7
- * the zone-dashboard legend items (iteration/current/disabled/
- * tasks/verdicts) were removed with the WorkflowCanvas (spec §6.1 — the
- * legend re-mounts on the agents list page, in flow below the list). The
- * collaboration-edge /
- * layout swatches (actual handoff edge / card ports / sub-buckets /
- * supervise line / on-demand badge / unknown partition) are REMOVED with
- * the legend simplification ; only the
- * 3 entity-status swatches stay. */
-
-/* Entity status swatches : the
- * agent row card treatments — running = business dot with the 1px ring
- * the running-card glow uses; settled = the success ✓ color; idle = the
- * dashed muted card frame (caption border, like `agentCardIdle`). */
-.swatchAgentRunning {
-  background: var(--dsw-alias-state-business-primary);
-  border-radius: 999px;
-  box-shadow: 0 0 0 1px var(--dsw-alias-bg-layer-1), 0 0 0 2px var(--dsw-alias-state-business-primary);
-}
-
-.swatchAgentSettled {
-  background: var(--dsw-alias-state-success-primary);
-  border-radius: 999px;
-}
-
-.swatchAgentIdle {
-  border: 1px dashed var(--dsw-alias-label-caption);
 }
 
 /* --- task board kanban (spec §3/§5/§7): five STACKED groups + count badges + plan cards + dim flow

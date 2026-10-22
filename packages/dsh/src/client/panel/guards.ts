@@ -1,17 +1,15 @@
 /**
- * Field-level degradation guards for the runtime `mstar-engine-status` payload
- * (spec §2.4): the client does not exhaustively validate the union — it
- * narrows, then degrades per field. Unknown/missing values render as
- * `unknown`, never as guessed values.
+ * Field-level degradation guards for the payloads the panel renders (spec §2.4):
+ * the client does not exhaustively validate the union — it narrows, then
+ * degrades per field. Unknown/missing values render as `unknown`, never as
+ * guessed values.
  *
- * This module ALSO carries the one place that validates untrusted input
- * exhaustively: {@link parseEngineStatusResult}, which turns the
- * `/api/mstar/engineStatus` wire envelope into the panel's explicit state. The
- * payload is a remote answer the panel never authored, so a malformed
- * envelope degrades to `unavailable` — never to a half-parsed view.
+ * This module ALSO carries the one place that validates the picker's untrusted
+ * wire answer exhaustively: {@link parseSelectWorkflowResult} turns the
+ * `/api/mstar/selectWorkflow` envelope into the panel's explicit state, so a
+ * malformed or foreign answer degrades to `unavailable` — never to a
+ * half-parsed acknowledgement.
  */
-
-import type { MstarEngineStatusPayload, WorkflowSelectionView } from '../../types.ts'
 
 /** String field: non-empty string, else null (missing → `unknown`). */
 export function str(value: unknown): string | null {
@@ -35,156 +33,16 @@ export function record(value: unknown): Record<string, unknown> | null {
     : null
 }
 
-/**
- * The engine-status state the panel renders from: either the host's stored
- * snapshot emission, or the explicit reason the snapshot is unavailable.
- * There is deliberately no third "empty" shape — a degraded read is ALWAYS an
- * `unavailable` carrying a reason, never a silently-empty payload.
- */
-export type MstarEngineStatusFetch =
-  | {
-    readonly status: 'ok'
-    /** The exact catalog payload the host stored for this session. */
-    readonly payload: MstarEngineStatusPayload
-    /** ISO timestamp of the served snapshot — the panel's freshness marker. */
-    readonly at: string
-    /** The agent turn the row was emitted for. */
-    readonly turn: number
-    /**
-     * The session's CURRENT control-state selection, when the host served one
-     * (D4). It is deliberately separate from `payload.state.selection`, which
-     * keeps recording the LAST MODEL EMISSION — the picker's acknowledgement
-     * shows here immediately while plans / Event Log stay on the last snapshot.
-     * Null when the response carries none (an older host, or a malformed one).
-     */
-    readonly binding: WorkflowSelectionView | null
-  }
-  | { readonly status: 'unavailable'; readonly reason: string }
-
 /** One workflow-pick acknowledgement (the `selectWorkflow` wire result). */
 export type MstarSelectWorkflowFetch =
   | { readonly status: 'selected'; readonly sessionId: string; readonly workflowId: string }
   | { readonly status: 'unavailable'; readonly reason: string }
 
-/** The explicit degraded state (one constructor — one shape everywhere). */
-function unavailable(reason: string): MstarEngineStatusFetch {
-  return { status: 'unavailable', reason }
-}
-
-/**
- * Narrow one untrusted workflow-selection view. Every arm must carry its
- * discriminants as non-empty strings; the picker rows (`activeWorkflowIds`)
- * survive only as a string array. Anything else is null — the caller then
- * falls back to the emitted payload's own selection rather than rendering a
- * guessed one.
- */
-export function selectionView(value: unknown): WorkflowSelectionView | null {
-  const view = record(value)
-  if (view === null) return null
-  const workflowId = str(view.workflowId)
-  const dir = str(view.dir)
-  if (view.kind === 'active' || view.kind === 'terminal') {
-    if (workflowId === null || dir === null) return null
-    if (view.kind === 'terminal') return { kind: 'terminal', workflowId, dir }
-    const warning = record(view.warning)
-    const code = warning === null ? null : str(warning.code)
-    const message = warning === null ? null : str(warning.message)
-    return {
-      kind: 'active',
-      workflowId,
-      dir,
-      ...(code === null || message === null ? {} : { warning: { code, message } }),
-    }
-  }
-  if (view.kind !== 'error') return null
-  const code = str(view.code)
-  const message = str(view.message)
-  if (code === null || message === null) return null
-  const ids = Array.isArray(view.activeWorkflowIds)
-    ? view.activeWorkflowIds.filter((id): id is string => str(id) !== null)
-    : undefined
-  return { kind: 'error', code, message, ...(ids === undefined ? {} : { activeWorkflowIds: ids }) }
-}
-
-/**
- * Validate one `/api/mstar/engineStatus` response into the panel's state.
- *
- * The whole envelope is untrusted: the transport result (`{ok, value}` /
- * `{ok: false, error}`), the endpoint result (`status` + its fields) and the
- * payload object. Every branch that cannot be read in full answers the
- * explicit `unavailable` state with a machine-readable reason; the host's own
- * `unavailable` reason is surfaced verbatim.
- *
- * @param raw - the value returned by `connection.rpc.call` (untrusted).
- * @param sessionId - the session this client ASKED for; a response naming any
- *   other session is refused (`session-mismatch`) — one session's request can
- *   never render another session's data.
- * @param cwd - the workspace this client ASSERTED in the same request; the host
- *   echoes the record's `cwd`, so a response naming another workspace is refused
- *   (`cwd-mismatch`) rather than rendered as this session's snapshot. The
- *   comparison is exact byte equality: the host matched the asserted string
- *   against its own record verbatim, so a normalising comparison here would
- *   accept a workspace the host itself refused.
- * @returns the validated snapshot state, or the explicit unavailable state.
- */
-export function parseEngineStatusResult(raw: unknown, sessionId: string, cwd?: string): MstarEngineStatusFetch {
-  const envelope = record(raw)
-  if (envelope === null) return unavailable('malformed-response')
-
-  if (envelope.ok !== true) {
-    const error = record(envelope.error)
-    const code = str(error?.code)
-    return unavailable(code === null ? 'transport-error' : `transport-error:${code}`)
-  }
-
-  const value = record(envelope.value)
-  if (value === null) return unavailable('malformed-response')
-
-  if (value.status === 'unavailable') return unavailable(str(value.reason) ?? 'unavailable')
-  if (value.status !== 'ok') return unavailable('malformed-response')
-
-  // The answer must name the session that was asked for — a foreign id is
-  // refused rather than rendered under this session's panel.
-  if (value.sessionId !== sessionId) return unavailable('session-mismatch')
-
-  // …and the workspace it names must be the one this panel asserted. The host
-  // echoes the stored record's `cwd`, so a mismatch means the answer describes
-  // another workspace (a same-session, moved/foreign read) — never a close
-  // match to render. Asserted only when the caller passes the requested cwd.
-  if (cwd !== undefined && value.cwd !== cwd) return unavailable('cwd-mismatch')
-
-  const at = str(value.at)
-  if (at === null) return unavailable('malformed-snapshot')
-  const turn = count(value.turn)
-  if (turn === null) return unavailable('malformed-snapshot')
-
-  const payload = record(value.payload)
-  if (payload === null) return unavailable('malformed-payload')
-
-  // The payload itself is handed over as read: its members degrade per field
-  // at render time (`str`/`bool`/`count`/`Array.isArray`), so a payload
-  // missing a member renders `unknown` for that member — the established
-  // field-level degradation contract (spec §2.4).
-  //
-  // The CURRENT control-state binding is a separate, optional field (D4): a
-  // host that does not serve one (or a malformed one) degrades to `null`, so
-  // the panel keeps the last emission's own selection as its display source.
-  const binding = record(value.binding)
-  return {
-    status: 'ok',
-    payload: payload as unknown as MstarEngineStatusPayload,
-    at,
-    turn,
-    binding: binding === null ? null : selectionView(binding.selection),
-  }
-}
-
 /**
  * Validate one `/api/mstar/selectWorkflow` response into the picker's state.
  *
- * Like {@link parseEngineStatusResult} the whole envelope is untrusted: the
- * transport result, the endpoint result and the acknowledged identity are all
- * checked. A success MUST name the session AND the workflow this client asked
+ * The whole envelope is untrusted: the transport result, the endpoint result and
+ * the acknowledged identity are all checked. A success MUST name the session AND the workflow this client asked
  * for — a foreign acknowledgement is refused rather than rendered as this
  * session's pick.
  *

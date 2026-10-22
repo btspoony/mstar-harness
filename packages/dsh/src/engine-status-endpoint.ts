@@ -1,6 +1,6 @@
 /**
- * Host half of the panel's engine-status channel: the `mstar/engineStatus`
- * endpoint on the host's SHARED `/api` typert gateway.
+ * Host half of the panel's WRITE channel: the `mstar/selectWorkflow` endpoint on
+ * the host's SHARED `/api` typert gateway.
  *
  * WHY this shape: a plugin cannot own a route. The host's typertGateway owns
  * the single `/api` interceptor (`connection.rpc.intercept('/api')` would
@@ -13,9 +13,16 @@
  * child (`ctx.inject(['typert'], …)`): a composition without a typert registry
  * simply has no `/api` endpoints, and the plugin's runtime keeps working.
  *
- * The browser half calls `connection.rpc.call('/api', 'mstar/engineStatus',
- * { args: { sessionId, cwd } })` — the payload contract is exactly one
- * plain-object `args` field keyed by the declared parameter names.
+ * READ PATH: none. The panel's read is `mstar/panelSnapshot`
+ * (`src/panel/panel-snapshot-endpoint.ts`), served by its own service under the
+ * same `mstar` wire namespace; this module's descriptor list carries that
+ * invocation too (typert admits one contribution per `<package>#<face>`). What
+ * remains HERE is the picker's durable WRITE — retiring the read did not retire
+ * the pick.
+ *
+ * The browser half calls `connection.rpc.call('/api', 'mstar/selectWorkflow',
+ * { args: { sessionId, cwd, workflowId } })` — the payload contract is exactly
+ * one plain-object `args` field keyed by the declared parameter names.
  *
  * HARD constraint — headless boot safety: this module is reachable from
  * `apply`, and it must never make the host row statically inject `connection`
@@ -24,29 +31,12 @@
  * `ctx.get('sessionController')`) are structural and degrade when the service
  * is absent.
  *
- * VALIDATION CHAIN — the endpoint serves ONE session's snapshot and answers
- * otherwise. In order:
- *  1. argument shape (non-empty ids, an absolute traversal-free `cwd`);
- *  2. the session is resolved SERVER-side — the live `ctx.sessions.get(id)`
- *     first, then the session controller's persisted `inspect(id)` fallback;
- *  3. the `{HARNESS_DIR}` comes from the SERVER-side session cwd (or the
- *     boot-resolved config root) — never from client-asserted input;
- *  4. the store entry for that session must exist;
- *  5. the client-asserted `cwd` must EQUAL the record's `cwd`, and the record's
- *     `cwd` must equal the resolved session's cwd.
- * Every failure returns the explicit unavailable state WITH a reason: never
- * another session's data, never a silently-close match, never a path built from
- * unvalidated input.
- *
- * The response additionally carries the session's CURRENT control-state
- * selection (`binding.selection`, D4) — server-resolved from the durable
- * picker record + the verified live Agent — so the panel can show the chosen
- * active id while `payload` / `at` / `turn` keep naming the LAST MODEL
- * EMISSION. The `selectWorkflow` UI control (D4) is the write half: a LIVE
- * session, an exact cwd, an ACTIVE workflow id, automatic-binding compatibility
- * and a bounded session sequence are mandatory before the durable pick is
- * committed.
- *
+ * VALIDATION CHAIN — one session's pick is committed and answered otherwise. In
+ * order: argument shape (non-empty ids, an absolute traversal-free `cwd`), a
+ * LIVE session resolved SERVER-side, an exact `cwd` match, an ACTIVE workflow id,
+ * automatic-binding compatibility, and a bounded session sequence. Every failure
+ * returns the explicit unavailable state WITH a reason: never another session's
+ * data, never a silently-close match, never a path built from unvalidated input.
  * @module @mstar-harness/dsh/engine-status-endpoint
  */
 
@@ -57,52 +47,26 @@ import { TypertRemoteService } from '@deepseek-ai/dsh-typert-protocol'
 import type { WorkflowSelectionView } from './types.ts'
 import type { HarnessResolver } from './gates/_shared.ts'
 import { readExecutionWorkflowSource, type SessionHint } from './gates/workflow-selection.ts'
+import { readWorkflowSessionBinding, updateWorkflowSessionBinding } from './engine-status-store.ts'
 import {
-  readEngineStatusSnapshot,
-  readWorkflowSessionBinding,
-  updateWorkflowSessionBinding,
-  type EngineStatusSnapshotEntry,
-} from './engine-status-store.ts'
-import {
-  MSTAR_ENGINE_STATUS_METHOD,
   MSTAR_ENGINE_STATUS_NAMESPACE,
   MSTAR_SELECT_WORKFLOW_METHOD,
 } from './engine-status-wire.ts'
+// The panel's store-backed read joins THIS package's host contribution: typert
+// admits one contribution per `<package>#<face>`, so a second `register` from
+// the same package is refused. Its descriptor names its own service and the
+// shared `mstar` namespace, so nothing here changes for the two above.
+import { mstarPanelSnapshotInvocation } from './panel/panel-snapshot-endpoint.ts'
 
 // The wire address is declared ONCE for both halves (`./engine-status-wire.ts`)
 // and re-exported here for the host-side consumers that already import this
 // module; a rename can therefore never land on one side only.
-export { MSTAR_ENGINE_STATUS_METHOD, MSTAR_ENGINE_STATUS_NAMESPACE, MSTAR_SELECT_WORKFLOW_METHOD }
+export { MSTAR_ENGINE_STATUS_NAMESPACE, MSTAR_SELECT_WORKFLOW_METHOD }
 
 /** The contributing package identity (also the invocation id prefix). */
 const CONTRIBUTING_PACKAGE = '@mstar-harness/dsh'
 /** Logger label for the endpoint's own degradation lines. */
 const ENDPOINT_LOGGER = 'mstar-engine-status-endpoint'
-
-/**
- * The session's CURRENT control state (D4): the selection the server resolves
- * for the session it just validated — the durable picker record folded with
- * the live session's structural identity. Deliberately SEPARATE from
- * `payload` / `at` / `turn`, which keep naming the last model emission.
- */
-export interface MstarEngineStatusBinding {
-  readonly selection: WorkflowSelectionView
-}
-
-/** The served snapshot (the stored emission, echoed back with its identity). */
-export interface MstarEngineStatusOk {
-  readonly status: 'ok'
-  readonly sessionId: string
-  readonly cwd: string
-  /** ISO timestamp of the emission the entry records. */
-  readonly at: string
-  /** The agent turn the row was emitted for. */
-  readonly turn: number
-  /** The exact catalog payload emitted to that session's model. */
-  readonly payload: Record<string, unknown>
-  /** Current control-state selection for this session (never the last emission's). */
-  readonly binding?: MstarEngineStatusBinding
-}
 
 /**
  * The explicit "no answer" result. `reason` is machine-readable and always
@@ -112,9 +76,6 @@ export interface MstarEngineStatusUnavailableResult {
   readonly status: 'unavailable'
   readonly reason: string
 }
-
-/** The endpoint's wire result. */
-export type MstarEngineStatusResult = MstarEngineStatusOk | MstarEngineStatusUnavailableResult
 
 /** The picker commit result: the durable preference was acknowledged. */
 export interface MstarSelectWorkflowOk {
@@ -200,8 +161,9 @@ type SessionCwdResolution =
   | { readonly kind: 'unavailable'; readonly reason: string }
 
 /**
- * Host-side `mstar/engineStatus` service: `/api/mstar/engineStatus` serves the
- * stored snapshot of the session the caller asserts.
+ * Host-side `mstar` gateway: `/api/mstar/selectWorkflow` commits the session's
+ * durable workflow pick. (The panel's read is a sibling service under the same
+ * wire namespace — see the module header.)
  */
 export class MstarEngineStatusGateway extends TypertRemoteService {
   private readonly resolver: HarnessResolver
@@ -217,28 +179,6 @@ export class MstarEngineStatusGateway extends TypertRemoteService {
     this.resolver = options.resolver
     this.bootHarnessDir = options.bootHarnessDir
     this.invalidateSelection = options.invalidateSelection
-  }
-
-  /**
-   * Serve one session's stored engine-status snapshot after the validation
-   * chain documented in the module header.
-   * @param sessionId - the session whose snapshot is requested (client-asserted).
-   * @param cwd - the session workspace the client believes it is reading (client-asserted).
-   * @returns the stored emission plus the session's current control-state
-   *   selection, or the explicit unavailable state with a reason.
-   */
-  async engineStatus(sessionId: string, cwd: string): Promise<MstarEngineStatusResult> {
-    try {
-      return await this.serve(sessionId, cwd)
-    } catch (error) {
-      // The endpoint never throws across the wire: an unexpected fault is
-      // reported as a degraded answer, never as a host error the client has to
-      // interpret (and never as another session's data).
-      this.ctx.logger(ENDPOINT_LOGGER).warn(
-        `engineStatus failed for ${String(sessionId)} (answering unavailable): ${(error as Error)?.message ?? error}`,
-      )
-      return unavailable('internal-error')
-    }
   }
 
   /**
@@ -264,49 +204,6 @@ export class MstarEngineStatusGateway extends TypertRemoteService {
         `selectWorkflow failed for ${String(sessionId)} (answering unavailable): ${(error as Error)?.message ?? error}`,
       )
       return unavailable('internal-error')
-    }
-  }
-
-  /** The validation chain itself (contained by {@link engineStatus}). */
-  private async serve(sessionId: unknown, cwd: unknown): Promise<MstarEngineStatusResult> {
-    const sid = nonEmptyString(sessionId)
-    if (sid === undefined) return unavailable('invalid-session-id')
-    const claimed = nonEmptyString(cwd)
-    if (claimed === undefined) return unavailable('invalid-cwd')
-    if (isRefusedPath(claimed)) return unavailable('cwd-refused')
-
-    // (2) Resolve the session SERVER-side — the client's claim is not evidence.
-    const session = await this.resolveSessionCwd(sid)
-    if (session.kind !== 'ok') return unavailable(session.reason)
-
-    // (3) The store root comes from the SERVER-side cwd (or the boot root).
-    const harnessDir = this.bootHarnessDir ?? this.resolver.forWorkspace(session.cwd)
-    if (harnessDir === null || harnessDir === '') return unavailable('no-harness-dir')
-
-    // (4) An entry for THAT session must exist — native authority refusals
-    // retain their cause/recovery, never masquerading as a missing row.
-    const read = readEngineStatusSnapshot(harnessDir, sid, session.cwd)
-    if (read.kind !== 'ok') return unavailable(
-      read.reason.startsWith('[store.') ? read.reason : `store-${read.reason}`,
-    )
-    const entry: EngineStatusSnapshotEntry = read.entry
-
-    // (5) The asserted cwd must match the record, and the record must match the
-    // resolved session — a mismatch is a stale/foreign read, not a close match.
-    if (entry.cwd !== claimed) return unavailable('cwd-mismatch')
-    if (entry.cwd !== session.cwd) return unavailable('session-cwd-mismatch')
-
-    return {
-      status: 'ok',
-      sessionId: sid,
-      cwd: entry.cwd,
-      at: entry.at,
-      turn: entry.turn,
-      payload: entry.payload,
-      // Current control state, computed for the SAME validated session: the
-      // durable pick folded with the verified live Agent. Never the emitted
-      // payload's selection — that one keeps recording the last emission.
-      binding: { selection: await this.currentSelection(harnessDir, sid, entry.cwd, session.source === 'live') },
     }
   }
 
@@ -445,13 +342,16 @@ export class MstarEngineStatusGateway extends TypertRemoteService {
 
 /**
  * The generated-style invocation descriptors for the shared `/api` gateway:
- * `/api/mstar/engineStatus` (the stored snapshot + current binding) and
- * `/api/mstar/selectWorkflow` (the panel's durable pick).
+ * `/api/mstar/selectWorkflow` (the panel's durable pick) and the panel's
+ * read `mstar/panelSnapshot` (contributed from `panel/panel-snapshot-endpoint.ts`).
  *
  * Registered EXPLICITLY (not through `@Remote` SRC markers): the host gateway
  * checks its own `ctx.typert.local` table FIRST, while SRC discovery reads a
  * module-private marker table that a locally-resolved plugin copy can never
  * share with the host installation.
+ *
+ * The panel's `mstar/panelSnapshot` descriptor rides this list (typert admits
+ * one contribution per package face) while its service stays separate.
  */
 export function mstarEngineStatusContribution(): TypertContribution {
   return {
@@ -460,18 +360,6 @@ export function mstarEngineStatusContribution(): TypertContribution {
     schemas: [],
     model: { services: [], events: [], objects: [] },
     invocations: [
-      {
-        id: `${CONTRIBUTING_PACKAGE}#${MSTAR_ENGINE_STATUS_NAMESPACE}/${MSTAR_ENGINE_STATUS_METHOD}`,
-        service: MSTAR_ENGINE_STATUS_NAMESPACE,
-        namespace: MSTAR_ENGINE_STATUS_NAMESPACE,
-        method: MSTAR_ENGINE_STATUS_METHOD,
-        invocation: { kind: 'direct' },
-        parameters: [
-          { name: 'sessionId', wire: 'sessionId', source: 'json', codec: { mode: 'src-json' } },
-          { name: 'cwd', wire: 'cwd', source: 'json', codec: { mode: 'src-json' } },
-        ],
-        result: { mode: 'src-json' },
-      },
       {
         id: `${CONTRIBUTING_PACKAGE}#${MSTAR_ENGINE_STATUS_NAMESPACE}/${MSTAR_SELECT_WORKFLOW_METHOD}`,
         service: MSTAR_ENGINE_STATUS_NAMESPACE,
@@ -485,6 +373,9 @@ export function mstarEngineStatusContribution(): TypertContribution {
         ],
         result: { mode: 'src-json' },
       },
+      // The panel's store-backed read rides this contribution (one per package
+      // face) while serving from its OWN service — see the import note above.
+      mstarPanelSnapshotInvocation(),
     ],
   }
 }

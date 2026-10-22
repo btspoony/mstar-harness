@@ -428,6 +428,65 @@ export async function buildCatalogPayloadWithStore(
   return payload
 }
 
+/**
+ * One session's cached catalog payload plus the instant it was built.
+ *
+ * WHY the age travels with the payload: the panel reuses this payload for the
+ * facts no dashboard DTO owns, so its freshness is a DIFFERENT domain from the
+ * store read it is rendered beside. Without the build instant the UI could only
+ * imply it was as fresh as the store.
+ */
+export interface CatalogPayloadRead {
+  readonly payload: MstarEngineStatusPayload
+  /** Epoch millis when `payload` was built (a cache hit keeps the ORIGINAL instant). */
+  readonly builtAt: number
+}
+
+/**
+ * Resolve one session's catalog payload from the apply-scoped cache, building it
+ * on a miss or a TTL expiry — the ONE implementation of that rule, shared by the
+ * pre-step emission and the panel's `retained` read.
+ *
+ * A session with no stable id is built uncached (nothing to key on). A miss (or
+ * an expired entry) REBUILDS, which reads the store and can refresh projections:
+ * a caller that also reads other store views must sequence this call after them,
+ * never beside them.
+ * @param ctx - registrant context (logger for the manifest fallback).
+ * @param cache - the apply-scoped payload cache.
+ * @param invalidation - the matching reverse map + digest set.
+ * @param harnessDir - the resolved `{HARNESS_DIR}` for this session.
+ * @param sessionId - the durable `session.header.id` (undefined ⇒ uncached build).
+ * @param cwd - the session workspace the payload is resolved for.
+ * @param hint - the carrying session's effective selection hint.
+ * @param ttlMs - refresh interval in milliseconds.
+ */
+export async function readCatalogPayload(
+  ctx: Context,
+  cache: Map<string, CatalogCacheEntry>,
+  invalidation: CatalogInvalidation,
+  harnessDir: string | null,
+  sessionId: string | undefined,
+  cwd: string,
+  hint: SessionHint | undefined,
+  ttlMs: number,
+): Promise<CatalogPayloadRead> {
+  if (sessionId === undefined) {
+    return { payload: await buildCatalogPayloadWithStore(ctx, harnessDir, hint), builtAt: Date.now() }
+  }
+  const key = catalogCacheKey(harnessDir, sessionId, cwd, hint)
+  const entry = cache.get(key)
+  const now = Date.now()
+  if (entry !== undefined && now - entry.builtAt < ttlMs) {
+    invalidation.register(harnessDir, sessionId, key)
+    return { payload: entry.payload, builtAt: entry.builtAt }
+  }
+  const payload = await buildCatalogPayloadWithStore(ctx, harnessDir, hint)
+  cache.set(key, { payload, builtAt: now })
+  invalidation.register(harnessDir, sessionId, key)
+  return { payload, builtAt: now }
+}
+
+/** The pre-step's payload-only view of {@link readCatalogPayload}. */
 async function catalogPayloadFor(
   ctx: Context,
   cache: Map<string, CatalogCacheEntry>,
@@ -438,17 +497,7 @@ async function catalogPayloadFor(
   hint: SessionHint | undefined,
   ttlMs: number,
 ): Promise<MstarEngineStatusPayload> {
-  if (sessionId === undefined) return await buildCatalogPayloadWithStore(ctx, harnessDir, hint)
-  const key = catalogCacheKey(harnessDir, sessionId, cwd, hint)
-  const entry = cache.get(key)
-  if (entry !== undefined && Date.now() - entry.builtAt < ttlMs) {
-    invalidation.register(harnessDir, sessionId, key)
-    return entry.payload
-  }
-  const payload = await buildCatalogPayloadWithStore(ctx, harnessDir, hint)
-  cache.set(key, { payload, builtAt: Date.now() })
-  invalidation.register(harnessDir, sessionId, key)
-  return payload
+  return (await readCatalogPayload(ctx, cache, invalidation, harnessDir, sessionId, cwd, hint, ttlMs)).payload
 }
 
 /**
@@ -1403,7 +1452,19 @@ export async function preStepCatalogListener(
  */
 function sessionHintForCatalog(harnessDir: string | null, agent: unknown): SessionHint | undefined {
   const identity = sessionHintOf(agent)
-  if (identity === undefined) return undefined
+  return identity === undefined ? undefined : selectionHintFor(harnessDir, identity)
+}
+
+/**
+ * Fold a session's DURABLE pick into its structural identity — the ONE
+ * cache-key rule, shared by the pre-step (which starts from an agent) and the
+ * panel's `retained` read (which starts from a validated session id + cwd). An
+ * unreadable binding record keeps the structural hint only: the pick is unknown,
+ * never invented.
+ * @param harnessDir - the resolved `{HARNESS_DIR}` for the session workspace.
+ * @param identity - the session's structural hint (cwd + durable id).
+ */
+export function selectionHintFor(harnessDir: string | null, identity: SessionHint): SessionHint {
   const { cwd, sessionId } = identity
   if (cwd === undefined || sessionId === undefined || harnessDir === null) return identity
   const binding = readWorkflowSessionBinding(harnessDir, sessionId, cwd)

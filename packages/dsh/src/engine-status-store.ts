@@ -1,6 +1,13 @@
 /**
- * Durable engine-status store — the edge-safe catalog source a later host
- * endpoint serves, plus the per-session workflow-selection CONTROL record (D4).
+ * Durable engine-status store — the WRITE half of the catalog emission
+ * (`dsh_status_emissions`, written by the pre-step) plus the per-session
+ * workflow-selection CONTROL record (D4) the picker reads and commits.
+ *
+ * Flushing that emission no longer has a plugin-side reader: the panel renders
+ * the store-backed `readPanelSnapshot` (`src/panel/read-panel-snapshot.ts`), and
+ * a test that verifies the write reads the row back through the engine's own
+ * verb (`readDshStatusEmission`). The row itself stays — the MODEL-visible
+ * catalog is anchored by it.
  *
  * Every piece of state lives in the control-root `store.db` through the
  * engine's typed synchronous host-state domain operations
@@ -16,15 +23,13 @@
  *
  * ADDRESSING (HARD): both records are keyed by the durable
  * `session.header.id` AND the authoritative cwd, so a read must be addressed
- * by both. A session id alone cannot address a row — the endpoint therefore
- * passes the cwd it resolved SERVER-side. A read that finds no row for that
- * exact pair reports `no-session-entry` (never another workspace's row).
+ * by both. A session id alone cannot address a row — the picker's reader
+ * therefore passes the cwd it resolved SERVER-side.
  *
- * READ RULE (HARD): an absent row, a store this build cannot answer from, or a
- * malformed stored record is never guessed at. A read reports either the
- * stored record or the explicit unavailable state carrying the store's own
- * cause (which names `mstar store init` / `mstar store upgrade` before an
- * ACTIVE authority exists).
+ * WRITE RULE (HARD): a store that cannot be written is never guessed at. The
+ * emission returns `{kind:'degraded', reason}` (the advisory path logs it and
+ * never aborts the step it observes); the binding commit reports its own
+ * degraded reason.
  *
  * KEYING (HARD): the stored maps are SQL rows keyed by
  * `(session_id, cwd)`. The session id is caller-chosen on the host's
@@ -37,49 +42,12 @@
 
 import {
   readDshSessionBinding,
-  readDshStatusEmission,
   recordDshStatusEmission,
   writeDshSessionBinding,
   type DshSelectedGeneration,
   type ExecutionBinding,
 } from '@mstar-harness/engine'
 
-/** Per-entry record version carried by every stored entry (`rv`). */
-export const ENGINE_STATUS_SNAPSHOT_ENTRY_VERSION = 1
-
-/**
- * One stored emission: the payload the model saw, plus the identity needed to
- * validate a later reader's claim (`cwd` is the session workspace the payload
- * was resolved for).
- */
-export interface EngineStatusSnapshotEntry {
-  /** Record version — a reader must see {@link ENGINE_STATUS_SNAPSHOT_ENTRY_VERSION}. */
-  readonly rv: number
-  /** The session workspace the payload was resolved for (validation anchor). */
-  readonly cwd: string
-  /** ISO timestamp of the emission. */
-  readonly at: string
-  /** The agent turn the payload was emitted for. */
-  readonly turn: number
-  /** The exact catalog payload object handed to the step messages. */
-  readonly payload: Record<string, unknown>
-}
-
-/** Store-read refusal text is retained verbatim from the native authority. */
-export type EngineStatusSnapshotUnavailableReason = string
-
-/** The explicit "no answer" result — never a best-effort parse. */
-export interface EngineStatusUnavailable {
-  readonly kind: 'unavailable'
-  readonly reason: EngineStatusSnapshotUnavailableReason
-}
-
-/** Read outcome: the stored entry, or the explicit unavailable state. */
-export type EngineStatusSnapshotRead =
-  | { readonly kind: 'ok'; readonly entry: EngineStatusSnapshotEntry }
-  | EngineStatusUnavailable
-
-/** Write outcome: written, or the degraded reason (never throws for store faults). */
 export type EngineStatusSnapshotWrite =
   | { readonly kind: 'written' }
   | { readonly kind: 'degraded'; readonly reason: string }
@@ -152,10 +120,6 @@ export type WorkflowSessionBindingWrite =
   | { readonly kind: 'written' }
   | { readonly kind: 'degraded'; readonly reason: string }
 
-export function engineStatusUnavailable(reason: string): EngineStatusUnavailable {
-  return { kind: 'unavailable', reason }
-}
-
 /** Structural test for a plain JSON object (never an array, never null). */
 function isPlainObject(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value)
@@ -183,48 +147,6 @@ function asExecutionBinding(value: unknown): ExecutionBinding | null | undefined
     return undefined
   }
   return value as ExecutionBinding
-}
-
-/**
- * Every failure path is explicit: unresolved `{HARNESS_DIR}` (`no-harness-dir`),
- * no row for this exact `(sessionId, cwd)` pair (`no-session-entry`), a native
- * authority refusal carrying the engine's complete cause/recovery text, or a
- * stored payload that is not usable JSON (`invalid-json`) / not an object
- * (`entry-schema`). A row belonging to another workspace is never served — it
- * is not addressable by this pair.
- * @param harnessDir - the resolved `{HARNESS_DIR}` (null when none resolved).
- * @param sessionId - the session whose snapshot is requested.
- * @param cwd - the authoritative session workspace the row was written for.
- * @returns the stored entry, or the explicit unavailable state.
- */
-export function readEngineStatusSnapshot(
-  harnessDir: string | null,
-  sessionId: string,
-  cwd: string,
-): EngineStatusSnapshotRead {
-  if (harnessDir === null || harnessDir === '') return engineStatusUnavailable('no-harness-dir')
-  if (sessionId === '' || cwd === '') return engineStatusUnavailable('no-session-entry')
-  const read = readDshStatusEmission({ harnessDir }, sessionId, cwd)
-  if (read.kind === 'unavailable') return engineStatusUnavailable(read.reason)
-  const emission = read.emission
-  if (emission === undefined) return engineStatusUnavailable('no-session-entry')
-  let payload: unknown
-  try {
-    payload = JSON.parse(emission.payloadJson)
-  } catch {
-    return engineStatusUnavailable('invalid-json')
-  }
-  if (!isPlainObject(payload)) return engineStatusUnavailable('entry-schema')
-  return {
-    kind: 'ok',
-    entry: {
-      rv: ENGINE_STATUS_SNAPSHOT_ENTRY_VERSION,
-      cwd: emission.cwd,
-      at: emission.emittedAt,
-      turn: emission.turn,
-      payload,
-    },
-  }
 }
 
 /**
