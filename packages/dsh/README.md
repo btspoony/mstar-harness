@@ -263,7 +263,7 @@ Every engine module attaches to a dsh surface — delivered except the lint modu
 | host (resolveSkillRoot, HostAdapter) | engine host.ts detection row + plugin adapter (`host: 'dsh'`) | delivered (P2) |
 | skill-authoring (lintFrontmatter, lintFiveQuestion) | skill-filesystem roots + `fs/write-intent` on SKILL.md | delivered (P2) |
 | lint (lintSkillFrontmatter, planQualityBar, assertSddTddTriple) | not wired — plan/tdd fs gates are a deferral; `lintSkillFrontmatter` runs only in the skills-mount test suite | deferred |
-| agent catalog | producer-owned `mstar-engine` catalog source (the anchor) + `/api/mstar/engineStatus` emission read (model-visible ⟺ logged) | delivered (P2) |
+| agent catalog | producer-owned `mstar-engine` catalog source (the anchor) + `dsh_status_emissions` (model-visible ⟺ logged); the panel reads the store, not the emission | delivered (P2) |
 | sdd (sddWorkspace, taskBrief) | MCP family `mstar_sdd` (`workspace` / `task-brief`) — no dsh-native wrapper | delivered (P3) |
 | iteration (evaluatePhaseGate, parseCompassFrontmatter) | `agent/pre-step` + iteration gate | delivered (P3) |
 | worktree (l1PreDispatchCheck, l2PreDispatchCheck) | `tools/pre-execute` L1/L2 (inside the dispatch gate) | delivered (P3) |
@@ -271,7 +271,7 @@ Every engine module attaches to a dsh surface — delivered except the lint modu
 
 ## Engine-status catalog
 
-An advisory `agent/pre-step` waterfall listener appends ONE **`mstar-engine`** catalog MessageSource to a composed step **when the row is emitted** — the producer-owned `mstar-engine` kind, exactly `{ kind: 'mstar-engine', form: 'catalog' }` and **no other member** (the dsh producer-owned source contract): the model-visible `<mstar_engine_status>` block is a **projection** of the payload (`renderEngineStatusCatalog`) and renders ONE **delta line** — `workflow: <id> (<kind>) | plans: <non-Done rows> | branch: <base> → <target> | gate: <verdict> (<transition>)` — carrying the selected lifecycle, its non-Done plan rows, the resolved branch anchors and, when a steering compass gated the iteration, the phase-gate verdict (a `FAIL` carries its violation codes; a bare verdict would name no cause). Everything else the payload carries is deliberately **NOT** in the row: the **residuals** rollup and its detail rows, the **branch policy**, the **spec-integration** anchor, each plan row's **row scope** (a recorded scope, never an ownership claim or a lease), the **knowledge** digest, the compass **direction**, the **agent-flow** ledger, the former iteration/transition history and the watermark trio. Those facts stay in `MstarEngineStatusPayload` (the panel renders them from the persisted emission) and in the engine authorities behind them — `mstar status`, `mstar roadmap show`, `mstar plan show`, the compass document, `{KNOWLEDGE_DIR}` and `dsh_status_emissions` — so the row is a change notice, never the authority. The **watermark is payload-only**: **mstar version** (plugin own manifest; the single-version invariant pins the bundled engine to the same version), **harness dir** (resolved `{HARNESS_DIR}`, `none` when absent) and **enforcement** (compass mode, `soft` / `hard (compass)`) stay in `MstarEngineStatusPayload` — the panel meta dock renders version + harness dir — and stay model-visible once in the always-on system prompt (`mstar:engine-status` digest + `mstar:harness-rules`), so the row never repeats them. **Fallback composition:** while no prompt registration is CONFIRMED live — the host provides no `system-prompt` service, the asynchronous registration fails (a `true` return only means the inject child was scheduled), or a live registration is disposed — the listener's per-step `showWatermark` predicate makes the row re-render the trio itself, so the version / harness dir / enforcement facts are never lost (a registration that lands later simply stops the fallback). The listener calls `next()` first and builds on the delegated decision — it never vetoes a step and never replaces the composed messages. When no lifecycle is selected the row renders `workflow selection: ERROR (<code>) <message>` in place of the state lines (those aggregates are empty by construction and must not read as "no plans"), and that message no longer points at a retired `status.json` path — it names the cause and the real recovery commands, `mstar workflow register` for a plan or `mstar iteration register` for an iteration (selecting an already-registered lifecycle for this session is the other way out of that state). Model-visible ⟺ logged: the persisted source carries no facts — the row is the durable **anchor** and the exact emitted payload is persisted per session as the newest row of the control-root `store.db` table `dsh_status_emissions` at this same emission, so the session log plus that store reconstruct the row without re-parsing the block (dsh packages/AGENTS.md). dsh session-format V4 refuses the retired `{ kind: 'plugin', plugin }` wrapper at message admission, so nothing but the producer-owned kind is ever written there. **Anchor kind (renamed, with read compat)**: the emitted kind is `mstar-engine` (the pre-rename identity was `mstar-engine-status`); rows emitted by released builds persist the old `plugin` wrapper in their V3 session logs, and the dsh V3→V4 migration lifts it to `plugin:mstar-engine` (or `plugin:mstar-engine-status` for the pre-rename identity), which the panel's anchor reader also accepts — any other kind is not an anchor and the session degrades to the explicit `waiting` state (never guessed data). The workflow panel reads that stored emission on demand over the host's shared `/api` typert gateway: the **host gateway owns the route** (a plugin cannot register one; a plain `connection.rpc.handle` channel mounts through `webServer` on the calling fiber and would pend this row's boot — the mechanism this package deliberately does not use) and this package contributes the `mstar/engineStatus` endpoint descriptor through an optional `ctx.typert.register(...)` child. The browser half calls `connection.rpc.call('/api', 'mstar/engineStatus', { args: { sessionId, cwd } })` and receives that session's stored emission, or an explicit `unavailable` reason (never another session's data, never silently-empty fields). **Trust boundary, stated plainly:** the endpoint authenticates nothing of its own — the transport fence (host/origin + browser auth) establishes only that the caller is a page this host served, so *possession of a `(sessionId, cwd)` pair plus reachability of the local `/api` gateway is the capability*. An answer is scoped to the REQUEST: the lookup is keyed by the asserted id, the stored record's `cwd` must equal both the asserted and the server-resolved session `cwd`, and the client re-checks the echoed id and workspace before rendering — so one session's request can never be served another session's row. The payload is a workspace digest (version, harness dir, enforcement, plan/residual/row-scope counters) that the panel's own session transcript already exposes; it is not treated as a secret, and the distinct `unavailable` reasons make the endpoint a weak session-existence oracle for a caller who already holds the id. Fiber disposal removes the listener (HMR-safe).
+An advisory `agent/pre-step` waterfall listener appends ONE **`mstar-engine`** catalog MessageSource to a composed step **when the row is emitted** — the producer-owned `mstar-engine` kind, exactly `{ kind: 'mstar-engine', form: 'catalog' }` and **no other member** (the dsh producer-owned source contract): the model-visible `<mstar_engine_status>` block is a **projection** of the payload (`renderEngineStatusCatalog`) and renders ONE **delta line** — `workflow: <id> (<kind>) | plans: <non-Done rows> | branch: <base> → <target> | gate: <verdict> (<transition>)` — carrying the selected lifecycle, its non-Done plan rows, the resolved branch anchors and, when a steering compass gated the iteration, the phase-gate verdict (a `FAIL` carries its violation codes; a bare verdict would name no cause). Everything else the payload carries is deliberately **NOT** in the row: the **residuals** rollup and its detail rows, the **branch policy**, the **spec-integration** anchor, each plan row's **row scope** (a recorded scope, never an ownership claim or a lease), the **knowledge** digest, the compass **direction**, the **agent-flow** ledger, the former iteration/transition history and the watermark trio. Those facts stay in `MstarEngineStatusPayload` (the row's own source) and in the engine authorities behind them — `mstar status`, `mstar roadmap show`, `mstar plan show`, the compass document, `{KNOWLEDGE_DIR}` and `dsh_status_emissions` — so the row is a change notice, never the authority. The **watermark is payload-only**: **mstar version** (plugin own manifest; the single-version invariant pins the bundled engine to the same version), **harness dir** (resolved `{HARNESS_DIR}`, `none` when absent) and **enforcement** (compass mode, `soft` / `hard (compass)`) stay in `MstarEngineStatusPayload` — the panel meta dock renders version + harness dir — and stay model-visible once in the always-on system prompt (`mstar:engine-status` digest + `mstar:harness-rules`), so the row never repeats them. **Fallback composition:** while no prompt registration is CONFIRMED live — the host provides no `system-prompt` service, the asynchronous registration fails (a `true` return only means the inject child was scheduled), or a live registration is disposed — the listener's per-step `showWatermark` predicate makes the row re-render the trio itself, so the version / harness dir / enforcement facts are never lost (a registration that lands later simply stops the fallback). The listener calls `next()` first and builds on the delegated decision — it never vetoes a step and never replaces the composed messages. When no lifecycle is selected the row renders `workflow selection: ERROR (<code>) <message>` in place of the state lines (those aggregates are empty by construction and must not read as "no plans"), and that message no longer points at a retired `status.json` path — it names the cause and the real recovery commands, `mstar workflow register` for a plan or `mstar iteration register` for an iteration (selecting an already-registered lifecycle for this session is the other way out of that state). Model-visible ⟺ logged: the persisted source carries no facts — the row is the durable **anchor** and the exact emitted payload is persisted per session as the newest row of the control-root `store.db` table `dsh_status_emissions` at this same emission, so the session log plus that store reconstruct the row without re-parsing the block (dsh packages/AGENTS.md). dsh session-format V4 refuses the retired `{ kind: 'plugin', plugin }` wrapper at message admission, so nothing but the producer-owned kind is ever written there. **Anchor kind (renamed, with read compat)**: the emitted kind is `mstar-engine` (the pre-rename identity was `mstar-engine-status`); rows emitted by released builds persist the old `plugin` wrapper in their V3 session logs, and the dsh V3→V4 migration lifts it to `plugin:mstar-engine` (or `plugin:mstar-engine-status` for the pre-rename identity), which a released-build log may still carry — the persisted row is the model-visible ANCHOR, and the panel no longer reads it: the workflow panel's data path is the store-backed `mstar/panelSnapshot` (see § Web client plugin), so the emission reader this package used to serve (`mstar/engineStatus`) is retired and only the picker's `mstar/selectWorkflow` write remains on that gateway. The panel half reaches the host over the host's shared `/api` typert gateway: the **host gateway owns the route** (a plugin cannot register one; a plain `connection.rpc.handle` channel mounts through `webServer` on the calling fiber and would pend this row's boot — the mechanism this package deliberately does not use) and this package contributes its descriptors through an optional `ctx.typert.register(...)` child. **Trust boundary, stated plainly:** the endpoints authenticate nothing of their own — the transport fence (host/origin + browser auth) establishes only that the caller is a page this host served, so *possession of a `(sessionId, cwd)` pair plus reachability of the local `/api` gateway is the capability*. An answer is scoped to the REQUEST: the lookup is keyed by the asserted id, the session is resolved SERVER-side, and the asserted `cwd` must equal both the resolved session cwd and the record the answer describes — so one session's request can never be served another session's data. The payload is a workspace digest (version, harness dir, enforcement, plan/residual/row-scope counters) that the panel's own session transcript already exposes; it is not treated as a secret, and the distinct `unavailable` reasons make the endpoint a weak session-existence oracle for a caller who already holds the id. Fiber disposal removes the listener (HMR-safe).
 
 Emission is **change-driven, not turn-driven**: per session+workspace the row is appended on the first emission, then only when its rendered text or the panel-relevant payload projection changed (the projection normalizes the store revision, because the emission's own store write advances it — comparing raw payloads would read that side effect as a change and re-emit every step) — a 20-step turn shows the catalog once, not 20 times, and a 20-turn unchanged session no longer accumulates an identical copy per turn. The start of a turn is never a trigger, so **no resolved `{HARNESS_DIR}` means no row at all** (the block would be an empty wrapper) and the panel shows its `waiting` state. Two consequences are worth stating: the emitted block is a **projection** of the payload (the watermark trio is not rendered, see above), and the persisted payload is written at this same gate — so the panel's stored emission is **the last payload the model saw**, whose freshness footer `turn` / `at` mean *last emission*, not current turn; whenever nothing is emitted the stored row is still the current state. One explicit re-anchor path remains: a picker commit evicts that session's digest, so the next step re-emits even when the text is unchanged. **Known limitation:** the row is not periodically re-anchored, so after host-side context compaction it may be absent until the next change — the always-on system-prompt digest still carries the version, the active workflow and its non-Done plans. The source shares ONE per-workspace cache entry, built at boot for an explicit `harnessDir` (else on the workspace's first pre-step) and TTL-refreshed (`catalogTtlMs`, default 60 s) — the hot path is a timestamp compare + Map lookup between refreshes, and a mid-session plan/compass/residual change lands within one interval.
 
@@ -309,7 +309,7 @@ A FOURTH kind, **`workflow-verdict`**, is written by the workflow/ralph GATE (no
 
 **Mount-order note.** The consumer activates only when the `sessions` service is available at apply — the **dsh-session row must mount BEFORE the mstar row** (the standard `web` profile order does). A composition where dsh-session mounts after the plugin (or is absent) degrades **silently**: ONE debug log (`sessions service absent — workflow-ledger consumer disabled`) and no rows are recorded — never an error, never a broken run.
 
-**Panel visibility.** The three workflow rows render in the **事件记录 (Event Log) tab**'s Agent 流转事件 partition through the existing event-row chrome (no redesign): the summary identity is the run NAME (agent/end rows resolve it via the window lookup; fallback runId → 「未知」), the detail body adds four workflow fields — run-id / name / members / stop-reason (missing → 「—」) — and the expected/settled seats render 「—」 (a workflow row is not a role dispatch — no settle pairing exists, same precedent as settle rows). Unknown kind strings render as GENERIC rows (verbatim kind, no workflow fields) — never dropped, never guessed. The catalog summary counts workflow rows as a DISTINCT `workflow` bucket (`by role: workflow N` in the model-facing line) — never folded into dispatch-role counts.
+**Panel visibility.** The three workflow rows render in the **事件记录 (Event Log) tab**'s single merged flow through the existing event-row chrome (no redesign): the summary identity is the run NAME (agent/end rows resolve it via the window lookup; fallback runId → 「未知」), the detail body adds four workflow fields — run-id / name / members / stop-reason (missing → 「—」) — and the expected/settled seats render 「—」 (a workflow row is not a role dispatch — no settle pairing exists, same precedent as settle rows). Unknown kind strings render as GENERIC rows (verbatim kind, no workflow fields) — never dropped, never guessed. The catalog summary counts workflow rows as a DISTINCT `workflow` bucket (`by role: workflow N` in the model-facing line) — never folded into dispatch-role counts.
 
 ## Web client plugin (workflow panel)
 
@@ -341,11 +341,39 @@ the selected section lives in the entry's slot store keyed by the tab record,
 so it survives the docked body's unmount. Labels come from the `mstar-panel`
 locale namespace: **"Morning Star Workflow"** (en) / **"晨星工作流"** (zh).
 
-The panel is a pure render of the latest catalog snapshot (from the host's
-`/api/mstar/engineStatus` endpoint — refresh follows the fetch, no polling):
-the **narrow-column layout** is a single flex column bound to the sidebar
+The panel renders the **control-root `store.db`**, not the model's last
+emission. The host half composes five engine dashboard views — `workflow-detail`,
+`iteration-detail`, `roadmap`, `issues`, `projects` — **sequentially** (the
+store read layer may refresh projections, so two views never overlap) into one
+`PanelSnapshot`, served on `/api/mstar/panelSnapshot`; the browser half polls it
+while the tab is visible. The retired `mstar/engineStatus` read method is gone —
+the `mstar` gateway keeps only the picker's durable write
+(`mstar/selectWorkflow`).
+
+**Poll contract** (`panel-snapshot-client.ts`): 5 s while the tab is visible, at
+most **one** request in flight (a slow answer never stacks a queue), a 5 s
+deadline per request, the last good snapshot kept on screen while a refresh is
+out (no flicker), an immediate refetch on a new connection generation, and
+nothing at all while the tab is not visible.
+
+**Three states per view, never a flattened empty**: `ok` (the authority
+answered — `data: null` still means "nothing here"), `not-applicable` (nothing
+was read: no target resolved) and `unavailable` (the read failed, carrying the
+store's own message verbatim). The whole snapshot is `unavailable` only when no
+view reached the authority.
+
+**Two freshness domains, both disclosed**: `PanelSnapshot.at` is the store-read
+instant; `PanelSnapshot.retained.at` is when the catalog payload was BUILT. The
+three `retained` facts — the iteration gate, the knowledge digest and the
+resolved workflow selection — are the ones no dashboard DTO owns, and the panel
+REUSES them from the apply-scoped catalog cache (the pre-step's own entry, key
+and TTL) instead of re-deriving them. The freshness footer therefore prints both
+(`snapshot HH:MM:SS` and, when the cache answered, `catalog facts HH:MM:SS`), so
+a catalog fact that is older than the snapshot is visible rather than implied.
+
+The **narrow-column layout** is a single flex column bound to the sidebar
 pane's definite height with exactly three zones — the **section nav**
-(任务迭代 / 代理执行 / 事件记录, flex: none), the panel-owned **single scroll
+(任务迭代 / 项目路线图 / 事件记录, flex: none), the panel-owned **single scroll
 body** (`[data-mstar-scroll]` — the ONLY `overflow-y` element in the panel; no
 element scrolls horizontally; `data-mstar-graph` rides it), and the pinned
 **meta dock** (version + harness dir; never scrolls). The workspace-state
@@ -353,18 +381,17 @@ digest (plans ≤5 time-desc + `+N more`, open residual findings ≤10 with
 severity chips, policy with **enforcement first** then push / worktree /
 control worktree, leases, knowledge, direction) sits IN FLOW at the end of
 the scroll body — the fixed 300px sibling column and its nested scroller are
-gone — and the freshness footer (`last-updated HH:MM:SS` + turn) closes the
-scroll body. The host composer-overlay opt-in is no longer needed (the
-sidebar pane body is a definite-height box) and the obsolete viewport media
-queries are deleted: the shell carries `container-type: inline-size` and the
-width rules are **container queries** — below 480px container width the
-padding and group gap tighten (compact rhythm at the 300px floor); at ≥720px
-the shared group grid spreads to two columns
+gone — and the freshness footer closes it. The host composer-overlay opt-in is
+no longer needed (the sidebar pane body is a definite-height box) and the
+obsolete viewport media queries are deleted: the shell carries
+`container-type: inline-size` and the width rules are **container queries** —
+below 480px container width the padding and group gap tighten (compact rhythm at
+the 300px floor); at ≥720px the shared group grid spreads to two columns
 (`repeat(auto-fit, minmax(280px, 1fr))`) — the only structural change any
 width makes (one DOM, one tree; no JS layout measurement). Missing fields
-degrade to explicit empty/last-known states (muted, never orange warn
-boxes); `waiting` keeps the muted hint; no harness renders the centered
-inactive-state card that activates automatically on detection.
+degrade to explicit empty/last-known states (muted, never orange warn boxes);
+`waiting` keeps the muted hint; no harness renders the centered inactive-state
+card that activates automatically on detection.
 
 The three sections stack in the single scroll body. **任务迭代** renders the
 iteration head (collapsed summary when inactive) + the **vertical** 5-step
@@ -381,55 +408,24 @@ groups** in constant order — Todo / InProgress / InReview / Done / the merged
 its rendered rows at `PLAN_CAP` with the clickable 「更多」/「收起」 expander
 (`data-kanban-more`) unfolding the full column (the projection keeps ALL plan
 rows — the cap is a render concern, never a discard) — then the project
-rollup. **事件记录** renders its two partitions (Agent 流转事件 / 违规记录) as
-flow content — every row an expandable native `<details>` carrying the full
+rollup. **项目路线图** renders the project authority's direction, goals and
+milestone↔issue membership (`data-roadmap-*` anchors, the project authority's
+revision + content hash in its header) and distinguishes FOUR absence states —
+no project resolved, no roadmap row, no milestones, read unavailable — each on
+its own anchor, so an empty roadmap never looks like a failed read. **事件记录**
+renders **ONE** time-descending flow mixing dispatch / settle / violation rows
+(the former two partitions are a single merged flow — no partition-owned
+scrollers) — every row an expandable native `<details>` carrying the full
 catalog fields (a missing field renders 「—」, never a guessed value; the
-workflow-run rows keep their name / member-count / stop-reason fields), with
-no partition-owned scrollers. **代理执行** renders the agents as a **vertical
-grouped list** — the absolutely-positioned canvas with its SVG edge layer,
-card ports, and pointer pan is DELETED: two phase groups in constant order,
-Phase 1 (`iteration-start` — the sequential review-edit-chain:
-product-manager → architect → writing-specialist) above Phase 2
-(`autonomous-execute` — the iterative plan loop; its label annotates the
-CURRENT PLAN: the projected `activePlanId` (`data-agent-group-plan`), `+N
-more` when several plans run in parallel (`data-agent-group-plan-more`),
-muted「无进行中 plan」when none (`data-agent-group-no-plan`)); each phase group
-stacks its stage groups — `sdd-implement` splits into the **implementor**
-partition (flow roles fullstack-dev / fullstack-dev-2 / frontend-dev in flow
-order, then the on-demand roles ops-engineer / prompt-engineer carrying the
-dashed **on-demand badge**) above the **reviewer** partition (code-reviewer),
-and the `general` bucket sinks into the `unknown` sub-bucket at the bottom of
-the LAST stage group, rendered only when it has members; every stage group
-renders the full 14-role roster as **full-width flow rows** (idle rows
-dashed-muted — the roster is never hidden) with role chip / status point /
-`×N` count / record line (session id · task tag — auxiliary, never the
-title), the `N executing · M pending` summary in the header
-(`data-agent-summary-*`), and the three-status legend in flow below the list.
-Rows carry the projected **emphasis tier**: `emphasis: 'current' | 'next' |
-'off' | null` — current-phase roles at **100%** chrome intensity, later-phase
-expected roles at **75%**, already-passed / stage-less (on-demand, general)
-roles at **45%**, `null` (no iteration / unresolved transition) applies NO
-override — always a chrome **alpha mix** (`--mstar-canvas-emphasis-*` tokens;
-never a whole-row `opacity`, so the status point + running glow stay opaque).
-Settled entities get a **standalone GREEN DONE FRAME + green ✓**
-(`data-agent-done="true"` — success border + 1px ring on the rounded row body
-+ the ✓ in the status point, full-strength evidence states) **ONLY when
-`emphasis ≠ 'off'`** — an off-tier role renders the muted dot instead and
-NEVER shows the completion marker. The agents page contains zero `<svg>`
-elements, zero `data-agent-port` / `data-canvas-*` anchors, and no pan
-transform. Dispatch evidence still projects for the **current iteration's
-plans only** (the steering compass `iterationId` when active, else the
-nearest iteration from the catalog `plans[].iterationRefs`); provably
-cross-iteration events produce no entity — the roster keeps its idle cards,
-and plan-less / unknown-plan / standalone dispatches are never hidden. Status
-honesty: `advisory` is not terminal — a soft-enforcement dispatch falls
-through to its paired settle (green ✓ when a settle exists, `running` when
-none), `denied` stays terminal, and the advisory verdict still renders in the
-event log. The **iteration info section is SHARED by the tasks AND agents
-pages** — one `IterationInfoSection` component, both pages render the same
-`view.iteration` block (summary + steps + branches). Projection is the pure
-`projectGraph(source)` function (schema constants strictly separated from
-catalog evidence; never throws).
+workflow-run rows keep their name / member-count / stop-reason fields), and an
+unreadable ledger is a different state from an empty one. The workflow picker
+(「工作流选择」) is never optimistic: a commit posts to `mstar/selectWorkflow`,
+lands as this session's `pending` → `selected` / `failed` state, and the
+selection it renders comes from the next snapshot's `retained.selection` (the
+host rebuilds that from the same durable binding). The **iteration info section
+is shared by the tasks AND roadmap pages** — one `IterationInfoSection`
+component. Projection is the pure `projectGraph(snapshot)` function (schema
+constants strictly separated from catalog evidence; never throws).
 
 **Dependency**: the panel's client bundle carries **no graph library** — the
 `@xyflow/react` devDependency (previously inlined into `dist/client.js` at
@@ -443,8 +439,8 @@ emitted bundle must contain **no `xyflow`/`reactflow` markers**, zero
 the web loader executes plugin bundles as classic `<script>`s, where a
 literal `import.meta` is a parse-time SyntaxError (a zustand v4
 `import.meta.env` read is defined away at build; see the iteration
-install-verification guide §6). Current bundle size: **145,159 B
-raw / 29,460 B gzip** (re-measure per the iteration install-verification
+install-verification guide §6). Current bundle size: **143,686 B
+raw / 28,890 B gzip** (re-measure per the iteration install-verification
 guide — the bundle shrank to ~85 KB when react-flow was removed and grew
 back with the agents page's entity rendering, then again with the
 emphasis-tier styling).
@@ -478,15 +474,15 @@ otherwise;
 the current step follows the TTL-refreshed `compassStatus` — up to one catalog
 interval (60 s) behind a mid-session `active`→`locked` flip (bounded,
 documented staleness, never a wrong verdict);
-the agent-entity status derivation pairs a PAIRED settle exactly by its
-dispatch identity (agent, role, planId, taskId — QC-tri N=3 settles land on
-their own cards), and an unpaired dispatch stays running (no paired settle,
-never faked); the current-iteration filter with NO steering compass infers
-the iteration from plan ids (8-digit date prefix) + doneAt — a
-deterministic, documented heuristic, and only provably cross-iteration
-events are dropped; no historical
-back-scan of a resumed long log (the row is emitted on change, not at every
-turn's first step: a resumed session shows the anchor again on its first
+a store read happens every 5 s while the tab is visible (five sequential
+dashboard views on the host; a collapsed tab reads nothing); a cold or expired
+catalog cache makes the panel REBUILD the payload — the pre-step's own rule,
+TTL-bounded, so at most once a minute per open panel — and that build may
+refresh projections, which is why the retained read runs AFTER the five views
+and never beside them; the retained facts can therefore lag the store read by up
+to one catalog interval (60 s), which `retained.at` discloses instead of hiding;
+the engine-status emission still writes `dsh_status_emissions` on change (the
+model-visible anchor), and a resumed session shows the anchor again on its first
 composed step after an app restart — the digest is in-memory — and thereafter
 only when the row changed); the sidebar chip title is captured at open time (a
 mid-session locale switch does not flip it — accepted for glyph parity with

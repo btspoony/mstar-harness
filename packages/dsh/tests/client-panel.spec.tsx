@@ -73,6 +73,7 @@ function snapshot(over: { roadmap?: Member; ledger?: unknown; issues?: Member; r
       },
       knowledge: null,
       selection: null,
+      at: null,
     },
     ledger: over.ledger === undefined ? { events: [], summary: [] } : over.ledger,
   } as unknown as PanelSnapshot
@@ -203,7 +204,7 @@ describe('events page (T6)', () => {
 
     // A readable ledger with no rows and no violations: the "recording started" state.
     const empty = html(createElement(EventLogPage, {
-      view: projectGraph(snapshot({ retained: { iterationGate: null, knowledge: null, selection: null } })),
+      view: projectGraph(snapshot({ retained: { iterationGate: null, knowledge: null, selection: null, at: null } })),
       t,
     }))
     expect(empty).toContain('data-event-log-empty="no-events"')

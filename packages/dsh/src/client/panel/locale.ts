@@ -148,6 +148,7 @@ export type PanelKey =
   | 'state.residual.more'
   | 'state.knowledge.docs'
   | 'freshness.last-updated'
+  | 'freshness.retained'
   | 'freshness.refresh-note'
 
 declare module '@deepseek-ai/dsh-client-ui-slots' {
@@ -278,8 +279,9 @@ export const zh: LocaleDictOf<'mstar-panel'> = {
   'state.plans.more': '+{count} 更多',
   'state.residual.more': '+{count} 更多',
   'state.knowledge.docs': '{count} 篇文档',
-  'freshness.last-updated': '快照 {time} · 第 {turn} 轮',
-  'freshness.refresh-note': '该会话已存储的快照——不是实时值',
+  'freshness.last-updated': '快照 {time}',
+  'freshness.retained': '目录事实 {time}（独立于快照）',
+  'freshness.refresh-note': 'store.db 的读取结果与目录缓存——不是实时值',
 }
 
 /** en dictionary (default locale). */
@@ -404,6 +406,7 @@ export const en: LocaleDictOf<'mstar-panel'> = {
   'state.plans.more': '+{count} more',
   'state.residual.more': '+{count} more',
   'state.knowledge.docs': '{count} docs',
-  'freshness.last-updated': 'snapshot {time} · turn {turn}',
-  'freshness.refresh-note': 'the stored snapshot for this session — never a live value',
+  'freshness.last-updated': 'snapshot {time}',
+  'freshness.retained': 'catalog facts {time} (separate from the snapshot)',
+  'freshness.refresh-note': 'a store.db read plus the catalog cache — never a live value',
 }

@@ -35,6 +35,8 @@ import {
   preStepCatalogListener,
   createCatalogInvalidation,
   DEFAULT_CATALOG_TTL_MS,
+  readCatalogPayload,
+  selectionHintFor,
 } from './gates/catalog.ts'
 import type { CatalogCacheEntry, EmissionDigest } from './gates/catalog.ts'
 import { installEngineStatusEndpoint } from './engine-status-endpoint.ts'
@@ -948,9 +950,25 @@ export function apply(ctx: Context, config: Config): void {
   })
   // The panel's store-backed read: its own service under the shared `mstar`
   // wire namespace (its descriptor rides the contribution above — typert admits
-  // one per package face), so retiring the engine-status read path in Task 7
-  // leaves this endpoint serving.
-  installPanelSnapshotEndpoint(ctx, { resolver, bootHarnessDir })
+  // one per package face). The `retained` facts (the iteration gate, the
+  // knowledge digest and the selection no dashboard DTO carries) are REUSED
+  // from the cache above through the same reader and the same hint fold the
+  // pre-step uses — one key rule, one TTL rule, no second catalog build.
+  installPanelSnapshotEndpoint(ctx, {
+    resolver,
+    bootHarnessDir,
+    readRetained: (harnessDir, sessionId, cwd) =>
+      readCatalogPayload(
+        ctx,
+        catalogCache,
+        catalogInvalidation,
+        harnessDir,
+        sessionId,
+        cwd,
+        selectionHintFor(harnessDir, { sessionId, cwd }),
+        ttlMs,
+      ),
+  })
 
   // The dsh-native tool surface — three tools, registered and HMR-disposed in
   // the module: `mstar_plan_bind` (producer of the dsh durable execution

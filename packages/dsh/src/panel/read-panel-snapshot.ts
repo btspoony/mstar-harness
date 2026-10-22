@@ -32,7 +32,7 @@ import {
   type StoreContext,
 } from '@mstar-harness/engine'
 import { AGENT_FLOW_DEFAULT_LIMIT, readAgentFlow } from '../gates/agent-flow.ts'
-import type { AgentFlowView } from '../types.ts'
+import type { AgentFlowView, MstarEngineStatusPayload } from '../types.ts'
 import type { PanelSnapshot, PanelSnapshotRead, PanelWorkspaceView } from './panel-snapshot.ts'
 
 /**
@@ -75,6 +75,51 @@ async function readView<V extends DashboardView>(
 }
 
 /**
+ * One cached catalog payload and the instant it was built — the shape
+ * `readCatalogPayload` answers (threaded in from the apply scope, where the
+ * cache and its TTL live).
+ */
+export interface PanelRetainedRead {
+  readonly payload: MstarEngineStatusPayload
+  /** Epoch millis the payload was built at (the retained members' OWN freshness). */
+  readonly builtAt: number
+}
+
+/**
+ * The apply-scoped catalog reader the plugin threads into this service.
+ *
+ * WHY injected rather than reached for: the cache, its TTL and the
+ * session-keyed invalidation map are created per apply in `index.ts`. Passing
+ * the reader keeps ONE catalog implementation (the pre-step's) and leaves this
+ * module free of `gates/` imports.
+ */
+export type PanelRetainedReader = (
+  harnessDir: string,
+  sessionId: string,
+  cwd: string,
+) => Promise<PanelRetainedRead>
+
+/**
+ * The retained catalog facts, advisory in the same sense as the ledger: no
+ * reader, no session identity or an unreadable cache answers `null` (all three
+ * members, and their age) and never fails the snapshot. A store or catalog
+ * fault must not turn a panel that has five good workspace views into an error.
+ */
+async function readRetained(
+  reader: PanelRetainedReader | undefined,
+  harnessDir: string,
+  sessionId: string | undefined,
+  cwd: string | undefined,
+): Promise<PanelRetainedRead | null> {
+  if (reader === undefined || sessionId === undefined || cwd === undefined) return null
+  try {
+    return await reader(harnessDir, sessionId, cwd)
+  } catch {
+    return null
+  }
+}
+
+/**
  * The dsh ledger window for the selected workflow. Advisory: a missing or
  * unreadable ledger answers `null` and never fails the snapshot.
  */
@@ -92,7 +137,8 @@ function readLedger(harnessDir: string, workflowId: string | undefined): AgentFl
  *
  * `harnessDir === null` (no workspace harness) is the whole-snapshot
  * unavailable state — never a fabricated empty workspace.
- * @param input - the resolved harness dir plus the ids the session currently addresses.
+ * @param input - the resolved harness dir, the ids the session addresses, and
+ *   the optional catalog reader for the retained facts.
  * @returns the composed snapshot, or the explicit unavailable state with a reason.
  */
 export async function readPanelSnapshot(input: {
@@ -100,8 +146,14 @@ export async function readPanelSnapshot(input: {
   workflowId?: string
   iterationId?: string
   projectId?: string
+  /** The validated session the catalog cache is keyed by (absent ⇒ no retained read). */
+  sessionId?: string
+  /** The validated session workspace, the cache key's second half. */
+  cwd?: string
+  /** The apply-scoped catalog reader; absent in a host without the catalog wiring. */
+  retained?: PanelRetainedReader
 }): Promise<PanelSnapshotRead> {
-  const { harnessDir, workflowId, iterationId, projectId } = input
+  const { harnessDir, workflowId, iterationId, projectId, sessionId, cwd, retained } = input
   if (harnessDir === null || harnessDir === '') return { kind: 'unavailable', reason: 'no-harness-dir' }
 
   const context: StoreContext = { harnessDir }
@@ -136,17 +188,26 @@ export async function readPanelSnapshot(input: {
     return { kind: 'unavailable', reason: (members.find((member) => member.state === 'unavailable') as { reason: string }).reason }
   }
 
+  // The catalog facts come LAST: a cache miss rebuilds the payload, which reads
+  // the store and can refresh projections, so it must never overlap the views
+  // above. Its freshness is its own (`builtAt`), not the store-read `at`.
+  const retainedRead = await readRetained(retained, harnessDir, sessionId, cwd)
+
   const snapshot: PanelSnapshot = {
     at,
     version: panelVersion(),
     harnessDir,
     enforcement: resolveRepoEnforcement(harnessDir),
     workspace,
-    // The four facts no dashboard DTO carries come from the catalog cache; the
-    // read service takes no cache handle, so they stay explicitly absent until
-    // that wiring lands rather than being re-derived here (iteration-gate
-    // evaluation and the knowledge digest are NOT re-implemented in the panel).
-    retained: { iterationGate: null, knowledge: null, selection: null },
+    // The three facts no dashboard DTO carries are REUSED from the catalog
+    // cache, never re-derived here: iteration-gate evaluation and the knowledge
+    // digest stay owned by the catalog build.
+    retained: {
+      iterationGate: retainedRead?.payload.iteration ?? null,
+      knowledge: retainedRead?.payload.state?.knowledge ?? null,
+      selection: retainedRead?.payload.state?.selection ?? null,
+      at: retainedRead === null ? null : new Date(retainedRead.builtAt).toISOString(),
+    },
     ledger: readLedger(harnessDir, workflowId),
   }
   return { kind: 'ok', snapshot }

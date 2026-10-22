@@ -35,7 +35,7 @@ import {
   MSTAR_PANEL_SNAPSHOT_NAMESPACE,
 } from '../engine-status-wire.ts'
 import type { PanelSnapshotRead } from './panel-snapshot.ts'
-import { readPanelSnapshot } from './read-panel-snapshot.ts'
+import { readPanelSnapshot, type PanelRetainedReader } from './read-panel-snapshot.ts'
 
 /** The contributing package identity (also the invocation id prefix). */
 const CONTRIBUTING_PACKAGE = '@mstar-harness/dsh'
@@ -54,6 +54,12 @@ export interface PanelSnapshotEndpointOptions {
   readonly resolver: Pick<HarnessResolver, 'forWorkspace'>
   /** The boot-resolved config root when an explicit `harnessDir` is configured. */
   readonly bootHarnessDir: string | null
+  /**
+   * The apply-scoped catalog reader for the `retained` facts. Optional: a host
+   * without the catalog wiring answers `retained: null` and the snapshot stays
+   * `ok`, so the panel never loses its workspace body to a missing catalog.
+   */
+  readonly readRetained?: PanelRetainedReader
 }
 
 /** Structural view of the live sessions service (`get(id)` only). */
@@ -121,6 +127,7 @@ type SessionCwdResolution =
 export class MstarPanelSnapshotGateway extends TypertRemoteService {
   private readonly resolver: Pick<HarnessResolver, 'forWorkspace'>
   private readonly bootHarnessDir: string | null
+  private readonly readRetained: PanelRetainedReader | undefined
 
   /**
    * @param ctx - owning Cordis context.
@@ -130,6 +137,7 @@ export class MstarPanelSnapshotGateway extends TypertRemoteService {
     super(ctx, PANEL_SNAPSHOT_SERVICE, { namespace: MSTAR_PANEL_SNAPSHOT_NAMESPACE })
     this.resolver = options.resolver
     this.bootHarnessDir = options.bootHarnessDir
+    this.readRetained = options.readRetained
   }
 
   /**
@@ -197,9 +205,14 @@ export class MstarPanelSnapshotGateway extends TypertRemoteService {
 
     return readPanelSnapshot({
       harnessDir,
+      // The catalog cache is keyed by harness dir + the session's OWN identity +
+      // cwd: the validated session supplies all three, never the client's claim.
+      sessionId: sid,
+      cwd: session.cwd,
       ...(workflowId === undefined ? {} : { workflowId: String(workflowId) }),
       ...(iterationId === undefined ? {} : { iterationId: String(iterationId) }),
       ...(projectId === undefined ? {} : { projectId: String(projectId) }),
+      ...(this.readRetained === undefined ? {} : { retained: this.readRetained }),
     })
   }
 

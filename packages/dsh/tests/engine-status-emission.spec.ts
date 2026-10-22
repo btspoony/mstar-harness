@@ -21,10 +21,26 @@ import { initializeStore, readDshStatusEmission, readExecutionState } from '@mst
 import { createUserMessage, type UserMessage } from '@deepseek-ai/dsh-llm'
 import type { PreStepDecision } from '@deepseek-ai/dsh-agent'
 import { buildCatalogPayloadWithStore } from '../src/gates/catalog.ts'
-import { readEngineStatusSnapshot, writeEngineStatusSnapshot } from '../src/engine-status-store.ts'
+import { writeEngineStatusSnapshot } from '../src/engine-status-store.ts'
 import { bootApp, seedOpenIssue, seedStore, type BootResult } from './harness.ts'
 
 let booted: BootResult | undefined
+
+/**
+ * One session's emission row, read through the ENGINE's own verb. The plugin's
+ * emission reader is retired with the panel's old read path, so a write is
+ * verified against the row the authority holds.
+ */
+function emissionRow(harnessDir: string, sessionId: string, cwd: string) {
+  return readDshStatusEmission({ harnessDir }, sessionId, cwd)
+}
+
+/** One emission's parsed payload; fails the case when no row landed. */
+function emissionPayload(harnessDir: string, sessionId: string, cwd: string): Record<string, unknown> {
+  const read = emissionRow(harnessDir, sessionId, cwd)
+  if (read.kind !== 'ok' || read.emission === undefined) throw new Error(`no emission row for ${sessionId}`)
+  return JSON.parse(read.emission.payloadJson) as Record<string, unknown>
+}
 
 afterEach(async () => {
   await booted?.dispose()
@@ -65,12 +81,11 @@ describe('engine-status emission — written at the real change-driven emission'
     // The real path emitted the row…
     expect(decision.kind === 'enter' && decision.messages.length).toBe(inbox.length + 1)
     // …and the same payload landed as this session's emission row.
-    const read = readEngineStatusSnapshot(app.harnessDir, 'ses_alpha', app.root)
+    const read = emissionRow(app.harnessDir, 'ses_alpha', app.root)
     expect(read.kind).toBe('ok')
-    if (read.kind !== 'ok') throw new Error('unreachable')
-    expect(read.entry.rv).toBe(1)
-    expect(read.entry.cwd).toBe(app.root)
-    expect(read.entry.turn).toBe(4)
+    if (read.kind !== 'ok' || read.emission === undefined) throw new Error('unreachable')
+    expect(read.emission.cwd).toBe(app.root)
+    expect(read.emission.turn).toBe(4)
     // The stored payload is the REAL composed catalog payload (the same builder
     // the emission site uses), not a fixture object. The store facts' revision
     // is normalized away: persisting the emission advances the shared store
@@ -81,7 +96,7 @@ describe('engine-status emission — written at the real change-driven emission'
       if (copy.state?.storeFacts !== undefined) delete copy.state.storeFacts.storeRevision
       return JSON.stringify(copy)
     }
-    expect(normalize(read.entry.payload)).toBe(
+    expect(normalize(JSON.parse(read.emission.payloadJson))).toBe(
       normalize(await buildCatalogPayloadWithStore(app.ctx, app.harnessDir)),
     )
   })
@@ -200,7 +215,7 @@ describe('engine-status emission — written at the real change-driven emission'
     )
     const firstEnd = Date.now()
     expect(first.kind === 'enter' && first.messages.length).toBe(inbox.length + 1)
-    expect(readEngineStatusSnapshot(app.harnessDir, 'ses_retry', app.root).kind).toBe('unavailable')
+    expect(emissionRow(app.harnessDir, 'ses_retry', app.root).kind).toBe('unavailable')
 
     // (b) The store becomes ACTIVE. The payload is unchanged, so no second row
     // is appended — but the pending persist is retried and lands. It carries
@@ -219,11 +234,11 @@ describe('engine-status emission — written at the real change-driven emission'
       defaultEnter(inbox),
     )
     expect(second.kind === 'enter' && second.messages.length).toBe(inbox.length)
-    const persisted = readEngineStatusSnapshot(app.harnessDir, 'ses_retry', app.root)
+    const persisted = emissionRow(app.harnessDir, 'ses_retry', app.root)
     expect(persisted.kind).toBe('ok')
-    if (persisted.kind !== 'ok') throw new Error('unreachable')
-    expect(persisted.entry.turn).toBe(1)
-    const persistedAt = Date.parse(persisted.entry.at)
+    if (persisted.kind !== 'ok' || persisted.emission === undefined) throw new Error('unreachable')
+    expect(persisted.emission.turn).toBe(1)
+    const persistedAt = Date.parse(persisted.emission.emittedAt)
     expect(persistedAt).toBeGreaterThanOrEqual(firstStart)
     expect(persistedAt).toBeLessThanOrEqual(firstEnd)
     expect(persistedAt).toBeLessThan(retryStart)
@@ -241,7 +256,7 @@ describe('engine-status emission — written at the real change-driven emission'
     expect(third.kind === 'enter' && third.messages.length).toBe(inbox.length)
     const unchanged = readDshStatusEmission({ harnessDir: app.harnessDir }, 'ses_retry', app.root)
     expect(unchanged.kind === 'ok' && unchanged.emission?.turn).toBe(1)
-    expect(unchanged.kind === 'ok' && unchanged.emission?.emittedAt).toBe(persisted.entry.at)
+    expect(unchanged.kind === 'ok' && unchanged.emission?.emittedAt).toBe(persisted.emission.emittedAt)
     expect((await readExecutionState({ harnessDir: app.harnessDir })).token).toBe(tokenBefore)
   })
 
@@ -251,10 +266,11 @@ describe('engine-status emission — written at the real change-driven emission'
     const inbox = [inboxMessage()]
     await app.ctx.waterfall('agent/pre-step', stepPayloadOf('ses_alpha', app.root, inbox, 1), defaultEnter(inbox))
     await app.ctx.waterfall('agent/pre-step', stepPayloadOf('ses_beta', '/proj/other', inbox, 1), defaultEnter(inbox))
-    expect(readEngineStatusSnapshot(app.harnessDir, 'ses_alpha', app.root).kind).toBe('ok')
-    expect(readEngineStatusSnapshot(app.harnessDir, 'ses_beta', '/proj/other').kind).toBe('ok')
-    // A cwd that is not the row's own workspace is never served.
-    expect(readEngineStatusSnapshot(app.harnessDir, 'ses_beta', app.root).kind).toBe('unavailable')
+    expect(emissionPayload(app.harnessDir, 'ses_alpha', app.root)).toBeTruthy()
+    expect(emissionPayload(app.harnessDir, 'ses_beta', '/proj/other')).toBeTruthy()
+    // A cwd that is not the row's own workspace addresses no row at all.
+    const foreign = emissionRow(app.harnessDir, 'ses_beta', app.root)
+    expect(foreign.kind === 'ok' && foreign.emission).toBeUndefined()
   })
 
   it('retains the watermark trio in the row when the composition has no system-prompt service (finding C)', async () => {

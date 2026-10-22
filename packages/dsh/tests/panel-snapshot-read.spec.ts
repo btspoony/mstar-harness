@@ -18,8 +18,9 @@ import { initializeStore, readDashboardView, type DashboardView } from '@mstar-h
 // wrapper on ONE exported function, so the production service still reads the
 // real store for every view the case does not fault.
 import * as engine from '@mstar-harness/engine'
-import { readPanelSnapshot } from '../src/panel/read-panel-snapshot.ts'
+import { readPanelSnapshot, type PanelRetainedRead } from '../src/panel/read-panel-snapshot.ts'
 import type { PanelSnapshot, PanelSnapshotRead } from '../src/panel/panel-snapshot.ts'
+import type { MstarEngineStatusPayload } from '../src/types.ts'
 
 /** Temp roots created by the case; removed after it. */
 const roots: string[] = []
@@ -220,5 +221,130 @@ describe('readPanelSnapshot — degradation', () => {
     const reason = await engineRefusal(harnessDir, 'issues')
 
     expect(await readPanelSnapshot({ harnessDir })).toEqual({ kind: 'unavailable', reason })
+  })
+})
+
+/* ------------------------- retained (catalog cache) ------------------------- */
+
+/**
+ * A catalog payload carrying the three facts no dashboard DTO owns. Shaped by
+ * the contract `readCatalogPayload` returns, not by a rebuilt fixture: only the
+ * members the panel maps are populated.
+ */
+function catalogPayload(over: { selection?: unknown; knowledge?: unknown } = {}): MstarEngineStatusPayload {
+  return {
+    version: '4.0.4',
+    harnessDir: '/proj/.mstar',
+    enforcement: { hard: true, source: 'compass' },
+    iteration: {
+      iterationId: 'iter-1',
+      compassPath: 'iterations/iter-1/delivery-compass.md',
+      compassStatus: 'locked',
+      gate: { transition: 'phase-2-execute', ok: true, violations: [] },
+    },
+    state: {
+      ...(over.knowledge === undefined ? { knowledge: { docCount: 4, categories: ['testing'] } } : { knowledge: over.knowledge }),
+      ...(over.selection === undefined
+        ? { selection: { kind: 'active', workflowId: 'wf-1', dir: 'workflows/wf-1' } }
+        : { selection: over.selection }),
+    },
+  } as unknown as MstarEngineStatusPayload
+}
+
+/** A reader answering the same payload for every target, and its build instant. */
+function readerOf(payload: MstarEngineStatusPayload, builtAt: number): {
+  calls: { harnessDir: string; sessionId: string; cwd: string }[]
+  read: (harnessDir: string, sessionId: string, cwd: string) => Promise<PanelRetainedRead>
+} {
+  const calls: { harnessDir: string; sessionId: string; cwd: string }[] = []
+  return {
+    calls,
+    read: async (harnessDir: string, sessionId: string, cwd: string) => {
+      calls.push({ harnessDir, sessionId, cwd })
+      return { payload, builtAt }
+    },
+  }
+}
+
+describe('readPanelSnapshot — retained catalog facts', () => {
+  it('maps the cached payload onto the three retained members with their OWN freshness', async () => {
+    const harnessDir = await activeHarness()
+    // The payload was built a minute ago: the retained age must NOT be `at`.
+    const builtAt = Date.now() - 60_000
+    const reader = readerOf(catalogPayload(), builtAt)
+
+    const snapshot = snapshotOf(await readPanelSnapshot({
+      harnessDir,
+      sessionId: 'ses_alpha',
+      cwd: '/proj',
+      retained: reader.read,
+    }))
+
+    expect(snapshot.retained).toEqual({
+      iterationGate: catalogPayload().iteration ?? null,
+      knowledge: { docCount: 4, categories: ['testing'] },
+      selection: { kind: 'active', workflowId: 'wf-1', dir: 'workflows/wf-1' },
+      at: new Date(builtAt).toISOString(),
+    })
+    // The store-read instant and the catalog build instant are two domains.
+    expect(snapshot.retained.at).not.toBe(snapshot.at)
+    expect(Date.parse(snapshot.retained.at!)).toBeLessThan(Date.parse(snapshot.at))
+    // The reader was asked for THIS session's key material.
+    expect(reader.calls).toEqual([{ harnessDir, sessionId: 'ses_alpha', cwd: '/proj' }])
+  })
+
+  it('leaves all three null and the snapshot ok when no catalog reader is wired', async () => {
+    const harnessDir = await activeHarness()
+
+    const snapshot = snapshotOf(await readPanelSnapshot({ harnessDir, sessionId: 'ses_alpha', cwd: '/proj' }))
+
+    expect(snapshot.retained).toEqual({ iterationGate: null, knowledge: null, selection: null, at: null })
+    expect(snapshot.workspace.projects).toMatchObject({ state: 'ok' })
+  })
+
+  it('leaves all three null and the snapshot ok when the catalog reader refuses', async () => {
+    const harnessDir = await activeHarness()
+
+    const snapshot = snapshotOf(await readPanelSnapshot({
+      harnessDir,
+      sessionId: 'ses_alpha',
+      cwd: '/proj',
+      retained: async () => {
+        throw new Error('catalog build refused')
+      },
+    }))
+
+    expect(snapshot.retained).toEqual({ iterationGate: null, knowledge: null, selection: null, at: null })
+  })
+
+  it('reads the catalog payload AFTER every dashboard view, never in parallel', async () => {
+    const harnessDir = await activeHarness()
+    const trace: string[] = []
+    const real = engine.readDashboardView
+    const spy = spyOn(engine, 'readDashboardView').mockImplementation(async (input) => {
+      trace.push(input.view)
+      return await real(input)
+    })
+    const reader = readerOf(catalogPayload(), Date.now())
+
+    const snapshot = snapshotOf(await readPanelSnapshot({
+      harnessDir,
+      workflowId: 'wf-1',
+      iterationId: 'iter-1',
+      projectId: 'proj-1',
+      sessionId: 'ses_alpha',
+      cwd: '/proj',
+      retained: async (...args) => {
+        trace.push('retained')
+        return await reader.read(...args)
+      },
+    }))
+    spy.mockRestore()
+
+    // A miss rebuilds the catalog payload, which can refresh store projections:
+    // it must come after the last view, never between two of them.
+    expect(trace.slice(0, 5)).toEqual(['workflow-detail', 'iteration-detail', 'roadmap', 'issues', 'projects'])
+    expect(trace.at(-1)).toBe('retained')
+    expect(snapshot.retained.iterationGate).not.toBeNull()
   })
 })

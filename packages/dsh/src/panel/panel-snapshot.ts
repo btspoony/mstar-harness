@@ -52,10 +52,17 @@ export interface PanelSnapshot {
     readonly issues: PanelWorkspaceView<IssuePage> // "issues"
     readonly projects: PanelWorkspaceView<ProjectListDTO> // "projects"
   }
+  /**
+   * The catalog-cache facts no dashboard DTO owns. Its OWN freshness (`at`)
+   * travels with them: a cache hit keeps the instant the payload was BUILT, so
+   * the panel can disclose an age that is deliberately different from the
+   * store-read `PanelSnapshot.at` above.
+   */
   readonly retained: {
     readonly iterationGate: MstarIterationGateView | null // catalog cache
     readonly knowledge: MstarHarnessState['knowledge'] // catalog cache
     readonly selection: WorkflowSelectionView | null // catalog cache
+    readonly at: string | null // catalog build instant, ISO; null when nothing was retained
   }
   readonly ledger: AgentFlowView | null // readAgentFlow
 }

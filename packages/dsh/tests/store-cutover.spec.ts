@@ -38,7 +38,7 @@ import {
 import type { ToolExecution, ToolExecutionToken } from '@deepseek-ai/dsh-tools'
 import type { FsTarget } from '@deepseek-ai/dsh-fs'
 import { createUserMessage } from '@deepseek-ai/dsh-llm'
-import { readEngineStatusSnapshot } from '../src/engine-status-store.ts'
+import { readDshStatusEmission } from '@mstar-harness/engine'
 import { buildCatalogPayload, buildCatalogPayloadWithStore } from '../src/gates/catalog.ts'
 import { StatusVetoError, validateStatusValue } from '../src/gates/status.ts'
 import { bootApp, seedActiveWorkflow, seedHarness, seedKnowledgeDoc, seedOpenIssue, seedStore, v2Register, v2ResidualEntry, v2Root, v2Snapshot, v2SnapshotWithPlans, v2WorkflowEntry, type BootResult } from './harness.ts'
@@ -280,13 +280,17 @@ describe('store cutover — the authority is the store, never the retired files'
     // PERSISTED emission this step wrote (the record the panel serves), not on
     // a second payload build: a build would only prove the builder reads the
     // store, not that the listener carried it.
-    const stored = readEngineStatusSnapshot(harnessDir, 's-store-cutover', app.root)
+    // Read back through the ENGINE's own verb: the plugin keeps no emission
+    // reader any more, and this assertion is about the row the authority holds.
+    const stored = readDshStatusEmission({ harnessDir }, 's-store-cutover', app.root)
     expect(stored.kind).toBe('ok')
-    if (stored.kind !== 'ok') return
-    const state = (stored.entry.payload as { state?: { residuals?: unknown; storeFacts?: { diagnostic?: string | null } } }).state
-    expect(state?.residuals).toEqual([{ severity: 'critical', count: 1 }])
-    expect(state?.storeFacts?.diagnostic).toContain('projection unavailable')
-    expect(stored.entry.turn).toBe(1)
+    if (stored.kind !== 'ok' || stored.emission === undefined) return
+    const payload = JSON.parse(stored.emission.payloadJson) as {
+      state?: { residuals?: unknown; storeFacts?: { diagnostic?: string | null } }
+    }
+    expect(payload.state?.residuals).toEqual([{ severity: 'critical', count: 1 }])
+    expect(payload.state?.storeFacts?.diagnostic).toContain('projection unavailable')
+    expect(stored.emission.turn).toBe(1)
   })
 })
 

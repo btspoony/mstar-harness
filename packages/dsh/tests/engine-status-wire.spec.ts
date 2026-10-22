@@ -1,63 +1,46 @@
 /**
- * Wire-address parity spec for the engine-status channel: the host registers
- * ONE endpoint descriptor and the browser half calls ONE address, and those two
- * must be the same address. Both halves previously declared their own literals
- * (`MSTAR_ENGINE_STATUS_NAMESPACE`/`_METHOD` on the host, `'mstar/engineStatus'`
- * in the client) and each spec pinned only its own copy — so renaming either
- * side kept both suites green while the panel silently degraded to
- * `transport-error`.
+ * Wire-address parity spec for the panel's channels: the host registers ONE
+ * endpoint descriptor per method and the browser half calls the same address.
+ * Both halves previously declared their own literals (`MSTAR_*_NAMESPACE` on the
+ * host, `'mstar/engineStatus'` in the client) and each spec pinned only its own
+ * copy — so renaming either side kept both suites green while the panel
+ * silently degraded to `transport-error`.
  *
- * Covered: the literals live in exactly one module, the descriptor's endpoint
+ * Covered: the literals live in exactly one module, each descriptor's endpoint
  * path is composed from them, and the client calls exactly that path on exactly
  * that channel (asserted through the real `connection.rpc.call` arguments, not
  * against a re-declared constant).
+ *
+ * The READ channel is `mstar/panelSnapshot` (its own spec:
+ * `panel-snapshot-endpoint.spec.ts`); what remains in the `mstar` gateway
+ * contribution is the picker's durable WRITE, pinned below.
  */
 import { describe, expect, it } from 'bun:test'
-import { ENGINE_STATUS_CHANNEL, ENGINE_STATUS_ENDPOINT, SELECT_WORKFLOW_ENDPOINT } from '../src/engine-status-wire.ts'
+import { ENGINE_STATUS_CHANNEL, PANEL_SNAPSHOT_ENDPOINT, SELECT_WORKFLOW_ENDPOINT } from '../src/engine-status-wire.ts'
 import { mstarEngineStatusContribution } from '../src/engine-status-endpoint.ts'
-import { MstarEngineStatusClient } from '../src/client/panel/engine-status-client.ts'
+import { MstarWorkflowPickerClient } from '../src/client/panel/workflow-picker-client.ts'
 import { stubGateway } from './gateway-stub.ts'
 
-/** The `namespace/method` address a typert invocation descriptor is served at. */
-function descriptorAddress(): string {
-  const invocation = mstarEngineStatusContribution().invocations[0]
-  if (invocation === undefined) throw new Error('the contribution declares no invocation')
-  return `${invocation.namespace}/${invocation.method}`
+/** Every endpoint path the package's one host contribution declares. */
+function contributedEndpoints(): string[] {
+  return mstarEngineStatusContribution().invocations.map((invocation) => `${invocation.namespace}/${invocation.method}`)
 }
 
-describe('engine-status wire address — one declaration, both halves', () => {
-  it('the host descriptor is served at the shared endpoint literal', () => {
-    expect(descriptorAddress()).toBe(ENGINE_STATUS_ENDPOINT)
+describe('panel wire addresses — one declaration, both halves', () => {
+  it('the host contribution serves the picker write and the store-backed read', () => {
+    expect(contributedEndpoints()).toEqual([SELECT_WORKFLOW_ENDPOINT, PANEL_SNAPSHOT_ENDPOINT])
   })
 
-  it('the client calls the shared endpoint literal on the host /api channel', async () => {
+  it('the picker calls the shared selectWorkflow literal on the host /api channel', async () => {
     const gateway = stubGateway()
-    const client = new MstarEngineStatusClient(gateway.connection)
-    client.ensure('s-wire', '/proj', 1)
-    await new Promise((resolve) => setTimeout(resolve, 0))
-    expect(gateway.calls).toHaveLength(1)
-    // Compared against the shared literals, i.e. against what the descriptor
-    // above uses — not against a client-side copy of the same string.
-    expect(gateway.calls[0]!.channel).toBe(ENGINE_STATUS_CHANNEL)
-    expect(gateway.calls[0]!.endpoint).toBe(ENGINE_STATUS_ENDPOINT)
-  })
-
-})
-
-describe('selectWorkflow wire address — one declaration, both halves', () => {
-  it('the host descriptor is served at the shared selectWorkflow literal', () => {
-    const invocation = mstarEngineStatusContribution().invocations[1]
-    expect(`${invocation?.namespace}/${invocation?.method}`).toBe(SELECT_WORKFLOW_ENDPOINT)
-  })
-
-  it('the client calls the shared selectWorkflow literal on the host /api channel', async () => {
-    const gateway = stubGateway()
-    const client = new MstarEngineStatusClient(gateway.connection)
+    const client = new MstarWorkflowPickerClient(gateway.connection)
     await client.selectWorkflow('s-wire', '/proj', 'wf-a')
     expect(gateway.calls).toHaveLength(1)
+    // Compared against the shared literals, i.e. against what the descriptors
+    // above use — not against a client-side copy of the same string.
     expect(gateway.calls[0]!.channel).toBe(ENGINE_STATUS_CHANNEL)
     expect(gateway.calls[0]!.endpoint).toBe(SELECT_WORKFLOW_ENDPOINT)
+    expect(gateway.calls[0]!.payload).toEqual({ args: { sessionId: 's-wire', cwd: '/proj', workflowId: 'wf-a' } })
     client.dispose()
   })
-
 })

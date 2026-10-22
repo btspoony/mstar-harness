@@ -8,9 +8,10 @@
  * store-backed `PanelSnapshot`; `projectGraph` projects it into the zone view
  * model the pages consume. Nothing here reads the emission relay any more.
  *
- * Pickers: the workflow selection control still rides its own client until the
- * retired read path is removed; it contributes ONLY the picker seat
- * (`selection` / `pick` / `select`) to the workspace digest.
+ * Picker: the workflow selection control's WRITE rides its own client
+ * (`useMstarWorkflowPicker`) and contributes only `pick` / `select` to the
+ * digest. The selection it renders comes from the snapshot's
+ * `retained.selection`, rebuilt by the host from the same durable binding.
  *
  * Visibility (plan sidebar §L2.6): a docked body is projected only while its
  * sidebar column is expanded and the tab is active — `useTabInfo().tab.visible`
@@ -36,7 +37,7 @@ import type { PropsLocale, PropsRuntime, TranslateNS } from '@deepseek-ai/dsh-cl
 import type { SessionId } from '@deepseek-ai/dsh-session'
 import type { PropsStore } from '@deepseek-ai/dsh-client-store'
 import css from './panel.module.css'
-import type { MstarEngineStatusClient } from './engine-status-client.ts'
+import type { MstarWorkflowPickerClient } from './workflow-picker-client.ts'
 import type { MstarPanelSnapshotClient } from './panel-snapshot-client.ts'
 import type { PanelSnapshot } from '../../panel/panel-snapshot.ts'
 import { projectGraph, type ZoneView } from './graph/project-graph.ts'
@@ -47,7 +48,7 @@ import { EventLogPage } from './pages/EventLogPage.tsx'
 import { IterationTaskPage } from './pages/IterationTaskPage.tsx'
 import { RoadmapPage } from './pages/RoadmapPage.tsx'
 import { useMstarPanelSnapshot } from './use-mstar-panel-snapshot.ts'
-import { useMstarEngineStatus, type UseSessions } from './use-mstar-engine-status.ts'
+import { useMstarWorkflowPicker, type UseSessions } from './use-mstar-workflow-picker.ts'
 import { createPanelStore, type PanelSection } from './panel-store.ts'
 
 /**
@@ -65,8 +66,8 @@ export interface MstarPanelBodyProps
   sessionId?: SessionId
   /** Host session-list selector hook (the global standard seat). */
   useSessions?: UseSessions
-  /** The workflow-pick client (picker seat only, until its read path retires). */
-  engineStatus?: MstarEngineStatusClient
+  /** The workflow-pick client (the picker's WRITE; the read is `panelSnapshot`). */
+  picker?: MstarWorkflowPickerClient
   /**
    * The store-backed snapshot client (bound to the client `connection` service
    * by the plugin entry). The panel polls it while the tab is visible; absent
@@ -110,7 +111,7 @@ function sessionCwd(useSessions: UseSessions | undefined, sessionId: SessionId |
 }
 
 export function PanelView(props: MstarPanelBodyProps) {
-  const { t, useChat, useSessions, sessionId, engineStatus, panelSnapshot, useTabInfo, useStore, actions } = props
+  const { t, useSessions, sessionId, picker, panelSnapshot, useTabInfo, useStore, actions } = props
   const tabInfo = useTabInfo()
   const tabId = tabInfo.tab.id
   const section: PanelSection = useStore((s) => s.byTab[tabId]) ?? 'tasks'
@@ -121,9 +122,9 @@ export function PanelView(props: MstarPanelBodyProps) {
     sessionId: sessionId === undefined ? null : String(sessionId),
     cwd,
   })
-  // Picker seat only: the durable binding/pick control keeps its own client
-  // until the retired read path is removed.
-  const { selection, pick, select } = useMstarEngineStatus({ useChat, useSessions, sessionId, engineStatus })
+  // The picker's WRITE half only: what it contributes is the commit state
+  // (`pick`) and `select`. The SELECTION it displays rides the snapshot below.
+  const { pick, select } = useMstarWorkflowPicker({ useSessions, sessionId, picker })
   // Every hook runs before the early returns below (hooks rule). A refresh keeps
   // painting the last good snapshot (`loading.previous`); only the FIRST read
   // has none.
@@ -162,6 +163,11 @@ export function PanelView(props: MstarPanelBodyProps) {
     )
   }
   const snapshotTime = formatSnapshotTime(snapshot.at)
+  // The retained catalog facts are a SECOND freshness domain: their age is the
+  // payload's build instant, shown separately so a stale catalog fact is never
+  // mistaken for a stale store read (or vice versa).
+  const retainedAt = snapshot.retained.at
+  const retainedTime = retainedAt === null ? null : formatSnapshotTime(retainedAt)
   const freshness = (
     <footer className={css.freshness} data-mstar-freshness>
       {snapshotTime === null
@@ -169,6 +175,13 @@ export function PanelView(props: MstarPanelBodyProps) {
         : (
           <span data-mstar-freshness-at={snapshot.at}>
             {t('freshness.last-updated', { time: snapshotTime })}
+          </span>
+        )}
+      {retainedAt === null || retainedTime === null
+        ? null
+        : (
+          <span data-mstar-freshness-retained={retainedAt}>
+            {t('freshness.retained', { time: retainedTime })}
           </span>
         )}
       <span>{t('freshness.refresh-note')}</span>
@@ -218,7 +231,14 @@ export function PanelView(props: MstarPanelBodyProps) {
       <TabNav active={section} onChange={selectSection} t={t} />
       <div className={css.scroll} data-mstar-scroll data-mstar-graph>
         <PanelContent section={section} view={view} t={t} />
-        <Sidebar t={t} view={view} snapshot={snapshot} selection={selection} pick={pick} select={select} />
+        <Sidebar
+          t={t}
+          view={view}
+          snapshot={snapshot}
+          selection={snapshot.retained.selection}
+          pick={pick}
+          select={select}
+        />
         {freshness}
       </div>
       <PanelMeta t={t} snapshot={snapshot} />

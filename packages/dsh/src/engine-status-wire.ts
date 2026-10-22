@@ -1,7 +1,7 @@
 /**
- * The ONE declaration of the engine-status wire address, shared by both halves
- * of the channel: the host half composes the `/api` typert endpoint descriptor
- * from these literals, and the browser half calls the same address through
+ * The ONE declaration of the panel's wire addresses, shared by both halves of
+ * every channel: the host half composes the `/api` typert endpoint descriptors
+ * from these literals, and the browser half calls the same addresses through
  * `connection.rpc.call(...)`.
  *
  * WHY a separate module: the two halves live in two bundle graphs (the host
@@ -20,19 +20,19 @@
  * @module @mstar-harness/dsh/engine-status-wire
  */
 
-/** The gateway channel the endpoint is served on (the host's shared `/api`). */
+/** The gateway channel every endpoint is served on (the host's shared `/api`). */
 export const ENGINE_STATUS_CHANNEL = '/api'
-/** The endpoint path on that channel (namespace + method of the descriptor). */
-export const ENGINE_STATUS_ENDPOINT = 'mstar/engineStatus'
-/** Wire namespace of the invocation (the cordis service key mirrors it). */
+/**
+ * Wire namespace of the plugin's invocations — the `mstar` family. The
+ * engine-status service's cordis key mirrors it (it is the wire namespace's
+ * service), while `mstar/panelSnapshot` is served from its own service key.
+ */
 export const MSTAR_ENGINE_STATUS_NAMESPACE = 'mstar'
-/** Wire method of the invocation → `/api/mstar/engineStatus`. */
-export const MSTAR_ENGINE_STATUS_METHOD = 'engineStatus'
 /**
  * Wire method of the panel's workflow-selection control → `/api/mstar/selectWorkflow`.
- * A session-scoped UI control (never a model workflow-execution tool): the
- * host acknowledges the pick durably and the next `ensure()` reads the
- * current binding back.
+ * A session-scoped UI control (never a model workflow-execution tool): the host
+ * commits the pick durably, and the next panel read rebuilds its selection from
+ * the acknowledged binding.
  */
 export const MSTAR_SELECT_WORKFLOW_METHOD = 'selectWorkflow'
 /** The endpoint path the client calls for a workflow pick. */
@@ -40,8 +40,8 @@ export const SELECT_WORKFLOW_ENDPOINT = `${MSTAR_ENGINE_STATUS_NAMESPACE}/${MSTA
 /**
  * Wire namespace of the panel-snapshot read. The panel keeps the `mstar`
  * namespace (one plugin, one address family) while serving the snapshot from
- * its own host service, so retiring the engine-status READ path cannot
- * withdraw this one.
+ * its own host service, so the retired engine-status read path could not
+ * withdraw it.
  */
 export const MSTAR_PANEL_SNAPSHOT_NAMESPACE = 'mstar'
 /** Wire method of the store-backed panel read → `/api/mstar/panelSnapshot`. */

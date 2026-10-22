@@ -2,16 +2,14 @@
  * Test double for the host's shared `/api` typert gateway — the panel's ONE
  * data path.
  *
- * The persisted catalog row is an ANCHOR (its `source` is the frozen
- * producer-owned catalog source and carries no payload), so a panel fixture is
- * now the PAYLOAD THE HOST WOULD HAVE STORED for the session, delivered
- * through the channel the production client actually calls:
- * `connection.rpc.call('/api', 'mstar/engineStatus', { args: { sessionId, cwd } })`.
+ * The panel's data arrives through the channel the production client actually
+ * calls: `connection.rpc.call('/api', 'mstar/panelSnapshot', { args: … })` (the
+ * store-backed read) or `… 'mstar/selectWorkflow'` (the picker's commit).
  *
- * Specs therefore stub THE CHANNEL (this module) — never the removed `source`
- * members. {@link GatewayStub.calls} records every literal call so a spec can
- * assert the request shape, and the reply helpers build the endpoint result
- * and the transport envelope exactly as the host half produces them.
+ * Specs therefore stub THE CHANNEL (this module) — never a component internal.
+ * {@link GatewayStub.calls} records every literal call so a spec can assert the
+ * request shape, and the reply helpers build the transport envelopes exactly as
+ * the host half produces them.
  */
 
 import type { ChatSnapshot } from '@deepseek-ai/dsh-client-ui-chat/client'
@@ -20,16 +18,13 @@ import type { SnapshotSelectorHook } from '@deepseek-ai/dsh-client-ui-slots'
 import type { SessionId } from '@deepseek-ai/dsh-session'
 import type { SessionListState } from '@deepseek-ai/dsh-api-session-controller/client'
 import { createSnapshotStore } from '@deepseek-ai/dsh-client-store'
-import type { MstarEngineStatusConnection } from '../src/client/panel/engine-status-client.ts'
-import type { UseSessions } from '../src/client/panel/use-mstar-engine-status.ts'
+import type { MstarPanelSnapshotConnection } from '../src/client/panel/panel-snapshot-client.ts'
+import type { UseSessions } from '../src/client/panel/use-mstar-workflow-picker.ts'
 import { createPanelStore, type PanelStoreState } from '../src/client/panel/panel-store.ts'
 
 /** Session id / workspace directory the specs' fixtures belong to (synthetic). */
 export const SESSION_ID = 's-1'
 export const SESSION_CWD = '/proj'
-
-/** The endpoint result's snapshot timestamp (freshness marker). */
-export const SNAPSHOT_AT = '2024-07-03T09:23:20.000Z'
 
 /** The locked anchor source: exactly two members, never a payload. */
 export const ANCHOR_SOURCE = { kind: 'mstar-engine', form: 'catalog' } as const
@@ -43,7 +38,7 @@ export interface GatewayCall {
 
 /** The stub gateway: the `connection` service face + the recorded calls. */
 export interface GatewayStub {
-  readonly connection: MstarEngineStatusConnection
+  readonly connection: MstarPanelSnapshotConnection
   readonly calls: GatewayCall[]
   /** Answer every later call with these envelopes (the last one repeats). */
   reply(...envelopes: unknown[]): void
@@ -60,7 +55,7 @@ export function stubGateway(...envelopes: unknown[]): GatewayStub {
   const calls: GatewayCall[] = []
   let queue = envelopes.length > 0 ? [...envelopes] : [undefined]
   let byRequest: ((sessionId: string, cwd: string) => unknown) | null = null
-  const connection: MstarEngineStatusConnection = {
+  const connection: MstarPanelSnapshotConnection = {
     rpc: {
       call(channel: string, endpoint: string, payload: unknown): Promise<never> {
         calls.push({ channel, endpoint, payload })
@@ -79,26 +74,6 @@ export function stubGateway(...envelopes: unknown[]): GatewayStub {
   }
 }
 
-/** The `{status:'ok'}` endpoint result for one stored snapshot payload. */
-export function okResult(
-  payload: unknown,
-  over: { sessionId?: string; cwd?: string; at?: string; turn?: number } = {},
-): Record<string, unknown> {
-  return {
-    status: 'ok',
-    sessionId: over.sessionId ?? SESSION_ID,
-    cwd: over.cwd ?? SESSION_CWD,
-    at: over.at ?? SNAPSHOT_AT,
-    turn: over.turn ?? 1,
-    payload,
-  }
-}
-
-/** The `{status:'unavailable', reason}` endpoint result (the host's degraded answer). */
-export function unavailableResult(reason: string): Record<string, unknown> {
-  return { status: 'unavailable', reason }
-}
-
 /** The transport success envelope the typert gateway returns. */
 export function gatewayOk(value: unknown): Record<string, unknown> {
   return { ok: true, value }
@@ -107,14 +82,6 @@ export function gatewayOk(value: unknown): Record<string, unknown> {
 /** The transport failure envelope the typert gateway returns. */
 export function gatewayError(code: string, message = code): Record<string, unknown> {
   return { ok: false, error: { code, message, details: {} } }
-}
-
-/** The ready-made "a snapshot was served" envelope. */
-export function servedSnapshot(
-  payload: unknown,
-  over: { sessionId?: string; cwd?: string; at?: string; turn?: number } = {},
-): Record<string, unknown> {
-  return gatewayOk(okResult(payload, over))
 }
 
 /** A finalized user message — never matches the anchor discriminator. */

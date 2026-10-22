@@ -23,7 +23,7 @@ import type { PanelSnapshot } from '../../panel/panel-snapshot.ts'
 import type { ZoneView } from './graph/project-graph.ts'
 import css from './panel.module.css'
 import { bool, count, str } from './guards.ts'
-import type { MstarSelectionState } from './engine-status-client.ts'
+import type { MstarSelectionState } from './workflow-picker-client.ts'
 import { FINDINGS_CAP, PLAN_CAP } from './plan-sort.ts'
 
 /**
