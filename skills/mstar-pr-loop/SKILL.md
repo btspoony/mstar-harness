@@ -23,7 +23,7 @@ Enter only on the user's explicit request to loop review → fix on an existing 
 - Accept one optional tier: `quick`, `default` or `deep`; otherwise use the review's own inference ladder (§ Review depth (tiers)), not a loop-specific default.
 - An optional user-supplied round budget has no default. Honor an explicit budget or interruption, retain the latest report and residuals, and name the user action needed to resume; never invent a numeric round ceiling.
 
-The loop does not own CI babysitting, review-thread resolution or the merge-ready gate; those remain with iteration Phase 5 / its separately discovered babysit helper. Never submit `APPROVE` or `REQUEST_CHANGES`, merge a PR, or close a captured issue. A `ship it` exit is review-loop success, not merge authorization or lifecycle Done.
+The loop does not own CI babysitting, review-thread resolution or the merge-ready gate; those remain with iteration Phase 5 / its separately discovered babysit helper. Never submit `APPROVE` or `REQUEST_CHANGES`, merge a PR, or close a finding-capture issue. A deferred-PR tracking issue must still be closed through the existing closure authority at that PR's review completion (`mstar-audit` → `references/pr-review.md` § Batch sibling PRs). A `ship it` exit is review-loop success, not merge authorization or lifecycle Done.
 
 ## Workflow
 
@@ -46,6 +46,8 @@ One round is a review and its tally-derived transition, followed by a qualifying
 | `incomplete` | Never a fix round. Repair the cause/coverage recorded in `incomplete_reason` and `unscanned`, then rerun the same round without consuming a fix round. If unrepairable, stop as Blocked with recovery. No implementation dispatch. |
 | `needs fixes` | Dispatch fixes only for qualifying findings under the fixable-finding rule below, then re-review the updated PR head. |
 | `blocked` | Triage each finding, not a blanket keep-fixing instruction: only `file:line` + fix sketch + merge class `must-fix` / `should-fix` is dispatchable. Product, permission or external decisions stop the loop and are reported to their decision owner. |
+
+Leftover `unmet` acceptance criteria are separate tally increments, not findings (§ Linked-issue hygiene in `mstar-audit` → `references/pr-review.md`). If they produce `needs fixes` or `blocked`, even with zero findings, stop as Blocked naming each criterion, its responsible owner and the recovery: that owner authorizes and completes the missing implementation or supplies the required decision, then rerun this entry against the current PR head. Never emit a duplicate Merge-class finding for the same criterion.
 
 ### Fix sites
 
