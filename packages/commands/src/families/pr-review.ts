@@ -10,7 +10,7 @@ import { z } from "zod";
 import { commandEnvelopeSchema } from "../definitions.js";
 import { refusalEnvelope, type RefusalDiagnostic } from "../envelope.js";
 import { engineErrorFacts } from "./family-refusal.js";
-import { launchDirectoryRefusal } from "./launch-workspace.js";
+import { launchDirectoryRefusal, launchDirectoryDiagnostics } from "./launch-workspace.js";
 import { decodeInputDiagnostics } from "../input-diagnostics.js";
 import type { CommandDefinition, CommandEnvelope, InvocationContext } from "../types.js";
 
@@ -53,7 +53,7 @@ const ok = (id: string, data: unknown): CommandEnvelope => ({ version: 1, comman
  */
 export const failure = (id: string, error: unknown): CommandEnvelope<never> => {
   const message = error instanceof Error ? error.message : String(error);
-  if (error instanceof UsageError) return refusalEnvelope({ command: id, status: "usage", code: "command.invalid-input", exitCode: 2, message, ...(error.diagnostics === undefined ? {} : { diagnostics: error.diagnostics }) });
+  if (error instanceof UsageError) return refusalEnvelope({ command: id, status: "usage", code: "command.invalid-input", exitCode: 2, message, ...(error.diagnostics === undefined ? {} : { diagnostics: error.diagnostics }), ...(error.recovery === undefined ? {} : { recovery: error.recovery }) });
   const { code, details, recovery } = engineErrorFacts(error);
   if (code === undefined) return { version: 1, command: id, status: "error", code: `${id}.failed`, exitCode: 1, message };
   return refusalEnvelope({
@@ -63,9 +63,11 @@ export const failure = (id: string, error: unknown): CommandEnvelope<never> => {
   });
 };
 /** A caller-correctable input error; `diagnostics` carries one entry per
- * invalid field so a refusal can report all of them at once. */
+ * invalid field so a refusal can report all of them at once, and `recovery`
+ * keeps a class-specific way out (the launcher declaration) when the
+ * aggregation includes that class. */
 class UsageError extends Error {
-  constructor(message: string, readonly diagnostics?: readonly RefusalDiagnostic[]) { super(message); }
+  constructor(message: string, readonly diagnostics?: readonly RefusalDiagnostic[], readonly recovery?: string) { super(message); }
 }
 const abs = (cwd: string, file: string) => path.isAbsolute(file) ? file : path.resolve(cwd, file);
 const need = (value: string | undefined, name: string): string => { if (value === undefined || value === "") throw new UsageError(`${name} is required`); return value; };
@@ -108,12 +110,12 @@ async function execute(verb: Verb, input: Input, context: InvocationContext): Pr
     if (verb === "tally") {
       // The findings payload is what the verdict is computed FROM, so a
       // relative path read out of the HOST's checkout would settle a review of
-      // the wrong run: the same rule the sibling verbs apply.
-      const unnamedFindings = launchDirectoryRefusal(id, context, {
+      // the wrong run: the same rule the sibling verbs apply. This fault joins
+      // the collection phase below instead of returning early, so the same
+      // refusal also reports the run facts the caller left out.
+      const unnamedFindings = launchDirectoryDiagnostics(context, {
         fields: [{ field: "findings", subject: "the findings file", value: input.findings }],
       });
-      if (unnamedFindings !== undefined) return unnamedFindings;
-      const file = abs(context.cwd, need(input.findings, "--findings"));
  // One collection phase for every tally input: the findings payload, the
  // four run facts and the three counts all append diagnostics, and a single
  // refusal carries all of them, so one call reports every invalid field
@@ -121,10 +123,17 @@ async function execute(verb: Verb, input: Input, context: InvocationContext): Pr
  // § Aggregated validation). The run facts feed the derivation in
  // `resolvePrReviewSettlement`; nothing about elapsed time is an input, so a
  // run past its tier clock with complete coverage still settles.
-      const diagnostics: RefusalDiagnostic[] = [];
+      const diagnostics: RefusalDiagnostic[] = [...(unnamedFindings?.diagnostics ?? [])];
       const allowed: readonly string[] = ["must-fix", "should-fix", "nit"];
       let findings: { mergeClass: MergeClass }[] = [];
-      if (!existsSync(file)) {
+      const file = input.findings === undefined || input.findings === "" ? undefined : abs(context.cwd, input.findings);
+      if (file === undefined || unnamedFindings !== undefined) {
+        // An unnamed connection has no directory to read the payload from: its
+        // own diagnostic says why, and reading it would judge the HOST checkout.
+        // `--findings` is required at admission, so a direct call gets the same
+        // answer from this collection phase.
+        if (file === undefined && unnamedFindings === undefined) diagnostics.push({ path: "findings", code: "required", message: "--findings is required", expected: "present", received: "undefined" });
+      } else if (!existsSync(file)) {
         diagnostics.push({ path: "findings", code: "invalid", message: `findings file not found: ${file}` });
       } else {
         // An unparseable file is the same caller-correctable class as the
@@ -210,7 +219,7 @@ async function execute(verb: Verb, input: Input, context: InvocationContext): Pr
       });
       const unmetAcUnsafe = count(input.unmetAcUnsafe, "--unmet-ac-unsafe", "unmetAcUnsafe");
       const unmetAcSafe = count(input.unmetAcSafe, "--unmet-ac-safe", "unmetAcSafe");
-      if (diagnostics.length > 0) throw new UsageError(diagnostics[0]!.message, diagnostics);
+      if (diagnostics.length > 0) throw new UsageError(diagnostics[0]!.message, diagnostics, unnamedFindings?.recovery);
       // The trigger list lives in the engine (one implementation): the CLI
       // only reports the run's facts, and the derived cause/scope travels in
       // the unchanged `incomplete` field of the tally envelope.

@@ -1,5 +1,5 @@
 import path from "node:path";
-import { refusalEnvelope } from "../envelope.js";
+import { refusalEnvelope, type RefusalDiagnostic } from "../envelope.js";
 import type { CommandEnvelope, InvocationContext } from "../types.js";
 
 /**
@@ -75,6 +75,21 @@ export function launchDirectoryRefusal(
     ...(subjectCauses === undefined ? { diagnostics: offending.map(diagnostic) } : {}),
     recovery: LAUNCH_DIRECTORY_RECOVERY,
   });
+}
+
+/**
+ * The field form's refusal facts, for a family that collects its OWN input
+ * diagnostics: the per-field entries and the launcher recovery join the
+ * family's single refusal, so the launch-directory cause is reported beside
+ * every other invalid field instead of replacing them.
+ */
+export function launchDirectoryDiagnostics(
+  context: InvocationContext,
+  target: { readonly fields: readonly LaunchDirectoryField[] },
+): { readonly diagnostics: readonly RefusalDiagnostic[]; readonly recovery: string } | undefined {
+  if (context.launchDirectory !== true) return undefined;
+  const offending = unnamed(target.fields);
+  return offending.length === 0 ? undefined : { diagnostics: offending.map(diagnostic), recovery: LAUNCH_DIRECTORY_RECOVERY };
 }
 
 function cause(subject: string, supplied: string | undefined): string {

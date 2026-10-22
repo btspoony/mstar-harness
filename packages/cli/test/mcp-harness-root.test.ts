@@ -1329,6 +1329,40 @@ describe("MCP control-root admission class", () => {
     }
   });
 
+  test("tally reports a relative findings path together with the run facts it also faults", async () => {
+    const fixture = await launchDirectoryCheckout();
+    const previousCwd = process.cwd();
+    const previousHarness = process.env.MSTAR_HARNESS_DIR;
+    delete process.env.MSTAR_HARNESS_DIR;
+    process.chdir(fixture.launch);
+    try {
+      // The findings payload is RELATIVE and the coverage facts that settle the
+      // run are missing: the launch-directory fault must join the family's one
+      // collection phase, so this single response reports both.
+      const result = await callRawTool(createContextResolver(), "pr-review.tally", { findings: "findings.json" });
+      expect(result.isError).toBe(true);
+      const envelope = rawEnvelope(result);
+      expect([envelope.status, envelope.code]).toEqual(["usage", "command.invalid-input"]);
+      const diagnostics = (envelope.details?.diagnostics ?? []) as Array<{ path?: string; code?: string }>;
+      expect(diagnostics).toEqual(expect.arrayContaining([
+        expect.objectContaining({ path: "findings", code: "invalid_type" }),
+        expect.objectContaining({ path: "requiredDomains", code: "required" }),
+        expect.objectContaining({ path: "diffBasis", code: "required" }),
+      ]));
+      // The launcher cause and its recovery survive the aggregation, and the
+      // refused directory is neither read nor echoed back.
+      const text = rawText(result);
+      expect(text).toContain("LAUNCH directory");
+      expect(text).toContain("--workspace");
+      expect(text).not.toContain(fixture.launch);
+      expect(text).not.toContain("findings file not found");
+    } finally {
+      process.chdir(previousCwd);
+      if (previousHarness === undefined) delete process.env.MSTAR_HARNESS_DIR;
+      else process.env.MSTAR_HARNESS_DIR = previousHarness;
+    }
+  });
+
   test("an array path input names EVERY relative member in one refusal, and only the relative ones", async () => {
     const fixture = await launchDirectoryCheckout();
     const previousCwd = process.cwd();
