@@ -239,11 +239,18 @@ export interface ZoneView {
 /*
  * The snapshot members are read through their DECLARED types (`PanelSnapshot`'s
  * own members, `PanelWorkspaceView<T>`), never through a stringly-keyed record:
- * a member rename is a compile error here instead of a silent `undefined`. The
- * unknown-byte convergence lives at the wire parse boundary
- * (`parsePanelSnapshotRead`) and, below, in the FIELD guards on a DTO's own
- * members — a host that leaves a field out still degrades that field, never the
- * panel.
+ * a member rename is a compile error here instead of a silent `undefined`.
+ *
+ * That leaves degradation split across exactly two layers, and this file relies
+ * on the split rather than repeating it:
+ * - the wire parse boundary (`parsePanelSnapshotRead`) refuses an `ok` answer
+ *   that omits a member this file dereferences — the answer becomes
+ *   `unavailable`, so `projectGraph` only ever sees a complete envelope or
+ *   `null`;
+ * - here, a DTO's own FIELD may still be missing or the wrong type (the wire
+ *   envelope is validated by shape, not by every nested element), so each field
+ *   is guarded individually and degrades alone — one bad field never blanks the
+ *   panel.
  */
 
 /** A workspace read's state; a MISSING member reads as `unavailable`. */

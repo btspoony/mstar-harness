@@ -109,20 +109,52 @@ function str(value: unknown): string | null {
   return typeof value === 'string' && value !== '' ? value : null
 }
 
+/** The five workspace reads an `ok` answer must carry. */
+const WORKSPACE_KEYS = ['workflow', 'iteration', 'roadmap', 'issues', 'projects'] as const
+
+/** A workspace read is one of the three declared states. */
+function isWorkspaceView(value: unknown): boolean {
+  if (value === null || typeof value !== 'object') return false
+  const state = (value as { state?: unknown }).state
+  return state === 'ok' || state === 'not-applicable' || state === 'unavailable'
+}
+
+/**
+ * Is this the complete envelope the projection reads UNGUARDED? Every member
+ * `projectGraph` dereferences must be here, or the whole panel throws on a
+ * version-skewed or truncated answer. A `null` ledger is legal (advisory read
+ * failed); a present one must carry the events array.
+ */
+function isSnapshotEnvelope(value: unknown): value is PanelSnapshot {
+  if (value === null || typeof value !== 'object') return false
+  const row = value as { at?: unknown; workspace?: unknown; retained?: unknown; ledger?: unknown }
+  if (str(row.at) === null) return false
+  if (row.retained === null || typeof row.retained !== 'object') return false
+  const workspace = row.workspace
+  if (workspace === null || typeof workspace !== 'object') return false
+  if (!WORKSPACE_KEYS.every((key) => isWorkspaceView((workspace as Record<string, unknown>)[key]))) return false
+  const ledger = row.ledger as { events?: unknown } | null | undefined
+  if (ledger === null) return true
+  return typeof ledger === 'object' && Array.isArray(ledger.events)
+}
+
 /**
  * Validate one endpoint answer into the closed `PanelSnapshotRead` union.
  * Total: an unreadable answer degrades to `unavailable`, never a half-parsed
  * snapshot.
+ *
+ * This is the ONLY place unknown bytes become the contract, so it also enforces
+ * the envelope the rest of the client reads without guards — `at`, the five
+ * workspace members, `retained` and `ledger`'s `events`. A member-less `ok`
+ * answer is `unavailable`, not a thrown render.
  */
 export function parsePanelSnapshotRead(value: unknown): PanelSnapshotRead {
   const row = value as { kind?: unknown; snapshot?: unknown; reason?: unknown } | null | undefined
   if (row === null || typeof row !== 'object') return { kind: 'unavailable', reason: 'malformed-answer' }
   if (row.kind === 'ok') {
-    const snapshot = row.snapshot as { at?: unknown } | null | undefined
-    if (snapshot === null || typeof snapshot !== 'object' || str(snapshot.at) === null) {
-      return { kind: 'unavailable', reason: 'malformed-answer' }
-    }
-    return { kind: 'ok', snapshot: snapshot as PanelSnapshot }
+    return isSnapshotEnvelope(row.snapshot)
+      ? { kind: 'ok', snapshot: row.snapshot }
+      : { kind: 'unavailable', reason: 'malformed-answer' }
   }
   // No harness root resolved: its OWN kind, so the client renders the
   // dedicated card rather than leaking a wire reason token into the UI.

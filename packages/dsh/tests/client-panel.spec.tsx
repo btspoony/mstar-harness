@@ -274,3 +274,30 @@ describe('panel — no harness is its own render (F3)', () => {
     expect(markup).not.toContain('data-mstar-meta')
   })
 })
+
+/* ------------------- 6. a malformed ok answer degrades (QC round 2) ------------------- */
+
+describe('panel — a malformed ok answer degrades instead of throwing', () => {
+  it('a snapshot with no workspace renders the unavailable branch', async () => {
+    const locale: LocaleRuntime = new LocaleRuntimeCtor(new Context())
+    locale.register(NS, { zh, en })
+    locale.setLocale('en')
+    // Reachable through host/plugin version skew or a truncated payload: the
+    // `ok` kind with an envelope the projection would dereference into a throw.
+    const gateway = stubGateway(gatewayOk({ kind: 'ok', snapshot: { at: '2026-10-22T00:00:00.000Z' } }))
+    const client = new MstarPanelSnapshotClient(gateway.connection, { pollIntervalMs: 0 })
+    const seats = {
+      sessionId: SESSION,
+      useSessions: bindUseSessions(),
+      t: locale.bind(NS),
+      panelSnapshot: client,
+      ...visibleTabKit(),
+    }
+    // The render itself is the assertion: an unguarded projection throws here.
+    const markup = await settleRender(() => renderToStaticMarkup(createElement(PanelView, seats as never)))
+    client.dispose()
+
+    expect(markup).toContain('data-mstar-panel="unavailable"')
+    expect(markup).toContain('data-mstar-unavailable-reason="malformed-answer"')
+  })
+})

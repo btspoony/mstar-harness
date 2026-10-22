@@ -19,6 +19,7 @@
 import { describe, expect, it } from 'bun:test'
 import type { PanelSnapshot } from '../src/panel/panel-snapshot.ts'
 import { projectGraph, type ZoneView } from '../src/client/panel/graph/project-graph.ts'
+import { parsePanelSnapshotRead } from '../src/client/panel/panel-snapshot-client.ts'
 
 /* ------------------------------- fixtures ------------------------------- */
 
@@ -315,5 +316,54 @@ describe('projectGraph — total function (T5)', () => {
     // A settle row with no identity still renders (degraded fields, never dropped).
     expect(view.events).toHaveLength(1)
     expect(view.events[0]!.kind).toBe('settle')
+  })
+})
+
+/* --------------------- the wire envelope the projection needs --------------------- */
+
+/**
+ * QC round 2: the projection reads its members through their declared types with
+ * no optional chaining on the members themselves, so the WIRE PARSE BOUNDARY must
+ * refuse an `ok` answer that omits them. Otherwise `{kind:'ok', snapshot:{at:'x'}}`
+ * reaches `projectGraph` and the whole panel throws.
+ */
+describe('projectGraph — the parse boundary owns the envelope', () => {
+  /** A complete, well-formed `ok` answer — the control. */
+  function completeSnapshot(): PanelSnapshot {
+    return snapshot({})
+  }
+
+  it('a member-less ok answer parses to unavailable, never a half-parsed snapshot', () => {
+    const parsed = parsePanelSnapshotRead({ kind: 'ok', snapshot: { at: '2026-10-22T00:00:00.000Z' } })
+    expect(parsed.kind).toBe('unavailable')
+    expect(parsed.kind === 'unavailable' ? parsed.reason : null).toBe('malformed-answer')
+    // …so the panel renders the degraded branch: the projection gets null, not junk.
+    expect(() => projectGraph(parsed.kind === 'ok' ? parsed.snapshot : null)).not.toThrow()
+  })
+
+  it('every mandatory member is enforced — dropping any ONE parses to unavailable', () => {
+    const full = completeSnapshot()
+    const variants: Record<string, unknown> = {
+      'no workspace': { ...full, workspace: undefined },
+      'workspace not an object': { ...full, workspace: 'nope' },
+      'one workspace member missing': { ...full, workspace: { ...full.workspace, issues: undefined } },
+      'one workspace member is not a read': { ...full, workspace: { ...full.workspace, projects: { state: 'boom' } } },
+      'no retained': { ...full, retained: undefined },
+      'retained not an object': { ...full, retained: 'nope' },
+      'no ledger key': { ...full, ledger: undefined },
+      'ledger without its events array': { ...full, ledger: { events: 'nope' } },
+      'no timestamp': { ...full, at: '' },
+    }
+    for (const [name, shape] of Object.entries(variants)) {
+      const parsed = parsePanelSnapshotRead({ kind: 'ok', snapshot: shape })
+      expect({ name, kind: parsed.kind }).toEqual({ name, kind: 'unavailable' })
+    }
+    // The control is ACCEPTED, so the cases above fail for the reason they name.
+    expect(parsePanelSnapshotRead({ kind: 'ok', snapshot: full }).kind).toBe('ok')
+  })
+
+  it('a null ledger is legal — an advisory read that did not answer is not malformed', () => {
+    const parsed = parsePanelSnapshotRead({ kind: 'ok', snapshot: { ...completeSnapshot(), ledger: null } })
+    expect(parsed.kind).toBe('ok')
   })
 })
