@@ -6,6 +6,17 @@ The monorepo root [CHANGELOG.md](../../CHANGELOG.md) summarizes cross-surface re
 
 ## [Unreleased]
 
+## [4.0.5] - 2026-10-22
+
+### Changed
+
+- **Identity injection is decided per selected `action`, not per family tool.** A folded family publishes its `sessionId` selector ONCE for the whole tool, so the `omp` `mcp-identity` extension filled the host id into every call of a mixed family — and the CLI refuses a selector the selected action does not declare, so every non-identity action of such a family (`mstar_status` → `tech-debt`, `mstar_milestone` → `list`, …) was unusable on OMP, refused with a "drop `sessionId`" recovery the hook undid on the next call. The extension now reads the per-action answer from the published `x-mstar-selectors` index and passes a call whose action declares no selector through untouched; when the action DOES declare it, the host id still replaces any caller-supplied value. The CLI publishes that index on every family with a selector, stating exactly the accepting actions its own refusal names.
+- **The `mcp-identity` extension makes the HOST session id authoritative.** It revises every eligible `mcp__morning_star_mstar_*` call to carry the calling session's native `sessionId` and REPLACES a caller-supplied value instead of deferring to it. On the opted-in connection (`mcp.json` passes `--trust-caller-session-id`) that wire value becomes the execution identity, so the former "an explicit caller-supplied id is never overridden" rule let any caller execute as another live coordinator session. The extension header, the package README and `skills/mstar-host/references/omp.md` state the new rule.
+
+- Version alignment with harness **4.0.5**.
+
+See root [CHANGELOG.md](../../CHANGELOG.md) **4.0.5**.
+
 ## [4.0.4] - 2026-10-20
 
 ### Changed
