@@ -93,14 +93,19 @@ async function makeActiveWorkspace(label) {
  * The MCP stdio client: newline-delimited JSON-RPC over the child's stdio
  * ------------------------------------------------------------------------ */
 
-function startMcpServer(fixture) {
+/**
+ * The stdio child. `trustCallerSessionId` is the ONE launcher difference between
+ * the deployed omp shape (opted in) and the shipped default connection (off, the
+ * shape a shared host row launches), so the identity contract is proven on both.
+ */
+function startMcpServer(fixture, { trustCallerSessionId = true } = {}) {
   const env = {};
   for (const [key, value] of Object.entries(process.env)) {
     if (STRIPPED_ENV.includes(key)) continue;
     env[key] = value;
   }
   env.MSTAR_HARNESS_DIR = fixture.harness;
-  const child = spawn(process.execPath, [CLI_ENTRY, "mcp", "--trust-caller-session-id"], { cwd: fixture.root, env, stdio: ["pipe", "pipe", "pipe"] });
+  const child = spawn(process.execPath, [CLI_ENTRY, "mcp", ...(trustCallerSessionId ? ["--trust-caller-session-id"] : [])], { cwd: fixture.root, env, stdio: ["pipe", "pipe", "pipe"] });
   const pending = [];
   let buffer = "";
   let stderr = "";
@@ -317,6 +322,50 @@ test("T4: stdio MCP chain - identity-free shared connection, per-call injected i
     } finally {
       db.close();
     }
+  } finally {
+    await server.close();
+  }
+});
+
+test("default connection: a real child publishes no identity and refuses a caller-declared session id", { timeout: 120_000 }, async () => {
+  // The shipped, default connection: no `--trust-caller-session-id`. A host that
+  // mounts one generic stdio row for the whole profile gets exactly this shape,
+  // so the in-memory proof is not enough — the published surface and the refusal
+  // have to hold on the process boundary a real host sees.
+  const fixture = await makeActiveWorkspace("mstar-t4-mcp-default");
+  const server = startMcpServer(fixture, { trustCallerSessionId: false });
+  try {
+    const initialized = await server.request("initialize", {
+      protocolVersion: "2025-06-18",
+      capabilities: {},
+      clientInfo: { name: "t4-default-identity", version: "0.0.0" },
+    });
+    assert.equal(initialized.result?.serverInfo?.name, "mstar-harness", "server initialize handshake");
+    server.notify("notifications/initialized", {});
+
+    // The per-call selector is not published: a caller reading `tools/list`
+    // learns that this connection carries no identity channel.
+    const listed = await server.request("tools/list", {});
+    const sessionTool = listed.result.tools.find((tool) => tool.name === "mstar_session");
+    assert.ok(sessionTool, "mstar_session is published");
+    assert.equal(
+      Object.hasOwn(sessionTool.inputSchema.properties ?? {}, "sessionId"),
+      false,
+      "the default connection publishes no sessionId selector",
+    );
+
+    // A call that puts one on the wire anyway is refused by name, with the
+    // opt-in that would admit it, and the claimed value is never echoed.
+    const claimed = "live-coordinator-session";
+    const refused = await server.request("tools/call", {
+      name: "mstar_session",
+      arguments: { action: "recover", workflow: "wf-default-identity", sessionId: claimed },
+    });
+    const text = (refused.result?.content ?? []).map((block) => block.text ?? "").join("\n");
+    assert.equal(refused.result?.isError, true, `the call is refused:\n${text}`);
+    assert.match(text, /mcp\.caller-identity-unavailable/, "the refusal names the identity cause");
+    assert.match(text, /--trust-caller-session-id/, "the refusal names the opt-in that admits an identity");
+    assert.equal(text.includes(claimed), false, "the claimed value is never echoed");
   } finally {
     await server.close();
   }

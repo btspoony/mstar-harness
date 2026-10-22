@@ -10,27 +10,31 @@ import { inputFields } from "../src/schema-branches";
 import { FAMILY_PURPOSE, actionOf, familyOf, familyToolName, foldFamilyTools } from "../src/mcp/fold";
 
 /**
- * The design budget for the whole published surface: every folded tool's
+ * The approved CEILING for the whole published surface: every folded tool's
  * description plus its input JSON schema, read back from `tools/list`.
  *
- * This is a ceiling, not a repository fact. `tools/list` is paid on every
- * request of every session. On the same probe the per-command surface this
+ * This literal is an APPROVED CEILING, not a measurement of this tree: nothing
+ * derives it from the repository, and it is not a figure any suite recomputes.
+ * `tools/list` is paid on every request of every session, so the number is a
+ * design limit a change must argue for, not a value to edit until the suite is
+ * green again; a raise belongs with a re-measured before/after in the same
+ * change. For reference, on the probe that set it the per-command surface this
  * replaces measured 173,340 characters of description + input schema (189,881
- * for the payload-composed input view), and it also published 154,471
- * characters of output schemas — 327,811 characters in total, over 90k tokens.
- * The fold publishes the descriptor field index instead of payload composition
- * and drops output schemas, so the after figure is 33,274 characters of
- * description + input schema (~9.2k tokens; the payload schemas published for
- * `plan.issue-add` and `workflow.execution-policy` are sanctioned contract
- * detail, not per-command republishing): 33,500 keeps a small but real margin
- * while a regression that starts republishing per-command contracts inside
- * family descriptions — or that lets per-action tools creep back — reddens
- * here. A published discovery example must carry every field the tool
- * REQUIRES (`"action":"schema"`), and a family that publishes an identity
- * selector also publishes the per-action `x-mstar-selectors` index a host-side
- * injector reads, so the margin absorbs both.
+ * for the payload-composed input view) and also published 154,471 characters of
+ * output schemas — 327,811 characters in total, over 90k tokens. The fold
+ * publishes the descriptor field index instead of payload composition and drops
+ * output schemas, so the after figure was 33,274 characters of description +
+ * input schema (~9.2k tokens; the payload schemas published for `plan.issue-add`
+ * and `workflow.execution-policy` are sanctioned contract detail, not
+ * per-command republishing): 33,500 keeps a small but real margin while a
+ * regression that starts republishing per-command contracts inside family
+ * descriptions — or that lets per-action tools creep back — reddens here. A
+ * published discovery example must carry every field the tool REQUIRES
+ * (`"action":"schema"`), and a family that publishes an identity selector also
+ * publishes the per-action `x-mstar-selectors` index a host-side injector reads,
+ * so the margin absorbs both.
  */
-const PUBLISHED_SURFACE_BUDGET_CHARS = 33_500;
+const PUBLISHED_SURFACE_CEILING_CHARS = 33_500;
 
 type PublishedTool = Readonly<{
   name: string;
@@ -645,11 +649,11 @@ describe("folded MCP command families", () => {
     });
   });
 
-  test("the whole published surface stays inside the design budget", async () => {
+  test("the whole published surface stays inside the approved ceiling", async () => {
     await withClient(async (_client, tools) => {
       const surface = tools.reduce((total, tool) =>
         total + JSON.stringify(tool.inputSchema).length + (tool.description ?? "").length, 0);
-      expect(surface).toBeLessThanOrEqual(PUBLISHED_SURFACE_BUDGET_CHARS);
+      expect(surface).toBeLessThanOrEqual(PUBLISHED_SURFACE_CEILING_CHARS);
     });
   });
 });

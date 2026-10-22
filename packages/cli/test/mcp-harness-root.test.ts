@@ -18,7 +18,24 @@ import { runCli } from "./harness";
 import { DESIGN_LEVEL1, SKILL_GOOD } from "./support/cli-content-fixtures";
 
 const roots: string[] = [];
-afterEach(() => { for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true }); });
+
+/**
+ * The global state the fixtures below move: `process.cwd()` and the ambient
+ * `MSTAR_HARNESS_DIR`. Each fixture restores both in its own `finally`, but a
+ * fixture that throws BETWEEN mutating them and entering that `try` — a missing
+ * definition, a server that fails to construct — would leak the change into
+ * every later test in this file. The baseline is captured here and restored
+ * after EVERY test, so the ORDER inside a fixture stops mattering.
+ */
+const AMBIENT_CWD = process.cwd();
+const AMBIENT_HARNESS_DIR = process.env.MSTAR_HARNESS_DIR;
+
+afterEach(() => {
+  if (process.cwd() !== AMBIENT_CWD) process.chdir(AMBIENT_CWD);
+  if (AMBIENT_HARNESS_DIR === undefined) delete process.env.MSTAR_HARNESS_DIR;
+  else process.env.MSTAR_HARNESS_DIR = AMBIENT_HARNESS_DIR;
+  for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true });
+});
 
 /**
  * A harness and an invocation cwd that are siblings: the cwd contains no

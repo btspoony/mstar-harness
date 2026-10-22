@@ -14,7 +14,9 @@
  * patch algorithm (`insert` append + id-targeted `config` replacement).
  */
 import { describe, expect, it } from 'bun:test'
-import { existsSync, readFileSync } from 'node:fs'
+import { spawn } from 'node:child_process'
+import { existsSync, mkdtempSync, readFileSync, rmSync } from 'node:fs'
+import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { load } from 'js-yaml'
 import * as plugin from '../src/index.ts'
@@ -171,4 +173,137 @@ describe('profile bundle layer (Task 4)', () => {
     expect(finalRow?.config).toEqual({ enforcement: 'soft' })
     expect((finalRow?.config as Record<string, unknown>).bundledSkillDir).toBeUndefined()
   })
+})
+
+/* ------------------------------------------------------------------------ *
+ * The shipped `mstar-mcp` row, LAUNCHED
+ *
+ * Reading the row proves it is declared; it does not prove what the host gets
+ * from it. The row mounts ONE generic stdio connection for the whole profile,
+ * and that connection is where a caller meets the control-root rule. So the
+ * test runs the row's OWN server argv against this checkout's CLI entry (the
+ * row's `npx` launcher would fetch the published package over the network; the
+ * argv, not the launcher, is the shipped contract) and asserts what the default
+ * connection does: a root-free call answers, a root CONSUMER refuses.
+ * ------------------------------------------------------------------------ */
+
+/** Repo root (`packages/dsh/tests` -> up three levels). */
+const REPO_ROOT = join(import.meta.dir, '..', '..', '..')
+/** The CLI entry the row's package (`@mstar-harness/cli`) provides in this checkout. */
+const CLI_ENTRY = join(REPO_ROOT, 'packages', 'cli', 'src', 'index.ts')
+/** Ambient root/identity variables the connection must not inherit. */
+const STRIPPED_ENV = [
+  'MSTAR_HARNESS_DIR',
+  'MSTAR_CONTROL_ROOT',
+  'SDD_DIR',
+  'MSTAR_HOST_SESSION_ID',
+  'MSTAR_EXECUTION_IDENTITY',
+  'MSTAR_WRITE_GATE',
+]
+
+/** The MCP server argv the shipped row launches, read from the row itself. */
+function rowServerArgv(): string[] {
+  const config = mstarMcpRow().config as { command?: unknown; args?: unknown }
+  expect(typeof config.command).toBe('string')
+  const args = config.args as string[]
+  const packageIndex = args.indexOf('@mstar-harness/cli')
+  expect(packageIndex).toBeGreaterThanOrEqual(0)
+  return args.slice(packageIndex + 1)
+}
+
+type JsonRpcResponse = {
+  id?: number
+  result?: { content?: Array<{ text?: string }>; structuredContent?: unknown; isError?: boolean }
+  error?: unknown
+}
+
+/** One newline-delimited JSON-RPC child over its stdio, answered by request id. */
+function startRowServer(argv: readonly string[], cwd: string) {
+  const env: Record<string, string> = {}
+  for (const [key, value] of Object.entries(process.env)) {
+    if (value === undefined || STRIPPED_ENV.includes(key)) continue
+    env[key] = value
+  }
+  const child = spawn(process.execPath, ['run', CLI_ENTRY, ...argv], { cwd, env, stdio: ['pipe', 'pipe', 'pipe'] })
+  const waiters = new Map<number, (response: JsonRpcResponse) => void>()
+  let buffer = ''
+  let stderr = ''
+  let nextId = 0
+  child.stdout.setEncoding('utf8')
+  child.stderr.setEncoding('utf8')
+  child.stdout.on('data', (chunk: string) => {
+    buffer += chunk
+    while (true) {
+      const newline = buffer.indexOf('\n')
+      if (newline === -1) break
+      const line = buffer.slice(0, newline).trim()
+      buffer = buffer.slice(newline + 1)
+      if (line === '') continue
+      const response = JSON.parse(line) as JsonRpcResponse
+      const waiter = response.id === undefined ? undefined : waiters.get(response.id)
+      if (waiter !== undefined) {
+        waiters.delete(response.id!)
+        waiter(response)
+      }
+    }
+  })
+  child.stderr.on('data', (chunk: string) => {
+    stderr += chunk
+  })
+  return {
+    request(method: string, params: unknown): Promise<JsonRpcResponse> {
+      const id = nextId++
+      return new Promise((resolve, reject) => {
+        waiters.set(id, resolve)
+        child.stdin.write(`${JSON.stringify({ jsonrpc: '2.0', id, method, params })}\n`)
+        setTimeout(() => reject(new Error(`mcp ${method} timed out\n${stderr}`)), 60_000).unref?.()
+      })
+    },
+    notify(method: string, params: unknown): void {
+      child.stdin.write(`${JSON.stringify({ jsonrpc: '2.0', method, params })}\n`)
+    },
+    stderr: (): string => stderr,
+    stop(): void {
+      child.stdin.end()
+      child.kill()
+    },
+  }
+}
+
+describe('the shipped mstar-mcp row, launched', () => {
+  it('answers a root-free call and refuses a root consumer when no root is declared', async () => {
+    const cwd = mkdtempSync(join(tmpdir(), 'mstar-dsh-row-'))
+    const server = startRowServer(rowServerArgv(), cwd)
+    try {
+      const handshake = await server.request('initialize', {
+        protocolVersion: '2025-06-18',
+        capabilities: {},
+        clientInfo: { name: 'dsh-row-test', version: '0.0.0' },
+      })
+      expect((handshake.result as unknown as { serverInfo?: { name?: string } }).serverInfo?.name).toBe('mstar-harness')
+      server.notify('notifications/initialized', {})
+
+      // The row mounts the folded family surface, not some other server.
+      const listed = await server.request('tools/list', {})
+      const names = ((listed.result as unknown as { tools?: Array<{ name: string }> }).tools ?? []).map((tool) => tool.name)
+      expect(names).toContain('mstar_status')
+      expect(names).toContain('mstar_schema')
+
+      // A root-free call answers on the very connection that refuses below: the
+      // refusal is about the missing root, not a dead child.
+      const discovery = await server.request('tools/call', { name: 'mstar_schema', arguments: { action: 'schema', family: 'plan' } })
+      expect(discovery.result?.isError).toBe(false)
+
+      // `status.validate` reads the control root and publishes no root
+      // selector, so the shipped argv's undeclared root is what refuses it.
+      const refused = await server.request('tools/call', { name: 'mstar_status', arguments: { action: 'validate' } })
+      expect(refused.result?.isError).toBe(true)
+      const text = (refused.result?.content ?? []).map((block) => block.text ?? '').join('\n')
+      expect(text).toContain('mcp.control-root-unresolved')
+      expect(text).toContain('--harness')
+    } finally {
+      server.stop()
+      rmSync(cwd, { recursive: true, force: true })
+    }
+  }, 120_000)
 })
