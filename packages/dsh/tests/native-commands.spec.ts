@@ -38,7 +38,7 @@ import {
   readExecutionState,
   registerCatalogEntity,
 } from '@mstar-harness/engine'
-import type { ExecutionCaller, ExecutionContext, ExecutionSessionRef } from '@mstar-harness/engine'
+import type { ExecutionCaller, ExecutionContext, ExecutionSessionRef, StoreHandle } from '@mstar-harness/engine'
 import { adoptExecutionBinding, resolveExecutionLedgerTarget } from '../src/gates/workflow-selection.ts'
 import { adoptionRecoveryText, postCommitAdoptionRefusal } from '../src/gates/native-commands.ts'
 import { readWorkflowSessionBinding, updateWorkflowSessionBinding } from '../src/engine-status-store.ts'
@@ -88,7 +88,22 @@ const REMOVED_TOOLS = [
 let booted: BootResult | undefined
 const roots: string[] = []
 
+/**
+ * The store connections this case holds open, one per root at most: a fixture
+ * acquires it while the store is created or seeded and keeps it to the end.
+ *
+ * The reason is the runtime's own close: once the last connection to a WAL
+ * store closes, its journal sidecars are removed when the handle is collected,
+ * and a read-only open of that quiesced shape fails with SQLITE_CANTOPEN,
+ * which the engine reports as `store.corrupt` "unable to open database file".
+ * The fixture's live connection keeps the journal in place, so every read the
+ * case performs — the tool's own read and the durable-slot reads — meets an
+ * open store instead of a just-closed one.
+ */
+const storeHandles: StoreHandle[] = []
+
 afterEach(async () => {
+  for (const handle of storeHandles.splice(0)) handle.close()
   await booted?.dispose()
   booted = undefined
   for (const root of roots.splice(0)) await rm(root, { recursive: true, force: true })
@@ -126,12 +141,15 @@ function storedBinding(harnessDir: string, cwd: string, sessionId = CHILD_ID): W
 }
 
 /**
- * The session's adopted execution binding, or `null` — tolerant of a slot that
- * was never written (a refusal path leaves no readable record).
+ * The session's adopted execution binding, or `null` — a slot that was never
+ * written reads as `ok` with no binding. An UNREADABLE store is not "no
+ * record": it fails the case with the store's own reason, so "nothing was
+ * written" can never pass because the store could not be opened.
  */
 function adoptedBindingOf(harnessDir: string, cwd: string, sessionId: string): WorkflowSessionBinding['executionBinding'] | null {
   const read = readWorkflowSessionBinding(harnessDir, sessionId, cwd)
-  return read.kind === 'ok' ? read.binding?.executionBinding ?? null : null
+  if (read.kind !== 'ok') throw new Error(`the binding slot read failed: ${read.reason}`)
+  return read.binding?.executionBinding ?? null
 }
 
 /**
@@ -142,8 +160,9 @@ function adoptedBindingOf(harnessDir: string, cwd: string, sessionId: string): W
  */
 async function seedBoundAuthority(harnessDir: string, sessionId: string): Promise<ExecutionSessionRef> {
   await mkdir(harnessDir, { recursive: true })
-  const handle = await initializeStore({ harnessDir })
-  handle.close()
+  // The fixture's ONE connection for this root: kept open through the case so
+  // the reads below never open a just-closed store (see `storeHandles`).
+  storeHandles.push(await initializeStore({ harnessDir }))
   const rootToken = (await readExecutionState({ harnessDir })).token
   await registerCatalogEntity(
     { harnessDir },
@@ -210,8 +229,9 @@ async function adoptFor(harnessDir: string, cwd: string, sessionId: string): Pro
  */
 async function seedUnboundWorkflow(harnessDir: string, coordinatorSessionId: string): Promise<void> {
   await mkdir(harnessDir, { recursive: true })
-  const handle = await initializeStore({ harnessDir })
-  handle.close()
+  // The fixture's ONE connection for this root, kept open for the case (see
+  // `storeHandles`): the bind's refusal path reads the slot afterwards.
+  storeHandles.push(await initializeStore({ harnessDir }))
   const rootToken = (await readExecutionState({ harnessDir })).token
   await registerCatalogEntity(
     { harnessDir },
@@ -485,9 +505,10 @@ describe('mstar_execution_clear — the native-only clear', () => {
     const app = booted = await bootApp()
     // An ACTIVE authority with no binding row for this session is the
     // "nothing to clear" case; without a store the same call answers the
-    // store refusal instead (pinned by the case below).
-    const handle = await initializeStore({ harnessDir: app.harnessDir })
-    handle.close()
+    // store refusal instead (pinned by the case below). The handle stays open
+    // through the call and the assertions — closing it here would make the
+    // clear's own read the first connection to a just-closed store.
+    storeHandles.push(await initializeStore({ harnessDir: app.harnessDir }))
     const refused = envelopeOf(await run(app.ctx, CLEAR_TOOL, agentOf(CHILD_ID, app.root), {}))
     expect(refused.status).toBe('refused')
     expect(refused.code).toBe('execution.clear.no-binding')
@@ -509,8 +530,7 @@ describe('mstar_execution_clear — the native-only clear', () => {
     const recordedWorkspace = await mkdtemp(join(tmpdir(), 'native-surface-workspace-'))
     roots.push(recordedWorkspace)
     await mkdir(app.harnessDir, { recursive: true })
-    const handle = await initializeStore({ harnessDir: app.harnessDir })
-    handle.close()
+    storeHandles.push(await initializeStore({ harnessDir: app.harnessDir }))
     // A durable record for this session exists, keyed to another workspace…
     expect(updateWorkflowSessionBinding(app.harnessDir, CHILD_ID, recordedWorkspace, {
       selectedWorkflowId: WORKFLOW_ID,
