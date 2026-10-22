@@ -29,6 +29,7 @@ describe("redactSessionIds", () => {
         }],
       }],
       terminalAdoptions: [{ actor_session_id: "live-actor", status: "completed" }],
+      integrationLease: { holder: "live-lease-holder", branch: "feature/x" },
     };
 
     const out = JSON.stringify(redactSessionIds(payload));
@@ -42,6 +43,7 @@ describe("redactSessionIds", () => {
       "live-stopped-a",
       "live-stopped-b",
       "live-actor",
+      "live-lease-holder",
     ]) {
       expect(out).not.toContain(id);
     }
@@ -50,7 +52,7 @@ describe("redactSessionIds", () => {
     expect(out).toContain('"epoch":3');
     expect(out).toContain('"revision":7');
     expect(out).toContain('"status":"completed"');
-    expect(out.split(REDACTED_SESSION_ID).length - 1).toBe(8);
+    expect(out.split(REDACTED_SESSION_ID).length - 1).toBe(9);
   });
 
   test("leaves blank and non-string values untouched", () => {

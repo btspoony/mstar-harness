@@ -52,6 +52,7 @@ import {
   type ExecutionIdentity,
 } from "@mstar-harness/engine";
 import { commandEnvelopeSchema } from "../definitions.js";
+import { redactSessionIds } from "../session-redaction.js";
 import { refusalEnvelope } from "../envelope.js";
 import { decodeInputDiagnostics } from "../input-diagnostics.js";
 import { engineErrorFacts } from "./family-refusal.js";
@@ -260,7 +261,10 @@ export function getExecutionLedgerCommandDefinitions(): readonly CommandDefiniti
           }
           const file = input.file ?? workflowNotesLedgerPath({ harnessDir: root }, input.workflow);
           const bytes = readLedgerBytes(file);
-          return ok(COVERAGE_ID, normalizeWorkflowNotesCoverage({ workflowId: input.workflow, path: file, bytes }));
+          // A note records the session that appended it, and this command needs
+          // no identity to run, so the raw record would hand out a bearer id for
+          // coordinator-scoped writes on an opted-in connection.
+          return ok(COVERAGE_ID, redactSessionIds(normalizeWorkflowNotesCoverage({ workflowId: input.workflow, path: file, bytes })));
         } catch (error) {
           return engineRefusal(COVERAGE_ID, error);
         }

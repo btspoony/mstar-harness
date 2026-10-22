@@ -10,9 +10,11 @@
  * names in the same payload — `sessionId` on a coordinator ref, `prepared_by`
  * on a plan's coordination block, `session_id` / `prior_session_id` /
  * `stopped_session_ids[]` on an identity recovery, `actor_session_id` on a
- * terminal adoption. This walks the whole payload and rewrites every one of
- * them, keeping the surrounding facts (role, epoch, revision, actor name) so
- * the read stays useful.
+ * terminal adoption, and `holder` on an integration merge lease (the engine
+ * compares it with the bound session id, so it IS that coordinator's id). This
+ * walks the whole payload and rewrites every one of them, keeping the
+ * surrounding facts (role, epoch, revision, actor name) so the read stays
+ * useful.
  */
 export const REDACTED_SESSION_ID = "[redacted]";
 
@@ -24,6 +26,9 @@ const SESSION_ID_FIELDS = new Set([
   "completed_by",
   "actor_session_id",
   "prior_session_id",
+  // `IntegrationMergeLease.holder` is compared with the bound session id
+  // (`execution-coordination.ts`), so it is that coordinator's id, not a name.
+  "holder",
 ]);
 
 /** Field names that carry a list of session ids. */
