@@ -236,9 +236,9 @@ export class MstarPanelSnapshotGateway extends TypertRemoteService {
  * (`src-json` codecs accept a missing wire field), so the panel can ask for the
  * workspace body without a selection.
  *
- * Exported separately from {@link mstarPanelSnapshotContribution}: typert admits
- * exactly ONE contribution per `<package>#<face>`, so this descriptor is what a
- * shared host contribution carries beside its own — see
+ * The descriptor is CARRIED by `mstarEngineStatusContribution()`: typert admits
+ * exactly ONE contribution per `<package>#<face>`, so the package's single host
+ * contribution lists it beside its own — see
  * {@link installPanelSnapshotEndpoint} for the constraint.
  */
 export function mstarPanelSnapshotInvocation(): TypertContribution['invocations'][number] {
@@ -260,44 +260,19 @@ export function mstarPanelSnapshotInvocation(): TypertContribution['invocations'
 }
 
 /**
- * The invocation descriptor for the shared `/api` gateway:
- * `/api/mstar/panelSnapshot` with one plain-object `args` field keyed by the
- * five declared parameter names. Optional ids legitimately absent (`src-json`
- * codecs accept a missing wire field), so the panel can ask for the workspace
- * body without a selection.
- */
-export function mstarPanelSnapshotContribution(): TypertContribution {
-  return {
-    package: CONTRIBUTING_PACKAGE,
-    face: 'host',
-    schemas: [],
-    model: { services: [], events: [], objects: [] },
-    invocations: [mstarPanelSnapshotInvocation()],
-  }
-}
-
-/**
- * A registration refusal that the SECOND registrant may ignore: the endpoint or
- * its invocation id already exists (a sibling fiber / HMR re-apply got there
- * first). A duplicate PACKAGE FACE is NOT benign — typert admits one
- * contribution per `<package>#<face>`, so that refusal means this unit's
- * descriptor can never be served, and swallowing it would leave the endpoint
- * silently absent. It propagates.
- * @param error - what `typert.register` threw.
- */
-function isBenignDuplicate(error: unknown): boolean {
-  if (!(error instanceof Error)) return false
-  return error.message.includes('endpoint "') || error.message.includes('invocation id "')
-}
-
-/**
- * Install the host half of the channel on one apply scope.
+ * Install the host half of the channel on one apply scope: just the cordis
+ * service.
  *
- * Two optional units, never a static inject on the plugin row: the service
- * (present-check first, so a sibling apply / HMR re-apply keeps the FIRST
- * instance and its own resolver), and the endpoint contribution inside
- * `ctx.inject(['typert'], …)`, returning that registration's own disposer so
- * the endpoint withdraws with the child fiber.
+ * The DESCRIPTOR is not registered here. typert admits exactly ONE
+ * contribution per `<package>#<face>`, and this package's `host` face belongs
+ * to `mstarEngineStatusContribution()`, which carries
+ * {@link mstarPanelSnapshotInvocation} in its own list (the engine-status
+ * module imports it). A second contribution from this module would be refused
+ * at boot and leave the endpoint silently unserved.
+ *
+ * The present-check is the dedupe: a sibling apply / HMR re-apply keeps the
+ * FIRST instance with its own resolver and boot root, exactly like the
+ * engine-status gateway beside it.
  * @param ctx - the plugin's apply context.
  * @param options - the apply-scoped resolver + boot root.
  */
@@ -310,22 +285,13 @@ export function installPanelSnapshotEndpoint(ctx: Context, options: PanelSnapsho
   }
   if (present) {
     ctx.logger(ENDPOINT_LOGGER).debug('mstar panel-snapshot gateway already registered — kept as-is (multi-fiber dedupe)')
-  } else {
-    try {
-      void new MstarPanelSnapshotGateway(ctx, options)
-    } catch (error) {
-      // The admission test lost a race: the earlier registrant stays.
-      if (!(error instanceof Error) || !error.message.includes('has been registered')) throw error
-      ctx.logger(ENDPOINT_LOGGER).debug('mstar panel-snapshot gateway registered concurrently — kept the first (multi-fiber dedupe)')
-    }
+    return
   }
-  ctx.inject(['typert'], (tctx) => {
-    try {
-      return tctx.typert.register(mstarPanelSnapshotContribution())
-    } catch (error) {
-      if (!isBenignDuplicate(error)) throw error
-      tctx.logger(ENDPOINT_LOGGER).debug('mstar panel-snapshot endpoint registered concurrently — none on this fiber (multi-fiber dedupe)')
-      return () => {}
-    }
-  })
+  try {
+    void new MstarPanelSnapshotGateway(ctx, options)
+  } catch (error) {
+    // The admission test lost a race: the earlier registrant stays.
+    if (!(error instanceof Error) || !error.message.includes('has been registered')) throw error
+    ctx.logger(ENDPOINT_LOGGER).debug('mstar panel-snapshot gateway registered concurrently — kept the first (multi-fiber dedupe)')
+  }
 }

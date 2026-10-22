@@ -68,6 +68,11 @@ import {
   MSTAR_ENGINE_STATUS_NAMESPACE,
   MSTAR_SELECT_WORKFLOW_METHOD,
 } from './engine-status-wire.ts'
+// The panel's store-backed read joins THIS package's host contribution: typert
+// admits one contribution per `<package>#<face>`, so a second `register` from
+// the same package is refused. Its descriptor names its own service and the
+// shared `mstar` namespace, so nothing here changes for the two above.
+import { mstarPanelSnapshotInvocation } from './panel/panel-snapshot-endpoint.ts'
 
 // The wire address is declared ONCE for both halves (`./engine-status-wire.ts`)
 // and re-exported here for the host-side consumers that already import this
@@ -452,6 +457,9 @@ export class MstarEngineStatusGateway extends TypertRemoteService {
  * checks its own `ctx.typert.local` table FIRST, while SRC discovery reads a
  * module-private marker table that a locally-resolved plugin copy can never
  * share with the host installation.
+ *
+ * The panel's `mstar/panelSnapshot` descriptor rides this list (typert admits
+ * one contribution per package face) while its service stays separate.
  */
 export function mstarEngineStatusContribution(): TypertContribution {
   return {
@@ -485,6 +493,9 @@ export function mstarEngineStatusContribution(): TypertContribution {
         ],
         result: { mode: 'src-json' },
       },
+      // The panel's store-backed read rides this contribution (one per package
+      // face) while serving from its OWN service — see the import note above.
+      mstarPanelSnapshotInvocation(),
     ],
   }
 }

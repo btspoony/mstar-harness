@@ -38,6 +38,7 @@ import {
 } from './gates/catalog.ts'
 import type { CatalogCacheEntry, EmissionDigest } from './gates/catalog.ts'
 import { installEngineStatusEndpoint } from './engine-status-endpoint.ts'
+import { installPanelSnapshotEndpoint } from './panel/panel-snapshot-endpoint.ts'
 import { writeIntentListener, editIntentListener } from './gates/status.ts'
 import type { StatusGateAdvisory } from './gates/status.ts'
 import { skillWriteIntentListener } from './gates/skill-lint.ts'
@@ -945,6 +946,11 @@ export function apply(ctx: Context, config: Config): void {
     // acknowledged binding (the other sessions' keys stay untouched).
     invalidateSelection: (harnessDir, sessionId) => catalogInvalidation.invalidateSession(harnessDir, sessionId),
   })
+  // The panel's store-backed read: its own service under the shared `mstar`
+  // wire namespace (its descriptor rides the contribution above — typert admits
+  // one per package face), so retiring the engine-status read path in Task 7
+  // leaves this endpoint serving.
+  installPanelSnapshotEndpoint(ctx, { resolver, bootHarnessDir })
 
   // The dsh-native tool surface — three tools, registered and HMR-disposed in
   // the module: `mstar_plan_bind` (producer of the dsh durable execution

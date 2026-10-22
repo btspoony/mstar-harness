@@ -19,12 +19,11 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { Context, Service } from '@deepseek-ai/cordis'
 import TypertRegistry from '@deepseek-ai/dsh-typert-registry'
-import { HarnessResolver } from '../src/gates/_shared.ts'
 import { bootApp, seedStore, type BootResult } from './harness.ts'
 import {
   PANEL_SNAPSHOT_SERVICE,
   installPanelSnapshotEndpoint,
-  mstarPanelSnapshotContribution,
+  mstarPanelSnapshotInvocation,
   type PanelSnapshotEndpointOptions,
 } from '../src/panel/panel-snapshot-endpoint.ts'
 import { MSTAR_PANEL_SNAPSHOT_METHOD, MSTAR_PANEL_SNAPSHOT_NAMESPACE } from '../src/engine-status-wire.ts'
@@ -92,57 +91,56 @@ async function bareWorkspace(): Promise<string> {
   return root
 }
 
-/** The apply-scoped options the plugin passes: per-workspace resolution, no configured root. */
-function endpointOptions(): PanelSnapshotEndpointOptions {
-  return { resolver: new HarnessResolver(undefined), bootHarnessDir: null }
-}
-
-/** Install the unit on the app's context — the wiring `apply` performs. */
-async function installEndpoint(app: BootResult): Promise<void> {
-  await app.ctx.plugin((rowCtx: Context) => {
-    installPanelSnapshotEndpoint(rowCtx, endpointOptions())
-  })
-}
 
 describe('panelSnapshot endpoint — registration on the shared /api gateway', () => {
-  it('contributes mstar/panelSnapshot with the five declared argument wires', async () => {
-    // A FRESH context: the plugin's own apply already registers the
-    // `@mstar-harness/dsh#host` package face (the engine-status contribution),
-    // and typert admits one contribution per package face — so the descriptor
-    // shape is pinned here, on a registry where this unit is the only host
-    // contributor.
-    const ctx = new Context()
-    await ctx.plugin(TypertRegistry)
-    await ctx.plugin((rowCtx: Context) => {
-      installPanelSnapshotEndpoint(rowCtx, endpointOptions())
-    })
+  it('serves mstar/panelSnapshot from the composed plugin beside the two it shares a contribution with', async () => {
+    // The COMPOSED boot, not a hand-mounted unit: typert admits one
+    // contribution per `<package>#<face>`, so the only proof that matters is
+    // that the plugin's own apply registers all three descriptors and that the
+    // two pre-existing ones are untouched.
+    const app = (booted = await bootApp({ sessionsService: 'fake', harnessDir: null }))
+    await app.ctx.plugin(TypertRegistry)
 
-    const registry = ctx.get('typert') as { local: { get(endpoint: string): unknown } }
-    const descriptor = registry.local.get(`${MSTAR_PANEL_SNAPSHOT_NAMESPACE}/${MSTAR_PANEL_SNAPSHOT_METHOD}`) as
+    const registry = app.ctx.get('typert') as { local: { get(endpoint: string): unknown } }
+    const panel = registry.local.get(`${MSTAR_PANEL_SNAPSHOT_NAMESPACE}/${MSTAR_PANEL_SNAPSHOT_METHOD}`) as
       | Record<string, unknown>
       | undefined
-    expect(descriptor).toBeDefined()
-    expect(descriptor).toMatchObject({
+    expect(panel).toBeDefined()
+    expect(panel).toMatchObject({
       service: PANEL_SNAPSHOT_SERVICE,
       namespace: MSTAR_PANEL_SNAPSHOT_NAMESPACE,
       method: MSTAR_PANEL_SNAPSHOT_METHOD,
       invocation: { kind: 'direct' },
       result: { mode: 'src-json' },
     })
-    expect((descriptor?.parameters as Array<{ wire: string }>).map((parameter) => parameter.wire)).toEqual([
+    expect((panel?.parameters as Array<{ wire: string }>).map((parameter) => parameter.wire)).toEqual([
       'sessionId',
       'cwd',
       'workflowId',
       'iterationId',
       'projectId',
     ])
+    // The neighbours are unchanged: same service, same namespace, same wires.
+    expect(registry.local.get('mstar/engineStatus')).toMatchObject({
+      service: 'mstar',
+      namespace: 'mstar',
+      method: 'engineStatus',
+      result: { mode: 'src-json' },
+    })
+    expect(registry.local.get('mstar/selectWorkflow')).toMatchObject({
+      service: 'mstar',
+      namespace: 'mstar',
+      method: 'selectWorkflow',
+      result: { mode: 'src-json' },
+    })
+    // And the service the panel descriptor names is the one that answers.
+    expect(typeof endpointOf(app).panelSnapshot).toBe('function')
   })
 })
 
 describe('panelSnapshot endpoint — argument shape precedes every store access', () => {
   it('refuses empty ids, a relative cwd and traversal before reading the store', async () => {
     const app = (booted = await bootApp({ sessionsService: 'fake', harnessDir: null }))
-    await installEndpoint(app)
     liveSession(app, 'ses_alpha', app.root)
     const endpoint = endpointOf(app)
 
@@ -178,7 +176,6 @@ describe('panelSnapshot endpoint — argument shape precedes every store access'
 
   it('refuses a client cwd that does not equal the resolved session cwd', async () => {
     const app = (booted = await bootApp({ sessionsService: 'fake', harnessDir: null }))
-    await installEndpoint(app)
     liveSession(app, 'ses_alpha', app.root)
     const other = await bareWorkspace()
 
@@ -195,7 +192,6 @@ describe('panelSnapshot endpoint — server-side harness resolution', () => {
     // No configured root: the ONLY way to a harness dir is the SERVER-side
     // resolution of the session's own cwd.
     const app = (booted = await bootApp({ sessionsService: 'fake', harnessDir: null }))
-    await installEndpoint(app)
     await seedStore(app.harnessDir)
     liveSession(app, 'ses_alpha', app.root)
 
@@ -209,7 +205,6 @@ describe('panelSnapshot endpoint — server-side harness resolution', () => {
 
   it('answers no-harness-dir for a session whose workspace declares none', async () => {
     const app = (booted = await bootApp({ sessionsService: 'fake', harnessDir: null }))
-    await installEndpoint(app)
     const bare = await bareWorkspace()
     liveSession(app, 'ses_bare', bare)
 
@@ -222,7 +217,6 @@ describe('panelSnapshot endpoint — server-side harness resolution', () => {
 
   it('resolves a cold session through the persisted controller read', async () => {
     const app = (booted = await bootApp({ sessionsService: 'fake', harnessDir: null }))
-    await installEndpoint(app)
     await app.ctx.plugin(FakeSessionController)
     const controller = app.ctx.get('sessionController') as FakeSessionController
     controller.handler = async (sessionId: string) =>
@@ -239,7 +233,6 @@ describe('panelSnapshot endpoint — server-side harness resolution', () => {
 describe('panelSnapshot endpoint — store degradation is a value, not a throw', () => {
   it('answers unavailable with the store reason when the store refuses', async () => {
     const app = (booted = await bootApp({ sessionsService: 'fake', harnessDir: null }))
-    await installEndpoint(app)
     liveSession(app, 'ses_alpha', app.root)
 
     const result = await endpointOf(app).panelSnapshot('ses_alpha', app.root)
@@ -252,7 +245,6 @@ describe('panelSnapshot endpoint — store degradation is a value, not a throw',
 
   it('answers unavailable when the session is unknown to the host', async () => {
     const app = (booted = await bootApp({ sessionsService: 'fake', harnessDir: null }))
-    await installEndpoint(app)
     await seedStore(app.harnessDir)
 
     expect(await endpointOf(app).panelSnapshot('ses_absent', app.root)).toEqual({
@@ -265,7 +257,6 @@ describe('panelSnapshot endpoint — store degradation is a value, not a throw',
 describe('panelSnapshot endpoint — install', () => {
   it('installs once per context and keeps the first service on a second apply', async () => {
     const app = (booted = await bootApp({ sessionsService: 'fake', harnessDir: null }))
-    await installEndpoint(app)
     const options: PanelSnapshotEndpointOptions = {
       resolver: { forWorkspace: () => null },
       bootHarnessDir: null,
@@ -274,6 +265,12 @@ describe('panelSnapshot endpoint — install', () => {
     // taken): it logs and keeps the existing one.
     installPanelSnapshotEndpoint(app.ctx, options)
     expect(typeof endpointOf(app).panelSnapshot).toBe('function')
-    expect(mstarPanelSnapshotContribution().invocations).toHaveLength(1)
+    // The descriptor is NOT this unit's to register: the package's single host
+    // contribution carries it, and that is the only invocation it declares.
+    expect(mstarPanelSnapshotInvocation()).toMatchObject({
+      service: PANEL_SNAPSHOT_SERVICE,
+      namespace: MSTAR_PANEL_SNAPSHOT_NAMESPACE,
+      method: MSTAR_PANEL_SNAPSHOT_METHOD,
+    })
   })
 })
