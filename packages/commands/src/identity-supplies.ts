@@ -11,7 +11,7 @@
  * through the CLI, and plan prepare/progress/complete have no native tool yet.
  */
 export const IDENTITY_SUPPLIES =
-  "CLI: pass --session-id or set MSTAR_HOST_SESSION_ID; MCP: a shared connection accepts no caller-declared identity by default, so use the dsh native tool that covers the operation (plan bind, audit report validation and execution clear) or run the CLI command from the session's shell \u2014 plan prepare/progress/complete have no native tool yet";
+  "CLI: pass --session-id or set MSTAR_HOST_SESSION_ID (dsh shells also export DSH_SESSION_ID, which the CLI reads); MCP: pass sessionId on a connection launched with --trust-caller-session-id \u2014 the shipped dsh and omp launcher rows pass it, and there the value is a bearer identity that selects the caller's own coordinator binding; on a connection that did not opt in, use the dsh native tool that covers the operation (plan bind, audit report validation and execution clear) or run the CLI command";
 
 /**
  * Where a caller reads each execution token kind a CLI `--expect` may need, in

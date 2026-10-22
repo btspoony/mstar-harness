@@ -311,14 +311,16 @@ describe("execution session recovery (S2/E03)", () => {
       workflow_id: WORKFLOW_ID,
       role: "coordinator",
       session_id: FOREIGN_COORDINATOR_ID,
-      holder: COORDINATOR_ID,
+      holder_epoch: expect.any(Number),
     });
     expect(foreign.recovery).toMatchObject({ outcome: "unresolved", commitState: "none", applied: [] });
     expect(foreign.recovery.unresolved).toHaveLength(1);
     expect(foreign.recovery.unresolved[0]).toMatchObject({ component: "session", path: "session" });
-    // The supported, ownership-preserving recovery names the RECORDED HOLDER
-    // (stop/recovery with its attestation), never the foreign caller.
-    expect(foreign.recovery.unresolved[0]?.needed).toContain(COORDINATOR_ID);
+    // The supported, ownership-preserving recovery names the live holder by
+    // state/epoch, never by id: the id is replayable as a coordinator-scoped
+    // write input on an opted-in MCP connection, so a refusal must not hand it
+    // out. The operator reads it from `mstar status validate`.
+    expect(foreign.recovery.unresolved[0]?.needed).not.toContain(COORDINATOR_ID);
     expect(foreign.recovery.unresolved[0]?.needed).not.toContain(FOREIGN_COORDINATOR_ID);
     // The holder is left exactly where it was, and keeps working.
     expect(footprint(fixture.context)).toEqual(before);

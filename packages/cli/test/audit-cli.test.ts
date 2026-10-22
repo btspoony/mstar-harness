@@ -337,7 +337,9 @@ describe("mstar audit scaffold — review run dir from findings JSON", () => {
     });
   });
 
-  test("invalid optional-field states → usage, exit 2", () => {
+  // Thirteen spawns, one per invalid payload: the default 5s budget is not
+  // enough on a loaded CI shard, and a timeout here reads as a wrong exit code.
+  test("invalid optional-field states → usage, exit 2", { timeout: 60_000 }, () => {
     for (const bad of [
       { fingerprint: null },
       { fingerprint: 42 },

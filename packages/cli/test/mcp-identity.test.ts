@@ -481,3 +481,79 @@ describe("MCP session identity", () => {
   });
 
 });
+
+/**
+ * Store-level operations belong to the local CLI: their payload is the whole
+ * execution store, including `execution_sessions` rows, so publishing them on a
+ * shared connection would hand out bearer ids that no redaction can remove
+ * without making a backup unrestorable. MCP carries the runtime surface only.
+ */
+describe("MCP surface — store-level commands stay on the CLI", () => {
+  /** Every tool the production assembly publishes, with its description. */
+  async function allPublishedTools(): Promise<Array<{ name: string; description?: string }>> {
+    const server = new McpServer({ name: "surface-test-server", version: "1.0.0" });
+    const client = new Client({ name: "surface-test-client", version: "1.0.0" });
+    const [clientEnd, serverEnd] = InMemoryTransport.createLinkedPair();
+    try {
+      registerMcpCommands(server, getCommandDefinitions(), createContextResolver());
+      await server.connect(serverEnd);
+      await client.connect(clientEnd);
+      const { tools } = await client.listTools();
+      return tools as Array<{ name: string; description?: string }>;
+    } finally {
+      await client.close();
+      await server.close();
+    }
+  }
+
+  test("no command whose id starts with `store.` is reachable through tools/list", async () => {
+    // Enumerated independently of the filter, so a new or misclassified
+    // store command cannot become MCP-readable and keep this test green: the
+    // list comes from the command registry, the assertion from the published
+    // tools.
+    const storeIds = getCommandDefinitions()
+      .map((definition) => definition.id)
+      .filter((id) => id.startsWith("store."));
+    expect(storeIds.length).toBeGreaterThan(0);
+
+    const tools = await allPublishedTools();
+    expect(tools.map((tool) => tool.name)).not.toContain(familyToolName("store"));
+    const surfaces = tools.map((tool) => `${tool.name}\n${tool.description ?? ""}`).join("\n");
+    for (const id of storeIds) {
+      expect([id, surfaces.includes(id)]).toEqual([id, false]);
+    }
+
+    // A runtime family still publishes, so the assertion above is not vacuous.
+    expect(tools.map((tool) => tool.name)).toContain(familyToolName("plan"));
+  });
+
+  test("mstar_schema reports those commands as CLI-only through the MCP surface", async () => {
+    // The tool is gone but the COMMAND still exists, so discovery must not send
+    // an agent toward an MCP route that cannot be invoked: the surviving schema
+    // tool answers with the transport fact on both the family and leaf paths.
+    const server = new McpServer({ name: "schema-surface-server", version: "1.0.0" });
+    const client = new Client({ name: "schema-surface-client", version: "1.0.0" });
+    const [clientEnd, serverEnd] = InMemoryTransport.createLinkedPair();
+    try {
+      registerMcpCommands(server, getCommandDefinitions(), createContextResolver());
+      await server.connect(serverEnd);
+      await client.connect(clientEnd);
+      const family = await client.callTool({ name: "mstar_schema", arguments: { action: "schema", family: "store" } });
+      const members = (JSON.parse(String((family.content[0] as { text: string }).text)) as {
+        data: { members: Array<{ id: string; transport?: string }> };
+      }).data.members;
+      expect(members.length).toBeGreaterThan(0);
+      expect(members.every((member) => member.transport === "cli")).toBe(true);
+
+      const leaf = await client.callTool({
+        name: "mstar_schema",
+        arguments: { action: "schema", command: "store.execution.export" },
+      });
+      expect((JSON.parse(String((leaf.content[0] as { text: string }).text)) as { data: { transport?: string } })
+        .data.transport).toBe("cli");
+    } finally {
+      await client.close();
+      await server.close();
+    }
+  });
+});

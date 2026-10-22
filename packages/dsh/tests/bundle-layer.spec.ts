@@ -115,7 +115,15 @@ describe('profile bundle layer (Task 4)', () => {
     expect(config.serverName).toBe('mstar')
     expect(config.transport).toBe('stdio')
     expect(config.command).toBe('npx')
-    expect(config.args).toEqual(['-y', '@mstar-harness/cli', 'mcp'])
+    // The row opts in to caller session identity: without this flag the shared
+    // connection publishes no `sessionId` selector and every identity-bearing
+    // MCP action refuses. Assert the fact, not one exact argv: an equivalent
+    // launch (extra/renamed no-op options) must not fail this test, while a
+    // regression that drops the opt-in must.
+    const args = config.args as string[]
+    expect(args).toContain('--trust-caller-session-id')
+    expect(args.slice(0, 2)).toEqual(['-y', '@mstar-harness/cli'])
+    expect(args[2]).toBe('mcp')
   })
 
   it('ships exactly one MCP row: only the shared mstar-mcp row names the client package', () => {

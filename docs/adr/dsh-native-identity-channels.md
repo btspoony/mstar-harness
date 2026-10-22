@@ -81,17 +81,23 @@ the native path's own documentation replaces it.
   call puts on the wire is that call's own fact. The per-agent scoped mount was
   removed because it spawned one full process per agent and never activated
   (its bridge dependency was not on the plugin's resolution chain).
-  **A command that needs an identity does NOT read it from a caller-declared
-  `sessionId` on the default connection**: a child process cannot prove the
-  caller, so the selector is unpublished and a supplied one is refused with
-  `mcp.caller-identity-unavailable`. An explicit launch opt-in
-  (`mstar mcp --trust-caller-session-id`, OFF in the shipped bundle row) is the
-  only way to publish it, for a deployment that owns that trust boundary. The
-  three dsh **native tools** (`mstar_plan_bind`, `mstar_audit_validate`,
-  `mstar_execution_clear`) are the host-proven route where they cover the
-  operation, because there identity is `exec.agent.id` and no argument can
-  override it; everything else — including `plan prepare`, `plan progress` and
-  `plan complete`, which have no native tool yet — runs through the CLI. The
+  **A command that needs an identity reads a caller-declared `sessionId` only
+  on a connection whose launcher opted in** (`mstar mcp
+  --trust-caller-session-id`). A stdio child cannot prove the caller, so the
+  flag is the deployment's statement that it owns this connection's trust
+  boundary: without it the selector is unpublished and a supplied one is
+  refused with `mcp.caller-identity-unavailable`; with it the selector is
+  published and the value is a BEARER identity — `executionContextFor` turns it
+  into `context.caller` and the engine resolves the caller's OWN coordinator
+  binding from it, so knowing a live session id is enough to act as that
+  session, while authorization stays that binding row plus the optional
+  `--expect` CAS token. The shipped dsh bundle row and omp's `mcp.json` pass
+  the flag; a deployment that connects callers it does not trust must remove
+  it, and its refusal then names the host-proven routes: the three dsh
+  **native tools** (`mstar_plan_bind`, `mstar_audit_validate`,
+  `mstar_execution_clear`), where identity is `exec.agent.id` and no argument
+  can override it, and the CLI. On an opted-in connection those native tools
+  remain the routes that own plugin-local state. The
   shared connection takes its control root as an explicit input (`--harness`,
   `MSTAR_HARNESS_DIR`, or the call's `harness` selector) — never from the launch
   cwd.

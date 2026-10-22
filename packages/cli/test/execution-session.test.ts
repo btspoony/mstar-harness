@@ -2106,3 +2106,91 @@ describe("mstar milestone assign — acquired identity CLI smoke", () => {
     expect(jsonOf(stale).status).toBe("refused");
   });
 });
+
+/**
+ * The public authority read must not hand out a bearer identity. On an opted-in
+ * MCP connection a caller-declared id selects that session's coordinator
+ * binding, so `status validate` — which needs no identity to run — would
+ * otherwise answer any caller with a working credential for coordinator-scoped
+ * writes. This pins the field name the read used to expose, and the facts that
+ * must survive the redaction.
+ */
+describe("status validate — public authority reads", () => {
+  test("reports the coordinator by role and epoch, never its session id", async () => {
+    const fixture = await activeFixture("mstar-status-redaction");
+    const identity: ExecutionIdentity = {
+      source: "local",
+      sessionId: "session-status-redaction",
+      workflowId: WORKFLOW_ID,
+      role: "coordinator",
+    };
+    const rootToken = (await readExecutionAuthority(fixture.context)).token;
+    registerThroughAuthority(fixture, identity, rootToken);
+    const workflowToken = (await tokensOf(fixture)).workflow;
+    const bound = spawnCli(
+      [
+        "plan", "bind", "--execution", "--workflow", WORKFLOW_ID, "--coordinator",
+        "--expect", workflowToken, "--operation", "bind-redaction", "--harness", fixture.harnessDir,
+      ],
+      fixture,
+      cliEnv(fixture, identity),
+    );
+    expect(bound.exitCode, bound.stdout).toBe(0);
+
+    // No `--harness`: `status validate` takes no such option and must answer
+    // from the launch cwd's control root, exactly as an operator runs it.
+    const result = runCli(["status", "validate"], fixture);
+    expect(result.exitCode, result.stdout).toBe(0);
+    const payload = JSON.parse(result.stdout) as { data?: { authority?: { workflows?: Array<Record<string, unknown>> } } };
+    const workflow = payload.data?.authority?.workflows?.find(
+      (entry) => (entry.state as Record<string, unknown> | undefined)?.id === WORKFLOW_ID,
+    );
+    expect(workflow).toBeDefined();
+    expect(workflow?.coordinator).toMatchObject({ role: "coordinator", sessionId: "[redacted]" });
+    expect(typeof (workflow?.coordinator as Record<string, unknown>).epoch).toBe("number");
+    // Nothing else in the payload may echo it either: the read is the whole
+    // discoverability surface, not one field.
+    expect(JSON.stringify(payload)).not.toContain(identity.sessionId);
+  });
+});
+
+/**
+ * `terminalAdoptions` is a SIBLING of `authority`, so a redaction that walks
+ * only the authority subtree leaves `actor_session_id` readable — the third
+ * omission of that shape. This fixture records an adoption and pins the whole
+ * envelope.
+ */
+describe("status validate — adopted workflows", () => {
+  test("redacts the adopter session id on the sibling terminalAdoptions key", async () => {
+    const fixture = await activeFixture("mstar-status-adoption");
+    const handle = await openStore(fixture.context, "write");
+    try {
+      handle.db.prepare(
+        "insert into execution_workflows(workflow_id, revision, creator_session_id, state_json, created_at, updated_at) values (?, 1, null, ?, ?, ?)",
+      ).run("wf-adopted-legacy", JSON.stringify({
+        id: "wf-adopted-legacy",
+        schema_version: 1,
+        type: "plan",
+        status: "stopped",
+        started_at: "2026-10-01T00:00:00.000Z",
+        ended_at: "2026-10-01T01:00:00.000Z",
+        updated_at: "2026-10-01T01:00:00.000Z",
+        lifecycle_adopted_at: "2026-10-02T00:00:00.000Z",
+        adopt_reason: "legacy closeout",
+        adoption_actor_session_id: "session-adopter-live",
+        adoption_operation_id: "op-adopt-1",
+      }), "2026-10-01T00:00:00.000Z", "2026-10-01T01:00:00.000Z");
+    } finally {
+      handle.close();
+    }
+
+    const result = runCli(["status", "validate"], fixture);
+    expect(result.exitCode, result.stdout).toBe(0);
+    const payload = JSON.parse(result.stdout) as { data?: { terminalAdoptions?: Array<Record<string, unknown>> } };
+    expect(payload.data?.terminalAdoptions?.[0]).toMatchObject({
+      actor_session_id: "[redacted]",
+      adopt_reason: "legacy closeout",
+    });
+    expect(JSON.stringify(payload)).not.toContain("session-adopter-live");
+  });
+});

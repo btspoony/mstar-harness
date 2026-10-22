@@ -1,6 +1,6 @@
 import { resolve } from "node:path";
 import type { McpServer, StandardSchemaWithJSON } from "@modelcontextprotocol/server";
-import { admitCommandInput, getCommandSchemas, isPayloadPlaceholder, refusalEnvelope, sanitizeInputScalar } from "@mstar-harness/commands";
+import { admitCommandInput, getCommandSchemas, isCliOnlyCommand, isPayloadPlaceholder, refusalEnvelope, sanitizeInputScalar } from "@mstar-harness/commands";
 import { z } from "zod";
 import type { CommandAdmission, CommandDefinition, CommandEnvelope, CommandSchemaDescriptor, InvocationContext, RefusalDiagnostic } from "@mstar-harness/commands";
 import { createMcpEffects, type McpEffects } from "./effects.js";
@@ -740,7 +740,11 @@ export function registerMcpCommands(
     harnessDefault: boolean;
     rootInputs: readonly string[];
   }>();
-  const members = definitions.map((definition) => {
+  // Store-level commands are CLI-only: their payload is the whole store, so
+  // publishing them on a shared connection would hand out `execution_sessions`
+  // rows that no redaction can remove without breaking a restore. MCP carries
+  // the runtime surface only.
+  const members = definitions.filter((definition) => !isCliOnlyCommand(definition.id)).map((definition) => {
     const descriptor = getCommandSchemas([definition])[0]!;
     const selector = definition.cli.options.find((option) => option.context === "sessionId");
     const rootInputs = rootInputsOf(definition, descriptor);

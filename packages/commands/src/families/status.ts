@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import { redactSessionIds } from "../session-redaction.js";
 import {
   decodeExecutionSessionRef,
   executionContextFor,
@@ -134,14 +135,18 @@ export function getStatusCommandDefinitions(): readonly CommandDefinition[] {
           try {
             const authority = await resolveCurrentAuthority({ harnessDir });
             const read = await readExecutionAuthority({ harnessDir });
-            return ok("status.validate", {
+            // The WHOLE envelope goes through the walker, not only `authority`:
+            // `terminalAdoptions[].actor_session_id` is a live session id on a
+            // sibling key, and a per-subtree allow-list is what let it through
+            // three times before.
+            return ok("status.validate", redactSessionIds({
               authority: read.data,
               token: read.token,
               workflows: "workflows" in read.data ? read.data.workflows.map((entry) => ({ id: entry.state.id, token: entry.workflowToken })) : [],
               terminalUnregistered: "terminalUnregistered" in read.data ? read.data.terminalUnregistered : [],
               terminalAdoptions: "terminalAdoptions" in read.data ? read.data.terminalAdoptions : [],
               state: authority.route,
-            });
+            }) as Record<string, unknown>);
           } catch (error) {
             const code = engineCode(error, "status.authority-unreadable");
             const cause = messageOf(error);

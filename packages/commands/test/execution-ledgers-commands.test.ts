@@ -187,6 +187,9 @@ describe("workflow-note public routes", () => {
     expect(facts.records.map((record) => record.id)).toEqual(["note-3", "note-3"]);
     expect(facts.counts.records).toBe(2);
     expect(facts.fileSha256 ?? "").toMatch(/^[0-9a-f]{64}$/);
+    // Appending a note records the coordinator session that wrote it, and this
+    // command needs no identity to run: the id must never come back out.
+    expect(JSON.stringify(present.data)).not.toContain(COORDINATOR);
   });
 
   test("coverage continues past blank and partial lines to a later record", async () => {

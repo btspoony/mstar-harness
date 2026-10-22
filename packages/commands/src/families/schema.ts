@@ -3,6 +3,7 @@ import { ISSUE_PAYLOAD_SCHEMAS } from "@mstar-harness/engine";
 import type { IssuePayloadName, PayloadFieldSchema } from "@mstar-harness/engine";
 import { z } from "zod";
 import { commandEnvelopeSchema, getCommandDefinitions } from "../definitions.js";
+import { isCliOnlyCommand } from "../cli-only.js";
 import type { CommandDefinition, CommandEffect, CommandEnvelope, CommandRequirement } from "../types.js";
 
 export type PayloadSchemaQuery = { type: string; fields: ({ name: string } & PayloadFieldSchema)[] };
@@ -61,10 +62,20 @@ export type CommandSchemaSelector = Readonly<{
   type?: string;
 }>;
 
-export type CommandFamilyMember = Readonly<{ id: string; description: string }>;
+/**
+ * `transport: "cli"` means the command is NOT published on the MCP connection
+ * (store-level operations, which move the whole store). Discovery must say so:
+ * an agent that lists the family and then calls the missing tool has no
+ * recovery.
+ */
+export type CommandFamilyMember = Readonly<{
+  id: string;
+  description: string;
+  transport?: "cli";
+}>;
 
 export type CommandSchemaSelection =
-  | Readonly<{ kind: "command"; descriptor: CommandSchemaDescriptor }>
+  | Readonly<{ kind: "command"; descriptor: CommandSchemaDescriptor; transport?: "cli" }>
   | Readonly<{ kind: "family"; family: string; members: readonly CommandFamilyMember[] }>
   | Readonly<{ kind: "payload"; schema: PayloadSchemaQuery }>;
 
@@ -128,7 +139,7 @@ function commandRequirements(definition: CommandDefinition): readonly CommandReq
       requirements.push({ name: sessionOption.key, ownership: "caller", route: "cli" });
     }
     if (!overridden.has(`mcp:${sessionOption.key}`)) {
-      requirements.push({ name: sessionOption.key, ownership: "caller", route: "mcp", help: "MCP: published only on a server launched with --trust-caller-session-id (off by default); a shared connection carries no host-proven caller identity, so use the dsh native tool that covers the operation or run the CLI command from the session's shell" });
+      requirements.push({ name: sessionOption.key, ownership: "caller", route: "mcp", help: "MCP: published on a connection launched with --trust-caller-session-id \u2014 the shipped dsh and omp launcher rows pass it; there it is a bearer identity selecting the caller's own coordinator binding. A connection that did not opt in carries no caller identity: use the dsh native tool that covers the operation or run the CLI command (on dsh the CLI reads DSH_SESSION_ID)" });
     }
   }
   return requirements;
@@ -210,12 +221,24 @@ export function selectCommandSchema(
         ["command"],
       );
     }
-    return { kind: "command", descriptor: commandSchemaDescriptor(definition) };
+    // The leaf query is the shortest discovery path and the one the refusal
+    // recovery recommends, so it must carry the same transport fact the family
+    // query does: without it the descriptor looks callable on a connection that
+    // does not publish the tool.
+    return {
+      kind: "command",
+      descriptor: commandSchemaDescriptor(definition),
+      ...(isCliOnlyCommand(definition.id) ? { transport: "cli" as const } : {}),
+    };
   }
   if (selector.family !== undefined) {
     const members = definitions
       .filter((entry) => entry.cli.path[0] === selector.family)
-      .map((entry) => ({ id: entry.id, description: entry.description }));
+      .map((entry) => ({
+        id: entry.id,
+        description: entry.description,
+        ...(isCliOnlyCommand(entry.id) ? { transport: "cli" as const } : {}),
+      }));
     if (members.length === 0) {
       throw new CommandSchemaSelectionError(
         `unknown family ${JSON.stringify(selector.family)}; available families: ${[...new Set(definitions.map((entry) => entry.cli.path[0]!))].join(", ")}`,

@@ -105,19 +105,19 @@ contract answers from explicit inputs and never resolves an implicit harness
 path. The launch cwd is **never** a root candidate: it is the HOST's directory
 and says nothing about which workspace a caller belongs to.
 
-**Identity.** The shipped row declares none, and the connection carries none:
-there is no `--identity-env`, no declared-identity lock, no selector stripping
-and no connection-wide default session id (ADR
-`dsh-native-identity-channels`). It also does NOT trust a caller-declared
-identity: the per-call `sessionId` selector is unpublished and a call that
-supplies one is refused with `mcp.caller-identity-unavailable`. An operator who
-genuinely owns that trust can add `--trust-caller-session-id` to the row's
-`args` (default OFF; doing so lets any caller that knows a live coordinator
-session id act as it). The host-proven routes are the dsh-native tools, where
-identity is `exec.agent.id`, and the CLI. The native surface covers plan bind,
-audit report validation and execution clear only; plan prepare/progress/complete
-have no native tool yet and are CLI-only. The shipped row keeps neutral
-defaults: no path, no identity. Because a patch replaces the row's whole
+**Identity.** The shipped row passes `--trust-caller-session-id` and declares
+no path: there is no `--identity-env`, no declared-identity lock, no selector
+stripping and no connection-wide default session id (ADR
+`dsh-native-identity-channels`). The flag is the deployment's explicit
+statement that it owns this connection's trust boundary; without it the
+per-call `sessionId` selector is unpublished and a call that supplies one is
+refused with `mcp.caller-identity-unavailable`. With it, the selector is
+published and the value is a bearer identity: it selects the caller's own
+coordinator binding, so any caller that knows a live coordinator session id can
+act as it, while authorization stays that binding row plus the optional
+`--expect` CAS token. Remove the flag for a deployment whose callers are not
+trusted; the host-attested routes are then the dsh-native tools, where identity
+is `exec.agent.id`, and the CLI. Because a patch replaces the row's whole
 `config`, an override restates the `command` and the whole `args` list.
 
 ## Config surface

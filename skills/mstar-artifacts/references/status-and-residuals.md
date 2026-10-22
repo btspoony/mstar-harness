@@ -214,7 +214,7 @@ ACTIVE actions acquire caller identity independently and revalidate identity/roo
 
 | Level | Field | Meaning |
 |---|---|---|
-| Workflow | coordinator session | One workflow-wide ACTIVE binding (`execution_sessions`): `storeId`, `epoch`, `workflowId`, `role: coordinator`, `sessionId`. A session reference is a lookup, not a file path and not a bearer credential |
+| Workflow | coordinator session | One workflow-wide ACTIVE binding (`execution_sessions`): `storeId`, `epoch`, `workflowId`, `role: coordinator`, `sessionId`. A session reference is a lookup, not a file path; `status validate` reports the coordinator by role and epoch, never its `sessionId`, because on an opted-in MCP connection that id is a bearer identity for coordinator-scoped writes |
 | Workflow | `coordination.identity_recoveries` | Migration-source recovery history only. Live coordinator recovery is `mstar session recover` |
 | Row | `coordination.revision` | Row CAS revision |
 | Row | `coordination.prepared` | `{qa_gate, findings_cleanup, prepared_by, prepared_at}`; ordinary configuration, no Assignment seal |

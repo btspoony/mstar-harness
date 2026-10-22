@@ -174,9 +174,9 @@ describe("command discovery", () => {
     // publishes it and that the default connection is off -- not the prose that
     // states it: the wording lives in the definition, and pinning it here made
     // one sentence a second source of truth.
+    // Structured fact only: the help sentence is owned by the definition, so a
+    // copy pin here would only duplicate it and fail on any rewording.
     expect(mcpSession).toMatchObject({ name: "session", ownership: "caller", route: "mcp" });
-    expect(mcpSession?.help).toContain("--trust-caller-session-id");
-    expect(mcpSession?.help).toContain("off by default");
   });
 
   test("schema command publishes family and leaf selections through the engine", async () => {
