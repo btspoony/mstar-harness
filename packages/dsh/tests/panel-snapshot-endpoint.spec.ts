@@ -439,3 +439,42 @@ describe('panelSnapshot endpoint — carrier cancellation (F5)', () => {
     })
   })
 })
+
+describe('panelSnapshot endpoint — an explicit null id is an ABSENT id', () => {
+  it('resolves the targets instead of reading ids spelled "null"', async () => {
+    const app = (booted = await bootApp({ sessionsService: 'fake' }))
+    await seedStore(app.harnessDir)
+    await seedActiveWorkflow(app.harnessDir, 'wf-nullable', [{ id: 'plan-n', status: 'Todo' }])
+    liveSession(app, 'ses_null', app.root)
+
+    // `refusedId` deliberately ACCEPTS an explicit null as absent, so the forward
+    // site must agree: forwarding it would hand the service the literal string
+    // "null", and the whole server-side resolution branch would read a workflow
+    // id that cannot exist — turning a resolution miss into a fake store failure.
+    const result = await endpointOf(app).panelSnapshot('ses_null', app.root, null, null, null)
+    expect(result.kind).toBe('ok')
+    if (result.kind !== 'ok') throw new Error('unreachable')
+
+    // Same observable result as omitting all three (the F1 case above).
+    expect(result.snapshot.workspace.workflow.state).toBe('ok')
+    if (result.snapshot.workspace.workflow.state !== 'ok') throw new Error('unreachable')
+    expect(result.snapshot.workspace.workflow.data?.id).toBe('wf-nullable')
+    expect(result.snapshot.workspace.projects).toMatchObject({ state: 'ok' })
+  })
+
+  it('still lets an asserted id win over resolution', async () => {
+    const app = (booted = await bootApp({ sessionsService: 'fake' }))
+    await seedStore(app.harnessDir)
+    await seedActiveWorkflow(app.harnessDir, 'wf-resolved', [{ id: 'plan-r', status: 'Todo' }])
+    liveSession(app, 'ses_assert', app.root)
+
+    // A STRING id is asserted (not resolved): it addresses an id the authority
+    // does not know, which is `ok` + no workflow row — never the resolved one.
+    const result = await endpointOf(app).panelSnapshot('ses_assert', app.root, 'wf-asserted')
+    expect(result.kind).toBe('ok')
+    if (result.kind !== 'ok') throw new Error('unreachable')
+    expect(result.snapshot.workspace.workflow.state).toBe('ok')
+    if (result.snapshot.workspace.workflow.state !== 'ok') throw new Error('unreachable')
+    expect(result.snapshot.workspace.workflow.data).toBeNull()
+  })
+})

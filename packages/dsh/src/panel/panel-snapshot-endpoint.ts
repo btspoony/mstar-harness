@@ -232,6 +232,16 @@ export class MstarPanelSnapshotGateway extends TypertRemoteService {
     // close match, and never a claim onto another session's workspace.
     if (claimed !== session.cwd) return unavailable('cwd-mismatch')
 
+    // An explicit `null` is ABSENT — `refusedId` above already accepted it as
+    // such — so the forward site must agree. `String(null)` would hand the
+    // service the literal id "null": the resolution branch then never runs, and
+    // every member answers `ok` + no row for an id that cannot exist — a
+    // resolution miss wearing the face of "the authority holds nothing". Reuse
+    // the normalizer the validation used, so the two cannot drift apart.
+    const assertedWorkflowId = nonEmptyString(workflowId)
+    const assertedIterationId = nonEmptyString(iterationId)
+    const assertedProjectId = nonEmptyString(projectId)
+
     return readPanelSnapshot({
       harnessDir,
       // The carrier's own lifetime: a client timeout or a closed socket stops
@@ -241,9 +251,9 @@ export class MstarPanelSnapshotGateway extends TypertRemoteService {
       // cwd: the validated session supplies all three, never the client's claim.
       sessionId: sid,
       cwd: session.cwd,
-      ...(workflowId === undefined ? {} : { workflowId: String(workflowId) }),
-      ...(iterationId === undefined ? {} : { iterationId: String(iterationId) }),
-      ...(projectId === undefined ? {} : { projectId: String(projectId) }),
+      ...(assertedWorkflowId === undefined ? {} : { workflowId: assertedWorkflowId }),
+      ...(assertedIterationId === undefined ? {} : { iterationId: assertedIterationId }),
+      ...(assertedProjectId === undefined ? {} : { projectId: assertedProjectId }),
       ...(this.readRetained === undefined ? {} : { retained: this.readRetained }),
     })
   }
