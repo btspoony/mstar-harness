@@ -62,6 +62,8 @@ afterAll(() => {
 function assertPackedEntryCurrent(): void {
   const entry = join(ROOT, PACKED_ENTRY)
   if (!existsSync(entry)) throw new Error(`missing ${PACKED_ENTRY} — run \`bun run --cwd packages/dsh build\` first`)
+  // CI checks out sources and builds in a fresh clone, so mtimes say nothing about order there.
+  if (process.env.CI !== undefined && process.env.CI !== "") return
   const built = statSync(entry).mtimeMs
   for (const root of [join(ROOT, 'src'), join(ROOT, '..', 'commands', 'src')]) {
     for (const file of readdirSync(root, { recursive: true, encoding: 'utf8' })) {

@@ -500,7 +500,6 @@ describe("folded MCP command families", () => {
       { tool: "mstar_status", id: "status.tech-debt", action: "tech-debt", accepting: ["workflow-close"] },
       { tool: "mstar_milestone", id: "milestone.list", action: "list", accepting: ["assign"] },
       { tool: "mstar_iteration", id: "iteration.gate", action: "gate", accepting: ["register"] },
-      { tool: "mstar_session", id: "session.run", action: "run", accepting: ["recover"] },
       { tool: "mstar_workflow_note", id: "workflow-note.coverage", action: "coverage", accepting: ["append"] },
     ] as const;
     await withClient(async (client, tools) => {

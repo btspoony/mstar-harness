@@ -3506,10 +3506,10 @@ describe("execution-workflow: \u00A73 the delivery-anchor repair", () => {
 });
 
 /* ------------------------------------------------------------------------ *
- * §4.1 the registered-compass repair (I-000863)
+ * 4.1 the registered-compass repair (I-000863)
  * ------------------------------------------------------------------------ */
 
-describe("execution-workflow: §4.1 the registered-compass repair", () => {
+describe("execution-workflow: 4.1 the registered-compass repair", () => {
   /**
    * The lifecycle's OWN reviewed compass: `writeCompass` states the shared
    * fixture iteration id, while a repair proves the document belongs to THIS
