@@ -73,10 +73,12 @@ export interface Config {
    * as the anti-recursion binding: an Assignment whose `Execute as` equals this
    * role is a self-dispatch (critical violation — leaf executors must not
    * re-invoke their own role). dsh exposes no agent role on the tool-execution
-   * context, so the deployment declares it. Absent → the empty binding FAILS
-   * CLOSED: every Assignment-shaped dispatch emits
-   * `dispatch.anti-recursion.empty-binding` (critical) until the binding is
-   * set.
+   * context, so the deployment declares it; the shipped default is
+   * `project-manager`, the harness model's only coordinating role. `volatile`:
+   * read through the Loader's live reference per dispatch, so the plugin
+   * settings form can edit it without a remount. An explicitly blank value
+   * still FAILS CLOSED (every Assignment-shaped dispatch emits
+   * `dispatch.anti-recursion.empty-binding`).
    */
   dispatchBinding?: string
   /**
@@ -251,6 +253,28 @@ export function isLiveConfigRef(value: unknown): value is LiveConfigRef {
   return typeof value === 'object' && value !== null && typeof (value as { get?: unknown }).get === 'function'
 }
 
+/**
+ * Read one `volatile` config field's CURRENT value. The Loader hands a
+ * `volatile` node to `apply` as a live reference re-committed on every
+ * settings save, so reading it per use (never caching it at apply) is what
+ * makes a saved edit take effect without a remount. A plain value — a host
+ * that resolves the schema without the volatile protocol — is read as-is.
+ * @param value - the configured field (a live reference or a plain value).
+ * @returns the current value, or `undefined` when absent.
+ */
+export function liveConfigValue<T>(value: T | LiveConfigRef | undefined): T | undefined {
+  return (isLiveConfigRef(value) ? value.get() : value) as T | undefined
+}
+
+/**
+ * Shipped anti-recursion caller (`Config.dispatchBinding`). `project-manager` is
+ * the harness model's only coordinating role: an unbound dispatch gate fails
+ * closed on EVERY Assignment (`dispatch.anti-recursion.empty-binding`), which is
+ * an unusable out-of-the-box deployment. An explicitly blank value still fails
+ * closed — the default only fills ABSENCE.
+ */
+export const DEFAULT_DISPATCH_BINDING = 'project-manager'
+
 /** Schemastery configuration schema for the plugin consumer. Object keys are optional by default (`.optional()` is a vendored-fork addition not present in npm schemastery); omitted ARRAY keys would materialize as `[]` (schemastery empty-value default — the tool-subagent `toolFilter` pitfall) and omitted DICT keys would materialize as `{}`, so the dispatch keys and the persona keys all preserve omission via `.default(undefined)`. */
 // simplify: the fork's 3.18.4 `.default()` typing defers the property Mode
 // generic, so the inferred meta.default output admits a `Volatile<...>` arm
@@ -262,7 +286,13 @@ export const Config: z<Config> = z.object({
   harnessDir: z.string(),
   enforcement: z.union(['hard', 'soft']),
   dispatchTools: z.array(z.string()).default(undefined as unknown as string[]),
-  dispatchBinding: z.string().default(undefined as unknown as string),
+  // VOLATILE: the anti-recursion caller is read through the Loader's live
+  // reference per dispatch (a settings save applies on the next dispatch).
+  // Default `project-manager` — the harness model's only coordinating role —
+  // so a fresh deployment does not refuse every dispatch with
+  // `dispatch.anti-recursion.empty-binding`; an explicitly blank value still
+  // fails closed.
+  dispatchBinding: z.string().default(DEFAULT_DISPATCH_BINDING).extra('volatile', true),
   skillRoots: z.array(z.string()).default(undefined as unknown as string[]),
   bundledSkillDir: z.string().default(undefined as unknown as string),
   catalogTtlMs: z.number().default(undefined as unknown as number),
@@ -293,10 +323,11 @@ export const Config: z<Config> = z.object({
   // (normalize-first, refuse-last: an explicit declaration is repaired
   // before a start is ever refused, and only a prompt with NO reliable role
   // declaration is blocked); `warn`/`off` are the per-deployment rollbacks.
-  // VOLATILE (the plugin's ONLY live field): `roleGate` is read through the
-  // Loader's live reference on every start, so the dsh plugin settings form
-  // can edit it without a remount — and the form therefore carries exactly
-  // this field (every other Config key is apply-time and needs a reload).
+  // VOLATILE (with `dispatchBinding`, the plugin's TWO live fields):
+  // `roleGate` is read through the Loader's live reference on every start, so
+  // the dsh plugin settings form can edit it without a remount — and the form
+  // therefore carries exactly these fields (every other Config key is
+  // apply-time and needs a reload).
   roleGate: z.union(['off', 'warn', 'hard']).default('hard').extra('volatile', true),
   // Workflow/ralph gate : `workflowGate`
   // defaults to 'warn' (no surprise hard-block — the gate is advisory-only

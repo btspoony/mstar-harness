@@ -42,7 +42,7 @@ import type {
   WorktreeTrack,
 } from '@mstar-harness/engine'
 import type { PreToolDecision, ToolExecution } from '@deepseek-ai/dsh-tools'
-import { STATUS_FILE, asRecord, formatViolation, HarnessResolver } from './_shared.ts'
+import { STATUS_FILE, asRecord, formatViolation, HarnessResolver, DEFAULT_DISPATCH_BINDING, liveConfigValue } from './_shared.ts'
 import type { Config, SessionHintRead } from './_shared.ts'
 // Type-only (erased at runtime): the carrying-session hint the gate forwards
 // to the shared resolver.
@@ -731,13 +731,16 @@ export async function dispatchGateCore(
   // Engine single composition: shape guard + validateAssignmentFields
   // (writable) + antiRecursionPrecheck (caller = the dispatching agent's own
   // role, Config-declared — dsh exposes no agent role on the execution
-  // context; callerRequired keeps the 3.1.2 fail-closed contract: an unset
-  // dispatchBinding emits dispatch.anti-recursion.empty-binding) +
-  // default-branch gate (Assignment branch forms, else
-  // $MSTAR_WORKING_BRANCH; direct-on exception only when its branch is the
-  // one being checked) + header-region enforcement. Never throws.
+  // context; callerRequired keeps the 3.1.2 fail-closed contract: an
+  // explicitly blank dispatchBinding emits
+  // dispatch.anti-recursion.empty-binding) + default-branch gate (Assignment
+  // branch forms, else $MSTAR_WORKING_BRANCH; direct-on exception only when
+  // its branch is the one being checked) + header-region enforcement. Never
+  // throws. The caller is read LIVE — `dispatchBinding` is volatile (a
+  // settings save applies on the next dispatch) — and falls back to the
+  // shipped default when absent; an explicitly blank value still fails closed.
   violations.push(
-    ...composeDispatchGate(header, { caller: config.dispatchBinding ?? '', callerRequired: true, writable }).violations,
+    ...composeDispatchGate(header, { caller: liveConfigValue(config.dispatchBinding) ?? DEFAULT_DISPATCH_BINDING, callerRequired: true, writable }).violations,
   )
   return { violations, writable }
 }

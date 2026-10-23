@@ -720,9 +720,10 @@ the runtime itself resolves against, never the immutable header alone), so the
 default `subagent` / `spawn_teammate` starts — which omit `cwd` — are gated by
 the directory the parent is in NOW rather than exempted. A request already
 carrying `agentPreset` and an unknown provider are exempt too. `off` skips only
-the refusal; a single explicit declaration is still normalized. `roleGate` is
-the plugin's only live-editable settings field — a dsh plugin-configuration save
-applies on the next start without a reload.
+the refusal; a single explicit declaration is still normalized. `roleGate` and
+`dispatchBinding` are the plugin's live-editable settings fields — a dsh
+plugin-configuration save applies on the next start (next dispatch for the
+binding) without a reload.
 
 **Execution: same-message invokes start concurrently.** The installed `subagent`
 tool declares **`isConcurrencySafe: () => true`**, so a batch of invokes emitted
@@ -917,11 +918,13 @@ The dsh web client resolves slash commands against a client-side lexicon driven 
   (absolute path) or declare it in a repo `.mstarc` — the gates are inert
   without a resolvable harness dir.
 - The dispatch gate needs the dispatching agent's own role for the
-  anti-recursion precheck: declare it via Config **`dispatchBinding`** (dsh
-  exposes no per-agent role on the tool-execution context). Under hard
-  enforcement with no binding, the plugin logs the absence AND every
-  Assignment-shaped dispatch fails closed (`dispatch.anti-recursion.
-  empty-binding` → deny) until the binding is set.
+  anti-recursion precheck: Config **`dispatchBinding`** declares it (dsh
+  exposes no per-agent role on the tool-execution context) and defaults to
+  `project-manager`, the harness model's only coordinating role, so dispatches
+  are admitted out of the box; the value is live-editable in the dsh plugin
+  settings form. An explicitly blank binding still fails closed — under hard
+  enforcement the plugin logs it AND every Assignment-shaped dispatch fails
+  (`dispatch.anti-recursion.empty-binding` → deny) until a role is configured.
 - **Caller-scoped engine enforcement (the dsh-only half of issue #156).** That
   binding is what makes the precheck real here: with a declared dispatcher
   identity the engine compares the **dispatching seat's own role** against the
