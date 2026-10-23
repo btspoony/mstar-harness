@@ -2092,8 +2092,10 @@ function reopenWorkflowRequestHash(
  *
  * The CAS is the terminal header revision — the token `status validate`
  * publishes in `terminalUnregistered[].token` — and it is checked BEFORE any
- * write, so a stale token leaves no footprint. An omitted `expected` is the
- * current revision, exactly as the other guarded transitions resolve it.
+ * write, so a stale token leaves no footprint. An omitted `expected` resolves to
+ * the current revision inside the transaction, so only the CALLER's explicit
+ * token enters the request hash: an identical retry after a committed reopen
+ * still replays instead of conflicting on the revision that reopen advanced.
  */
 export async function reopenExecutionWorkflow(
   context: ExecutionContext,
@@ -2172,16 +2174,16 @@ export async function reopenExecutionWorkflow(
       );
     }
     // The CAS addresses the terminal header revision the caller read; an omitted
-    // token is the current revision, as the other guarded transitions resolve it.
-    if (input.expected !== undefined) {
-      assertExecutionToken(input.expected, {
-        kind: "workflow",
-        storeId: tx.storeId,
-        epoch: tx.epoch,
-        key: [workflowId],
-        revision: header.revision,
-      });
-    }
+    // token resolves to the revision this transaction locked, so the request hash
+    // ("current") stays stable across a post-success retry while every write is
+    // still token-checked.
+    assertExecutionToken(input.expected ?? executionToken("workflow", tx.storeId, tx.epoch, [workflowId], header.revision), {
+      kind: "workflow",
+      storeId: tx.storeId,
+      epoch: tx.epoch,
+      key: [workflowId],
+      revision: header.revision,
+    });
     // The registry row is DERIVED from the closed header, never from request
     // JSON, and the existing entry gate validates the result.
     const entry = {

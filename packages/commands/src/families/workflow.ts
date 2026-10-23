@@ -6,7 +6,7 @@ import {
   PLAN_PARALLELISM_VALUES,
   WORKFLOW_COMPOUND_OUTCOMES, WORKFLOW_DELIVERY_KINDS, WORKFLOW_LIFECYCLE_STATUSES,
   adoptTerminalWorkflow, createFsStore, decodeExecutionSessionRef,
-  executionContextFor, mutateExecutionWorkflow, normalizeIterationCompassRef, readExecutionAuthority, registerShippedCatalogExecution,
+  executionContextFor, mutateExecutionWorkflow, normalizeIterationCompassRef, registerShippedCatalogExecution,
   reopenExecutionWorkflow, resolveProcessHarnessDir, setArtifactStore,
   type ActivationAttestation,
   type CatalogExecutionWorkflow, type ExecutionIdentity, type ExecutionToken, type WorkflowCompoundOutcome,
@@ -230,25 +230,6 @@ function readOperatorAttestation(documentPath: string, id: string, label: string
       { code: `${id}.attestation-malformed`, details: { parser: diagnostic } },
     );
   }
-}
-
-/**
- * The CAS the public reopen passes EXPLICITLY. The engine's omitted-token path
- * has no CAS, so this verb never relies on it: the retained terminal header's
- * token comes first (`status validate` publishes it), and a non-terminal header
- * is addressed by its live workflow token — so the engine still answers with its
- * own named refusal instead of a writes-without-CAS path.
- */
-async function reopenExpectedToken(harnessDir: string, workflowId: string): Promise<ExecutionToken | undefined> {
-  const read = await readExecutionAuthority({ harnessDir });
-  const data = read.data;
-  const terminal = [
-    ...("terminalUnregistered" in data ? data.terminalUnregistered ?? [] : []),
-    ...("terminalAdoptions" in data ? data.terminalAdoptions ?? [] : []),
-  ].find((entry) => entry.id === workflowId);
-  if (terminal !== undefined) return terminal.token;
-  const live = "workflows" in data ? data.workflows.find((entry) => entry.state.id === workflowId) : undefined;
-  return live?.workflowToken;
 }
 
 function schema() {
@@ -693,23 +674,17 @@ export function getWorkflowCommandDefinitions(): readonly CommandDefinition[] {
           const attestation = readOperatorAttestation(absolute(input.attestation, "attestation"), id, "recovery-scope attestation");
           const harnessDir = resolveProcessHarnessDir(context.cwd, input.harness);
           if (harnessDir === null) return refusalEnvelope({ command: id, status: "usage", code: "command.invalid-input", exitCode: 2, message: "no control harness resolved; supply an absolute harness" });
-          // The engine's omitted-token path is not a CAS, so an omitted --expect
-          // is resolved into an explicit token here, never left to the engine.
-          const expected = input.expect ?? await reopenExpectedToken(harnessDir, workflowId);
-          if (expected === undefined) {
-            return refusalEnvelope({
-              command: id, status: "refused", code: "coordination.workflow-not-found", exitCode: 1,
-              message: `workflow ${workflowId} is neither registered nor a retained terminal header in this authority; nothing was written.`,
-              details: { workflow_id: workflowId },
-              recovery: "Run `mstar status validate` and address a workflow this authority holds.",
-            });
-          }
+          // The caller's own token (or its absence) is what the engine sees: the
+          // omitted form resolves the current terminal revision inside the
+          // guarded transaction, which keeps the replay fingerprint stable after
+          // a committed reopen. A derived out-of-transaction token would enter
+          // that fingerprint and turn an identical retry into a conflict.
           const identity = acquired ?? { source: context.host === undefined ? "local" : "host", sessionId: context.sessionId, workflowId, role: "coordinator" as const };
           return ok(id, await reopenExecutionWorkflow(executionContextFor({ harnessDir }, identity), {
             workflowId,
             reason: input.reason,
             attestation,
-            expected: expected as ExecutionToken,
+            ...(input.expect === undefined ? {} : { expected: input.expect as ExecutionToken }),
             operationId: input.operation ?? randomUUID(),
           }));
         } catch (error) {
@@ -718,7 +693,7 @@ export function getWorkflowCommandDefinitions(): readonly CommandDefinition[] {
       },
       [{ key: "sessionId", context: "sessionId" }],
       {
-        expect: `Optional checked CAS: the closed header's terminal token published by \`mstar status validate\`. When omitted this verb reads that retained terminal token and passes it explicitly, so the transition is never token-less. ${TOKEN_SUPPLIES.workflow}`,
+        expect: `Optional checked CAS: the closed header's terminal token published by \`mstar status validate\`. When omitted the engine resolves the current terminal header revision inside the guarded transaction and checks it there; only a token you pass explicitly enters the request fingerprint, so repeating the same --operation without --expect replays the committed reopen. ${TOKEN_SUPPLIES.workflow}`,
         operation: "Optional idempotency/replay id; when omitted one id is generated for this invocation.",
         reason: "Required. Why the terminal lifecycle is reopened; recorded with the transition as the operator-facing justification.",
         attestation: "Required absolute JSON path to the operator's recovery-scope document: version, attestedAt, operator.actor, operator.authorizationRef and a stoppedSessions array (possibly empty); consumers is optional and ignored. SELF-REPORTED operator authorization — the structure is validated, host liveness is never verified.",

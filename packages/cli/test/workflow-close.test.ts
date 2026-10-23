@@ -672,8 +672,8 @@ describe("mstar workflow reopen — the explicit operator route back from a term
     const retainedRows = closedEntry.plans as Array<{ id: string }>;
     expect(retainedRows.map((row) => row.id)).toEqual([PLAN_ID]);
 
-    // `--expect` is omitted on purpose: the verb itself reads the retained
-    // terminal token and passes it as the CAS.
+    // `--expect` is omitted on purpose: the engine resolves the retained terminal
+    // header revision inside the guarded transaction and checks it there.
     const reopened = runCli(reopenArgs(fixture, attestationFile(fixture, "reopen-attestation.json")), fixture.root, identityEnv());
     expect(reopened.exitCode, reopened.stdout).toBe(0);
     expect(jsonOf(reopened)).toMatchObject({ command: "workflow.reopen", status: "ok", code: "workflow.reopen.ok" });

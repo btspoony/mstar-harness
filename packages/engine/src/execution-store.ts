@@ -1072,18 +1072,24 @@ function readWorkflowView(
  * the plan-row inventory the close left behind — the baseline a later plan-file
  * move is detectable against. A header with no surviving receipt serves none of
  * them: an absent fact is never invented from the header.
+ *
+ * The source is the TERMINAL MUTATION's receipt, not the newest workflow row: a
+ * later terminal-era write (the attested lease release) adds its own receipt,
+ * and taking that one would serve a takeover as if the close never happened.
+ * The terminal mutation is the lifecycle close, and it is the one workflow-level
+ * receipt that records the lifecycle attribution — so the projection binds to
+ * the newest receipt that carries `actor_session_id`.
  */
 function terminalProjection(
   db: StoreDb,
   store: StoreIdentity,
   workflowId: string,
 ): Pick<NonNullable<ExecutionState["terminalUnregistered"]>[number], "actor_session_id" | "reason" | "warnings" | "plans"> {
-  const receipt = db
-    .prepare("select result_json from execution_operations where workflow_id = ? and epoch = ? order by rowid desc limit 1")
-    .get(workflowId, store.epoch) as { result_json?: unknown } | undefined;
-  const facts: Partial<Pick<ExecutionRead<unknown>, "actor_session_id" | "reason" | "holder_live_warning">> = receipt === undefined
-    ? {}
-    : storedReceiptFacts(storedJsonObject(receipt.result_json, `execution_operations(${workflowId}).result_json`));
+  const facts: Partial<Pick<ExecutionRead<unknown>, "actor_session_id" | "reason" | "holder_live_warning">> = (db
+    .prepare("select result_json from execution_operations where workflow_id = ? and epoch = ? and plan_id is null order by rowid desc")
+    .all(workflowId, store.epoch) as Array<{ result_json?: unknown }>)
+    .map((row) => storedReceiptFacts(storedJsonObject(row.result_json, `execution_operations(${workflowId}).result_json`)))
+    .find((candidate) => candidate.actor_session_id !== undefined) ?? {};
   const warning = holderLiveWarningOf(facts.holder_live_warning);
   const plans = (db
     .prepare("select plan_id, state_json from execution_plans where workflow_id = ? order by ordinal")

@@ -1838,13 +1838,32 @@ describe("execution-coordinator-recovery: \u00A72.3/\u00A74.2 the named recovery
     // The closed lifecycle's projection serves that same attribution, the
     // carried warning and the plan-file baseline the close left behind: the
     // discovery state of the incident this chain reproduces.
-    expect((await readExecutionState(fixture.context)).data.terminalUnregistered).toEqual([{
-      id: WORKFLOW_ID, status: "stopped", revision: expect.any(Number), token: expect.any(String),
+    const projected = [{
+      id: WORKFLOW_ID, status: "stopped" as const, revision: expect.any(Number), token: expect.any(String),
       actor_session_id: RECOVERY_ID,
       reason: stopRequest.reason,
       warnings: [recovered.holder_live_warning!],
       plans: [{ id: PLAN_ID, file: `plans/${PLAN_ID}.md`, status: "Todo" }],
-    }]);
+    }];
+    expect((await readExecutionState(fixture.context)).data.terminalUnregistered).toEqual(projected);
+
+    // A later terminal-era write — the attested lease release a crash or a
+    // foreign writer leaves behind — records its OWN workflow-level receipt and
+    // does not move the header. The projection must keep serving the terminal
+    // mutation's attribution, not that newer row.
+    plantMergeClaim(fixture.context, { ownerEpoch: fixture.epoch, holder: COORDINATOR_ID });
+    await recoverExecutionCoordinator(domainContext(fixture.context, recoveryCaller), {
+      expected: workflowTokenOfRow(fixture.context),
+      operationId: "op-release-after-close",
+      priorSessionId: COORDINATOR_ID,
+      reason: "release the stopped holder's integration claim",
+      attestation: attestation([COORDINATOR_ID]),
+    });
+    expect(rows(
+      fixture.context,
+      `select operation_id from execution_operations where workflow_id = '${WORKFLOW_ID}' order by rowid`,
+    ).map((row) => row.operation_id)).toEqual(["op-stop-after-recover", "op-release-after-close"]);
+    expect((await readExecutionState(fixture.context)).data.terminalUnregistered).toEqual(projected);
   });
 
   test("an already-revoked predecessor records no warning, and a header with no surviving receipt serves no attribution", async () => {

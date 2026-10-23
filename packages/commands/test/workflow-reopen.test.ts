@@ -91,6 +91,27 @@ describe("workflow.reopen — the public verb on a terminal lifecycle", () => {
       .toEqual([[WORKFLOW_ID, "completed"]]);
   });
 
+  test("an identical retry with no --expect replays the committed reopen", async () => {
+    const { root, harness, attestation } = await fixture("stopped");
+    const request = {
+      workflow: WORKFLOW_ID,
+      harness,
+      reason: "resume the stopped lifecycle under the operator's authorization",
+      attestation,
+      operation: "op-reopen-retry",
+    };
+    const first = await definition("workflow.reopen").execute(request, invocation(root));
+    expect(first).toMatchObject({ status: "ok", code: "workflow.reopen.ok", exitCode: 0 });
+    const committed = await readExecutionState({ harnessDir: harness });
+    // The caller omitted --expect both times: the engine, not the command,
+    // resolves the terminal revision, so the fingerprint is unchanged and the
+    // revision the first call advanced cannot turn the retry into a conflict.
+    const retry = await definition("workflow.reopen").execute(request, invocation(root));
+    expect(retry).toMatchObject({ status: "ok", code: "workflow.reopen.ok", exitCode: 0 });
+    expect(retry.data).toMatchObject({ replayed: true });
+    expect(await readExecutionState({ harnessDir: harness })).toEqual(committed);
+  });
+
   test("the operator attestation and reason are required inputs", async () => {
     const { root, harness } = await fixture("stopped");
     const missingAttestation = await definition("workflow.reopen").execute({
