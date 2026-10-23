@@ -1207,29 +1207,33 @@ describe('durable adopted-root seam — a cross-root bind survives a restart', (
       close: () => closing.promise,
     })
     const provider = await mountStorageDomain(app, stub.facility)
-    stub.settle()
-    // Drain the microtasks of the open and of the install failure; `close` is
-    // still pending, so no clock wait and no settlement is involved.
-    await new Promise<void>((resolve) => setImmediate(resolve))
-    const added = logged.slice(before).filter((row) => row.name === EXECUTION_BINDING_ROOTS_LOGGER)
-    // Exactly ONE warning, already emitted while `close` is pending.
-    expect(added).toHaveLength(1)
-    expect(added[0]!.type).toBe('warn')
-    const message = String(added[0]!.args[0])
-    expect(message).toContain('install failed')
-    expect(message).toContain('the roots table is unavailable')
-    expect(message).not.toContain('open refused')
-    // The latch was spent with that report: a later adoption adds no generic
-    // "the host provides no storage-domain seam" line.
-    await recordExecutionBindingRoot(CHILD_ID, app.root, '/synthetic/adopted-root')
-    const afterAdoption = logged.slice(before).filter((row) => row.name === EXECUTION_BINDING_ROOTS_LOGGER)
-    expect(afterAdoption).toHaveLength(1)
-    expect(String(afterAdoption[0]!.args[0])).not.toContain('the host provides no storage-domain seam')
-    stopLogging()
-    // The assertions above were made while `close` was pending; settle it only
-    // now so the suite's teardown can drain the child that awaits it.
-    closing.resolve()
-    await provider.dispose()
+    try {
+      stub.settle()
+      // Drain the microtasks of the open and of the install failure; `close` is
+      // still pending, so no clock wait and no settlement is involved.
+      await new Promise<void>((resolve) => setImmediate(resolve))
+      const added = logged.slice(before).filter((row) => row.name === EXECUTION_BINDING_ROOTS_LOGGER)
+      // Exactly ONE warning, already emitted while `close` is pending.
+      expect(added).toHaveLength(1)
+      expect(added[0]!.type).toBe('warn')
+      const message = String(added[0]!.args[0])
+      expect(message).toContain('install failed')
+      expect(message).toContain('the roots table is unavailable')
+      expect(message).not.toContain('open refused')
+      // The latch was spent with that report: a later adoption adds no generic
+      // "the host provides no storage-domain seam" line.
+      await recordExecutionBindingRoot(CHILD_ID, app.root, '/synthetic/adopted-root')
+      const afterAdoption = logged.slice(before).filter((row) => row.name === EXECUTION_BINDING_ROOTS_LOGGER)
+      expect(afterAdoption).toHaveLength(1)
+      expect(String(afterAdoption[0]!.args[0])).not.toContain('the host provides no storage-domain seam')
+    } finally {
+      // The assertions above run while `close` is pending; settle it and drop the
+      // provider even when one of them throws, so a failure reddens instead of
+      // hanging the unbounded shared teardown.
+      stopLogging()
+      closing.resolve()
+      await provider.dispose()
+    }
   })
 
   it('a rejected durable put is contained: the bind still completes, the cause is logged once, and the receipt still answers', async () => {
