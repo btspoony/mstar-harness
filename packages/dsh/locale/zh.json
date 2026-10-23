@@ -1,6 +1,6 @@
 {
   "meta": {
-    "title": "Morning Star Harness",
+    "title": "晨星工作流 (mstar-harness)",
     "description": "Morning Star harness 的 dsh 引擎门禁：为 agent 工作流提供状态、派发与租约约束。"
   }
 }

@@ -62,12 +62,30 @@ afterEach(async () => {
 type RecordedRequest = {
   agentPreset?: string
   cwd?: string
+  parent?: unknown
   prompt?: Array<{ type: string; text?: string }>
 }
 
 /** The prompt payload of one start request. */
 function textPrompt(text: string): RecordedRequest {
   return { prompt: [{ type: 'text', text }] }
+}
+
+/** A fake spawning agent carrying a session cwd (the omitted-cwd inheritance source). */
+function parentAgent(cwd: string): { session: { header: { cwd: string } } } {
+  return { session: { header: { cwd } } }
+}
+
+/**
+ * Write a value through the Loader's live volatile config reference — the
+ * exact effect a dsh plugin-settings save has on a `volatile` field. Fails
+ * loud when the field is not volatile (no live reference was created).
+ */
+function writeLiveRoleGate(app: BootResult, mode: 'off' | 'warn' | 'hard'): void {
+  const config = app.pluginFiber?.config as { roleGate?: Record<symbol, unknown> } | undefined
+  const write = (config?.roleGate as Record<symbol, unknown> | undefined)?.[Symbol.for('cosmokit.volatile.write')]
+  expect(typeof write, 'the plugin config must carry a live volatile roleGate reference').toBe('function')
+  ;(write as (value: unknown) => void)(mode)
 }
 
 /** One activation spec for the fake provider (the non-consumed fields are additive). */
@@ -311,6 +329,118 @@ describe('dispatch-role gate — repair + refusal through the start seam', () =>
     expect(error.message).toContain('NO_PROVIDER')
     expect(error.message).not.toContain('roleGate')
   })
+
+  it('(l) an omitted cwd inherits the HARNESS parent directory → repaired (not exempt)', async () => {
+    const { app, provider, workspace } = await bootWithProvider()
+    // `subagent` / `spawn_teammate` omit `cwd`: the child starts in the parent's directory.
+    await startActivationViaNativeChannel(app, specFor({ ...textPrompt(FIELD_ROLE_PROMPT), parent: parentAgent(workspace) }))
+
+    const sent = provider.starts[0]!.request as RecordedRequest
+    expect(promptTextOf(sent).startsWith('## Assignment\n\nExecute as: fullstack-dev\n')).toBe(true)
+    expect(sent.agentPreset).toBe(PRESET_ID)
+  })
+
+  it('(m) an omitted cwd with NO declaration is refused under hard (the default is not inert)', async () => {
+    const { app, provider, workspace } = await bootWithProvider()
+    const error = await startAndCatch(app, specFor({ ...textPrompt(NO_DECLARATION_PROMPT), parent: parentAgent(workspace) }))
+
+    expect(error.message).toContain('Execute as')
+    expect(error.message).toContain('roleGate')
+    expect(error.message).toContain(workspace)
+    expect(provider.starts).toHaveLength(0)
+  })
+
+  it('(n) a RELATIVE cwd inside the harness parent is not exempt', async () => {
+    const { app, provider, workspace } = await bootWithProvider()
+    const error = await startAndCatch(app, specFor({ ...textPrompt(NO_DECLARATION_PROMPT), cwd: '.', parent: parentAgent(workspace) }))
+
+    expect(error.message).toContain('Execute as')
+    expect(provider.starts).toHaveLength(0)
+  })
+
+  it('(o) an omitted cwd inherits a NON-harness parent → passes under hard', async () => {
+    const plain = await mkdtemp(join(tmpdir(), 'dsh-role-gate-parent-'))
+    scratchDirs.push(plain)
+    const { app, provider } = await bootWithProvider()
+
+    await startActivationViaNativeChannel(app, specFor({ ...textPrompt(NO_DECLARATION_PROMPT), parent: parentAgent(plain) }))
+
+    expect(provider.starts).toHaveLength(1)
+  })
+
+  it('(q) a repair over MULTIPLE text blocks resolves to the target role, and a second pass is a no-op', async () => {
+    const { app, provider, workspace } = await bootWithProvider()
+    const blocks = [
+      { type: 'text', text: '## Assignment\n\n' },
+      { type: 'text', text: 'Execute as: `fullstack-dev`\n' },
+    ]
+    await startActivationViaNativeChannel(app, specFor({ prompt: blocks, cwd: workspace }))
+
+    const sent = provider.starts[0]!.request as RecordedRequest
+    const text = promptTextOf(sent)
+    expect(text).toContain('Execute as: fullstack-dev')
+    expect(text).not.toContain('`fullstack-dev`')
+    // The inner consumer parses the joined text: the canonical field bound the preset.
+    expect(sent.agentPreset).toBe(PRESET_ID)
+    // Rewriting the already-repaired text changes nothing (idempotent).
+    expect(rewritePromptWithExecuteAs(text, EXECUTE_AS)).toBe(text)
+  })
+
+  it('(r) a lowercase `execute as` is normalized to the canonical label on the DELEGATED request', async () => {
+    const { app, provider, workspace } = await bootWithProvider()
+    const prompt = [
+      '## Assignment',
+      '',
+      '**Delegation**: forbidden',
+      'execute as: `fullstack-dev`',
+      '',
+      '## Task',
+      '',
+      'Do it.',
+    ].join('\n')
+    await startActivationViaNativeChannel(app, specFor({ ...textPrompt(prompt), cwd: workspace }))
+
+    const sent = provider.starts[0]!.request as RecordedRequest
+    const text = promptTextOf(sent)
+    expect(text).toContain('\nExecute as: fullstack-dev\n')
+    expect(text).not.toContain('execute as:')
+    // The case-sensitive downstream parser reads the repaired field.
+    expect(sent.agentPreset).toBe(PRESET_ID)
+  })
+
+  it('(s) two same-value `Execute as` lines: every line is repaired (the parser binds the last)', async () => {
+    const { app, provider, workspace } = await bootWithProvider()
+    const prompt = [
+      '## Assignment',
+      '',
+      'Execute as: `fullstack-dev`',
+      'Execute as: **fullstack-dev**',
+      '',
+      '## Task',
+      '',
+      'Do it.',
+    ].join('\n')
+    await startActivationViaNativeChannel(app, specFor({ ...textPrompt(prompt), cwd: workspace }))
+
+    const text = promptTextOf(provider.starts[0]!.request as RecordedRequest)
+    expect(text.match(/^Execute as: fullstack-dev$/gm)).toHaveLength(2)
+    // The wrapper's own consumer read the LAST line and selected the preset.
+    expect((provider.starts[0]!.request as RecordedRequest).agentPreset).toBe(PRESET_ID)
+  })
+
+  it('(t) a live roleGate save is observed by the NEXT start (plugin settings form path)', async () => {
+    const { app, provider, workspace } = await bootWithProvider({ roleGate: 'off' })
+    // `off`: a start with no declaration passes silently.
+    await startActivationViaNativeChannel(app, specFor({ ...textPrompt(NO_DECLARATION_PROMPT), cwd: workspace }))
+    expect(provider.starts).toHaveLength(1)
+    // The dsh plugin settings form saves through the live volatile field — no
+    // remount, no re-apply.
+    writeLiveRoleGate(app, 'hard')
+    const error = await startAndCatch(app, specFor({ ...textPrompt(NO_DECLARATION_PROMPT), cwd: workspace }))
+
+    expect(error.message).toContain('roleGate')
+    expect(provider.starts).toHaveLength(1)
+  })
 })
 
 /** Pure decision inputs: a harness project that declares both fixture roles. */
@@ -405,6 +535,48 @@ describe('dispatch-role gate — pure decision table (evaluateRoleGate)', () => 
     expect(decision.message).toContain('Execute as')
     expect(decision.message).toContain('roleGate')
   })
+
+  it('(p10) an ambiguous declaration names the ids and demands exactly one (not "missing")', () => {
+    const ambiguous = evaluateRoleGate(gateInput('## Assignment\n\nRole: fullstack-dev\nAct as: writing-specialist\n'))
+    expect(ambiguous.kind).toBe('refuse')
+    if (ambiguous.kind !== 'refuse') return
+    expect(ambiguous.message).toContain('exactly one')
+    expect(ambiguous.message).toContain(EXECUTE_AS)
+    expect(ambiguous.message).toContain(WRITING)
+    expect(ambiguous.message).not.toContain('carries no role declaration')
+    expect(ambiguous.message).toContain('roleGate')
+  })
+
+  it('(p11) zero candidates keeps the missing-declaration wording', () => {
+    const missing = evaluateRoleGate(gateInput('Implement.'))
+    expect(missing.kind).toBe('refuse')
+    if (missing.kind !== 'refuse') return
+    expect(missing.message).toContain('carries no role declaration')
+    expect(missing.message).not.toContain('exactly one')
+  })
+
+  it('(p12) the warn advisory does not tell a warn-mode operator to set warn', () => {
+    const warn = evaluateRoleGate(gateInput('Implement.', { mode: 'warn' }))
+    expect(warn.kind).toBe('warn')
+    if (warn.kind !== 'warn') return
+    expect(warn.message).not.toContain('Escape hatch')
+    expect(warn.message).not.toContain("set 'roleGate: warn'")
+    expect(warn.message).toContain("set 'roleGate: off'")
+    const hard = evaluateRoleGate(gateInput('Implement.'))
+    if (hard.kind === 'refuse') expect(hard.message).toContain('Escape hatch')
+  })
+
+  it('(p13) fenced code blocks never become repair candidates', () => {
+    // A quoted example is not a declaration.
+    expect(evaluateRoleGate(gateInput('## Assignment\n\nSee:\n\n```text\nTake the `writing-specialist` seat.\n```\n')).kind)
+      .toBe('refuse')
+    // The same token outside a fence is a declared-id candidate.
+    expect(evaluateRoleGate(gateInput('Take the `writing-specialist` seat.')).kind).toBe('repair')
+    // A fenced example of ANOTHER role does not make a real field ambiguous.
+    const decision = evaluateRoleGate(gateInput('## Assignment\n\nRole: fullstack-dev\n\n~~~\nUse `writing-specialist`.\n~~~\n'))
+    expect(decision.kind).toBe('repair')
+    if (decision.kind === 'repair') expect(decision.roleId).toBe(EXECUTE_AS)
+  })
 })
 
 describe('dispatch-role gate — canonical header rewrite', () => {
@@ -424,6 +596,23 @@ describe('dispatch-role gate — canonical header rewrite', () => {
     const rewritten = rewritePromptWithExecuteAs('## Assignment\n\nExecute as: `fullstack-dev`\n**Delegation**: forbidden\n', EXECUTE_AS)
     expect(rewritten).toBe('## Assignment\n\nExecute as: fullstack-dev\n**Delegation**: forbidden\n')
     expect(rewritten.match(/Execute as/g)).toHaveLength(1)
+  })
+
+  it('repairs EVERY `Execute as` line — the engine parser binds the last one', () => {
+    const rewritten = rewritePromptWithExecuteAs(
+      '## Assignment\n\nExecute as: `fullstack-dev`\nExecute as: **fullstack-dev**\n',
+      EXECUTE_AS,
+    )
+    expect(rewritten).toBe('## Assignment\n\nExecute as: fullstack-dev\nExecute as: fullstack-dev\n')
+  })
+
+  it('normalizes the label of a case-variant declaration to `Execute as`', () => {
+    expect(rewritePromptWithExecuteAs('## Assignment\n\nexecute as: `fullstack-dev`\n', EXECUTE_AS)).toBe(
+      '## Assignment\n\nExecute as: fullstack-dev\n',
+    )
+    expect(rewritePromptWithExecuteAs('## Assignment\n\n**EXECUTE AS**: fullstack-dev\n', EXECUTE_AS)).toBe(
+      '## Assignment\n\nExecute as: fullstack-dev\n',
+    )
   })
 
   it('preserves the rest of the prompt byte-for-byte', () => {

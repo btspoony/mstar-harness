@@ -16,7 +16,13 @@
 import { existsSync } from 'node:fs'
 import { resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
-import z from 'schemastery'
+// The hosted schemastery fork (a peer dependency), NOT the npm `schemastery`
+// the lockfile also carries: only the fork implements the `volatile` config
+// reference protocol, and the Loader validates a plugin config through THIS
+// schema's own `~standard`. With npm 3.18.0 the marker would be accepted but
+// `createVolatile` never runs, so the Loader would drop a live settings save
+// without a remount AND without applying it.
+import z from '@deepseek-ai/schemastery'
 import { resolveHarnessDir, resolveRepoEnforcement } from '@mstar-harness/engine'
 import type { GateResult, ValidationResult } from '@mstar-harness/engine'
 import type { Config as SkillLocalConfig } from '@deepseek-ai/dsh-skill-filesystem'
@@ -217,6 +223,34 @@ export function stripInterpolationHazard(text: string): string {
   }
 }
 
+/** The live-editable marker the Loader / `SettingsForms` read (declared here so a schemastery release that predates it still typechecks the `.extra()` write). */
+declare module '@deepseek-ai/schemastery' {
+  namespace Schemastery {
+    interface Meta {
+      volatile?: boolean
+    }
+  }
+}
+
+/**
+ * The Loader's live config reference for a `volatile` schema node: an
+ * identity-stable `{ get }` view whose snapshot the Loader re-commits on every
+ * settings save (the cosmokit `Volatile` protocol). Detected STRUCTURALLY — the
+ * protocol is duck-shaped and every other config shape must keep working.
+ */
+export interface LiveConfigRef {
+  get(): unknown
+}
+
+/**
+ * Whether one config value is the Loader's live volatile reference.
+ * @param value - a raw config field value.
+ * @returns `true` when the value answers `get()` as the live reference does.
+ */
+export function isLiveConfigRef(value: unknown): value is LiveConfigRef {
+  return typeof value === 'object' && value !== null && typeof (value as { get?: unknown }).get === 'function'
+}
+
 /** Schemastery configuration schema for the plugin consumer. Object keys are optional by default (`.optional()` is a vendored-fork addition not present in npm schemastery); omitted ARRAY keys would materialize as `[]` (schemastery empty-value default — the tool-subagent `toolFilter` pitfall) and omitted DICT keys would materialize as `{}`, so the dispatch keys and the persona keys all preserve omission via `.default(undefined)`. */
 // simplify: the fork's 3.18.4 `.default()` typing defers the property Mode
 // generic, so the inferred meta.default output admits a `Volatile<...>` arm
@@ -241,7 +275,9 @@ export const Config: z<Config> = z.object({
   // id), where the answer is available.
   rolePresets: z.transform(
     z.dict(z.string()),
-    (value) => {
+    // Explicit parameter type: the fork's `transform` does not infer the dict
+    // value type (npm schemastery did), and the runtime value is the same.
+    (value: Record<string, string>) => {
       for (const [role, presetId] of Object.entries(value)) {
         if (presetId.trim().length === 0) {
           throw new z.ValidationError(
@@ -257,7 +293,11 @@ export const Config: z<Config> = z.object({
   // (normalize-first, refuse-last: an explicit declaration is repaired
   // before a start is ever refused, and only a prompt with NO reliable role
   // declaration is blocked); `warn`/`off` are the per-deployment rollbacks.
-  roleGate: z.union(['off', 'warn', 'hard']).default('hard'),
+  // VOLATILE (the plugin's ONLY live field): `roleGate` is read through the
+  // Loader's live reference on every start, so the dsh plugin settings form
+  // can edit it without a remount — and the form therefore carries exactly
+  // this field (every other Config key is apply-time and needs a reload).
+  roleGate: z.union(['off', 'warn', 'hard']).default('hard').extra('volatile', true),
   // Workflow/ralph gate : `workflowGate`
   // defaults to 'warn' (no surprise hard-block — the gate is advisory-only
   // unless the deployment opts into ask/hard); `workflowNames` preserves

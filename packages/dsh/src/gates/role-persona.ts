@@ -61,9 +61,12 @@
  * / `Role:` field or a backticked/bold already-declared role id is rewritten
  * into the canonical Assignment header, and only a start with NO reliable
  * declaration is refused. The rewritten request is what the preset merge and
- * the runtime receive. The gate exempts non-harness projects, canonical
- * prompts, `agentPreset` requests and unknown providers; its refusal is
- * raised outside the contained-degradation catch below.
+ * the runtime receive. The gate exempts non-harness projects (judged at the
+ * child's EFFECTIVE start directory, so an omitted/relative `cwd` inherits the
+ * parent's), canonical prompts, `agentPreset` requests and unknown providers;
+ * its refusal is raised outside the contained-degradation catch below. The
+ * configured mode is read LIVE per start from the Loader's `volatile` field,
+ * so a dsh plugin-settings save applies on the next start without a remount.
  *
  * Degradation (the preset merge never throws before delegating — contained
  * like the dispatch gate's degrade path): unparseable prompt / role without a
@@ -107,13 +110,20 @@
  * runtime surface is consumed structurally (same pattern as the probe's
  * `LoaderEntryView` and T2's `fallbacks-structural.ts`).
  */
+import { isAbsolute, resolve } from 'node:path'
 import type { Context } from '@deepseek-ai/cordis'
 // Type-only: loads the registry's `Context` augmentation (the `agentPresets`
 // service name) without a runtime dependency — the plugin consumes the host
 // service structurally.
 import type {} from '@deepseek-ai/dsh-agent-preset-registry'
 import { assignmentHeaderRegion, parseAssignmentFields, resolveHarnessDir } from '@mstar-harness/engine'
-import { packagedAgentsDir, type Config } from './_shared.ts'
+import {
+  isLiveConfigRef,
+  packagedAgentsDir,
+  sessionCwdOf,
+  type Config,
+  type LiveConfigRef,
+} from './_shared.ts'
 import { ROLE_ID_PATTERN, subagentRoleIds } from './agent-personas.ts'
 
 /** Logger label for the role-persona channel (dsh logger naming: `<scope>/<subject>`). */
@@ -165,11 +175,17 @@ export interface SubagentStartRequestView {
   /** Optional preset already selected by the tool or the model — caller intent wins. */
   readonly agentPreset?: string
   /**
-   * Initial child directory (the role gate's harness-project test). Omitted →
-   * the child inherits the parent's directory, which this seam cannot
-   * inspect; the gate treats an absent cwd as a non-harness project.
+   * Initial child directory as requested (the role gate resolves the child's
+   * EFFECTIVE start directory from it: absolute as-is, relative against
+   * {@link parent}, omitted = the parent's own directory).
    */
   readonly cwd?: string
+  /**
+   * The spawning agent (`SubagentStartRequest.parent`). Its session cwd is the
+   * default child directory, exactly what the runtime's own `resolveDirectory`
+   * inherits when `cwd` is omitted.
+   */
+  readonly parent?: unknown
 }
 
 /**
@@ -281,6 +297,24 @@ function agentPresetsService(ctx: Context): Context['agentPresets'] | undefined 
 }
 
 /**
+ * Live reader for `Config.roleGate`. The Loader hands a `volatile` field to
+ * `apply` as an identity-stable `{ get }` reference whose snapshot it
+ * re-commits on every settings save, so reading it per start is what makes a
+ * saved edit take effect on the NEXT start without a reload. A plain value (a
+ * host that resolves the schema without the volatile protocol) is read as-is;
+ * an unrecognized value falls back to the shipped default.
+ *
+ * @param value - the configured field (a live reference or a plain value).
+ * @returns a reader returning the CURRENT gate mode.
+ */
+function roleGateReader(value: Config['roleGate'] | LiveConfigRef): () => RoleGateMode {
+  return () => {
+    const current = isLiveConfigRef(value) ? value.get() : value
+    return current === 'off' || current === 'warn' || current === 'hard' ? current : 'hard'
+  }
+}
+
+/**
  * Register the role-preset channel on the plugin's context: an
  * `internal/get` waterfall listener (the cordis service-read interception
  * hook) that wraps `ctx.subagents` reads. The listener is owned by the
@@ -319,8 +353,10 @@ export function registerRolePersonaChannel(ctx: Context, config: Config): void {
   // Dispatch-role gate: the configured mode and the declared role-id set the
   // repair tier reads. Declared = the configured presets' role keys ∪ the
   // packaged mirror's subagent shell stems (the SAME taxonomy the fallbacks
-  // advisory derives — never a hard-coded role list).
-  const roleGate = config.roleGate ?? 'hard'
+  // advisory derives — never a hard-coded role list). The mode is read LIVE
+  // per start (see {@link roleGateReader}): the settings form edits a volatile
+  // field, and a save must take effect on the next start without a remount.
+  const readRoleGate = roleGateReader(config.roleGate)
   const declaredRoleIds = new Set<string>([
     ...Object.keys(rolePresets ?? {}),
     ...subagentRoleIds(packagedAgentsDir() ?? ''),
@@ -335,7 +371,7 @@ export function registerRolePersonaChannel(ctx: Context, config: Config): void {
     const value: unknown = next()
     if (name !== SUBAGENTS_SERVICE) return value
     try {
-      return wrapSubagentsService(value, rolePresets, state, ctx, roleGate, declaredRoleIds)
+      return wrapSubagentsService(value, rolePresets, state, ctx, readRoleGate, declaredRoleIds)
     } catch (error) {
       // Contained: an internal wrap error degrades to the raw service —
       // delivery is skipped, the runtime is untouched.
@@ -539,7 +575,10 @@ export interface RoleGateInput {
   readonly request: SubagentStartRequestView
   /** Configured mode. */
   readonly mode: RoleGateMode
-  /** The start `cwd` (named in the refusal message; harness-project test is pre-resolved). */
+  /**
+   * The child's EFFECTIVE start directory (named in the refusal message; the
+   * harness-project test is pre-resolved by the caller from this same value).
+   */
   readonly cwd?: string
   /** `cwd` resolves a `{HARNESS_DIR}` — false exempts the start from the gate. */
   readonly harnessProject: boolean
@@ -554,8 +593,9 @@ export interface RoleGateInput {
  * - `pass` — silent pass-through (caller intent, canonical header, non-harness
  *   project, unknown provider, `off`, or the wrapper's contained fail-open);
  * - `repair` — the request carries a rewritten prompt (canonical header);
- * - `warn` — no reliable declaration, advisory mode;
- * - `refuse` — no reliable declaration, `hard` mode (throws before delegating).
+ * - `warn` — no reliable declaration (or an ambiguous one), advisory mode;
+ * - `refuse` — no reliable declaration (or an ambiguous one), `hard` mode
+ *   (throws before delegating).
  */
 export type RoleGateDecision =
   | { readonly kind: 'pass'; readonly reason: 'agent-preset' | 'canonical' | 'non-harness' | 'provider-unknown' | 'off' | 'degraded' }
@@ -574,8 +614,8 @@ const PLAIN_FIELD_LINE_RE = /^[ \t]*(?:[-*][ \t]+)?([A-Za-z][A-Za-z -]*?)\s*:\s*
 /** A prompt that OPENS with an Assignment section (heading + its blank-line run). */
 const OPEN_ASSIGNMENT_HEADING_RE = /^([ \t]*#{2}[ \t]+Assignment[ \t]*)(\r?\n(?:[ \t]*\r?\n)*)?/
 
-/** An existing `Execute as` field line (bold or plain, optional list bullet). */
-const EXECUTE_AS_FIELD_LINE_RE = /^([ \t]*(?:[-*][ \t]+)?(?:\*\*\s*Execute as\s*\*\*\s*:|Execute as\s*:)[ \t]*)(.*)$/im
+/** An existing `Execute as` field line (bold or plain label, case-insensitive, optional list bullet). */
+const EXECUTE_AS_FIELD_LINE_RE = /^([ \t]*(?:[-*][ \t]+)?)(?:\*\*\s*Execute as\s*\*\*\s*:|Execute as\s*:)[ \t]*(.*)$/gim
 
 /**
  * Evaluate the dispatch-role gate for one start — PURE (the harness-project
@@ -607,28 +647,28 @@ export function evaluateRoleGate(input: RoleGateInput): RoleGateDecision {
   if (headerExecuteAs !== undefined && isCanonicalExecuteAs(headerExecuteAs)) {
     return { kind: 'pass', reason: 'canonical' }
   }
-  // (3) Non-harness projects (and an omitted cwd, whose child directory the
-  // seam cannot inspect) are exempt.
+  // (3) Non-harness projects are exempt (the caller resolved the child's
+  // EFFECTIVE start directory, so an omitted/relative cwd is decided by the
+  // directory the child inherits, never treated as non-harness blindly).
   if (!input.harnessProject) return { kind: 'pass', reason: 'non-harness' }
   // (4) The runtime's own `NO_PROVIDER` failure must not be shadowed.
   if (!input.providerKnown) return { kind: 'pass', reason: 'provider-unknown' }
   // (5) Repair candidates: exactly one distinct value across both tiers.
   const { fields, tokens } = roleCandidates(text, input.declaredRoleIds)
-  if (fields.length <= 1 && tokens.length <= 1) {
-    const distinct = new Set([...fields, ...tokens])
-    if (distinct.size === 1) {
-      const roleId = distinct.values().next().value as string
-      return {
-        kind: 'repair',
-        roleId,
-        evidence: fields.length === 1 ? 'field' : 'token',
-        request: repairRequest(request, roleId),
-      }
+  const candidates = [...new Set([...fields, ...tokens])]
+  if (fields.length <= 1 && tokens.length <= 1 && candidates.length === 1) {
+    const roleId = candidates[0]!
+    return {
+      kind: 'repair',
+      roleId,
+      evidence: fields.length === 1 ? 'field' : 'token',
+      request: repairRequest(request, roleId),
     }
   }
-  // (6) No reliable declaration (or an ambiguous one) → the configured mode.
-  const message = missingDeclarationMessage(input.cwd)
+  // (6) No reliable declaration (zero candidates) or an ambiguous one (two
+  // or more distinct) → the configured mode, with the cause-specific text.
   if (input.mode === 'off') return { kind: 'pass', reason: 'off' }
+  const message = declarationMessage(input.cwd, input.mode, candidates)
   if (input.mode === 'warn') return { kind: 'warn', message }
   return { kind: 'refuse', message }
 }
@@ -642,20 +682,40 @@ function promptText(request: SubagentStartRequestView): string {
 }
 
 /**
- * Whether one start `cwd` is a harness project: the engine resolver probes
- * from that directory and STOPS there (`workspaceRoot = cwd`) — the same
- * boundary the plugin's own workspace resolver uses. An absent/empty cwd is
- * never a probe start (the child inherits the parent's directory).
+ * The directory the child will actually start in — the runtime's own
+ * `resolveDirectory` rule (`dsh-subagent`): an absolute `cwd` is used as-is, a
+ * relative one resolves against the parent's directory, an omitted one IS the
+ * parent's directory. The parent directory is the spawning agent's session cwd
+ * (the same structural read the plugin's workspace resolver uses), falling
+ * back to the process cwd when the parent carries none. Treating an omitted
+ * cwd as non-harness would exempt exactly the channel the gate exists for
+ * (`subagent` / `spawn_teammate` omit it and inherit the parent directory).
  */
-function cwdIsHarnessProject(cwd: string | undefined): boolean {
-  if (cwd === undefined || cwd.trim() === '') return false
-  return resolveHarnessDir(cwd, { workspaceRoot: cwd }) !== null
+function effectiveStartDirectory(request: SubagentStartRequestView): string {
+  const cwd = request.cwd
+  if (cwd !== undefined && cwd.trim() !== '' && isAbsolute(cwd)) return resolve(cwd)
+  const parentDir = sessionCwdOf(request.parent) ?? process.cwd()
+  return cwd === undefined || cwd.trim() === '' ? resolve(parentDir) : resolve(parentDir, cwd)
+}
+
+/**
+ * Whether one directory is a harness project: the engine resolver probes from
+ * that directory and STOPS there (`workspaceRoot = cwd`) — the same boundary
+ * the plugin's own workspace resolver uses. The probe start is absolutized
+ * first: a relative `workspaceRoot` would anchor the boundary below the probe
+ * start and null out an otherwise resolvable harness root.
+ */
+function isHarnessProject(directory: string): boolean {
+  const abs = resolve(directory)
+  return resolveHarnessDir(abs, { workspaceRoot: abs }) !== null
 }
 
 /**
  * Scan one prompt for repair candidates: field lines in the Assignment HEADER
  * region (the engine's header scope) and backticked/bold tokens anywhere that
  * are already-declared role ids. Returns the DISTINCT values per tier.
+ * Fenced code blocks (` ``` ` / `~~~`) are stripped before the token scan — a
+ * quoted example is not a declaration.
  */
 function roleCandidates(text: string, declaredRoleIds: ReadonlySet<string>): { fields: string[]; tokens: string[] } {
   const fields = new Set<string>()
@@ -665,10 +725,19 @@ function roleCandidates(text: string, declaredRoleIds: ReadonlySet<string>): { f
     const roleId = normalizeRoleFieldValue(match[2]!)
     if (roleId !== undefined) fields.add(roleId)
   }
+  const unfenced = stripFencedCodeBlocks(text)
   const tokens = new Set<string>()
-  for (const match of text.matchAll(/`([^`\n]+)`/g)) addDeclaredToken(tokens, match[1]!, declaredRoleIds)
-  for (const match of text.matchAll(/\*\*([^*\n]+)\*\*/g)) addDeclaredToken(tokens, match[1]!, declaredRoleIds)
+  for (const match of unfenced.matchAll(/`([^`\n]+)`/g)) addDeclaredToken(tokens, match[1]!, declaredRoleIds)
+  for (const match of unfenced.matchAll(/\*\*([^*\n]+)\*\*/g)) addDeclaredToken(tokens, match[1]!, declaredRoleIds)
   return { fields: [...fields], tokens: [...tokens] }
+}
+
+/** Fenced code blocks (backtick or tilde, a closed pair) — their content is an example, never a declaration. */
+const FENCED_BLOCK_RE = /^[ \t]*(?:```|~~~)[^\n]*\n[\s\S]*?^[ \t]*(?:```|~~~)[ \t]*$/gm
+
+/** Drop fenced code blocks from one prompt text (an unterminated fence is left intact). */
+function stripFencedCodeBlocks(text: string): string {
+  return text.replace(FENCED_BLOCK_RE, '')
 }
 
 /** Add one wrapped token when it is a declared role id (`inherit` is never a role). */
@@ -699,23 +768,30 @@ function normalizeWrapped(raw: string): string | undefined {
 }
 
 /**
- * Rewrite one prompt with the canonical role declaration: an existing
- * (unusable) `Execute as` header line has its value replaced IN PLACE — a
- * second field would let the parsers' last-match rule keep the broken one — an
- * Assignment section that OPENS the prompt gets `Execute as: <id>` as its
- * first field line, and any other prompt gets the canonical header block
- * prepended. Every character of the rest is preserved.
+ * Rewrite one prompt with the canonical role declaration: every existing
+ * (unusable) `Execute as` header line has its value replaced IN PLACE and its
+ * label normalized to the canonical spelling — the parsers match the label
+ * case-sensitively and bind the LAST field line, so replacing only the first
+ * occurrence would leave a later broken line winning the read. An Assignment
+ * section that OPENS the prompt gets `Execute as: <id>` as its first field
+ * line, and any other prompt gets the canonical header block prepended. Every
+ * character outside the repaired field lines is preserved.
  *
  * @param text - the prompt text to rewrite.
  * @param roleId - the repaired role id.
  * @returns the rewritten prompt text.
  */
 export function rewritePromptWithExecuteAs(text: string, roleId: string): string {
-  const existing = EXECUTE_AS_FIELD_LINE_RE.exec(assignmentHeaderRegion(text))
-  if (existing !== null) {
-    const start = existing.index + existing[1]!.length
-    const end = existing.index + existing[0]!.length
-    return `${text.slice(0, start)}${roleId}${text.slice(end)}`
+  const existing = [...assignmentHeaderRegion(text).matchAll(EXECUTE_AS_FIELD_LINE_RE)]
+  if (existing.length > 0) {
+    // Splice from the END backwards so earlier offsets stay valid.
+    let out = text
+    for (const field of existing.reverse()) {
+      const start = field.index + field[1]!.length
+      const end = field.index + field[0]!.length
+      out = `${out.slice(0, start)}Execute as: ${roleId}${out.slice(end)}`
+    }
+    return out
   }
   const match = OPEN_ASSIGNMENT_HEADING_RE.exec(text)
   if (match === null) return `## Assignment\n\nExecute as: ${roleId}\n\n${text}`
@@ -725,29 +801,50 @@ export function rewritePromptWithExecuteAs(text: string, roleId: string): string
   return `${heading}${gap}Execute as: ${roleId}\n${text.slice(match[0].length)}`
 }
 
-/** Rewrite the request's FIRST text block (the header carrier); every other block is untouched. */
+/**
+ * Rewrite the request prompt over the SAME text range the candidate scan
+ * reads — the text blocks joined with newlines. The rewritten text is carried
+ * by the first text block and the remaining text blocks are folded into it:
+ * rewriting only the first block would let a later block's old `Execute as`
+ * line shadow the canonical one after the join. Non-text blocks stay in place.
+ */
 function repairRequest(request: SubagentStartRequestView, roleId: string): SubagentStartRequestView {
   const blocks = request.prompt ?? []
   const index = blocks.findIndex((block) => block.type === 'text')
   if (index < 0) return request
-  const prompt = blocks.map((block, i) =>
-    i === index ? { ...block, text: rewritePromptWithExecuteAs(block.text ?? '', roleId) } : block,
+  const rewritten = rewritePromptWithExecuteAs(promptText(request), roleId)
+  const prompt = blocks.flatMap((block, i) =>
+    i === index ? [{ ...block, text: rewritten }] : block.type === 'text' ? [] : [block],
   )
   return { ...request, prompt }
 }
 
 /**
- * The `hard` refusal / `warn` advisory text: what is missing, the exact fix,
- * and the supported escape hatch (a refusal with no recovery path is a defect).
+ * The `hard` refusal / `warn` advisory text: the actual cause (no declaration,
+ * or more than one distinct one), the exact fix, and the mode-appropriate
+ * recovery (a refusal with no recovery path is a defect; an advisory that
+ * tells a warn-mode operator to switch to warn is noise).
+ *
+ * @param cwd - the child's effective start directory, when known.
+ * @param mode - the configured mode (`hard` refusal or `warn` advisory).
+ * @param candidates - the distinct repair candidates found (0 or >1).
  */
-function missingDeclarationMessage(cwd: string | undefined): string {
+function declarationMessage(cwd: string | undefined, mode: 'warn' | 'hard', candidates: readonly string[]): string {
   const where = cwd === undefined ? 'the subagent start' : `the subagent start from cwd '${cwd}'`
-  return (
-    `${where} carries no role declaration — the delegation prompt is missing 'Execute as: <role-id>' in its Assignment header ` +
-    `(no 'Execute as:' / 'Act as:' / 'Role:' field, and no declared role id in backticks or bold). ` +
-    `Fix: add 'Execute as: <role-id>' under the '## Assignment' heading of the prompt. ` +
-    `Escape hatch: set 'roleGate: warn' (one advisory, start proceeds) or 'roleGate: off' (gate disabled) in the dsh plugin config.`
-  )
+  const cause =
+    candidates.length > 1
+      ? `declares ${candidates.length} distinct roles (${candidates.map((id) => `'${id}'`).join(', ')}) — exactly one role declaration is required`
+      : `carries no role declaration — the delegation prompt is missing 'Execute as: <role-id>' in its Assignment header ` +
+        `(no 'Execute as:' / 'Act as:' / 'Role:' field, and no declared role id in backticks or bold)`
+  const fix =
+    candidates.length > 1
+      ? `Fix: keep exactly one role declaration — remove the extra 'Role:' / 'Act as:' / 'Execute as:' lines, or name the one role in 'Execute as: <role-id>' under the '## Assignment' heading.`
+      : `Fix: add 'Execute as: <role-id>' under the '## Assignment' heading of the prompt.`
+  const recovery =
+    mode === 'warn'
+      ? `The start proceeded under 'roleGate: warn'; set 'roleGate: off' to skip this advisory (a single explicit declaration is still normalized either way).`
+      : `Escape hatch: set 'roleGate: warn' (one advisory, the start proceeds) or 'roleGate: off' (the refusal is skipped; a single explicit declaration is still normalized) in the dsh plugin config.`
+  return `${where} ${cause}. ${fix} ${recovery}`
 }
 
 /**
@@ -766,7 +863,7 @@ function wrapSubagentsService(
   rolePresets: Config['rolePresets'],
   state: ChannelState,
   ctx: Context,
-  roleGate: RoleGateMode,
+  readRoleGate: () => RoleGateMode,
   declaredRoleIds: ReadonlySet<string>,
 ): unknown {
   if (typeof value !== 'object' || value === null) return value
@@ -789,11 +886,15 @@ function wrapSubagentsService(
     let gated = spec
     let decision: RoleGateDecision
     try {
+      // The child's EFFECTIVE start directory — an omitted/relative cwd
+      // inherits the parent's directory, so it must be resolved BEFORE the
+      // harness predicate (an omitted cwd is never a non-harness exemption).
+      const startDirectory = effectiveStartDirectory(spec.request)
       decision = evaluateRoleGate({
         request: spec.request,
-        mode: roleGate,
-        cwd: spec.request.cwd,
-        harnessProject: cwdIsHarnessProject(spec.request.cwd),
+        mode: readRoleGate(),
+        cwd: startDirectory,
+        harnessProject: isHarnessProject(startDirectory),
         providerKnown: service.getProvider(spec.provider) !== undefined,
         declaredRoleIds,
       })
