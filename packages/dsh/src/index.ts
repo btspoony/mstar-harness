@@ -28,6 +28,7 @@ import { DshMstar } from './service.ts'
 import {
   Config,
   HarnessResolver,
+  liveConfigValue,
   packagedAgentsDir,
   skillLocalConfig,
 } from './gates/_shared.ts'
@@ -774,18 +775,20 @@ export function apply(ctx: Context, config: Config): void {
     )
   }
 
-  // Deploy-time observability: when enforcement resolves hard but
-  // no dispatchBinding is declared, the anti-recursion red line FAILS
-  // CLOSED — every Assignment-shaped dispatch emits
-  // `dispatch.anti-recursion.empty-binding` (critical) until
-  // dispatchBinding is set — surface the absence instead of only
-  // documenting it. (Boot-time the only known enforcement source is the
-  // explicit Config override — compass hard is per-workspace and resolves
-  // at event time.)
+  // Deploy-time observability: an UNSET `dispatchBinding` is not a warning —
+  // the caller is then derived from the calling session (a root session reads
+  // as the coordinator, a child session fails closed). This fires only when
+  // the operator EXPLICITLY blanks it. Under hard the anti-recursion red line
+  // then FAILS CLOSED — every Assignment-shaped dispatch emits
+  // `dispatch.anti-recursion.empty-binding` (critical) — so surface the blank
+  // instead of only documenting it, and point at the supported fix.
+  // (Boot-time the only known enforcement source is the explicit Config
+  // override — compass hard is per-workspace and resolves at event time.)
   const effectiveHard = config.enforcement === 'hard' || (bootHarnessDir !== null && resolveRepoEnforcement(bootHarnessDir).hard)
-  if (effectiveHard && (config.dispatchBinding ?? '').trim() === '') {
+  const configuredBinding = liveConfigValue(config.dispatchBinding)
+  if (effectiveHard && configuredBinding !== undefined && configuredBinding.trim() === '') {
     ctx.logger(DISPATCH_LOGGER).warn(
-      'Enforcement: hard is active but dispatchBinding is unset — the empty host binding fails closed: every Assignment-shaped dispatch emits dispatch.anti-recursion.empty-binding (critical) until dispatchBinding is set',
+      'Enforcement: hard is active but dispatchBinding is explicitly blank — the empty caller fails closed: every Assignment-shaped dispatch emits dispatch.anti-recursion.empty-binding (critical). Set the dispatching role in the dsh plugin settings form (live, no reload), or remove the blank value from the plugin config to derive the caller from the calling session (a root session reads as "project-manager"; a child session fails closed)',
     )
   }
   // Deploy-time observability: a renamed dsh subagent tool

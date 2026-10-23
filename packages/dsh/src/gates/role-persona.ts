@@ -56,11 +56,34 @@
  * configured default or the model's own `agent_preset` choice) is caller
  * intent and WINS — the channel fills the slot only when it is free.
  *
- * Degradation (the wrapper never throws before delegating — contained like
- * the dispatch gate's degrade path): unparseable prompt / role without a
+ * Dispatch-role gate: the same wrapper first normalizes the role declaration
+ * (`Config.roleGate`, default `hard`) — an explicit `Execute as:` / `Act as:`
+ * / `Role:` field or a backticked/bold already-declared role id IN THE
+ * ASSIGNMENT HEADER is rewritten into the canonical Assignment header, and
+ * only a start with NO reliable declaration — or one the rewrite cannot make
+ * the binding seam read — is refused. A repair is returned only after the
+ * rewritten text is re-parsed with the seam's own reader. The rewritten
+ * request is what the preset merge and the runtime receive. The canonical/pass
+ * judgement reads the SAME raw header the preset merge parses — fence masking
+ * only decides which text may supply a repair candidate — so a gate pass never
+ * means the merge sees no role; a canonical declaration that exists only
+ * inside a fenced example is refused under `hard` (the seam still binds it).
+ * A present-but-unusable role value (empty, or not a role id) gets its own
+ * cause-specific message. The gate exempts non-harness projects (judged at the
+ * child's EFFECTIVE start directory, resolved from the parent's
+ * working-directory projection — the same source the runtime resolves against,
+ * so an omitted/relative `cwd` inherits the directory the parent is in NOW),
+ * canonical prompts, `agentPreset` requests and unknown providers;
+ * its refusal is raised outside the contained-degradation catch below. The
+ * configured mode is read LIVE per start from the Loader's `volatile` field,
+ * so a dsh plugin-settings save applies on the next start without a remount.
+ *
+ * Degradation (the preset merge never throws before delegating — contained
+ * like the dispatch gate's degrade path): unparseable prompt / role without a
  * configured preset → silent pass-through; a throwing merge aborts the
  * merge only — the ORIGINAL request reaches the service and the start is
- * never affected.
+ * never affected. The role gate's own reads are contained the same way; only
+ * its configured `hard` verdict refuses a start.
  *
  * Seam probe (apply-time, observation only): a future cordis rename/removal
  * of `internal/get` would stop the listener from ever firing — delivery
@@ -87,20 +110,31 @@
  * Module boundary: no barrel — the entry imports this module by explicit
  * relative path and re-exports the public names verbatim, EXCEPT the four
  * probe exports (`PERSONA_SEAM_EVENT`, `ROLE_PERSONA_WRAPPER_BRAND`,
- * `evaluateSeamProbe`, `probeRolePersonaSeam`), which are deliberately NOT
- * re-exported from the entry: the frozen entry surface keeps the probe
- * observable only through this module (tests import it directly; the
- * shipped bundle exports no probe symbol). No dsh-subagent dependency: the
+ * `evaluateSeamProbe`, `probeRolePersonaSeam`) and the role-gate contract
+ * (`RoleGateMode`, `RoleGateEvidence`, `RoleGateInput`, `RoleGateDecision`,
+ * `evaluateRoleGate`, `rewritePromptWithExecuteAs`), which are deliberately
+ * NOT re-exported from the entry: the frozen entry surface keeps the probe
+ * and the pure gate decision observable only through this module (tests
+ * import it directly; the shipped bundle exports no probe symbol). No
+ * dsh-subagent dependency: the
  * runtime surface is consumed structurally (same pattern as the probe's
  * `LoaderEntryView` and T2's `fallbacks-structural.ts`).
  */
+import { isAbsolute, resolve } from 'node:path'
 import type { Context } from '@deepseek-ai/cordis'
 // Type-only: loads the registry's `Context` augmentation (the `agentPresets`
 // service name) without a runtime dependency — the plugin consumes the host
 // service structurally.
 import type {} from '@deepseek-ai/dsh-agent-preset-registry'
-import { assignmentHeaderRegion, parseAssignmentFields } from '@mstar-harness/engine'
-import type { Config } from './_shared.ts'
+import { assignmentHeaderRegion, parseAssignmentFields, resolveHarnessDir } from '@mstar-harness/engine'
+import {
+  isLiveConfigRef,
+  packagedAgentsDir,
+  sessionCwdOf,
+  type Config,
+  type LiveConfigRef,
+} from './_shared.ts'
+import { ROLE_ID_PATTERN, subagentRoleIds } from './agent-personas.ts'
 
 /** Logger label for the role-persona channel (dsh logger naming: `<scope>/<subject>`). */
 export const ROLE_PERSONA_LOGGER = 'mstar/role-persona'
@@ -150,6 +184,18 @@ export interface SubagentStartRequestView {
   readonly prompt: readonly PromptBlockView[]
   /** Optional preset already selected by the tool or the model — caller intent wins. */
   readonly agentPreset?: string
+  /**
+   * Initial child directory as requested (the role gate resolves the child's
+   * EFFECTIVE start directory from it: absolute as-is, relative against
+   * {@link parent}, omitted = the parent's own directory).
+   */
+  readonly cwd?: string
+  /**
+   * The spawning agent (`SubagentStartRequest.parent`). Its session cwd is the
+   * default child directory, exactly what the runtime's own `resolveDirectory`
+   * inherits when `cwd` is omitted.
+   */
+  readonly parent?: unknown
 }
 
 /**
@@ -240,6 +286,8 @@ const wrapperCache = new WeakMap<object, { state: ChannelState; wrapper: unknown
 interface ChannelState {
   /** Once-per-apply latch for the missing-registry debug. */
   registryAbsentLogged: boolean
+  /** Once-per-apply latch for the role gate's `warn` advisory. */
+  roleGateWarned: boolean
 }
 
 /**
@@ -256,6 +304,24 @@ interface ChannelState {
  */
 function agentPresetsService(ctx: Context): Context['agentPresets'] | undefined {
   return ctx.get('agentPresets')
+}
+
+/**
+ * Live reader for `Config.roleGate`. The Loader hands a `volatile` field to
+ * `apply` as an identity-stable `{ get }` reference whose snapshot it
+ * re-commits on every settings save, so reading it per start is what makes a
+ * saved edit take effect on the NEXT start without a reload. A plain value (a
+ * host that resolves the schema without the volatile protocol) is read as-is;
+ * an unrecognized value falls back to the shipped default.
+ *
+ * @param value - the configured field (a live reference or a plain value).
+ * @returns a reader returning the CURRENT gate mode.
+ */
+function roleGateReader(value: Config['roleGate'] | LiveConfigRef): () => RoleGateMode {
+  return () => {
+    const current = isLiveConfigRef(value) ? value.get() : value
+    return current === 'off' || current === 'warn' || current === 'hard' ? current : 'hard'
+  }
 }
 
 /**
@@ -294,7 +360,18 @@ export function registerRolePersonaChannel(ctx: Context, config: Config): void {
   // wrapper's `startActivation` signature stays the service's own (the
   // closure carries the binding).
   const rolePresets = config.rolePresets
-  const state: ChannelState = { registryAbsentLogged: false }
+  // Dispatch-role gate: the configured mode and the declared role-id set the
+  // repair tier reads. Declared = the configured presets' role keys ∪ the
+  // packaged mirror's subagent shell stems (the SAME taxonomy the fallbacks
+  // advisory derives — never a hard-coded role list). The mode is read LIVE
+  // per start (see {@link roleGateReader}): the settings form edits a volatile
+  // field, and a save must take effect on the next start without a remount.
+  const readRoleGate = roleGateReader(config.roleGate)
+  const declaredRoleIds = new Set<string>([
+    ...Object.keys(rolePresets ?? {}),
+    ...subagentRoleIds(packagedAgentsDir() ?? ''),
+  ])
+  const state: ChannelState = { registryAbsentLogged: false, roleGateWarned: false }
   // Waterfall listener: `(ctx, name, error, next)` — calling `next()` runs
   // the remaining chain (finally the built-in resolution) and its return is
   // the value readers receive. Dispatch carries no `this`, so no context
@@ -304,7 +381,7 @@ export function registerRolePersonaChannel(ctx: Context, config: Config): void {
     const value: unknown = next()
     if (name !== SUBAGENTS_SERVICE) return value
     try {
-      return wrapSubagentsService(value, rolePresets, state, ctx)
+      return wrapSubagentsService(value, rolePresets, state, ctx, readRoleGate, declaredRoleIds)
     } catch (error) {
       // Contained: an internal wrap error degrades to the raw service —
       // delivery is skipped, the runtime is untouched.
@@ -481,6 +558,536 @@ export function probeRolePersonaSeam(ctx: Context): PersonaSeamProbeResult {
 }
 
 /**
+ * Dispatch-role gate (`Config.roleGate`) — normalize an explicit role
+ * declaration into the canonical Assignment header, refuse only when there is
+ * none. Role identity is prompt-only on dsh, so a delegation that says
+ * "Role: `fullstack-dev`" in prose binds nothing and both role consumers
+ * (the fallbacks persona chain and `rolePresets`) silently see a role-less
+ * child. The gate runs BEFORE the preset merge in the same wrapper, so the
+ * rewritten request is what the inner merge and the runtime receive.
+ *
+ * Never a guess: only an explicit field line (`Execute as:` / `Act as:` /
+ * `Role:`) or a backticked/bold token that is an ALREADY-DECLARED role id is
+ * a repair candidate. Free prose ("You are an architect doing…") is never
+ * mined, and two distinct candidates at the same or different tiers are
+ * ambiguous — an ambiguous prompt is not repaired (it falls to the mode).
+ */
+
+/** Role-gate mode (`Config.roleGate`). */
+export type RoleGateMode = 'off' | 'warn' | 'hard'
+
+/** Which tier identified a repair candidate (`field` outranks `token`). */
+export type RoleGateEvidence = 'field' | 'token'
+
+/** Inputs of the pure role-gate decision ({@link evaluateRoleGate}). */
+export interface RoleGateInput {
+  /** The start request under gate (prompt + `agentPreset` + `cwd`). */
+  readonly request: SubagentStartRequestView
+  /** Configured mode. */
+  readonly mode: RoleGateMode
+  /**
+   * The child's EFFECTIVE start directory (named in the refusal message; the
+   * harness-project test is pre-resolved by the caller from this same value).
+   */
+  readonly cwd?: string
+  /** `cwd` resolves a `{HARNESS_DIR}` — false exempts the start from the gate. */
+  readonly harnessProject: boolean
+  /** The runtime declares `provider`; an unknown provider fails loud its own way (`NO_PROVIDER`). */
+  readonly providerKnown: boolean
+  /** Declared role ids: `Config.rolePresets` keys ∪ packaged mirror shell stems. */
+  readonly declaredRoleIds: ReadonlySet<string>
+}
+
+/**
+ * The gate's verdict:
+ * - `pass` — silent pass-through (caller intent, canonical header, non-harness
+ *   project, unknown provider, `off`, or the wrapper's contained fail-open);
+ * - `repair` — the request carries a rewritten prompt (canonical header) that
+ *   the binding seam's own reader PROVES it will bind;
+ * - `warn` — no reliable declaration, an ambiguous one, a present-but-unusable
+ *   one (fenced, empty, or outside the role-id shape), or a declaration the
+ *   repair cannot make the seam see — advisory mode;
+ * - `refuse` — the same causes, `hard` mode (throws before delegating).
+ */
+export type RoleGateDecision =
+  | { readonly kind: 'pass'; readonly reason: 'agent-preset' | 'canonical' | 'non-harness' | 'provider-unknown' | 'off' | 'degraded' }
+  | { readonly kind: 'repair'; readonly request: SubagentStartRequestView; readonly roleId: string; readonly evidence: RoleGateEvidence }
+  | { readonly kind: 'warn'; readonly message: string }
+  | { readonly kind: 'refuse'; readonly message: string }
+
+/** Field labels whose value is a role declaration (case-insensitive). */
+const ROLE_FIELD_LABELS: ReadonlySet<string> = new Set(['execute as', 'act as', 'role'])
+
+/** Bold field line (`**Execute as**: <value>`, optional list bullet). */
+const BOLD_FIELD_LINE_RE = /^[ \t]*(?:[-*][ \t]+)?\*\*\s*([^*:]+?)\s*\*\*\s*:\s*(.*)$/
+/** Plain field line (`Role: <value>`, optional list bullet) — same grammar as the engine parser. */
+const PLAIN_FIELD_LINE_RE = /^[ \t]*(?:[-*][ \t]+)?([A-Za-z][A-Za-z -]*?)\s*:\s*(.*)$/
+
+/** A prompt that OPENS with an Assignment section (heading + its blank-line run). */
+const OPEN_ASSIGNMENT_HEADING_RE = /^([ \t]*#{2}[ \t]+Assignment[ \t]*)(\r?\n(?:[ \t]*\r?\n)*)?/
+
+/** An existing `Execute as` field line (bold or plain label, case-insensitive, optional list bullet). */
+const EXECUTE_AS_FIELD_LINE_RE = /^([ \t]*(?:[-*][ \t]+)?)(?:\*\*\s*Execute as\s*\*\*\s*:|Execute as\s*:)[ \t]*(.*)$/gim
+
+/**
+ * Evaluate the dispatch-role gate for one start — PURE (the harness-project
+ * test is pre-resolved by the caller), first match wins:
+ *
+ * 1. `agentPreset` already set → pass (caller intent wins, silent).
+ * 2. header already carries a USABLE, UNFENCED `Execute as` value → pass
+ *    (idempotent, silent; read from the RAW header, the binding seam's own
+ *    scope).
+ * 3. not a harness project → pass (a non-harness project never pays the gate).
+ * 4. unknown provider → pass (the service fails loud its own way).
+ * 5. a canonical `Execute as` value that exists ONLY inside a fenced block →
+ *    the seam binds that quoted line, so `hard` refuses (and `warn` advises)
+ *    with that cause; `off` passes.
+ * 6. exactly one distinct repair candidate (field tier or declared token, both
+ *    header-scoped) → repair the prompt, then PROVE the repair: the rewritten
+ *    text is parsed with the binding seam's own reader
+ *    (`parseAssignmentFields` over `assignmentHeaderRegion`) and must resolve
+ *    to that role. A rewrite that leaves another `Execute as` line winning the
+ *    read (a wrapped value, or one past the header boundary) would log
+ *    "repaired" while the child still starts unbound, so it is NOT returned as
+ *    `repair`; ambiguous, none, unusable, or an unprovable repair → the
+ *    configured mode (`off` silent, `warn` one advisory, `hard` refusal).
+ *
+ * @param input - the request, mode, pre-resolved harness/provider facts and
+ *   the declared role-id set.
+ * @returns the verdict described by {@link RoleGateDecision}.
+ */
+export function evaluateRoleGate(input: RoleGateInput): RoleGateDecision {
+  const { request } = input
+  // (1) An explicit selection is caller intent — never gated.
+  if (request.agentPreset !== undefined) return { kind: 'pass', reason: 'agent-preset' }
+  const text = promptText(request)
+  // The CANDIDATE scan and the REWRITE read the fence-masked text: a quoted
+  // example is never a declaration, and the scan and the rewrite cannot
+  // disagree about where fences are. The READ below judges the raw header,
+  // and a fenced winning line is refused rather than passed.
+  const unfenced = maskFencedCodeBlocks(text)
+  const headerExecuteAs = parseAssignmentFields(assignmentHeaderRegion(text)).executeAs
+  const canonicalExecuteAs =
+    headerExecuteAs !== undefined && isCanonicalExecuteAs(headerExecuteAs) ? headerExecuteAs : undefined
+  // (2) A USABLE, UNFENCED canonical declaration is already in place — no
+  // rewrite (byte-identical). This reads the RAW header, which is exactly the
+  // input the binding seam downstream (`withRolePreset`) parses: judging the
+  // masked header would pass a declaration the raw header never reaches (a
+  // fenced `## Task` truncates it), and a "pass" would leave the child
+  // unbound. A wrapped/odd `Execute as` value is not canonical: the
+  // downstream parsers keep it raw, so it binds nothing and falls through to
+  // the repair tiers below (replaced in place, never duplicated).
+  if (canonicalExecuteAs !== undefined && !rawHeaderDeclarationFenced(text, unfenced)) {
+    return { kind: 'pass', reason: 'canonical' }
+  }
+  // (3) Non-harness projects are exempt (the caller resolved the child's
+  // EFFECTIVE start directory, so an omitted/relative cwd is decided by the
+  // directory the child inherits, never treated as non-harness blindly).
+  if (!input.harnessProject) return { kind: 'pass', reason: 'non-harness' }
+  // (4) The runtime's own `NO_PROVIDER` failure must not be shadowed.
+  if (!input.providerKnown) return { kind: 'pass', reason: 'provider-unknown' }
+  // (5) A canonical-looking declaration that exists ONLY inside a fenced
+  // example: the seam's header slice is line-based and fence-unaware, so it
+  // binds that quoted line as the declaration — and the preset selection then
+  // arms that role's whole composition. Pasting a template or an untrusted
+  // excerpt into the Assignment must not pass silently under `hard`; `warn`
+  // advises once per apply and `off` stays silent (the documented rollbacks).
+  if (canonicalExecuteAs !== undefined) {
+    if (input.mode === 'off') return { kind: 'pass', reason: 'off' }
+    const message = fencedDeclarationMessage(input.cwd, input.mode, canonicalExecuteAs)
+    return input.mode === 'warn' ? { kind: 'warn', message } : { kind: 'refuse', message }
+  }
+  // (6) Repair candidates: exactly one distinct value across both tiers.
+  const { fields, tokens, unusable } = roleCandidates(unfenced, input.declaredRoleIds)
+  const candidates = [...new Set([...fields, ...tokens])]
+  // The candidate the rewrite produced but could not make the seam bind (an
+  // unrepairable declaration) — reported by the mode fallback below.
+  let unrepairable: string | undefined
+  if (fields.length <= 1 && tokens.length <= 1 && candidates.length === 1) {
+    const roleId = candidates[0]!
+    const repaired = repairRequest(request, roleId)
+    // The repair must PROVE itself against the SAME reader the binding seam
+    // uses (`withRolePreset`): a rewrite whose canonical line does not win
+    // the read — a later wrapped field still binds, e.g. when the inserted line
+    // lands before one past the raw header boundary — leaves the child unbound,
+    // and claiming "repaired" would hide exactly that.
+    if (parseAssignmentFields(assignmentHeaderRegion(promptText(repaired))).executeAs === roleId) {
+      return { kind: 'repair', roleId, evidence: fields.length === 1 ? 'field' : 'token', request: repaired }
+    }
+    unrepairable = roleId
+  }
+  // (7) No reliable declaration (zero candidates), an ambiguous one (two
+  // or more distinct), an unusable one (a role field whose value is empty or
+  // not a role id), or an unrepairable one → the configured mode, with the
+  // cause-specific text.
+  if (input.mode === 'off') return { kind: 'pass', reason: 'off' }
+  const message =
+    unrepairable !== undefined
+      ? unrepairableMessage(input.cwd, input.mode, unrepairable)
+      : unusable.length > 0 && candidates.length === 0
+        ? unusableDeclarationMessage(input.cwd, input.mode, unusable)
+        : declarationMessage(input.cwd, input.mode, candidates)
+  if (input.mode === 'warn') return { kind: 'warn', message }
+  return { kind: 'refuse', message }
+}
+
+/** The prompt text projection both the parser and the rewrite operate on (text blocks joined with newlines). */
+function promptText(request: SubagentStartRequestView): string {
+  return (request.prompt ?? [])
+    .filter((block) => block.type === 'text')
+    .map((block) => block.text ?? '')
+    .join('\n')
+}
+
+/**
+ * The directory the child will actually start in — the runtime's own
+ * `resolveDirectory` rule (`dsh-subagent` `manager.js`, verbatim): a non-null
+ * ABSOLUTE `cwd` is used as-is (no trim, no resolve); anything else — a
+ * relative value, an omitted one, and a whitespace-only one alike (upstream
+ * resolves it as a relative segment) — is `resolve(parentBase, cwd ?? '.')`.
+ * Treating an omitted cwd as non-harness would exempt exactly the channel the
+ * gate exists for (`subagent` / `spawn_teammate` omit it and inherit the
+ * parent directory).
+ *
+ * @param request - the start request under gate.
+ * @param parentBase - the parent's current directory (see
+ *   {@link currentDirectoryOf}), or `undefined` to fall back to `header.cwd`
+ *   and then the process cwd.
+ */
+function effectiveStartDirectory(request: SubagentStartRequestView, parentBase: string | undefined): string {
+  const cwd = request.cwd
+  if (cwd !== undefined && isAbsolute(cwd)) return cwd
+  return resolve(parentBase ?? sessionCwdOf(request.parent) ?? process.cwd(), cwd ?? '.')
+}
+
+/**
+ * The parent directory the child inherits — read from the SAME synchronous
+ * source the runtime's `resolveDirectory` inherits from: it resolves against
+ * `workingDirectory.ensure(parent)`, whose value is
+ * `WorkingDirectoryService.get(parent.session)` (the session's
+ * `workingDirectory` projection — initialised from `header.cwd` and then
+ * following every `working-directory/change` — else the deployment default).
+ * `header.cwd` is the immutable original project, so reading it alone would
+ * judge a `cd`-ed parent at the directory it STARTED in: the child can start
+ * role-less in a harness project the gate declared non-harness, or the
+ * refusal can name a directory the child never uses.
+ *
+ * The host service is consumed structurally (house pattern: the optional
+ * `agentPresets` read) and a composition without it falls back to `header.cwd`.
+ *
+ * @param parent - the spawning agent (`SubagentStartRequest.parent`).
+ * @param ctx - the registrant context (the service accessor read).
+ * @returns the parent's current directory, or `undefined` when unknowable.
+ */
+function currentDirectoryOf(parent: unknown, ctx: Context): string | undefined {
+  const session = (parent as { session?: unknown } | null | undefined)?.session
+  if (session !== undefined) {
+    const workingDirectory = ctx.get('workingDirectory') as { get(session: unknown): unknown } | undefined
+    const current = workingDirectory?.get(session)
+    if (typeof current === 'string' && current.trim() !== '') return current
+  }
+  return sessionCwdOf(parent)
+}
+
+/**
+ * Whether one directory is a harness project: the engine resolver probes from
+ * that directory and STOPS there (`workspaceRoot = cwd`) — the same boundary
+ * the plugin's own workspace resolver uses. The probe start is absolutized
+ * first: a relative `workspaceRoot` would anchor the boundary below the probe
+ * start and null out an otherwise resolvable harness root.
+ */
+function isHarnessProject(directory: string): boolean {
+  const abs = resolve(directory)
+  return resolveHarnessDir(abs, { workspaceRoot: abs }) !== null
+}
+
+/**
+ * Scan one prompt for repair candidates: role field lines in the Assignment
+ * HEADER region (the engine's header scope) and backticked/bold tokens in that
+ * SAME header region that are already-declared role ids. The token tier is
+ * header-scoped like the field tier: a task sentence quoting an artifact
+ * ("Use `writing-specialist` for the write-up.") must not select the child's
+ * role, or prose could arm a role the dispatcher never declared.
+ *
+ * Also returns the role-field values that ARE present but unusable (empty, or
+ * not a role-id shape) — the cause-specific refusal names them instead of
+ * claiming the prompt carries no declaration at all.
+ *
+ * @param unfenced - the prompt text ALREADY fence-masked (see
+ *   {@link maskFencedCodeBlocks}): a quoted example is not a declaration, in
+ *   either tier. The rewrite masks the same way, so the two agree.
+ */
+function roleCandidates(
+  unfenced: string,
+  declaredRoleIds: ReadonlySet<string>,
+): { fields: string[]; tokens: string[]; unusable: string[] } {
+  const header = assignmentHeaderRegion(unfenced)
+  const fields = new Set<string>()
+  const unusable = new Set<string>()
+  for (const line of header.split(/\r?\n/)) {
+    const match = BOLD_FIELD_LINE_RE.exec(line) ?? PLAIN_FIELD_LINE_RE.exec(line)
+    if (match === null || !ROLE_FIELD_LABELS.has(match[1]!.trim().toLowerCase())) continue
+    const roleId = normalizeRoleFieldValue(match[2]!)
+    if (roleId !== undefined) fields.add(roleId)
+    else unusable.add(match[2]!.trim())
+  }
+  const tokens = new Set<string>()
+  for (const match of header.matchAll(/`([^`\n]+)`/g)) addDeclaredToken(tokens, match[1]!, declaredRoleIds)
+  for (const match of header.matchAll(/\*\*([^*\n]+)\*\*/g)) addDeclaredToken(tokens, match[1]!, declaredRoleIds)
+  return { fields: [...fields], tokens: [...tokens], unusable: [...unusable] }
+}
+
+/** An `Execute as` header field line the engine parser binds (case-sensitive label, bold or plain). */
+const EXECUTE_AS_HEADER_LINE_RE = /^[ \t]*(?:[-*][ \t]+)?(?:\*\*\s*Execute as\s*\*\*\s*:|Execute as\s*:)/
+
+/**
+ * Whether the LAST raw-header `Execute as` line the engine parser binds sits
+ * inside a fenced block. The engine grammar is case-sensitive (`Execute as`),
+ * and the parser binds the last such line in the header region — the same line
+ * the binding seam reads. `unfenced` is offset-identical to `text`, so a line
+ * that maskFencedCodeBlocks blanked is fence content.
+ *
+ * @param text - the raw prompt text.
+ * @param unfenced - the fence-masked prompt text (see {@link maskFencedCodeBlocks}).
+ */
+function rawHeaderDeclarationFenced(text: string, unfenced: string): boolean {
+  const header = assignmentHeaderRegion(text)
+  let offset: number | undefined
+  let position = 0
+  for (const line of header.split('\n')) {
+    if (EXECUTE_AS_HEADER_LINE_RE.test(line)) offset = position
+    position += line.length + 1
+  }
+  if (offset === undefined) return false
+  const length = header.indexOf('\n', offset) === -1 ? header.length - offset : header.indexOf('\n', offset) - offset
+  return unfenced.slice(offset, offset + length).trim() === ''
+}
+
+/**
+ * Mask fenced code blocks for one prompt text — real Markdown fence rules: a
+ * fence opens on a run of 3+ backticks or 3+ tildes, and closes only on the
+ * SAME character with a run at least as long (a different character or a
+ * shorter run is content, so a four-backtick fence is not closed by three).
+ * An unterminated fence stays intact.
+ *
+ * A CRLF prompt keeps its `\r` in the split result, and `.` / `$` never match
+ * past it — so the trailing carriage return is stripped for FENCE recognition
+ * only. Without that, every line of a CRLF prompt fails the fence pattern and
+ * masking degenerates to a no-op (a quoted `Execute as:` becomes a candidate).
+ *
+ * Every masked character becomes a space (the CR included), newlines are kept:
+ * the result is character-position identical to the input, so the rewrite can
+ * match on the masked text and splice into the original by the same offsets.
+ */
+function maskFencedCodeBlocks(text: string): string {
+  const out: string[] = []
+  let openChar: string | undefined
+  let openRun = 0
+  for (const rawLine of text.split('\n')) {
+    const line = rawLine.endsWith('\r') ? rawLine.slice(0, -1) : rawLine
+    const fence = /^[ \t]*(`{3,}|~{3,})(.*)$/.exec(line)
+    if (openChar === undefined) {
+      if (fence !== null) {
+        openChar = fence[1]![0]
+        openRun = fence[1]!.length
+      }
+      out.push(fence === null ? rawLine : ' '.repeat(rawLine.length))
+      continue
+    }
+    const closes = fence !== null && fence[1]![0] === openChar && fence[1]!.length >= openRun && fence[2]!.trim() === ''
+    if (closes) openChar = undefined
+    out.push(' '.repeat(rawLine.length))
+  }
+  return out.join('\n')
+}
+
+/** Add one wrapped token when it is a declared role id (`inherit` is never a role). */
+function addDeclaredToken(tokens: Set<string>, raw: string, declaredRoleIds: ReadonlySet<string>): void {
+  const value = normalizeWrapped(raw) ?? raw.trim()
+  if (ROLE_ID_PATTERN.test(value) && value !== 'inherit' && declaredRoleIds.has(value)) tokens.add(value)
+}
+
+/** A directly usable `Execute as` value: the role-id shape, or the explicit `inherit` intent. */
+function isCanonicalExecuteAs(value: string): boolean {
+  const trimmed = value.trim()
+  return ROLE_ID_PATTERN.test(trimmed) || trimmed === 'inherit'
+}
+
+/** Trim ONE leading `@`, surrounding quotes or backticks; accept only the role-id shape (never `inherit`). */
+function normalizeRoleFieldValue(raw: string): string | undefined {
+  let value = raw.trim()
+  if (value.startsWith('@')) value = value.slice(1).trim()
+  value = normalizeWrapped(value) ?? value
+  return ROLE_ID_PATTERN.test(value) && value !== 'inherit' ? value : undefined
+}
+
+/** Strip one matching pair of surrounding quotes or backticks (undefined when none). */
+function normalizeWrapped(raw: string): string | undefined {
+  const value = raw.trim()
+  const match = /^(?:"([^"]*)"|'([^']*)'|`([^`]*)`)$/.exec(value)
+  return match === null ? undefined : (match[1] ?? match[2] ?? match[3] ?? '').trim()
+}
+
+/**
+ * Rewrite one prompt with the canonical role declaration: every existing
+ * (unusable) `Execute as` header line has its value replaced IN PLACE and its
+ * label normalized to the canonical spelling — the parsers match the label
+ * case-sensitively and bind the LAST field line, so replacing only the first
+ * occurrence would leave a later broken line winning the read. An Assignment
+ * section that OPENS the prompt gets `Execute as: <id>` as its first field
+ * line, and any other prompt gets the canonical header block prepended. Every
+ * character outside the repaired field lines is preserved. Fenced examples are
+ * not field lines: the scan runs on the fence-masked text (same offsets as the
+ * input), so a quoted `Execute as:` line is neither repaired nor shadowed —
+ * and only a field line the RAW header reaches is repaired in place: one past
+ * the raw header boundary (a fenced `## Task` truncates the header there)
+ * binds nothing, so the canonical line is inserted after the `## Assignment`
+ * heading instead, i.e. before the point the binding seam stops at.
+ *
+ * @param text - the prompt text to rewrite.
+ * @param roleId - the repaired role id.
+ * @returns the rewritten prompt text.
+ */
+export function rewritePromptWithExecuteAs(text: string, roleId: string): string {
+  const headerLength = assignmentHeaderRegion(text).length
+  const existing = [...assignmentHeaderRegion(maskFencedCodeBlocks(text)).matchAll(EXECUTE_AS_FIELD_LINE_RE)]
+    .filter((field) => field.index! < headerLength)
+  if (existing.length > 0) {
+    // Splice from the END backwards so earlier offsets stay valid.
+    let out = text
+    for (const field of existing.reverse()) {
+      const start = field.index + field[1]!.length
+      const end = field.index + field[0]!.length
+      out = `${out.slice(0, start)}Execute as: ${roleId}${out.slice(end)}`
+    }
+    return out
+  }
+  const match = OPEN_ASSIGNMENT_HEADING_RE.exec(text)
+  if (match === null) return `## Assignment\n\nExecute as: ${roleId}\n\n${text}`
+  const heading = match[1]!
+  const blanks = match[2]
+  const gap = blanks === undefined ? '\n\n' : blanks.endsWith('\n') ? blanks : `${blanks}\n`
+  return `${heading}${gap}Execute as: ${roleId}\n${text.slice(match[0].length)}`
+}
+
+/**
+ * Rewrite the request prompt over the SAME text range the candidate scan
+ * reads — the text blocks joined with newlines. The rewritten text is carried
+ * by the first text block and the remaining text blocks are folded into it:
+ * rewriting only the first block would let a later block's old `Execute as`
+ * line shadow the canonical one after the join. Non-text blocks stay in place.
+ */
+function repairRequest(request: SubagentStartRequestView, roleId: string): SubagentStartRequestView {
+  const blocks = request.prompt ?? []
+  const index = blocks.findIndex((block) => block.type === 'text')
+  if (index < 0) return request
+  const rewritten = rewritePromptWithExecuteAs(promptText(request), roleId)
+  const prompt = blocks.flatMap((block, i) =>
+    i === index ? [{ ...block, text: rewritten }] : block.type === 'text' ? [] : [block],
+  )
+  return { ...request, prompt }
+}
+
+/**
+ * The `hard` refusal / `warn` advisory text: the actual cause (no declaration,
+ * or more than one distinct one), the exact fix, and the mode-appropriate
+ * recovery (a refusal with no recovery path is a defect; an advisory that
+ * tells a warn-mode operator to switch to warn is noise).
+ *
+ * @param cwd - the child's effective start directory, when known.
+ * @param mode - the configured mode (`hard` refusal or `warn` advisory).
+ * @param candidates - the distinct repair candidates found (0 or >1).
+ */
+function declarationMessage(cwd: string | undefined, mode: 'warn' | 'hard', candidates: readonly string[]): string {
+  const where = startLocation(cwd)
+  const cause =
+    candidates.length > 1
+      ? `declares ${candidates.length} distinct roles (${candidates.map((id) => `'${id}'`).join(', ')}) — exactly one role declaration is required`
+      : `carries no role declaration — the delegation prompt is missing 'Execute as: <role-id>' in its Assignment header ` +
+        `(no 'Execute as:' / 'Act as:' / 'Role:' field, and no declared role id in backticks or bold)`
+  const fix =
+    candidates.length > 1
+      ? `Fix: keep exactly one role declaration — remove the extra 'Role:' / 'Act as:' / 'Execute as:' lines, or name the one role in 'Execute as: <role-id>' under the '## Assignment' heading.`
+      : `Fix: add 'Execute as: <role-id>' under the '## Assignment' heading of the prompt.`
+  const recovery = modeRecovery(mode)
+  return `${where} ${cause}. ${fix} ${recovery}`
+}
+
+/**
+ * The mode-appropriate recovery for a `warn` advisory / `hard` refusal (a
+ * refusal with no recovery path is a defect; an advisory that tells a warn-mode
+ * operator to switch to warn is noise).
+ */
+function modeRecovery(mode: 'warn' | 'hard'): string {
+  return mode === 'warn'
+    ? `The start proceeded under 'roleGate: warn'; set 'roleGate: off' to skip this advisory (a single explicit declaration is still normalized either way).`
+    : `Escape hatch: set 'roleGate: warn' (one advisory, the start proceeds) or 'roleGate: off' (the refusal is skipped; a single explicit declaration is still normalized) in the dsh plugin config.`
+}
+
+/**
+ * The `hard` refusal / `warn` advisory text for a declaration that IS present
+ * but cannot be normalized — the rewrite could not make the binding seam read
+ * the role (another `Execute as` line keeps winning the read). Distinct from
+ * {@link declarationMessage}: the role is NOT missing, so the operator must be
+ * told the declaration could not be moved into the seam's read, plus the exact
+ * unambiguous form that always binds.
+ *
+ * @param cwd - the child's effective start directory, when known.
+ * @param mode - the configured mode (`hard` refusal or `warn` advisory).
+ * @param roleId - the declared role the repair could not bind.
+ */
+function unrepairableMessage(cwd: string | undefined, mode: 'warn' | 'hard', roleId: string): string {
+  const where = startLocation(cwd)
+  const cause =
+    `declares the role '${roleId}', but the declaration cannot be normalized so that the binding seam reads it ` +
+    `(another 'Execute as' line keeps winning the header read — a wrapped value, or one past the header boundary)`
+  const fix = `Fix: write 'Execute as: ${roleId}' as the ONLY role declaration in the Assignment header, above any fenced block.`
+  return `${where} ${cause}. ${fix} ${modeRecovery(mode)}`
+}
+
+/** The location prefix the mode messages name (`the subagent start` when the directory is unknown). */
+function startLocation(cwd: string | undefined): string {
+  return cwd === undefined ? 'the subagent start' : `the subagent start from cwd '${cwd}'`
+}
+
+/**
+ * The `hard` refusal / `warn` advisory text for a declaration that IS present
+ * but only inside a fenced example. The seam binds it (its header slice does
+ * not know fences), so the operator must be told the REAL cause — a quoted
+ * line armed the role — plus the form that declares it deliberately.
+ *
+ * @param cwd - the child's effective start directory, when known.
+ * @param mode - the configured mode (`hard` refusal or `warn` advisory).
+ * @param roleId - the role the fenced line binds.
+ */
+function fencedDeclarationMessage(cwd: string | undefined, mode: 'warn' | 'hard', roleId: string): string {
+  const cause =
+    `declares the role '${roleId}' only inside a fenced code block — a quoted example is not a declaration, ` +
+    `but the binding seam reads the header without fence awareness and binds it anyway`
+  const fix = `Fix: write 'Execute as: ${roleId}' outside any fenced block under the '## Assignment' heading (or remove the quoted line).`
+  return `${startLocation(cwd)} ${cause}. ${fix} ${modeRecovery(mode)}`
+}
+
+/**
+ * The `hard` refusal / `warn` advisory text for a role field that IS present
+ * but unusable — an empty value, a case-variant id, or any value outside the
+ * role-id shape. `declarationMessage`'s "carries no role declaration" would
+ * name the wrong cause and leave the operator without a fix direction.
+ *
+ * @param cwd - the child's effective start directory, when known.
+ * @param mode - the configured mode (`hard` refusal or `warn` advisory).
+ * @param values - the raw field values found, in scan order (empty string for an empty value).
+ */
+function unusableDeclarationMessage(cwd: string | undefined, mode: 'warn' | 'hard', values: readonly string[]): string {
+  const named = values.map((value) => (value === '' ? "an empty value ('')" : `'${value}'`)).join(', ')
+  const cause =
+    `declares the role value ${named}, which is not a usable role id — a role declaration must be a lowercase ` +
+    `role id ('a-z', '0-9' and '-', 1-32 characters), and 'inherit' is valid only on 'Execute as'`
+  const fix = "Fix: write 'Execute as: <role-id>' under the '## Assignment' heading with the lowercase role id (e.g. 'Execute as: fullstack-dev')."
+  return `${startLocation(cwd)} ${cause}. ${fix} ${modeRecovery(mode)}`
+}
+
+/**
  * Wrap one `ctx.subagents` read value: non-objects and non-runtime shapes
  * (the service is absent) pass through untouched. The wrapper is a
  * prototype-delegating object whose OWN `startActivation` merges the role's
@@ -491,7 +1098,14 @@ export function probeRolePersonaSeam(ctx: Context): PersonaSeamProbeResult {
  * (service value, preset mapping, registrant context) so repeated reads
  * agree and re-applies re-bind.
  */
-function wrapSubagentsService(value: unknown, rolePresets: Config['rolePresets'], state: ChannelState, ctx: Context): unknown {
+function wrapSubagentsService(
+  value: unknown,
+  rolePresets: Config['rolePresets'],
+  state: ChannelState,
+  ctx: Context,
+  readRoleGate: () => RoleGateMode,
+  declaredRoleIds: ReadonlySet<string>,
+): unknown {
   if (typeof value !== 'object' || value === null) return value
   const service = value as SubagentsServiceView
   if (typeof service.startActivation !== 'function' || typeof service.getProvider !== 'function') return value
@@ -503,10 +1117,54 @@ function wrapSubagentsService(value: unknown, rolePresets: Config['rolePresets']
   // and spread surface stays identical to the service's (no behavior change).
   Object.defineProperty(wrapper, ROLE_PERSONA_WRAPPER_BRAND, { value: true, enumerable: false })
   wrapper.startActivation = (spec: SubagentActivationSpecView) => {
-    let merged = spec
+    // (1) Dispatch-role normalization BEFORE the preset merge: the rewritten
+    // request is what the inner consumer (and the runtime) receives, so a
+    // prose-declared role binds the same way a canonical header does. The
+    // `hard` refusal is raised by the pure evaluator's verdict, OUTSIDE the
+    // merge's contained-degradation catch below — a gate refusal must never
+    // be swallowed. Only the gate's own reads are contained.
+    let gated = spec
+    let decision: RoleGateDecision
     try {
-      const mergedRequest = withRolePreset(agentPresetsService(ctx), state, service, spec.provider, spec.request, rolePresets)
-      if (mergedRequest !== spec.request) merged = { ...spec, request: mergedRequest }
+      // The child's EFFECTIVE start directory — an omitted/relative cwd
+      // inherits the parent's CURRENT directory (the working-directory
+      // projection, not the immutable header), so it must be resolved BEFORE
+      // the harness predicate (an omitted cwd is never a non-harness
+      // exemption).
+      const startDirectory = effectiveStartDirectory(spec.request, currentDirectoryOf(spec.request.parent, ctx))
+      decision = evaluateRoleGate({
+        request: spec.request,
+        mode: readRoleGate(),
+        cwd: startDirectory,
+        harnessProject: isHarnessProject(startDirectory),
+        providerKnown: service.getProvider(spec.provider) !== undefined,
+        declaredRoleIds,
+      })
+    } catch {
+      // Contained fail-open: an unreadable request/provider is a pathological
+      // caller object, and the merge below reads the same fields under its
+      // own contained warn — the gate adds no second failure surface and no
+      // second log line for it.
+      decision = { kind: 'pass', reason: 'degraded' }
+    }
+    if (decision.kind === 'refuse') throw new Error(decision.message)
+    if (decision.kind === 'warn') {
+      if (!state.roleGateWarned) {
+        state.roleGateWarned = true
+        log('warn', decision.message)
+      }
+    }
+    if (decision.kind === 'repair') {
+      gated = { ...spec, request: decision.request }
+      log(
+        'debug',
+        `role gate repaired the dispatch role '${decision.roleId}' from a ${decision.evidence === 'field' ? 'role field line' : 'declared role-id token'}; the canonical 'Execute as' header is what the child receives`,
+      )
+    }
+    let merged = gated
+    try {
+      const mergedRequest = withRolePreset(agentPresetsService(ctx), state, service, spec.provider, gated.request, rolePresets)
+      if (mergedRequest !== gated.request) merged = { ...gated, request: mergedRequest }
     } catch (error) {
       // Contained like the gate's degrade path: the merge aborts, the
       // ORIGINAL spec reaches the service — the start is never affected.

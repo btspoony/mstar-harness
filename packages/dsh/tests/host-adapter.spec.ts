@@ -552,7 +552,7 @@ describe('dispatchGate — D4 session hint derivation', () => {
     })
 
     const result = await adapter.dispatchGate(VALID_WRITABLE, subagentExec(VALID_WRITABLE, sessionAgent('sess-none', app.root)))
-    expect(result.ok).toBe(false) // the assignment still gates (anti-recursion empty binding)
+    expect(result.ok).toBe(true) // the gate verdict still returns (the default binding admits a clean Assignment)
     expect(readAgentFlow(join(app.harnessDir, 'workflows/wf-a'), 'wf-a')!.events).toEqual([])
     expect(readAgentFlow(join(app.harnessDir, 'workflows/wf-b'), 'wf-b')!.events).toEqual([])
   })

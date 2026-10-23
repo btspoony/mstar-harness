@@ -26,11 +26,12 @@ import type { PreToolDecision, ToolExecution, ToolExecutionToken } from '@deepse
 import { assignmentHeaderRegion } from '@mstar-harness/engine'
 import { foldedFamilyToolName, getCommandDefinitions, isCoordinatorSeatCommand } from '@mstar-harness/commands'
 import { bootApp, seedActiveWorkflow, seedHarness, type BootResult } from './harness.ts'
+import * as entry from '../src/index.ts'
 import { updateWorkflowSessionBinding } from '../src/engine-status-store.ts'
 import type { DispatchGateAdvisory } from '../src/index.ts'
-import { planIdOf, preExecuteListener } from '../src/gates/dispatch.ts'
+import { planIdOf, preExecuteListener, dispatchCallerOf, DISPATCH_LOGGER } from '../src/gates/dispatch.ts'
 import { DshHostAdapter } from '../src/gates/adapter.ts'
-import { HarnessResolver, type Config } from '../src/gates/_shared.ts'
+import { HarnessResolver, ROOT_SESSION_DISPATCH_BINDING, type Config } from '../src/gates/_shared.ts'
 
 let booted: BootResult | undefined
 
@@ -145,6 +146,17 @@ const SELF_RECURSION = `## Assignment
 Do the thing.
 `
 
+/** Self-recursion against the SHIPPED default binding (`project-manager`). */
+const SELF_DISPATCH_PROJECT_MANAGER = `## Assignment
+
+**Execute as**: project-manager
+**Delegation**: forbidden
+**Task category**: logic
+**Working branch**: feature/x
+
+Do the thing.
+`
+
 /** Hard flag in the Assignment HEADER plus a violation (branch form missing) to harden on. */
 const HARD_HEADER_FLAG = `## Assignment
 
@@ -226,6 +238,16 @@ const subagentExec = (prompt: string, agent?: unknown): ToolExecution =>
 /** The registry's bare default decision (the waterfall's terminal `next()`). */
 const defaultAllow = (): Promise<PreToolDecision> => Promise.resolve<PreToolDecision>({ kind: 'allow' })
 
+/**
+ * The CALLING sessions the anti-recursion caller derivation reads (F7): a ROOT
+ * session carries no `header.parentSession` (the coordinator seat), an
+ * in-process subagent child stamps it at creation. Neither carries a durable
+ * id/cwd, so the session-hint derivation stays as cheap as the agent-less
+ * shapes these tests used before.
+ */
+const rootAgent = { session: { header: {} } }
+const childAgent = { session: { header: { parentSession: 'root-session' } } }
+
 /** Collect dispatch-gate advisory emits on the app context. */
 function captureAdvisories(ctx: BootResult['ctx']): DispatchGateAdvisory[] {
   const advisories: DispatchGateAdvisory[] = []
@@ -236,11 +258,40 @@ function captureAdvisories(ctx: BootResult['ctx']): DispatchGateAdvisory[] {
 const violationCodes = (advisory: DispatchGateAdvisory | undefined): string[] =>
   advisory?.result.violations.map((v) => v.code) ?? []
 
+/**
+ * Capture `mstar/dispatch-gate` warn logs through a cordis logger exporter (the
+ * default buffer exporter filters warns out, so the exporter registers its own
+ * `levels.default: 2` threshold). Only logs emitted AFTER registration are
+ * captured — an apply-time warn needs the exporter installed before the apply.
+ */
+function captureDispatchWarns(ctx: BootResult['ctx']): string[] {
+  const warns: string[] = []
+  ctx.logger.exporter({
+    levels: { default: 2 },
+    export: (message) => {
+      if (message.type === 'warn' && message.name === DISPATCH_LOGGER) warns.push(String(message.args[0]))
+    },
+  })
+  return warns
+}
+
+/**
+ * Write a role through the Loader's live volatile `dispatchBinding` reference —
+ * the exact effect a dsh plugin-settings save has. Fails loud when the field is
+ * not volatile (no live reference was created).
+ */
+function writeLiveDispatchBinding(app: BootResult, role: string): void {
+  const config = app.pluginFiber?.config as { dispatchBinding?: Record<symbol, unknown> } | undefined
+  const write = config?.dispatchBinding?.[Symbol.for('cosmokit.volatile.write')]
+  expect(typeof write, 'the plugin config must carry a live volatile dispatchBinding reference').toBe('function')
+  ;(write as (value: unknown) => void)(role)
+}
+
 /* ---------------------------------- warn (default) mode ---------------------------------- */
 
 describe('dispatch gate — warn (default) mode', () => {
-  it('valid writable Assignment → allow, advisory with dispatch.anti-recursion.empty-binding (unset binding fails closed)', async () => {
-    const app = booted = await bootApp()
+  it('explicitly blank dispatchBinding → allow, advisory with dispatch.anti-recursion.empty-binding (fails closed)', async () => {
+    const app = booted = await bootApp({ dispatchBinding: '' })
     const advisories = captureAdvisories(app.ctx)
 
     const decision = await app.ctx.waterfall('tools/pre-execute', subagentExec(VALID_WRITABLE), defaultAllow)
@@ -297,7 +348,7 @@ describe('dispatch gate — warn (default) mode', () => {
   })
 
   it('read-only role (scout) without branch form → allow, advisory with dispatch.anti-recursion.empty-binding (no read-only carve-out)', async () => {
-    const app = booted = await bootApp()
+    const app = booted = await bootApp({ dispatchBinding: '' })
     const advisories = captureAdvisories(app.ctx)
 
     const decision = await app.ctx.waterfall('tools/pre-execute', subagentExec(SCOUT_NO_BRANCH), defaultAllow)
@@ -320,7 +371,7 @@ describe('dispatch gate — warn (default) mode', () => {
   })
 
   it('well-formed Branch policy direct on main → allow, advisory with dispatch.anti-recursion.empty-binding (exception honored)', async () => {
-    const app = booted = await bootApp()
+    const app = booted = await bootApp({ dispatchBinding: '' })
     const advisories = captureAdvisories(app.ctx)
 
     const decision = await app.ctx.waterfall('tools/pre-execute', subagentExec(DIRECT_ON_MAIN), defaultAllow)
@@ -345,13 +396,14 @@ describe('dispatch gate — warn (default) mode', () => {
     expect(anti!.severity).toBe('critical')
   })
 
-  it('no configured binding → dispatch.anti-recursion.empty-binding fires, self-type does not (fail closed)', async () => {
-    const app = booted = await bootApp()
+  it('explicitly blank binding → dispatch.anti-recursion.empty-binding fires, self-type does not (fail closed)', async () => {
+    const app = booted = await bootApp({ dispatchBinding: '' })
     const advisories = captureAdvisories(app.ctx)
 
     // MISSING_BRANCH carries Execute as: fullstack-dev (a self-typed role when a
-    // binding were configured) — without a binding the empty-binding violation
-    // fires alongside the field gate; self-type cannot fire (no binding).
+    // binding were configured) — with a blank binding the empty-binding
+    // violation fires alongside the field gate; self-type cannot fire (no
+    // caller role to compare against).
     const decision = await app.ctx.waterfall('tools/pre-execute', subagentExec(MISSING_BRANCH), defaultAllow)
 
     expect(decision).toEqual({ kind: 'allow' })
@@ -418,8 +470,30 @@ describe('dispatch gate — hard mode (Config enforcement: hard)', () => {
     expect(advisories).toHaveLength(0)
   })
 
-  it('unset dispatchBinding under hard → deny with dispatch.anti-recursion.empty-binding (fail closed)', async () => {
+  it('an unset binding on a ROOT session reads as project-manager under hard → admit, no empty-binding', async () => {
+    // No explicit binding: a root session IS the coordinator, so the red line
+    // has a real role to compare against instead of failing closed.
     const app = booted = await bootApp({ enforcement: 'hard' })
+    const advisories = captureAdvisories(app.ctx)
+
+    const decision = await app.ctx.waterfall('tools/pre-execute', subagentExec(VALID_WRITABLE, rootAgent), defaultAllow)
+
+    expect(decision).toEqual({ kind: 'allow' })
+    expect(advisories).toHaveLength(0)
+  })
+
+  it('the root-session caller still refuses an Execute as matching it (self-type red line intact)', async () => {
+    const app = booted = await bootApp({ enforcement: 'hard' })
+
+    const decision = await app.ctx.waterfall('tools/pre-execute', subagentExec(SELF_DISPATCH_PROJECT_MANAGER, rootAgent), defaultAllow)
+
+    expect(decision.kind).toBe('deny')
+    expect(decision.kind === 'deny' && decision.reason).toContain('dispatch.anti-recursion.self-type')
+    expect(decision.kind === 'deny' && decision.reason).toContain('[critical]')
+  })
+
+  it('explicitly blank dispatchBinding under hard → deny with dispatch.anti-recursion.empty-binding (fail closed)', async () => {
+    const app = booted = await bootApp({ enforcement: 'hard', dispatchBinding: '' })
     let secondRan = false
     app.ctx.on('tools/pre-execute', () => {
       secondRan = true
@@ -432,6 +506,38 @@ describe('dispatch gate — hard mode (Config enforcement: hard)', () => {
     expect(decision.kind).toBe('deny')
     expect(decision.kind === 'deny' && decision.reason).toContain('dispatch.anti-recursion.empty-binding')
     expect(decision.kind === 'deny' && decision.reason).toContain('[critical]')
+  })
+
+  it('an explicitly blank binding is also warned about at apply, pointing at the settings form', async () => {
+    const app = booted = await bootApp({ enforcement: 'hard', dispatchBinding: '' })
+    // The apply-time warn fires before any test exporter can listen, so
+    // re-apply the plugin row on the same context (the HMR shape) under a
+    // warn exporter.
+    await app.pluginFiber!.dispose()
+    const warns = captureDispatchWarns(app.ctx)
+
+    await app.ctx.plugin(entry, { harnessDir: app.harnessDir, enforcement: 'hard', dispatchBinding: '' })
+
+    // The apply also warns about an unset `dispatchTools` on the same logger.
+    const bindingWarns = warns.filter((warn) => warn.includes('dispatchBinding'))
+    expect(bindingWarns).toHaveLength(1)
+    expect(bindingWarns[0]).toContain('explicitly blank')
+    expect(bindingWarns[0]).toContain('settings form')
+    expect(bindingWarns[0]).not.toContain('until dispatchBinding is set')
+  })
+
+  it('a live dispatchBinding save is observed by the NEXT dispatch (plugin settings form path)', async () => {
+    const app = booted = await bootApp({ enforcement: 'hard', dispatchBinding: 'qc-specialist' })
+    // VALID_WRITABLE carries Execute as: fullstack-dev — not the bound role.
+    expect(await app.ctx.waterfall('tools/pre-execute', subagentExec(VALID_WRITABLE), defaultAllow)).toEqual({ kind: 'allow' })
+
+    // The dsh plugin settings form saves through the live volatile field — no
+    // remount, no re-apply.
+    writeLiveDispatchBinding(app, 'fullstack-dev')
+    const decision = await app.ctx.waterfall('tools/pre-execute', subagentExec(VALID_WRITABLE), defaultAllow)
+
+    expect(decision.kind).toBe('deny')
+    expect(decision.kind === 'deny' && decision.reason).toContain('dispatch.anti-recursion.self-type')
   })
 
   it("the Assignment's OWN **Enforcement**: hard header flag hardens without Config (opencode parity)", async () => {
@@ -478,6 +584,62 @@ describe('dispatch gate — hard mode (Config enforcement: hard)', () => {
 
     expect(decision).toEqual({ kind: 'allow' })
     expect(advisories).toHaveLength(0)
+  })
+})
+
+/* ---------------------------------- F7: derived caller ---------------------------------- */
+
+describe('F7 — the anti-recursion caller is DERIVED from the calling session, never invented', () => {
+  it('dispatchCallerOf: explicit wins verbatim, root reads as the coordinator, child/unreadable stays empty', () => {
+    expect(dispatchCallerOf({ dispatchBinding: 'fullstack-dev' }, rootAgent)).toBe('fullstack-dev')
+    // An explicitly blank value stays blank — never replaced by the root identity.
+    expect(dispatchCallerOf({ dispatchBinding: '' }, rootAgent)).toBe('')
+    expect(dispatchCallerOf({}, rootAgent)).toBe(ROOT_SESSION_DISPATCH_BINDING)
+    expect(dispatchCallerOf({}, childAgent)).toBe('')
+    expect(dispatchCallerOf({}, undefined)).toBe('')
+  })
+
+  it('REGRESSION (reported bypass): a CHILD session with no explicit binding dispatching Execute as fullstack-dev is refused with dispatch.anti-recursion.empty-binding', async () => {
+    // Before F7 the schema default fabricated `project-manager` for every
+    // caller, so a leaf could dispatch a same-role child and pass the
+    // anti-recursion precheck. A leaf must not dispatch: the caller is empty.
+    const app = booted = await bootApp({ enforcement: 'hard' })
+
+    const decision = await app.ctx.waterfall('tools/pre-execute', subagentExec(VALID_WRITABLE, childAgent), defaultAllow)
+
+    expect(decision.kind).toBe('deny')
+    expect(decision.kind === 'deny' && decision.reason).toContain('[critical] dispatch.anti-recursion.empty-binding')
+    expect(decision.kind === 'deny' && decision.reason).not.toContain('dispatch.anti-recursion.self-type')
+  })
+
+  it('a child session dispatching Execute as fullstack-dev with an explicit dispatchBinding: fullstack-dev is refused with self-type', async () => {
+    // The explicit binding is still compared verbatim — derivation never
+    // overrides configuration.
+    const app = booted = await bootApp({ enforcement: 'hard', dispatchBinding: 'fullstack-dev' })
+
+    const decision = await app.ctx.waterfall('tools/pre-execute', subagentExec(SELF_RECURSION, childAgent), defaultAllow)
+
+    expect(decision.kind).toBe('deny')
+    expect(decision.kind === 'deny' && decision.reason).toContain('dispatch.anti-recursion.self-type')
+    expect(decision.kind === 'deny' && decision.reason).not.toContain('dispatch.anti-recursion.empty-binding')
+  })
+
+  it('an explicitly blank binding still fails closed on a ROOT session', async () => {
+    const app = booted = await bootApp({ enforcement: 'hard', dispatchBinding: '' })
+
+    const decision = await app.ctx.waterfall('tools/pre-execute', subagentExec(VALID_WRITABLE, rootAgent), defaultAllow)
+
+    expect(decision.kind).toBe('deny')
+    expect(decision.kind === 'deny' && decision.reason).toContain('dispatch.anti-recursion.empty-binding')
+  })
+
+  it('an UNREADABLE calling session (no session on the execution context) falls back to EMPTY, never to the coordinator', async () => {
+    const app = booted = await bootApp({ enforcement: 'hard' })
+
+    const decision = await app.ctx.waterfall('tools/pre-execute', subagentExec(VALID_WRITABLE), defaultAllow)
+
+    expect(decision.kind).toBe('deny')
+    expect(decision.kind === 'deny' && decision.reason).toContain('dispatch.anti-recursion.empty-binding')
   })
 })
 
@@ -628,7 +790,7 @@ Survey the codebase, report only.
 `
 
   it('explore read-only role without branch form → allow, advisory with dispatch.anti-recursion.empty-binding (no read-only carve-out)', async () => {
-    const app = booted = await bootApp()
+    const app = booted = await bootApp({ dispatchBinding: '' })
     const advisories = captureAdvisories(app.ctx)
 
     const decision = await app.ctx.waterfall('tools/pre-execute', subagentExec(EXPLORE_NO_BRANCH), defaultAllow)
@@ -641,7 +803,7 @@ Survey the codebase, report only.
   })
 
   it('explore under Enforcement: hard → deny with dispatch.anti-recursion.empty-binding (read-only assignments carry no other vetoable violations)', async () => {
-    const app = booted = await bootApp({ enforcement: 'hard' })
+    const app = booted = await bootApp({ enforcement: 'hard', dispatchBinding: '' })
     const advisories = captureAdvisories(app.ctx)
 
     const decision = await app.ctx.waterfall('tools/pre-execute', subagentExec(EXPLORE_NO_BRANCH), defaultAllow)

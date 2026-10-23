@@ -699,6 +699,32 @@ the role-preset channel read, so `Execute as` / `Act as` + skill load must be
 in the prompt). A dispatch that drops those lines has no field to fall back on
 — it is a bare delegation.
 
+**Role gate (`roleGate`, default `hard`):** the plugin normalizes an explicit
+declaration at the subagent start seam before the preset merge, so a
+`Role: \`<role>\`` line or a backticked/bold already-declared role id IN THE
+ASSIGNMENT HEADER is rewritten into the canonical `Execute as: <role>` header
+and binds normally; free prose is never mined, so write the header explicitly.
+A body mention is not a declaration (the token tier is header-scoped), and a
+canonical declaration that exists only inside a fenced code block is refused
+too — the seam's header read is fence-unaware and would bind that quote. A
+harness-project start with NO reliable declaration is refused under `hard` with
+a message naming the exact fix (`Execute as: <role-id>` under `## Assignment`)
+and the `roleGate: warn|off` escape hatch; a start naming two or more distinct
+roles is refused with the ids and the "exactly one declaration" rule instead,
+and a role field that IS present but unusable (empty, or not a lowercase role
+id) gets its own message naming the raw value and the accepted shape. The
+non-harness exemption is judged at the child's EFFECTIVE start directory (an
+absolute `cwd` as-is, a relative one resolved against the parent's CURRENT
+directory, an omitted one inherited from it — the working-directory projection
+the runtime itself resolves against, never the immutable header alone), so the
+default `subagent` / `spawn_teammate` starts — which omit `cwd` — are gated by
+the directory the parent is in NOW rather than exempted. A request already
+carrying `agentPreset` and an unknown provider are exempt too. `off` skips only
+the refusal; a single explicit declaration is still normalized. `roleGate` and
+`dispatchBinding` are the plugin's live-editable settings fields — a dsh
+plugin-configuration save applies on the next start (next dispatch for the
+binding) without a reload.
+
 **Execution: same-message invokes start concurrently.** The installed `subagent`
 tool declares **`isConcurrencySafe: () => true`**, so a batch of invokes emitted
 in ONE assistant message is admitted concurrently instead of serialized. Each
@@ -892,11 +918,21 @@ The dsh web client resolves slash commands against a client-side lexicon driven 
   (absolute path) or declare it in a repo `.mstarc` — the gates are inert
   without a resolvable harness dir.
 - The dispatch gate needs the dispatching agent's own role for the
-  anti-recursion precheck: declare it via Config **`dispatchBinding`** (dsh
-  exposes no per-agent role on the tool-execution context). Under hard
-  enforcement with no binding, the plugin logs the absence AND every
-  Assignment-shaped dispatch fails closed (`dispatch.anti-recursion.
-  empty-binding` → deny) until the binding is set.
+  anti-recursion precheck: Config **`dispatchBinding`** declares it (dsh
+  exposes no per-agent role on the tool-execution context) and is
+  live-editable in the dsh plugin settings form. The value is never
+  fabricated: an explicit binding wins verbatim; without one the gate DERIVES
+  the caller from the CALLING session — a ROOT session
+  (`session.header.parentSession` absent, the coordinating agent in this
+  harness) reads as `project-manager`, while a CHILD session stays EMPTY and
+  fails closed (`dispatch.anti-recursion.empty-binding` → every
+  Assignment-shaped dispatch denied under hard), because a leaf must not
+  dispatch. A session the gate cannot read (the exec-less host
+  `beforeDispatch` hook) falls back to EMPTY too. An explicitly blank binding
+  also fails closed — under hard enforcement the plugin logs it AND every
+  Assignment-shaped dispatch fails until a role is configured. **A deployment
+  whose coordinator is not the root session must set the binding
+  explicitly.**
 - **Caller-scoped engine enforcement (the dsh-only half of issue #156).** That
   binding is what makes the precheck real here: with a declared dispatcher
   identity the engine compares the **dispatching seat's own role** against the

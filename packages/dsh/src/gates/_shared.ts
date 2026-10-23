@@ -16,7 +16,13 @@
 import { existsSync } from 'node:fs'
 import { resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
-import z from 'schemastery'
+// The hosted schemastery fork (a peer dependency), NOT the npm `schemastery`
+// the lockfile also carries: only the fork implements the `volatile` config
+// reference protocol, and the Loader validates a plugin config through THIS
+// schema's own `~standard`. With npm 3.18.0 the marker would be accepted but
+// `createVolatile` never runs, so the Loader would drop a live settings save
+// without a remount AND without applying it.
+import z from '@deepseek-ai/schemastery'
 import { resolveHarnessDir, resolveRepoEnforcement } from '@mstar-harness/engine'
 import type { GateResult, ValidationResult } from '@mstar-harness/engine'
 import type { Config as SkillLocalConfig } from '@deepseek-ai/dsh-skill-filesystem'
@@ -67,10 +73,17 @@ export interface Config {
    * as the anti-recursion binding: an Assignment whose `Execute as` equals this
    * role is a self-dispatch (critical violation — leaf executors must not
    * re-invoke their own role). dsh exposes no agent role on the tool-execution
-   * context, so the deployment declares it. Absent → the empty binding FAILS
-   * CLOSED: every Assignment-shaped dispatch emits
-   * `dispatch.anti-recursion.empty-binding` (critical) until the binding is
-   * set.
+   * context, so the deployment declares it. `volatile`: read through the
+   * Loader's live reference per dispatch, so the plugin settings form can edit
+   * it without a remount.
+   *
+   * Absent is NOT a default: the caller is derived from the CALLING session —
+   * a root session (`session.header.parentSession === undefined`) reads as the
+   * coordinator (`ROOT_SESSION_DISPATCH_BINDING`), while a child session — or a
+   * session the gate cannot read — stays EMPTY and fails closed with
+   * `dispatch.anti-recursion.empty-binding`. An explicitly blank value
+   * (`''`) also fails closed. A deployment whose coordinator is not the root
+   * session MUST set this explicitly.
    */
   dispatchBinding?: string
   /**
@@ -139,6 +152,23 @@ export interface Config {
    */
   rolePresets?: Record<string, string>
   /**
+   * Dispatch-role normalization gate at the subagent start seam (the same
+   * `internal/get` wrapper that delivers `rolePresets`). Both role consumers
+   * read the Assignment header (`Execute as: <role>`); a delegation that
+   * names its role only in prose ("Role: `fullstack-dev`") binds nothing and
+   * silently starts a role-less child. The gate NORMALIZES an explicit
+   * declaration — an `Execute as:` / `Act as:` / `Role:` field line, or a
+   * backticked/bold already-declared role id — into the canonical header
+   * (the rewritten prompt is what the runtime receives), and REFUSES only
+   * when there is no reliable declaration: `hard` throws before delegating,
+   * `warn` logs ONE advisory per apply and starts unchanged, `off` disables
+   * the gate. Non-harness projects (the start `cwd` resolves no
+   * `{HARNESS_DIR}`), requests that already carry a declaration or an
+   * `agentPreset`, and unknown providers pass through silently. Default
+   * `hard` (normalize-first, refuse-last).
+   */
+  roleGate?: 'off' | 'warn' | 'hard'
+  /**
    * Workflow/ralph gate mode :
    * `off` disables the gate entirely (workflow/ralph calls pass through
    * untouched, NO verdict row); `warn` (default) logs an advisory for
@@ -200,6 +230,58 @@ export function stripInterpolationHazard(text: string): string {
   }
 }
 
+/** The live-editable marker the Loader / `SettingsForms` read (declared here so a schemastery release that predates it still typechecks the `.extra()` write). */
+declare module '@deepseek-ai/schemastery' {
+  namespace Schemastery {
+    interface Meta {
+      volatile?: boolean
+    }
+  }
+}
+
+/**
+ * The Loader's live config reference for a `volatile` schema node: an
+ * identity-stable `{ get }` view whose snapshot the Loader re-commits on every
+ * settings save (the cosmokit `Volatile` protocol). Detected STRUCTURALLY — the
+ * protocol is duck-shaped and every other config shape must keep working.
+ */
+export interface LiveConfigRef {
+  get(): unknown
+}
+
+/**
+ * Whether one config value is the Loader's live volatile reference.
+ * @param value - a raw config field value.
+ * @returns `true` when the value answers `get()` as the live reference does.
+ */
+export function isLiveConfigRef(value: unknown): value is LiveConfigRef {
+  return typeof value === 'object' && value !== null && typeof (value as { get?: unknown }).get === 'function'
+}
+
+/**
+ * Read one `volatile` config field's CURRENT value. The Loader hands a
+ * `volatile` node to `apply` as a live reference re-committed on every
+ * settings save, so reading it per use (never caching it at apply) is what
+ * makes a saved edit take effect without a remount. A plain value — a host
+ * that resolves the schema without the volatile protocol — is read as-is.
+ * @param value - the configured field (a live reference or a plain value).
+ * @returns the current value, or `undefined` when absent.
+ */
+export function liveConfigValue<T>(value: T | LiveConfigRef | undefined): T | undefined {
+  return (isLiveConfigRef(value) ? value.get() : value) as T | undefined
+}
+
+/**
+ * The anti-recursion caller of a ROOT session (`Config.dispatchBinding`
+ * fallback). A root session in this harness IS the coordinating agent, so an
+ * unset `dispatchBinding` on a root session reads as `project-manager` — an
+ * identity read, never a guess. It is NEVER the caller for a child session or
+ * for a session the gate cannot read: those fail closed with
+ * `dispatch.anti-recursion.empty-binding`, because a leaf must not dispatch.
+ * Derivation: `dispatchCallerOf` in `dispatch.ts`.
+ */
+export const ROOT_SESSION_DISPATCH_BINDING = 'project-manager'
+
 /** Schemastery configuration schema for the plugin consumer. Object keys are optional by default (`.optional()` is a vendored-fork addition not present in npm schemastery); omitted ARRAY keys would materialize as `[]` (schemastery empty-value default — the tool-subagent `toolFilter` pitfall) and omitted DICT keys would materialize as `{}`, so the dispatch keys and the persona keys all preserve omission via `.default(undefined)`. */
 // simplify: the fork's 3.18.4 `.default()` typing defers the property Mode
 // generic, so the inferred meta.default output admits a `Volatile<...>` arm
@@ -211,7 +293,13 @@ export const Config: z<Config> = z.object({
   harnessDir: z.string(),
   enforcement: z.union(['hard', 'soft']),
   dispatchTools: z.array(z.string()).default(undefined as unknown as string[]),
-  dispatchBinding: z.string().default(undefined as unknown as string),
+  // VOLATILE: the anti-recursion caller is read through the Loader's live
+  // reference per dispatch (a settings save applies on the next dispatch).
+  // NO constant default: an absent value means "derive the caller from the
+  // calling session" (a root session reads as the coordinator; a child session
+  // fails closed — `dispatchCallerOf`), and a schema default would fabricate
+  // the caller for every leaf. An explicitly blank value also fails closed.
+  dispatchBinding: z.string().extra('volatile', true),
   skillRoots: z.array(z.string()).default(undefined as unknown as string[]),
   bundledSkillDir: z.string().default(undefined as unknown as string),
   catalogTtlMs: z.number().default(undefined as unknown as number),
@@ -224,7 +312,9 @@ export const Config: z<Config> = z.object({
   // id), where the answer is available.
   rolePresets: z.transform(
     z.dict(z.string()),
-    (value) => {
+    // Explicit parameter type: the fork's `transform` does not infer the dict
+    // value type (npm schemastery did), and the runtime value is the same.
+    (value: Record<string, string>) => {
       for (const [role, presetId] of Object.entries(value)) {
         if (presetId.trim().length === 0) {
           throw new z.ValidationError(
@@ -236,6 +326,16 @@ export const Config: z<Config> = z.object({
       return value
     },
   ).default(undefined as unknown as Record<string, string>),
+  // Dispatch-role normalization gate : `roleGate` defaults to 'hard'
+  // (normalize-first, refuse-last: an explicit declaration is repaired
+  // before a start is ever refused, and only a prompt with NO reliable role
+  // declaration is blocked); `warn`/`off` are the per-deployment rollbacks.
+  // VOLATILE (with `dispatchBinding`, the plugin's TWO live fields):
+  // `roleGate` is read through the Loader's live reference on every start, so
+  // the dsh plugin settings form can edit it without a remount — and the form
+  // therefore carries exactly these fields (every other Config key is
+  // apply-time and needs a reload).
+  roleGate: z.union(['off', 'warn', 'hard']).default('hard').extra('volatile', true),
   // Workflow/ralph gate : `workflowGate`
   // defaults to 'warn' (no surprise hard-block — the gate is advisory-only
   // unless the deployment opts into ask/hard); `workflowNames` preserves

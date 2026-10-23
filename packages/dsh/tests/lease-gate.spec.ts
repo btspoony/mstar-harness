@@ -280,7 +280,9 @@ describe('dispatch gate — row-scope matrix (sdd / InProgress)', () => {
     expect(violationCodes(advisories[0])).toContain('lease.dispatch.branch-mismatch')
   })
   it('alternate create-form and direct-on branch spellings are compared with the row branch', async () => {
-    const app = booted = await bootApp()
+    // Explicit blank binding: each dispatch then carries exactly one advisory
+    // (empty-binding), so the ABSENCE of branch-mismatch stays observable.
+    const app = booted = await bootApp({ dispatchBinding: '' })
     await seedRowDoc(app.harnessDir, IN_PROGRESS_WITH_SCOPE)
     const advisories = captureAdvisories(app.ctx)
     const createForm = SDD_ASSIGNMENT.replace(`**Working branch**: ${BRANCH}`, `**Working branch**: create ${BRANCH} from main`)
