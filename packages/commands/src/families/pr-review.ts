@@ -7,7 +7,7 @@ import {
 } from "@mstar-harness/engine";
 import { randomUUID } from "node:crypto";
 import { z } from "zod";
-import { commandEnvelopeSchema } from "../definitions.js";
+import { commandEnvelopeSchema } from "../envelope.js";
 import { refusalEnvelope, type RefusalDiagnostic } from "../envelope.js";
 import { engineErrorFacts } from "./family-refusal.js";
 import { launchDirectoryRefusal, launchDirectoryDiagnostics } from "./launch-workspace.js";

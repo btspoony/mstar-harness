@@ -1,4 +1,4 @@
-import { commandEnvelopeSchema } from "../definitions.js";
+import { commandEnvelopeSchema } from "../envelope.js";
 import { createReport, reportInputSchema } from "../report.js";
 import type { ReportData, ReportInput } from "../report.js";
 import type { CommandDefinition, CommandEnvelope } from "../types.js";

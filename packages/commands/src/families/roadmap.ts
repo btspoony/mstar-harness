@@ -18,7 +18,7 @@ import {
 } from "@mstar-harness/engine";
 import { z } from "zod";
 import type { CommandDefinition, CommandEnvelope, InvocationContext } from "../types.js";
-import { commandEnvelopeSchema } from "../definitions.js";
+import { commandEnvelopeSchema } from "../envelope.js";
 
 const inputSchema = z.object({
   project: z.string().optional(), file: z.string().optional(), review: z.string().optional(), apply: z.boolean().optional(), operation: z.string().optional(),

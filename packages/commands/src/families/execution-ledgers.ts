@@ -51,7 +51,7 @@ import {
   workflowNotesLedgerPath,
   type ExecutionIdentity,
 } from "@mstar-harness/engine";
-import { commandEnvelopeSchema } from "../definitions.js";
+import { commandEnvelopeSchema } from "../envelope.js";
 import { redactSessionIds } from "../session-redaction.js";
 import { refusalEnvelope } from "../envelope.js";
 import { decodeInputDiagnostics } from "../input-diagnostics.js";

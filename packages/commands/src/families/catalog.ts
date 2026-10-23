@@ -36,7 +36,7 @@ import {
 import { purgeCatalogRegistration } from "@mstar-harness/engine";
 import { z } from "zod";
 import type { CommandDefinition, CommandEnvelope, InvocationContext } from "../types.js";
-import { commandEnvelopeSchema } from "../definitions.js";
+import { commandEnvelopeSchema } from "../envelope.js";
 
 const inputSchema = z.object({
   kind: z.string().optional(), id: z.string().optional(), title: z.string().optional(), description: z.string().optional(),

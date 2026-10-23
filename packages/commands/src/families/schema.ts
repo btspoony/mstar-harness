@@ -2,7 +2,8 @@ import { refusalEnvelope } from "../envelope.js";
 import { ISSUE_PAYLOAD_SCHEMAS } from "@mstar-harness/engine";
 import type { IssuePayloadName, PayloadFieldSchema } from "@mstar-harness/engine";
 import { z } from "zod";
-import { commandEnvelopeSchema, getCommandDefinitions } from "../definitions.js";
+import { commandEnvelopeSchema } from "../envelope.js";
+import { getCommandDefinitions } from "../definitions.js";
 import { isCliOnlyCommand } from "../cli-only.js";
 import type { CommandDefinition, CommandEffect, CommandEnvelope, CommandRequirement } from "../types.js";
 

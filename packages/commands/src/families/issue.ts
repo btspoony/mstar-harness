@@ -31,7 +31,7 @@ import type { PayloadFieldSchema } from "@mstar-harness/engine";
 import { z } from "zod";
 import type { CommandDefinition, CommandEnvelope, InvocationContext } from "../types.js";
 import { refusalEnvelope, type RefusalDiagnostic } from "../envelope.js";
-import { commandEnvelopeSchema } from "../definitions.js";
+import { commandEnvelopeSchema } from "../envelope.js";
 import { decodeInputDiagnostics } from "../input-diagnostics.js";
 import { payloadSchema } from "../payload-field-schema.js";
 import { engineErrorFacts } from "./family-refusal.js";
