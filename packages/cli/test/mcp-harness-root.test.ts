@@ -1114,7 +1114,7 @@ const CONTROL_ROOT_CLASS: Readonly<Record<string, "root" | "none">> = {
   "store.execution.export": "none", "store.execution.restore": "none", "store.execution.restore-preview": "none",
   "store.init": "root", "store.migrate": "root", "store.retire": "root",
   "store.upgrade": "root", "workflow-note.append": "root", "workflow-note.coverage": "root",
-  "workflow.adopt-terminal": "root", "workflow.delivery-anchors": "root", "workflow.evidence": "root",
+  "workflow.adopt-terminal": "root", "workflow.compass-ref": "root", "workflow.delivery-anchors": "root", "workflow.evidence": "root",
   "workflow.execution-policy": "root", "workflow.integration-worktree": "root", "workflow.lifecycle": "root",
   "workflow.phase": "root", "workflow.register": "root", "worktree.check": "root",
   "worktree.cleanup": "root", "worktree.qc-alignment": "none",

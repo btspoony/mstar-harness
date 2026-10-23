@@ -23,7 +23,7 @@
  *   `compass_ref?` (relative pointer to the iteration delivery compass).
  * - Mutex shape: `validateIntegrationMergeLease` (this module).
  */
-import { existsSync, readFileSync } from "node:fs";
+import { existsSync, readFileSync, statSync } from "node:fs";
 import { basename, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { readJson, type GateResult, type Severity, type ValidationResult } from "./core.js";
 import {
@@ -1236,16 +1236,20 @@ export type RegisterIterationWorkflowOptions = {
 
 /**
  * Normalize the registration input's `compassRef` to the stored contract
- * form: a harness-relative pointer. An absolute path that resolves inside
- * the harness root names the identical reviewed document and is rewritten to
- * its relative POSIX form; anything that would resolve outside the root
- * refuses with the accepted form spelled out. The relative form is kept
- * verbatim (resolved against the root and range-checked, never rewritten).
+ * form: the canonical harness-relative pointer of the document it names.
  *
- * Containment is decided on `canonicalizeNearestExisting` of both sides, so
- * an in-root symlink whose target lies outside the harness is refused here -
- * the same canonical read `readPrepareCompass` performs later - rather than
- * being stored and failing at amendment time.
+ * Both accepted spellings name the SAME existing reviewed document, and the
+ * stored value is always that document's canonical relative form - never the
+ * caller's spelling, so a repository-relative `.mstar/...` pointer can never
+ * be stored as if it were harness-relative (it was, and every later reader
+ * joined it under the harness root twice: I-000863). A pointer that names no
+ * existing file, or that would resolve outside the root, refuses here - before
+ * any row is published - with the accepted forms spelled out.
+ *
+ * Containment and existence are both decided on `canonicalizeNearestExisting`
+ * of the resolved path, so an in-root symlink whose target lies outside the
+ * harness is refused here - the same canonical read `readPrepareCompass`
+ * performs later - rather than being stored and failing at amendment time.
  */
 export function normalizeIterationCompassRef(
   ref: string,
@@ -1254,10 +1258,6 @@ export function normalizeIterationCompassRef(
 ): string {
   const rootCanon = canonicalizeNearestExisting(harnessRoot);
   const prefix = rootCanon.endsWith("/") ? rootCanon : `${rootCanon}/`;
-  const contained = (candidate: string): boolean => {
-    const canon = canonicalizeNearestExisting(candidate);
-    return canon === rootCanon || canon.startsWith(prefix);
-  };
   if (isAbsolute(ref)) {
     // Canonical-vs-canonical containment and storage (#301 issue 3 / #304
     // issue 2 remedy): the symlink spelling of either side must not leak into
@@ -1271,15 +1271,41 @@ export function normalizeIterationCompassRef(
           `document inside ${harnessRoot}; store the harness-relative pointer of that compass instead`,
       );
     }
+    if (!existsSync(canon) || !statSync(canon).isFile()) {
+      throw refuse(reviewedCompassMissing(ref, harnessRoot));
+    }
     return relative(rootCanon, canon).split(sep).join("/");
   }
-  if (!contained(resolve(harnessRoot, ref))) {
+  const canon = canonicalizeNearestExisting(resolve(harnessRoot, ref));
+  if (canon !== rootCanon && !canon.startsWith(prefix)) {
     throw refuse(
       `options.compassRef escapes the harness root - the reviewed compass_ref must address a document inside ` +
         `${harnessRoot}; store the harness-relative pointer of that compass instead`,
     );
   }
-  return ref;
+  if (!existsSync(canon) || !statSync(canon).isFile()) {
+    throw refuse(reviewedCompassMissing(ref, harnessRoot));
+  }
+  return relative(rootCanon, canon).split(sep).join("/");
+}
+
+/**
+ * The refusal of a pointer that names no existing reviewed compass. It names
+ * the two accepted forms, and the one trap that produced I-000863: a
+ * repository-relative `.mstar/...` pointer is joined under the harness root,
+ * so it can only ever name `.mstar/.mstar/...`.
+ */
+function reviewedCompassMissing(ref: string, harnessRoot: string): string {
+  const repoRelative = isAbsolute(ref) ? undefined : /^(?:\.\/)?\.mstar\//.test(ref);
+  return (
+    `options.compassRef names no existing reviewed compass under ${harnessRoot}` +
+    (repoRelative
+      ? ` - the pointer ${JSON.stringify(ref)} is repository-relative, but a compass_ref is resolved against the ` +
+        `harness root, so it would name a nested ".mstar/.mstar/..." document; drop the leading ".mstar/"`
+      : "") +
+    `; pass the compass document's absolute path inside the harness root, or its harness-relative pointer ` +
+    `(e.g. iterations/<iteration-id>/delivery-compass.md)`
+  );
 }
 
 /** Build the validated iteration snapshot shape consumed by the catalog journal. */

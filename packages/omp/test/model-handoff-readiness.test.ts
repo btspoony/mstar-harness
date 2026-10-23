@@ -39,6 +39,7 @@ import {
   createFsStore,
   initializeStore,
   mutateExecutionPlan,
+  mutateExecutionWorkflow,
   readExecutionAuthority,
   registerCatalogEntity,
   setArtifactStore,
@@ -348,6 +349,8 @@ type ActiveFixtureOptions = {
   skipPrepare?: boolean;
   /** Bind this session id as the coordinator instead of the default one. */
   sessionId?: string;
+  /** Record this `compass_ref` on the workflow row instead of the canonical pointer. */
+  storedCompassRef?: string;
 };
 
 /** A canonical plain copy of an engine-returned session reference. */
@@ -459,7 +462,7 @@ async function buildActiveFixture(options: ActiveFixtureOptions = {}): Promise<A
       phase: "phase-1-prepare",
       started_at: "2026-09-16T00:00:00Z",
       updated_at: "2026-09-16T00:00:00Z",
-      compass_ref: `iterations/${workflowId}/delivery-compass.md`,
+      compass_ref: options.storedCompassRef ?? `iterations/${workflowId}/delivery-compass.md`,
       branch: { base: "main", integration: integrationBranch, target: "main" },
       integration_worktree_path: integration,
       plans: [
@@ -702,6 +705,46 @@ describe("E2 phase 1 readiness on the ACTIVE route", () => {
     const unpushed = await inspectPhase1Readiness(f.binding, f.input);
     expect(unpushed.ready).toBe(false);
     expect(codesOf(unpushed)).toContain("push-unverified");
+  }, 120_000);
+
+  test("a repository-relative stored pointer is diagnosed, and the public repair makes the checkpoint ready", async () => {
+    // The I-000863 shape: the row records a repository-relative pointer, which
+    // every reader joins under the harness root and therefore resolves to a
+    // nested `.mstar/.mstar/...` document that does not exist.
+    const workflowId = "fixture-active-iteration";
+    const f = await buildActiveFixture({ storedCompassRef: `.mstar/iterations/${workflowId}/delivery-compass.md` });
+    const refused = await inspectPhase1Readiness(f.binding, f.input);
+    expect(refused.ready).toBe(false);
+    expect(codesOf(refused)).toContain("binding-invalid");
+    if (refused.ready) throw new Error("the repository-relative pointer must not pass");
+    const pointer = refused.diagnostics.find((entry) => entry.detail === "compass-pointer-invalid");
+    // The received FORM is projected; the stored text (private path data) is not.
+    expect(pointer).toMatchObject({
+      received: "repository-relative",
+      base: realpathSync(f.harness),
+      target: realpathSync(f.compassPath),
+    });
+    expect(pointer?.next).toContain("mstar workflow compass-ref");
+
+    // The public repair records the canonical harness-relative pointer, and the
+    // SAME checkpoint (same binding, same input) then passes the comparison.
+    await mutateExecutionWorkflow(
+      { harnessDir: f.harness, caller: { sessionId: f.sessionId, role: "coordinator", workflowId } },
+      {
+        operationId: "repair-compass-pointer",
+        workflowId,
+        session: f.coordinator,
+        expected: (await readExecutionAuthority({ harnessDir: f.harness }, { workflowId })).token,
+        operation: {
+          kind: "compass-ref",
+          compassPath: `iterations/${workflowId}/delivery-compass.md`,
+          reason: "the registered pointer carried a repository-relative prefix",
+        },
+      },
+    );
+    const repaired = await inspectPhase1Readiness(f.binding, f.input);
+    expect(repaired.ready).toBe(true);
+    if (!repaired.ready) throw new Error(`unexpected refusal after the repair: ${repaired.codes.join(", ")}`);
   }, 120_000);
 
   test("a missing writing-specialist return refuses review-evidence-missing", async () => {

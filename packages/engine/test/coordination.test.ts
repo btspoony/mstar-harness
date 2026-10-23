@@ -79,6 +79,12 @@ describe("registration route parity — one canonical plan pointer (E07 fold)", 
     const initialized = await readExecutionAuthority({ harnessDir: dbRoot.harness });
     setArtifactStore(createFsStore(dbRoot.harness));
     const iterationId = "iter-route-db";
+    // Registration proves the named document IS this iteration's reviewed
+    // compass, so the fixture states one like any real registration does.
+    writeText(
+      join(dbRoot.harness, "iterations", iterationId, "delivery-compass.md"),
+      `---\niteration_id: ${iterationId}\nstart_date: 2026-09-18\nstatus: active\niteration_base_branch: main\ntarget_branch: main\n---\n`,
+    );
     const caller = { sessionId: FIXTURE_COORDINATOR_ID, role: "coordinator" as const, workflowId: iterationId };
     await commitExecutionRegistration(
       { harnessDir: dbRoot.harness, caller },
@@ -113,6 +119,12 @@ describe("registration route parity — one canonical plan pointer (E07 fold)", 
     // ...and the DB route refuses the spelling the file route refuses, instead
     // of persisting it verbatim — the finding this fold closes.
     const verbatimId = "iter-route-verbatim";
+    // Its own reviewed compass too, so the plan-pointer spelling is the ONE fact
+    // left to disagree with: the compass admission gate runs first.
+    writeText(
+      join(dbRoot.harness, "iterations", verbatimId, "delivery-compass.md"),
+      `---\niteration_id: ${verbatimId}\nstart_date: 2026-09-18\nstatus: active\niteration_base_branch: main\ntarget_branch: main\n---\n`,
+    );
     const refusal = await failureOf(() =>
       commitExecutionRegistration(
         { harnessDir: dbRoot.harness, caller: { ...caller, workflowId: verbatimId } },

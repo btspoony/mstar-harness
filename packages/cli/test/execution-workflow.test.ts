@@ -148,6 +148,19 @@ async function activeFixture(label: string): Promise<Fixture> {
   return { root, harnessDir, context, planMarkdown };
 }
 
+/**
+ * Registration proves the named document IS this iteration's reviewed compass,
+ * so an iteration case states one where a real registration names it.
+ */
+function writeIterationCompass(fixture: Fixture, iterationId: string, plans: readonly string[] = [PLAN_ID]): string {
+  const ref = `iterations/${iterationId}/delivery-compass.md`;
+  writeText(
+    join(fixture.harnessDir, ref),
+    `---\niteration_id: ${iterationId}\nstart_date: 2026-09-22\nstatus: active\niteration_base_branch: main\ntarget_branch: main\nplans: [${plans.join(", ")}]\n---\n\n# ${iterationId}\n`,
+  );
+  return ref;
+}
+
 async function rootTokenOf(fixture: Fixture): Promise<string> {
   const read = await readExecutionAuthority(fixture.context);
   return read.token;
@@ -262,6 +275,18 @@ async function plantDoneRow(fixture: Fixture, status = "Done"): Promise<void> {
     handle.db
       .prepare("update execution_plans set state_json = ? where workflow_id = ? and plan_id = ?")
       .run(JSON.stringify(state), WORKFLOW_ID, PLAN_ID);
+  } finally {
+    handle.close();
+  }
+}
+
+/** The stored plan rows of one workflow, exactly as `execution_plans` holds them. */
+async function planRows(fixture: Fixture, workflowId = WORKFLOW_ID): Promise<unknown[]> {
+  const handle = await openStore(fixture.context, "read");
+  try {
+    return handle.db
+      .prepare("select plan_id, revision, state_json from execution_plans where workflow_id = ? order by plan_id")
+      .all(workflowId);
   } finally {
     handle.close();
   }
@@ -521,7 +546,7 @@ describe("mstar workflow \u2014 documented invocation", () => {
         "--workflow",
         ITERATION_ID,
         "--compass-ref",
-        `iterations/${ITERATION_ID}/delivery-compass.md`,
+        writeIterationCompass(fixture, ITERATION_ID),
         "--branch-base",
         "main",
         "--branch-integration",
@@ -601,7 +626,7 @@ describe("mstar workflow \u2014 documented invocation", () => {
         "--workflow",
         ITERATION_ID,
         "--compass-ref",
-        `iterations/${ITERATION_ID}/delivery-compass.md`,
+        writeIterationCompass(fixture, ITERATION_ID),
         "--branch-base",
         "main",
         "--branch-integration",
@@ -1061,6 +1086,93 @@ describe("mstar workflow \u2014 documented invocation", () => {
     } finally {
       handle.close();
     }
+  });
+
+  test("the compass-ref verb repairs a retained repository-relative pointer and preserves the lifecycle", async () => {
+    const fixture = await activeFixture("mstar-workflow-compass-ref");
+    const identity = coordinatorIdentity(ITERATION_ID);
+    const compassRef = writeIterationCompass(fixture, ITERATION_ID);
+    const registered = runCli(
+      [
+        "iteration", "register",
+        "--workflow", ITERATION_ID,
+        "--compass-ref", compassRef,
+        "--branch-base", "main",
+        "--branch-integration", INTEGRATION_BRANCH,
+        "--branch-target-iteration", "main",
+        "--row", JSON.stringify({ id: PLAN_ID, title: "Iteration row", file: `plans/${PLAN_ID}.md` }),
+        "--expect", await rootTokenOf(fixture),
+        "--operation", "register-compass-ref",
+        "--harness", fixture.harnessDir,
+        "--session-id", identity.sessionId,
+      ],
+      fixture,
+      identity,
+    );
+    if (registered.exitCode !== 0) throw new Error(`iteration registration failed: ${registered.stdout}${registered.stderr}`);
+    const bound = bindCoordinator(fixture, ITERATION_ID, await workflowTokenOf(fixture, ITERATION_ID), "bind-compass-ref");
+
+    // The retained pointer a wrong writer stored: repository-relative, so every
+    // reader joins it under the harness root twice (I-000863).
+    const handle = await openStore(fixture.context, "write");
+    try {
+      handle.db
+        .prepare("update execution_workflows set state_json = json_set(state_json, '$.compass_ref', ?) where workflow_id = ?")
+        .run(`.mstar/${compassRef}`, ITERATION_ID);
+    } finally {
+      handle.close();
+    }
+    const before = await storedHeader(fixture, ITERATION_ID);
+    expect(before.compass_ref).toBe(`.mstar/${compassRef}`);
+    const planRowsBefore = await planRows(fixture, ITERATION_ID);
+
+    // The bare repository-relative spelling is refused by the ONE registration
+    // normalizer this route delegates to, with the trap named.
+    const refused = runCli(
+      workflowVerbArgs("compass-ref", fixture, bound, await workflowTokenOf(fixture, ITERATION_ID), "compass-ref-bad", [
+        "--compass", `.mstar/${compassRef}`,
+        "--reason", "correct the retained pointer",
+      ]),
+      fixture,
+      identity,
+    );
+    expect(refused.exitCode).toBe(1);
+    expect(String(jsonOf(refused).code)).toBe("coordination.invalid-input");
+    expect(String(jsonOf(refused).message)).toContain(".mstar/.mstar/");
+    expect((await storedHeader(fixture, ITERATION_ID)).compass_ref).toBe(`.mstar/${compassRef}`);
+
+    // The repair: identity, statuses and rows keep their values, and only the
+    // registered pointer moves to its canonical harness-relative form.
+    const repaired = runCli(
+      workflowVerbArgs("compass-ref", fixture, bound, await workflowTokenOf(fixture, ITERATION_ID), "compass-ref-repair", [
+        "--compass", compassRef,
+        "--reason", "the registered pointer carried a repository-relative prefix",
+      ]),
+      fixture,
+      identity,
+    );
+    expect(repaired.exitCode).toBe(0);
+    expect(jsonOf(repaired)).toMatchObject({ command: "workflow.compass-ref", status: "ok", code: "workflow.compass-ref.ok" });
+    expect(dataOf(repaired).replayed).toBe(false);
+    const after = await storedHeader(fixture, ITERATION_ID);
+    expect(after.compass_ref).toBe(compassRef);
+    for (const key of ["id", "type", "status", "started_at", "branch", "integration_worktree_path"] as const) {
+      expect(after[key]).toEqual(before[key]);
+    }
+    expect(await planRows(fixture, ITERATION_ID)).toEqual(planRowsBefore);
+
+    // The phase gate now reads the registered compass again: the caller-supplied
+    // stray path still refuses, and the registered one reaches the gate.
+    const strayCompass = join(fixture.harnessDir, "iterations", ITERATION_ID, "somewhere-else.md");
+    const phase = runCli(
+      workflowVerbArgs("phase", fixture, bound, await workflowTokenOf(fixture, ITERATION_ID), "phase-after-repair", [
+        "--phase", "phase-2-execute",
+        "--compass", strayCompass,
+      ]),
+      fixture,
+      identity,
+    );
+    expect(String(jsonOf(phase).code)).toBe("coordination.scope-mismatch");
   });
 
   test("the documented registration form answers through the ACTIVE authority; no file-route bytes", async () => {
