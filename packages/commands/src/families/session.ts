@@ -4,14 +4,15 @@ import { isAbsolute } from "node:path";
 import { z } from "zod";
 import {
   createFsStore,
-  createLocalExecutionIdentity,
   executionContextFor,
+  readExecutionState,
   recoverExecutionCoordinator,
   resolveProcessHarnessDir,
   serializeExecutionValue,
   setArtifactStore,
   type ActivationAttestation,
   type ExecutionIdentity,
+  type ExecutionSessionRef,
 } from "@mstar-harness/engine";
 import { redactSecrets } from "@mstar-harness/engine/src/audit";
 import { refusalEnvelope, type RefusalDiagnostic } from "../envelope.js";
@@ -228,6 +229,41 @@ function readAttestationDocument(pathValue: string): ActivationAttestation {
   }
 }
 
+/** The states a launch can observe instead of the workflow's live coordinator. */
+type BindingState =
+  | "no-store"
+  | "unregistered"
+  | "ownerless"
+  | "foreign-holder"
+  | "paused"
+  | "completed"
+  | "failed"
+  | "stopped";
+
+/**
+ * The compass-D12 recovery for one observed binding state: `plan bind` is not
+ * the recovery when a foreign/live holder has the seat or the lifecycle is not
+ * running, so each state names the route that actually accepts it.
+ */
+function unboundRecovery(state: BindingState, workflow: string): string {
+  switch (state) {
+    case "ownerless":
+      return `Bind a coordinator first: run mstar plan bind --execution --workflow ${workflow} --coordinator as the workflow's creator or through ownerless adoption, then retry mstar session run.`;
+    case "foreign-holder":
+      return "A foreign or still-live coordinator holds this workflow. Under explicit operator authorization run the audited mstar session recover, then launch under the recovered identity; plan bind never replaces a live holder.";
+    case "paused":
+      return `Resume the lifecycle first with mstar workflow lifecycle --workflow ${workflow} --status running, then retry mstar session run.`;
+    case "stopped":
+    case "failed":
+      return `Reopen the lifecycle first with mstar workflow reopen --workflow ${workflow}, then retry mstar session run.`;
+    case "completed":
+      return "A completed lifecycle is never reopened or rebound; register a new lifecycle id for further work.";
+    case "unregistered":
+    case "no-store":
+      return "Register the workflow first with mstar workflow register under the operator's own identity (the creator binds first; an ownerless workflow adopts), or supply --harness naming the control harness that holds it.";
+  }
+}
+
 export function getSessionCommandDefinitions(): readonly CommandDefinition[] {
   const runInput = z.object({ workflow: z.string().min(1), role: z.enum(SESSION_ROLES), argv: z.array(z.string()).optional(), harness: z.string().optional() });
   return [
@@ -236,6 +272,7 @@ export function getSessionCommandDefinitions(): readonly CommandDefinition[] {
       cli: { path: ["session", "run"], aliases: [], arguments: [{ key: "argv", required: true, variadic: true }], options: [
         { key: "workflow", flags: "--workflow <id>", required: true }, { key: "role", flags: "--role <role>", required: true },
         { key: "harness", flags: "--harness <path>", required: false },
+        { key: "sessionId", flags: "--session-id <value>", required: false, context: "sessionId" },
       ] },
       input: runInput, output: commandEnvelopeSchema, effects: ["process"],
       requirements: [
@@ -243,28 +280,74 @@ export function getSessionCommandDefinitions(): readonly CommandDefinition[] {
           { name, ownership: "caller" as const, route: "cli" as const, required: true },
           { name, ownership: "caller" as const, route: "mcp" as const, required: true },
         ]),
+        ...(["cli", "mcp"] as const).map((route) => ({
+          name: "sessionId", ownership: "caller" as const, route, required: true,
+          constraint: "the operator's acquired session identity; it must be the running lifecycle's live coordinator and is never minted or derived",
+        })),
       ],
-      description: "Launch argv under a freshly minted local execution identity; this is a launch, not a binding — it writes no session row or lease, and the child binds through the public `plan bind --execution --workflow <id> --coordinator` route, whose creator/ownerless/foreign-holder conditions still apply.",
+      description: "Launch argv under the workflow's live coordinator binding: resolve the claimed session id from --session-id or the inherited identity channel, verify it against the active execution authority, and refuse `session.run-unbound` with the recovery that matches the observed state (ownerless -> plan bind; foreign/live holder -> audited session recover; paused -> lifecycle resume; failed/stopped -> workflow reopen; completed -> a new lifecycle; unregistered -> workflow register). The launch writes no session row or lease, and the child carries the verified identity in MSTAR_EXECUTION_IDENTITY.",
       async execute(raw, context) {
         const { workflow, role, argv = [], harness } = raw as z.infer<typeof runInput>;
         if (role !== "coordinator" || argv.length === 0 || argv[0]!.trim() === "") {
           return refusalEnvelope({ command: "session.run", status: "usage", code: "command.invalid-input", exitCode: 2, message: "session run requires --workflow, --role coordinator, and a child argv" });
         }
+        const claimedId = context.sessionId?.trim() ?? "";
+        if (claimedId === "") {
+          return refusalEnvelope({
+            command: "session.run", status: "usage", code: "command.invalid-input", exitCode: 2,
+            message: "session run requires the operator's session identity",
+            diagnostics: [{
+              path: "sessionId", code: "required",
+              message: "session run verifies the operator's session identity; supply --session-id or launch from a session whose identity channel is set",
+            }],
+          });
+        }
         const root = resolveProcessHarnessDir(context.cwd, harness);
-        const identity = createLocalExecutionIdentity({ workflowId: workflow, role });
+        let observed: BindingState | null = null;
+        let coordinator: ExecutionSessionRef | null = null;
+        if (root === null) {
+          observed = "unregistered";
+        } else {
+          try {
+            const graph = (await readExecutionState({ harnessDir: root })).data;
+            const held = graph.workflows.find(({ state }) => state.id === workflow);
+            if (held === undefined) {
+              const terminal = graph.terminalUnregistered?.find((entry) => entry.id === workflow);
+              observed = terminal === undefined ? "unregistered" : terminal.status;
+            } else if (held.state.status !== "running") {
+              observed = held.state.status;
+            } else if (held.coordinator === null) {
+              observed = "ownerless";
+            } else if (held.coordinator.sessionId !== claimedId) {
+              observed = "foreign-holder";
+            } else {
+              coordinator = held.coordinator;
+            }
+          } catch (error) {
+            if (engineErrorFacts(error).code !== "store.not-initialized") return engineRefusal("session.run", error);
+            observed = "no-store";
+          }
+        }
+        if (coordinator === null) {
+          const state = observed ?? "unregistered";
+          return refusalEnvelope({
+            command: "session.run", status: "refused", code: "session.run-unbound", exitCode: 1,
+            message: `session.run cannot launch workflow "${workflow}" under session "${claimedId}": that identity is not the running lifecycle's live coordinator (${state}).`,
+            details: { workflowId: workflow, claimedSessionId: claimedId, state },
+            recovery: unboundRecovery(state, workflow),
+          });
+        }
+        // The verified binding is the whole launch fact: the child receives the
+        // identity the store already holds, and this route writes no session row,
+        // lease or minted substitute.
+        const identity: ExecutionIdentity = {
+          source: context.host === undefined ? "local" : "host",
+          sessionId: claimedId, workflowId: workflow, role: "coordinator",
+        };
+        const binding = { verified: true as const, coordinator };
         const env: Record<string, string> = { ...process.env as Record<string, string>, MSTAR_EXECUTION_IDENTITY: serializeExecutionValue(identity) };
         delete env.MSTAR_HOST_SESSION_ID;
         if (root !== null) env.MSTAR_HARNESS_DIR = root;
-        // The receipt is a launch fact, never an ownership claim: the minted
-        // identity is attribution the CLI now consumes, and no session row or
-        // lease was written. Binding is a separate public step whose real
-        // conditions (creator first-bind, ownerless adoption, foreign/live
-        // holder refusal) are the engine's, not this launcher's.
-        const binding = {
-          written: false,
-          route: `mstar plan bind --execution --workflow ${workflow} --coordinator`,
-          conditions: "the workflow's creating identity binds first; a workflow with no coordinator record may be adopted; a live or foreign holder is refused and never replaced by a launch",
-        };
         try {
           const child = await context.effects.spawn({ argv, cwd: context.cwd, env, signal: context.signal });
           const childCode = child.signal === null
