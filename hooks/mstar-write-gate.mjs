@@ -12672,7 +12672,12 @@ function readExecutionGraph(db, store, meta) {
         operation_id: state.adoption_operation_id
       });
     } else {
-      terminalUnregistered.push({ id, status: state.status, revision });
+      terminalUnregistered.push({
+        id,
+        status: state.status,
+        revision,
+        token: executionToken("workflow", store.storeId, store.epoch, [id], revision)
+      });
     }
   }
   return {
