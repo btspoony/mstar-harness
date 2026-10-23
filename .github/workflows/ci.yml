@@ -192,11 +192,11 @@ jobs:
 
 
       # `bun run --cwd packages/cli check` loads packages/cli/src/index.ts,
-      # whose static graph reaches src/dashboard/server.ts ->
-      # src/dashboard/assets.generated.ts. That module is gitignored and emitted
-      # by scripts/build-web.ts, which the "Typecheck" step above runs
-      # (`--cwd packages/cli typecheck:src`) — keep this step after typecheck.
-      # packages/cli/tsconfig.json documents the same contract.
+      # whose static graph reaches the commands package's
+      # packages/commands/src/dashboard/assets.generated.ts. That module is
+      # gitignored and emitted by scripts/build-web.ts, which the "Typecheck"
+      # step above runs (`--cwd packages/cli typecheck:src`) — keep this step
+      # after typecheck. packages/cli/tsconfig.json documents the same contract.
       - name: CLI smoke check
         run: bun run --cwd packages/cli check
 
@@ -780,10 +780,10 @@ jobs:
 
       # The execution-session specs spawn the checkout's real CLI entry
       # (`bun run packages/cli/src/index.ts …`); loading it resolves the whole
-      # static import graph, which reaches src/dashboard/server.ts ->
-      # src/dashboard/assets.generated.ts — the gitignored module only the CLI
-      # build emits. Build the CLI here, keeping the single-job order
-      # (Build CLI → … → Test OpenCode) those specs relied on.
+      # static import graph, which reaches the commands package's
+      # packages/commands/src/dashboard/assets.generated.ts — the gitignored
+      # module only the CLI build emits. Build the CLI here, keeping the
+      # single-job order (Build CLI → … → Test OpenCode) those specs relied on.
       - name: Build CLI (generated dashboard module for the CLI-entry specs)
         run: bun run cli:build
 
