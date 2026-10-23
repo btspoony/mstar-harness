@@ -190,7 +190,7 @@ export type ExecutionState = {
    * address a terminal-only write (the held-lease release) can be given.
    */
   terminalUnregistered?: Array<{ id: string; status: "completed" | "stopped" | "failed"; revision: number; token: ExecutionToken }>;
-  terminalAdoptions?: Array<{ id: string; status: "completed" | "stopped" | "failed"; revision: number; lifecycle_adopted_at: string; adopt_reason: string; actor_session_id: string; operation_id: string }>;
+  terminalAdoptions?: Array<{ id: string; status: "completed" | "stopped" | "failed"; revision: number; token: ExecutionToken; lifecycle_adopted_at: string; adopt_reason: string; actor_session_id: string; operation_id: string }>;
 };
 
 /**
@@ -1065,6 +1065,7 @@ function readExecutionGraph(db: StoreDb, store: StoreIdentity, meta: ExecutionMe
         isNonEmptyString(state.adoption_actor_session_id) && isNonEmptyString(state.adoption_operation_id)) {
       terminalAdoptions.push({
         id, status: state.status, revision,
+        token: executionToken("workflow", store.storeId, store.epoch, [id], revision),
         lifecycle_adopted_at: state.lifecycle_adopted_at,
         adopt_reason: state.adopt_reason,
         actor_session_id: state.adoption_actor_session_id,

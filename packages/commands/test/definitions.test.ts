@@ -91,9 +91,10 @@ describe("command definitions", () => {
   /**
    * A blank `harness` is an UNSUPPLIED root selector, exactly like an omitted
    * one: the engine's `isNonEmptyString` rule already treats blank as absent,
-   * so no family may refuse the call at the schema boundary instead. Both a
-   * converted family and an already-bare one are covered so the rule is stated
-   * once for the whole surface.
+   * so no family may refuse the call at the schema boundary instead. The id
+   * list is derived from the published input contract — every definition whose
+   * schema declares `harness` is covered, so a family that reintroduces a
+   * non-empty constraint fails here even when it was never sampled before.
    */
   test("a blank harness admits like an omitted one in every family", () => {
     const definitions = new Map(getCommandDefinitions().map((entry) => [entry.id, entry]));
@@ -103,9 +104,28 @@ describe("command definitions", () => {
       const admission = admitCommandInput(target, input, getCommandSchemas([target])[0]!);
       return admission.success ? { admitted: true as const, harness: admission.harness } : { admitted: false as const, code: admission.envelope.code };
     };
-    for (const id of ["status.tech-debt", "store.init"] as const) {
+    const declaredProperties = (input: unknown): Record<string, unknown> => {
+      const properties = typeof input === "object" && input !== null
+        ? Object.getOwnPropertyDescriptor(input, "properties")?.value
+        : undefined;
+      return typeof properties === "object" && properties !== null && !Array.isArray(properties)
+        ? properties as Record<string, unknown>
+        : {};
+    };
+    // `harness` is a required TARGET (an absolute path) on `store execution *`,
+    // not a root selector: those verbs refuse an omitted one by contract, so
+    // the rule under test covers exactly the optional selector surface.
+    const ids = [...definitions.values()]
+      .filter((entry) => {
+        const contract = getCommandSchemas([entry])[0]!;
+        return "harness" in declaredProperties(contract.input) && !contract.required.includes("harness");
+      })
+      .map((entry) => entry.id);
+    expect(ids.length).toBeGreaterThan(0);
+    for (const id of ids) {
       expect({ id, ...outcome(id, { harness: "" }) }).toEqual({ id, ...outcome(id, {}) });
-      expect(outcome(id, { harness: "" })).toEqual({ admitted: true, harness: undefined });
+      const blank = outcome(id, { harness: "" });
+      if (blank.admitted) expect(blank.harness).toBeUndefined();
     }
   });
 });
