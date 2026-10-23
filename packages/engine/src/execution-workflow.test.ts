@@ -1762,6 +1762,79 @@ describe("execution-coordinator-recovery: \u00A72.3/\u00A74.2 the named recovery
     expect(workflowFootprint(fixture.context)).toEqual(replacedBefore);
   });
 
+  test("a recovery that revokes the still-live holder warns on the receipt, and the later close carries the warning", async () => {
+    const fixture = await workflowFixture("recovery-live-holder-receipt");
+    const recoveryCaller = trustedCaller(RECOVERY_ID, "coordinator");
+    // The named prior holder IS the still-live row: only the operator's attested
+    // stop makes this admissible, so the receipt records exactly that.
+    expect(sessionState(fixture.context, COORDINATOR_ID)).toBe("active");
+    const recoverRequest = {
+      expected: await liveWorkflowToken(fixture),
+      operationId: "op-recover-live-holder",
+      priorSessionId: COORDINATOR_ID,
+      reason: "operator replaced the coordinator",
+      attestation: attestation([COORDINATOR_ID]),
+    };
+    const recovered = await recoverExecutionCoordinator(domainContext(fixture.context, recoveryCaller), recoverRequest);
+    expect(recovered.replayed).toBe(false);
+    expect(sessionState(fixture.context, COORDINATOR_ID)).toBe("revoked");
+    expect(recovered.holder_live_warning).toEqual({
+      code: "recovery.holder-live",
+      holder: COORDINATOR_ID,
+      epoch: fixture.epoch,
+      // What the engine saw, plus the instant the OPERATOR attested: no field
+      // claims the process was observed dead or the authorization verified.
+      observed_state: "active",
+      attested_at: recoverRequest.attestation.attestedAt,
+    });
+    // The immutable record keeps the same warning, and the replay serves it too.
+    const stored = parsedJson(rows(
+      fixture.context,
+      "select result_json from execution_operations where operation_id = 'op-recover-live-holder'",
+    )[0]!.result_json) as { recovery?: Record<string, unknown> };
+    expect(stored.recovery?.holder_live_warning).toEqual(recovered.holder_live_warning);
+    const recoverReplay = await recoverExecutionCoordinator(domainContext(fixture.context, recoveryCaller), recoverRequest);
+    expect(recoverReplay.replayed).toBe(true);
+    expect(recoverReplay.holder_live_warning).toEqual(recovered.holder_live_warning);
+
+    const stopExpected = await liveWorkflowToken(fixture);
+    const stopRequest = {
+      kind: "lifecycle" as const,
+      status: "stopped" as const,
+      reason: "the lifecycle is stopped after that recovery",
+    };
+    const stopped = await workflowMutation(fixture, "op-stop-after-recover", stopRequest, {
+      who: recoveryCaller, session: recovered.data, expected: stopExpected,
+    });
+    expect(stopped.actor_session_id).toBe(RECOVERY_ID);
+    expect(stopped.reason).toBe(stopRequest.reason);
+    expect(stopped.holder_live_warning).toEqual(recovered.holder_live_warning);
+
+    // The close pruned the recover receipt; the surviving closing receipt is
+    // where the attribution and the predecessor warning live.
+    expect(rows(fixture.context,
+      `select operation_id from execution_operations where workflow_id = '${WORKFLOW_ID}'`,
+    )).toEqual([{ operation_id: "op-stop-after-recover" }]);
+    const surviving = JSON.parse(String(rows(
+      fixture.context,
+      "select result_json from execution_operations where operation_id = 'op-stop-after-recover'",
+    )[0]!.result_json)) as Record<string, unknown>;
+    expect(surviving).toMatchObject({
+      slim: true,
+      actor_session_id: RECOVERY_ID,
+      reason: stopRequest.reason,
+      holder_live_warning: recovered.holder_live_warning,
+    });
+    // The replay of the close returns the same attributed receipt.
+    const stopReplay = await workflowMutation(fixture, "op-stop-after-recover", stopRequest, {
+      who: recoveryCaller, session: recovered.data, expected: stopExpected,
+    });
+    expect(stopReplay.replayed).toBe(true);
+    expect(stopReplay.actor_session_id).toBe(RECOVERY_ID);
+    expect(stopReplay.reason).toBe(stopRequest.reason);
+    expect(stopReplay.holder_live_warning).toEqual(recovered.holder_live_warning);
+  });
+
   test("recovery settles the exact named predecessor's integration claim and preserves live and foreign claims", async () => {
     const fixture = await workflowFixture("recovery-claim-settle");
     // The crashed coordinator's own integration claim, taken before it stopped.

@@ -154,6 +154,20 @@ export type ExecutionSessionRef = {
 /** Recovery outcome and commit boundary carried by an execution action. */
 export type ExecutionReceiptRecovery = RecoveryDetails;
 
+/**
+ * The recover receipt's self-reported fact that the prior holder it revoked was
+ * still the live row: the operator's attestation is the whole evidence, so this
+ * records what the engine saw and the stop instant, never that the process was
+ * observed dead or that the authorization was host-verified.
+ */
+export type HolderLiveWarning = Readonly<{
+  code: "recovery.holder-live";
+  holder: string;
+  epoch: number;
+  observed_state: "active";
+  attested_at: string;
+}>;
+
 /** §3: one consistent authority read, optionally carrying a committed action's sidecar. */
 export type ExecutionRead<T> = {
   data: T;
@@ -161,6 +175,11 @@ export type ExecutionRead<T> = {
   storeId: string;
   epoch: number;
   operationRecovery?: ExecutionReceiptRecovery;
+  /** Lifecycle attribution: the session that moved the lifecycle and the reason it stated. */
+  actor_session_id?: string;
+  reason?: string;
+  /** A recover receipt's holder-live warning, carried onto the close of that same binding. */
+  holder_live_warning?: HolderLiveWarning;
 };
 
 /** One coordinator view of an explicitly addressed plan. */
@@ -1832,7 +1851,7 @@ function readCommittedReceipt<T>(
   const storedRecovery = recovery as ExecutionReceiptRecovery | undefined;
   if (receipt.slim === true) {
     const live = readExecutionStateGraph(tx);
-    return { ...live, ...(storedRecovery === undefined ? {} : { operationRecovery: storedRecovery }) } as ExecutionRead<T>;
+    return { ...live, ...(storedRecovery === undefined ? {} : { operationRecovery: storedRecovery }), ...storedReceiptFacts(receipt) } as ExecutionRead<T>;
   }
   return {
     data: receipt.data as T,
@@ -1840,6 +1859,27 @@ function readCommittedReceipt<T>(
     storeId: receipt.storeId,
     epoch: receipt.epoch,
     ...(storedRecovery === undefined ? {} : { operationRecovery: storedRecovery }),
+    ...storedReceiptFacts(receipt),
+  };
+}
+
+/**
+ * The attribution facts a stored receipt may carry at its top level; a receipt
+ * that never recorded one serves it absent. A recover receipt records its
+ * holder-live warning inside its own `recovery` provenance block, so the replay
+ * serves that one at the same top-level position as the close's carried copy.
+ */
+function storedReceiptFacts(
+  receipt: Record<string, unknown>,
+): Partial<Pick<ExecutionRead<unknown>, "actor_session_id" | "reason" | "holder_live_warning">> {
+  const recovery = isPlainObject(receipt.recovery) ? receipt.recovery : undefined;
+  return {
+    ...(typeof receipt.actor_session_id === "string" ? { actor_session_id: receipt.actor_session_id } : {}),
+    ...(typeof receipt.reason === "string" ? { reason: receipt.reason } : {}),
+    ...(isPlainObject(receipt.holder_live_warning) ? { holder_live_warning: receipt.holder_live_warning as HolderLiveWarning } : {}),
+    ...(recovery !== undefined && isPlainObject(recovery.holder_live_warning) && !isPlainObject(receipt.holder_live_warning)
+      ? { holder_live_warning: recovery.holder_live_warning as HolderLiveWarning }
+      : {}),
   };
 }
 
@@ -3033,6 +3073,21 @@ export function writePlanOperationReceipt(
 }
 
 /**
+ * The optional facts an operation receipt carries besides its address: the
+ * action's sidecar, the lifecycle attribution and a recovered binding's
+ * holder-live warning. Absent fields stay absent, so a receipt without them
+ * keeps its minimal stored shape.
+ */
+function receiptFacts(receipt: ExecutionRead<unknown>): Record<string, unknown> {
+  return {
+    ...(receipt.operationRecovery === undefined ? {} : { operationRecovery: receipt.operationRecovery }),
+    ...(receipt.actor_session_id === undefined ? {} : { actor_session_id: receipt.actor_session_id }),
+    ...(receipt.reason === undefined ? {} : { reason: receipt.reason }),
+    ...(receipt.holder_live_warning === undefined ? {} : { holder_live_warning: receipt.holder_live_warning }),
+  };
+}
+
+/**
  * §3.1 the one receipt writer: the committed receipt of an accepted operation
  * (`planId: null` for a workflow-level operation), recorded inside the same
  * transaction that produced the effect, so a rolled-back operation leaves no
@@ -3063,15 +3118,7 @@ export function writeOperationReceipt(
       input.workflowId,
       input.planId,
       JSON.stringify(
-        input.slim === true
-          ? {
-              slim: true,
-              token: input.receipt.token,
-              storeId: tx.storeId,
-              epoch: tx.epoch,
-              ...(input.receipt.operationRecovery === undefined ? {} : { operationRecovery: input.receipt.operationRecovery }),
-            }
-          : input.receipt,
+        input.slim === true ? { slim: true, token: input.receipt.token, storeId: tx.storeId, epoch: tx.epoch, ...receiptFacts(input.receipt) } : input.receipt,
       ),
       input.now,
     );

@@ -131,6 +131,7 @@ import {
   type ExecutionToken,
   type ExecutionTransaction,
   type ExecutionWorkflowWitness,
+  type HolderLiveWarning,
   type ResolvedWorkflowWrite,
   type SessionRow,
 } from "./execution-store.js";
@@ -1146,19 +1147,32 @@ export async function mutateExecutionWorkflow(
     } catch (error) {
       throw workflowConflictCause(error, { workflowId, operation, state: stored.state });
     }
+    // A lifecycle receipt is attributed to the session that moved it and the
+    // reason it stated. A terminal close additionally carries forward the
+    // holder-live warning of the recovery that created this binding: it prunes
+    // that recover receipt below, so the closing receipt is where the fact
+    // survives.
+    const carried = operation.kind === "lifecycle" && applied.membershipLost
+      ? recoveredHolderLiveWarning(tx, witness.workflowId, witness.session.sessionId)
+      : undefined;
+    const receipt: ExecutionRead<ExecutionState> = {
+      ...applied.receipt,
+      ...(operation.kind === "lifecycle" ? { actor_session_id: witness.session.sessionId, reason: operation.reason } : {}),
+      ...(carried === undefined ? {} : { holder_live_warning: carried }),
+    };
     writeOperationReceipt(tx, {
       operationId: resolved.call.operationId,
       requestHash,
       workflowId: witness.workflowId,
       planId: null,
-      receipt: applied.receipt,
+      receipt,
       now: at,
       slim: true,
     });
     if (applied.membershipLost)
       pruneWorkflowOperationReceipts(tx, witness.workflowId, resolved.call.operationId);
     return {
-      ...applied.receipt,
+      ...receipt,
       operationId: resolved.call.operationId,
       replayed: false,
       recovery: workflowRecovery({
@@ -1873,6 +1887,11 @@ export async function recoverExecutionCoordinator(
     });
     const rows = readCoordinatorRows(tx, workflowId);
     const live = rows.find((row) => row.state === "active" && row.ref.epoch === tx.epoch);
+    // The named predecessor IS the still-live row: the operator's attested stop
+    // is the only evidence this call has, so the receipt records what the engine
+    // observed, never that the process was seen dead or the authorization
+    // host-verified.
+    const holderWasLive = priorSessionId !== null && live !== undefined && live.ref.sessionId === priorSessionId;
     let continuation = false;
     if (priorSessionId === null) {
       if (rows.length > 0) {
@@ -1974,6 +1993,15 @@ export async function recoverExecutionCoordinator(
     // The immutable recovery receipt: the session the store now holds, plus the
     // provenance of the replacement (prior holder, reason, attestation), which
     // only a committed operation row can carry.
+    const holderLiveWarning: HolderLiveWarning | undefined = holderWasLive
+      ? {
+          code: "recovery.holder-live",
+          holder: priorSessionId,
+          epoch: tx.epoch,
+          observed_state: "active",
+          attested_at: attestation.attestedAt,
+        }
+      : undefined;
     writeOperationReceipt(tx, {
       operationId,
       requestHash,
@@ -1987,11 +2015,19 @@ export async function recoverExecutionCoordinator(
           attested_at: attestation.attestedAt,
           operator: attestation.operator,
           stopped_sessions: attestation.stoppedSessions.map((session) => session.sessionId),
+          // Self-reported: the attested stop is the reason this recovery was
+          // admissible, not proof that the holder had died.
+          ...(holderLiveWarning === undefined ? {} : { holder_live_warning: holderLiveWarning }),
         },
       } as ExecutionRead<ExecutionSessionRef>,
       now,
     });
-    return { ...receipt, operationId, replayed: false };
+    return {
+      ...receipt,
+      operationId,
+      replayed: false,
+      ...(holderLiveWarning === undefined ? {} : { holder_live_warning: holderLiveWarning }),
+    };
   });
 }
 
@@ -2207,21 +2243,26 @@ function readHeldIntegrationLease(tx: ExecutionTransaction, workflowId: string):
   return raw as unknown as IntegrationMergeLease;
 }
 
-/** The successful receipt must have created this exact current binding. */
-function hasCoordinatorRecoveryChain(
+/**
+ * The recovered bindings' provenance: every successful recovery receipt that
+ * created this exact current binding (same session, epoch, revision and
+ * `bound_at`), as the `recovery` blocks they recorded. Empty when the binding
+ * was created by an ordinary bind rather than a recovery.
+ */
+function bindingRecoveryBlocks(
   tx: ExecutionTransaction,
   workflowId: string,
   current: SessionRow,
-  priorSessionId: string,
-): boolean {
+): Array<Record<string, unknown>> {
   const binding = tx.db.prepare(
     "select bound_at from execution_sessions where workflow_id = ? and role = 'coordinator' and session_id = ? and epoch = ?",
   ).get(workflowId, current.ref.sessionId, tx.epoch) as { bound_at: string } | undefined;
-  if (binding === undefined) return false;
+  if (binding === undefined) return [];
   const token = executionToken("session", tx.storeId, tx.epoch, [workflowId, "coordinator", current.ref.sessionId], current.revision);
   const receipts = tx.db.prepare(
     "select result_json from execution_operations where workflow_id = ? and plan_id is null and store_id = ? and epoch = ? and committed_at = ?",
   ).all(workflowId, tx.storeId, tx.epoch, binding.bound_at) as Array<{ result_json: string }>;
+  const blocks: Array<Record<string, unknown>> = [];
   for (const receipt of receipts) {
     const raw: unknown = JSON.parse(receipt.result_json);
     if (!isPlainObject(raw) || raw.token !== token || raw.storeId !== tx.storeId || raw.epoch !== tx.epoch) continue;
@@ -2230,11 +2271,42 @@ function hasCoordinatorRecoveryChain(
     if (!isPlainObject(data) || !isPlainObject(recovery)) continue;
     if (
       data.storeId === tx.storeId && data.epoch === tx.epoch && data.workflowId === workflowId &&
-      data.sessionId === current.ref.sessionId && data.role === "coordinator" &&
-      recovery.prior_session_id === priorSessionId
-    ) return true;
+      data.sessionId === current.ref.sessionId && data.role === "coordinator"
+    ) blocks.push(recovery);
   }
-  return false;
+  return blocks;
+}
+
+/** The successful receipt must have created this exact current binding from that predecessor. */
+function hasCoordinatorRecoveryChain(
+  tx: ExecutionTransaction,
+  workflowId: string,
+  current: SessionRow,
+  priorSessionId: string,
+): boolean {
+  return bindingRecoveryBlocks(tx, workflowId, current).some((recovery) => recovery.prior_session_id === priorSessionId);
+}
+
+/**
+ * The holder-live warning the close of a recovered binding carries forward: the
+ * recover receipt that created the caller's current binding recorded it, and the
+ * terminal close prunes that receipt, so the surviving receipt keeps the fact.
+ * Absent when this binding was not created by a recovery, or the recovery it
+ * came from replaced a holder that was already revoked.
+ */
+function recoveredHolderLiveWarning(
+  tx: ExecutionTransaction,
+  workflowId: string,
+  sessionId: string,
+): HolderLiveWarning | undefined {
+  const current = readCoordinatorRows(tx, workflowId).find(
+    (row) => row.ref.sessionId === sessionId && row.state === "active" && row.ref.epoch === tx.epoch,
+  );
+  if (current === undefined) return undefined;
+  for (const recovery of bindingRecoveryBlocks(tx, workflowId, current)) {
+    if (isPlainObject(recovery.holder_live_warning)) return recovery.holder_live_warning as HolderLiveWarning;
+  }
+  return undefined;
 }
 
 /** §2.3 a replay's authority revalidation: the caller must still hold its binding. */
