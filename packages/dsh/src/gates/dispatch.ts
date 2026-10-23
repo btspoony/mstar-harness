@@ -42,8 +42,12 @@ import type {
   WorktreeTrack,
 } from '@mstar-harness/engine'
 import type { PreToolDecision, ToolExecution } from '@deepseek-ai/dsh-tools'
-import { STATUS_FILE, asRecord, formatViolation, HarnessResolver, DEFAULT_DISPATCH_BINDING, liveConfigValue } from './_shared.ts'
+import { STATUS_FILE, asRecord, formatViolation, HarnessResolver, ROOT_SESSION_DISPATCH_BINDING, liveConfigValue } from './_shared.ts'
 import type { Config, SessionHintRead } from './_shared.ts'
+// The root discriminator (`session.header.parentSession === undefined`) the
+// planMode bridge already reads: the dispatch gate reuses ONE lineage grammar
+// instead of keeping a second root test.
+import { isRootLikeAgent } from './steering.ts'
 // Type-only (erased at runtime): the carrying-session hint the gate forwards
 // to the shared resolver.
 import type { SessionHint } from './workflow-selection.ts'
@@ -690,6 +694,41 @@ async function writableFanOutUncovered(
 }
 
 /**
+ * The CALLING session's lineage position, as the execution context exposes it
+ * (`session.header` — the same structural surface `sessionCwdOf` /
+ * `sessionHintOf` read). `unresolvable` = the context carries no session at
+ * all (the exec-less host `beforeDispatch` hook, a bare agent stub) — never
+ * silently treated as a root.
+ */
+function callingSessionOf(agent: unknown): 'root' | 'child' | 'unresolvable' {
+  const session = asRecord(asRecord(agent)?.session)
+  if (asRecord(session?.header) === undefined) return 'unresolvable'
+  return isRootLikeAgent(agent) ? 'root' : 'child'
+}
+
+/**
+ * The anti-recursion CALLER for one dispatch — DERIVED from the calling
+ * session, never invented:
+ *
+ * 1. an explicit `dispatchBinding` (settings / profile) wins verbatim; an
+ *    explicitly blank value stays blank and fails closed;
+ * 2. no explicit value + a ROOT session → the coordinator identity
+ *    (`ROOT_SESSION_DISPATCH_BINDING`) — a root session in this harness IS the
+ *    coordinating agent, so this is an identity read, not a guess;
+ * 3. no explicit value + a CHILD session (or a session the gate cannot read) →
+ *    EMPTY, so the engine's `dispatch.anti-recursion.empty-binding` fails
+ *    closed. A leaf must not dispatch.
+ *
+ * A deployment whose coordinator is NOT the root session must set the binding
+ * explicitly — case 3 then never applies to its coordinators.
+ */
+export function dispatchCallerOf(config: Config, agent: unknown): string {
+  const explicit = liveConfigValue(config.dispatchBinding)
+  if (explicit !== undefined) return explicit
+  return callingSessionOf(agent) === 'root' ? ROOT_SESSION_DISPATCH_BINDING : ''
+}
+
+/**
  * The dispatch-gate validation core — the engine's SINGLE dispatch-gate
  * composition (`dispatch.composeDispatchGate`, opencode/omp/CLI parity — the
  * SAME composition, so violation codes are identical by construction): shape
@@ -713,6 +752,9 @@ async function writableFanOutUncovered(
  *
  * @returns the violations plus the writable flag (false for read-only
  * roles — the listener feeds it to the lease gate).
+ * @param callerAgent - the CALLING agent (`exec.agent` on the listener path,
+ *   `undefined` on the exec-less host hook) — the session the caller identity
+ *   is derived from ({@link dispatchCallerOf}).
  * @param hint - the carrying session's selection hint (the adapter derives
  *   it once per dispatch and shares it with the lease gate, the ledger
  *   record and every selection read below).
@@ -721,6 +763,7 @@ export async function dispatchGateCore(
   config: Config,
   harnessDir: string | null,
   prompt: string,
+  callerAgent: unknown,
   hint?: SessionHint,
   activeSource?: ExecutionWorkflowSourceRead,
 ): Promise<{ violations: ValidationResult[]; writable: boolean | undefined }> {
@@ -730,17 +773,17 @@ export async function dispatchGateCore(
   const writable = isReadOnlyAssignmentRole(parseAssignmentFields(header).executeAs ?? '') ? false : undefined
   // Engine single composition: shape guard + validateAssignmentFields
   // (writable) + antiRecursionPrecheck (caller = the dispatching agent's own
-  // role, Config-declared — dsh exposes no agent role on the execution
-  // context; callerRequired keeps the 3.1.2 fail-closed contract: an
-  // explicitly blank dispatchBinding emits
+  // role, DERIVED from the calling session — root reads as the coordinator,
+  // child/unreadable fails closed; callerRequired keeps the 3.1.2 fail-closed
+  // contract: an empty binding emits
   // dispatch.anti-recursion.empty-binding) + default-branch gate (Assignment
   // branch forms, else $MSTAR_WORKING_BRANCH; direct-on exception only when
   // its branch is the one being checked) + header-region enforcement. Never
   // throws. The caller is read LIVE — `dispatchBinding` is volatile (a
-  // settings save applies on the next dispatch) — and falls back to the
-  // shipped default when absent; an explicitly blank value still fails closed.
+  // settings save applies on the next dispatch) — and an explicitly blank
+  // value still fails closed.
   violations.push(
-    ...composeDispatchGate(header, { caller: liveConfigValue(config.dispatchBinding) ?? DEFAULT_DISPATCH_BINDING, callerRequired: true, writable }).violations,
+    ...composeDispatchGate(header, { caller: dispatchCallerOf(config, callerAgent), callerRequired: true, writable }).violations,
   )
   return { violations, writable }
 }

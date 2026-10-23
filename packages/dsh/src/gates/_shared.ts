@@ -73,12 +73,17 @@ export interface Config {
    * as the anti-recursion binding: an Assignment whose `Execute as` equals this
    * role is a self-dispatch (critical violation — leaf executors must not
    * re-invoke their own role). dsh exposes no agent role on the tool-execution
-   * context, so the deployment declares it; the shipped default is
-   * `project-manager`, the harness model's only coordinating role. `volatile`:
-   * read through the Loader's live reference per dispatch, so the plugin
-   * settings form can edit it without a remount. An explicitly blank value
-   * still FAILS CLOSED (every Assignment-shaped dispatch emits
-   * `dispatch.anti-recursion.empty-binding`).
+   * context, so the deployment declares it. `volatile`: read through the
+   * Loader's live reference per dispatch, so the plugin settings form can edit
+   * it without a remount.
+   *
+   * Absent is NOT a default: the caller is derived from the CALLING session —
+   * a root session (`session.header.parentSession === undefined`) reads as the
+   * coordinator (`ROOT_SESSION_DISPATCH_BINDING`), while a child session — or a
+   * session the gate cannot read — stays EMPTY and fails closed with
+   * `dispatch.anti-recursion.empty-binding`. An explicitly blank value
+   * (`''`) also fails closed. A deployment whose coordinator is not the root
+   * session MUST set this explicitly.
    */
   dispatchBinding?: string
   /**
@@ -267,13 +272,15 @@ export function liveConfigValue<T>(value: T | LiveConfigRef | undefined): T | un
 }
 
 /**
- * Shipped anti-recursion caller (`Config.dispatchBinding`). `project-manager` is
- * the harness model's only coordinating role: an unbound dispatch gate fails
- * closed on EVERY Assignment (`dispatch.anti-recursion.empty-binding`), which is
- * an unusable out-of-the-box deployment. An explicitly blank value still fails
- * closed — the default only fills ABSENCE.
+ * The anti-recursion caller of a ROOT session (`Config.dispatchBinding`
+ * fallback). A root session in this harness IS the coordinating agent, so an
+ * unset `dispatchBinding` on a root session reads as `project-manager` — an
+ * identity read, never a guess. It is NEVER the caller for a child session or
+ * for a session the gate cannot read: those fail closed with
+ * `dispatch.anti-recursion.empty-binding`, because a leaf must not dispatch.
+ * Derivation: `dispatchCallerOf` in `dispatch.ts`.
  */
-export const DEFAULT_DISPATCH_BINDING = 'project-manager'
+export const ROOT_SESSION_DISPATCH_BINDING = 'project-manager'
 
 /** Schemastery configuration schema for the plugin consumer. Object keys are optional by default (`.optional()` is a vendored-fork addition not present in npm schemastery); omitted ARRAY keys would materialize as `[]` (schemastery empty-value default — the tool-subagent `toolFilter` pitfall) and omitted DICT keys would materialize as `{}`, so the dispatch keys and the persona keys all preserve omission via `.default(undefined)`. */
 // simplify: the fork's 3.18.4 `.default()` typing defers the property Mode
@@ -288,11 +295,11 @@ export const Config: z<Config> = z.object({
   dispatchTools: z.array(z.string()).default(undefined as unknown as string[]),
   // VOLATILE: the anti-recursion caller is read through the Loader's live
   // reference per dispatch (a settings save applies on the next dispatch).
-  // Default `project-manager` — the harness model's only coordinating role —
-  // so a fresh deployment does not refuse every dispatch with
-  // `dispatch.anti-recursion.empty-binding`; an explicitly blank value still
-  // fails closed.
-  dispatchBinding: z.string().default(DEFAULT_DISPATCH_BINDING).extra('volatile', true),
+  // NO constant default: an absent value means "derive the caller from the
+  // calling session" (a root session reads as the coordinator; a child session
+  // fails closed — `dispatchCallerOf`), and a schema default would fabricate
+  // the caller for every leaf. An explicitly blank value also fails closed.
+  dispatchBinding: z.string().extra('volatile', true),
   skillRoots: z.array(z.string()).default(undefined as unknown as string[]),
   bundledSkillDir: z.string().default(undefined as unknown as string),
   catalogTtlMs: z.number().default(undefined as unknown as number),

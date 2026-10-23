@@ -29,9 +29,9 @@ import { bootApp, seedActiveWorkflow, seedHarness, type BootResult } from './har
 import * as entry from '../src/index.ts'
 import { updateWorkflowSessionBinding } from '../src/engine-status-store.ts'
 import type { DispatchGateAdvisory } from '../src/index.ts'
-import { planIdOf, preExecuteListener, DISPATCH_LOGGER } from '../src/gates/dispatch.ts'
+import { planIdOf, preExecuteListener, dispatchCallerOf, DISPATCH_LOGGER } from '../src/gates/dispatch.ts'
 import { DshHostAdapter } from '../src/gates/adapter.ts'
-import { HarnessResolver, type Config } from '../src/gates/_shared.ts'
+import { HarnessResolver, ROOT_SESSION_DISPATCH_BINDING, type Config } from '../src/gates/_shared.ts'
 
 let booted: BootResult | undefined
 
@@ -237,6 +237,16 @@ const subagentExec = (prompt: string, agent?: unknown): ToolExecution =>
 
 /** The registry's bare default decision (the waterfall's terminal `next()`). */
 const defaultAllow = (): Promise<PreToolDecision> => Promise.resolve<PreToolDecision>({ kind: 'allow' })
+
+/**
+ * The CALLING sessions the anti-recursion caller derivation reads (F7): a ROOT
+ * session carries no `header.parentSession` (the coordinator seat), an
+ * in-process subagent child stamps it at creation. Neither carries a durable
+ * id/cwd, so the session-hint derivation stays as cheap as the agent-less
+ * shapes these tests used before.
+ */
+const rootAgent = { session: { header: {} } }
+const childAgent = { session: { header: { parentSession: 'root-session' } } }
 
 /** Collect dispatch-gate advisory emits on the app context. */
 function captureAdvisories(ctx: BootResult['ctx']): DispatchGateAdvisory[] {
@@ -460,22 +470,22 @@ describe('dispatch gate — hard mode (Config enforcement: hard)', () => {
     expect(advisories).toHaveLength(0)
   })
 
-  it('default dispatchBinding (project-manager) under hard → admit, no empty-binding', async () => {
-    // No explicit binding: the schema default is the caller, so the red line
+  it('an unset binding on a ROOT session reads as project-manager under hard → admit, no empty-binding', async () => {
+    // No explicit binding: a root session IS the coordinator, so the red line
     // has a real role to compare against instead of failing closed.
     const app = booted = await bootApp({ enforcement: 'hard' })
     const advisories = captureAdvisories(app.ctx)
 
-    const decision = await app.ctx.waterfall('tools/pre-execute', subagentExec(VALID_WRITABLE), defaultAllow)
+    const decision = await app.ctx.waterfall('tools/pre-execute', subagentExec(VALID_WRITABLE, rootAgent), defaultAllow)
 
     expect(decision).toEqual({ kind: 'allow' })
     expect(advisories).toHaveLength(0)
   })
 
-  it('the default binding still refuses an Execute as matching it (self-type red line intact)', async () => {
+  it('the root-session caller still refuses an Execute as matching it (self-type red line intact)', async () => {
     const app = booted = await bootApp({ enforcement: 'hard' })
 
-    const decision = await app.ctx.waterfall('tools/pre-execute', subagentExec(SELF_DISPATCH_PROJECT_MANAGER), defaultAllow)
+    const decision = await app.ctx.waterfall('tools/pre-execute', subagentExec(SELF_DISPATCH_PROJECT_MANAGER, rootAgent), defaultAllow)
 
     expect(decision.kind).toBe('deny')
     expect(decision.kind === 'deny' && decision.reason).toContain('dispatch.anti-recursion.self-type')
@@ -574,6 +584,62 @@ describe('dispatch gate — hard mode (Config enforcement: hard)', () => {
 
     expect(decision).toEqual({ kind: 'allow' })
     expect(advisories).toHaveLength(0)
+  })
+})
+
+/* ---------------------------------- F7: derived caller ---------------------------------- */
+
+describe('F7 — the anti-recursion caller is DERIVED from the calling session, never invented', () => {
+  it('dispatchCallerOf: explicit wins verbatim, root reads as the coordinator, child/unreadable stays empty', () => {
+    expect(dispatchCallerOf({ dispatchBinding: 'fullstack-dev' }, rootAgent)).toBe('fullstack-dev')
+    // An explicitly blank value stays blank — never replaced by the root identity.
+    expect(dispatchCallerOf({ dispatchBinding: '' }, rootAgent)).toBe('')
+    expect(dispatchCallerOf({}, rootAgent)).toBe(ROOT_SESSION_DISPATCH_BINDING)
+    expect(dispatchCallerOf({}, childAgent)).toBe('')
+    expect(dispatchCallerOf({}, undefined)).toBe('')
+  })
+
+  it('REGRESSION (reported bypass): a CHILD session with no explicit binding dispatching Execute as fullstack-dev is refused with dispatch.anti-recursion.empty-binding', async () => {
+    // Before F7 the schema default fabricated `project-manager` for every
+    // caller, so a leaf could dispatch a same-role child and pass the
+    // anti-recursion precheck. A leaf must not dispatch: the caller is empty.
+    const app = booted = await bootApp({ enforcement: 'hard' })
+
+    const decision = await app.ctx.waterfall('tools/pre-execute', subagentExec(VALID_WRITABLE, childAgent), defaultAllow)
+
+    expect(decision.kind).toBe('deny')
+    expect(decision.kind === 'deny' && decision.reason).toContain('[critical] dispatch.anti-recursion.empty-binding')
+    expect(decision.kind === 'deny' && decision.reason).not.toContain('dispatch.anti-recursion.self-type')
+  })
+
+  it('a child session dispatching Execute as fullstack-dev with an explicit dispatchBinding: fullstack-dev is refused with self-type', async () => {
+    // The explicit binding is still compared verbatim — derivation never
+    // overrides configuration.
+    const app = booted = await bootApp({ enforcement: 'hard', dispatchBinding: 'fullstack-dev' })
+
+    const decision = await app.ctx.waterfall('tools/pre-execute', subagentExec(SELF_RECURSION, childAgent), defaultAllow)
+
+    expect(decision.kind).toBe('deny')
+    expect(decision.kind === 'deny' && decision.reason).toContain('dispatch.anti-recursion.self-type')
+    expect(decision.kind === 'deny' && decision.reason).not.toContain('dispatch.anti-recursion.empty-binding')
+  })
+
+  it('an explicitly blank binding still fails closed on a ROOT session', async () => {
+    const app = booted = await bootApp({ enforcement: 'hard', dispatchBinding: '' })
+
+    const decision = await app.ctx.waterfall('tools/pre-execute', subagentExec(VALID_WRITABLE, rootAgent), defaultAllow)
+
+    expect(decision.kind).toBe('deny')
+    expect(decision.kind === 'deny' && decision.reason).toContain('dispatch.anti-recursion.empty-binding')
+  })
+
+  it('an UNREADABLE calling session (no session on the execution context) falls back to EMPTY, never to the coordinator', async () => {
+    const app = booted = await bootApp({ enforcement: 'hard' })
+
+    const decision = await app.ctx.waterfall('tools/pre-execute', subagentExec(VALID_WRITABLE), defaultAllow)
+
+    expect(decision.kind).toBe('deny')
+    expect(decision.kind === 'deny' && decision.reason).toContain('dispatch.anti-recursion.empty-binding')
   })
 })
 

@@ -919,12 +919,20 @@ The dsh web client resolves slash commands against a client-side lexicon driven 
   without a resolvable harness dir.
 - The dispatch gate needs the dispatching agent's own role for the
   anti-recursion precheck: Config **`dispatchBinding`** declares it (dsh
-  exposes no per-agent role on the tool-execution context) and defaults to
-  `project-manager`, the harness model's only coordinating role, so dispatches
-  are admitted out of the box; the value is live-editable in the dsh plugin
-  settings form. An explicitly blank binding still fails closed — under hard
-  enforcement the plugin logs it AND every Assignment-shaped dispatch fails
-  (`dispatch.anti-recursion.empty-binding` → deny) until a role is configured.
+  exposes no per-agent role on the tool-execution context) and is
+  live-editable in the dsh plugin settings form. The value is never
+  fabricated: an explicit binding wins verbatim; without one the gate DERIVES
+  the caller from the CALLING session — a ROOT session
+  (`session.header.parentSession` absent, the coordinating agent in this
+  harness) reads as `project-manager`, while a CHILD session stays EMPTY and
+  fails closed (`dispatch.anti-recursion.empty-binding` → every
+  Assignment-shaped dispatch denied under hard), because a leaf must not
+  dispatch. A session the gate cannot read (the exec-less host
+  `beforeDispatch` hook) falls back to EMPTY too. An explicitly blank binding
+  also fails closed — under hard enforcement the plugin logs it AND every
+  Assignment-shaped dispatch fails until a role is configured. **A deployment
+  whose coordinator is not the root session must set the binding
+  explicitly.**
 - **Caller-scoped engine enforcement (the dsh-only half of issue #156).** That
   binding is what makes the precheck real here: with a declared dispatcher
   identity the engine compares the **dispatching seat's own role** against the
