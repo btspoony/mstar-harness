@@ -105,12 +105,14 @@ import {
 } from './gates/system-prompt.ts'
 import {
   EXECUTION_BINDING_ROOTS_LOGGER,
+  beginExecutionBindingRootStoreOpening,
+  endExecutionBindingRootStoreOpening,
   executionBindingRootsDomain,
   executionBindingRootStoreOf,
   installExecutionBindingRootStore,
-  setExecutionBindingRootStoreOpening,
   setExecutionBindingRootsLogger,
 } from './gates/execution-binding-roots-domain.ts'
+import { warnExecutionBindingRootStoreUnavailable } from './gates/execution-binding-roots.ts'
 
 // Re-export the service type from the package entry: the cordis
 // `Context` augmentation (`ctx.dshMstar`) lives in service.d.ts, so the entry
@@ -992,11 +994,28 @@ export function apply(ctx: Context, config: Config): void {
   ctx.inject(['storageDomain'], async (storageCtx) => {
     // The facility IS provided, so the seam is coming: an adoption that lands
     // while `open` is in flight is back-filled at install, and reporting it as
-    // "no seam" would name a cause that is not true. Only a refused `open`
-    // (below) makes the absence real for the rest of this process.
-    setExecutionBindingRootStoreOpening(true)
+    // "no seam" would name a cause that is not true. Only a settled `open` that
+    // installed nothing makes the absence real for the rest of this process.
+    // The token is THIS activation's — no other activation's completion,
+    // refusal or disposal may release it. Two effects own the release, because
+    // neither covers the other: the child's fires when its facility goes away,
+    // while the row's fires on teardown of a child that a stalled `open` keeps
+    // from ever unloading (a child pending on `open` is disposed only once that
+    // `open` settles; the row's disposal runs its own effects concurrently).
+    const activation = beginExecutionBindingRootStoreOpening()
+    const releaseActivation = (): void => endExecutionBindingRootStoreOpening(activation)
+    try {
+      storageCtx.effect(() => releaseActivation, 'mstar:execution-binding-roots pending open')
+      ctx.effect(() => releaseActivation, 'mstar:execution-binding-roots pending open (row teardown)')
+    } catch {
+      // Either owner is already tearing down, so nothing can install here and no
+      // one is left to warn: release the activation rather than leak it.
+      releaseActivation()
+      return
+    }
     try {
       const domain = await storageCtx.storageDomain.open(executionBindingRootsDomain)
+      releaseActivation()
       const uninstall = installExecutionBindingRootStore(executionBindingRootStoreOf(domain))
       try {
         storageCtx.effect(() => async () => {
@@ -1020,13 +1039,16 @@ export function apply(ctx: Context, config: Config): void {
         } catch (closeError) {
           warnExecutionBindingRoots(`durable adopted control root store close failed after a disposed apply (${causeOf(closeError)})`)
         }
-        warnExecutionBindingRoots(
+        warnExecutionBindingRootStoreUnavailable(
           `durable adopted control root store discarded: its apply fiber was already disposed when open resolved (${causeOf(error)}) — the late handle was closed; the next apply may re-open the domain`,
         )
       }
     } catch (error) {
-      setExecutionBindingRootStoreOpening(false)
-      warnExecutionBindingRoots(
+      releaseActivation()
+      // This absence carries its OWN cause (the facility is provided; only this
+      // `open` was refused) and its own recovery, so it spends the one-shot
+      // latch: the generic "the host provides no seam" line would be false here.
+      warnExecutionBindingRootStoreUnavailable(
         `durable adopted control root unavailable: open refused (${causeOf(error)}) — the selected control root stays a per-process receipt; restart so the next apply can open the domain once the refused name (an \`already-open\` holder) is released, then a resume re-bind carrying the original session reference records it durably`,
       )
     }

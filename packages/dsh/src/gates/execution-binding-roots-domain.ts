@@ -55,8 +55,18 @@ export interface ExecutionBindingRootStore {
 /** The installed seam; `undefined` while no store is open (today's behaviour). */
 let installedStore: ExecutionBindingRootStore | undefined
 
-/** Whether the facility is provided and its `open` is still in flight (see {@link setExecutionBindingRootStoreOpening}). */
-let openingStore = false
+/**
+ * The activations whose `open` is still outstanding, one monotonic token each.
+ * A process-wide boolean would belong to no activation: a stalled `open` whose
+ * fiber was disposed could leave it set forever (no later adoption would ever
+ * warn), while one activation's refused `open` could clear another's pending
+ * one and make an adoption warn "no seam" about a facility that IS provided.
+ * "In flight" therefore means "at least one activation still owes an `open`".
+ */
+const openingActivations = new Set<number>()
+
+/** Last activation token handed out; monotonic, so a stale release never matches a newer activation. */
+let lastActivationToken = 0
 
 /**
  * Whether a seam is installed. The receipt path reads this to say ONCE, at the
@@ -67,18 +77,29 @@ export function executionBindingRootStoreInstalled(): boolean {
 }
 
 /**
- * Whether a seam's `open` is in flight: the facility IS provided, so an
- * adoption landing now is back-filled at install and its absence from the
- * durable table is temporary, not a missing seam. The plugin's inject child
- * raises this before awaiting `open`, an install or a refused `open` lowers it.
+ * Claim one activation's pending `open` and return the token that owns it: the
+ * plugin's inject child raises it before awaiting `open`, and only that token
+ * releases it again — on completion, refusal, or the child's disposal.
+ *
+ * shortcut: an `open` that never settles on a fiber that is never disposed
+ * keeps its activation in flight forever, so the generic no-seam warning stays
+ * silent for it; upgrade by bounding the `open` itself (a timeout that closes
+ * the late handle) if a supported host is observed to leak one that way.
  */
-export function executionBindingRootStoreOpening(): boolean {
-  return openingStore
+export function beginExecutionBindingRootStoreOpening(): number {
+  const token = ++lastActivationToken
+  openingActivations.add(token)
+  return token
 }
 
-/** Set the in-flight-`open` fact (the plugin's inject child); install clears it with the seam. */
-export function setExecutionBindingRootStoreOpening(opening: boolean): void {
-  openingStore = opening
+/** Release ONE activation's pending `open`; another activation's `open` stays in flight. */
+export function endExecutionBindingRootStoreOpening(token: number): void {
+  openingActivations.delete(token)
+}
+
+/** Whether at least one activation's `open` is still in flight (see {@link beginExecutionBindingRootStoreOpening}). */
+export function executionBindingRootStoreOpening(): boolean {
+  return openingActivations.size > 0
 }
 
 /**
@@ -145,12 +166,13 @@ function warn(message: string, error: unknown): void {
  * seam that was installed before it (tests boot several apps in one process).
  * Installing never drops an in-process receipt this host already holds: it
  * replays them into the new store, so an adoption made before the seam existed
- * becomes durable here.
+ * becomes durable here. The in-flight-`open` state belongs to the activation
+ * that raised it ({@link beginExecutionBindingRootStoreOpening}), so installing
+ * leaves another activation's pending `open` alone.
  */
 export function installExecutionBindingRootStore(store: ExecutionBindingRootStore): () => void {
   const previous = installedStore
   installedStore = store
-  openingStore = false
   replayObservedRoots?.()
   return () => {
     if (installedStore === store) installedStore = previous
