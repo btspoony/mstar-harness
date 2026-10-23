@@ -1,4 +1,3 @@
-import { resolve } from "node:path";
 import type { McpServer, StandardSchemaWithJSON } from "@modelcontextprotocol/server";
 import { admitCommandInput, getCommandSchemas, isCliOnlyCommand, isPayloadPlaceholder, refusalEnvelope, sanitizeInputScalar } from "@mstar-harness/commands";
 import { z } from "zod";
@@ -175,7 +174,7 @@ function handlerInput(definition: CommandDefinition, input: unknown, defaultHarn
 }
 
 /**
- * Normalize the ROOT selectors BEFORE the tool schema runs. Two rules:
+ * Normalize the ROOT selectors BEFORE the tool schema runs:
  *
  * - the connection pin WINS. The resolver already pins `controlRoot`, but a
  *   command that resolves its own root from an input field would still read the
@@ -185,11 +184,11 @@ function handlerInput(definition: CommandDefinition, input: unknown, defaultHarn
  *   `sdd.workspace`'s `controlRoot` is not the harness dir). Writing the pin
  *   over the caller's value at the earliest seam is what makes every family
  *   judge that call the same way.
- * - a per-call value is resolved to an ABSOLUTE path. The invocation workspace
- *   is anchored at the root's parent, so a relative value would be re-resolved
- *   against that anchor by the handler and double-join the path (`x/.mstar`
- *   under an `x` anchor became `<anchor>/x/x/.mstar`). The launch directory is
- *   the only base a per-call selector can be relative to.
+ *
+ * - an unpinned connection passes a per-call value through UNCHANGED. A root
+ *   selector must be an absolute path; the seam refuses a relative one, so
+ *   resolving it here would hide the caller's relative value behind a
+ *   launch-directory guess the seam no longer makes.
  *
  * A field that names an operation TARGET (`rootInputs: []`) is never touched:
  * the pin governs which store a command EXECUTES AGAINST, not which object an
@@ -200,16 +199,11 @@ function normalizedRootInputs(rootInputs: readonly string[], input: unknown, def
   if (input === null || typeof input !== "object" || Array.isArray(input)) return input;
   const record = input as Record<string, unknown>;
   const named = rootInputs.filter((field) => Object.hasOwn(record, field));
-  if (named.length === 0) return input;
+  if (named.length === 0 || defaultHarness === undefined) return input;
   const normalized = { ...record };
   for (const field of named) {
-    if (defaultHarness !== undefined) {
-      if (field === "harness") normalized[field] = defaultHarness;
-      else delete normalized[field];
-      continue;
-    }
-    const value = normalized[field];
-    if (typeof value === "string" && value.trim() !== "") normalized[field] = resolve(value);
+    if (field === "harness") normalized[field] = defaultHarness;
+    else delete normalized[field];
   }
   return normalized;
 }
@@ -259,7 +253,7 @@ function unpinnedRootFacts(
 ): Readonly<{ message: string; recovery: string; diagnostic: RefusalDiagnostic }> {
   return {
     message: `${definition.id} needs the call's "${field}" selector: this MCP connection declared no control root, and the command resolves its root from that field`,
-    recovery: `pass \`${field}\` naming this call's root directory (an absolute path, or one relative to the server's launch directory), or declare the root for the whole connection \u2014 \`mstar mcp --harness <absolute path>\`, or a non-blank MSTAR_HARNESS_DIR in the server environment \u2014 and no call needs the selector`,
+    recovery: `pass \`${field}\` naming this call's root directory (an absolute path), or declare the root for the whole connection \u2014 \`mstar mcp --harness <absolute path>\`, or a non-blank, absolute MSTAR_HARNESS_DIR in the server environment \u2014 and no call needs the selector`,
     diagnostic: {
       path: field,
       code: "required",

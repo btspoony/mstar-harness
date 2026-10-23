@@ -772,15 +772,14 @@ describe("MCP harness root", () => {
     }
   });
 
-  test("a relative MSTAR_HARNESS_DIR is resolved ONCE: the scaffold lands on the pin, not its child", async () => {
-    // The environment form is the launcher fact with no CLI boundary to refuse
-    // a relative value, so it means "relative to the launch directory" and the
-    // resolver resolves it there. The pin it publishes must be that RESOLVED
-    // path: a handler that re-reads the variable against the workspace this
-    // root anchors (its own parent) resolves `sub/.mstar` a second time and
-    // scaffolds a DIFFERENT harness at `<pin>/sub`.
-    // The resolved root is compare-able only by its canonical path: the
-    // launcher's `resolve` sees the physical directory `chdir` reports.
+  test("the environment pin is published ONCE: the scaffold lands on it, not its child", async () => {
+    // The environment form is a launcher fact like `--harness`, so it is
+    // absolute and the pin it publishes must be the declared path verbatim. A
+    // handler that re-read the variable against the workspace this root
+    // anchors (its own parent) would resolve a second time and scaffold a
+    // DIFFERENT harness at `<pin>/sub`.
+    // The pin is compare-able only by its canonical path: the launcher's
+    // `resolve` sees the physical directory `chdir` reports.
     const host = realpathSync(mkdtempSync(path.join(os.tmpdir(), "mcp-harness-root-")));
     roots.push(host);
     mkdirSync(path.join(host, "sub"), { recursive: true });
@@ -788,7 +787,7 @@ describe("MCP harness root", () => {
     const doubleResolved = path.join(host, "sub", "sub", ".mstar");
     const previousCwd = process.cwd();
     const previousHarness = process.env.MSTAR_HARNESS_DIR;
-    process.env.MSTAR_HARNESS_DIR = path.join("sub", ".mstar");
+    process.env.MSTAR_HARNESS_DIR = pinnedHarness;
     process.chdir(host);
     const definition = getCommandDefinitions().find((entry) => entry.id === "harness.scaffold");
     if (definition === undefined) throw new Error("missing command: harness.scaffold");
@@ -1786,20 +1785,67 @@ describe("MCP control-root admission class", () => {
     }
   });
 
-  test("a relative MSTAR_HARNESS_DIR resolves against the launch directory", async () => {
-    const fixture = await relativeRootWorkspace();
+  test("an absolute harness B from a host launched in A touches only B", async () => {
+    const root = mkdtempSync(path.join(os.tmpdir(), "mcp-harness-root-"));
+    roots.push(root);
+    const launch = path.join(root, "A");
+    const launchHarness = path.join(launch, ".mstar");
+    const otherHarness = path.join(root, "B", ".mstar");
+    mkdirSync(launchHarness, { recursive: true });
+    mkdirSync(otherHarness, { recursive: true });
+    (await initializeStore({ harnessDir: launchHarness })).close();
+    (await initializeStore({ harnessDir: otherHarness })).close();
     const previousCwd = process.cwd();
     const previousHarness = process.env.MSTAR_HARNESS_DIR;
-    process.chdir(fixture.base);
-    process.env.MSTAR_HARNESS_DIR = fixture.selector;
+    delete process.env.MSTAR_HARNESS_DIR;
+    process.chdir(launch);
     try {
-      const definition = getCommandDefinitions().find((entry) => entry.id === "schema")!;
-      const context = createContextResolver()(definition, undefined, new AbortController().signal, [], createMcpEffects([])) as { controlRoot: string | null };
-      // The environment form has no CLI boundary to refuse a relative value, so
-      // it means "relative to the server's launch directory" — resolved once, so
-      // the workspace anchor below is absolute too. (`process.cwd()` is the
-      // platform realpath, so the expectation is too.)
-      expect(context.controlRoot).toBe(realpathSync(fixture.harness));
+      const launchBefore = snapshotTree(launchHarness);
+      // A write rooted at B, from a server whose launch directory owns A's
+      // harness: the pin is the only root candidate, so the capture lands in B
+      // and leaves every file under A byte-identical.
+      const added = await callRawTool(createContextResolver({ harnessRoot: otherHarness }), "issue.add", {
+        payload: { ...CAPTURE_INPUT },
+        actor: "project-manager",
+      });
+      expect(added.isError).toBe(false);
+      expect(rawEnvelope(added)).toMatchObject({ status: "ok", code: "issue.add.ok" });
+      expect(snapshotTree(launchHarness)).toEqual(launchBefore);
+
+      const inB = await callRawTool(createContextResolver({ harnessRoot: otherHarness }), "status.tech-debt", {});
+      expect(((inB.structuredContent as CommandEnvelope).data as { total_open: number }).total_open).toBe(1);
+      // A's own store answers 0: the issued capture never reached it.
+      const inA = await callRawTool(createContextResolver({ harnessRoot: launchHarness }), "status.tech-debt", {});
+      expect(((inA.structuredContent as CommandEnvelope).data as { total_open: number }).total_open).toBe(0);
+    } finally {
+      process.chdir(previousCwd);
+      if (previousHarness === undefined) delete process.env.MSTAR_HARNESS_DIR;
+      else process.env.MSTAR_HARNESS_DIR = previousHarness;
+    }
+  });
+
+  test("a relative MSTAR_HARNESS_DIR is a boot refusal naming the absolute requirement", async () => {
+    const fixture = await plainForeignCwd();
+    const selector = path.join("x", ".mstar");
+    const previousCwd = process.cwd();
+    const previousHarness = process.env.MSTAR_HARNESS_DIR;
+    process.chdir(fixture.cwd);
+    process.env.MSTAR_HARNESS_DIR = selector;
+    try {
+      // The environment pin has no command boundary to refuse it, so the seam
+      // refuses the whole connection instead of reading the value against the
+      // server's launch directory — the cwd is never a root anchor.
+      let caught: unknown;
+      try {
+        createContextResolver();
+      } catch (error) {
+        caught = error;
+      }
+      expect(caught).toBeInstanceOf(McpControlRootError);
+      const message = (caught as Error).message;
+      expect(message).toContain("mcp.control-root-unresolved");
+      expect(message).toContain(`MSTAR_HARNESS_DIR must be an absolute path; got ${JSON.stringify(selector)}`);
+      expect(message).toContain("mstar mcp --harness");
     } finally {
       process.chdir(previousCwd);
       if (previousHarness === undefined) delete process.env.MSTAR_HARNESS_DIR;
@@ -1829,7 +1875,7 @@ describe("MCP control-root admission class", () => {
     }
   });
 
-  test("a relative per-call harness resolves once, against the launch directory", async () => {
+  test("a relative per-call harness is a named refusal, never a launch-directory resolution", async () => {
     const fixture = await relativeRootWorkspace();
     const previousCwd = process.cwd();
     const previousHarness = process.env.MSTAR_HARNESS_DIR;
@@ -1837,21 +1883,29 @@ describe("MCP control-root admission class", () => {
     process.chdir(fixture.base);
     try {
       const definition = getCommandDefinitions().find((entry) => entry.id === "status.tech-debt")!;
-      const context = createContextResolver()(definition, undefined, new AbortController().signal, [], createMcpEffects([]), { harness: fixture.selector }) as {
-        controlRoot: string | null;
-        cwd: string;
-      };
-      // The workspace anchor is the root's parent, and the root is absolute: the
-      // handler re-resolves the same selector against that anchor, so a relative
-      // control root would double-join into `<base>/x/x/.mstar`. (`process.cwd()`
-      // is the platform realpath, so the expectation is too.)
-      expect(context.controlRoot).toBe(realpathSync(fixture.harness));
-      expect(context.cwd).toBe(path.dirname(realpathSync(fixture.harness)));
+      let caught: unknown;
+      try {
+        createContextResolver()(definition, undefined, new AbortController().signal, [], createMcpEffects([]), { harness: fixture.selector });
+      } catch (error) {
+        caught = error;
+      }
+      // The selector is a path fact like `--harness`: the invocation workspace
+      // is anchored on its parent, so a relative value would be re-resolved
+      // against its own parent and double-join.
+      expect(caught).toBeInstanceOf(McpControlRootError);
+      const message = (caught as Error).message;
+      expect(message).toContain("mcp.control-root-unresolved");
+      expect(message).toContain(`status.tech-debt's "harness" selector must be an absolute path; got ${JSON.stringify(fixture.selector)}`);
+      expect(message).toContain("mstar mcp --harness");
 
-      const result = await callRawTool(createContextResolver(), "status.tech-debt", { harness: fixture.selector });
-      const envelope = result.structuredContent as CommandEnvelope;
-      expect(envelope).toMatchObject({ status: "ok", code: "status.ok" });
-      expect((envelope.data as { total_open: number }).total_open).toBe(1);
+      // The same selector through a real tool call is refused the same way,
+      // instead of answering from the root it would have named before.
+      const refused = await callRawTool(createContextResolver(), "status.tech-debt", { harness: fixture.selector });
+      expect(refused.isError).toBe(true);
+      const text = rawText(refused);
+      expect(text).toContain("mcp.control-root-unresolved");
+      expect(text).toContain("must be an absolute path");
+      expect(text).not.toContain("status.ok");
     } finally {
       process.chdir(previousCwd);
       if (previousHarness === undefined) delete process.env.MSTAR_HARNESS_DIR;
