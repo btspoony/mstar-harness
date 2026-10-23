@@ -1263,6 +1263,21 @@ function declaredPluginWorkspace(): string {
   return workspace;
 }
 
+/**
+ * A nested workspace inside a monorepo: the declared workspace is a MEMBER, so
+ * the project root a relative input resolves from is the monorepo root one
+ * level up — the single answer both path-reading families must agree on.
+ */
+function nestedWorkspaceCheckout(): { root: string; workspace: string } {
+  const root = mkdtempSync(path.join(os.tmpdir(), "mcp-harness-root-monorepo-"));
+  roots.push(root);
+  writeFileSync(path.join(root, "package.json"), JSON.stringify({ name: "mono", workspaces: ["packages/*"] }), "utf8");
+  const workspace = path.join(root, "packages", "app");
+  mkdirSync(workspace, { recursive: true });
+  writeFileSync(path.join(workspace, "package.json"), JSON.stringify({ name: "@mono/app" }), "utf8");
+  return { root, workspace };
+}
+
 /** The class an unpinned resolver actually gives one definition (throws for `root`). */
 function admitOnUnpinnedConnection(id: string): "root" | "none" {
   const definition = getCommandDefinitions().find((entry) => entry.id === id);
@@ -1527,6 +1542,33 @@ describe("MCP control-root admission class", () => {
     expect([pluginEnvelope.status, pluginEnvelope.code]).toEqual(["ok", "plugin.validate.ok"]);
     expect((pluginEnvelope.data as { root: string }).root).toBe(workspace);
     expect(rawText(validated)).toContain(workspace);
+  });
+
+  test("the same relative input reaches one root in the validation and audit families", async () => {
+    const { root, workspace } = nestedWorkspaceCheckout();
+    // The declared workspace is the MEMBER: both families must resolve their
+    // relative input from the MONOREPO root one level up, not from the raw
+    // workspace join. The harness is only the connection's declared root —
+    // every path below is derived from the workspace.
+    const resolver = createContextResolver({ workspace, harnessRoot: path.join(root, ".mstar") });
+    // Both fixtures sit at the MONOREPO root, one level above the declared
+    // member workspace. Each family resolves its relative input from that one
+    // project root; a raw workspace join would answer about the member and
+    // find neither file.
+    writeFileSync(path.join(root, "app.ts"), "export const parity = true;\n", "utf8");
+    writeFileSync(path.join(root, "findings.json"), JSON.stringify([
+      { title: "Parity finding", description: "Fixture finding", priority: "P2", effort: "S", risk: "LOW", category: "bug" },
+    ]), "utf8");
+
+    const linted = rawEnvelope(await callRawTool(resolver, "lint", { target: "app.ts" }));
+    // The lint family publishes `{ results: [{ file }] }`; name the shape once.
+    const lintData = linted.data as { results: Array<{ file: string }> };
+    expect([linted.status, lintData.results[0]?.file]).toEqual(["ok", path.join(root, "app.ts")]);
+
+    const scaffolded = rawEnvelope(await callRawTool(resolver, "audit.scaffold", { findings: "findings.json", dir: "audit-out", sha: "deadbee" }));
+    const scaffoldData = scaffolded.data as { outDir: string; file: string };
+    expect([scaffolded.status, scaffoldData.outDir]).toEqual(["ok", path.join(root, "audit-out")]);
+    expect(scaffoldData.file).toBe(path.join(root, "audit-out", "README.md"));
   });
 
   test("a relative reportFile is refused on an unnamed workspace instead of validating the host checkout", async () => {

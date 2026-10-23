@@ -3,7 +3,6 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { resolveProjectRoot } from "./paths.js";
 import { compareSemver } from "./version-compare.js";
 
 export const DSH_BIN = "dsh";

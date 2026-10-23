@@ -1,5 +1,4 @@
 import { existsSync } from "node:fs";
-import path from "node:path";
 import {
   evaluatePhaseGate,
   evaluatePostMergeCloseFromExecutionAuthority,
@@ -9,6 +8,7 @@ import {
   resolveProcessHarnessDir,
 } from "@mstar-harness/engine";
 import { z } from "zod";
+import { resolveCliPath } from "../host-health.js";
 import { refusalEnvelope } from "../envelope.js";
 import { commandEnvelopeSchema } from "../envelope.js";
 import type { CommandDefinition, CommandEnvelope, InvocationContext } from "../types.js";
@@ -99,7 +99,7 @@ export function getCoordinationChecksCommandDefinitions(): readonly CommandDefin
           if (snapshot === null) {
             return refusalEnvelope({ command: id, status: "refused", code: "iteration.gate.workflow-not-found", exitCode: 1, message: `workflow '${input.workflow}' not found in the registered execution authority`, recovery: "Run mstar status validate to inspect registered workflow IDs, select the intended workflow, then run mstar iteration gate --workflow <workflow-id> --compass <compass-path>." });
           }
-          const compassPath = path.resolve(context.cwd, input.compass!);
+          const compassPath = resolveCliPath(input.compass!, context.cwd);
           if (!existsSync(compassPath)) return refusalEnvelope({ command: id, status: "refused", code: "iteration.gate.compass-not-found", exitCode: 1, message: `compass file not found: ${compassPath}`, recovery: "The compass must exist at the reported path before mstar iteration gate --workflow <workflow-id> --compass <compass-path>." });
           const gate = evaluatePhaseGate(snapshot, parseCompassFrontmatter(compassPath), {
             currentBranch: input.branch,

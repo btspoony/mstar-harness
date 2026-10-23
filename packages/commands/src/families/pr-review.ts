@@ -7,6 +7,7 @@ import {
 } from "@mstar-harness/engine";
 import { randomUUID } from "node:crypto";
 import { z } from "zod";
+import { resolveCliPath } from "../host-health.js";
 import { commandEnvelopeSchema } from "../definitions.js";
 import { refusalEnvelope, type RefusalDiagnostic } from "../envelope.js";
 import { engineErrorFacts } from "./family-refusal.js";
@@ -69,7 +70,8 @@ export const failure = (id: string, error: unknown): CommandEnvelope<never> => {
 class UsageError extends Error {
   constructor(message: string, readonly diagnostics?: readonly RefusalDiagnostic[], readonly recovery?: string) { super(message); }
 }
-const abs = (cwd: string, file: string) => path.isAbsolute(file) ? file : path.resolve(cwd, file);
+/** A relative review input resolves from the invocation workspace's project root, like every other dev-command path argument. */
+const abs = (cwd: string, file: string) => resolveCliPath(file, cwd);
 const need = (value: string | undefined, name: string): string => { if (value === undefined || value === "") throw new UsageError(`${name} is required`); return value; };
 function parseTarget(raw: string): PrReportTarget {
   const colon = raw.indexOf(":"); const kind = colon < 0 ? raw : raw.slice(0, colon); const value = colon < 0 ? "" : raw.slice(colon + 1);
