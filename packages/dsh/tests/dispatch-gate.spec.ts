@@ -387,7 +387,7 @@ describe('dispatch gate — warn (default) mode', () => {
     const app = booted = await bootApp({ dispatchBinding: 'fullstack-dev' })
     const advisories = captureAdvisories(app.ctx)
 
-    const decision = await app.ctx.waterfall('tools/pre-execute', subagentExec(SELF_RECURSION), defaultAllow)
+    const decision = await app.ctx.waterfall('tools/pre-execute', subagentExec(SELF_RECURSION, rootAgent), defaultAllow)
 
     expect(decision).toEqual({ kind: 'allow' })
     expect(advisories).toHaveLength(1)
@@ -453,7 +453,7 @@ describe('dispatch gate — hard mode (Config enforcement: hard)', () => {
   it('anti-recursion self-type under hard → deny with the critical code', async () => {
     const app = booted = await bootApp({ enforcement: 'hard', dispatchBinding: 'fullstack-dev' })
 
-    const decision = await app.ctx.waterfall('tools/pre-execute', subagentExec(SELF_RECURSION), defaultAllow)
+    const decision = await app.ctx.waterfall('tools/pre-execute', subagentExec(SELF_RECURSION, rootAgent), defaultAllow)
 
     expect(decision.kind).toBe('deny')
     expect(decision.kind === 'deny' && decision.reason).toContain('dispatch.anti-recursion.self-type')
@@ -464,7 +464,7 @@ describe('dispatch gate — hard mode (Config enforcement: hard)', () => {
     const app = booted = await bootApp({ enforcement: 'hard', dispatchBinding: 'qc-specialist' })
     const advisories = captureAdvisories(app.ctx)
 
-    const decision = await app.ctx.waterfall('tools/pre-execute', subagentExec(VALID_WRITABLE), defaultAllow)
+    const decision = await app.ctx.waterfall('tools/pre-execute', subagentExec(VALID_WRITABLE, rootAgent), defaultAllow)
 
     expect(decision).toEqual({ kind: 'allow' })
     expect(advisories).toHaveLength(0)
@@ -529,12 +529,12 @@ describe('dispatch gate — hard mode (Config enforcement: hard)', () => {
   it('a live dispatchBinding save is observed by the NEXT dispatch (plugin settings form path)', async () => {
     const app = booted = await bootApp({ enforcement: 'hard', dispatchBinding: 'qc-specialist' })
     // VALID_WRITABLE carries Execute as: fullstack-dev — not the bound role.
-    expect(await app.ctx.waterfall('tools/pre-execute', subagentExec(VALID_WRITABLE), defaultAllow)).toEqual({ kind: 'allow' })
+    expect(await app.ctx.waterfall('tools/pre-execute', subagentExec(VALID_WRITABLE, rootAgent), defaultAllow)).toEqual({ kind: 'allow' })
 
     // The dsh plugin settings form saves through the live volatile field — no
     // remount, no re-apply.
     writeLiveDispatchBinding(app, 'fullstack-dev')
-    const decision = await app.ctx.waterfall('tools/pre-execute', subagentExec(VALID_WRITABLE), defaultAllow)
+    const decision = await app.ctx.waterfall('tools/pre-execute', subagentExec(VALID_WRITABLE, rootAgent), defaultAllow)
 
     expect(decision.kind).toBe('deny')
     expect(decision.kind === 'deny' && decision.reason).toContain('dispatch.anti-recursion.self-type')
@@ -590,12 +590,19 @@ describe('dispatch gate — hard mode (Config enforcement: hard)', () => {
 /* ---------------------------------- F7: derived caller ---------------------------------- */
 
 describe('F7 — the anti-recursion caller is DERIVED from the calling session, never invented', () => {
-  it('dispatchCallerOf: explicit wins verbatim, root reads as the coordinator, child/unreadable stays empty', () => {
+  it('dispatchCallerOf: a ROOT session reads the explicit binding verbatim (or the coordinator); a child/unreadable session is EMPTY', () => {
     expect(dispatchCallerOf({ dispatchBinding: 'fullstack-dev' }, rootAgent)).toBe('fullstack-dev')
-    // An explicitly blank value stays blank — never replaced by the root identity.
+    // An explicitly blank value on a ROOT session stays blank — never replaced
+    // by the root identity.
     expect(dispatchCallerOf({ dispatchBinding: '' }, rootAgent)).toBe('')
     expect(dispatchCallerOf({}, rootAgent)).toBe(ROOT_SESSION_DISPATCH_BINDING)
+    // A CHILD session never inherits the binding: the caller is empty, so the
+    // engine's empty-binding fail-closed rule applies whatever is configured.
     expect(dispatchCallerOf({}, childAgent)).toBe('')
+    expect(dispatchCallerOf({ dispatchBinding: 'project-manager' }, childAgent)).toBe('')
+    expect(dispatchCallerOf({ dispatchBinding: 'fullstack-dev' }, childAgent)).toBe('')
+    expect(dispatchCallerOf({ dispatchBinding: '' }, childAgent)).toBe('')
+    expect(dispatchCallerOf({ dispatchBinding: 'project-manager' }, undefined)).toBe('')
     expect(dispatchCallerOf({}, undefined)).toBe('')
   })
 
@@ -612,16 +619,31 @@ describe('F7 — the anti-recursion caller is DERIVED from the calling session, 
     expect(decision.kind === 'deny' && decision.reason).not.toContain('dispatch.anti-recursion.self-type')
   })
 
-  it('a child session dispatching Execute as fullstack-dev with an explicit dispatchBinding: fullstack-dev is refused with self-type', async () => {
-    // The explicit binding is still compared verbatim — derivation never
-    // overrides configuration.
+  it('REGRESSION (reported bypass, explicit binding): a CHILD session with dispatchBinding: project-manager dispatching Execute as fullstack-dev is refused with dispatch.anti-recursion.empty-binding', async () => {
+    // The explicit binding is a ROOT-session identity: a child session never
+    // inherits it, so the configured coordinator identity cannot be borrowed
+    // to defeat the anti-recursion precheck from a leaf.
+    const app = booted = await bootApp({ enforcement: 'hard', dispatchBinding: ROOT_SESSION_DISPATCH_BINDING })
+
+    const decision = await app.ctx.waterfall('tools/pre-execute', subagentExec(VALID_WRITABLE, childAgent), defaultAllow)
+
+    expect(decision.kind).toBe('deny')
+    expect(decision.kind === 'deny' && decision.reason).toContain('[critical] dispatch.anti-recursion.empty-binding')
+    // The configured role is never compared for a child — no wrong-identity
+    // self-type verdict either.
+    expect(decision.kind === 'deny' && decision.reason).not.toContain('dispatch.anti-recursion.self-type')
+  })
+
+  it('a child session whose explicit binding equals its own Execute as is refused with empty-binding, not self-type', async () => {
+    // The caller is EMPTY for a child, so there is no role to compare against:
+    // the dispatch fails closed as empty-binding rather than matching itself.
     const app = booted = await bootApp({ enforcement: 'hard', dispatchBinding: 'fullstack-dev' })
 
     const decision = await app.ctx.waterfall('tools/pre-execute', subagentExec(SELF_RECURSION, childAgent), defaultAllow)
 
     expect(decision.kind).toBe('deny')
-    expect(decision.kind === 'deny' && decision.reason).toContain('dispatch.anti-recursion.self-type')
-    expect(decision.kind === 'deny' && decision.reason).not.toContain('dispatch.anti-recursion.empty-binding')
+    expect(decision.kind === 'deny' && decision.reason).toContain('dispatch.anti-recursion.empty-binding')
+    expect(decision.kind === 'deny' && decision.reason).not.toContain('dispatch.anti-recursion.self-type')
   })
 
   it('an explicitly blank binding still fails closed on a ROOT session', async () => {
@@ -720,7 +742,7 @@ describe('dispatch gate — header-region scoping ', () => {
     // The HEADER is a valid read-only scout assignment — no branch form
     // obligation, no self-recursion. The body-quoted `Working branch: main`
     // / `Execute as: fullstack-dev` examples must not flip the verdict.
-    const decision = await app.ctx.waterfall('tools/pre-execute', subagentExec(BODY_QUOTED_FIELDS), defaultAllow)
+    const decision = await app.ctx.waterfall('tools/pre-execute', subagentExec(BODY_QUOTED_FIELDS, rootAgent), defaultAllow)
 
     expect(decision).toEqual({ kind: 'allow' })
     expect(advisories).toHaveLength(0)
@@ -734,7 +756,7 @@ describe('dispatch gate — parity with the opencode validated field set', () =>
     const app = booted = await bootApp({ dispatchBinding: 'fullstack-dev' })
     const advisories = captureAdvisories(app.ctx)
 
-    await app.ctx.waterfall('tools/pre-execute', subagentExec(MISSING_ALL_CORE), defaultAllow)
+    await app.ctx.waterfall('tools/pre-execute', subagentExec(MISSING_ALL_CORE, rootAgent), defaultAllow)
 
     // Same engine fns as packages/opencode validateDispatchAssignment →
     // identical codes by construction; assert the concrete set here.

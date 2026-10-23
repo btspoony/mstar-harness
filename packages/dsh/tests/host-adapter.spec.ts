@@ -346,29 +346,36 @@ describe('beforeDispatch — dispatch gate validation path (same codes as tools/
     expect(result.violations.map((v) => v.code)).toContain('dispatch.default-branch.protected')
   })
 
-  it('read-only role (scout) without branch form → pass (branch gate skipped, same as the gate)', async () => {
+  it('read-only role (scout) without branch form → no branch violation; the exec-less hook fails the caller closed like the gate', async () => {
     const app = booted = await bootApp({ dispatchBinding: 'qc-specialist' })
     const adapter = makeAdapter({ config: { dispatchBinding: 'qc-specialist' } })
 
     const advisories = captureDispatchAdvisories(app.ctx)
     const decision = await app.ctx.waterfall('tools/pre-execute', subagentExec(SCOUT_NO_BRANCH), defaultAllow)
     expect(decision).toEqual({ kind: 'allow' })
-    expect(advisories).toHaveLength(0)
+    // Neither path carries a calling session, so the caller is EMPTY (a
+    // configured binding is a ROOT-session identity, never inferred here); the
+    // branch gate stays skipped for the read-only role.
+    expect(dispatchCodes(advisories[0])).toEqual(['dispatch.anti-recursion.empty-binding'])
 
     const result = await adapter.beforeDispatch(SCOUT_NO_BRANCH)
-    expect(result.ok).toBe(true)
-    expect(result.violations).toHaveLength(0)
+    expect(result.violations.map((v) => v.code)).toEqual(dispatchCodes(advisories[0]))
+    expect(result.violations.map((v) => v.code)).not.toContain('assignment.field.branch-missing')
   })
 
-  it('valid writable Assignment → pass', async () => {
+  it('valid writable Assignment on the exec-less hook → only the fail-closed caller (the configured binding is not inherited)', async () => {
     booted = await bootApp({ dispatchBinding: 'qc-specialist' })
     const adapter = makeAdapter({ config: { dispatchBinding: 'qc-specialist' } })
 
     const result = await adapter.beforeDispatch(VALID_WRITABLE)
-    expect(result.ok).toBe(true)
+    expect(result.violations.map((v) => v.code)).toEqual(['dispatch.anti-recursion.empty-binding'])
+    expect(result.hardBlocked).toBe(false) // warn mode — the verdict is advisory
   })
 
-  it('anti-recursion binding → dispatch.anti-recursion.self-type (critical), same as the gate', async () => {
+  it('anti-recursion on the exec-less hook → empty-binding (critical), never a borrowed self-type, same as the gate', async () => {
+    // An explicit binding belongs to the ROOT session that dispatches; the hook
+    // carries no calling session, so it cannot borrow that identity and the red
+    // line fails closed exactly like the agent-less listener path.
     const app = booted = await bootApp({ dispatchBinding: 'fullstack-dev' })
     const adapter = makeAdapter({ config: { dispatchBinding: 'fullstack-dev' } })
 
@@ -378,9 +385,10 @@ describe('beforeDispatch — dispatch gate validation path (same codes as tools/
     const result = await adapter.beforeDispatch(SELF_RECURSION)
 
     expect(result.ok).toBe(false)
-    expect(result.violations.map((v) => v.code)).toContain('dispatch.anti-recursion.self-type')
     expect(result.violations.map((v) => v.code)).toEqual(dispatchCodes(advisories[0]))
-    const anti = result.violations.find((v) => v.code === 'dispatch.anti-recursion.self-type')
+    expect(result.violations.map((v) => v.code)).toContain('dispatch.anti-recursion.empty-binding')
+    expect(result.violations.map((v) => v.code)).not.toContain('dispatch.anti-recursion.self-type')
+    const anti = result.violations.find((v) => v.code === 'dispatch.anti-recursion.empty-binding')
     expect(anti?.severity).toBe('critical')
   })
 
@@ -421,8 +429,9 @@ describe('beforeDispatch — dispatch gate validation path (same codes as tools/
   })
 
   it('typed Task budget survives the fields→text normalization (§ A1) — and its absence still fails the gate', async () => {
-    // Non-colliding caller binding so anti-recursion stays out of the picture
-    // (default empty binding fails every dispatch with empty-binding).
+    // The exec-less hook carries no calling session, so its verdict ALWAYS
+    // carries the fail-closed empty-binding; the budget codes are what this
+    // case asserts.
     booted = await bootApp({ dispatchBinding: 'qc-specialist' })
     const adapter = makeAdapter({ config: { dispatchBinding: 'qc-specialist' } })
 
@@ -431,7 +440,7 @@ describe('beforeDispatch — dispatch gate validation path (same codes as tools/
     // the codes match the equivalent hand-written text exactly.
     const withBudget = await adapter.beforeDispatch(IMPLEMENT_FIELDS_WITH_BUDGET)
     const withBudgetText = await adapter.beforeDispatch(IMPLEMENT_FIELDS_WITH_BUDGET_TEXT)
-    expect(withBudget.ok).toBe(true)
+    expect(withBudget.violations.map((v) => v.code)).toEqual(['dispatch.anti-recursion.empty-binding'])
     expect(withBudget.violations.map((v) => v.code)).not.toContain('assignment.field.task-budget-missing')
     expect(withBudget.violations).toEqual(withBudgetText.violations)
 
@@ -448,7 +457,7 @@ describe('beforeDispatch — dispatch gate validation path (same codes as tools/
 
     const fromFields = await adapter.beforeDispatch(REVIEW_SEAT_FIELDS)
     const fromText = await adapter.beforeDispatch(REVIEW_SEAT_FIELDS_TEXT)
-    expect(fromFields.ok).toBe(true)
+    expect(fromFields.violations.map((v) => v.code)).toEqual(['dispatch.anti-recursion.empty-binding'])
     expect(fromFields.violations).toEqual(fromText.violations)
     expect(fromFields.violations.map((v) => v.code)).not.toContain('assignment.field.budget-missing')
     expect(fromFields.violations.map((v) => v.code)).not.toContain('assignment.field.return-shape-missing')

@@ -116,12 +116,16 @@ const violationCodes = (advisory: { result: { violations: Array<{ code: string }
 
 let seq = 0
 
+/** ROOT calling session (no `header.parentSession`) — the only session whose configured `dispatchBinding` is read. */
+const rootAgent = { session: { header: {} } }
+
 /** One pending subagent tool call in the registry pipeline shape. */
-function subagentExec(prompt: string): ToolExecution {
+function subagentExec(prompt: string, agent?: unknown): ToolExecution {
   return {
     callId: `c${++seq}` as ToolExecution['callId'],
     name: 'subagent',
     arguments: { description: 'probe', prompt },
+    ...(agent === undefined ? {} : { agent: agent as ToolExecution['agent'] }),
     signal: new AbortController().signal,
     token: Symbol('dsh.tool.execution') as unknown as ToolExecutionToken,
   } as unknown as ToolExecution
@@ -235,7 +239,7 @@ describe('dispatch gate — full session dispatch decisions', () => {
     const app = booted = await bootApp({ cordisYml: FIXTURE_CORDIS_YML, enforcement: 'hard', dispatchBinding: 'qc-specialist' })
     const advisories = captureDispatchAdvisories(app.ctx)
 
-    const decision = await app.ctx.waterfall('tools/pre-execute', subagentExec(fixture('assignments/valid.md')), defaultAllow)
+    const decision = await app.ctx.waterfall('tools/pre-execute', subagentExec(fixture('assignments/valid.md'), rootAgent), defaultAllow)
 
     expect(decision).toEqual({ kind: 'allow' })
     expect(advisories).toHaveLength(0)
@@ -245,7 +249,7 @@ describe('dispatch gate — full session dispatch decisions', () => {
     const app = booted = await bootApp({ cordisYml: FIXTURE_CORDIS_YML, enforcement: 'hard', dispatchBinding: 'qc-specialist' })
     const advisories = captureDispatchAdvisories(app.ctx)
 
-    const decision = await app.ctx.waterfall('tools/pre-execute', subagentExec(fixture('assignments/read-only.md')), defaultAllow)
+    const decision = await app.ctx.waterfall('tools/pre-execute', subagentExec(fixture('assignments/read-only.md'), rootAgent), defaultAllow)
 
     expect(decision).toEqual({ kind: 'allow' })
     expect(advisories).toHaveLength(0)
@@ -271,7 +275,7 @@ describe('dispatch gate — full session dispatch decisions', () => {
     const feature = await seedScopedRow(app)
     const advisories = captureDispatchAdvisories(app.ctx)
 
-    const decision = await app.ctx.waterfall('tools/pre-execute', subagentExec(sddAssignment(feature)), defaultAllow)
+    const decision = await app.ctx.waterfall('tools/pre-execute', subagentExec(sddAssignment(feature), rootAgent), defaultAllow)
 
     expect(decision).toEqual({ kind: 'allow' })
     expect(advisories).toHaveLength(0)
@@ -536,7 +540,7 @@ describe('agent-flow — real settle pairing (real call through the composed reg
       callId,
       name: 'subagent',
       arguments: { description: 'probe', prompt: fixture('assignments/valid.md') },
-      agent: { id: 'e2e-agent' } as unknown as import('@deepseek-ai/dsh-agent').Agent,
+      agent: { id: 'e2e-agent', session: { header: {} } } as unknown as import('@deepseek-ai/dsh-agent').Agent,
       signal,
     })
     expect(result.isError).toBe(false)

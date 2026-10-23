@@ -710,22 +710,24 @@ function callingSessionOf(agent: unknown): 'root' | 'child' | 'unresolvable' {
  * The anti-recursion CALLER for one dispatch — DERIVED from the calling
  * session, never invented:
  *
- * 1. an explicit `dispatchBinding` (settings / profile) wins verbatim; an
- *    explicitly blank value stays blank and fails closed;
- * 2. no explicit value + a ROOT session → the coordinator identity
+ * 1. a CHILD session (or a session the gate cannot read) → EMPTY, whatever
+ *    `dispatchBinding` says, so the engine's
+ *    `dispatch.anti-recursion.empty-binding` fails closed. A leaf must not
+ *    dispatch, and no configuration may lift that;
+ * 2. a ROOT session → an explicit `dispatchBinding` (settings / profile) wins
+ *    verbatim, and an explicitly blank value stays blank and fails closed;
+ * 3. no explicit value on a ROOT session → the coordinator identity
  *    (`ROOT_SESSION_DISPATCH_BINDING`) — a root session in this harness IS the
- *    coordinating agent, so this is an identity read, not a guess;
- * 3. no explicit value + a CHILD session (or a session the gate cannot read) →
- *    EMPTY, so the engine's `dispatch.anti-recursion.empty-binding` fails
- *    closed. A leaf must not dispatch.
+ *    coordinating agent, so this is an identity read, not a guess.
  *
- * A deployment whose coordinator is NOT the root session must set the binding
- * explicitly — case 3 then never applies to its coordinators.
+ * Consequence: a deployment whose coordinator is NOT the root session cannot be
+ * served by this field — the binding is a ROOT-session identity, never
+ * inherited by a child.
  */
 export function dispatchCallerOf(config: Config, agent: unknown): string {
+  if (callingSessionOf(agent) !== 'root') return ''
   const explicit = liveConfigValue(config.dispatchBinding)
-  if (explicit !== undefined) return explicit
-  return callingSessionOf(agent) === 'root' ? ROOT_SESSION_DISPATCH_BINDING : ''
+  return explicit !== undefined ? explicit : ROOT_SESSION_DISPATCH_BINDING
 }
 
 /**
@@ -773,9 +775,10 @@ export async function dispatchGateCore(
   const writable = isReadOnlyAssignmentRole(parseAssignmentFields(header).executeAs ?? '') ? false : undefined
   // Engine single composition: shape guard + validateAssignmentFields
   // (writable) + antiRecursionPrecheck (caller = the dispatching agent's own
-  // role, DERIVED from the calling session — root reads as the coordinator,
-  // child/unreadable fails closed; callerRequired keeps the 3.1.2 fail-closed
-  // contract: an empty binding emits
+  // role, DERIVED from the calling session — an explicit binding is honoured
+  // only for a ROOT session, which otherwise reads as the coordinator; a
+  // child/unreadable session is always EMPTY; callerRequired keeps the 3.1.2
+  // fail-closed contract: an empty binding emits
   // dispatch.anti-recursion.empty-binding) + default-branch gate (Assignment
   // branch forms, else $MSTAR_WORKING_BRANCH; direct-on exception only when
   // its branch is the one being checked) + header-region enforcement. Never

@@ -275,10 +275,11 @@ export function liveConfigValue<T>(value: T | LiveConfigRef | undefined): T | un
  * The anti-recursion caller of a ROOT session (`Config.dispatchBinding`
  * fallback). A root session in this harness IS the coordinating agent, so an
  * unset `dispatchBinding` on a root session reads as `project-manager` — an
- * identity read, never a guess. It is NEVER the caller for a child session or
- * for a session the gate cannot read: those fail closed with
- * `dispatch.anti-recursion.empty-binding`, because a leaf must not dispatch.
- * Derivation: `dispatchCallerOf` in `dispatch.ts`.
+ * identity read, never a guess. `Config.dispatchBinding` itself is a
+ * ROOT-session identity and is read only there; it is NEVER the caller for a
+ * child session or for a session the gate cannot read, which fail closed with
+ * `dispatch.anti-recursion.empty-binding` whatever the field says, because a
+ * leaf must not dispatch. Derivation: `dispatchCallerOf` in `dispatch.ts`.
  */
 export const ROOT_SESSION_DISPATCH_BINDING = 'project-manager'
 
@@ -295,10 +296,12 @@ export const Config: z<Config> = z.object({
   dispatchTools: z.array(z.string()).default(undefined as unknown as string[]),
   // VOLATILE: the anti-recursion caller is read through the Loader's live
   // reference per dispatch (a settings save applies on the next dispatch).
-  // NO constant default: an absent value means "derive the caller from the
-  // calling session" (a root session reads as the coordinator; a child session
-  // fails closed — `dispatchCallerOf`), and a schema default would fabricate
-  // the caller for every leaf. An explicitly blank value also fails closed.
+  // A ROOT-session identity only: a child session (or an unreadable one) never
+  // inherits it and always fails closed with empty-binding, so no configuration
+  // can lift the leaf-dispatch red line. Within a root session, an absent value
+  // reads as the coordinator (`ROOT_SESSION_DISPATCH_BINDING` — no schema
+  // default would fabricate it for a leaf) and an explicitly blank value stays
+  // blank and fails closed. See `dispatchCallerOf`.
   dispatchBinding: z.string().extra('volatile', true),
   skillRoots: z.array(z.string()).default(undefined as unknown as string[]),
   bundledSkillDir: z.string().default(undefined as unknown as string),
