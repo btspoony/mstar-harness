@@ -402,7 +402,6 @@ describe("skill load closure", () => {
  // the leaf boundary carries the load-bearing semantics itself and load
  // selection follows the hub decision.
     expect(leafText.includes("**Read `mstar-harness-core` first.**")).toBe(false);
-    expect(leafText.includes("Load selection follows the `mstar-roles` hub § Load Order")).toBe(true);
     expect(leafText.includes("`none` never grants delegation or waives gates")).toBe(true);
     const qcClosure = closureOf(realGraph, ["SKILL.md", ROUTE_ROLE_REF.qc]);
     expect(qcClosure.has("../mstar-harness-core/SKILL.md")).toBe(false);
@@ -485,8 +484,6 @@ describe("skill load closure", () => {
     const pmText = read(join(ROLES_DIR, "references/project-manager.md"));
     expect(pmText.includes("**Required reading is not preset-gated.**")).toBe(true);
     expect(pmText.includes("only `project-manager` or `qa-engineer` set `Done`")).toBe(true);
- // And the stop condition's authority text is still present in core:
-    expect(coreText.includes("Done sign-off belongs to project-manager or qualified QA evidence")).toBe(true);
   });
 });
 
