@@ -977,8 +977,9 @@ export function apply(ctx: Context, config: Config): void {
   // composition without the facility), so the unit is a deferred child: the
   // reactive inject below is the install contract, so a boot where the service
   // is merely late installs when it arrives and says nothing at apply time.
-  // Every failure path — `open` rejected, an HMR re-apply meeting
-  // `already-open` — logs ONE warning naming the cause and the recovery, and
+  // Every failure path — `open` rejected, an install that throws while wiring
+  // the opened handle, an HMR re-apply meeting `already-open` — logs ONE
+  // warning naming the cause and the recovery, and
   // leaves today's per-process receipt in place; the plugin still mounts. The
   // child's fiber owns the handle: its disposer uninstalls the seam
   // SYNCHRONOUSLY first (no consumer may read a closing or closed domain) and
@@ -1013,36 +1014,12 @@ export function apply(ctx: Context, config: Config): void {
       releaseActivation()
       return
     }
+    // The `open` try covers ONLY the open: an install failure below happened
+    // after the domain opened, so reporting it as "open refused" would name a
+    // cause that is not true (and the latch would then hide the truth forever).
+    let domain: Awaited<ReturnType<typeof storageCtx.storageDomain.open>>
     try {
-      const domain = await storageCtx.storageDomain.open(executionBindingRootsDomain)
-      releaseActivation()
-      const uninstall = installExecutionBindingRootStore(executionBindingRootStoreOf(domain))
-      try {
-        storageCtx.effect(() => async () => {
-          // Synchronous first: a read must never reach a closing or closed domain.
-          uninstall()
-          try {
-            await domain.close()
-          } catch (error) {
-            warnExecutionBindingRoots(`durable adopted control root store close failed during disposal (${causeOf(error)})`)
-          }
-        }, 'mstar:execution-binding-roots durable store')
-      } catch (error) {
-        // The child fiber was torn down while `open` was still in flight and
-        // refuses a new effect (INACTIVE_EFFECT). Drop the seam and close the
-        // handle right here — the facility would otherwise keep the name open
-        // and the next apply would meet `already-open` instead of regaining
-        // durability.
-        uninstall()
-        try {
-          await domain.close()
-        } catch (closeError) {
-          warnExecutionBindingRoots(`durable adopted control root store close failed after a disposed apply (${causeOf(closeError)})`)
-        }
-        warnExecutionBindingRootStoreUnavailable(
-          `durable adopted control root store discarded: its apply fiber was already disposed when open resolved (${causeOf(error)}) — the late handle was closed; the next apply may re-open the domain`,
-        )
-      }
+      domain = await storageCtx.storageDomain.open(executionBindingRootsDomain)
     } catch (error) {
       releaseActivation()
       // This absence carries its OWN cause (the facility is provided; only this
@@ -1050,6 +1027,52 @@ export function apply(ctx: Context, config: Config): void {
       // latch: the generic "the host provides no seam" line would be false here.
       warnExecutionBindingRootStoreUnavailable(
         `durable adopted control root unavailable: open refused (${causeOf(error)}) — the selected control root stays a per-process receipt; restart so the next apply can open the domain once the refused name (an \`already-open\` holder) is released, then a resume re-bind carrying the original session reference records it durably`,
+      )
+      return
+    }
+    releaseActivation()
+    let uninstall: () => void
+    try {
+      uninstall = installExecutionBindingRootStore(executionBindingRootStoreOf(domain))
+    } catch (error) {
+      // The domain opened but wiring it into the seam failed. Close the handle
+      // (the facility must not keep the name open for the next apply) and
+      // report the INSTALL failure with its own cause, spending the latch: the
+      // "open refused" line would be false here.
+      try {
+        await domain.close()
+      } catch (closeError) {
+        warnExecutionBindingRoots(`durable adopted control root store close failed after a failed install (${causeOf(closeError)})`)
+      }
+      warnExecutionBindingRootStoreUnavailable(
+        `durable adopted control root unavailable: install failed (${causeOf(error)}) — the selected control root stays a per-process receipt; restart so the next apply retries the install, then a resume re-bind carrying the original session reference records it durably`,
+      )
+      return
+    }
+    try {
+      storageCtx.effect(() => async () => {
+        // Synchronous first: a read must never reach a closing or closed domain.
+        uninstall()
+        try {
+          await domain.close()
+        } catch (error) {
+          warnExecutionBindingRoots(`durable adopted control root store close failed during disposal (${causeOf(error)})`)
+        }
+      }, 'mstar:execution-binding-roots durable store')
+    } catch (error) {
+      // The child fiber was torn down while `open` was still in flight and
+      // refuses a new effect (INACTIVE_EFFECT). Drop the seam and close the
+      // handle right here — the facility would otherwise keep the name open
+      // and the next apply would meet `already-open` instead of regaining
+      // durability.
+      uninstall()
+      try {
+        await domain.close()
+      } catch (closeError) {
+        warnExecutionBindingRoots(`durable adopted control root store close failed after a disposed apply (${causeOf(closeError)})`)
+      }
+      warnExecutionBindingRootStoreUnavailable(
+        `durable adopted control root store discarded: its apply fiber was already disposed when open resolved (${causeOf(error)}) — the late handle was closed; the next apply may re-open the domain`,
       )
     }
   })
