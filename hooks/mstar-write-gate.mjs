@@ -12666,6 +12666,7 @@ function readExecutionGraph(db, store, meta) {
         id,
         status: state.status,
         revision,
+        token: executionToken("workflow", store.storeId, store.epoch, [id], revision),
         lifecycle_adopted_at: state.lifecycle_adopted_at,
         adopt_reason: state.adopt_reason,
         actor_session_id: state.adoption_actor_session_id,
