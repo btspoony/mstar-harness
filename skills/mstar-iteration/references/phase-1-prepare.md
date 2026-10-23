@@ -245,6 +245,7 @@ Pre-integration gate — every `[x]` before walking §2.3:
 - [ ] product-manager / architect include/skip reasons recorded; every selected role returned, writing-specialist last; no fake skip receipts, omitted-role markers or unresolved blocking questions; no `{KNOWLEDGE_DIR}/` additions
 - [ ] PM final lock: compass `status: locked` and each plan's Prepare gate passes (blocked plans documented)
 - [ ] Branch policy locked (`iteration_base_branch` / `spec_integration_branch` / `target_branch`) in the compass and the ACTIVE workflow; never a silent `main`/`master`
+- [ ] `pr_merge_policy` locked (`reviewed-auto` | `owner-gated`) in compass frontmatter, explicitly confirmed with the user and never defaulted, with `source` logged in `## Decisions` — its absence later stops Phase 5 and returns here
 
 **Then** walk **`phase-2-worktree-lease.md` §2.3** checklist steps 1–7 and mark the closing item once the branch push has happened:
 

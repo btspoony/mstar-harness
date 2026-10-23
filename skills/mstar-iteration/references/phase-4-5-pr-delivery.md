@@ -57,7 +57,7 @@ History rewrite / force-with-lease / 改写后证据失效规则 SSOT → `mstar
 
 1. **Status** — PR mergeable？required CI？unresolved review threads？**任一 CI/AI review 是否仍在跑？**
 2. **Merge conflicts** — blocking 则在 integration 分支**本地**解决；**仅当 §5.1a push gate 满足时**再 push（意图冲突 → **Blocked**）
-3. **Review dispatch（按 compass `pr_merge_policy`）** — `reviewed-auto`：PR 级 review 归 **`mstar-pr-loop`** 所有——它自己跑 review → fix → re-review 循环，并按 §5.1a 的 push cadence 推进；**不要**在每个 §5.1 迭代里另起第二个 review loop。§5.1 只保留 mergeable / required CI / review thread resolve / push 的所有权；§5.3 读取该 loop 在当前 PR head 上最终 settled、已 posted 的 `ship it` 报告作为授权。`owner-gated`：**完全**不起 PR 级 review loop，owner review 就是 gate，Phase 5 停在 merge-ready
+3. **Review dispatch（按 compass `pr_merge_policy`）** — `reviewed-auto`：PR 级 review 归 **`mstar-pr-loop`** 所有——它自己跑 review → fix → re-review 循环，并按 §5.1a 的 push cadence 推进；**不要**在每个 §5.1 迭代里另起第二个 review loop。§5.1 在该轮内**暂停第 4–6 步**——review 修复与 push 由该 loop 一并执行（§5.1a 仍逐次适用，单一 pusher，避免同一 head 两个推手），§5.1 只处理 loop 之外的 mergeable / required CI 观测与 thread 分派。§5.3 读取该 loop 在当前 PR head 上最终 settled、已 posted 的 `ship it` 报告作为授权。`owner-gated`：**完全**不起 PR 级 review loop，**人类 owner** 的 review 就是 gate，Phase 5 停在 merge-ready 等其书面批准
 4. **Reviews** — fetch unresolved threads；triage；dispatch **本地**修复（可在上一波次仍在跑时开工）
 5. **CI** — 失败项在 PR 范围内**本地**修复（可提前开工）；**不**在 CI 仍在跑时 push
 6. **Push** — 仅当 §5.1a 满足：无 in-flight CI，上一波 CI **与** reviews 均已跑完 → **一次** push 本批修复
@@ -90,15 +90,15 @@ When both babysit/`*-babysit` and greploop apply: **babysit/`*-babysit` first**�
 
 ### 5.3 Merge authorization（HARD）
 
-**Merge 是独立的授权动作**：merge-ready、required CI 全绿、QC Approve、review `ship it` **各自都不**构成 merge 授权。
+**Merge 是独立的授权动作**：merge-ready、required CI 全绿、QC Approve、review `ship it` **各自单独出现时都不构成** merge 授权。授权只在 `pr_merge_policy` 对应下表**完整**谓词成立时才存在——`reviewed-auto` 要求 settled + 已 posted + `head` 等于当前 PR head 三者同时满足；`owner-gated` 只认下表定义的**人类 owner** 书面批准。
 
 | `pr_merge_policy` | Merge 授权来源 |
 |---|---|
-| `reviewed-auto` | 一份 **settled、已 posted**、且 `head` 等于**当前** PR head 的 `ship it` 报告（`mstar-pr-loop` 的 `ship it` 行） |
-| `owner-gated` | owner 对**当前** PR head 的**显式书面** merge 批准 |
+| `reviewed-auto` | 一份 **settled、已 posted**、且 `head` 等于**当前** PR head 的 `ship it` 报告（`mstar-pr-loop` 的 `ship it` 行）——三项缺一不可 |
+| `owner-gated` | **人类 owner 本人**（操作者/用户，**不是**本 harness 的 coordinator 席位）对**当前** PR head 的**显式书面** merge 批准；PM 自己的 owner 席位不构成该批准 |
 
-- **`reviewed-auto` 未满足 → STOP**：等 PR 级 review 跑到 settled 的 `ship it`；若该报告 `head` 已不是当前 PR head（中间有 push），重跑该 review 取新报告。恢复路径：给出上述授权报告，或回 Phase 1 改动记录的 policy。
-- **`owner-gated` 未满足 → hard stop**：给出 PR 链接 + merge-ready 证据后**等待**；owner 书面批准前不得 merge，任何自动化证据（mergeable / CI 绿 / QC Approve / `ship it`）都不能替代。恢复路径：owner 书面批准当前 PR head，或回 Phase 1 改动记录的 policy。
+- **`reviewed-auto` 未满足 → STOP**：等 PR 级 review 跑到 settled 的 `ship it`；若该报告 `head` 已不是当前 PR head（中间有 push），重跑该 review 取新报告。恢复路径：给出上述授权报告，或经 **§1.2 与用户重新确认后**改动 compass 记录的 policy —— PM **不得**自行改写 `pr_merge_policy`。
+- **`owner-gated` 未满足 → hard stop**：给出 PR 链接 + merge-ready 证据后**等待**；**人类 owner**（操作者/用户，**不是** coordinator 席位）书面批准前不得 merge，任何自动化证据（mergeable / CI 绿 / QC Approve / `ship it`）都不能替代。恢复路径：人类 owner 书面批准当前 PR head，或经 **§1.2 与用户重新确认后**改动 compass 记录的 policy —— PM **不得**自行改写。
 - **`pr_merge_policy` 缺失 → STOP**：回 Phase 1 补齐，**绝不**推断默认值。恢复路径：§1.2 与用户确认该字段，写入 compass frontmatter 并在 `## Decisions` 留 `source`。
 
-**谁执行 merge**：`reviewed-auto` 下，§5.3 授权谓词成立后由 **PM** 执行 merge；`owner-gated` 下，owner 可自行 merge，或书面批准后由 PM 执行。两种 policy 都只在 §5.3 满足后才 merge；verified merge 之后进入 **Phase 6** —— merge 不是生命周期终点。
+**谁执行 merge**：`reviewed-auto` 下，§5.3 授权谓词成立后由 **PM** 执行 merge；`owner-gated` 下，**人类 owner** 可自行 merge，或书面批准后由 PM 执行。两种 policy 都只在 §5.3 满足后才 merge；verified merge 之后进入 **Phase 6** —— merge 不是生命周期终点。
