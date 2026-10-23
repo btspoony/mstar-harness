@@ -8650,7 +8650,7 @@ async function evaluatePostMergeCloseFromExecutionAuthority(context, workflowId)
               status = parsed.status;
           } catch {}
           if (status !== "released") {
-            violations.push(violation3("high", "PHASE6_DANGLING_LEASE", "The workflow still carries a held integration merge mutex; completed close cannot release it, and failed/stopped close needs an attested recovery of the exact recorded coordinator holder before terminal close.", "Cause: the workflow is stopped and its integration merge lease remains held by the recorded coordinator. Run `mstar status validate` (with no arguments), then locate this workflow by `id` in the returned `data.terminalUnregistered[]` collection (a closed lifecycle is out of `data.workflows[]`) and use its matching `token` as the `--expect` value for `mstar session recover --workflow <id> --prior-session <holder-id> --reason <text> --attestation <absolute-json> --expect <workflow-token> --operation <id>`. That is the terminal lease release: it proceeds only while the lease is still held and the attestation names exactly that recorded holder as stopped, and it releases the lease alone — the terminal header, snapshot, registry membership and session rows stay exactly as recorded."));
+            violations.push(violation3("high", "PHASE6_DANGLING_LEASE", "The workflow still carries a held integration merge mutex; completed close cannot release it, and failed/stopped close needs an attested recovery of the exact recorded coordinator holder before terminal close.", "Cause: the workflow is stopped and its integration merge lease remains held by the recorded coordinator. Run `mstar status validate` (with no arguments), then locate this workflow by `id` in the returned `data.terminalUnregistered[]` collection, or in `data.terminalAdoptions[]` for an adopted close (a closed lifecycle is out of `data.workflows[]`), and use the matching `token` that entry publishes as the `--expect` value for `mstar session recover --workflow <id> --prior-session <holder-id> --reason <text> --attestation <absolute-json> --expect <workflow-token> --operation <id>`. That is the terminal lease release: it proceeds only while the lease is still held and the attestation names exactly that recorded holder as stopped, and it releases the lease alone — the terminal header, snapshot, registry membership and session rows stay exactly as recorded."));
           }
         }
       }
@@ -12195,6 +12195,7 @@ function readExecutionGraph(db, store, meta) {
         id,
         status: state.status,
         revision,
+        token: executionToken("workflow", store.storeId, store.epoch, [id], revision),
         lifecycle_adopted_at: state.lifecycle_adopted_at,
         adopt_reason: state.adopt_reason,
         actor_session_id: state.adoption_actor_session_id,
