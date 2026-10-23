@@ -104,7 +104,7 @@ describe("terminal workflow adoption", () => {
     expect(applied.replayed).toBe(false);
     expect(applied.data.terminalUnregistered).toBeUndefined();
     expect(applied.data.terminalAdoptions).toEqual([{
-      id: "wf-stranded", status: "stopped", revision: 2,
+      id: "wf-stranded", status: "stopped", revision: 2, token: expect.any(String),
       lifecycle_adopted_at: expect.any(String), adopt_reason: request.reason,
       actor_session_id: caller.sessionId, operation_id: request.operationId,
     }]);
@@ -132,7 +132,10 @@ describe("terminal workflow adoption", () => {
     expect((await readExecutionState(context)).data.terminalAdoptions).toEqual(applied.data.terminalAdoptions);
     const dashboard = await withStoreRead(context, queryDashboard("workflows"));
     expect(dashboard.data.terminalUnregistered).toBeUndefined();
-    expect(dashboard.data.terminalAdoptions).toEqual(applied.data.terminalAdoptions);
+    // The dashboard projection carries the adoption facts, not the CAS token.
+    expect(dashboard.data.terminalAdoptions).toEqual(
+      applied.data.terminalAdoptions?.map(({ token: _token, ...entry }) => entry),
+    );
   });
 
   test("leaves an already-terminal header's own status and ended_at exactly untouched", async () => {
@@ -170,7 +173,7 @@ describe("terminal workflow adoption", () => {
       });
       expect(applied.replayed).toBe(false);
       expect(applied.data.terminalAdoptions).toEqual([{
-        id: "wf-stranded", status: terminal, revision: 2,
+        id: "wf-stranded", status: terminal, revision: 2, token: expect.any(String),
         lifecycle_adopted_at: expect.any(String), adopt_reason: `adopt the ${terminal} record`,
         actor_session_id: caller.sessionId, operation_id: `adopt-terminal-${terminal}`,
       }]);
@@ -266,7 +269,7 @@ describe("terminal workflow adoption", () => {
       workflowId: nonterminal.caller.workflowId, expectedRevision: 1, reason: "running", operationId: "adopt-running",
     });
     expect(adopted.data.terminalAdoptions).toEqual([{
-      id: "wf-stranded", status: "stopped", revision: 2,
+      id: "wf-stranded", status: "stopped", revision: 2, token: expect.any(String),
       lifecycle_adopted_at: expect.any(String), adopt_reason: "running",
       actor_session_id: nonterminal.caller.sessionId, operation_id: "adopt-running",
     }]);
@@ -352,7 +355,7 @@ describe("terminal adoption session settlement", () => {
       commitState: "committed",
     });
     expect(applied.data.terminalAdoptions).toEqual([{
-      id: "wf-stranded", status: "stopped", revision: 2,
+      id: "wf-stranded", status: "stopped", revision: 2, token: expect.any(String),
       lifecycle_adopted_at: expect.any(String), adopt_reason: "settle the stranded holder",
       actor_session_id: stranded.caller.sessionId, operation_id: "adopt-settle-1",
     }]);
@@ -386,7 +389,7 @@ describe("terminal adoption session settlement", () => {
     const applied = await adopt(stranded, { attestation: attestation(["active-holder"]) });
     expect(applied.replayed).toBe(false);
     expect(applied.data.terminalAdoptions).toEqual([{
-      id: "wf-stranded", status: "stopped", revision: 2,
+      id: "wf-stranded", status: "stopped", revision: 2, token: expect.any(String),
       lifecycle_adopted_at: expect.any(String), adopt_reason: "settle the stranded holder",
       actor_session_id: stranded.caller.sessionId, operation_id: "adopt-settle-1",
     }]);
@@ -417,7 +420,7 @@ describe("terminal adoption session settlement", () => {
       applied: ["execution_sessions(wf-stranded, coordinator, active-holder) revoked"],
     });
     expect(applied.data.terminalAdoptions).toEqual([{
-      id: "wf-stranded", status: "stopped", revision: 2,
+      id: "wf-stranded", status: "stopped", revision: 2, token: expect.any(String),
       lifecycle_adopted_at: expect.any(String), adopt_reason: "settle the stranded holder",
       actor_session_id: stranded.caller.sessionId, operation_id: "adopt-settle-1",
     }]);
