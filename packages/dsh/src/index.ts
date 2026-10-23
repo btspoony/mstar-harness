@@ -1035,18 +1035,21 @@ export function apply(ctx: Context, config: Config): void {
     try {
       uninstall = installExecutionBindingRootStore(executionBindingRootStoreOf(domain))
     } catch (error) {
-      // The domain opened but wiring it into the seam failed. Close the handle
-      // (the facility must not keep the name open for the next apply) and
-      // report the INSTALL failure with its own cause, spending the latch: the
-      // "open refused" line would be false here.
+      // The domain opened but wiring it into the seam failed. Report the INSTALL
+      // failure FIRST — with its own cause, spending the latch: the "open
+      // refused" line would be false here — and close the handle (the facility
+      // must not keep the name open for the next apply) only afterwards. The
+      // close is unbounded, so awaiting it first could swallow the diagnosis,
+      // leave the latch unspent, and make the next adoption emit the false
+      // "the host provides no storage-domain seam" line.
+      warnExecutionBindingRootStoreUnavailable(
+        `durable adopted control root unavailable: install failed (${causeOf(error)}) — the selected control root stays a per-process receipt; restart so the next apply retries the install, then a resume re-bind carrying the original session reference records it durably`,
+      )
       try {
         await domain.close()
       } catch (closeError) {
         warnExecutionBindingRoots(`durable adopted control root store close failed after a failed install (${causeOf(closeError)})`)
       }
-      warnExecutionBindingRootStoreUnavailable(
-        `durable adopted control root unavailable: install failed (${causeOf(error)}) — the selected control root stays a per-process receipt; restart so the next apply retries the install, then a resume re-bind carrying the original session reference records it durably`,
-      )
       return
     }
     try {
@@ -1064,16 +1067,18 @@ export function apply(ctx: Context, config: Config): void {
       // refuses a new effect (INACTIVE_EFFECT). Drop the seam and close the
       // handle right here — the facility would otherwise keep the name open
       // and the next apply would meet `already-open` instead of regaining
-      // durability.
+      // durability. Report the discard BEFORE the (unbounded) close for the
+      // same reason as the install path: a close that never settles must not
+      // suppress the diagnosis or leave the latch unspent.
       uninstall()
+      warnExecutionBindingRootStoreUnavailable(
+        `durable adopted control root store discarded: its apply fiber was already disposed when open resolved (${causeOf(error)}) — the late handle is uninstalled and is being closed; the next apply may re-open the domain`,
+      )
       try {
         await domain.close()
       } catch (closeError) {
         warnExecutionBindingRoots(`durable adopted control root store close failed after a disposed apply (${causeOf(closeError)})`)
       }
-      warnExecutionBindingRootStoreUnavailable(
-        `durable adopted control root store discarded: its apply fiber was already disposed when open resolved (${causeOf(error)}) — the late handle was closed; the next apply may re-open the domain`,
-      )
     }
   })
 }
