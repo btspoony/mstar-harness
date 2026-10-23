@@ -31,7 +31,7 @@ Morning Star brings a delivery process to the AI coding tools you already use �
 - **From request to pull request** — describe the work once; the PM keeps the plan, brings in the right specialists, and drives everything to a pull request. If work stops partway, the plan records where it left off so the work can resume later.
 - **Specialists instead of one long prompt** — a PM orchestrates; separate roles own requirements, architecture, implementation, QC, acceptance, audits, and ops, each with a narrow brief.
 - **A trail you can audit** — plans, findings, review reports, and decisions are recorded under the harness directory in your repo, not just in the chat.
-- **Boundaries are explicit** — the workflow opens pull requests and stops at merge-ready; merging stays your call. Audits read and report, and anything that touches a real environment needs your explicit authorization.
+- **Boundaries are explicit** — the workflow opens pull requests and records a merge policy when an iteration starts. Under `reviewed-auto` only a settled, posted `ship it` review report at the current PR head authorizes the merge; under `owner-gated` it stops at merge-ready and waits for your written approval. A policy that was never recorded returns the run to Phase 1 rather than defaulting to either. Audits read and report, and anything that touches a real environment needs your explicit authorization.
 
 ## Install
 
@@ -115,13 +115,13 @@ flowchart TD
     I --> J{"All green and reviews resolved?"}
     J -->|no: fix, verify, push| I
     J -->|yes| K["Merge-ready"]
-    K -->|only after your authorization| L["Merge"]
+    K -->|per its merge policy §5.3, or your approval| L["Merge"]
     L --> M["Verify the merge, then close the delivery"]
 ```
 
 The main path shows a **development** delivery. Every plan gets a plan-level QC review — three independent seats by default — and a multi-task plan adds a per-task review during implementation. A hotfix — or a plan explicitly set to run inline — takes a lighter route with fewer review seats. Acceptance is a separate pass with its own evidence — QA or the PM — not a re-read of the implementer's summary, and confirmed problems that this round does not fix become tracked issues instead of being dropped.
 
-**Scope notes.** An iteration locks its direction with you first, then runs the per-plan cycle for every plan it takes on and closes out once before its pull request; without an iteration, the cycle runs for a single plan. A verification or report-only deliverable — an audit, for example — ends at its agreed completion, with no pull request or merge. On the development path, a plan is complete only with its evidence: plan completion, merge-ready, and merged are three different facts, and only a verified merge, followed by the post-merge close, ends the delivery. Merging is a separate authorization — request it explicitly, or merge yourself — and branch cleanup stays a separate, explicit step.
+**Scope notes.** An iteration locks its direction with you first, then runs the per-plan cycle for every plan it takes on and closes out once before its pull request; without an iteration, the cycle runs for a single plan. A verification or report-only deliverable — an audit, for example — ends at its agreed completion, with no pull request or merge. On the development path, a plan is complete only with its evidence: plan completion, merge-ready, and merged are three different facts, and only a verified merge, followed by the post-merge close, ends the delivery. Merging is a separate authorization with one recorded source: under `owner-gated` you approve it or merge yourself, and under `reviewed-auto` the recorded policy supplies it only through a settled, posted `ship it` report at the current PR head — not the mere existence of a review. An iteration that never recorded a policy returns to Phase 1 instead of falling back to either. Branch cleanup stays a separate, explicit step.
 
 The engine checks the mechanically checkable parts of this process — workflow state transitions, branch and worktree alignment, dispatch preconditions, plan and issue bookkeeping. These checks are advisory by default: they report problems, and a project or iteration can opt into blocking enforcement with `enforcement: hard`; whether a violation can actually block depends on the host. Process state (plans, workflow records, findings, review reports) lives in the harness directory, `.mstar/` by default, which the scaffold's canonical `.gitignore` snippet ignores — the installer does not touch `.gitignore`.
 

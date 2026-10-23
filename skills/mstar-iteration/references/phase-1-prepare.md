@@ -31,6 +31,7 @@ PM 在新迭代启动时执行。
 | **非目标** | 明确排除在本次迭代外的事项 |
 | **Roadmap 上下文** | 从 store envelope 的 Direction + project milestones 确定 current / next iteration 位置，引用 milestone ID + 关联 issue 证据；缺失明确记录。compass `## Milestones` 是迭代交付节点，区别于 store 的项目 `project_milestones`，互不替代。 |
 | **Delivery branch policy** | `iteration_base_branch`（integration 分支从何处分出）、`spec_integration_branch`、`target_branch`（最终 PR 目标） |
+| **PR merge policy** | `reviewed-auto` — Phase 5 跑 PR 级 review loop（`mstar-pr-loop`），其 `ship it` 结论即 merge 授权（须 settled、已 posted、且 `head` 等于当前 PR head；谓词定义见 `references/phase-4-5-pr-delivery.md` §5.3）。`owner-gated` — 不起 PR 级 review loop；Phase 5 停在 merge-ready，等待**人类 owner**（操作者/用户，不是 coordinator 席位）对当前 PR head 的显式 merge 批准。**必须与用户显式确认，绝不默认。** 记入 compass frontmatter `pr_merge_policy`，并在 `## Decisions` 中带 `source` 记录。 |
 | **Scale budget**（可选） | 仅当 caller **显式**给出或选用 **autonomous** 时适用：`S` = 1 **业务** plan；`M` = 2–3；`L` = 3–4（上限 4）；`XL` = **>4**（5+）。**只计实际业务交付 plan**，不计 harness 流程性工作（Review 链 / QC / QA / compound / close / PR 等）。**interactive 默认不强制** S/M/L/XL。计数细则 → **`references/autonomous-direction-lock.md`** § Scale budget |
 
 ### Direction lock modes
@@ -89,6 +90,7 @@ start_date: YYYY-MM-DD
 status: active
 iteration_base_branch: <branch-or-ref>
 target_branch: <branch>
+pr_merge_policy: <reviewed-auto | owner-gated>
 plans: []
 ---
 
@@ -243,6 +245,7 @@ Pre-integration gate — every `[x]` before walking §2.3:
 - [ ] product-manager / architect include/skip reasons recorded; every selected role returned, writing-specialist last; no fake skip receipts, omitted-role markers or unresolved blocking questions; no `{KNOWLEDGE_DIR}/` additions
 - [ ] PM final lock: compass `status: locked` and each plan's Prepare gate passes (blocked plans documented)
 - [ ] Branch policy locked (`iteration_base_branch` / `spec_integration_branch` / `target_branch`) in the compass and the ACTIVE workflow; never a silent `main`/`master`
+- [ ] `pr_merge_policy` locked (`reviewed-auto` | `owner-gated`) in compass frontmatter, explicitly confirmed with the user and never defaulted, with `source` logged in `## Decisions` — its absence later stops Phase 5 and returns here
 
 **Then** walk **`phase-2-worktree-lease.md` §2.3** checklist steps 1–7 and mark the closing item once the branch push has happened:
 

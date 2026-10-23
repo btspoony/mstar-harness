@@ -1,6 +1,6 @@
 ---
 name: mstar-pr-loop
-description: "Opt-in skill loaded only when the user explicitly asks for a review → fix loop on an existing ready PR. It does not activate for routine review requests or as an automatic step of plan/iteration work."
+description: "Opt-in skill loaded when the user explicitly asks for a review → fix loop on an existing ready PR, or when iteration Phase 1 selects it as that iteration's `pr_merge_policy: reviewed-auto` review path. It never activates for routine review requests or on its own initiative."
 ---
 
 # PR Review-Fix Loop
@@ -17,13 +17,15 @@ The project-manager orchestrates; implementers fix; review seats remain read-onl
 
 ## Scope
 
-Enter only on the user's explicit request to loop review → fix on an existing ready PR. This is not routine review or an automatic plan/iteration step.
+Enter only on the user's explicit request to loop review → fix on an existing ready PR, or when the active iteration recorded `pr_merge_policy: reviewed-auto` at its Phase 1. This is not routine review, and the loop never starts on its own initiative.
+
+Under a recorded `reviewed-auto` this loop is that iteration's Phase 5 review gate, and its `ship it` row is the merge authorization `mstar-iteration` → `references/phase-4-5-pr-delivery.md` §5.3 reads. Outside such a recorded policy a `ship it` exit authorizes nothing: no merge, no lifecycle Done.
 
 - Resolve `pr:<n>` preferentially, otherwise a branch with an open PR. If resolution fails or the PR is not ready, refuse with the actual cause and accepted forms: `pr:<n>` or a branch with an open, ready PR; supply that target or make the existing PR ready, then retry this entry.
 - Accept one optional tier: `quick`, `default` or `deep`; otherwise use the review's own inference ladder (§ Review depth (tiers)), not a loop-specific default.
 - An optional user-supplied round budget has no default. Honor an explicit budget or interruption, retain the latest report and residuals, and name the user action needed to resume; never invent a numeric round ceiling.
 
-The loop does not own CI babysitting, review-thread resolution or the merge-ready gate; those remain with iteration Phase 5 / its separately discovered babysit helper. Never submit `APPROVE` or `REQUEST_CHANGES`, merge a PR, or close a finding-capture issue. A deferred-PR tracking issue must still be closed through the existing closure authority at that PR's review completion (`mstar-audit` → `references/pr-review.md` § Batch sibling PRs). A `ship it` exit is review-loop success, not merge authorization or lifecycle Done.
+The loop does not own CI babysitting, review-thread resolution or the merge-ready gate; those remain with iteration Phase 5 / its separately discovered babysit helper. Never submit `APPROVE` or `REQUEST_CHANGES`, merge a PR, or close a finding-capture issue. A deferred-PR tracking issue must still be closed through the existing closure authority at that PR's review completion (`mstar-audit` → `references/pr-review.md` § Batch sibling PRs). A `ship it` exit is review-loop success, never lifecycle Done, and it authorizes a merge only where a recorded `pr_merge_policy: reviewed-auto` names it as that authorization.
 
 ## Workflow
 

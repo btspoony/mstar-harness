@@ -21,4 +21,4 @@
 
 **No greploop / repo without Greptile**: skip greploop entirely — babysit/`*-babysit` or fallback only。
 
-**All modes** share the §5.2 exit checklist（CI + reviews + mergeable；Greptile 5/5 only when greploop mode ran or repo shows a Greptile score）。
+**All modes** share the §5.2 exit checklist（CI + reviews + mergeable；Greptile 5/5 only when greploop mode ran or repo shows a Greptile score）。Helper 只覆盖 CI 与 reviews 两维：§5.2 第 6 项 merge authorization 与第 7 项 merge 完成不由任何 helper 判定，`mstar-pr-loop` 亦不代替 §5.3。
