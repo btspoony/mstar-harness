@@ -442,7 +442,7 @@ describe('dispatch-role gate — repair + refusal through the start seam', () =>
     expect(provider.starts).toHaveLength(1)
   })
 
-  it('(u) a four-backtick fenced declaration is refused, never repaired', async () => {
+  it('(u) a four-backtick fenced declaration in the RAW header binds — the gate agrees (pass)', async () => {
     const { app, provider, workspace } = await bootWithProvider()
     const prompt = [
       '## Assignment',
@@ -455,10 +455,40 @@ describe('dispatch-role gate — repair + refusal through the start seam', () =>
       '',
       'Implement.',
     ].join('\n')
-    const error = await startAndCatch(app, specFor({ ...textPrompt(prompt), cwd: workspace }))
+    await startActivationViaNativeChannel(app, specFor({ ...textPrompt(prompt), cwd: workspace }))
 
-    expect(error.message).toContain('carries no role declaration')
-    expect(provider.starts).toHaveLength(0)
+    const sent = provider.starts[0]!.request as RecordedRequest
+    // The header slice is line-based and fence-unaware: the binding seam parses
+    // the quoted line, so a gate that refused here would diverge from what the
+    // child actually gets. Pass — and the prompt stays byte-identical.
+    expect(promptTextOf(sent)).toBe(prompt)
+    expect(sent.agentPreset).toBe(PRESET_ID)
+  })
+
+  it('(v) a fenced `## Task` truncates the raw header → repaired BEFORE the truncation point (the seam binds)', async () => {
+    const { app, provider, workspace } = await bootWithProvider()
+    const prompt = [
+      '## Assignment',
+      '',
+      '```',
+      '## Task',
+      '```',
+      '',
+      'Execute as: fullstack-dev',
+      '',
+      '## Task',
+      '',
+      'Implement.',
+    ].join('\n')
+    await startActivationViaNativeChannel(app, specFor({ ...textPrompt(prompt), cwd: workspace }))
+
+    const sent = provider.starts[0]!.request as RecordedRequest
+    const text = promptTextOf(sent)
+    // The canonical line lands before the fenced `## Task` — inside the raw
+    // header the binding seam parses, not merely somewhere in the prompt.
+    expect(text.startsWith('## Assignment\n\nExecute as: fullstack-dev\n')).toBe(true)
+    // The FINAL selection on the delegated request (not just the verdict kind).
+    expect(sent.agentPreset).toBe(PRESET_ID)
   })
 })
 
@@ -602,7 +632,7 @@ describe('dispatch-role gate — pure decision table (evaluateRoleGate)', () => 
       '## Assignment',
       '',
       '````markdown',
-      'Execute as: fullstack-dev',
+      'Execute as: `fullstack-dev`',
       'Take the `writing-specialist` seat.',
       '````',
       '',
@@ -610,15 +640,27 @@ describe('dispatch-role gate — pure decision table (evaluateRoleGate)', () => 
       '',
       'Implement.',
     ].join('\n')
+    // The fenced field line is wrapped (never canonical), so it can only act
+    // as a repair CANDIDATE — and the fence masks it, in both tiers.
     expect(evaluateRoleGate(gateInput(text)).kind).toBe('refuse')
   })
 
   it('(p15) a fence closes only on its own character and a run at least as long', () => {
-    // A tilde line does not close a backtick fence — the quoted id stays fenced.
-    expect(evaluateRoleGate(gateInput('## Assignment\n\n```\n`writing-specialist`\n~~~\n')).kind).toBe('refuse')
+    // A tilde line does not close a backtick fence: the token AFTER the fake
+    // closer is still fenced (a wrongly accepted tilde would expose it).
+    expect(evaluateRoleGate(gateInput('## Assignment\n\n```\n~~~\n`writing-specialist`\n```\n')).kind).toBe('refuse')
+    // A same-character, long-enough closer line carrying trailing text is
+    // content, not a closer (only the opening fence carries an info string).
+    expect(evaluateRoleGate(gateInput('## Assignment\n\n```\n``` not-a-closer\n`writing-specialist`\n```\n')).kind)
+      .toBe('refuse')
     // Three backticks do not close a four-backtick opener.
     expect(
       evaluateRoleGate(gateInput('## Assignment\n\n````\n`writing-specialist`\n```\n`writing-specialist`\n````\n')).kind,
+    ).toBe('refuse')
+    // An unterminated fence keeps its body: its declaration is never a candidate.
+    expect(
+      evaluateRoleGate(gateInput('## Assignment\n\n```\nExecute as: `fullstack-dev`\nTake the `writing-specialist` seat.\n'))
+        .kind,
     ).toBe('refuse')
     // After the real closer, the same token outside the fence is a candidate again.
     const decision = evaluateRoleGate(
@@ -628,7 +670,7 @@ describe('dispatch-role gate — pure decision table (evaluateRoleGate)', () => 
     if (decision.kind === 'repair') expect(decision.roleId).toBe(WRITING)
   })
 
-  it('(p16) a fenced `Execute as:` line in the header is neither a candidate nor rewritten', () => {
+  it('(p16) a fully fenced `Execute as:` line is judged on the RAW header (pass — the seam binds it)', () => {
     const text = [
       '## Assignment',
       '',
@@ -642,11 +684,38 @@ describe('dispatch-role gate — pure decision table (evaluateRoleGate)', () => 
       '',
       'Do it.',
     ].join('\n')
-    expect(evaluateRoleGate(gateInput(text)).kind).toBe('refuse')
-    // The rewrite still declares the role, but leaves the quoted line intact.
+    // The binding seam's header slice does not know fences, so it parses the
+    // quoted line as the declaration and binds `fullstack-dev`; the gate says
+    // the same thing instead of refusing a start that will bind.
+    expect(evaluateRoleGate(gateInput(text))).toEqual({ kind: 'pass', reason: 'canonical' })
+    // The rewrite still never edits fenced content: the canonical line is
+    // inserted after the heading and the quoted block stays intact.
     const rewritten = rewritePromptWithExecuteAs(text, EXECUTE_AS)
     expect(rewritten.startsWith('## Assignment\n\nExecute as: fullstack-dev\n')).toBe(true)
     expect(rewritten).toContain('```text\nExecute as: fullstack-dev\n```')
+  })
+
+  it('(p17) a CRLF prompt masks its fences (a fenced declaration is refused, not repaired)', () => {
+    const prompt = [
+      '## Assignment',
+      '',
+      '````markdown',
+      'Execute as: `fullstack-dev`',
+      '````',
+      '',
+      '## Task',
+      '',
+      'Implement.',
+    ].join('\r\n')
+    // `.`/`$` never match past the trailing `\r`: without stripping it for
+    // fence recognition every line failed the fence pattern, masking was a
+    // no-op and this quoted field line came back as a repair candidate.
+    expect(evaluateRoleGate(gateInput(prompt)).kind).toBe('refuse')
+    // The rest of the gate is CRLF-agnostic: a real declaration still passes.
+    expect(evaluateRoleGate(gateInput('## Assignment\r\n\r\nExecute as: fullstack-dev\r\n'))).toEqual({
+      kind: 'pass',
+      reason: 'canonical',
+    })
   })
 })
 

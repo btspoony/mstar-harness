@@ -61,7 +61,10 @@
  * / `Role:` field or a backticked/bold already-declared role id is rewritten
  * into the canonical Assignment header, and only a start with NO reliable
  * declaration is refused. The rewritten request is what the preset merge and
- * the runtime receive. The gate exempts non-harness projects (judged at the
+ * the runtime receive. The canonical/pass judgement reads the SAME raw header
+ * the preset merge parses — fence masking only decides which text may supply a
+ * repair candidate — so a gate pass never means the merge sees no role. The
+ * gate exempts non-harness projects (judged at the
  * child's EFFECTIVE start directory, so an omitted/relative `cwd` inherits the
  * parent's), canonical prompts, `agentPreset` requests and unknown providers;
  * its refusal is raised outside the contained-degradation catch below. The
@@ -623,7 +626,7 @@ const EXECUTE_AS_FIELD_LINE_RE = /^([ \t]*(?:[-*][ \t]+)?)(?:\*\*\s*Execute as\s
  *
  * 1. `agentPreset` already set → pass (caller intent wins, silent).
  * 2. header already carries a USABLE `Execute as` value → pass (idempotent,
- *    silent).
+ *    silent; read from the RAW header, the binding seam's own scope).
  * 3. not a harness project → pass (a non-harness project never pays the gate).
  * 4. unknown provider → pass (the service fails loud its own way).
  * 5. exactly one distinct repair candidate (field tier or declared token) →
@@ -639,15 +642,25 @@ export function evaluateRoleGate(input: RoleGateInput): RoleGateDecision {
   // (1) An explicit selection is caller intent — never gated.
   if (request.agentPreset !== undefined) return { kind: 'pass', reason: 'agent-preset' }
   const text = promptText(request)
-  // Every read below (canonical check, both candidate tiers, the rewrite) runs
-  // on the same fence-masked text: a quoted example is never a declaration,
-  // and the scan and the rewrite cannot disagree about where fences are.
+  // The CANDIDATE scan and the REWRITE read the fence-masked text: a quoted
+  // example is never a declaration, and the scan and the rewrite cannot
+  // disagree about where fences are. The READ below judges the raw header.
   const unfenced = maskFencedCodeBlocks(text)
   // (2) A USABLE canonical declaration is already in place — no rewrite
-  // (byte-identical). A wrapped/odd `Execute as` value is not canonical: the
-  // downstream parsers keep it raw, so it binds nothing and falls through to
-  // the repair tiers below (replaced in place, never duplicated).
-  const headerExecuteAs = parseAssignmentFields(assignmentHeaderRegion(unfenced)).executeAs
+  // (byte-identical). This reads the RAW header, which is exactly the input
+  // the binding seam downstream (`withRolePreset`) parses: judging the masked
+  // header would pass a declaration the raw header never reaches (a fenced
+  // `## Task` truncates it), and a "pass" would leave the child unbound. A
+  // wrapped/odd `Execute as` value is not canonical: the downstream parsers
+  // keep it raw, so it binds nothing and falls through to the repair tiers
+  // below (replaced in place, never duplicated).
+  //
+  // A FULLY fenced canonical-looking declaration therefore PASSES: the header
+  // slice is line-based and fence-unaware, so `withRolePreset` parses that
+  // quoted line as the declaration and binds its role. The gate returns the
+  // verdict the seam actually reaches instead of a "cleaner" one that
+  // contradicts it; a rewrite would also silently edit quoted content.
+  const headerExecuteAs = parseAssignmentFields(assignmentHeaderRegion(text)).executeAs
   if (headerExecuteAs !== undefined && isCanonicalExecuteAs(headerExecuteAs)) {
     return { kind: 'pass', reason: 'canonical' }
   }
@@ -744,28 +757,33 @@ function roleCandidates(unfenced: string, declaredRoleIds: ReadonlySet<string>):
  * shorter run is content, so a four-backtick fence is not closed by three).
  * An unterminated fence stays intact.
  *
- * Every masked character becomes a space, newlines are kept: the result is
- * character-position identical to the input, so the rewrite can match on the
- * masked text and splice into the original by the same offsets.
+ * A CRLF prompt keeps its `\r` in the split result, and `.` / `$` never match
+ * past it — so the trailing carriage return is stripped for FENCE recognition
+ * only. Without that, every line of a CRLF prompt fails the fence pattern and
+ * masking degenerates to a no-op (a quoted `Execute as:` becomes a candidate).
+ *
+ * Every masked character becomes a space (the CR included), newlines are kept:
+ * the result is character-position identical to the input, so the rewrite can
+ * match on the masked text and splice into the original by the same offsets.
  */
 function maskFencedCodeBlocks(text: string): string {
-  const lines = text.split('\n')
   const out: string[] = []
   let openChar: string | undefined
   let openRun = 0
-  for (const line of lines) {
+  for (const rawLine of text.split('\n')) {
+    const line = rawLine.endsWith('\r') ? rawLine.slice(0, -1) : rawLine
     const fence = /^[ \t]*(`{3,}|~{3,})(.*)$/.exec(line)
     if (openChar === undefined) {
       if (fence !== null) {
         openChar = fence[1]![0]
         openRun = fence[1]!.length
       }
-      out.push(fence === null ? line : ' '.repeat(line.length))
+      out.push(fence === null ? rawLine : ' '.repeat(rawLine.length))
       continue
     }
     const closes = fence !== null && fence[1]![0] === openChar && fence[1]!.length >= openRun && fence[2]!.trim() === ''
     if (closes) openChar = undefined
-    out.push(' '.repeat(line.length))
+    out.push(' '.repeat(rawLine.length))
   }
   return out.join('\n')
 }
@@ -807,15 +825,20 @@ function normalizeWrapped(raw: string): string | undefined {
  * line, and any other prompt gets the canonical header block prepended. Every
  * character outside the repaired field lines is preserved. Fenced examples are
  * not field lines: the scan runs on the fence-masked text (same offsets as the
- * input), so a quoted `Execute as:` line is neither repaired nor shadowed.
+ * input), so a quoted `Execute as:` line is neither repaired nor shadowed —
+ * and only a field line the RAW header reaches is repaired in place: one past
+ * the raw header boundary (a fenced `## Task` truncates the header there)
+ * binds nothing, so the canonical line is inserted after the `## Assignment`
+ * heading instead, i.e. before the point the binding seam stops at.
  *
  * @param text - the prompt text to rewrite.
  * @param roleId - the repaired role id.
  * @returns the rewritten prompt text.
  */
 export function rewritePromptWithExecuteAs(text: string, roleId: string): string {
-  const unfenced = maskFencedCodeBlocks(text)
-  const existing = [...assignmentHeaderRegion(unfenced).matchAll(EXECUTE_AS_FIELD_LINE_RE)]
+  const headerLength = assignmentHeaderRegion(text).length
+  const existing = [...assignmentHeaderRegion(maskFencedCodeBlocks(text)).matchAll(EXECUTE_AS_FIELD_LINE_RE)]
+    .filter((field) => field.index! < headerLength)
   if (existing.length > 0) {
     // Splice from the END backwards so earlier offsets stay valid.
     let out = text
