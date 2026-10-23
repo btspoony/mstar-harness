@@ -1842,7 +1842,7 @@ describe("execution-coordinator-recovery: \u00A72.3/\u00A74.2 the named recovery
       id: WORKFLOW_ID, status: "stopped", revision: expect.any(Number), token: expect.any(String),
       actor_session_id: RECOVERY_ID,
       reason: stopRequest.reason,
-      warnings: [recovered.holder_live_warning],
+      warnings: [recovered.holder_live_warning!],
       plans: [{ id: PLAN_ID, file: `plans/${PLAN_ID}.md`, status: "Todo" }],
     }]);
   });
