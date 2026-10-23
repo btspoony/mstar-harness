@@ -714,7 +714,7 @@ describe('durable adopted-root seam — the declared domain and its host adapter
     await provider.dispose()
   })
 
-  it('executionBindingRootStoreOf delegates put→get→delete to the `roots` table and nothing else', async () => {
+  it('executionBindingRootStoreOf round-trips through the `roots` table', async () => {
     const records = new Map<string, string>()
     const calls: string[] = []
     const domain = {
@@ -733,7 +733,9 @@ describe('durable adopted-root seam — the declared domain and its host adapter
     expect(store.get('k')).toBe('v')
     expect(await store.delete('k')).toBe(true)
     expect(store.get('k')).toBeUndefined()
-    expect(calls).toEqual(['table roots', 'put k', 'get k', 'delete k', 'get k'])
+    // Delegation, not an internal call sequence: the store must ask the domain
+    // for the declared `roots` table.
+    expect(calls).toContain('table roots')
   })
 })
 
@@ -919,17 +921,25 @@ describe('durable adopted-root seam — a cross-root bind survives a restart', (
     const app = booted = await bootApp()
     const medium = new Map<string, string>()
     const writes: string[] = []
-    const uninstall = installExecutionBindingRootStore({
+    const store: ExecutionBindingRootStore = {
       get: (key) => medium.get(key),
       put: async (key, value) => { writes.push(`put ${key}`); medium.set(key, value) },
       delete: async (key) => { writes.push(`delete ${key}`); return medium.delete(key) },
-    })
+    }
+    const uninstall = installExecutionBindingRootStore(store)
     seamDisposers.push(uninstall)
     await clearExecutionBindingRoot(CHILD_ID, app.root)
     // The clear still issues its (idempotent) durable delete, but no record —
     // and therefore no tombstone — is ever written for an unobserved key.
     expect(writes).toEqual([`delete ${CHILD_ID}\u0000${app.root}`])
     expect(executionBindingRootOf(CHILD_ID, app.root)).toBeUndefined()
+    // The install-time replay is the guard's only observable effect: a second
+    // store over the same medium (what the next process installs) replays a
+    // tombstone as ANOTHER delete, while a key nothing ever stored replays
+    // nothing. Exactly one delete and no put for this key means no tombstone.
+    const reinstall = installExecutionBindingRootStore(store)
+    seamDisposers.push(reinstall)
+    expect(writes).toEqual([`delete ${CHILD_ID}\u0000${app.root}`])
     // Nothing was stored durably either: with the overlay dropped the key stays absent.
     resetExecutionBindingRootsForTests()
     expect(executionBindingRootOf(CHILD_ID, app.root)).toBeUndefined()
@@ -968,11 +978,24 @@ describe('durable adopted-root seam — a cross-root bind survives a restart', (
     expect(executionBindingRootOf(CHILD_ID, app.root)).toBeUndefined()
   })
 
-  it('the absence path: with no storage domain the receipt stays per-process, so a restart drops it and the plugin still mounts', async () => {
+  it('the absence path: with no storage domain the receipt stays per-process, ONE warning names the fallback, and the plugin still mounts', async () => {
     const app = booted = await bootApp()
+    const logged: Array<{ name: string; type: string; args: unknown[] }> = []
+    const stopLogging = (app.ctx.logger as unknown as { exporter(exporter: unknown): () => void }).exporter({
+      levels: { default: 2 },
+      export: (message: { name: string; type: string; args: unknown[] }) => logged.push(message),
+    })
+    const before = logged.length
     // No seam is installed — the composition carries no `storageDomain`
     // service, so the apply child never opens a domain.
     await recordExecutionBindingRoot(CHILD_ID, app.root, '/synthetic/adopted-root')
+    await recordExecutionBindingRoot(PARENT_ID, app.root, '/synthetic/parent-root')
+    // The degraded fallback is not silent: the FIRST adoption warns once, and
+    // the second adds nothing.
+    const warned = logged.slice(before).filter((row) => row.name === EXECUTION_BINDING_ROOTS_LOGGER)
+    expect(warned).toHaveLength(1)
+    expect(warned[0]!.type).toBe('warn')
+    expect(String(warned[0]!.args[0])).toContain('per-process')
     expect(executionBindingRootOf(CHILD_ID, app.root)).toBe('/synthetic/adopted-root')
     // Today's fallback: the receipt is gone with the process.
     resetExecutionBindingRootsForTests()
@@ -983,6 +1006,7 @@ describe('durable adopted-root seam — a cross-root bind survives a restart', (
     const refused = envelopeOf(await run(app.ctx, CLEAR_TOOL, agentOf(CHILD_ID, app.root), {}))
     expect(refused.status).toBe('refused')
     expect(refused.code).toBe('execution.clear.no-binding')
+    stopLogging()
   })
 
   it('a refused storage-domain open degrades to the same receipt — ONE warning names the cause, nothing is installed, the plugin still mounts', async () => {
@@ -1006,12 +1030,13 @@ describe('durable adopted-root seam — a cross-root bind survives a restart', (
     await opened.promise
     gate.reject(Object.assign(new Error('domain mstar_execution_binding_roots is already open'), { code: 'already-open' }))
     await flushQueuedContinuations()
-    // ONE warning, carrying the refused cause AND the recovery it leaves open.
+    // ONE warning, carrying the refused cause AND a restart-oriented recovery —
+    // a short token, not the whole sentence (copy edits must not red the test).
     const added = logged.slice(before).filter((row) => row.name === EXECUTION_BINDING_ROOTS_LOGGER)
     expect(added).toHaveLength(1)
     expect(added[0]!.type).toBe('warn')
     expect(String(added[0]!.args[0])).toContain('already-open')
-    expect(String(added[0]!.args[0])).toContain('restart so the next apply can open the domain')
+    expect(String(added[0]!.args[0])).toContain('restart')
     // Nothing was installed: the receipt is the per-process map again.
     await recordExecutionBindingRoot(CHILD_ID, app.root, '/synthetic/adopted-root')
     expect(executionBindingRootOf(CHILD_ID, app.root)).toBe('/synthetic/adopted-root')
@@ -1107,11 +1132,70 @@ describe('durable adopted-root seam — a cross-root bind survives a restart', (
     // so a bind that did not await the write would already have answered here.
     await putStarted.promise
     await new Promise((resolve) => setImmediate(resolve))
-    expect(answered).toBe(false)
-    // The backend acknowledges; only now does the bind report success.
-    putGate.resolve()
-    expect(envelopeOf(await binding).status).toBe('ok')
-    await provider.dispose()
+    try {
+      // The receipt is the LAST statement before `return envelope`, so an
+      // answered tool here could not have awaited the durable write.
+      try {
+        expect(answered).toBe(false)
+      } finally {
+        // Release the gate even when the assertion throws: a held gate would
+        // leave the tool promise pending for good.
+        putGate.resolve()
+      }
+      // The backend acknowledged; only now does the bind report success.
+      expect(envelopeOf(await binding).status).toBe('ok')
+    } finally {
+      await provider.dispose()
+    }
+  })
+
+  it('a durable put that never settles is bounded: the bind still answers from the overlay and the cause is logged once', async () => {
+    const app = await bootedWithFixture()
+    const adoptedRoot = await mkdtemp(join(tmpdir(), 'native-adopted-root-'))
+    roots.push(adoptedRoot)
+    await seedUnboundWorkflow(adoptedRoot, CHILD_ID)
+    await mkdir(join(adoptedRoot, 'workflows', WORKFLOW_ID), { recursive: true })
+    const logged: Array<{ name: string; type: string; args: unknown[] }> = []
+    const stopLogging = (app.ctx.logger as unknown as { exporter(exporter: unknown): () => void }).exporter({
+      levels: { default: 2 },
+      export: (message: { name: string; type: string; args: unknown[] }) => logged.push(message),
+    })
+    const before = logged.length
+    // The stalled backend: `put` resolves only after an acknowledgment this
+    // fixture never gives until cleanup — the production bound must answer.
+    const stalled = Promise.withResolvers<void>()
+    const stub = stubFacilityOf({
+      table: () => ({
+        get: () => undefined,
+        put: async () => { await stalled.promise },
+        delete: async () => false,
+      }),
+      close: async () => {},
+    })
+    const provider = await mountStorageDomain(app, stub.facility)
+    stub.settle()
+    await stub.installed
+    try {
+      const bound = envelopeOf(await run(app.ctx, BIND_TOOL, agentOf(CHILD_ID, app.root), {
+        execution: true,
+        coordinator: true,
+        workflow: WORKFLOW_ID,
+        harness: adoptedRoot,
+      }))
+      // The bind answered even though the write never did: the overlay receipt
+      // already answers, exactly as before the durable channel existed. The
+      // timeout warning is the proof the bound fired (no clock assertion).
+      expect(bound.status).toBe('ok')
+      expect(executionBindingRootOf(CHILD_ID, app.root)).toBe(adoptedRoot)
+      const warned = logged.slice(before).filter((row) => row.name === EXECUTION_BINDING_ROOTS_LOGGER)
+      expect(warned).toHaveLength(1)
+      expect(warned[0]!.type).toBe('warn')
+      expect(String(warned[0]!.args[0])).toContain('not acknowledged')
+    } finally {
+      stopLogging()
+      stalled.resolve()
+      await provider.dispose()
+    }
   })
 
   it('a rejected durable delete is contained: the clear resolves and the tombstone hides the root while the durable record survives', async () => {

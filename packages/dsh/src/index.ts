@@ -1020,7 +1020,7 @@ export function apply(ctx: Context, config: Config): void {
       }
     } catch (error) {
       warnExecutionBindingRoots(
-        `durable adopted control root unavailable: open refused (${causeOf(error)}) — the selected control root stays a per-process receipt and a resume re-bind records it there; restart so the next apply can open the domain once the refused name (an \`already-open\` holder) is released`,
+        `durable adopted control root unavailable: open refused (${causeOf(error)}) — the selected control root stays a per-process receipt; restart so the next apply can open the domain once the refused name (an \`already-open\` holder) is released, then re-bind to record the receipt durably`,
       )
     }
   })
