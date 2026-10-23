@@ -975,31 +975,29 @@ function prerequisiteCause(
   }
   // The evidence a transition reads depends on the transition: a phase /
   // integration-worktree transition reads the registered compass and its Git
-  // probes, while a terminal close reads its owned rows' recorded completion
-  // evidence (and the Git proof a development/integration row's completion
-  // needs). The report names what THIS transition actually reads instead of a
-  // generic inventory.
-  const readsCompassFacts =
-    input.operation.kind === "phase" ||
-    input.operation.kind === "integration-worktree" ||
-    input.operation.kind === "compass-ref";
+  // probes, a compass-ref repair reads only the compass DOCUMENT it names (no
+  // Git evidence), and a terminal close reads its owned rows' recorded
+  // completion evidence (and the Git proof a development/integration row's
+  // completion needs). The report names what THIS transition actually reads
+  // instead of a generic inventory.
+  const prerequisiteRead =
+    input.operation.kind === "phase" || input.operation.kind === "integration-worktree"
+      ? "the lifecycle's registered compass and the Git probes its checkouts answer"
+      : input.operation.kind === "compass-ref"
+        ? "the reviewed delivery compass document this repair names"
+        : "the recorded completion evidence of the rows this transition composes (and the Git proof a completion needs)";
   const problem: RecoveryProblem = {
     component: "operation-prerequisite",
     path: workflowOperationField(input.operation),
     code: code ?? "execution.prerequisite-unavailable",
     sourcesTried: [
       `the workflow ${input.workflowId} header and rows this store owns`,
-      readsCompassFacts
-        ? "the lifecycle's registered compass and the Git probes its checkouts answer"
-        : "the recorded completion evidence of the rows this transition composes",
+      prerequisiteRead,
     ],
     currentFacts: [
       input.stage === "read"
-        ? readsCompassFacts
-          ? `the ${input.operation.kind} transition reads external evidence (the lifecycle's registered compass and its ` +
-            `checkout probes) before it can decide, and this call did not get past that read`
-          : `the ${input.operation.kind} transition reads its owned rows' recorded completion evidence (and the Git proof a ` +
-            `completion needs) before it can decide, and this call did not get past that read`
+        ? `the ${input.operation.kind} transition reads ${prerequisiteRead} before it can decide, and this call did ` +
+          `not get past that read`
         : `the ${input.operation.kind} transition re-read its external evidence in the commit window, and it no longer ` +
           `matches what the transition decided against`,
       `the refusal reports: ${message}`,

@@ -17,7 +17,7 @@
  */
 import { afterAll, describe, expect, test } from 'bun:test'
 import { execFileSync } from 'node:child_process'
-import { existsSync, mkdirSync, mkdtempSync, renameSync, rmSync, symlinkSync } from 'node:fs'
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, renameSync, rmSync, statSync, symlinkSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { pathToFileURL } from 'node:url'
@@ -51,6 +51,26 @@ const scratchDirs: string[] = []
 afterAll(() => {
   for (const dir of scratchDirs) rmSync(dir, { recursive: true, force: true })
 })
+
+/**
+ * The packed entry must BE the build of the sources in this checkout: a stale
+ * `dist` would let this suite prove the refusal of a bundle the build no longer
+ * produces. `pretest` builds only the client, so the entry's own currency is
+ * asserted here. The inputs are this package's sources plus the
+ * `@mstar-harness/commands` sources the build inlines; the engine stays external.
+ */
+function assertPackedEntryCurrent(): void {
+  const entry = join(ROOT, PACKED_ENTRY)
+  if (!existsSync(entry)) throw new Error(`missing ${PACKED_ENTRY} — run \`bun run --cwd packages/dsh build\` first`)
+  const built = statSync(entry).mtimeMs
+  for (const root of [join(ROOT, 'src'), join(ROOT, '..', 'commands', 'src')]) {
+    for (const file of readdirSync(root, { recursive: true, encoding: 'utf8' })) {
+      if (!file.endsWith('.ts')) continue
+      const source = join(root, file)
+      if (statSync(source).mtimeMs > built) throw new Error(`${source} is newer than ${PACKED_ENTRY} — run \`bun run --cwd packages/dsh build\` first`)
+    }
+  }
+}
 
 /**
  * `npm pack` this package, unpack the tarball into a disposable consumer root
@@ -92,7 +112,7 @@ const defaultAllow = (): Promise<PreToolDecision> => Promise.resolve<PreToolDeci
 
 describe('packed dsh artifact — leaf-seat refusal without the private commands package', () => {
   test('the isolated consumer cannot resolve @mstar-harness/commands, yet the packed gate still refuses a leaf seat', async () => {
-    expect(existsSync(join(ROOT, PACKED_ENTRY)), `missing ${PACKED_ENTRY} — run \`bun run --cwd packages/dsh build\` first`).toBe(true)
+    assertPackedEntryCurrent()
     const packageRoot = packedPackageRoot()
 
     // (a) The premise: no private-commands module resolution from the packed root.

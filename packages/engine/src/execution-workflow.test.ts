@@ -1646,6 +1646,27 @@ describe("execution-workflow: \u00A74.1/\u00A74.2 semantic replay and typed caus
     expect(listOf(problems[0]!, "availableWork")).toContain("lifecycle, execution-policy, delivery");
     expect(await workflowFootprint(fixture.context)).toEqual(before);
   });
+
+  test("a compass-ref repair's prerequisite report names the compass document it reads, never Git evidence (A25)", async () => {
+    // The default `plan` fixture carries no reviewed delivery compass, so the
+    // repair refuses at its evidence read. That read is the compass DOCUMENT the
+    // repair names — no checkout and no Git probe is involved — so the typed
+    // cause must name what this transition actually reads.
+    const fixture = await workflowFixture("compass-ref-prerequisite");
+    const refused = await refusalOf(() =>
+      workflowMutation(fixture, "op-compass-ref-prerequisite", {
+        kind: "compass-ref",
+        compassPath: COMPASS_REF,
+        reason: "record the pointer registration refused",
+      }),
+    );
+    const problems = problemsOf(recoveryOf(refused.details));
+    expect(problems).toHaveLength(1);
+    expect(problems[0]!.path).toBe("operation.compassPath");
+    const sourcesTried = listOf(problems[0]!, "sourcesTried");
+    expect(sourcesTried).toContain("reviewed delivery compass document");
+    expect(sourcesTried).not.toContain("Git probes");
+  });
 });
 
 /* ------------------------------------------------------------------------ *
