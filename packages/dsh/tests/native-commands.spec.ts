@@ -46,6 +46,7 @@ import {
   executionBindingRootOf,
   recordExecutionBindingRoot,
   resetExecutionBindingRootsForTests,
+  setDurableReceiptBoundForTests,
 } from '../src/gates/execution-binding-roots.ts'
 import {
   EXECUTION_BINDING_ROOTS_LOGGER,
@@ -119,6 +120,7 @@ const storeHandles: StoreHandle[] = []
 afterEach(async () => {
   for (const dispose of seamDisposers.splice(0)) dispose()
   resetExecutionBindingRootsForTests()
+  setDurableReceiptBoundForTests(undefined)
   for (const handle of storeHandles.splice(0)) handle.close()
   await booted?.dispose()
   booted = undefined
@@ -978,7 +980,7 @@ describe('durable adopted-root seam — a cross-root bind survives a restart', (
     expect(executionBindingRootOf(CHILD_ID, app.root)).toBeUndefined()
   })
 
-  it('the absence path: with no storage domain the receipt stays per-process, ONE warning names the fallback, and the plugin still mounts', async () => {
+  it('the absence path: an adoption inside the open window warns nothing and back-fills; with no facility at all ONE warning names the per-process fallback and the plugin still mounts', async () => {
     const app = booted = await bootApp()
     const logged: Array<{ name: string; type: string; args: unknown[] }> = []
     const stopLogging = (app.ctx.logger as unknown as { exporter(exporter: unknown): () => void }).exporter({
@@ -986,22 +988,42 @@ describe('durable adopted-root seam — a cross-root bind survives a restart', (
       export: (message: { name: string; type: string; args: unknown[] }) => logged.push(message),
     })
     const before = logged.length
-    // No seam is installed — the composition carries no `storageDomain`
-    // service, so the apply child never opens a domain.
+    const warnedSince = (from: number) => logged.slice(from).filter((row) => row.name === EXECUTION_BINDING_ROOTS_LOGGER)
+
+    // ---- (a) the facility is provided, its `open` is still in flight ----
+    // This is the deferred-install window, not a missing seam: the receipt is
+    // back-filled at install, so the warning's "no seam" cause would be false
+    // and its one-shot latch must not be spent here.
+    const medium = new Map<string, string>()
+    const stub = stubFacilityOf(stubHandleOf(medium))
+    const provider = await mountStorageDomain(app, stub.facility)
+    await stub.opened
     await recordExecutionBindingRoot(CHILD_ID, app.root, '/synthetic/adopted-root')
+    expect(warnedSince(before)).toHaveLength(0)
+    // The install back-fills the receipt into the durable table.
+    stub.settle()
+    await stub.installed
+    await flushQueuedContinuations()
+    expect(medium.get(`${CHILD_ID}\u0000${app.root}`)).toBe('/synthetic/adopted-root')
+
+    // ---- (b) the facility is gone: a genuine degradation warns ONCE ----
+    // Disposal uninstalls the seam; the install above reset the latch, so this
+    // later absence must still be able to speak.
+    await provider.dispose()
     await recordExecutionBindingRoot(PARENT_ID, app.root, '/synthetic/parent-root')
-    // The degraded fallback is not silent: the FIRST adoption warns once, and
-    // the second adds nothing.
-    const warned = logged.slice(before).filter((row) => row.name === EXECUTION_BINDING_ROOTS_LOGGER)
+    await recordExecutionBindingRoot(CHILD_ID, app.root, '/synthetic/second-root')
+    const warned = warnedSince(before)
     expect(warned).toHaveLength(1)
     expect(warned[0]!.type).toBe('warn')
     expect(String(warned[0]!.args[0])).toContain('per-process')
-    expect(executionBindingRootOf(CHILD_ID, app.root)).toBe('/synthetic/adopted-root')
+    // The recovery names the resume shape the module's contract accepts.
+    expect(String(warned[0]!.args[0])).toContain('resume re-bind')
+    expect(executionBindingRootOf(CHILD_ID, app.root)).toBe('/synthetic/second-root')
     // Today's fallback: the receipt is gone with the process.
     resetExecutionBindingRootsForTests()
     expect(executionBindingRootOf(CHILD_ID, app.root)).toBeUndefined()
     // The plugin still mounts, and the clear answers its unchanged
-    // workspace-route refusal (the durable seam never installed).
+    // workspace-route refusal (the durable seam is not installed).
     storeHandles.push(await initializeStore({ harnessDir: app.harnessDir }))
     const refused = envelopeOf(await run(app.ctx, CLEAR_TOOL, agentOf(CHILD_ID, app.root), {}))
     expect(refused.status).toBe('refused')
@@ -1030,13 +1052,16 @@ describe('durable adopted-root seam — a cross-root bind survives a restart', (
     await opened.promise
     gate.reject(Object.assign(new Error('domain mstar_execution_binding_roots is already open'), { code: 'already-open' }))
     await flushQueuedContinuations()
-    // ONE warning, carrying the refused cause AND a restart-oriented recovery —
-    // a short token, not the whole sentence (copy edits must not red the test).
+    // ONE warning, carrying the refused cause AND the restart-then-resume
+    // recovery — short tokens, not the whole sentence (copy edits must not red
+    // the test).
     const added = logged.slice(before).filter((row) => row.name === EXECUTION_BINDING_ROOTS_LOGGER)
     expect(added).toHaveLength(1)
     expect(added[0]!.type).toBe('warn')
     expect(String(added[0]!.args[0])).toContain('already-open')
     expect(String(added[0]!.args[0])).toContain('restart')
+    // The recovery names the resume shape the module's contract accepts.
+    expect(String(added[0]!.args[0])).toContain('resume re-bind')
     // Nothing was installed: the receipt is the per-process map again.
     await recordExecutionBindingRoot(CHILD_ID, app.root, '/synthetic/adopted-root')
     expect(executionBindingRootOf(CHILD_ID, app.root)).toBe('/synthetic/adopted-root')
@@ -1096,6 +1121,12 @@ describe('durable adopted-root seam — a cross-root bind survives a restart', (
   })
 
   it('acks the bind only AFTER the durable receipt landed: a pending put holds the tool call open', async () => {
+    // The assertion below is that the bind is still unanswered one macrotask
+    // hop after the put started. On a starved runner that hop could outlast the
+    // production 250 ms bound, which would answer the bind for the bound's
+    // reason and read as "did not await the write" — the wrong cause. Raising
+    // the bound (no clock wait) is what keeps THIS case about the ordering.
+    setDurableReceiptBoundForTests(5_000)
     const app = await bootedWithFixture()
     const adoptedRoot = await mkdtemp(join(tmpdir(), 'native-adopted-root-'))
     roots.push(adoptedRoot)

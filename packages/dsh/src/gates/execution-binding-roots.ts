@@ -32,8 +32,9 @@
  * bare module instance in a test — the receipt is exactly the per-process map
  * it has always been, and the consumers answer as they did before this module
  * existed (attribution null, clear `no-binding`). That degraded fallback is not
- * silent: the first adoption that finds no installed seam warns once with the
- * recovery below, and the bind's wait for a durable acknowledgment is bounded,
+ * silent: the first adoption that finds neither an installed seam nor an `open`
+ * in flight warns once with the recovery below, and the bind's wait for a
+ * durable acknowledgment is bounded,
  * so a stalled backend is reported and answered from the overlay rather than
  * hanging a committed bind. The named recovery for that
  * degraded case is a RESUME re-bind: re-run the native bind carrying the
@@ -59,6 +60,7 @@ import {
   deleteDurableExecutionBindingRoot,
   durableExecutionBindingRootOf,
   executionBindingRootStoreInstalled,
+  executionBindingRootStoreOpening,
   putDurableExecutionBindingRoot,
   registerExecutionBindingRootReplay,
   warnExecutionBindingRoots,
@@ -84,9 +86,21 @@ const observedRoots = new Map<string, string | null>()
  */
 const DURABLE_RECEIPT_BOUND_MS = 250
 
-/** One-time diagnostic: the host never installed the seam (a deployment fact, not a per-call failure). */
+/**
+ * The bound in force. Production never changes it; a suite raises it through
+ * {@link setDurableReceiptBoundForTests} when its assertion must not race the
+ * timer (a starved runner can lose a whole macrotask hop to 250 ms).
+ */
+let durableReceiptBoundMs = DURABLE_RECEIPT_BOUND_MS
+
+/** Test seam for the receipt wait: raise it, or pass `undefined` to restore the production default. */
+export function setDurableReceiptBoundForTests(milliseconds: number | undefined): void {
+  durableReceiptBoundMs = milliseconds ?? DURABLE_RECEIPT_BOUND_MS
+}
+
+/** One-time diagnostic: this process has no seam AND no `open` in flight (a deployment fact, not a per-call failure). */
 const NO_DURABLE_SEAM_WARNING =
-  'durable adopted control root unavailable: the host provides no storage-domain seam, so the selected control root stays a per-process receipt that a restart drops — once the host provides the domain, restart so the next apply can install it, then re-bind to record the receipt durably'
+  'durable adopted control root unavailable: the host provides no storage-domain seam, so the selected control root stays a per-process receipt that a restart drops — once the host provides the domain, restart so the next apply can install it, then a resume re-bind carrying the original session reference records it durably'
 
 /** Whether the missing-facility warning already fired in this process. */
 let warnedNoDurableSeam = false
@@ -115,8 +129,10 @@ export async function recordExecutionBindingRoot(sessionId: string, cwd: string,
   const key = keyOf(sessionId, cwd)
   observedRoots.set(key, harnessRoot)
   // The facility is optional, and silence would hide the degraded fallback:
-  // say it ONCE, at the first adoption that finds no installed seam.
-  if (!executionBindingRootStoreInstalled() && !warnedNoDurableSeam) {
+  // say it ONCE, at the first adoption that finds neither a seam nor an `open`
+  // in flight (a pending open back-fills this receipt at install, so warning
+  // then would name a cause that is not true).
+  if (!executionBindingRootStoreInstalled() && !executionBindingRootStoreOpening() && !warnedNoDurableSeam) {
     warnedNoDurableSeam = true
     warnExecutionBindingRoots(NO_DURABLE_SEAM_WARNING)
   }
@@ -125,10 +141,10 @@ export async function recordExecutionBindingRoot(sessionId: string, cwd: string,
   const bound = new Promise<void>((resolve) => {
     timer = setTimeout(() => {
       warnExecutionBindingRoots(
-        `durable adopted control root receipt not acknowledged within ${DURABLE_RECEIPT_BOUND_MS} ms — the native bind answered from the per-process receipt, so a restart may drop it; a resume re-bind records it durably`,
+        `durable adopted control root receipt not acknowledged within ${durableReceiptBoundMs} ms — the native bind answered from the per-process receipt, so a restart may drop it; a resume re-bind records it durably`,
       )
       resolve()
-    }, DURABLE_RECEIPT_BOUND_MS)
+    }, durableReceiptBoundMs)
   })
   try {
     await Promise.race([write, bound])
@@ -187,6 +203,9 @@ export function resetExecutionBindingRootsForTests(): void {
 // table — the recorded roots, and the cleared tombstones as deletes rather than
 // roots — so no receipt is readable in-process yet absent after a restart.
 registerExecutionBindingRootReplay(() => {
+  // An installed seam is the facility working: a later absence is a NEW
+  // degradation and must be able to warn again.
+  warnedNoDurableSeam = false
   for (const [key, root] of observedRoots) {
     if (root === null) void deleteDurableExecutionBindingRoot(key)
     else void putDurableExecutionBindingRoot(key, root)
