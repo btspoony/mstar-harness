@@ -49,6 +49,8 @@ import {
 } from '../src/gates/execution-binding-roots.ts'
 import {
   EXECUTION_BINDING_ROOTS_LOGGER,
+  executionBindingRootStoreOf,
+  executionBindingRootsDomain,
   installExecutionBindingRootStore,
   type ExecutionBindingRootStore,
 } from '../src/gates/execution-binding-roots-domain.ts'
@@ -597,20 +599,24 @@ const stubHandleOf = (medium: Map<string, string>): StubDomainHandle => ({
  * settles — no wall-clock wait. `opened` resolves from inside `open`, so a
  * fixture can order against the child's registered continuation (settle the
  * gate, or dispose the row while it is still pending); `installed` resolves
- * from `table()`, in the install path itself.
+ * from `table()`, in the install path itself. `openedWith` keeps the spec the
+ * plugin handed to `open` (the declaration the seam is bound to).
  */
 function stubFacilityOf(handle: StubDomainHandle): {
-  facility: { open(): Promise<StubDomainHandle> }
+  facility: { open(spec?: unknown): Promise<StubDomainHandle> }
   opened: Promise<void>
   installed: Promise<void>
+  openedWith(): unknown
   settle(): void
 } {
   const gate = Promise.withResolvers<StubDomainHandle>()
   const opened = Promise.withResolvers<void>()
   const installed = Promise.withResolvers<void>()
+  let spec: unknown
   return {
     facility: {
-      open: () => {
+      open: (openedSpec) => {
+        spec = openedSpec
         // The child registers its continuation on `gate.promise` after this
         // returns, so resolving `opened` here gives the fixture that order.
         opened.resolve()
@@ -619,6 +625,7 @@ function stubFacilityOf(handle: StubDomainHandle): {
     },
     opened: opened.promise,
     installed: installed.promise,
+    openedWith: () => spec,
     settle: () => gate.resolve({
       table: () => {
         installed.resolve()
@@ -630,11 +637,11 @@ function stubFacilityOf(handle: StubDomainHandle): {
 }
 
 /**
- * Let every continuation queued on an already-settled promise run: the
- * production path queues its durable put/delete without awaiting it (and the
- * fake table applies each operation at call time), so this is a microtask
- * flush — never a wait on wall-clock time. Call it after settling a gate whose
- * continuation the fixture has already been ordered behind.
+ * Let every continuation queued on an already-settled promise run: the clear
+ * path and the install replay queue their durable delete/put without awaiting
+ * it (and the fake table applies each operation at call time), so this is a
+ * microtask flush — never a wait on wall-clock time. Call it after settling a
+ * gate whose continuation the fixture has already been ordered behind.
  */
 const flushQueuedContinuations = async (): Promise<void> => { await Promise.resolve() }
 
@@ -689,10 +696,46 @@ async function crossRootBindFixture(): Promise<{
     harness: adoptedRoot,
   }))
   if (bound.status !== 'ok') throw new Error(`the cross-root native bind was refused: ${String(bound.code)}`)
-  // The bind's durable put is fire-and-forget; flush its queued continuation.
-  await flushQueuedContinuations()
   return { app, adoptedRoot, medium, provider }
 }
+
+describe('durable adopted-root seam — the declared domain and its host adapter', () => {
+  it('opens the DECLARED domain spec: the facility receives executionBindingRootsDomain with its `roots` table', async () => {
+    const app = booted = await bootApp()
+    const stub = stubFacilityOf(stubHandleOf(new Map()))
+    const provider = await mountStorageDomain(app, stub.facility)
+    await stub.opened
+    const spec = stub.openedWith() as { name: string; tables: Record<string, unknown> }
+    expect(spec).toBe(executionBindingRootsDomain)
+    expect(spec.name).toBe('mstar_execution_binding_roots')
+    expect(Object.keys(spec.tables)).toEqual(['roots'])
+    stub.settle()
+    await stub.installed
+    await provider.dispose()
+  })
+
+  it('executionBindingRootStoreOf delegates put→get→delete to the `roots` table and nothing else', async () => {
+    const records = new Map<string, string>()
+    const calls: string[] = []
+    const domain = {
+      name: 'mstar_execution_binding_roots',
+      table: (name: string) => {
+        calls.push(`table ${name}`)
+        return {
+          get: (key: string) => { calls.push(`get ${key}`); return records.get(key) },
+          put: async (key: string, value: string) => { calls.push(`put ${key}`); records.set(key, value) },
+          delete: async (key: string) => { calls.push(`delete ${key}`); return records.delete(key) },
+        }
+      },
+    }
+    const store = executionBindingRootStoreOf(domain as unknown as Parameters<typeof executionBindingRootStoreOf>[0])
+    await store.put('k', 'v')
+    expect(store.get('k')).toBe('v')
+    expect(await store.delete('k')).toBe(true)
+    expect(store.get('k')).toBeUndefined()
+    expect(calls).toEqual(['table roots', 'put k', 'get k', 'delete k', 'get k'])
+  })
+})
 
 describe('durable adopted-root seam — a cross-root bind survives a restart', () => {
   it('resolves the adopted root for BOTH the ledger target and the clear after a restart, with no resume re-bind', async () => {
@@ -847,6 +890,51 @@ describe('durable adopted-root seam — a cross-root bind survives a restart', (
     expect(executionBindingRootOf(PARENT_ID, app.root)).toBe('/synthetic/parent-root')
   })
 
+  it('a disposer restores the seam installed before it; disposing the first leaves no seam', async () => {
+    const app = booted = await bootApp()
+    resetExecutionBindingRootsForTests()
+    const disposeA = installExecutionBindingRootStore(rootTableOf(new Map()))
+    // A holds the child's root; B (installed over A) additionally the parent's.
+    await recordExecutionBindingRoot(CHILD_ID, app.root, '/synthetic/a-root')
+    const disposeB = installExecutionBindingRootStore(rootTableOf(new Map()))
+    seamDisposers.push(() => {
+      disposeB()
+      disposeA()
+    })
+    await recordExecutionBindingRoot(PARENT_ID, app.root, '/synthetic/b-root')
+    resetExecutionBindingRootsForTests()
+    expect(executionBindingRootOf(PARENT_ID, app.root)).toBe('/synthetic/b-root')
+    // Disposing B restores A, whose medium never held the parent key.
+    disposeB()
+    resetExecutionBindingRootsForTests()
+    expect(executionBindingRootOf(PARENT_ID, app.root)).toBeUndefined()
+    expect(executionBindingRootOf(CHILD_ID, app.root)).toBe('/synthetic/a-root')
+    // Disposing A leaves no seam at all: every durable read is absent again.
+    disposeA()
+    resetExecutionBindingRootsForTests()
+    expect(executionBindingRootOf(CHILD_ID, app.root)).toBeUndefined()
+  })
+
+  it('a clear for a key nothing ever stored writes no tombstone and leaves the next read undefined', async () => {
+    const app = booted = await bootApp()
+    const medium = new Map<string, string>()
+    const writes: string[] = []
+    const uninstall = installExecutionBindingRootStore({
+      get: (key) => medium.get(key),
+      put: async (key, value) => { writes.push(`put ${key}`); medium.set(key, value) },
+      delete: async (key) => { writes.push(`delete ${key}`); return medium.delete(key) },
+    })
+    seamDisposers.push(uninstall)
+    await clearExecutionBindingRoot(CHILD_ID, app.root)
+    // The clear still issues its (idempotent) durable delete, but no record —
+    // and therefore no tombstone — is ever written for an unobserved key.
+    expect(writes).toEqual([`delete ${CHILD_ID}\u0000${app.root}`])
+    expect(executionBindingRootOf(CHILD_ID, app.root)).toBeUndefined()
+    // Nothing was stored durably either: with the overlay dropped the key stays absent.
+    resetExecutionBindingRootsForTests()
+    expect(executionBindingRootOf(CHILD_ID, app.root)).toBeUndefined()
+  })
+
   it('a fiber torn down while open is in flight contains the inactive-effect throw, drops the just-installed seam and closes the late handle once', async () => {
     const app = booted = await bootApp()
     const lateClose = Promise.withResolvers<void>()
@@ -895,7 +983,6 @@ describe('durable adopted-root seam — a cross-root bind survives a restart', (
     const refused = envelopeOf(await run(app.ctx, CLEAR_TOOL, agentOf(CHILD_ID, app.root), {}))
     expect(refused.status).toBe('refused')
     expect(refused.code).toBe('execution.clear.no-binding')
-    expect(app.ctx.tools.get(BIND_TOOL)).toBeDefined()
   })
 
   it('a refused storage-domain open degrades to the same receipt — ONE warning names the cause, nothing is installed, the plugin still mounts', async () => {
@@ -919,11 +1006,12 @@ describe('durable adopted-root seam — a cross-root bind survives a restart', (
     await opened.promise
     gate.reject(Object.assign(new Error('domain mstar_execution_binding_roots is already open'), { code: 'already-open' }))
     await flushQueuedContinuations()
-    // ONE warning, carrying the refused cause.
+    // ONE warning, carrying the refused cause AND the recovery it leaves open.
     const added = logged.slice(before).filter((row) => row.name === EXECUTION_BINDING_ROOTS_LOGGER)
     expect(added).toHaveLength(1)
     expect(added[0]!.type).toBe('warn')
     expect(String(added[0]!.args[0])).toContain('already-open')
+    expect(String(added[0]!.args[0])).toContain('restart so the next apply can open the domain')
     // Nothing was installed: the receipt is the per-process map again.
     await recordExecutionBindingRoot(CHILD_ID, app.root, '/synthetic/adopted-root')
     expect(executionBindingRootOf(CHILD_ID, app.root)).toBe('/synthetic/adopted-root')
@@ -960,15 +1048,14 @@ describe('durable adopted-root seam — a cross-root bind survives a restart', (
     const provider = await mountStorageDomain(app, stub.facility)
     stub.settle()
     await stub.installed
-    // The receipt's durable write is fire-and-forget; its rejection must never
-    // reach the native bind.
+    // The bind awaits the receipt's durable write, and its rejection must never
+    // reach the native bind: the tool still answers ok, with the cause logged.
     const bound = envelopeOf(await run(app.ctx, BIND_TOOL, agentOf(CHILD_ID, app.root), {
       execution: true,
       coordinator: true,
       workflow: WORKFLOW_ID,
       harness: adoptedRoot,
     }))
-    await flushQueuedContinuations()
     expect(bound.status).toBe('ok')
     expect(executionBindingRootOf(CHILD_ID, app.root)).toBe(adoptedRoot)
     const warned = logged.slice(before).filter((row) => row.name === EXECUTION_BINDING_ROOTS_LOGGER)
@@ -980,6 +1067,50 @@ describe('durable adopted-root seam — a cross-root bind survives a restart', (
     expect(executionBindingRootOf(PARENT_ID, app.root)).toBe('/synthetic/parent-root')
     expect(logged.slice(before).filter((row) => row.name === EXECUTION_BINDING_ROOTS_LOGGER)).toHaveLength(2)
     stopLogging()
+    await provider.dispose()
+  })
+
+  it('acks the bind only AFTER the durable receipt landed: a pending put holds the tool call open', async () => {
+    const app = await bootedWithFixture()
+    const adoptedRoot = await mkdtemp(join(tmpdir(), 'native-adopted-root-'))
+    roots.push(adoptedRoot)
+    await seedUnboundWorkflow(adoptedRoot, CHILD_ID)
+    await mkdir(join(adoptedRoot, 'workflows', WORKFLOW_ID), { recursive: true })
+    const putGate = Promise.withResolvers<void>()
+    const putStarted = Promise.withResolvers<void>()
+    const stub = stubFacilityOf({
+      table: () => ({
+        get: () => undefined,
+        put: async () => {
+          putStarted.resolve()
+          await putGate.promise
+        },
+        delete: async () => false,
+      }),
+      close: async () => {},
+    })
+    const provider = await mountStorageDomain(app, stub.facility)
+    stub.settle()
+    await stub.installed
+    let answered = false
+    const binding = run(app.ctx, BIND_TOOL, agentOf(CHILD_ID, app.root), {
+      execution: true,
+      coordinator: true,
+      workflow: WORKFLOW_ID,
+      harness: adoptedRoot,
+    }).then((result) => {
+      answered = true
+      return result
+    })
+    // The adoption reached the durable put and is waiting on the backend. One
+    // macrotask boundary runs every queued microtask (the whole tool surface),
+    // so a bind that did not await the write would already have answered here.
+    await putStarted.promise
+    await new Promise((resolve) => setImmediate(resolve))
+    expect(answered).toBe(false)
+    // The backend acknowledges; only now does the bind report success.
+    putGate.resolve()
+    expect(envelopeOf(await binding).status).toBe('ok')
     await provider.dispose()
   })
 

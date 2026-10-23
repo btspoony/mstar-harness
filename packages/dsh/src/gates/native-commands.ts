@@ -716,7 +716,10 @@ async function adoptNativeExecutionBinding(
     // clear) resolve THIS root for the session instead of re-deriving the
     // workspace harness — the durable slot lives here, and nothing is ever
     // copied into the workspace root. Only a successful adoption records.
-    recordExecutionBindingRoot(sessionId, cwd, harnessDir)
+    // Awaited so `ok` means the receipt is durable, not only in memory; the
+    // returned promise never rejects (the seam logs the cause), so a refused
+    // durable write stays non-fatal and cannot fail the committed bind.
+    await recordExecutionBindingRoot(sessionId, cwd, harnessDir)
   } catch (error) {
     // The engine's own refusal code/message surface verbatim. The seat the
     // bind committed stays bound and the durable slot is exactly what this

@@ -971,13 +971,15 @@ export function apply(ctx: Context, config: Config): void {
   // `mstar_plan_bind` adoption survive a host restart. The host's
   // storage-domain facility is OPTIONAL — this row's static inject stays
   // `['loader']` (naming it there would pend the whole row, and the boot, on a
-  // composition without the facility), so the unit is a deferred child. Every
-  // failure path — service absent, `open` rejected, an HMR re-apply meeting
-  // `already-open` — logs ONE warning naming the cause and leaves today's
-  // per-process receipt in place; the plugin still mounts. The child's fiber
-  // owns the handle: its disposer uninstalls the seam SYNCHRONOUSLY first (no
-  // consumer may read a closing or closed domain) and only then awaits
-  // `close()`, which drains the queued durable writes.
+  // composition without the facility), so the unit is a deferred child: the
+  // reactive inject below is the install contract, so a boot where the service
+  // is merely late installs when it arrives and says nothing at apply time.
+  // Every failure path — `open` rejected, an HMR re-apply meeting
+  // `already-open` — logs ONE warning naming the cause and the recovery, and
+  // leaves today's per-process receipt in place; the plugin still mounts. The
+  // child's fiber owns the handle: its disposer uninstalls the seam
+  // SYNCHRONOUSLY first (no consumer may read a closing or closed domain) and
+  // only then awaits `close()`, which drains the queued durable writes.
   // Cordis invokes exporters unguarded: a throwing log sink must never make
   // this apply throw, so every seam warning takes the house guarded shape.
   const warnExecutionBindingRoots = (message: string): void => {
@@ -986,11 +988,6 @@ export function apply(ctx: Context, config: Config): void {
     } catch {}
   }
   setExecutionBindingRootsLogger(warnExecutionBindingRoots)
-  if (ctx.get('storageDomain') === undefined) {
-    warnExecutionBindingRoots(
-      'durable adopted control root unavailable: the storageDomain service is absent at this apply, so the selected control root starts as a per-process receipt',
-    )
-  }
   ctx.inject(['storageDomain'], async (storageCtx) => {
     try {
       const domain = await storageCtx.storageDomain.open(executionBindingRootsDomain)
@@ -1023,7 +1020,7 @@ export function apply(ctx: Context, config: Config): void {
       }
     } catch (error) {
       warnExecutionBindingRoots(
-        `durable adopted control root unavailable: open refused (${causeOf(error)}); the selected control root stays a per-process receipt`,
+        `durable adopted control root unavailable: open refused (${causeOf(error)}) — the selected control root stays a per-process receipt and a resume re-bind records it there; restart so the next apply can open the domain once the refused name (an \`already-open\` holder) is released`,
       )
     }
   })
