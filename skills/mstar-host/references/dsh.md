@@ -931,8 +931,16 @@ The dsh web client resolves slash commands against a client-side lexicon driven 
   (`dispatch.anti-recursion.empty-binding` → every Assignment-shaped dispatch
   denied under hard), because a leaf must not dispatch and no configuration may
   lift that. A session the gate cannot read (the exec-less host
-  `beforeDispatch` hook) falls back to EMPTY too. **A coordinator that is not
-  the root session cannot be served by this field.**
+  `beforeDispatch` hook) falls back to EMPTY too — a path reachable ONLY from a
+  host hook that supplies no calling session (in-repo, only tests drive that
+  hook), while every production dispatch carries its calling agent through the
+  `tools/pre-execute` listener, so the refusal never fires on a production
+  dispatch path. An embedder that wires such an exec-less hook must resolve a
+  session before dispatching — this field is not its recovery. The root read
+  trusts `session.header.parentSession`: a host provider that does not stamp a
+  child's parent would be read as root and receive the coordinator identity.
+  **A coordinator that is not the root session cannot be served by this
+  field.**
 - **Caller-scoped engine enforcement (the dsh-only half of issue #156).** That
   binding is what makes the precheck real here: with a declared dispatcher
   identity the engine compares the **dispatching seat's own role** against the

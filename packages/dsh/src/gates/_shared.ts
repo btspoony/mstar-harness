@@ -83,7 +83,8 @@ export interface Config {
    * session the gate cannot read — stays EMPTY and fails closed with
    * `dispatch.anti-recursion.empty-binding`. An explicitly blank value
    * (`''`) also fails closed. A deployment whose coordinator is not the root
-   * session MUST set this explicitly.
+   * session cannot be served by this field — the value is read only for a
+   * root caller, so setting it changes nothing for a non-root coordinator.
    */
   dispatchBinding?: string
   /**
