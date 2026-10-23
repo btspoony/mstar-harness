@@ -16,9 +16,11 @@
  *   instead of producing a role-gate error.
  */
 import { describe, expect, it, afterEach } from 'bun:test'
+import { Service, type Context } from '@deepseek-ai/cordis'
 import { mkdtemp, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
+import { assignmentHeaderRegion, parseAssignmentFields } from '@mstar-harness/engine'
 import {
   FakeSubagentProvider,
   FakeSubagentService,
@@ -74,6 +76,24 @@ function textPrompt(text: string): RecordedRequest {
 /** A fake spawning agent carrying a session cwd (the omitted-cwd inheritance source). */
 function parentAgent(cwd: string): { session: { header: { cwd: string } } } {
   return { session: { header: { cwd } } }
+}
+
+/**
+ * A `workingDirectory` service answering the session's CURRENT directory —
+ * the host's own `get(session)` projection (initialised from `header.cwd`,
+ * then following `working-directory/change`). `current` models a parent that
+ * `cd`-ed after the session was created.
+ */
+class FakeWorkingDirectory extends Service {
+  current: string | undefined
+
+  constructor(ctx: Context) {
+    super(ctx, 'workingDirectory')
+  }
+
+  get(session: unknown): string | undefined {
+    return this.current ?? (session as { header?: { cwd?: string } } | undefined)?.header?.cwd
+  }
 }
 
 /**
@@ -368,6 +388,81 @@ describe('dispatch-role gate — repair + refusal through the start seam', () =>
     expect(provider.starts).toHaveLength(1)
   })
 
+  it('(o1) an omitted cwd inherits the parent workingDirectory projection, not header.cwd (repair)', async () => {
+    const plain = await mkdtemp(join(tmpdir(), 'dsh-role-gate-projection-'))
+    scratchDirs.push(plain)
+    const { app, provider, workspace } = await bootWithProvider()
+    // The parent STARTED in `plain` (header.cwd) and then `cd`-ed into the
+    // harness project: the runtime resolves the child against the projection.
+    const workingDirectory = new FakeWorkingDirectory(app.ctx)
+    workingDirectory.current = workspace
+
+    await startActivationViaNativeChannel(app, specFor({ ...textPrompt(FIELD_ROLE_PROMPT), parent: parentAgent(plain) }))
+
+    expect(provider.starts).toHaveLength(1)
+    expect(promptTextOf(provider.starts[0]!.request as RecordedRequest).startsWith('## Assignment\n\nExecute as: fullstack-dev\n')).toBe(true)
+  })
+
+  it('(o2) an omitted cwd with NO declaration is refused against the projection (names the child directory)', async () => {
+    const plain = await mkdtemp(join(tmpdir(), 'dsh-role-gate-projection-'))
+    scratchDirs.push(plain)
+    const { app, provider, workspace } = await bootWithProvider()
+    const workingDirectory = new FakeWorkingDirectory(app.ctx)
+    workingDirectory.current = workspace
+
+    const error = await startAndCatch(app, specFor({ ...textPrompt(NO_DECLARATION_PROMPT), parent: parentAgent(plain) }))
+
+    expect(error.message).toContain(workspace)
+    expect(error.message).not.toContain(plain)
+    expect(provider.starts).toHaveLength(0)
+  })
+
+  it('(o3) a parent that cd-ed OUT of the harness project is exempt (header.cwd is not the source)', async () => {
+    const plain = await mkdtemp(join(tmpdir(), 'dsh-role-gate-projection-'))
+    scratchDirs.push(plain)
+    const { app, provider, workspace } = await bootWithProvider()
+    const workingDirectory = new FakeWorkingDirectory(app.ctx)
+    workingDirectory.current = plain
+
+    await startActivationViaNativeChannel(
+      app,
+      specFor({ ...textPrompt(NO_DECLARATION_PROMPT), parent: parentAgent(workspace) }),
+    )
+
+    expect(provider.starts).toHaveLength(1)
+  })
+
+  it('(o4) a RELATIVE cwd resolves against the projection, not header.cwd', async () => {
+    const plain = await mkdtemp(join(tmpdir(), 'dsh-role-gate-projection-'))
+    scratchDirs.push(plain)
+    const { app, provider, workspace } = await bootWithProvider()
+    const workingDirectory = new FakeWorkingDirectory(app.ctx)
+    workingDirectory.current = workspace
+
+    // `.` is a relative segment (the host's `resolve(parentBase, cwd)`), and
+    // resolving it against the plain header would exempt the start.
+    const error = await startAndCatch(
+      app,
+      specFor({ ...textPrompt(NO_DECLARATION_PROMPT), cwd: '.', parent: parentAgent(plain) }),
+    )
+
+    expect(error.message).toContain(workspace)
+    expect(provider.starts).toHaveLength(0)
+  })
+
+  it('(o5) a WHITESPACE-only cwd is a relative segment, not "omitted" (judged where it resolves)', async () => {
+    const { app, provider, workspace } = await bootWithProvider()
+    // `resolve(workspace, '   ')` is a subdirectory the harness probe does not
+    // resolve from, so the start is NOT the harness parent itself — reading
+    // the value as "omitted" would have refused it against the parent.
+    await startActivationViaNativeChannel(
+      app,
+      specFor({ ...textPrompt(NO_DECLARATION_PROMPT), cwd: '   ', parent: parentAgent(workspace) }),
+    )
+
+    expect(provider.starts).toHaveLength(1)
+  })
+
   it('(q) a repair over MULTIPLE text blocks resolves to the target role, and a second pass is a no-op', async () => {
     const { app, provider, workspace } = await bootWithProvider()
     const blocks = [
@@ -442,7 +537,7 @@ describe('dispatch-role gate — repair + refusal through the start seam', () =>
     expect(provider.starts).toHaveLength(1)
   })
 
-  it('(u) a four-backtick fenced declaration in the RAW header binds — the gate agrees (pass)', async () => {
+  it('(u) a canonical declaration inside a fence is REFUSED under hard (the seam would bind a quote)', async () => {
     const { app, provider, workspace } = await bootWithProvider()
     const prompt = [
       '## Assignment',
@@ -455,14 +550,15 @@ describe('dispatch-role gate — repair + refusal through the start seam', () =>
       '',
       'Implement.',
     ].join('\n')
-    await startActivationViaNativeChannel(app, specFor({ ...textPrompt(prompt), cwd: workspace }))
+    const error = await startAndCatch(app, specFor({ ...textPrompt(prompt), cwd: workspace }))
 
-    const sent = provider.starts[0]!.request as RecordedRequest
-    // The header slice is line-based and fence-unaware: the binding seam parses
-    // the quoted line, so a gate that refused here would diverge from what the
-    // child actually gets. Pass — and the prompt stays byte-identical.
-    expect(promptTextOf(sent)).toBe(prompt)
-    expect(sent.agentPreset).toBe(PRESET_ID)
+    // The seam binds the quoted line, so a silent pass would arm a role the
+    // dispatcher only pasted; the refusal names the real cause and the fix.
+    expect(error.message).toContain('fenced code block')
+    expect(error.message).toContain(EXECUTE_AS)
+    expect(error.message).not.toContain('carries no role declaration')
+    expect(error.message).toContain('roleGate')
+    expect(provider.starts).toHaveLength(0)
   })
 
   it('(v) a fenced `## Task` truncates the raw header → repaired BEFORE the truncation point (the seam binds)', async () => {
@@ -550,13 +646,39 @@ describe('dispatch-role gate — pure decision table (evaluateRoleGate)', () => 
       if (decision.kind !== 'repair') continue
       expect(decision.roleId).toBe(EXECUTE_AS)
       expect(decision.evidence).toBe('field')
+      // The repaired request — not only its metadata — carries a header the
+      // binding seam's own reader resolves to the target role.
+      const repaired = (decision.request.prompt ?? []).map((block) => block.text ?? '').join('\n')
+      expect(parseAssignmentFields(assignmentHeaderRegion(repaired)).executeAs, line).toBe(EXECUTE_AS)
     }
   })
 
-  it('(p2) `inherit` and non-role-id values are not candidates', () => {
-    for (const line of ['Role: inherit', 'Role: FullStack-Dev', 'Role: fullstack dev', 'Role: ']) {
-      expect(evaluateRoleGate(gateInput(`## Assignment\n\n${line}\n`)).kind, line).toBe('refuse')
+  it('(p2) a present-but-unusable role value names that value (never a missing declaration)', () => {
+    for (const [line, raw] of [
+      ['Role: inherit', 'inherit'],
+      ['Role: FullStack-Dev', 'FullStack-Dev'],
+      ['Role: fullstack dev', 'fullstack dev'],
+      ['Role: ', ''],
+      ['Execute as:', ''],
+      ['Execute as: FullStack-Dev', 'FullStack-Dev'],
+    ] as const) {
+      const decision = evaluateRoleGate(gateInput(`## Assignment\n\n${line}\n`))
+      expect(decision.kind, line).toBe('refuse')
+      if (decision.kind !== 'refuse') continue
+      // The field IS there: the cause must be its value, with the requirement.
+      expect(decision.message, line).not.toContain('carries no role declaration')
+      expect(decision.message, line).toContain('lowercase role id')
+      expect(decision.message, line).toContain(raw === '' ? 'an empty value' : raw)
+      expect(decision.message, line).toContain('roleGate')
     }
+    // warn advises with the same cause; off stays the rollback.
+    const warn = evaluateRoleGate(gateInput('## Assignment\n\nExecute as: FullStack-Dev\n', { mode: 'warn' }))
+    expect(warn.kind).toBe('warn')
+    if (warn.kind === 'warn') {
+      expect(warn.message).toContain('FullStack-Dev')
+      expect(warn.message).not.toContain('carries no role declaration')
+    }
+    expect(evaluateRoleGate(gateInput('## Assignment\n\nExecute as:\n', { mode: 'off' }))).toEqual({ kind: 'pass', reason: 'off' })
   })
 
   it('(p3) a bold/backticked DECLARED id is the lower-confidence token tier', () => {
@@ -571,8 +693,22 @@ describe('dispatch-role gate — pure decision table (evaluateRoleGate)', () => 
     expect(evaluateRoleGate(gateInput('## Assignment\n\nRole: fullstack-dev\nRole: writing-specialist\n')).kind).toBe('refuse')
   })
 
-  it('(p5) one candidate at each tier with DIFFERENT values → ambiguous, never repaired', () => {
-    const text = '## Assignment\n\nRole: fullstack-dev\n\nUse `writing-specialist` for the write-up.\n'
+  it('(p5) the token tier is header-scoped: a BODY mention never competes with a header field', () => {
+    const text = '## Assignment\n\nRole: fullstack-dev\n\n## Task\n\nUse `writing-specialist` for the write-up.\n'
+    const decision = evaluateRoleGate(gateInput(text))
+    // The body sentence quotes a role id but is not a declaration; the header
+    // field is the only candidate, so the prompt is repaired to it.
+    expect(decision.kind).toBe('repair')
+    if (decision.kind !== 'repair') return
+    expect(decision.roleId).toBe(EXECUTE_AS)
+    expect(decision.evidence).toBe('field')
+    // A bare body mention with no header declaration falls to the refusal.
+    const bodyOnly = '## Assignment\n\n**Delegation**: forbidden\n\n## Task\n\nUse `writing-specialist` for the write-up.\n'
+    expect(evaluateRoleGate(gateInput(bodyOnly)).kind).toBe('refuse')
+  })
+
+  it('(p5b) one candidate at each tier with DIFFERENT values → ambiguous, never repaired', () => {
+    const text = '## Assignment\n\nRole: fullstack-dev\n\n**writing-specialist**\n\n## Task\n\nDo it.\n'
     expect(evaluateRoleGate(gateInput(text)).kind).toBe('refuse')
   })
 
@@ -697,7 +833,7 @@ describe('dispatch-role gate — pure decision table (evaluateRoleGate)', () => 
     if (decision.kind === 'repair') expect(decision.roleId).toBe(WRITING)
   })
 
-  it('(p16) a fully fenced `Execute as:` line is judged on the RAW header (pass — the seam binds it)', () => {
+  it('(p16) a fully fenced `Execute as:` line is not a canonical pass: hard refuses, warn advises, off passes', () => {
     const text = [
       '## Assignment',
       '',
@@ -712,9 +848,21 @@ describe('dispatch-role gate — pure decision table (evaluateRoleGate)', () => 
       'Do it.',
     ].join('\n')
     // The binding seam's header slice does not know fences, so it parses the
-    // quoted line as the declaration and binds `fullstack-dev`; the gate says
-    // the same thing instead of refusing a start that will bind.
-    expect(evaluateRoleGate(gateInput(text))).toEqual({ kind: 'pass', reason: 'canonical' })
+    // quoted line as the declaration and binds `fullstack-dev`; a silent pass
+    // would let a pasted template arm that role's whole composition.
+    const hard = evaluateRoleGate(gateInput(text))
+    expect(hard.kind).toBe('refuse')
+    if (hard.kind === 'refuse') {
+      expect(hard.message).toContain('fenced code block')
+      expect(hard.message).toContain(EXECUTE_AS)
+      expect(hard.message).not.toContain('carries no role declaration')
+      expect(hard.message).toContain('roleGate')
+    }
+    // `warn` / `off` stay the documented rollbacks.
+    const warn = evaluateRoleGate(gateInput(text, { mode: 'warn' }))
+    expect(warn.kind).toBe('warn')
+    if (warn.kind === 'warn') expect(warn.message).toContain('fenced code block')
+    expect(evaluateRoleGate(gateInput(text, { mode: 'off' }))).toEqual({ kind: 'pass', reason: 'off' })
     // The rewrite still never edits fenced content: the canonical line is
     // inserted after the heading and the quoted block stays intact.
     const rewritten = rewritePromptWithExecuteAs(text, EXECUTE_AS)

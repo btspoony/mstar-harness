@@ -701,22 +701,28 @@ in the prompt). A dispatch that drops those lines has no field to fall back on
 
 **Role gate (`roleGate`, default `hard`):** the plugin normalizes an explicit
 declaration at the subagent start seam before the preset merge, so a
-`Role: \`<role>\`` line or a backticked/bold already-declared role id is
-rewritten into the canonical `Execute as: <role>` header and binds normally;
-free prose is never mined, so write the header explicitly. A harness-project
-start with NO reliable declaration is refused under `hard` with a message
-naming the exact fix (`Execute as: <role-id>` under `## Assignment`) and the
-`roleGate: warn|off` escape hatch; a start naming two or more distinct roles is
-refused with the ids and the "exactly one declaration" rule instead. The
+`Role: \`<role>\`` line or a backticked/bold already-declared role id IN THE
+ASSIGNMENT HEADER is rewritten into the canonical `Execute as: <role>` header
+and binds normally; free prose is never mined, so write the header explicitly.
+A body mention is not a declaration (the token tier is header-scoped), and a
+canonical declaration that exists only inside a fenced code block is refused
+too — the seam's header read is fence-unaware and would bind that quote. A
+harness-project start with NO reliable declaration is refused under `hard` with
+a message naming the exact fix (`Execute as: <role-id>` under `## Assignment`)
+and the `roleGate: warn|off` escape hatch; a start naming two or more distinct
+roles is refused with the ids and the "exactly one declaration" rule instead,
+and a role field that IS present but unusable (empty, or not a lowercase role
+id) gets its own message naming the raw value and the accepted shape. The
 non-harness exemption is judged at the child's EFFECTIVE start directory (an
-absolute `cwd`, a relative one resolved against the parent's, an omitted one
-inherited from the parent session), so the default `subagent` /
-`spawn_teammate` starts — which omit `cwd` — are gated by the parent's
-directory rather than exempted. A request already carrying `agentPreset` and an
-unknown provider are exempt too. `off` skips only the refusal; a single explicit
-declaration is still normalized. `roleGate` is the plugin's only live-editable
-settings field — a dsh plugin-configuration save applies on the next start
-without a reload.
+absolute `cwd` as-is, a relative one resolved against the parent's CURRENT
+directory, an omitted one inherited from it — the working-directory projection
+the runtime itself resolves against, never the immutable header alone), so the
+default `subagent` / `spawn_teammate` starts — which omit `cwd` — are gated by
+the directory the parent is in NOW rather than exempted. A request already
+carrying `agentPreset` and an unknown provider are exempt too. `off` skips only
+the refusal; a single explicit declaration is still normalized. `roleGate` is
+the plugin's only live-editable settings field — a dsh plugin-configuration save
+applies on the next start without a reload.
 
 **Execution: same-message invokes start concurrently.** The installed `subagent`
 tool declares **`isConcurrencySafe: () => true`**, so a batch of invokes emitted
