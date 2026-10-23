@@ -1139,24 +1139,20 @@ describe("validateMstarReviewV1 — mstar.review/v1 envelope ", () => {
     expect(codes(validateMstarReviewV1(nonString))).toContain("review.tally-malformed");
   });
 
-  test("tally-only declaredScopes is not an envelope key — a stray copy is ignored, never carried", () => {
-    // Compatibility record, not a field-exclusion guard: this pins what the
-    // validator currently tolerates, so a future unknown-key policy change
-    // (rejection) is a deliberate decision rather than a silent drift. The
-    // missing unknown-key policy itself is tracked separately.
-    //
+  test("tally-only declaredScopes is not an envelope key — a stray copy is refused, never carried", () => {
     // `mstar pr-review tally` echoes a settled run's truncated seat scopes as
     // `declaredScopes` (packages/commands/src/families/pr-review.ts). It is a
     // tally-output fact feeding the report's `- unverified:` / `- notes:`; the
-    // envelope has no such key, and tolerance is not permission.
+    // envelope has no such key, so a copy at either level is refused by the
+    // closed-key guard (I-000753) instead of persisting as an unreadable claim.
     const topLevel = reviewDoc({ declaredScopes: ["docs"] });
     const inTally = reviewDoc();
     (inTally.tally as Record<string, unknown>).declaredScopes = ["docs"];
 
     for (const doc of [topLevel, inTally]) {
       const gate = validateMstarReviewV1(doc);
-      expect(gate.ok).toBe(true);
-      expect(gate.violations).toEqual([]);
+      expect(gate.ok).toBe(false);
+      expect(codes(gate)).toContain("review.unknown-key");
     }
 
     // The documented contract in pr-review.md: not part of mstar.review/v1 —

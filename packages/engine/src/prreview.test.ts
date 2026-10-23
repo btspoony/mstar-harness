@@ -44,3 +44,38 @@ describe("MstarReviewV1 envelope tally: band is optional (legacy) but accepted w
     expect(validateMstarReviewV1(BAND_ENVELOPE).ok).toBe(true);
   });
 });
+
+describe("MstarReviewV1 envelope shape: keys outside the documented set are refused", () => {
+  test("canonical envelope still validates", () => {
+    const gate = validateMstarReviewV1(BAND_ENVELOPE);
+    expect(gate.ok).toBe(true);
+    expect(gate.violations).toEqual([]);
+  });
+
+  test("an unknown top-level key is refused and named", () => {
+    const doc = { ...BAND_ENVELOPE, declaredScopes: ["docs"] };
+    const gate = validateMstarReviewV1(doc);
+    expect(gate.ok).toBe(false);
+    expect(gate.violations.map((v) => v.message).join("\n")).toContain("declaredScopes");
+  });
+
+  test("an unknown tally key is refused and named", () => {
+    const doc = { ...BAND_ENVELOPE, tally: { ...COMPUTED_TALLY, declaredScopes: ["docs"] } };
+    const gate = validateMstarReviewV1(doc);
+    expect(gate.ok).toBe(false);
+    expect(gate.violations.map((v) => v.message).join("\n")).toContain("tally.declaredScopes");
+  });
+
+  test("every unknown key is named in one refusal, own keys only", () => {
+    const doc = { ...BAND_ENVELOPE, declaredScopes: ["docs"], severity: "critical" };
+    const gate = validateMstarReviewV1(doc);
+    expect(gate.violations).toHaveLength(2);
+    const refusal = gate.violations.map((v) => v.message).join("\n");
+    expect(refusal).toContain("declaredScopes");
+    expect(refusal).toContain("severity");
+
+    // Inherited members are not envelope keys: only own properties are enumerated.
+    const inherited = Object.assign(Object.create({ ghost: 1 }), BAND_ENVELOPE);
+    expect(validateMstarReviewV1(inherited).ok).toBe(true);
+  });
+});

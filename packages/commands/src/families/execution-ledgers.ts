@@ -103,13 +103,13 @@ const appendInput = z.object({
   id: z.string().min(1),
   text: z.string(),
   ts: z.string().min(1).optional(),
-  harness: z.string().min(1).optional(),
+  harness: z.string().optional(),
 });
 
 const coverageInput = z.object({
   workflow: z.string().min(1),
   file: z.string().min(1).optional(),
-  harness: z.string().min(1).optional(),
+  harness: z.string().optional(),
 });
 
 /**

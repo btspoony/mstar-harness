@@ -72,7 +72,7 @@ const inputSchema = z.object({
   workflow: z.string().min(1).optional(),
   plan: z.string().min(1).optional(),
   file: z.string().min(1).optional(),
-  harness: z.string().min(1).optional(),
+  harness: z.string().optional(),
   expect: z.union([z.string().min(1), z.number().int().nonnegative()]).optional(),
   operation: z.string().min(1).optional(),
   worktreePath: z.string().min(1).optional(),

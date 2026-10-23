@@ -149,7 +149,7 @@ type RecoverInputs = Readonly<{
   harness: string | undefined;
 }>;
 
-const recoverInput = z.object({ workflow: z.string().min(1), priorSession: z.string().min(1).optional(), unowned: z.boolean().optional(), reason: z.string().min(1).optional(), attestation: z.string().min(1).optional(), expect: z.string().min(1).optional(), operation: z.string().min(1).optional(), harness: z.string().min(1).optional() });
+const recoverInput = z.object({ workflow: z.string().min(1), priorSession: z.string().min(1).optional(), unowned: z.boolean().optional(), reason: z.string().min(1).optional(), attestation: z.string().min(1).optional(), expect: z.string().min(1).optional(), operation: z.string().min(1).optional(), harness: z.string().optional() });
 
 /**
  * The ONE resolution of `session.recover`'s caller inputs. Every known absent
@@ -229,7 +229,7 @@ function readAttestationDocument(pathValue: string): ActivationAttestation {
 }
 
 export function getSessionCommandDefinitions(): readonly CommandDefinition[] {
-  const runInput = z.object({ workflow: z.string().min(1), role: z.enum(SESSION_ROLES), argv: z.array(z.string()).optional(), harness: z.string().min(1).optional() });
+  const runInput = z.object({ workflow: z.string().min(1), role: z.enum(SESSION_ROLES), argv: z.array(z.string()).optional(), harness: z.string().optional() });
   return [
     command({
       id: "session.run",
