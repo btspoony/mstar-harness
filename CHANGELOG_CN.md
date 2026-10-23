@@ -6,6 +6,24 @@
 
 ## [Unreleased]
 
+## [4.0.7] - 2026-10-23
+
+### Harness
+
+- **解释生成式 dashboard 模块的两处 CI 注释改为点名生成器真正写出的路径。** `CLI smoke check` 与 `Build CLI` 两处原先指向 `src/dashboard/assets.generated.ts`——两个包中都不存在该文件——而 `packages/cli/scripts/build-web.ts` 实际产出的是 `packages/commands/src/dashboard/assets.generated.ts`，即 `packages/commands/src/dashboard/server.ts` 所导入的模块。各步骤必须排在其前置步骤之后的原因（smoke check 依赖 typecheck，CLI build 依赖 commands 构建）保持不变。
+- 在 sticky implementer 的宿主映射（`mstar-sdd/references/sticky-implementer-session.md`）中补充 **dsh 行**：dsh 轨道通过 `send_message` 延续同一个派发目标 —— Team 队友用 `target`，仅挂 direct 层时用 `subagent` 子会话的 `agent_id` —— 没有 resume token，也绝不为同一份工作再开第二个子会话。
+- **两个偶发失败的套件改为断言自身属性，不再断言库文件的字节镜像。** `packages/dsh/tests/native-commands.spec.ts` 在 fixture 建立 store 时为每个根目录取得唯一一条连接，贯穿用例断言并在清理阶段关闭，于是 clear 与持久槽读取面对的是一个仍然打开的 store，而不是刚关闭的 writer 留给下一次只读打开的「无 journal WAL」形态；持久槽读取器也改为以 store 自身的原因失败，不再把无法读取的 store 折叠成「没有记录」。`packages/engine/src/host-state-store.test.ts` 通过逻辑内容证明「schema 被拒的读取不改变任何东西」——在读取前后经同一条保活连接比较共享的 `store_meta.revision` 与已记录的 `dsh_status_emissions` 行，并点明变化的是哪一个元素，而不是比较读取前后库文件的字节。
+- 两个套件都没有加入重试、sleep 或第二次尝试：产生失败的顺序被移除，而不是被等待掉。
+- 迭代 Phase 1 新增 **`pr_merge_policy`** 问题，答案记入 compass frontmatter，取值仅两个：`reviewed-auto` 让 Phase 5 走 PR 级 review 循环，且只在当前 PR head 上产生、已定稿并发布的 `ship it` 报告下 merge；`owner-gated` 不跑 PR 级 review 循环，停在 merge-ready 等 owner 对当前 PR head 的显式书面批准。
+- 把 **merge 变为独立的授权动作**：merge-ready、CI 绿、QC Approve 与 review `ship it` 都不再单独构成 merge 授权；`pr_merge_policy` 缺失即硬停并回到 Phase 1，不得推断默认值。
+- 扩宽 **`mstar-pr-loop`** 的唯一新进入场景：现可在迭代 Phase 1 被选定为该次迭代的 `reviewed-auto` review 路径；其余场景仍是 opt-in，且从不执行 merge。
+- 修复 **bounded-resolution 覆盖门禁**：`workflow.delivery-anchors` 现带有显式 `excluded` 处置，所有 live 命令路由均有归属。
+- 清理 **closure 清单**：逐行 `afterSha256` 当前字节 pin 及其三处断言已删除而非重新冻结；BASE `beforeSha256` 溯源与 anchor 守卫仍是冻结证据。
+
+### 版本对齐
+
+- 提升 monorepo 根、`@mstar-harness/opencode`、`@mstar-harness/opencode-v2`、`@mstar-harness/cli`、`@mstar-harness/engine`、`@mstar-harness/dsh`、Cursor/Codex/Kimi/ZCode/omp/Claude 插件清单、便携式 Agent Plugins 清单及两份 marketplace 清单：**→ 4.0.7**。
+
 ## [4.0.6] - 2026-10-23
 
 ### Harness

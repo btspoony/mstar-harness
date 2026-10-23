@@ -6,6 +6,17 @@ The monorepo root [CHANGELOG.md](../../CHANGELOG.md) summarizes cross-surface re
 
 ## [Unreleased]
 
+## [4.0.7] - 2026-10-23
+
+### Changed
+
+- **The `plan progress` / `plan issue-add` / `plan issue-close` recoveries now name argument shapes their decoder accepts.** Payload values are advertised as inline JSON strings (`--progress '<json-progress-object>'`, `--entries '<json-array>'`), and the `issue-close` route names its required `--expect-issue` revision together with the evidence `--file`; the previous `--entries <issues-file>` named a file where an inline array is decoded, and `issue-close` omitted the CAS member the verb refuses without.
+- **The regression is the replayed invocation, not its wording.** `packages/cli/test/plan-coordination.test.ts` reads each verb's own refusal, extracts the advertised `mstar …` sentence, binds its placeholders against the fixture and runs exactly that; all three succeed in one invocation.
+
+- Version alignment with harness **4.0.7**.
+
+See root [CHANGELOG.md](../../CHANGELOG.md) **4.0.7**.
+
 ## [4.0.6] - 2026-10-23
 
 ### Harness

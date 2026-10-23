@@ -8,6 +8,24 @@ Package-specific histories: [`packages/cli/CHANGELOG.md`](packages/cli/CHANGELOG
 
 ## [Unreleased]
 
+## [4.0.7] - 2026-10-23
+
+### Harness
+
+- **The two CI comments that explain the generated dashboard module now name the path the generator really writes.** Both the `CLI smoke check` and `Build CLI` blocks pointed at `src/dashboard/assets.generated.ts` — no such file exists in either package — while `packages/cli/scripts/build-web.ts` emits `packages/commands/src/dashboard/assets.generated.ts`, the module `packages/commands/src/dashboard/server.ts` imports. The reason each step must come after the one before it (`typecheck` for the smoke check, the commands build for the CLI build) is unchanged.
+- Added the **dsh row** to the sticky-implementer host mapping (`mstar-sdd/references/sticky-implementer-session.md`): a dsh track continues the same delegation target through `send_message` — the Team teammate's `target`, or a direct `subagent` child's `agent_id` on a direct-only profile — with no resume token and never a second child for the same work.
+- **Two flaky suites now assert their own property instead of the store's wire image.** `packages/dsh/tests/native-commands.spec.ts` acquires one store connection per fixture root when the store is created or seeded, keeps it through the case's assertions and closes it in cleanup, so the clear and durable-slot reads meet an open store rather than the journal-less WAL shape a just-closed writer leaves for the next read-only open; the durable-slot reader also fails with the store's own reason instead of folding an unreadable store into "no record". `packages/engine/src/host-state-store.test.ts` proves a schema-refused read mutates nothing through logical content — the shared `store_meta.revision` and the recorded `dsh_status_emissions` row, compared across the read on one held connection — and names the element that changed, instead of comparing the store file's bytes before and after.
+- Neither suite gained a retry, sleep or second attempt: the ordering that produced the failure is gone, not waited out.
+- Added a **`pr_merge_policy`** question to iteration Phase 1, recorded in compass frontmatter with exactly two values: `reviewed-auto` routes Phase 5 through the PR-level review loop and merges only on its settled, posted `ship it` report at the current PR head; `owner-gated` runs no PR-level review loop and stops at merge-ready for the owner's explicit written approval of the current PR head.
+- Made **merge a separately authorized act**: merge-ready, green CI, QC Approve and a review `ship it` no longer authorize a merge on their own, and a missing `pr_merge_policy` is a hard stop that returns to Phase 1 instead of inferring a default.
+- Widened **`mstar-pr-loop`**'s single activation context: it may now be selected at iteration Phase 1 as that iteration's `reviewed-auto` review path, while staying opt-in for every other context and never merging a PR.
+- Fixed the **bounded-resolution coverage gate**: `workflow.delivery-anchors` now carries an explicit `excluded` disposition, so every live command route is accounted for.
+- Reconciled the **closure inventory**: the per-row `afterSha256` current-byte pins and their three assertions were deleted, not re-frozen — BASE `beforeSha256` provenance and the anchor guards remain the freeze evidence.
+
+### Version alignment
+
+- Bump monorepo root, `@mstar-harness/opencode`, `@mstar-harness/opencode-v2`, `@mstar-harness/cli`, `@mstar-harness/engine`, `@mstar-harness/dsh`, Cursor/Codex/Kimi/ZCode/omp/Claude plugin manifests, the portable Agent Plugins manifest, and both marketplace manifests: **→ 4.0.7**.
+
 ## [4.0.6] - 2026-10-23
 
 ### Harness

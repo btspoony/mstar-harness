@@ -6,6 +6,22 @@ The monorepo root [CHANGELOG.md](../../CHANGELOG.md) summarizes cross-surface re
 
 ## [Unreleased]
 
+## [4.0.7] - 2026-10-23
+
+### Changed
+
+- **`plan_parallelism` has one authority.** The engine's `PLAN_PARALLELISM_VALUES` is now an `as const` tuple re-exported from the package entry, and the command transport builds its `--file` policy schema's `z.enum` from it instead of a hand-copied literal. `mstar schema --command workflow.execution-policy` still publishes exactly `serial` | `parallel` and still refuses any other value; the two values now have one spelling in the repository, so the transport and the engine's `execution-policy` re-validation cannot drift.
+- **`mstar.review/v1` is a closed key set.** `validateMstarReviewV1` now refuses any key outside the envelope it documents — `schema`, `verdict`, `summary_md`, `findings`, `incomplete`, `tally`, `target` — and any key outside a provided tally's `PrTallyResult` members, reporting one `review.unknown-key` violation per offending key with its full path (`declaredScopes`, `tally.declaredScopes`). The key sets are derived from what the validator already reads and `synthesizeReview` already produces, so every previously valid envelope stays valid; a stray key is refused instead of persisted as an unreadable claim.
+- **Two flaky suites now assert their own property instead of the store's wire image.** `packages/dsh/tests/native-commands.spec.ts` acquires one store connection per fixture root when the store is created or seeded, keeps it through the case's assertions and closes it in cleanup, so the clear and durable-slot reads meet an open store rather than the journal-less WAL shape a just-closed writer leaves for the next read-only open; the durable-slot reader also fails with the store's own reason instead of folding an unreadable store into "no record". `packages/engine/src/host-state-store.test.ts` proves a schema-refused read mutates nothing through logical content — the shared `store_meta.revision` and the recorded `dsh_status_emissions` row, compared across the read on one held connection — and names the element that changed, instead of comparing the store file's bytes before and after.
+- Neither suite gained a retry, sleep or second attempt: the ordering that produced the failure is gone, not waited out.
+- **A terminal workflow's held integration lease is now releasable through `mstar session recover`.** When a crash or a foreign writer leaves the lease held on a lifecycle that is already `completed` / `failed` / `stopped`, the existing recovery call takes the workflow token, the lease's recorded holder as `--prior-session`, and an attestation naming that holder as stopped/reloaded, then writes the released tombstone and its operation receipt. Nothing else moves: the terminal header keeps its bytes and revision, the snapshot, registry membership and every coordinator row stay as recorded, and no session is rebound or revoked.
+- **The release is guarded, not a second writer.** A terminal workflow with no held lease keeps the previous closed-lifecycle refusal verbatim, a request that does not name the lease's recorded holder is refused, an attestation that does not cover that holder is refused, and a superseded workflow token is still the CAS. Every other terminal request is refused exactly as before.
+- **The `PHASE6_DANGLING_LEASE` recovery text now names the route that exists.** It points at `mstar status validate` for the workflow token — published for both terminal shapes, in `data.terminalUnregistered[]` and in `data.terminalAdoptions[]` — and then at `mstar session recover` for the release, and states that only the lease is released; the previous "a terminal workflow cannot be recovered, record a residual" outcome is gone.
+
+- Version alignment with harness **4.0.7**.
+
+See root [CHANGELOG.md](../../CHANGELOG.md) **4.0.7**.
+
 ## [4.0.6] - 2026-10-23
 
 ### Changed
