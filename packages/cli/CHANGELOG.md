@@ -6,6 +6,20 @@ The monorepo root [CHANGELOG.md](../../CHANGELOG.md) summarizes cross-surface re
 
 ## [Unreleased]
 
+## [4.0.6] - 2026-10-23
+
+### Harness
+
+- **The shipped dsh row opts in to caller session identity.** It now passes `mstar mcp --trust-caller-session-id` (omp's row already did), so the per-call `sessionId` selector is published on the dsh connection and an identity-bearing action — `plan progress`, `plan complete`, `workflow register/evidence/phase`, `session recover`, `workflow-note.append` — runs on the MCP surface instead of being pushed to the CLI. Before this, the dsh row did not pass the flag, so every such action refused with "requires an acquired runtime session identity" while the native surface covered only plan bind, audit report validation and execution clear. The flag stays the deployment's explicit statement that it owns the connection's trust boundary: a connection launched without it still publishes no selector and still refuses a supplied one.
+- **On an opted-in connection the value is a bearer identity, and the docs say so.** `executionContextFor` turns `sessionId` into `context.caller`, the engine resolves the caller's OWN coordinator binding from it, and the optional `--expect` token is derived when omitted — so knowing a live session id is enough to act as that session. Authorization is that binding row plus the CAS token; no binding lookup, role check or CAS check is weakened. The ADR, both package READMEs, the bundle comment and the two host references state this instead of calling the value mere attribution.
+- **Store-level commands are CLI-only.** Every `store.*` command (`init`, `upgrade`, `migrate`, `backup`, `activate`, `retire`, `execution.restore`, `execution.restore-preview`, `execution.export`) is no longer published on the MCP connection: they move or reshape the whole store, including `execution_sessions` rows whose `session_id` is a bearer identity on an opted-in connection, and that payload cannot be redacted without making a backup unrestorable. They are operator work against a checkout, not runtime work. MCP carries the runtime surface — plans, workflows, issues, ledger reads.
+- **The identity-missing refusal and the `mstar schema` MCP requirement now name a route the caller can actually use**: `sessionId` on a `--trust-caller-session-id` connection (the shipped dsh and omp rows), `--session-id` or `MSTAR_HOST_SESSION_ID` on the CLI (dsh shells also export `DSH_SESSION_ID`, which the CLI reads), otherwise the native tool or the CLI. The shared sentence no longer claims `--expect` authorizes every command: `workflow-note.append` takes a `sessionRef` and has no `--expect` input.
+- **A refusal no longer hands out a working identity.** `coordination.identity-mismatch` used to echo the ACTIVE holder's `sessionId` in its message, `current_facts`, `needed` and `details`; it now reports the holder's state and epoch only. Once the selector is published, that echo was a directly replayable input for a coordinator-scoped write.
+
+- Version alignment with harness **4.0.6**.
+
+See root [CHANGELOG.md](../../CHANGELOG.md) **4.0.6**.
+
 ## [4.0.5] - 2026-10-22
 
 ### Changed
