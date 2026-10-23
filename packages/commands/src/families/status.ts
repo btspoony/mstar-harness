@@ -116,7 +116,7 @@ export function getStatusCommandDefinitions(): readonly CommandDefinition[] {
       input: z.object({ path: z.string().min(1).optional() }),
       output,
       effects: ["read", "validate"],
-      description: "Validate the control root's ACTIVE execution authority (the pre-activation status.json / snapshot file route is retired). The output carries the execution CAS tokens a caller records as --expect: the store's root token at data.token, each workflow's token at data.workflows[].token, and each plan's token at data.authority.workflows[].planTokens[<planId>].",
+      description: "Validate the control root's ACTIVE execution authority (the pre-activation status.json / snapshot file route is retired). The output carries the execution CAS tokens a caller records as --expect: the store's root token at data.token, each workflow's token at data.workflows[].token, each plan's token at data.authority.workflows[].planTokens[<planId>], and a closed lifecycle's retained header token at data.terminalUnregistered[].token (the one such token a terminal held-lease release takes).",
       async execute(input, context) {
         const parsed = z.object({ path: z.string().min(1).optional() }).safeParse(input);
         if (!parsed.success) return invalid("status.validate", parsed.error);

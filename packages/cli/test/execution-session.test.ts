@@ -1035,26 +1035,20 @@ async function storedLease(fixture: Fixture): Promise<Record<string, unknown>> {
 }
 
 /**
- * The workflow CAS token of the retained terminal header. The close removes the
- * registry row, so the header's own revision (with the store identity and
- * epoch) is the only address left that a `--expect` can name.
+ * The terminal workflow's CAS token, read through the route the violation
+ * advertises: `mstar status validate` publishes the retained header (the close
+ * removed its registry row, so `data.workflows[]` never carries it) with the
+ * token that header's revision addresses. Nothing here constructs the token.
  */
-async function terminalHeaderToken(fixture: Fixture): Promise<string> {
-  const handle = await openStore(fixture.context, "read");
-  try {
-    const meta = handle.db.prepare("select store_id, authority_epoch from store_meta where id = 1").get();
-    const header = handle.db.prepare("select revision from execution_workflows where workflow_id = ?").get(WORKFLOW_ID);
-    const storeId = stringMember(meta, "store_id");
-    const epoch = Number(fieldOf(meta, "authority_epoch"));
-    const revision = Number(fieldOf(header, "revision"));
-    if (storeId === undefined || !Number.isInteger(epoch) || !Number.isInteger(revision)) {
-      throw new Error("fixture: the terminal header or the store identity is unreadable");
-    }
-    const key = Buffer.from(serializeExecutionValue([WORKFLOW_ID]), "utf8").toString("base64url");
-    return `exec-v1:workflow:${storeId}:${epoch}:${key}:${revision}`;
-  } finally {
-    handle.close();
-  }
+function terminalTokenFromStatus(fixture: Fixture): string {
+  const validated = runCli(["status", "validate"], fixture);
+  expect(validated.exitCode, validated.stdout).toBe(0);
+  const terminal = fieldOf(dataOf(validated), "terminalUnregistered");
+  if (!Array.isArray(terminal)) throw new Error(`status validate carries no terminalUnregistered collection: ${validated.stdout}`);
+  const entry = terminal.find((candidate) => stringMember(candidate, "id") === WORKFLOW_ID);
+  const token = entry === undefined ? undefined : stringMember(entry, "token");
+  if (token === undefined) throw new Error(`terminalUnregistered carries no token for ${WORKFLOW_ID}: ${validated.stdout}`);
+  return token;
 }
 
 /** The violation codes the phase-6 post-merge close gate reports, from either envelope arm. */
@@ -1111,6 +1105,8 @@ describe("mstar session recover — a terminal workflow's held lease", () => {
     const attestationPath = join(fixture.root, "terminal-attestation.json");
     writeJson(attestationPath, attestationFor(COORDINATOR_ID));
     const successor: ExecutionIdentity = { ...coordinatorIdentity(), sessionId: SUCCESSOR_ID };
+    // The advertised invocation, verbatim: the token is the one `status
+    // validate` publishes for this closed lifecycle, not a local fabrication.
     const released = runCli(
       [
         "session",
@@ -1124,7 +1120,7 @@ describe("mstar session recover — a terminal workflow's held lease", () => {
         "--attestation",
         attestationPath,
         "--expect",
-        await terminalHeaderToken(fixture),
+        terminalTokenFromStatus(fixture),
         "--operation",
         "release-terminal",
         "--harness",
