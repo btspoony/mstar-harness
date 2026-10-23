@@ -312,7 +312,11 @@ export function getSessionCommandDefinitions(): readonly CommandDefinition[] {
             const graph = (await readExecutionState({ harnessDir: root })).data;
             const held = graph.workflows.find(({ state }) => state.id === workflow);
             if (held === undefined) {
-              const terminal = graph.terminalUnregistered?.find((entry) => entry.id === workflow);
+              // An adopted close leaves ACTIVE membership exactly like a local
+              // close; both collections publish the recorded terminal status,
+              // and only a genuinely absent id is unregistered.
+              const terminal = graph.terminalUnregistered?.find((entry) => entry.id === workflow)
+                ?? graph.terminalAdoptions?.find((entry) => entry.id === workflow);
               observed = terminal === undefined ? "unregistered" : terminal.status;
             } else if (held.state.status !== "running") {
               observed = held.state.status;

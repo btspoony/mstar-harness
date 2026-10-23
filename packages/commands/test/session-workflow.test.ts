@@ -4,12 +4,14 @@ import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:
 import os from "node:os";
 import path from "node:path";
 import {
+  adoptTerminalWorkflow,
   bindExecutionSession,
   createExecutionWorkflow,
   encodeExecutionSessionRef,
   executionContextFor,
   initializeStore,
   mutateExecutionWorkflow,
+  openStore,
   readExecutionState,
   type ExecutionToken,
 } from "@mstar-harness/engine";
@@ -270,6 +272,33 @@ async function runFixture(
   return { harness };
 }
 
+/**
+ * One lifecycle the authority holds only as an adopted terminal: an imported
+ * header that was never ACTIVE registry membership. The adoption itself is the
+ * engine's producer, so only the imported header is planted here.
+ */
+async function adoptedTerminal(status: "stopped" | "completed"): Promise<string> {
+  const root = mkdtempSync(path.join(os.tmpdir(), `session-run-adopted-${status}-`));
+  roots.push(root);
+  const harness = path.join(root, ".mstar");
+  mkdirSync(harness, { recursive: true });
+  (await initializeStore({ harnessDir: harness })).close();
+  const writer = await openStore({ harnessDir: harness }, "write");
+  try {
+    writer.db.prepare(
+      "insert into execution_workflows(workflow_id, revision, creator_session_id, state_json, created_at, updated_at) values (?, 1, null, ?, ?, ?)",
+    ).run(RUN_WORKFLOW, JSON.stringify({
+      id: RUN_WORKFLOW, schema_version: 1, type: "plan", status,
+      started_at: RUN_TS, ended_at: RUN_TS, updated_at: RUN_TS, stop_reason: `fixture ${status}`,
+    }), RUN_TS, RUN_TS);
+  } finally { writer.close(); }
+  await adoptTerminalWorkflow(
+    executionContextFor({ harnessDir: harness }, { source: "local", sessionId: "adopting-operator", workflowId: RUN_WORKFLOW, role: "coordinator" }),
+    { workflowId: RUN_WORKFLOW, reason: `adopt the imported ${status} record`, operationId: `adopt-${status}` },
+  );
+  return harness;
+}
+
 /** One launch under the bound workflow, claiming the supplied session id. */
 async function launchBound(harness: string, claimed: string) {
   return definition("session.run").execute(
@@ -373,6 +402,19 @@ describe("session.run bound identity", () => {
       const result = await launchBound(harness, RUN_CLAIMED);
       expect(result).toMatchObject({ status: "refused", code: "session.run-unbound" });
       expect(recoveryOf(result)).toContain("mstar workflow register");
+    }
+  });
+
+  test("classifies an adopted terminal lifecycle by its recorded status", async () => {
+    for (const [status, recovery] of [
+      ["stopped", "mstar workflow reopen"],
+      ["completed", "new lifecycle"],
+    ] as const) {
+      const result = await launchBound(await adoptedTerminal(status), RUN_CLAIMED);
+      expect(result, status).toMatchObject({ status: "refused", code: "session.run-unbound", details: { state: status } });
+      expect(recoveryOf(result), status).toContain(recovery);
+      // Registering the id cannot succeed for a lifecycle the authority holds.
+      expect(recoveryOf(result), status).not.toContain("mstar workflow register");
     }
   });
 });
