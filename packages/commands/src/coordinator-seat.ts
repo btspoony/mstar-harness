@@ -22,10 +22,10 @@ import type { CommandDefinition } from "./types.js";
  * here when it works under that identity and
  *
  * - establishes or replaces a seat: over an EXISTING workflow (`plan.bind`,
- *   `session.recover`), or by minting a coordinator identity for a CHILD
- *   process that can then bind with it (`session.run` — the seat lands on the
- *   child, and the child never passes this caller's seat check, so allowing a
- *   leaf to launch it hands a leaf the seat), or
+ *   `session.recover`), or by launching a CHILD under the caller's inherited
+ *   live coordinator binding (`session.run` — the seat is the caller's own
+ *   verified binding, and the child never passes this caller's seat check, so
+ *   allowing a leaf to launch it hands a leaf that binding), or
  * - writes workflow-scope delivery, lifecycle, adoption or coordinator ledger
  *   state: every action of the `workflow` family (`evidence`,
  *   `delivery-anchors`, `adopt-terminal`, `phase`, `lifecycle`,

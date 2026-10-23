@@ -18,7 +18,7 @@
  * refused BEFORE any engine round-trip. A non-leaf connection is unaffected.
  */
 import { describe, expect, test } from "bun:test";
-import { existsSync, mkdtempSync, rmSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, rmSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { Client, InMemoryTransport } from "@modelcontextprotocol/client";
@@ -29,6 +29,13 @@ import {
   type CommandDefinition,
   type CommandEnvelope,
 } from "@mstar-harness/commands";
+import {
+  bindExecutionSession,
+  createExecutionWorkflow,
+  executionContextFor,
+  initializeStore,
+  readExecutionState,
+} from "@mstar-harness/engine";
 import { familyOf, familyToolName } from "../src/mcp/fold";
 import { createMcpServer } from "../src/mcp/server";
 import { createContextResolver, type McpStdioOptions } from "../src/mcp/stdio";
@@ -72,6 +79,49 @@ function harnessFixture(): { harness: string; dispose: () => void } {
   const root = mkdtempSync(path.join(os.tmpdir(), "mstar-leaf-seat-"));
   const harness = path.join(root, ".mstar");
   return { harness, dispose: () => rmSync(root, { recursive: true, force: true }) };
+}
+
+const LAUNCH_WORKFLOW = "wf-a";
+const LAUNCH_SESSION = "launcher-session";
+const LAUNCH_TS = "2026-10-24T00:00:00.000Z";
+
+/**
+ * An initialized harness holding a `running` workflow whose live coordinator is
+ * LAUNCH_SESSION: the binding a non-leaf `session.run` launch now requires.
+ */
+async function boundHarness(): Promise<{ harness: string; dispose: () => void }> {
+  const fixture = harnessFixture();
+  mkdirSync(fixture.harness, { recursive: true });
+  const store = await initializeStore({ harnessDir: fixture.harness });
+  store.close();
+  const context = executionContextFor(
+    { harnessDir: fixture.harness },
+    { source: "local", sessionId: LAUNCH_SESSION, workflowId: LAUNCH_WORKFLOW, role: "coordinator" },
+  );
+  const initialized = await readExecutionState({ harnessDir: fixture.harness });
+  await createExecutionWorkflow(context, {
+    entry: { id: LAUNCH_WORKFLOW, type: "plan", started_at: LAUNCH_TS, dir: `workflows/${LAUNCH_WORKFLOW}` } as never,
+    snapshot: {
+      schema_version: 1,
+      id: LAUNCH_WORKFLOW,
+      type: "plan",
+      status: "running",
+      started_at: LAUNCH_TS,
+      updated_at: LAUNCH_TS,
+      project: "harness",
+      delivery_kind: "development",
+      branch: { base: "main", work: "feature/leaf-seat", target: "main" },
+      execution_policy: { plan_parallelism: "serial", worktree_mode: "required" },
+      plans: [{ id: "plan-a", title: "Leaf seat plan", file: "plans/plan-a.md", status: "Todo" }],
+    } as never,
+    expected: initialized.token,
+    operationId: "create-launch",
+  });
+  const state = await readExecutionState({ harnessDir: fixture.harness });
+  const workflow = state.data.workflows.find((entry) => entry.state.id === LAUNCH_WORKFLOW);
+  if (workflow === undefined) throw new Error("fixture: the launch workflow is not registered");
+  await bindExecutionSession(context, { workflowId: LAUNCH_WORKFLOW, expected: workflow.workflowToken, operationId: "bind-launch" });
+  return fixture;
 }
 
 describe("MCP leaf seat", () => {
@@ -180,18 +230,18 @@ describe("MCP leaf seat", () => {
     }
   });
 
-  test("the leaf cannot launch a child under a minted coordinator identity, and no child is spawned", async () => {
+  test("the leaf cannot launch a child under the inherited coordinator identity, and no child is spawned", async () => {
     const fixture = harnessFixture();
     const marker = path.join(path.dirname(fixture.harness), "spawned-by-leaf");
     try {
-      // The launch mints a coordinator identity and hands it to a CHILD that
-      // never passes this seat check, so the seat is established for the child:
-      // the refusal must land before the spawn effect, and `touch` would have
-      // created the marker had any child run.
+      // Even a leaf connection that declares a caller identity cannot launch:
+      // the launch would hand that caller's binding to a CHILD that never passes
+      // this seat check, so the refusal must land before the spawn effect, and
+      // `touch` would have created the marker had any child run.
       const envelope = await envelopeOf(
-        { harnessRoot: fixture.harness, seat: "leaf" },
+        { harnessRoot: fixture.harness, seat: "leaf", trustCallerSessionId: true },
         "mstar_session",
-        { action: "run", workflow: "wf-a", role: "coordinator", argv: ["touch", marker] },
+        { action: "run", workflow: LAUNCH_WORKFLOW, role: "coordinator", argv: ["touch", marker], sessionId: LAUNCH_SESSION },
       );
       expect(envelope).toMatchObject({
         command: "session.run",
@@ -205,14 +255,14 @@ describe("MCP leaf seat", () => {
     }
   });
 
-  test("a non-leaf launcher still runs the child under the minted identity", async () => {
-    const fixture = harnessFixture();
+  test("a non-leaf launcher still runs the child under the inherited identity", async () => {
+    const fixture = await boundHarness();
     const marker = path.join(path.dirname(fixture.harness), "spawned-by-launcher");
     try {
       const envelope = await envelopeOf(
-        { harnessRoot: fixture.harness },
+        { harnessRoot: fixture.harness, trustCallerSessionId: true },
         "mstar_session",
-        { action: "run", workflow: "wf-a", role: "coordinator", argv: ["touch", marker] },
+        { action: "run", workflow: LAUNCH_WORKFLOW, role: "coordinator", argv: ["touch", marker], sessionId: LAUNCH_SESSION },
       );
       expect(envelope).toMatchObject({ command: "session.run", status: "ok", exitCode: 0 });
       expect(existsSync(marker)).toBe(true);

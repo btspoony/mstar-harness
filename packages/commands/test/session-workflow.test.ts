@@ -103,14 +103,16 @@ describe("session and workflow command families", () => {
     expect(JSON.stringify(policy)).not.toContain("workflow adopt-terminal --attestation");
   });
   test("session.run launches argv without a shell and preserves child output and exit status", async () => {
-    const context = testContext();
-    const result = await definition("session.run").execute({ workflow: "wf-smoke", role: "coordinator", argv: [process.execPath, "-e", "const i=JSON.parse(process.env.MSTAR_EXECUTION_IDENTITY); process.stdout.write((process.env.MSTAR_HOST_SESSION_ID === undefined ? 'clean' : 'stale') + ':' + i.source + ':' + i.role); process.exit(124)" ] }, context);
+    const { harness } = await runFixture("smoke", { bind: RUN_CLAIMED });
+    const context = testContext({ sessionId: RUN_CLAIMED });
+    const result = await definition("session.run").execute({ workflow: RUN_WORKFLOW, role: "coordinator", argv: [process.execPath, "-e", "const i=JSON.parse(process.env.MSTAR_EXECUTION_IDENTITY); process.stdout.write((process.env.MSTAR_HOST_SESSION_ID === undefined ? 'clean' : 'stale') + ':' + i.source + ':' + i.role); process.exit(124)" ], harness }, context);
     expect(result).toMatchObject({ status: "error", exitCode: 124, code: "session.child-exit", details: { stdout: "clean:local:coordinator" } });
   });
 
   test("session.run carries a real child signal in the result envelope", async () => {
-    const context = testContext();
-    const result = await definition("session.run").execute({ workflow: "wf-signal", role: "coordinator", argv: [process.execPath, "-e", "process.kill(process.pid, 'SIGTERM')"] }, context);
+    const { harness } = await runFixture("signal", { bind: RUN_CLAIMED });
+    const context = testContext({ sessionId: RUN_CLAIMED });
+    const result = await definition("session.run").execute({ workflow: RUN_WORKFLOW, role: "coordinator", argv: [process.execPath, "-e", "process.kill(process.pid, 'SIGTERM')"], harness }, context);
     expect(result).toMatchObject({ status: "error", exitCode: 143, code: "session.child-exit", details: { signal: "SIGTERM" } });
   });
 
@@ -173,6 +175,17 @@ function absentStore(): string {
   roots.push(root);
   const harness = path.join(root, ".mstar");
   mkdirSync(harness, { recursive: true });
+  return harness;
+}
+
+/** A harness directory whose initialized store holds no registered workflow. */
+async function emptyStore(): Promise<string> {
+  const root = mkdtempSync(path.join(os.tmpdir(), "session-run-empty-"));
+  roots.push(root);
+  const harness = path.join(root, ".mstar");
+  mkdirSync(harness, { recursive: true });
+  const store = await initializeStore({ harnessDir: harness });
+  store.close();
   return harness;
 }
 
@@ -356,7 +369,7 @@ describe("session.run bound identity", () => {
   });
 
   test("refuses a workflow the authority does not hold, naming registration", async () => {
-    for (const harness of [await runFixture("unregistered"), absentStore()]) {
+    for (const harness of [await emptyStore(), absentStore()]) {
       const result = await launchBound(harness, RUN_CLAIMED);
       expect(result).toMatchObject({ status: "refused", code: "session.run-unbound" });
       expect(recoveryOf(result)).toContain("mstar workflow register");
