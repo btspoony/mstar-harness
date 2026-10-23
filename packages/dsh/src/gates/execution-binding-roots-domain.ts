@@ -55,12 +55,30 @@ export interface ExecutionBindingRootStore {
 /** The installed seam; `undefined` while no store is open (today's behaviour). */
 let installedStore: ExecutionBindingRootStore | undefined
 
+/** Whether the facility is provided and its `open` is still in flight (see {@link setExecutionBindingRootStoreOpening}). */
+let openingStore = false
+
 /**
  * Whether a seam is installed. The receipt path reads this to say ONCE, at the
  * first adoption that finds no facility, that the receipt is per-process.
  */
 export function executionBindingRootStoreInstalled(): boolean {
   return installedStore !== undefined
+}
+
+/**
+ * Whether a seam's `open` is in flight: the facility IS provided, so an
+ * adoption landing now is back-filled at install and its absence from the
+ * durable table is temporary, not a missing seam. The plugin's inject child
+ * raises this before awaiting `open`, an install or a refused `open` lowers it.
+ */
+export function executionBindingRootStoreOpening(): boolean {
+  return openingStore
+}
+
+/** Set the in-flight-`open` fact (the plugin's inject child); install clears it with the seam. */
+export function setExecutionBindingRootStoreOpening(opening: boolean): void {
+  openingStore = opening
 }
 
 /**
@@ -132,6 +150,7 @@ function warn(message: string, error: unknown): void {
 export function installExecutionBindingRootStore(store: ExecutionBindingRootStore): () => void {
   const previous = installedStore
   installedStore = store
+  openingStore = false
   replayObservedRoots?.()
   return () => {
     if (installedStore === store) installedStore = previous

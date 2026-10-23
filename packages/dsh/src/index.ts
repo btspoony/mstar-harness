@@ -108,6 +108,7 @@ import {
   executionBindingRootsDomain,
   executionBindingRootStoreOf,
   installExecutionBindingRootStore,
+  setExecutionBindingRootStoreOpening,
   setExecutionBindingRootsLogger,
 } from './gates/execution-binding-roots-domain.ts'
 
@@ -989,6 +990,11 @@ export function apply(ctx: Context, config: Config): void {
   }
   setExecutionBindingRootsLogger(warnExecutionBindingRoots)
   ctx.inject(['storageDomain'], async (storageCtx) => {
+    // The facility IS provided, so the seam is coming: an adoption that lands
+    // while `open` is in flight is back-filled at install, and reporting it as
+    // "no seam" would name a cause that is not true. Only a refused `open`
+    // (below) makes the absence real for the rest of this process.
+    setExecutionBindingRootStoreOpening(true)
     try {
       const domain = await storageCtx.storageDomain.open(executionBindingRootsDomain)
       const uninstall = installExecutionBindingRootStore(executionBindingRootStoreOf(domain))
@@ -1019,8 +1025,9 @@ export function apply(ctx: Context, config: Config): void {
         )
       }
     } catch (error) {
+      setExecutionBindingRootStoreOpening(false)
       warnExecutionBindingRoots(
-        `durable adopted control root unavailable: open refused (${causeOf(error)}) — the selected control root stays a per-process receipt; restart so the next apply can open the domain once the refused name (an \`already-open\` holder) is released, then re-bind to record the receipt durably`,
+        `durable adopted control root unavailable: open refused (${causeOf(error)}) — the selected control root stays a per-process receipt; restart so the next apply can open the domain once the refused name (an \`already-open\` holder) is released, then a resume re-bind carrying the original session reference records it durably`,
       )
     }
   })
