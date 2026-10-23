@@ -146,8 +146,15 @@ function toolExec(name: string, args: unknown, agent?: unknown): ToolExecution {
   } as unknown as ToolExecution
 }
 
+/**
+ * The dispatching coordinator: a ROOT session. The dispatch gate derives the
+ * anti-recursion caller from `session.header`, so an agent stub without one
+ * reads as unreadable and legitimately fails closed.
+ */
+const rootAgent = { session: { header: {} } }
+
 /** The subagent tool call shape: `{ description, prompt, run_in_background? }`. */
-const subagentExec = (prompt: string): ToolExecution => toolExec('subagent', { description: 'probe', prompt })
+const subagentExec = (prompt: string): ToolExecution => toolExec('subagent', { description: 'probe', prompt }, rootAgent)
 
 /** The registry's bare default decision (the waterfall's terminal `next()`). */
 const defaultAllow = (): Promise<PreToolDecision> => Promise.resolve<PreToolDecision>({ kind: 'allow' })

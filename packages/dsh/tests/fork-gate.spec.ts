@@ -98,19 +98,27 @@ const FORK_ASSIGNMENT_PROMPT = [
 let seq = 0
 
 /** One pending tool call in the registry pipeline shape (dsh-tools 9451be2). */
-function toolExec(name: string, args: unknown): ToolExecution {
+function toolExec(name: string, args: unknown, agent?: unknown): ToolExecution {
   return {
     callId: `c${++seq}` as ToolExecution['callId'],
     name,
     arguments: args,
+    ...(agent !== undefined ? { agent: agent as ToolExecution['agent'] } : {}),
     signal: new AbortController().signal,
     token: Symbol('dsh.tool.execution') as unknown as ToolExecutionToken,
   } as unknown as ToolExecution
 }
 
+/**
+ * The dispatching coordinator: a ROOT session. The dispatch gate derives the
+ * anti-recursion caller from `session.header`, so an agent stub without one
+ * reads as unreadable and legitimately fails closed.
+ */
+const rootAgent = { session: { header: {} } }
+
 /** The fork tool call shape: the SAME `{ description, prompt }` as subagent. */
 const forkExec = (prompt: string): ToolExecution =>
-  toolExec('subagent_fork', { description: 'fork probe', prompt })
+  toolExec('subagent_fork', { description: 'fork probe', prompt }, rootAgent)
 
 /** The registry's bare default decision (the waterfall's terminal `next()`). */
 const defaultAllow = (): Promise<PreToolDecision> => Promise.resolve<PreToolDecision>({ kind: 'allow' })
@@ -238,7 +246,9 @@ describe('fork settle — ledger records fork dispatch + settle (dispatchTools-d
       callId: 'fork-1' as ToolCallId,
       name: 'subagent_fork',
       arguments: { description: 'fork probe', prompt: VALID_FORK },
-      agent: { id: 'fork-session' } as never,
+      // The dispatching session is the ROOT coordinator (the caller the gate
+      // reads); `id` carries the ledger's settle identity.
+      agent: { id: 'fork-session', ...rootAgent } as never,
       signal: new AbortController().signal,
     })
     expect(result.isError).toBe(false)
