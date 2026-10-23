@@ -161,11 +161,11 @@ function failure(id: string, error: unknown): CommandEnvelope<never> {
                   : id === "plan.prepare"
                     ? "Correct the absolute feature-worktree path, feature branch, and Prepare gate values. Run mstar plan prepare --workflow <workflow-id> --plan <plan-id> --worktree-path <absolute-path> --working-branch <branch>."
                     : id === "plan.progress"
-                      ? "The progress value must be the JSON progress object (status, summary, evidence_paths) and the plan revision must be current. Run mstar plan progress --workflow <workflow-id> --plan <plan-id> --progress <json-progress-object>."
+                      ? "The progress value must be the JSON progress object (status, summary, evidence_paths) and the plan revision must be current. Run mstar plan progress --workflow <workflow-id> --plan <plan-id> --progress '<json-progress-object>'."
                       : id === "plan.issue-add"
-                        ? "Valid issue entries and the current revision for the addressed plan are required. Run mstar plan issue-add --workflow <workflow-id> --plan <plan-id> --entries <issues-file>."
+                        ? "Valid issue entries and the current revision for the addressed plan are required. Run mstar plan issue-add --workflow <workflow-id> --plan <plan-id> --entries '<json-array>'."
                         : id === "plan.issue-close"
-                          ? "The addressed plan issue needs its current revision and a supported disposition. Run mstar plan issue-close --workflow <workflow-id> --plan <plan-id> --issue <issue-id> --disposition <disposition>."
+                          ? "The addressed plan issue needs its current revision and a supported disposition. Run mstar plan issue-close --workflow <workflow-id> --plan <plan-id> --issue <issue-id> --disposition <disposition> --expect-issue <issue-revision> --file <absolute-evidence.json>."
                           : "Delivery-route evidence and QC/QA proof for this plan are required. Run mstar plan complete --workflow <workflow-id> --plan <plan-id> --file <absolute-evidence.json>.",
   });
 }

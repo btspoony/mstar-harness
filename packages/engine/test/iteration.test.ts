@@ -41,6 +41,7 @@ import { dirname, join } from "node:path";
 import {
   assertCatalogCompleteness,
   evaluatePhaseGate,
+  evaluatePostMergeCloseFromExecutionAuthority,
   parseCompassFrontmatter,
   pushCadenceProbe,
   readCatalogCompleteness,
@@ -48,9 +49,20 @@ import {
   type CompassDoc,
 } from "../src/iteration.js";
 import type { SnapshotDoc } from "../src/iteration.js";
-import { readJson } from "../src/core.js";
-import { registerCatalogEntity } from "../src/catalog.js";
-import { initializeStore, type StoreContext } from "../src/store-db.js";
+import { readDeclaredNodeFloor, readJson } from "../src/core.js";
+import { registerCatalogEntity, type CatalogOperation } from "../src/catalog.js";
+import { initializeStore, openStore, type StoreContext } from "../src/store-db.js";
+import {
+  bindExecutionSession,
+  createExecutionWorkflow,
+  executionToken,
+  readExecutionState,
+  type ExecutionToken,
+} from "../src/execution-store.js";
+import { executionContextFor } from "../src/execution-session.js";
+import { mutateExecutionWorkflow, recoverExecutionCoordinator } from "../src/execution-workflow.js";
+import { ACTIVATION_PROTOCOL_VERSION, type ActivationAttestation } from "../src/store-activation.js";
+import type { WorkflowSnapshot } from "../src/workflow.js";
 
 const REAL_STATUS_PATH = join(import.meta.dir, "fixtures", "status.real-shape.json");
 
@@ -338,4 +350,132 @@ describe("evaluatePhaseGate — phase transitions on workflow snapshot input (ms
   });
 });
 
-/** Minimal valid terminal workflow snapshot for the Phase-6 gate fixtures. */
+/* ------------------------------------------------------------------------ *
+ * Phase 6 post-merge close — a terminal workflow's held integration lease
+ * ------------------------------------------------------------------------ */
+
+/**
+ * The gap this closes: the Phase-6 gate flags a terminal workflow whose
+ * integration lease is still held, and the ONE route that clears it is the
+ * public coordinator recovery release. Behavior only — the codes are asserted,
+ * the rendered prose is not.
+ */
+describe("evaluatePostMergeCloseFromExecutionAuthority — a terminal workflow's held lease", () => {
+  test("the gate reports the held lease, and the public recover release clears it", async () => {
+    const root = mkdtempSync(join(tmpdir(), "mstar-phase6-lease-"));
+    try {
+      const harnessDir = join(root, ".mstar");
+      mkdirSync(harnessDir, { recursive: true });
+      const context: StoreContext = { harnessDir };
+      (await initializeStore(context)).close();
+      const workflowId = "wf-phase6-held-lease";
+      const planId = "plan-phase6-held-lease";
+      const holderId = "coordinator-phase6-holder";
+      const operatorId = "coordinator-phase6-operator";
+      const now = "2026-09-01T00:00:00.000Z";
+      const identity = { source: "local" as const, sessionId: holderId, role: "coordinator" as const, workflowId };
+      const execution = executionContextFor(context, identity);
+      await registerCatalogEntity(
+        context,
+        { kind: "plan", id: planId, title: planId, rootKind: "plans", relativePath: `${planId}.md` },
+        { operationId: "catalog-phase6", actor: "project-manager" } satisfies CatalogOperation,
+      );
+      const created = await createExecutionWorkflow(execution, {
+        entry: { id: workflowId, type: "plan", started_at: now, dir: `workflows/${workflowId}` },
+        snapshot: {
+          schema_version: 1, id: workflowId, type: "plan", status: "running", started_at: now, updated_at: now,
+          phase: "phase-2-execute",
+          plans: [{ id: planId, title: planId, file: `${planId}.md`, status: "InProgress" }],
+          delivery_kind: "development",
+          branch: { base: "main", source: "feature/test", target: "main", integration: "integration/test" },
+        } as unknown as WorkflowSnapshot,
+        expected: (await readExecutionState(context)).token,
+        operationId: "create-phase6",
+      });
+      const session = await bindExecutionSession(execution, {
+        workflowId,
+        expected: created.data.workflows[0]!.workflowToken,
+        operationId: "bind-phase6",
+      });
+      await mutateExecutionWorkflow(execution, {
+        operationId: "stop-phase6",
+        session: session.data,
+        expected: (await readExecutionState(context)).data.workflows[0]!.workflowToken,
+        workflowId,
+        operation: { kind: "lifecycle", status: "stopped", reason: "operator cancelled the lifecycle" },
+      });
+
+      // The held lease a crash or a foreign writer left behind: the close itself
+      // never leaves one.
+      const store = await openStore(context, "write");
+      try {
+        const meta = store.db.prepare("select authority_epoch from store_meta where id = 1").get() as { authority_epoch: number };
+        store.db.prepare(
+          "insert or replace into execution_integration_leases(workflow_id, revision, owner_epoch, lease_json) values (?, 1, ?, ?)",
+        ).run(workflowId, meta.authority_epoch, JSON.stringify({
+          holder: holderId, claimed_at: now, plan_id: planId,
+          source_branch: "feature/test", target_branch: "main",
+        }));
+      } finally {
+        store.close();
+      }
+
+      const held = await evaluatePostMergeCloseFromExecutionAuthority(context, workflowId);
+      expect(held.violations.map((entry) => entry.code)).toContain("PHASE6_DANGLING_LEASE");
+
+      const released = await recoverExecutionCoordinator(
+        executionContextFor(context, { ...identity, sessionId: operatorId }),
+        {
+          expected: await workflowTokenOf(context, workflowId),
+          operationId: "release-phase6",
+          priorSessionId: holderId,
+          reason: "the stopped holder's lease is released",
+          attestation: stopAttestation(holderId),
+        },
+      );
+      expect(released.replayed).toBe(false);
+
+      const cleared = await evaluatePostMergeCloseFromExecutionAuthority(context, workflowId);
+      expect(cleared.violations.map((entry) => entry.code)).not.toContain("PHASE6_DANGLING_LEASE");
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+});
+
+/** The workflow's current CAS token, built from the retained header's revision. */
+async function workflowTokenOf(context: StoreContext, workflowId: string): Promise<ExecutionToken> {
+  const store = await openStore(context, "read");
+  try {
+    const meta = store.db.prepare("select store_id, authority_epoch from store_meta where id = 1").get() as
+      { store_id: string; authority_epoch: number };
+    const row = store.db.prepare("select revision from execution_workflows where workflow_id = ?").get(workflowId) as
+      { revision: number };
+    return executionToken("workflow", meta.store_id, meta.authority_epoch, [workflowId], row.revision);
+  } finally {
+    store.close();
+  }
+}
+
+/** A conforming installed-consumer attestation naming the given stopped session. */
+function stopAttestation(stopped: string): ActivationAttestation {
+  const floor = readDeclaredNodeFloor() ?? "0.0.0";
+  return {
+    version: ACTIVATION_PROTOCOL_VERSION,
+    attestedAt: "2026-09-02T00:00:00.000Z",
+    operator: { actor: "ops-engineer", authorizationRef: "phase 6 held-lease release decision" },
+    consumers: [
+      {
+        entryId: "coordinator-omp",
+        kind: "coordinator",
+        entrypoint: "/opt/mstar/coordinator/dist/index.js",
+        runtime: "node",
+        runtimeVersion: `${Number.parseInt(floor.split(".")[0]!, 10) + 1}.0.0`,
+        version: "0.0.0-synthetic",
+        current: true,
+        disposition: "reloaded",
+      },
+    ],
+    stoppedSessions: [{ sessionId: stopped, host: "omp", state: "stopped" }],
+  };
+}
