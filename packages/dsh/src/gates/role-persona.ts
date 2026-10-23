@@ -60,7 +60,9 @@
  * (`Config.roleGate`, default `hard`) — an explicit `Execute as:` / `Act as:`
  * / `Role:` field or a backticked/bold already-declared role id is rewritten
  * into the canonical Assignment header, and only a start with NO reliable
- * declaration is refused. The rewritten request is what the preset merge and
+ * declaration — or one the rewrite cannot make the binding seam read — is
+ * refused. A repair is returned only after the rewritten text is re-parsed
+ * with the seam's own reader. The rewritten request is what the preset merge and
  * the runtime receive. The canonical/pass judgement reads the SAME raw header
  * the preset merge parses — fence masking only decides which text may supply a
  * repair candidate — so a gate pass never means the merge sees no role. The
@@ -595,10 +597,11 @@ export interface RoleGateInput {
  * The gate's verdict:
  * - `pass` — silent pass-through (caller intent, canonical header, non-harness
  *   project, unknown provider, `off`, or the wrapper's contained fail-open);
- * - `repair` — the request carries a rewritten prompt (canonical header);
- * - `warn` — no reliable declaration (or an ambiguous one), advisory mode;
- * - `refuse` — no reliable declaration (or an ambiguous one), `hard` mode
- *   (throws before delegating).
+ * - `repair` — the request carries a rewritten prompt (canonical header) that
+ *   the binding seam's own reader PROVES it will bind;
+ * - `warn` — no reliable declaration, an ambiguous one, or a declaration the
+ *   repair cannot make the seam see, advisory mode;
+ * - `refuse` — the same three causes, `hard` mode (throws before delegating).
  */
 export type RoleGateDecision =
   | { readonly kind: 'pass'; readonly reason: 'agent-preset' | 'canonical' | 'non-harness' | 'provider-unknown' | 'off' | 'degraded' }
@@ -630,8 +633,14 @@ const EXECUTE_AS_FIELD_LINE_RE = /^([ \t]*(?:[-*][ \t]+)?)(?:\*\*\s*Execute as\s
  * 3. not a harness project → pass (a non-harness project never pays the gate).
  * 4. unknown provider → pass (the service fails loud its own way).
  * 5. exactly one distinct repair candidate (field tier or declared token) →
- *    repair the prompt; ambiguous or none → the configured mode
- *    (`off` silent, `warn` one advisory, `hard` refusal).
+ *    repair the prompt, then PROVE the repair: the rewritten text is parsed
+ *    with the binding seam's own reader (`parseAssignmentFields` over
+ *    `assignmentHeaderRegion`) and must resolve to that role. A rewrite that
+ *    leaves another `Execute as` line winning the read (a wrapped value, or
+ *    one past the header boundary) would log "repaired" while the child still
+ *    starts unbound, so it is NOT returned as `repair`; ambiguous, none, or an
+ *    unprovable repair → the configured mode (`off` silent, `warn` one
+ *    advisory, `hard` refusal).
  *
  * @param input - the request, mode, pre-resolved harness/provider facts and
  *   the declared role-id set.
@@ -673,19 +682,30 @@ export function evaluateRoleGate(input: RoleGateInput): RoleGateDecision {
   // (5) Repair candidates: exactly one distinct value across both tiers.
   const { fields, tokens } = roleCandidates(unfenced, input.declaredRoleIds)
   const candidates = [...new Set([...fields, ...tokens])]
+  // The candidate the rewrite produced but could not make the seam bind (an
+  // unrepairable declaration) — reported by the mode fallback below.
+  let unrepairable: string | undefined
   if (fields.length <= 1 && tokens.length <= 1 && candidates.length === 1) {
     const roleId = candidates[0]!
-    return {
-      kind: 'repair',
-      roleId,
-      evidence: fields.length === 1 ? 'field' : 'token',
-      request: repairRequest(request, roleId),
+    const repaired = repairRequest(request, roleId)
+    // The repair must PROVE itself against the SAME reader the binding seam
+    // uses (`withRolePreset`): a rewrite whose canonical line does not win
+    // the read — a later wrapped field still binds, e.g. when the inserted line
+    // lands before one past the raw header boundary — leaves the child unbound,
+    // and claiming "repaired" would hide exactly that.
+    if (parseAssignmentFields(assignmentHeaderRegion(promptText(repaired))).executeAs === roleId) {
+      return { kind: 'repair', roleId, evidence: fields.length === 1 ? 'field' : 'token', request: repaired }
     }
+    unrepairable = roleId
   }
-  // (6) No reliable declaration (zero candidates) or an ambiguous one (two
-  // or more distinct) → the configured mode, with the cause-specific text.
+  // (6) No reliable declaration (zero candidates), an ambiguous one (two
+  // or more distinct), or an unrepairable one → the configured mode, with the
+  // cause-specific text.
   if (input.mode === 'off') return { kind: 'pass', reason: 'off' }
-  const message = declarationMessage(input.cwd, input.mode, candidates)
+  const message =
+    unrepairable === undefined
+      ? declarationMessage(input.cwd, input.mode, candidates)
+      : unrepairableMessage(input.cwd, input.mode, unrepairable)
   if (input.mode === 'warn') return { kind: 'warn', message }
   return { kind: 'refuse', message }
 }
@@ -896,11 +916,40 @@ function declarationMessage(cwd: string | undefined, mode: 'warn' | 'hard', cand
     candidates.length > 1
       ? `Fix: keep exactly one role declaration — remove the extra 'Role:' / 'Act as:' / 'Execute as:' lines, or name the one role in 'Execute as: <role-id>' under the '## Assignment' heading.`
       : `Fix: add 'Execute as: <role-id>' under the '## Assignment' heading of the prompt.`
-  const recovery =
-    mode === 'warn'
-      ? `The start proceeded under 'roleGate: warn'; set 'roleGate: off' to skip this advisory (a single explicit declaration is still normalized either way).`
-      : `Escape hatch: set 'roleGate: warn' (one advisory, the start proceeds) or 'roleGate: off' (the refusal is skipped; a single explicit declaration is still normalized) in the dsh plugin config.`
+  const recovery = modeRecovery(mode)
   return `${where} ${cause}. ${fix} ${recovery}`
+}
+
+/**
+ * The mode-appropriate recovery for a `warn` advisory / `hard` refusal (a
+ * refusal with no recovery path is a defect; an advisory that tells a warn-mode
+ * operator to switch to warn is noise).
+ */
+function modeRecovery(mode: 'warn' | 'hard'): string {
+  return mode === 'warn'
+    ? `The start proceeded under 'roleGate: warn'; set 'roleGate: off' to skip this advisory (a single explicit declaration is still normalized either way).`
+    : `Escape hatch: set 'roleGate: warn' (one advisory, the start proceeds) or 'roleGate: off' (the refusal is skipped; a single explicit declaration is still normalized) in the dsh plugin config.`
+}
+
+/**
+ * The `hard` refusal / `warn` advisory text for a declaration that IS present
+ * but cannot be normalized — the rewrite could not make the binding seam read
+ * the role (another `Execute as` line keeps winning the read). Distinct from
+ * {@link declarationMessage}: the role is NOT missing, so the operator must be
+ * told the declaration could not be moved into the seam's read, plus the exact
+ * unambiguous form that always binds.
+ *
+ * @param cwd - the child's effective start directory, when known.
+ * @param mode - the configured mode (`hard` refusal or `warn` advisory).
+ * @param roleId - the declared role the repair could not bind.
+ */
+function unrepairableMessage(cwd: string | undefined, mode: 'warn' | 'hard', roleId: string): string {
+  const where = cwd === undefined ? 'the subagent start' : `the subagent start from cwd '${cwd}'`
+  const cause =
+    `declares the role '${roleId}', but the declaration cannot be normalized so that the binding seam reads it ` +
+    `(another 'Execute as' line keeps winning the header read — a wrapped value, or one past the header boundary)`
+  const fix = `Fix: write 'Execute as: ${roleId}' as the ONLY role declaration in the Assignment header, above any fenced block.`
+  return `${where} ${cause}. ${fix} ${modeRecovery(mode)}`
 }
 
 /**

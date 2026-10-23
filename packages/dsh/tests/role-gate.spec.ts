@@ -490,6 +490,33 @@ describe('dispatch-role gate — repair + refusal through the start seam', () =>
     // The FINAL selection on the delegated request (not just the verdict kind).
     expect(sent.agentPreset).toBe(PRESET_ID)
   })
+
+  it('(w) a repair the seam would NOT bind is never claimed — hard refuses, nothing starts', async () => {
+    const { app, provider, workspace } = await bootWithProvider()
+    // The masked scan finds the real declaration past the fenced `## Task`, so
+    // the rewrite inserts the canonical line BEFORE the wrapped field that
+    // still wins the raw header read — "repaired" would leave the child
+    // unbound.
+    const prompt = [
+      '## Assignment',
+      '',
+      '```',
+      'Execute as: `fullstack-dev`',
+      '## Task',
+      '```',
+      'Execute as: fullstack-dev',
+    ].join('\n')
+    const error = await startAndCatch(app, specFor({ ...textPrompt(prompt), cwd: workspace }))
+
+    // The real cause: a role IS declared, it just cannot be normalized.
+    expect(error.message).toContain(`declares the role '${EXECUTE_AS}'`)
+    expect(error.message).not.toContain('carries no role declaration')
+    // The fix names the form that always binds, and the escape hatch stays.
+    expect(error.message).toContain(`'Execute as: ${EXECUTE_AS}' as the ONLY role declaration`)
+    expect(error.message).toContain('above any fenced block')
+    expect(error.message).toContain('roleGate')
+    expect(provider.starts).toHaveLength(0)
+  })
 })
 
 /** Pure decision inputs: a harness project that declares both fixture roles. */
@@ -716,6 +743,58 @@ describe('dispatch-role gate — pure decision table (evaluateRoleGate)', () => 
       kind: 'pass',
       reason: 'canonical',
     })
+  })
+
+  it('(p18) a repair the seam would NOT bind is never `repair` — the configured mode decides', () => {
+    // The masked scan finds the declaration past the fenced `## Task`, so the
+    // canonical line is inserted BEFORE the wrapped field that keeps winning
+    // the raw header read: the rewrite cannot be proven, so the verdict is the
+    // configured mode — never a "repaired" claim that leaves the child unbound.
+    const text = [
+      '## Assignment',
+      '',
+      '```',
+      'Execute as: `fullstack-dev`',
+      '## Task',
+      '```',
+      'Execute as: fullstack-dev',
+    ].join('\n')
+    const hard = evaluateRoleGate(gateInput(text))
+    expect(hard.kind).toBe('refuse')
+    if (hard.kind === 'refuse') {
+      expect(hard.message).toContain(`declares the role '${EXECUTE_AS}'`)
+      expect(hard.message).not.toContain('carries no role declaration')
+      expect(hard.message).toContain('above any fenced block')
+      expect(hard.message).toContain('roleGate')
+    }
+    const warn = evaluateRoleGate(gateInput(text, { mode: 'warn' }))
+    expect(warn.kind).toBe('warn')
+    if (warn.kind === 'warn') expect(warn.message).toContain(`declares the role '${EXECUTE_AS}'`)
+    expect(evaluateRoleGate(gateInput(text, { mode: 'off' }))).toEqual({ kind: 'pass', reason: 'off' })
+  })
+
+  it('(p19) a fenced `## Task` whose inserted line DOES win the raw header still repairs', () => {
+    // The insertion lands before the truncation point, so the binding seam's
+    // own reader resolves the canonical value — the proof accepts the repair.
+    const text = [
+      '## Assignment',
+      '',
+      '```',
+      '## Task',
+      '```',
+      '',
+      'Execute as: fullstack-dev',
+      '',
+      '## Task',
+      '',
+      'Implement.',
+    ].join('\n')
+    const decision = evaluateRoleGate(gateInput(text))
+    expect(decision.kind).toBe('repair')
+    if (decision.kind !== 'repair') return
+    expect(decision.roleId).toBe(EXECUTE_AS)
+    expect((decision.request.prompt ?? []).map((block) => block.text ?? '').join('\n'))
+      .toContain(`\nExecute as: ${EXECUTE_AS}\n`)
   })
 })
 
