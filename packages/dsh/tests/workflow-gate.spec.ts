@@ -158,8 +158,16 @@ const boundAgentIn = (cwd: string, sessionId: string): unknown =>
 const workflowExecBound = (metaName: string, cwd: string, sessionId: string): ToolExecution =>
   toolExec('workflow', { script: 'probe', meta: { name: metaName, description: 'probe' } }, boundAgentIn(cwd, sessionId))
 
+/**
+ * The dispatching coordinator: a ROOT session. The dispatch gate derives the
+ * anti-recursion caller from `session.header`, so an agent stub without one
+ * reads as unreadable and legitimately fails closed.
+ */
+const rootAgent = { session: { header: {} } }
+
 /** The subagent tool call shape: `{ description, prompt, run_in_background? }`. */
-const subagentExec = (prompt: string): ToolExecution => toolExec('subagent', { description: 'probe', prompt })
+const subagentExec = (prompt: string): ToolExecution =>
+  toolExec('subagent', { description: 'probe', prompt }, rootAgent)
 
 /* ------------------------------ P-b fixtures (Task 3) ------------------------------ */
 

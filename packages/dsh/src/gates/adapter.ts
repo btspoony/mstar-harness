@@ -258,9 +258,11 @@ export class DshHostAdapter extends Service implements HostAdapter {
    * worktree L1/L2 checks; read-only roles skip the branch gate). The
    * listener passes `exec` so the lease gate (ToolExecution-bound: session
    * id, in-flight call) joins the same verdict; the host hook has no exec
-   * context and covers the field/branch/anti-recursion/worktree path — with
-   * no calling session its derived anti-recursion caller is EMPTY, so only an
-   * explicit `dispatchBinding` lets that path judge the red line.
+   * context and therefore no calling session, so its anti-recursion caller is
+   * always EMPTY — an explicit `dispatchBinding` is a ROOT-session identity and
+   * is never inherited by that path, which fails closed with
+   * `dispatch.anti-recursion.empty-binding` while still covering the
+   * field/branch/worktree checks.
    * @param prompt - the Assignment text (engine header grammar).
    * @param exec - the in-flight delegation tool call (listener path only).
    * @param hard - the caller's ONE `resolveDispatchHard` resolution): passed in so the record block and

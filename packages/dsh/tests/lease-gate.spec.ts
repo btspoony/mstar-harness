@@ -203,7 +203,7 @@ const subagentExec = (prompt: string, agent?: unknown): ToolExecution =>
       .replaceAll(WORKTREE, join(booted!.root, 'feature-checkout'))
       .replaceAll('/srv/plans', join(booted!.harnessDir, 'plans'))
       .replaceAll('/srv/mstar/sdd', join(booted!.harnessDir, 'sdd')),
-  }, agent ?? { id: 'project-manager' })
+  }, agent ?? { id: 'project-manager', session: { header: {} } })
 
 /** The registry's bare default decision (the waterfall's terminal `next()`). */
 const defaultAllow = (): Promise<PreToolDecision> => Promise.resolve<PreToolDecision>({ kind: 'allow' })

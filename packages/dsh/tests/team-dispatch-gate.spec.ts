@@ -71,15 +71,19 @@ const COORDINATION_MESSAGE = `Please re-run the failing test and paste the log; 
 let seq = 0
 
 /** One pending tool call in the registry pipeline shape. */
-function toolExec(name: string, args: unknown): ToolExecution {
+function toolExec(name: string, args: unknown, agent?: unknown): ToolExecution {
   return {
     callId: `c${++seq}` as ToolExecution['callId'],
     name,
     arguments: args,
+    ...(agent === undefined ? {} : { agent: agent as ToolExecution['agent'] }),
     signal: new AbortController().signal,
     token: Symbol('dsh.tool.execution') as unknown as ToolExecutionToken,
   } as unknown as ToolExecution
 }
+
+/** ROOT calling session (no `header.parentSession`) — the only session whose configured `dispatchBinding` is read. */
+const rootAgent = { session: { header: {} } }
 
 /** The `subagent` call shape: `{ description, prompt }`. */
 const subagentExec = (prompt: string): ToolExecution => toolExec('subagent', { description: 'probe', prompt })
@@ -290,7 +294,11 @@ describe('team dispatch gate — the subagent/subagent_fork verdicts are unchang
     const app = booted = await bootApp({ enforcement: 'hard', dispatchBinding: 'qc-specialist' })
     const advisories = captureAdvisories(app.ctx)
 
-    const decision = await app.ctx.waterfall('tools/pre-execute', subagentExec(VALID_WRITABLE), defaultAllow)
+    const decision = await app.ctx.waterfall(
+      'tools/pre-execute',
+      toolExec('subagent', { description: 'probe', prompt: VALID_WRITABLE }, rootAgent),
+      defaultAllow,
+    )
 
     expect(decision).toEqual({ kind: 'allow' })
     expect(advisories).toHaveLength(0)
