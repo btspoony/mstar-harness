@@ -56,6 +56,14 @@ export interface ExecutionBindingRootStore {
 let installedStore: ExecutionBindingRootStore | undefined
 
 /**
+ * Whether a seam is installed. The receipt path reads this to say ONCE, at the
+ * first adoption that finds no facility, that the receipt is per-process.
+ */
+export function executionBindingRootStoreInstalled(): boolean {
+  return installedStore !== undefined
+}
+
+/**
  * The overlay replay the sibling module registers at load and every install
  * runs once: a receipt recorded while no store existed reaches the table then,
  * so an adoption made before the facility's `open` resolved is not lost.
@@ -90,19 +98,27 @@ export function setExecutionBindingRootsLogger(sink: ExecutionBindingRootsLogSin
 }
 
 /**
- * Log one contained durable failure. Never-throws invariant: the whole sink call
- * is inside the guard, so neither the default console write nor a throwing bound
- * sink can re-enter the caller — a contained read failure stays a read failure
- * and a contained write rejection stays a resolved promise. The message carries
- * no label: the sink owns it — the default console sink prefixes it, while the
- * bound `ctx.logger(EXECUTION_BINDING_ROOTS_LOGGER)` scope already labels it.
+ * Log one contained warning through the bound sink. Never-throws invariant: the
+ * whole sink call is inside the guard, so neither the default console write nor
+ * a throwing bound sink can re-enter the caller. The message carries no label:
+ * the sink owns it — the default console sink prefixes it, while the bound
+ * `ctx.logger(EXECUTION_BINDING_ROOTS_LOGGER)` scope already labels it.
  */
-function warn(message: string, error: unknown): void {
+export function warnExecutionBindingRoots(message: string): void {
   try {
-    logSink(`${message}: ${error instanceof Error ? error.message : String(error)}`)
+    logSink(message)
   } catch {
     // Never-throws invariant (module log-sink pattern).
   }
+}
+
+/**
+ * Log one contained durable failure: the cause is appended to the sink line —
+ * a contained read failure stays a read failure and a contained write rejection
+ * stays a resolved promise.
+ */
+function warn(message: string, error: unknown): void {
+  warnExecutionBindingRoots(`${message}: ${error instanceof Error ? error.message : String(error)}`)
 }
 
 /**

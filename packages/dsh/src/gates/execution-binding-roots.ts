@@ -31,7 +31,11 @@
  * a root. With no seam — the host service is absent, its open refused, or a
  * bare module instance in a test — the receipt is exactly the per-process map
  * it has always been, and the consumers answer as they did before this module
- * existed (attribution null, clear `no-binding`). The named recovery for that
+ * existed (attribution null, clear `no-binding`). That degraded fallback is not
+ * silent: the first adoption that finds no installed seam warns once with the
+ * recovery below, and the bind's wait for a durable acknowledgment is bounded,
+ * so a stalled backend is reported and answered from the overlay rather than
+ * hanging a committed bind. The named recovery for that
  * degraded case is a RESUME re-bind: re-run the native bind carrying the
  * ORIGINAL session reference (the `resumeRef` the first bind's receipt minted —
  * still durable in the binding slot's `executionBinding.session`) and the SAME
@@ -54,8 +58,10 @@
 import {
   deleteDurableExecutionBindingRoot,
   durableExecutionBindingRootOf,
+  executionBindingRootStoreInstalled,
   putDurableExecutionBindingRoot,
   registerExecutionBindingRootReplay,
+  warnExecutionBindingRoots,
 } from './execution-binding-roots-domain.ts'
 
 /**
@@ -64,6 +70,26 @@ import {
  * is never consulted for that key again in this process).
  */
 const observedRoots = new Map<string, string | null>()
+
+/**
+ * Bound on the native bind's wait for the durable receipt's acknowledgment.
+ * A healthy backend resolves far below it; a stalled backend, or a domain
+ * close that never settles its queued writes, must not leave `mstar_plan_bind`
+ * unanswered after the engine bind already committed.
+ *
+ * shortcut: a fixed 250 ms — a healthy backend that occasionally acknowledges
+ * slower ages that receipt into the per-process fallback and logs it; upgrade
+ * to a configurable bound or a backend-health probe if a supported host
+ * reports acknowledgments above it.
+ */
+const DURABLE_RECEIPT_BOUND_MS = 250
+
+/** One-time diagnostic: the host never installed the seam (a deployment fact, not a per-call failure). */
+const NO_DURABLE_SEAM_WARNING =
+  'durable adopted control root unavailable: the host provides no storage-domain seam, so the selected control root stays a per-process receipt that a restart drops — once the host provides the domain, restart so the next apply can install it, then re-bind to record the receipt durably'
+
+/** Whether the missing-facility warning already fired in this process. */
+let warnedNoDurableSeam = false
 
 /** The map key — the session/cwd identity pair, delimiter-joined. */
 function keyOf(sessionId: string, cwd: string): string {
@@ -74,14 +100,41 @@ function keyOf(sessionId: string, cwd: string): string {
  * Record the harness root a native bind adoption wrote its durable binding
  * into, for the carrying `(sessionId, cwd)` pair. Only a successful adoption
  * records: a refused envelope never rewrites the session's selection. The
- * receipt is synchronous and the returned promise is the queued durable
- * write — it never rejects, so a store failure cannot reach the bind path.
+ * receipt is synchronous and the returned promise settles once the queued
+ * durable write is acknowledged or the wait bound expires — it never rejects,
+ * so a store failure cannot reach the bind path.
+ *
+ * The wait for the backend's acknowledgment is bounded (see
+ * `DURABLE_RECEIPT_BOUND_MS`): the overlay already answers, so a stalled
+ * backend or a close that never settles its pending writes degrades the
+ * receipt to the per-process map instead of leaving the committed bind
+ * unanswered.
  */
-export function recordExecutionBindingRoot(sessionId: string, cwd: string, harnessRoot: string): Promise<void> {
-  if (sessionId === '' || cwd === '' || harnessRoot === '') return Promise.resolve()
+export async function recordExecutionBindingRoot(sessionId: string, cwd: string, harnessRoot: string): Promise<void> {
+  if (sessionId === '' || cwd === '' || harnessRoot === '') return
   const key = keyOf(sessionId, cwd)
   observedRoots.set(key, harnessRoot)
-  return putDurableExecutionBindingRoot(key, harnessRoot)
+  // The facility is optional, and silence would hide the degraded fallback:
+  // say it ONCE, at the first adoption that finds no installed seam.
+  if (!executionBindingRootStoreInstalled() && !warnedNoDurableSeam) {
+    warnedNoDurableSeam = true
+    warnExecutionBindingRoots(NO_DURABLE_SEAM_WARNING)
+  }
+  const write = putDurableExecutionBindingRoot(key, harnessRoot)
+  let timer: ReturnType<typeof setTimeout> | undefined
+  const bound = new Promise<void>((resolve) => {
+    timer = setTimeout(() => {
+      warnExecutionBindingRoots(
+        `durable adopted control root receipt not acknowledged within ${DURABLE_RECEIPT_BOUND_MS} ms — the native bind answered from the per-process receipt, so a restart may drop it; a resume re-bind records it durably`,
+      )
+      resolve()
+    }, DURABLE_RECEIPT_BOUND_MS)
+  })
+  try {
+    await Promise.race([write, bound])
+  } finally {
+    clearTimeout(timer)
+  }
 }
 
 /**
@@ -120,11 +173,13 @@ export function clearExecutionBindingRoot(sessionId: string, cwd: string): Promi
 
 /**
  * Test-only reset: a suite sharing one module instance clears every in-process
- * receipt between cases (the durable table is untouched — a fresh seam over the
- * same medium is how the restart shape is modelled).
+ * receipt (and the one-time warning latch) between cases (the durable table is
+ * untouched — a fresh seam over the same medium is how the restart shape is
+ * modelled).
  */
 export function resetExecutionBindingRootsForTests(): void {
   observedRoots.clear()
+  warnedNoDurableSeam = false
 }
 
 // The store installs asynchronously (the plugin's deferred child), so an
