@@ -6,6 +6,18 @@ The monorepo root [CHANGELOG.md](../../CHANGELOG.md) summarizes cross-surface re
 
 ## [Unreleased]
 
+## [4.0.6] - 2026-10-23
+
+### Changed
+
+- **engine**: add `dashboard-view`, holding the generic dashboard request layer (`dashboardFilters`, `readDashboardView`, `dashboardFailure`) that every transport shares. `queryDashboard` / `withStoreRead` are unchanged.
+- **commands**: the dashboard transport keeps only its URL route table and re-exports the shared layer from the engine — no second copy of the query validation.
+- **dsh**: the workflow panel renders from the control-root `store.db` authorities instead of the last model-emitted engine-status payload, and polls a new `mstar/panelSnapshot` endpoint while its tab is visible. The panel now has three tabs — 任务迭代 / 项目路线图 / 事件记录: the agents tab, its page and its projection are removed, the two event partitions are merged into one chronological flow, and a new roadmap page renders the direction, goals and milestone↔issue membership with four distinct absence states. `mstar/engineStatus` no longer answers reads; the catalog emission, `mstar/selectWorkflow` and the durable selection are unchanged. The three catalog facts no dashboard DTO carries (iteration gate, knowledge digest, resolved selection) ride the snapshot as `retained` and disclose their own build instant, separate from the store-read time. The browser supplies only the session and its workspace: the workflow, iteration and project are resolved server-side, a workspace with no harness answers its own `no-harness` state instead of a degraded read, and a cancelled request stops the host read before its next view.
+
+- Version alignment with harness **4.0.6**.
+
+See root [CHANGELOG.md](../../CHANGELOG.md) **4.0.6**.
+
 ## [4.0.5] - 2026-10-22
 
 ### Changed
