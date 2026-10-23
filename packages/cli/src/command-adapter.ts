@@ -621,6 +621,7 @@ const COORDINATOR_SEAT_ROUTES: Record<string, true> = {
   "workflow.compass-ref": true,
   "status.workflow-close": true,
   "workflow.adopt-terminal": true,
+  "workflow.reopen": true,
   "session.recover": true,
 };
 

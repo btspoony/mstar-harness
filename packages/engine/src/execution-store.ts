@@ -119,6 +119,10 @@ export type ExecutionErrorCode =
   | "execution.delivery-declaration-required"
   | "execution.workflow-skip-unmatched"
   | "execution.compass-skip-unmatched"
+  // `workflow.reopen` eligibility refusals: one code per documented reason, so a
+  // caller branches on the exact refusal instead of parsing the message.
+  | "workflow.reopen-completed"
+  | "workflow.reopen-not-terminal"
   | "store.not-active"
   | "store.stale-epoch";
 
@@ -154,6 +158,20 @@ export type ExecutionSessionRef = {
 /** Recovery outcome and commit boundary carried by an execution action. */
 export type ExecutionReceiptRecovery = RecoveryDetails;
 
+/**
+ * The recover receipt's self-reported fact that the prior holder it revoked was
+ * still the live row: the operator's attestation is the whole evidence, so this
+ * records what the engine saw and the stop instant, never that the process was
+ * observed dead or that the authorization was host-verified.
+ */
+export type HolderLiveWarning = Readonly<{
+  code: "recovery.holder-live";
+  holder: string;
+  epoch: number;
+  observed_state: "active";
+  attested_at: string;
+}>;
+
 /** §3: one consistent authority read, optionally carrying a committed action's sidecar. */
 export type ExecutionRead<T> = {
   data: T;
@@ -161,6 +179,11 @@ export type ExecutionRead<T> = {
   storeId: string;
   epoch: number;
   operationRecovery?: ExecutionReceiptRecovery;
+  /** Lifecycle attribution: the session that moved the lifecycle and the reason it stated. */
+  actor_session_id?: string;
+  reason?: string;
+  /** A recover receipt's holder-live warning, carried onto the close of that same binding. */
+  holder_live_warning?: HolderLiveWarning;
 };
 
 /** One coordinator view of an explicitly addressed plan. */
@@ -189,7 +212,19 @@ export type ExecutionState = {
    * live workflow's token is read from is gone, so this is the only published
    * address a terminal-only write (the held-lease release) can be given.
    */
-  terminalUnregistered?: Array<{ id: string; status: "completed" | "stopped" | "failed"; revision: number; token: ExecutionToken }>;
+  terminalUnregistered?: Array<{
+    id: string;
+    status: "completed" | "stopped" | "failed";
+    revision: number;
+    token: ExecutionToken;
+    /** Attribution of the surviving terminal receipt; absent when none survived. */
+    actor_session_id?: string;
+    reason?: string;
+    /** The warnings that surviving receipt carries forward (a recovered binding's holder-live fact). */
+    warnings?: HolderLiveWarning[];
+    /** The plan rows the close left behind: the file baseline a later move is measured against. */
+    plans?: Array<{ id: string; file: string; status: string }>;
+  }>;
   terminalAdoptions?: Array<{ id: string; status: "completed" | "stopped" | "failed"; revision: number; token: ExecutionToken; lifecycle_adopted_at: string; adopt_reason: string; actor_session_id: string; operation_id: string }>;
 };
 
@@ -1031,6 +1066,49 @@ function readWorkflowView(
   };
 }
 
+/**
+ * The facts a closed lifecycle still serves about itself: the attribution its
+ * surviving terminal receipt recorded (the prune keeps exactly that one) and
+ * the plan-row inventory the close left behind — the baseline a later plan-file
+ * move is detectable against. A header with no surviving receipt serves none of
+ * them: an absent fact is never invented from the header.
+ *
+ * The source is the TERMINAL MUTATION's receipt, not the newest workflow row: a
+ * later terminal-era write (the attested lease release) adds its own receipt,
+ * and taking that one would serve a takeover as if the close never happened.
+ * The terminal mutation is the lifecycle close, and it is the one workflow-level
+ * receipt that records the lifecycle attribution — so the projection binds to
+ * the newest receipt that carries `actor_session_id`.
+ */
+function terminalProjection(
+  db: StoreDb,
+  store: StoreIdentity,
+  workflowId: string,
+): Pick<NonNullable<ExecutionState["terminalUnregistered"]>[number], "actor_session_id" | "reason" | "warnings" | "plans"> {
+  const facts: Partial<Pick<ExecutionRead<unknown>, "actor_session_id" | "reason" | "holder_live_warning">> = (db
+    .prepare("select result_json from execution_operations where workflow_id = ? and epoch = ? and plan_id is null order by rowid desc")
+    .all(workflowId, store.epoch) as Array<{ result_json?: unknown }>)
+    .map((row) => storedReceiptFacts(storedJsonObject(row.result_json, `execution_operations(${workflowId}).result_json`)))
+    .find((candidate) => candidate.actor_session_id !== undefined) ?? {};
+  const warning = holderLiveWarningOf(facts.holder_live_warning);
+  const plans = (db
+    .prepare("select plan_id, state_json from execution_plans where workflow_id = ? order by ordinal")
+    .all(workflowId) as Array<{ plan_id?: unknown; state_json?: unknown }>)
+    .map((row) => {
+      const planId = storedText(row.plan_id, `execution_plans(${workflowId}).plan_id`);
+      const state = storedJsonObject(row.state_json, `execution_plans(${workflowId},${planId}).state_json`);
+      const validation = validatePlanRow(state);
+      if (!validation.ok) throw validationRefusal(`execution_plans(${workflowId},${planId}).state_json`, validation.violations);
+      return { id: planId, file: state.file as string, status: state.status as string };
+    });
+  return {
+    ...(facts.actor_session_id === undefined ? {} : { actor_session_id: facts.actor_session_id }),
+    ...(facts.reason === undefined ? {} : { reason: facts.reason }),
+    ...(warning === undefined ? {} : { warnings: [warning] }),
+    ...(plans.length === 0 ? {} : { plans }),
+  };
+}
+
 /** The whole graph in the caller's transaction: registry order is creation order. */
 function readExecutionGraph(db: StoreDb, store: StoreIdentity, meta: ExecutionMeta): ExecutionState {
   const registry = db
@@ -1075,6 +1153,7 @@ function readExecutionGraph(db: StoreDb, store: StoreIdentity, meta: ExecutionMe
       terminalUnregistered.push({
         id, status: state.status, revision,
         token: executionToken("workflow", store.storeId, store.epoch, [id], revision),
+        ...terminalProjection(db, store, id),
       });
     }
   }
@@ -1832,7 +1911,7 @@ function readCommittedReceipt<T>(
   const storedRecovery = recovery as ExecutionReceiptRecovery | undefined;
   if (receipt.slim === true) {
     const live = readExecutionStateGraph(tx);
-    return { ...live, ...(storedRecovery === undefined ? {} : { operationRecovery: storedRecovery }) } as ExecutionRead<T>;
+    return { ...live, ...(storedRecovery === undefined ? {} : { operationRecovery: storedRecovery }), ...storedReceiptFacts(receipt) } as ExecutionRead<T>;
   }
   return {
     data: receipt.data as T,
@@ -1840,6 +1919,40 @@ function readCommittedReceipt<T>(
     storeId: receipt.storeId,
     epoch: receipt.epoch,
     ...(storedRecovery === undefined ? {} : { operationRecovery: storedRecovery }),
+    ...storedReceiptFacts(receipt),
+  };
+}
+
+/** A stored `HolderLiveWarning` fact, or `undefined` when the record is not one. */
+function holderLiveWarningOf(value: unknown): HolderLiveWarning | undefined {
+  return isPlainObject(value) &&
+    value.code === "recovery.holder-live" &&
+    isNonEmptyString(value.holder) &&
+    typeof value.epoch === "number" &&
+    value.observed_state === "active" &&
+    isNonEmptyString(value.attested_at)
+    ? (value as HolderLiveWarning)
+    : undefined;
+}
+
+/**
+ * The attribution facts a stored receipt may carry at its top level; a receipt
+ * that never recorded one serves it absent. A recover receipt records its
+ * holder-live warning inside its own `recovery` provenance block, so the replay
+ * serves that one at the same top-level position as the close's carried copy.
+ */
+function storedReceiptFacts(
+  receipt: Record<string, unknown>,
+): Partial<Pick<ExecutionRead<unknown>, "actor_session_id" | "reason" | "holder_live_warning">> {
+  const recovery = isPlainObject(receipt.recovery) ? receipt.recovery : undefined;
+  // A warning is a TYPED record, not any object: the top-level copy passes the
+  // same gate the terminal projection uses, so a replay never serves a malformed
+  // shape as a `HolderLiveWarning`.
+  const warning = holderLiveWarningOf(receipt.holder_live_warning) ?? holderLiveWarningOf(recovery?.holder_live_warning);
+  return {
+    ...(typeof receipt.actor_session_id === "string" ? { actor_session_id: receipt.actor_session_id } : {}),
+    ...(typeof receipt.reason === "string" ? { reason: receipt.reason } : {}),
+    ...(warning === undefined ? {} : { holder_live_warning: warning }),
   };
 }
 
@@ -3078,6 +3191,21 @@ export function writePlanOperationReceipt(
 }
 
 /**
+ * The optional facts an operation receipt carries besides its address: the
+ * action's sidecar, the lifecycle attribution and a recovered binding's
+ * holder-live warning. Absent fields stay absent, so a receipt without them
+ * keeps its minimal stored shape.
+ */
+function receiptFacts(receipt: ExecutionRead<unknown>): Record<string, unknown> {
+  return {
+    ...(receipt.operationRecovery === undefined ? {} : { operationRecovery: receipt.operationRecovery }),
+    ...(receipt.actor_session_id === undefined ? {} : { actor_session_id: receipt.actor_session_id }),
+    ...(receipt.reason === undefined ? {} : { reason: receipt.reason }),
+    ...(receipt.holder_live_warning === undefined ? {} : { holder_live_warning: receipt.holder_live_warning }),
+  };
+}
+
+/**
  * §3.1 the one receipt writer: the committed receipt of an accepted operation
  * (`planId: null` for a workflow-level operation), recorded inside the same
  * transaction that produced the effect, so a rolled-back operation leaves no
@@ -3108,15 +3236,7 @@ export function writeOperationReceipt(
       input.workflowId,
       input.planId,
       JSON.stringify(
-        input.slim === true
-          ? {
-              slim: true,
-              token: input.receipt.token,
-              storeId: tx.storeId,
-              epoch: tx.epoch,
-              ...(input.receipt.operationRecovery === undefined ? {} : { operationRecovery: input.receipt.operationRecovery }),
-            }
-          : input.receipt,
+        input.slim === true ? { slim: true, token: input.receipt.token, storeId: tx.storeId, epoch: tx.epoch, ...receiptFacts(input.receipt) } : input.receipt,
       ),
       input.now,
     );

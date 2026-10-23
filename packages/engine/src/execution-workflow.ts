@@ -50,9 +50,10 @@
  *   different active coordinator is never replaced; the only live identity it
  *   may replace is the exact named holder covered by stop evidence;
  * - the workflow token is the CAS, the prior holder must be NAMED, and the
- *   operator attestation must name that session as stopped/reloaded (the
- *   existing `validateActivationAttestation` document rule supplies the
- *   operator authorization reference and the current-coordinator consumer);
+ *   operator attestation must name that session as stopped/reloaded
+ *   (`validateRecoveryAttestation` supplies the operator authorization
+ *   reference; the store is already active, so no installed-consumer
+ *   attestation is required);
  * - revocation and rebinding commit together with an immutable operation
  *   receipt recording the prior holder, the reason and the attestation digest;
  * - the coordinator holds no per-plan claim to adopt: the removed plan-PM
@@ -131,6 +132,7 @@ import {
   type ExecutionToken,
   type ExecutionTransaction,
   type ExecutionWorkflowWitness,
+  type HolderLiveWarning,
   type ResolvedWorkflowWrite,
   type SessionRow,
 } from "./execution-store.js";
@@ -152,7 +154,7 @@ import {
   type ResolutionSource,
   type ResolutionWarning,
 } from "./recovery-intent.js";
-import { validateActivationAttestation, type ActivationAttestation } from "./store-activation.js";
+import { validateRecoveryAttestation, type ActivationAttestation } from "./store-activation.js";
 import { StoreError, storeDbPath } from "./store-db.js";
 import {
   WORKFLOW_LIFECYCLE_STATUSES,
@@ -170,7 +172,7 @@ import {
   type WorkflowSnapshot,
 } from "./workflow.js";
 import { assertBranchAlignment, isDistinctCheckout, readMainWorktree } from "./worktree.js";
-import type { PlanRow } from "./status.js";
+import { validateWorkflowEntry, type PlanRow } from "./status.js";
 
 /* ------------------------------------------------------------------------ *
  * §3 the closed workflow-operation union
@@ -1330,19 +1332,36 @@ export async function mutateExecutionWorkflow(
     } catch (error) {
       throw workflowConflictCause(error, { workflowId, operation, state: stored.state });
     }
+    // A lifecycle receipt is attributed to the session that moved it and the
+    // reason it stated. A terminal close additionally carries forward the
+    // holder-live warning of the recovery that created this binding: it prunes
+    // that recover receipt below, so the closing receipt is where the fact
+    // survives.
+    const carried = operation.kind === "lifecycle" && applied.membershipLost
+      ? recoveredHolderLiveWarning(tx, witness.workflowId, witness.session.sessionId)
+      : undefined;
+    const receipt: ExecutionRead<ExecutionState> = {
+      ...applied.receipt,
+      ...(operation.kind === "lifecycle" ? { actor_session_id: witness.session.sessionId, reason: operation.reason } : {}),
+      ...(carried === undefined ? {} : { holder_live_warning: carried }),
+    };
     writeOperationReceipt(tx, {
       operationId: resolved.call.operationId,
       requestHash,
       workflowId: witness.workflowId,
       planId: null,
-      receipt: applied.receipt,
+      receipt,
       now: at,
       slim: true,
     });
     if (applied.membershipLost)
       pruneWorkflowOperationReceipts(tx, witness.workflowId, resolved.call.operationId);
     return {
-      ...applied.receipt,
+      ...receipt,
+      // The terminal projection serves the receipt this close just wrote, so the
+      // returned graph is read AFTER the prune: a caller that stores the close
+      // receipt sees the same attribution and warning a replay serves.
+      ...(applied.membershipLost ? { data: readExecutionStateGraph(tx).data } : {}),
       operationId: resolved.call.operationId,
       replayed: false,
       recovery: workflowRecovery({
@@ -1954,13 +1973,13 @@ function recoverCoordinatorRequestHash(
  *    only one recovery may replace: naming any other identity is refused
  *    (`coordination.duplicate-holder`), because ownership is not replaceable by
  *    another identity;
- * 5. the operator attestation is a valid `ActivationAttestation` (the existing
- *    document rule: an authorization reference, at least one installed consumer
- *    and exactly one current coordinator) AND it names the prior holder as
- *    stopped/reloaded. A named holder with no stop evidence is refused — the
- *    engine cannot observe a dead process, so the attested stop IS the trust
- *    boundary, and without it this transition would be the silent takeover it
- *    must never be.
+ * 5. the operator attestation is a valid RECOVERY-scope attestation (a
+ *    well-formed operator authorization reference plus attested stops; the
+ *    store is already active, so the barrier's installed-consumer obligation
+ *    does not apply) AND it names the prior holder as stopped/reloaded. A
+ *    named holder with no stop evidence is refused — the engine cannot observe
+ *    a dead process, so the attested stop IS the trust boundary, and without it
+ *    this transition would be the silent takeover it must never be.
  *
  * Initial recovery revokes the predecessor and binds the caller atomically.
  * A claim continuation preserves the current binding and requires the receipt
@@ -1997,9 +2016,12 @@ export async function recoverExecutionCoordinator(
     );
   }
   // The operator's authorization is a DOCUMENT here, exactly as at the
-  // activation barrier: the existing validator project the declared shape, so a
-  // credential-bearing or incomplete attestation never reaches the store.
-  const attestation = validateActivationAttestation(input?.attestation);
+  // activation barrier, but the scope is RECOVERY: the store is already
+  // active, so the installed-consumer obligation of the barrier does not
+  // apply and the document only has to be a well-formed operator
+  // authorization with attested stops. A credential-bearing or incomplete
+  // attestation never reaches the store.
+  const attestation = validateRecoveryAttestation(input?.attestation);
   // The replacement identity must be a genuinely acquired, CURRENT session: an
   // attestation that names it as stopped/reloaded means the operator is asking
   // this recovery to resurrect a stopped identity, which it never does. The
@@ -2067,6 +2089,11 @@ export async function recoverExecutionCoordinator(
     });
     const rows = readCoordinatorRows(tx, workflowId);
     const live = rows.find((row) => row.state === "active" && row.ref.epoch === tx.epoch);
+    // The named predecessor IS the still-live row: the operator's attested stop
+    // is the only evidence this call has, so the receipt records what the engine
+    // observed, never that the process was seen dead or the authorization
+    // host-verified.
+    const holderWasLive = priorSessionId !== null && live !== undefined && live.ref.sessionId === priorSessionId;
     let continuation = false;
     if (priorSessionId === null) {
       if (rows.length > 0) {
@@ -2168,6 +2195,15 @@ export async function recoverExecutionCoordinator(
     // The immutable recovery receipt: the session the store now holds, plus the
     // provenance of the replacement (prior holder, reason, attestation), which
     // only a committed operation row can carry.
+    const holderLiveWarning: HolderLiveWarning | undefined = holderWasLive
+      ? {
+          code: "recovery.holder-live",
+          holder: priorSessionId,
+          epoch: tx.epoch,
+          observed_state: "active",
+          attested_at: attestation.attestedAt,
+        }
+      : undefined;
     writeOperationReceipt(tx, {
       operationId,
       requestHash,
@@ -2181,11 +2217,247 @@ export async function recoverExecutionCoordinator(
           attested_at: attestation.attestedAt,
           operator: attestation.operator,
           stopped_sessions: attestation.stoppedSessions.map((session) => session.sessionId),
+          // Self-reported: the attested stop is the reason this recovery was
+          // admissible, not proof that the holder had died.
+          ...(holderLiveWarning === undefined ? {} : { holder_live_warning: holderLiveWarning }),
         },
       } as ExecutionRead<ExecutionSessionRef>,
       now,
     });
-    return { ...receipt, operationId, replayed: false };
+    return {
+      ...receipt,
+      operationId,
+      replayed: false,
+      ...(holderLiveWarning === undefined ? {} : { holder_live_warning: holderLiveWarning }),
+    };
+  });
+}
+
+/** §3.1: the operation kind a reopen request hashes its request under. */
+const REOPEN_WORKFLOW_OPERATION = "reopenExecutionWorkflow";
+
+/**
+ * §3.1 the request hash of one reopen: operation kind, the addressed workflow,
+ * the exact terminal CAS (or the explicit "current"), the trusted caller, the
+ * reason and the operator document that authorizes it.
+ */
+function reopenWorkflowRequestHash(
+  caller: ExecutionCaller,
+  workflowId: string,
+  input: { expected: ExecutionToken | undefined; reason: string; attestation: ActivationAttestation },
+): string {
+  return createHash("sha256")
+    .update(
+      serializeExecutionValue({
+        operation: REOPEN_WORKFLOW_OPERATION,
+        workflow_id: workflowId,
+        expected: input.expected ?? "current",
+        caller: {
+          session_id: caller.sessionId,
+          role: caller.role,
+          workflow_id: caller.workflowId,
+        },
+        reason: input.reason,
+        attestation: input.attestation,
+      }),
+      "utf8",
+    )
+    .digest("hex");
+}
+
+/**
+ * §4.2 `workflow.reopen`: the ONE transition that returns a `failed` or
+ * `stopped` lifecycle to `running` on the SAME id.
+ *
+ * It is not a second create and not a rewrite of history: the header keeps its
+ * identity anchors and its `started_at`, every plan row and every retained
+ * operation receipt stay exactly where the close left them, and the closed
+ * lifecycle simply re-enters the ACTIVE registry. Eligibility is the header's
+ * own `failed`/`stopped` status — `completed` is never reopened (no override
+ * flag exists) and a lifecycle that is still running/paused is not "terminal",
+ * so both are named refusals. A terminal header that still carries an ACTIVE
+ * registry row (the residue a crashed close leaves) is repaired through the
+ * existing restatement edge in the same transaction instead of failing on a
+ * duplicate membership.
+ *
+ * Authorization is EXPLICIT: the trusted caller is a coordinator addressing the
+ * workflow, a non-empty reason is recorded, and the operator document is the
+ * recovery-scope attestation (the store is already active, so the barrier's
+ * installed-consumer obligation does not apply and an empty `stoppedSessions`
+ * is valid — the authorization record is operator + reason, never a stop claim).
+ * Reopening binds NO coordinator: the session rows stay as they are, and the
+ * ordinary `bind`/`recover` routes resume ownership afterwards.
+ *
+ * The CAS is the terminal header revision — the token `status validate`
+ * publishes in `terminalUnregistered[].token` — and it is checked BEFORE any
+ * write, so a stale token leaves no footprint. An omitted `expected` resolves to
+ * the current revision inside the transaction, so only the CALLER's explicit
+ * token enters the request hash: an identical retry after a committed reopen
+ * still replays instead of conflicting on the revision that reopen advanced.
+ */
+export async function reopenExecutionWorkflow(
+  context: ExecutionContext,
+  input: {
+    workflowId: string;
+    reason: string;
+    attestation: ActivationAttestation;
+    expected?: ExecutionToken;
+    operationId: string;
+  },
+): Promise<ExecutionReceipt<ExecutionState>> {
+  const caller = context.caller;
+  if (caller?.role !== "coordinator" || caller.workflowId !== input?.workflowId || !isNonEmptyString(caller.sessionId)) {
+    throw new ExecutionError(
+      "execution.scope-mismatch",
+      `reopening a workflow is a coordinator operation addressed by the caller's own workflow; the supplied caller is a ` +
+        `${String(caller?.role)} session of ${JSON.stringify(caller?.workflowId)}.`,
+    );
+  }
+  const workflowId = input.workflowId;
+  if (!isNonEmptyString(workflowId) || !isNonEmptyString(input.reason)) {
+    throw invalidWorkflowInput(
+      "Reopening a workflow requires its id and a non-empty reason; inspect the closed lifecycle with mstar status validate.",
+    );
+  }
+  const operationId = assertOperationId(input.operationId);
+  // The operator's authorization is a DOCUMENT, validated projectively BEFORE
+  // any store access — the same recovery-scope rule the coordinator recovery
+  // applies, so a credential-bearing or incomplete attestation never reaches
+  // the store.
+  const attestation = validateRecoveryAttestation(input.attestation);
+  const requestHash = reopenWorkflowRequestHash(caller, workflowId, {
+    expected: input.expected,
+    reason: input.reason,
+    attestation,
+  });
+  return withExecutionTransaction(context, (tx) => {
+    if (tx.execution.authorityState !== "active") {
+      throw new ExecutionError(
+        "execution.not-active",
+        `the execution authority is ${tx.execution.authorityState}; reopening a workflow requires an active authority. ` +
+          `A staged store is inspectable only through migration diagnostics.`,
+      );
+    }
+    // `coordination.workflow-not-found` for a header this store does not hold.
+    const header = requireWorkflowState(tx, workflowId);
+    // §3.1 an identical retry replays its recorded receipt — and it is checked
+    // BEFORE eligibility precisely because the successful reopen leaves the
+    // workflow `running`: a retry must not be answered with "not terminal".
+    const replay = readOperationReplay<ExecutionState>(tx, {
+      operationId,
+      requestHash,
+      workflowId,
+      planId: null,
+      token: { kind: "root", key: [] },
+    });
+    if (replay !== null) {
+      const { operationRecovery, ...recorded } = replay;
+      return { ...recorded, ...(operationRecovery === undefined ? {} : { recovery: operationRecovery }) };
+    }
+    const status = String(header.state.status ?? "");
+    if (status === "completed") {
+      throw new ExecutionError(
+        "workflow.reopen-completed",
+        `workflow ${workflowId} is completed \u2014 a completed lifecycle is never reopened, and this route has no override. ` +
+          `Register a new lifecycle for further work; the completed history stays exactly as it was recorded.`,
+        { workflow_id: workflowId, status },
+      );
+    }
+    if (status !== "failed" && status !== "stopped") {
+      throw new ExecutionError(
+        "workflow.reopen-not-terminal",
+        `workflow ${workflowId} is ${JSON.stringify(status)}; only a failed or stopped lifecycle is reopened, and a ` +
+          `running/paused one is already active. Nothing was written.`,
+        { workflow_id: workflowId, status },
+      );
+    }
+    // The CAS addresses the terminal header revision the caller read; an omitted
+    // token resolves to the revision this transaction locked, so the request hash
+    // ("current") stays stable across a post-success retry while every write is
+    // still token-checked.
+    assertExecutionToken(input.expected ?? executionToken("workflow", tx.storeId, tx.epoch, [workflowId], header.revision), {
+      kind: "workflow",
+      storeId: tx.storeId,
+      epoch: tx.epoch,
+      key: [workflowId],
+      revision: header.revision,
+    });
+    // The registry row is DERIVED from the closed header, never from request
+    // JSON, and the existing entry gate validates the result.
+    const entry = {
+      id: workflowId,
+      type: header.state.type,
+      started_at: header.state.started_at,
+      dir: `workflows/${workflowId}`,
+    };
+    const entryGate = validateWorkflowEntry(entry);
+    if (!entryGate.ok) {
+      throw new CoordinationError(
+        "coordination.invalid-input",
+        `workflow ${workflowId} cannot be restored to the ACTIVE registry: its header does not carry the entry identity ` +
+          `anchors (id, type, started_at). Inspect it with mstar status validate.`,
+        { workflow_id: workflowId, violations: entryGate.violations.map(({ code, message }) => ({ code, message })) },
+      );
+    }
+    const now = new Date().toISOString();
+    advanceWorkflowHeaderRevision(tx, { workflowId, now });
+    // Registry membership changes DIRECTION here. A residue row a crashed close
+    // left is the existing restatement edge's cleanup, so it is removed through
+    // that same edge; a clean closed header instead records the membership gain.
+    // Either way the ROOT advances exactly once, without a second store bump.
+    const residue = tx.db.prepare("select 1 as present from execution_registry where workflow_id = ?").get(workflowId);
+    if (residue !== undefined) {
+      recordRootMembershipLoss(tx, { workflowId, now });
+    } else {
+      tx.db.prepare("update execution_meta set revision = revision + 1, root_updated_at = ? where id = 1").run(now);
+    }
+    tx.db
+      .prepare("insert into execution_registry(workflow_id, entry_json) values (?, ?)")
+      .run(workflowId, JSON.stringify(entry));
+    const nextState: Record<string, unknown> = { ...header.state, status: "running", updated_at: now };
+    delete nextState.ended_at;
+    assertHeaderValid(workflowId, nextState);
+    writeWorkflowState(tx, { workflowId, state: nextState });
+    // The attributed receipt: the session that reopened it, its stated reason,
+    // and the operator provenance the authorization came from. The coordinator
+    // binding is NOT touched and nothing here claims a stop.
+    const provenance: RecoveryDetails = {
+      outcome: "applied",
+      target: { workflowId },
+      applied: [
+        `execution_workflows(${workflowId}) status ${status} \u2192 running`,
+        `execution_registry(${workflowId}) restored`,
+      ],
+      unresolved: [],
+      resolvedFrom: [
+        { path: "attestation.operator", source: `${attestation.operator.actor} (${attestation.operator.authorizationRef})` },
+        { path: "attestation.attestedAt", source: attestation.attestedAt },
+      ],
+      warnings: [],
+      commitState: "committed",
+    };
+    const receipt: ExecutionRead<ExecutionState> = {
+      ...readExecutionStateGraph(tx),
+      actor_session_id: caller.sessionId,
+      reason: input.reason,
+      operationRecovery: provenance,
+    };
+    writeOperationReceipt(tx, {
+      operationId,
+      requestHash,
+      workflowId,
+      planId: null,
+      receipt,
+      now,
+      slim: true,
+    });
+    const { operationRecovery, ...publicReceipt } = receipt;
+    return {
+      ...publicReceipt,
+      operationId,
+      replayed: false,
+      ...(operationRecovery === undefined ? {} : { recovery: operationRecovery }),
+    };
   });
 }
 
@@ -2401,21 +2673,26 @@ function readHeldIntegrationLease(tx: ExecutionTransaction, workflowId: string):
   return raw as unknown as IntegrationMergeLease;
 }
 
-/** The successful receipt must have created this exact current binding. */
-function hasCoordinatorRecoveryChain(
+/**
+ * The recovered bindings' provenance: every successful recovery receipt that
+ * created this exact current binding (same session, epoch, revision and
+ * `bound_at`), as the `recovery` blocks they recorded. Empty when the binding
+ * was created by an ordinary bind rather than a recovery.
+ */
+function bindingRecoveryBlocks(
   tx: ExecutionTransaction,
   workflowId: string,
   current: SessionRow,
-  priorSessionId: string,
-): boolean {
+): Array<Record<string, unknown>> {
   const binding = tx.db.prepare(
     "select bound_at from execution_sessions where workflow_id = ? and role = 'coordinator' and session_id = ? and epoch = ?",
   ).get(workflowId, current.ref.sessionId, tx.epoch) as { bound_at: string } | undefined;
-  if (binding === undefined) return false;
+  if (binding === undefined) return [];
   const token = executionToken("session", tx.storeId, tx.epoch, [workflowId, "coordinator", current.ref.sessionId], current.revision);
   const receipts = tx.db.prepare(
     "select result_json from execution_operations where workflow_id = ? and plan_id is null and store_id = ? and epoch = ? and committed_at = ?",
   ).all(workflowId, tx.storeId, tx.epoch, binding.bound_at) as Array<{ result_json: string }>;
+  const blocks: Array<Record<string, unknown>> = [];
   for (const receipt of receipts) {
     const raw: unknown = JSON.parse(receipt.result_json);
     if (!isPlainObject(raw) || raw.token !== token || raw.storeId !== tx.storeId || raw.epoch !== tx.epoch) continue;
@@ -2424,11 +2701,42 @@ function hasCoordinatorRecoveryChain(
     if (!isPlainObject(data) || !isPlainObject(recovery)) continue;
     if (
       data.storeId === tx.storeId && data.epoch === tx.epoch && data.workflowId === workflowId &&
-      data.sessionId === current.ref.sessionId && data.role === "coordinator" &&
-      recovery.prior_session_id === priorSessionId
-    ) return true;
+      data.sessionId === current.ref.sessionId && data.role === "coordinator"
+    ) blocks.push(recovery);
   }
-  return false;
+  return blocks;
+}
+
+/** The successful receipt must have created this exact current binding from that predecessor. */
+function hasCoordinatorRecoveryChain(
+  tx: ExecutionTransaction,
+  workflowId: string,
+  current: SessionRow,
+  priorSessionId: string,
+): boolean {
+  return bindingRecoveryBlocks(tx, workflowId, current).some((recovery) => recovery.prior_session_id === priorSessionId);
+}
+
+/**
+ * The holder-live warning the close of a recovered binding carries forward: the
+ * recover receipt that created the caller's current binding recorded it, and the
+ * terminal close prunes that receipt, so the surviving receipt keeps the fact.
+ * Absent when this binding was not created by a recovery, or the recovery it
+ * came from replaced a holder that was already revoked.
+ */
+function recoveredHolderLiveWarning(
+  tx: ExecutionTransaction,
+  workflowId: string,
+  sessionId: string,
+): HolderLiveWarning | undefined {
+  const current = readCoordinatorRows(tx, workflowId).find(
+    (row) => row.ref.sessionId === sessionId && row.state === "active" && row.ref.epoch === tx.epoch,
+  );
+  if (current === undefined) return undefined;
+  for (const recovery of bindingRecoveryBlocks(tx, workflowId, current)) {
+    if (isPlainObject(recovery.holder_live_warning)) return recovery.holder_live_warning as HolderLiveWarning;
+  }
+  return undefined;
 }
 
 /** §2.3 a replay's authority revalidation: the caller must still hold its binding. */

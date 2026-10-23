@@ -54,6 +54,7 @@ Find the task, run the family, then read its owning skill for the rules around i
 | Register a standalone plan workflow; record delivery evidence | `mstar workflow register`, `mstar workflow evidence` | `mstar-artifacts` |
 | Register an iteration workflow | `mstar iteration register` | `mstar-artifacts` (lifecycle semantics) |
 | Close one finished lifecycle (terminal workflow state + root unregister in the current authority) | `mstar status workflow-close` | `mstar-iteration` (Phase 6) |
+| Return a `failed`/`stopped` lifecycle to `running` on the same id under explicit operator authorization (`completed` is never reopened) | `mstar workflow reopen` | `mstar-artifacts` (lifecycle semantics), `mstar-iteration` |
 | Validate a coordination document before trusting or replacing it | `mstar status validate` | `mstar-artifacts` |
 | Read the open-issue rollup; enforce a plan's findings-cleanup mode over the issues linked to it | `mstar status tech-debt`, `mstar status findings-cleanup` | `mstar-project-governance`, `mstar-artifacts` |
 | Initialize a fresh issue/catalog store; upgrade/import recognizable execution state and activate authority; or run staged migration, backup, activation and retirement | the `store` group (`init` / `upgrade` / `migrate` / `backup` / `activate` / `retire`) | `mstar-conventions` (store authority and bootstrap paths); help owns inputs; `activate` is not a routine step after `init` / `upgrade` |
