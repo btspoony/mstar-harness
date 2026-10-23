@@ -57,7 +57,11 @@
  *   receipt recording the prior holder, the reason and the attestation digest;
  * - the coordinator holds no per-plan claim to adopt: the removed plan-PM
  *   seat's leases are gone, and the workflow's own integration merge claim is
- *   settled by the close/completion transitions that own it.
+ *   settled by the close/completion transitions that own it;
+ * - a TERMINAL workflow is never reopened, but the ONE ownership a crash can
+ *   leave on it — a held integration merge lease — is releasable through that
+ *   same call: the header, registry and session rows stay frozen, and only the
+ *   lease tombstone and its operation receipt are written.
  *
  * Plan-PM recovery is GONE with the seat it recovered. A plan row is ordinary
  * coordinator data addressed by `planId`; there is no second plan-scoped
@@ -103,6 +107,7 @@ import {
   readOperationReplay,
   readWorkflowSessionRows,
   recordRootMembershipLoss,
+  releaseIntegrationMergeLease,
   requireWorkflowState,
   resolveTokenFreshness,
   resolveWorkflowSession,
@@ -1736,7 +1741,12 @@ function recoverCoordinatorRequestHash(
  * 1. the trusted caller is the workflow's COORDINATOR: the recovery identity is
  *    never taken from request JSON;
  * 2. the exact workflow token is the CAS, and the lifecycle is still an active
- *    one (running/paused); a terminal lifecycle is never reopened;
+ *    one (running/paused); a terminal lifecycle is never reopened — the ONE
+ *    exception is a terminal workflow that still carries a HELD integration
+ *    merge lease, whose release is the whole of that call (no rebind, no
+ *    revoke, no header revision) once the request names the lease's recorded
+ *    holder and the attestation names it stopped/reloaded. Every other
+ *    terminal request keeps the closed-lifecycle refusal;
  * 3. the named prior holder exists in this workflow's records, and `null` is
  *    only admissible when the workflow records no coordinator row at all — an
  *    unnamed holder is refused rather than guessed;
@@ -1818,6 +1828,22 @@ export async function recoverExecutionCoordinator(
           `A staged store is inspectable only through migration diagnostics.`,
       );
     }
+    const header = requireWorkflowState(tx, workflowId);
+    const status = String(header.state.status ?? "");
+    if ((WORKFLOW_TERMINAL_STATUSES as readonly string[]).includes(status)) {
+      return releaseTerminalHeldLease(tx, {
+        workflowId,
+        callerId: caller.sessionId,
+        priorSessionId,
+        reason,
+        attestation,
+        operationId,
+        requestHash,
+        expected: input.expected,
+        status,
+        revision: header.revision,
+      });
+    }
     const sessionKey = [workflowId, "coordinator", caller.sessionId] as const;
     const replay = readOperationReplay<ExecutionSessionRef>(tx, {
       operationId,
@@ -1832,7 +1858,6 @@ export async function recoverExecutionCoordinator(
       requireLiveCoordinator(tx, workflowId, caller.sessionId);
       return replay;
     }
-    const header = requireWorkflowState(tx, workflowId);
     assertExecutionToken(input.expected, {
       kind: "workflow",
       storeId: tx.storeId,
@@ -1840,14 +1865,6 @@ export async function recoverExecutionCoordinator(
       key: [workflowId],
       revision: header.revision,
     });
-    const status = String(header.state.status ?? "");
-    if ((WORKFLOW_TERMINAL_STATUSES as readonly string[]).includes(status)) {
-      throw invalidWorkflowTransition(
-        `workflow ${workflowId} is ${String(status)} \u2014 recovery binds an ACTIVE lifecycle's coordinator, and a closed ` +
-          `lifecycle is never reopened`,
-        { workflow_id: workflowId, status },
-      );
-    }
     const rows = readCoordinatorRows(tx, workflowId);
     const live = rows.find((row) => row.state === "active" && row.ref.epoch === tx.epoch);
     let continuation = false;
@@ -2019,6 +2036,169 @@ function recoverableIntegrationClaim(
       registered_target: target ?? null, attested_at: attestedAt, recovered_at: at, cause,
     },
   );
+}
+
+/**
+ * §4.2 a terminal lifecycle's ONE admissible repair: the integration merge lease
+ * a crash (or a foreign writer) left held is released by the same recovery call,
+ * and nothing else about the closed lifecycle moves. The header keeps its bytes
+ * and revision, every coordinator row stays as recorded, registry membership
+ * stays removed and no binding is created — a closed lifecycle is never
+ * reopened.
+ *
+ * The guards are the recovery guards, narrowed: the workflow token is still the
+ * CAS, the request must NAME the lease's recorded holder, and the attestation
+ * must name that holder as stopped/reloaded. Without stop evidence this would
+ * release a claim a LIVE session still holds — the silent takeover the recovery
+ * route must never perform. A terminal workflow with no held lease keeps the
+ * closed-lifecycle refusal.
+ */
+function releaseTerminalHeldLease(
+  tx: ExecutionTransaction,
+  input: {
+    workflowId: string;
+    callerId: string;
+    priorSessionId: string | null;
+    reason: string;
+    attestation: ActivationAttestation;
+    operationId: string;
+    requestHash: string;
+    expected: ExecutionToken;
+    status: string;
+    revision: number;
+  },
+): ExecutionReceipt<ExecutionSessionRef> {
+  const { workflowId, status } = input;
+  // The receipt addresses the workflow header, not a session: no binding is
+  // created or advanced here.
+  const replay = readOperationReplay<ExecutionSessionRef>(tx, {
+    operationId: input.operationId,
+    requestHash: input.requestHash,
+    workflowId,
+    planId: null,
+    token: { kind: "workflow", key: [workflowId] },
+  });
+  if (replay !== null) return replay;
+  assertExecutionToken(input.expected, {
+    kind: "workflow",
+    storeId: tx.storeId,
+    epoch: tx.epoch,
+    key: [workflowId],
+    revision: input.revision,
+  });
+  const claim = readHeldIntegrationLease(tx, workflowId);
+  if (claim === null) {
+    throw invalidWorkflowTransition(
+      `workflow ${workflowId} is ${status} \u2014 recovery binds an ACTIVE lifecycle's coordinator, and a closed ` +
+        `lifecycle is never reopened`,
+      { workflow_id: workflowId, status },
+    );
+  }
+  if (input.priorSessionId === null || input.priorSessionId !== claim.holder) {
+    throw invalidWorkflowTransition(
+      `workflow ${workflowId} is ${status} and its held integration merge lease belongs to ${claim.holder} \u2014 a terminal ` +
+        `release must name that exact holder as the prior session, and no other identity can release its claim`,
+      { workflow_id: workflowId, status, holder: claim.holder, named: input.priorSessionId },
+    );
+  }
+  if (!input.attestation.stoppedSessions.some((session) => session.sessionId === claim.holder)) {
+    throw invalidWorkflowTransition(
+      `the attestation does not name the held lease's holder ${claim.holder} as stopped/reloaded \u2014 a terminal release ` +
+        `requires stop evidence for that holder, so it can never release a live session's claim`,
+      { workflow_id: workflowId, status, session_id: claim.holder },
+    );
+  }
+  const now = new Date().toISOString();
+  // The attested stop must cover the claim it releases: a claim taken after the
+  // stop means its holder was still working then, and a future stop is no
+  // evidence at all. Same trust boundary the ACTIVE claim settlement applies.
+  const claimedAt = Date.parse(claim.claimed_at);
+  const stopAt = Date.parse(input.attestation.attestedAt);
+  const releaseAt = Date.parse(now);
+  const uncovered =
+    !Number.isFinite(claimedAt) || !Number.isFinite(stopAt) || !Number.isFinite(releaseAt) ? "the claim or stop time is not a finite instant" :
+    claimedAt > stopAt ? "the claim was taken after the attested stop" :
+    stopAt > releaseAt ? "the attested stop is in the future" : null;
+  if (uncovered !== null) {
+    throw invalidWorkflowTransition(
+      `the attestation does not cover the held integration merge lease of ${claim.holder} \u2014 ${uncovered}; a terminal release ` +
+        `needs stop evidence at or after the claim's own instant, so it can never release a claim its stopped holder did not take`,
+      {
+        workflow_id: workflowId,
+        status,
+        session_id: claim.holder,
+        claimed_at: claim.claimed_at,
+        attested_at: input.attestation.attestedAt,
+        cause: uncovered,
+      },
+    );
+  }
+  releaseIntegrationMergeLease(tx, {
+    workflowId,
+    claim,
+    releasedBy: input.callerId,
+    reason: `terminal-release:${claim.holder}`,
+    now,
+  });
+  // The header revision is deliberately NOT advanced: the release is a fact
+  // about the lease row, and a closed lifecycle's header stays frozen.
+  const receipt: ExecutionRead<ExecutionSessionRef> = {
+    data: { storeId: tx.storeId, epoch: tx.epoch, workflowId, role: "coordinator", sessionId: input.callerId },
+    token: executionToken("workflow", tx.storeId, tx.epoch, [workflowId], input.revision),
+    storeId: tx.storeId,
+    epoch: tx.epoch,
+  };
+  writeOperationReceipt(tx, {
+    operationId: input.operationId,
+    requestHash: input.requestHash,
+    workflowId,
+    planId: null,
+    receipt: {
+      ...receipt,
+      recovery: {
+        prior_session_id: input.priorSessionId,
+        reason: input.reason,
+        attested_at: input.attestation.attestedAt,
+        operator: input.attestation.operator,
+        stopped_sessions: input.attestation.stoppedSessions.map((session) => session.sessionId),
+        terminal_release: true,
+      },
+    } as ExecutionRead<ExecutionSessionRef>,
+    now,
+  });
+  return { ...receipt, operationId: input.operationId, replayed: false };
+}
+
+/**
+ * The workflow's held integration lease read from its own row: a terminal
+ * workflow is out of the ACTIVE registry, so no witness reader covers it. A
+ * released tombstone reads as no held lease; an unreadable row refuses.
+ */
+function readHeldIntegrationLease(tx: ExecutionTransaction, workflowId: string): IntegrationMergeLease | null {
+  const row = tx.db
+    .prepare("select lease_json from execution_integration_leases where workflow_id = ?")
+    .get(workflowId) as { lease_json?: unknown } | undefined;
+  if (row === undefined) return null;
+  let raw: unknown;
+  try {
+    raw = JSON.parse(String(row.lease_json));
+  } catch {
+    throw new StoreError("store.corrupt", `execution_integration_leases(${workflowId}).lease_json is not valid JSON`);
+  }
+  if (!isPlainObject(raw)) {
+    throw new StoreError("store.corrupt", `execution_integration_leases(${workflowId}).lease_json is not an object`);
+  }
+  if (raw.status !== undefined && raw.status !== "held" && raw.status !== "released") {
+    throw new StoreError(
+      "store.corrupt",
+      `execution_integration_leases(${workflowId}).lease_json carries status ${JSON.stringify(raw.status)}, which is neither held nor released`,
+    );
+  }
+  if (raw.status === "released") return null;
+  if (!isNonEmptyString(raw.holder)) {
+    throw new StoreError("store.corrupt", `execution_integration_leases(${workflowId}).lease_json records no holder`);
+  }
+  return raw as unknown as IntegrationMergeLease;
 }
 
 /** The successful receipt must have created this exact current binding. */

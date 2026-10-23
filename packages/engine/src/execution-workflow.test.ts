@@ -51,6 +51,7 @@ import {
   recoverExecutionCoordinator,
   setWorkflowWitnessGapForTest,
 } from "../src/execution-workflow.js";
+import { evaluatePostMergeCloseFromExecutionAuthority } from "../src/iteration.js";
 import { initializeStore, storeDbPath, type StoreContext, type StoreDb } from "../src/store-db.js";
 import type { CompletionEvidence, PlanProgress } from "../src/coordination-write.js";
 import { prepareAmendmentComponent } from "../src/coordination.js";
@@ -2212,6 +2213,229 @@ describe("execution-coordinator-recovery: \u00A72.3/\u00A74.2 the named recovery
     expect(replay.replayed).toBe(true);
     expect(replay.data).toEqual(receipt.data);
     expect(await workflowFootprint(fixture.context)).toEqual(before);
+  });
+});
+
+/* ------------------------------------------------------------------------ *
+ * §4.2 a TERMINAL lifecycle's held integration lease
+ * ------------------------------------------------------------------------ */
+
+/**
+ * The one repair a closed lifecycle admits: its header is frozen, its registry
+ * membership is gone, and the integration lease a crash left behind is the only
+ * ownership the Phase-6 gate still flags. Recovery releases that lease alone —
+ * no rebind, no revoke, no header revision — and every other terminal request
+ * keeps the closed-lifecycle refusal.
+ */
+describe("execution-coordinator-recovery: \u00A74.2 a terminal workflow's held lease is releasable", () => {
+  test("an attested terminal release writes the released tombstone and leaves the header untouched", async () => {
+    const fixture = await workflowFixture("terminal-lease-release");
+    await workflowMutation(fixture, "op-terminal-stop", {
+      kind: "lifecycle",
+      status: "stopped",
+      reason: "operator cancelled the lifecycle",
+    });
+    // The held lease a crash or a foreign writer left behind AFTER the terminal
+    // close: the close itself never leaves one.
+    plantMergeClaim(fixture.context, { ownerEpoch: fixture.epoch, holder: COORDINATOR_ID });
+    const headerBefore = rows(
+      fixture.context,
+      `select revision, state_json from execution_workflows where workflow_id = '${WORKFLOW_ID}'`,
+    );
+    const sessionsBefore = rows(fixture.context, "select * from execution_sessions order by session_id");
+    const dangling = await evaluatePostMergeCloseFromExecutionAuthority(fixture.context, WORKFLOW_ID);
+    expect(dangling.violations.map((entry) => entry.code)).toContain("PHASE6_DANGLING_LEASE");
+
+    const request = {
+      expected: workflowTokenOfRow(fixture.context),
+      operationId: "op-terminal-release",
+      priorSessionId: COORDINATOR_ID,
+      reason: "the stopped holder's lease is released",
+      attestation: attestation([COORDINATOR_ID]),
+    };
+    const receipt = await recoverExecutionCoordinator(
+      domainContext(fixture.context, trustedCaller(RECOVERY_ID, "coordinator")),
+      request,
+    );
+    expect(receipt.replayed).toBe(false);
+    expect(receipt.data).toEqual({
+      storeId: fixture.storeId,
+      epoch: fixture.epoch,
+      workflowId: WORKFLOW_ID,
+      role: "coordinator",
+      sessionId: RECOVERY_ID,
+    });
+    expect(storedMergeClaim(fixture.context)).toMatchObject({
+      status: "released",
+      prior_holder: COORDINATOR_ID,
+      released_by: RECOVERY_ID,
+      release_reason: `terminal-release:${COORDINATOR_ID}`,
+    });
+
+    // Nothing else moved: the frozen header, every coordinator row and the
+    // removed registry membership are exactly what the terminal close left.
+    expect(rows(
+      fixture.context,
+      `select revision, state_json from execution_workflows where workflow_id = '${WORKFLOW_ID}'`,
+    )).toEqual(headerBefore);
+    expect(rows(fixture.context, "select * from execution_sessions order by session_id")).toEqual(sessionsBefore);
+    expect(rows(
+      fixture.context,
+      `select count(*) as n from execution_registry where workflow_id = '${WORKFLOW_ID}'`,
+    )).toEqual([{ n: 0 }]);
+
+    // The Phase-6 gate reads the released tombstone as no dangling ownership.
+    const cleared = await evaluatePostMergeCloseFromExecutionAuthority(fixture.context, WORKFLOW_ID);
+    expect(cleared.violations.map((entry) => entry.code)).not.toContain("PHASE6_DANGLING_LEASE");
+
+    // The terminal release is its own replay anchor: the same request returns
+    // the recorded receipt and rewrites no provenance.
+    const settled = storedMergeClaim(fixture.context);
+    const replay = await recoverExecutionCoordinator(
+      domainContext(fixture.context, trustedCaller(RECOVERY_ID, "coordinator")),
+      request,
+    );
+    expect(replay.replayed).toBe(true);
+    expect(replay.data).toEqual(receipt.data);
+    expect(storedMergeClaim(fixture.context)).toEqual(settled);
+    expect(rows(
+      fixture.context,
+      `select revision, state_json from execution_workflows where workflow_id = '${WORKFLOW_ID}'`,
+    )).toEqual(headerBefore);
+  });
+
+  test("the terminal release refuses an unnamed, un-attested or foreign holder and a stale token", async () => {
+    const fixture = await workflowFixture("terminal-lease-refusals");
+    await workflowMutation(fixture, "op-terminal-stop-refusals", {
+      kind: "lifecycle",
+      status: "failed",
+      reason: "operator cancelled the lifecycle",
+    });
+    plantMergeClaim(fixture.context, { ownerEpoch: fixture.epoch, holder: COORDINATOR_ID });
+    const expected = workflowTokenOfRow(fixture.context);
+    const recover = (input: {
+      expected: ExecutionToken;
+      operationId: string;
+      priorSessionId: string | null;
+      attestation: ActivationAttestation;
+    }) => recoverExecutionCoordinator(domainContext(fixture.context, trustedCaller(RECOVERY_ID, "coordinator")), {
+      ...input,
+      reason: "release the held lease",
+    });
+    const heldBefore = storedMergeClaim(fixture.context);
+
+    // The attestation does not name the lease's recorded holder.
+    const unattested = await refusalOf(() => recover({
+      expected,
+      operationId: "op-terminal-unattested",
+      priorSessionId: COORDINATOR_ID,
+      attestation: attestation(["host-elsewhere"]),
+    }));
+    expect(unattested.code).toBe("coordination.invalid-transition");
+    expect(unattested.message).toContain(COORDINATOR_ID);
+
+    // The named identity is not the lease's holder.
+    const foreign = await refusalOf(() => recover({
+      expected,
+      operationId: "op-terminal-foreign",
+      priorSessionId: "host-ghost",
+      attestation: attestation(["host-ghost"]),
+    }));
+    expect(foreign.code).toBe("coordination.invalid-transition");
+    expect(foreign.details).toMatchObject({ holder: COORDINATOR_ID, named: "host-ghost" });
+
+    // Claiming the lease is nameless while it records a holder.
+    const nameless = await refusalOf(() => recover({
+      expected,
+      operationId: "op-terminal-nameless",
+      priorSessionId: null,
+      attestation: attestation([COORDINATOR_ID]),
+    }));
+    expect(nameless.code).toBe("coordination.invalid-transition");
+
+    // A superseded workflow token is still the CAS.
+    const stale = await refusalOf(() => recover({
+      expected: executionToken("workflow", fixture.storeId, fixture.epoch, [WORKFLOW_ID], 1),
+      operationId: "op-terminal-stale",
+      priorSessionId: COORDINATOR_ID,
+      attestation: attestation([COORDINATOR_ID]),
+    }));
+    expect(stale.code).toBe("execution.stale-token");
+
+    expect(storedMergeClaim(fixture.context)).toEqual(heldBefore);
+  });
+
+  test("a claim taken after the attested stop is not released by the terminal route", async () => {
+    const fixture = await workflowFixture("terminal-lease-uncovered");
+    await workflowMutation(fixture, "op-terminal-stop-uncovered", {
+      kind: "lifecycle",
+      status: "stopped",
+      reason: "operator cancelled the lifecycle",
+    });
+    plantMergeClaim(fixture.context, {
+      ownerEpoch: fixture.epoch, holder: COORDINATOR_ID, claimed_at: "2099-01-01T00:00:00.000Z",
+    });
+    const heldBefore = storedMergeClaim(fixture.context);
+    const uncovered = await refusalOf(() => recoverExecutionCoordinator(
+      domainContext(fixture.context, trustedCaller(RECOVERY_ID, "coordinator")),
+      {
+        expected: workflowTokenOfRow(fixture.context),
+        operationId: "op-terminal-uncovered",
+        priorSessionId: COORDINATOR_ID,
+        reason: "release a claim the stop does not cover",
+        attestation: attestation([COORDINATOR_ID]),
+      },
+    ));
+    expect(uncovered.code).toBe("coordination.invalid-transition");
+    expect(uncovered.details.cause).toBe("the claim was taken after the attested stop");
+    expect(storedMergeClaim(fixture.context)).toEqual(heldBefore);
+  });
+
+  test("a terminal lifecycle without a held lease keeps the closed-lifecycle refusal, and the active route is unchanged", async () => {
+    const terminal = await workflowFixture("terminal-lease-absent");
+    await workflowMutation(terminal, "op-terminal-stop-absent", {
+      kind: "lifecycle",
+      status: "stopped",
+      reason: "operator cancelled the lifecycle",
+    });
+    const absentBefore = workflowFootprint(terminal.context);
+    const refused = await refusalOf(() => recoverExecutionCoordinator(
+      domainContext(terminal.context, trustedCaller(RECOVERY_ID, "coordinator")),
+      {
+        expected: workflowTokenOfRow(terminal.context),
+        operationId: "op-terminal-no-lease",
+        priorSessionId: COORDINATOR_ID,
+        reason: "release an absent lease",
+        attestation: attestation([COORDINATOR_ID]),
+      },
+    ));
+    expect(refused.code).toBe("coordination.invalid-transition");
+    expect(refused.message).toContain("closed lifecycle is never reopened");
+    expect(refused.details.status).toBe("stopped");
+    expect(workflowFootprint(terminal.context)).toEqual(absentBefore);
+
+    // The ACTIVE route is untouched: the attested predecessor is replaced and
+    // its claim settled by the same call that always did.
+    const active = await workflowFixture("terminal-lease-active");
+    plantMergeClaim(active.context, { ownerEpoch: active.epoch, holder: COORDINATOR_ID });
+    const receipt = await recoverExecutionCoordinator(
+      domainContext(active.context, trustedCaller(RECOVERY_ID, "coordinator")),
+      {
+        expected: workflowTokenOfRow(active.context),
+        operationId: "op-active-recover",
+        priorSessionId: COORDINATOR_ID,
+        reason: "coordinator process stopped",
+        attestation: attestation([COORDINATOR_ID]),
+      },
+    );
+    expect(receipt.data.sessionId).toBe(RECOVERY_ID);
+    expect(sessionState(active.context, COORDINATOR_ID)).toBe("revoked");
+    expect(sessionState(active.context, RECOVERY_ID)).toBe("active");
+    expect(storedMergeClaim(active.context)).toMatchObject({
+      status: "released",
+      prior_holder: COORDINATOR_ID,
+      released_by: RECOVERY_ID,
+    });
   });
 });
 
