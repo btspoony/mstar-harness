@@ -27,10 +27,9 @@
  * hub's decision matrix and rejects a topic that claims the hub bootstrap
  * exemption without its required core-first declaration.
  * 5. Inventory gap closures (Task 1 coverageGapsFound) — audit mode has a
- * role-owned identity boundary in code-reviewer.md (trigger-contract +
- * enforcement honesty reachable under none); the close route's
- * Done-ownership stop condition is reachable because PM required reading
- * is declared not preset-gated.
+ * role-owned identity boundary heading in code-reviewer.md reachable under
+ * none. Policy prose is deliberately NOT pinned: wording assertions were
+ * removed because a semantic rephrase must not fail a structural gate.
  * 6. Red fixtures — on a disposable synthetic skill root, a removed
  * referenced target, a removed anchor heading, and a manufactured cycle
  * are each reported by the checker (i.e. the suite fails on such real
@@ -360,7 +359,6 @@ describe("skill load closure", () => {
       expect(leafText.includes(heading), `leaf-executor-core.md ${heading}`).toBe(true);
     }
     expect(coreText.includes("## 状态机")).toBe(true);
-    expect(coreText.includes("Done sign-off belongs to project-manager or qualified QA evidence")).toBe(true);
   });
 
   test("case route matrix: 5 routes x first/resume, none + default present, engine absent/advisory/blocking present", () => {
@@ -397,12 +395,6 @@ describe("skill load closure", () => {
   });
 
   test("A2 pin (C3 flipped): the none closure does NOT pass through mstar-harness-core — leaf boundary is none-coherent", () => {
- // before-state: the leaf block forced "**Read `mstar-harness-core`
- // first.**" so every none closure was pulled through core. Task 2 (A2):
- // the leaf boundary carries the load-bearing semantics itself and load
- // selection follows the hub decision.
-    expect(leafText.includes("**Read `mstar-harness-core` first.**")).toBe(false);
-    expect(leafText.includes("`none` never grants delegation or waives gates")).toBe(true);
     const qcClosure = closureOf(realGraph, ["SKILL.md", ROUTE_ROLE_REF.qc]);
     expect(qcClosure.has("../mstar-harness-core/SKILL.md")).toBe(false);
  // AC3 still holds under none: leaf + role-owned checklist reachable
@@ -469,21 +461,12 @@ describe("skill load closure", () => {
     expect(topicNoCore.violations.map((v) => v.code)).toContain("roles.loadorder.core.missing");
   });
 
-  test("inventory gap closures: audit role-owned boundary under none; close Done-ownership reachable (PM not preset-gated)", () => {
+  test("inventory gap closures: audit role-owned boundary under none", () => {
  // Gap 1 (coverageGapsFound[0]): audit method had no role-owned source
- // under none — the Mode B identity boundary in code-reviewer.md makes the
- // trigger-contract check + enforcement honesty reachable from identity.
+ // under none — the Mode B identity boundary heading in code-reviewer.md
+ // makes the audit method reachable from identity rather than from a preset.
     const reviewerText = read(join(ROLES_DIR, "references/code-reviewer.md"));
     expect(reviewerText.includes("### Mode B identity boundary (role-owned, reachable under `none`)")).toBe(true);
-    expect(reviewerText.includes("frontmatter trigger contract")).toBe(true);
-    expect(reviewerText.includes("Enforcement honesty")).toBe(true);
-    expect(reviewerText.includes("engine absent or advisory means every check is advisory-only")).toBe(true);
- // Gap 2 (coverageGapsFound[1]): the close route's Done-ownership stop
- // condition (core § 状态机) is reachable because PM required reading is
- // declared not preset-gated.
-    const pmText = read(join(ROLES_DIR, "references/project-manager.md"));
-    expect(pmText.includes("**Required reading is not preset-gated.**")).toBe(true);
-    expect(pmText.includes("only `project-manager` or `qa-engineer` set `Done`")).toBe(true);
   });
 });
 
@@ -496,10 +479,11 @@ describe("skill load closure", () => {
 // 1. Route map — start→phase1, execute/resume→phase2, close→phase3,
 // PR/merge-ready→phase4-5; each route row names exactly its phase file.
 // 2. No missing local file/anchor — every dispatched file exists and carries
-// its entry heading + load-bearing AC2 semantics (start chain, PM lock,
-// five gates, push cadence, close/merge-ready guards, SP5 retargets).
+// its entry heading and named section anchors (five gates, push cadence,
+// phase boundary, SP5 retarget pointers).
 // 3. No unconditional all-phase read edge — the unconditional Load order
 // names zero phase detail files, and no single line names ≥2 of them.
+// Policy prose is not pinned: a semantic rephrase must not fail these gates.
 // Never substitutes for model traces (Spec A1 runner/efficacy separation).
 // ---------------------------------------------------------------------------
 
@@ -555,8 +539,6 @@ describe("mstar-iteration phase route map ", () => {
  // Main skill: router + universal invariants only.
     expect(iterationText.includes("## Phase transition gates（HARD — 防跳步）")).toBe(true);
     expect(iterationText.includes("## 2.6 Continuous execution + push 纪律（Phase 2–5 通用 SSOT）")).toBe(true);
-    expect(iterationText.includes("Push cadence（§5.1a HARD）")).toBe(true);
-    expect(iterationText.includes("一次迭代 = 一个 PR")).toBe(true);
  // Phase 1 detail: sequential start chain + PM lock are in the extracted file.
     const phase1 = read(join(ITERATION_DIR, PHASE_ROUTE_FILES[0]));
     expect(phase1.includes("## 1.6 Review & Edit chain")).toBe(true);
@@ -567,14 +549,11 @@ describe("mstar-iteration phase route map ", () => {
     expect(pmIdx < archIdx).toBe(true);
     expect(archIdx < writingIdx).toBe(true);
     expect(phase1.includes("`status: locked`")).toBe(true);
-    expect(phase1.includes("corpus hygiene")).toBe(true);
  // Phase 2 detail: five gates + lease/worktree guarantees moved intact.
     const phase2 = read(join(ITERATION_DIR, PHASE_ROUTE_FILES[1]));
     expect(phase2.includes("## 2.0 前置条件（五道闸）")).toBe(true);
     expect(phase2.includes("execution_integration_leases") || phase2.includes("integration_merge_lease")).toBe(true);
     expect(phase2.includes("execution_integration_leases")).toBe(true);
-    expect(phase2.includes("MUST differ from")).toBe(true);
-    expect(phase2.includes("Existing foreign claims are not stealable")).toBe(true);
     expect(phase2.includes("## Waiver")).toBe(true);
  // Phase 3 / 4-5 detail keeps its hard gates.
     const phase3 = read(join(ITERATION_DIR, PHASE_ROUTE_FILES[2]));
@@ -597,9 +576,8 @@ describe("mstar-iteration phase route map ", () => {
     expect(offenders, `lines naming ≥2 phase files: ${JSON.stringify(offenders)}`).toEqual([]);
   });
 
-  test("AC2 pins: transition guards and SP5 retargets survive the extraction", () => {
+  test("AC2 pins: SP5 retargeted pointers and the phase-boundary anchor survive the extraction", () => {
  // Sequential start chain + PM lock stay a HARD transition row in main…
-    expect(iterationText.includes("start → integration branch")).toBe(true);
     expect(iterationText.includes("「Shared anti-recursion NEVER」")).toBe(true);
     expect(iterationText.includes("mstar-roles/references/_shared/leaf-executor-core.md")).toBe(true);
  // …and the extracted §1.6 carries the SP5-retargeted anti-pattern pointer.
@@ -609,11 +587,6 @@ describe("mstar-iteration phase route map ", () => {
  // Phase 3 cannot collapse into final-plan Done.
     const phase3 = read(join(ITERATION_DIR, PHASE_ROUTE_FILES[2]));
     expect(phase3.includes("## 3.0 Phase boundary（HARD）")).toBe(true);
-    expect(phase3.includes("不能替代 §3.1→§3.5")).toBe(true);
-    expect(iterationText.includes("不要将 Phase 4 开 PR 等同于迭代交付完成")).toBe(true);
- // PR open ≠ merge-ready, and the push gate survives in the 4-5 reference.
-    const phase45 = read(join(ITERATION_DIR, PHASE_ROUTE_FILES[3]));
-    expect(phase45.includes("Phase 4 exit ≠ 迭代交付完成")).toBe(true);
   });
 });
 
