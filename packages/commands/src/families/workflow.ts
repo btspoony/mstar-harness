@@ -228,7 +228,7 @@ function readAdoptionAttestation(documentPath: string): ActivationAttestation {
 
 function schema() {
   return z.object({
-    workflow: z.string().min(1).optional(), harness: z.string().min(1).optional(), planId: z.string().min(1).optional(),
+    workflow: z.string().min(1).optional(), harness: z.string().optional(), planId: z.string().min(1).optional(),
     planTitle: z.string().min(1).optional(), planFile: z.string().min(1).optional(), deliveryKind: z.enum(WORKFLOW_DELIVERY_KINDS).optional(),
     project: z.string().min(1).optional(), branchWork: z.string().min(1).optional(), branchSource: z.string().min(1).optional(), branchTarget: z.string().min(1).optional(),
     completionPolicy: z.string().min(1).optional(), startedAt: z.string().min(1).optional(), expect: z.string().min(1).optional(),

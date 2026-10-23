@@ -5,6 +5,7 @@ import {
   admitCommandInput,
   commandEnvelopeSchema,
   executeCommand,
+  getCommandDefinitions,
   getCommandSchemas,
   getPayloadSchema,
   validateCommandDefinitions,
@@ -85,6 +86,27 @@ describe("command definitions", () => {
     expect(commandSchemas).toHaveLength(1);
     expect(commandSchemas[0]!.input).toMatchObject({ type: "object", properties: { name: { type: "string" } } });
     expect(commandSchemas[0]!.payloadSchemas).toEqual({});
+  });
+
+  /**
+   * A blank `harness` is an UNSUPPLIED root selector, exactly like an omitted
+   * one: the engine's `isNonEmptyString` rule already treats blank as absent,
+   * so no family may refuse the call at the schema boundary instead. Both a
+   * converted family and an already-bare one are covered so the rule is stated
+   * once for the whole surface.
+   */
+  test("a blank harness admits like an omitted one in every family", () => {
+    const definitions = new Map(getCommandDefinitions().map((entry) => [entry.id, entry]));
+    const outcome = (id: string, input: Record<string, unknown>) => {
+      const target = definitions.get(id);
+      if (target === undefined) throw new Error(`missing ${id}`);
+      const admission = admitCommandInput(target, input, getCommandSchemas([target])[0]!);
+      return admission.success ? { admitted: true as const, harness: admission.harness } : { admitted: false as const, code: admission.envelope.code };
+    };
+    for (const id of ["status.tech-debt", "store.init"] as const) {
+      expect({ id, ...outcome(id, { harness: "" }) }).toEqual({ id, ...outcome(id, {}) });
+      expect(outcome(id, { harness: "" })).toEqual({ admitted: true, harness: undefined });
+    }
   });
 });
 
