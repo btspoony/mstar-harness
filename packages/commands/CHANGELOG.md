@@ -6,6 +6,19 @@ The monorepo root [CHANGELOG.md](../../CHANGELOG.md) summarizes cross-surface re
 
 ## [Unreleased]
 
+## [4.0.7] - 2026-10-23
+
+### Changed
+
+- **A blank `--harness` now means "unset" in every command family.** The five families that declared `harness: z.string().min(1).optional()` (`status`, `execution-ledgers`, `session`, `plan`, `workflow`) now use the same bare optional-string declaration the rest of the surface already used, so `{harness: ""}` is admitted and resolves exactly like an omitted harness instead of being refused as `command.invalid-input`. `status` also drops the `?? parsed.data.harness` fallback that had become reachable with a blank value and would have resolved an empty root to the process cwd rather than the pinned control root.
+- **`plan_parallelism` has one authority.** The engine's `PLAN_PARALLELISM_VALUES` is now an `as const` tuple re-exported from the package entry, and the command transport builds its `--file` policy schema's `z.enum` from it instead of a hand-copied literal. `mstar schema --command workflow.execution-policy` still publishes exactly `serial` | `parallel` and still refuses any other value; the two values now have one spelling in the repository, so the transport and the engine's `execution-policy` re-validation cannot drift.
+- **The `plan progress` / `plan issue-add` / `plan issue-close` recoveries now name argument shapes their decoder accepts.** Payload values are advertised as inline JSON strings (`--progress '<json-progress-object>'`, `--entries '<json-array>'`), and the `issue-close` route names its required `--expect-issue` revision together with the evidence `--file`; the previous `--entries <issues-file>` named a file where an inline array is decoded, and `issue-close` omitted the CAS member the verb refuses without.
+- **The regression is the replayed invocation, not its wording.** `packages/cli/test/plan-coordination.test.ts` reads each verb's own refusal, extracts the advertised `mstar …` sentence, binds its placeholders against the fixture and runs exactly that; all three succeed in one invocation.
+
+- Version alignment with harness **4.0.7**.
+
+See root [CHANGELOG.md](../../CHANGELOG.md) **4.0.7**.
+
 ## [4.0.6] - 2026-10-23
 
 ### Harness

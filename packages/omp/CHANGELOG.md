@@ -6,6 +6,18 @@ The monorepo root [CHANGELOG.md](../../CHANGELOG.md) summarizes cross-surface re
 
 ## [Unreleased]
 
+## [4.0.7] - 2026-10-23
+
+### Changed
+
+- **A normal workflow close no longer reads as a Phase-2 authority failure.** The `mstar_phase2` extension now classifies a `coordination.workflow-not-found` probe refusal through the cleanup read: a retained terminal lifecycle returns the new `phase2.workflow-retired` code and stays silent on `agent_end`, while a genuinely unknown id, a foreign root, a stale epoch and an unreadable store keep their existing diagnostics. The retired code is the only one suppressed — the once-per-code-per-generation latch is unchanged.
+- **Both refusals now name one executable action.** `checkpoint` against a retired binding says the workflow ended and points at `{operation:"export-history", workflowId}` instead of asking for a rebind that would refuse again; `bind` says the workflow ended and names `mstar status validate` for listing ACTIVE lifecycles, and the unknown-id refusal carries the same pointer.
+- **Retired silence is a regression test, not a forwarding echo.** The new case drives the public route end to end — create, bind, record the report-only fulfilment, the ordinary `completed` close, then `agent_end` — and asserts no notice is sent; the unknown-id case appends a format-legal bind record and asserts the diagnostic and refusal text still appear.
+
+- Version alignment with harness **4.0.7**.
+
+See root [CHANGELOG.md](../../CHANGELOG.md) **4.0.7**.
+
 ## [4.0.6] - 2026-10-23
 
 ### Harness
