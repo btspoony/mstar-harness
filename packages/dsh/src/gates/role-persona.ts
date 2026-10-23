@@ -639,11 +639,15 @@ export function evaluateRoleGate(input: RoleGateInput): RoleGateDecision {
   // (1) An explicit selection is caller intent — never gated.
   if (request.agentPreset !== undefined) return { kind: 'pass', reason: 'agent-preset' }
   const text = promptText(request)
+  // Every read below (canonical check, both candidate tiers, the rewrite) runs
+  // on the same fence-masked text: a quoted example is never a declaration,
+  // and the scan and the rewrite cannot disagree about where fences are.
+  const unfenced = maskFencedCodeBlocks(text)
   // (2) A USABLE canonical declaration is already in place — no rewrite
   // (byte-identical). A wrapped/odd `Execute as` value is not canonical: the
   // downstream parsers keep it raw, so it binds nothing and falls through to
   // the repair tiers below (replaced in place, never duplicated).
-  const headerExecuteAs = parseAssignmentFields(assignmentHeaderRegion(text)).executeAs
+  const headerExecuteAs = parseAssignmentFields(assignmentHeaderRegion(unfenced)).executeAs
   if (headerExecuteAs !== undefined && isCanonicalExecuteAs(headerExecuteAs)) {
     return { kind: 'pass', reason: 'canonical' }
   }
@@ -654,7 +658,7 @@ export function evaluateRoleGate(input: RoleGateInput): RoleGateDecision {
   // (4) The runtime's own `NO_PROVIDER` failure must not be shadowed.
   if (!input.providerKnown) return { kind: 'pass', reason: 'provider-unknown' }
   // (5) Repair candidates: exactly one distinct value across both tiers.
-  const { fields, tokens } = roleCandidates(text, input.declaredRoleIds)
+  const { fields, tokens } = roleCandidates(unfenced, input.declaredRoleIds)
   const candidates = [...new Set([...fields, ...tokens])]
   if (fields.length <= 1 && tokens.length <= 1 && candidates.length === 1) {
     const roleId = candidates[0]!
@@ -714,30 +718,56 @@ function isHarnessProject(directory: string): boolean {
  * Scan one prompt for repair candidates: field lines in the Assignment HEADER
  * region (the engine's header scope) and backticked/bold tokens anywhere that
  * are already-declared role ids. Returns the DISTINCT values per tier.
- * Fenced code blocks (` ``` ` / `~~~`) are stripped before the token scan — a
- * quoted example is not a declaration.
+ *
+ * @param unfenced - the prompt text ALREADY fence-masked (see
+ *   {@link maskFencedCodeBlocks}): a quoted example is not a declaration, in
+ *   either tier. The rewrite masks the same way, so the two agree.
  */
-function roleCandidates(text: string, declaredRoleIds: ReadonlySet<string>): { fields: string[]; tokens: string[] } {
+function roleCandidates(unfenced: string, declaredRoleIds: ReadonlySet<string>): { fields: string[]; tokens: string[] } {
   const fields = new Set<string>()
-  for (const line of assignmentHeaderRegion(text).split(/\r?\n/)) {
+  for (const line of assignmentHeaderRegion(unfenced).split(/\r?\n/)) {
     const match = BOLD_FIELD_LINE_RE.exec(line) ?? PLAIN_FIELD_LINE_RE.exec(line)
     if (match === null || !ROLE_FIELD_LABELS.has(match[1]!.trim().toLowerCase())) continue
     const roleId = normalizeRoleFieldValue(match[2]!)
     if (roleId !== undefined) fields.add(roleId)
   }
-  const unfenced = stripFencedCodeBlocks(text)
   const tokens = new Set<string>()
   for (const match of unfenced.matchAll(/`([^`\n]+)`/g)) addDeclaredToken(tokens, match[1]!, declaredRoleIds)
   for (const match of unfenced.matchAll(/\*\*([^*\n]+)\*\*/g)) addDeclaredToken(tokens, match[1]!, declaredRoleIds)
   return { fields: [...fields], tokens: [...tokens] }
 }
 
-/** Fenced code blocks (backtick or tilde, a closed pair) — their content is an example, never a declaration. */
-const FENCED_BLOCK_RE = /^[ \t]*(?:```|~~~)[^\n]*\n[\s\S]*?^[ \t]*(?:```|~~~)[ \t]*$/gm
-
-/** Drop fenced code blocks from one prompt text (an unterminated fence is left intact). */
-function stripFencedCodeBlocks(text: string): string {
-  return text.replace(FENCED_BLOCK_RE, '')
+/**
+ * Mask fenced code blocks for one prompt text — real Markdown fence rules: a
+ * fence opens on a run of 3+ backticks or 3+ tildes, and closes only on the
+ * SAME character with a run at least as long (a different character or a
+ * shorter run is content, so a four-backtick fence is not closed by three).
+ * An unterminated fence stays intact.
+ *
+ * Every masked character becomes a space, newlines are kept: the result is
+ * character-position identical to the input, so the rewrite can match on the
+ * masked text and splice into the original by the same offsets.
+ */
+function maskFencedCodeBlocks(text: string): string {
+  const lines = text.split('\n')
+  const out: string[] = []
+  let openChar: string | undefined
+  let openRun = 0
+  for (const line of lines) {
+    const fence = /^[ \t]*(`{3,}|~{3,})(.*)$/.exec(line)
+    if (openChar === undefined) {
+      if (fence !== null) {
+        openChar = fence[1]![0]
+        openRun = fence[1]!.length
+      }
+      out.push(fence === null ? line : ' '.repeat(line.length))
+      continue
+    }
+    const closes = fence !== null && fence[1]![0] === openChar && fence[1]!.length >= openRun && fence[2]!.trim() === ''
+    if (closes) openChar = undefined
+    out.push(' '.repeat(line.length))
+  }
+  return out.join('\n')
 }
 
 /** Add one wrapped token when it is a declared role id (`inherit` is never a role). */
@@ -775,14 +805,17 @@ function normalizeWrapped(raw: string): string | undefined {
  * occurrence would leave a later broken line winning the read. An Assignment
  * section that OPENS the prompt gets `Execute as: <id>` as its first field
  * line, and any other prompt gets the canonical header block prepended. Every
- * character outside the repaired field lines is preserved.
+ * character outside the repaired field lines is preserved. Fenced examples are
+ * not field lines: the scan runs on the fence-masked text (same offsets as the
+ * input), so a quoted `Execute as:` line is neither repaired nor shadowed.
  *
  * @param text - the prompt text to rewrite.
  * @param roleId - the repaired role id.
  * @returns the rewritten prompt text.
  */
 export function rewritePromptWithExecuteAs(text: string, roleId: string): string {
-  const existing = [...assignmentHeaderRegion(text).matchAll(EXECUTE_AS_FIELD_LINE_RE)]
+  const unfenced = maskFencedCodeBlocks(text)
+  const existing = [...assignmentHeaderRegion(unfenced).matchAll(EXECUTE_AS_FIELD_LINE_RE)]
   if (existing.length > 0) {
     // Splice from the END backwards so earlier offsets stay valid.
     let out = text

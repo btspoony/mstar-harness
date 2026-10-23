@@ -441,6 +441,25 @@ describe('dispatch-role gate — repair + refusal through the start seam', () =>
     expect(error.message).toContain('roleGate')
     expect(provider.starts).toHaveLength(1)
   })
+
+  it('(u) a four-backtick fenced declaration is refused, never repaired', async () => {
+    const { app, provider, workspace } = await bootWithProvider()
+    const prompt = [
+      '## Assignment',
+      '',
+      '````markdown',
+      'Execute as: fullstack-dev',
+      '````',
+      '',
+      '## Task',
+      '',
+      'Implement.',
+    ].join('\n')
+    const error = await startAndCatch(app, specFor({ ...textPrompt(prompt), cwd: workspace }))
+
+    expect(error.message).toContain('carries no role declaration')
+    expect(provider.starts).toHaveLength(0)
+  })
 })
 
 /** Pure decision inputs: a harness project that declares both fixture roles. */
@@ -576,6 +595,58 @@ describe('dispatch-role gate — pure decision table (evaluateRoleGate)', () => 
     const decision = evaluateRoleGate(gateInput('## Assignment\n\nRole: fullstack-dev\n\n~~~\nUse `writing-specialist`.\n~~~\n'))
     expect(decision.kind).toBe('repair')
     if (decision.kind === 'repair') expect(decision.roleId).toBe(EXECUTE_AS)
+  })
+
+  it('(p14) a four-backtick fence keeps its body: no candidate, not repaired', () => {
+    const text = [
+      '## Assignment',
+      '',
+      '````markdown',
+      'Execute as: fullstack-dev',
+      'Take the `writing-specialist` seat.',
+      '````',
+      '',
+      '## Task',
+      '',
+      'Implement.',
+    ].join('\n')
+    expect(evaluateRoleGate(gateInput(text)).kind).toBe('refuse')
+  })
+
+  it('(p15) a fence closes only on its own character and a run at least as long', () => {
+    // A tilde line does not close a backtick fence — the quoted id stays fenced.
+    expect(evaluateRoleGate(gateInput('## Assignment\n\n```\n`writing-specialist`\n~~~\n')).kind).toBe('refuse')
+    // Three backticks do not close a four-backtick opener.
+    expect(
+      evaluateRoleGate(gateInput('## Assignment\n\n````\n`writing-specialist`\n```\n`writing-specialist`\n````\n')).kind,
+    ).toBe('refuse')
+    // After the real closer, the same token outside the fence is a candidate again.
+    const decision = evaluateRoleGate(
+      gateInput('## Assignment\n\n````\n`writing-specialist`\n```\n````\n\nTake the `writing-specialist` seat.\n'),
+    )
+    expect(decision.kind).toBe('repair')
+    if (decision.kind === 'repair') expect(decision.roleId).toBe(WRITING)
+  })
+
+  it('(p16) a fenced `Execute as:` line in the header is neither a candidate nor rewritten', () => {
+    const text = [
+      '## Assignment',
+      '',
+      '```text',
+      'Execute as: fullstack-dev',
+      '```',
+      '',
+      '**Delegation**: forbidden',
+      '',
+      '## Task',
+      '',
+      'Do it.',
+    ].join('\n')
+    expect(evaluateRoleGate(gateInput(text)).kind).toBe('refuse')
+    // The rewrite still declares the role, but leaves the quoted line intact.
+    const rewritten = rewritePromptWithExecuteAs(text, EXECUTE_AS)
+    expect(rewritten.startsWith('## Assignment\n\nExecute as: fullstack-dev\n')).toBe(true)
+    expect(rewritten).toContain('```text\nExecute as: fullstack-dev\n```')
   })
 })
 
