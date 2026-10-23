@@ -970,6 +970,7 @@ export {
   retireStoreSources,
   StoreActivationError,
   validateActivationAttestation,
+  validateRecoveryAttestation,
 } from "./store-activation.js";
 // §5 F1 the retained workflow-notes ledger: the append-only record writer plus
 // its pure coverage normalizer. The record shape, the receipt and the coverage

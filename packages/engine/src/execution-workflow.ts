@@ -50,9 +50,10 @@
  *   different active coordinator is never replaced; the only live identity it
  *   may replace is the exact named holder covered by stop evidence;
  * - the workflow token is the CAS, the prior holder must be NAMED, and the
- *   operator attestation must name that session as stopped/reloaded (the
- *   existing `validateActivationAttestation` document rule supplies the
- *   operator authorization reference and the current-coordinator consumer);
+ *   operator attestation must name that session as stopped/reloaded
+ *   (`validateRecoveryAttestation` supplies the operator authorization
+ *   reference; the store is already active, so no installed-consumer
+ *   attestation is required);
  * - revocation and rebinding commit together with an immutable operation
  *   receipt recording the prior holder, the reason and the attestation digest;
  * - the coordinator holds no per-plan claim to adopt: the removed plan-PM
@@ -151,7 +152,7 @@ import {
   type ResolutionSource,
   type ResolutionWarning,
 } from "./recovery-intent.js";
-import { validateActivationAttestation, type ActivationAttestation } from "./store-activation.js";
+import { validateRecoveryAttestation, type ActivationAttestation } from "./store-activation.js";
 import { StoreError, storeDbPath } from "./store-db.js";
 import {
   WORKFLOW_LIFECYCLE_STATUSES,
@@ -1756,13 +1757,13 @@ function recoverCoordinatorRequestHash(
  *    only one recovery may replace: naming any other identity is refused
  *    (`coordination.duplicate-holder`), because ownership is not replaceable by
  *    another identity;
- * 5. the operator attestation is a valid `ActivationAttestation` (the existing
- *    document rule: an authorization reference, at least one installed consumer
- *    and exactly one current coordinator) AND it names the prior holder as
- *    stopped/reloaded. A named holder with no stop evidence is refused — the
- *    engine cannot observe a dead process, so the attested stop IS the trust
- *    boundary, and without it this transition would be the silent takeover it
- *    must never be.
+ * 5. the operator attestation is a valid RECOVERY-scope attestation (a
+ *    well-formed operator authorization reference plus attested stops; the
+ *    store is already active, so the barrier's installed-consumer obligation
+ *    does not apply) AND it names the prior holder as stopped/reloaded. A
+ *    named holder with no stop evidence is refused — the engine cannot observe
+ *    a dead process, so the attested stop IS the trust boundary, and without it
+ *    this transition would be the silent takeover it must never be.
  *
  * Initial recovery revokes the predecessor and binds the caller atomically.
  * A claim continuation preserves the current binding and requires the receipt
@@ -1799,9 +1800,12 @@ export async function recoverExecutionCoordinator(
     );
   }
   // The operator's authorization is a DOCUMENT here, exactly as at the
-  // activation barrier: the existing validator project the declared shape, so a
-  // credential-bearing or incomplete attestation never reaches the store.
-  const attestation = validateActivationAttestation(input?.attestation);
+  // activation barrier, but the scope is RECOVERY: the store is already
+  // active, so the installed-consumer obligation of the barrier does not
+  // apply and the document only has to be a well-formed operator
+  // authorization with attested stops. A credential-bearing or incomplete
+  // attestation never reaches the store.
+  const attestation = validateRecoveryAttestation(input?.attestation);
   // The replacement identity must be a genuinely acquired, CURRENT session: an
   // attestation that names it as stopped/reloaded means the operator is asking
   // this recovery to resurrect a stopped identity, which it never does. The

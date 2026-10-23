@@ -55,7 +55,7 @@ import { evaluatePostMergeCloseFromExecutionAuthority } from "../src/iteration.j
 import { initializeStore, storeDbPath, type StoreContext, type StoreDb } from "../src/store-db.js";
 import type { CompletionEvidence, PlanProgress } from "../src/coordination-write.js";
 import { prepareAmendmentComponent } from "../src/coordination.js";
-import { ACTIVATION_PROTOCOL_VERSION, type ActivationAttestation } from "../src/store-activation.js";
+import { ACTIVATION_PROTOCOL_VERSION, validateActivationAttestation, type ActivationAttestation } from "../src/store-activation.js";
 import type { WorkflowEntry } from "../src/status.js";
 import type { WorkflowSnapshot } from "../src/workflow.js";
 import { deliveryBranchOf } from "../src/workflow.js";
@@ -1692,6 +1692,31 @@ describe("execution-coordinator-recovery: \u00A72.3/\u00A74.2 the named recovery
     expect(invalidDocument.code).toBe("store.attestation-invalid");
 
     expect(await workflowFootprint(fixture.context)).toEqual(before);
+  });
+
+  test("recovery validates an operator attestation without installed consumers, and activation still refuses one", async () => {
+    const fixture = await workflowFixture("recovery-no-consumers");
+    // Recovery runs against an ALREADY-active store, so the document is the
+    // operator authorization plus the attested stops: no consumer list.
+    const operatorOnly = attestation([COORDINATOR_ID]) as Partial<ActivationAttestation>;
+    delete operatorOnly.consumers;
+    const receipt = await recoverExecutionCoordinator(
+      domainContext(fixture.context, trustedCaller(RECOVERY_ID, "coordinator")),
+      {
+        expected: await liveWorkflowToken(fixture),
+        operationId: "op-recover-no-consumers",
+        priorSessionId: COORDINATOR_ID,
+        reason: "coordinator process stopped",
+        attestation: operatorOnly as ActivationAttestation,
+      },
+    );
+    expect(receipt.replayed).toBe(false);
+    expect(sessionState(fixture.context, COORDINATOR_ID)).toBe("revoked");
+    expect(sessionState(fixture.context, RECOVERY_ID)).toBe("active");
+
+    // The activation barrier keeps its installed-consumer obligation.
+    const activationRefusal = await refusalOf(async () => validateActivationAttestation(operatorOnly));
+    expect(activationRefusal.code).toBe("store.attestation-invalid");
   });
 
   test("recovery never takes over an owner it may not replace", async () => {
