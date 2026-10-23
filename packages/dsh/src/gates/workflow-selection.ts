@@ -714,9 +714,9 @@ export function clearExecutionBinding(
 }
 
 /**
- * The canonical directory of one workflow's ledger target — the F-207
- * boundary, in this order for a reason: `existsSync` rejects an absent dir, a
- * dangling symlink and an unreadable parent WITHOUT throwing; the
+ * The canonical directory of one workflow's ledger target — the canonical-path
+ * boundary, checked in this order for a reason: `existsSync` rejects an absent
+ * dir, a dangling symlink and an unreadable parent WITHOUT throwing; the
  * symlink-FOLLOWING `statSync` then rejects a non-directory (a symlink to a
  * file is not a workflow dir); `realpathSync` runs LAST so only a verified
  * directory is canonicalized — the ledger, its identity index and its cursor

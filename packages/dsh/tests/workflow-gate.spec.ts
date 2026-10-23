@@ -52,26 +52,36 @@
  * (the ledger ROW's display name is capped separately).
  */
 import { describe, expect, it, afterEach } from 'bun:test'
-import { mkdir, mkdtemp, rm } from 'node:fs/promises'
+import { realpathSync } from 'node:fs'
+import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { Context } from '@deepseek-ai/cordis'
 import type { PreToolDecision, ToolExecution, ToolExecutionToken } from '@deepseek-ai/dsh-tools'
 import { SEVERITY_ORDER } from '@mstar-harness/engine'
 import { iterationViolationView } from '../src/gates/_shared.ts'
-import { bootApp, seedHarness, seedActiveWorkflow, FakeSessionsRegistry, type BootResult } from './harness.ts'
+import { bootApp, restartSeam, seamDisposers, seedHarness, seedActiveWorkflow, FakeSessionsRegistry, type BootResult } from './harness.ts'
 import type { DispatchGateAdvisory } from '../src/index.ts'
 import { DISPATCH_LOGGER } from '../src/gates/dispatch.ts'
 import { readAgentFlow } from '../src/gates/agent-flow.ts'
 import { awaitWorkflowLedgerIdle, registerWorkflowLedger, setWorkflowLedgerLogger } from '../src/gates/workflow-ledger.ts'
 import { HarnessResolver } from '../src/gates/_shared.ts'
 import { resolveExecutionLedgerTarget } from '../src/gates/workflow-selection.ts'
+import {
+  executionBindingRootOf,
+  recordExecutionBindingRoot,
+  resetExecutionBindingRootsForTests,
+} from '../src/gates/execution-binding-roots.ts'
 import type { AgentFlowView } from '../src/types.ts'
 import type { WorkflowAskCache } from '../src/gates/workflow-policy.ts'
 
 let booted: BootResult | undefined
+const roots: string[] = []
 
 afterEach(async () => {
+  for (const dispose of seamDisposers.splice(0)) dispose()
+  resetExecutionBindingRootsForTests()
+  for (const root of roots.splice(0)) await rm(root, { recursive: true, force: true })
   if (booted !== undefined) {
     await booted.dispose()
     booted = undefined
@@ -672,6 +682,47 @@ describe('workflow gate — P-b lease attribution', () => {
   })
 })
 
+/* ------------------- the durable adopted-root seam (ledger target after a restart) ------------------- */
+
+describe('workflow ledger — the adopted-root receipt survives a restart', () => {
+  it('resolves the adopted control root from the durable record after a restart, not the workspace harness', async () => {
+    const SESSION = 'sess-durable-adopted-root'
+    const ws = await makeHarnessWorkspace('dsh-ws-durable-adopted-root-')
+    roots.push(ws)
+    const adoptedRoot = await mkdtemp(join(tmpdir(), 'dsh-adopted-root-'))
+    roots.push(adoptedRoot)
+    // The ADOPTED root carries the store, the lifecycle, the bind and the C1
+    // slot for (SESSION, ws) — the state a cross-root native bind leaves there.
+    await seedActiveWorkflow(adoptedRoot, 'wf-adopted', [], {}, SESSION, ws, 'wf-adopted')
+    // The fixture points ws/.mstarc at the adopted root; the workspace declares
+    // its OWN harness instead, so the two resolution routes disagree and the
+    // assertion below discriminates between them.
+    await writeFile(join(ws, '.mstarc'), `[config]\nharness_dir=${join(ws, '.agents')}\n`)
+
+    // The receipt, recorded durably; then the restart that keeps only the medium.
+    const medium = new Map<string, string>()
+    const firstSeam = restartSeam(medium)
+    await recordExecutionBindingRoot(SESSION, ws, adoptedRoot)
+    // The receipt reached the DURABLE medium, not only the overlay: with the
+    // in-process receipts dropped, the installed seam still answers it.
+    resetExecutionBindingRootsForTests()
+    expect(executionBindingRootOf(SESSION, ws)).toBe(adoptedRoot)
+    restartSeam(medium, firstSeam)
+
+    const target = await resolveExecutionLedgerTarget(SESSION, ws)
+    expect(target).not.toBeNull()
+    expect(target?.workflowId).toBe('wf-adopted')
+    expect(target?.harnessDir).toBe(adoptedRoot)
+    expect(target?.workflowDir).toBe(realpathSync(join(adoptedRoot, 'workflows/wf-adopted')))
+
+    // Control: with the durable record gone the workspace harness is what the
+    // resolver falls back to — and it holds no binding for this session.
+    medium.clear()
+    resetExecutionBindingRootsForTests()
+    expect(await resolveExecutionLedgerTarget(SESSION, ws)).toBeNull()
+  })
+})
+
 /* ---------------------------------- Task 4: ledger integration ---------------------------------- */
 
 /** The booted app's agent-flow ledger events, latest first (the verdict-row read). The element is the FULL projected union — these verdict rows are dispatches, but the exported view no longer narrows the union away. */
@@ -1099,11 +1150,11 @@ describe('workflow gate — Task 4 ledger integration (verdict rows + P-c observ
     expect(second.kind).toBe('ask')
   })
 
-  it('(17) WorkflowAskCache record + markAsked normalize keys internally (F-302 doc contract; wasAsked matches raw spellings)', async () => {
+  it('(17) WorkflowAskCache record + markAsked normalize keys internally (the explicit record seam stores the stripped key; wasAsked matches raw spellings)', async () => {
     const app = booted = await bootApp({ workflowGate: 'ask', seedV2: true })
     const cache = app.ctx.dshHostAdapter.workflowAskCache
 
-    // F-302: the explicit record() seam stores under the STRIPPED key — a
+    // The explicit record() seam stores under the STRIPPED key — a
     // raw-key record is never consulted by the normalized gate lookups.
     cache.record('au\u0000dit', 'allow')
     expect(cache.get('audit')).toBe('allow')

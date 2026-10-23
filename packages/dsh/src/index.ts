@@ -103,6 +103,16 @@ import {
   registerHarnessPrompt,
   setHarnessPromptLogger,
 } from './gates/system-prompt.ts'
+import {
+  EXECUTION_BINDING_ROOTS_LOGGER,
+  beginExecutionBindingRootStoreOpening,
+  endExecutionBindingRootStoreOpening,
+  executionBindingRootsDomain,
+  executionBindingRootStoreOf,
+  installExecutionBindingRootStore,
+  setExecutionBindingRootsLogger,
+} from './gates/execution-binding-roots-domain.ts'
+import { warnExecutionBindingRootStoreUnavailable } from './gates/execution-binding-roots.ts'
 
 // Re-export the service type from the package entry: the cordis
 // `Context` augmentation (`ctx.dshMstar`) lives in service.d.ts, so the entry
@@ -371,6 +381,13 @@ function registerMstarCommands(ctx: Context): void {
       })
     }
   })
+}
+
+/** One-line cause of a refused optional unit: the host error's stable `code` when it carries one. */
+function causeOf(error: unknown): string {
+  const code = (error as { code?: unknown } | null)?.code
+  const message = error instanceof Error ? error.message : String(error)
+  return typeof code === 'string' ? `${code}: ${message}` : message
 }
 
 /**
@@ -952,4 +969,116 @@ export function apply(ctx: Context, config: Config): void {
   // shared command). Every other command is an action of the shared MCP
   // connection.
   registerNativeCommandTools(ctx, resolver)
+
+  // Durable adopted control root : install the seam that lets a cross-root
+  // `mstar_plan_bind` adoption survive a host restart. The host's
+  // storage-domain facility is OPTIONAL — this row's static inject stays
+  // `['loader']` (naming it there would pend the whole row, and the boot, on a
+  // composition without the facility), so the unit is a deferred child: the
+  // reactive inject below is the install contract, so a boot where the service
+  // is merely late installs when it arrives and says nothing at apply time.
+  // Every failure path — `open` rejected, an install that throws while wiring
+  // the opened handle, an HMR re-apply meeting `already-open` — logs ONE
+  // warning naming the cause and the recovery, and
+  // leaves today's per-process receipt in place; the plugin still mounts. The
+  // child's fiber owns the handle: its disposer uninstalls the seam
+  // SYNCHRONOUSLY first (no consumer may read a closing or closed domain) and
+  // only then awaits `close()`, which drains the queued durable writes.
+  // Cordis invokes exporters unguarded: a throwing log sink must never make
+  // this apply throw, so every seam warning takes the house guarded shape.
+  const warnExecutionBindingRoots = (message: string): void => {
+    try {
+      ctx.logger(EXECUTION_BINDING_ROOTS_LOGGER).warn(message)
+    } catch {}
+  }
+  setExecutionBindingRootsLogger(warnExecutionBindingRoots)
+  ctx.inject(['storageDomain'], async (storageCtx) => {
+    // The facility IS provided, so the seam is coming: an adoption that lands
+    // while `open` is in flight is back-filled at install, and reporting it as
+    // "no seam" would name a cause that is not true. Only a settled `open` that
+    // installed nothing makes the absence real for the rest of this process.
+    // The token is THIS activation's — no other activation's completion,
+    // refusal or disposal may release it. Two effects own the release, because
+    // neither covers the other: the child's fires when its facility goes away,
+    // while the row's fires on teardown of a child that a stalled `open` keeps
+    // from ever unloading (a child pending on `open` is disposed only once that
+    // `open` settles; the row's disposal runs its own effects concurrently).
+    const activation = beginExecutionBindingRootStoreOpening()
+    const releaseActivation = (): void => endExecutionBindingRootStoreOpening(activation)
+    try {
+      storageCtx.effect(() => releaseActivation, 'mstar:execution-binding-roots pending open')
+      ctx.effect(() => releaseActivation, 'mstar:execution-binding-roots pending open (row teardown)')
+    } catch {
+      // Either owner is already tearing down, so nothing can install here and no
+      // one is left to warn: release the activation rather than leak it.
+      releaseActivation()
+      return
+    }
+    // The `open` try covers ONLY the open: an install failure below happened
+    // after the domain opened, so reporting it as "open refused" would name a
+    // cause that is not true (and the latch would then hide the truth forever).
+    let domain: Awaited<ReturnType<typeof storageCtx.storageDomain.open>>
+    try {
+      domain = await storageCtx.storageDomain.open(executionBindingRootsDomain)
+    } catch (error) {
+      releaseActivation()
+      // This absence carries its OWN cause (the facility is provided; only this
+      // `open` was refused) and its own recovery, so it spends the one-shot
+      // latch: the generic "the host provides no seam" line would be false here.
+      warnExecutionBindingRootStoreUnavailable(
+        `durable adopted control root unavailable: open refused (${causeOf(error)}) — the selected control root stays a per-process receipt; restart so the next apply can open the domain once the refused name (an \`already-open\` holder) is released, then a resume re-bind carrying the original session reference records it durably`,
+      )
+      return
+    }
+    releaseActivation()
+    let uninstall: () => void
+    try {
+      uninstall = installExecutionBindingRootStore(executionBindingRootStoreOf(domain))
+    } catch (error) {
+      // The domain opened but wiring it into the seam failed. Report the INSTALL
+      // failure FIRST — with its own cause, spending the latch: the "open
+      // refused" line would be false here — and close the handle (the facility
+      // must not keep the name open for the next apply) only afterwards. The
+      // close is unbounded, so awaiting it first could swallow the diagnosis,
+      // leave the latch unspent, and make the next adoption emit the false
+      // "the host provides no storage-domain seam" line.
+      warnExecutionBindingRootStoreUnavailable(
+        `durable adopted control root unavailable: install failed (${causeOf(error)}) — the selected control root stays a per-process receipt; restart so the next apply retries the install, then a resume re-bind carrying the original session reference records it durably`,
+      )
+      try {
+        await domain.close()
+      } catch (closeError) {
+        warnExecutionBindingRoots(`durable adopted control root store close failed after a failed install (${causeOf(closeError)})`)
+      }
+      return
+    }
+    try {
+      storageCtx.effect(() => async () => {
+        // Synchronous first: a read must never reach a closing or closed domain.
+        uninstall()
+        try {
+          await domain.close()
+        } catch (error) {
+          warnExecutionBindingRoots(`durable adopted control root store close failed during disposal (${causeOf(error)})`)
+        }
+      }, 'mstar:execution-binding-roots durable store')
+    } catch (error) {
+      // The child fiber was torn down while `open` was still in flight and
+      // refuses a new effect (INACTIVE_EFFECT). Drop the seam and close the
+      // handle right here — the facility would otherwise keep the name open
+      // and the next apply would meet `already-open` instead of regaining
+      // durability. Report the discard BEFORE the (unbounded) close for the
+      // same reason as the install path: a close that never settles must not
+      // suppress the diagnosis or leave the latch unspent.
+      uninstall()
+      warnExecutionBindingRootStoreUnavailable(
+        `durable adopted control root store discarded: its apply fiber was already disposed when open resolved (${causeOf(error)}) — the late handle is uninstalled and is being closed; the next apply may re-open the domain`,
+      )
+      try {
+        await domain.close()
+      } catch (closeError) {
+        warnExecutionBindingRoots(`durable adopted control root store close failed after a disposed apply (${causeOf(closeError)})`)
+      }
+    }
+  })
 }
