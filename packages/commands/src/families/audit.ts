@@ -17,7 +17,7 @@ import {
 } from "@mstar-harness/engine";
 import { z } from "zod";
 import { resolveCliPath } from "../host-health.js";
-import { commandEnvelopeSchema } from "../definitions.js";
+import { commandEnvelopeSchema } from "../envelope.js";
 import { refusalEnvelope } from "../envelope.js";
 import { engineErrorFacts } from "./family-refusal.js";
 import { launchDirectoryRefusal } from "./launch-workspace.js";

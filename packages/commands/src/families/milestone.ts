@@ -2,7 +2,7 @@ import { engineErrorFacts } from "./family-refusal.js";
 import { refusalEnvelope } from "../envelope.js";
 import { addMilestone, assignIssueMilestone, executionContextFor, queryMilestones, resolveProcessHarnessDir, updateMilestone, withStoreRead, type MilestonePatch, type MutationContext, type StoreContext } from "@mstar-harness/engine";
 import { z } from "zod";
-import { commandEnvelopeSchema } from "../definitions.js";
+import { commandEnvelopeSchema } from "../envelope.js";
 import type { CommandDefinition, CommandEnvelope, InvocationContext } from "../types.js";
 
 const schema = z.object({ project: z.string().optional(), id: z.string().optional(), name: z.string().optional(), ordinal: z.number().int().nonnegative().optional(), target: z.string().optional(), clearTarget: z.boolean().optional(), status: z.enum(["planned", "active", "delivered", "dropped"]).optional(), issue: z.string().optional(), reason: z.string().optional(), expectIssue: z.number().int().nonnegative().optional(), expectStore: z.number().int().nonnegative().optional(), operation: z.string().optional(), sessionRef: z.string().optional(), actor: z.string().optional(), harness: z.string().optional(), clear: z.boolean().optional() });

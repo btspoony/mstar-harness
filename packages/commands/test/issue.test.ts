@@ -522,6 +522,64 @@ describe("issue command family", () => {
     const shown = await definition("issue.show").execute({ id: receipt.issueId }, context);
     if (shown.status === "ok") expect(shown.data).toMatchObject({ owner: "reviewer" });
   });
+  test("triage corrects the title without touching the dedup identity", async () => {
+    const context = await testContext();
+    const added = await definition("issue.add").execute({
+      payload: capture(), operationId: "capture-title", actor: "project-manager",
+    }, context);
+    expect(added.status).toBe("ok");
+    if (added.status !== "ok") return;
+    const receipt = added.data as { issueId: string; revision: number };
+    const before = await definition("issue.show").execute({ id: receipt.issueId }, context);
+    expect(before.status).toBe("ok");
+    if (before.status !== "ok") return;
+    const beforeIssue = before.data as { revision: number; title: string; identityKey: string };
+    expect(beforeIssue.title).toBe("Finding");
+
+    const triaged = await definition("issue.triage").execute({
+      id: receipt.issueId, payload: { reason: "sharpen the finding title", title: "Corrected finding title" },
+      operationId: "triage-title", actor: "project-manager", expect: beforeIssue.revision,
+    }, context);
+    expect(triaged).toMatchObject({ status: "ok", data: { revision: beforeIssue.revision + 1 } });
+    const after = await definition("issue.show").execute({ id: receipt.issueId }, context);
+    expect(after).toMatchObject({
+      status: "ok",
+      data: { title: "Corrected finding title", revision: beforeIssue.revision + 1, identityKey: beforeIssue.identityKey },
+    });
+
+    // The corrected title survives a recapture of the same identity: another
+    // observation of one finding never rewrites the issue row.
+    const recaptured = await definition("issue.add").execute({
+      payload: capture({ occurrenceKey: "occ-2", title: "Stale title from the source" }),
+      operationId: "capture-title-again", actor: "project-manager",
+    }, context);
+    expect(recaptured).toMatchObject({ status: "ok", data: { issueId: receipt.issueId, created: false } });
+    const settled = await definition("issue.show").execute({ id: receipt.issueId }, context);
+    if (settled.status === "ok") expect(settled.data).toMatchObject({ title: "Corrected finding title" });
+  });
+
+  test("a blank triage title is refused without a write", async () => {
+    const context = await testContext();
+    const added = await definition("issue.add").execute({
+      payload: capture(), operationId: "capture-blank-title", actor: "project-manager",
+    }, context);
+    expect(added.status).toBe("ok");
+    if (added.status !== "ok") return;
+    const receipt = added.data as { issueId: string; revision: number };
+    const before = await issueState(context);
+
+    const blank = await definition("issue.triage").execute({
+      id: receipt.issueId, payload: { reason: "sharpen the finding title", title: "  " },
+      operationId: "triage-blank-title", actor: "project-manager", expect: receipt.revision,
+    }, context);
+    expect(blank).toMatchObject({
+      status: "refused",
+      code: "issue.invalid-payload",
+      details: { paths: ["payload.title"] },
+    });
+    expect(await issueState(context)).toEqual(before);
+  });
+
   test("omitted replay ids are fresh per mutation while explicit blank remains invalid without a write", async () => {
     const context = await testContext();
     const command = definition("issue.add");

@@ -14,7 +14,7 @@ import {
 } from "@mstar-harness/engine";
 import { redactSecrets } from "@mstar-harness/engine/src/audit";
 import { activationAttestationDocumentConstraints, activationAttestationDocumentSchema } from "../activation-attestation.js";
-import { commandEnvelopeSchema } from "../definitions.js";
+import { commandEnvelopeSchema } from "../envelope.js";
 import { refusalEnvelope } from "../envelope.js";
 import { IDENTITY_SUPPLIES, SESSION_REF_SUPPLIES, TOKEN_SUPPLIES } from "../identity-supplies.js";
 import type { CommandDefinition, CommandEnvelope, InvocationContext } from "../types.js";

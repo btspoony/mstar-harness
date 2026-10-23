@@ -121,6 +121,7 @@ export const ISSUE_PAYLOAD_SCHEMAS = {
     reason: { required: true, type: "string", description: "Reason for triage change" },
     kind: { required: false, type: "string", description: "Replacement issue kind", values: ["bug", "risk", "improvement", "request", "decision", "review-obligation"] },
     severity: { required: false, type: "string", description: "Replacement severity", values: ["critical", "high", "medium", "low", "nit"] },
+    title: { required: false, type: "string", description: "Corrected finding title; nonblank when supplied", nonblankWhenPresent: true },
     impact: { required: false, type: "string", description: "Updated impact; nonblank when supplied", nonblankWhenPresent: true },
     acceptance: { required: false, type: "string", description: "Updated acceptance condition; nonblank when supplied", nonblankWhenPresent: true },
     owner: { required: false, type: "string | null", description: "Updated owner, or null to clear", nullable: true },
@@ -330,6 +331,7 @@ export type IssueDetail = {
 export type IssueTriage = {
   kind?: IssueKind;
   severity?: Severity;
+  title?: string;
   impact?: string;
   acceptance?: string;
   owner?: string | null;
@@ -1523,12 +1525,13 @@ export function triageIssueOn(
   const existingOp = lookupOperation(db, mutation.operationId);
   if (existingOp) return replayOrConflict(existingOp, hash);
 
-  const issue = db.prepare("select id, revision, kind, severity, impact, acceptance, owner from issues where id = ?").get(issueId) as
+  const issue = db.prepare("select id, revision, kind, severity, title, impact, acceptance, owner from issues where id = ?").get(issueId) as
     | {
         id: string;
         revision: number;
         kind: IssueKind;
         severity: Severity;
+        title: string;
         impact: string;
         acceptance: string;
         owner: string | null;
@@ -1539,10 +1542,11 @@ export function triageIssueOn(
 
   const at = nowRfc3339();
   db.prepare(
-    "update issues set kind = ?, severity = ?, impact = ?, acceptance = ?, owner = ?, revision = ?, updated_at = ? where id = ?",
+    "update issues set kind = ?, severity = ?, title = ?, impact = ?, acceptance = ?, owner = ?, revision = ?, updated_at = ? where id = ?",
   ).run(
     patch.kind ?? issue.kind,
     patch.severity ?? issue.severity,
+    patch.title !== undefined ? requireNonblank("title", patch.title) : issue.title,
     patch.impact !== undefined ? requireNonblank("impact", patch.impact) : issue.impact,
     patch.acceptance !== undefined ? requireNonblank("acceptance", patch.acceptance) : issue.acceptance,
     patch.owner !== undefined ? patch.owner : issue.owner,

@@ -13,7 +13,7 @@ import {
 } from "@mstar-harness/engine";
 import { z } from "zod";
 import { refusalEnvelope } from "../envelope.js";
-import { commandEnvelopeSchema } from "../definitions.js";
+import { commandEnvelopeSchema } from "../envelope.js";
 import type { CommandDefinition, CommandEnvelope } from "../types.js";
 
 const payloadContracts = persistPayloadContracts();

@@ -15,7 +15,7 @@ import {
 } from "@mstar-harness/engine";
 import { redactSecrets } from "@mstar-harness/engine/src/audit";
 import { refusalEnvelope, type RefusalDiagnostic } from "../envelope.js";
-import { commandEnvelopeSchema } from "../definitions.js";
+import { commandEnvelopeSchema } from "../envelope.js";
 import { decodeInputDiagnostics } from "../input-diagnostics.js";
 import { engineErrorFacts } from "./family-refusal.js";
 import { TOKEN_SUPPLIES } from "../identity-supplies.js";

@@ -11,7 +11,7 @@ import {
 import { z } from "zod";
 import { refusalEnvelope } from "../envelope.js";
 import type { CommandDefinition, CommandEnvelope, InvocationContext } from "../types.js";
-import { commandEnvelopeSchema } from "../definitions.js";
+import { commandEnvelopeSchema } from "../envelope.js";
 
 const inputSchema = z.object({
   harness: z.string().optional(),
