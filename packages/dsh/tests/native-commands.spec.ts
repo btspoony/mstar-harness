@@ -1142,6 +1142,51 @@ describe('durable adopted-root seam — a cross-root bind survives a restart', (
     await provider.dispose()
   })
 
+  it('an install failure after a successful open names the INSTALL cause, not "open refused", and its latch silences the generic absence line', async () => {
+    const app = booted = await bootApp()
+    const logged: Array<{ name: string; type: string; args: unknown[] }> = []
+    const stopLogging = (app.ctx.logger as unknown as { exporter(exporter: unknown): () => void }).exporter({
+      levels: { default: 2 },
+      export: (message: { name: string; type: string; args: unknown[] }) => logged.push(message),
+    })
+    const before = logged.length
+    let closed = 0
+    // The OPEN succeeds; what fails is the install stage — the domain's
+    // `table('roots')`, called while wiring the opened handle into the seam.
+    // Reporting this as "open refused" would name a cause that is not true.
+    const stub = stubFacilityOf({
+      table: () => { throw new Error('the roots table is unavailable') },
+      close: async () => { closed += 1 },
+    })
+    const provider = await mountStorageDomain(app, stub.facility)
+    stub.settle()
+    // Drain the microtasks of the open, the failed install and the close; both
+    // are await-free for the fixture (no wall-clock wait).
+    await new Promise<void>((resolve) => setImmediate(resolve))
+    const added = logged.slice(before).filter((row) => row.name === EXECUTION_BINDING_ROOTS_LOGGER)
+    expect(added).toHaveLength(1)
+    expect(added[0]!.type).toBe('warn')
+    const message = String(added[0]!.args[0])
+    // The install-failure token, its own cause, and the named recovery.
+    expect(message).toContain('install failed')
+    expect(message).toContain('the roots table is unavailable')
+    expect(message).toContain('restart')
+    expect(message).toContain('resume re-bind')
+    expect(message).not.toContain('open refused')
+    // The opened handle was closed again, so the next apply can re-open the name.
+    expect(closed).toBe(1)
+    // ONE adoption: the truthful install-failure line already spent the one-shot
+    // latch, so the generic "no storage-domain seam" line (false here — the
+    // facility opened fine) must not follow it.
+    await recordExecutionBindingRoot(CHILD_ID, app.root, '/synthetic/adopted-root')
+    const afterAdoption = logged.slice(before).filter((row) => row.name === EXECUTION_BINDING_ROOTS_LOGGER)
+    expect(afterAdoption).toHaveLength(1)
+    expect(String(afterAdoption[0]!.args[0])).not.toContain('the host provides no storage-domain seam')
+    expect(executionBindingRootOf(CHILD_ID, app.root)).toBe('/synthetic/adopted-root')
+    stopLogging()
+    await provider.dispose()
+  })
+
   it('a rejected durable put is contained: the bind still completes, the cause is logged once, and the receipt still answers', async () => {
     const app = await bootedWithFixture()
     const adoptedRoot = await mkdtemp(join(tmpdir(), 'native-adopted-root-'))
