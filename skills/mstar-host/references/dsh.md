@@ -706,8 +706,17 @@ rewritten into the canonical `Execute as: <role>` header and binds normally;
 free prose is never mined, so write the header explicitly. A harness-project
 start with NO reliable declaration is refused under `hard` with a message
 naming the exact fix (`Execute as: <role-id>` under `## Assignment`) and the
-`roleGate: warn|off` escape hatch — a non-harness project, a request already
-carrying `agentPreset`, and an unknown provider are exempt.
+`roleGate: warn|off` escape hatch; a start naming two or more distinct roles is
+refused with the ids and the "exactly one declaration" rule instead. The
+non-harness exemption is judged at the child's EFFECTIVE start directory (an
+absolute `cwd`, a relative one resolved against the parent's, an omitted one
+inherited from the parent session), so the default `subagent` /
+`spawn_teammate` starts — which omit `cwd` — are gated by the parent's
+directory rather than exempted. A request already carrying `agentPreset` and an
+unknown provider are exempt too. `off` skips only the refusal; a single explicit
+declaration is still normalized. `roleGate` is the plugin's only live-editable
+settings field — a dsh plugin-configuration save applies on the next start
+without a reload.
 
 **Execution: same-message invokes start concurrently.** The installed `subagent`
 tool declares **`isConcurrencySafe: () => true`**, so a batch of invokes emitted
