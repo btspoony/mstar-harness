@@ -34,7 +34,7 @@ description: "Lifecycle and authorization authority: delivery loop, state machin
 
 **per-plan**：`specify → clarify → plan` → `plan(locked) → tasks → implement`（多 task 默认 SDD）→ plan QC tri + **QA gate**（`mandatory` 派 QA 或 `pm-acceptance`）→ Done（`inline` 单席例外）。阶段细则 → **`mstar-phase-gates`**；QA 分级 → **`mstar-roles/references/project-manager/qa-trigger-matrix.md`**。独立交付 development plan 在 Done 后继续交付尾段 `compound disposition → submit PR → merge-ready（resumable milestone）→ verify merge → terminal close/unregister/reconcile`（`verification/report-only` 按注册声明的替代完成政策，无强制 PR；注册与尾段语义/失败行为的权威 = 冻结契约 **`mstar-artifacts/references/plan-workflow-lifecycle-contract.md`**，PM 步骤序列 → **`mstar-roles/references/project-manager/plan-management.md`**，`compound disposition` 步骤 → **`mstar-compound/references/compound-workflow.md`**）。迭代内 plan 行不各自走尾段，迭代整体走一次（见下行）。
 
-**迭代级**：`iteration-start → [per-plan cycle × N] → iteration-close → PR delivery → PR merge-ready loop`。细则 → **`mstar-iteration`**。
+**迭代级**：`iteration-start → [per-plan cycle × N] → iteration-close → PR delivery → PR merge-ready loop`。merge 是独立的授权动作：按 compass `pr_merge_policy`（`reviewed-auto` → PR 级 review 循环的 `ship it` 结论，须 settled、已 posted、且 `head` 等于当前 PR head；`owner-gated` → owner 对当前 PR head 的显式书面批准）判定，merge-ready / CI 绿 / QC Approve 各自都不构成授权；`pr_merge_policy` 缺失即停并回到 Phase 1。细则 → **`mstar-iteration`** §5.3。
 
 **Capture duty**：确认的 finding 即落为 `{HARNESS_DIR}/store.db` 的 issue（计划内 `mstar plan issue-add`，计划外 `mstar issue add`；同一 finding 再次出现追加 occurrence，**不**新开第二个）——**捕获只记证据，处置是独立的授权动作**。cutover 落地后 **open issue 即 residual SSOT**（project register 只作迁移历史）。契约唯一权威 → **`mstar-project-governance`「Issue capture」**（本 skill 不复述）。
 
@@ -111,7 +111,7 @@ PM 在 Assignment 写 **`Task category`**（主类 + 可选 `secondary`）：
 | `mstar-strategy` | `STRATEGY.md` 全局战略方向 —— 产品愿景、技术方向、决策原则 |
 | `mstar-skill-authoring` | 通用 skill 撰写门控（SkillsBench 六原则）：trigger 契约、紧凑 5 问 body、渐进披露、paired 证据 |
 | `mstar-audit` | Variant carrier：common core（hard rules、recon、vet、variant dispatch）+ SKILL.md `## Output format`（review report 运行目录 `<date>-codebase-<level>-<round>/`、findings、coverage、leads）+ `references/codebase-audit.md`（full-audit 变体：9 类别 fan-out、effort、scope variants、Phase 4 excerpt/reconcile、audit index 模板）+ `references/security-review.md`（security 深查：exploitability 门槛、FP 纪律、LLM/供应链面）+ `references/pr-review.md`（`pr` 变体）；`audit-playbook` + `finding-format` |
-| `mstar-pr-loop` | Opt-in PR review → fix loop until the review verdict is `ship it`; not part of plan/iteration flow |
+| `mstar-pr-loop` | Opt-in PR review → fix loop until the review verdict is `ship it`; also selectable at iteration Phase 1 as that iteration's `reviewed-auto` review path, whose `ship it` row the iteration merge authorization reads |
 | `mstar-e2e` | 用户显式启动的独立真实浏览器 / 真机 / E2E 验证 workflow；PM 编排、ops 执行，不进入迭代 QA gate |
 | `mstar-roles` | 角色正文 hub |
 | `mstar-host` | 宿主适配（自动识别；`references/opencode.md` / `cursor.md` / `codex.md` / `kimi.md` / `parallel-dispatch.md`） |

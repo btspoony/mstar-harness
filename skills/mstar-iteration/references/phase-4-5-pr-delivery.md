@@ -10,8 +10,9 @@
 2. Resolve target：ACTIVE workflow 执行行 `branch.target`（compass frontmatter 镜像）；缺失 → **STOP**，问用户
 3. 创建 PR：`spec_integration_branch` → `target_branch`
 4. PR 正文须含 residual 披露节：本迭代各 plan 的 open R# 清单（id + severity + 跟踪位置 + blocker-defer 标记；无 open 时写 `N/A — none open`）—— 职责 → **`mstar-artifacts`**「Findings cleanup modes」
-5. 记录 PR URL / number（Phase 5 会话 SSOT）
-6. **Immediately** 进入 **Phase 5** — **Phase 4 exit ≠ 迭代交付完成**
+5. PR 正文须写明 compass 记录的 `pr_merge_policy`（`reviewed-auto` / `owner-gated`）—— reviewer 据此知道本 PR 是否被期待给出 merge 批准
+6. 记录 PR URL / number（Phase 5 会话 SSOT）
+7. **Immediately** 进入 **Phase 5** — **Phase 4 exit ≠ 迭代交付完成**
 
 ---
 
@@ -52,17 +53,18 @@
 > **Engine check (when available):** run `mstar iteration push-cadence [--ci-running] [--review-wave]` (or `import { pushCadenceProbe } from "@mstar-harness/engine"` in a host hook) to probe the push gate above. On `fail` -> do not proceed; fix and re-run. Skill text below remains authoritative when the runtime is absent.
 History rewrite / force-with-lease / 改写后证据失效规则 SSOT → `mstar-branch-worktree`「History rewrite 与推送安全」节；本节只管 push 时序。
 
-### 5.1 Loop（repeat until §5.5 exit）
+### 5.1 Loop（repeat until §5.2 第 1–4 项全 `[x]`）
 
 1. **Status** — PR mergeable？required CI？unresolved review threads？**任一 CI/AI review 是否仍在跑？**
 2. **Merge conflicts** — blocking 则在 integration 分支**本地**解决；**仅当 §5.1a push gate 满足时**再 push（意图冲突 → **Blocked**）
-3. **Reviews** — fetch unresolved threads；triage；dispatch **本地**修复（可在上一波次仍在跑时开工）
-4. **CI** — 失败项在 PR 范围内**本地**修复（可提前开工）；**不**在 CI 仍在跑时 push
-5. **Push** — 仅当 §5.1a 满足：无 in-flight CI，上一波 CI **与** reviews 均已跑完 → **一次** push 本批修复
-6. **Review fix hygiene**（每次因 review 而 push 后）：
+3. **Review dispatch（按 compass `pr_merge_policy`）** — `reviewed-auto`：PR 级 review 归 **`mstar-pr-loop`** 所有——它自己跑 review → fix → re-review 循环，并按 §5.1a 的 push cadence 推进；**不要**在每个 §5.1 迭代里另起第二个 review loop。§5.1 只保留 mergeable / required CI / review thread resolve / push 的所有权；§5.3 读取该 loop 在当前 PR head 上最终 settled、已 posted 的 `ship it` 报告作为授权。`owner-gated`：**完全**不起 PR 级 review loop，owner review 就是 gate，Phase 5 停在 merge-ready
+4. **Reviews** — fetch unresolved threads；triage；dispatch **本地**修复（可在上一波次仍在跑时开工）
+5. **CI** — 失败项在 PR 范围内**本地**修复（可提前开工）；**不**在 CI 仍在跑时 push
+6. **Push** — 仅当 §5.1a 满足：无 in-flight CI，上一波 CI **与** reviews 均已跑完 → **一次** push 本批修复
+7. **Review fix hygiene**（每次因 review 而 push 后）：
    - 在同 thread **comment**（改动 + 验证）
    - **Resolve** when addressed
-7. Return to step 1（CI 结束后若出现 **新** reviews → 继续本地修，再等 idle 后 push）
+8. Return to step 1（CI 结束后若出现 **新** reviews → 继续本地修，再等 idle 后 push）
 
 **Optional host helpers（command 层发现；非 `mstar-*` load order）**：
 
@@ -76,13 +78,27 @@ When both babysit/`*-babysit` and greploop apply: **babysit/`*-babysit` first**�
 
 ### 5.2 Phase 5 exit checklist（merge-ready → enter Phase 6）
 
-打印 **`## Phase 5 exit checklist`**；前 5 项全 `[x]` = **merge-ready**（第 6 项为 transition marker，merged 后才可勾），此后唯一出口是 **Phase 6**（PR merged 后执行 `references/phase-6-post-merge-close.md` §6.1–§6.4）——本 checklist **不是**「迭代交付完成」：
+打印 **`## Phase 5 exit checklist`**；**第 1–4 项全 `[x]` = merge-ready**（第 5 项是 merge-ready 的 todo 勾选动作，其条件即第 1–4 项），第 6 项（**Merge authorization**）是 merge 与进入 Phase 6 的独立前置（§5.3），第 7 项为 transition marker（merged 后才可勾）。**整表全 `[x]` 只在 merge 之后成立**（Phase 6 进入前置），不得作为 merge-ready 的定义或 `phase-5-pr-merge-ready` todo 的关闭条件（否则要求先 merge，`owner-gated` 下自相矛盾）；此后唯一出口是 **Phase 6**（PR merged 后执行 `references/phase-6-post-merge-close.md` §6.1–§6.4）——本 checklist **不是**「迭代交付完成」：
 
 - [ ] PR mergeable（无 blocking merge conflicts）
 - [ ] All **required** CI checks green on latest head
 - [ ] All review threads **resolved**（或用户书面 waive 特定 thread）
 - [ ] §5.1 review comment + resolve 已覆盖本轮所有 addressed feedback
 - [ ] Host todo `phase-5-pr-merge-ready` 可勾选
+- [ ] **Merge authorization** — satisfied per §5.3
 - [ ] PR **merge** 完成后进入 **Phase 6**：追加 todo `phase-6-post-merge-close`，执行 post-merge close（`references/phase-6-post-merge-close.md` §6.1–§6.4）
 
-PR **merge** 本身可仍由用户手动执行，除非 Assignment 明确授权 auto-merge。Merge 完成（手动或授权 auto-merge）即进入 **Phase 6** —— merge 不是生命周期终点。
+### 5.3 Merge authorization（HARD）
+
+**Merge 是独立的授权动作**：merge-ready、required CI 全绿、QC Approve、review `ship it` **各自都不**构成 merge 授权。
+
+| `pr_merge_policy` | Merge 授权来源 |
+|---|---|
+| `reviewed-auto` | 一份 **settled、已 posted**、且 `head` 等于**当前** PR head 的 `ship it` 报告（`mstar-pr-loop` 的 `ship it` 行） |
+| `owner-gated` | owner 对**当前** PR head 的**显式书面** merge 批准 |
+
+- **`reviewed-auto` 未满足 → STOP**：等 PR 级 review 跑到 settled 的 `ship it`；若该报告 `head` 已不是当前 PR head（中间有 push），重跑该 review 取新报告。恢复路径：给出上述授权报告，或回 Phase 1 改动记录的 policy。
+- **`owner-gated` 未满足 → hard stop**：给出 PR 链接 + merge-ready 证据后**等待**；owner 书面批准前不得 merge，任何自动化证据（mergeable / CI 绿 / QC Approve / `ship it`）都不能替代。恢复路径：owner 书面批准当前 PR head，或回 Phase 1 改动记录的 policy。
+- **`pr_merge_policy` 缺失 → STOP**：回 Phase 1 补齐，**绝不**推断默认值。恢复路径：§1.2 与用户确认该字段，写入 compass frontmatter 并在 `## Decisions` 留 `source`。
+
+**谁执行 merge**：`reviewed-auto` 下，§5.3 授权谓词成立后由 **PM** 执行 merge；`owner-gated` 下，owner 可自行 merge，或书面批准后由 PM 执行。两种 policy 都只在 §5.3 满足后才 merge；verified merge 之后进入 **Phase 6** —— merge 不是生命周期终点。

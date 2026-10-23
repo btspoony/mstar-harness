@@ -28,4 +28,4 @@ Phase 1 of a new iteration. **Phase 1 is complete only when the current prototyp
 
 ## Report
 
-Iteration id, locked direction and branch policy, plan list, role selection (include/skip reasons with the actual returns) and Phase 1 lock evidence — or, with `pause`, the resume instruction.
+Iteration id, locked direction and branch policy, the recorded `pr_merge_policy`, plan list, role selection (include/skip reasons with the actual returns) and Phase 1 lock evidence — or, with `pause`, the resume instruction.

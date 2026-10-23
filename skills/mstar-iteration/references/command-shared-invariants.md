@@ -17,7 +17,7 @@ Phase 2–5 全程有效（drive + loop 共有的行）：
 | Write/Edit/Shell 产品代码、写测试、跑 QC（Phase 2） | 每条 implement/QC/QA Assignment ⇒ **1 次 `Task`** |
 | **多 task plan 用 inline 大包派发**（整份 plan / T1–Tn 贴进一个 dev Assignment） | **SDD**：`mstar-sdd` per-task 循环 — `mstar sdd task-brief` → implementer → `mstar sdd review-package` → task reviewer → `progress.md` |
 | 只写 Assignment 就进入下一 gate | 同轮 dispatch：每条 Assignment ⇒ **1 次 invoke**（`Subagent invokes issued: N`，N = Assignment 条数） |
-| 最后一个 plan `Done` 后直接开 PR / 汇报结束；§5.2 exit 或 PR merged 即宣称交付完成 | **Phase 3 → 4 → 5 → 6** 顺序执行（Phase 6 = PR merged 后 post-merge close，`references/phase-6-post-merge-close.md`） |
+| 最后一个 plan `Done` 后直接开 PR / 汇报结束；§5.2 merge-ready exit 或 PR merged 即宣称交付完成 | **Phase 3 → 4 → 5 → 6** 顺序执行（Phase 6 = PR merged 后 post-merge close，`references/phase-6-post-merge-close.md`） |
 | Phase 5 自己改产品代码 | 需改产品代码时 **dispatch** `fullstack-dev` / `ops-engineer` |
 
 派发细则 → **`mstar-dispatch-gates`** + **`mstar-host`**。Phase 3 细则 → **`mstar-iteration/references/phase-3-iteration-close.md`** + **`mstar-compound`**。
@@ -49,18 +49,19 @@ The primary coordinator projects the entire selected iteration into the table be
 | plan-wave todos | 进入 Phase 2 | 各 plan `Done` |
 | `phase-3-iteration-close` | 仅剩 1 个非 `Done` plan | Phase 3 §3.5 exit 全 `[x]` |
 | `phase-4-create-pr` | Phase 3 完成后 | PR 已创建并记录 URL/number |
-| `phase-5-pr-merge-ready` | Phase 4 完成后 | Phase 5 §5.5 exit 全 `[x]` |
-| `phase-6-post-merge-close` | §5.2 exit 后 PR **已 merge**（mergeable ≠ merged） | Phase 6 §6.1–§6.4 完成（`mstar status workflow-close --workflow <id>` exit 0 + 投影一致） |
+| `phase-5-pr-merge-ready` | Phase 4 完成后 | Phase 5 merge-ready：§5.2 第 1–4 项全 `[x]`（第 6 项是 merge 前置、第 7 项 merged 后才可勾，均不属于本 todo） |
+| `phase-6-post-merge-close` | §5.2 第 6 项（§5.3 授权）成立后 PR **已 merge**（mergeable ≠ merged） | Phase 6 §6.1–§6.4 完成（`mstar status workflow-close --workflow <id>` exit 0 + 投影一致） |
 
 Phase/gate 转换按 **`mstar-host`**「Phase-transition todo refresh (host-agnostic)」刷新：依据 ACTIVE 执行行与 authored plan 证据勾掉完成项，保留未决 gate / 未来 phase，再追加下一批；todos 只是投影，不授权转换。
 
 ## Continuous execution STOP list（重叠行；start / drive / loop 共有）
 
-Execute **`mstar-iteration` §2.6**（Continuous execution SSOT：自 Phase 2 进入至 Phase 5 §5.5 exit 前 PM **连续编排**，进度汇报后下一条必须是 dispatch 或下一 phase 步骤，不向用户例行 yes/no check-in）。
+Execute **`mstar-iteration` §2.6**（Continuous execution SSOT：自 Phase 2 进入至 Phase 5 merge-ready（§5.2 第 1–4 项全 `[x]`）前 PM **连续编排**，进度汇报后下一条必须是 dispatch 或下一 phase 步骤，不向用户例行 yes/no check-in；`reviewed-auto` 下继续至 §5.3 授权成立并 merge，`owner-gated` 在此停等 owner 批准）。
 
 **合法 STOP（仅此升级用户）**：
 
 - 迭代 branch metadata 缺失（`iteration_base_branch` / `target_branch`）
+- **§5.3 merge 授权未满足**：`owner-gated` 停等 owner 对当前 PR head 的书面批准；`reviewed-auto` 停等 settled、已 posted、且 `head` 等于当前 PR head 的 `ship it` 报告；`pr_merge_policy` 缺失则回 Phase 1 补齐。这是设计的等待点，不是流程问题
 - **`Blocked`**：真冲突、secrets、不可逆范围缺口、Phase 5 多轮仍无法 merge-ready
 - 用户本轮显式打断
 

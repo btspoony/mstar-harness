@@ -21,8 +21,8 @@ Accepts no arguments: reject a nonempty invocation before boot and name the supp
 
 Phase route and transition gates → **`mstar-iteration`** `## Phase route map` / `## Phase transition gates`: run Phase 2 → 3 → 4 → 5 → 6 in order, loading only the current phase's detail and printing each `## Phase N` header at its boundary. Phase 5 optional helper-skill discovery → **`mstar-iteration/references/phase5-helper-discovery.md`** (non-`mstar-*` helpers stay out of the `mstar-*` load order). Continuous execution → **`mstar-iteration` §2.6**.
 
-PR merge stays manual unless the user authorized auto-merge; a verified merge immediately enters Phase 6.
+Merge is authorized by the compass `pr_merge_policy`, never by flow completeness: under `reviewed-auto` Phase 5 runs the PR-level review loop and only a settled, posted `ship it` report whose `head` equals the current PR head authorizes the merge; under `owner-gated` Phase 5 stops at merge-ready and waits for the owner's explicit written approval of the current PR head. A missing `pr_merge_policy` is a STOP back to Phase 1 — never infer a default. Rules and every refusal recovery → **`mstar-iteration`** §5.3. A verified merge immediately enters Phase 6.
 
 ## Report
 
-Iteration id, plans completed, compound summary, PR link, merge-ready evidence, and post-merge close evidence (workflow `completed` + `ended_at`, root unregister, projections consistent).
+Iteration id, plans completed, compound summary, PR link, merge-ready evidence, the recorded `pr_merge_policy` and the merge-authorization evidence that satisfied `mstar-iteration` §5.3, and post-merge close evidence (workflow `completed` + `ended_at`, root unregister, projections consistent).

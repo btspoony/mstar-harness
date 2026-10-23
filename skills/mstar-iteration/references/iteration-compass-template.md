@@ -9,6 +9,7 @@ start_date: YYYY-MM-DD
 status: active
 iteration_base_branch: <branch-or-ref>
 target_branch: <branch>
+pr_merge_policy: <reviewed-auto | owner-gated>
 plans: []
 ---
 
@@ -151,6 +152,7 @@ Notes:
 | `status` | Yes | Phase 1 → `active` / `locked`（§1.6 PM lock）；Phase 3 §3.4 → **`completed`**（YAML frontmatter，非 prose completion status） |
 | `iteration_base_branch` | Yes | Phase 1; integration branch must be created from this ref |
 | `target_branch` | Yes | Phase 1; final PR target after Phase 3 |
+| `pr_merge_policy` | Yes | Phase 1 at direction lock: exactly `reviewed-auto` or `owner-gated`, confirmed with the user and never defaulted. Phase 5 dispatches its review path on it; Phase 6 requires the merge authorization it names (`phase-4-5-pr-delivery.md` §5.3). |
 | `plans` (frontmatter) | Recommended | Phase 1 (initial), Phase 2 (add new) |
 | `## Plans` table | Yes | Phase 2 (sync status), Phase 3 (final) |
 | `## Milestones` | Recommended | Phase 1, Phase 2 (update) |
