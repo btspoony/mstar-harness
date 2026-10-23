@@ -1176,6 +1176,9 @@
       "workflow.register": {
         "excluded": "requires a live coordinator session/workflow fixture; explicit unverified route"
       },
+      "workflow.delivery-anchors": {
+        "excluded": "repairs a RUNNING workflow's delivery anchors under its CAS token; requires a live coordinator session/workflow fixture; explicit unverified route"
+      },
       "workflow.evidence": {
         "excluded": "requires a live coordinator session/workflow fixture; explicit unverified route"
       },

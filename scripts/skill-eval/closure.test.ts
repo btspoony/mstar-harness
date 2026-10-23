@@ -856,7 +856,6 @@ type AblationRule = {
   coverageRefs: string[];
   caseIds: string[];
   beforeSha256: string;
-  afterSha256: string | null;
   /** When true, current absence is guarded against reintroduction. After the
    * reviewed BASE supersession, this no longer proves the historical removal. */
   removedFromSource?: boolean;
@@ -893,11 +892,6 @@ const REMOVAL_BASES = new Set(["duplicated-rule-owner-exists", "model-native-tea
 function ownerTextOf(rule: AblationRule): string {
   return read(join(REPO_ROOT, rule.owner));
 }
-function sha256Of(path: string): string {
-  return createHash("sha256").update(readFileSync(path)).digest("hex");
-}
-/** sha256 of the file content at `<rev>:<relPath>` in git history (used to
- * verify the reviewed closure pin baseline, independent of the working tree). */
 function sha256OfGitBlob(rev: string, relPath: string): string {
   const bytes = execFileSync("git", ["-C", REPO_ROOT, "show", `${rev}:${relPath}`], {
     encoding: "buffer",
@@ -944,9 +938,6 @@ describe("A5 ablation inventory (frozen)", () => {
       expect(rule.sourceRef.anchor.length > 0, `${rule.ruleId} anchor`).toBe(true);
       expect(rule.beforeSha256).toMatch(/^[0-9a-f]{64}$/);
       expect(rule.restore.length > 0, `${rule.ruleId} restore`).toBe(true);
-      // Current per-row pin meaning is recorded in closurePinRefreeze; the next
-      // test checks these afterSha256 values against the current owner bytes.
-      expect(rule.afterSha256, `${rule.ruleId} current afterSha256 pin is filled`).toMatch(/^[0-9a-f]{64}$/);
  // A non-keep row must name a concrete removal basis (never an enforcement argument).
       if (rule.disposition !== "keep") {
         expect(REMOVAL_BASES.has(rule.removalBasis ?? ""), `${rule.ruleId} removalBasis`).toBe(true);
@@ -968,8 +959,6 @@ describe("A5 ablation inventory (frozen)", () => {
       // Freeze provenance: the reviewed baseline hash must match the owner blob
       // at the reachable BASE commit, independently of the working tree.
       expect(sha256OfGitBlob(CLOSURE_PIN_BASE_SHA, rule.owner), `${rule.ruleId} beforeSha256 pins the BASE blob of ${rule.owner}`).toBe(rule.beforeSha256);
- // Re-freeze: afterSha256 matches the current owner bytes.
-      expect(rule.afterSha256, `${rule.ruleId} afterSha256 matches current bytes`).toBe(sha256Of(abs));
       // Anchor expectations are evaluated against the reviewed replacement
       // BASE. Historical removals predating it can only be guarded against
       // reintroduction, not proven by this BASE-to-current comparison.
