@@ -6,11 +6,11 @@ import {
   PLAN_PARALLELISM_VALUES,
   WORKFLOW_COMPOUND_OUTCOMES, WORKFLOW_DELIVERY_KINDS, WORKFLOW_LIFECYCLE_STATUSES,
   adoptTerminalWorkflow, createFsStore, decodeExecutionSessionRef,
-  executionContextFor, mutateExecutionWorkflow, normalizeIterationCompassRef, registerShippedCatalogExecution,
-  resolveProcessHarnessDir, setArtifactStore,
+  executionContextFor, mutateExecutionWorkflow, normalizeIterationCompassRef, readExecutionAuthority, registerShippedCatalogExecution,
+  reopenExecutionWorkflow, resolveProcessHarnessDir, setArtifactStore,
   type ActivationAttestation,
-  type CatalogExecutionWorkflow, type ExecutionIdentity, type WorkflowCompoundOutcome, type WorkflowDeliveryEvidence,
-  type WorkflowExecutionOperation, type WorkflowExecutionPolicy,
+  type CatalogExecutionWorkflow, type ExecutionIdentity, type ExecutionToken, type WorkflowCompoundOutcome,
+  type WorkflowDeliveryEvidence, type WorkflowExecutionOperation, type WorkflowExecutionPolicy,
 } from "@mstar-harness/engine";
 import { redactSecrets } from "@mstar-harness/engine/src/audit";
 import { activationAttestationDocumentConstraints, activationAttestationDocumentSchema } from "../activation-attestation.js";
@@ -75,10 +75,12 @@ function engineRefusal(id: string, error: unknown): CommandEnvelope<never> {
                 ? "Run `mstar status workflow-close --workflow <id> --reason <text>` through the existing registered-workflow close path under the ACTIVE coordinator holder's binding."
                 : code === "execution.adoption-refused" && message.includes("already has a terminal-adoption record")
                   ? "Read `mstar status validate`; the existing terminal-adoption record is already the close receipt, so no further adoption is needed."
-                  : id === "workflow.adopt-terminal" &&
-                      (code === "workflow.adopt-terminal.attestation-unreadable" ||
-                        code === "workflow.adopt-terminal.attestation-malformed" || posixReadFailure)
-                      ? "Supply --attestation as an absolute path to the operator's ActivationAttestation JSON document; `mstar schema --command workflow.adopt-terminal` (payload contract adoptionAttestation) publishes its structure and semantic constraints."
+                  : (id === "workflow.adopt-terminal" || id === "workflow.reopen") &&
+                      (code === `${id}.attestation-unreadable` ||
+                        code === `${id}.attestation-malformed` || posixReadFailure)
+                      ? id === "workflow.reopen"
+                        ? "Supply --attestation as an absolute path to the operator's recovery-scope JSON document: version, attestedAt, operator.actor, operator.authorizationRef and a stoppedSessions array (possibly empty); consumers is optional and ignored. The attestation is self-reported operator authorization, not verified host evidence."
+                        : "Supply --attestation as an absolute path to the operator's ActivationAttestation JSON document; `mstar schema --command workflow.adopt-terminal` (payload contract adoptionAttestation) publishes its structure and semantic constraints."
                     : (id === "workflow.evidence" || id === "workflow.execution-policy") &&
                       (code === `${id}.file-malformed` || posixReadFailure)
                       ? (id === "workflow.evidence"
@@ -100,7 +102,11 @@ function engineRefusal(id: string, error: unknown): CommandEnvelope<never> {
           },
         } : {}),
       };
-  const supportedRecovery = recovery ?? "mstar status validate.";
+  const supportedRecovery = recovery ?? (code === "workflow.reopen-completed"
+    ? "A completed lifecycle is never reopened and this route has no override: keep its recorded history and register a new lifecycle for further work (mstar workflow register)."
+    : code === "workflow.reopen-not-terminal"
+      ? "Read `mstar status validate`: only a failed or stopped lifecycle is reopened, and a running or paused one is already active."
+      : "mstar status validate.");
   return refusalEnvelope({
     command: id, status: "refused", code, exitCode: 1,
     message,
@@ -207,23 +213,42 @@ function jsonParseDiagnostic(error: unknown): { cause: string; location?: string
   return { cause: scrubbed, ...(location === undefined ? {} : { location }) };
 }
 
-function readAdoptionAttestation(documentPath: string): ActivationAttestation {
+function readOperatorAttestation(documentPath: string, id: string, label: string): ActivationAttestation {
   let text: string;
   try { text = readFileSync(documentPath, "utf8"); }
   catch (error) {
     const cause = error instanceof Error ? error.message : String(error);
     const code = error !== null && typeof error === "object" && "code" in error && typeof error.code === "string"
-      ? error.code : "workflow.adopt-terminal.attestation-unreadable";
+      ? error.code : `${id}.attestation-unreadable`;
     throw Object.assign(new Error(`the attestation document ${documentPath} could not be read: ${cause}`), { code });
   }
   try { return JSON.parse(text) as ActivationAttestation; }
   catch (error) {
     const diagnostic = jsonParseDiagnostic(error);
     throw Object.assign(
-      new Error(`the attestation document ${documentPath} is not valid JSON (${diagnostic.cause}${diagnostic.location === undefined ? "" : ` at ${diagnostic.location}`}); --attestation must point at the operator's ActivationAttestation object`),
-      { code: "workflow.adopt-terminal.attestation-malformed", details: { parser: diagnostic } },
+      new Error(`the attestation document ${documentPath} is not valid JSON (${diagnostic.cause}${diagnostic.location === undefined ? "" : ` at ${diagnostic.location}`}); --attestation must point at the operator's ${label} object`),
+      { code: `${id}.attestation-malformed`, details: { parser: diagnostic } },
     );
   }
+}
+
+/**
+ * The CAS the public reopen passes EXPLICITLY. The engine's omitted-token path
+ * has no CAS, so this verb never relies on it: the retained terminal header's
+ * token comes first (`status validate` publishes it), and a non-terminal header
+ * is addressed by its live workflow token — so the engine still answers with its
+ * own named refusal instead of a writes-without-CAS path.
+ */
+async function reopenExpectedToken(harnessDir: string, workflowId: string): Promise<ExecutionToken | undefined> {
+  const read = await readExecutionAuthority({ harnessDir });
+  const data = read.data;
+  const terminal = [
+    ...("terminalUnregistered" in data ? data.terminalUnregistered ?? [] : []),
+    ...("terminalAdoptions" in data ? data.terminalAdoptions ?? [] : []),
+  ].find((entry) => entry.id === workflowId);
+  if (terminal !== undefined) return terminal.token;
+  const live = "workflows" in data ? data.workflows.find((entry) => entry.state.id === workflowId) : undefined;
+  return live?.workflowToken;
 }
 
 function schema() {
@@ -335,6 +360,33 @@ function makeDefinition(
           constraint: `the same absolute JSON path string (same-host paths remain usable); the structure is adoptionAttestation in the command schema, and engine-semantic constraints are: ${attestationRules}`,
         },
       ],
+    } : {}),
+    ...(id === "workflow.reopen" ? {
+      requirements: (["cli", "mcp"] as const).flatMap((route) => [
+        {
+          name: "expect",
+          ownership: "caller" as const,
+          route,
+          required: false,
+          tokenKind: "workflow" as const,
+          constraint:
+            "checked CAS on the closed header's current terminal token, exactly as `mstar status validate` publishes it " +
+            "(terminalUnregistered[].token or terminalAdoptions[].token); when omitted this verb reads that token itself and " +
+            "passes it explicitly, so the transition is always CAS-guarded",
+        },
+        { name: "operation", ownership: "caller" as const, route, required: false, constraint: "optional replay id; omitted creates one fresh id for this invocation" },
+        { name: "reason", ownership: "caller" as const, route, required: true, constraint: "recorded with the transition: the operator-facing justification, never generated from the request" },
+        {
+          name: "attestation",
+          ownership: "caller" as const,
+          route,
+          required: true,
+          constraint:
+            "absolute JSON path to the operator's recovery-scope document: version, attestedAt, operator.actor, " +
+            "operator.authorizationRef and a stoppedSessions array (possibly empty); consumers is optional and ignored. " +
+            "The attestation is SELF-REPORTED operator authorization — structure is validated, host liveness is not",
+        },
+      ]),
     } : {}),
     cli: {
       path: id.split("."),
@@ -596,7 +648,7 @@ export function getWorkflowCommandDefinitions(): readonly CommandDefinition[] {
           }
           const attestation = input.attestation === undefined
             ? undefined
-            : readAdoptionAttestation(absolute(input.attestation, "attestation"));
+            : readOperatorAttestation(absolute(input.attestation, "attestation"), id, "ActivationAttestation");
           const harnessDir = resolveProcessHarnessDir(context.cwd, input.harness);
           if (harnessDir === null) return refusalEnvelope({ command: id, status: "usage", code: "command.invalid-input", exitCode: 2, message: "no control harness resolved; supply an absolute harness" });
           const identity = acquired ?? { source: context.host === undefined ? "local" : "host", sessionId: context.sessionId, workflowId, role: "coordinator" as const };
@@ -618,6 +670,59 @@ export function getWorkflowCommandDefinitions(): readonly CommandDefinition[] {
         attestation: `absolute JSON file path for operator proof; required only for an eligible unregistered header with current-epoch ACTIVE coordinator sessions. Exact structure is payload adoptionAttestation; shared semantic constraints: ${attestationRules}`,
       },
       { adoptionAttestation: activationAttestationDocumentSchema },
+    ),
+    makeDefinition(
+      "workflow.reopen",
+      "Return a failed or stopped workflow to running on the SAME id. The header keeps its identity anchors, plan rows, session rows and retained operation receipts; the lifecycle simply re-enters the ACTIVE registry, and the ordinary bind/recover routes resume ownership afterwards. Reopening a terminal workflow takes an EXPLICIT operator authorization: a coordinator identity addressing this workflow, a non-empty --reason, and --attestation <absolute-json>, the recovery-scope document whose operator + reason are the authorization (no installed consumer is required and an empty stoppedSessions is valid). The attestation is SELF-REPORTED operator evidence: its structure is validated, the operator's authorization is never verified against host liveness. --expect is the closed header's current terminal token exactly as `mstar status validate` publishes it in terminalUnregistered[].token (or terminalAdoptions[].token for an adopted close); when omitted this verb reads that token from the authority and passes it explicitly, so the transition is always CAS-guarded. `completed` is never reopened and this route has no override — register a new lifecycle instead. An omitted --operation gets one generated id for this invocation.",
+      "write",
+      ["workflow", "harness", "expect", "operation", "reason", "attestation"],
+      async (input, context) => {
+        const id = "workflow.reopen";
+        try {
+          if (context.sessionId === undefined || context.sessionId.trim() === "") {
+            return refusalEnvelope({ command: id, status: "usage", code: "command.invalid-input", exitCode: 2, message: `reopening a workflow requires an acquired coordinator identity (${IDENTITY_RECOVERY})` });
+          }
+          const acquired = context.executionIdentity;
+          const workflowId = input.workflow ?? acquired?.workflowId;
+          if (workflowId === undefined || input.reason === undefined || input.attestation === undefined) {
+            return refusalEnvelope({ command: id, status: "usage", code: "command.invalid-input", exitCode: 2, message: "workflow, reason and attestation are required; expect and operation may be omitted safely" });
+          }
+          if (acquired !== undefined && (acquired.workflowId !== workflowId || acquired.role !== "coordinator")) {
+            return refusalEnvelope({ command: id, status: "usage", code: "command.invalid-input", exitCode: 2, message: "acquired caller identity does not address the selected coordinator workflow" });
+          }
+          const attestation = readOperatorAttestation(absolute(input.attestation, "attestation"), id, "recovery-scope attestation");
+          const harnessDir = resolveProcessHarnessDir(context.cwd, input.harness);
+          if (harnessDir === null) return refusalEnvelope({ command: id, status: "usage", code: "command.invalid-input", exitCode: 2, message: "no control harness resolved; supply an absolute harness" });
+          // The engine's omitted-token path is not a CAS, so an omitted --expect
+          // is resolved into an explicit token here, never left to the engine.
+          const expected = input.expect ?? await reopenExpectedToken(harnessDir, workflowId);
+          if (expected === undefined) {
+            return refusalEnvelope({
+              command: id, status: "refused", code: "coordination.workflow-not-found", exitCode: 1,
+              message: `workflow ${workflowId} is neither registered nor a retained terminal header in this authority; nothing was written.`,
+              details: { workflow_id: workflowId },
+              recovery: "Run `mstar status validate` and address a workflow this authority holds.",
+            });
+          }
+          const identity = acquired ?? { source: context.host === undefined ? "local" : "host", sessionId: context.sessionId, workflowId, role: "coordinator" as const };
+          return ok(id, await reopenExecutionWorkflow(executionContextFor({ harnessDir }, identity), {
+            workflowId,
+            reason: input.reason,
+            attestation,
+            expected: expected as ExecutionToken,
+            operationId: input.operation ?? randomUUID(),
+          }));
+        } catch (error) {
+          return engineRefusal(id, error);
+        }
+      },
+      [{ key: "sessionId", context: "sessionId" }],
+      {
+        expect: `Optional checked CAS: the closed header's terminal token published by \`mstar status validate\`. When omitted this verb reads that retained terminal token and passes it explicitly, so the transition is never token-less. ${TOKEN_SUPPLIES.workflow}`,
+        operation: "Optional idempotency/replay id; when omitted one id is generated for this invocation.",
+        reason: "Required. Why the terminal lifecycle is reopened; recorded with the transition as the operator-facing justification.",
+        attestation: "Required absolute JSON path to the operator's recovery-scope document: version, attestedAt, operator.actor, operator.authorizationRef and a stoppedSessions array (possibly empty); consumers is optional and ignored. SELF-REPORTED operator authorization — the structure is validated, host liveness is never verified.",
+      },
     ),
   ];
   for (const transition of transitions) {

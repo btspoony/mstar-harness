@@ -620,6 +620,7 @@ const COORDINATOR_SEAT_ROUTES: Record<string, true> = {
   "workflow.integration-worktree": true,
   "status.workflow-close": true,
   "workflow.adopt-terminal": true,
+  "workflow.reopen": true,
   "session.recover": true,
 };
 

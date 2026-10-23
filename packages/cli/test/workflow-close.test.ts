@@ -631,3 +631,92 @@ describe("mstar status workflow-close — usage and the retired file transports"
     expect(existsSync(join(fixture.root, "escape"))).toBe(false);
   }, 30_000);
 });
+
+describe("mstar workflow reopen — the explicit operator route back from a terminal lifecycle", () => {
+  /** The recovery-scope document: operator + reason are the authorization. */
+  function attestationFile(fixture: Fixture, name: string): string {
+    const path = join(fixture.root, name);
+    writeJson(path, {
+      version: 1,
+      attestedAt: "2026-10-24T00:00:00.000Z",
+      operator: { actor: "ops-engineer", authorizationRef: "fixture operator decision" },
+      stoppedSessions: [],
+    });
+    return path;
+  }
+
+  function reopenArgs(fixture: Fixture, attestation: string): string[] {
+    return [
+      "workflow", "reopen", "--workflow", WORKFLOW_ID,
+      "--reason", "resume the stopped lifecycle under the operator's authorization",
+      "--attestation", attestation, "--harness", fixture.harness,
+    ];
+  }
+
+  test("a stopped lifecycle reopens to running with its plan rows intact", async () => {
+    const fixture = await activeFixture("mstar-reopen-stopped");
+    await registerAndBind(fixture);
+    const stopped = runCli(
+      ["workflow", "lifecycle", "--workflow", WORKFLOW_ID, "--status", "stopped", "--reason", "fixture stop", "--harness", fixture.harness],
+      fixture.root,
+      identityEnv(),
+    );
+    expect(stopped.exitCode, stopped.stdout).toBe(0);
+
+    // The close retained the plan rows on the terminal header; they are the
+    // baseline the reopened lifecycle must still serve.
+    const closed = runCli(["status", "validate"], fixture.root);
+    expect(closed.exitCode, closed.stdout).toBe(0);
+    const closedEntry = (dataOf(closed).terminalUnregistered as Array<Record<string, unknown>>)[0]!;
+    expect(closedEntry).toMatchObject({ id: WORKFLOW_ID, status: "stopped" });
+    const retainedRows = closedEntry.plans as Array<{ id: string }>;
+    expect(retainedRows.map((row) => row.id)).toEqual([PLAN_ID]);
+
+    // `--expect` is omitted on purpose: the verb itself reads the retained
+    // terminal token and passes it as the CAS.
+    const reopened = runCli(reopenArgs(fixture, attestationFile(fixture, "reopen-attestation.json")), fixture.root, identityEnv());
+    expect(reopened.exitCode, reopened.stdout).toBe(0);
+    expect(jsonOf(reopened)).toMatchObject({ command: "workflow.reopen", status: "ok", code: "workflow.reopen.ok" });
+
+    const validated = runCli(["status", "validate"], fixture.root);
+    expect(validated.exitCode, validated.stdout).toBe(0);
+    const authority = dataOf(validated).authority as {
+      workflows?: Array<{ state: { id: string; status: string }; plans: Array<{ plan: { id: string } }> }>;
+      terminalUnregistered?: unknown;
+    };
+    const entry = authority.workflows?.find((workflow) => workflow.state.id === WORKFLOW_ID);
+    expect(entry?.state.status).toBe("running");
+    expect(entry?.plans.map((row) => row.plan.id)).toEqual(retainedRows.map((row) => row.id));
+    expect(authority.terminalUnregistered).toBeUndefined();
+  }, 30_000);
+
+  test("a completed lifecycle refuses with the named code and keeps its recorded outcome", async () => {
+    const fixture = await activeFixture("mstar-reopen-completed");
+    await registerAndBind(fixture);
+    await driveToDone(fixture);
+    expect(runCli(closeArgs(fixture, ["--reason", "delivery complete"]), fixture.root, identityEnv()).exitCode).toBe(0);
+    const terminal = await storedHeader(fixture);
+    expect(terminal.status).toBe("completed");
+
+    const refused = runCli(reopenArgs(fixture, attestationFile(fixture, "reopen-completed.json")), fixture.root, identityEnv());
+    expect(refused.exitCode).toBe(1);
+    expect(envelope(refused)).toMatchObject({ status: "refused", code: "workflow.reopen-completed" });
+    expect(recoveryOf(refused)).toContain("never reopened");
+    // A completed lifecycle is history, not a resumable state.
+    expect(await storedHeader(fixture)).toEqual(terminal);
+    expect(await servedRoot(fixture)).toHaveLength(0);
+  }, 30_000);
+
+  test("the help lists the fields and states the authorization contract honestly", async () => {
+    const fixture = await activeFixture("mstar-reopen-help");
+    const text = runCli(["workflow", "reopen", "--help"], fixture.root).stdout.replace(/\s+/g, " ");
+    for (const flag of ["--workflow <value>", "--reason <value>", "--attestation <value>", "--expect <value>", "--operation <value>", "--session-id <value>"]) {
+      expect(text).toContain(flag);
+    }
+    // The authorization is explicit and the document is self-reported: the help
+    // never presents the attestation as verified host evidence.
+    expect(text).toContain("SELF-REPORTED operator evidence");
+    expect(text).toContain("never verified against host liveness");
+    expect(text).toContain("never reopened");
+  }, 30_000);
+});
