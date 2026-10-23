@@ -139,6 +139,23 @@ export interface Config {
    */
   rolePresets?: Record<string, string>
   /**
+   * Dispatch-role normalization gate at the subagent start seam (the same
+   * `internal/get` wrapper that delivers `rolePresets`). Both role consumers
+   * read the Assignment header (`Execute as: <role>`); a delegation that
+   * names its role only in prose ("Role: `fullstack-dev`") binds nothing and
+   * silently starts a role-less child. The gate NORMALIZES an explicit
+   * declaration — an `Execute as:` / `Act as:` / `Role:` field line, or a
+   * backticked/bold already-declared role id — into the canonical header
+   * (the rewritten prompt is what the runtime receives), and REFUSES only
+   * when there is no reliable declaration: `hard` throws before delegating,
+   * `warn` logs ONE advisory per apply and starts unchanged, `off` disables
+   * the gate. Non-harness projects (the start `cwd` resolves no
+   * `{HARNESS_DIR}`), requests that already carry a declaration or an
+   * `agentPreset`, and unknown providers pass through silently. Default
+   * `hard` (normalize-first, refuse-last).
+   */
+  roleGate?: 'off' | 'warn' | 'hard'
+  /**
    * Workflow/ralph gate mode :
    * `off` disables the gate entirely (workflow/ralph calls pass through
    * untouched, NO verdict row); `warn` (default) logs an advisory for
@@ -236,6 +253,11 @@ export const Config: z<Config> = z.object({
       return value
     },
   ).default(undefined as unknown as Record<string, string>),
+  // Dispatch-role normalization gate : `roleGate` defaults to 'hard'
+  // (normalize-first, refuse-last: an explicit declaration is repaired
+  // before a start is ever refused, and only a prompt with NO reliable role
+  // declaration is blocked); `warn`/`off` are the per-deployment rollbacks.
+  roleGate: z.union(['off', 'warn', 'hard']).default('hard'),
   // Workflow/ralph gate : `workflowGate`
   // defaults to 'warn' (no surprise hard-block — the gate is advisory-only
   // unless the deployment opts into ask/hard); `workflowNames` preserves

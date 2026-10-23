@@ -758,6 +758,8 @@ export interface BootOptions {
   roleMap?: Record<string, string>
   /** Role map (Config `rolePresets`): mstar role id → deployed agent preset id. */
   rolePresets?: Record<string, string>
+  /** Dispatch-role gate mode (Config `roleGate`). */
+  roleGate?: 'off' | 'warn' | 'hard'
   /** Workflow/ralph gate mode (Config `workflowGate`,). */
   workflowGate?: 'off' | 'warn' | 'ask' | 'hard'
   /** Workflow name allowlist (Config `workflowNames`; empty/absent ⇒ every name unknown). */
@@ -1277,6 +1279,7 @@ export async function bootApp(options: BootOptions = {}): Promise<BootResult> {
   if (options.catalogTtlMs !== undefined) config.catalogTtlMs = options.catalogTtlMs
   if (options.roleMap !== undefined) config.roleMap = options.roleMap
   if (options.rolePresets !== undefined) config.rolePresets = options.rolePresets
+  if (options.roleGate !== undefined) config.roleGate = options.roleGate
   if (options.workflowGate !== undefined) config.workflowGate = options.workflowGate
   if (options.workflowNames !== undefined) config.workflowNames = options.workflowNames
 

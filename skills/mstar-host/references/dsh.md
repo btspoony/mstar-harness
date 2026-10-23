@@ -699,6 +699,16 @@ the role-preset channel read, so `Execute as` / `Act as` + skill load must be
 in the prompt). A dispatch that drops those lines has no field to fall back on
 — it is a bare delegation.
 
+**Role gate (`roleGate`, default `hard`):** the plugin normalizes an explicit
+declaration at the subagent start seam before the preset merge, so a
+`Role: \`<role>\`` line or a backticked/bold already-declared role id is
+rewritten into the canonical `Execute as: <role>` header and binds normally;
+free prose is never mined, so write the header explicitly. A harness-project
+start with NO reliable declaration is refused under `hard` with a message
+naming the exact fix (`Execute as: <role-id>` under `## Assignment`) and the
+`roleGate: warn|off` escape hatch — a non-harness project, a request already
+carrying `agentPreset`, and an unknown provider are exempt.
+
 **Execution: same-message invokes start concurrently.** The installed `subagent`
 tool declares **`isConcurrencySafe: () => true`**, so a batch of invokes emitted
 in ONE assistant message is admitted concurrently instead of serialized. Each
