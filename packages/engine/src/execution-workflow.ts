@@ -1173,6 +1173,10 @@ export async function mutateExecutionWorkflow(
       pruneWorkflowOperationReceipts(tx, witness.workflowId, resolved.call.operationId);
     return {
       ...receipt,
+      // The terminal projection serves the receipt this close just wrote, so the
+      // returned graph is read AFTER the prune: a caller that stores the close
+      // receipt sees the same attribution and warning a replay serves.
+      ...(applied.membershipLost ? { data: readExecutionStateGraph(tx).data } : {}),
       operationId: resolved.call.operationId,
       replayed: false,
       recovery: workflowRecovery({

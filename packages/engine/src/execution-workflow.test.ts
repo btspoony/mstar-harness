@@ -1833,6 +1833,70 @@ describe("execution-coordinator-recovery: \u00A72.3/\u00A74.2 the named recovery
     expect(stopReplay.actor_session_id).toBe(RECOVERY_ID);
     expect(stopReplay.reason).toBe(stopRequest.reason);
     expect(stopReplay.holder_live_warning).toEqual(recovered.holder_live_warning);
+
+    // The closed lifecycle's projection serves that same attribution, the
+    // carried warning and the plan-file baseline the close left behind: the
+    // discovery state of the incident this chain reproduces.
+    expect((await readExecutionState(fixture.context)).data.terminalUnregistered).toEqual([{
+      id: WORKFLOW_ID, status: "stopped", revision: expect.any(Number), token: expect.any(String),
+      actor_session_id: RECOVERY_ID,
+      reason: stopRequest.reason,
+      warnings: [recovered.holder_live_warning],
+      plans: [{ id: PLAN_ID, file: `plans/${PLAN_ID}.md`, status: "Todo" }],
+    }]);
+  });
+
+  test("an already-revoked predecessor records no warning, and a header with no surviving receipt serves no attribution", async () => {
+    const fixture = await workflowFixture("terminal-projection-absent");
+    const recoveryCaller = trustedCaller(RECOVERY_ID, "coordinator");
+    // The named predecessor was revoked before this recovery, so it was never
+    // the live row: there is no holder-live fact to warn about.
+    withRaw(fixture.context, (db) => {
+      db.prepare("update execution_sessions set state = 'revoked' where workflow_id = ? and session_id = ?").run(WORKFLOW_ID, COORDINATOR_ID);
+    });
+    const recovered = await recoverExecutionCoordinator(domainContext(fixture.context, recoveryCaller), {
+      expected: workflowTokenOfRow(fixture.context),
+      operationId: "op-recover-revoked-prior",
+      priorSessionId: COORDINATOR_ID,
+      reason: "coordinator had already been revoked",
+      attestation: attestation([COORDINATOR_ID]),
+    });
+    expect(recovered.holder_live_warning).toBeUndefined();
+    const recoverReceipt = parsedJson(rows(
+      fixture.context,
+      "select result_json from execution_operations where operation_id = 'op-recover-revoked-prior'",
+    )[0]!.result_json) as { recovery?: Record<string, unknown> };
+    expect(recoverReceipt.recovery?.holder_live_warning).toBeUndefined();
+
+    const stopRequest = {
+      kind: "lifecycle" as const,
+      status: "stopped" as const,
+      reason: "the lifecycle is stopped after an already-revoked predecessor",
+    };
+    await workflowMutation(fixture, "op-stop-revoked-prior", stopRequest, {
+      who: recoveryCaller, session: recovered.data, expected: await liveWorkflowToken(fixture),
+    });
+    // The close is still attributed, and it carries no warning to carry.
+    expect((await readExecutionState(fixture.context)).data.terminalUnregistered).toEqual([{
+      id: WORKFLOW_ID, status: "stopped", revision: expect.any(Number), token: expect.any(String),
+      actor_session_id: RECOVERY_ID,
+      reason: stopRequest.reason,
+      plans: [{ id: PLAN_ID, file: `plans/${PLAN_ID}.md`, status: "Todo" }],
+    }]);
+
+    // A terminal header the engine never closed (no surviving receipt, no plan
+    // rows) serves only what it has: nothing is invented.
+    withRaw(fixture.context, (db) => {
+      db.prepare(
+        "insert into execution_workflows(workflow_id, revision, creator_session_id, state_json, created_at, updated_at) " +
+          "values (?, 1, null, ?, ?, ?)",
+      ).run("wf-imported-terminal", JSON.stringify({
+        id: "wf-imported-terminal", schema_version: 1, type: "plan", status: "failed",
+        started_at: TS, ended_at: TS, updated_at: TS,
+      }), TS, TS);
+    });
+    expect((await readExecutionState(fixture.context)).data.terminalUnregistered?.find((entry) => entry.id === "wf-imported-terminal"))
+      .toEqual({ id: "wf-imported-terminal", status: "failed", revision: 1, token: expect.any(String) });
   });
 
   test("recovery settles the exact named predecessor's integration claim and preserves live and foreign claims", async () => {

@@ -208,7 +208,19 @@ export type ExecutionState = {
    * live workflow's token is read from is gone, so this is the only published
    * address a terminal-only write (the held-lease release) can be given.
    */
-  terminalUnregistered?: Array<{ id: string; status: "completed" | "stopped" | "failed"; revision: number; token: ExecutionToken }>;
+  terminalUnregistered?: Array<{
+    id: string;
+    status: "completed" | "stopped" | "failed";
+    revision: number;
+    token: ExecutionToken;
+    /** Attribution of the surviving terminal receipt; absent when none survived. */
+    actor_session_id?: string;
+    reason?: string;
+    /** The warnings that surviving receipt carries forward (a recovered binding's holder-live fact). */
+    warnings?: HolderLiveWarning[];
+    /** The plan rows the close left behind: the file baseline a later move is measured against. */
+    plans?: Array<{ id: string; file: string; status: string }>;
+  }>;
   terminalAdoptions?: Array<{ id: string; status: "completed" | "stopped" | "failed"; revision: number; token: ExecutionToken; lifecycle_adopted_at: string; adopt_reason: string; actor_session_id: string; operation_id: string }>;
 };
 
@@ -1050,6 +1062,43 @@ function readWorkflowView(
   };
 }
 
+/**
+ * The facts a closed lifecycle still serves about itself: the attribution its
+ * surviving terminal receipt recorded (the prune keeps exactly that one) and
+ * the plan-row inventory the close left behind — the baseline a later plan-file
+ * move is detectable against. A header with no surviving receipt serves none of
+ * them: an absent fact is never invented from the header.
+ */
+function terminalProjection(
+  db: StoreDb,
+  store: StoreIdentity,
+  workflowId: string,
+): Pick<NonNullable<ExecutionState["terminalUnregistered"]>[number], "actor_session_id" | "reason" | "warnings" | "plans"> {
+  const receipt = db
+    .prepare("select result_json from execution_operations where workflow_id = ? and epoch = ? order by rowid desc limit 1")
+    .get(workflowId, store.epoch) as { result_json?: unknown } | undefined;
+  const facts: Partial<Pick<ExecutionRead<unknown>, "actor_session_id" | "reason" | "holder_live_warning">> = receipt === undefined
+    ? {}
+    : storedReceiptFacts(storedJsonObject(receipt.result_json, `execution_operations(${workflowId}).result_json`));
+  const warning = holderLiveWarningOf(facts.holder_live_warning);
+  const plans = (db
+    .prepare("select plan_id, state_json from execution_plans where workflow_id = ? order by ordinal")
+    .all(workflowId) as Array<{ plan_id?: unknown; state_json?: unknown }>)
+    .map((row) => {
+      const planId = storedText(row.plan_id, `execution_plans(${workflowId}).plan_id`);
+      const state = storedJsonObject(row.state_json, `execution_plans(${workflowId},${planId}).state_json`);
+      const validation = validatePlanRow(state);
+      if (!validation.ok) throw validationRefusal(`execution_plans(${workflowId},${planId}).state_json`, validation.violations);
+      return { id: planId, file: state.file as string, status: state.status as string };
+    });
+  return {
+    ...(facts.actor_session_id === undefined ? {} : { actor_session_id: facts.actor_session_id }),
+    ...(facts.reason === undefined ? {} : { reason: facts.reason }),
+    ...(warning === undefined ? {} : { warnings: [warning] }),
+    ...(plans.length === 0 ? {} : { plans }),
+  };
+}
+
 /** The whole graph in the caller's transaction: registry order is creation order. */
 function readExecutionGraph(db: StoreDb, store: StoreIdentity, meta: ExecutionMeta): ExecutionState {
   const registry = db
@@ -1094,6 +1143,7 @@ function readExecutionGraph(db: StoreDb, store: StoreIdentity, meta: ExecutionMe
       terminalUnregistered.push({
         id, status: state.status, revision,
         token: executionToken("workflow", store.storeId, store.epoch, [id], revision),
+        ...terminalProjection(db, store, id),
       });
     }
   }
@@ -1861,6 +1911,18 @@ function readCommittedReceipt<T>(
     ...(storedRecovery === undefined ? {} : { operationRecovery: storedRecovery }),
     ...storedReceiptFacts(receipt),
   };
+}
+
+/** A stored `HolderLiveWarning` fact, or `undefined` when the record is not one. */
+function holderLiveWarningOf(value: unknown): HolderLiveWarning | undefined {
+  return isPlainObject(value) &&
+    value.code === "recovery.holder-live" &&
+    isNonEmptyString(value.holder) &&
+    typeof value.epoch === "number" &&
+    value.observed_state === "active" &&
+    isNonEmptyString(value.attested_at)
+    ? (value as HolderLiveWarning)
+    : undefined;
 }
 
 /**
