@@ -127,6 +127,29 @@ function writePlanDocument(harnessDir: string, planId: string, title: string): v
 }
 
 /**
+ * The reviewed delivery compass a registration is proven against: the full
+ * mstar-iteration §1.3 field set, declared for THIS iteration. Registration
+ * refuses a pointer that names anything else, so every fixture that registers
+ * an iteration states one.
+ */
+function writeReviewedCompass(harnessDir: string, iterationId: string, relativePath = "delivery-compass.md"): string {
+  const file = join(harnessDir, relativePath);
+  mkdirSync(dirname(file), { recursive: true });
+  writeFileSync(
+    file,
+    "---\n" +
+      `iteration_id: ${iterationId}\n` +
+      "start_date: 2026-09-21\n" +
+      "status: active\n" +
+      "iteration_base_branch: main\n" +
+      "target_branch: main\n" +
+      "---\n\n" +
+      `# ${iterationId}\n`,
+  );
+  return relativePath;
+}
+
+/**
  * One plan registration request, and the narrowed form the fixture builds: the
  * plan producer call with its own options type, so a case that re-spells the
  * sparse `plan` input does not have to re-prove the union member at every use.
@@ -493,7 +516,7 @@ describe("execution-registration", () => {
     // seam, so one intent cannot persist two spellings (E07 fold).
     const row = { id: `${iterationId}-plan`, title: "Iteration row", file: `plans/${iterationId}-plan.md` };
     writePlanDocument(fixture.context.harnessDir, row.id, row.title);
-    writeFileSync(join(fixture.context.harnessDir, "delivery-compass.md"), "# Iteration compass\n");
+    writeReviewedCompass(fixture.context.harnessDir, iterationId);
     const receipt = await commitExecutionRegistration(
       { ...fixture.context, caller: { ...fixture.caller, workflowId: iterationId } },
       {
@@ -552,13 +575,65 @@ describe("execution-registration", () => {
     expect(noJsonRegistrationFiles(fixture.workspace)).toBe(true);
   });
 
+  test("execution-registration-publishes-nothing-when-the-named-compass-is-not-this-iterations", async () => {
+    const fixture = await activeFixture("iteration-compass-document");
+    const iterationId = "iter-20260921-compass-document";
+    const row = { id: `${iterationId}-plan`, title: "Iteration row", file: `plans/${iterationId}-plan.md` };
+    writePlanDocument(fixture.context.harnessDir, row.id, row.title);
+    // One valid compass, authored for a DIFFERENT iteration, plus a pointer that
+    // names no document at all: both are the registration-time mistakes this
+    // gate exists for, and neither may leave a row behind.
+    writeReviewedCompass(fixture.context.harnessDir, "iter-someone-else", `iterations/${iterationId}/delivery-compass.md`);
+    const before = await footprint(fixture.context);
+    const attempts = [
+      ["another iteration's compass", `iterations/${iterationId}/delivery-compass.md`],
+      ["a pointer that names no document", `iterations/${iterationId}/missing-compass.md`],
+    ] as const;
+
+    for (const [index, [label, compassRef]] of attempts.entries()) {
+      const refusal = await refusalOf(() =>
+        commitExecutionRegistration(
+          { ...fixture.context, caller: { ...fixture.caller, workflowId: iterationId } },
+          {
+            operationId: `op-iteration-compass-document-${index}`,
+            actor: "project-manager",
+            expectedCatalogRevision: 0,
+            workflow: {
+              kind: "iteration",
+              workflowId: iterationId,
+              options: {
+                harnessDir: fixture.context.harnessDir,
+                compassRef,
+                branch: { base: "main", integration: `iteration/${iterationId}`, target: "main" },
+                rows: [row],
+                project: "_default",
+              },
+            },
+            delta: {
+              entities: [{ kind: "iteration", id: iterationId, title: iterationId, rootKind: "iterations", relativePath: iterationId }],
+              binding: { catalogKind: "iteration", catalogId: iterationId },
+            },
+            expected: fixture.rootToken,
+          },
+        ),
+      );
+      expect(`${label} -> ${refusal.code}`).toBe(`${label} -> catalog.registration-invalid`);
+    }
+
+    // No workflow row, no plan row, no catalog entity, no binding, no receipt:
+    // the gate runs before the ACTIVE transaction opens.
+    expect(await footprint(fixture.context)).toEqual(before);
+    expect(await one(fixture.context, "select workflow_id from execution_workflows where workflow_id = ?", iterationId)).toBeUndefined();
+    expect(await one<{ n: number }>(fixture.context, "select count(*) as n from catalog_entities")).toEqual({ n: 0 });
+    expect(noJsonRegistrationFiles(fixture.workspace)).toBe(true);
+  });
+
   test("execution-registration-canonicalizes an in-root compass symlink for ACTIVE iteration registration", async () => {
     const fixture = await activeFixture("iteration-compass-alias");
     const iterationId = "iter-20260921-compass-alias";
     const compassRef = `iterations/${iterationId}/delivery-compass.md`;
     const compassPath = join(fixture.context.harnessDir, compassRef);
-    mkdirSync(dirname(compassPath), { recursive: true });
-    writeFileSync(compassPath, "# Iteration compass\n");
+    writeReviewedCompass(fixture.context.harnessDir, iterationId, compassRef);
     const aliasPath = join(fixture.workspace, "compass-alias.md");
     symlinkSync(compassPath, aliasPath);
     const row = { id: `${iterationId}-plan`, title: "Iteration row", file: `plans/${iterationId}-plan.md` };
@@ -879,6 +954,7 @@ describe("execution-registration \u2014 recovery-first registration", () => {
     // and the legacy journal accept (E07 folded the DB route onto that seam).
     const row = { id: `${iterationId}-plan`, title: "Iteration row", file: `plans/${iterationId}-plan.md` };
     writePlanDocument(fixture.context.harnessDir, row.id, row.title);
+    writeReviewedCompass(fixture.context.harnessDir, iterationId);
     // No phase is declared anywhere in this request: the producer derives the
     // phase a genuinely unstarted iteration factually sits in.
     await commitExecutionRegistration(

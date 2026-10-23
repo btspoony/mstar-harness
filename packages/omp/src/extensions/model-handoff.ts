@@ -1029,12 +1029,17 @@ export default function modelHandoff(pi: ExtensionAPI): void {
       // The checkpoint's typed §5 refinements are forwarded verbatim: they carry
       // public ids, codes, canonical plan pointers and the next supported
       // operation — never an envelope path, credential or session payload.
-      const primary = readiness.diagnostics[0];
-      const refined = primary === undefined ? "" : ` (${primary.detail})`;
+      // Every distinct refinement is named, so a checkpoint with two separate
+      // mismatches (two authored compass mirrors, or a pointer plus a mirror)
+      // does not send the author back for the second one on a retry.
+      const refined = readiness.diagnostics.length === 0
+        ? ""
+        : ` (${[...new Set(readiness.diagnostics.map((entry) => entry.detail))].join(", ")})`;
+      const nextSteps = [...new Set(readiness.diagnostics.map((entry) => entry.next))];
       return outcome(
         false,
         false,
-        `Phase 1 is not complete for ${record.binding.workflowId}: ${readiness.codes.join(", ")}${refined}. The handoff stays pending and nothing was switched.${primary === undefined ? "" : ` Next: ${primary.next}.`}`,
+        `Phase 1 is not complete for ${record.binding.workflowId}: ${readiness.codes.join(", ")}${refined}. The handoff stays pending and nothing was switched.${nextSteps.length === 0 ? "" : ` Next: ${nextSteps.join(" ")}`}`,
         {
           code: "not-ready",
           state: "pending",

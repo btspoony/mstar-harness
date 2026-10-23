@@ -5,7 +5,7 @@
  * Moved from slice4-cli.test.ts during the command-owner test split.
  */
 import { describe, expect, test } from "bun:test";
-import { existsSync, mkdirSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, realpathSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { runCli, withTempDir } from "./harness";
 import { cliEnvelope, lintResults, type RunResult } from "./support/cli-assertions";
@@ -86,10 +86,10 @@ describe("project-root path resolution — relative dev-command args (audit-002)
 });
 
 // ---------------------------------------------------------------------------
-// all six resolveCliPath adoptions — parameterized subprocess proof (F-S2)
+// resolveCliPath adoptions — parameterized subprocess proof (F-S2)
 // ---------------------------------------------------------------------------
 
-describe("project-root path resolution — all six dev commands with relative args (audit-002 F-S2)", () => {
+describe("project-root path resolution — converted dev commands with relative args (audit-002 F-S2)", () => {
   /** Minimal well-formed writable assignment (same shape as the engine fixture). */
   const ASSIGNMENT_GOOD = `## Assignment
 
@@ -210,6 +210,31 @@ describe("project-root path resolution — all six dev commands with relative ar
         expect(existsSync(join(dir, "out", "README.md"))).toBe(true);
       },
     },
+    {
+      name: "pr-review report-path <relative --reviews-dir>",
+      args: ["pr-review", "report-path", "--reviews-dir", "reviews", "--target", "branch:fix-parity", "--date", "2026-10-24"],
+      setup: () => {},
+      assert: (dir, result) => {
+        expect(result.exitCode).toBe(0);
+        const data = cliEnvelope(result, "ok", "pr-review.report-path.ok").data as { path: string };
+        expect(data.path.startsWith(join(dir, "reviews") + "/")).toBe(true);
+      },
+    },
+    {
+      name: "persist write review <relative --file>",
+      // Invalid JSON proves the payload was READ from the project root: a
+      // cwd-relative resolution fails one step earlier with `input-file-not-found`.
+      args: ["persist", "write", "review", "--key", "parity", "--file", "payloads/review.json"],
+      setup: (dir) => {
+        mkdirSync(join(dir, "payloads"), { recursive: true });
+        writeFileSync(join(dir, "payloads", "review.json"), "{ not json");
+      },
+      exit: 1,
+      assert: (_dir, result) => {
+        expect(result.exitCode).toBe(1);
+        expect(cliEnvelope(result, "refused", "persist.invalid-json"));
+      },
+    },
   ];
 
   for (const c of cases) {
@@ -223,4 +248,25 @@ describe("project-root path resolution — all six dev commands with relative ar
       });
     });
   }
+
+  test("a relative arg resolves through the workspaces walk-up from a member cwd, not the member", () => {
+    withTempDir("mstar-slice4-cli-", (dir) => {
+      // Scrubbed env: only the declared workspace tells the run where it is,
+      // and the nested-workspace document stays at the monorepo root. A raw
+      // cwd join would look in `packages/app/findings` and find nothing.
+      writeFileSync(join(dir, "package.json"), JSON.stringify({ name: "mono", workspaces: ["packages/*"] }));
+      const member = join(dir, "packages", "app");
+      mkdirSync(member, { recursive: true });
+      writeFileSync(join(member, "package.json"), JSON.stringify({ name: "@mono/app" }));
+      mkdirSync(join(dir, "findings"), { recursive: true });
+      writeFileSync(join(dir, "findings", "findings.json"), JSON.stringify(AUDIT_FINDINGS));
+      // The child's cwd is the PHYSICAL directory, so the root it walks to is
+      // the physical form of this fixture.
+      const physical = realpathSync(dir);
+      const result = runCli(["audit", "scaffold", "findings/findings.json", "--dir", "walked-out", "--sha", "deadbee"], { cwd: member });
+      expect(result.exitCode).toBe(0);
+      expect(cliEnvelope(result, "ok", "audit.scaffold.ok").data).toMatchObject({ outDir: join(physical, "walked-out") });
+      expect(existsSync(join(physical, "walked-out", "README.md"))).toBe(true);
+    });
+  });
 });

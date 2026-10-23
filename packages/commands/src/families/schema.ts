@@ -2,7 +2,8 @@ import { refusalEnvelope } from "../envelope.js";
 import { ISSUE_PAYLOAD_SCHEMAS } from "@mstar-harness/engine";
 import type { IssuePayloadName, PayloadFieldSchema } from "@mstar-harness/engine";
 import { z } from "zod";
-import { commandEnvelopeSchema, getCommandDefinitions } from "../definitions.js";
+import { commandEnvelopeSchema } from "../envelope.js";
+import { getCommandDefinitions } from "../definitions.js";
 import { isCliOnlyCommand } from "../cli-only.js";
 import type { CommandDefinition, CommandEffect, CommandEnvelope, CommandRequirement } from "../types.js";
 
@@ -101,6 +102,7 @@ const EXPECT_TOKEN_KINDS: Readonly<Record<string, CommandRequirement["tokenKind"
   "workflow.lifecycle": "workflow",
   "workflow.execution-policy": "workflow",
   "workflow.integration-worktree": "workflow",
+  "workflow.compass-ref": "workflow",
   "status.workflow-close": "workflow",
   "workflow.adopt-terminal": "revision",
   "issue.reopen": "revision",

@@ -85,6 +85,14 @@ function expectAdoptionRefusal(result: CommandEnvelope, firstLine: string, recov
 const terminalStateSchema = z.object({
   terminalUnregistered: z.array(z.object({
     id: z.string(), status: z.enum(["completed", "stopped", "failed"]), revision: z.number(),
+    // Declared so the pins below stay exact: a fixture with no surviving
+    // receipt and no plan rows must serve none of them.
+    actor_session_id: z.string().optional(), reason: z.string().optional(),
+    warnings: z.array(z.object({
+      code: z.literal("recovery.holder-live"), holder: z.string(), epoch: z.number(),
+      observed_state: z.literal("active"), attested_at: z.string(),
+    })).optional(),
+    plans: z.array(z.object({ id: z.string(), file: z.string(), status: z.string() })).optional(),
   })).optional(),
   terminalAdoptions: z.array(z.object({
     id: z.string(), status: z.enum(["completed", "stopped", "failed"]), revision: z.number(),

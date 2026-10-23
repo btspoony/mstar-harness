@@ -12,8 +12,9 @@ import {
   type ArtifactStore,
 } from "@mstar-harness/engine";
 import { z } from "zod";
+import { resolveCliPath } from "../host-health.js";
 import { refusalEnvelope } from "../envelope.js";
-import { commandEnvelopeSchema } from "../definitions.js";
+import { commandEnvelopeSchema } from "../envelope.js";
 import type { CommandDefinition, CommandEnvelope } from "../types.js";
 
 const payloadContracts = persistPayloadContracts();
@@ -126,7 +127,7 @@ function readPayload(input: string | undefined, file: string | undefined, cwd: s
   if (input !== undefined && file !== undefined) return refusalEnvelope({ command: command, status: "usage", code: "command.invalid-input", exitCode: 2, message: "input and file are mutually exclusive" });
   if (input !== undefined) return input;
   if (file === undefined) return refusalEnvelope({ command: command, status: "usage", code: "command.invalid-input", exitCode: 2, message: "provide input or file; protocol stdin is never read implicitly" });
-  const requested = path.isAbsolute(file) ? file : path.resolve(cwd, file);
+  const requested = resolveCliPath(file, cwd);
   if (!existsSync(requested)) return refusalEnvelope({ command: command, status: "refused", code: "persist.input-file-not-found", exitCode: 1, message: `persist payload file not found: ${requested}`, recovery: "Make the payload file readable at the reported path, then run mstar persist write review --key <key> --file <path> to retry." });
   try {
     return readFileSync(requested, "utf8");

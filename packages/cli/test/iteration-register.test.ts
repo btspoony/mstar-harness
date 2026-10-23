@@ -22,7 +22,7 @@ import { initializeStore, openStore, readExecutionState, type ExecutionState } f
 import { execFileSync } from "node:child_process";
 import { existsSync, mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join, resolve } from "node:path";
+import { dirname, join, resolve } from "node:path";
 
 const CLI_ROOT = resolve(import.meta.dir, "..");
 const SRC_ENTRY = join(CLI_ROOT, "src/index.ts");
@@ -32,6 +32,17 @@ const COMPASS_REF = "iterations/20260918-iteration-register-cli/delivery-compass
 const FIXTURE_SESSION_ID = "0f0e0d0c-0b0a-4901-8a7b-000000000001";
 /** Invalid-input coverage spawns many CLI processes; avoid the 5s default under CI load. */
 const MULTI_CLI_TEST_TIMEOUT_MS = 120_000;
+
+/** The reviewed compass frontmatter of one iteration (the mstar-iteration §1.3 field set). */
+function compassFrontmatter(iterationId: string): string {
+  return "---\n" +
+    `iteration_id: ${iterationId}\n` +
+    "start_date: 2026-09-18\n" +
+    "status: active\n" +
+    "iteration_base_branch: main\n" +
+    "target_branch: main\n" +
+    "---\n";
+}
 
 interface RunResult {
   exitCode: number | null;
@@ -126,6 +137,10 @@ async function setupHarness(fn: (harness: string, paths: { root: string; snapsho
   for (const id of ["20260918-plan-alpha", "20260918-plan-beta", "20260918-plan-gamma"]) {
     writeFileSync(join(harness, "plans", `${id}.md`), `# Plan ${id}\n\n**plan_id:** ${id}\n`);
   }
+  // Registration proves the named document IS this iteration's reviewed
+  // compass, so the fixture states one like any real registration does.
+  mkdirSync(dirname(join(harness, COMPASS_REF)), { recursive: true });
+  writeFileSync(join(harness, COMPASS_REF), `${compassFrontmatter(WORKFLOW_ID)}\n# Iteration compass\n`);
   // Contract §3: registration goes through the catalog journal, which requires
   // an initialized ACTIVE store — the fixture provisions one.
   await initializeStore({ harnessDir: harness }).then((handle) => handle.close());

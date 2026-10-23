@@ -80,6 +80,17 @@ Read the action-local receipt: the close acts on store rows, not file bytes, and
 
 Failure between steps 2 and 3 is reported as a partial close. A re-run finishes it, and a fully closed retry rewrites nothing. The close verb is the lifecycle route for a finished workflow: the protected staging files refuse the generic delete face, and the removed residual-archival command fails and names the issue disposition that replaced it.
 
+## Lifecycle reopen
+
+A `failed` or `stopped` lifecycle returns to `running` on the SAME id through `mstar workflow reopen`; a `completed` lifecycle is never reopened and keeps `workflow.reopen-completed` with no override:
+
+```sh
+mstar workflow reopen --workflow <id> --reason <text> --attestation <absolute-json> \
+  [--expect <terminal-token>] [--operation <id>] [--harness <absolute-path>]
+```
+
+The header keeps its identity anchors, plan rows, session rows and retained operation receipts, and the workflow re-enters the ACTIVE registry. Reopening is an explicit operator authorization: `--reason` is recorded, and `--attestation` is a required recovery-scope JSON document whose `attestedAt` + `operator.actor` / `operator.authorizationRef` are the authorization (no installed consumer is required, and an empty `stoppedSessions` is valid). The attestation is self-reported operator evidence — its structure is validated, the operator's authorization is never verified against host liveness. `--expect` is the closed header's terminal token from `mstar status validate` (`data.terminalUnregistered[].token`, or `data.terminalAdoptions[].token` for an adopted close); omitting it is safe because the verb reads that token and passes it as the CAS itself. The transition binds no coordinator: resume ownership afterwards through the ordinary bind/recover route.
+
 ## Open items: the issue store
 
 Open findings are issues in `{HARNESS_DIR}/store.db`; the project register above is migration history and no command maintains it. The capture contract, its authorization and the migration mapping live in **`mstar-project-governance`「Issue capture」** — this file only names the transport.

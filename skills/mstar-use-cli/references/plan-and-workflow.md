@@ -63,11 +63,11 @@ Complete may atomically entail InProgress → InReview → Done with sufficient 
 ## Coordinator identity and recovery
 
 ```text
-mstar session run --workflow <id> --role coordinator <argv...> [--harness <path>]
+mstar session run --workflow <id> --role coordinator <argv...> [--session-id <id>] [--harness <path>]
 mstar session recover --workflow <id> (--prior-session <id> | --unowned) --reason <text> --attestation <absolute-json> --expect <workflow-token> --operation <id> [--harness <path>] [--session-id <id>]
 ```
 
-The launcher mints one child-local coordinator identity, overwrites the identity channel and propagates exit/signal. It does not bind a workflow. Coordinator bootstrap remains workflow-wide and limited to one owner. Read-only resume reports current own context; it never restarts execution or replaces a stopped owner. Recovery replaces the explicitly stopped workflow coordinator, never a row identity. The stop attestation must name the real prior owner; `--unowned` explicitly means no recorded coordinator. No age/idle/TTL takeover. Any authorizationRef names a real external user/operator authorization event, not an agent-invented task reference.
+The launcher verifies the caller's session identity (`--session-id` or the inherited identity channel) against the workflow's live coordinator binding and hands that exact identity to the child; an id that is not the running lifecycle's live coordinator is refused (`session.run-unbound`) with the recovery for the observed state. It never mints or derives an id, and it does not bind a workflow. Coordinator bootstrap remains workflow-wide and limited to one owner. Read-only resume reports current own context; it never restarts execution or replaces a stopped owner. Recovery replaces the explicitly stopped workflow coordinator, never a row identity. The stop attestation must name the real prior owner; `--unowned` explicitly means no recorded coordinator. No age/idle/TTL takeover. Any authorizationRef names a real external user/operator authorization event, not an agent-invented task reference.
 
 Public recovery output exposes workflow/public session ids and receipt/replay/token/version facts, never envelope paths/body. Independent caller identity is revalidated within the transaction. A copied session id/reference or repeated launcher is not acquisition of the old identity.
 
@@ -104,6 +104,10 @@ Refusals cover absent/ambiguous scope, missing/mismatched independent identity, 
 Standalone `workflow register` is create-only and declares project, plan pointer, delivery kind, anchors and report-only completion policy. `--plan-file` accepts harness-relative `plans/<id>.md` or canonical absolute path, not repository-relative `.mstar/plans/<id>.md`. ACTIVE creation uses root token + operation under independently acquired identity, no pre-existing session reference. Delivery evidence/close use workflow context and token. Source facts are corrected through ordinary prepare, never a legacy repair verb.
 
 Iteration registration uses `mstar iteration register`, not standalone registration: compass ref, explicit base/integration/target anchors and Todo rows; canonical absolute plan pointers and producer-derived metadata. Registration cannot silently overwrite an existing lifecycle; recover partial registration through the supported catalog/registration receipt route.
+
+A compass ref is admitted, not merely stored. `--compass-ref` accepts the reviewed compass as an absolute path inside the harness root or as its harness-relative pointer (`iterations/<iteration-id>/delivery-compass.md`); the stored value is always that canonical harness-relative form. The document must exist as a regular file inside the harness root, be non-empty, parse as compass frontmatter, validate against the §1.3 field set, and declare `iteration_id:` equal to the registered workflow. A repository-relative `.mstar/...` pointer is refused: every reader joins a compass ref under the harness root, so that spelling can only name `.mstar/.mstar/...` (I-000863). The admission runs before the registration transaction opens, so a refused compass publishes no workflow row, no plan row and no catalog entity.
+
+Correct an already-registered pointer with `mstar workflow compass-ref --workflow <id> --compass <harness-relative-or-absolute-compass> --reason <why> --expect <workflow-token> --operation <id>` — the same revisable repair shape as `workflow delivery-anchors`, for lifecycles already running with a pointer a wrong writer stored. `--compass` passes the same admission gate; `--reason` is required and is part of the operation's intent, so an identical retry replays its receipt and a different reason conflicts. The repair preserves the workflow/session/plan identities, their rows and their history, and it stays repeatable while the lifecycle runs; a closed lifecycle is refused by the existing amend guard.
 
 ## Exit codes
 

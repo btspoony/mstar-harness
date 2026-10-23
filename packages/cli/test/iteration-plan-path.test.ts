@@ -18,12 +18,15 @@ import {
 } from "@mstar-harness/engine";
 import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join, resolve } from "node:path";
+import { join, dirname, resolve } from "node:path";
 
 const CLI_ROOT = resolve(import.meta.dir, "..");
 const SRC_ENTRY = join(CLI_ROOT, "src/index.ts");
 const PLAN_ID = "20260918-plan-alpha";
-const COMPASS_REF = "iterations/20260918-iteration-plan-path/delivery-compass.md";
+/** The reviewed compass pointer of one registered iteration (its own id names the package). */
+function compassRefFor(workflowId: string): string {
+  return `iterations/${workflowId}/delivery-compass.md`;
+}
 
 interface RunResult {
   exitCode: number | null;
@@ -78,7 +81,7 @@ function registerArgs(harness: string, workflowId: string, file: string, token: 
     "--workflow",
     workflowId,
     "--compass-ref",
-    COMPASS_REF,
+    compassRefFor(workflowId),
     "--branch-base",
     "main",
     "--branch-integration",
@@ -151,6 +154,13 @@ describe("iteration registration inputs and registered plan paths", () => {
     await initStore(fixture.harness);
     try {
       const workflowId = "20260918-path-default";
+      // Registration proves the named document IS this iteration's reviewed
+      // compass, so the fixture states one like any real registration does.
+      mkdirSync(dirname(join(fixture.harness, compassRefFor(workflowId))), { recursive: true });
+      writeFileSync(
+        join(fixture.harness, compassRefFor(workflowId)),
+        `---\niteration_id: ${workflowId}\nstart_date: 2026-09-18\nstatus: active\niteration_base_branch: main\ntarget_branch: main\n---\n`,
+      );
       const result = runCli(
         registerArgs(fixture.harness, workflowId, `plans/${PLAN_ID}.md`, await rootToken(fixture.harness)),
         fixture.harness,

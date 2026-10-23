@@ -137,6 +137,7 @@ export const WORKFLOW_OPERATION_SEMANTICS: Readonly<Record<WorkflowExecutionOper
   "integration-worktree": ["workflowId", "operation.kind", "operation.path"],
   delivery: ["workflowId", "operation.kind", "operation.delivery"],
   "delivery-anchors": ["workflowId", "operation.kind", "operation.branch", "operation.reason"],
+  "compass-ref": ["workflowId", "operation.kind", "operation.compassPath", "operation.reason"],
 };
 
 /**

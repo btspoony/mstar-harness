@@ -21,8 +21,9 @@ import {
   type StoreContext,
 } from "@mstar-harness/engine";
 import { z } from "zod";
+import { resolveCliPath } from "../host-health.js";
 import type { CommandDefinition, CommandEffect, CommandEnvelope, InvocationContext } from "../types.js";
-import { commandEnvelopeSchema } from "../definitions.js";
+import { commandEnvelopeSchema } from "../envelope.js";
 import { refusalEnvelope } from "../envelope.js";
 
 /**
@@ -146,7 +147,7 @@ function absoluteFile(value: string, flag: string): string {
   return value;
 }
 function outputPath(value: string | undefined, cwd: string): string | undefined {
-  return value === undefined ? undefined : path.resolve(cwd, value);
+  return value === undefined ? undefined : resolveCliPath(value, cwd);
 }
 function jsonFile<T>(value: string, flag: string): T {
   // The absolute-path boundary is decided BEFORE the read: a relative value is

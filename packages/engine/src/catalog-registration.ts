@@ -6,7 +6,8 @@
  * does not create or finish journaled file registrations.
  */
 import { createHash } from "node:crypto";
-import { isAbsolute, resolve, sep } from "node:path";
+import { isAbsolute, join, resolve, sep } from "node:path";
+import { readFileSync } from "node:fs";
 import {
   CatalogError,
   catalogRootDir,
@@ -17,7 +18,8 @@ import {
   type CatalogRootKind,
 } from "./catalog.js";
 import { isPlainObject } from "./coordination-write.js";
-import { assertSafePathComponent } from "./path.js";
+import { assertSafePathComponent, canonicalizeNearestExisting } from "./path.js";
+import { parseCompassFrontmatter, validateCompassFrontmatter } from "./iteration.js";
 import { resolveRegisteredPlanFile } from "./plan-path.js";
 import { openStore, type StoreContext, type StoreDb } from "./store-db.js";
 import { validateWorkflowEntry, type WorkflowEntry } from "./status.js";
@@ -393,8 +395,57 @@ function validateRequest(request: unknown): CatalogExecutionRequest {
 }
 
 /**
+ * Prove the pointer names an actual reviewed compass for THIS iteration before
+ * any row is published: a non-empty document whose frontmatter passes the one
+ * compass validator and declares this workflow's `iteration_id`. Registration is
+ * the one place the pointer is authored, so it is the place a wrong document is
+ * caught — never discovered later by a reader that has no way to tell "wrong
+ * document" from "wrong base".
+ */
+function assertReviewedCompassDocument(workflowId: string, harnessDir: string, compassRef: string): void {
+  const path = canonicalizeNearestExisting(join(harnessDir, compassRef));
+  const invalid = (detail: string): CatalogRegistrationError =>
+    new CatalogRegistrationError("catalog.registration-invalid", detail);
+  let text: string;
+  try {
+    text = readFileSync(path, "utf8");
+  } catch (error) {
+    throw invalid(`options.compassRef could not be read as ${path}: ${error instanceof Error ? error.message : String(error)}`);
+  }
+  if (text.trim() === "") throw invalid(`options.compassRef names an empty document (${path}); it must be the reviewed delivery compass`);
+  let doc: Record<string, unknown>;
+  try {
+    doc = parseCompassFrontmatter(path);
+  } catch (error) {
+    throw invalid(
+      `options.compassRef names a document with no readable compass frontmatter (${path}): ` +
+        `${error instanceof Error ? error.message : String(error)}`,
+    );
+  }
+  const validation = validateCompassFrontmatter(doc);
+  if (!validation.ok) {
+    throw new CatalogRegistrationError(
+      "catalog.registration-invalid",
+      `options.compassRef names an invalid compass (${path}): ${validation.violations.map((entry) => entry.message).join("; ")}`,
+    );
+  }
+  if (doc.iteration_id !== workflowId) {
+    throw invalid(
+      `options.compassRef names the compass of iteration ${JSON.stringify(String(doc.iteration_id))}, not of workflow ` +
+        `${workflowId} (${path}); registration records this iteration's own reviewed delivery compass`,
+    );
+  }
+}
+
+/**
  * Canonicalize selected iteration plan and compass pointers before deriving
  * the snapshot or deterministic operation id. Plan inputs are unchanged.
+ *
+ * The compass pointer must ALSO name a real, valid reviewed compass for THIS
+ * iteration — the document the registration is about to make every later reader
+ * resolve through. It is proven here, before the ACTIVE transaction opens, so a
+ * registration that names a nonexistent document or another iteration's compass
+ * publishes no workflow, no row and no catalog entity (I-000863).
  */
 function normalizeIterationWorkflow(workflow: CatalogExecutionWorkflow): CatalogExecutionWorkflow {
   if (!isPlainObject(workflow) || workflow.kind !== "iteration") return workflow;
@@ -426,6 +477,12 @@ function normalizeIterationWorkflow(workflow: CatalogExecutionWorkflow): Catalog
     changed = true;
     return { ...row, file: planPath };
   });
+  // Last, and still before the ACTIVE transaction: the pointer must name this
+  // iteration's own valid reviewed compass. A malformed id is the request
+  // validator's own refusal, so it never reaches this comparison.
+  if (typeof workflow.workflowId === "string") {
+    assertReviewedCompassDocument(workflow.workflowId, harnessDir, normalizedCompassRef);
+  }
   if (!changed) return workflow;
   return {
     ...workflow,

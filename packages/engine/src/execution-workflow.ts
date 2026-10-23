@@ -50,9 +50,10 @@
  *   different active coordinator is never replaced; the only live identity it
  *   may replace is the exact named holder covered by stop evidence;
  * - the workflow token is the CAS, the prior holder must be NAMED, and the
- *   operator attestation must name that session as stopped/reloaded (the
- *   existing `validateActivationAttestation` document rule supplies the
- *   operator authorization reference and the current-coordinator consumer);
+ *   operator attestation must name that session as stopped/reloaded
+ *   (`validateRecoveryAttestation` supplies the operator authorization
+ *   reference; the store is already active, so no installed-consumer
+ *   attestation is required);
  * - revocation and rebinding commit together with an immutable operation
  *   receipt recording the prior holder, the reason and the attestation digest;
  * - the coordinator holds no per-plan claim to adopt: the removed plan-PM
@@ -105,6 +106,7 @@ import {
   readExecutionStateGraph,
   readExecutionWorkflowWitness,
   readOperationReplay,
+  readWorkflowOperationReplayBeforeProof,
   readWorkflowSessionRows,
   recordRootMembershipLoss,
   releaseIntegrationMergeLease,
@@ -130,6 +132,7 @@ import {
   type ExecutionToken,
   type ExecutionTransaction,
   type ExecutionWorkflowWitness,
+  type HolderLiveWarning,
   type ResolvedWorkflowWrite,
   type SessionRow,
 } from "./execution-store.js";
@@ -151,7 +154,7 @@ import {
   type ResolutionSource,
   type ResolutionWarning,
 } from "./recovery-intent.js";
-import { validateActivationAttestation, type ActivationAttestation } from "./store-activation.js";
+import { validateRecoveryAttestation, type ActivationAttestation } from "./store-activation.js";
 import { StoreError, storeDbPath } from "./store-db.js";
 import {
   WORKFLOW_LIFECYCLE_STATUSES,
@@ -161,6 +164,7 @@ import {
   deliveryEvidenceMembers,
   deliveryEvidenceViolations,
   isTerminalSnapshot,
+  normalizeIterationCompassRef,
   validateWorkflowSnapshot,
   type WorkflowDeliveryEvidence,
   type IntegrationMergeLease,
@@ -168,7 +172,7 @@ import {
   type WorkflowSnapshot,
 } from "./workflow.js";
 import { assertBranchAlignment, isDistinctCheckout, readMainWorktree } from "./worktree.js";
-import type { PlanRow } from "./status.js";
+import { validateWorkflowEntry, type PlanRow } from "./status.js";
 
 /* ------------------------------------------------------------------------ *
  * §3 the closed workflow-operation union
@@ -193,6 +197,14 @@ import type { PlanRow } from "./status.js";
  * abandoning the lifecycle. The deprecated `branch.source` spelling of the
  * delivery branch is a READ alias: it is never an operation member, and a
  * `work` this operation records replaces it (see `applyWorkflowOperation`).
+ *
+ * `compass-ref` is the same repairability for the OTHER registered pointer that
+ * a live checkpoint compares: the lifecycle's reviewed delivery compass. It is
+ * not a header patch either - it names one existing reviewed compass document,
+ * requires a non-empty reason, stores the document's canonical harness-relative
+ * pointer (never the caller's spelling), and commits under the same workflow CAS
+ * token. Without it, a pointer stored in the wrong form left every later reader
+ * comparing against a double-joined path with no public way back (I-000863).
  */
 export type WorkflowExecutionOperation =
   | { kind: "phase"; phase: NonNullable<WorkflowSnapshot["phase"]>; compassPath: string }
@@ -200,7 +212,8 @@ export type WorkflowExecutionOperation =
   | { kind: "execution-policy"; policy: NonNullable<WorkflowSnapshot["execution_policy"]> }
   | { kind: "integration-worktree"; path: string }
   | { kind: "delivery"; delivery: NonNullable<WorkflowSnapshot["delivery"]> }
-  | { kind: "delivery-anchors"; branch: { base?: string; work?: string; target?: string }; reason: string };
+  | { kind: "delivery-anchors"; branch: { base?: string; work?: string; target?: string }; reason: string }
+  | { kind: "compass-ref"; compassPath: string; reason: string };
 
 /** §3 one DB workflow-operation request: the §3.1 envelope plus what it addresses. */
 export type WorkflowOperationRequest<Operation extends WorkflowExecutionOperation = WorkflowExecutionOperation> =
@@ -313,6 +326,19 @@ function assertWorkflowOperationShape(operation: unknown): asserts operation is 
       }
       return;
     }
+    case "compass-ref": {
+      assertExactKeys(op, ["kind", "compassPath", "reason"], "a compass-ref operation");
+      if (!isNonEmptyString(op.compassPath)) {
+        throw invalidWorkflowInput(
+          "a compass-ref operation needs the reviewed delivery compass as an absolute path inside the harness root or " +
+            "as a harness-relative pointer; retry through mstar workflow compass-ref",
+        );
+      }
+      if (!isNonEmptyString(op.reason)) {
+        throw invalidWorkflowInput("Invalid compass-ref operation: provide a non-empty reason; retry through mstar workflow compass-ref.");
+      }
+      return;
+    }
     default:
       throw new CoordinationError("coordination.unknown-operation", "Unknown workflow operation kind; inspect the operation contract with mstar schema.", {
         operation: op.kind,
@@ -364,6 +390,8 @@ function workflowOperationField(operation: WorkflowExecutionOperation): string {
       return "operation.delivery";
     case "delivery-anchors":
       return "operation.branch";
+    case "compass-ref":
+      return "operation.compassPath";
   }
 }
 
@@ -382,6 +410,8 @@ function storedOperationValue(state: Record<string, unknown>, operation: Workflo
       return state.delivery;
     case "delivery-anchors":
       return state.branch;
+    case "compass-ref":
+      return state.compass_ref;
   }
 }
 
@@ -402,6 +432,11 @@ function requestedOperationValue(operation: WorkflowExecutionOperation): unknown
       return operation.delivery;
     case "delivery-anchors":
       return operation.branch;
+    // The caller's own spelling: the stored form is the document's canonical
+    // harness-relative pointer, so a refusal reports both forms rather than
+    // pretending the request asked for the relative one.
+    case "compass-ref":
+      return operation.compassPath;
   }
 }
 
@@ -453,6 +488,50 @@ function workflowRecovery(input: {
   };
 }
 
+/**
+ * §4.2 the transport-freshness warning of one accepted intent: a token whose
+ * revision moved is recorded as provenance, not refused (A10).
+ */
+function workflowTokenDriftWarnings(
+  workflowId: string,
+  freshness: { readRevision: number; currentRevision: number; current: boolean },
+): ResolutionWarning[] {
+  if (freshness.current) return [];
+  return [
+    {
+      code: "execution.token-drifted",
+      path: "expected",
+      message:
+        `the token carries revision ${freshness.readRevision} while workflow ${workflowId} is at revision ` +
+        `${freshness.currentRevision}: the revision is transport freshness, so the intent was recomputed against ` +
+        `the current state instead of being refused`,
+    },
+  ];
+}
+
+/**
+ * §3.1 (R6/A09) the one shape of a served recorded receipt: the receipt itself
+ * plus the `already-satisfied` sidecar. Both the before-proof read route and the
+ * committing frame's own lookup return through here, so a replay looks the same
+ * however it was reached.
+ */
+function replayedWorkflowReceipt(
+  replayed: ExecutionReceipt<ExecutionState>,
+  input: { workflowId: string; warnings: readonly ResolutionWarning[] },
+): ExecutionReceipt<ExecutionState> {
+  return {
+    ...replayed,
+    recovery: workflowRecovery({
+      workflowId: input.workflowId,
+      outcome: "already-satisfied",
+      applied: [],
+      commitState: "committed",
+      resolvedFrom: [{ path: "operationId", source: "execution_operations receipt" }],
+      warnings: [...input.warnings, { code: "execution.receipt-replayed", message: "the recorded receipt of this operation id is served; nothing was written." }],
+    }),
+  };
+}
+
 /** One comparable value, as the typed causes quote it. */
 function describeValue(value: unknown): string {
   if (value === undefined) return "absent";
@@ -497,6 +576,13 @@ type WorkflowEvidence = {
   checkout?: { path: string; branch: string | null };
   /** `integration-worktree`: the canonical candidate path and the branch it was on. */
   worktree?: { path: string; branch: string };
+  /**
+   * `compass-ref`: the reviewed compass the repair names, as its canonical
+   * absolute path plus the harness-relative pointer it is stored as. The pointer
+   * form is decided here, before SQLite ownership, by the one registration
+   * normalizer; the path fact is re-read at the commit boundary.
+   */
+  compassRef?: { path: string; relative: string };
 };
 
 /**
@@ -677,6 +763,82 @@ async function readIntegrationWorktreeEvidence(
   return { worktree: { path, branch: integrationBranch } };
 }
 
+/**
+ * §4.1 the external evidence of one `compass-ref` repair: the reviewed delivery
+ * compass the operation names, proven here — before SQLite ownership — to be an
+ * existing, non-empty, well-formed compass frontmatter belonging to THIS
+ * lifecycle. The stored form is decided by the ONE registration normalizer, so a
+ * repaired pointer can never carry a spelling that registration would have
+ * refused (that is how a repository-relative pointer reached the store, I-000863).
+ */
+async function readCompassRefEvidence(
+  context: ExecutionContext,
+  workflowId: string,
+  operation: Extract<WorkflowExecutionOperation, { kind: "compass-ref" }>,
+): Promise<WorkflowEvidence> {
+  const header = await readWorkflowHeaderBefore(context, workflowId);
+  // An iteration owns the reviewed delivery compass; a plan workflow records no
+  // `compass_ref` at all, so repairing one would write a field its own type never
+  // reads.
+  if (header.type !== "iteration") {
+    throw invalidWorkflowTransition(
+      `workflow ${workflowId} records type ${JSON.stringify(header.type)}, which carries no reviewed delivery compass; ` +
+        `a compass_ref is repaired only on an iteration workflow`,
+      { workflow_id: workflowId, type: header.type },
+    );
+  }
+  const harnessRoot = controlHarnessRoot(context);
+  // The ONE registration normalizer decides containment, existence and the
+  // stored form: a pointer this route accepts is exactly a pointer registration
+  // would have accepted.
+  const relative = normalizeIterationCompassRef(operation.compassPath, harnessRoot, (detail) => invalidWorkflowInput(detail));
+  // Both accepted spellings resolve against the harness root — the base the
+  // stored pointer is later read under — and the file itself is canonicalized
+  // the same way the normalizer just did.
+  const path = canonicalizeNearestExisting(
+    isAbsolute(operation.compassPath) ? operation.compassPath : join(harnessRoot, operation.compassPath),
+  );
+  const text = readFileSync(path, "utf8");
+  if (text.trim() === "") {
+    throw invalidWorkflowTransition("The named compass document is empty; name the reviewed delivery compass, then retry through mstar workflow compass-ref.", {
+      workflow_id: workflowId,
+      compass_path: path,
+    });
+  }
+  let doc: Record<string, unknown>;
+  try {
+    doc = parseCompassFrontmatterText(text, path);
+  } catch (error) {
+    // The parser's own report rides in the details, so this message can name the
+    // repair verb as one statically provable literal.
+    throw invalidWorkflowTransition(
+      "The named compass document is not a readable compass frontmatter; correct the document, then retry through mstar workflow compass-ref.",
+      {
+        workflow_id: workflowId,
+        compass_path: path,
+        reason: error instanceof Error ? error.message : String(error),
+      },
+    );
+  }
+  const validation = validateCompassFrontmatter(doc);
+  if (!validation.ok) {
+    throw invalidWorkflowInput("The named compass is invalid; correct its validation findings, then retry through mstar workflow compass-ref.", {
+      compass_path: path,
+      violations: validation.violations,
+    });
+  }
+  if (doc.iteration_id !== workflowId) {
+    // The ids that disagreed are details, not prose: an interpolated id would
+    // leave the repair verb unprovable to the reachability lint.
+    throw new CoordinationError(
+      "coordination.scope-mismatch",
+      "the named compass belongs to a different iteration than the addressed workflow; name this workflow's own reviewed delivery compass, then retry through mstar workflow compass-ref.",
+      { workflow_id: workflowId, compass_path: path, compass_iteration_id: String(doc.iteration_id) },
+    );
+  }
+  return { compassRef: { path, relative } };
+}
+
 /** §4.1 the external evidence of one workflow operation, read before SQLite ownership. */
 async function readWorkflowEvidence(
   context: ExecutionContext,
@@ -689,6 +851,8 @@ async function readWorkflowEvidence(
       return readPhaseEvidence(context, workflowId, operation);
     case "integration-worktree":
       return readIntegrationWorktreeEvidence(context, workflowId, operation);
+    case "compass-ref":
+      return readCompassRefEvidence(context, workflowId, operation);
     case "lifecycle":
       // A terminal `completed` close synthesizes NOTHING: the report-only
       // fulfilment is the outer lifecycle fact an authorized `workflow evidence`
@@ -716,6 +880,17 @@ async function readWorkflowEvidence(
  * directory, because nothing records a checkout that is no longer there.
  */
 function revalidateWorkflowEvidence(evidence: WorkflowEvidence): void {
+  // A `compass-ref` repair records a DOCUMENT: the file it names must still be
+  // there at the commit boundary. Its bytes are not a witness (an edit moved the
+  // record on), but a vanished or non-file target is not a pointer worth storing.
+  const compassRef = evidence.compassRef;
+  if (compassRef !== undefined && (!existsSync(compassRef.path) || !statSync(compassRef.path).isFile())) {
+    throw invalidWorkflowTransition(
+      `the named compass ${compassRef.path} disappeared after it was validated; restore the reviewed delivery compass ` +
+        `and retry the workflow transition`,
+      { path: compassRef.path },
+    );
+  }
   const checkout = evidence.worktree ?? evidence.checkout;
   if (checkout !== undefined && checkout.branch !== null) {
     const { path, branch } = checkout;
@@ -802,28 +977,29 @@ function prerequisiteCause(
   }
   // The evidence a transition reads depends on the transition: a phase /
   // integration-worktree transition reads the registered compass and its Git
-  // probes, while a terminal close reads its owned rows' recorded completion
-  // evidence (and the Git proof a development/integration row's completion
-  // needs). The report names what THIS transition actually reads instead of a
-  // generic inventory.
-  const readsCompassFacts = input.operation.kind === "phase" || input.operation.kind === "integration-worktree";
+  // probes, a compass-ref repair reads only the compass DOCUMENT it names (no
+  // Git evidence), and a terminal close reads its owned rows' recorded
+  // completion evidence (and the Git proof a development/integration row's
+  // completion needs). The report names what THIS transition actually reads
+  // instead of a generic inventory.
+  const prerequisiteRead =
+    input.operation.kind === "phase" || input.operation.kind === "integration-worktree"
+      ? "the lifecycle's registered compass and the Git probes its checkouts answer"
+      : input.operation.kind === "compass-ref"
+        ? "the reviewed delivery compass document this repair names"
+        : "the recorded completion evidence of the rows this transition composes (and the Git proof a completion needs)";
   const problem: RecoveryProblem = {
     component: "operation-prerequisite",
     path: workflowOperationField(input.operation),
     code: code ?? "execution.prerequisite-unavailable",
     sourcesTried: [
       `the workflow ${input.workflowId} header and rows this store owns`,
-      readsCompassFacts
-        ? "the lifecycle's registered compass and the Git probes its checkouts answer"
-        : "the recorded completion evidence of the rows this transition composes",
+      prerequisiteRead,
     ],
     currentFacts: [
       input.stage === "read"
-        ? readsCompassFacts
-          ? `the ${input.operation.kind} transition reads external evidence (the lifecycle's registered compass and its ` +
-            `checkout probes) before it can decide, and this call did not get past that read`
-          : `the ${input.operation.kind} transition reads its owned rows' recorded completion evidence (and the Git proof a ` +
-            `completion needs) before it can decide, and this call did not get past that read`
+        ? `the ${input.operation.kind} transition reads ${prerequisiteRead} before it can decide, and this call did ` +
+          `not get past that read`
         : `the ${input.operation.kind} transition re-read its external evidence in the commit window, and it no longer ` +
           `matches what the transition decided against`,
       `the refusal reports: ${message}`,
@@ -1047,13 +1223,42 @@ export async function mutateExecutionWorkflow(
   const resolved = resolveWorkflowOperationRequest(context.caller, strictRequest);
   const operation = resolved.call.operation;
   const workflowId = resolved.read.workflowId;
+  const requestHash = workflowOperationRequestHash(context.caller, workflowId, operation);
+  // §4.1/§4.2 (R6/A09) RECEIPT-FIRST for an operation whose prerequisite is
+  // MUTABLE external state. A `compass-ref` repair names a document an operator
+  // may later remove, empty or edit into invalid frontmatter; that document is
+  // admission for a NEW write, never a condition on the replay of an ACCEPTED
+  // one. The committed receipt — or the operation conflict of a changed intent
+  // under the same id — is therefore decided here, before the evidence read.
+  // Every other operation keeps reading its evidence first: its prerequisite is
+  // the state the transition itself stands on, and moving that read ahead of the
+  // store would change admission for operations this repair does not address.
+  const replayed = operation.kind === "compass-ref"
+    ? await readWorkflowOperationReplayBeforeProof<ExecutionState>(context, resolved.read, {
+        operationId: resolved.call.operationId,
+        requestHash,
+      })
+    : null;
+  if (replayed !== null) {
+    // The replay is bound to the CURRENT authority the read transaction just
+    // revalidated; the token's revision remains transport freshness (A10), so a
+    // receipt served against a header that moved is still the recorded receipt.
+    const freshness = resolveTokenFreshness(
+      resolved.call.expected,
+      { kind: "workflow", storeId: replayed.storeId, epoch: replayed.epoch, key: [workflowId], revision: replayed.revision },
+      { target: { workflowId } },
+    );
+    return replayedWorkflowReceipt(replayed.replay, {
+      workflowId,
+      warnings: workflowTokenDriftWarnings(workflowId, freshness),
+    });
+  }
   let evidence: WorkflowEvidence;
   try {
     evidence = await readWorkflowEvidence(context, resolved);
   } catch (error) {
     throw prerequisiteCause(error, { workflowId, operation, stage: "read" });
   }
-  const requestHash = workflowOperationRequestHash(context.caller, workflowId, operation);
   workflowWitnessGapForTest?.();
   return withExecutionTransaction(context, (tx) => {
     if (tx.execution.authorityState !== "active") {
@@ -1081,24 +1286,16 @@ export async function mutateExecutionWorkflow(
     // revision is transport freshness. A token whose revision moved is recorded
     // as provenance, not refused (A10): the intent below is recomputed against
     // the state this transaction reads.
-    const warnings: readonly ResolutionWarning[] = freshness.current
-      ? []
-      : [
-          {
-            code: "execution.token-drifted",
-            path: "expected",
-            message:
-              `the token carries revision ${freshness.readRevision} while workflow ${workflowId} is at revision ` +
-              `${freshness.currentRevision}: the revision is transport freshness, so the intent was recomputed against ` +
-              `the current state instead of being refused`,
-          },
-        ];
+    const warnings: readonly ResolutionWarning[] = workflowTokenDriftWarnings(workflowId, freshness);
     // §3.1 (R6/A09) an identical retry returns its recorded receipt — but only
     // while the receipt is retained and after CURRENT authority is revalidated.
     // A close that loses registry membership prunes the workflow's OTHER receipts
     // and keeps this operation's current-epoch receipt as its replay anchor: the
     // identical terminal retry replays here, and only a different operation id
     // falls through to the registry witness for actionable read-back guidance.
+    // A `compass-ref` retry normally replays on the before-proof read route
+    // above; this lookup also covers a receipt committed in the gap between that
+    // read and this write transaction.
     const replay = readOperationReplay<ExecutionState>(tx, {
       operationId: resolved.call.operationId,
       requestHash,
@@ -1108,17 +1305,7 @@ export async function mutateExecutionWorkflow(
     });
     if (replay !== null) {
       resolveWorkflowSession(tx, resolved.read);
-      return {
-        ...replay,
-        recovery: workflowRecovery({
-          workflowId,
-          outcome: "already-satisfied",
-          applied: [],
-          commitState: "committed",
-          resolvedFrom: [{ path: "operationId", source: "execution_operations receipt" }],
-          warnings: [...warnings, { code: "execution.receipt-replayed", message: "the recorded receipt of this operation id is served; nothing was written." }],
-        }),
-      };
+      return replayedWorkflowReceipt(replay, { workflowId, warnings });
     }
     // `at` is the ONE timestamp of this accepted operation: the header, the
     // settled claim and the receipt all carry the same instant.
@@ -1145,19 +1332,36 @@ export async function mutateExecutionWorkflow(
     } catch (error) {
       throw workflowConflictCause(error, { workflowId, operation, state: stored.state });
     }
+    // A lifecycle receipt is attributed to the session that moved it and the
+    // reason it stated. A terminal close additionally carries forward the
+    // holder-live warning of the recovery that created this binding: it prunes
+    // that recover receipt below, so the closing receipt is where the fact
+    // survives.
+    const carried = operation.kind === "lifecycle" && applied.membershipLost
+      ? recoveredHolderLiveWarning(tx, witness.workflowId, witness.session.sessionId)
+      : undefined;
+    const receipt: ExecutionRead<ExecutionState> = {
+      ...applied.receipt,
+      ...(operation.kind === "lifecycle" ? { actor_session_id: witness.session.sessionId, reason: operation.reason } : {}),
+      ...(carried === undefined ? {} : { holder_live_warning: carried }),
+    };
     writeOperationReceipt(tx, {
       operationId: resolved.call.operationId,
       requestHash,
       workflowId: witness.workflowId,
       planId: null,
-      receipt: applied.receipt,
+      receipt,
       now: at,
       slim: true,
     });
     if (applied.membershipLost)
       pruneWorkflowOperationReceipts(tx, witness.workflowId, resolved.call.operationId);
     return {
-      ...applied.receipt,
+      ...receipt,
+      // The terminal projection serves the receipt this close just wrote, so the
+      // returned graph is read AFTER the prune: a caller that stores the close
+      // receipt sees the same attribution and warning a replay serves.
+      ...(applied.membershipLost ? { data: readExecutionStateGraph(tx).data } : {}),
       operationId: resolved.call.operationId,
       replayed: false,
       recovery: workflowRecovery({
@@ -1254,6 +1458,12 @@ function applyWorkflowOperation(input: {
       break;
     case "integration-worktree":
       header.integration_worktree_path = requireWorktreeEvidence(evidence).worktree.path;
+      break;
+    case "compass-ref":
+      // The evidence reader decided the STORED form; this step stores exactly
+      // that canonical harness-relative pointer, so a repair cannot reintroduce
+      // the spelling registration refuses.
+      header.compass_ref = requireCompassRefEvidence(evidence).compassRef.relative;
       break;
     case "delivery":
       header.delivery = applyDeliveryEvidence({ header, rows, workflowId, delivery: operation.delivery });
@@ -1373,6 +1583,13 @@ function requireWorktreeEvidence(evidence: WorkflowEvidence): { worktree: { path
     throw invalidWorkflowInput("The integration-worktree transition ran without a validated checkout; retry through mstar workflow integration-worktree.");
   }
   return { worktree: evidence.worktree };
+}
+
+function requireCompassRefEvidence(evidence: WorkflowEvidence): { compassRef: { path: string; relative: string } } {
+  if (evidence.compassRef === undefined) {
+    throw invalidWorkflowInput("The compass-ref transition ran without its validated compass; retry through mstar workflow compass-ref.");
+  }
+  return { compassRef: evidence.compassRef };
 }
 
 /** The candidate header must be a valid snapshot before it is stored. */
@@ -1756,13 +1973,13 @@ function recoverCoordinatorRequestHash(
  *    only one recovery may replace: naming any other identity is refused
  *    (`coordination.duplicate-holder`), because ownership is not replaceable by
  *    another identity;
- * 5. the operator attestation is a valid `ActivationAttestation` (the existing
- *    document rule: an authorization reference, at least one installed consumer
- *    and exactly one current coordinator) AND it names the prior holder as
- *    stopped/reloaded. A named holder with no stop evidence is refused — the
- *    engine cannot observe a dead process, so the attested stop IS the trust
- *    boundary, and without it this transition would be the silent takeover it
- *    must never be.
+ * 5. the operator attestation is a valid RECOVERY-scope attestation (a
+ *    well-formed operator authorization reference plus attested stops; the
+ *    store is already active, so the barrier's installed-consumer obligation
+ *    does not apply) AND it names the prior holder as stopped/reloaded. A
+ *    named holder with no stop evidence is refused — the engine cannot observe
+ *    a dead process, so the attested stop IS the trust boundary, and without it
+ *    this transition would be the silent takeover it must never be.
  *
  * Initial recovery revokes the predecessor and binds the caller atomically.
  * A claim continuation preserves the current binding and requires the receipt
@@ -1799,9 +2016,12 @@ export async function recoverExecutionCoordinator(
     );
   }
   // The operator's authorization is a DOCUMENT here, exactly as at the
-  // activation barrier: the existing validator project the declared shape, so a
-  // credential-bearing or incomplete attestation never reaches the store.
-  const attestation = validateActivationAttestation(input?.attestation);
+  // activation barrier, but the scope is RECOVERY: the store is already
+  // active, so the installed-consumer obligation of the barrier does not
+  // apply and the document only has to be a well-formed operator
+  // authorization with attested stops. A credential-bearing or incomplete
+  // attestation never reaches the store.
+  const attestation = validateRecoveryAttestation(input?.attestation);
   // The replacement identity must be a genuinely acquired, CURRENT session: an
   // attestation that names it as stopped/reloaded means the operator is asking
   // this recovery to resurrect a stopped identity, which it never does. The
@@ -1869,6 +2089,11 @@ export async function recoverExecutionCoordinator(
     });
     const rows = readCoordinatorRows(tx, workflowId);
     const live = rows.find((row) => row.state === "active" && row.ref.epoch === tx.epoch);
+    // The named predecessor IS the still-live row: the operator's attested stop
+    // is the only evidence this call has, so the receipt records what the engine
+    // observed, never that the process was seen dead or the authorization
+    // host-verified.
+    const holderWasLive = priorSessionId !== null && live !== undefined && live.ref.sessionId === priorSessionId;
     let continuation = false;
     if (priorSessionId === null) {
       if (rows.length > 0) {
@@ -1970,6 +2195,15 @@ export async function recoverExecutionCoordinator(
     // The immutable recovery receipt: the session the store now holds, plus the
     // provenance of the replacement (prior holder, reason, attestation), which
     // only a committed operation row can carry.
+    const holderLiveWarning: HolderLiveWarning | undefined = holderWasLive
+      ? {
+          code: "recovery.holder-live",
+          holder: priorSessionId,
+          epoch: tx.epoch,
+          observed_state: "active",
+          attested_at: attestation.attestedAt,
+        }
+      : undefined;
     writeOperationReceipt(tx, {
       operationId,
       requestHash,
@@ -1983,11 +2217,248 @@ export async function recoverExecutionCoordinator(
           attested_at: attestation.attestedAt,
           operator: attestation.operator,
           stopped_sessions: attestation.stoppedSessions.map((session) => session.sessionId),
+          // Self-reported: the attested stop is the reason this recovery was
+          // admissible, not proof that the holder had died.
+          ...(holderLiveWarning === undefined ? {} : { holder_live_warning: holderLiveWarning }),
         },
       } as ExecutionRead<ExecutionSessionRef>,
       now,
     });
-    return { ...receipt, operationId, replayed: false };
+    return {
+      ...receipt,
+      operationId,
+      replayed: false,
+      ...(holderLiveWarning === undefined ? {} : { holder_live_warning: holderLiveWarning }),
+    };
+  });
+}
+
+/** §3.1: the operation kind a reopen request hashes its request under. */
+const REOPEN_WORKFLOW_OPERATION = "reopenExecutionWorkflow";
+
+/**
+ * §3.1 the request hash of one reopen: operation kind, the addressed workflow,
+ * the exact terminal CAS (or the explicit "current"), the trusted caller, the
+ * reason and the operator document that authorizes it.
+ */
+function reopenWorkflowRequestHash(
+  caller: ExecutionCaller,
+  workflowId: string,
+  input: { expected: ExecutionToken | undefined; reason: string; attestation: ActivationAttestation },
+): string {
+  return createHash("sha256")
+    .update(
+      serializeExecutionValue({
+        operation: REOPEN_WORKFLOW_OPERATION,
+        workflow_id: workflowId,
+        expected: input.expected ?? "current",
+        caller: {
+          session_id: caller.sessionId,
+          role: caller.role,
+          workflow_id: caller.workflowId,
+        },
+        reason: input.reason,
+        attestation: input.attestation,
+      }),
+      "utf8",
+    )
+    .digest("hex");
+}
+
+/**
+ * §4.2 `workflow.reopen`: the ONE transition that returns a `failed` or
+ * `stopped` lifecycle to `running` on the SAME id.
+ *
+ * It is not a second create and not a rewrite of history: the header keeps its
+ * identity anchors and its `started_at`, every plan row and every retained
+ * operation receipt stay exactly where the close left them, and the closed
+ * lifecycle simply re-enters the ACTIVE registry. Eligibility is the header's
+ * own `failed`/`stopped` status — `completed` is never reopened (no override
+ * flag exists) and a lifecycle that is still running/paused is not "terminal",
+ * so both are named refusals. A terminal header that still carries an ACTIVE
+ * registry row (the residue a crashed close leaves) is repaired through the
+ * existing restatement edge in the same transaction instead of failing on a
+ * duplicate membership.
+ *
+ * Authorization is EXPLICIT: the trusted caller is a coordinator addressing the
+ * workflow, a non-empty reason is recorded, and the operator document is the
+ * recovery-scope attestation (the store is already active, so the barrier's
+ * installed-consumer obligation does not apply and an empty `stoppedSessions`
+ * is valid — the authorization record is operator + reason, never a stop claim).
+ * Reopening binds NO coordinator: the session rows stay as they are, and the
+ * ordinary `bind`/`recover` routes resume ownership afterwards.
+ *
+ * The CAS is the terminal header revision — the token `status validate`
+ * publishes in `terminalUnregistered[].token` — and it is checked BEFORE any
+ * write, so a stale token leaves no footprint. An omitted `expected` resolves to
+ * the current revision inside the transaction, so only the CALLER's explicit
+ * token enters the request hash: an identical retry after a committed reopen
+ * still replays instead of conflicting on the revision that reopen advanced.
+ */
+export async function reopenExecutionWorkflow(
+  context: ExecutionContext,
+  input: {
+    workflowId: string;
+    reason: string;
+    attestation: ActivationAttestation;
+    expected?: ExecutionToken;
+    operationId: string;
+  },
+): Promise<ExecutionReceipt<ExecutionState>> {
+  const caller = context.caller;
+  if (caller?.role !== "coordinator" || caller.workflowId !== input?.workflowId || !isNonEmptyString(caller.sessionId)) {
+    throw new ExecutionError(
+      "execution.scope-mismatch",
+      `reopening a workflow is a coordinator operation addressed by the caller's own workflow; the supplied caller is a ` +
+        `${String(caller?.role)} session of ${JSON.stringify(caller?.workflowId)}.`,
+    );
+  }
+  const workflowId = input.workflowId;
+  if (!isNonEmptyString(workflowId) || !isNonEmptyString(input.reason)) {
+    throw invalidWorkflowInput(
+      "Reopening a workflow requires its id and a non-empty reason; inspect the closed lifecycle with mstar status validate.",
+    );
+  }
+  const operationId = assertOperationId(input.operationId);
+  // The operator's authorization is a DOCUMENT, validated projectively BEFORE
+  // any store access — the same recovery-scope rule the coordinator recovery
+  // applies, so a credential-bearing or incomplete attestation never reaches
+  // the store.
+  const attestation = validateRecoveryAttestation(input.attestation);
+  const requestHash = reopenWorkflowRequestHash(caller, workflowId, {
+    expected: input.expected,
+    reason: input.reason,
+    attestation,
+  });
+  return withExecutionTransaction(context, (tx) => {
+    if (tx.execution.authorityState !== "active") {
+      throw new ExecutionError(
+        "execution.not-active",
+        `the execution authority is ${tx.execution.authorityState}; reopening a workflow requires an active authority. ` +
+          `A staged store is inspectable only through migration diagnostics.`,
+      );
+    }
+    // `coordination.workflow-not-found` for a header this store does not hold.
+    const header = requireWorkflowState(tx, workflowId);
+    // §3.1 an identical retry replays its recorded receipt — and it is checked
+    // BEFORE eligibility precisely because the successful reopen leaves the
+    // workflow `running`: a retry must not be answered with "not terminal".
+    const replay = readOperationReplay<ExecutionState>(tx, {
+      operationId,
+      requestHash,
+      workflowId,
+      planId: null,
+      token: { kind: "root", key: [] },
+    });
+    if (replay !== null) {
+      const { operationRecovery, ...recorded } = replay;
+      return { ...recorded, ...(operationRecovery === undefined ? {} : { recovery: operationRecovery }) };
+    }
+    const status = String(header.state.status ?? "");
+    if (status === "completed") {
+      throw new ExecutionError(
+        "workflow.reopen-completed",
+        `workflow ${workflowId} is completed \u2014 a completed lifecycle is never reopened, and this route has no override. ` +
+          `Register a new lifecycle for further work; the completed history stays exactly as it was recorded.`,
+        { workflow_id: workflowId, status },
+      );
+    }
+    if (status !== "failed" && status !== "stopped") {
+      throw new ExecutionError(
+        "workflow.reopen-not-terminal",
+        `workflow ${workflowId} is ${JSON.stringify(status)}; only a failed or stopped lifecycle is reopened, and a ` +
+          `running/paused one is already active. Nothing was written.`,
+        { workflow_id: workflowId, status },
+      );
+    }
+    // The CAS addresses the terminal header revision the caller read; an omitted
+    // token resolves to the revision this transaction locked, so the request hash
+    // ("current") stays stable across a post-success retry while every write is
+    // still token-checked.
+    assertExecutionToken(input.expected ?? executionToken("workflow", tx.storeId, tx.epoch, [workflowId], header.revision), {
+      kind: "workflow",
+      storeId: tx.storeId,
+      epoch: tx.epoch,
+      key: [workflowId],
+      revision: header.revision,
+    });
+    // The registry row is DERIVED from the closed header, never from request
+    // JSON, and the existing entry gate validates the result.
+    const entry = {
+      id: workflowId,
+      type: header.state.type,
+      started_at: header.state.started_at,
+      dir: `workflows/${workflowId}`,
+    };
+    const entryGate = validateWorkflowEntry(entry);
+    if (!entryGate.ok) {
+      // reachability: manual — the message names the runtime workflow id, so no single statically provable command can be interpolated
+      throw new CoordinationError(
+        "coordination.invalid-input",
+        `workflow ${workflowId} cannot be restored to the ACTIVE registry: its header does not carry the entry identity ` +
+          `anchors (id, type, started_at). Inspect it with mstar status validate.`,
+        { workflow_id: workflowId, violations: entryGate.violations.map(({ code, message }) => ({ code, message })) },
+      );
+    }
+    const now = new Date().toISOString();
+    advanceWorkflowHeaderRevision(tx, { workflowId, now });
+    // Registry membership changes DIRECTION here. A residue row a crashed close
+    // left is the existing restatement edge's cleanup, so it is removed through
+    // that same edge; a clean closed header instead records the membership gain.
+    // Either way the ROOT advances exactly once, without a second store bump.
+    const residue = tx.db.prepare("select 1 as present from execution_registry where workflow_id = ?").get(workflowId);
+    if (residue !== undefined) {
+      recordRootMembershipLoss(tx, { workflowId, now });
+    } else {
+      tx.db.prepare("update execution_meta set revision = revision + 1, root_updated_at = ? where id = 1").run(now);
+    }
+    tx.db
+      .prepare("insert into execution_registry(workflow_id, entry_json) values (?, ?)")
+      .run(workflowId, JSON.stringify(entry));
+    const nextState: Record<string, unknown> = { ...header.state, status: "running", updated_at: now };
+    delete nextState.ended_at;
+    assertHeaderValid(workflowId, nextState);
+    writeWorkflowState(tx, { workflowId, state: nextState });
+    // The attributed receipt: the session that reopened it, its stated reason,
+    // and the operator provenance the authorization came from. The coordinator
+    // binding is NOT touched and nothing here claims a stop.
+    const provenance: RecoveryDetails = {
+      outcome: "applied",
+      target: { workflowId },
+      applied: [
+        `execution_workflows(${workflowId}) status ${status} \u2192 running`,
+        `execution_registry(${workflowId}) restored`,
+      ],
+      unresolved: [],
+      resolvedFrom: [
+        { path: "attestation.operator", source: `${attestation.operator.actor} (${attestation.operator.authorizationRef})` },
+        { path: "attestation.attestedAt", source: attestation.attestedAt },
+      ],
+      warnings: [],
+      commitState: "committed",
+    };
+    const receipt: ExecutionRead<ExecutionState> = {
+      ...readExecutionStateGraph(tx),
+      actor_session_id: caller.sessionId,
+      reason: input.reason,
+      operationRecovery: provenance,
+    };
+    writeOperationReceipt(tx, {
+      operationId,
+      requestHash,
+      workflowId,
+      planId: null,
+      receipt,
+      now,
+      slim: true,
+    });
+    const { operationRecovery, ...publicReceipt } = receipt;
+    return {
+      ...publicReceipt,
+      operationId,
+      replayed: false,
+      ...(operationRecovery === undefined ? {} : { recovery: operationRecovery }),
+    };
   });
 }
 
@@ -2203,21 +2674,26 @@ function readHeldIntegrationLease(tx: ExecutionTransaction, workflowId: string):
   return raw as unknown as IntegrationMergeLease;
 }
 
-/** The successful receipt must have created this exact current binding. */
-function hasCoordinatorRecoveryChain(
+/**
+ * The recovered bindings' provenance: every successful recovery receipt that
+ * created this exact current binding (same session, epoch, revision and
+ * `bound_at`), as the `recovery` blocks they recorded. Empty when the binding
+ * was created by an ordinary bind rather than a recovery.
+ */
+function bindingRecoveryBlocks(
   tx: ExecutionTransaction,
   workflowId: string,
   current: SessionRow,
-  priorSessionId: string,
-): boolean {
+): Array<Record<string, unknown>> {
   const binding = tx.db.prepare(
     "select bound_at from execution_sessions where workflow_id = ? and role = 'coordinator' and session_id = ? and epoch = ?",
   ).get(workflowId, current.ref.sessionId, tx.epoch) as { bound_at: string } | undefined;
-  if (binding === undefined) return false;
+  if (binding === undefined) return [];
   const token = executionToken("session", tx.storeId, tx.epoch, [workflowId, "coordinator", current.ref.sessionId], current.revision);
   const receipts = tx.db.prepare(
     "select result_json from execution_operations where workflow_id = ? and plan_id is null and store_id = ? and epoch = ? and committed_at = ?",
   ).all(workflowId, tx.storeId, tx.epoch, binding.bound_at) as Array<{ result_json: string }>;
+  const blocks: Array<Record<string, unknown>> = [];
   for (const receipt of receipts) {
     const raw: unknown = JSON.parse(receipt.result_json);
     if (!isPlainObject(raw) || raw.token !== token || raw.storeId !== tx.storeId || raw.epoch !== tx.epoch) continue;
@@ -2226,11 +2702,42 @@ function hasCoordinatorRecoveryChain(
     if (!isPlainObject(data) || !isPlainObject(recovery)) continue;
     if (
       data.storeId === tx.storeId && data.epoch === tx.epoch && data.workflowId === workflowId &&
-      data.sessionId === current.ref.sessionId && data.role === "coordinator" &&
-      recovery.prior_session_id === priorSessionId
-    ) return true;
+      data.sessionId === current.ref.sessionId && data.role === "coordinator"
+    ) blocks.push(recovery);
   }
-  return false;
+  return blocks;
+}
+
+/** The successful receipt must have created this exact current binding from that predecessor. */
+function hasCoordinatorRecoveryChain(
+  tx: ExecutionTransaction,
+  workflowId: string,
+  current: SessionRow,
+  priorSessionId: string,
+): boolean {
+  return bindingRecoveryBlocks(tx, workflowId, current).some((recovery) => recovery.prior_session_id === priorSessionId);
+}
+
+/**
+ * The holder-live warning the close of a recovered binding carries forward: the
+ * recover receipt that created the caller's current binding recorded it, and the
+ * terminal close prunes that receipt, so the surviving receipt keeps the fact.
+ * Absent when this binding was not created by a recovery, or the recovery it
+ * came from replaced a holder that was already revoked.
+ */
+function recoveredHolderLiveWarning(
+  tx: ExecutionTransaction,
+  workflowId: string,
+  sessionId: string,
+): HolderLiveWarning | undefined {
+  const current = readCoordinatorRows(tx, workflowId).find(
+    (row) => row.ref.sessionId === sessionId && row.state === "active" && row.ref.epoch === tx.epoch,
+  );
+  if (current === undefined) return undefined;
+  for (const recovery of bindingRecoveryBlocks(tx, workflowId, current)) {
+    if (isPlainObject(recovery.holder_live_warning)) return recovery.holder_live_warning as HolderLiveWarning;
+  }
+  return undefined;
 }
 
 /** §2.3 a replay's authority revalidation: the caller must still hold its binding. */

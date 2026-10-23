@@ -294,7 +294,7 @@ export function renderCommandContract(
 ): string {
   const lines = [definition.description, `Command id: ${descriptor.id}`, `Effects: ${descriptor.effects.join(", ")}`];
   if (route === "cli" && definition.cli.options.some((option) => option.context === "sessionId")) {
-    lines.push("Session identity resolves --session-id first, then the launched session's minted MSTAR_EXECUTION_IDENTITY, then DSH_SESSION_ID, then the ambient MSTAR_HOST_SESSION_ID (empty/whitespace ignored), else unset. For token-authorized writes it is transport-resolved attribution, not authorization: the acquired coordinator session/binding authorizes the write, and an explicit session reference is a checked constraint.");
+    lines.push("Session identity resolves --session-id first, then the launched session's inherited MSTAR_EXECUTION_IDENTITY, then DSH_SESSION_ID, then the ambient MSTAR_HOST_SESSION_ID (empty/whitespace ignored), else unset. For token-authorized writes it is transport-resolved attribution, not authorization: the acquired coordinator session/binding authorizes the write, and an explicit session reference is a checked constraint.");
   }
   // No `CLI: mstar …` usage line is emitted on either route: the CLI route
   // already prints commander's Usage from the same `cli` table, and a tool
@@ -618,8 +618,10 @@ const COORDINATOR_SEAT_ROUTES: Record<string, true> = {
   "workflow.lifecycle": true,
   "workflow.execution-policy": true,
   "workflow.integration-worktree": true,
+  "workflow.compass-ref": true,
   "status.workflow-close": true,
   "workflow.adopt-terminal": true,
+  "workflow.reopen": true,
   "session.recover": true,
 };
 

@@ -992,6 +992,47 @@ function attestationString(object: Record<string, unknown>, key: string, what: s
   return value;
 }
 
+/** The fields every attestation declares: the protocol version, its instant and the approving operator. */
+function attestationHeader(raw: Record<string, unknown>): {
+  attestedAt: string;
+  operator: { actor: string; authorizationRef: string };
+} {
+  if (raw.version !== ACTIVATION_PROTOCOL_VERSION) {
+    attestationRefusal(`the attestation version must be ${ACTIVATION_PROTOCOL_VERSION}`);
+  }
+  const attestedAt = attestationString(raw, "attestedAt", "the attestation");
+  if (!Number.isFinite(Date.parse(attestedAt))) attestationRefusal("the attestation.attestedAt must be an ISO/RFC3339 instant");
+
+  const operator = attestationObject(raw.operator, "the attestation.operator");
+  attestationKeys(operator, ["actor", "authorizationRef"], "the attestation.operator");
+  return {
+    attestedAt,
+    operator: {
+      actor: attestationString(operator, "actor", "the attestation.operator"),
+      authorizationRef: attestationString(operator, "authorizationRef", "the attestation.operator"),
+    },
+  };
+}
+
+/** The quiesced sessions of an attestation: only a stopped/reloaded one is admissible. */
+function stoppedSessionsOf(raw: Record<string, unknown>): StoppedSessionAttestation[] {
+  if (!Array.isArray(raw.stoppedSessions)) attestationRefusal("the attestation.stoppedSessions must be an array (possibly empty)");
+  return raw.stoppedSessions.map((entry, index) => {
+    const what = `the attestation.stoppedSessions[${index}]`;
+    const session = attestationObject(entry, what);
+    attestationKeys(session, ["sessionId", "host", "state"], what);
+    const state = session.state;
+    if (typeof state !== "string" || !Object.hasOwn(SESSION_STATES, state)) {
+      activationBlocked(`${what}.state must be "stopped" or "reloaded"; a running or queued session is not quiesced and stops the barrier`);
+    }
+    return {
+      sessionId: attestationString(session, "sessionId", what),
+      host: attestationString(session, "host", what),
+      state: state as "stopped" | "reloaded",
+    };
+  });
+}
+
 /**
  * Validate one attestation and project it onto the declared shape. Missing
  * consumer or current-coordinator attestation, a below-floor consumer, a
@@ -1001,16 +1042,7 @@ function attestationString(object: Record<string, unknown>, key: string, what: s
 export function validateActivationAttestation(value: unknown): ActivationAttestation {
   const raw = attestationObject(value, "the attestation");
   attestationKeys(raw, ["version", "attestedAt", "operator", "consumers", "stoppedSessions"], "the attestation");
-  if (raw.version !== ACTIVATION_PROTOCOL_VERSION) {
-    attestationRefusal(`the attestation version must be ${ACTIVATION_PROTOCOL_VERSION}`);
-  }
-  const attestedAt = attestationString(raw, "attestedAt", "the attestation");
-  if (!Number.isFinite(Date.parse(attestedAt))) attestationRefusal("the attestation.attestedAt must be an ISO/RFC3339 instant");
-
-  const operator = attestationObject(raw.operator, "the attestation.operator");
-  attestationKeys(operator, ["actor", "authorizationRef"], "the attestation.operator");
-  const actor = attestationString(operator, "actor", "the attestation.operator");
-  const authorizationRef = attestationString(operator, "authorizationRef", "the attestation.operator");
+  const { attestedAt, operator } = attestationHeader(raw);
 
   if (!Array.isArray(raw.consumers)) attestationRefusal("the attestation.consumers must be an array");
   if (raw.consumers.length === 0) {
@@ -1092,22 +1124,23 @@ export function validateActivationAttestation(value: unknown): ActivationAttesta
   }
 
   if (!Array.isArray(raw.stoppedSessions)) attestationRefusal("the attestation.stoppedSessions must be an array (possibly empty)");
-  const stoppedSessions: StoppedSessionAttestation[] = raw.stoppedSessions.map((entry, index) => {
-    const what = `the attestation.stoppedSessions[${index}]`;
-    const session = attestationObject(entry, what);
-    attestationKeys(session, ["sessionId", "host", "state"], what);
-    const state = session.state;
-    if (typeof state !== "string" || !Object.hasOwn(SESSION_STATES, state)) {
-      activationBlocked(`${what}.state must be "stopped" or "reloaded"; a running or queued session is not quiesced and stops the barrier`);
-    }
-    return {
-      sessionId: attestationString(session, "sessionId", what),
-      host: attestationString(session, "host", what),
-      state: state as "stopped" | "reloaded",
-    };
-  });
+  const stoppedSessions = stoppedSessionsOf(raw);
 
-  return { version: ACTIVATION_PROTOCOL_VERSION, attestedAt, operator: { actor, authorizationRef }, consumers, stoppedSessions };
+  return { version: ACTIVATION_PROTOCOL_VERSION, attestedAt, operator, consumers, stoppedSessions };
+}
+
+/**
+ * Validate one RECOVERY-scope attestation and project it onto the declared
+ * shape. Recovery replaces a crashed coordinator in an ALREADY-active store, so
+ * the installed-consumer obligation of the activation barrier does not apply:
+ * `consumers` is accepted and ignored when present, and the operator
+ * authorization plus the attested stops are the whole document.
+ */
+export function validateRecoveryAttestation(value: unknown): ActivationAttestation {
+  const raw = attestationObject(value, "the attestation");
+  attestationKeys(raw, ["version", "attestedAt", "operator", "consumers", "stoppedSessions"], "the attestation");
+  const { attestedAt, operator } = attestationHeader(raw);
+  return { version: ACTIVATION_PROTOCOL_VERSION, attestedAt, operator, consumers: [], stoppedSessions: stoppedSessionsOf(raw) };
 }
 
 // ---------------------------------------------------------------------------

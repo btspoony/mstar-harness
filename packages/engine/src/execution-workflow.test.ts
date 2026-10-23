@@ -25,7 +25,7 @@
  */
 import { afterAll, describe, expect, test } from "bun:test";
 import { execFileSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
@@ -49,13 +49,14 @@ import {
 import {
   mutateExecutionWorkflow,
   recoverExecutionCoordinator,
+  reopenExecutionWorkflow,
   setWorkflowWitnessGapForTest,
 } from "../src/execution-workflow.js";
 import { evaluatePostMergeCloseFromExecutionAuthority } from "../src/iteration.js";
 import { initializeStore, storeDbPath, type StoreContext, type StoreDb } from "../src/store-db.js";
 import type { CompletionEvidence, PlanProgress } from "../src/coordination-write.js";
 import { prepareAmendmentComponent } from "../src/coordination.js";
-import { ACTIVATION_PROTOCOL_VERSION, type ActivationAttestation } from "../src/store-activation.js";
+import { ACTIVATION_PROTOCOL_VERSION, validateActivationAttestation, type ActivationAttestation } from "../src/store-activation.js";
 import type { WorkflowEntry } from "../src/status.js";
 import type { WorkflowSnapshot } from "../src/workflow.js";
 import { deliveryBranchOf } from "../src/workflow.js";
@@ -1646,6 +1647,27 @@ describe("execution-workflow: \u00A74.1/\u00A74.2 semantic replay and typed caus
     expect(listOf(problems[0]!, "availableWork")).toContain("lifecycle, execution-policy, delivery");
     expect(await workflowFootprint(fixture.context)).toEqual(before);
   });
+
+  test("a compass-ref repair's prerequisite report names the compass document it reads, never Git evidence (A25)", async () => {
+    // The default `plan` fixture carries no reviewed delivery compass, so the
+    // repair refuses at its evidence read. That read is the compass DOCUMENT the
+    // repair names — no checkout and no Git probe is involved — so the typed
+    // cause must name what this transition actually reads.
+    const fixture = await workflowFixture("compass-ref-prerequisite");
+    const refused = await refusalOf(() =>
+      workflowMutation(fixture, "op-compass-ref-prerequisite", {
+        kind: "compass-ref",
+        compassPath: COMPASS_REF,
+        reason: "record the pointer registration refused",
+      }),
+    );
+    const problems = problemsOf(recoveryOf(refused.details));
+    expect(problems).toHaveLength(1);
+    expect(problems[0]!.path).toBe("operation.compassPath");
+    const sourcesTried = listOf(problems[0]!, "sourcesTried");
+    expect(sourcesTried).toContain("reviewed delivery compass document");
+    expect(sourcesTried).not.toContain("Git probes");
+  });
 });
 
 /* ------------------------------------------------------------------------ *
@@ -1694,6 +1716,31 @@ describe("execution-coordinator-recovery: \u00A72.3/\u00A74.2 the named recovery
     expect(await workflowFootprint(fixture.context)).toEqual(before);
   });
 
+  test("recovery validates an operator attestation without installed consumers, and activation still refuses one", async () => {
+    const fixture = await workflowFixture("recovery-no-consumers");
+    // Recovery runs against an ALREADY-active store, so the document is the
+    // operator authorization plus the attested stops: no consumer list.
+    const operatorOnly = attestation([COORDINATOR_ID]) as Partial<ActivationAttestation>;
+    delete operatorOnly.consumers;
+    const receipt = await recoverExecutionCoordinator(
+      domainContext(fixture.context, trustedCaller(RECOVERY_ID, "coordinator")),
+      {
+        expected: await liveWorkflowToken(fixture),
+        operationId: "op-recover-no-consumers",
+        priorSessionId: COORDINATOR_ID,
+        reason: "coordinator process stopped",
+        attestation: operatorOnly as ActivationAttestation,
+      },
+    );
+    expect(receipt.replayed).toBe(false);
+    expect(sessionState(fixture.context, COORDINATOR_ID)).toBe("revoked");
+    expect(sessionState(fixture.context, RECOVERY_ID)).toBe("active");
+
+    // The activation barrier keeps its installed-consumer obligation.
+    const activationRefusal = await refusalOf(async () => validateActivationAttestation(operatorOnly));
+    expect(activationRefusal.code).toBe("store.attestation-invalid");
+  });
+
   test("recovery never takes over an owner it may not replace", async () => {
     const fixture = await workflowFixture("recovery-live");
     // A live holder with NO stop evidence: the engine cannot observe a dead
@@ -1735,6 +1782,162 @@ describe("execution-coordinator-recovery: \u00A72.3/\u00A74.2 the named recovery
     expect(named.code).toBe("coordination.invalid-transition");
     expect(named.details.cause).toBe("no held integration claim remains");
     expect(workflowFootprint(fixture.context)).toEqual(replacedBefore);
+  });
+
+  test("a recovery that revokes the still-live holder warns on the receipt, and the later close carries the warning", async () => {
+    const fixture = await workflowFixture("recovery-live-holder-receipt");
+    const recoveryCaller = trustedCaller(RECOVERY_ID, "coordinator");
+    // The named prior holder IS the still-live row: only the operator's attested
+    // stop makes this admissible, so the receipt records exactly that.
+    expect(sessionState(fixture.context, COORDINATOR_ID)).toBe("active");
+    const recoverRequest = {
+      expected: await liveWorkflowToken(fixture),
+      operationId: "op-recover-live-holder",
+      priorSessionId: COORDINATOR_ID,
+      reason: "operator replaced the coordinator",
+      attestation: attestation([COORDINATOR_ID]),
+    };
+    const recovered = await recoverExecutionCoordinator(domainContext(fixture.context, recoveryCaller), recoverRequest);
+    expect(recovered.replayed).toBe(false);
+    expect(sessionState(fixture.context, COORDINATOR_ID)).toBe("revoked");
+    expect(recovered.holder_live_warning).toEqual({
+      code: "recovery.holder-live",
+      holder: COORDINATOR_ID,
+      epoch: fixture.epoch,
+      // What the engine saw, plus the instant the OPERATOR attested: no field
+      // claims the process was observed dead or the authorization verified.
+      observed_state: "active",
+      attested_at: recoverRequest.attestation.attestedAt,
+    });
+    // The immutable record keeps the same warning, and the replay serves it too.
+    const stored = parsedJson(rows(
+      fixture.context,
+      "select result_json from execution_operations where operation_id = 'op-recover-live-holder'",
+    )[0]!.result_json) as { recovery?: Record<string, unknown> };
+    expect(stored.recovery?.holder_live_warning).toEqual(recovered.holder_live_warning);
+    const recoverReplay = await recoverExecutionCoordinator(domainContext(fixture.context, recoveryCaller), recoverRequest);
+    expect(recoverReplay.replayed).toBe(true);
+    expect(recoverReplay.holder_live_warning).toEqual(recovered.holder_live_warning);
+
+    const stopExpected = await liveWorkflowToken(fixture);
+    const stopRequest = {
+      kind: "lifecycle" as const,
+      status: "stopped" as const,
+      reason: "the lifecycle is stopped after that recovery",
+    };
+    const stopped = await workflowMutation(fixture, "op-stop-after-recover", stopRequest, {
+      who: recoveryCaller, session: recovered.data, expected: stopExpected,
+    });
+    expect(stopped.actor_session_id).toBe(RECOVERY_ID);
+    expect(stopped.reason).toBe(stopRequest.reason);
+    expect(stopped.holder_live_warning).toEqual(recovered.holder_live_warning);
+
+    // The close pruned the recover receipt; the surviving closing receipt is
+    // where the attribution and the predecessor warning live.
+    expect(rows(fixture.context,
+      `select operation_id from execution_operations where workflow_id = '${WORKFLOW_ID}'`,
+    )).toEqual([{ operation_id: "op-stop-after-recover" }]);
+    const surviving = JSON.parse(String(rows(
+      fixture.context,
+      "select result_json from execution_operations where operation_id = 'op-stop-after-recover'",
+    )[0]!.result_json)) as Record<string, unknown>;
+    expect(surviving).toMatchObject({
+      slim: true,
+      actor_session_id: RECOVERY_ID,
+      reason: stopRequest.reason,
+      holder_live_warning: recovered.holder_live_warning,
+    });
+    // The replay of the close returns the same attributed receipt.
+    const stopReplay = await workflowMutation(fixture, "op-stop-after-recover", stopRequest, {
+      who: recoveryCaller, session: recovered.data, expected: stopExpected,
+    });
+    expect(stopReplay.replayed).toBe(true);
+    expect(stopReplay.actor_session_id).toBe(RECOVERY_ID);
+    expect(stopReplay.reason).toBe(stopRequest.reason);
+    expect(stopReplay.holder_live_warning).toEqual(recovered.holder_live_warning);
+
+    // The closed lifecycle's projection serves that same attribution, the
+    // carried warning and the plan-file baseline the close left behind: the
+    // discovery state of the incident this chain reproduces.
+    const projected = [{
+      id: WORKFLOW_ID, status: "stopped" as const, revision: expect.any(Number), token: expect.any(String),
+      actor_session_id: RECOVERY_ID,
+      reason: stopRequest.reason,
+      warnings: [recovered.holder_live_warning!],
+      plans: [{ id: PLAN_ID, file: `plans/${PLAN_ID}.md`, status: "Todo" }],
+    }];
+    expect((await readExecutionState(fixture.context)).data.terminalUnregistered).toEqual(projected);
+
+    // A later terminal-era write — the attested lease release a crash or a
+    // foreign writer leaves behind — records its OWN workflow-level receipt and
+    // does not move the header. The projection must keep serving the terminal
+    // mutation's attribution, not that newer row.
+    plantMergeClaim(fixture.context, { ownerEpoch: fixture.epoch, holder: COORDINATOR_ID });
+    await recoverExecutionCoordinator(domainContext(fixture.context, recoveryCaller), {
+      expected: workflowTokenOfRow(fixture.context),
+      operationId: "op-release-after-close",
+      priorSessionId: COORDINATOR_ID,
+      reason: "release the stopped holder's integration claim",
+      attestation: attestation([COORDINATOR_ID]),
+    });
+    expect(rows(
+      fixture.context,
+      `select operation_id from execution_operations where workflow_id = '${WORKFLOW_ID}' order by rowid`,
+    ).map((row) => row.operation_id)).toEqual(["op-stop-after-recover", "op-release-after-close"]);
+    expect((await readExecutionState(fixture.context)).data.terminalUnregistered).toEqual(projected);
+  });
+
+  test("an already-revoked predecessor records no warning, and a header with no surviving receipt serves no attribution", async () => {
+    const fixture = await workflowFixture("terminal-projection-absent");
+    const recoveryCaller = trustedCaller(RECOVERY_ID, "coordinator");
+    // The named predecessor was revoked before this recovery, so it was never
+    // the live row: there is no holder-live fact to warn about.
+    withRaw(fixture.context, (db) => {
+      db.prepare("update execution_sessions set state = 'revoked' where workflow_id = ? and session_id = ?").run(WORKFLOW_ID, COORDINATOR_ID);
+    });
+    const recovered = await recoverExecutionCoordinator(domainContext(fixture.context, recoveryCaller), {
+      expected: workflowTokenOfRow(fixture.context),
+      operationId: "op-recover-revoked-prior",
+      priorSessionId: COORDINATOR_ID,
+      reason: "coordinator had already been revoked",
+      attestation: attestation([COORDINATOR_ID]),
+    });
+    expect(recovered.holder_live_warning).toBeUndefined();
+    const recoverReceipt = parsedJson(rows(
+      fixture.context,
+      "select result_json from execution_operations where operation_id = 'op-recover-revoked-prior'",
+    )[0]!.result_json) as { recovery?: Record<string, unknown> };
+    expect(recoverReceipt.recovery?.holder_live_warning).toBeUndefined();
+
+    const stopRequest = {
+      kind: "lifecycle" as const,
+      status: "stopped" as const,
+      reason: "the lifecycle is stopped after an already-revoked predecessor",
+    };
+    await workflowMutation(fixture, "op-stop-revoked-prior", stopRequest, {
+      who: recoveryCaller, session: recovered.data, expected: await liveWorkflowToken(fixture),
+    });
+    // The close is still attributed, and it carries no warning to carry.
+    expect((await readExecutionState(fixture.context)).data.terminalUnregistered).toEqual([{
+      id: WORKFLOW_ID, status: "stopped", revision: expect.any(Number), token: expect.any(String),
+      actor_session_id: RECOVERY_ID,
+      reason: stopRequest.reason,
+      plans: [{ id: PLAN_ID, file: `plans/${PLAN_ID}.md`, status: "Todo" }],
+    }]);
+
+    // A terminal header the engine never closed (no surviving receipt, no plan
+    // rows) serves only what it has: nothing is invented.
+    withRaw(fixture.context, (db) => {
+      db.prepare(
+        "insert into execution_workflows(workflow_id, revision, creator_session_id, state_json, created_at, updated_at) " +
+          "values (?, 1, null, ?, ?, ?)",
+      ).run("wf-imported-terminal", JSON.stringify({
+        id: "wf-imported-terminal", schema_version: 1, type: "plan", status: "failed",
+        started_at: TS, ended_at: TS, updated_at: TS,
+      }), TS, TS);
+    });
+    expect((await readExecutionState(fixture.context)).data.terminalUnregistered?.find((entry) => entry.id === "wf-imported-terminal"))
+      .toEqual({ id: "wf-imported-terminal", status: "failed", revision: 1, token: expect.any(String) });
   });
 
   test("recovery settles the exact named predecessor's integration claim and preserves live and foreign claims", async () => {
@@ -3303,6 +3506,265 @@ describe("execution-workflow: \u00A73 the delivery-anchor repair", () => {
 });
 
 /* ------------------------------------------------------------------------ *
+ * 4.1 the registered-compass repair (I-000863)
+ * ------------------------------------------------------------------------ */
+
+describe("execution-workflow: 4.1 the registered-compass repair", () => {
+  /**
+   * The lifecycle's OWN reviewed compass: `writeCompass` states the shared
+   * fixture iteration id, while a repair proves the document belongs to THIS
+   * workflow, so the repair cases restate it as the workflow's own.
+   */
+  function writeOwnCompass(fixture: Fixture): void {
+    writeCompass(fixture.compassPath, { status: "active", plans: [PLAN_ID], targetBranch: "main" });
+    const text = readFileSync(fixture.compassPath, "utf8").replace(`iteration_id: ${ITERATION_ID}`, `iteration_id: ${WORKFLOW_ID}`);
+    writeFileSync(fixture.compassPath, text);
+  }
+
+  /** The compass document of another iteration, written where a repair can name it. */
+  function writeForeignCompass(fixture: Fixture): string {
+    const ref = "iterations/iter-someone-else/delivery-compass.md";
+    writeText(join(dirname(storeDbPath(fixture.context)), ref), [
+      "---",
+      "iteration_id: iter-someone-else",
+      "start_date: 2026-01-01",
+      "status: active",
+      "iteration_base_branch: main",
+      "target_branch: main",
+      "---",
+      "",
+      "# another iteration",
+    ].join("\n"));
+    return ref;
+  }
+
+  /** Plant a stored `compass_ref` without moving the header revision. */
+  function plantCompassRef(fixture: Fixture, value: string): void {
+    withRaw(fixture.context, (db) => {
+      db.prepare("update execution_workflows set state_json = json_set(state_json, '$.compass_ref', ?) where workflow_id = ?").run(
+        value,
+        WORKFLOW_ID,
+      );
+    });
+  }
+
+  function storedCompassRef(fixture: Fixture): unknown {
+    const [row] = rows(fixture.context, `select state_json from execution_workflows where workflow_id = '${WORKFLOW_ID}'`);
+    return parsedJson(row!.state_json).compass_ref;
+  }
+
+  function planRowStates(fixture: Fixture): Array<Record<string, unknown>> {
+    return rows(
+      fixture.context,
+      `select plan_id, revision, state_json from execution_plans where workflow_id = '${WORKFLOW_ID}' order by plan_id`,
+    );
+  }
+
+  test("a repository-relative pointer is repaired to the canonical harness-relative form, keeping identities, rows and history", async () => {
+    const fixture = await workflowFixture("compass-ref-repair", [], "iteration");
+    writeOwnCompass(fixture);
+    // The stored value the double-join produced: a repository-relative pointer
+    // that every later reader resolves to `<harness>/.mstar/iterations/...`.
+    plantCompassRef(fixture, `.mstar/${COMPASS_REF}`);
+    const before = (await readExecutionState(fixture.context)).data.workflows[0]!.state as unknown as Record<string, unknown>;
+    expect(identityAnchors(before).compass_ref).toBe(`.mstar/${COMPASS_REF}`);
+    const rowsBefore = planRowStates(fixture);
+    const [operationsBefore] = rows(
+      fixture.context,
+      `select count(*) as n from execution_operations where workflow_id = '${WORKFLOW_ID}'`,
+    );
+
+    const repaired = await workflowMutation(fixture, "op-compass-ref", {
+      kind: "compass-ref",
+      compassPath: COMPASS_REF,
+      reason: "the registered pointer carried a repository-relative prefix",
+    });
+    expect(repaired.replayed).toBe(false);
+    const state = repaired.data.workflows[0]!.state as unknown as Record<string, unknown>;
+    expect(state.compass_ref).toBe(COMPASS_REF);
+    // The ONLY identity anchor that moved is the pointer this operation owns.
+    expect(identityAnchors(state)).toEqual({ ...identityAnchors(before), compass_ref: COMPASS_REF });
+    // Rows and their recorded history are untouched: this is a pointer repair,
+    // not a re-registration.
+    expect(planRowStates(fixture)).toEqual(rowsBefore);
+    const [operationsAfter] = rows(
+      fixture.context,
+      `select count(*) as n from execution_operations where workflow_id = '${WORKFLOW_ID}'`,
+    );
+    expect(Number(operationsAfter!.n)).toBe(Number(operationsBefore!.n) + 1);
+
+    // The repaired pointer is what the phase transition's own comparison expects:
+    // the registered compass is reachable under the harness root again.
+    expect(existsSync(join(dirname(storeDbPath(fixture.context)), String(storedCompassRef(fixture))))).toBe(true);
+  });
+
+  test("the absolute in-harness spelling stores the same canonical pointer, and an identical replay writes nothing", async () => {
+    const fixture = await workflowFixture("compass-ref-absolute", [], "iteration");
+    writeOwnCompass(fixture);
+    plantCompassRef(fixture, `.mstar/${COMPASS_REF}`);
+    const repaired = await workflowMutation(fixture, "op-compass-ref-absolute", {
+      kind: "compass-ref",
+      compassPath: fixture.compassPath,
+      reason: "record the pointer from the document's absolute path",
+    });
+    expect((repaired.data.workflows[0]!.state as unknown as Record<string, unknown>).compass_ref).toBe(COMPASS_REF);
+    const published = await workflowFootprint(fixture.context);
+
+    // The same operation id replays its recorded receipt; a different reason is
+    // a different intent and conflicts instead of being served as a replay.
+    const replay = await workflowMutation(fixture, "op-compass-ref-absolute", {
+      kind: "compass-ref",
+      compassPath: fixture.compassPath,
+      reason: "record the pointer from the document's absolute path",
+    });
+    expect(replay.replayed).toBe(true);
+    expect(await workflowFootprint(fixture.context)).toEqual(published);
+
+    const conflicting = await refusalOf(() =>
+      workflowMutation(fixture, "op-compass-ref-absolute", {
+        kind: "compass-ref",
+        compassPath: COMPASS_REF,
+        reason: "a different reason for the same pointer",
+      }),
+    );
+    expect(conflicting.code).toBe("execution.operation-conflict");
+    expect(await workflowFootprint(fixture.context)).toEqual(published);
+  });
+
+  test("a committed repair replays after its document becomes unusable, while a new operation still refuses", async () => {
+    const fixture = await workflowFixture("compass-ref-replay-broken", [], "iteration");
+    writeOwnCompass(fixture);
+    plantCompassRef(fixture, `.mstar/${COMPASS_REF}`);
+    const repaired = await workflowMutation(fixture, "op-compass-ref-broken", {
+      kind: "compass-ref",
+      compassPath: COMPASS_REF,
+      reason: "record the pointer registration refused",
+    });
+    expect(repaired.replayed).toBe(false);
+    expect((repaired.data.workflows[0]!.state as unknown as Record<string, unknown>).compass_ref).toBe(COMPASS_REF);
+    const published = await workflowFootprint(fixture.context);
+
+    // The external document is the ADMISSION for a new write, never a condition
+    // on the replay of an operation the store already accepted: a coordinator
+    // that retries the exact committed request after the document was removed
+    // still gets its receipt, with nothing written.
+    rmSync(fixture.compassPath);
+    const replay = await workflowMutation(fixture, "op-compass-ref-broken", {
+      kind: "compass-ref",
+      compassPath: COMPASS_REF,
+      reason: "record the pointer registration refused",
+    });
+    expect(replay.replayed).toBe(true);
+    expect(await workflowFootprint(fixture.context)).toEqual(published);
+
+    // A changed intent under the committed id is still the operation conflict:
+    // replay-first must not turn a different request into a served success.
+    const conflicting = await refusalOf(() =>
+      workflowMutation(fixture, "op-compass-ref-broken", {
+        kind: "compass-ref",
+        compassPath: COMPASS_REF,
+        reason: "a different reason for the same pointer",
+      }),
+    );
+    expect(conflicting.code).toBe("execution.operation-conflict");
+    expect(await workflowFootprint(fixture.context)).toEqual(published);
+
+    // The same unusable document under a NEW operation id is still refused by
+    // full admission, so the ordering does not weaken the new-write gate.
+    writeFileSync(fixture.compassPath, "");
+    const refused = await refusalOf(() =>
+      workflowMutation(fixture, "op-compass-ref-broken-new", {
+        kind: "compass-ref",
+        compassPath: COMPASS_REF,
+        reason: "repair against an empty document",
+      }),
+    );
+    expect(refused.code).toBe("coordination.invalid-transition");
+    expect(await workflowFootprint(fixture.context)).toEqual(published);
+  });
+
+  test("a repair the lifecycle or the document cannot support is refused with no mutation", async () => {
+    const iterationFixture = await workflowFixture("compass-ref-refusals", [], "iteration");
+    writeOwnCompass(iterationFixture);
+    const planFixture = await workflowFixture("compass-ref-plan-type");
+    const foreignRef = writeForeignCompass(iterationFixture);
+    const before = await workflowFootprint(iterationFixture.context);
+    const planBefore = await workflowFootprint(planFixture.context);
+
+    const cases: ReadonlyArray<readonly [string, Fixture, unknown, string]> = [
+      ["a compass that names no document", iterationFixture, { kind: "compass-ref", compassPath: "iterations/missing/delivery-compass.md", reason: "repair" }, "coordination.invalid-input"],
+      ["another iteration's compass", iterationFixture, { kind: "compass-ref", compassPath: foreignRef, reason: "repair" }, "coordination.scope-mismatch"],
+      ["a repository-relative pointer", iterationFixture, { kind: "compass-ref", compassPath: `.mstar/${COMPASS_REF}`, reason: "repair" }, "coordination.invalid-input"],
+      ["a missing reason", iterationFixture, { kind: "compass-ref", compassPath: COMPASS_REF }, "coordination.invalid-input"],
+      ["an empty reason", iterationFixture, { kind: "compass-ref", compassPath: COMPASS_REF, reason: "   " }, "coordination.invalid-input"],
+      ["a key the operation does not own", iterationFixture, { kind: "compass-ref", compassPath: COMPASS_REF, reason: "repair", phase: "phase-2-execute" }, "coordination.forbidden-field"],
+      // A plan workflow registers no reviewed compass, so repairing one would
+      // write a field its own type never reads.
+      ["a plan workflow", planFixture, { kind: "compass-ref", compassPath: COMPASS_REF, reason: "repair" }, "coordination.invalid-transition"],
+    ];
+    for (const [index, [label, fixture, operation, code]] of cases.entries()) {
+      const refusal = await refusalOf(() => workflowMutation(fixture, `op-compass-ref-${index}`, operation as never));
+      expect(`${label} -> ${refusal.code}`).toBe(`${label} -> ${code}`);
+    }
+    expect(await workflowFootprint(iterationFixture.context)).toEqual(before);
+    expect(await workflowFootprint(planFixture.context)).toEqual(planBefore);
+  });
+
+  test("a superseded CAS token is refused with no mutation", async () => {
+    const fixture = await workflowFixture("compass-ref-stale-cas", [], "iteration");
+    writeOwnCompass(fixture);
+    plantCompassRef(fixture, `.mstar/${COMPASS_REF}`);
+    const before = await workflowFootprint(fixture.context);
+    const [storeRow] = rows(fixture.context, "select store_id, authority_epoch from store_meta where id = 1");
+    const [headerRow] = rows(fixture.context, `select revision from execution_workflows where workflow_id = '${WORKFLOW_ID}'`);
+    // A token of the NEXT authority generation: the generation fence refuses it
+    // before any evidence is applied or any revision advances.
+    const superseded = executionToken(
+      "workflow",
+      String(storeRow!.store_id),
+      Number(storeRow!.authority_epoch) + 1,
+      [WORKFLOW_ID],
+      Number(headerRow!.revision),
+    );
+    const refusal = await refusalOf(() =>
+      workflowMutation(fixture, "op-compass-ref-stale", {
+        kind: "compass-ref",
+        compassPath: COMPASS_REF,
+        reason: "repair against a superseded token",
+      }, { expected: superseded }),
+    );
+    expect(refusal.code).toBe("store.stale-epoch");
+    expect(await workflowFootprint(fixture.context)).toEqual(before);
+    expect(storedCompassRef(fixture)).toBe(`.mstar/${COMPASS_REF}`);
+  });
+
+  test("a compass that vanishes between the read and the commit is refused at the boundary", async () => {
+    const fixture = await workflowFixture("compass-ref-vanish", [], "iteration");
+    writeOwnCompass(fixture);
+    const before = await workflowFootprint(fixture.context);
+    // The named document is a symlink whose target is removed inside the read
+    // window: the pre-transaction read succeeds, the commit-boundary re-read does
+    // not, and nothing is stored.
+    const aliasPath = join(fixture.repoRoot, "compass-alias.md");
+    symlinkSync(fixture.compassPath, aliasPath);
+    setWorkflowWitnessGapForTest(() => rmSync(fixture.compassPath));
+    try {
+      const refusal = await refusalOf(() =>
+        workflowMutation(fixture, "op-compass-ref-vanish", {
+          kind: "compass-ref",
+          compassPath: aliasPath,
+          reason: "record the pointer from an alias",
+        }),
+      );
+      expect(refusal.code).toBe("coordination.invalid-transition");
+    } finally {
+      setWorkflowWitnessGapForTest(undefined);
+    }
+    expect(await workflowFootprint(fixture.context)).toEqual(before);
+  });
+});
+
+/* ------------------------------------------------------------------------ *
  * §4.1 the prepare claim names a BRANCH, never the Assignment's claim string
  * ------------------------------------------------------------------------ */
 
@@ -3413,5 +3875,302 @@ describe("execution-workflow: \u00A74.1 the prepare claim records source_branch"
       .not.toContain("feature/smuggled");
     expect((await readExecutionPlan(domainContext(fixture.context, fixture.coordinatorCaller), fixture.coordinator, PLAN_ID))
       .data.plan.metadata).toMatchObject({ working_branch: SOURCE_BRANCH });
+  });
+});
+
+/* ------------------------------------------------------------------------ *
+ * §4.2 `workflow.reopen`: a failed/stopped lifecycle returns to `running`
+ * ------------------------------------------------------------------------ */
+
+/** One `reopenExecutionWorkflow` call under the fixture's coordinator. */
+function reopenWorkflow(
+  fixture: Fixture,
+  input: {
+    operationId: string;
+    reason?: string;
+    expected?: ExecutionToken;
+    attestation: ActivationAttestation;
+    who?: ExecutionCaller;
+  },
+) {
+  return reopenExecutionWorkflow(domainContext(fixture.context, input.who ?? fixture.coordinatorCaller), {
+    workflowId: WORKFLOW_ID,
+    reason: input.reason ?? "the failed lifecycle is reopened for further work",
+    attestation: input.attestation,
+    operationId: input.operationId,
+    ...(input.expected === undefined ? {} : { expected: input.expected }),
+  });
+}
+
+/** The closed lifecycle's CAS address, exactly as `status validate` publishes it. */
+async function terminalToken(fixture: Fixture): Promise<{ token: ExecutionToken; revision: number }> {
+  const [entry] = (await readExecutionState(fixture.context)).data.terminalUnregistered ?? [];
+  if (entry?.id !== WORKFLOW_ID) throw new Error("fixture: the addressed workflow is not closed");
+  return { token: entry.token as ExecutionToken, revision: entry.revision };
+}
+
+/** The raw committed status/outcome of the addressed header. */
+function storedHeader(context: StoreContext): Record<string, unknown> {
+  const [row] = rows(
+    context,
+    `select (select count(*) as n from execution_registry where workflow_id = '${WORKFLOW_ID}') as registered, ` +
+      `(select json_extract(state_json, '$.status') from execution_workflows where workflow_id = '${WORKFLOW_ID}') as status, ` +
+      `(select json_extract(state_json, '$.ended_at') from execution_workflows where workflow_id = '${WORKFLOW_ID}') as ended_at, ` +
+      `(select json_extract(state_json, '$.started_at') from execution_workflows where workflow_id = '${WORKFLOW_ID}') as started_at, ` +
+      `(select json_extract(state_json, '$.type') from execution_workflows where workflow_id = '${WORKFLOW_ID}') as type`,
+  );
+  return row!;
+}
+
+describe("execution-workflow-reopen: \u00A74.2 a closed lifecycle returns to running on the same id", () => {
+  test("a failed lifecycle reopens with its plan rows, history and identity anchors intact", async () => {
+    const fixture = await workflowFixture("reopen-failed");
+    const close = await workflowMutation(fixture, "op-reopen-close-failed", {
+      kind: "lifecycle",
+      status: "failed",
+      reason: "the coordinator chain broke",
+    });
+    expect(close.data.workflows.some((workflow) => workflow.state.id === WORKFLOW_ID)).toBe(false);
+    expect((await readExecutionState(fixture.context)).data.terminalUnregistered?.map((entry) => entry.id)).toEqual([WORKFLOW_ID]);
+    const terminal = await terminalToken(fixture);
+    const plansBefore = rows(
+      fixture.context,
+      `select * from execution_plans where workflow_id = '${WORKFLOW_ID}' order by ordinal`,
+    );
+    const headerBefore = parsedJson(rows(
+      fixture.context,
+      `select state_json from execution_workflows where workflow_id = '${WORKFLOW_ID}'`,
+    )[0]!.state_json);
+    const before = revisions(fixture.context);
+    const reason = "the failed lifecycle is reopened under the operator's authorization";
+
+    const receipt = await reopenWorkflow(fixture, {
+      operationId: "op-reopen-failed",
+      expected: terminal.token,
+      attestation: attestation([]),
+      reason,
+    });
+    expect(receipt.replayed).toBe(false);
+    expect(receipt.actor_session_id).toBe(COORDINATOR_ID);
+    expect(receipt.reason).toBe(reason);
+    expect(receipt.recovery).toMatchObject({
+      outcome: "applied",
+      commitState: "committed",
+      target: { workflowId: WORKFLOW_ID },
+      applied: [
+        `execution_workflows(${WORKFLOW_ID}) status failed \u2192 running`,
+        `execution_registry(${WORKFLOW_ID}) restored`,
+      ],
+      unresolved: [],
+      warnings: [],
+      resolvedFrom: [
+        { path: "attestation.operator", source: "ops-engineer (compass D29 / coordinator recovery decision)" },
+        { path: "attestation.attestedAt", source: "2026-01-02T04:00:00.000Z" },
+      ],
+    });
+
+    // Routed again as `running`, same identity anchors, same plan rows.
+    const reopened = receipt.data.workflows.find((workflow) => workflow.state.id === WORKFLOW_ID)!;
+    expect(reopened.state.status).toBe("running");
+    expect(reopened.state.ended_at).toBeUndefined();
+    expect(identityAnchors(reopened.state as unknown as Record<string, unknown>)).toEqual(identityAnchors(headerBefore));
+    expect(reopened.plans.map((entry) => entry.plan.id)).toEqual([PLAN_ID]);
+    expect(rows(
+      fixture.context,
+      `select * from execution_plans where workflow_id = '${WORKFLOW_ID}' order by ordinal`,
+    )).toEqual(plansBefore);
+    expect(storedHeader(fixture.context)).toMatchObject({ registered: 1, status: "running", ended_at: null, started_at: TS, type: "plan" });
+    // One accepted operation: workflow + store once, and the membership change once.
+    expect(revisions(fixture.context)).toEqual({
+      root: before.root + 1,
+      store: before.store + 1,
+      workflow: before.workflow + 1,
+    });
+    // History survives: the close's surviving receipt and this reopen's receipt.
+    expect(rows(
+      fixture.context,
+      `select operation_id from execution_operations where workflow_id = '${WORKFLOW_ID}' order by rowid`,
+    ).map((row) => row.operation_id)).toEqual(["op-reopen-close-failed", "op-reopen-failed"]);
+    expect((await readExecutionState(fixture.context)).data.terminalUnregistered).toBeUndefined();
+  });
+
+  test("a stopped lifecycle reopens under a consumerless recovery-scope attestation, and plan work resumes", async () => {
+    const fixture = await workflowFixture("reopen-stopped");
+    await workflowMutation(fixture, "op-reopen-close-stopped", {
+      kind: "lifecycle",
+      status: "stopped",
+      reason: "the operator stopped the lifecycle",
+    });
+    // A closed lifecycle is out of routing: the plan write the caller wants is
+    // refused before the reopen and accepted after it, on the SAME id.
+    const outOfRouting = await refusalOf(() => mutateExecutionPlan(domainContext(fixture.context, fixture.coordinatorCaller), {
+      operationId: "op-reopen-plan-before",
+      planId: PLAN_ID,
+      operation: { kind: "progress", progress: { status: "InProgress", summary: "resume", evidence_paths: [] } },
+    }));
+    expect(outOfRouting.code).toBe("coordination.workflow-not-running");
+
+    // The store is already active, so the recovery-scope document needs no
+    // installed consumer and makes no stop claim (empty `stoppedSessions`).
+    const consumerless = {
+      version: ACTIVATION_PROTOCOL_VERSION,
+      attestedAt: "2026-01-02T05:00:00.000Z",
+      operator: { actor: "ops-engineer", authorizationRef: "reopen decision D30" },
+      stoppedSessions: [],
+    } as unknown as ActivationAttestation;
+    const receipt = await reopenWorkflow(fixture, {
+      operationId: "op-reopen-stopped",
+      attestation: consumerless,
+    });
+    expect(receipt.recovery?.resolvedFrom).toContainEqual({
+      path: "attestation.operator",
+      source: "ops-engineer (reopen decision D30)",
+    });
+    expect(storedHeader(fixture.context)).toMatchObject({ registered: 1, status: "running", ended_at: null });
+
+    const progress = await mutateExecutionPlan(domainContext(fixture.context, fixture.coordinatorCaller), {
+      operationId: "op-reopen-plan-after",
+      planId: PLAN_ID,
+      operation: { kind: "progress", progress: { status: "InProgress", summary: "resume", evidence_paths: [] } },
+    });
+    expect(progress.data.plan.status).toBe("InProgress");
+    expect(progress.data.workflow.id).toBe(WORKFLOW_ID);
+  });
+
+  test("completed is never reopened and a non-terminal lifecycle is not terminal", async () => {
+    const completed = await workflowFixture("reopen-completed");
+    setRowStatus(completed.context, PLAN_ID, "Done");
+    await workflowMutation(completed, "op-reopen-delivery", { kind: "delivery", delivery: DELIVERY_TAIL });
+    await workflowMutation(completed, "op-reopen-close-completed", {
+      kind: "lifecycle",
+      status: "completed",
+      reason: "delivery tail verified",
+    });
+    const completedBefore = workflowFootprint(completed.context);
+    const completedRefusal = await refusalOf(() => reopenWorkflow(completed, {
+      operationId: "op-reopen-completed",
+      reason: "reopen a completed lifecycle",
+      attestation: attestation([]),
+    }));
+    expect(completedRefusal.code).toBe("workflow.reopen-completed");
+    expect(completedRefusal.message).toContain("never reopened");
+    expect(await workflowFootprint(completed.context)).toEqual(completedBefore);
+
+    // running and paused are both non-terminal: there is nothing to reopen.
+    const active = await workflowFixture("reopen-not-terminal");
+    const runningBefore = workflowFootprint(active.context);
+    const running = await refusalOf(() => reopenWorkflow(active, {
+      operationId: "op-reopen-running",
+      attestation: attestation([]),
+    }));
+    expect(running.code).toBe("workflow.reopen-not-terminal");
+    expect(running.message).toContain("running");
+    expect(await workflowFootprint(active.context)).toEqual(runningBefore);
+
+    await workflowMutation(active, "op-reopen-pause", { kind: "lifecycle", status: "paused", reason: "paused for inspection" });
+    const pausedBefore = workflowFootprint(active.context);
+    const paused = await refusalOf(() => reopenWorkflow(active, {
+      operationId: "op-reopen-paused",
+      attestation: attestation([]),
+    }));
+    expect(paused.code).toBe("workflow.reopen-not-terminal");
+    expect(paused.message).toContain("paused");
+    expect(await workflowFootprint(active.context)).toEqual(pausedBefore);
+  });
+
+  test("a stale terminal CAS and a missing authorization are refused without a footprint", async () => {
+    const fixture = await workflowFixture("reopen-refusals");
+    await workflowMutation(fixture, "op-reopen-refusal-close", {
+      kind: "lifecycle",
+      status: "stopped",
+      reason: "stopped before the reopen",
+    });
+    const terminal = await terminalToken(fixture);
+    const before = workflowFootprint(fixture.context);
+
+    // The token of the revision the close superseded: the CAS is strict.
+    const stale = await refusalOf(() => reopenWorkflow(fixture, {
+      operationId: "op-reopen-stale",
+      expected: executionToken("workflow", fixture.storeId, fixture.epoch, [WORKFLOW_ID], terminal.revision - 1),
+      attestation: attestation([]),
+    }));
+    expect(stale.code).toBe("execution.stale-token");
+    expect(await workflowFootprint(fixture.context)).toEqual(before);
+
+    // No operator document: the authorization is the whole admission gate.
+    const unauthorized = await refusalOf(() => reopenWorkflow(fixture, {
+      operationId: "op-reopen-unauthorized",
+      expected: terminal.token,
+      attestation: undefined as unknown as ActivationAttestation,
+    }));
+    expect(unauthorized.code).toBe("store.attestation-invalid");
+    expect(await workflowFootprint(fixture.context)).toEqual(before);
+  });
+
+  test("an identical retry replays the attributed receipt and writes nothing", async () => {
+    const fixture = await workflowFixture("reopen-replay");
+    await workflowMutation(fixture, "op-reopen-replay-close", {
+      kind: "lifecycle",
+      status: "failed",
+      reason: "failed before the reopen",
+    });
+    const terminal = await terminalToken(fixture);
+    const request = {
+      operationId: "op-reopen-replay",
+      reason: "reopen after the operator decision",
+      expected: terminal.token,
+      attestation: attestation([]),
+    };
+    const first = await reopenWorkflow(fixture, request);
+    const after = revisions(fixture.context);
+    // The workflow is `running` now, yet the SAME operation id still replays its
+    // recorded receipt instead of being answered as "not terminal".
+    const replay = await reopenWorkflow(fixture, request);
+    expect(replay.replayed).toBe(true);
+    expect(replay.actor_session_id).toBe(first.actor_session_id);
+    expect(replay.reason).toBe(first.reason);
+    expect(replay.recovery).toEqual(first.recovery);
+    expect(revisions(fixture.context)).toEqual(after);
+    expect(rows(
+      fixture.context,
+      `select count(*) as n from execution_operations where workflow_id = '${WORKFLOW_ID}'`,
+    )[0]!.n).toBe(2);
+  });
+
+  test("a residue registry row a crashed close left is repaired, not duplicated", async () => {
+    const fixture = await workflowFixture("reopen-residue");
+    await workflowMutation(fixture, "op-reopen-residue-close", {
+      kind: "lifecycle",
+      status: "stopped",
+      reason: "stopped with the registry row left behind",
+    });
+    const terminal = await terminalToken(fixture);
+    // The residue a crashed/foreign writer leaves: the terminal header still
+    // carries its ACTIVE registry row.
+    withRaw(fixture.context, (db) => {
+      db.prepare("insert into execution_registry(workflow_id, entry_json) values (?, ?)").run(
+        WORKFLOW_ID,
+        JSON.stringify({ id: WORKFLOW_ID, type: "plan", started_at: TS, dir: `workflows/${WORKFLOW_ID}` }),
+      );
+    });
+    const before = revisions(fixture.context);
+
+    await reopenWorkflow(fixture, {
+      operationId: "op-reopen-residue",
+      expected: terminal.token,
+      attestation: attestation([]),
+    });
+
+    expect(rows(
+      fixture.context,
+      `select entry_json from execution_registry where workflow_id = '${WORKFLOW_ID}'`,
+    )).toEqual([{ entry_json: JSON.stringify({ id: WORKFLOW_ID, type: "plan", started_at: TS, dir: `workflows/${WORKFLOW_ID}` }) }]);
+    // The residue repair and the restored membership are ONE root advance.
+    expect(revisions(fixture.context)).toEqual({
+      root: before.root + 1,
+      store: before.store + 1,
+      workflow: before.workflow + 1,
+    });
+    expect(storedHeader(fixture.context)).toMatchObject({ registered: 1, status: "running", ended_at: null });
   });
 });

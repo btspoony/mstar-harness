@@ -23,7 +23,7 @@ import {
 } from "@mstar-harness/engine";
 import { z } from "zod";
 import { refusalEnvelope } from "../envelope.js";
-import { commandEnvelopeSchema } from "../definitions.js";
+import { commandEnvelopeSchema } from "../envelope.js";
 import {
   diagnoseCodexHost,
   diagnoseCursorHost,
@@ -36,6 +36,7 @@ import {
   parseOmpPluginList,
   probePathNodeRuntime,
   projectInstallPath,
+  resolveCliPath,
   resolveDshProfileDir,
   validateAgentPlugin,
 } from "../host-health.js";
@@ -129,7 +130,7 @@ function projectRootAt(workspace: string): string {
 }
 
 function pluginRoot(explicit: string | undefined, workspace: string): string {
-  if (explicit !== undefined) return path.resolve(workspace, explicit);
+  if (explicit !== undefined) return resolveCliPath(explicit, workspace);
   let candidate = projectRootAt(workspace);
   while (!fs.existsSync(path.join(candidate, "plugin.json"))) {
     const parent = path.dirname(candidate);
@@ -275,7 +276,7 @@ export function getLocalCommandDefinitions(): readonly CommandDefinition[] {
         // target verbatim: re-discovering it from the workspace would follow
         // MSTAR_HARNESS_DIR / .mstarc / the default `<workspace>/.mstar` and
         // scaffold a different root.
-        const root = input.path === undefined ? context.cwd : path.resolve(context.cwd, input.path);
+        const root = input.path === undefined ? context.cwd : resolveCliPath(input.path, context.cwd);
         const harnessPin = input.path === undefined ? context.harnessPin : undefined;
         const scaffoldOptions = harnessPin === undefined ? {} : { harnessDir: harnessPin };
         setArtifactStore(createFsStore(resolveScaffoldDirs(root, scaffoldOptions).harnessDir));
@@ -459,7 +460,7 @@ export function getLocalCommandDefinitions(): readonly CommandDefinition[] {
           fields: [{ field: "path", subject: "the start directory", value: input.path }],
         });
         if (unnamedStart !== undefined) return unnamedStart;
-        const startDir = input.path === undefined ? context.cwd : path.resolve(context.cwd, input.path);
+        const startDir = input.path === undefined ? context.cwd : resolveCliPath(input.path, context.cwd);
         // `controlRoot` is a HARNESS dir, not a workspace boundary; feeding it
         // as `workspaceRoot` makes the resolver refuse the very harness it
         // sits inside (the boundary contains the answer). Resolve from the

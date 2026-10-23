@@ -46,19 +46,19 @@ import { basename as basename7, isAbsolute as isAbsolute5, join as join14, relat
 import { execFileSync as execFileSync3 } from "node:child_process";
 import { existsSync as existsSync12, realpathSync as realpathSync6 } from "node:fs";
 import { createHash as createHash8 } from "node:crypto";
-import { existsSync as existsSync13, readFileSync as readFileSync13, readdirSync as readdirSync9, statSync as statSync5 } from "node:fs";
-import { dirname as dirname9, isAbsolute as isAbsolute8, join as join16, resolve as resolve12, sep as sep8 } from "node:path";
+import { existsSync as existsSync13, readFileSync as readFileSync14, readdirSync as readdirSync9, statSync as statSync6 } from "node:fs";
+import { dirname as dirname9, isAbsolute as isAbsolute8, join as join17, resolve as resolve12, sep as sep8 } from "node:path";
 import { createRequire as createRequire2 } from "node:module";
 import { setTimeout as sleep } from "node:timers/promises";
-import { closeSync, existsSync as existsSync14, fstatSync, fsyncSync, linkSync, lstatSync as lstatSync6, openSync, readSync, statSync as statSync6, unlinkSync as unlinkSync3 } from "node:fs";
-import { basename as basename8, dirname as dirname10, join as join17, resolve as resolve13 } from "node:path";
-import { existsSync as existsSync15, statSync as statSync8 } from "node:fs";
-import { basename as basename11, dirname as dirname13, join as join19, relative as relative6, resolve as resolve15 } from "node:path";
+import { closeSync, existsSync as existsSync14, fstatSync, fsyncSync, linkSync, lstatSync as lstatSync6, openSync, readSync, statSync as statSync7, unlinkSync as unlinkSync3 } from "node:fs";
+import { basename as basename8, dirname as dirname10, join as join18, resolve as resolve13 } from "node:path";
+import { existsSync as existsSync15, statSync as statSync9 } from "node:fs";
+import { basename as basename11, dirname as dirname13, join as join20, relative as relative6, resolve as resolve15 } from "node:path";
 import { readlinkSync, realpathSync as realpathSync9 } from "node:fs";
 import { basename as basename12, dirname as dirname14, relative as relative7, resolve as resolve16 } from "node:path";
 import { createHash as createHash16 } from "node:crypto";
-import { readFileSync as readFileSync22 } from "node:fs";
-import { join as join28 } from "node:path";
+import { readFileSync as readFileSync23 } from "node:fs";
+import { join as join29 } from "node:path";
 var __defProp = Object.defineProperty;
 var __returnValue = (v) => v;
 function __exportSetter(name, newValue) {
@@ -10945,7 +10945,8 @@ var init_recovery_intent = __esm(() => {
     "execution-policy": ["workflowId", "operation.kind", "operation.policy"],
     "integration-worktree": ["workflowId", "operation.kind", "operation.path"],
     delivery: ["workflowId", "operation.kind", "operation.delivery"],
-    "delivery-anchors": ["workflowId", "operation.kind", "operation.branch", "operation.reason"]
+    "delivery-anchors": ["workflowId", "operation.kind", "operation.branch", "operation.reason"],
+    "compass-ref": ["workflowId", "operation.kind", "operation.compassPath", "operation.reason"]
   };
 });
 function resolveRelativePath(raw, label) {
@@ -11109,7 +11110,8 @@ __export(exports_store_activation, {
   inspectBackupCopy: () => inspectBackupCopy,
   isPathWithin: () => isPathWithin,
   retireStoreSources: () => retireStoreSources,
-  validateActivationAttestation: () => validateActivationAttestation
+  validateActivationAttestation: () => validateActivationAttestation,
+  validateRecoveryAttestation: () => validateRecoveryAttestation
 });
 function sha256Bytes2(bytes) {
   return createHash4("sha256").update(bytes).digest("hex");
@@ -11417,9 +11419,7 @@ function attestationString(object, key, what) {
     attestationRefusal(`${what}.${key} must be a nonblank string`);
   return value;
 }
-function validateActivationAttestation(value) {
-  const raw = attestationObject(value, "the attestation");
-  attestationKeys(raw, ["version", "attestedAt", "operator", "consumers", "stoppedSessions"], "the attestation");
+function attestationHeader(raw) {
   if (raw.version !== ACTIVATION_PROTOCOL_VERSION) {
     attestationRefusal(`the attestation version must be ${ACTIVATION_PROTOCOL_VERSION}`);
   }
@@ -11428,8 +11428,36 @@ function validateActivationAttestation(value) {
     attestationRefusal("the attestation.attestedAt must be an ISO/RFC3339 instant");
   const operator = attestationObject(raw.operator, "the attestation.operator");
   attestationKeys(operator, ["actor", "authorizationRef"], "the attestation.operator");
-  const actor = attestationString(operator, "actor", "the attestation.operator");
-  const authorizationRef = attestationString(operator, "authorizationRef", "the attestation.operator");
+  return {
+    attestedAt,
+    operator: {
+      actor: attestationString(operator, "actor", "the attestation.operator"),
+      authorizationRef: attestationString(operator, "authorizationRef", "the attestation.operator")
+    }
+  };
+}
+function stoppedSessionsOf(raw) {
+  if (!Array.isArray(raw.stoppedSessions))
+    attestationRefusal("the attestation.stoppedSessions must be an array (possibly empty)");
+  return raw.stoppedSessions.map((entry, index2) => {
+    const what = `the attestation.stoppedSessions[${index2}]`;
+    const session = attestationObject(entry, what);
+    attestationKeys(session, ["sessionId", "host", "state"], what);
+    const state = session.state;
+    if (typeof state !== "string" || !Object.hasOwn(SESSION_STATES, state)) {
+      activationBlocked(`${what}.state must be "stopped" or "reloaded"; a running or queued session is not quiesced and stops the barrier`);
+    }
+    return {
+      sessionId: attestationString(session, "sessionId", what),
+      host: attestationString(session, "host", what),
+      state
+    };
+  });
+}
+function validateActivationAttestation(value) {
+  const raw = attestationObject(value, "the attestation");
+  attestationKeys(raw, ["version", "attestedAt", "operator", "consumers", "stoppedSessions"], "the attestation");
+  const { attestedAt, operator } = attestationHeader(raw);
   if (!Array.isArray(raw.consumers))
     attestationRefusal("the attestation.consumers must be an array");
   if (raw.consumers.length === 0) {
@@ -11484,21 +11512,14 @@ function validateActivationAttestation(value) {
   }
   if (!Array.isArray(raw.stoppedSessions))
     attestationRefusal("the attestation.stoppedSessions must be an array (possibly empty)");
-  const stoppedSessions = raw.stoppedSessions.map((entry, index2) => {
-    const what = `the attestation.stoppedSessions[${index2}]`;
-    const session = attestationObject(entry, what);
-    attestationKeys(session, ["sessionId", "host", "state"], what);
-    const state = session.state;
-    if (typeof state !== "string" || !Object.hasOwn(SESSION_STATES, state)) {
-      activationBlocked(`${what}.state must be "stopped" or "reloaded"; a running or queued session is not quiesced and stops the barrier`);
-    }
-    return {
-      sessionId: attestationString(session, "sessionId", what),
-      host: attestationString(session, "host", what),
-      state
-    };
-  });
-  return { version: ACTIVATION_PROTOCOL_VERSION, attestedAt, operator: { actor, authorizationRef }, consumers, stoppedSessions };
+  const stoppedSessions = stoppedSessionsOf(raw);
+  return { version: ACTIVATION_PROTOCOL_VERSION, attestedAt, operator, consumers, stoppedSessions };
+}
+function validateRecoveryAttestation(value) {
+  const raw = attestationObject(value, "the attestation");
+  attestationKeys(raw, ["version", "attestedAt", "operator", "consumers", "stoppedSessions"], "the attestation");
+  const { attestedAt, operator } = attestationHeader(raw);
+  return { version: ACTIVATION_PROTOCOL_VERSION, attestedAt, operator, consumers: [], stoppedSessions: stoppedSessionsOf(raw) };
 }
 function currentRegisterSources(context) {
   const projectsRoot = catalogRootDir(context, "projects");
@@ -12142,6 +12163,7 @@ __export(exports_execution_store, {
   readOwnExecutionSession: () => readOwnExecutionSession,
   readPlanOperationReplay: () => readPlanOperationReplay,
   readPlanOperationReplayBeforeProof: () => readPlanOperationReplayBeforeProof,
+  readWorkflowOperationReplayBeforeProof: () => readWorkflowOperationReplayBeforeProof,
   readWorkflowSessionRows: () => readWorkflowSessionRows,
   recordRootMembershipLoss: () => recordRootMembershipLoss,
   releaseIntegrationMergeLease: () => releaseIntegrationMergeLease,
@@ -12632,6 +12654,24 @@ function readWorkflowView(db, store, workflowId) {
     integrationLease
   };
 }
+function terminalProjection(db, store, workflowId) {
+  const facts = db.prepare("select result_json from execution_operations where workflow_id = ? and epoch = ? and plan_id is null order by rowid desc").all(workflowId, store.epoch).map((row) => storedReceiptFacts(storedJsonObject(row.result_json, `execution_operations(${workflowId}).result_json`))).find((candidate) => candidate.actor_session_id !== undefined) ?? {};
+  const warning = holderLiveWarningOf(facts.holder_live_warning);
+  const plans = db.prepare("select plan_id, state_json from execution_plans where workflow_id = ? order by ordinal").all(workflowId).map((row) => {
+    const planId = storedText(row.plan_id, `execution_plans(${workflowId}).plan_id`);
+    const state = storedJsonObject(row.state_json, `execution_plans(${workflowId},${planId}).state_json`);
+    const validation = validatePlanRow(state);
+    if (!validation.ok)
+      throw validationRefusal(`execution_plans(${workflowId},${planId}).state_json`, validation.violations);
+    return { id: planId, file: state.file, status: state.status };
+  });
+  return {
+    ...facts.actor_session_id === undefined ? {} : { actor_session_id: facts.actor_session_id },
+    ...facts.reason === undefined ? {} : { reason: facts.reason },
+    ...warning === undefined ? {} : { warnings: [warning] },
+    ...plans.length === 0 ? {} : { plans }
+  };
+}
 function readExecutionGraph(db, store, meta) {
   const registry = db.prepare("select workflow_id, entry_json from execution_registry order by rowid").all();
   const entries = [];
@@ -12677,7 +12717,8 @@ function readExecutionGraph(db, store, meta) {
         id,
         status: state.status,
         revision,
-        token: executionToken("workflow", store.storeId, store.epoch, [id], revision)
+        token: executionToken("workflow", store.storeId, store.epoch, [id], revision),
+        ...terminalProjection(db, store, id)
       });
     }
   }
@@ -13073,14 +13114,27 @@ function readCommittedReceipt(recorded, tx, operationId, workflowId, token) {
   const storedRecovery = recovery;
   if (receipt.slim === true) {
     const live = readExecutionStateGraph(tx);
-    return { ...live, ...storedRecovery === undefined ? {} : { operationRecovery: storedRecovery } };
+    return { ...live, ...storedRecovery === undefined ? {} : { operationRecovery: storedRecovery }, ...storedReceiptFacts(receipt) };
   }
   return {
     data: receipt.data,
     token: recordedToken,
     storeId: receipt.storeId,
     epoch: receipt.epoch,
-    ...storedRecovery === undefined ? {} : { operationRecovery: storedRecovery }
+    ...storedRecovery === undefined ? {} : { operationRecovery: storedRecovery },
+    ...storedReceiptFacts(receipt)
+  };
+}
+function holderLiveWarningOf(value) {
+  return isPlainObject(value) && value.code === "recovery.holder-live" && isNonEmptyString(value.holder) && typeof value.epoch === "number" && value.observed_state === "active" && isNonEmptyString(value.attested_at) ? value : undefined;
+}
+function storedReceiptFacts(receipt) {
+  const recovery = isPlainObject(receipt.recovery) ? receipt.recovery : undefined;
+  const warning = holderLiveWarningOf(receipt.holder_live_warning) ?? holderLiveWarningOf(recovery?.holder_live_warning);
+  return {
+    ...typeof receipt.actor_session_id === "string" ? { actor_session_id: receipt.actor_session_id } : {},
+    ...typeof receipt.reason === "string" ? { reason: receipt.reason } : {},
+    ...warning === undefined ? {} : { holder_live_warning: warning }
   };
 }
 function assertWorkflowIdentityIsNew(db, workflowId) {
@@ -13553,6 +13607,25 @@ async function readPlanOperationReplayBeforeProof(context, read, input) {
     });
   });
 }
+async function readWorkflowOperationReplayBeforeProof(context, read, input) {
+  return withExecutionReadTransaction(context, (tx) => {
+    assertAuthorityGeneration(tx, {
+      referenceStoreId: read.referenceStoreId,
+      referenceEpoch: read.referenceEpoch,
+      target: { workflowId: read.workflowId }
+    });
+    resolveWorkflowSession(tx, read);
+    const replay = readOperationReplay(tx, {
+      ...input,
+      workflowId: read.workflowId,
+      planId: null,
+      token: { kind: "root", key: [] }
+    });
+    if (replay === null)
+      return null;
+    return { replay, storeId: tx.storeId, epoch: tx.epoch, revision: requireWorkflowState(tx, read.workflowId).revision };
+  });
+}
 function readOperationReplay(tx, input) {
   const recorded = readCommittedOperation(tx.db, tx.epoch, input.operationId);
   if (recorded === null)
@@ -13599,14 +13672,16 @@ function readOperationReplay(tx, input) {
 function writePlanOperationReceipt(tx, input) {
   writeOperationReceipt(tx, input);
 }
+function receiptFacts(receipt) {
+  return {
+    ...receipt.operationRecovery === undefined ? {} : { operationRecovery: receipt.operationRecovery },
+    ...receipt.actor_session_id === undefined ? {} : { actor_session_id: receipt.actor_session_id },
+    ...receipt.reason === undefined ? {} : { reason: receipt.reason },
+    ...receipt.holder_live_warning === undefined ? {} : { holder_live_warning: receipt.holder_live_warning }
+  };
+}
 function writeOperationReceipt(tx, input) {
-  tx.db.prepare("insert into execution_operations(epoch, operation_id, request_hash, store_id, workflow_id, plan_id, result_json, committed_at) " + "values (?, ?, ?, ?, ?, ?, ?, ?)").run(tx.epoch, input.operationId, input.requestHash, tx.storeId, input.workflowId, input.planId, JSON.stringify(input.slim === true ? {
-    slim: true,
-    token: input.receipt.token,
-    storeId: tx.storeId,
-    epoch: tx.epoch,
-    ...input.receipt.operationRecovery === undefined ? {} : { operationRecovery: input.receipt.operationRecovery }
-  } : input.receipt), input.now);
+  tx.db.prepare("insert into execution_operations(epoch, operation_id, request_hash, store_id, workflow_id, plan_id, result_json, committed_at) " + "values (?, ?, ?, ?, ?, ?, ?, ?)").run(tx.epoch, input.operationId, input.requestHash, tx.storeId, input.workflowId, input.planId, JSON.stringify(input.slim === true ? { slim: true, token: input.receipt.token, storeId: tx.storeId, epoch: tx.epoch, ...receiptFacts(input.receipt) } : input.receipt), input.now);
 }
 function pruneWorkflowOperationReceipts(tx, workflowId, keepOperationId) {
   tx.db.prepare("delete from execution_operations where workflow_id = ? and (epoch != ? or operation_id != ?)").run(workflowId, tx.epoch, keepOperationId);
@@ -14227,6 +14302,7 @@ var init_issue = __esm(() => {
       reason: { required: true, type: "string", description: "Reason for triage change" },
       kind: { required: false, type: "string", description: "Replacement issue kind", values: ["bug", "risk", "improvement", "request", "decision", "review-obligation"] },
       severity: { required: false, type: "string", description: "Replacement severity", values: ["critical", "high", "medium", "low", "nit"] },
+      title: { required: false, type: "string", description: "Corrected finding title; nonblank when supplied", nonblankWhenPresent: true },
       impact: { required: false, type: "string", description: "Updated impact; nonblank when supplied", nonblankWhenPresent: true },
       acceptance: { required: false, type: "string", description: "Updated acceptance condition; nonblank when supplied", nonblankWhenPresent: true },
       owner: { required: false, type: "string | null", description: "Updated owner, or null to clear", nullable: true }
@@ -14911,6 +14987,7 @@ var init_catalog_registration = __esm(() => {
   init_catalog();
   init_coordination_write();
   init_path();
+  init_iteration();
   init_plan_path();
   init_store_db();
   init_status();
@@ -15058,7 +15135,7 @@ function resolveProcessHarnessDir(cwd = process.cwd(), harnessDir) {
   for (let dir = start;; ) {
     let linked = false;
     try {
-      const marker = statSync5(join16(dir, ".git"));
+      const marker = statSync6(join17(dir, ".git"));
       if (marker.isDirectory())
         return resolveHarnessDir(start, { workspaceRoot: dir });
       linked = marker.isFile();
@@ -15071,7 +15148,7 @@ function resolveProcessHarnessDir(cwd = process.cwd(), harnessDir) {
       const envRoot = process.env.MSTAR_HARNESS_DIR;
       if (typeof envRoot === "string" && envRoot.trim() !== "")
         return resolveHarnessDir(start);
-      throw new CoordinationError("coordination.not-in-git", "The linked checkout's main worktree cannot be read. Run mstar status validate. Then inspect the main worktree at the control harness root.", { cwd: start, marker: join16(dir, ".git") });
+      throw new CoordinationError("coordination.not-in-git", "The linked checkout's main worktree cannot be read. Run mstar status validate. Then inspect the main worktree at the control harness root.", { cwd: start, marker: join17(dir, ".git") });
     }
     const parent = dirname9(dir);
     if (parent === dir)
@@ -15208,7 +15285,7 @@ function storeDbPath(context) {
   if (!context?.harnessDir)
     throw new StoreError("store.corrupt", "StoreContext.harnessDir is required");
   const root = resolve13(context.harnessDir);
-  return join17(resolveProcessHarnessDir(root, root) ?? root, "store.db");
+  return join18(resolveProcessHarnessDir(root, root) ?? root, "store.db");
 }
 function busyTimeoutMs(value = DEFAULT_BUSY_TIMEOUT_MS) {
   const floored = Math.floor(value);
@@ -15658,7 +15735,7 @@ function probeConnectionFor(dbPath) {
   let dev;
   let ino;
   try {
-    const stats = statSync6(dbPath);
+    const stats = statSync7(dbPath);
     dev = stats.dev;
     ino = stats.ino;
   } catch {
@@ -16507,7 +16584,7 @@ var SNAPSHOT_FILE2 = "snapshot.json";
 var REGISTER_FILE = "residuals.json";
 function hasEntry(dir, name) {
   try {
-    statSync8(join19(dir, name));
+    statSync9(join20(dir, name));
     return true;
   } catch {
     return false;
@@ -16558,8 +16635,8 @@ function harnessDocKindOfTarget(targetPath) {
       workflowDir = resolveWorkflowDir(harnessDir2, { harnessDir: harnessDir2 });
       projectDir = resolveProjectDir(harnessDir2, { harnessDir: harnessDir2 });
     } catch {
-      workflowDir = join19(harnessDir2, "workflows");
-      projectDir = join19(harnessDir2, "projects");
+      workflowDir = join20(harnessDir2, "workflows");
+      projectDir = join20(harnessDir2, "projects");
     }
     if (name === SNAPSHOT_FILE2 && /^[^/]+\/snapshot\.json$/.test(relative6(workflowDir, resolved))) {
       return { harnessDir: harnessDir2, kind: "snapshot" };
@@ -16629,7 +16706,7 @@ function validateStatusWriteDoc(content3, filePath, kind, options = {}) {
   if (!existsSync15(filePath))
     return [];
   try {
-    if (statSync8(filePath).size > MAX_STATUS_CONTENT_LENGTH) {
+    if (statSync9(filePath).size > MAX_STATUS_CONTENT_LENGTH) {
       return oversized === "violate" ? [oversizedViolation(filePath)] : [];
     }
   } catch {
@@ -16900,7 +16977,7 @@ class ProjectionError extends Error {
 function readCompassSource(spec) {
   let content3;
   try {
-    content3 = readFileSync22(spec.absolutePath, "utf8");
+    content3 = readFileSync23(spec.absolutePath, "utf8");
   } catch (error) {
     const code2 = error.code ?? "";
     if (code2 === "ENOENT" || code2 === "ENOTDIR") {
@@ -17243,7 +17320,7 @@ async function captureExecutionProjectionSources(context) {
       rows.plans.push({ workflowId: row.workflow_id, planId, status: text4(authorityPlanView.plan.status), progress: text4(progressSummary), phase: workflowPhases.get(row.workflow_id) ?? null, doneAt: text4(authorityPlanView.plan.done_at), catalogPinRevision: typeof pinRevision === "number" ? pinRevision : null });
     }
     for (const doc of inputs.compassDocs) {
-      const fspec = { sourceKey: sourceKeyOf2("compass", doc.rootKind, doc.relativePath), kind: "compass", rootKind: doc.rootKind, relativePath: doc.relativePath, absolutePath: join28(catalogRootDir(context, doc.rootKind), doc.relativePath), declared: true };
+      const fspec = { sourceKey: sourceKeyOf2("compass", doc.rootKind, doc.relativePath), kind: "compass", rootKind: doc.rootKind, relativePath: doc.relativePath, absolutePath: join29(catalogRootDir(context, doc.rootKind), doc.relativePath), declared: true };
       const read = readCompassSource(fspec);
       if (read.state !== "ok" || read.content === null) {
         sources.push({ sourceKey: fspec.sourceKey, kind: "compass", rootKind: fspec.rootKind, relativePath: fspec.relativePath, sha256: read.sha256, state: read.state, diagnostic: read.diagnostic, declared: true });
@@ -18429,6 +18506,7 @@ init_store_activation();
 init_store_db();
 init_workflow();
 init_worktree();
+init_status();
 init_issue();
 init_catalog();
 init_catalog_import();

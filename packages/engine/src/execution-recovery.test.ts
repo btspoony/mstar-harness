@@ -1499,8 +1499,11 @@ describe("execution-restore", () => {
           `select result_json from execution_operations where operation_id = '${operationId}'`,
         )!.result_json,
       ) as Record<string, unknown>;
-    // Mixed forms are really in the live store, in the declared shapes.
-    expect(Object.keys(payload(world.dbPath, "op-slim-pause")).sort()).toEqual(["epoch", "slim", "storeId", "token"]);
+    // Mixed forms are really in the live store, in the declared shapes. A
+    // lifecycle mutation's slim envelope also carries the attribution facts
+    // (`actor_session_id` + `reason`) it records for the transition.
+    expect(Object.keys(payload(world.dbPath, "op-slim-pause")).sort())
+      .toEqual(["actor_session_id", "epoch", "reason", "slim", "storeId", "token"]);
     expect(payload(world.dbPath, fatOperationId).slim).toBeUndefined();
     expect(payload(world.dbPath, fatOperationId).data).toBeDefined();
 

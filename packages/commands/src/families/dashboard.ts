@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { commandEnvelopeSchema } from "../definitions.js";
+import { commandEnvelopeSchema } from "../envelope.js";
 import { refusalEnvelope } from "../envelope.js";
 import { engineErrorFacts } from "./family-refusal.js";
 import { decodeInputDiagnostics } from "../input-diagnostics.js";
