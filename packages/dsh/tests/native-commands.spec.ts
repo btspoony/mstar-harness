@@ -50,7 +50,10 @@ import {
 } from '../src/gates/execution-binding-roots.ts'
 import {
   EXECUTION_BINDING_ROOTS_LOGGER,
+  beginExecutionBindingRootStoreOpening,
+  endExecutionBindingRootStoreOpening,
   executionBindingRootStoreOf,
+  executionBindingRootStoreOpening,
   executionBindingRootsDomain,
   installExecutionBindingRootStore,
   type ExecutionBindingRootStore,
@@ -980,7 +983,52 @@ describe('durable adopted-root seam — a cross-root bind survives a restart', (
     expect(executionBindingRootOf(CHILD_ID, app.root)).toBeUndefined()
   })
 
-  it('the absence path: an adoption inside the open window warns nothing and back-fills; with no facility at all ONE warning names the per-process fallback and the plugin still mounts', async () => {
+  it('overlapping activations each own their pending open: one finishing never clears another\'s', () => {
+    // Two activations (an HMR re-inject while the earlier `open` is pending):
+    // the first refusal must not make the second one look settled.
+    const first = beginExecutionBindingRootStoreOpening()
+    const second = beginExecutionBindingRootStoreOpening()
+    endExecutionBindingRootStoreOpening(first)
+    expect(executionBindingRootStoreOpening()).toBe(true)
+    endExecutionBindingRootStoreOpening(second)
+    expect(executionBindingRootStoreOpening()).toBe(false)
+    // Releasing an already-released activation is a no-op, never a leak.
+    endExecutionBindingRootStoreOpening(second)
+    expect(executionBindingRootStoreOpening()).toBe(false)
+  })
+
+  it('a row torn down while open NEVER settles releases its own activation: the next adoption still warns instead of staying silent', async () => {
+    const app = booted = await bootApp()
+    const logged: Array<{ name: string; type: string; args: unknown[] }> = []
+    const stopLogging = (app.ctx.logger as unknown as { exporter(exporter: unknown): () => void }).exporter({
+      levels: { default: 2 },
+      export: (message: { name: string; type: string; args: unknown[] }) => logged.push(message),
+    })
+    const before = logged.length
+    const stub = stubFacilityOf(stubHandleOf(new Map()))
+    await mountStorageDomain(app, stub.facility)
+    await stub.opened
+    // The stalled-backend shape the receipt bound names: `open` never settles,
+    // so the child's continuation never runs. The row's teardown is then the
+    // ONLY thing that can release the activation — a process-wide flag would
+    // stay set and silence every later adoption in this process.
+    const disposing = (app.pluginFiber as unknown as { dispose(): Promise<void> }).dispose()
+    await new Promise<void>((resolve) => setImmediate(resolve))
+    expect(executionBindingRootStoreOpening()).toBe(false)
+    await recordExecutionBindingRoot(CHILD_ID, app.root, '/synthetic/adopted-root')
+    const warned = logged.slice(before).filter((row) => row.name === EXECUTION_BINDING_ROOTS_LOGGER)
+    expect(warned).toHaveLength(1)
+    expect(warned[0]!.type).toBe('warn')
+    expect(String(warned[0]!.args[0])).toContain('per-process')
+    expect(executionBindingRootOf(CHILD_ID, app.root)).toBe('/synthetic/adopted-root')
+    stopLogging()
+    // Let the disposal finish (its child is waiting on this gate) so the suite
+    // tears the app down in order.
+    stub.settle()
+    await disposing
+  })
+
+  it('the absence path: an adoption with no facility warns once, one inside the open window warns nothing and back-fills, and the absence after a seam install warns again — the plugin still mounts', async () => {
     const app = booted = await bootApp()
     const logged: Array<{ name: string; type: string; args: unknown[] }> = []
     const stopLogging = (app.ctx.logger as unknown as { exporter(exporter: unknown): () => void }).exporter({
@@ -990,34 +1038,45 @@ describe('durable adopted-root seam — a cross-root bind survives a restart', (
     const before = logged.length
     const warnedSince = (from: number) => logged.slice(from).filter((row) => row.name === EXECUTION_BINDING_ROOTS_LOGGER)
 
-    // ---- (a) the facility is provided, its `open` is still in flight ----
+    // ---- (a) no facility mounted yet: a genuine absence warns ONCE ----
+    // Spending the latch BEFORE the seam exists is what makes the install-time
+    // reset observable: from here the one-shot warning can only speak again if
+    // installing a seam reset it.
+    await recordExecutionBindingRoot(PARENT_ID, app.root, '/synthetic/pre-mount-root')
+    const preMount = warnedSince(before)
+    expect(preMount).toHaveLength(1)
+    expect(String(preMount[0]!.args[0])).toContain('per-process')
+
+    // ---- (b) the facility is provided, its `open` is still in flight ----
     // This is the deferred-install window, not a missing seam: the receipt is
     // back-filled at install, so the warning's "no seam" cause would be false
-    // and its one-shot latch must not be spent here.
+    // and the latch (already spent) is not consulted into a second warning.
     const medium = new Map<string, string>()
     const stub = stubFacilityOf(stubHandleOf(medium))
     const provider = await mountStorageDomain(app, stub.facility)
     await stub.opened
     await recordExecutionBindingRoot(CHILD_ID, app.root, '/synthetic/adopted-root')
-    expect(warnedSince(before)).toHaveLength(0)
+    expect(warnedSince(before)).toHaveLength(1)
     // The install back-fills the receipt into the durable table.
     stub.settle()
     await stub.installed
     await flushQueuedContinuations()
     expect(medium.get(`${CHILD_ID}\u0000${app.root}`)).toBe('/synthetic/adopted-root')
 
-    // ---- (b) the facility is gone: a genuine degradation warns ONCE ----
-    // Disposal uninstalls the seam; the install above reset the latch, so this
-    // later absence must still be able to speak.
+    // ---- (c) the facility is gone: the SECOND absence warns again ----
+    // Disposal uninstalls the seam. The latch was already spent in (a), so only
+    // the install-time reset can let this later absence speak — delete that
+    // reset and this assertion reddens (negative check).
     await provider.dispose()
     await recordExecutionBindingRoot(PARENT_ID, app.root, '/synthetic/parent-root')
     await recordExecutionBindingRoot(CHILD_ID, app.root, '/synthetic/second-root')
     const warned = warnedSince(before)
-    expect(warned).toHaveLength(1)
-    expect(warned[0]!.type).toBe('warn')
-    expect(String(warned[0]!.args[0])).toContain('per-process')
+    expect(warned).toHaveLength(2)
+    const secondAbsence = warned[1]!
+    expect(secondAbsence.type).toBe('warn')
+    expect(String(secondAbsence.args[0])).toContain('per-process')
     // The recovery names the resume shape the module's contract accepts.
-    expect(String(warned[0]!.args[0])).toContain('resume re-bind')
+    expect(String(secondAbsence.args[0])).toContain('resume re-bind')
     expect(executionBindingRootOf(CHILD_ID, app.root)).toBe('/synthetic/second-root')
     // Today's fallback: the receipt is gone with the process.
     resetExecutionBindingRootsForTests()
@@ -1065,6 +1124,14 @@ describe('durable adopted-root seam — a cross-root bind survives a restart', (
     // Nothing was installed: the receipt is the per-process map again.
     await recordExecutionBindingRoot(CHILD_ID, app.root, '/synthetic/adopted-root')
     expect(executionBindingRootOf(CHILD_ID, app.root)).toBe('/synthetic/adopted-root')
+    // The adoption AFTER the refusal adds NO second warning: the refused `open`
+    // already reported this absence with its true cause, so the generic "the
+    // host provides no storage-domain seam" line (false here — the facility is
+    // provided, only this `open` was refused) must not fire for it.
+    const afterAdoption = logged.slice(before).filter((row) => row.name === EXECUTION_BINDING_ROOTS_LOGGER)
+    expect(afterAdoption).toHaveLength(1)
+    expect(String(afterAdoption[0]!.args[0])).toContain('open refused')
+    expect(String(afterAdoption[0]!.args[0])).not.toContain('the host provides no storage-domain seam')
     resetExecutionBindingRootsForTests()
     expect(executionBindingRootOf(CHILD_ID, app.root)).toBeUndefined()
     // The plugin still mounts and answers today's fallback.

@@ -105,6 +105,18 @@ const NO_DURABLE_SEAM_WARNING =
 /** Whether the missing-facility warning already fired in this process. */
 let warnedNoDurableSeam = false
 
+/**
+ * Report a seam absence that carries its own cause and recovery — the plugin's
+ * refused `open`. The one-shot latch is spent WITH that report, so the generic
+ * "the host provides no seam" line cannot follow it for the same degradation
+ * and name a cause that is not true (the facility is provided; only this
+ * `open` was refused). A later install resets the latch with the seam.
+ */
+export function warnExecutionBindingRootStoreUnavailable(message: string): void {
+  warnedNoDurableSeam = true
+  warnExecutionBindingRoots(message)
+}
+
 /** The map key — the session/cwd identity pair, delimiter-joined. */
 function keyOf(sessionId: string, cwd: string): string {
   return `${sessionId}\u0000${cwd}`
