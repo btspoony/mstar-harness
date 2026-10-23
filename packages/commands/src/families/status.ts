@@ -18,7 +18,7 @@ import { SESSION_REF_SUPPLIES, TOKEN_SUPPLIES } from "../identity-supplies.js";
 import { engineErrorFacts } from "./family-refusal.js";
 import type { CommandDefinition, CommandEnvelope, InvocationContext } from "../types.js";
 
-const harnessInput = z.object({ harness: z.string().min(1).optional() });
+const harnessInput = z.object({ harness: z.string().optional() });
 
 function ok<T>(command: string, data: T): CommandEnvelope<T> {
   return { version: 1, command, status: "ok", code: "status.ok", exitCode: 0, data };
@@ -116,7 +116,7 @@ export function getStatusCommandDefinitions(): readonly CommandDefinition[] {
       input: z.object({ path: z.string().min(1).optional() }),
       output,
       effects: ["read", "validate"],
-      description: "Validate the control root's ACTIVE execution authority (the pre-activation status.json / snapshot file route is retired). The output carries the execution CAS tokens a caller records as --expect: the store's root token at data.token, each workflow's token at data.workflows[].token, and each plan's token at data.authority.workflows[].planTokens[<planId>].",
+      description: "Validate the control root's ACTIVE execution authority (the pre-activation status.json / snapshot file route is retired). The output carries the execution CAS tokens a caller records as --expect: the store's root token at data.token, each workflow's token at data.workflows[].token, each plan's token at data.authority.workflows[].planTokens[<planId>], and a closed lifecycle's retained header token at data.terminalUnregistered[].token or data.terminalAdoptions[].token (either is the one such token a terminal held-lease release takes).",
       async execute(input, context) {
         const parsed = z.object({ path: z.string().min(1).optional() }).safeParse(input);
         if (!parsed.success) return invalid("status.validate", parsed.error);
@@ -201,7 +201,7 @@ export function getStatusCommandDefinitions(): readonly CommandDefinition[] {
         { key: "sessionId", flags: "--session-id <value>", required: false, context: "sessionId" },
       ] },
       input: z.object({
-        workflow: z.string().min(1).optional(), harness: z.string().min(1).optional(), endedAt: z.string().optional(), session: z.string().optional(),
+        workflow: z.string().min(1).optional(), harness: z.string().optional(), endedAt: z.string().optional(), session: z.string().optional(),
         sessionRef: z.string().optional(), expect: z.string().optional(), operation: z.string().optional(), reason: z.string().optional(), json: z.boolean().optional(),
       }),
       output,
@@ -209,7 +209,7 @@ export function getStatusCommandDefinitions(): readonly CommandDefinition[] {
       description: "Close a workflow only after engine lifecycle and delivery guards pass.",
       async execute(input, context) {
         const schema = z.object({
-          workflow: z.string().min(1).optional(), harness: z.string().min(1).optional(), endedAt: z.string().optional(), session: z.string().optional(),
+          workflow: z.string().min(1).optional(), harness: z.string().optional(), endedAt: z.string().optional(), session: z.string().optional(),
           sessionRef: z.string().optional(), expect: z.string().optional(), operation: z.string().optional(), reason: z.string().optional(), json: z.boolean().optional(),
         });
         const parsed = schema.safeParse(input);
@@ -333,14 +333,14 @@ export function getStatusCommandDefinitions(): readonly CommandDefinition[] {
         { key: "harness", flags: "--harness <path>", required: false },
         { key: "mode", flags: "--mode <mode>", required: false },
       ] },
-      input: z.object({ planId: z.string().min(1), harness: z.string().min(1).optional(), mode: z.enum(["zero-residual", "allow-residual"]).optional() }),
+      input: z.object({ planId: z.string().min(1), harness: z.string().optional(), mode: z.enum(["zero-residual", "allow-residual"]).optional() }),
       output, effects: ["read", "validate"], description: "Enforce the findings-cleanup gate against the issue store.",
       async execute(input, context) {
-        const schema = z.object({ planId: z.string().min(1), harness: z.string().min(1).optional(), mode: z.enum(["zero-residual", "allow-residual"]).optional() });
+        const schema = z.object({ planId: z.string().min(1), harness: z.string().optional(), mode: z.enum(["zero-residual", "allow-residual"]).optional() });
         const parsed = schema.safeParse(input);
         if (!parsed.success) return invalid("status.findings-cleanup", parsed.error);
         try {
-          const harnessDir = executionHarness(context, parsed.data.harness) ?? parsed.data.harness ?? context.cwd;
+          const harnessDir = executionHarness(context, parsed.data.harness) ?? context.cwd;
           const gate = await findingsCleanupGate({ harnessDir }, parsed.data.planId, parsed.data.mode ? { mode: parsed.data.mode } : undefined);
           return gate.ok ? ok("status.findings-cleanup", { planId: parsed.data.planId, violations: [] }) : refused("status.findings-cleanup", gate.violations[0]?.code ?? "findings.cleanup-refused", "Findings cleanup gate failed", { violations: gate.violations }, "Resolve each reported findings-cleanup violation, then rerun mstar status findings-cleanup <plan-id>.");
         } catch (error) {
@@ -357,7 +357,7 @@ export function getStatusCommandDefinitions(): readonly CommandDefinition[] {
         const parsed = harnessInput.safeParse(input);
         if (!parsed.success) return invalid("status.tech-debt", parsed.error);
         try {
-          const harnessDir = executionHarness(context, parsed.data.harness) ?? parsed.data.harness ?? context.cwd;
+          const harnessDir = executionHarness(context, parsed.data.harness) ?? context.cwd;
           const bySeverity: Record<string, number> = { critical: 0, high: 0, medium: 0, low: 0, nit: 0 };
           const byProject: Record<string, number> = {};
           let totalOpen = 0;

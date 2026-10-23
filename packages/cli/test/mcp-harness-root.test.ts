@@ -611,7 +611,7 @@ describe("MCP harness root", () => {
     }
   });
 
-  test("a blank harness on a min(1) harness command resolves to the pinned root instead of a usage refusal", async () => {
+  test("a blank harness on a root-selector command resolves to the pinned root instead of a usage refusal", async () => {
     const fixture = await competingAuthorityRoots();
     const previousCwd = process.cwd();
     const previousHarness = process.env.MSTAR_HARNESS_DIR;
@@ -626,11 +626,11 @@ describe("MCP harness root", () => {
       await server.connect(serverEnd);
       await client.connect(clientEnd);
 
-      // `status.tech-debt` declares its harness as `z.string().min(1)`, so an
-      // empty string would be a usage refusal if the pin were only injected
-      // after admission. Normalizing blank to the pin before validation makes
-      // it read the pinned root (A), whose store holds the fixture's one issue,
-      // instead of the uninitialized cwd root (B).
+      // `status.tech-debt` resolves its harness from the input field, so a
+      // blank value would name the uninitialized cwd root (B) if the pin were
+      // only injected after admission. Normalizing blank to the pin before
+      // validation makes it read the pinned root (A), whose store holds the
+      // fixture's one issue.
       const envelope = await toolEnvelope(client, "mstar_status", withAction("status.tech-debt", { harness: "" }));
       expect(envelope.code).not.toBe("command.invalid-input");
       expect(envelope).toMatchObject({ status: "ok", code: "status.ok" });

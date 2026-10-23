@@ -347,6 +347,40 @@ export type MstarReviewV1 = {
  * derived score — must/should/nit/unverified, no fourth class). */
 const TALLY_COUNT_KEYS = ["mustFix", "shouldFix", "nit", "unverified"] as const;
 
+/**
+ * The `mstar.review/v1` key set, derived from what this validator reads and
+ * what {@link synthesizeReview} produces — never widened for a caller. A key
+ * outside these sets is refused rather than carried: the envelope is a closed
+ * contract, so a stray key (a tally-output fact, an inspector field) would
+ * persist as an unreadable claim.
+ */
+const ENVELOPE_KEYS = ["schema", "verdict", "summary_md", "findings", "incomplete", "tally", "target"] as const;
+
+/** The envelope `tally` key set — the {@link PrTallyResult} members
+ * {@link checkProvidedTallyShape} governs. */
+const ENVELOPE_TALLY_KEYS = ["verdict", "scorePct", "tally", "chatHeader", "band", "incomplete"] as const;
+
+/** Report one violation per own key of `value` outside `allowed`, named by
+ * its full path (`label` is empty for the envelope, `tally.` inside a tally).
+ * Own enumerable keys only: an inherited member is not part of the document. */
+function checkUnknownKeys(
+  value: Record<string, unknown>,
+  allowed: readonly string[],
+  label: string,
+  violations: ValidationResult[],
+): void {
+  for (const key of Object.keys(value)) {
+    if (!allowed.includes(key)) {
+      violations.push(violation(
+        "high",
+        "review.unknown-key",
+        `unknown key "${label}${key}" is not part of the review envelope - accepted keys: ${allowed.join(", ")}`,
+        `remove ${label}${key}, or use one of: ${allowed.join(" | ")}`,
+      ));
+    }
+  }
+}
+
 /** The producer's single-line rule ({@link computePrTally}): the cause and
  * every unscanned entry render inside the four-line header contract, so each
  * is a non-blank string with no CR/LF. Reused here so the validator accepts
@@ -410,6 +444,7 @@ function checkIncompleteShape(fact: unknown, label: string, violations: Validati
  * between the two `incomplete` levels is `review.incomplete-tally-mismatch`.
  */
 function checkProvidedTallyShape(tally: Record<string, unknown>, violations: ValidationResult[]): void {
+  checkUnknownKeys(tally, ENVELOPE_TALLY_KEYS, "tally.", violations);
   if (typeof tally.verdict !== "string" || !(PR_VERDICTS as readonly string[]).includes(tally.verdict)) {
     violations.push(violation(
       "high",
@@ -635,6 +670,8 @@ export function validateMstarReviewV1(doc: unknown): GateResult {
       violations: [violation("high", "review.not-object", "review document must be a JSON object")],
     };
   }
+
+  checkUnknownKeys(doc, ENVELOPE_KEYS, "", violations);
 
   if (doc.schema === undefined) {
     violations.push(violation("high", "review.missing-schema", "missing required field: schema"));

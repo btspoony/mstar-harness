@@ -182,10 +182,9 @@ function handlerInput(definition: CommandDefinition, input: unknown, defaultHarn
  *   caller's value, so a pinned connection overwrites a `harness` root selector
  *   with the pin and REMOVES any other root selector (the invocation context
  *   already carries the pin, and a workspace-root selector such as
- *   `sdd.workspace`'s `controlRoot` is not the harness dir). This is also what
- *   lets a `min(1)` harness schema accept a blank value the caller sent: writing
- *   the pin over it at the earliest seam makes every family judge that call the
- *   same way.
+ *   `sdd.workspace`'s `controlRoot` is not the harness dir). Writing the pin
+ *   over the caller's value at the earliest seam is what makes every family
+ *   judge that call the same way.
  * - a per-call value is resolved to an ABSOLUTE path. The invocation workspace
  *   is anchored at the root's parent, so a relative value would be re-resolved
  *   against that anchor by the handler and double-join the path (`x/.mstar`

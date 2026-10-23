@@ -1382,9 +1382,11 @@ export function integrationProof(path: string, head: string, baseSha: string, so
  *
  * Exported because the ACTIVE DB route's `execution-policy` transition applies
  * the SAME closed set (E08): one rule, two authority routes, no second list to
- * drift (`execution-workflow.ts` no longer mirrors it).
+ * drift (`execution-workflow.ts` no longer mirrors it). The command transport's
+ * flag schema builds its `z.enum` from this tuple, so the values have exactly
+ * one spelling in the repo.
  */
-export const PLAN_PARALLELISM_VALUES: readonly string[] = ["serial", "parallel"];
+export const PLAN_PARALLELISM_VALUES = ["serial", "parallel"] as const;
 
 /**
  * The stable identity of one amendment component, as BOTH authority routes

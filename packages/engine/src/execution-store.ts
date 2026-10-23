@@ -183,9 +183,14 @@ export type ExecutionState = {
     coordinator: ExecutionSessionRef | null;
     integrationLease: IntegrationMergeLease | null;
   }>;
-  /** Terminal headers outside ACTIVE registry membership, including their CAS revision. */
-  terminalUnregistered?: Array<{ id: string; status: "completed" | "stopped" | "failed"; revision: number }>;
-  terminalAdoptions?: Array<{ id: string; status: "completed" | "stopped" | "failed"; revision: number; lifecycle_adopted_at: string; adopt_reason: string; actor_session_id: string; operation_id: string }>;
+  /**
+   * Terminal headers outside ACTIVE registry membership, including their CAS
+   * revision and the workflow token that revision addresses: the registry row a
+   * live workflow's token is read from is gone, so this is the only published
+   * address a terminal-only write (the held-lease release) can be given.
+   */
+  terminalUnregistered?: Array<{ id: string; status: "completed" | "stopped" | "failed"; revision: number; token: ExecutionToken }>;
+  terminalAdoptions?: Array<{ id: string; status: "completed" | "stopped" | "failed"; revision: number; token: ExecutionToken; lifecycle_adopted_at: string; adopt_reason: string; actor_session_id: string; operation_id: string }>;
 };
 
 /**
@@ -1060,13 +1065,17 @@ function readExecutionGraph(db: StoreDb, store: StoreIdentity, meta: ExecutionMe
         isNonEmptyString(state.adoption_actor_session_id) && isNonEmptyString(state.adoption_operation_id)) {
       terminalAdoptions.push({
         id, status: state.status, revision,
+        token: executionToken("workflow", store.storeId, store.epoch, [id], revision),
         lifecycle_adopted_at: state.lifecycle_adopted_at,
         adopt_reason: state.adopt_reason,
         actor_session_id: state.adoption_actor_session_id,
         operation_id: state.adoption_operation_id,
       });
     } else {
-      terminalUnregistered.push({ id, status: state.status, revision });
+      terminalUnregistered.push({
+        id, status: state.status, revision,
+        token: executionToken("workflow", store.storeId, store.epoch, [id], revision),
+      });
     }
   }
   return {

@@ -22,6 +22,7 @@ import {
   executionContextFor,
   probeCheckoutRoot,
   readExecutionAuthority,
+  readExecutionCleanupState,
   readMainWorktree,
   resolveHarnessDir,
   resumeExecutionSession,
@@ -64,6 +65,10 @@ const TOOL_NAME = "mstar_phase2";
 const RECORD_VERSION = 1;
 /** Record schema version of the ACTIVE observation binding (the §3.1 `ExecutionBinding` generation). */
 const BIND_RECORD_VERSION = 2;
+/** The engine's exact refusal for a workflow id the ACTIVE registry does not serve. */
+const NOT_FOUND_CODE = "coordination.workflow-not-found";
+/** A retained terminal lifecycle: the binding is retired, not a Phase-2 authority failure. */
+const PHASE2_RETIRED_CODE = "phase2.workflow-retired";
 
 /** The advisory body: a pointer to the shared checkpoint, and nothing more. */
 const ADVISORY_TEXT = [
@@ -322,7 +327,10 @@ type WorkflowProbe =
       planFacts: readonly string[];
       binding: ExecutionBinding;
     }>
-  | Readonly<{ ok: false; code: string; message: string; observed?: ObservedStatus }>;
+  | ProbeRefusal;
+
+/** One refused probe: the code, its sentence and the lifecycle facts a notice may cite. */
+type ProbeRefusal = Readonly<{ ok: false; code: string; message: string; observed?: ObservedStatus }>;
 
 type SamplingResult = Readonly<{
   /** The bound coordinator owns a live workflow in `phase-2-execute`. */
@@ -338,6 +346,33 @@ type SamplingResult = Readonly<{
 /** `null` when an ACTIVE workflow status is terminal. */
 function workflowIsTerminal(state: { status: string }): boolean {
   return (WORKFLOW_TERMINAL_STATUSES as readonly string[]).includes(state.status);
+}
+
+/**
+ * The retained terminal status of a workflow the ACTIVE registry no longer
+ * serves, or `null` when this authority never retained a terminal lifecycle for
+ * it. Close + unregister keeps the coordinator's `execution_sessions` row, so a
+ * resume still succeeds while the registry refuses the id; the cleanup read is
+ * the only read independent of registry membership, and a retained header that
+ * is still non-terminal (or an unreadable store) answers `null`.
+ */
+async function retainedTerminalStatus(harnessRoot: string, workflowId: string): Promise<string | null> {
+  try {
+    const { selected } = await readExecutionCleanupState({ harnessDir: harnessRoot }, workflowId);
+    return workflowIsTerminal(selected) ? selected.status : null;
+  } catch {
+    return null;
+  }
+}
+
+/** Report the retired binding for a terminal status; the code is the single new vocabulary. */
+function retiredProbe(workflowId: string, status: string): ProbeRefusal {
+  return {
+    ok: false,
+    code: PHASE2_RETIRED_CODE,
+    message: `workflow ${workflowId} ended (${status}); its binding is retired, not a Phase-2 authority failure`,
+    observed: { workflowId, status },
+  };
 }
 
 /** Per-plan stable facts from the DB view — the same terms, from the authoritative source. */
@@ -390,19 +425,26 @@ async function probeActiveWorkflow(
   try {
     read = await readExecutionAuthority({ harnessDir: adopted.harnessRoot }, { workflowId: binding.workflowId });
   } catch (error) {
-    return {
+    const code = engineCodeOf(error, "phase2.authority-unreadable");
+    const refusal: ProbeRefusal = {
       ok: false,
-      code: engineCodeOf(error, "phase2.authority-unreadable"),
+      code,
       message: `the execution authority of ${adopted.harnessRoot} cannot serve workflow ${binding.workflowId}: ${String(error)}`,
     };
+    if (code !== NOT_FOUND_CODE) return refusal;
+    const status = await retainedTerminalStatus(adopted.harnessRoot, binding.workflowId);
+    return status === null ? refusal : retiredProbe(binding.workflowId, status);
   }
   const workflow = "workflows" in read.data ? read.data.workflows[0] : undefined;
   if (workflow === undefined) {
-    return {
-      ok: false,
-      code: "coordination.workflow-not-found",
-      message: `the execution authority read of workflow ${binding.workflowId} returned no active lifecycle`,
-    };
+    const status = await retainedTerminalStatus(adopted.harnessRoot, binding.workflowId);
+    return status === null
+      ? {
+          ok: false,
+          code: NOT_FOUND_CODE,
+          message: `the execution authority read of workflow ${binding.workflowId} returned no active lifecycle`,
+        }
+      : retiredProbe(binding.workflowId, status);
   }
   let workflowDir: string;
   try {
@@ -632,7 +674,11 @@ export default function phase2Orchestration(pi: ExtensionAPI): void {
     const probed = await probeOwnership(ctx, state, true);
     const sampled = await sample(ctx, terms, probed);
     if (generation !== gate.generation || gate.navigationPending) return;
-    if (sampled.refusal !== null) diagnose(sampled.refusal.code, sampled.refusal.message, sampled.refusal.observed);
+    // A retained terminal lifecycle is the ordinary end of a workflow, not an
+    // authority failure: it produces no notice at all.
+    if (sampled.refusal !== null && sampled.refusal.code !== PHASE2_RETIRED_CODE) {
+      diagnose(sampled.refusal.code, sampled.refusal.message, sampled.refusal.observed);
+    }
 
     const observation = sampled.observation ?? NO_OBSERVATION;
     const decision = decidePhase2Reminder(state.reminder, observation, {
@@ -689,6 +735,20 @@ export default function phase2Orchestration(pi: ExtensionAPI): void {
     return null;
   };
 
+  /** `bind`'s refusal when the authority serves no ACTIVE lifecycle for the id. */
+  const bindNotFound = async (harnessRoot: string, workflowId: string): Promise<ToolOutcome> => {
+    const status = await retainedTerminalStatus(harnessRoot, workflowId);
+    return status === null
+      ? refuse(
+          NOT_FOUND_CODE,
+          `the execution authority holds no active lifecycle ${workflowId}; nothing was bound. List the ACTIVE lifecycles with \`mstar status validate\`.`,
+        )
+      : refuse(
+          PHASE2_RETIRED_CODE,
+          `workflow ${workflowId} has ended (${status}); there is no active lifecycle to bind in this session. List the ACTIVE lifecycles with \`mstar status validate\`; nothing was bound.`,
+        );
+  };
+
   /** The ACTIVE bind: adopt this session's own DB coordinator binding for one workflow. */
   const bindActive = async (
     workflowId: string,
@@ -700,12 +760,12 @@ export default function phase2Orchestration(pi: ExtensionAPI): void {
     try {
       read = await readExecutionAuthority({ harnessDir: harnessRoot }, { workflowId });
     } catch (error) {
-      return refuse(engineCodeOf(error, "phase2.authority-unreadable"), `the execution authority of ${harnessRoot} cannot serve workflow ${workflowId}: ${String(error)}`);
+      const code = engineCodeOf(error, "phase2.authority-unreadable");
+      if (code === NOT_FOUND_CODE) return bindNotFound(harnessRoot, workflowId);
+      return refuse(code, `the execution authority of ${harnessRoot} cannot serve workflow ${workflowId}: ${String(error)}`);
     }
     const workflow = "workflows" in read.data ? read.data.workflows[0] : undefined;
-    if (workflow === undefined) {
-      return refuse("coordination.workflow-not-found", `the execution authority holds no active lifecycle ${workflowId}; nothing was bound.`);
-    }
+    if (workflow === undefined) return bindNotFound(harnessRoot, workflowId);
     const coordinator = workflow.coordinator;
     if (coordinator === null || coordinator.sessionId !== hostSessionId) {
       return refuse(
@@ -792,6 +852,13 @@ export default function phase2Orchestration(pi: ExtensionAPI): void {
     }
     const probe = await probeOwnership(ctx, state, true);
     if (!probe.ok) {
+      if (probe.code === PHASE2_RETIRED_CODE) {
+        return refuse(
+          probe.code,
+          `${probe.message}. Nothing remains to check in: the workflow this session observes has ended. Export this session's evidence with ` +
+            `{operation:"export-history", workflowId:"${terms.workflowId}"} instead. The checkpoint was not recorded.`,
+        );
+      }
       return refuse(probe.code, `${probe.message}. The checkpoint was not recorded.${staleHint()}`);
     }
     const sampled = await sample(ctx, terms, probe);

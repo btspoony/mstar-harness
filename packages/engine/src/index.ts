@@ -537,6 +537,7 @@ export {
   CoordinationError,
   EXECUTION_PIN_CONFLICT_CODE,
   ExecutionPinConflictError,
+  PLAN_PARALLELISM_VALUES,
   executionInputHash,
   readExecutionCatalogPin,
   resolveProcessHarnessDir,

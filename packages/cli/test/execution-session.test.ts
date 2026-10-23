@@ -990,6 +990,292 @@ describe("mstar session recover — documented invocation", () => {
   });
 });
 
+/**
+ * The held lease a crash or a foreign writer leaves behind a terminal close:
+ * the close itself never leaves one, so the row is written in the store's own
+ * lease shape and names a holder that is still an ACTIVE session.
+ */
+async function plantHeldLease(fixture: Fixture, input: { holder: string }): Promise<void> {
+  const handle = await openStore(fixture.context, "write");
+  try {
+    const meta = handle.db.prepare("select authority_epoch from store_meta where id = 1").get();
+    const epoch = Number(fieldOf(meta, "authority_epoch"));
+    if (!Number.isInteger(epoch)) throw new Error("fixture: store_meta.authority_epoch is unreadable");
+    handle.db
+      .prepare("insert into execution_integration_leases(workflow_id, revision, owner_epoch, lease_json) values (?, 1, ?, ?)")
+      .run(
+        WORKFLOW_ID,
+        epoch,
+        JSON.stringify({
+          holder: input.holder,
+          claimed_at: "2026-09-01T00:00:00.000Z",
+          plan_id: PLAN_ID,
+          source_branch: "feature/exec-session",
+          target_branch: "main",
+        }),
+      );
+  } finally {
+    handle.close();
+  }
+}
+
+/** The stored integration lease of this workflow, parsed (the tombstone witness). */
+async function storedLease(fixture: Fixture): Promise<Record<string, unknown>> {
+  const handle = await openStore(fixture.context, "read");
+  try {
+    const row = handle.db.prepare("select lease_json from execution_integration_leases where workflow_id = ?").get(WORKFLOW_ID);
+    const text = stringMember(row, "lease_json");
+    if (text === undefined) throw new Error(`no stored lease row for ${WORKFLOW_ID}`);
+    const parsed: unknown = JSON.parse(text);
+    if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) throw new Error("stored lease is not an object");
+    return parsed as Record<string, unknown>;
+  } finally {
+    handle.close();
+  }
+}
+
+/**
+ * The terminal workflow's CAS token, read through the route the violation
+ * advertises: `mstar status validate` publishes the retained header (the close
+ * removed its registry row, so `data.workflows[]` never carries it) with the
+ * token that header's revision addresses. Nothing here constructs the token.
+ */
+function terminalTokenFromStatus(fixture: Fixture): string {
+  const validated = runCli(["status", "validate"], fixture);
+  expect(validated.exitCode, validated.stdout).toBe(0);
+  const terminal = fieldOf(dataOf(validated), "terminalUnregistered");
+  if (!Array.isArray(terminal)) throw new Error(`status validate carries no terminalUnregistered collection: ${validated.stdout}`);
+  const entry = terminal.find((candidate) => stringMember(candidate, "id") === WORKFLOW_ID);
+  const token = entry === undefined ? undefined : stringMember(entry, "token");
+  if (token === undefined) throw new Error(`terminalUnregistered carries no token for ${WORKFLOW_ID}: ${validated.stdout}`);
+  return token;
+}
+
+/**
+ * The adopted terminal workflow's CAS token, read through the same route for
+ * the OTHER terminal shape: an adopted close is published in
+ * `data.terminalAdoptions[]`, never in `terminalUnregistered[]`. Nothing here
+ * constructs the token either.
+ */
+function terminalAdoptionTokenFromStatus(fixture: Fixture): string {
+  const validated = runCli(["status", "validate"], fixture);
+  expect(validated.exitCode, validated.stdout).toBe(0);
+  const adopted = fieldOf(dataOf(validated), "terminalAdoptions");
+  if (!Array.isArray(adopted)) throw new Error(`status validate carries no terminalAdoptions collection: ${validated.stdout}`);
+  const entry = adopted.find((candidate) => stringMember(candidate, "id") === WORKFLOW_ID);
+  const token = entry === undefined ? undefined : stringMember(entry, "token");
+  if (token === undefined) throw new Error(`terminalAdoptions carries no token for ${WORKFLOW_ID}: ${validated.stdout}`);
+  return token;
+}
+
+/** The violation codes the phase-6 post-merge close gate reports, from either envelope arm. */
+function gateViolationCodes(result: RunResult): string[] {
+  const envelope = jsonOf(result);
+  const gate = objectMember(fieldOf(envelope, "data"), "gate") ?? objectMember(fieldOf(envelope, "details"), "gate");
+  const violations = fieldOf(gate, "violations");
+  if (!Array.isArray(violations)) throw new Error(`the gate envelope carries no violations: ${result.stdout}`);
+  return violations.map((entry) => stringMember(entry, "code") ?? "");
+}
+
+describe("mstar session recover — a terminal workflow's held lease", () => {
+  test("the spawned release clears the phase-6 dangling lease on a stopped lifecycle", async () => {
+    const fixture = await activeFixture("mstar-terminal-lease");
+    const identity = coordinatorIdentity();
+    const initial = await readExecutionAuthority(fixture.context);
+    registerThroughAuthority(fixture, identity, initial.token);
+    const beforeBind = await tokensOf(fixture);
+    activeBind(fixture, identity, ["--coordinator"], beforeBind.workflow, "bind-lease-holder");
+
+    // Close through the public transition: a stopped close settles nothing that
+    // is held, so the lease planted below stands for the residual the gate names.
+    const stopped = runCli(
+      [
+        "workflow",
+        "lifecycle",
+        "--workflow",
+        WORKFLOW_ID,
+        "--status",
+        "stopped",
+        "--reason",
+        "the operator cancelled the lifecycle",
+        "--expect",
+        (await tokensOf(fixture)).workflow,
+        "--operation",
+        "stop-terminal",
+        "--harness",
+        fixture.harnessDir,
+      ],
+      fixture,
+      identity,
+    );
+    expect(stopped.exitCode, stopped.stdout).toBe(0);
+    expect(jsonOf(stopped).command).toBe("workflow.lifecycle");
+
+    await plantHeldLease(fixture, { holder: COORDINATOR_ID });
+    const dangling = runCli(
+      ["iteration", "gate", "--workflow", WORKFLOW_ID, "--phase", "6", "--harness", fixture.harnessDir],
+      fixture,
+    );
+    expect(dangling.exitCode).toBe(1);
+    expect(gateViolationCodes(dangling)).toContain("PHASE6_DANGLING_LEASE");
+
+    const attestationPath = join(fixture.root, "terminal-attestation.json");
+    writeJson(attestationPath, attestationFor(COORDINATOR_ID));
+    const successor: ExecutionIdentity = { ...coordinatorIdentity(), sessionId: SUCCESSOR_ID };
+    // The advertised invocation, verbatim: the token is the one `status
+    // validate` publishes for this closed lifecycle, not a local fabrication.
+    const released = runCli(
+      [
+        "session",
+        "recover",
+        "--workflow",
+        WORKFLOW_ID,
+        "--prior-session",
+        COORDINATOR_ID,
+        "--reason",
+        "release the stopped holder's terminal lease",
+        "--attestation",
+        attestationPath,
+        "--expect",
+        terminalTokenFromStatus(fixture),
+        "--operation",
+        "release-terminal",
+        "--harness",
+        fixture.harnessDir,
+      ],
+      fixture,
+      successor,
+    );
+    expect(released.exitCode, released.stdout).toBe(0);
+    expect(jsonOf(released).command).toBe("session.recover");
+    expect((dataOf(released).data as ExecutionSessionRef).sessionId).toBe(SUCCESSOR_ID);
+
+    // The lease row is the released tombstone naming both the holder and the releaser.
+    expect(await storedLease(fixture)).toMatchObject({
+      status: "released",
+      prior_holder: COORDINATOR_ID,
+      released_by: SUCCESSOR_ID,
+      release_reason: `terminal-release:${COORDINATOR_ID}`,
+    });
+
+    // The gate the operator reads no longer reports the dangling lease.
+    const cleared = runCli(
+      ["iteration", "gate", "--workflow", WORKFLOW_ID, "--phase", "6", "--harness", fixture.harnessDir],
+      fixture,
+    );
+    expect(gateViolationCodes(cleared)).not.toContain("PHASE6_DANGLING_LEASE");
+  });
+
+  test("the spawned release clears the held lease of an ADOPTED terminal lifecycle", async () => {
+    // The other terminal shape: the header left the ACTIVE registry and was
+    // settled through terminal adoption, so `status validate` publishes it in
+    // `data.terminalAdoptions[]` and the gate's recovery must be reachable from
+    // that collection too — never from a locally rebuilt token.
+    const fixture = await activeFixture("mstar-terminal-lease-adopted");
+    const identity = coordinatorIdentity();
+    const initial = await readExecutionAuthority(fixture.context);
+    registerThroughAuthority(fixture, identity, initial.token);
+    const beforeBind = await tokensOf(fixture);
+    activeBind(fixture, identity, ["--coordinator"], beforeBind.workflow, "bind-adopted-holder");
+
+    const stopped = runCli(
+      [
+        "workflow",
+        "lifecycle",
+        "--workflow",
+        WORKFLOW_ID,
+        "--status",
+        "stopped",
+        "--reason",
+        "the operator cancelled the lifecycle",
+        "--expect",
+        (await tokensOf(fixture)).workflow,
+        "--operation",
+        "stop-adopted-terminal",
+        "--harness",
+        fixture.harnessDir,
+      ],
+      fixture,
+      identity,
+    );
+    expect(stopped.exitCode, stopped.stdout).toBe(0);
+
+    // The close left the coordinator row ACTIVE, so the adoption settles it
+    // only against the operator's stop attestation, from a distinct identity.
+    const adoptionAttestationPath = join(fixture.root, "adoption-attestation.json");
+    writeJson(adoptionAttestationPath, attestationFor(COORDINATOR_ID));
+    const successor: ExecutionIdentity = { ...coordinatorIdentity(), sessionId: SUCCESSOR_ID };
+    const adopted = runCli(
+      [
+        "workflow",
+        "adopt-terminal",
+        "--workflow",
+        WORKFLOW_ID,
+        "--reason",
+        "settle the stopped coordinator of the closed lifecycle",
+        "--attestation",
+        adoptionAttestationPath,
+        "--operation",
+        "adopt-terminal",
+        "--harness",
+        fixture.harnessDir,
+      ],
+      fixture,
+      successor,
+    );
+    expect(adopted.exitCode, adopted.stdout).toBe(0);
+    expect(jsonOf(adopted).command).toBe("workflow.adopt-terminal");
+
+    await plantHeldLease(fixture, { holder: COORDINATOR_ID });
+    const dangling = runCli(
+      ["iteration", "gate", "--workflow", WORKFLOW_ID, "--phase", "6", "--harness", fixture.harnessDir],
+      fixture,
+    );
+    expect(gateViolationCodes(dangling)).toContain("PHASE6_DANGLING_LEASE");
+
+    const releaseAttestationPath = join(fixture.root, "adopted-terminal-attestation.json");
+    writeJson(releaseAttestationPath, attestationFor(COORDINATOR_ID));
+    const released = runCli(
+      [
+        "session",
+        "recover",
+        "--workflow",
+        WORKFLOW_ID,
+        "--prior-session",
+        COORDINATOR_ID,
+        "--reason",
+        "release the adopted terminal lifecycle's held lease",
+        "--attestation",
+        releaseAttestationPath,
+        "--expect",
+        terminalAdoptionTokenFromStatus(fixture),
+        "--operation",
+        "release-adopted-terminal",
+        "--harness",
+        fixture.harnessDir,
+      ],
+      fixture,
+      successor,
+    );
+    expect(released.exitCode, released.stdout).toBe(0);
+    expect(jsonOf(released).command).toBe("session.recover");
+    expect((dataOf(released).data as ExecutionSessionRef).sessionId).toBe(SUCCESSOR_ID);
+
+    expect(await storedLease(fixture)).toMatchObject({
+      status: "released",
+      prior_holder: COORDINATOR_ID,
+      released_by: SUCCESSOR_ID,
+      release_reason: `terminal-release:${COORDINATOR_ID}`,
+    });
+
+    const cleared = runCli(
+      ["iteration", "gate", "--workflow", WORKFLOW_ID, "--phase", "6", "--harness", fixture.harnessDir],
+      fixture,
+    );
+    expect(gateViolationCodes(cleared)).not.toContain("PHASE6_DANGLING_LEASE");
+  });
+});
+
 describe("mstar status validate — tokens of the active register", () => {
   test("reports the root and per-workflow tokens the active writes expect", async () => {
     const fixture = await activeFixture("mstar-session-tokens");
