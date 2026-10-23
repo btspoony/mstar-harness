@@ -6,6 +6,25 @@
 
 ## [Unreleased]
 
+## [4.0.6] - 2026-10-23
+
+### Harness
+
+- 修正 `status-and-residuals.md` 与 `plan-management.md` 中三处现行语义文档位置的**交付分支命名**：将旧拼写 `branch.source` / `--branch-source` 改为 `branch.work` / `--branch-work`，与独立 development plan 登记的分支一致；冻结的生命周期契约及旧版兼容读取保持不变。
+- 在 `mstar-host/references/dsh.md` 前置**派发通道选择**：先读实况工具集而非 profile 名，因为 Agent Teams profile 与重新插入 `subagent` 的 agent preset 可能同时挂载。
+- 纠正「shipped Team profile 只暴露一个直接派发面」的断言：在其后叠加的 preset 可重新插入直接派发行，因此通道表改为读取实况工具集。**挂载 Team 层**时，`list_agents` / `send_message` / `interrupt_agent` 只解析 roster 目标，对 `subagent` 子会话会以 `TEAM_MEMBER_NOT_FOUND` 拒绝；**仅挂 direct 层**时，同样三个名字可直达子会话（`send_message` 取 `agent_id`）。
+- **随发行的 dsh 行显式 opt-in 调用方会话身份。** 它现在传 `mstar mcp --trust-caller-session-id`（omp 的行本来就有），因此 dsh 连接会发布按调用的 `sessionId` 选择器，需要身份的动作——`plan progress`、`plan complete`、`workflow register/evidence/phase`、`session recover`、`workflow-note.append`——直接在 MCP 面执行，而不是被推回 CLI。此前 dsh 行没有这个开关，于是这类动作一律以「requires an acquired runtime session identity」拒绝，而原生面只覆盖 plan bind、审计报告校验与 execution clear。该开关仍是部署方对「本连接的信任边界归我所有」的显式声明：不带它的连接依旧不发布选择器，也依旧拒绝传入的 id。
+- **在 opt-in 连接上该值是 bearer 身份，文档照此表述。** `executionContextFor` 把 `sessionId` 变成 `context.caller`，引擎据此解析调用方**自己**的 coordinator 绑定，省略 `--expect` 时令牌由引擎推导——因此知道一个活跃会话的 id 就足以以它行事。授权仍是那条绑定行加上 CAS 令牌；没有任何绑定查找、角色校验或 CAS 校验被放宽。ADR、两个包的 README、bundle 注释与两份 host 参考都改为陈述这一点，而不再称其为单纯的归属标注。
+- **store 级命令只在 CLI。** 所有 `store.*` 命令（`init`、`upgrade`、`migrate`、`backup`、`activate`、`retire`、`execution.restore`、`execution.restore-preview`、`execution.export`）不再发布在 MCP 连接上：它们搬运或重塑整个 store，其中 `execution_sessions` 行的 `session_id` 在 opt-in 连接上是 bearer 身份，而该 payload 一旦脱敏就无法恢复备份。它们属于针对检出的运维操作，不是运行时工作。MCP 只承载运行时面——计划、工作流、issue、ledger 读取。
+- **身份缺失拒绝与 `mstar schema` 的 MCP 要求现在给出调用方真正能走的路**：在 `--trust-caller-session-id` 连接上传 `sessionId`（随发行的 dsh 与 omp 行即是），CLI 上用 `--session-id` 或 `MSTAR_HOST_SESSION_ID`（dsh shell 还会导出 `DSH_SESSION_ID`，CLI 会读），否则走原生工具或 CLI。共享句不再声称所有命令都由 `--expect` 授权：`workflow-note.append` 用的是 `sessionRef`，根本没有 `--expect` 输入。
+- **拒绝不再顺手交出可用身份。** `coordination.identity-mismatch` 过去会在 message、`current_facts`、`needed` 与 `details` 里回显 ACTIVE holder 的 `sessionId`；现在只报告 holder 的状态与 epoch。选择器一旦发布，那处回显就是可直接重放的 coordinator 写入输入。
+- 新增 **`mstar-pr-loop`**：仅在用户显式请求时，为已有 ready PR 执行评审 → 修复循环，遵循 tally 派生结论、隔离修复 worktree 和波次空闲后推送纪律；不会自动进入 plan/iteration 流程。
+- 在核心索引、PM preset 与运行时参考表中登记该 skill；复用现有评审和交付契约，不新增 command，也不修改 engine 或 CLI。
+
+### 版本对齐
+
+- 提升 monorepo 根、`@mstar-harness/opencode`、`@mstar-harness/opencode-v2`、`@mstar-harness/cli`、`@mstar-harness/engine`、`@mstar-harness/dsh`、Cursor/Codex/Kimi/ZCode/omp/Claude 插件清单、便携式 Agent Plugins 清单及两份 marketplace 清单：**→ 4.0.6**。
+
 ## [4.0.5] - 2026-10-22
 
 ### Harness
