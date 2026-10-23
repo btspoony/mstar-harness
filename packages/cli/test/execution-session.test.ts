@@ -380,12 +380,26 @@ async function prepareRow(fixture: Fixture): Promise<{ coordinator: ExecutionSes
   return { coordinator: coordinator.ref, coordinatorWire: coordinator.wire };
 }
 
+/**
+ * Register the workflow under the operator identity and bind its coordinator
+ * through the active route: the launcher's inherited binding, with no minted
+ * identity anywhere in the chain.
+ */
+async function boundFixture(label: string): Promise<Fixture> {
+  const fixture = await activeFixture(label);
+  const identity = coordinatorIdentity();
+  registerThroughAuthority(fixture, identity, (await readExecutionAuthority(fixture.context)).token);
+  activeBind(fixture, identity, ["--coordinator"], (await tokensOf(fixture)).workflow, "bind-coordinator");
+  return fixture;
+}
+
 describe("mstar session run — documented invocation", () => {
-  test("launches argv under one minted local identity and propagates its exit code", async () => {
-    const fixture = await activeFixture("mstar-session-run");
+  test("launches argv under the caller's verified identity and propagates its exit code", async () => {
+    const fixture = await boundFixture("mstar-session-run");
+    const identity = coordinatorIdentity();
     const script =
       "const v=JSON.parse(process.env.MSTAR_EXECUTION_IDENTITY);console.log(JSON.stringify(v));process.exit(3);";
-    const child = spawnCli(
+    const child = runCli(
       [
         "session",
         "run",
@@ -401,25 +415,31 @@ describe("mstar session run — documented invocation", () => {
         script,
       ],
       fixture,
-      cliEnv(fixture),
+      identity,
     );
 
     // The child's own exit code is the launcher's: nothing is swallowed.
     expect(child.exitCode).toBe(3);
     const childStdoutRaw = stringMember(objectMember(jsonOf(child), "details"), "stdout");
     if (childStdoutRaw === undefined) throw new Error(`no child stdout in ${child.stdout}`);
-    const identity = JSON.parse(childStdoutRaw) as ExecutionIdentity;
-    expect(identity.source).toBe("local");
-    expect(identity.role).toBe("coordinator");
-    expect(identity.workflowId).toBe(WORKFLOW_ID);
-    expect(identity.sessionId.length).toBeGreaterThan(0);
-    // The launched identity is minted, never inherited from the caller's env.
-    expect(identity.sessionId).not.toBe(COORDINATOR_ID);
+    const launched = JSON.parse(childStdoutRaw) as ExecutionIdentity;
+    expect(launched.source).toBe("local");
+    expect(launched.role).toBe("coordinator");
+    expect(launched.workflowId).toBe(WORKFLOW_ID);
+    // The launched identity is the caller's inherited binding, never a new id.
+    expect(launched.sessionId).toBe(COORDINATOR_ID);
+    // …and the receipt echoes that same id with the verified coordinator ref.
+    const receipt = objectMember(jsonOf(child), "details");
+    expect(objectMember(receipt, "identity")).toMatchObject({ sessionId: COORDINATOR_ID });
+    expect(objectMember(receipt, "binding")).toMatchObject({
+      verified: true,
+      coordinator: { sessionId: COORDINATOR_ID, workflowId: WORKFLOW_ID, role: "coordinator" },
+    });
   });
 
   test("a child the launcher cannot find surfaces the admitted exit 127", async () => {
-    const fixture = await activeFixture("mstar-session-missing-child");
-    const missing = spawnCli(
+    const fixture = await boundFixture("mstar-session-missing-child");
+    const missing = runCli(
       [
         "session",
         "run",
@@ -433,7 +453,7 @@ describe("mstar session run — documented invocation", () => {
         "mstar-binary-that-does-not-exist",
       ],
       fixture,
-      cliEnv(fixture),
+      coordinatorIdentity(),
     );
     // The admitted child outcome survives the launcher: a missing executable is
     // the effect's own 127, reported in the child-exit envelope.
@@ -445,8 +465,9 @@ describe("mstar session run — documented invocation", () => {
   });
 
   test("reports the signal a child was killed by, and refuses a plan selector on the coordinator launch", async () => {
-    const fixture = await activeFixture("mstar-session-signal");
-    const killed = spawnCli(
+    const fixture = await boundFixture("mstar-session-signal");
+    const identity = coordinatorIdentity();
+    const killed = runCli(
       [
         "session",
         "run",
@@ -462,7 +483,7 @@ describe("mstar session run — documented invocation", () => {
         "kill -TERM $$",
       ],
       fixture,
-      cliEnv(fixture),
+      identity,
     );
     expect(killed.exitCode).toBe(143);
     expect(stringMember(objectMember(jsonOf(killed), "details"), "signal")).toBe("SIGTERM");
@@ -474,6 +495,7 @@ describe("mstar session run — documented invocation", () => {
       const refused = runCli(
         ["session", "run", "--workflow", WORKFLOW_ID, ...invalid, "--", "true"],
         fixture,
+        identity,
       );
       expect(refused.exitCode).toBe(2);
       expect(jsonOf(refused).code).toBe("command.invalid-input");
@@ -593,64 +615,49 @@ function registerArgs(fixture: Fixture, rootToken: string, operationId: string, 
   ];
 }
 
-/** The CLI child argv a `session run` launch executes inside the fixture. */
-function registerArgv(fixture: Fixture, rootToken: string, operationId: string): string[] {
-  return [process.execPath, "run", SRC_ENTRY, ...registerArgs(fixture, rootToken, operationId)];
-}
-
-/** The minted identity a `session run` receipt discloses for its one launch. */
-function mintedOf(launch: RunResult): ExecutionIdentity {
+/** The identity a `session run` receipt echoes for its one launch. */
+function launchedIdentity(launch: RunResult): ExecutionIdentity {
   const identity = fieldOf(dataOf(launch), "identity");
-  if (identity === null || typeof identity !== "object") throw new Error(`no minted identity in the launch receipt: ${launch.stdout}`);
+  if (identity === null || typeof identity !== "object") throw new Error(`no launched identity in the launch receipt: ${launch.stdout}`);
   // The receipt is this adapter's own output: its identity member is the §3.1
-  // tuple the launcher minted, so it is read as that named type.
+  // tuple the launcher verified, so it is read as that named type.
   return identity as ExecutionIdentity;
 }
 
 /**
- * The minted-local-identity transport. `session.run` mints one local identity,
- * overwrites the identity channel and deletes the legacy one; these cases pin
- * that a launched child actually consumes that channel against the real active
- * authority — precedence, the ambient fallback, cross-scope refusal, and the
- * launch/register/bind chain under ONE acquired identity.
+ * The inherited-identity transport. `session.run` verifies the caller's live
+ * coordinator binding, overwrites the identity channel and deletes the legacy
+ * one; these cases pin that a launched child actually consumes that channel
+ * against the real active authority — precedence, the ambient fallback,
+ * cross-scope refusal, and the register/bind/launch chain under ONE acquired
+ * identity.
  */
-describe("mstar session run — minted identity transport", () => {
-  test("a launched child consumes its minted identity through register, and that same identity binds", async () => {
-    const fixture = await activeFixture("mstar-minted-launch");
-    const rootToken = (await readExecutionAuthority(fixture.context)).token;
+describe("mstar session run — inherited identity transport", () => {
+  test("a launched child consumes the inherited identity through a real CLI command", async () => {
+    const fixture = await boundFixture("mstar-inherited-launch");
+    const identity = coordinatorIdentity();
 
-    // The launch writes no binding itself; the child CLI (register) runs with
-    // ONLY the minted channel — `session.run` deleted MSTAR_HOST_SESSION_ID.
+    // The launch hands the child the caller's verified identity and deletes
+    // MSTAR_HOST_SESSION_ID; the child CLI runs a real coordinator read with it.
     const launched = runCli(
       ["session", "run", "--workflow", WORKFLOW_ID, "--role", "coordinator", "--harness", fixture.harnessDir,
-        "--", ...registerArgv(fixture, rootToken, "register-minted")],
+        "--", process.execPath, "run", SRC_ENTRY, "plan", "show", "--plan", PLAN_ID, "--harness", fixture.harnessDir],
       fixture,
+      identity,
     );
     expect(launched.exitCode, launched.stdout).toBe(0);
-    const identity = mintedOf(launched);
-    expect(identity.source).toBe("local");
-    expect(identity.workflowId).toBe(WORKFLOW_ID);
-    expect(identity.role).toBe("coordinator");
+    // The receipt echoes the supplied id, never a freshly generated one.
+    expect(launchedIdentity(launched)).toMatchObject({
+      source: "local", sessionId: COORDINATOR_ID, workflowId: WORKFLOW_ID, role: "coordinator",
+    });
 
-    // The child's own stdout is the register success of that minted identity.
+    // The child's own stdout is the plan.show success of that inherited identity.
     const childStdout = JSON.parse(String(dataOf(launched).stdout).trim()) as Record<string, unknown>;
-    expect(childStdout).toMatchObject({ command: "workflow.register", status: "ok" });
+    expect(childStdout).toMatchObject({ command: "plan.show", status: "ok" });
 
-    // The SAME acquired identity is the workflow's creator, so its first bind
-    // succeeds — through the minted channel itself, with no --session-id.
-    const workflowToken = (await tokensOf(fixture)).workflow;
-    const bound = spawnCli(
-      ["plan", "bind", "--execution", "--workflow", WORKFLOW_ID, "--coordinator",
-        "--expect", workflowToken, "--operation", "bind-minted", "--harness", fixture.harnessDir],
-      fixture,
-      { ...cliEnv(fixture, identity) },
-    );
-    expect(bound.exitCode, bound.stdout).toBe(0);
-    expect(jsonOf(bound).command).toBe("plan.bind");
-
-    // The authority itself holds the coordinator row under that minted session.
+    // The authority itself holds the coordinator row the launch verified.
     const workflow = await workflowStateOf(fixture);
-    expect(workflow.coordinator?.sessionId).toBe(identity.sessionId);
+    expect(workflow.coordinator?.sessionId).toBe(COORDINATOR_ID);
   });
 
   test("a minted identity never authorizes a scope it does not declare", async () => {

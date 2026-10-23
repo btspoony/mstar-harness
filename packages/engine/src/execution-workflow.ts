@@ -2392,6 +2392,7 @@ export async function reopenExecutionWorkflow(
     };
     const entryGate = validateWorkflowEntry(entry);
     if (!entryGate.ok) {
+      // reachability: manual — the message names the runtime workflow id, so no single statically provable command can be interpolated
       throw new CoordinationError(
         "coordination.invalid-input",
         `workflow ${workflowId} cannot be restored to the ACTIVE registry: its header does not carry the entry identity ` +

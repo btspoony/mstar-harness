@@ -321,7 +321,7 @@ async function execute(id: string, input: PlanInput, context: InvocationContext)
       const ref = input.sessionRef === undefined ? undefined : decodeExecutionSessionRef(input.sessionRef);
       const workflowId = ref?.workflowId ?? input.workflow ?? context.executionIdentity?.workflowId;
       if (workflowId === undefined) {
-        return refusalEnvelope({ command: id, status: "usage", code: "command.invalid-input", exitCode: 2, message: "plan show needs the addressed workflow: bind the coordinator, pass --workflow, or launch the child with its minted identity" });
+        return refusalEnvelope({ command: id, status: "usage", code: "command.invalid-input", exitCode: 2, message: "plan show needs the addressed workflow: bind the coordinator, pass --workflow, or launch the child with its verified binding" });
       }
       if (input.workflow !== undefined && ref !== undefined && input.workflow !== ref.workflowId) {
         return refusalEnvelope({ command: id, status: "usage", code: "command.invalid-input", exitCode: 2, message: "workflow selector does not match the supplied session reference" });
@@ -347,7 +347,7 @@ async function execute(id: string, input: PlanInput, context: InvocationContext)
       context.executionIdentity !== undefined ||
       input.workflow !== undefined;
     if (!activeRoute) {
-      return refusalEnvelope({ command: id, status: "usage", code: "command.invalid-input", exitCode: 2, message: "operation requires the addressed workflow: bind the coordinator, pass --workflow, or launch the child with its minted identity" });
+      return refusalEnvelope({ command: id, status: "usage", code: "command.invalid-input", exitCode: 2, message: "operation requires the addressed workflow: bind the coordinator, pass --workflow, or launch the child with its verified binding" });
     }
     if (context.sessionId === undefined) {
       return refusalEnvelope({ command: id, status: "usage", code: "command.invalid-input", exitCode: 2, message: `active operation requires an acquired runtime session identity (${IDENTITY_SUPPLIES}).` });
@@ -365,7 +365,7 @@ async function execute(id: string, input: PlanInput, context: InvocationContext)
     const acquired = context.executionIdentity;
     const workflowId = ref?.workflowId ?? acquired?.workflowId ?? input.workflow;
     if (workflowId === undefined) {
-      return refusalEnvelope({ command: id, status: "usage", code: "command.invalid-input", exitCode: 2, message: "active plan operation needs the addressed workflow: bind the coordinator, pass --workflow, or launch the child with its minted identity" });
+      return refusalEnvelope({ command: id, status: "usage", code: "command.invalid-input", exitCode: 2, message: "active plan operation needs the addressed workflow: bind the coordinator, pass --workflow, or launch the child with its verified binding" });
     }
     if (input.workflow !== undefined && input.workflow !== workflowId) {
       return refusalEnvelope({ command: id, status: "usage", code: "command.invalid-input", exitCode: 2, message: "workflow selector does not match the caller's workflow" });
