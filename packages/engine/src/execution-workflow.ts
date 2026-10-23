@@ -105,6 +105,7 @@ import {
   readExecutionStateGraph,
   readExecutionWorkflowWitness,
   readOperationReplay,
+  readWorkflowOperationReplayBeforeProof,
   readWorkflowSessionRows,
   recordRootMembershipLoss,
   releaseIntegrationMergeLease,
@@ -482,6 +483,50 @@ function workflowRecovery(input: {
     resolvedFrom: [...(input.resolvedFrom ?? [])],
     warnings: [...(input.warnings ?? [])],
     commitState: input.commitState,
+  };
+}
+
+/**
+ * §4.2 the transport-freshness warning of one accepted intent: a token whose
+ * revision moved is recorded as provenance, not refused (A10).
+ */
+function workflowTokenDriftWarnings(
+  workflowId: string,
+  freshness: { readRevision: number; currentRevision: number; current: boolean },
+): ResolutionWarning[] {
+  if (freshness.current) return [];
+  return [
+    {
+      code: "execution.token-drifted",
+      path: "expected",
+      message:
+        `the token carries revision ${freshness.readRevision} while workflow ${workflowId} is at revision ` +
+        `${freshness.currentRevision}: the revision is transport freshness, so the intent was recomputed against ` +
+        `the current state instead of being refused`,
+    },
+  ];
+}
+
+/**
+ * §3.1 (R6/A09) the one shape of a served recorded receipt: the receipt itself
+ * plus the `already-satisfied` sidecar. Both the before-proof read route and the
+ * committing frame's own lookup return through here, so a replay looks the same
+ * however it was reached.
+ */
+function replayedWorkflowReceipt(
+  replayed: ExecutionReceipt<ExecutionState>,
+  input: { workflowId: string; warnings: readonly ResolutionWarning[] },
+): ExecutionReceipt<ExecutionState> {
+  return {
+    ...replayed,
+    recovery: workflowRecovery({
+      workflowId: input.workflowId,
+      outcome: "already-satisfied",
+      applied: [],
+      commitState: "committed",
+      resolvedFrom: [{ path: "operationId", source: "execution_operations receipt" }],
+      warnings: [...input.warnings, { code: "execution.receipt-replayed", message: "the recorded receipt of this operation id is served; nothing was written." }],
+    }),
   };
 }
 
@@ -1178,13 +1223,42 @@ export async function mutateExecutionWorkflow(
   const resolved = resolveWorkflowOperationRequest(context.caller, strictRequest);
   const operation = resolved.call.operation;
   const workflowId = resolved.read.workflowId;
+  const requestHash = workflowOperationRequestHash(context.caller, workflowId, operation);
+  // §4.1/§4.2 (R6/A09) RECEIPT-FIRST for an operation whose prerequisite is
+  // MUTABLE external state. A `compass-ref` repair names a document an operator
+  // may later remove, empty or edit into invalid frontmatter; that document is
+  // admission for a NEW write, never a condition on the replay of an ACCEPTED
+  // one. The committed receipt — or the operation conflict of a changed intent
+  // under the same id — is therefore decided here, before the evidence read.
+  // Every other operation keeps reading its evidence first: its prerequisite is
+  // the state the transition itself stands on, and moving that read ahead of the
+  // store would change admission for operations this repair does not address.
+  const replayed = operation.kind === "compass-ref"
+    ? await readWorkflowOperationReplayBeforeProof<ExecutionState>(context, resolved.read, {
+        operationId: resolved.call.operationId,
+        requestHash,
+      })
+    : null;
+  if (replayed !== null) {
+    // The replay is bound to the CURRENT authority the read transaction just
+    // revalidated; the token's revision remains transport freshness (A10), so a
+    // receipt served against a header that moved is still the recorded receipt.
+    const freshness = resolveTokenFreshness(
+      resolved.call.expected,
+      { kind: "workflow", storeId: replayed.storeId, epoch: replayed.epoch, key: [workflowId], revision: replayed.revision },
+      { target: { workflowId } },
+    );
+    return replayedWorkflowReceipt(replayed.replay, {
+      workflowId,
+      warnings: workflowTokenDriftWarnings(workflowId, freshness),
+    });
+  }
   let evidence: WorkflowEvidence;
   try {
     evidence = await readWorkflowEvidence(context, resolved);
   } catch (error) {
     throw prerequisiteCause(error, { workflowId, operation, stage: "read" });
   }
-  const requestHash = workflowOperationRequestHash(context.caller, workflowId, operation);
   workflowWitnessGapForTest?.();
   return withExecutionTransaction(context, (tx) => {
     if (tx.execution.authorityState !== "active") {
@@ -1212,24 +1286,16 @@ export async function mutateExecutionWorkflow(
     // revision is transport freshness. A token whose revision moved is recorded
     // as provenance, not refused (A10): the intent below is recomputed against
     // the state this transaction reads.
-    const warnings: readonly ResolutionWarning[] = freshness.current
-      ? []
-      : [
-          {
-            code: "execution.token-drifted",
-            path: "expected",
-            message:
-              `the token carries revision ${freshness.readRevision} while workflow ${workflowId} is at revision ` +
-              `${freshness.currentRevision}: the revision is transport freshness, so the intent was recomputed against ` +
-              `the current state instead of being refused`,
-          },
-        ];
+    const warnings: readonly ResolutionWarning[] = workflowTokenDriftWarnings(workflowId, freshness);
     // §3.1 (R6/A09) an identical retry returns its recorded receipt — but only
     // while the receipt is retained and after CURRENT authority is revalidated.
     // A close that loses registry membership prunes the workflow's OTHER receipts
     // and keeps this operation's current-epoch receipt as its replay anchor: the
     // identical terminal retry replays here, and only a different operation id
     // falls through to the registry witness for actionable read-back guidance.
+    // A `compass-ref` retry normally replays on the before-proof read route
+    // above; this lookup also covers a receipt committed in the gap between that
+    // read and this write transaction.
     const replay = readOperationReplay<ExecutionState>(tx, {
       operationId: resolved.call.operationId,
       requestHash,
@@ -1239,17 +1305,7 @@ export async function mutateExecutionWorkflow(
     });
     if (replay !== null) {
       resolveWorkflowSession(tx, resolved.read);
-      return {
-        ...replay,
-        recovery: workflowRecovery({
-          workflowId,
-          outcome: "already-satisfied",
-          applied: [],
-          commitState: "committed",
-          resolvedFrom: [{ path: "operationId", source: "execution_operations receipt" }],
-          warnings: [...warnings, { code: "execution.receipt-replayed", message: "the recorded receipt of this operation id is served; nothing was written." }],
-        }),
-      };
+      return replayedWorkflowReceipt(replay, { workflowId, warnings });
     }
     // `at` is the ONE timestamp of this accepted operation: the header, the
     // settled claim and the receipt all carry the same instant.

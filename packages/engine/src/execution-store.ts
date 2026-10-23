@@ -2945,6 +2945,51 @@ export async function readPlanOperationReplayBeforeProof<T>(
 }
 
 /**
+ * §3.1 the same receipt-first decision for a WORKFLOW-level operation: the
+ * committed receipt of one operation id, or `null` for a first attempt, decided
+ * BEFORE the transition reads its external evidence.
+ *
+ * A workflow operation whose prerequisite is mutable — `compass-ref` names a
+ * document an operator may later move, empty or break — must reach the
+ * replay/conflict decision on the ACCEPTED operation, not on that document's
+ * current state: an identical retry of a committed repair replays without a
+ * write and a changed intent under the same id still conflicts, whatever the
+ * document says now. A genuinely NEW operation id gets `null` and therefore
+ * still faces full admission when it reads its evidence.
+ *
+ * §2.3 the READ transaction revalidates CURRENT authority first — the
+ * reference's store/epoch fence and the caller's own ACTIVE coordinator row — so
+ * a revoked or foreign session never replays another actor's receipt. The
+ * committing transaction repeats this lookup under its own handle, so a receipt
+ * committed in the gap is still served and a conflict still refused.
+ */
+export async function readWorkflowOperationReplayBeforeProof<T>(
+  context: ExecutionContext,
+  read: ResolvedWorkflowWrite,
+  input: { operationId: string; requestHash: string },
+): Promise<{ replay: ExecutionReceipt<T>; storeId: string; epoch: number; revision: number } | null> {
+  return withExecutionReadTransaction(context, (tx) => {
+    assertAuthorityGeneration(tx, {
+      referenceStoreId: read.referenceStoreId,
+      referenceEpoch: read.referenceEpoch,
+      target: { workflowId: read.workflowId },
+    });
+    resolveWorkflowSession(tx, read);
+    const replay = readOperationReplay<T>(tx, {
+      ...input,
+      workflowId: read.workflowId,
+      planId: null,
+      token: { kind: "root", key: [] },
+    });
+    if (replay === null) return null;
+    // The store identity and header revision the caller's token is judged
+    // against, read in the SAME snapshot as the receipt: a replay must not be
+    // reported against a state this read did not see.
+    return { replay, storeId: tx.storeId, epoch: tx.epoch, revision: requireWorkflowState(tx, read.workflowId).revision };
+  });
+}
+
+/**
  * §3.1 the same replay for ANY addressed record: the committed receipt of one
  * operation id, or `null` for a first attempt. `token` names the address the
  * receipt must carry — a plan, a session, the workflow header — so a receipt

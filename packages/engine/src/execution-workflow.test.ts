@@ -3428,6 +3428,58 @@ describe("execution-workflow: §4.1 the registered-compass repair", () => {
     expect(await workflowFootprint(fixture.context)).toEqual(published);
   });
 
+  test("a committed repair replays after its document becomes unusable, while a new operation still refuses", async () => {
+    const fixture = await workflowFixture("compass-ref-replay-broken", [], "iteration");
+    writeOwnCompass(fixture);
+    plantCompassRef(fixture, `.mstar/${COMPASS_REF}`);
+    const repaired = await workflowMutation(fixture, "op-compass-ref-broken", {
+      kind: "compass-ref",
+      compassPath: COMPASS_REF,
+      reason: "record the pointer registration refused",
+    });
+    expect(repaired.replayed).toBe(false);
+    expect((repaired.data.workflows[0]!.state as unknown as Record<string, unknown>).compass_ref).toBe(COMPASS_REF);
+    const published = await workflowFootprint(fixture.context);
+
+    // The external document is the ADMISSION for a new write, never a condition
+    // on the replay of an operation the store already accepted: a coordinator
+    // that retries the exact committed request after the document was removed
+    // still gets its receipt, with nothing written.
+    rmSync(fixture.compassPath);
+    const replay = await workflowMutation(fixture, "op-compass-ref-broken", {
+      kind: "compass-ref",
+      compassPath: COMPASS_REF,
+      reason: "record the pointer registration refused",
+    });
+    expect(replay.replayed).toBe(true);
+    expect(await workflowFootprint(fixture.context)).toEqual(published);
+
+    // A changed intent under the committed id is still the operation conflict:
+    // replay-first must not turn a different request into a served success.
+    const conflicting = await refusalOf(() =>
+      workflowMutation(fixture, "op-compass-ref-broken", {
+        kind: "compass-ref",
+        compassPath: COMPASS_REF,
+        reason: "a different reason for the same pointer",
+      }),
+    );
+    expect(conflicting.code).toBe("execution.operation-conflict");
+    expect(await workflowFootprint(fixture.context)).toEqual(published);
+
+    // The same unusable document under a NEW operation id is still refused by
+    // full admission, so the ordering does not weaken the new-write gate.
+    writeFileSync(fixture.compassPath, "");
+    const refused = await refusalOf(() =>
+      workflowMutation(fixture, "op-compass-ref-broken-new", {
+        kind: "compass-ref",
+        compassPath: COMPASS_REF,
+        reason: "repair against an empty document",
+      }),
+    );
+    expect(refused.code).toBe("coordination.invalid-transition");
+    expect(await workflowFootprint(fixture.context)).toEqual(published);
+  });
+
   test("a repair the lifecycle or the document cannot support is refused with no mutation", async () => {
     const iterationFixture = await workflowFixture("compass-ref-refusals", [], "iteration");
     writeOwnCompass(iterationFixture);
