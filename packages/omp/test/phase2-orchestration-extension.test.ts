@@ -4,14 +4,28 @@ import { mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { zod } from "@oh-my-pi/pi-coding-agent";
 import type { ExtensionAPI, ExtensionContext, SessionEntry } from "@oh-my-pi/pi-coding-agent";
-import { bindExecutionSession, createExecutionWorkflow, readExecutionState, registerCatalogEntity, initializeStore } from "@mstar-harness/engine";
+import {
+  bindExecutionSession,
+  createExecutionWorkflow,
+  mutateExecutionWorkflow,
+  readExecutionAuthority,
+  readExecutionState,
+  registerCatalogEntity,
+  initializeStore,
+} from "@mstar-harness/engine";
 import type { ExecutionCaller, ExecutionContext, WorkflowSnapshot } from "@mstar-harness/engine";
 import { afterEachCleanup, makeFixture, WORKFLOW_ID, PLAN_ID } from "../../engine/test/support/coordination-fixtures.js";
 import { PHASE2_CUSTOM_TYPE, PHASE2_PHASE, default as phase2Orchestration, derivePhase2State } from "../src/extensions/phase2-orchestration";
 
 afterEach(() => afterEachCleanup());
 
-async function activeFixture() {
+/**
+ * `closeable` registers a report-only lifecycle whose single row is already
+ * `Done`, so the ordinary `completed` close (`mstar status workflow-close`) is
+ * reachable through the public route instead of being refused for undelivered
+ * work.
+ */
+async function activeFixture(options: { closeable?: boolean } = {}) {
   const fixture = makeFixture();
   rmSync(join(fixture.harness, "status.json"), { force: true });
   rmSync(join(fixture.harness, "workflows"), { recursive: true, force: true });
@@ -20,7 +34,17 @@ async function activeFixture() {
   await registerCatalogEntity(store, { kind: "plan", id: PLAN_ID, title: PLAN_ID, rootKind: "plans", relativePath: `plans/${PLAN_ID}.md` }, { operationId: randomUUID(), actor: "phase2-orchestration-extension.test" });
   const caller: ExecutionCaller = { sessionId: "active-coordinator", role: "coordinator", workflowId: WORKFLOW_ID };
   const domain: ExecutionContext = { harnessDir: fixture.harness, caller };
-  const snapshot: WorkflowSnapshot = { schema_version: 1, id: WORKFLOW_ID, type: "plan", status: "running", phase: PHASE2_PHASE, started_at: "2026-01-01T00:00:00.000Z", updated_at: "2026-01-01T00:00:00.000Z", plans: [{ id: PLAN_ID, title: PLAN_ID, file: `plans/${PLAN_ID}.md`, status: "Todo" }] };
+  const snapshot: WorkflowSnapshot = {
+    schema_version: 1,
+    id: WORKFLOW_ID,
+    type: "plan",
+    status: "running",
+    phase: PHASE2_PHASE,
+    started_at: "2026-01-01T00:00:00.000Z",
+    updated_at: "2026-01-01T00:00:00.000Z",
+    plans: [{ id: PLAN_ID, title: PLAN_ID, file: `plans/${PLAN_ID}.md`, status: options.closeable === true ? "Done" : "Todo" }],
+    ...(options.closeable === true ? { delivery_kind: "verification/report-only" as const, completion_policy: "report-only" } : {}),
+  };
   const created = await createExecutionWorkflow(domain, { entry: { id: WORKFLOW_ID, type: "plan", started_at: snapshot.started_at, dir: `workflows/${WORKFLOW_ID}` }, snapshot, expected: (await readExecutionState(store)).token, operationId: "create-phase2-workflow" });
   const bound = await bindExecutionSession(domain, { workflowId: WORKFLOW_ID, expected: created.data.workflows[0]!.workflowToken, operationId: "bind-phase2-coordinator" });
   mkdirSync(join(fixture.harness, "workflows", WORKFLOW_ID), { recursive: true });
@@ -128,6 +152,60 @@ describe("phase2 extension ACTIVE authority", () => {
     host.setSnapshot(jobSnapshot([], [{ id: "job-1", status: "completed" }], ["job-1"]));
     await host.emit("agent_end");
     expect(host.messages).toHaveLength(1);
+  });
+
+  test("a retained terminal lifecycle is silent on agent_end and its checkpoint names the executable action", async () => {
+    const { fixture, domain } = await activeFixture({ closeable: true });
+    const host = phase2Host(fixture.root);
+    await host.call({ operation: "bind", workflowId: WORKFLOW_ID });
+
+    // The ordinary close: record the report-only fulfilment, then the same
+    // terminal transition `mstar status workflow-close` drives. The registry row
+    // is dropped while the coordinator session row survives.
+    await mutateExecutionWorkflow(domain, {
+      workflowId: WORKFLOW_ID,
+      operationId: randomUUID(),
+      operation: { kind: "delivery", delivery: { completion: { policy: "report-only", evidence: "sdd/review/qc.md" } } },
+    });
+    await mutateExecutionWorkflow(domain, {
+      workflowId: WORKFLOW_ID,
+      operationId: randomUUID(),
+      operation: { kind: "lifecycle", status: "completed", reason: "closed through status workflow-close" },
+    });
+    await expect(readExecutionAuthority({ harnessDir: fixture.harness }, { workflowId: WORKFLOW_ID })).rejects.toThrow();
+
+    host.setSnapshot(jobSnapshot([{ id: "job-1", type: "task", status: "running" }], []));
+    await host.emit("agent_end");
+    expect(host.messages).toEqual([]);
+
+    const checkpoint = await host.call({ operation: "checkpoint", reason: "result-settled", decision: "wait", note: "closed workflow" });
+    expect(checkpoint.isError).toBe(true);
+    expect(checkpoint.details.mstarPhase2?.code).toBe("phase2.workflow-retired");
+    expect(checkpoint.content[0]!.text).toContain("ended");
+    expect(checkpoint.content[0]!.text).toContain(`{operation:"export-history", workflowId:"${WORKFLOW_ID}"}`);
+    expect(checkpoint.content[0]!.text).not.toContain('re-run {operation:"bind"');
+    expect(host.entries.filter((entry) => entry.type === "custom" && entry.customType === PHASE2_CUSTOM_TYPE)).toHaveLength(1);
+  });
+
+  test("an unknown workflow id still diagnoses and its bind refusal names the ACTIVE listing", async () => {
+    const { fixture, session } = await activeFixture();
+    const unknownId = "wf-never-registered";
+    const host = phase2Host(fixture.root);
+    host.entries.push({
+      type: "custom",
+      customType: PHASE2_CUSTOM_TYPE,
+      data: { version: 2, kind: "bind", workflowId: unknownId, hostSessionId: "active-coordinator", executionBinding: { version: 1, harnessRoot: fixture.harness, session } },
+    } as unknown as SessionEntry);
+
+    await host.emit("agent_end");
+    expect(host.messages).toHaveLength(1);
+    expect(JSON.stringify(host.messages[0])).toContain("coordination.workflow-not-found");
+
+    const bound = await host.call({ operation: "bind", workflowId: unknownId });
+    expect(bound.isError).toBe(true);
+    expect(bound.details.mstarPhase2?.code).toBe("coordination.workflow-not-found");
+    expect(bound.content[0]!.text).toContain("no active lifecycle");
+    expect(bound.content[0]!.text).toContain("mstar status validate");
   });
 
   test("export-history returns this session's canonical digest without changing ACTIVE binding state", async () => {
