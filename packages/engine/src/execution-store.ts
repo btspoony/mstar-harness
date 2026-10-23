@@ -119,6 +119,10 @@ export type ExecutionErrorCode =
   | "execution.delivery-declaration-required"
   | "execution.workflow-skip-unmatched"
   | "execution.compass-skip-unmatched"
+  // `workflow.reopen` eligibility refusals: one code per documented reason, so a
+  // caller branches on the exact refusal instead of parsing the message.
+  | "workflow.reopen-completed"
+  | "workflow.reopen-not-terminal"
   | "store.not-active"
   | "store.stale-epoch";
 
@@ -1935,13 +1939,14 @@ function storedReceiptFacts(
   receipt: Record<string, unknown>,
 ): Partial<Pick<ExecutionRead<unknown>, "actor_session_id" | "reason" | "holder_live_warning">> {
   const recovery = isPlainObject(receipt.recovery) ? receipt.recovery : undefined;
+  // A warning is a TYPED record, not any object: the top-level copy passes the
+  // same gate the terminal projection uses, so a replay never serves a malformed
+  // shape as a `HolderLiveWarning`.
+  const warning = holderLiveWarningOf(receipt.holder_live_warning) ?? holderLiveWarningOf(recovery?.holder_live_warning);
   return {
     ...(typeof receipt.actor_session_id === "string" ? { actor_session_id: receipt.actor_session_id } : {}),
     ...(typeof receipt.reason === "string" ? { reason: receipt.reason } : {}),
-    ...(isPlainObject(receipt.holder_live_warning) ? { holder_live_warning: receipt.holder_live_warning as HolderLiveWarning } : {}),
-    ...(recovery !== undefined && isPlainObject(recovery.holder_live_warning) && !isPlainObject(receipt.holder_live_warning)
-      ? { holder_live_warning: recovery.holder_live_warning as HolderLiveWarning }
-      : {}),
+    ...(warning === undefined ? {} : { holder_live_warning: warning }),
   };
 }
 

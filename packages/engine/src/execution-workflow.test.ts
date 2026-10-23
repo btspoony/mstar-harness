@@ -49,6 +49,7 @@ import {
 import {
   mutateExecutionWorkflow,
   recoverExecutionCoordinator,
+  reopenExecutionWorkflow,
   setWorkflowWitnessGapForTest,
 } from "../src/execution-workflow.js";
 import { evaluatePostMergeCloseFromExecutionAuthority } from "../src/iteration.js";
@@ -3575,5 +3576,302 @@ describe("execution-workflow: \u00A74.1 the prepare claim records source_branch"
       .not.toContain("feature/smuggled");
     expect((await readExecutionPlan(domainContext(fixture.context, fixture.coordinatorCaller), fixture.coordinator, PLAN_ID))
       .data.plan.metadata).toMatchObject({ working_branch: SOURCE_BRANCH });
+  });
+});
+
+/* ------------------------------------------------------------------------ *
+ * §4.2 `workflow.reopen`: a failed/stopped lifecycle returns to `running`
+ * ------------------------------------------------------------------------ */
+
+/** One `reopenExecutionWorkflow` call under the fixture's coordinator. */
+function reopenWorkflow(
+  fixture: Fixture,
+  input: {
+    operationId: string;
+    reason?: string;
+    expected?: ExecutionToken;
+    attestation: ActivationAttestation;
+    who?: ExecutionCaller;
+  },
+) {
+  return reopenExecutionWorkflow(domainContext(fixture.context, input.who ?? fixture.coordinatorCaller), {
+    workflowId: WORKFLOW_ID,
+    reason: input.reason ?? "the failed lifecycle is reopened for further work",
+    attestation: input.attestation,
+    operationId: input.operationId,
+    ...(input.expected === undefined ? {} : { expected: input.expected }),
+  });
+}
+
+/** The closed lifecycle's CAS address, exactly as `status validate` publishes it. */
+async function terminalToken(fixture: Fixture): Promise<{ token: ExecutionToken; revision: number }> {
+  const [entry] = (await readExecutionState(fixture.context)).data.terminalUnregistered ?? [];
+  if (entry?.id !== WORKFLOW_ID) throw new Error("fixture: the addressed workflow is not closed");
+  return { token: entry.token as ExecutionToken, revision: entry.revision };
+}
+
+/** The raw committed status/outcome of the addressed header. */
+function storedHeader(context: StoreContext): Record<string, unknown> {
+  const [row] = rows(
+    context,
+    `select (select count(*) as n from execution_registry where workflow_id = '${WORKFLOW_ID}') as registered, ` +
+      `(select json_extract(state_json, '$.status') from execution_workflows where workflow_id = '${WORKFLOW_ID}') as status, ` +
+      `(select json_extract(state_json, '$.ended_at') from execution_workflows where workflow_id = '${WORKFLOW_ID}') as ended_at, ` +
+      `(select json_extract(state_json, '$.started_at') from execution_workflows where workflow_id = '${WORKFLOW_ID}') as started_at, ` +
+      `(select json_extract(state_json, '$.type') from execution_workflows where workflow_id = '${WORKFLOW_ID}') as type`,
+  );
+  return row!;
+}
+
+describe("execution-workflow-reopen: \u00A74.2 a closed lifecycle returns to running on the same id", () => {
+  test("a failed lifecycle reopens with its plan rows, history and identity anchors intact", async () => {
+    const fixture = await workflowFixture("reopen-failed");
+    const close = await workflowMutation(fixture, "op-reopen-close-failed", {
+      kind: "lifecycle",
+      status: "failed",
+      reason: "the coordinator chain broke",
+    });
+    expect(close.data.workflows.some((workflow) => workflow.state.id === WORKFLOW_ID)).toBe(false);
+    expect((await readExecutionState(fixture.context)).data.terminalUnregistered?.map((entry) => entry.id)).toEqual([WORKFLOW_ID]);
+    const terminal = await terminalToken(fixture);
+    const plansBefore = rows(
+      fixture.context,
+      `select * from execution_plans where workflow_id = '${WORKFLOW_ID}' order by ordinal`,
+    );
+    const headerBefore = parsedJson(rows(
+      fixture.context,
+      `select state_json from execution_workflows where workflow_id = '${WORKFLOW_ID}'`,
+    )[0]!.state_json);
+    const before = revisions(fixture.context);
+    const reason = "the failed lifecycle is reopened under the operator's authorization";
+
+    const receipt = await reopenWorkflow(fixture, {
+      operationId: "op-reopen-failed",
+      expected: terminal.token,
+      attestation: attestation([]),
+      reason,
+    });
+    expect(receipt.replayed).toBe(false);
+    expect(receipt.actor_session_id).toBe(COORDINATOR_ID);
+    expect(receipt.reason).toBe(reason);
+    expect(receipt.recovery).toMatchObject({
+      outcome: "applied",
+      commitState: "committed",
+      target: { workflowId: WORKFLOW_ID },
+      applied: [
+        `execution_workflows(${WORKFLOW_ID}) status failed \u2192 running`,
+        `execution_registry(${WORKFLOW_ID}) restored`,
+      ],
+      unresolved: [],
+      warnings: [],
+      resolvedFrom: [
+        { path: "attestation.operator", source: "ops-engineer (compass D29 / coordinator recovery decision)" },
+        { path: "attestation.attestedAt", source: "2026-01-02T04:00:00.000Z" },
+      ],
+    });
+
+    // Routed again as `running`, same identity anchors, same plan rows.
+    const reopened = receipt.data.workflows.find((workflow) => workflow.state.id === WORKFLOW_ID)!;
+    expect(reopened.state.status).toBe("running");
+    expect(reopened.state.ended_at).toBeUndefined();
+    expect(identityAnchors(reopened.state as unknown as Record<string, unknown>)).toEqual(identityAnchors(headerBefore));
+    expect(reopened.plans.map((entry) => entry.plan.id)).toEqual([PLAN_ID]);
+    expect(rows(
+      fixture.context,
+      `select * from execution_plans where workflow_id = '${WORKFLOW_ID}' order by ordinal`,
+    )).toEqual(plansBefore);
+    expect(storedHeader(fixture.context)).toMatchObject({ registered: 1, status: "running", ended_at: null, started_at: TS, type: "plan" });
+    // One accepted operation: workflow + store once, and the membership change once.
+    expect(revisions(fixture.context)).toEqual({
+      root: before.root + 1,
+      store: before.store + 1,
+      workflow: before.workflow + 1,
+    });
+    // History survives: the close's surviving receipt and this reopen's receipt.
+    expect(rows(
+      fixture.context,
+      `select operation_id from execution_operations where workflow_id = '${WORKFLOW_ID}' order by rowid`,
+    ).map((row) => row.operation_id)).toEqual(["op-reopen-close-failed", "op-reopen-failed"]);
+    expect((await readExecutionState(fixture.context)).data.terminalUnregistered).toBeUndefined();
+  });
+
+  test("a stopped lifecycle reopens under a consumerless recovery-scope attestation, and plan work resumes", async () => {
+    const fixture = await workflowFixture("reopen-stopped");
+    await workflowMutation(fixture, "op-reopen-close-stopped", {
+      kind: "lifecycle",
+      status: "stopped",
+      reason: "the operator stopped the lifecycle",
+    });
+    // A closed lifecycle is out of routing: the plan write the caller wants is
+    // refused before the reopen and accepted after it, on the SAME id.
+    const outOfRouting = await refusalOf(() => mutateExecutionPlan(domainContext(fixture.context, fixture.coordinatorCaller), {
+      operationId: "op-reopen-plan-before",
+      planId: PLAN_ID,
+      operation: { kind: "progress", progress: { status: "InProgress", summary: "resume", evidence_paths: [] } },
+    }));
+    expect(outOfRouting.code).toBe("coordination.workflow-not-running");
+
+    // The store is already active, so the recovery-scope document needs no
+    // installed consumer and makes no stop claim (empty `stoppedSessions`).
+    const consumerless = {
+      version: ACTIVATION_PROTOCOL_VERSION,
+      attestedAt: "2026-01-02T05:00:00.000Z",
+      operator: { actor: "ops-engineer", authorizationRef: "reopen decision D30" },
+      stoppedSessions: [],
+    } as unknown as ActivationAttestation;
+    const receipt = await reopenWorkflow(fixture, {
+      operationId: "op-reopen-stopped",
+      attestation: consumerless,
+    });
+    expect(receipt.recovery?.resolvedFrom).toContainEqual({
+      path: "attestation.operator",
+      source: "ops-engineer (reopen decision D30)",
+    });
+    expect(storedHeader(fixture.context)).toMatchObject({ registered: 1, status: "running", ended_at: null });
+
+    const progress = await mutateExecutionPlan(domainContext(fixture.context, fixture.coordinatorCaller), {
+      operationId: "op-reopen-plan-after",
+      planId: PLAN_ID,
+      operation: { kind: "progress", progress: { status: "InProgress", summary: "resume", evidence_paths: [] } },
+    });
+    expect(progress.data.plan.status).toBe("InProgress");
+    expect(progress.data.workflow.id).toBe(WORKFLOW_ID);
+  });
+
+  test("completed is never reopened and a non-terminal lifecycle is not terminal", async () => {
+    const completed = await workflowFixture("reopen-completed");
+    setRowStatus(completed.context, PLAN_ID, "Done");
+    await workflowMutation(completed, "op-reopen-delivery", { kind: "delivery", delivery: DELIVERY_TAIL });
+    await workflowMutation(completed, "op-reopen-close-completed", {
+      kind: "lifecycle",
+      status: "completed",
+      reason: "delivery tail verified",
+    });
+    const completedBefore = workflowFootprint(completed.context);
+    const completedRefusal = await refusalOf(() => reopenWorkflow(completed, {
+      operationId: "op-reopen-completed",
+      reason: "reopen a completed lifecycle",
+      attestation: attestation([]),
+    }));
+    expect(completedRefusal.code).toBe("workflow.reopen-completed");
+    expect(completedRefusal.message).toContain("never reopened");
+    expect(await workflowFootprint(completed.context)).toEqual(completedBefore);
+
+    // running and paused are both non-terminal: there is nothing to reopen.
+    const active = await workflowFixture("reopen-not-terminal");
+    const runningBefore = workflowFootprint(active.context);
+    const running = await refusalOf(() => reopenWorkflow(active, {
+      operationId: "op-reopen-running",
+      attestation: attestation([]),
+    }));
+    expect(running.code).toBe("workflow.reopen-not-terminal");
+    expect(running.message).toContain("running");
+    expect(await workflowFootprint(active.context)).toEqual(runningBefore);
+
+    await workflowMutation(active, "op-reopen-pause", { kind: "lifecycle", status: "paused", reason: "paused for inspection" });
+    const pausedBefore = workflowFootprint(active.context);
+    const paused = await refusalOf(() => reopenWorkflow(active, {
+      operationId: "op-reopen-paused",
+      attestation: attestation([]),
+    }));
+    expect(paused.code).toBe("workflow.reopen-not-terminal");
+    expect(paused.message).toContain("paused");
+    expect(await workflowFootprint(active.context)).toEqual(pausedBefore);
+  });
+
+  test("a stale terminal CAS and a missing authorization are refused without a footprint", async () => {
+    const fixture = await workflowFixture("reopen-refusals");
+    await workflowMutation(fixture, "op-reopen-refusal-close", {
+      kind: "lifecycle",
+      status: "stopped",
+      reason: "stopped before the reopen",
+    });
+    const terminal = await terminalToken(fixture);
+    const before = workflowFootprint(fixture.context);
+
+    // The token of the revision the close superseded: the CAS is strict.
+    const stale = await refusalOf(() => reopenWorkflow(fixture, {
+      operationId: "op-reopen-stale",
+      expected: executionToken("workflow", fixture.storeId, fixture.epoch, [WORKFLOW_ID], terminal.revision - 1),
+      attestation: attestation([]),
+    }));
+    expect(stale.code).toBe("execution.stale-token");
+    expect(await workflowFootprint(fixture.context)).toEqual(before);
+
+    // No operator document: the authorization is the whole admission gate.
+    const unauthorized = await refusalOf(() => reopenWorkflow(fixture, {
+      operationId: "op-reopen-unauthorized",
+      expected: terminal.token,
+      attestation: undefined as unknown as ActivationAttestation,
+    }));
+    expect(unauthorized.code).toBe("store.attestation-invalid");
+    expect(await workflowFootprint(fixture.context)).toEqual(before);
+  });
+
+  test("an identical retry replays the attributed receipt and writes nothing", async () => {
+    const fixture = await workflowFixture("reopen-replay");
+    await workflowMutation(fixture, "op-reopen-replay-close", {
+      kind: "lifecycle",
+      status: "failed",
+      reason: "failed before the reopen",
+    });
+    const terminal = await terminalToken(fixture);
+    const request = {
+      operationId: "op-reopen-replay",
+      reason: "reopen after the operator decision",
+      expected: terminal.token,
+      attestation: attestation([]),
+    };
+    const first = await reopenWorkflow(fixture, request);
+    const after = revisions(fixture.context);
+    // The workflow is `running` now, yet the SAME operation id still replays its
+    // recorded receipt instead of being answered as "not terminal".
+    const replay = await reopenWorkflow(fixture, request);
+    expect(replay.replayed).toBe(true);
+    expect(replay.actor_session_id).toBe(first.actor_session_id);
+    expect(replay.reason).toBe(first.reason);
+    expect(replay.recovery).toEqual(first.recovery);
+    expect(revisions(fixture.context)).toEqual(after);
+    expect(rows(
+      fixture.context,
+      `select count(*) as n from execution_operations where workflow_id = '${WORKFLOW_ID}'`,
+    )[0]!.n).toBe(2);
+  });
+
+  test("a residue registry row a crashed close left is repaired, not duplicated", async () => {
+    const fixture = await workflowFixture("reopen-residue");
+    await workflowMutation(fixture, "op-reopen-residue-close", {
+      kind: "lifecycle",
+      status: "stopped",
+      reason: "stopped with the registry row left behind",
+    });
+    const terminal = await terminalToken(fixture);
+    // The residue a crashed/foreign writer leaves: the terminal header still
+    // carries its ACTIVE registry row.
+    withRaw(fixture.context, (db) => {
+      db.prepare("insert into execution_registry(workflow_id, entry_json) values (?, ?)").run(
+        WORKFLOW_ID,
+        JSON.stringify({ id: WORKFLOW_ID, type: "plan", started_at: TS, dir: `workflows/${WORKFLOW_ID}` }),
+      );
+    });
+    const before = revisions(fixture.context);
+
+    await reopenWorkflow(fixture, {
+      operationId: "op-reopen-residue",
+      expected: terminal.token,
+      attestation: attestation([]),
+    });
+
+    expect(rows(
+      fixture.context,
+      `select entry_json from execution_registry where workflow_id = '${WORKFLOW_ID}'`,
+    )).toEqual([{ entry_json: JSON.stringify({ id: WORKFLOW_ID, type: "plan", started_at: TS, dir: `workflows/${WORKFLOW_ID}` }) }]);
+    // The residue repair and the restored membership are ONE root advance.
+    expect(revisions(fixture.context)).toEqual({
+      root: before.root + 1,
+      store: before.store + 1,
+      workflow: before.workflow + 1,
+    });
+    expect(storedHeader(fixture.context)).toMatchObject({ registered: 1, status: "running", ended_at: null });
   });
 });
