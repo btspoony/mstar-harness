@@ -321,6 +321,7 @@ __export(exports_engine, {
   refuse: () => refuse,
   registerCatalogEntity: () => registerCatalogEntity,
   registerShippedCatalogExecution: () => registerShippedCatalogExecution,
+  reopenExecutionWorkflow: () => reopenExecutionWorkflow,
   reopenIssue: () => reopenIssue,
   reopenIssueOn: () => reopenIssueOn,
   replaceRoadmapAuthority: () => replaceRoadmapAuthority,
@@ -395,6 +396,7 @@ __export(exports_engine, {
   validatePrReviewReport: () => validatePrReviewReport,
   validateProjectRegister: () => validateProjectRegister,
   validateQcReport: () => validateQcReport,
+  validateRecoveryAttestation: () => validateRecoveryAttestation,
   validateResidual: () => validateResidual,
   validateRoadmap: () => validateRoadmap,
   validateRoleMapping: () => validateRoleMapping,
@@ -469,65 +471,66 @@ import { execFileSync as execFileSync2 } from "node:child_process";
 import { basename as basename6, dirname as dirname8, isAbsolute as isAbsolute3, join as join12, relative as relative2, resolve as resolve8 } from "node:path";
 import { existsSync as existsSync10, readFileSync as readFileSync11, statSync as statSync4 } from "node:fs";
 import { isAbsolute as isAbsolute4, join as join13, normalize, sep as sep5 } from "node:path";
-import { existsSync as existsSync11, readFileSync as readFileSync12 } from "node:fs";
+import { existsSync as existsSync11, readFileSync as readFileSync12, statSync as statSync5 } from "node:fs";
 import { basename as basename7, isAbsolute as isAbsolute5, join as join14, relative as relative3, resolve as resolve9, sep as sep6 } from "node:path";
 import { createHash as createHash7 } from "node:crypto";
-import { isAbsolute as isAbsolute6, resolve as resolve10, sep as sep7 } from "node:path";
+import { isAbsolute as isAbsolute6, join as join15, resolve as resolve10, sep as sep7 } from "node:path";
+import { readFileSync as readFileSync13 } from "node:fs";
 import { execFileSync as execFileSync3 } from "node:child_process";
 import { existsSync as existsSync12, realpathSync as realpathSync6 } from "node:fs";
-import { isAbsolute as isAbsolute7, join as join15, resolve as resolve11 } from "node:path";
+import { isAbsolute as isAbsolute7, join as join16, resolve as resolve11 } from "node:path";
 import { execFileSync as execFileSync4 } from "node:child_process";
 import { createHash as createHash8 } from "node:crypto";
-import { existsSync as existsSync13, readFileSync as readFileSync13, readdirSync as readdirSync9, statSync as statSync5 } from "node:fs";
-import { dirname as dirname9, isAbsolute as isAbsolute8, join as join16, resolve as resolve12, sep as sep8 } from "node:path";
+import { existsSync as existsSync13, readFileSync as readFileSync14, readdirSync as readdirSync9, statSync as statSync6 } from "node:fs";
+import { dirname as dirname9, isAbsolute as isAbsolute8, join as join17, resolve as resolve12, sep as sep8 } from "node:path";
 import { createRequire as createRequire2 } from "node:module";
 import { createHash as createHash9, randomUUID as randomUUID5 } from "node:crypto";
 import { setTimeout as sleep } from "node:timers/promises";
-import { closeSync, existsSync as existsSync14, fstatSync, fsyncSync, linkSync, lstatSync as lstatSync6, openSync, readSync, statSync as statSync6, unlinkSync as unlinkSync3 } from "node:fs";
-import { basename as basename8, dirname as dirname10, join as join17, resolve as resolve13 } from "node:path";
+import { closeSync, existsSync as existsSync14, fstatSync, fsyncSync, linkSync, lstatSync as lstatSync6, openSync, readSync, statSync as statSync7, unlinkSync as unlinkSync3 } from "node:fs";
+import { basename as basename8, dirname as dirname10, join as join18, resolve as resolve13 } from "node:path";
 import { createHash as createHash10 } from "node:crypto";
-import { lstatSync as lstatSync7, readFileSync as readFileSync14, realpathSync as realpathSync7 } from "node:fs";
+import { lstatSync as lstatSync7, readFileSync as readFileSync15, realpathSync as realpathSync7 } from "node:fs";
 import { createHash as createHash11 } from "node:crypto";
 import { basename as basename9, dirname as dirname11 } from "node:path";
 import { execFileSync as execFileSync5, spawn } from "node:child_process";
-import { mkdirSync as mkdirSync6, readFileSync as readFileSync15, realpathSync as realpathSync8, statSync as statSync7, writeFileSync as writeFileSync4 } from "node:fs";
+import { mkdirSync as mkdirSync6, readFileSync as readFileSync16, realpathSync as realpathSync8, statSync as statSync8, writeFileSync as writeFileSync4 } from "node:fs";
 import { constants as osConstants } from "node:os";
-import { basename as basename10, dirname as dirname12, isAbsolute as isAbsolute9, join as join18, relative as relative5, resolve as resolve14 } from "node:path";
-import { existsSync as existsSync15, statSync as statSync8 } from "node:fs";
-import { basename as basename11, dirname as dirname13, join as join19, relative as relative6, resolve as resolve15 } from "node:path";
+import { basename as basename10, dirname as dirname12, isAbsolute as isAbsolute9, join as join19, relative as relative5, resolve as resolve14 } from "node:path";
+import { existsSync as existsSync15, statSync as statSync9 } from "node:fs";
+import { basename as basename11, dirname as dirname13, join as join20, relative as relative6, resolve as resolve15 } from "node:path";
 import { readlinkSync, realpathSync as realpathSync9 } from "node:fs";
 import { basename as basename12, dirname as dirname14, relative as relative7, resolve as resolve16 } from "node:path";
 import { createHash as createHash12 } from "node:crypto";
-import { closeSync as closeSync2, constants as constants2, fstatSync as fstatSync2, lstatSync as lstatSync8, openSync as openSync2, readFileSync as readFileSync16, readdirSync as readdirSync10 } from "node:fs";
-import { join as join20, relative as relative8 } from "node:path";
+import { closeSync as closeSync2, constants as constants2, fstatSync as fstatSync2, lstatSync as lstatSync8, openSync as openSync2, readFileSync as readFileSync17, readdirSync as readdirSync10 } from "node:fs";
+import { join as join21, relative as relative8 } from "node:path";
 import { existsSync as existsSync16, readdirSync as readdirSync11 } from "node:fs";
-import { basename as basename13, isAbsolute as isAbsolute10, join as join21, resolve as resolve17, sep as sep9 } from "node:path";
-import { existsSync as existsSync17, readFileSync as readFileSync18, readdirSync as readdirSync12 } from "node:fs";
-import { join as join22 } from "node:path";
+import { basename as basename13, isAbsolute as isAbsolute10, join as join22, resolve as resolve17, sep as sep9 } from "node:path";
+import { existsSync as existsSync17, readFileSync as readFileSync19, readdirSync as readdirSync12 } from "node:fs";
+import { join as join23 } from "node:path";
 import { lstatSync as lstatSync9, readdirSync as readdirSync13 } from "node:fs";
-import { isAbsolute as isAbsolute11, join as join23 } from "node:path";
+import { isAbsolute as isAbsolute11, join as join24 } from "node:path";
 import { existsSync as existsSync18, readdirSync as readdirSync14, unlinkSync as unlinkSync4 } from "node:fs";
-import { basename as basename14, isAbsolute as isAbsolute12, join as join24, resolve as resolve18, sep as sep10 } from "node:path";
-import { existsSync as existsSync19, readFileSync as readFileSync19 } from "node:fs";
-import { isAbsolute as isAbsolute13, join as join25, resolve as resolve19 } from "node:path";
-import { closeSync as closeSync4, constants as constants4, existsSync as existsSync20, fstatSync as fstatSync4, lstatSync as lstatSync11, mkdirSync as mkdirSync7, openSync as openSync4, readFileSync as readFileSync21, readdirSync as readdirSync16 } from "node:fs";
-import { dirname as dirname16, isAbsolute as isAbsolute14, join as join27, relative as relative9, resolve as resolve20, sep as sep11 } from "node:path";
+import { basename as basename14, isAbsolute as isAbsolute12, join as join25, resolve as resolve18, sep as sep10 } from "node:path";
+import { existsSync as existsSync19, readFileSync as readFileSync20 } from "node:fs";
+import { isAbsolute as isAbsolute13, join as join26, resolve as resolve19 } from "node:path";
+import { closeSync as closeSync4, constants as constants4, existsSync as existsSync20, fstatSync as fstatSync4, lstatSync as lstatSync11, mkdirSync as mkdirSync7, openSync as openSync4, readFileSync as readFileSync22, readdirSync as readdirSync16 } from "node:fs";
+import { dirname as dirname16, isAbsolute as isAbsolute14, join as join28, relative as relative9, resolve as resolve20, sep as sep11 } from "node:path";
 import { createHash as createHash14 } from "node:crypto";
 import { createHash as createHash13 } from "node:crypto";
-import { closeSync as closeSync3, constants as constants3, fstatSync as fstatSync3, lstatSync as lstatSync10, openSync as openSync3, readFileSync as readFileSync20, readdirSync as readdirSync15 } from "node:fs";
-import { dirname as dirname15, join as join26 } from "node:path";
+import { closeSync as closeSync3, constants as constants3, fstatSync as fstatSync3, lstatSync as lstatSync10, openSync as openSync3, readFileSync as readFileSync21, readdirSync as readdirSync15 } from "node:fs";
+import { dirname as dirname15, join as join27 } from "node:path";
 import { dirname as dirname17, isAbsolute as isAbsolute15 } from "node:path";
 import { createHash as createHash15, randomUUID as randomUUID6 } from "node:crypto";
 import { createHash as createHash16 } from "node:crypto";
-import { readFileSync as readFileSync22 } from "node:fs";
-import { join as join28 } from "node:path";
+import { readFileSync as readFileSync23 } from "node:fs";
+import { join as join29 } from "node:path";
 import { createHash as createHash17 } from "node:crypto";
-import { existsSync as existsSync21, readFileSync as readFileSync23, statSync as statSync9 } from "node:fs";
-import { dirname as dirname18, isAbsolute as isAbsolute16, join as join29 } from "node:path";
+import { existsSync as existsSync21, readFileSync as readFileSync24, statSync as statSync10 } from "node:fs";
+import { dirname as dirname18, isAbsolute as isAbsolute16, join as join30 } from "node:path";
 import { createHash as createHash18 } from "node:crypto";
 import { createHash as createHash19 } from "node:crypto";
-import { existsSync as existsSync22, lstatSync as lstatSync12, readFileSync as readFileSync24, readdirSync as readdirSync17 } from "node:fs";
-import { join as join30, resolve as resolve21 } from "node:path";
+import { existsSync as existsSync22, lstatSync as lstatSync12, readFileSync as readFileSync25, readdirSync as readdirSync17 } from "node:fs";
+import { join as join31, resolve as resolve21 } from "node:path";
 import {
   closeSync as closeSync5,
   constants as fsConstants,
@@ -538,7 +541,7 @@ import {
   openSync as openSync5,
   writeSync
 } from "node:fs";
-import { dirname as dirname19, join as join31 } from "node:path";
+import { dirname as dirname19, join as join32 } from "node:path";
 import { createHash as createHash20, randomUUID as randomUUID7 } from "node:crypto";
 import {
   closeSync as closeSync6,
@@ -547,7 +550,7 @@ import {
   existsSync as existsSync23,
   mkdtempSync,
   openSync as openSync6,
-  readFileSync as readFileSync25,
+  readFileSync as readFileSync26,
   readdirSync as readdirSync18,
   readSync as readSync2,
   rmSync as rmSync2,
@@ -555,7 +558,7 @@ import {
 } from "node:fs";
 import { createRequire as createRequire3 } from "node:module";
 import { tmpdir } from "node:os";
-import { dirname as dirname20, join as join32, relative as relative10, resolve as resolve22, sep as sep12 } from "node:path";
+import { dirname as dirname20, join as join33, relative as relative10, resolve as resolve22, sep as sep12 } from "node:path";
 function __exportSetter2(name, newValue) {
   this[name] = __returnValue2.bind(null, newValue);
 }
@@ -11032,9 +11035,7 @@ function attestationString(object, key, what) {
     attestationRefusal(`${what}.${key} must be a nonblank string`);
   return value;
 }
-function validateActivationAttestation(value) {
-  const raw = attestationObject(value, "the attestation");
-  attestationKeys(raw, ["version", "attestedAt", "operator", "consumers", "stoppedSessions"], "the attestation");
+function attestationHeader(raw) {
   if (raw.version !== ACTIVATION_PROTOCOL_VERSION) {
     attestationRefusal(`the attestation version must be ${ACTIVATION_PROTOCOL_VERSION}`);
   }
@@ -11043,8 +11044,36 @@ function validateActivationAttestation(value) {
     attestationRefusal("the attestation.attestedAt must be an ISO/RFC3339 instant");
   const operator = attestationObject(raw.operator, "the attestation.operator");
   attestationKeys(operator, ["actor", "authorizationRef"], "the attestation.operator");
-  const actor = attestationString(operator, "actor", "the attestation.operator");
-  const authorizationRef = attestationString(operator, "authorizationRef", "the attestation.operator");
+  return {
+    attestedAt,
+    operator: {
+      actor: attestationString(operator, "actor", "the attestation.operator"),
+      authorizationRef: attestationString(operator, "authorizationRef", "the attestation.operator")
+    }
+  };
+}
+function stoppedSessionsOf(raw) {
+  if (!Array.isArray(raw.stoppedSessions))
+    attestationRefusal("the attestation.stoppedSessions must be an array (possibly empty)");
+  return raw.stoppedSessions.map((entry, index2) => {
+    const what = `the attestation.stoppedSessions[${index2}]`;
+    const session = attestationObject(entry, what);
+    attestationKeys(session, ["sessionId", "host", "state"], what);
+    const state = session.state;
+    if (typeof state !== "string" || !Object.hasOwn(SESSION_STATES, state)) {
+      activationBlocked(`${what}.state must be "stopped" or "reloaded"; a running or queued session is not quiesced and stops the barrier`);
+    }
+    return {
+      sessionId: attestationString(session, "sessionId", what),
+      host: attestationString(session, "host", what),
+      state
+    };
+  });
+}
+function validateActivationAttestation(value) {
+  const raw = attestationObject(value, "the attestation");
+  attestationKeys(raw, ["version", "attestedAt", "operator", "consumers", "stoppedSessions"], "the attestation");
+  const { attestedAt, operator } = attestationHeader(raw);
   if (!Array.isArray(raw.consumers))
     attestationRefusal("the attestation.consumers must be an array");
   if (raw.consumers.length === 0) {
@@ -11099,21 +11128,14 @@ function validateActivationAttestation(value) {
   }
   if (!Array.isArray(raw.stoppedSessions))
     attestationRefusal("the attestation.stoppedSessions must be an array (possibly empty)");
-  const stoppedSessions = raw.stoppedSessions.map((entry, index2) => {
-    const what = `the attestation.stoppedSessions[${index2}]`;
-    const session = attestationObject(entry, what);
-    attestationKeys(session, ["sessionId", "host", "state"], what);
-    const state = session.state;
-    if (typeof state !== "string" || !Object.hasOwn(SESSION_STATES, state)) {
-      activationBlocked(`${what}.state must be "stopped" or "reloaded"; a running or queued session is not quiesced and stops the barrier`);
-    }
-    return {
-      sessionId: attestationString(session, "sessionId", what),
-      host: attestationString(session, "host", what),
-      state
-    };
-  });
-  return { version: ACTIVATION_PROTOCOL_VERSION, attestedAt, operator: { actor, authorizationRef }, consumers, stoppedSessions };
+  const stoppedSessions = stoppedSessionsOf(raw);
+  return { version: ACTIVATION_PROTOCOL_VERSION, attestedAt, operator, consumers, stoppedSessions };
+}
+function validateRecoveryAttestation(value) {
+  const raw = attestationObject(value, "the attestation");
+  attestationKeys(raw, ["version", "attestedAt", "operator", "consumers", "stoppedSessions"], "the attestation");
+  const { attestedAt, operator } = attestationHeader(raw);
+  return { version: ACTIVATION_PROTOCOL_VERSION, attestedAt, operator, consumers: [], stoppedSessions: stoppedSessionsOf(raw) };
 }
 function currentRegisterSources(context) {
   const projectsRoot = catalogRootDir(context, "projects");
@@ -12161,6 +12183,24 @@ function readWorkflowView(db, store, workflowId) {
     integrationLease
   };
 }
+function terminalProjection(db, store, workflowId) {
+  const facts = db.prepare("select result_json from execution_operations where workflow_id = ? and epoch = ? and plan_id is null order by rowid desc").all(workflowId, store.epoch).map((row) => storedReceiptFacts(storedJsonObject(row.result_json, `execution_operations(${workflowId}).result_json`))).find((candidate) => candidate.actor_session_id !== undefined) ?? {};
+  const warning = holderLiveWarningOf(facts.holder_live_warning);
+  const plans = db.prepare("select plan_id, state_json from execution_plans where workflow_id = ? order by ordinal").all(workflowId).map((row) => {
+    const planId = storedText(row.plan_id, `execution_plans(${workflowId}).plan_id`);
+    const state = storedJsonObject(row.state_json, `execution_plans(${workflowId},${planId}).state_json`);
+    const validation = validatePlanRow(state);
+    if (!validation.ok)
+      throw validationRefusal(`execution_plans(${workflowId},${planId}).state_json`, validation.violations);
+    return { id: planId, file: state.file, status: state.status };
+  });
+  return {
+    ...facts.actor_session_id === undefined ? {} : { actor_session_id: facts.actor_session_id },
+    ...facts.reason === undefined ? {} : { reason: facts.reason },
+    ...warning === undefined ? {} : { warnings: [warning] },
+    ...plans.length === 0 ? {} : { plans }
+  };
+}
 function readExecutionGraph(db, store, meta) {
   const registry = db.prepare("select workflow_id, entry_json from execution_registry order by rowid").all();
   const entries = [];
@@ -12206,7 +12246,8 @@ function readExecutionGraph(db, store, meta) {
         id,
         status: state.status,
         revision,
-        token: executionToken("workflow", store.storeId, store.epoch, [id], revision)
+        token: executionToken("workflow", store.storeId, store.epoch, [id], revision),
+        ...terminalProjection(db, store, id)
       });
     }
   }
@@ -12602,14 +12643,27 @@ function readCommittedReceipt(recorded, tx, operationId, workflowId, token) {
   const storedRecovery = recovery;
   if (receipt.slim === true) {
     const live = readExecutionStateGraph(tx);
-    return { ...live, ...storedRecovery === undefined ? {} : { operationRecovery: storedRecovery } };
+    return { ...live, ...storedRecovery === undefined ? {} : { operationRecovery: storedRecovery }, ...storedReceiptFacts(receipt) };
   }
   return {
     data: receipt.data,
     token: recordedToken,
     storeId: receipt.storeId,
     epoch: receipt.epoch,
-    ...storedRecovery === undefined ? {} : { operationRecovery: storedRecovery }
+    ...storedRecovery === undefined ? {} : { operationRecovery: storedRecovery },
+    ...storedReceiptFacts(receipt)
+  };
+}
+function holderLiveWarningOf(value) {
+  return isPlainObject(value) && value.code === "recovery.holder-live" && isNonEmptyString(value.holder) && typeof value.epoch === "number" && value.observed_state === "active" && isNonEmptyString(value.attested_at) ? value : undefined;
+}
+function storedReceiptFacts(receipt) {
+  const recovery = isPlainObject(receipt.recovery) ? receipt.recovery : undefined;
+  const warning = holderLiveWarningOf(receipt.holder_live_warning) ?? holderLiveWarningOf(recovery?.holder_live_warning);
+  return {
+    ...typeof receipt.actor_session_id === "string" ? { actor_session_id: receipt.actor_session_id } : {},
+    ...typeof receipt.reason === "string" ? { reason: receipt.reason } : {},
+    ...warning === undefined ? {} : { holder_live_warning: warning }
   };
 }
 function assertWorkflowIdentityIsNew(db, workflowId) {
@@ -13082,6 +13136,25 @@ async function readPlanOperationReplayBeforeProof(context, read, input) {
     });
   });
 }
+async function readWorkflowOperationReplayBeforeProof(context, read, input) {
+  return withExecutionReadTransaction(context, (tx) => {
+    assertAuthorityGeneration(tx, {
+      referenceStoreId: read.referenceStoreId,
+      referenceEpoch: read.referenceEpoch,
+      target: { workflowId: read.workflowId }
+    });
+    resolveWorkflowSession(tx, read);
+    const replay = readOperationReplay(tx, {
+      ...input,
+      workflowId: read.workflowId,
+      planId: null,
+      token: { kind: "root", key: [] }
+    });
+    if (replay === null)
+      return null;
+    return { replay, storeId: tx.storeId, epoch: tx.epoch, revision: requireWorkflowState(tx, read.workflowId).revision };
+  });
+}
 function readOperationReplay(tx, input) {
   const recorded = readCommittedOperation(tx.db, tx.epoch, input.operationId);
   if (recorded === null)
@@ -13128,14 +13201,16 @@ function readOperationReplay(tx, input) {
 function writePlanOperationReceipt(tx, input) {
   writeOperationReceipt(tx, input);
 }
+function receiptFacts(receipt) {
+  return {
+    ...receipt.operationRecovery === undefined ? {} : { operationRecovery: receipt.operationRecovery },
+    ...receipt.actor_session_id === undefined ? {} : { actor_session_id: receipt.actor_session_id },
+    ...receipt.reason === undefined ? {} : { reason: receipt.reason },
+    ...receipt.holder_live_warning === undefined ? {} : { holder_live_warning: receipt.holder_live_warning }
+  };
+}
 function writeOperationReceipt(tx, input) {
-  tx.db.prepare("insert into execution_operations(epoch, operation_id, request_hash, store_id, workflow_id, plan_id, result_json, committed_at) " + "values (?, ?, ?, ?, ?, ?, ?, ?)").run(tx.epoch, input.operationId, input.requestHash, tx.storeId, input.workflowId, input.planId, JSON.stringify(input.slim === true ? {
-    slim: true,
-    token: input.receipt.token,
-    storeId: tx.storeId,
-    epoch: tx.epoch,
-    ...input.receipt.operationRecovery === undefined ? {} : { operationRecovery: input.receipt.operationRecovery }
-  } : input.receipt), input.now);
+  tx.db.prepare("insert into execution_operations(epoch, operation_id, request_hash, store_id, workflow_id, plan_id, result_json, committed_at) " + "values (?, ?, ?, ?, ?, ?, ?, ?)").run(tx.epoch, input.operationId, input.requestHash, tx.storeId, input.workflowId, input.planId, JSON.stringify(input.slim === true ? { slim: true, token: input.receipt.token, storeId: tx.storeId, epoch: tx.epoch, ...receiptFacts(input.receipt) } : input.receipt), input.now);
 }
 function pruneWorkflowOperationReceipts(tx, workflowId, keepOperationId) {
   tx.db.prepare("delete from execution_operations where workflow_id = ? and (epoch != ? or operation_id != ?)").run(workflowId, tx.epoch, keepOperationId);
@@ -14225,12 +14300,12 @@ function triageIssueOn(db, issueId, patch, mutation, composed, vocabularyValidat
   const existingOp = lookupOperation2(db, mutation.operationId);
   if (existingOp)
     return replayOrConflict(existingOp, hash);
-  const issue = db.prepare("select id, revision, kind, severity, impact, acceptance, owner from issues where id = ?").get(issueId);
+  const issue = db.prepare("select id, revision, kind, severity, title, impact, acceptance, owner from issues where id = ?").get(issueId);
   if (!issue)
     throw new IssueError("issue.not-found", `Issue ${issueId} does not exist`);
   requireExpectedRevision2(mutation, issue.revision);
   const at = nowRfc33392();
-  db.prepare("update issues set kind = ?, severity = ?, impact = ?, acceptance = ?, owner = ?, revision = ?, updated_at = ? where id = ?").run(patch.kind ?? issue.kind, patch.severity ?? issue.severity, patch.impact !== undefined ? requireNonblank2("impact", patch.impact) : issue.impact, patch.acceptance !== undefined ? requireNonblank2("acceptance", patch.acceptance) : issue.acceptance, patch.owner !== undefined ? patch.owner : issue.owner, issue.revision + 1, at, issueId);
+  db.prepare("update issues set kind = ?, severity = ?, title = ?, impact = ?, acceptance = ?, owner = ?, revision = ?, updated_at = ? where id = ?").run(patch.kind ?? issue.kind, patch.severity ?? issue.severity, patch.title !== undefined ? requireNonblank2("title", patch.title) : issue.title, patch.impact !== undefined ? requireNonblank2("impact", patch.impact) : issue.impact, patch.acceptance !== undefined ? requireNonblank2("acceptance", patch.acceptance) : issue.acceptance, patch.owner !== undefined ? patch.owner : issue.owner, issue.revision + 1, at, issueId);
   const storeRevision = receiptStoreRevision(db, composed);
   const receipt = { issueId, revision: issue.revision + 1, storeRevision, created: false };
   recordOperation(db, mutation.operationId, hash, receipt, at);
@@ -15560,21 +15635,28 @@ function planWorkflowSnapshot(workflowId, options, startedAt) {
 function normalizeIterationCompassRef(ref, harnessRoot, refuse) {
   const rootCanon = canonicalizeNearestExisting(harnessRoot);
   const prefix = rootCanon.endsWith("/") ? rootCanon : `${rootCanon}/`;
-  const contained = (candidate) => {
-    const canon = canonicalizeNearestExisting(candidate);
-    return canon === rootCanon || canon.startsWith(prefix);
-  };
   if (isAbsolute5(ref)) {
-    const canon = canonicalizeNearestExisting(resolve9(ref));
-    if (canon !== rootCanon && !canon.startsWith(prefix)) {
+    const canon2 = canonicalizeNearestExisting(resolve9(ref));
+    if (canon2 !== rootCanon && !canon2.startsWith(prefix)) {
       throw refuse(`options.compassRef resolves outside the harness root - the reviewed compass_ref must address a ` + `document inside ${harnessRoot}; store the harness-relative pointer of that compass instead`);
     }
-    return relative3(rootCanon, canon).split(sep6).join("/");
+    if (!existsSync11(canon2) || !statSync5(canon2).isFile()) {
+      throw refuse(reviewedCompassMissing(ref, harnessRoot));
+    }
+    return relative3(rootCanon, canon2).split(sep6).join("/");
   }
-  if (!contained(resolve9(harnessRoot, ref))) {
+  const canon = canonicalizeNearestExisting(resolve9(harnessRoot, ref));
+  if (canon !== rootCanon && !canon.startsWith(prefix)) {
     throw refuse(`options.compassRef escapes the harness root - the reviewed compass_ref must address a document inside ` + `${harnessRoot}; store the harness-relative pointer of that compass instead`);
   }
-  return ref;
+  if (!existsSync11(canon) || !statSync5(canon).isFile()) {
+    throw refuse(reviewedCompassMissing(ref, harnessRoot));
+  }
+  return relative3(rootCanon, canon).split(sep6).join("/");
+}
+function reviewedCompassMissing(ref, harnessRoot) {
+  const repoRelative = isAbsolute5(ref) ? undefined : /^(?:\.\/)?\.mstar\//.test(ref);
+  return `options.compassRef names no existing reviewed compass under ${harnessRoot}` + (repoRelative ? ` - the pointer ${JSON.stringify(ref)} is repository-relative, but a compass_ref is resolved against the ` + `harness root, so it would name a nested ".mstar/.mstar/..." document; drop the leading ".mstar/"` : "") + `; pass the compass document's absolute path inside the harness root, or its harness-relative pointer ` + `(e.g. iterations/<iteration-id>/delivery-compass.md)`;
 }
 function iterationWorkflowSnapshot(workflowId, options, startedAt) {
   const snapshot = {
@@ -15951,6 +16033,31 @@ function validateRequest(request) {
     delta: validateDelta(request.delta, validated.kind)
   };
 }
+function assertReviewedCompassDocument(workflowId, harnessDir, compassRef) {
+  const path2 = canonicalizeNearestExisting(join15(harnessDir, compassRef));
+  const invalid4 = (detail) => new CatalogRegistrationError("catalog.registration-invalid", detail);
+  let text4;
+  try {
+    text4 = readFileSync13(path2, "utf8");
+  } catch (error) {
+    throw invalid4(`options.compassRef could not be read as ${path2}: ${error instanceof Error ? error.message : String(error)}`);
+  }
+  if (text4.trim() === "")
+    throw invalid4(`options.compassRef names an empty document (${path2}); it must be the reviewed delivery compass`);
+  let doc;
+  try {
+    doc = parseCompassFrontmatter(path2);
+  } catch (error) {
+    throw invalid4(`options.compassRef names a document with no readable compass frontmatter (${path2}): ` + `${error instanceof Error ? error.message : String(error)}`);
+  }
+  const validation = validateCompassFrontmatter(doc);
+  if (!validation.ok) {
+    throw new CatalogRegistrationError("catalog.registration-invalid", `options.compassRef names an invalid compass (${path2}): ${validation.violations.map((entry) => entry.message).join("; ")}`);
+  }
+  if (doc.iteration_id !== workflowId) {
+    throw invalid4(`options.compassRef names the compass of iteration ${JSON.stringify(String(doc.iteration_id))}, not of workflow ` + `${workflowId} (${path2}); registration records this iteration's own reviewed delivery compass`);
+  }
+}
 function normalizeIterationWorkflow(workflow) {
   if (!isPlainObject(workflow) || workflow.kind !== "iteration")
     return workflow;
@@ -15977,6 +16084,9 @@ function normalizeIterationWorkflow(workflow) {
     changed = true;
     return { ...row, file: planPath };
   });
+  if (typeof workflow.workflowId === "string") {
+    assertReviewedCompassDocument(workflow.workflowId, harnessDir, normalizedCompassRef);
+  }
   if (!changed)
     return workflow;
   return {
@@ -16474,7 +16584,7 @@ function probeCheckout(worktreePath, opts) {
     const raw = stdout.trim();
     if (raw === "")
       return { error: `no git dir reported at "${worktreePath}"` };
-    const abs = isAbsolute7(raw) ? raw : join15(worktreePath, raw);
+    const abs = isAbsolute7(raw) ? raw : join16(worktreePath, raw);
     return { gitDir: realpathSync6(abs) };
   } catch (err) {
     const e = err;
@@ -16724,7 +16834,7 @@ function assertViolationFree(violations, what) {
   }
 }
 function snapshotPathOf(harnessRoot, workflowId) {
-  return join16(resolveWorkflowDir(harnessRoot, { harnessDir: harnessRoot }), workflowId, SNAPSHOT_FILE);
+  return join17(resolveWorkflowDir(harnessRoot, { harnessDir: harnessRoot }), workflowId, SNAPSHOT_FILE);
 }
 function isWithin(parent, child) {
   return child === parent || child.startsWith(parent.endsWith(sep8) ? parent : `${parent}${sep8}`);
@@ -16739,7 +16849,7 @@ function resolveProcessHarnessDir(cwd = process.cwd(), harnessDir) {
   for (let dir = start;; ) {
     let linked = false;
     try {
-      const marker = statSync5(join16(dir, ".git"));
+      const marker = statSync6(join17(dir, ".git"));
       if (marker.isDirectory())
         return resolveHarnessDir(start, { workspaceRoot: dir });
       linked = marker.isFile();
@@ -16752,7 +16862,7 @@ function resolveProcessHarnessDir(cwd = process.cwd(), harnessDir) {
       const envRoot = process.env.MSTAR_HARNESS_DIR;
       if (typeof envRoot === "string" && envRoot.trim() !== "")
         return resolveHarnessDir(start);
-      throw new CoordinationError("coordination.not-in-git", "The linked checkout's main worktree cannot be read. Run mstar status validate. Then inspect the main worktree at the control harness root.", { cwd: start, marker: join16(dir, ".git") });
+      throw new CoordinationError("coordination.not-in-git", "The linked checkout's main worktree cannot be read. Run mstar status validate. Then inspect the main worktree at the control harness root.", { cwd: start, marker: join17(dir, ".git") });
     }
     const parent = dirname9(dir);
     if (parent === dir)
@@ -16853,7 +16963,7 @@ function workflowIdsAt(root) {
   const dir = resolveWorkflowDir(root, { harnessDir: root });
   if (!existsSync13(dir))
     return [];
-  return readdirSync9(dir, { withFileTypes: true }).filter((entry) => entry.isDirectory() && existsSync13(join16(dir, entry.name, SNAPSHOT_FILE))).map((entry) => entry.name).sort();
+  return readdirSync9(dir, { withFileTypes: true }).filter((entry) => entry.isDirectory() && existsSync13(join17(dir, entry.name, SNAPSHOT_FILE))).map((entry) => entry.name).sort();
 }
 function unresolvedTarget(input) {
   return {
@@ -16938,7 +17048,7 @@ function readSnapshot(dir) {
   return readSnapshotWithPhase(dir).snapshot;
 }
 function readSnapshotWithPhase(dir) {
-  const snapshotPath = join16(dir, SNAPSHOT_FILE);
+  const snapshotPath = join17(dir, SNAPSHOT_FILE);
   if (!existsSync13(snapshotPath)) {
     throw new CoordinationError("coordination.workflow-not-found", "Workflow snapshot was not found. Inspect the harness with mstar status validate.", {
       path: snapshotPath
@@ -17184,21 +17294,21 @@ function gitCheckout(path2) {
   return { head, clean: dirty.length === 0, operation };
 }
 function gitDirectoryIdentity(path2) {
-  const stat = statSync5(path2);
+  const stat = statSync6(path2);
   return [Number(stat.dev), Number(stat.ino)];
 }
 function currentGitHead(gitDir, commonDir) {
-  const head = readFileSync13(join16(gitDir, "HEAD"), "utf8").trim();
+  const head = readFileSync14(join17(gitDir, "HEAD"), "utf8").trim();
   if (!head.startsWith("ref: "))
     return { head, ref: null };
   const ref = head.slice(5);
   for (const root of [gitDir, commonDir]) {
-    const path2 = join16(root, ref);
+    const path2 = join17(root, ref);
     if (existsSync13(path2))
-      return { head: readFileSync13(path2, "utf8").trim(), ref };
+      return { head: readFileSync14(path2, "utf8").trim(), ref };
   }
-  const packed = join16(commonDir, "packed-refs");
-  const entry = existsSync13(packed) ? readFileSync13(packed, "utf8").split(`
+  const packed = join17(commonDir, "packed-refs");
+  const entry = existsSync13(packed) ? readFileSync14(packed, "utf8").split(`
 `).find((line) => line.split(" ")[1] === ref) : undefined;
   return { head: entry?.split(" ")[0] ?? "", ref };
 }
@@ -17243,7 +17353,7 @@ function revalidateGitProofWitness(witness) {
     const gitIdentity = gitDirectoryIdentity(witness.gitDir);
     const commonIdentity = gitDirectoryIdentity(witness.commonDir);
     current = currentGitHead(witness.gitDir, witness.commonDir);
-    if (gitIdentity[0] === witness.gitIdentity[0] && gitIdentity[1] === witness.gitIdentity[1] && commonIdentity[0] === witness.commonIdentity[0] && commonIdentity[1] === witness.commonIdentity[1] && current.ref === witness.ref && current.head === witness.head && gitRead(witness.repository, ["--no-optional-locks", "status", "--porcelain"]) === "" && !UNFINISHED_GIT_OPERATIONS.some(([marker]) => existsSync13(join16(witness.gitDir, marker)) || existsSync13(join16(witness.commonDir, marker))))
+    if (gitIdentity[0] === witness.gitIdentity[0] && gitIdentity[1] === witness.gitIdentity[1] && commonIdentity[0] === witness.commonIdentity[0] && commonIdentity[1] === witness.commonIdentity[1] && current.ref === witness.ref && current.head === witness.head && gitRead(witness.repository, ["--no-optional-locks", "status", "--porcelain"]) === "" && !UNFINISHED_GIT_OPERATIONS.some(([marker]) => existsSync13(join17(witness.gitDir, marker)) || existsSync13(join17(witness.commonDir, marker))))
       return;
   } catch (error) {
     if (error instanceof CoordinationError)
@@ -17352,7 +17462,7 @@ function storeDbPath(context) {
   if (!context?.harnessDir)
     throw new StoreError("store.corrupt", "StoreContext.harnessDir is required");
   const root = resolve13(context.harnessDir);
-  return join17(resolveProcessHarnessDir(root, root) ?? root, "store.db");
+  return join18(resolveProcessHarnessDir(root, root) ?? root, "store.db");
 }
 function busyTimeoutMs(value = DEFAULT_BUSY_TIMEOUT_MS) {
   const floored = Math.floor(value);
@@ -17845,7 +17955,7 @@ function probeConnectionFor(dbPath) {
   let dev;
   let ino;
   try {
-    const stats = statSync6(dbPath);
+    const stats = statSync7(dbPath);
     dev = stats.dev;
     ino = stats.ino;
   } catch {
@@ -18062,7 +18172,7 @@ async function initializeStore(context, options = {}) {
   await loadSqliteDriver();
   if (existsSync14(dbPath))
     throw alreadyExists();
-  const stagingPath = join17(dirname10(dbPath), `.${basename8(dbPath)}.init-${process.pid}-${randomUUID5()}.tmp`);
+  const stagingPath = join18(dirname10(dbPath), `.${basename8(dbPath)}.init-${process.pid}-${randomUUID5()}.tmp`);
   let claim;
   try {
     claim = openSync(stagingPath, "wx");
@@ -18289,7 +18399,7 @@ function canonicalSource(sourcePath2) {
 function sourceBytes(sourcePath2) {
   const resolved = canonicalSource(sourcePath2);
   try {
-    const bytes = readFileSync14(resolved);
+    const bytes = readFileSync15(resolved);
     const content3 = new TextDecoder("utf-8", { fatal: true, ignoreBOM: true }).decode(bytes);
     return { content: content3, hash: sha2563(bytes), sourcePath: resolved };
   } catch (error) {
@@ -19454,14 +19564,14 @@ function collectActiveLifecycleBranches(snapshots) {
 }
 function isDirectory2(dir) {
   try {
-    return statSync7(dir).isDirectory();
+    return statSync8(dir).isDirectory();
   } catch {
     return false;
   }
 }
 function isFile2(file) {
   try {
-    return statSync7(file).isFile();
+    return statSync8(file).isFile();
   } catch {
     return false;
   }
@@ -19518,7 +19628,7 @@ function sddWorkspace(planId, opts = {}) {
 ` + `  Re-run with MSTAR_CONTROL_ROOT=${main.root}`, 1);
       }
       root = main.root;
-    } else if (isFile2(join18(supplied, ".git")) || gitOut(supplied, ["rev-parse", "--is-inside-work-tree"]) === "true") {
+    } else if (isFile2(join19(supplied, ".git")) || gitOut(supplied, ["rev-parse", "--is-inside-work-tree"]) === "true") {
       throw new SddScriptError(`mstar sdd workspace: cannot verify the main worktree for CONTROL_ROOT "${supplied}" (git worktree discovery failed).
 ` + `  Refusing to resolve or create any SDD tree without a verified main worktree.`, 1);
     } else {
@@ -19539,16 +19649,16 @@ function sddWorkspace(planId, opts = {}) {
     harnessDir = resolve14(root, harnessOverride);
   } else {
     const rc = findMstarc(root, root);
-    const rcHarnessDir = rc !== null ? parseMstarc(readFileSync15(rc, "utf8")).harnessDir : undefined;
+    const rcHarnessDir = rc !== null ? parseMstarc(readFileSync16(rc, "utf8")).harnessDir : undefined;
     if (rcHarnessDir) {
       harnessDir = resolve14(rc !== null ? dirname12(rc) : root, rcHarnessDir);
     } else {
-      if (isDirectory2(join18(root, ".mstar"))) {
-        harnessDir = join18(root, ".mstar");
-      } else if (isDirectory2(join18(root, ".agents"))) {
-        harnessDir = join18(root, ".agents");
+      if (isDirectory2(join19(root, ".mstar"))) {
+        harnessDir = join19(root, ".mstar");
+      } else if (isDirectory2(join19(root, ".agents"))) {
+        harnessDir = join19(root, ".agents");
       } else {
-        harnessDir = join18(root, ".mstar");
+        harnessDir = join19(root, ".mstar");
       }
     }
   }
@@ -19559,7 +19669,7 @@ function sddWorkspace(planId, opts = {}) {
   }
   const sddDir = resolveSddDir(harnessDir, planId);
   mkdirSync6(sddDir, { recursive: true });
-  writeFileSync4(join18(sddDir, ".gitignore"), `*
+  writeFileSync4(join19(sddDir, ".gitignore"), `*
 `);
   return realpathSync8(sddDir);
 }
@@ -19579,7 +19689,7 @@ function taskBrief(planFile, taskN, outFile, opts = {}) {
   }
   let content3;
   try {
-    content3 = readFileSync15(planFile, "utf8");
+    content3 = readFileSync16(planFile, "utf8");
   } catch {
     throw new SddScriptError(`no such plan file: ${planFile}`, 2);
   }
@@ -19588,14 +19698,14 @@ function taskBrief(planFile, taskN, outFile, opts = {}) {
   if (outFile) {
     out = bound ? resolve14(observedCwd, outFile) : outFile;
   } else if (bound) {
-    out = join18(bound.sddDir, `task-${taskN}-brief.md`);
+    out = join19(bound.sddDir, `task-${taskN}-brief.md`);
     mkdirAfterGate = bound.sddDir;
   } else {
     const sddDir = opts.sddDir ?? process.env.SDD_DIR;
     if (!sddDir) {
       throw new SddScriptError("mstar sdd task-brief: set SDD_DIR or pass OUTFILE (run mstar sdd workspace PLAN_ID first)", 2);
     }
-    out = join18(sddDir, `task-${taskN}-brief.md`);
+    out = join19(sddDir, `task-${taskN}-brief.md`);
   }
   if (bound) {
     const gate2 = checkSddAction(bound, { kind: "artifact", cwd: observedCwd, target: out });
@@ -19653,7 +19763,7 @@ function reviewPackage(base, head, outFile, opts = {}) {
   } else if (bound) {
     const shortBase = gitOut(cwd, ["rev-parse", "--short", base]) ?? base;
     const shortHead = gitOut(cwd, ["rev-parse", "--short", head]) ?? head;
-    out = join18(bound.sddDir, `review-${shortBase}..${shortHead}.diff`);
+    out = join19(bound.sddDir, `review-${shortBase}..${shortHead}.diff`);
     mkdirAfterGate = bound.sddDir;
   } else {
     const sddDir = opts.sddDir ?? process.env.SDD_DIR;
@@ -19663,7 +19773,7 @@ function reviewPackage(base, head, outFile, opts = {}) {
     mkdirSync6(sddDir, { recursive: true });
     const shortBase = gitOut(cwd, ["rev-parse", "--short", base]) ?? base;
     const shortHead = gitOut(cwd, ["rev-parse", "--short", head]) ?? head;
-    out = join18(sddDir, `review-${shortBase}..${shortHead}.diff`);
+    out = join19(sddDir, `review-${shortBase}..${shortHead}.diff`);
   }
   if (bound) {
     const gate2 = checkSddAction(bound, { kind: "artifact", cwd: observedCwd, target: out });
@@ -19711,7 +19821,7 @@ function assertBaseSha(ref, opts = {}) {
 }
 function taskReportExists(sddDir, taskN) {
   try {
-    const st = statSync7(join18(sddDir, `task-${taskN}-report.md`));
+    const st = statSync8(join19(sddDir, `task-${taskN}-report.md`));
     return st.isFile() && st.size > 0;
   } catch {
     return false;
@@ -19720,7 +19830,7 @@ function taskReportExists(sddDir, taskN) {
 function readProgressLedger(sddDir) {
   let content3;
   try {
-    content3 = readFileSync15(join18(sddDir, "progress.md"), "utf8");
+    content3 = readFileSync16(join19(sddDir, "progress.md"), "utf8");
   } catch {
     return [];
   }
@@ -19761,7 +19871,7 @@ function isInside(child, ancestor) {
 }
 function canonicalDir(path2) {
   try {
-    return statSync7(path2).isDirectory() ? realpathSync8(path2) : null;
+    return statSync8(path2).isDirectory() ? realpathSync8(path2) : null;
   } catch {
     return null;
   }
@@ -19780,7 +19890,7 @@ function throwUsage(message) {
 }
 function recordedMainWorktreeBranch(planFile) {
   try {
-    const text4 = readFileSync15(planFile, "utf8");
+    const text4 = readFileSync16(planFile, "utf8");
     const match = text4.match(/^\s*\*{0,2}Main worktree branch\*{0,2}\s*[:\uff1a][ \t]*(\S+)/m);
     return match ? match[1] : "";
   } catch {
@@ -20081,7 +20191,7 @@ function eventTargetPaths(input) {
 }
 function hasEntry(dir, name) {
   try {
-    statSync8(join19(dir, name));
+    statSync9(join20(dir, name));
     return true;
   } catch {
     return false;
@@ -20132,8 +20242,8 @@ function harnessDocKindOfTarget(targetPath) {
       workflowDir = resolveWorkflowDir(harnessDir2, { harnessDir: harnessDir2 });
       projectDir = resolveProjectDir(harnessDir2, { harnessDir: harnessDir2 });
     } catch {
-      workflowDir = join19(harnessDir2, "workflows");
-      projectDir = join19(harnessDir2, "projects");
+      workflowDir = join20(harnessDir2, "workflows");
+      projectDir = join20(harnessDir2, "projects");
     }
     if (name === SNAPSHOT_FILE2 && /^[^/]+\/snapshot\.json$/.test(relative6(workflowDir, resolved))) {
       return { harnessDir: harnessDir2, kind: "snapshot" };
@@ -20202,7 +20312,7 @@ function validateStatusWriteDoc(content3, filePath, kind, options = {}) {
   if (!existsSync15(filePath))
     return [];
   try {
-    if (statSync8(filePath).size > MAX_STATUS_CONTENT_LENGTH) {
+    if (statSync9(filePath).size > MAX_STATUS_CONTENT_LENGTH) {
       return oversized === "violate" ? [oversizedViolation(filePath)] : [];
     }
   } catch {
@@ -20327,7 +20437,7 @@ function compareIds(a, b) {
   return a < b ? -1 : a > b ? 1 : 0;
 }
 function scanCompasses(harnessDir, acknowledgedCompassSkips) {
-  const iterationsDir = join20(harnessDir, "iterations");
+  const iterationsDir = join21(harnessDir, "iterations");
   const out = [];
   const skipped = [];
   const refusals = [];
@@ -20341,7 +20451,7 @@ function scanCompasses(harnessDir, acknowledgedCompassSkips) {
   for (const entry of entries) {
     if (!entry.isDirectory())
       continue;
-    const compassPath = join20(iterationsDir, entry.name, "delivery-compass.md");
+    const compassPath = join21(iterationsDir, entry.name, "delivery-compass.md");
     let bytes;
     let info;
     try {
@@ -20368,7 +20478,7 @@ function scanCompasses(harnessDir, acknowledgedCompassSkips) {
         throw notRegular();
       if (opened.dev !== info.dev || opened.ino !== info.ino)
         throw notRegular();
-      bytes = readFileSync16(fd);
+      bytes = readFileSync17(fd);
     } catch (error) {
       if (error instanceof Error && error.message.startsWith("refusing to convert"))
         throw error;
@@ -20464,8 +20574,8 @@ function buildIterationSnapshot(compass, rowById, rootUpdatedAt) {
     id: compass.id,
     type: "iteration",
     status,
-    file: join20("workflows", compass.id, WORKFLOW_SNAPSHOT_FILE),
-    source: join20("iterations", compass.id, "delivery-compass.md"),
+    file: join21("workflows", compass.id, WORKFLOW_SNAPSHOT_FILE),
+    source: join21("iterations", compass.id, "delivery-compass.md"),
     data: snapshot
   };
 }
@@ -20536,7 +20646,7 @@ function buildStandaloneSnapshot(row, rootUpdatedAt, dispositions) {
     id,
     type: "plan",
     status,
-    file: join20("workflows", id, WORKFLOW_SNAPSHOT_FILE),
+    file: join21("workflows", id, WORKFLOW_SNAPSHOT_FILE),
     source: "status.json plans[] row",
     data: snapshot
   };
@@ -20584,7 +20694,7 @@ function applyRootMetadataLift(snapshot, metadata, dispositions, activeIteration
   }
 }
 function convertLegacyV1Tree(root, declarations = [], verifiedStatusBytes, acknowledgedCompassSkips = []) {
-  const statusPath = join20(root, MIGRATE_STATUS_FILE);
+  const statusPath = join21(root, MIGRATE_STATUS_FILE);
   const source = verifiedStatusBytes === undefined ? readArtifactBytes(statusPath) : { payload: JSON.parse(verifiedStatusBytes.toString("utf8")), version: artifactVersion(verifiedStatusBytes) };
   if (source === undefined) {
     throw new Error(`refusing to convert: no legacy ${MIGRATE_STATUS_FILE} at ${statusPath}; a workspace without a legacy root has nothing to import`);
@@ -21279,7 +21389,7 @@ function referenceExists(repoRoot, docText) {
           break;
         if (entry.isDirectory()) {
           if (!WALK_SKIP_DIRS.has(entry.name))
-            stack.push(join21(dir, entry.name));
+            stack.push(join22(dir, entry.name));
         } else if (!entry.isSymbolicLink()) {
           const base = entry.name.replace(/\.(?:ts|tsx|js|jsx|mjs|cjs)$/, "");
           if (moduleNames.has(base))
@@ -21308,7 +21418,7 @@ function assertIndexRows(knowledgeDir) {
   return {
     ok: false,
     violations: [
-      violation11("medium", "compound.index.retired", `${join21(knowledgeDir, "README.md")} is no longer a register — knowledge catalog completeness is a store.db query (state-projection contract §4)`, "call assertKnowledgeCatalogCompleteness(context), or run `mstar catalog discover` + `mstar catalog import`")
+      violation11("medium", "compound.index.retired", `${join22(knowledgeDir, "README.md")} is no longer a register — knowledge catalog completeness is a store.db query (state-projection contract §4)`, "call assertKnowledgeCatalogCompleteness(context), or run `mstar catalog discover` + `mstar catalog import`")
     ]
   };
 }
@@ -21317,9 +21427,9 @@ async function assertKnowledgeCatalogCompleteness(context) {
 }
 function compoundRefreshScope(harnessDir, projectRoot) {
   return [
-    join21(harnessDir, "knowledge"),
-    join21(harnessDir, "knowledge", "README.md"),
-    join21(projectRoot, "CONCEPTS.md")
+    join22(harnessDir, "knowledge"),
+    join22(harnessDir, "knowledge", "README.md"),
+    join22(projectRoot, "CONCEPTS.md")
   ];
 }
 function isFileLikeRoot(root) {
@@ -21644,8 +21754,8 @@ function validateRoleMapping(rolesDir, options = {}) {
   const violations = [];
   const referenceById = new Map(mapping.map((m) => [m.agentId, m.reference]));
   for (const { agentId, reference } of mapping) {
-    if (!existsSync17(join22(rolesDir, reference))) {
-      violations.push(violation13("medium", "roles.mapping.reference.missing", `role "${agentId}" maps to ${reference} which does not exist under ${rolesDir} (mstar-roles § Role Reference Mapping)`, `create ${join22(rolesDir, reference)} or fix the mapping row`));
+    if (!existsSync17(join23(rolesDir, reference))) {
+      violations.push(violation13("medium", "roles.mapping.reference.missing", `role "${agentId}" maps to ${reference} which does not exist under ${rolesDir} (mstar-roles § Role Reference Mapping)`, `create ${join23(rolesDir, reference)} or fix the mapping row`));
     }
   }
   for (const { family, memberIds } of families) {
@@ -21733,7 +21843,7 @@ function mergeLegacyArchiveReferences(skillTexts, referenceTexts) {
   };
 }
 function collectLegacyArchiveReferenceTexts(skillsRoot) {
-  const dir = join22(skillsRoot, LEGACY_ARCHIVE_SKILL, "references");
+  const dir = join23(skillsRoot, LEGACY_ARCHIVE_SKILL, "references");
   let names;
   try {
     names = readdirSync12(dir).filter((name) => name.endsWith(".md")).sort();
@@ -21743,7 +21853,7 @@ function collectLegacyArchiveReferenceTexts(skillsRoot) {
   const texts = [];
   for (const name of names) {
     try {
-      texts.push(readFileSync18(join22(dir, name), "utf8"));
+      texts.push(readFileSync19(join23(dir, name), "utf8"));
     } catch {}
   }
   return texts;
@@ -22246,7 +22356,7 @@ function nextReportName(runDir) {
   return maxRevision === 0 ? "report.md" : `report-r${maxRevision + 1}.md`;
 }
 function requireWritableEvidencePath(runDir, name) {
-  const target = join23(runDir, name);
+  const target = join24(runDir, name);
   let entry;
   try {
     entry = lstatSync9(target);
@@ -22275,7 +22385,7 @@ function prReviewReportPath(opts) {
   const runDir = resolveReviewRunDir({ reviewsDir: opts.reviewsDir, date, spec: opts.target });
   if (hasStage)
     return requireWritableEvidencePath(runDir, `stage${opts.stage}-${requireSafeComponent(opts.slug ?? "", "slug")}.md`);
-  return join23(runDir, nextReportName(runDir));
+  return join24(runDir, nextReportName(runDir));
 }
 function violation15(severity, code2, message, fix) {
   return { ok: false, severity, code: code2, message, fix };
@@ -22590,7 +22700,7 @@ function prReviewSeatPrompt(opts) {
   lines.push("");
   lines.push("## Read first");
   lines.push("");
-  const prReviewRef = join23(skillRoot, "references", "pr-review.md");
+  const prReviewRef = join24(skillRoot, "references", "pr-review.md");
   const sections = opts.stage === 1 ? tier === "quick" ? "Scoping, Evidence rules" : "Review pipeline, Worktree isolation, Scoping, Evidence rules" : "Scoping, Concern lenses, Merge class, Attack and vet, Evidence rules, Sizing & change shape";
   lines.push(`1. \`${prReviewRef}\` — read at least these sections: ${sections}.`);
   lines.push(`2. The review worktree: \`${worktreePath}\` — your ONLY working directory this session; read-only (no edits, no fixes, no stash, no commits, no posts).`);
@@ -22598,11 +22708,11 @@ function prReviewSeatPrompt(opts) {
     lines.push(`- Read the pinned diff snapshot FIRST: \`${opts.diffFile}\` — it is the review's diff basis (already computed at setup); read it before opening files.`);
   }
   if (opts.stage === 2) {
-    lines.push(`3. \`${join23(skillRoot, "SKILL.md")}\` — read \`## Hard Rules (Read-Only)\`, \`### Phase 1 — Recon (always)\`, and \`### Phase 2 — Audit (per variant)\` only for the scoped shared investigation boundaries. Do not run the root workflow, start a recon survey, or decline the assigned review.`);
-    lines.push(`4. \`${join23(skillRoot, "references", "audit-playbook.md")}\` — read \`## 1. Correctness / Bugs\`, \`## 4. Test Coverage\`, \`## 5. Tech Debt & Architecture\`, and \`## Finding format\` for relevant investigation lenses and the shared evidence/reporting contract.`);
-    lines.push(`5. \`${join23(skillRoot, "references", "finding-format.md")}\` — the template every finding follows.`);
+    lines.push(`3. \`${join24(skillRoot, "SKILL.md")}\` — read \`## Hard Rules (Read-Only)\`, \`### Phase 1 — Recon (always)\`, and \`### Phase 2 — Audit (per variant)\` only for the scoped shared investigation boundaries. Do not run the root workflow, start a recon survey, or decline the assigned review.`);
+    lines.push(`4. \`${join24(skillRoot, "references", "audit-playbook.md")}\` — read \`## 1. Correctness / Bugs\`, \`## 4. Test Coverage\`, \`## 5. Tech Debt & Architecture\`, and \`## Finding format\` for relevant investigation lenses and the shared evidence/reporting contract.`);
+    lines.push(`5. \`${join24(skillRoot, "references", "finding-format.md")}\` — the template every finding follows.`);
     if (opts.securitySeat === true) {
-      lines.push(`6. \`${join23(skillRoot, "references", "security-review.md")}\` — the security lens.`);
+      lines.push(`6. \`${join24(skillRoot, "references", "security-review.md")}\` — the security lens.`);
     }
   }
   const budget = PR_REVIEW_TIER_BUDGETS[tier];
@@ -22958,7 +23068,7 @@ function validateQcReport(text4) {
   return { ok: violations.length === 0, violations };
 }
 function legacyStatusDocPath(harnessRoot) {
-  return join24(harnessRoot, "status.json");
+  return join25(harnessRoot, "status.json");
 }
 function assertKindAdmitted(kind) {
   if (kind === "residuals") {
@@ -22982,9 +23092,9 @@ function resolveArtifactPath(harnessRoot, ref) {
   }
   assertSafePathComponent(key, "ArtifactStore key");
   if (PLAN_SHAPED_KEY_RE.test(key)) {
-    return join24(harnessRoot, "sdd", key, "review", "report.json");
+    return join25(harnessRoot, "sdd", key, "review", "report.json");
   }
-  return join24(harnessRoot, "sdd", "_reviews", `${key}.json`);
+  return join25(harnessRoot, "sdd", "_reviews", `${key}.json`);
 }
 function listDirNames(dir) {
   return readDirEntries(dir).filter((entry) => entry.isDirectory()).map((entry) => entry.name);
@@ -23070,8 +23180,8 @@ function createFsStore(harnessRoot) {
       }
       resolveArtifactPath(root, { kind, key: "root" });
       const keys = [];
-      const sddDir = join24(root, "sdd");
-      for (const key of listJsonKeys(join24(sddDir, "_reviews"))) {
+      const sddDir = join25(root, "sdd");
+      for (const key of listJsonKeys(join25(sddDir, "_reviews"))) {
         if (!PLAN_SHAPED_KEY_RE.test(key) && tryResolveGetPath(root, kind, key) !== undefined) {
           keys.push(key);
         }
@@ -23169,7 +23279,7 @@ function readSessionEnvelope(sessionPath) {
   }
   let parsed;
   try {
-    parsed = JSON.parse(readFileSync19(abs, "utf8"));
+    parsed = JSON.parse(readFileSync20(abs, "utf8"));
   } catch (error) {
     throw new CoordinationError("coordination.store", "Session envelope is not valid JSON. Inspect the harness authority with mstar status validate.", {
       path: abs,
@@ -23673,7 +23783,7 @@ function readBytes(path2) {
   try {
     if (!fstatSync3(fd).isFile())
       throw new Error(`not a regular file: ${path2}`);
-    return readFileSync20(fd);
+    return readFileSync21(fd);
   } finally {
     closeSync3(fd);
   }
@@ -23682,7 +23792,7 @@ function readInside(parent, child) {
   const st = lstatSync10(parent);
   if (st.isSymbolicLink() || !st.isDirectory())
     throw new Error(`unsafe ancestor directory: ${parent}`);
-  return readBytes(join26(parent, child));
+  return readBytes(join27(parent, child));
 }
 function evaluate(context, now2) {
   const root = dirname15(storeDbPath(context));
@@ -23690,7 +23800,7 @@ function evaluate(context, now2) {
   const workflows = [];
   const findings = [];
   const refusals = [];
-  const dirs = join26(root, "workflows");
+  const dirs = join27(root, "workflows");
   try {
     const rootInfo = lstatSync10(dirs);
     if (rootInfo.isSymbolicLink())
@@ -23706,7 +23816,7 @@ function evaluate(context, now2) {
       findings.push({ source: "workflows", kind: "ignored" });
     else
       for (const entry of readdirSync15(dirs, { withFileTypes: true })) {
-        const dir = join26(dirs, entry.name), source = `workflows/${entry.name}`;
+        const dir = join27(dirs, entry.name), source = `workflows/${entry.name}`;
         if (entry.isSymbolicLink()) {
           refusals.push({
             selector: `dsh-ledger:${entry.name}`,
@@ -23727,7 +23837,7 @@ function evaluate(context, now2) {
         const unreadable = new Set;
         for (const name of names) {
           try {
-            const b = readBytes(join26(dir, name));
+            const b = readBytes(join27(dir, name));
             present[name] = b;
             allFiles.push([`${source}/${name}`, hash(b)]);
           } catch (e) {
@@ -23772,7 +23882,7 @@ function evaluate(context, now2) {
         }
         const historyIdentities = new Map;
         let historySafe = true;
-        const historyDir = join26(dir, HISTORY);
+        const historyDir = join27(dir, HISTORY);
         let historyEnumerated = false;
         try {
           const hs = lstatSync10(historyDir);
@@ -23782,7 +23892,7 @@ function evaluate(context, now2) {
           }
           historyEnumerated = true;
           for (const h of readdirSync15(historyDir).filter((n) => n.startsWith("chunk-") && n.endsWith(".jsonl")).sort()) {
-            const b = readBytes(join26(historyDir, h));
+            const b = readBytes(join27(historyDir, h));
             allFiles.push([`${source}/${HISTORY}/${h}`, hash(b)]);
             for (const line of b.toString("utf8").split(`
 `))
@@ -23911,7 +24021,7 @@ function evaluate(context, now2) {
               if (!historySafe)
                 tailRefusal = "the journal's archive proof is unavailable because the retained history directory is not a safe source";
               else {
-                const archived = readBytes(join26(historyDir, archive.chunk));
+                const archived = readBytes(join27(historyDir, archive.chunk));
                 allFiles.push([`${source}/${HISTORY}/${archive.chunk}`, hash(archived)]);
                 const range = archived.subarray(archive.offset, archive.offset + archive.bytes);
                 if (archived.length === archive.offset + archive.bytes && hash(range) === archive.sha256)
@@ -24002,7 +24112,7 @@ function evaluate(context, now2) {
   }
   const bindings = [];
   const emissions = [];
-  const snapshotsDir = join26(root, SNAPSHOTS);
+  const snapshotsDir = join27(root, SNAPSHOTS);
   try {
     const b = readInside(snapshotsDir, STATUS);
     allFiles.push([`${SNAPSHOTS}/${STATUS}`, hash(b)]);
@@ -24187,7 +24297,7 @@ function provenReplayIds(db, sourceDigest, inputDigest, carriesInput) {
   return { proven, inputUnproven };
 }
 function assertWorkflowTreeIsReal(root, acknowledgedSkips, registeredExecution, acknowledgedWorkflowSkips) {
-  const workflowsDir = join27(root, "workflows");
+  const workflowsDir = join28(root, "workflows");
   const workflowsPrefix = workflowsDir.endsWith(sep11) ? workflowsDir : `${workflowsDir}${sep11}`;
   const registeredUnderRoot = registeredExecution.filter(({ dir }) => dir !== workflowsDir && dir.startsWith(workflowsPrefix));
   let info;
@@ -24210,7 +24320,7 @@ function assertWorkflowTreeIsReal(root, acknowledgedSkips, registeredExecution, 
     for (const dirent of readdirSync16(workflowsDir, { withFileTypes: true })) {
       if (!dirent.isSymbolicLink())
         continue;
-      const path2 = join27(workflowsDir, dirent.name);
+      const path2 = join28(workflowsDir, dirent.name);
       if (registeredExecution.some((entry) => entry.dir === path2))
         continue;
       if (acknowledgedSkips.includes(`dsh-ledger:${dirent.name}`))
@@ -24266,7 +24376,7 @@ function readSourceBytes(path2, label) {
     if (!opened.isFile() || opened.dev !== info.dev || opened.ino !== info.ino) {
       throw new UnsafeSourceError(`${label} at ${path2} was replaced, is not a regular file, or is no longer the verified bytes.`);
     }
-    return readFileSync21(fd);
+    return readFileSync22(fd);
   } catch (error) {
     if (error instanceof UnsafeSourceError)
       throw error;
@@ -24287,7 +24397,7 @@ function readRegularJson(path2, label, read = readSourceBytes) {
   }
 }
 function verifyBinding(value, source, read = readSourceBytes) {
-  const sessionsDir = join27(source.dir, "sessions");
+  const sessionsDir = join28(source.dir, "sessions");
   const path2 = resolve20(value.session_file);
   if (!isPathWithin(canonicalPath(sessionsDir), path2) || path2 === canonicalPath(sessionsDir)) {
     throw new UnsafeSourceError(`coordinator binding ${value.session_id} points outside ${sessionsDir}; move its envelope into that workflow's sessions directory or remove the binding.`);
@@ -24365,17 +24475,17 @@ function discoverV1(root, legacy, operator, verifiedStatusBytes, acknowledgedWor
         id: converted.id,
         type: converted.type,
         started_at: snapshot.started_at,
-        dir: join27("workflows", converted.id)
+        dir: join28("workflows", converted.id)
       };
       const registered = converted.status === "running" || converted.status === "paused";
       if (registered)
         entries.push(entry);
-      rows.push({ entry: registered ? entry : null, id: converted.id, dir: join27(root, "workflows", converted.id), snapshot, coordinator: null, plans });
+      rows.push({ entry: registered ? entry : null, id: converted.id, dir: join28(root, "workflows", converted.id), snapshot, coordinator: null, plans });
     } catch (error) {
       if (!(error instanceof UnsafeSourceError))
         throw error;
       refusedSourceIds.add(converted.id);
-      const path2 = join27("workflows", converted.id).split(/[\\/]+/).join("/");
+      const path2 = join28("workflows", converted.id).split(/[\\/]+/).join("/");
       if (acknowledgedWorkflowSkips.has(converted.id)) {
         skipped.push({ path: path2, reason: `workflow ${converted.id} skipped by --ack-skip-workflow; its converted legacy row could not be imported and no execution row was registered for it` });
         skippedWorkflowAcknowledgements.push({ id: converted.id, path: path2 });
@@ -24393,7 +24503,7 @@ function discoverV1(root, legacy, operator, verifiedStatusBytes, acknowledgedWor
 }
 function discover(context, operator, acknowledgedSkips, acknowledgedWorkflowSkips, declarations, acknowledgedCompassSkips) {
   const root = rootOf(context);
-  const statusPath = join27(root, "status.json");
+  const statusPath = join28(root, "status.json");
   const skipped = [];
   const sourceHashes = new Map;
   const relOf = (path2) => relative9(root, path2).split(/[\\/]+/).join("/");
@@ -24418,7 +24528,7 @@ function discover(context, operator, acknowledgedSkips, acknowledgedWorkflowSkip
     }
   }
   const entries = isPlainObject(parsed) && Array.isArray(parsed.workflows) ? parsed.workflows : null;
-  const registeredExecution = (entries ?? []).flatMap((entry) => isPlainObject(entry) && typeof entry.dir === "string" && typeof entry.id === "string" ? [{ id: entry.id, dir: join27(root, entry.dir) }] : []);
+  const registeredExecution = (entries ?? []).flatMap((entry) => isPlainObject(entry) && typeof entry.dir === "string" && typeof entry.id === "string" ? [{ id: entry.id, dir: join28(root, entry.dir) }] : []);
   const skippableRegistered = isPlainObject(parsed) && parsed.version === 1 ? [] : registeredExecution;
   const tree = assertWorkflowTreeIsReal(root, acknowledgedSkips, skippableRegistered, acknowledgedWorkflowSkips);
   const isRealWorkflowTree = tree.enumerable;
@@ -24448,7 +24558,7 @@ function discover(context, operator, acknowledgedSkips, acknowledgedWorkflowSkip
   const safeEntries = [];
   for (const entry of entries ?? []) {
     if (isPlainObject(entry) && typeof entry.id === "string" && typeof entry.dir === "string") {
-      const dir = join27(root, entry.dir);
+      const dir = join28(root, entry.dir);
       const prefix = root.endsWith(sep11) ? root : `${root}${sep11}`;
       if (!dir.startsWith(prefix) || dir === root)
         conflict2(`workflow ${entry.id} records dir ${JSON.stringify(entry.dir)} outside control root ${root}; correct or remove that status.json entry, then rerun store upgrade.`);
@@ -24459,13 +24569,13 @@ function discover(context, operator, acknowledgedSkips, acknowledgedWorkflowSkip
       skipped.push({ path: `status.json#${entry.id}`, reason: "unrecognizable workflow entry; left in place" });
   }
   const registeredIds = new Set(safeEntries.flatMap((entry) => isPlainObject(entry) && typeof entry.id === "string" ? [entry.id] : []));
-  const workflowsDir = join27(root, "workflows");
+  const workflowsDir = join28(root, "workflows");
   if (isRealWorkflowTree) {
     for (const dirent of readdirSync16(workflowsDir, { withFileTypes: true })) {
-      const dir = join27(workflowsDir, dirent.name);
+      const dir = join28(workflowsDir, dirent.name);
       if (!dirent.isDirectory() || registeredIds.has(dirent.name))
         continue;
-      const snapshotPath = join27(dir, WORKFLOW_SNAPSHOT_FILE);
+      const snapshotPath = join28(dir, WORKFLOW_SNAPSHOT_FILE);
       if (!existsSync20(snapshotPath))
         continue;
       const snapshotValue = readRegularJson(snapshotPath, `unregistered snapshot at ${snapshotPath}`, readTracked);
@@ -24501,7 +24611,7 @@ function discover(context, operator, acknowledgedSkips, acknowledgedWorkflowSkip
     if (seen.has(entry.id))
       conflict2(`status.json lists workflow ${entry.id} more than once; remove the duplicate registration and rerun store upgrade.`);
     seen.add(entry.id);
-    const dir = join27(root, entry.dir);
+    const dir = join28(root, entry.dir);
     const refusedRegistered = tree.refusedRegisteredIds.has(entry.id);
     if (refusedRegistered && acknowledgedWorkflowSkips.has(entry.id)) {
       const path2 = relative9(root, dir).split(/[\\/]+/).join("/");
@@ -24528,8 +24638,8 @@ function discover(context, operator, acknowledgedSkips, acknowledgedWorkflowSkip
     try {
       if (!isPathWithin(root, dir) || dir === root)
         throw new UnsafeSourceError(`workflow ${entry.id} directory ${dir} resolves outside control root ${root}; replace it with a real in-root directory or remove its registration.`);
-      const sessionsDir = join27(dir, "sessions");
-      const snapshotPath = join27(dir, WORKFLOW_SNAPSHOT_FILE);
+      const sessionsDir = join28(dir, "sessions");
+      const snapshotPath = join28(dir, WORKFLOW_SNAPSHOT_FILE);
       if (info === null || !existsSync20(snapshotPath)) {
         skipped.push({ path: relative9(root, snapshotPath).split(/[\\/]+/).join("/"), reason: "registered workflow snapshot is missing; left in place" });
         continue;
@@ -24551,7 +24661,7 @@ function discover(context, operator, acknowledgedSkips, acknowledgedWorkflowSkip
         if (sessionsInfo.isSymbolicLink() || !sessionsInfo.isDirectory())
           throw new UnsafeSourceError(`workflow ${entry.id} sessions path is not a real directory.`);
         for (const sessionEntry of readdirSync16(sessionsDir, { withFileTypes: true })) {
-          const sessionPath = join27(sessionsDir, sessionEntry.name);
+          const sessionPath = join28(sessionsDir, sessionEntry.name);
           if (!sessionEntry.isFile() || sessionEntry.isSymbolicLink()) {
             skipped.push({ path: relative9(root, sessionPath).split(/[\\/]+/).join("/"), reason: "unrecognized session entry; left in place" });
             continue;
@@ -24610,7 +24720,7 @@ function discover(context, operator, acknowledgedSkips, acknowledgedWorkflowSkip
       for (const dirent of readdirSync16(dir, { withFileTypes: true })) {
         if (dirent.name === WORKFLOW_SNAPSHOT_FILE || dirent.name === "sessions")
           continue;
-        const path2 = join27(dir, dirent.name);
+        const path2 = join28(dir, dirent.name);
         if (dirent.isSymbolicLink())
           throw new UnsafeSourceError(`workflow entry ${path2} is a symlink.`);
         if (dirent.isFile()) {
@@ -25006,7 +25116,7 @@ function queryMilestones(projectId, milestoneId) {
 function readCompassSource(spec) {
   let content3;
   try {
-    content3 = readFileSync22(spec.absolutePath, "utf8");
+    content3 = readFileSync23(spec.absolutePath, "utf8");
   } catch (error) {
     const code2 = error.code ?? "";
     if (code2 === "ENOENT" || code2 === "ENOTDIR") {
@@ -25340,7 +25450,7 @@ async function captureExecutionProjectionSources(context) {
       rows.plans.push({ workflowId: row.workflow_id, planId, status: text4(authorityPlanView.plan.status), progress: text4(progressSummary), phase: workflowPhases.get(row.workflow_id) ?? null, doneAt: text4(authorityPlanView.plan.done_at), catalogPinRevision: typeof pinRevision === "number" ? pinRevision : null });
     }
     for (const doc of inputs.compassDocs) {
-      const fspec = { sourceKey: sourceKeyOf2("compass", doc.rootKind, doc.relativePath), kind: "compass", rootKind: doc.rootKind, relativePath: doc.relativePath, absolutePath: join28(catalogRootDir(context, doc.rootKind), doc.relativePath), declared: true };
+      const fspec = { sourceKey: sourceKeyOf2("compass", doc.rootKind, doc.relativePath), kind: "compass", rootKind: doc.rootKind, relativePath: doc.relativePath, absolutePath: join29(catalogRootDir(context, doc.rootKind), doc.relativePath), declared: true };
       const read = readCompassSource(fspec);
       if (read.state !== "ok" || read.content === null) {
         sources.push({ sourceKey: fspec.sourceKey, kind: "compass", rootKind: fspec.rootKind, relativePath: fspec.relativePath, sha256: read.sha256, state: read.state, diagnostic: read.diagnostic, declared: true });
@@ -27406,6 +27516,16 @@ function assertWorkflowOperationShape(operation) {
       }
       return;
     }
+    case "compass-ref": {
+      assertExactKeys(op, ["kind", "compassPath", "reason"], "a compass-ref operation");
+      if (!isNonEmptyString(op.compassPath)) {
+        throw invalidWorkflowInput("a compass-ref operation needs the reviewed delivery compass as an absolute path inside the harness root or as a harness-relative pointer; retry through mstar workflow compass-ref");
+      }
+      if (!isNonEmptyString(op.reason)) {
+        throw invalidWorkflowInput("Invalid compass-ref operation: provide a non-empty reason; retry through mstar workflow compass-ref.");
+      }
+      return;
+    }
     default:
       throw new CoordinationError("coordination.unknown-operation", "Unknown workflow operation kind; inspect the operation contract with mstar schema.", {
         operation: op.kind
@@ -27441,6 +27561,8 @@ function workflowOperationField(operation) {
       return "operation.delivery";
     case "delivery-anchors":
       return "operation.branch";
+    case "compass-ref":
+      return "operation.compassPath";
   }
 }
 function storedOperationValue(state, operation) {
@@ -27457,6 +27579,8 @@ function storedOperationValue(state, operation) {
       return state.delivery;
     case "delivery-anchors":
       return state.branch;
+    case "compass-ref":
+      return state.compass_ref;
   }
 }
 function requestedOperationValue(operation) {
@@ -27473,6 +27597,8 @@ function requestedOperationValue(operation) {
       return operation.delivery;
     case "delivery-anchors":
       return operation.branch;
+    case "compass-ref":
+      return operation.compassPath;
   }
 }
 function workflowOperationRequestHash(caller, workflowId, operation) {
@@ -27492,6 +27618,30 @@ function workflowRecovery(input) {
     resolvedFrom: [...input.resolvedFrom ?? []],
     warnings: [...input.warnings ?? []],
     commitState: input.commitState
+  };
+}
+function workflowTokenDriftWarnings(workflowId, freshness) {
+  if (freshness.current)
+    return [];
+  return [
+    {
+      code: "execution.token-drifted",
+      path: "expected",
+      message: `the token carries revision ${freshness.readRevision} while workflow ${workflowId} is at revision ${freshness.currentRevision}: the revision is transport freshness, so the intent was recomputed against the current state instead of being refused`
+    }
+  ];
+}
+function replayedWorkflowReceipt(replayed, input) {
+  return {
+    ...replayed,
+    recovery: workflowRecovery({
+      workflowId: input.workflowId,
+      outcome: "already-satisfied",
+      applied: [],
+      commitState: "committed",
+      resolvedFrom: [{ path: "operationId", source: "execution_operations receipt" }],
+      warnings: [...input.warnings, { code: "execution.receipt-replayed", message: "the recorded receipt of this operation id is served; nothing was written." }]
+    })
   };
 }
 function describeValue(value) {
@@ -27522,7 +27672,7 @@ async function readPhaseEvidence(context, workflowId, operation) {
   }
   const harnessRoot = controlHarnessRoot2(context);
   const canonical2 = canonicalTarget(operation.compassPath);
-  const expected = canonicalTarget(join29(harnessRoot, registered));
+  const expected = canonicalTarget(join30(harnessRoot, registered));
   if (canonical2 !== expected) {
     throw new CoordinationError("coordination.scope-mismatch", "Phase transition must use the workflow's registered compass; inspect the workflow with mstar status validate.", { workflow_id: workflowId, expected, actual: canonical2 });
   }
@@ -27532,7 +27682,7 @@ async function readPhaseEvidence(context, workflowId, operation) {
       compass_path: canonical2
     });
   }
-  const text6 = readFileSync23(canonical2, "utf8");
+  const text6 = readFileSync24(canonical2, "utf8");
   const doc = parseCompassFrontmatterText(text6, canonical2);
   const validation = validateCompassFrontmatter(doc);
   if (!validation.ok) {
@@ -27574,7 +27724,7 @@ async function readIntegrationWorktreeEvidence(context, workflowId, operation) {
   if (path2 === mainRoot || path2 === canonicalTarget(control)) {
     throw invalidWorkflowTransition("The integration checkout is the control checkout; provide a dedicated worktree, then retry through mstar workflow integration-worktree.", { workflow_id: workflowId, path: path2, expected: `a checkout distinct from ${mainRoot}` });
   }
-  if (!existsSync21(path2) || !statSync9(path2).isDirectory()) {
+  if (!existsSync21(path2) || !statSync10(path2).isDirectory()) {
     throw invalidWorkflowTransition("The integration checkout does not exist; provide an existing checkout path, then retry through mstar workflow integration-worktree.", { workflow_id: workflowId, path: path2 });
   }
   const owner = readMainWorktree(path2);
@@ -27603,6 +27753,43 @@ async function readIntegrationWorktreeEvidence(context, workflowId, operation) {
   }
   return { worktree: { path: path2, branch: integrationBranch } };
 }
+async function readCompassRefEvidence(context, workflowId, operation) {
+  const header = await readWorkflowHeaderBefore(context, workflowId);
+  if (header.type !== "iteration") {
+    throw invalidWorkflowTransition(`workflow ${workflowId} records type ${JSON.stringify(header.type)}, which carries no reviewed delivery compass; a compass_ref is repaired only on an iteration workflow`, { workflow_id: workflowId, type: header.type });
+  }
+  const harnessRoot = controlHarnessRoot2(context);
+  const relative102 = normalizeIterationCompassRef(operation.compassPath, harnessRoot, (detail) => invalidWorkflowInput(detail));
+  const path2 = canonicalizeNearestExisting(isAbsolute16(operation.compassPath) ? operation.compassPath : join30(harnessRoot, operation.compassPath));
+  const text6 = readFileSync24(path2, "utf8");
+  if (text6.trim() === "") {
+    throw invalidWorkflowTransition("The named compass document is empty; name the reviewed delivery compass, then retry through mstar workflow compass-ref.", {
+      workflow_id: workflowId,
+      compass_path: path2
+    });
+  }
+  let doc;
+  try {
+    doc = parseCompassFrontmatterText(text6, path2);
+  } catch (error) {
+    throw invalidWorkflowTransition("The named compass document is not a readable compass frontmatter; correct the document, then retry through mstar workflow compass-ref.", {
+      workflow_id: workflowId,
+      compass_path: path2,
+      reason: error instanceof Error ? error.message : String(error)
+    });
+  }
+  const validation = validateCompassFrontmatter(doc);
+  if (!validation.ok) {
+    throw invalidWorkflowInput("The named compass is invalid; correct its validation findings, then retry through mstar workflow compass-ref.", {
+      compass_path: path2,
+      violations: validation.violations
+    });
+  }
+  if (doc.iteration_id !== workflowId) {
+    throw new CoordinationError("coordination.scope-mismatch", "the named compass belongs to a different iteration than the addressed workflow; name this workflow's own reviewed delivery compass, then retry through mstar workflow compass-ref.", { workflow_id: workflowId, compass_path: path2, compass_iteration_id: String(doc.iteration_id) });
+  }
+  return { compassRef: { path: path2, relative: relative102 } };
+}
 async function readWorkflowEvidence(context, resolved) {
   const operation = resolved.call.operation;
   const workflowId = resolved.read.workflowId;
@@ -27611,6 +27798,8 @@ async function readWorkflowEvidence(context, resolved) {
       return readPhaseEvidence(context, workflowId, operation);
     case "integration-worktree":
       return readIntegrationWorktreeEvidence(context, workflowId, operation);
+    case "compass-ref":
+      return readCompassRefEvidence(context, workflowId, operation);
     case "lifecycle":
       return {};
     default:
@@ -27618,10 +27807,14 @@ async function readWorkflowEvidence(context, resolved) {
   }
 }
 function revalidateWorkflowEvidence(evidence) {
+  const compassRef = evidence.compassRef;
+  if (compassRef !== undefined && (!existsSync21(compassRef.path) || !statSync10(compassRef.path).isFile())) {
+    throw invalidWorkflowTransition(`the named compass ${compassRef.path} disappeared after it was validated; restore the reviewed delivery compass and retry the workflow transition`, { path: compassRef.path });
+  }
   const checkout = evidence.worktree ?? evidence.checkout;
   if (checkout !== undefined && checkout.branch !== null) {
     const { path: path2, branch } = checkout;
-    if (!existsSync21(path2) || !statSync9(path2).isDirectory()) {
+    if (!existsSync21(path2) || !statSync10(path2).isDirectory()) {
       throw new CoordinationError("coordination.integration-unresolved", `the integration checkout ${path2} disappeared after it was validated; restore the checkout at the registered path and retry the workflow transition`, { path: path2 });
     }
     const alignment = assertBranchAlignment(path2, branch);
@@ -27654,17 +27847,17 @@ function prerequisiteCause(error, input) {
   if (declared !== undefined) {
     return withRecoveryDetails(error, { workflow_id: input.workflowId, stage: input.stage, commit_state: "none" });
   }
-  const readsCompassFacts = input.operation.kind === "phase" || input.operation.kind === "integration-worktree";
+  const prerequisiteRead = input.operation.kind === "phase" || input.operation.kind === "integration-worktree" ? "the lifecycle's registered compass and the Git probes its checkouts answer" : input.operation.kind === "compass-ref" ? "the reviewed delivery compass document this repair names" : "the recorded completion evidence of the rows this transition composes (and the Git proof a completion needs)";
   const problem = {
     component: "operation-prerequisite",
     path: workflowOperationField(input.operation),
     code: code2 ?? "execution.prerequisite-unavailable",
     sourcesTried: [
       `the workflow ${input.workflowId} header and rows this store owns`,
-      readsCompassFacts ? "the lifecycle's registered compass and the Git probes its checkouts answer" : "the recorded completion evidence of the rows this transition composes"
+      prerequisiteRead
     ],
     currentFacts: [
-      input.stage === "read" ? readsCompassFacts ? `the ${input.operation.kind} transition reads external evidence (the lifecycle's registered compass and its checkout probes) before it can decide, and this call did not get past that read` : `the ${input.operation.kind} transition reads its owned rows' recorded completion evidence (and the Git proof a completion needs) before it can decide, and this call did not get past that read` : `the ${input.operation.kind} transition re-read its external evidence in the commit window, and it no longer matches what the transition decided against`,
+      input.stage === "read" ? `the ${input.operation.kind} transition reads ${prerequisiteRead} before it can decide, and this call did not get past that read` : `the ${input.operation.kind} transition re-read its external evidence in the commit window, and it no longer matches what the transition decided against`,
       `the refusal reports: ${message}`
     ],
     needed: message,
@@ -27780,13 +27973,24 @@ async function mutateExecutionWorkflow(context, request) {
   const resolved = resolveWorkflowOperationRequest(context.caller, strictRequest);
   const operation = resolved.call.operation;
   const workflowId = resolved.read.workflowId;
+  const requestHash4 = workflowOperationRequestHash(context.caller, workflowId, operation);
+  const replayed = operation.kind === "compass-ref" ? await readWorkflowOperationReplayBeforeProof(context, resolved.read, {
+    operationId: resolved.call.operationId,
+    requestHash: requestHash4
+  }) : null;
+  if (replayed !== null) {
+    const freshness = resolveTokenFreshness(resolved.call.expected, { kind: "workflow", storeId: replayed.storeId, epoch: replayed.epoch, key: [workflowId], revision: replayed.revision }, { target: { workflowId } });
+    return replayedWorkflowReceipt(replayed.replay, {
+      workflowId,
+      warnings: workflowTokenDriftWarnings(workflowId, freshness)
+    });
+  }
   let evidence;
   try {
     evidence = await readWorkflowEvidence(context, resolved);
   } catch (error) {
     throw prerequisiteCause(error, { workflowId, operation, stage: "read" });
   }
-  const requestHash4 = workflowOperationRequestHash(context.caller, workflowId, operation);
   workflowWitnessGapForTest?.();
   return withExecutionTransaction(context, (tx) => {
     if (tx.execution.authorityState !== "active") {
@@ -27799,13 +28003,7 @@ async function mutateExecutionWorkflow(context, request) {
     });
     const stored = requireWorkflowState(tx, workflowId);
     const freshness = resolveTokenFreshness(resolved.call.expected, { kind: "workflow", storeId: tx.storeId, epoch: tx.epoch, key: [workflowId], revision: stored.revision }, { target: { workflowId } });
-    const warnings = freshness.current ? [] : [
-      {
-        code: "execution.token-drifted",
-        path: "expected",
-        message: `the token carries revision ${freshness.readRevision} while workflow ${workflowId} is at revision ${freshness.currentRevision}: the revision is transport freshness, so the intent was recomputed against the current state instead of being refused`
-      }
-    ];
+    const warnings = workflowTokenDriftWarnings(workflowId, freshness);
     const replay = readOperationReplay(tx, {
       operationId: resolved.call.operationId,
       requestHash: requestHash4,
@@ -27815,17 +28013,7 @@ async function mutateExecutionWorkflow(context, request) {
     });
     if (replay !== null) {
       resolveWorkflowSession(tx, resolved.read);
-      return {
-        ...replay,
-        recovery: workflowRecovery({
-          workflowId,
-          outcome: "already-satisfied",
-          applied: [],
-          commitState: "committed",
-          resolvedFrom: [{ path: "operationId", source: "execution_operations receipt" }],
-          warnings: [...warnings, { code: "execution.receipt-replayed", message: "the recorded receipt of this operation id is served; nothing was written." }]
-        })
-      };
+      return replayedWorkflowReceipt(replay, { workflowId, warnings });
     }
     const at = new Date().toISOString();
     const witness = readExecutionWorkflowWitness(tx, resolved.read);
@@ -27841,19 +28029,26 @@ async function mutateExecutionWorkflow(context, request) {
     } catch (error) {
       throw workflowConflictCause(error, { workflowId, operation, state: stored.state });
     }
+    const carried = operation.kind === "lifecycle" && applied.membershipLost ? recoveredHolderLiveWarning(tx, witness.workflowId, witness.session.sessionId) : undefined;
+    const receipt = {
+      ...applied.receipt,
+      ...operation.kind === "lifecycle" ? { actor_session_id: witness.session.sessionId, reason: operation.reason } : {},
+      ...carried === undefined ? {} : { holder_live_warning: carried }
+    };
     writeOperationReceipt(tx, {
       operationId: resolved.call.operationId,
       requestHash: requestHash4,
       workflowId: witness.workflowId,
       planId: null,
-      receipt: applied.receipt,
+      receipt,
       now: at,
       slim: true
     });
     if (applied.membershipLost)
       pruneWorkflowOperationReceipts(tx, witness.workflowId, resolved.call.operationId);
     return {
-      ...applied.receipt,
+      ...receipt,
+      ...applied.membershipLost ? { data: readExecutionStateGraph(tx).data } : {},
       operationId: resolved.call.operationId,
       replayed: false,
       recovery: workflowRecovery({
@@ -27894,6 +28089,9 @@ function applyWorkflowOperation(input) {
       break;
     case "integration-worktree":
       header.integration_worktree_path = requireWorktreeEvidence(evidence).worktree.path;
+      break;
+    case "compass-ref":
+      header.compass_ref = requireCompassRefEvidence(evidence).compassRef.relative;
       break;
     case "delivery":
       header.delivery = applyDeliveryEvidence({ header, rows, workflowId, delivery: operation.delivery });
@@ -27952,6 +28150,12 @@ function requireWorktreeEvidence(evidence) {
     throw invalidWorkflowInput("The integration-worktree transition ran without a validated checkout; retry through mstar workflow integration-worktree.");
   }
   return { worktree: evidence.worktree };
+}
+function requireCompassRefEvidence(evidence) {
+  if (evidence.compassRef === undefined) {
+    throw invalidWorkflowInput("The compass-ref transition ran without its validated compass; retry through mstar workflow compass-ref.");
+  }
+  return { compassRef: evidence.compassRef };
 }
 function assertHeaderValid(workflowId, header) {
   const gate2 = validateWorkflowSnapshot({ ...header, plans: [] });
@@ -28127,7 +28331,7 @@ async function recoverExecutionCoordinator(context, input) {
   if (priorSessionId !== null && !isNonEmptyString(priorSessionId)) {
     throw invalidWorkflowInput("Coordinator recovery requires the prior session id to name the holder it replaces, or null only when no coordinator is recorded; inspect the workflow with mstar status validate.");
   }
-  const attestation = validateActivationAttestation(input?.attestation);
+  const attestation = validateRecoveryAttestation(input?.attestation);
   if (attestation.stoppedSessions.some((session) => session.sessionId === caller.sessionId)) {
     throw invalidWorkflowTransition(`the replacement coordinator ${JSON.stringify(caller.sessionId)} is named as stopped/reloaded in this attestation; a recovery binds a genuinely acquired CURRENT session and never resurrects a stopped one. Rerun with the replacement's own acquired session id and an attestation whose stop list covers only the prior holder ${JSON.stringify(priorSessionId ?? "<none>")}.`, { workflow_id: workflowId, session_id: caller.sessionId });
   }
@@ -28178,6 +28382,7 @@ async function recoverExecutionCoordinator(context, input) {
     });
     const rows = readCoordinatorRows(tx, workflowId);
     const live = rows.find((row) => row.state === "active" && row.ref.epoch === tx.epoch);
+    const holderWasLive = priorSessionId !== null && live !== undefined && live.ref.sessionId === priorSessionId;
     let continuation = false;
     if (priorSessionId === null) {
       if (rows.length > 0) {
@@ -28241,6 +28446,13 @@ async function recoverExecutionCoordinator(context, input) {
       storeId: tx.storeId,
       epoch: tx.epoch
     };
+    const holderLiveWarning = holderWasLive ? {
+      code: "recovery.holder-live",
+      holder: priorSessionId,
+      epoch: tx.epoch,
+      observed_state: "active",
+      attested_at: attestation.attestedAt
+    } : undefined;
     writeOperationReceipt(tx, {
       operationId,
       requestHash: requestHash4,
@@ -28253,12 +28465,140 @@ async function recoverExecutionCoordinator(context, input) {
           reason,
           attested_at: attestation.attestedAt,
           operator: attestation.operator,
-          stopped_sessions: attestation.stoppedSessions.map((session) => session.sessionId)
+          stopped_sessions: attestation.stoppedSessions.map((session) => session.sessionId),
+          ...holderLiveWarning === undefined ? {} : { holder_live_warning: holderLiveWarning }
         }
       },
       now: now2
     });
-    return { ...receipt, operationId, replayed: false };
+    return {
+      ...receipt,
+      operationId,
+      replayed: false,
+      ...holderLiveWarning === undefined ? {} : { holder_live_warning: holderLiveWarning }
+    };
+  });
+}
+function reopenWorkflowRequestHash(caller, workflowId, input) {
+  return createHash17("sha256").update(serializeExecutionValue({
+    operation: REOPEN_WORKFLOW_OPERATION,
+    workflow_id: workflowId,
+    expected: input.expected ?? "current",
+    caller: {
+      session_id: caller.sessionId,
+      role: caller.role,
+      workflow_id: caller.workflowId
+    },
+    reason: input.reason,
+    attestation: input.attestation
+  }), "utf8").digest("hex");
+}
+async function reopenExecutionWorkflow(context, input) {
+  const caller = context.caller;
+  if (caller?.role !== "coordinator" || caller.workflowId !== input?.workflowId || !isNonEmptyString(caller.sessionId)) {
+    throw new ExecutionError("execution.scope-mismatch", `reopening a workflow is a coordinator operation addressed by the caller's own workflow; the supplied caller is a ${String(caller?.role)} session of ${JSON.stringify(caller?.workflowId)}.`);
+  }
+  const workflowId = input.workflowId;
+  if (!isNonEmptyString(workflowId) || !isNonEmptyString(input.reason)) {
+    throw invalidWorkflowInput("Reopening a workflow requires its id and a non-empty reason; inspect the closed lifecycle with mstar status validate.");
+  }
+  const operationId = assertOperationId(input.operationId);
+  const attestation = validateRecoveryAttestation(input.attestation);
+  const requestHash4 = reopenWorkflowRequestHash(caller, workflowId, {
+    expected: input.expected,
+    reason: input.reason,
+    attestation
+  });
+  return withExecutionTransaction(context, (tx) => {
+    if (tx.execution.authorityState !== "active") {
+      throw new ExecutionError("execution.not-active", `the execution authority is ${tx.execution.authorityState}; reopening a workflow requires an active authority. A staged store is inspectable only through migration diagnostics.`);
+    }
+    const header = requireWorkflowState(tx, workflowId);
+    const replay = readOperationReplay(tx, {
+      operationId,
+      requestHash: requestHash4,
+      workflowId,
+      planId: null,
+      token: { kind: "root", key: [] }
+    });
+    if (replay !== null) {
+      const { operationRecovery: operationRecovery2, ...recorded } = replay;
+      return { ...recorded, ...operationRecovery2 === undefined ? {} : { recovery: operationRecovery2 } };
+    }
+    const status = String(header.state.status ?? "");
+    if (status === "completed") {
+      throw new ExecutionError("workflow.reopen-completed", `workflow ${workflowId} is completed — a completed lifecycle is never reopened, and this route has no override. ` + `Register a new lifecycle for further work; the completed history stays exactly as it was recorded.`, { workflow_id: workflowId, status });
+    }
+    if (status !== "failed" && status !== "stopped") {
+      throw new ExecutionError("workflow.reopen-not-terminal", `workflow ${workflowId} is ${JSON.stringify(status)}; only a failed or stopped lifecycle is reopened, and a running/paused one is already active. Nothing was written.`, { workflow_id: workflowId, status });
+    }
+    assertExecutionToken(input.expected ?? executionToken("workflow", tx.storeId, tx.epoch, [workflowId], header.revision), {
+      kind: "workflow",
+      storeId: tx.storeId,
+      epoch: tx.epoch,
+      key: [workflowId],
+      revision: header.revision
+    });
+    const entry = {
+      id: workflowId,
+      type: header.state.type,
+      started_at: header.state.started_at,
+      dir: `workflows/${workflowId}`
+    };
+    const entryGate = validateWorkflowEntry(entry);
+    if (!entryGate.ok) {
+      throw new CoordinationError("coordination.invalid-input", `workflow ${workflowId} cannot be restored to the ACTIVE registry: its header does not carry the entry identity anchors (id, type, started_at). Inspect it with mstar status validate.`, { workflow_id: workflowId, violations: entryGate.violations.map(({ code: code2, message }) => ({ code: code2, message })) });
+    }
+    const now2 = new Date().toISOString();
+    advanceWorkflowHeaderRevision(tx, { workflowId, now: now2 });
+    const residue = tx.db.prepare("select 1 as present from execution_registry where workflow_id = ?").get(workflowId);
+    if (residue !== undefined) {
+      recordRootMembershipLoss(tx, { workflowId, now: now2 });
+    } else {
+      tx.db.prepare("update execution_meta set revision = revision + 1, root_updated_at = ? where id = 1").run(now2);
+    }
+    tx.db.prepare("insert into execution_registry(workflow_id, entry_json) values (?, ?)").run(workflowId, JSON.stringify(entry));
+    const nextState = { ...header.state, status: "running", updated_at: now2 };
+    delete nextState.ended_at;
+    assertHeaderValid(workflowId, nextState);
+    writeWorkflowState(tx, { workflowId, state: nextState });
+    const provenance = {
+      outcome: "applied",
+      target: { workflowId },
+      applied: [
+        `execution_workflows(${workflowId}) status ${status} → running`,
+        `execution_registry(${workflowId}) restored`
+      ],
+      unresolved: [],
+      resolvedFrom: [
+        { path: "attestation.operator", source: `${attestation.operator.actor} (${attestation.operator.authorizationRef})` },
+        { path: "attestation.attestedAt", source: attestation.attestedAt }
+      ],
+      warnings: [],
+      commitState: "committed"
+    };
+    const receipt = {
+      ...readExecutionStateGraph(tx),
+      actor_session_id: caller.sessionId,
+      reason: input.reason,
+      operationRecovery: provenance
+    };
+    writeOperationReceipt(tx, {
+      operationId,
+      requestHash: requestHash4,
+      workflowId,
+      planId: null,
+      receipt,
+      now: now2,
+      slim: true
+    });
+    const { operationRecovery, ...publicReceipt } = receipt;
+    return {
+      ...publicReceipt,
+      operationId,
+      replayed: false,
+      ...operationRecovery === undefined ? {} : { recovery: operationRecovery }
+    };
   });
 }
 function readCoordinatorRows(tx, workflowId) {
@@ -28394,12 +28734,13 @@ function readHeldIntegrationLease(tx, workflowId) {
   }
   return raw;
 }
-function hasCoordinatorRecoveryChain(tx, workflowId, current, priorSessionId) {
+function bindingRecoveryBlocks(tx, workflowId, current) {
   const binding2 = tx.db.prepare("select bound_at from execution_sessions where workflow_id = ? and role = 'coordinator' and session_id = ? and epoch = ?").get(workflowId, current.ref.sessionId, tx.epoch);
   if (binding2 === undefined)
-    return false;
+    return [];
   const token = executionToken("session", tx.storeId, tx.epoch, [workflowId, "coordinator", current.ref.sessionId], current.revision);
   const receipts = tx.db.prepare("select result_json from execution_operations where workflow_id = ? and plan_id is null and store_id = ? and epoch = ? and committed_at = ?").all(workflowId, tx.storeId, tx.epoch, binding2.bound_at);
+  const blocks = [];
   for (const receipt of receipts) {
     const raw = JSON.parse(receipt.result_json);
     if (!isPlainObject(raw) || raw.token !== token || raw.storeId !== tx.storeId || raw.epoch !== tx.epoch)
@@ -28408,10 +28749,23 @@ function hasCoordinatorRecoveryChain(tx, workflowId, current, priorSessionId) {
     const recovery = raw.recovery;
     if (!isPlainObject(data) || !isPlainObject(recovery))
       continue;
-    if (data.storeId === tx.storeId && data.epoch === tx.epoch && data.workflowId === workflowId && data.sessionId === current.ref.sessionId && data.role === "coordinator" && recovery.prior_session_id === priorSessionId)
-      return true;
+    if (data.storeId === tx.storeId && data.epoch === tx.epoch && data.workflowId === workflowId && data.sessionId === current.ref.sessionId && data.role === "coordinator")
+      blocks.push(recovery);
   }
-  return false;
+  return blocks;
+}
+function hasCoordinatorRecoveryChain(tx, workflowId, current, priorSessionId) {
+  return bindingRecoveryBlocks(tx, workflowId, current).some((recovery) => recovery.prior_session_id === priorSessionId);
+}
+function recoveredHolderLiveWarning(tx, workflowId, sessionId) {
+  const current = readCoordinatorRows(tx, workflowId).find((row) => row.ref.sessionId === sessionId && row.state === "active" && row.ref.epoch === tx.epoch);
+  if (current === undefined)
+    return;
+  for (const recovery of bindingRecoveryBlocks(tx, workflowId, current)) {
+    if (isPlainObject(recovery.holder_live_warning))
+      return recovery.holder_live_warning;
+  }
+  return;
 }
 function requireLiveCoordinator(tx, workflowId, sessionId) {
   const live = readCoordinatorRows(tx, workflowId).find((row) => row.ref.sessionId === sessionId && row.state === "active" && row.ref.epoch === tx.epoch);
@@ -28684,7 +29038,7 @@ function registerSources(context) {
   for (const entry of entries.sort((a, b) => a.name.localeCompare(b.name))) {
     if (entry.isSymbolicLink() || !entry.isDirectory())
       continue;
-    const registerPath = join30(projectsRoot, entry.name, "residuals.json");
+    const registerPath = join31(projectsRoot, entry.name, "residuals.json");
     let info;
     try {
       info = lstatSync12(registerPath);
@@ -28813,7 +29167,7 @@ async function planStoreMigration(context) {
   const sources = [];
   const rows = [];
   for (const source of registerSources(context)) {
-    const bytes = readFileSync24(source.absolutePath);
+    const bytes = readFileSync25(source.absolutePath);
     const buckets = parseRegister(bytes.toString("utf8"), source, unresolved);
     let openCount = 0;
     let closedCount = 0;
@@ -29231,7 +29585,7 @@ function assertWorkflowId(workflowId, what = "workflow id") {
 function workflowNotesLedgerPath(context, workflowId) {
   assertWorkflowId(workflowId);
   const root = controlRootOf(context);
-  return join31(resolveWorkflowDir(root, { harnessDir: root }), workflowId, NOTES_LEDGER_FILE);
+  return join32(resolveWorkflowDir(root, { harnessDir: root }), workflowId, NOTES_LEDGER_FILE);
 }
 function parseWorkflowNote(value) {
   if (!isPlainObject(value))
@@ -29504,7 +29858,7 @@ async function sha256OfFile(path2) {
 }
 function readIfExists2(path2) {
   try {
-    return readFileSync25(path2);
+    return readFileSync26(path2);
   } catch {
     return;
   }
@@ -29679,9 +30033,9 @@ async function openWalWithoutJournalReadSnapshot(context) {
   const walWithoutJournal = walStoreShapeOf(context);
   if (walWithoutJournal === null || walWithoutJournal.wal)
     return null;
-  const scratch = mkdtempSync(join32(tmpdir(), "mstar-store-read-"));
+  const scratch = mkdtempSync(join33(tmpdir(), "mstar-store-read-"));
   try {
-    const image = join32(scratch, "store.db");
+    const image = join33(scratch, "store.db");
     copyFileSync2(storeDbPath(context), image);
     writeFileSync5(`${image}-wal`, "");
     const handle = await openStore({ harnessDir: scratch }, "read");
@@ -30091,7 +30445,7 @@ function requiredRebind() {
   return "Every reference that was valid before the replacement is invalid: the restore advances the store-wide epoch above both the live store and the recovery point, so a pre-restore handle refuses `store.stale-epoch`, the restored session rows are below the new epoch and authorize nothing, and any restored held lease keeps its old `owner_epoch`. Recover each workflow's coordinator with `recoverExecutionCoordinator` (naming the recorded prior holder and attesting it stopped), rebind its plans with `bindExecutionSession`, and reconcile any restored lease explicitly before reuse. A database image does not roll back the append-only logs and documents beside the store: notes, agent-flow history and the launch journal keep every byte they had, so their history is never resurrected or truncated by a restore.";
 }
 function recoveryReceiptPathOf(root, attemptId) {
-  return join32(root, "archived", "store-migration", "recovery", `restore-${Date.now().toString().padStart(16, "0")}-${attemptId}.json`);
+  return join33(root, "archived", "store-migration", "recovery", `restore-${Date.now().toString().padStart(16, "0")}-${attemptId}.json`);
 }
 function reclaimAbandonedRestoreScratch(root, currentAttemptId, committed) {
   if (committed === null)
@@ -30109,7 +30463,7 @@ function reclaimAbandonedRestoreScratch(root, currentAttemptId, committed) {
     if (attemptId === currentAttemptId || !committed.has(attemptId))
       continue;
     try {
-      const imagePath = join32(root, `.store-restore-${attemptId}.db`);
+      const imagePath = join33(root, `.store-restore-${attemptId}.db`);
       for (const suffix of RESTORE_SCRATCH_SIDECARS)
         rmSync2(`${imagePath}${suffix}`, { force: true });
       rmSync2(imagePath, { force: true });
@@ -30240,7 +30594,7 @@ async function readCommittedRestoreAttempts(context) {
 async function runRestore(context, root, input) {
   const point3 = recoveryPointPath(context, root, input.preview.backupPath);
   const attemptId = randomUUID7();
-  const imagePath = join32(root, `.store-restore-${attemptId}.db`);
+  const imagePath = join33(root, `.store-restore-${attemptId}.db`);
   try {
     try {
       copyFileSync2(point3, imagePath);
@@ -30252,7 +30606,7 @@ async function runRestore(context, root, input) {
       throw new StoreActivationError("store.activation-stale", `the recovery point at ${point3} belongs to store ${image.storeId}, not to the live store ${input.preview.liveStoreId}; a point of another store is never restored over this one.`);
     }
     const safety = await backupStore(context, {
-      out: join32(root, "archived", "store-migration", "backups", `pre-restore-e${input.preview.liveEpoch}-${randomUUID7()}.db`)
+      out: join33(root, "archived", "store-migration", "backups", `pre-restore-e${input.preview.liveEpoch}-${randomUUID7()}.db`)
     });
     try {
       const liveStoreSha256 = await sha256OfFile(storeDbPath(context));
@@ -31039,7 +31393,7 @@ drop table issue_transitions_v12_stage;
   select issues.registered_at as ts
   union all select o.discovered_at from occurrences o where o.issue_id = issues.id
   union all select t.occurred_at from issue_transitions t where t.issue_id = issues.id
-))`, ISSUE_ORDER_SQL, TERMINAL_DISPOSITIONS = "'resolved', 'waived', 'duplicate', 'superseded'", IDENTITY_COLUMNS = "kind, id, title, description, root_kind, relative_path, document_kind, lifecycle, revision, registered_at, updated_at", completeWitnessGapForTest, workflowWitnessGapForTest, RECOVER_COORDINATOR_OPERATION = "recoverExecutionCoordinator", COMMIT_REGISTRATION_OPERATION = "commitExecutionRegistration", REGISTRATION_SEMANTICS, MAX_DASHBOARD_SEARCH_LENGTH = 200, VIEW_QUERY_FIELDS, DISPOSITIONS3, KINDS2, SEVERITIES2, MIGRATION_MANIFEST_VERSION = 1, LEGACY_ISSUE_KIND = "review-obligation", StoreMigrationError, MIGRATION_VOCABULARY, LEGACY_REQUIRED_FIELDS, HISTORY_ONLY_ABSENT_FIELDS, EXECUTION_LEDGER_ERROR_CODES, ExecutionLedgerError, NOTE_KEYS, NOTE_KEY_ORDER, UNRECOGNIZED_LINE, EXECUTION_RECOVERY_PROTOCOL_VERSION = 3, ExecutionRecoveryError, EXECUTION_MIGRATION_VERSION2, CATALOG_MIGRATION_VERSION, PROVENANCE_ORIGIN_MIGRATION_VERSION, ROADMAP_MIGRATION_VERSION, EXECUTION_COVERAGE_MIGRATION_VERSION, MILESTONE_MIGRATION_VERSION, DSH_MIGRATION_VERSION, EXECUTION_COORDINATOR_ONLY_MIGRATION_VERSION, DSH_LEGACY_PROVENANCE_MIGRATION_VERSION, AUTHORITY_TABLES, REPLACEMENT_ORDER, DATABASE_HEADER_BYTES2 = 100, WAL_FILE_FORMAT_VERSION2 = 2, RESTORE_SCRATCH_NAME, RESTORE_SCRATCH_SIDECARS, REDACTED_KEYS;
+))`, ISSUE_ORDER_SQL, TERMINAL_DISPOSITIONS = "'resolved', 'waived', 'duplicate', 'superseded'", IDENTITY_COLUMNS = "kind, id, title, description, root_kind, relative_path, document_kind, lifecycle, revision, registered_at, updated_at", completeWitnessGapForTest, workflowWitnessGapForTest, RECOVER_COORDINATOR_OPERATION = "recoverExecutionCoordinator", REOPEN_WORKFLOW_OPERATION = "reopenExecutionWorkflow", COMMIT_REGISTRATION_OPERATION = "commitExecutionRegistration", REGISTRATION_SEMANTICS, MAX_DASHBOARD_SEARCH_LENGTH = 200, VIEW_QUERY_FIELDS, DISPOSITIONS3, KINDS2, SEVERITIES2, MIGRATION_MANIFEST_VERSION = 1, LEGACY_ISSUE_KIND = "review-obligation", StoreMigrationError, MIGRATION_VOCABULARY, LEGACY_REQUIRED_FIELDS, HISTORY_ONLY_ABSENT_FIELDS, EXECUTION_LEDGER_ERROR_CODES, ExecutionLedgerError, NOTE_KEYS, NOTE_KEY_ORDER, UNRECOGNIZED_LINE, EXECUTION_RECOVERY_PROTOCOL_VERSION = 3, ExecutionRecoveryError, EXECUTION_MIGRATION_VERSION2, CATALOG_MIGRATION_VERSION, PROVENANCE_ORIGIN_MIGRATION_VERSION, ROADMAP_MIGRATION_VERSION, EXECUTION_COVERAGE_MIGRATION_VERSION, MILESTONE_MIGRATION_VERSION, DSH_MIGRATION_VERSION, EXECUTION_COORDINATOR_ONLY_MIGRATION_VERSION, DSH_LEGACY_PROVENANCE_MIGRATION_VERSION, AUTHORITY_TABLES, REPLACEMENT_ORDER, DATABASE_HEADER_BYTES2 = 100, WAL_FILE_FORMAT_VERSION2 = 2, RESTORE_SCRATCH_NAME, RESTORE_SCRATCH_SIDECARS, REDACTED_KEYS;
 var init_engine = __esm(() => {
   __defProp2 = Object.defineProperty;
   init_coordination_write = __esm2(() => {
@@ -34571,7 +34925,8 @@ var init_engine = __esm(() => {
       "execution-policy": ["workflowId", "operation.kind", "operation.policy"],
       "integration-worktree": ["workflowId", "operation.kind", "operation.path"],
       delivery: ["workflowId", "operation.kind", "operation.delivery"],
-      "delivery-anchors": ["workflowId", "operation.kind", "operation.branch", "operation.reason"]
+      "delivery-anchors": ["workflowId", "operation.kind", "operation.branch", "operation.reason"],
+      "compass-ref": ["workflowId", "operation.kind", "operation.compassPath", "operation.reason"]
     };
   });
   init_catalog_import = __esm2(() => {
@@ -34642,7 +34997,8 @@ var init_engine = __esm(() => {
     inspectBackupCopy: () => inspectBackupCopy,
     isPathWithin: () => isPathWithin,
     retireStoreSources: () => retireStoreSources,
-    validateActivationAttestation: () => validateActivationAttestation
+    validateActivationAttestation: () => validateActivationAttestation,
+    validateRecoveryAttestation: () => validateRecoveryAttestation
   });
   init_store_activation = __esm2(() => {
     init_catalog();
@@ -34700,6 +35056,7 @@ var init_engine = __esm(() => {
     readOwnExecutionSession: () => readOwnExecutionSession,
     readPlanOperationReplay: () => readPlanOperationReplay,
     readPlanOperationReplayBeforeProof: () => readPlanOperationReplayBeforeProof,
+    readWorkflowOperationReplayBeforeProof: () => readWorkflowOperationReplayBeforeProof,
     readWorkflowSessionRows: () => readWorkflowSessionRows,
     recordRootMembershipLoss: () => recordRootMembershipLoss,
     releaseIntegrationMergeLease: () => releaseIntegrationMergeLease,
@@ -34833,6 +35190,7 @@ var init_engine = __esm(() => {
         reason: { required: true, type: "string", description: "Reason for triage change" },
         kind: { required: false, type: "string", description: "Replacement issue kind", values: ["bug", "risk", "improvement", "request", "decision", "review-obligation"] },
         severity: { required: false, type: "string", description: "Replacement severity", values: ["critical", "high", "medium", "low", "nit"] },
+        title: { required: false, type: "string", description: "Corrected finding title; nonblank when supplied", nonblankWhenPresent: true },
         impact: { required: false, type: "string", description: "Updated impact; nonblank when supplied", nonblankWhenPresent: true },
         acceptance: { required: false, type: "string", description: "Updated acceptance condition; nonblank when supplied", nonblankWhenPresent: true },
         owner: { required: false, type: "string | null", description: "Updated owner, or null to clear", nullable: true }
@@ -35024,6 +35382,7 @@ var init_engine = __esm(() => {
     init_catalog();
     init_coordination_write();
     init_path();
+    init_iteration();
     init_plan_path();
     init_store_db();
     init_status();
@@ -35871,6 +36230,7 @@ var init_engine = __esm(() => {
   init_store_db();
   init_workflow();
   init_worktree();
+  init_status();
   init_issue();
   init_catalog();
   init_catalog_import();
