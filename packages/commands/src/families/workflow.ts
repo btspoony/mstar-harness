@@ -3,6 +3,7 @@ import path from "node:path";
 import { z } from "zod";
 import { randomUUID } from "node:crypto";
 import {
+  PLAN_PARALLELISM_VALUES,
   WORKFLOW_COMPOUND_OUTCOMES, WORKFLOW_DELIVERY_KINDS, WORKFLOW_LIFECYCLE_STATUSES,
   adoptTerminalWorkflow, createFsStore, decodeExecutionSessionRef,
   executionContextFor, mutateExecutionWorkflow, normalizeIterationCompassRef, registerShippedCatalogExecution,
@@ -139,24 +140,19 @@ function parseWorkflowJson<T>(text: string, label: string, code: string): T {
   }
 }
 /**
- * The engine's closed concurrency set. The authority is `PLAN_PARALLELISM_VALUES`
- * in `packages/engine/src/coordination.ts`, which the package entry does not
- * re-export, so the two accepted values are mirrored here; the engine
- * re-validates that same set on the `execution-policy` operation.
- */
-const WORKFLOW_PLAN_PARALLELISM_VALUES = ["serial", "parallel"] as const;
-/**
  * The transport mirror of the engine's declared `WorkflowExecutionPolicy`
  * (`packages/engine/src/workflow.ts`). `policy` is parsed AND published through
  * this one schema, so `mstar schema --command workflow.execution-policy` states
  * the shape the `--file` route accepts — including the `plan_parallelism` set
- * the engine refuses anything outside of. `worktree_mode` / `push_policy` stay
+ * the engine refuses anything outside of, taken from the engine's own
+ * `PLAN_PARALLELISM_VALUES` so the accepted values have one authority and
+ * cannot drift. `worktree_mode` / `push_policy` stay
  * accepted-but-opaque, and `passthrough` keeps the engine's own
  * `coordination.forbidden-field` guard as the authority on unknown keys: the
  * transport must not refuse them with a weaker message first.
  */
 const workflowExecutionPolicySchema = z.object({
-  plan_parallelism: z.enum(WORKFLOW_PLAN_PARALLELISM_VALUES).optional().describe("Concurrency contract: serial or parallel. Any other value is refused."),
+  plan_parallelism: z.enum(PLAN_PARALLELISM_VALUES).optional().describe("Concurrency contract: serial or parallel. Any other value is refused."),
   worktree_mode: z.unknown().optional().describe("Accepted-but-opaque worktree mode value; copied into the policy block unchanged."),
   push_policy: z.unknown().optional().describe("Accepted-but-opaque push policy value; copied into the policy block unchanged."),
 }).passthrough();

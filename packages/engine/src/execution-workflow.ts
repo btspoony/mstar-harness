@@ -1558,7 +1558,9 @@ export function workflowExecutionPolicyViolations(value: unknown, workflowId = "
   const unknown = Object.keys(value).filter((key) => !["plan_parallelism", "worktree_mode", "push_policy"].includes(key));
   const violations = unknown.length === 0 ? [] : [`workflow ${workflowId} execution_policy has unknown key(s) ${unknown.join(", ")}`];
   const parallelism = value.plan_parallelism;
-  if (parallelism !== undefined && (typeof parallelism !== "string" || !PLAN_PARALLELISM_VALUES.includes(parallelism))) {
+  // The tuple's members are a literal union; the value under test is an
+  // arbitrary `string`, so the closed set widens only at this lookup.
+  if (parallelism !== undefined && (typeof parallelism !== "string" || !(PLAN_PARALLELISM_VALUES as readonly string[]).includes(parallelism))) {
     violations.push(`workflow ${workflowId} execution_policy.plan_parallelism must be one of ${PLAN_PARALLELISM_VALUES.join(" | ")}`);
   }
   return violations;
