@@ -102,6 +102,7 @@ const EXPECT_TOKEN_KINDS: Readonly<Record<string, CommandRequirement["tokenKind"
   "workflow.lifecycle": "workflow",
   "workflow.execution-policy": "workflow",
   "workflow.integration-worktree": "workflow",
+  "workflow.compass-ref": "workflow",
   "status.workflow-close": "workflow",
   "workflow.adopt-terminal": "revision",
   "issue.reopen": "revision",

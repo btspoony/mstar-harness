@@ -105,6 +105,7 @@ import {
   readExecutionStateGraph,
   readExecutionWorkflowWitness,
   readOperationReplay,
+  readWorkflowOperationReplayBeforeProof,
   readWorkflowSessionRows,
   recordRootMembershipLoss,
   releaseIntegrationMergeLease,
@@ -161,6 +162,7 @@ import {
   deliveryEvidenceMembers,
   deliveryEvidenceViolations,
   isTerminalSnapshot,
+  normalizeIterationCompassRef,
   validateWorkflowSnapshot,
   type WorkflowDeliveryEvidence,
   type IntegrationMergeLease,
@@ -193,6 +195,14 @@ import type { PlanRow } from "./status.js";
  * abandoning the lifecycle. The deprecated `branch.source` spelling of the
  * delivery branch is a READ alias: it is never an operation member, and a
  * `work` this operation records replaces it (see `applyWorkflowOperation`).
+ *
+ * `compass-ref` is the same repairability for the OTHER registered pointer that
+ * a live checkpoint compares: the lifecycle's reviewed delivery compass. It is
+ * not a header patch either - it names one existing reviewed compass document,
+ * requires a non-empty reason, stores the document's canonical harness-relative
+ * pointer (never the caller's spelling), and commits under the same workflow CAS
+ * token. Without it, a pointer stored in the wrong form left every later reader
+ * comparing against a double-joined path with no public way back (I-000863).
  */
 export type WorkflowExecutionOperation =
   | { kind: "phase"; phase: NonNullable<WorkflowSnapshot["phase"]>; compassPath: string }
@@ -200,7 +210,8 @@ export type WorkflowExecutionOperation =
   | { kind: "execution-policy"; policy: NonNullable<WorkflowSnapshot["execution_policy"]> }
   | { kind: "integration-worktree"; path: string }
   | { kind: "delivery"; delivery: NonNullable<WorkflowSnapshot["delivery"]> }
-  | { kind: "delivery-anchors"; branch: { base?: string; work?: string; target?: string }; reason: string };
+  | { kind: "delivery-anchors"; branch: { base?: string; work?: string; target?: string }; reason: string }
+  | { kind: "compass-ref"; compassPath: string; reason: string };
 
 /** §3 one DB workflow-operation request: the §3.1 envelope plus what it addresses. */
 export type WorkflowOperationRequest<Operation extends WorkflowExecutionOperation = WorkflowExecutionOperation> =
@@ -313,6 +324,19 @@ function assertWorkflowOperationShape(operation: unknown): asserts operation is 
       }
       return;
     }
+    case "compass-ref": {
+      assertExactKeys(op, ["kind", "compassPath", "reason"], "a compass-ref operation");
+      if (!isNonEmptyString(op.compassPath)) {
+        throw invalidWorkflowInput(
+          "a compass-ref operation needs the reviewed delivery compass as an absolute path inside the harness root or " +
+            "as a harness-relative pointer; retry through mstar workflow compass-ref",
+        );
+      }
+      if (!isNonEmptyString(op.reason)) {
+        throw invalidWorkflowInput("Invalid compass-ref operation: provide a non-empty reason; retry through mstar workflow compass-ref.");
+      }
+      return;
+    }
     default:
       throw new CoordinationError("coordination.unknown-operation", "Unknown workflow operation kind; inspect the operation contract with mstar schema.", {
         operation: op.kind,
@@ -364,6 +388,8 @@ function workflowOperationField(operation: WorkflowExecutionOperation): string {
       return "operation.delivery";
     case "delivery-anchors":
       return "operation.branch";
+    case "compass-ref":
+      return "operation.compassPath";
   }
 }
 
@@ -382,6 +408,8 @@ function storedOperationValue(state: Record<string, unknown>, operation: Workflo
       return state.delivery;
     case "delivery-anchors":
       return state.branch;
+    case "compass-ref":
+      return state.compass_ref;
   }
 }
 
@@ -402,6 +430,11 @@ function requestedOperationValue(operation: WorkflowExecutionOperation): unknown
       return operation.delivery;
     case "delivery-anchors":
       return operation.branch;
+    // The caller's own spelling: the stored form is the document's canonical
+    // harness-relative pointer, so a refusal reports both forms rather than
+    // pretending the request asked for the relative one.
+    case "compass-ref":
+      return operation.compassPath;
   }
 }
 
@@ -453,6 +486,50 @@ function workflowRecovery(input: {
   };
 }
 
+/**
+ * §4.2 the transport-freshness warning of one accepted intent: a token whose
+ * revision moved is recorded as provenance, not refused (A10).
+ */
+function workflowTokenDriftWarnings(
+  workflowId: string,
+  freshness: { readRevision: number; currentRevision: number; current: boolean },
+): ResolutionWarning[] {
+  if (freshness.current) return [];
+  return [
+    {
+      code: "execution.token-drifted",
+      path: "expected",
+      message:
+        `the token carries revision ${freshness.readRevision} while workflow ${workflowId} is at revision ` +
+        `${freshness.currentRevision}: the revision is transport freshness, so the intent was recomputed against ` +
+        `the current state instead of being refused`,
+    },
+  ];
+}
+
+/**
+ * §3.1 (R6/A09) the one shape of a served recorded receipt: the receipt itself
+ * plus the `already-satisfied` sidecar. Both the before-proof read route and the
+ * committing frame's own lookup return through here, so a replay looks the same
+ * however it was reached.
+ */
+function replayedWorkflowReceipt(
+  replayed: ExecutionReceipt<ExecutionState>,
+  input: { workflowId: string; warnings: readonly ResolutionWarning[] },
+): ExecutionReceipt<ExecutionState> {
+  return {
+    ...replayed,
+    recovery: workflowRecovery({
+      workflowId: input.workflowId,
+      outcome: "already-satisfied",
+      applied: [],
+      commitState: "committed",
+      resolvedFrom: [{ path: "operationId", source: "execution_operations receipt" }],
+      warnings: [...input.warnings, { code: "execution.receipt-replayed", message: "the recorded receipt of this operation id is served; nothing was written." }],
+    }),
+  };
+}
+
 /** One comparable value, as the typed causes quote it. */
 function describeValue(value: unknown): string {
   if (value === undefined) return "absent";
@@ -497,6 +574,13 @@ type WorkflowEvidence = {
   checkout?: { path: string; branch: string | null };
   /** `integration-worktree`: the canonical candidate path and the branch it was on. */
   worktree?: { path: string; branch: string };
+  /**
+   * `compass-ref`: the reviewed compass the repair names, as its canonical
+   * absolute path plus the harness-relative pointer it is stored as. The pointer
+   * form is decided here, before SQLite ownership, by the one registration
+   * normalizer; the path fact is re-read at the commit boundary.
+   */
+  compassRef?: { path: string; relative: string };
 };
 
 /**
@@ -677,6 +761,82 @@ async function readIntegrationWorktreeEvidence(
   return { worktree: { path, branch: integrationBranch } };
 }
 
+/**
+ * §4.1 the external evidence of one `compass-ref` repair: the reviewed delivery
+ * compass the operation names, proven here — before SQLite ownership — to be an
+ * existing, non-empty, well-formed compass frontmatter belonging to THIS
+ * lifecycle. The stored form is decided by the ONE registration normalizer, so a
+ * repaired pointer can never carry a spelling that registration would have
+ * refused (that is how a repository-relative pointer reached the store, I-000863).
+ */
+async function readCompassRefEvidence(
+  context: ExecutionContext,
+  workflowId: string,
+  operation: Extract<WorkflowExecutionOperation, { kind: "compass-ref" }>,
+): Promise<WorkflowEvidence> {
+  const header = await readWorkflowHeaderBefore(context, workflowId);
+  // An iteration owns the reviewed delivery compass; a plan workflow records no
+  // `compass_ref` at all, so repairing one would write a field its own type never
+  // reads.
+  if (header.type !== "iteration") {
+    throw invalidWorkflowTransition(
+      `workflow ${workflowId} records type ${JSON.stringify(header.type)}, which carries no reviewed delivery compass; ` +
+        `a compass_ref is repaired only on an iteration workflow`,
+      { workflow_id: workflowId, type: header.type },
+    );
+  }
+  const harnessRoot = controlHarnessRoot(context);
+  // The ONE registration normalizer decides containment, existence and the
+  // stored form: a pointer this route accepts is exactly a pointer registration
+  // would have accepted.
+  const relative = normalizeIterationCompassRef(operation.compassPath, harnessRoot, (detail) => invalidWorkflowInput(detail));
+  // Both accepted spellings resolve against the harness root — the base the
+  // stored pointer is later read under — and the file itself is canonicalized
+  // the same way the normalizer just did.
+  const path = canonicalizeNearestExisting(
+    isAbsolute(operation.compassPath) ? operation.compassPath : join(harnessRoot, operation.compassPath),
+  );
+  const text = readFileSync(path, "utf8");
+  if (text.trim() === "") {
+    throw invalidWorkflowTransition("The named compass document is empty; name the reviewed delivery compass, then retry through mstar workflow compass-ref.", {
+      workflow_id: workflowId,
+      compass_path: path,
+    });
+  }
+  let doc: Record<string, unknown>;
+  try {
+    doc = parseCompassFrontmatterText(text, path);
+  } catch (error) {
+    // The parser's own report rides in the details, so this message can name the
+    // repair verb as one statically provable literal.
+    throw invalidWorkflowTransition(
+      "The named compass document is not a readable compass frontmatter; correct the document, then retry through mstar workflow compass-ref.",
+      {
+        workflow_id: workflowId,
+        compass_path: path,
+        reason: error instanceof Error ? error.message : String(error),
+      },
+    );
+  }
+  const validation = validateCompassFrontmatter(doc);
+  if (!validation.ok) {
+    throw invalidWorkflowInput("The named compass is invalid; correct its validation findings, then retry through mstar workflow compass-ref.", {
+      compass_path: path,
+      violations: validation.violations,
+    });
+  }
+  if (doc.iteration_id !== workflowId) {
+    // The ids that disagreed are details, not prose: an interpolated id would
+    // leave the repair verb unprovable to the reachability lint.
+    throw new CoordinationError(
+      "coordination.scope-mismatch",
+      "the named compass belongs to a different iteration than the addressed workflow; name this workflow's own reviewed delivery compass, then retry through mstar workflow compass-ref.",
+      { workflow_id: workflowId, compass_path: path, compass_iteration_id: String(doc.iteration_id) },
+    );
+  }
+  return { compassRef: { path, relative } };
+}
+
 /** §4.1 the external evidence of one workflow operation, read before SQLite ownership. */
 async function readWorkflowEvidence(
   context: ExecutionContext,
@@ -689,6 +849,8 @@ async function readWorkflowEvidence(
       return readPhaseEvidence(context, workflowId, operation);
     case "integration-worktree":
       return readIntegrationWorktreeEvidence(context, workflowId, operation);
+    case "compass-ref":
+      return readCompassRefEvidence(context, workflowId, operation);
     case "lifecycle":
       // A terminal `completed` close synthesizes NOTHING: the report-only
       // fulfilment is the outer lifecycle fact an authorized `workflow evidence`
@@ -716,6 +878,17 @@ async function readWorkflowEvidence(
  * directory, because nothing records a checkout that is no longer there.
  */
 function revalidateWorkflowEvidence(evidence: WorkflowEvidence): void {
+  // A `compass-ref` repair records a DOCUMENT: the file it names must still be
+  // there at the commit boundary. Its bytes are not a witness (an edit moved the
+  // record on), but a vanished or non-file target is not a pointer worth storing.
+  const compassRef = evidence.compassRef;
+  if (compassRef !== undefined && (!existsSync(compassRef.path) || !statSync(compassRef.path).isFile())) {
+    throw invalidWorkflowTransition(
+      `the named compass ${compassRef.path} disappeared after it was validated; restore the reviewed delivery compass ` +
+        `and retry the workflow transition`,
+      { path: compassRef.path },
+    );
+  }
   const checkout = evidence.worktree ?? evidence.checkout;
   if (checkout !== undefined && checkout.branch !== null) {
     const { path, branch } = checkout;
@@ -802,28 +975,29 @@ function prerequisiteCause(
   }
   // The evidence a transition reads depends on the transition: a phase /
   // integration-worktree transition reads the registered compass and its Git
-  // probes, while a terminal close reads its owned rows' recorded completion
-  // evidence (and the Git proof a development/integration row's completion
-  // needs). The report names what THIS transition actually reads instead of a
-  // generic inventory.
-  const readsCompassFacts = input.operation.kind === "phase" || input.operation.kind === "integration-worktree";
+  // probes, a compass-ref repair reads only the compass DOCUMENT it names (no
+  // Git evidence), and a terminal close reads its owned rows' recorded
+  // completion evidence (and the Git proof a development/integration row's
+  // completion needs). The report names what THIS transition actually reads
+  // instead of a generic inventory.
+  const prerequisiteRead =
+    input.operation.kind === "phase" || input.operation.kind === "integration-worktree"
+      ? "the lifecycle's registered compass and the Git probes its checkouts answer"
+      : input.operation.kind === "compass-ref"
+        ? "the reviewed delivery compass document this repair names"
+        : "the recorded completion evidence of the rows this transition composes (and the Git proof a completion needs)";
   const problem: RecoveryProblem = {
     component: "operation-prerequisite",
     path: workflowOperationField(input.operation),
     code: code ?? "execution.prerequisite-unavailable",
     sourcesTried: [
       `the workflow ${input.workflowId} header and rows this store owns`,
-      readsCompassFacts
-        ? "the lifecycle's registered compass and the Git probes its checkouts answer"
-        : "the recorded completion evidence of the rows this transition composes",
+      prerequisiteRead,
     ],
     currentFacts: [
       input.stage === "read"
-        ? readsCompassFacts
-          ? `the ${input.operation.kind} transition reads external evidence (the lifecycle's registered compass and its ` +
-            `checkout probes) before it can decide, and this call did not get past that read`
-          : `the ${input.operation.kind} transition reads its owned rows' recorded completion evidence (and the Git proof a ` +
-            `completion needs) before it can decide, and this call did not get past that read`
+        ? `the ${input.operation.kind} transition reads ${prerequisiteRead} before it can decide, and this call did ` +
+          `not get past that read`
         : `the ${input.operation.kind} transition re-read its external evidence in the commit window, and it no longer ` +
           `matches what the transition decided against`,
       `the refusal reports: ${message}`,
@@ -1047,13 +1221,42 @@ export async function mutateExecutionWorkflow(
   const resolved = resolveWorkflowOperationRequest(context.caller, strictRequest);
   const operation = resolved.call.operation;
   const workflowId = resolved.read.workflowId;
+  const requestHash = workflowOperationRequestHash(context.caller, workflowId, operation);
+  // §4.1/§4.2 (R6/A09) RECEIPT-FIRST for an operation whose prerequisite is
+  // MUTABLE external state. A `compass-ref` repair names a document an operator
+  // may later remove, empty or edit into invalid frontmatter; that document is
+  // admission for a NEW write, never a condition on the replay of an ACCEPTED
+  // one. The committed receipt — or the operation conflict of a changed intent
+  // under the same id — is therefore decided here, before the evidence read.
+  // Every other operation keeps reading its evidence first: its prerequisite is
+  // the state the transition itself stands on, and moving that read ahead of the
+  // store would change admission for operations this repair does not address.
+  const replayed = operation.kind === "compass-ref"
+    ? await readWorkflowOperationReplayBeforeProof<ExecutionState>(context, resolved.read, {
+        operationId: resolved.call.operationId,
+        requestHash,
+      })
+    : null;
+  if (replayed !== null) {
+    // The replay is bound to the CURRENT authority the read transaction just
+    // revalidated; the token's revision remains transport freshness (A10), so a
+    // receipt served against a header that moved is still the recorded receipt.
+    const freshness = resolveTokenFreshness(
+      resolved.call.expected,
+      { kind: "workflow", storeId: replayed.storeId, epoch: replayed.epoch, key: [workflowId], revision: replayed.revision },
+      { target: { workflowId } },
+    );
+    return replayedWorkflowReceipt(replayed.replay, {
+      workflowId,
+      warnings: workflowTokenDriftWarnings(workflowId, freshness),
+    });
+  }
   let evidence: WorkflowEvidence;
   try {
     evidence = await readWorkflowEvidence(context, resolved);
   } catch (error) {
     throw prerequisiteCause(error, { workflowId, operation, stage: "read" });
   }
-  const requestHash = workflowOperationRequestHash(context.caller, workflowId, operation);
   workflowWitnessGapForTest?.();
   return withExecutionTransaction(context, (tx) => {
     if (tx.execution.authorityState !== "active") {
@@ -1081,24 +1284,16 @@ export async function mutateExecutionWorkflow(
     // revision is transport freshness. A token whose revision moved is recorded
     // as provenance, not refused (A10): the intent below is recomputed against
     // the state this transaction reads.
-    const warnings: readonly ResolutionWarning[] = freshness.current
-      ? []
-      : [
-          {
-            code: "execution.token-drifted",
-            path: "expected",
-            message:
-              `the token carries revision ${freshness.readRevision} while workflow ${workflowId} is at revision ` +
-              `${freshness.currentRevision}: the revision is transport freshness, so the intent was recomputed against ` +
-              `the current state instead of being refused`,
-          },
-        ];
+    const warnings: readonly ResolutionWarning[] = workflowTokenDriftWarnings(workflowId, freshness);
     // §3.1 (R6/A09) an identical retry returns its recorded receipt — but only
     // while the receipt is retained and after CURRENT authority is revalidated.
     // A close that loses registry membership prunes the workflow's OTHER receipts
     // and keeps this operation's current-epoch receipt as its replay anchor: the
     // identical terminal retry replays here, and only a different operation id
     // falls through to the registry witness for actionable read-back guidance.
+    // A `compass-ref` retry normally replays on the before-proof read route
+    // above; this lookup also covers a receipt committed in the gap between that
+    // read and this write transaction.
     const replay = readOperationReplay<ExecutionState>(tx, {
       operationId: resolved.call.operationId,
       requestHash,
@@ -1108,17 +1303,7 @@ export async function mutateExecutionWorkflow(
     });
     if (replay !== null) {
       resolveWorkflowSession(tx, resolved.read);
-      return {
-        ...replay,
-        recovery: workflowRecovery({
-          workflowId,
-          outcome: "already-satisfied",
-          applied: [],
-          commitState: "committed",
-          resolvedFrom: [{ path: "operationId", source: "execution_operations receipt" }],
-          warnings: [...warnings, { code: "execution.receipt-replayed", message: "the recorded receipt of this operation id is served; nothing was written." }],
-        }),
-      };
+      return replayedWorkflowReceipt(replay, { workflowId, warnings });
     }
     // `at` is the ONE timestamp of this accepted operation: the header, the
     // settled claim and the receipt all carry the same instant.
@@ -1255,6 +1440,12 @@ function applyWorkflowOperation(input: {
     case "integration-worktree":
       header.integration_worktree_path = requireWorktreeEvidence(evidence).worktree.path;
       break;
+    case "compass-ref":
+      // The evidence reader decided the STORED form; this step stores exactly
+      // that canonical harness-relative pointer, so a repair cannot reintroduce
+      // the spelling registration refuses.
+      header.compass_ref = requireCompassRefEvidence(evidence).compassRef.relative;
+      break;
     case "delivery":
       header.delivery = applyDeliveryEvidence({ header, rows, workflowId, delivery: operation.delivery });
       break;
@@ -1373,6 +1564,13 @@ function requireWorktreeEvidence(evidence: WorkflowEvidence): { worktree: { path
     throw invalidWorkflowInput("The integration-worktree transition ran without a validated checkout; retry through mstar workflow integration-worktree.");
   }
   return { worktree: evidence.worktree };
+}
+
+function requireCompassRefEvidence(evidence: WorkflowEvidence): { compassRef: { path: string; relative: string } } {
+  if (evidence.compassRef === undefined) {
+    throw invalidWorkflowInput("The compass-ref transition ran without its validated compass; retry through mstar workflow compass-ref.");
+  }
+  return { compassRef: evidence.compassRef };
 }
 
 /** The candidate header must be a valid snapshot before it is stored. */

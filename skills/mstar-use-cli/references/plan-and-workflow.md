@@ -105,6 +105,10 @@ Standalone `workflow register` is create-only and declares project, plan pointer
 
 Iteration registration uses `mstar iteration register`, not standalone registration: compass ref, explicit base/integration/target anchors and Todo rows; canonical absolute plan pointers and producer-derived metadata. Registration cannot silently overwrite an existing lifecycle; recover partial registration through the supported catalog/registration receipt route.
 
+A compass ref is admitted, not merely stored. `--compass-ref` accepts the reviewed compass as an absolute path inside the harness root or as its harness-relative pointer (`iterations/<iteration-id>/delivery-compass.md`); the stored value is always that canonical harness-relative form. The document must exist as a regular file inside the harness root, be non-empty, parse as compass frontmatter, validate against the §1.3 field set, and declare `iteration_id:` equal to the registered workflow. A repository-relative `.mstar/...` pointer is refused: every reader joins a compass ref under the harness root, so that spelling can only name `.mstar/.mstar/...` (I-000863). The admission runs before the registration transaction opens, so a refused compass publishes no workflow row, no plan row and no catalog entity.
+
+Correct an already-registered pointer with `mstar workflow compass-ref --workflow <id> --compass <harness-relative-or-absolute-compass> --reason <why> --expect <workflow-token> --operation <id>` — the same revisable repair shape as `workflow delivery-anchors`, for lifecycles already running with a pointer a wrong writer stored. `--compass` passes the same admission gate; `--reason` is required and is part of the operation's intent, so an identical retry replays its receipt and a different reason conflicts. The repair preserves the workflow/session/plan identities, their rows and their history, and it stays repeatable while the lifecycle runs; a closed lifecycle is refused by the existing amend guard.
+
 ## Exit codes
 
 - `0`: success, idempotent no-op, exact replay or read-only resume.

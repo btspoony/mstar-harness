@@ -374,11 +374,23 @@ const CODE_ORDER: readonly Phase1RefusalCode[] = [
 /** Safe identity subreasons refining the broad `binding-invalid` gate. */
 export type Phase1IdentityDetail = "identity-missing" | "identity-mismatch" | "foreign-owner";
 
-/** Safe plan-path and compass subreasons. */
-export type Phase1PathDetail = "plan-pointer-invalid" | "plan-identity-mismatch" | "prepare-unlocked";
+/**
+ * Safe plan-path and compass subreasons. The compass members are split so a
+ * refusal names the ONE fact that disagreed: the registered pointer's form, or
+ * one of the two authored frontmatter mirrors.
+ */
+export type Phase1PathDetail =
+  | "plan-pointer-invalid"
+  | "plan-identity-mismatch"
+  | "prepare-unlocked"
+  | "compass-pointer-invalid"
+  | "compass-unregistered"
+  | "compass-base-branch-mirror"
+  | "compass-integration-branch-mirror"
+  | "compass-worktree-mirror";
 
 /** Safe pointer-form classification; the stored path value is never projected. */
-export type Phase1PointerForm = "canonical-absolute" | "harness-relative";
+export type Phase1PointerForm = "canonical-absolute" | "harness-relative" | "repository-relative";
 
 /** Safe source label for an observed identity or plan pointer. */
 export type Phase1DiagnosticSource = "host-session" | "plan-row" | "execution-authority";
@@ -419,6 +431,10 @@ const NEXT_COORDINATOR_EVIDENCE =
 const NEXT_REGISTERED_PLAN =
 "register the plan row through `mstar iteration register` under ACTIVE execution authority";
 const NEXT_LOCK_COMPASS = "lock the reviewed delivery compass, then re-run this checkpoint";
+const NEXT_REPAIR_COMPASS =
+  "repair the registered pointer with `mstar workflow compass-ref --workflow <workflow-id> --compass <harness-relative-or-absolute-compass> --reason <why>`, then re-run this checkpoint";
+const NEXT_AUTHOR_COMPASS_MIRRORS =
+  "add the named anchor fields to the reviewed delivery compass frontmatter so they mirror the registered workflow anchors, then re-run this checkpoint";
 
 
 export type Phase1Readiness =
@@ -790,22 +806,55 @@ export async function inspectPhase1Readiness(
   // engine's amendment reader requires exactly that); an absolute pointer is
   // still accepted here as long as it resolves to the *bound* compass path, so
   // this checkpoint never refuses a self-consistent document whose form the
-  // writer chose.
-  if (
-    compassRef === null ||
-    canonicalizeNearestExisting(isAbsolute(compassRef) ? compassRef : join(harnessRoot, compassRef)) !== compassFile.real
-  ) {
+  // writer chose. A pointer that does NOT resolve there names a real, repairable
+  // mismatch: it is either the wrong document or the wrong base (a
+  // repository-relative `.mstar/...` pointer is joined under the harness root,
+  // so it can only ever name `.mstar/.mstar/...` — I-000863). The diagnostic
+  // reports the received FORM (never the stored text) and the public repair.
+  const resolvedCompassRef =
+    compassRef === null
+      ? null
+      : canonicalizeNearestExisting(isAbsolute(compassRef) ? compassRef : join(harnessRoot, compassRef));
+  if (compassRef === null || resolvedCompassRef !== compassFile.real) {
     fail("binding-invalid");
+    diagnose({
+      code: "binding-invalid",
+      detail: compassRef === null ? "compass-unregistered" : "compass-pointer-invalid",
+      workflowId: binding.workflowId,
+      source: "execution-authority",
+      ...(compassRef === null
+        ? {}
+        : { received: isAbsolute(compassRef) ? "canonical-absolute" : /^(?:\.\/)?\.mstar\//.test(compassRef) ? "repository-relative" : "harness-relative" }),
+      base: harnessRoot,
+      target: compassFile.real,
+      next: NEXT_REPAIR_COMPASS,
+    });
   }
 
   // Branch anchors: the lifecycle and the compass must describe the same
-  // iteration.
-  if (
-    anchors === null ||
-    compass.iteration_base_branch !== anchors.base ||
-    compass.spec_integration_branch !== anchors.integration
-  ) {
+  // iteration. The two authored mirrors are reported separately — an author who
+  // has to add BOTH must not learn about the second on a retry.
+  if (anchors === null || compass.iteration_base_branch !== anchors.base) {
     fail("binding-invalid");
+    diagnose({
+      code: "binding-invalid",
+      detail: "compass-base-branch-mirror",
+      workflowId: binding.workflowId,
+      source: "execution-authority",
+      ...(anchors === null ? {} : { expected: anchors.base }),
+      next: NEXT_AUTHOR_COMPASS_MIRRORS,
+    });
+  }
+  if (anchors === null || compass.spec_integration_branch !== anchors.integration) {
+    fail("binding-invalid");
+    diagnose({
+      code: "binding-invalid",
+      detail: "compass-integration-branch-mirror",
+      workflowId: binding.workflowId,
+      source: "execution-authority",
+      ...(anchors === null ? {} : { expected: anchors.integration }),
+      next: NEXT_AUTHOR_COMPASS_MIRRORS,
+    });
   }
   const compassWorktree = isNonEmptyString(compass.integration_worktree_path) ? compass.integration_worktree_path : null;
   if (
@@ -814,6 +863,14 @@ export async function inspectPhase1Readiness(
     canonicalizeNearestExisting(integrationWorktree) !== canonicalizeNearestExisting(compassWorktree)
   ) {
     fail("binding-invalid");
+    diagnose({
+      code: "binding-invalid",
+      detail: "compass-worktree-mirror",
+      workflowId: binding.workflowId,
+      source: "execution-authority",
+      ...(integrationWorktree === null ? {} : { expected: integrationWorktree }),
+      next: NEXT_AUTHOR_COMPASS_MIRRORS,
+    });
   }
 
   // Compass registration and ACTIVE lifecycle plan rows must agree exactly.

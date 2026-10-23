@@ -2088,9 +2088,21 @@ async function continuationFixture(label: string): Promise<ContinuationFixture> 
   const store = await initializeStore(context);
   store.close();
 
+  // Registration proves the named document IS this iteration's reviewed
+  // compass, so the fixture states a complete one.
   writeText(
     join(harnessDir, CONTINUATION_COMPASS_REF),
-    `---\nstatus: active\nplans:\n  - ${CONTINUATION_PLAN_A}\n  - ${CONTINUATION_PLAN_B}\ntargetBranch: main\n---\n`,
+    "---\n" +
+      `iteration_id: ${CONTINUATION_WORKFLOW}\n` +
+      "start_date: 2026-09-24\n" +
+      "status: active\n" +
+      "iteration_base_branch: main\n" +
+      `spec_integration_branch: ${CONTINUATION_INTEGRATION_BRANCH}\n` +
+      "target_branch: main\n" +
+      "plans:\n" +
+      `  - ${CONTINUATION_PLAN_A}\n` +
+      `  - ${CONTINUATION_PLAN_B}\n` +
+      "---\n",
   );
 
   const integrationPath = join(root, "wt-integration");

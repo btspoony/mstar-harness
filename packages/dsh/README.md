@@ -257,7 +257,7 @@ The bundle patch inserts ONE `mstar-mcp` row, and that row is the whole MCP chan
 **The control root is DECLARED, never inferred.** It resolves in one ordered rule, and the launch cwd is never a candidate — that directory is the HOST's, it says nothing about which workspace a caller belongs to, and adopting it would root writes on an unrelated project:
 
 1. the connection pin — `mstar mcp --harness <absolute path>`, else a non-blank `MSTAR_HARNESS_DIR` in the server environment;
-2. otherwise the root the admitted CALL names through the tool's `harness` field (an absolute path, or one relative to the server's launch directory);
+2. otherwise the root the admitted CALL names through the tool's `harness` field (an absolute path; a relative selector is refused with the same named cause, because the launch directory never anchors a caller's root);
 3. a null root for the commands whose contract reads none — `harness.scaffold` (establishing a root is its own operation) and the root-free class (`schema`, `path.resolve`, `host.*`, `doctor`, and the read-only validators such as `lint` / `skill.lint` / `qc.validate-report`), which only answer from explicit inputs and therefore never resolve an implicit harness path;
 4. otherwise the call is refused with `[mcp.control-root-unresolved]`, naming the cause and every recovery — the two launcher recoveries apply to every command, while the per-call `harness` selector is tool-dependent (a command that does not publish the field cannot accept it).
 

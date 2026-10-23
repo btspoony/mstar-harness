@@ -573,6 +573,57 @@ export function getWorkflowCommandDefinitions(): readonly CommandDefinition[] {
       harness: "Control harness root whose store owns the addressed workflow.",
     }),
     makeDefinition(
+      "workflow.compass-ref",
+      "Repair a RUNNING iteration workflow's registered reviewed-compass pointer (`compass_ref`) under the workflow CAS token. `--compass` names the reviewed delivery compass as an absolute path inside the harness root or as a harness-relative pointer; it must exist, be a non-empty valid compass frontmatter for THIS iteration, and the stored value is its canonical harness-relative form. `--reason` is required and recorded with the operation. The correction preserves the workflow/session/plan identities and their rows and is revisable and repeatable for as long as the workflow keeps running; a closed lifecycle is refused by the pre-existing amend guard.",
+      "write",
+      ["workflow", "compass", "reason", "sessionRef", "expect", "operation", "harness"],
+      async (input, context) => {
+        const id = "workflow.compass-ref";
+        try {
+          const missing = [
+            ...(input.workflow === undefined ? ["workflow is required; inspect registered workflows with mstar status validate."] : []),
+            ...(input.compass === undefined || input.compass.trim() === ""
+              ? ["a compass is required: name the reviewed delivery compass as an absolute path inside the harness root or as a harness-relative pointer."]
+              : []),
+            ...((input.reason ?? "").trim() === ""
+              ? ["a non-empty reason is required: state why the registered compass pointer is being corrected, so the repair is auditable."]
+              : []),
+          ];
+          if (input.workflow === undefined || missing.length > 0) {
+            return refusalEnvelope({ command: id, status: "usage", code: "command.invalid-input", exitCode: 2, message: missing.join(" ") });
+          }
+          if (context.sessionId === undefined) return refusalEnvelope({ command: id, status: "usage", code: "command.invalid-input", exitCode: 2, message: `active compass repair requires an acquired coordinator identity: ${IDENTITY_RECOVERY} (${IDENTITY_SUPPLIES}).` });
+          const ref = input.sessionRef === undefined ? undefined : decodeExecutionSessionRef(input.sessionRef);
+          const acquired = context.executionIdentity;
+          if (ref !== undefined && (ref.workflowId !== input.workflow || ref.role !== "coordinator")) {
+            return refusalEnvelope({ command: id, status: "usage", code: "command.invalid-input", exitCode: 2, message: "sessionRef must address the selected workflow's coordinator seat" });
+          }
+          if (acquired !== undefined && (acquired.workflowId !== input.workflow || acquired.role !== "coordinator")) {
+            return refusalEnvelope({ command: id, status: "usage", code: "command.invalid-input", exitCode: 2, message: "acquired caller identity does not address the selected coordinator workflow" });
+          }
+          const root = resolveProcessHarnessDir(context.cwd, input.harness);
+          if (root === null) return refusalEnvelope({ command: id, status: "usage", code: "command.invalid-input", exitCode: 2, message: "no control harness resolved; supply an absolute harness" });
+          const identity: ExecutionIdentity = acquired ?? { source: context.host === undefined ? "local" : "host", sessionId: context.sessionId, workflowId: input.workflow, role: "coordinator" };
+          const operation: WorkflowExecutionOperation = { kind: "compass-ref", compassPath: input.compass!, reason: input.reason! };
+          return ok(id, await mutateExecutionWorkflow(executionContextFor({ harnessDir: root }, identity), {
+            workflowId: input.workflow,
+            ...(ref === undefined ? {} : { session: ref }),
+            ...(input.expect === undefined ? {} : { expected: input.expect as never }),
+            operationId: input.operation ?? randomUUID(),
+            operation,
+          }));
+        } catch (error) { return engineRefusal(id, error); }
+      },
+      [{ key: "sessionId", context: "sessionId" }],
+      {
+        compass: "The reviewed delivery compass to record: an absolute path inside the harness root, or its harness-relative pointer (e.g. iterations/<iteration-id>/delivery-compass.md). A repository-relative `.mstar/...` pointer is not a compass_ref — it is joined under the harness root and would name `.mstar/.mstar/...`.",
+        reason: "Required. Why the registered compass pointer is being corrected; recorded with the operation so the repair is auditable.",
+        expect: `CAS expectation: ${TOKEN_SUPPLIES.workflow}`,
+        sessionRef: `session transport: ${SESSION_REF_SUPPLIES}`,
+        harness: "Control harness root whose store owns the addressed workflow.",
+      },
+    ),
+    makeDefinition(
       "workflow.adopt-terminal",
       "Adopt a header that has no ACTIVE registry membership. An optional --expect is a positive header-revision CAS; if omitted, the engine derives the current revision inside the guarded transaction. An omitted --operation gets one generated id for this invocation. A header that never closed is terminalized to stopped in the same transaction as its adoption record, so the committed state never carries an adoption on a still-running header; an already-terminal header keeps its recorded status and ended_at. If the eligible header holds current-epoch ACTIVE coordinator session(s), the same transaction settles only the exact sessions supported by genuine operator stop evidence supplied through --attestation <absolute-json>; its stoppedSessions must name every target stopped/reloaded. The engine refuses self-settlement, invalid proof, and changed proof under a committed operation id. It does not infer that a process stopped or that consumer/operator facts are true.",
       "write",

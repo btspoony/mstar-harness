@@ -25,7 +25,7 @@
  */
 import { afterAll, describe, expect, test } from "bun:test";
 import { execFileSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
@@ -1645,6 +1645,27 @@ describe("execution-workflow: \u00A74.1/\u00A74.2 semantic replay and typed caus
     expect(listOf(problems[0]!, "currentFacts")).toContain("did not get past that read");
     expect(listOf(problems[0]!, "availableWork")).toContain("lifecycle, execution-policy, delivery");
     expect(await workflowFootprint(fixture.context)).toEqual(before);
+  });
+
+  test("a compass-ref repair's prerequisite report names the compass document it reads, never Git evidence (A25)", async () => {
+    // The default `plan` fixture carries no reviewed delivery compass, so the
+    // repair refuses at its evidence read. That read is the compass DOCUMENT the
+    // repair names — no checkout and no Git probe is involved — so the typed
+    // cause must name what this transition actually reads.
+    const fixture = await workflowFixture("compass-ref-prerequisite");
+    const refused = await refusalOf(() =>
+      workflowMutation(fixture, "op-compass-ref-prerequisite", {
+        kind: "compass-ref",
+        compassPath: COMPASS_REF,
+        reason: "record the pointer registration refused",
+      }),
+    );
+    const problems = problemsOf(recoveryOf(refused.details));
+    expect(problems).toHaveLength(1);
+    expect(problems[0]!.path).toBe("operation.compassPath");
+    const sourcesTried = listOf(problems[0]!, "sourcesTried");
+    expect(sourcesTried).toContain("reviewed delivery compass document");
+    expect(sourcesTried).not.toContain("Git probes");
   });
 });
 
@@ -3298,6 +3319,265 @@ describe("execution-workflow: \u00A73 the delivery-anchor repair", () => {
     // the status it observed.
     expect(refusal.code).toBe("coordination.invalid-transition");
     expect(refusal.details.status).toBe("stopped");
+    expect(await workflowFootprint(fixture.context)).toEqual(before);
+  });
+});
+
+/* ------------------------------------------------------------------------ *
+ * §4.1 the registered-compass repair (I-000863)
+ * ------------------------------------------------------------------------ */
+
+describe("execution-workflow: §4.1 the registered-compass repair", () => {
+  /**
+   * The lifecycle's OWN reviewed compass: `writeCompass` states the shared
+   * fixture iteration id, while a repair proves the document belongs to THIS
+   * workflow, so the repair cases restate it as the workflow's own.
+   */
+  function writeOwnCompass(fixture: Fixture): void {
+    writeCompass(fixture.compassPath, { status: "active", plans: [PLAN_ID], targetBranch: "main" });
+    const text = readFileSync(fixture.compassPath, "utf8").replace(`iteration_id: ${ITERATION_ID}`, `iteration_id: ${WORKFLOW_ID}`);
+    writeFileSync(fixture.compassPath, text);
+  }
+
+  /** The compass document of another iteration, written where a repair can name it. */
+  function writeForeignCompass(fixture: Fixture): string {
+    const ref = "iterations/iter-someone-else/delivery-compass.md";
+    writeText(join(dirname(storeDbPath(fixture.context)), ref), [
+      "---",
+      "iteration_id: iter-someone-else",
+      "start_date: 2026-01-01",
+      "status: active",
+      "iteration_base_branch: main",
+      "target_branch: main",
+      "---",
+      "",
+      "# another iteration",
+    ].join("\n"));
+    return ref;
+  }
+
+  /** Plant a stored `compass_ref` without moving the header revision. */
+  function plantCompassRef(fixture: Fixture, value: string): void {
+    withRaw(fixture.context, (db) => {
+      db.prepare("update execution_workflows set state_json = json_set(state_json, '$.compass_ref', ?) where workflow_id = ?").run(
+        value,
+        WORKFLOW_ID,
+      );
+    });
+  }
+
+  function storedCompassRef(fixture: Fixture): unknown {
+    const [row] = rows(fixture.context, `select state_json from execution_workflows where workflow_id = '${WORKFLOW_ID}'`);
+    return parsedJson(row!.state_json).compass_ref;
+  }
+
+  function planRowStates(fixture: Fixture): Array<Record<string, unknown>> {
+    return rows(
+      fixture.context,
+      `select plan_id, revision, state_json from execution_plans where workflow_id = '${WORKFLOW_ID}' order by plan_id`,
+    );
+  }
+
+  test("a repository-relative pointer is repaired to the canonical harness-relative form, keeping identities, rows and history", async () => {
+    const fixture = await workflowFixture("compass-ref-repair", [], "iteration");
+    writeOwnCompass(fixture);
+    // The stored value the double-join produced: a repository-relative pointer
+    // that every later reader resolves to `<harness>/.mstar/iterations/...`.
+    plantCompassRef(fixture, `.mstar/${COMPASS_REF}`);
+    const before = (await readExecutionState(fixture.context)).data.workflows[0]!.state as unknown as Record<string, unknown>;
+    expect(identityAnchors(before).compass_ref).toBe(`.mstar/${COMPASS_REF}`);
+    const rowsBefore = planRowStates(fixture);
+    const [operationsBefore] = rows(
+      fixture.context,
+      `select count(*) as n from execution_operations where workflow_id = '${WORKFLOW_ID}'`,
+    );
+
+    const repaired = await workflowMutation(fixture, "op-compass-ref", {
+      kind: "compass-ref",
+      compassPath: COMPASS_REF,
+      reason: "the registered pointer carried a repository-relative prefix",
+    });
+    expect(repaired.replayed).toBe(false);
+    const state = repaired.data.workflows[0]!.state as unknown as Record<string, unknown>;
+    expect(state.compass_ref).toBe(COMPASS_REF);
+    // The ONLY identity anchor that moved is the pointer this operation owns.
+    expect(identityAnchors(state)).toEqual({ ...identityAnchors(before), compass_ref: COMPASS_REF });
+    // Rows and their recorded history are untouched: this is a pointer repair,
+    // not a re-registration.
+    expect(planRowStates(fixture)).toEqual(rowsBefore);
+    const [operationsAfter] = rows(
+      fixture.context,
+      `select count(*) as n from execution_operations where workflow_id = '${WORKFLOW_ID}'`,
+    );
+    expect(Number(operationsAfter!.n)).toBe(Number(operationsBefore!.n) + 1);
+
+    // The repaired pointer is what the phase transition's own comparison expects:
+    // the registered compass is reachable under the harness root again.
+    expect(existsSync(join(dirname(storeDbPath(fixture.context)), String(storedCompassRef(fixture))))).toBe(true);
+  });
+
+  test("the absolute in-harness spelling stores the same canonical pointer, and an identical replay writes nothing", async () => {
+    const fixture = await workflowFixture("compass-ref-absolute", [], "iteration");
+    writeOwnCompass(fixture);
+    plantCompassRef(fixture, `.mstar/${COMPASS_REF}`);
+    const repaired = await workflowMutation(fixture, "op-compass-ref-absolute", {
+      kind: "compass-ref",
+      compassPath: fixture.compassPath,
+      reason: "record the pointer from the document's absolute path",
+    });
+    expect((repaired.data.workflows[0]!.state as unknown as Record<string, unknown>).compass_ref).toBe(COMPASS_REF);
+    const published = await workflowFootprint(fixture.context);
+
+    // The same operation id replays its recorded receipt; a different reason is
+    // a different intent and conflicts instead of being served as a replay.
+    const replay = await workflowMutation(fixture, "op-compass-ref-absolute", {
+      kind: "compass-ref",
+      compassPath: fixture.compassPath,
+      reason: "record the pointer from the document's absolute path",
+    });
+    expect(replay.replayed).toBe(true);
+    expect(await workflowFootprint(fixture.context)).toEqual(published);
+
+    const conflicting = await refusalOf(() =>
+      workflowMutation(fixture, "op-compass-ref-absolute", {
+        kind: "compass-ref",
+        compassPath: COMPASS_REF,
+        reason: "a different reason for the same pointer",
+      }),
+    );
+    expect(conflicting.code).toBe("execution.operation-conflict");
+    expect(await workflowFootprint(fixture.context)).toEqual(published);
+  });
+
+  test("a committed repair replays after its document becomes unusable, while a new operation still refuses", async () => {
+    const fixture = await workflowFixture("compass-ref-replay-broken", [], "iteration");
+    writeOwnCompass(fixture);
+    plantCompassRef(fixture, `.mstar/${COMPASS_REF}`);
+    const repaired = await workflowMutation(fixture, "op-compass-ref-broken", {
+      kind: "compass-ref",
+      compassPath: COMPASS_REF,
+      reason: "record the pointer registration refused",
+    });
+    expect(repaired.replayed).toBe(false);
+    expect((repaired.data.workflows[0]!.state as unknown as Record<string, unknown>).compass_ref).toBe(COMPASS_REF);
+    const published = await workflowFootprint(fixture.context);
+
+    // The external document is the ADMISSION for a new write, never a condition
+    // on the replay of an operation the store already accepted: a coordinator
+    // that retries the exact committed request after the document was removed
+    // still gets its receipt, with nothing written.
+    rmSync(fixture.compassPath);
+    const replay = await workflowMutation(fixture, "op-compass-ref-broken", {
+      kind: "compass-ref",
+      compassPath: COMPASS_REF,
+      reason: "record the pointer registration refused",
+    });
+    expect(replay.replayed).toBe(true);
+    expect(await workflowFootprint(fixture.context)).toEqual(published);
+
+    // A changed intent under the committed id is still the operation conflict:
+    // replay-first must not turn a different request into a served success.
+    const conflicting = await refusalOf(() =>
+      workflowMutation(fixture, "op-compass-ref-broken", {
+        kind: "compass-ref",
+        compassPath: COMPASS_REF,
+        reason: "a different reason for the same pointer",
+      }),
+    );
+    expect(conflicting.code).toBe("execution.operation-conflict");
+    expect(await workflowFootprint(fixture.context)).toEqual(published);
+
+    // The same unusable document under a NEW operation id is still refused by
+    // full admission, so the ordering does not weaken the new-write gate.
+    writeFileSync(fixture.compassPath, "");
+    const refused = await refusalOf(() =>
+      workflowMutation(fixture, "op-compass-ref-broken-new", {
+        kind: "compass-ref",
+        compassPath: COMPASS_REF,
+        reason: "repair against an empty document",
+      }),
+    );
+    expect(refused.code).toBe("coordination.invalid-transition");
+    expect(await workflowFootprint(fixture.context)).toEqual(published);
+  });
+
+  test("a repair the lifecycle or the document cannot support is refused with no mutation", async () => {
+    const iterationFixture = await workflowFixture("compass-ref-refusals", [], "iteration");
+    writeOwnCompass(iterationFixture);
+    const planFixture = await workflowFixture("compass-ref-plan-type");
+    const foreignRef = writeForeignCompass(iterationFixture);
+    const before = await workflowFootprint(iterationFixture.context);
+    const planBefore = await workflowFootprint(planFixture.context);
+
+    const cases: ReadonlyArray<readonly [string, Fixture, unknown, string]> = [
+      ["a compass that names no document", iterationFixture, { kind: "compass-ref", compassPath: "iterations/missing/delivery-compass.md", reason: "repair" }, "coordination.invalid-input"],
+      ["another iteration's compass", iterationFixture, { kind: "compass-ref", compassPath: foreignRef, reason: "repair" }, "coordination.scope-mismatch"],
+      ["a repository-relative pointer", iterationFixture, { kind: "compass-ref", compassPath: `.mstar/${COMPASS_REF}`, reason: "repair" }, "coordination.invalid-input"],
+      ["a missing reason", iterationFixture, { kind: "compass-ref", compassPath: COMPASS_REF }, "coordination.invalid-input"],
+      ["an empty reason", iterationFixture, { kind: "compass-ref", compassPath: COMPASS_REF, reason: "   " }, "coordination.invalid-input"],
+      ["a key the operation does not own", iterationFixture, { kind: "compass-ref", compassPath: COMPASS_REF, reason: "repair", phase: "phase-2-execute" }, "coordination.forbidden-field"],
+      // A plan workflow registers no reviewed compass, so repairing one would
+      // write a field its own type never reads.
+      ["a plan workflow", planFixture, { kind: "compass-ref", compassPath: COMPASS_REF, reason: "repair" }, "coordination.invalid-transition"],
+    ];
+    for (const [index, [label, fixture, operation, code]] of cases.entries()) {
+      const refusal = await refusalOf(() => workflowMutation(fixture, `op-compass-ref-${index}`, operation as never));
+      expect(`${label} -> ${refusal.code}`).toBe(`${label} -> ${code}`);
+    }
+    expect(await workflowFootprint(iterationFixture.context)).toEqual(before);
+    expect(await workflowFootprint(planFixture.context)).toEqual(planBefore);
+  });
+
+  test("a superseded CAS token is refused with no mutation", async () => {
+    const fixture = await workflowFixture("compass-ref-stale-cas", [], "iteration");
+    writeOwnCompass(fixture);
+    plantCompassRef(fixture, `.mstar/${COMPASS_REF}`);
+    const before = await workflowFootprint(fixture.context);
+    const [storeRow] = rows(fixture.context, "select store_id, authority_epoch from store_meta where id = 1");
+    const [headerRow] = rows(fixture.context, `select revision from execution_workflows where workflow_id = '${WORKFLOW_ID}'`);
+    // A token of the NEXT authority generation: the generation fence refuses it
+    // before any evidence is applied or any revision advances.
+    const superseded = executionToken(
+      "workflow",
+      String(storeRow!.store_id),
+      Number(storeRow!.authority_epoch) + 1,
+      [WORKFLOW_ID],
+      Number(headerRow!.revision),
+    );
+    const refusal = await refusalOf(() =>
+      workflowMutation(fixture, "op-compass-ref-stale", {
+        kind: "compass-ref",
+        compassPath: COMPASS_REF,
+        reason: "repair against a superseded token",
+      }, { expected: superseded }),
+    );
+    expect(refusal.code).toBe("store.stale-epoch");
+    expect(await workflowFootprint(fixture.context)).toEqual(before);
+    expect(storedCompassRef(fixture)).toBe(`.mstar/${COMPASS_REF}`);
+  });
+
+  test("a compass that vanishes between the read and the commit is refused at the boundary", async () => {
+    const fixture = await workflowFixture("compass-ref-vanish", [], "iteration");
+    writeOwnCompass(fixture);
+    const before = await workflowFootprint(fixture.context);
+    // The named document is a symlink whose target is removed inside the read
+    // window: the pre-transaction read succeeds, the commit-boundary re-read does
+    // not, and nothing is stored.
+    const aliasPath = join(fixture.repoRoot, "compass-alias.md");
+    symlinkSync(fixture.compassPath, aliasPath);
+    setWorkflowWitnessGapForTest(() => rmSync(fixture.compassPath));
+    try {
+      const refusal = await refusalOf(() =>
+        workflowMutation(fixture, "op-compass-ref-vanish", {
+          kind: "compass-ref",
+          compassPath: aliasPath,
+          reason: "record the pointer from an alias",
+        }),
+      );
+      expect(refusal.code).toBe("coordination.invalid-transition");
+    } finally {
+      setWorkflowWitnessGapForTest(undefined);
+    }
     expect(await workflowFootprint(fixture.context)).toEqual(before);
   });
 });
