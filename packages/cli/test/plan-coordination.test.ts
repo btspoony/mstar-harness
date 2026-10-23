@@ -73,6 +73,27 @@ async function issues(f: Fixture): Promise<Record<string, any>[]> {
   const result = cli(["issue", "list", "--harness", f.harness], f); expect(result.code, result.stdout).toBe(0);
   const items = result.json.data?.items; if (!Array.isArray(items)) throw new Error(`no issue items: ${result.stdout}`); return items;
 }
+// The recovery text is operator copy: its first `mstar …` sentence is taken as
+// the invocation, one layer of shell quoting is dropped, and each placeholder
+// the caller binds is substituted. An unbound placeholder is a failure, never a
+// silently skipped token.
+function advertisedInvocation(recovery: string, bindings: ReadonlyArray<readonly [RegExp, string]>): string[] {
+  const start = recovery.indexOf("mstar ");
+  if (start < 0) throw new Error(`recovery names no mstar invocation: ${recovery}`);
+  const from = recovery.slice(start + "mstar ".length);
+  const boundary = from.search(/[.;]\s/);
+  const clause = (boundary < 0 ? from : from.slice(0, boundary)).trim();
+  const argv = clause.split(/\s+/).map((token) => {
+    const cleaned = token.replace(/[.;,]+$/, "").replace(/^'|'$/g, "");
+    const binding = bindings.find(([pattern]) => pattern.test(cleaned));
+    return binding === undefined ? cleaned : binding[1];
+  });
+  const unbound = argv.filter((token) => /^<.*>$/.test(token));
+  if (unbound.length > 0) throw new Error(`recovery advertises unbound placeholder(s) ${unbound.join(", ")}: ${recovery}`);
+  // A `--help` argv exits 0 without running the verb: never accept it as a replay.
+  if (argv.includes("--help") || argv.includes("-h")) throw new Error(`recovery advertises only the help route: ${recovery}`);
+  return argv;
+}
 
 describe("mstar plan — ACTIVE coordinator operations", () => {
   test("bind records creator identity and refuses foreign or missing identity", async () => {
@@ -154,5 +175,44 @@ describe("mstar plan — ACTIVE coordinator operations", () => {
     for (const verb of ["show-prepare", "amend-prepare", "recover-coordinator"]) {
       expect(result.stdout.toString()).not.toContain(verb);
     }
+  });
+  test("progress, issue-add and issue-close recoveries advertise an invocation the decoder accepts", async () => {
+    const f = await fixture(); await register(f); expect((await bind(f)).code).toBe(0);
+    // The advertised command is the proof, not its prose: each refusal's own
+    // `recovery` is executed as-is (one layer of shell quoting removed) against
+    // the same fixture and must succeed in that single invocation.
+    const replay = (refusal: Result, bindings: ReadonlyArray<readonly [RegExp, string]>): Result => {
+      const applied = cli(advertisedInvocation(String(refusal.json.details?.recovery ?? refusal.json.recovery ?? ""), bindings), f, identity());
+      expect(applied.code, applied.stdout).toBe(0);
+      return applied;
+    };
+    const progressDoc = { status: "InProgress", summary: "recovery replay", evidence_paths: [] };
+    const addressing: ReadonlyArray<readonly [RegExp, string]> = [[/^<workflow-id>$/, WF], [/^<plan-id>$/, PLAN]];
+    const progressRefused = cli(["plan", "progress", "--plan", PLAN, "--progress", JSON.stringify(progressDoc),
+      "--expect", "stale-token", "--harness", f.harness], f, identity());
+    expect(progressRefused.code).toBe(1);
+    replay(progressRefused, [...addressing, [/^<json-progress-object>$/, JSON.stringify(progressDoc)]]);
+
+    const entries = JSON.stringify([issuePayload("recovery-replay")]);
+    const addRefused = cli(["plan", "issue-add", "--plan", PLAN, "--entries", entries,
+      "--expect", "stale-token", "--harness", f.harness], f, identity());
+    expect(addRefused.code).toBe(1);
+    replay(addRefused, [...addressing, [/^<json-array>$/, entries]]);
+    const captured = (await issues(f))[0]!;
+
+    const evidence = join(f.root, "close-evidence.json");
+    write(evidence, JSON.stringify({ reason: "verified fix", references: ["packages/commands/src/families/plan.ts"], alignmentRef: "test" }));
+    const closeRefused = cli(["plan", "issue-close", "--plan", PLAN, "--issue", String(captured.id), "--disposition", "resolved",
+      "--file", evidence, "--expect-issue", String(Number(captured.revision) + 1), "--harness", f.harness], f, identity());
+    expect(closeRefused.code).toBe(1);
+    replay(closeRefused, [
+      ...addressing,
+      [/^<issue-id>$/, String(captured.id)],
+      [/^<disposition>$/, "resolved"],
+      [/^<issue-revision>$/, String(captured.revision)],
+      [/^<absolute-evidence\.json>$/, evidence],
+    ]);
+    const closed = cli(["issue", "list", "--disposition", "resolved", "--harness", f.harness], f);
+    expect(closed.json.data?.items?.map((item: { id: string }) => item.id)).toEqual([captured.id]);
   });
 });
