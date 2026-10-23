@@ -1,6 +1,6 @@
 # Phase 6: post-merge close（terminal execution state → unregister → reconcile → cleanup handoff）
 
-> Loaded by `mstar-iteration` SKILL.md when entering Phase 6. **Read `mstar-harness-core` first.** 进入前置：§5.2 全 `[x]`（第 1–4 项 merge-ready **且** 第 6 项 §5.3 授权成立 **且** 第 7 项 merge 已完成）**且 PR 已 merge**（verified merged）。mergeable ≠ merged；引擎无法探测远端 PR 状态 —— merged 与否由 PM 核实后再调用，close verb **不**充当 merge 验证器。
+> Loaded by `mstar-iteration` SKILL.md when entering Phase 6. **Read `mstar-harness-core` first.** 进入前置：§5.2 第 1–4、6、7 项全 `[x]`（第 1–4 项 merge-ready **且** 第 6 项 §5.3 授权成立 **且** 第 7 项 merge 已完成；第 5 项 todo 勾选随前四项达成，不另设门）**且 PR 已 merge**（verified merged）。mergeable ≠ merged；引擎无法探测远端 PR 状态 —— merged 与否由 PM 核实后再调用，close verb **不**充当 merge 验证器。
 
 ## Entry
 
