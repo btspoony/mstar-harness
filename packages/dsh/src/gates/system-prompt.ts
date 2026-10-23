@@ -243,7 +243,7 @@ export function registerHarnessPrompt(
         // assembly — in zero-config and explicit-config deployments alike.
         text: (context) => {
           const harnessDir = resolveAssemblyHarnessDir(context, options.resolver, bootHarnessDir)
-          return harnessRulesText(harnessDir, sectionEnforcement(harnessDir))
+          return harnessRulesText(harnessDir, sectionEnforcement(harnessDir), teamLayerMounted(ctx))
         },
       })
       const disposeContext = view.context({
@@ -314,18 +314,52 @@ function sectionEnforcement(harnessDir: string | null): EnforcementFlag {
 }
 
 /**
+ * The delegation contract: which channel is the default and what shape every
+ * dispatch prompt must take. Appended only when the Agent Teams service is
+ * mounted — without it `spawn_teammate` does not exist, so the first line
+ * would name a tool the session cannot call.
+ *
+ * Both facts are otherwise reachable only through `mstar-host` →
+ * `references/dsh.md`, which a coordinator that is mid-task on something else
+ * does not open; a session that never reads it sends writable work through
+ * `subagent` and hand-writes header-less `workflow agent()` prompts, and
+ * neither the dispatch gate (no pre-start seam on `workflow`) nor the role
+ * gate (reads only `Execute as`) can correct that after the fact.
+ */
+const TEAM_DELEGATION_CONTRACT = [
+  'delegation: Agent Teams is mounted — `spawn_teammate` is the default channel for writable work (one durable teammate per writable track); `subagent` is a one-off read-only seat.',
+  'dispatch prompt: every delegation prompt — `workflow agent()` included — opens with "## Assignment" and "Execute as: <role>"; the role gate cannot repair a header-less `workflow` child.',
+].join('\n')
+
+/**
+ * Whether the optional Agent Teams service is mounted — the same structural
+ * read the ledger uses (`references/dsh-agent-teams.md`). Read per assembly,
+ * not at apply: the service may land after this plugin's apply on some
+ * compositions. Never throws.
+ */
+function teamLayerMounted(ctx: Context): boolean {
+  try {
+    return ctx.get('agentTeams') !== undefined
+  } catch {
+    return false
+  }
+}
+
+/**
  * The pointer block: presence / enforcement word / resolved
- * `{HARNESS_DIR}` / one read-mstar-harness-core directive. Zero complete
+ * `{HARNESS_DIR}` / one read-mstar-harness-core directive — plus the
+ * delegation contract when the Team layer is mounted. Zero complete
  * `{{...}}` groups by construction (STRICT interpolation safety — plan QC
  * fix wave W-1): the operator-controlled harness dir is screened before
  * embedding, so a path containing `{{…}}` can never break prompt assembly.
  */
-function harnessRulesText(harnessDir: string | null, enforcement: EnforcementFlag): string {
+function harnessRulesText(harnessDir: string | null, enforcement: EnforcementFlag, teamMounted: boolean): string {
   return [
     'This session runs under the Morning Star (mstar) harness: prompts and tool calls are governed by the harness gates and rules.',
     `enforcement: ${enforcement.hard ? 'hard' : 'soft'}`,
     `harness dir: ${stripInterpolationHazard(harnessDir ?? 'none')}`,
     'Before non-trivial work, read the skill `skill://mstar-harness-core` — the authoritative harness entry point (mstar-harness-core first, then topic skills).',
+    ...(teamMounted ? [TEAM_DELEGATION_CONTRACT] : []),
   ].join('\n')
 }
 

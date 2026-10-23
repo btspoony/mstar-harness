@@ -172,6 +172,25 @@ describe('mstar:harness-rules global section + mstar:engine-status context ', ()
     expect(section!.text).toContain('mstar-harness-core')
   })
 
+  it('(a2) appends the delegation contract only when the Agent Teams layer is mounted', async () => {
+    booted = await bootApp()
+    const without = await assembleWithEngineStatus(booted.ctx)
+    const withoutText = without.sections.find((s) => s.name === HARNESS_RULES_SECTION_NAME)!.text
+    // No Team service → `spawn_teammate` is not callable, so the contract must
+    // not name it; the pointer block stays exactly as it was.
+    expect(withoutText).not.toContain('spawn_teammate')
+
+    booted.ctx.provide('agentTeams' as never, { listMembers: () => [] } as never)
+    const withTeam = await assembleWithEngineStatus(booted.ctx)
+    const withText = withTeam.sections.find((s) => s.name === HARNESS_RULES_SECTION_NAME)!.text
+    // The two facts a coordinator otherwise finds only in
+    // `mstar-host` → `references/dsh.md`: the default channel, and the header
+    // shape every delegation prompt needs (workflow children included).
+    expect(withText).toContain('`spawn_teammate` is the default channel for writable work')
+    expect(withText).toContain('"## Assignment" and "Execute as: <role>"')
+    expect(withText).toContain('`workflow agent()` included')
+  })
+
   it('(b) engine-status context — idle default boot (no status.json seeded) injects exactly the version watermark line (D1)', async () => {
     booted = await bootApp()
     const assembly = await assembleWithEngineStatus(booted.ctx)
