@@ -57,7 +57,7 @@ describe("refusal quality scanner", () => {
     const result = applyAllowlist([finding], [{
       signature, justification: "Tracked structured refusal cleanup.", trackingIssue: "SYNTH-REFUSAL-COHORT", expectedCount: 3,
     }], "/repo");
-    expect(result.stale.map(({ signature: staleSignature }) => staleSignature)).toEqual([signature]);
+    expect(result.stale.map(({ entry }) => entry.signature)).toEqual([signature]);
     expect(exitCodeFor(result.findings, result.stale)).toBe(1);
   });
 
@@ -430,6 +430,19 @@ describe("refusal quality scanner", () => {
     expect(findings.map(({ classification }) => classification)).toEqual(["missing-recovery", "missing-recovery", "missing-recovery"]);
   });
 
+  test("proves concatenated recovery text only when both operands are provable", () => {
+    const proven = scanSource(`
+      refusalEnvelope({ command: "x", status: "refused", code: "x.blocked", message: "Blocked",
+        recovery: \`Rerun mstar session run --workflow \${workflow} --role coordinator. \` + "Then retry." });
+    `, "packages/commands/src/fixture.ts");
+    expect(proven).toEqual([]);
+    const unproven = scanSource(`
+      refusalEnvelope({ command: "x", status: "refused", code: "x.blocked", message: "Blocked",
+        recovery: "Run mstar status validate " + buildSuffix() });
+    `, "packages/commands/src/fixture.ts");
+    expect(unproven.map(({ classification }) => classification)).toEqual(["missing-recovery"]);
+  });
+
   test("a stale allowlist entry reports its tracking issue and refresh action", () => {
     const snippet = `refusalEnvelope({ code: "x.bad" })`;
     const finding = {
@@ -440,9 +453,13 @@ describe("refusal quality scanner", () => {
     const result = applyAllowlist([finding], [{
       signature, justification: "Tracked structured refusal cleanup.", trackingIssue: "SYNTH-STALE-COHORT", expectedCount: 2,
     }], "/repo");
-    expect(result.stale.map(({ trackingIssue }) => trackingIssue)).toEqual(["SYNTH-STALE-COHORT"]);
+    expect(result.stale.map(({ entry }) => entry.trackingIssue)).toEqual(["SYNTH-STALE-COHORT"]);
     expect(formatStaleAllowlist(result.stale)).toContain("SYNTH-STALE-COHORT");
     expect(formatStaleAllowlist(result.stale)).toContain("Refresh:");
+    expect(formatStaleAllowlist(result.stale)).toContain("matches 1 finding(s) but the entry expects 2");
+    const unmatched = applyAllowlist([], [{ signature, justification: "Tracked structured refusal cleanup.", trackingIssue: "SYNTH-STALE-COHORT" }], "/repo");
+    expect(formatStaleAllowlist(unmatched.stale)).toContain("no current finding matches this signature");
+    expect(formatStaleAllowlist(unmatched.stale)).toContain("SYNTH-STALE-COHORT");
     expect(exitCodeFor(result.findings, result.stale)).toBe(1);
   });
 });

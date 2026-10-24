@@ -481,6 +481,13 @@ export function scanSource(source: string, file: string): RefusalFinding[] {
       const left = codeValue(node.left, scope, new Set(seen), recoveryProof, helpers);
       return left?.trim() ? left : codeValue(node.right, scope, new Set(seen), recoveryProof, helpers);
     }
+    // Concatenated recovery text is provable only when both operands are: one unprovable
+    // operand can supply the whole command, so a partial proof proves nothing.
+    if (recoveryProof && ts.isBinaryExpression(node) && node.operatorToken.kind === ts.SyntaxKind.PlusToken) {
+      const left = codeValue(node.left, scope, new Set(seen), recoveryProof, helpers);
+      const right = codeValue(node.right, scope, new Set(seen), recoveryProof, helpers);
+      return left !== undefined && right !== undefined ? left + right : undefined;
+    }
     if (ts.isIdentifier(node)) {
       const declaration = resolveDeclaration(scope ?? scopeByNode.get(node), node.text);
       if (!declaration?.initializer || seen.has(declaration)) return undefined;
@@ -727,7 +734,8 @@ function loadAllowlist(path: string): AllowlistEntry[] {
   return parseAllowlist(readFileSync(path, "utf8"));
 }
 function statSafe(path: string): boolean { try { return statSync(path).isFile(); } catch { return false; } }
-export function applyAllowlist(findings: RefusalFinding[], entries: AllowlistEntry[], repoRoot: string): { findings: RefusalFinding[]; stale: AllowlistEntry[]; used: AllowlistEntry[] } {
+export interface StaleAllowlistEntry { entry: AllowlistEntry; observedCount: number; }
+export function applyAllowlist(findings: RefusalFinding[], entries: AllowlistEntry[], repoRoot: string): { findings: RefusalFinding[]; stale: StaleAllowlistEntry[]; used: AllowlistEntry[] } {
   const validated = validateAllowlistEntries(entries);
   const bySignature = new Map(validated.map((entry) => [entry.signature, entry]));
   const output: RefusalFinding[] = [];
@@ -743,15 +751,26 @@ export function applyAllowlist(findings: RefusalFinding[], entries: AllowlistEnt
     matched.add(signature);
     output.push({ ...finding, classification: "allowlisted", reason: `${finding.classification}: ${finding.reason} Allowlisted: ${entry.justification} (${entry.trackingIssue}).` });
   }
-  return { findings: output, stale: validated.filter((entry) => counts.get(entry.signature) !== entry.expectedCount), used: validated.filter((entry) => matched.has(entry.signature)) };
+  return {
+    findings: output,
+    stale: validated
+      .filter((entry) => counts.get(entry.signature) !== entry.expectedCount)
+      .map((entry) => ({ entry, observedCount: counts.get(entry.signature) ?? 0 })),
+    used: validated.filter((entry) => matched.has(entry.signature)),
+  };
 }
-export function formatStaleAllowlist(entries: readonly AllowlistEntry[]): string {
-  return entries.map((entry) => `${entry.signature} tracked by ${entry.trackingIssue}: no current finding matches this signature, so the exemption is stale. Refresh: re-run the lint and replace the signature with the current finding signature logged under ${entry.trackingIssue}, or delete the entry when that cause is fixed.`).join("\n");
+export function formatStaleAllowlist(entries: readonly StaleAllowlistEntry[]): string {
+  return entries.map(({ entry, observedCount }) => {
+    const cause = observedCount === 0
+      ? "no current finding matches this signature"
+      : `the signature matches ${observedCount} finding(s) but the entry expects ${entry.expectedCount}`;
+    return `${entry.signature} tracked by ${entry.trackingIssue}: ${cause}, so the exemption is stale. Refresh: re-run the lint and replace the signature with the current finding signature logged under ${entry.trackingIssue}, correct expectedCount to the observed count, or delete the entry when that cause is fixed.`;
+  }).join("\n");
 }
 export function countViolations(findings: RefusalFinding[]): number {
   return findings.filter((finding) => finding.classification !== "allowlisted" && finding.classification !== "manual-recovery").length;
 }
-export function exitCodeFor(findings: RefusalFinding[], stale: readonly AllowlistEntry[]): 0 | 1 {
+export function exitCodeFor(findings: RefusalFinding[], stale: readonly StaleAllowlistEntry[]): 0 | 1 {
   return countViolations(findings) === 0 && stale.length === 0 ? 0 : 1;
 }
 function run(): number {
