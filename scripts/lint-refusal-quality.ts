@@ -367,7 +367,7 @@ export function findRefusalWrappers(source: ts.SourceFile): Map<string, RefusalW
 const DECLARED_SAFE_INTERPOLATIONS: Readonly<Record<string, true>> = { workflow: true, holderList: true };
 export function scanSource(source: string, file: string): RefusalFinding[] {
   const sf = ts.createSourceFile(file, source, ts.ScriptTarget.Latest, true, ts.ScriptKind.TS);
-  interface Scope { parent?: Scope; kind: "source" | "function" | "block" | "class"; declarations: Map<string, ts.VariableDeclaration>; functions: Map<string, ts.FunctionDeclaration>; shadowNames: Set<string>; }
+  interface Scope { parent?: Scope; kind: "source" | "function" | "block" | "class"; declarations: Map<string, ts.VariableDeclaration[]>; functions: Map<string, ts.FunctionDeclaration>; shadowNames: Set<string>; }
   const scopeByNode = new WeakMap<ts.Node, Scope>();
   const sourceScope: Scope = { kind: "source", declarations: new Map(), functions: new Map(), shadowNames: new Set() };
   // Every binding form the parser sees names a shadowing binding, initializer or not:
@@ -390,7 +390,9 @@ export function scanSource(source: string, file: string): RefusalFinding[] {
         while (target.parent && target.kind !== "function" && target.kind !== "source") target = target.parent;
       }
       collectBindingNames(node.name, target.shadowNames);
-      if (ts.isIdentifier(node.name) && node.initializer) target.declarations.set(node.name.text, node);
+      // Every declaration of a name is kept in source order: a repeated `var` is one binding
+      // with several declarations, and the nearest preceding one is what a use sees.
+      if (ts.isIdentifier(node.name)) target.declarations.set(node.name.text, [...(target.declarations.get(node.name.text) ?? []), node]);
     }
     if ((ts.isClassDeclaration(node) || ts.isEnumDeclaration(node) || ts.isImportSpecifier(node) || ts.isNamespaceImport(node) || ts.isImportClause(node) || ts.isImportEqualsDeclaration(node))
       && node.name && ts.isIdentifier(node.name)) inherited.shadowNames.add(node.name.text);
@@ -398,13 +400,16 @@ export function scanSource(source: string, file: string): RefusalFinding[] {
     ts.forEachChild(node, (child) => buildScopes(child, scope));
   };
   buildScopes(sf, sourceScope);
-  const resolveDeclaration = (scope: Scope | undefined, name: string): ts.VariableDeclaration | undefined => {
+  // The nearest declaration that textually precedes the use wins; a scope that binds the name
+  // without a preceding declaration shadows outer ones and fails closed. The owning scope comes
+  // back with it so writes to that same binding can be attributed.
+  const resolveDeclaration = (scope: Scope | undefined, name: string, useStart: number): { declaration: ts.VariableDeclaration; owner: Scope } | undefined => {
     for (let current = scope; current; current = current.parent) {
-      const declaration = current.declarations.get(name);
-      if (declaration) return declaration;
-      // A nearer binding this map cannot resolve — a parameter, catch binding, destructured
-      // name or uninitialized variable — shadows any outer declaration. Fail closed instead
-      // of proving the outer value.
+      const declarations = current.declarations.get(name);
+      if (declarations) {
+        const preceding = declarations.filter((declaration) => declaration.getEnd() <= useStart);
+        return preceding.length > 0 ? { declaration: preceding[preceding.length - 1]!, owner: current } : undefined;
+      }
       if (current.shadowNames.has(name)) return undefined;
     }
     return undefined;
@@ -487,40 +492,56 @@ export function scanSource(source: string, file: string): RefusalFinding[] {
     }
     return false;
   };
-  // Writes are tracked by declaration identity, not by name: `cache[recovery] = …` and
-  // `obj.recovery = …` read those names, and a same-named binding in another scope is a
-  // different declaration. Only a target that binds the variable itself counts.
-  const writtenDeclarations = new Set<ts.VariableDeclaration>();
-  const recordBindingTarget = (target: ts.Expression): void => {
-    if (ts.isParenthesizedExpression(target)) { recordBindingTarget(target.expression); return; }
-    if (ts.isIdentifier(target)) {
-      const declaration = resolveDeclaration(scopeByNode.get(target), target.text);
-      if (declaration) writtenDeclarations.add(declaration);
+  // Writes are tracked by BINDING, not by declaration node or bare name: one binding is a
+  // (scope, name) pair, so repeated `var` declarations of the same name share its writes while
+  // a same-named binding in another scope has its own. `cache[recovery] = …` and
+  // `obj.recovery = …` read those names and are not writes to the binding. A write counts only
+  // when it falls between the resolved declaration and the use.
+  const writesByScope = new Map<Scope, Map<string, number[]>>();
+  const recordBindingWrite = (name: string, scope: Scope | undefined, position: number): void => {
+    for (let current = scope; current; current = current.parent) {
+      if (!current.declarations.has(name) && !current.shadowNames.has(name)) continue;
+      const writes = writesByScope.get(current) ?? new Map<string, number[]>();
+      writes.set(name, [...(writes.get(name) ?? []), position]);
+      writesByScope.set(current, writes);
       return;
     }
+  };
+  const recordBindingTarget = (target: ts.Expression, position: number): void => {
+    if (ts.isParenthesizedExpression(target)) { recordBindingTarget(target.expression, position); return; }
+    if (ts.isIdentifier(target)) { recordBindingWrite(target.text, scopeByNode.get(target), position); return; }
     if (ts.isArrayLiteralExpression(target)) {
-      for (const element of target.elements) if (!ts.isOmittedExpression(element)) recordBindingTarget(element);
+      for (const element of target.elements) if (!ts.isOmittedExpression(element)) recordBindingTarget(element, position);
       return;
     }
     if (ts.isObjectLiteralExpression(target)) {
       for (const property of target.properties) {
-        if (ts.isPropertyAssignment(property)) recordBindingTarget(property.initializer);
-        else if (ts.isShorthandPropertyAssignment(property)) recordBindingTarget(property.name);
-        else if (ts.isSpreadAssignment(property)) recordBindingTarget(property.expression);
+        if (ts.isPropertyAssignment(property)) recordBindingTarget(property.initializer, position);
+        else if (ts.isShorthandPropertyAssignment(property)) recordBindingTarget(property.name, position);
+        else if (ts.isSpreadAssignment(property)) recordBindingTarget(property.expression, position);
       }
     }
   };
   const collectWrittenDeclarations = (node: ts.Node): void => {
     if (ts.isBinaryExpression(node)
       && node.operatorToken.kind >= ts.SyntaxKind.FirstAssignment
-      && node.operatorToken.kind <= ts.SyntaxKind.LastAssignment) recordBindingTarget(node.left);
+      && node.operatorToken.kind <= ts.SyntaxKind.LastAssignment) recordBindingTarget(node.left, node.getStart());
     if ((ts.isPrefixUnaryExpression(node) || ts.isPostfixUnaryExpression(node))
-      && (node.operator === ts.SyntaxKind.PlusPlusToken || node.operator === ts.SyntaxKind.MinusMinusToken)) recordBindingTarget(node.operand);
-    // `for (x of …)` / `for (x in …)` binds x on every iteration, like an assignment.
-    if ((ts.isForOfStatement(node) || ts.isForInStatement(node)) && !ts.isVariableDeclarationList(node.initializer)) recordBindingTarget(node.initializer);
+      && (node.operator === ts.SyntaxKind.PlusPlusToken || node.operator === ts.SyntaxKind.MinusMinusToken)) recordBindingTarget(node.operand, node.getStart());
+    // `for (x of …)` / `for (x in …)` writes x on every iteration, whether the target is an
+    // expression or a declaration that reuses an existing hoisted `var` binding.
+    if (ts.isForOfStatement(node) || ts.isForInStatement(node)) {
+      if (ts.isVariableDeclarationList(node.initializer)) {
+        for (const declaration of node.initializer.declarations) {
+          if (ts.isIdentifier(declaration.name)) recordBindingWrite(declaration.name.text, scopeByNode.get(declaration), node.getStart());
+        }
+      } else recordBindingTarget(node.initializer, node.getStart());
+    }
     ts.forEachChild(node, collectWrittenDeclarations);
   };
   collectWrittenDeclarations(sf);
+  const isWrittenBetween = (owner: Scope, name: string, declaration: ts.VariableDeclaration, useStart: number): boolean =>
+    (writesByScope.get(owner)?.get(name) ?? []).some((position) => position > declaration.getStart() && position <= useStart);
   const enclosingFunctionScope = (scope: Scope | undefined): Scope | undefined => {
     for (let current = scope; current; current = current.parent) {
       if (current.kind === "function" || current.kind === "source") return current;
@@ -580,15 +601,15 @@ export function scanSource(source: string, file: string): RefusalFinding[] {
     if (ts.isIdentifier(node)) {
       const scope = context.scope ?? scopeByNode.get(node);
       if (node.text === "undefined") return hasNearerBinding(scope, node.text) ? undefined : RECOVERY_NULLISH;
-      const declaration = resolveDeclaration(scope, node.text);
-      if (declaration) {
+      // Resolution is position-aware, so a hoisted `var` read and a `let`/`const` temporal
+      // dead zone both fail closed before any initializer is considered.
+      const resolved = resolveDeclaration(scope, node.text, node.getStart());
+      if (resolved) {
+        const { declaration, owner } = resolved;
         if (!declaration.initializer || context.seen.has(declaration)) return undefined;
-        // The initializer has not run yet if it comes later in the file: a hoisted `var` is
-        // still `undefined` here and a `let`/`const` is in its temporal dead zone.
-        if (declaration.getEnd() > node.getStart()) return undefined;
         // A `const` binding cannot change; a `let`/`var` proves from its initializer only when
-        // no write resolves to this exact declaration.
-        if ((declaration.parent.flags & ts.NodeFlags.Const) === 0 && writtenDeclarations.has(declaration)) return undefined;
+        // no write to this binding falls between that declaration and this use.
+        if ((declaration.parent.flags & ts.NodeFlags.Const) === 0 && isWrittenBetween(owner, node.text, declaration, node.getStart())) return undefined;
         return recoveryTextOf(declaration.initializer, {
           ...context, scope: scopeByNode.get(declaration), seen: new Set(context.seen).add(declaration),
         });
@@ -664,10 +685,10 @@ export function scanSource(source: string, file: string): RefusalFinding[] {
       return { kind: "texts", texts, union: true };
     }
     if (ts.isIdentifier(node)) {
-      const declaration = resolveDeclaration(scope ?? scopeByNode.get(node), node.text);
-      if (!declaration) return MESSAGE_OPAQUE;
-      if (declaration.getEnd() > node.getStart()) return MESSAGE_OPAQUE;
-      if ((declaration.parent.flags & ts.NodeFlags.Const) === 0 && writtenDeclarations.has(declaration)) return MESSAGE_MUTABLE;
+      const resolved = resolveDeclaration(scope ?? scopeByNode.get(node), node.text, node.getStart());
+      if (!resolved) return MESSAGE_OPAQUE;
+      const { declaration, owner } = resolved;
+      if ((declaration.parent.flags & ts.NodeFlags.Const) === 0 && isWrittenBetween(owner, node.text, declaration, node.getStart())) return MESSAGE_MUTABLE;
       if (!declaration.initializer || seen.has(declaration)) return MESSAGE_OPAQUE;
       return analyzeMessage(declaration.initializer, scopeByNode.get(declaration), new Set(seen).add(declaration));
     }
@@ -690,7 +711,7 @@ export function scanSource(source: string, file: string): RefusalFinding[] {
       return left?.trim() ? left : codeValue(node.right, scope, new Set(seen));
     }
     if (ts.isIdentifier(node)) {
-      const declaration = resolveDeclaration(scope ?? scopeByNode.get(node), node.text);
+      const declaration = resolveDeclaration(scope ?? scopeByNode.get(node), node.text, node.getStart())?.declaration;
       if (!declaration?.initializer || seen.has(declaration)) return undefined;
       seen.add(declaration);
       return codeValue(declaration.initializer, scopeByNode.get(declaration), seen);

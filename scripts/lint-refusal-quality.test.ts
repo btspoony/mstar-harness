@@ -576,6 +576,15 @@ describe("refusal quality scanner", () => {
     expect(scan(`function f() { ${refuse("tdz")} let tdz = "Run mstar status validate."; }`)).toEqual(["missing-recovery"]);
   });
 
+  test("resolves a repeated var to the nearest preceding declaration", () => {
+    const scan = (source: string) => scanSource(source, "packages/commands/src/fixture.ts").map(({ classification }) => classification);
+    const refuse = (recovery: string) => `refusalEnvelope({ command: "x", status: "refused", code: "x.blocked", message: "Blocked", recovery: ${recovery} });`;
+    expect(scan(`var recovery = "Run mstar status validate."; for (var recovery of [""]) { noop(); } ${refuse("recovery")}`)).toEqual(["missing-recovery"]);
+    expect(scan(`function f() { ${refuse("recovery")} var recovery = "Run mstar status validate."; }`)).toEqual(["missing-recovery"]);
+    expect(scan(`var recovery = "Run mstar status validate."; var recovery = "Register the workflow first with mstar workflow register."; ${refuse("recovery")}`)).toEqual([]);
+    expect(scan(`var recovery = "Run mstar status validate."; recovery = dynamicRecovery(); var recovery = "Register the workflow first with mstar workflow register."; ${refuse("recovery")}`)).toEqual([]);
+  });
+
   test("tracks writes by declaration, not by name or member access", () => {
     const scan = (source: string) => scanSource(source, "packages/commands/src/fixture.ts").map(({ classification }) => classification);
     const refuse = (recovery: string) => `refusalEnvelope({ command: "x", status: "refused", code: "x.blocked", message: "Blocked", recovery: ${recovery} });`;
