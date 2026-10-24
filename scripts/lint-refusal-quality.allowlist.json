@@ -1,151 +1,67 @@
 [
   {
-    "signature": "missing-recovery:packages/commands/src/families/status.ts:519fc934c6f5",
-    "justification": "Engine-supplied recovery text (family-refusal.ts type-checks the string but proves no reachable command); strict static proof cannot cover it — see I-000872.",
-    "trackingIssue": "I-000872",
-    "expectedCount": 1
-  },
-  {
-    "signature": "missing-recovery:packages/commands/src/families/status.ts:4aba3ec1b5f9",
-    "justification": "Engine-supplied recovery text (family-refusal.ts type-checks the string but proves no reachable command); strict static proof cannot cover it — see I-000872.",
-    "trackingIssue": "I-000872",
-    "expectedCount": 1
-  },
-  {
-    "signature": "missing-recovery:packages/commands/src/families/status.ts:42bcb28f643b",
-    "justification": "Engine-supplied recovery text (family-refusal.ts type-checks the string but proves no reachable command); strict static proof cannot cover it — see I-000872.",
-    "trackingIssue": "I-000872",
-    "expectedCount": 1
-  },
-  {
     "signature": "missing-recovery:packages/commands/src/families/status.ts:1f78fdbe1af2",
-    "justification": "Engine-supplied recovery text (family-refusal.ts type-checks the string but proves no reachable command); strict static proof cannot cover it — see I-000872.",
-    "trackingIssue": "I-000872",
-    "expectedCount": 1
-  },
-  {
-    "signature": "missing-recovery:packages/commands/src/families/status.ts:7bc54b43eea3",
-    "justification": "Engine-supplied recovery text (family-refusal.ts type-checks the string but proves no reachable command); strict static proof cannot cover it — see I-000872.",
-    "trackingIssue": "I-000872",
-    "expectedCount": 1
-  },
-  {
-    "signature": "missing-recovery:packages/commands/src/families/status.ts:5b310a6d724c",
-    "justification": "Engine-supplied recovery text (family-refusal.ts type-checks the string but proves no reachable command); strict static proof cannot cover it — see I-000872.",
-    "trackingIssue": "I-000872",
-    "expectedCount": 1
-  },
-  {
-    "signature": "missing-recovery:packages/commands/src/families/status.ts:1a5a3c80fa26",
-    "justification": "Engine-supplied recovery text (family-refusal.ts type-checks the string but proves no reachable command); strict static proof cannot cover it — see I-000872.",
-    "trackingIssue": "I-000872",
-    "expectedCount": 1
-  },
-  {
-    "signature": "missing-recovery:packages/commands/src/families/status.ts:4b8146288da8",
-    "justification": "Engine-supplied recovery text (family-refusal.ts type-checks the string but proves no reachable command); strict static proof cannot cover it — see I-000872.",
-    "trackingIssue": "I-000872",
-    "expectedCount": 1
-  },
-  {
-    "signature": "missing-recovery:packages/commands/src/families/status.ts:5b8d7b5b255a",
-    "justification": "Engine-supplied recovery text (family-refusal.ts type-checks the string but proves no reachable command); strict static proof cannot cover it — see I-000872.",
-    "trackingIssue": "I-000872",
-    "expectedCount": 1
-  },
-  {
-    "signature": "missing-recovery:packages/commands/src/families/status.ts:5503c1e197c7",
-    "justification": "Engine-supplied recovery text (family-refusal.ts type-checks the string but proves no reachable command); strict static proof cannot cover it — see I-000872.",
-    "trackingIssue": "I-000872",
-    "expectedCount": 1
-  },
-  {
-    "signature": "missing-recovery:packages/commands/src/families/status.ts:bbc2898dc622",
-    "justification": "Engine-supplied recovery text (family-refusal.ts type-checks the string but proves no reachable command); strict static proof cannot cover it — see I-000872.",
-    "trackingIssue": "I-000872",
-    "expectedCount": 1
-  },
-  {
-    "signature": "missing-recovery:packages/commands/src/families/status.ts:2236d123895d",
-    "justification": "Engine-supplied recovery text (family-refusal.ts type-checks the string but proves no reachable command); strict static proof cannot cover it — see I-000872.",
-    "trackingIssue": "I-000872",
-    "expectedCount": 1
-  },
-  {
-    "signature": "missing-recovery:packages/commands/src/families/status.ts:9cb02fbce794",
-    "justification": "Engine-supplied recovery text (family-refusal.ts type-checks the string but proves no reachable command); strict static proof cannot cover it — see I-000872.",
-    "trackingIssue": "I-000872",
-    "expectedCount": 1
-  },
-  {
-    "signature": "missing-recovery:packages/commands/src/families/status.ts:49bffb7e32d7",
-    "justification": "Engine-supplied recovery text (family-refusal.ts type-checks the string but proves no reachable command); strict static proof cannot cover it — see I-000872.",
-    "trackingIssue": "I-000872",
-    "expectedCount": 1
-  },
-  {
-    "signature": "missing-recovery:packages/commands/src/families/status.ts:840040710e7a",
-    "justification": "Engine-supplied recovery text (family-refusal.ts type-checks the string but proves no reachable command); strict static proof cannot cover it — see I-000872.",
+    "justification": "Engine-supplied recovery text destructured from engineErrorFacts(error) (family-refusal.ts type-checks the string but proves no reachable command); strict static proof cannot cover it — see I-000872.",
     "trackingIssue": "I-000872",
     "expectedCount": 1
   },
   {
     "signature": "missing-recovery:packages/commands/src/families/milestone.ts:ee13cb6822a9",
-    "justification": "Engine-supplied recovery text (family-refusal.ts type-checks the string but proves no reachable command); strict static proof cannot cover it — see I-000872.",
+    "justification": "Engine-supplied recovery text destructured from engineErrorFacts(error) (family-refusal.ts type-checks the string but proves no reachable command); strict static proof cannot cover it — see I-000872.",
     "trackingIssue": "I-000872",
     "expectedCount": 1
   },
   {
     "signature": "missing-recovery:packages/commands/src/families/issue.ts:5cb8fe0ab00c",
-    "justification": "Engine-supplied recovery text (family-refusal.ts type-checks the string but proves no reachable command); strict static proof cannot cover it — see I-000872.",
+    "justification": "Engine-supplied recovery text forwarded through a local refusal adapter whose caller passes engine facts (family-refusal.ts type-checks the string but proves no reachable command); strict static proof cannot cover it — see I-000872.",
     "trackingIssue": "I-000872",
     "expectedCount": 1
   },
   {
     "signature": "missing-recovery:packages/commands/src/families/execution-ledgers.ts:4fa6d5edabaa",
-    "justification": "Engine-supplied recovery text (family-refusal.ts type-checks the string but proves no reachable command); strict static proof cannot cover it — see I-000872.",
+    "justification": "Engine-supplied recovery text forwarded through a local refusal adapter whose caller passes engine facts (family-refusal.ts type-checks the string but proves no reachable command); strict static proof cannot cover it — see I-000872.",
     "trackingIssue": "I-000872",
     "expectedCount": 1
   },
   {
     "signature": "missing-recovery:packages/commands/src/families/execution-ledgers.ts:77fee71a8f3d",
-    "justification": "Engine-supplied recovery text (family-refusal.ts type-checks the string but proves no reachable command); strict static proof cannot cover it — see I-000872.",
+    "justification": "Engine-supplied recovery text forwarded through a local refusal adapter whose caller passes engine facts (family-refusal.ts type-checks the string but proves no reachable command); strict static proof cannot cover it — see I-000872.",
     "trackingIssue": "I-000872",
     "expectedCount": 1
   },
   {
     "signature": "missing-recovery:packages/commands/src/families/dashboard.ts:04750519a45c",
-    "justification": "Engine-supplied recovery text (family-refusal.ts type-checks the string but proves no reachable command); strict static proof cannot cover it — see I-000872.",
+    "justification": "Engine-supplied recovery text forwarded through a local refusal adapter whose caller passes engine facts (family-refusal.ts type-checks the string but proves no reachable command); strict static proof cannot cover it — see I-000872.",
     "trackingIssue": "I-000872",
     "expectedCount": 1
   },
   {
     "signature": "missing-recovery:packages/commands/src/families/dashboard.ts:2d2899e61f11",
-    "justification": "Engine-supplied recovery text (family-refusal.ts type-checks the string but proves no reachable command); strict static proof cannot cover it — see I-000872.",
+    "justification": "Engine-supplied recovery text forwarded through a local refusal adapter whose caller passes engine facts (family-refusal.ts type-checks the string but proves no reachable command); strict static proof cannot cover it — see I-000872.",
     "trackingIssue": "I-000872",
     "expectedCount": 1
   },
   {
     "signature": "missing-recovery:packages/commands/src/families/session.ts:1fb700d536ac",
-    "justification": "Engine-supplied recovery text (family-refusal.ts type-checks the string but proves no reachable command); strict static proof cannot cover it — see I-000872.",
+    "justification": "Engine-supplied recovery text forwarded through a local refusal adapter whose caller passes engine facts (family-refusal.ts type-checks the string but proves no reachable command); strict static proof cannot cover it — see I-000872.",
     "trackingIssue": "I-000872",
     "expectedCount": 2
   },
   {
     "signature": "missing-recovery:packages/commands/src/families/session.ts:1cb923e8e996",
-    "justification": "Engine-supplied recovery text (family-refusal.ts type-checks the string but proves no reachable command); strict static proof cannot cover it — see I-000872.",
+    "justification": "Engine-supplied recovery text forwarded through a local refusal adapter whose caller passes engine facts (family-refusal.ts type-checks the string but proves no reachable command); strict static proof cannot cover it — see I-000872.",
     "trackingIssue": "I-000872",
     "expectedCount": 1
   },
   {
     "signature": "missing-recovery:packages/commands/src/families/pr-review.ts:11272c9ccda8",
-    "justification": "Engine-supplied recovery text (family-refusal.ts type-checks the string but proves no reachable command); strict static proof cannot cover it — see I-000872.",
+    "justification": "Engine-supplied recovery text forwarded through a local refusal adapter whose caller passes engine facts (family-refusal.ts type-checks the string but proves no reachable command); strict static proof cannot cover it — see I-000872.",
     "trackingIssue": "I-000872",
     "expectedCount": 1
   },
   {
     "signature": "missing-recovery:packages/commands/src/families/audit.ts:be6c3ec7ad16",
-    "justification": "Engine-supplied recovery text (family-refusal.ts type-checks the string but proves no reachable command); strict static proof cannot cover it — see I-000872.",
+    "justification": "Engine-supplied recovery text forwarded through a local refusal adapter whose caller passes engine facts (family-refusal.ts type-checks the string but proves no reachable command); strict static proof cannot cover it — see I-000872.",
     "trackingIssue": "I-000872",
     "expectedCount": 1
   }

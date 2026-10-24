@@ -456,12 +456,29 @@ export function scanSource(source: string, file: string): RefusalFinding[] {
   // or no text at all (`absent`). Only `text` satisfies a refusal's recovery. `undefined`
   // means the value is opaque and unproven, which fails closed wherever text is required.
   type RecoveryText = { kind: "text"; text: string } | { kind: "maybe" } | { kind: "absent" };
+  interface RecoveryContext {
+    scope?: Scope;
+    seen: Set<ts.VariableDeclaration>;
+    helpers: ReadonlySet<string>;
+    bindings: ReadonlyMap<string, ts.Expression>;
+    bound: ReadonlySet<string>;
+  }
   const RECOVERY_ABSENT: RecoveryText = { kind: "absent" };
   const RECOVERY_MAYBE: RecoveryText = { kind: "maybe" };
-  const recoveryTextOf = (node: ts.Expression | undefined, scope?: Scope, seen = new Set<ts.VariableDeclaration>(), helpers: ReadonlySet<string> = new Set()): RecoveryText | undefined => {
+  const recoveryContext = (bindings: ReadonlyMap<string, ts.Expression> = new Map()): RecoveryContext => ({
+    seen: new Set(), helpers: new Set(), bindings, bound: new Set(),
+  });
+  // The nearest binding of any name wins: a shadowed `undefined` is a value, not absence.
+  const hasNearerBinding = (scope: Scope | undefined, name: string): boolean => {
+    for (let current = scope; current; current = current.parent) {
+      if (current.shadowNames.has(name) || current.functions.has(name)) return true;
+    }
+    return false;
+  };
+  const recoveryTextOf = (node: ts.Expression | undefined, context: RecoveryContext): RecoveryText | undefined => {
     if (!node) return undefined;
     if (ts.isParenthesizedExpression(node) || ts.isAsExpression(node) || ts.isTypeAssertionExpression(node) || ts.isSatisfiesExpression(node)) {
-      return recoveryTextOf(node.expression, scope, seen, helpers);
+      return recoveryTextOf(node.expression, context);
     }
     if (ts.isStringLiteralLike(node) || ts.isNoSubstitutionTemplateLiteral(node)) {
       return node.text.trim() === "" ? RECOVERY_ABSENT : { kind: "text", text: node.text };
@@ -470,20 +487,19 @@ export function scanSource(source: string, file: string): RefusalFinding[] {
       if (!node.templateSpans.every((span) => ts.isIdentifier(span.expression) && DECLARED_SAFE_INTERPOLATIONS[span.expression.text] === true)) return undefined;
       return { kind: "text", text: node.head.text + node.templateSpans.map((span) => `${span.expression.getText(sf)}${span.literal.text}`).join("") };
     }
-    if (node.kind === ts.SyntaxKind.NullKeyword || (ts.isIdentifier(node) && node.text === "undefined")) return RECOVERY_ABSENT;
     // Every arm of a conditional chain is analysed: an arm with no text is allowed (a `??`
     // covering it must supply text), an arm that cannot be proven fails the whole chain.
     if (ts.isConditionalExpression(node)) {
-      const whenTrue = recoveryTextOf(node.whenTrue, scope, new Set(seen), helpers);
-      const whenFalse = recoveryTextOf(node.whenFalse, scope, new Set(seen), helpers);
+      const whenTrue = recoveryTextOf(node.whenTrue, { ...context, seen: new Set(context.seen) });
+      const whenFalse = recoveryTextOf(node.whenFalse, { ...context, seen: new Set(context.seen) });
       if (!whenTrue || !whenFalse) return undefined;
       if (whenTrue.kind === "text" && whenFalse.kind === "text") return whenTrue;
       if (whenTrue.kind === "absent" && whenFalse.kind === "absent") return RECOVERY_ABSENT;
       return RECOVERY_MAYBE;
     }
     if (ts.isBinaryExpression(node) && [ts.SyntaxKind.QuestionQuestionToken, ts.SyntaxKind.BarBarToken].includes(node.operatorToken.kind)) {
-      const left = recoveryTextOf(node.left, scope, new Set(seen), helpers);
-      const right = recoveryTextOf(node.right, scope, new Set(seen), helpers);
+      const left = recoveryTextOf(node.left, { ...context, seen: new Set(context.seen) });
+      const right = recoveryTextOf(node.right, { ...context, seen: new Set(context.seen) });
       // Both operands must be provable and the right arm must always supply text: the
       // operator routes the left arm's absent paths to it, so a partial proof of either
       // operand says nothing about the value actually used.
@@ -491,25 +507,39 @@ export function scanSource(source: string, file: string): RefusalFinding[] {
       return left.kind === "text" ? left : right;
     }
     if (ts.isBinaryExpression(node) && node.operatorToken.kind === ts.SyntaxKind.PlusToken) {
-      const left = recoveryTextOf(node.left, scope, new Set(seen), helpers);
-      const right = recoveryTextOf(node.right, scope, new Set(seen), helpers);
+      const left = recoveryTextOf(node.left, { ...context, seen: new Set(context.seen) });
+      const right = recoveryTextOf(node.right, { ...context, seen: new Set(context.seen) });
       if (!left || !right || left.kind !== "text" || right.kind !== "text") return undefined;
       return { kind: "text", text: left.text + right.text };
     }
     if (ts.isIdentifier(node)) {
-      const declaration = resolveDeclaration(scope ?? scopeByNode.get(node), node.text);
-      if (!declaration?.initializer || seen.has(declaration)) return undefined;
-      seen.add(declaration);
-      return recoveryTextOf(declaration.initializer, scopeByNode.get(declaration), seen, helpers);
+      // A wrapper parameter is replaced by the argument the call site actually passes, so a
+      // literal recovery argument proves and a runtime one still fails.
+      const boundValue = context.bindings.get(node.text);
+      if (boundValue && !context.bound.has(node.text)) {
+        return recoveryTextOf(boundValue, {
+          ...context, seen: new Set(context.seen), bound: new Set(context.bound).add(node.text),
+        });
+      }
+      const scope = context.scope ?? scopeByNode.get(node);
+      if (node.text === "undefined") return hasNearerBinding(scope, node.text) ? undefined : RECOVERY_ABSENT;
+      const declaration = resolveDeclaration(scope, node.text);
+      if (!declaration?.initializer || context.seen.has(declaration)) return undefined;
+      return recoveryTextOf(declaration.initializer, {
+        ...context, scope: scopeByNode.get(declaration), seen: new Set(context.seen).add(declaration),
+      });
     }
+    if (node.kind === ts.SyntaxKind.NullKeyword) return RECOVERY_ABSENT;
     if (ts.isCallExpression(node)) {
       if (!ts.isIdentifier(node.expression)) return undefined;
       const name = node.expression.text;
       const declaration = resolveFunction(scopeByNode.get(node.expression), name);
       const returns = declaration && helperReturns.get(declaration);
-      if (!declaration || !returns || helpers.has(name)) return undefined;
-      const seenHelpers = new Set(helpers).add(name);
-      const proven = returns.map((expression) => recoveryTextOf(expression, scopeByNode.get(expression), new Set(), seenHelpers));
+      if (!declaration || !returns || context.helpers.has(name)) return undefined;
+      const helpers = new Set(context.helpers).add(name);
+      const proven = returns.map((expression) => recoveryTextOf(expression, {
+        ...context, scope: scopeByNode.get(expression), seen: new Set(), helpers, bound: new Set(),
+      }));
       const texts = proven.flatMap((result) => (result?.kind === "text" ? [result.text] : []));
       return texts.length === proven.length ? { kind: "text", text: texts[0]! } : undefined;
     }
@@ -660,7 +690,7 @@ export function scanSource(source: string, file: string): RefusalFinding[] {
       const statusMayBeRefused = unprovenFields.has("status")
         || (!!status && ts.isIdentifier(status) && unprovenParameters.has(status.text))
         || codeValue(status) !== "usage";
-      const provenRecovery = recoveryTextOf(recovery);
+      const provenRecovery = recoveryTextOf(recovery, recoveryContext(bindings));
       const recoveryText = provenRecovery?.kind === "text" ? provenRecovery.text : undefined;
       return statusMayBeRefused && (
         unprovenFields.has("recovery")
@@ -809,7 +839,9 @@ export function formatStaleAllowlist(entries: readonly StaleAllowlistEntry[]): s
       : `the signature matches ${observedCount} finding(s) but the entry expects ${entry.expectedCount}`;
     const refresh = observedCount === 0
       ? "replace the signature with the current finding signature or delete the entry"
-      : `set expectedCount to the observed count (${observedCount}) after reviewing the extra occurrence, or delete the entry`;
+      : observedCount > entry.expectedCount
+        ? `set expectedCount to the observed count (${observedCount}) after confirming the extra occurrence, or delete the entry`
+        : `set expectedCount to the observed count (${observedCount}) after confirming the remaining occurrences, or delete the entry`;
     return `${entry.signature} tracked by ${entry.trackingIssue}: ${cause}, so the exemption is stale. Refresh: ${refresh}.`;
   }).join("\n");
 }

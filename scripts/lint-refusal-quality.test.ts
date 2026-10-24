@@ -463,6 +463,39 @@ describe("refusal quality scanner", () => {
     expect(unprovenRight.map(({ classification }) => classification)).toEqual(["missing-recovery"]);
   });
 
+  test("proves a wrapper recovery from its call-site argument and fails a dynamic one", () => {
+    const findings = scanSource(`
+      function refused(recovery?: string) {
+        return refusalEnvelope({ command: "x", status: "refused", code: "x.blocked", message: "Blocked",
+          recovery: recovery ?? "Run mstar status validate." });
+      }
+      function outer(runtimeRecovery: string) {
+        refused(runtimeRecovery);
+      }
+      refused("Register the workflow first with mstar workflow register.");
+    `, "packages/commands/src/fixture.ts");
+    expect(findings.map(({ classification }) => classification)).toEqual(["missing-recovery"]);
+    expect(findings[0]?.line).toBe(7);
+  });
+
+  test("keeps failing a recovery whose undefined is shadowed by a binding", () => {
+    const findings = scanSource(`
+      function fromConstant() {
+        const undefined = "";
+        refusalEnvelope({ command: "x", status: "refused", code: "x.blocked", message: "Blocked", recovery: undefined });
+      }
+      function fromParameter(undefined: string) {
+        refusalEnvelope({ command: "x", status: "refused", code: "x.blocked", message: "Blocked", recovery: undefined });
+      }
+      function fromCatch() {
+        try { noop(); } catch (undefined) {
+          refusalEnvelope({ command: "x", status: "refused", code: "x.blocked", message: "Blocked", recovery: undefined });
+        }
+      }
+    `, "packages/commands/src/fixture.ts");
+    expect(findings.map(({ classification }) => classification)).toEqual(["missing-recovery", "missing-recovery", "missing-recovery"]);
+  });
+
   test("a stale allowlist entry reports its tracking issue and refresh action", () => {
     const snippet = `refusalEnvelope({ code: "x.bad" })`;
     const finding = {
@@ -477,12 +510,16 @@ describe("refusal quality scanner", () => {
     expect(formatStaleAllowlist(result.stale)).toContain("SYNTH-STALE-COHORT");
     expect(formatStaleAllowlist(result.stale)).toContain("Refresh:");
     expect(formatStaleAllowlist(result.stale)).toContain("matches 1 finding(s) but the entry expects 2");
-    expect(formatStaleAllowlist(result.stale)).toContain("set expectedCount to the observed count (1) after reviewing the extra occurrence");
+    expect(formatStaleAllowlist(result.stale)).toContain("set expectedCount to the observed count (1) after confirming the remaining occurrences");
     const unmatched = applyAllowlist([], [{ signature, justification: "Tracked structured refusal cleanup.", trackingIssue: "SYNTH-STALE-COHORT" }], "/repo");
     expect(formatStaleAllowlist(unmatched.stale)).toContain("no current finding matches this signature");
     expect(formatStaleAllowlist(unmatched.stale)).toContain("replace the signature with the current finding signature or delete the entry");
     expect(formatStaleAllowlist(unmatched.stale)).not.toContain("expectedCount");
     expect(formatStaleAllowlist(unmatched.stale)).toContain("SYNTH-STALE-COHORT");
+    const overflow = applyAllowlist([finding, { ...finding, line: 2 }], [{
+      signature, justification: "Tracked structured refusal cleanup.", trackingIssue: "SYNTH-STALE-COHORT", expectedCount: 1,
+    }], "/repo");
+    expect(formatStaleAllowlist(overflow.stale)).toContain("set expectedCount to the observed count (2) after confirming the extra occurrence");
     expect(exitCodeFor(result.findings, result.stale)).toBe(1);
   });
 });
