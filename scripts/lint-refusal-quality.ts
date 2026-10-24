@@ -377,7 +377,9 @@ export function scanSource(source: string, file: string): RefusalFinding[] {
     for (const element of name.elements) if (!ts.isOmittedExpression(element)) collectBindingNames(element.name, into);
   };
   const buildScopes = (node: ts.Node, inherited: Scope): void => {
-    const kind: Scope["kind"] | undefined = ts.isFunctionLike(node) ? "function" : ts.isClassLike(node) ? "class" : ts.isBlock(node) ? "block" : undefined;
+    // A catch clause is its own scope: its binding belongs to the catch block, not to the
+    // enclosing function, so it must shadow rather than resolve outward.
+    const kind: Scope["kind"] | undefined = ts.isFunctionLike(node) ? "function" : ts.isClassLike(node) ? "class" : ts.isBlock(node) || ts.isCatchClause(node) ? "block" : undefined;
     const scope: Scope = kind ? { parent: inherited, kind, declarations: new Map(), functions: new Map(), shadowNames: new Set() } : inherited;
     scopeByNode.set(node, scope);
     // A named function or class expression binds its own name inside its own body only.
@@ -386,7 +388,8 @@ export function scanSource(source: string, file: string): RefusalFinding[] {
     if (ts.isParameter(node)) collectBindingNames(node.name, scope.shadowNames);
     if (ts.isVariableDeclaration(node)) {
       let target = scope;
-      if (!(node.parent.flags & (ts.NodeFlags.Const | ts.NodeFlags.Let))) {
+      const catchBinding = ts.isCatchClause(node.parent);
+      if (!catchBinding && !(node.parent.flags & (ts.NodeFlags.Const | ts.NodeFlags.Let))) {
         while (target.parent && target.kind !== "function" && target.kind !== "source") target = target.parent;
       }
       collectBindingNames(node.name, target.shadowNames);

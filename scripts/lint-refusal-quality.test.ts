@@ -602,6 +602,30 @@ describe("refusal quality scanner", () => {
     expect(scan(`let recovery = "Run mstar status validate."; recovery = dynamicRecovery(); ${refuse("recovery")}`)).toEqual(["missing-recovery"]);
   });
 
+  test("a catch binding shadows an outer var and proves nothing", () => {
+    const findings = scanSource(`
+      var recovery = "Run mstar status validate.";
+      try { throw ""; } catch (recovery) {
+        refusalEnvelope({ command: "x", status: "refused", code: "x.blocked", message: "Blocked", recovery });
+      }
+    `, "packages/commands/src/fixture.ts");
+    expect(findings.map(({ classification }) => classification)).toEqual(["missing-recovery"]);
+  });
+
+  test("a wrapper call-site binding still proves inside a catch block", () => {
+    const findings = scanSource(`
+      function refused(recovery?: string) {
+        return refusalEnvelope({ command: "x", status: "refused", code: "x.blocked", message: "Blocked",
+          recovery: recovery ?? "Run mstar status validate." });
+      }
+      var recovery = "Run mstar status validate.";
+      try { throw ""; } catch (recovery) {
+        refused("Register the workflow first with mstar workflow register.");
+      }
+    `, "packages/commands/src/fixture.ts");
+    expect(findings).toEqual([]);
+  });
+
   test("tracks writes by declaration, not by name or member access", () => {
     const scan = (source: string) => scanSource(source, "packages/commands/src/fixture.ts").map(({ classification }) => classification);
     const refuse = (recovery: string) => `refusalEnvelope({ command: "x", status: "refused", code: "x.blocked", message: "Blocked", recovery: ${recovery} });`;
