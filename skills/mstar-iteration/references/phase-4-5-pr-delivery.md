@@ -60,14 +60,15 @@ A PR can carry **two independent review surfaces**, and merge-ready requires bot
 | Surface | Owner | Evidence |
 |---|---|---|
 | **Internal PR loop** (only when `reviewed-auto`) | `mstar-pr-loop` | its settled, posted `ship it` on the current head |
-| **External AI review** (Greptile, Bugbot, or any attached review bot) | that bot, on the PR | its check **not failing** on the current head, and no unresolved finding at or above the blocking tier (a P1/must-fix is blocking; a bot failure caused by the review itself is a blocking state) |
+| **External AI review** (Greptile, Bugbot, or any attached review bot) | that bot, on the PR | its **own passing bar** on the current head — for Greptile that is the loop's **5/5** score — plus a non-failing check and no unresolved finding at or above the blocking tier (a P1/must-fix blocks; a failing check caused by the review itself is a blocking state) |
 
-- A `ship it` from the internal loop **never** waives an unresolved external finding; an external bot's silence is not evidence either — read its verdict and its inline comments on the current head.
+- The external surface is a **loop**, not a one-shot read: drive it to its passing bar (Greptile: 5/5) by fixing confirmed findings and re-running it on a new head, exactly as the internal loop is driven to `ship it`. A green check with a sub-threshold score (for example Greptile below 5/5) is **not** settled.
+- A `ship it` from the internal loop **never** waives an unresolved external finding or a sub-threshold external score; an external bot's silence is not evidence either — read its verdict and its inline comments on the current head.
 - If the bot reports findings, treat them like QC findings: confirm each against the code, fix the valid ones, and record why an invalid one is rejected. Re-run the bot only by pushing a new head (§5.1a) or its documented retrigger.
 - A bot check that fails for infrastructure reasons (quota, app error) is still **not green**: state the cause, and either retrigger or obtain the user's written waiver naming the surface and the head.
 - The two surfaces settle independently; do not stop the internal loop because the bot is green, and do not merge because the internal loop is green while the bot is red.
 
-### 5.1 Loop（repeat until §5.2 第 1–4 项全 `[x]`）
+### 5.1 Loop（repeat until §5.2 第 1–5 项全 `[x]`）
 
 1. **Status** — PR mergeable？required CI？unresolved review threads？**任一 CI/AI review 是否仍在跑？**
 2. **Merge conflicts** — blocking 则在 integration 分支**本地**解决；**仅当 §5.1a push gate 满足时**再 push（意图冲突 → **Blocked**）
@@ -85,18 +86,18 @@ A PR can carry **two independent review surfaces**, and merge-ready requires bot
 | Priority | Helper | When |
 |----------|--------|------|
 | 1 | `babysit` or any `*-babysit` skill（first readable `SKILL.md`） | **Default prefer** — CI green + reviews resolved loop |
-| 2 | `greploop` | **Optional helper** — the external bot's check + findings must settle per §5.1b regardless; `greploop` (and its Greptile 5/5 score target) is an optional strengthening on top, never a substitute for that settlement |
+| 2 | `greploop` | **Driver for the mandatory external bar** — the external bot's settlement is required per §5.1b; when the repo uses Greptile, drive it with `greploop` to the loop's **5/5** target. Without the helper, achieve the same bar manually and read the bot's score, check and inline comments directly |
 | 3 | neither | Command fallback = babysit-equivalent CI + reviews gates |
 
 When both babysit/`*-babysit` and greploop apply: **babysit/`*-babysit` first**（CI + reviews），then optional greploop for Greptile score. Discovery paths → `mstar-iteration` §5 (iteration command layer).
 
 ### 5.2 Phase 5 exit checklist（merge-ready → enter Phase 6）
 
-打印 **`## Phase 5 exit checklist`**；**第 1–4 项全 `[x]` = merge-ready**（第 5 项是 merge-ready 的 todo 勾选动作，其条件即第 1–4 项），第 6 项（**Merge authorization**）是 merge 与进入 Phase 6 的独立前置（§5.3），第 7 项为 transition marker（merged 后才可勾）。**整表全 `[x]` 只在 merge 之后成立**（Phase 6 进入前置），不得作为 merge-ready 的定义或 `phase-5-pr-merge-ready` todo 的关闭条件（否则要求先 merge，`owner-gated` 下自相矛盾）；此后唯一出口是 **Phase 6**（PR merged 后执行 `references/phase-6-post-merge-close.md` §6.1–§6.4）——本 checklist **不是**「迭代交付完成」：
+打印 **`## Phase 5 exit checklist`**；**第 1–5 项全 `[x]` = merge-ready**（第 6 项是 merge-ready 的 todo 勾选动作，其条件即第 1–5 项），第 7 项（**Merge authorization**）是 merge 与进入 Phase 6 的独立前置（§5.3），第 8 项为 transition marker（merged 后才可勾）。**整表全 `[x]` 只在 merge 之后成立**（Phase 6 进入前置），不得作为 merge-ready 的定义或 `phase-5-pr-merge-ready` todo 的关闭条件（否则要求先 merge，`owner-gated` 下自相矛盾）；此后唯一出口是 **Phase 6**（PR merged 后执行 `references/phase-6-post-merge-close.md` §6.1–§6.4）——本 checklist **不是**「迭代交付完成」：
 
 - [ ] PR mergeable（无 blocking merge conflicts）
 - [ ] All **required** CI checks green on latest head
-- [ ] **External AI review** settled on the latest head: check not failing, no unresolved blocking finding (or a user-written waiver naming the surface, finding and head) — §5.1b
+- [ ] **External AI review** settled on the latest head at its own passing bar (Greptile: 5/5), check not failing, no unresolved blocking finding (or a user-written waiver naming the surface, finding and head) — §5.1b
 - [ ] All review threads **resolved**（或用户书面 waive 特定 thread）
 - [ ] §5.1 review comment + resolve 已覆盖本轮所有 addressed feedback
 - [ ] Host todo `phase-5-pr-merge-ready` 可勾选
@@ -109,10 +110,10 @@ When both babysit/`*-babysit` and greploop apply: **babysit/`*-babysit` first**�
 
 |`pr_merge_policy`|Merge 授权来源|
 |---|---|
-|`reviewed-auto`|**同时**满足 (a) 一份 **settled、已 posted**、且 `head` 等于**当前** PR head 的 `ship it` 报告（`mstar-pr-loop` 的 `ship it` 行），与 (b) §5.1b 的外部 AI review 在当前 head 不失败且无未解决的 blocking finding（或用户针对该 finding 的书面 waive）——(a)(b) 缺一不可|
-|`owner-gated`|**人类 owner 本人**（操作者/用户，**不是**本 harness 的 coordinator 席位）对**当前** PR head 的**显式书面** merge 批准；PM 自己的 owner 席位不构成该批准。外部 AI review 的 blocking finding 仍是 merge-ready 前置（§5.1b），owner 批准不豁免它，除非自身即为对该 finding 的书面 waive|
+|`reviewed-auto`|**同时**满足 (a) 一份 **settled、已 posted**、且 `head` 等于**当前** PR head 的 `ship it` 报告（`mstar-pr-loop` 的 `ship it` 行），与 (b) §5.1b 的外部 AI review 在当前 head 达到其自身通过线（Greptile 为 5/5）、检查不失败且无未解决的 blocking finding（或用户针对该 finding/分数的书面 waive）——(a)(b) 缺一不可|
+|`owner-gated`|**人类 owner 本人**（操作者/用户，**不是**本 harness 的 coordinator 席位）对**当前** PR head 的**显式书面** merge 批准；PM 自己的 owner 席位不构成该批准。外部 AI review 达到其通过线（Greptile 5/5）且无 blocking finding 仍是 merge-ready 前置（§5.1b），owner 批准不豁免它，除非自身即为对该 finding/分数的书面 waive|
 
-- **`reviewed-auto` 未满足 → STOP**：等 PR 级 review 跑到 settled 的 `ship it`，**并且**等 §5.1b 的外部 AI review 在当前 head settled、无 blocking finding；任一未满足都不得 merge，二者不能互相替代。若授权报告或外部 verdict 的 `head` 已不是当前 PR head（中间有 push），重跑对应面取新结论。恢复路径：给出上述授权报告 + 外部 review 结论，或**重新进入 Phase 1 的 §1.2 流程**——加载 `mstar-iteration` → `references/phase-1-prepare.md`，按其「必须与用户显式确认，绝不默认」规则与用户重新确认后改动 compass 记录的 policy，新增 `## Decisions` 行记 `source: user`，并刷新 Phase 4 步骤 5 写入 PR 正文的 policy 行。PM **不得**在 Phase 5 就地改写 `pr_merge_policy`。
+- **`reviewed-auto` 未满足 → STOP**：等 PR 级 review 跑到 settled 的 `ship it`，**并且**等 §5.1b 的外部 AI review 在当前 head 达到其通过线（Greptile 5/5）、无 blocking finding；任一未满足都不得 merge，二者不能互相替代。若授权报告或外部 verdict 的 `head` 已不是当前 PR head（中间有 push），重跑对应面取新结论。恢复路径：给出上述授权报告 + 外部 review 结论，或**重新进入 Phase 1 的 §1.2 流程**——加载 `mstar-iteration` → `references/phase-1-prepare.md`，按其「必须与用户显式确认，绝不默认」规则与用户重新确认后改动 compass 记录的 policy，新增 `## Decisions` 行记 `source: user`，并刷新 Phase 4 步骤 5 写入 PR 正文的 policy 行。PM **不得**在 Phase 5 就地改写 `pr_merge_policy`。
 - **`owner-gated` 未满足 → hard stop**：给出 PR 链接 + merge-ready 证据后**等待**；**人类 owner**（操作者/用户，**不是** coordinator 席位）书面批准前不得 merge，任何自动化证据（mergeable / CI 绿 / QC Approve / `ship it`）都不能替代。恢复路径：人类 owner 书面批准当前 PR head，或**重新进入 Phase 1 的 §1.2 流程**——加载 `mstar-iteration` → `references/phase-1-prepare.md`，按其「必须与用户显式确认，绝不默认」规则与用户重新确认后改动 compass 记录的 policy，新增 `## Decisions` 行记 `source: user`，并刷新 Phase 4 步骤 5 写入 PR 正文的 policy 行。PM **不得**在 Phase 5 就地改写。
 - **`pr_merge_policy` 缺失 → STOP**：**绝不**推断默认值。恢复路径：**重新进入 Phase 1 的 §1.2 流程**——加载 `mstar-iteration` → `references/phase-1-prepare.md`，按其「必须与用户显式确认，绝不默认」规则与用户确认该字段，写入 compass frontmatter 并在 `## Decisions` 记 `source: user`。
 
