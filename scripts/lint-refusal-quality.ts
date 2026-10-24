@@ -790,11 +790,17 @@ export function scanSource(source: string, file: string): RefusalFinding[] {
     const resolvedMessage = message && resolveBound(message, bindings, new Set(), unprovenParameters);
     const text = codeValue(resolvedMessage);
     // A call-site object whose property is not a fresh literal cannot prove a reachable
-    // recovery either, so the discoverability check fails closed instead of being skipped.
-    const opaqueMessage = resolvedMessage !== undefined
+    // recovery either, and neither can a fresh literal whose value is not provable text, so
+    // the discoverability check fails closed instead of being skipped.
+    const messageIsObjectField = message !== undefined
+      && ts.isPropertyAccessExpression(message)
+      && ts.isIdentifier(message.expression)
+      && bindings.has(message.expression.text);
+    const resolvedIsOpaqueField = resolvedMessage !== undefined
       && ts.isPropertyAccessExpression(resolvedMessage)
       && ts.isIdentifier(resolvedMessage.expression)
       && bindings.has(resolvedMessage.expression.text);
+    const opaqueMessage = resolvedIsOpaqueField || (messageIsObjectField && text === undefined);
     if (opaqueMessage) {
       addFinding(node, "unreachable-recovery", "Rule #341 class 4 (discoverability): CoordinationError message is a property of a call-site object that is not a fresh literal, so no reachable command can be proven.");
     } else if (text && /\bmstar\s+[a-z][a-z0-9.-]*/i.test(text) && !recoveryIsReachable(text, getGrammar())) {
