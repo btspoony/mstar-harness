@@ -665,6 +665,18 @@ describe("refusal quality scanner", () => {
     `)).toEqual(["unreachable-recovery"]);
   });
 
+  test("carries the union shape through a resolved binding", () => {
+    const scan = (source: string) => scanSource(source, "packages/engine/src/fixture.ts").map(({ classification }) => classification);
+    expect(scan(`
+      const message = flag ? "Run mstar status validate." : dynamicMessage();
+      new CoordinationError("valid.code", message);
+    `)).toEqual(["unreachable-recovery"]);
+    expect(scan(`
+      const message = flag ? "Run mstar status validate." : "Register the workflow first with mstar workflow register.";
+      new CoordinationError("valid.code", message);
+    `)).toEqual([]);
+  });
+
   test("a stale allowlist entry reports its tracking issue and refresh action", () => {
     const snippet = `refusalEnvelope({ code: "x.bad" })`;
     const finding = {

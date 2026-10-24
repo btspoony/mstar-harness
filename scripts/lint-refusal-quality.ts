@@ -621,31 +621,34 @@ export function scanSource(source: string, file: string): RefusalFinding[] {
   // Message reachability considers every possible value, not one representative: a
   // conditional's arms are unioned, and only a const binding proves from its initializer.
   // `texts` carries the arms whose text is known even when another arm is opaque or
-  // mutable, so a known unreachable command is never discarded by a sibling arm.
-  type MessageAnalysis = { kind: "texts" | "opaque" | "mutable"; texts: string[] };
-  const MESSAGE_OPAQUE: MessageAnalysis = { kind: "opaque", texts: [] };
-  const MESSAGE_MUTABLE: MessageAnalysis = { kind: "mutable", texts: [] };
+  // mutable, so a known unreachable command is never discarded by a sibling arm. `union`
+  // records that the value came from a conditional / `??` / `||`, directly or through a
+  // resolved binding, so that shape is not lost when a binding is followed.
+  type MessageAnalysis = { kind: "texts" | "opaque" | "mutable"; texts: string[]; union: boolean };
+  const MESSAGE_OPAQUE: MessageAnalysis = { kind: "opaque", texts: [], union: false };
+  const MESSAGE_MUTABLE: MessageAnalysis = { kind: "mutable", texts: [], union: false };
   const analyzeMessage = (node: ts.Expression | undefined, scope?: Scope, seen = new Set<ts.VariableDeclaration>()): MessageAnalysis => {
     if (!node) return MESSAGE_OPAQUE;
     if (ts.isParenthesizedExpression(node) || ts.isAsExpression(node) || ts.isTypeAssertionExpression(node) || ts.isSatisfiesExpression(node)) {
       return analyzeMessage(node.expression, scope, seen);
     }
-    if (ts.isStringLiteralLike(node) || ts.isNoSubstitutionTemplateLiteral(node)) return { kind: "texts", texts: [node.text] };
+    if (ts.isStringLiteralLike(node) || ts.isNoSubstitutionTemplateLiteral(node)) return { kind: "texts", texts: [node.text], union: false };
     if (ts.isTemplateExpression(node)) {
-      return { kind: "texts", texts: [node.head.text + node.templateSpans.map((span) => `${span.expression.getText(sf)}${span.literal.text}`).join("")] };
+      return { kind: "texts", texts: [node.head.text + node.templateSpans.map((span) => `${span.expression.getText(sf)}${span.literal.text}`).join("")], union: false };
     }
     // `undefined` is absence only when no nearer binding takes the name; a shadowing
     // binding is an ordinary value and resolves through the identifier path below.
-    if (node.kind === ts.SyntaxKind.NullKeyword) return { kind: "texts", texts: [] };
+    if (node.kind === ts.SyntaxKind.NullKeyword) return { kind: "texts", texts: [], union: false };
     if (ts.isIdentifier(node) && node.text === "undefined" && !hasNearerBinding(scope ?? scopeByNode.get(node), "undefined")) {
-      return { kind: "texts", texts: [] };
+      return { kind: "texts", texts: [], union: false };
     }
     if (ts.isBinaryExpression(node) && node.operatorToken.kind === ts.SyntaxKind.PlusToken) {
       const left = analyzeMessage(node.left, scope, new Set(seen));
       const right = analyzeMessage(node.right, scope, new Set(seen));
-      if (left.kind === "mutable" || right.kind === "mutable") return MESSAGE_MUTABLE;
-      if (left.kind !== "texts" || right.kind !== "texts" || left.texts.length !== 1 || right.texts.length !== 1) return MESSAGE_OPAQUE;
-      return { kind: "texts", texts: [left.texts[0]! + right.texts[0]!] };
+      const union = left.union || right.union;
+      if (left.kind === "mutable" || right.kind === "mutable") return { ...MESSAGE_MUTABLE, union };
+      if (left.kind !== "texts" || right.kind !== "texts" || left.texts.length !== 1 || right.texts.length !== 1) return { ...MESSAGE_OPAQUE, union };
+      return { kind: "texts", texts: [left.texts[0]! + right.texts[0]!], union };
     }
     if (ts.isConditionalExpression(node) || (ts.isBinaryExpression(node) && [ts.SyntaxKind.QuestionQuestionToken, ts.SyntaxKind.BarBarToken].includes(node.operatorToken.kind))) {
       const arms = ts.isConditionalExpression(node)
@@ -653,9 +656,9 @@ export function scanSource(source: string, file: string): RefusalFinding[] {
         : [node.left, node.right];
       const analyzed = arms.map((arm) => analyzeMessage(arm, scope, new Set(seen)));
       const texts = analyzed.flatMap((arm) => arm.texts);
-      if (analyzed.some((arm) => arm.kind === "mutable")) return { kind: "mutable", texts };
-      if (analyzed.some((arm) => arm.kind === "opaque")) return { kind: "opaque", texts };
-      return { kind: "texts", texts };
+      if (analyzed.some((arm) => arm.kind === "mutable")) return { kind: "mutable", texts, union: true };
+      if (analyzed.some((arm) => arm.kind === "opaque")) return { kind: "opaque", texts, union: true };
+      return { kind: "texts", texts, union: true };
     }
     if (ts.isIdentifier(node)) {
       const declaration = resolveDeclaration(scope ?? scopeByNode.get(node), node.text);
@@ -881,15 +884,13 @@ export function scanSource(source: string, file: string): RefusalFinding[] {
       && ts.isIdentifier(resolvedMessage.expression)
       && bindings.has(resolvedMessage.expression.text);
     const analyzedMessage = resolvedMessage === undefined ? MESSAGE_OPAQUE : analyzeMessage(resolvedMessage, scopeByNode.get(resolvedMessage));
-    // Any union arm that is opaque or mutable leaves a message this check cannot vouch
-    // for, so it fails closed wherever the arm is, not only behind an object field.
-    const unionMessage = resolvedMessage !== undefined
-      && (ts.isConditionalExpression(resolvedMessage)
-        || (ts.isBinaryExpression(resolvedMessage) && [ts.SyntaxKind.QuestionQuestionToken, ts.SyntaxKind.BarBarToken].includes(resolvedMessage.operatorToken.kind)));
+    // Any union arm that is opaque or mutable leaves a message this check cannot vouch for.
+    // The union flag travels through resolved bindings, so a `const` bound to such a
+    // conditional fails closed too.
     const unprovableMessage = resolvedIsOpaqueField
       || (messageIsObjectField && analyzedMessage.kind !== "texts")
       || analyzedMessage.kind === "mutable"
-      || (unionMessage && analyzedMessage.kind !== "texts");
+      || (analyzedMessage.union && analyzedMessage.kind !== "texts");
     if (analyzedMessage.texts.some((text) => /\bmstar\s+[a-z][a-z0-9.-]*/i.test(text) && !recoveryIsReachable(text, getGrammar()))) {
       addFinding(node, "unreachable-recovery", "Rule #341 class 4 (discoverability): CoordinationError message references a CLI command absent from the help grammar.");
     } else if (unprovableMessage) {
