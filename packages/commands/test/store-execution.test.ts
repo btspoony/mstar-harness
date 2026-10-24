@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, spyOn, test } from "bun:test";
 import * as nodeFs from "node:fs";
-import { chmodSync, copyFileSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { copyFileSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { captureIssue, createExecutionWorkflow, getIssue, initializeStore, openStore, readExecutionState } from "@mstar-harness/engine";
@@ -163,19 +163,17 @@ describe("store and execution command surface", () => {
     const admitted = await invoke(definition("store.execution.export"), { harness: otherHarness }, root, join(root, "absent-control-root"));
     expect(admitted.status).toBe("ok");
 
-    // 6. An UNREADABLE control root still refuses: it is not absent, just not
-    //    comparable, so the pair is never admitted.
-    const sealed = join(root, "sealed");
-    mkdirSync(sealed);
-    chmodSync(sealed, 0o000);
-    try {
-      const blocked = await invoke(definition("store.execution.export"), { harness }, root, join(sealed, "unreadable-control"));
-      expect(blocked).toMatchObject({ status: "usage", code: "usage", exitCode: 2 });
-      expect(blocked.status === "usage" ? blocked.message : "")
-        .toContain("cannot be resolved for identity comparison (EACCES)");
-    } finally {
-      chmodSync(sealed, 0o700);
-    }
+    // 6. A control root that fails to resolve for a reason other than absence
+    //    still refuses. A self-referential symlink yields ELOOP for every uid,
+    //    unlike a permission-denied directory root would simply traverse.
+    const looped = join(root, "looped");
+    mkdirSync(looped);
+    const controlLoop = join(looped, "control-loop");
+    symlinkSync("control-loop", controlLoop);
+    const blocked = await invoke(definition("store.execution.export"), { harness }, root, controlLoop);
+    expect(blocked).toMatchObject({ status: "usage", code: "usage", exitCode: 2 });
+    expect(blocked.status === "usage" ? blocked.message : "")
+      .toContain("cannot be resolved for identity comparison (ELOOP)");
   });
 
   test("initializes despite symlinked project residuals, previews migration, upgrades and backs up an explicitly named fixture store", async () => {
