@@ -6,6 +6,18 @@ The monorepo root [CHANGELOG.md](../../CHANGELOG.md) summarizes cross-surface re
 
 ## [Unreleased]
 
+## [4.0.9] - 2026-10-24
+
+### Harness
+
+- Added `scripts/dsh-contract-lint.ts` (run by the `drift-lint` CI job) — three machine gates over the tracked dsh host documents: review-seat `Budget` + `Return shape` bounding, carrier-field vocabulary, and the `packages/dsh` README language-pair pin. Each violation is one named `file:line` row.
+- Exported `REVIEW_SEAT_ROLES`, `BUDGET_LABELS` and `RETURN_SHAPE_LABELS` from the engine dispatch module and source entry so the checker reads the same authorities the Assignment parser consumes instead of restating them.
+- Fixed the dsh workflow-script seat templates: their `Budget (review / QC seats)` / `Return shape (review / QC seats)` labels are now bold, the only parenthesized form the engine parser accepts — the plain form was silently rejected at dispatch.
+
+- Version alignment with harness **4.0.9**.
+
+See root [CHANGELOG.md](../../CHANGELOG.md) **4.0.9**.
+
 ## [4.0.8] - 2026-10-24
 
 ### Changed

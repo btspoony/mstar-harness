@@ -8,6 +8,22 @@ Package-specific histories: [`packages/cli/CHANGELOG.md`](packages/cli/CHANGELOG
 
 ## [Unreleased]
 
+## [4.0.9] - 2026-10-24
+
+### Harness
+
+- Added `scripts/dsh-contract-lint.ts` (run by the `drift-lint` CI job) — three machine gates over the tracked dsh host documents: review-seat `Budget` + `Return shape` bounding, carrier-field vocabulary, and the `packages/dsh` README language-pair pin. Each violation is one named `file:line` row.
+- Exported `REVIEW_SEAT_ROLES`, `BUDGET_LABELS` and `RETURN_SHAPE_LABELS` from the engine dispatch module and source entry so the checker reads the same authorities the Assignment parser consumes instead of restating them.
+- Fixed the dsh workflow-script seat templates: their `Budget (review / QC seats)` / `Return shape (review / QC seats)` labels are now bold, the only parenthesized form the engine parser accepts — the plain form was silently rejected at dispatch.
+- Documented the **dsh PR-review posting route** (MCP and CLI), linking the audit-owned report body and archive contracts and clarifying that only the main agent posts, including on Team-only profiles.
+- **Engine authority guards state one cause per operation class.** A committed `workflow.compass-ref` retry on a staged authority now refuses with the transition cause every other operation kind uses (other readers keep their messages byte-identical; ACTIVE replay is unchanged). The `store execution export|restore|restore-preview` control-root guard now compares by filesystem identity — `realpath`, with `dev`+`ino` as the tie-break — so a symlinked spelling of the live root is refused; an unreadable comparison refuses instead of admitting, while an absent control root (an explicitly configured but unscaffolded harness) is admitted because it protects no live store.
+- **Refusal-quality lint proves interpolated recovery text.** Recovery strings built from a helper or template are now proven statically when every interpolation is an explicit declared-safe identifier (`workflow`, `holderList`); computed expressions, shadowed helpers, and any other identifier fail closed. The two `I-000865` allowlist entries are gone, and a stale allowlist hash now names its tracking issue and the required refresh.
+- **Refusal-quality lint: 12 engine-supplied recovery sites are exempted under `I-000872`.** `packages/commands/src/families/family-refusal.ts` only type-checks the recovery string and proves no reachable command, so the strict static proof cannot cover those refusals; they are recorded as 11 content-hash allowlist entries (one signature covers two call sites), each stating its own cause. Statically provable recovery text still passes with no entry.
+
+### Version alignment
+
+- Bump monorepo root, `@mstar-harness/opencode`, `@mstar-harness/opencode-v2`, `@mstar-harness/cli`, `@mstar-harness/engine`, `@mstar-harness/dsh`, Cursor/Codex/Kimi/ZCode/omp/Claude plugin manifests, the portable Agent Plugins manifest, and both marketplace manifests: **→ 4.0.9**.
+
 ## [4.0.8] - 2026-10-24
 
 ### Changed
