@@ -438,14 +438,25 @@ function assertReviewedCompassDocument(workflowId: string, harnessDir: string, c
 }
 
 /**
+ * The reviewed-compass proof of one canonical registration request, run by the
+ * producers INSIDE their transaction after the operation replay: a genuinely
+ * new registration must name this iteration's own non-empty reviewed compass,
+ * while a committed operation id returns its recorded receipt even when the
+ * document has since been emptied or rewritten (I-000868).
+ */
+export function assertRegisteredCompassDocument(workflow: CatalogExecutionWorkflow): void {
+  if (workflow.kind !== "iteration") return;
+  assertReviewedCompassDocument(workflow.workflowId, workflow.options.harnessDir, workflow.options.compassRef);
+}
+
+/**
  * Canonicalize selected iteration plan and compass pointers before deriving
  * the snapshot or deterministic operation id. Plan inputs are unchanged.
  *
- * The compass pointer must ALSO name a real, valid reviewed compass for THIS
- * iteration — the document the registration is about to make every later reader
- * resolve through. It is proven here, before the ACTIVE transaction opens, so a
- * registration that names a nonexistent document or another iteration's compass
- * publishes no workflow, no row and no catalog entity (I-000863).
+ * The pointer's own document is NOT proven here: the registration transaction
+ * proves it after the operation replay (see `assertRegisteredCompassDocument`),
+ * so a committed operation id still returns its receipt when the compass has
+ * since changed (I-000868).
  */
 function normalizeIterationWorkflow(workflow: CatalogExecutionWorkflow): CatalogExecutionWorkflow {
   if (!isPlainObject(workflow) || workflow.kind !== "iteration") return workflow;
@@ -477,12 +488,6 @@ function normalizeIterationWorkflow(workflow: CatalogExecutionWorkflow): Catalog
     changed = true;
     return { ...row, file: planPath };
   });
-  // Last, and still before the ACTIVE transaction: the pointer must name this
-  // iteration's own valid reviewed compass. A malformed id is the request
-  // validator's own refusal, so it never reaches this comparison.
-  if (typeof workflow.workflowId === "string") {
-    assertReviewedCompassDocument(workflow.workflowId, harnessDir, normalizedCompassRef);
-  }
   if (!changed) return workflow;
   return {
     ...workflow,
