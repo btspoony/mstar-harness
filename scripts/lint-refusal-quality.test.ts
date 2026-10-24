@@ -599,6 +599,20 @@ describe("refusal quality scanner", () => {
     expect(scan(`refused("Register the workflow first with mstar workflow register.");`)).toEqual([]);
   });
 
+  test("reads error-wrapper fields from an inline object literal only", () => {
+    const scan = (call: string) => scanSource(`
+      function fail(facts: { code: string; message: string }) {
+        return new CoordinationError(facts.code, facts.message);
+      }
+      const facts = { code: "", message: "Use mstar nonexistent --bad" };
+      ${call}
+    `, "packages/engine/src/fixture.ts").map(({ classification }) => classification);
+    expect(scan(`fail({ code: "", message: "Use mstar nonexistent --bad" });`))
+      .toEqual(["missing-cause-code", "unreachable-recovery"]);
+    expect(scan(`fail({ code: "valid.code", message: "Run mstar status validate." });`)).toEqual([]);
+    expect(scan("fail(facts);")).toEqual(["missing-cause-code"]);
+  });
+
   test("a stale allowlist entry reports its tracking issue and refresh action", () => {
     const snippet = `refusalEnvelope({ code: "x.bad" })`;
     const finding = {

@@ -657,6 +657,21 @@ export function scanSource(source: string, file: string): RefusalFinding[] {
       if (bindings.has(expression.text) && !seenBindings.has(expression.text)) {
         return resolveBound(bindings.get(expression.text)!, bindings, new Set(seenBindings).add(expression.text), unprovenParameters);
       }
+      return expression;
+    }
+    // A property value is known only when the object is a fresh inline literal at this call
+    // site. A const-bound object does not freeze its properties, so it is never resolved.
+    if (ts.isPropertyAccessExpression(expression) && ts.isIdentifier(expression.expression)) {
+      const base = expression.expression.text;
+      if (unprovenParameters.has(base) || !bindings.has(base) || seenBindings.has(base)) return expression;
+      const actual = resolveBound(bindings.get(base)!, bindings, new Set(seenBindings).add(base), unprovenParameters);
+      if (!ts.isObjectLiteralExpression(actual)) return expression;
+      for (const property of actual.properties) {
+        if (!ts.isPropertyAssignment(property)) continue;
+        const name = ts.isIdentifier(property.name) || ts.isStringLiteralLike(property.name) ? property.name.text : undefined;
+        if (name === expression.name.text) return resolveBound(property.initializer, bindings, seenBindings, unprovenParameters);
+      }
+      return expression;
     }
     return expression;
   };
@@ -752,7 +767,13 @@ export function scanSource(source: string, file: string): RefusalFinding[] {
   ): void => {
     const resolvedCode = code && resolveBound(code, bindings, new Set(), unprovenParameters);
     const unprovenCode = resolvedCode !== undefined && ts.isIdentifier(resolvedCode) && unprovenParameters.has(resolvedCode.text);
-    if (unprovenCode || !isCauseCode(resolvedCode)) {
+    // A call-site object argument whose property is not a fresh inline literal cannot prove
+    // the cause; a locally built object (e.g. an engine witness) keeps the property-name rule.
+    const opaqueCause = resolvedCode !== undefined
+      && ts.isPropertyAccessExpression(resolvedCode)
+      && ts.isIdentifier(resolvedCode.expression)
+      && bindings.has(resolvedCode.expression.text);
+    if (unprovenCode || opaqueCause || !isCauseCode(resolvedCode)) {
       const detail = unprovenCode ? ` wrapper parameter \`${resolvedCode.text}\` does not prove a stable cause code.` : " supply a stable code to CoordinationError.";
       addFinding(node, "missing-cause-code", `Rule #341 class 2 (named cause):${detail}`);
     }
