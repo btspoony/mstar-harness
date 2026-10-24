@@ -496,6 +496,39 @@ describe("refusal quality scanner", () => {
     expect(findings.map(({ classification }) => classification)).toEqual(["missing-recovery", "missing-recovery", "missing-recovery"]);
   });
 
+  test("distinguishes an empty string from a nullish recovery", () => {
+    const findings = scanSource(`
+      refusalEnvelope({ command: "x", status: "refused", code: "x.blocked", message: "Blocked",
+        recovery: "" ?? "Run mstar status validate." });
+      refusalEnvelope({ command: "x", status: "refused", code: "x.blocked", message: "Blocked",
+        recovery: "   " ?? "Run mstar status validate." });
+      refusalEnvelope({ command: "x", status: "refused", code: "x.blocked", message: "Blocked",
+        recovery: (flag ? "" : undefined) ?? "Run mstar status validate." });
+      refusalEnvelope({ command: "x", status: "refused", code: "x.blocked", message: "Blocked",
+        recovery: (flag ? "" : "Run mstar status validate.") || "Register the workflow first with mstar workflow register." });
+    `, "packages/commands/src/fixture.ts");
+    expect(findings.map(({ classification }) => classification)).toEqual(["missing-recovery", "missing-recovery", "missing-recovery"]);
+  });
+
+  test("keeps a helper's parameters out of the caller's wrapper bindings", () => {
+    const findings = scanSource(`
+      function helper(recovery: string): string {
+        return recovery;
+      }
+      function refused(recovery?: string) {
+        return refusalEnvelope({ command: "x", status: "refused", code: "x.blocked", message: "Blocked",
+          recovery: helper(dynamicRecovery()) });
+      }
+      refused("Run mstar status validate.");
+      function literalHelper(unused: string): string {
+        return "Register the workflow first with mstar workflow register.";
+      }
+      refusalEnvelope({ command: "x", status: "refused", code: "x.blocked", message: "Blocked",
+        recovery: literalHelper(dynamicRecovery()) });
+    `, "packages/commands/src/fixture.ts");
+    expect(findings.map(({ classification }) => classification)).toEqual(["missing-recovery"]);
+  });
+
   test("a stale allowlist entry reports its tracking issue and refresh action", () => {
     const snippet = `refusalEnvelope({ code: "x.bad" })`;
     const finding = {

@@ -452,22 +452,28 @@ export function scanSource(source: string, file: string): RefusalFinding[] {
     collectReturns(statement.body);
     if (returns.length > 0) helperReturns.set(statement, returns);
   }
-  // Recovery text proof is a small lattice: always text, text on some paths only (`maybe`),
-  // or no text at all (`absent`). Only `text` satisfies a refusal's recovery. `undefined`
-  // means the value is opaque and unproven, which fails closed wherever text is required.
-  type RecoveryText = { kind: "text"; text: string } | { kind: "maybe" } | { kind: "absent" };
+  // Recovery text proof tracks which runtime outcomes an expression can produce: non-blank
+  // text, the empty string, or a nullish value. The operators differ — `??` falls back only
+  // on nullish, `||` also on the empty string — so one merge rule would prove text that the
+  // runtime never uses. `undefined` here means unproven, which fails closed.
+  type RecoveryOutcome = "text" | "empty" | "nullish";
+  interface RecoveryText { outcomes: Set<RecoveryOutcome>; text?: string; }
   interface RecoveryContext {
     scope?: Scope;
     seen: Set<ts.VariableDeclaration>;
     helpers: ReadonlySet<string>;
     bindings: ReadonlyMap<string, ts.Expression>;
+    bindingScope?: Scope;
     bound: ReadonlySet<string>;
   }
-  const RECOVERY_ABSENT: RecoveryText = { kind: "absent" };
-  const RECOVERY_MAYBE: RecoveryText = { kind: "maybe" };
-  const recoveryContext = (bindings: ReadonlyMap<string, ts.Expression> = new Map()): RecoveryContext => ({
-    seen: new Set(), helpers: new Set(), bindings, bound: new Set(),
-  });
+  const RECOVERY_EMPTY: RecoveryText = { outcomes: new Set<RecoveryOutcome>(["empty"]) };
+  const RECOVERY_NULLISH: RecoveryText = { outcomes: new Set<RecoveryOutcome>(["nullish"]) };
+  const recoveryText = (text: string): RecoveryText => ({ outcomes: new Set<RecoveryOutcome>(["text"]), text });
+  const hasOnlyText = (recovery: RecoveryText): boolean => recovery.outcomes.size === 1 && recovery.outcomes.has("text");
+  const recoveryContext = (
+    bindings: ReadonlyMap<string, ts.Expression> = new Map(),
+    bindingScope?: Scope,
+  ): RecoveryContext => ({ seen: new Set(), helpers: new Set(), bindings, bindingScope, bound: new Set() });
   // The nearest binding of any name wins: a shadowed `undefined` is a value, not absence.
   const hasNearerBinding = (scope: Scope | undefined, name: string): boolean => {
     for (let current = scope; current; current = current.parent) {
@@ -475,61 +481,80 @@ export function scanSource(source: string, file: string): RefusalFinding[] {
     }
     return false;
   };
+  const enclosingFunctionScope = (scope: Scope | undefined): Scope | undefined => {
+    for (let current = scope; current; current = current.parent) {
+      if (current.kind === "function" || current.kind === "source") return current;
+    }
+    return undefined;
+  };
   const recoveryTextOf = (node: ts.Expression | undefined, context: RecoveryContext): RecoveryText | undefined => {
     if (!node) return undefined;
     if (ts.isParenthesizedExpression(node) || ts.isAsExpression(node) || ts.isTypeAssertionExpression(node) || ts.isSatisfiesExpression(node)) {
       return recoveryTextOf(node.expression, context);
     }
     if (ts.isStringLiteralLike(node) || ts.isNoSubstitutionTemplateLiteral(node)) {
-      return node.text.trim() === "" ? RECOVERY_ABSENT : { kind: "text", text: node.text };
+      // A whitespace-only string is truthy text; only the empty string is blank.
+      return node.text === "" ? RECOVERY_EMPTY : recoveryText(node.text);
     }
     if (ts.isTemplateExpression(node)) {
       if (!node.templateSpans.every((span) => ts.isIdentifier(span.expression) && DECLARED_SAFE_INTERPOLATIONS[span.expression.text] === true)) return undefined;
-      return { kind: "text", text: node.head.text + node.templateSpans.map((span) => `${span.expression.getText(sf)}${span.literal.text}`).join("") };
+      return recoveryText(node.head.text + node.templateSpans.map((span) => `${span.expression.getText(sf)}${span.literal.text}`).join(""));
     }
-    // Every arm of a conditional chain is analysed: an arm with no text is allowed (a `??`
-    // covering it must supply text), an arm that cannot be proven fails the whole chain.
+    // Every arm of a conditional chain is analysed: the value can be any arm's outcome, and
+    // an arm that cannot be proven fails the whole chain.
     if (ts.isConditionalExpression(node)) {
       const whenTrue = recoveryTextOf(node.whenTrue, { ...context, seen: new Set(context.seen) });
       const whenFalse = recoveryTextOf(node.whenFalse, { ...context, seen: new Set(context.seen) });
       if (!whenTrue || !whenFalse) return undefined;
-      if (whenTrue.kind === "text" && whenFalse.kind === "text") return whenTrue;
-      if (whenTrue.kind === "absent" && whenFalse.kind === "absent") return RECOVERY_ABSENT;
-      return RECOVERY_MAYBE;
+      const text = whenTrue.text ?? whenFalse.text;
+      return { outcomes: new Set([...whenTrue.outcomes, ...whenFalse.outcomes]), ...(text !== undefined ? { text } : {}) };
     }
     if (ts.isBinaryExpression(node) && [ts.SyntaxKind.QuestionQuestionToken, ts.SyntaxKind.BarBarToken].includes(node.operatorToken.kind)) {
       const left = recoveryTextOf(node.left, { ...context, seen: new Set(context.seen) });
       const right = recoveryTextOf(node.right, { ...context, seen: new Set(context.seen) });
-      // Both operands must be provable and the right arm must always supply text: the
-      // operator routes the left arm's absent paths to it, so a partial proof of either
-      // operand says nothing about the value actually used.
-      if (!left || !right || right.kind !== "text") return undefined;
-      return left.kind === "text" ? left : right;
+      // Both operands must be provable and the right arm must always supply text: a partial
+      // proof of either operand says nothing about the value actually used.
+      if (!left || !right || !hasOnlyText(right)) return undefined;
+      const fallsBackOnNullish = left.outcomes.has("nullish");
+      const fallsBack = node.operatorToken.kind === ts.SyntaxKind.QuestionQuestionToken
+        ? fallsBackOnNullish
+        : fallsBackOnNullish || left.outcomes.has("empty");
+      const outcomes = new Set<RecoveryOutcome>([...left.outcomes].filter((outcome) => outcome !== "nullish" && (node.operatorToken.kind === ts.SyntaxKind.BarBarToken || outcome !== "empty")));
+      if (fallsBack) for (const outcome of right.outcomes) outcomes.add(outcome);
+      const text = left.outcomes.has("text") ? left.text : right.text;
+      return { outcomes, ...(text !== undefined ? { text } : {}) };
     }
     if (ts.isBinaryExpression(node) && node.operatorToken.kind === ts.SyntaxKind.PlusToken) {
       const left = recoveryTextOf(node.left, { ...context, seen: new Set(context.seen) });
       const right = recoveryTextOf(node.right, { ...context, seen: new Set(context.seen) });
-      if (!left || !right || left.kind !== "text" || right.kind !== "text") return undefined;
-      return { kind: "text", text: left.text + right.text };
+      if (!left || !right || left.outcomes.has("nullish") || right.outcomes.has("nullish")) return undefined;
+      const outcomes = new Set<RecoveryOutcome>(
+        [...left.outcomes].flatMap((a) => [...right.outcomes].map((b): RecoveryOutcome => (a === "text" || b === "text" ? "text" : "empty"))),
+      );
+      const text = left.text !== undefined && right.text !== undefined ? left.text + right.text : undefined;
+      return { outcomes, ...(text !== undefined ? { text } : {}) };
     }
     if (ts.isIdentifier(node)) {
-      // A wrapper parameter is replaced by the argument the call site actually passes, so a
-      // literal recovery argument proves and a runtime one still fails.
+      const scope = context.scope ?? scopeByNode.get(node);
+      if (node.text === "undefined") return hasNearerBinding(scope, node.text) ? undefined : RECOVERY_NULLISH;
+      const declaration = resolveDeclaration(scope, node.text);
+      if (declaration) {
+        if (!declaration.initializer || context.seen.has(declaration)) return undefined;
+        return recoveryTextOf(declaration.initializer, {
+          ...context, scope: scopeByNode.get(declaration), seen: new Set(context.seen).add(declaration),
+        });
+      }
+      // A wrapper parameter takes the argument its call site passes, but only from that
+      // wrapper's own scope: a same-named parameter of another function is a different value.
       const boundValue = context.bindings.get(node.text);
-      if (boundValue && !context.bound.has(node.text)) {
+      if (boundValue && !context.bound.has(node.text) && enclosingFunctionScope(scope) === context.bindingScope) {
         return recoveryTextOf(boundValue, {
           ...context, seen: new Set(context.seen), bound: new Set(context.bound).add(node.text),
         });
       }
-      const scope = context.scope ?? scopeByNode.get(node);
-      if (node.text === "undefined") return hasNearerBinding(scope, node.text) ? undefined : RECOVERY_ABSENT;
-      const declaration = resolveDeclaration(scope, node.text);
-      if (!declaration?.initializer || context.seen.has(declaration)) return undefined;
-      return recoveryTextOf(declaration.initializer, {
-        ...context, scope: scopeByNode.get(declaration), seen: new Set(context.seen).add(declaration),
-      });
+      return undefined;
     }
-    if (node.kind === ts.SyntaxKind.NullKeyword) return RECOVERY_ABSENT;
+    if (node.kind === ts.SyntaxKind.NullKeyword) return RECOVERY_NULLISH;
     if (ts.isCallExpression(node)) {
       if (!ts.isIdentifier(node.expression)) return undefined;
       const name = node.expression.text;
@@ -537,11 +562,13 @@ export function scanSource(source: string, file: string): RefusalFinding[] {
       const returns = declaration && helperReturns.get(declaration);
       if (!declaration || !returns || context.helpers.has(name)) return undefined;
       const helpers = new Set(context.helpers).add(name);
+      // The callee's parameters are its own: the caller's bindings and scope do not follow.
       const proven = returns.map((expression) => recoveryTextOf(expression, {
-        ...context, scope: scopeByNode.get(expression), seen: new Set(), helpers, bound: new Set(),
+        seen: new Set(), helpers, bindings: new Map(), bindingScope: undefined, bound: new Set(),
+        scope: scopeByNode.get(expression),
       }));
-      const texts = proven.flatMap((result) => (result?.kind === "text" ? [result.text] : []));
-      return texts.length === proven.length ? { kind: "text", text: texts[0]! } : undefined;
+      const texts = proven.flatMap((result) => (result && hasOnlyText(result) ? [result.text!] : []));
+      return texts.length === proven.length ? recoveryText(texts[0]!) : undefined;
     }
     return undefined;
   };
@@ -659,6 +686,7 @@ export function scanSource(source: string, file: string): RefusalFinding[] {
     input: ts.Expression | undefined,
     bindings = new Map<string, ts.Expression>(),
     unprovenParameters: ReadonlySet<string> = new Set(),
+    bindingScope?: Scope,
   ): void => {
     const variants = envelopeInput(input, bindings, unprovenParameters);
     const predicateNote = (alternative: ObjectAlternative): string => alternative.independentPredicates.size > 0
@@ -690,14 +718,14 @@ export function scanSource(source: string, file: string): RefusalFinding[] {
       const statusMayBeRefused = unprovenFields.has("status")
         || (!!status && ts.isIdentifier(status) && unprovenParameters.has(status.text))
         || codeValue(status) !== "usage";
-      const provenRecovery = recoveryTextOf(recovery, recoveryContext(bindings));
-      const recoveryText = provenRecovery?.kind === "text" ? provenRecovery.text : undefined;
+      const provenRecovery = recoveryTextOf(recovery, recoveryContext(bindings, bindingScope));
+      const provenText = provenRecovery && hasOnlyText(provenRecovery) ? provenRecovery.text : undefined;
       return statusMayBeRefused && (
         unprovenFields.has("recovery")
         || (!!recovery && ts.isIdentifier(recovery) && unprovenParameters.has(recovery.text))
         || !recovery
-        || recoveryText === undefined
-        || recoveryText.trim() === ""
+        || provenText === undefined
+        || provenText.trim() === ""
       );
     });
     if (missingRecovery) {
@@ -752,7 +780,7 @@ export function scanSource(source: string, file: string): RefusalFinding[] {
       const wrapper = callee ? wrappers.get(callee) : undefined;
       if (wrapper) {
         const bindings = callBindings(wrapper, node);
-        if (ts.isCallExpression(wrapper.inner)) checkEnvelope(node, wrapper.inner.arguments[0], bindings);
+        if (ts.isCallExpression(wrapper.inner)) checkEnvelope(node, wrapper.inner.arguments[0], bindings, new Set(), enclosingFunctionScope(scopeByNode.get(wrapper.inner)));
         else checkCoordinationError(node, wrapper.inner.arguments?.[0], wrapper.inner.arguments?.[1], bindings);
       } else if (callee === "refusalEnvelope") {
         const wrapperBody = wrapperBodies.get(node);
