@@ -28846,6 +28846,20 @@ function legacyRegistrationRequestHash(caller, request) {
     return null;
   }
 }
+function derivedOperationId(intent) {
+  return `op-${createHash18("sha256").update(stableJson(intent), "utf8").digest("hex").slice(0, 24)}`;
+}
+function legacyDerivedOperationId(actor, identity) {
+  let legacy;
+  try {
+    legacy = normalizeIterationPlanPaths(identity);
+  } catch {
+    return null;
+  }
+  if (legacy.workflow === identity.workflow)
+    return null;
+  return derivedOperationId({ actor, workflow: legacy.workflow, delta: catalogDeltaFor(legacy.workflow) });
+}
 async function commitExecutionRegistration(context, request) {
   const identity = canonicalRegistrationIdentity(request);
   const requestHash4 = registrationRequestHash(context.caller, identity);
@@ -28948,7 +28962,7 @@ async function registerShippedCatalogExecution(context, input) {
     delta: initialDelta
   });
   const intent = { actor: input.actor, workflow: drafted.workflow, delta: catalogDeltaFor(drafted.workflow) };
-  const operationId = input.operationId ?? `op-${createHash18("sha256").update(stableJson(intent), "utf8").digest("hex").slice(0, 24)}`;
+  const operationId = input.operationId ?? derivedOperationId(intent);
   const request = {
     ...intent,
     operationId,
@@ -28957,6 +28971,7 @@ async function registerShippedCatalogExecution(context, input) {
   const identity = canonicalRegistrationIdentity(request);
   const requestHash4 = registrationRequestHash(context.caller, identity);
   const legacyRequestHash = legacyRegistrationRequestHash(context.caller, identity);
+  const legacyOperationId = input.operationId === undefined ? legacyDerivedOperationId(input.actor, identity) : null;
   const resolved = await withExecutionTransaction(context, (tx) => {
     const expected = executionRootTokenOf(tx);
     const replayed = readOperationReplay(tx, {
@@ -28969,6 +28984,18 @@ async function registerShippedCatalogExecution(context, input) {
     });
     if (replayed !== null)
       return { replayed: replayed.data };
+    if (legacyOperationId !== null) {
+      const legacyReplayed = readOperationReplay(tx, {
+        operationId: legacyOperationId,
+        requestHash: requestHash4,
+        legacyRequestHash,
+        workflowId: identity.workflow.workflowId,
+        planId: null,
+        token: { kind: "root", key: [] }
+      });
+      if (legacyReplayed !== null)
+        return { replayed: legacyReplayed.data };
+    }
     const canonical2 = resolveCatalogExecutionPlan(context, request);
     assertRegisteredCompassDocument(canonical2.request.workflow);
     assertRegisteredPlanDocuments(canonical2.request.workflow);
