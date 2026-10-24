@@ -43,7 +43,7 @@ function carrierMap(): Record<string, string> {
   return parsed.map;
 }
 
-/** A dispatch payload fence: heading + header fields + body (the body makes it a payload). */
+/** An `## Assignment` fence: heading + header fields (+ optional prompt text). */
 function payload(header: readonly string[], body = "Operator: keep this body."): string {
   return ["# Example", "", "```ts", "## Assignment", "", ...header, "", body, "```", ""].join("\n");
 }
@@ -55,10 +55,9 @@ describe("checkSeatBounding — seat header blocks carry the bounding labels", (
   test("a review-seat payload without the labels yields one row per label", () => {
     const text = payload([`Execute as: ${seat}`, "Delegation: forbidden", "Task category: audit"]);
     const doc: Doc = { rel: "fixture.md", text };
-    const { rows, blocks, illustrations } = checkSeatBounding([doc]);
+    const { rows, blocks } = checkSeatBounding([doc]);
     const executeAsLine = text.split("\n").findIndex((line) => line.startsWith("Execute as:")) + 1;
     expect(blocks).toBe(1);
-    expect(illustrations).toBe(0);
     expect(rows).toHaveLength(2);
     expect(rows[0]).toStartWith(`fixture.md:${executeAsLine} `);
     expect(rows[0]).toContain(`review seat "${seat}"`);
@@ -92,12 +91,11 @@ describe("checkSeatBounding — seat header blocks carry the bounding labels", (
     expect(checkSeatBounding([{ rel: "fixture.md", text }]).rows).toEqual([]);
   });
 
-  test("a fence that ends at its own header is an illustration, not a violation", () => {
+  test("a fence that ends at its own header is still gated (no shape is skipped)", () => {
     const text = ["```markdown", "## Assignment", "", `Execute as: ${seat}`, "Delegation: forbidden", "Task category: audit", "```", ""].join("\n");
     const result = checkSeatBounding([{ rel: "fixture.md", text }]);
-    expect(result.rows).toEqual([]);
     expect(result.blocks).toBe(1);
-    expect(result.illustrations).toBe(1);
+    expect(result.rows).toHaveLength(2);
   });
 });
 

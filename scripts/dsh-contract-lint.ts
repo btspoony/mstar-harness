@@ -30,10 +30,9 @@
  * `scripts/lint-ascii-literals.ts`. An unparseable map fails loudly; there is
  * no literal fallback.
  *
- * Scope note (deliberate, tested): a fenced block that ends at its own header —
- * like the `## Assignment` shape illustration in `dsh.md` — documents the three
- * core header fields, not a seat dispatch, so it is counted as an illustration
- * and not as a violating header block. Every dispatch payload carries a body.
+ * Check 1 is strict: every fenced `## Assignment` header block is read, whether
+ * or not a body follows it, so a shape demo copied for a seat cannot skip the
+ * bounding contract.
  *
  * Usage: bun run scripts/dsh-contract-lint.ts
  * Exit 0 = the documents match their authorities; exit 1 = at least one row.
@@ -105,17 +104,15 @@ export function fencedBlocks(text: string): Array<{ line: number; lines: string[
  * Check 1 — seat bounding. Every `## Assignment` header block whose role is a
  * review seat carries a `Budget` and a `Return shape` label; the labels are the
  * engine's own, and the field values come from the engine parser that consumes
- * them (so the check and the dispatch gate agree on what a label is). A block
- * that ends at its own header inside the fence is an illustration (see the
- * module scope note) and is only counted.
+ * them (so the check and the dispatch gate agree on what a label is). No header
+ * shape is skipped: a fence that ends at its own header is read like any other.
  */
 export function checkSeatBounding(
   docs: readonly Doc[],
   seats: readonly string[] = REVIEW_SEAT_ROLES,
-): { rows: string[]; blocks: number; illustrations: number } {
+): { rows: string[]; blocks: number } {
   const rows: string[] = [];
   let blocks = 0;
-  let illustrations = 0;
   for (const doc of docs) {
     for (const block of fencedBlocks(doc.text)) {
       // One fence can carry several prompts (a shared template rendered per seat).
@@ -128,11 +125,6 @@ export function checkSeatBounding(
         let end = start;
         while (end < block.lines.length && !BLANK.test(block.lines[end]!) && !HEADING.test(block.lines[end]!)) end++;
         blocks++;
-        // A fence that ends at its header illustrates the header shape, not a dispatch.
-        if (block.lines.slice(end).every((rest) => BLANK.test(rest))) {
-          illustrations++;
-          return;
-        }
         const fields = parseAssignmentFields(["## Assignment", ...block.lines.slice(start, end)].join("\n"));
         const role = roleToken(fields.executeAs);
         if (!seats.includes(role)) return;
@@ -150,7 +142,7 @@ export function checkSeatBounding(
       });
     }
   }
-  return { rows, blocks, illustrations };
+  return { rows, blocks };
 }
 
 /**
@@ -346,7 +338,7 @@ if (import.meta.main) {
     pinSummary = `${pin.recorded} recorded blob hashes match git hash-object`;
   }
 
-  const seatSummary = `${seats.blocks} Assignment header block(s) scanned (${seats.illustrations} header-shape illustrations), ${seats.rows.length} seat-bounding violation(s); carrier vocabulary ${carrierSummary}; README pin ${pinSummary}`;
+  const seatSummary = `${seats.blocks} Assignment header block(s) scanned, ${seats.rows.length} seat-bounding violation(s); carrier vocabulary ${carrierSummary}; README pin ${pinSummary}`;
 
   if (rows.length > 0) {
     console.error(`dsh-contract-lint: ${rows.length} violation(s) found\n`);
