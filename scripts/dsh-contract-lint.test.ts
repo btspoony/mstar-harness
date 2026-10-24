@@ -27,6 +27,7 @@ import {
   checkReadmePin,
   checkSeatBounding,
   parseCarrierMap,
+  scanFences,
   type Doc,
 } from "./dsh-contract-lint.ts";
 
@@ -121,6 +122,15 @@ describe("checkSeatBounding — seat header blocks carry the bounding labels", (
     expect(checkSeatBounding([{ rel: "fixture.md", text: normal }]).rows).toEqual([]);
   });
 
+  test("b2: a review-seat header inside a tilde fence yields both bounding rows", () => {
+    const text = ["~~~markdown", "## Assignment", "", `Execute as: ${seat}`, "Delegation: forbidden", "Task category: audit", "~~~", ""].join("\n");
+    const result = checkSeatBounding([{ rel: "fixture.md", text }]);
+    expect(result.blocks).toBe(1);
+    expect(result.rows).toHaveLength(2);
+    expect(result.rows[0]).toContain("assignment.field.budget-missing");
+    expect(result.rows[1]).toContain("assignment.field.return-shape-missing");
+  });
+
   test("a fence that ends at its own header is still gated (no shape is skipped)", () => {
     const text = ["```markdown", "## Assignment", "", `Execute as: ${seat}`, "Delegation: forbidden", "Task category: audit", "```", ""].join("\n");
     const result = checkSeatBounding([{ rel: "fixture.md", text }]);
@@ -164,6 +174,23 @@ describe("checkFenceParity — an unbalanced fence cannot hide a document tail",
 
   test("balanced fences pass", () => {
     expect(checkFenceParity([{ rel: "fixture.md", text: "```ts\nbody\n```\n" }])).toEqual([]);
+  });
+
+  test("b2: an odd tilde-fence count is a named parity row too", () => {
+    const text = ["~~~markdown", "## Assignment", "", "Execute as: x", "~~~", "", "~~~markdown", "unclosed tail", ""].join("\n");
+    const rows = checkFenceParity([{ rel: "fixture.md", text }]);
+    const lastFence = text.split("\n").reduce((last, line, index) => (/^~~~/.test(line) ? index : last), 0);
+    expect(rows).toHaveLength(1);
+    expect(rows[0]).toStartWith(`fixture.md:${lastFence + 1} `);
+    expect(rows[0]).toContain("unbalanced fences (3 fence lines)");
+  });
+
+  test("b2: a shorter or different-character fence line does not close the block", () => {
+    const text = ["~~~~", "still inside", "~~~", "also inside", "```", "five tildes close:", "~~~~~", "outside", ""].join("\n");
+    const { blocks, fences } = scanFences(text);
+    expect(fences).toEqual([1, 7]);
+    expect(blocks).toHaveLength(1);
+    expect(blocks[0]!.lines).toEqual(["still inside", "~~~", "also inside", "```", "five tildes close:"]);
   });
 });
 
@@ -321,6 +348,75 @@ describe("checkReadmePin — recorded blob hashes equal git hash-object", () => 
     expect(rows).toHaveLength(1);
     expect(rows[0]).toStartWith(`${recorderRel}:3 `);
     expect(rows[0]).toContain(`records "${siblings[0]}" a second time (first record at line 2)`);
+  });
+
+  test("b1: a quoted duplicate record is named, so it cannot hide behind the first one", () => {
+    const rows = checkReadmePin({
+      recorderRel,
+      recorderText: recorder([
+        [siblings[0]!, hash("a")],
+        [`"${siblings[0]}"`, `"${hash("d")}"`],
+        [siblings[1]!, hash("b")],
+      ]),
+      packageDir,
+      siblings,
+      hashOf: (rel) => (rel === siblingPath(siblings[0]!) ? hash("a") : hash("b")),
+    }).rows;
+    expect(rows).toHaveLength(1);
+    expect(rows[0]).toStartWith(`${recorderRel}:3 `);
+    expect(rows[0]).toContain(`records "${siblings[0]}" a second time (first record at line 2)`);
+  });
+
+  test("b1: a quoted stale hash is compared, not ignored", () => {
+    const rows = checkReadmePin({
+      recorderRel,
+      recorderText: recorder([
+        [siblings[0]!, `"${hash("c")}"`],
+        [`'${siblings[1]!}'`, `'${hash("b")}'`],
+      ]),
+      packageDir,
+      siblings,
+      hashOf: (rel) => (rel === siblingPath(siblings[0]!) ? hash("a") : hash("b")),
+    }).rows;
+    expect(rows).toHaveLength(1);
+    expect(rows[0]).toStartWith(`${recorderRel}:2 `);
+    expect(rows[0]).toContain(hash("c"));
+    expect(rows[0]).toContain(hash("a"));
+  });
+
+  test("b1: an unparseable recorder line is named instead of skipped", () => {
+    const rows = checkReadmePin({
+      recorderRel,
+      recorderText: recorder([
+        [siblings[0]!, hash("a")],
+        [siblings[1]!, hash("b")],
+        ["README.md", "not-a-hash"],
+      ]),
+      packageDir,
+      siblings,
+      hashOf: (rel) => (rel === siblingPath(siblings[0]!) ? hash("a") : hash("b")),
+    }).rows;
+    expect(rows).toHaveLength(1);
+    expect(rows[0]).toStartWith(`${recorderRel}:4 `);
+    expect(rows[0]).toContain("recorder line is not a");
+    expect(rows[0]).toContain("not-a-hash");
+  });
+
+  test("b1: a quoted non-sibling record is named", () => {
+    const rows = checkReadmePin({
+      recorderRel,
+      recorderText: recorder([
+        [`"README.xx.md"`, `"${hash("a")}"`],
+        [siblings[0]!, hash("a")],
+        [siblings[1]!, hash("b")],
+      ]),
+      packageDir,
+      siblings,
+      hashOf: (rel) => (rel === siblingPath(siblings[0]!) ? hash("a") : hash("b")),
+    }).rows;
+    expect(rows).toHaveLength(1);
+    expect(rows[0]).toContain("README.xx.md");
+    expect(rows[0]).toContain("is not a README sibling");
   });
 
   test("a missing sibling entry and a non-sibling entry are each named", () => {

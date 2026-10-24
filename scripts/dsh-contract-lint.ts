@@ -34,7 +34,8 @@
  *
  * Check 1 is strict: every fenced `## Assignment` segment is read, whether or
  * not a body follows it, so a shape demo copied for a seat cannot skip the
- * bounding contract. An unbalanced fence is itself a row: the tail of such a
+ * bounding contract. Both fence characters count (backtick and tilde, CommonMark
+ * closing rule), and an unbalanced fence is itself a row: the tail of such a
  * document would otherwise fall outside every scan.
  *
  * Usage: bun run scripts/dsh-contract-lint.ts
@@ -66,7 +67,8 @@ const README_PACKAGE_DIR = "packages/dsh";
 const BLANK = /^\s*$/;
 // The marker opens a prompt template literal (`agent(`## Assignment`), so it need not start the line.
 const ASSIGNMENT_HEADING = /##\s+Assignment\s*$/;
-const FENCE = /^\s*```/;
+/** A fence line: three or more backticks or tildes, plus its info string. */
+const FENCE_OPEN = /^\s*(`{3,}|~{3,})(.*)$/;
 const EXECUTE_AS = /Execute as/i;
 
 export type Doc = { rel: string; text: string };
@@ -81,40 +83,61 @@ const BOUNDING_CODES: Record<string, { label: string; labels: readonly string[] 
   "assignment.field.return-shape-missing": { label: "Return shape", labels: RETURN_SHAPE_LABELS },
 };
 
-/** Fenced blocks (` ``` `-delimited) with the 1-based line number of their first content line. */
-export function fencedBlocks(text: string): Array<{ line: number; lines: string[] }> {
+export type Fence = { char: string; length: number; line: number };
+
+/**
+ * Fence toggles and their content blocks in the CommonMark shape, for BOTH
+ * fence characters: a fence closes only on the same character, at least as
+ * long, with nothing but whitespace after it. A `~~~` block therefore keeps a
+ * ``` line as literal content, and an unclosed fence runs to the document end.
+ *
+ * `fences` lists every toggle line (1-based), open or close, so an odd count
+ * means a fence never closed.
+ */
+export function scanFences(text: string): { blocks: Array<{ line: number; lines: string[] }>; fences: number[] } {
   const blocks: Array<{ line: number; lines: string[] }> = [];
-  let current: { line: number; lines: string[] } | null = null;
+  const fences: number[] = [];
+  let open: Fence | null = null;
   text.split(/\r?\n/).forEach((raw, index) => {
-    if (FENCE.test(raw)) {
-      if (current === null) current = { line: index + 2, lines: [] };
-      else {
-        blocks.push(current);
-        current = null;
-      }
+    const match = raw.match(FENCE_OPEN);
+    if (open === null) {
+      if (match === null) return;
+      const marker = match[1]!;
+      open = { char: marker[0]!, length: marker.length, line: index + 1 };
+      fences.push(index + 1);
+      blocks.push({ line: index + 2, lines: [] });
       return;
     }
-    if (current !== null) current.lines.push(raw);
+    const closes =
+      match !== null && match[2]!.trim() === "" && match[1]![0] === open.char && match[1]!.length >= open.length;
+    if (closes) {
+      fences.push(index + 1);
+      open = null;
+      return;
+    }
+    blocks[blocks.length - 1]!.lines.push(raw);
   });
-  if (current !== null) blocks.push(current);
-  return blocks;
+  return { blocks, fences };
+}
+
+/** Fenced blocks with the 1-based line number of their first content line. */
+export function fencedBlocks(text: string): Array<{ line: number; lines: string[] }> {
+  return scanFences(text).blocks;
 }
 
 /**
  * Unbalanced fences hide the document tail from every scan (the closing line
  * never arrives), so an odd fence count is a failure, named at the last fence.
+ * Both fence characters count: counting only backticks would leave a `~~~`
+ * document entirely unscanned.
  */
 export function checkFenceParity(docs: readonly Doc[]): string[] {
   const rows: string[] = [];
   for (const doc of docs) {
-    const fences = doc.text
-      .split(/\r?\n/)
-      .map((line, index) => ({ line, index }))
-      .filter(({ line }) => FENCE.test(line));
+    const { fences } = scanFences(doc.text);
     if (fences.length % 2 === 1) {
-      const last = fences[fences.length - 1]!;
       rows.push(
-        `${doc.rel}:${last.index + 1} unbalanced fences (${fences.length} fence lines) - `
+        `${doc.rel}:${fences[fences.length - 1]} unbalanced fences (${fences.length} fence lines) - `
           + "the document tail after the last fence is never scanned",
       );
     }
@@ -266,14 +289,30 @@ export type ReadmePinInput = {
   hashOf: (rel: string) => string | undefined;
 };
 
+/**
+ * One recorder entry: `<file>.md: <40-hex blob hash>`, with an optional MATCHED
+ * pair of quotes around either value (both are valid YAML). Strict on purpose —
+ * a line this does not match is reported, never skipped, because an unread line
+ * is exactly how a second record for the same file escapes the duplicate row.
+ */
+const README_RECORD = /^\s*(["']?)([A-Za-z0-9._-]+\.md)\1\s*:\s*(["']?)([0-9a-f]{40})\3\s*$/;
+
 /** Check 3 — README pin: the recorder names exactly its package's README pair once, and every recorded hash is the file's current blob hash. */
 export function checkReadmePin(input: ReadmePinInput): { rows: string[]; recorded: number } {
   const rows: string[] = [];
   const recordedAt = new Map<string, { hash: string; line: number }>();
   input.recorderText.split(/\r?\n/).forEach((line, index) => {
-    const match = line.match(/^\s*([A-Za-z0-9._-]+\.md)\s*:\s*([0-9a-f]{40})\s*$/);
-    if (!match) return;
-    const name = match[1]!;
+    const trimmed = line.trim();
+    if (trimmed === "" || trimmed.startsWith("#")) return;
+    const match = line.match(README_RECORD);
+    if (!match) {
+      rows.push(
+        `${input.recorderRel}:${index + 1} recorder line is not a \`<file>.md: <40-hex blob hash>\` record: `
+          + `${JSON.stringify(trimmed)} - the pin cannot verify this line`,
+      );
+      return;
+    }
+    const name = match[2]!;
     const first = recordedAt.get(name);
     if (first !== undefined) {
       // Last-record-wins would let a stale duplicate hide behind a fresh one.
@@ -283,7 +322,7 @@ export function checkReadmePin(input: ReadmePinInput): { rows: string[]; recorde
       );
       return;
     }
-    recordedAt.set(name, { hash: match[2]!, line: index + 1 });
+    recordedAt.set(name, { hash: match[4]!, line: index + 1 });
   });
   const siblings = [...input.siblings].sort();
   const siblingSet = new Set(siblings);
