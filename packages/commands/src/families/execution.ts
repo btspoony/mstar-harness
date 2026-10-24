@@ -125,23 +125,26 @@ function executionContext(target: string, invocation: InvocationContext, verb: s
   if (invocation.controlRoot !== null) {
     // Same spelling decides without touching the filesystem.
     if (root === path.resolve(invocation.controlRoot)) throw controlRootRefusal(verb, root, null);
-    // An unresolvable control root names no live directory to protect, so only
-    // the same-spelling refusal above applies to it.
+    // A comparison this guard could not resolve never admits: an unreadable
+    // side is refused rather than assumed different from the other.
     const control = filesystemIdentity(invocation.controlRoot);
-    if (control !== null) {
-      const named = filesystemIdentity(root);
-      // A comparison this guard could not resolve never admits: the target is
-      // refused instead of being assumed different from the control root.
-      if (named === null) {
-        throw new SddScriptError(
-          `${verb}: the target ${root} does not resolve to a readable path, so it cannot be compared with this invocation's control root ${control.real}. `
-          + "Pass --harness <absolute-path> naming an existing harness directory.",
-          2,
-        );
-      }
-      if (named.real === control.real || (named.dev === control.dev && named.ino === control.ino)) {
-        throw controlRootRefusal(verb, root, named.real);
-      }
+    if (control === null) {
+      throw new SddScriptError(
+        `${verb}: this invocation's control root ${invocation.controlRoot} does not resolve to a readable path, so ${root} cannot be compared with it by filesystem identity. `
+        + "Run the call from a checkout whose control root exists, or from one where no control root is discovered.",
+        2,
+      );
+    }
+    const named = filesystemIdentity(root);
+    if (named === null) {
+      throw new SddScriptError(
+        `${verb}: the target ${root} does not resolve to a readable path, so it cannot be compared with this invocation's control root ${control.real}. `
+        + "Pass --harness <absolute-path> naming an existing harness directory.",
+        2,
+      );
+    }
+    if (named.real === control.real || (named.dev === control.dev && named.ino === control.ino)) {
+      throw controlRootRefusal(verb, root, named.real);
     }
   }
   return { harnessDir: root };

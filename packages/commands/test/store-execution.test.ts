@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, spyOn, test } from "bun:test";
+import { afterAll, afterEach, beforeAll, describe, expect, spyOn, test } from "bun:test";
 import * as nodeFs from "node:fs";
 import { copyFileSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -13,6 +13,12 @@ const controlRoot = join(tmpdir(), "mstar-command-control-root-not-a-target");
 afterEach(() => {
   for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true });
 });
+
+// The guard compares filesystem identity, so the invocation's control root must
+// be a resolvable directory: a real invocation's is the Git-derived main
+// worktree. A missing one now refuses instead of admitting (I-000700).
+beforeAll(() => mkdirSync(controlRoot, { recursive: true }));
+afterAll(() => rmSync(controlRoot, { recursive: true, force: true }));
 
 function fixture(label: string): string {
   const root = mkdtempSync(join(tmpdir(), `mstar-${label}-`));
@@ -78,7 +84,11 @@ describe("store and execution command surface", () => {
   });
   test("execution restore-preview preserves usage code, status, and authored message", async () => {
     const root = fixture("execution-usage");
-    const result = await invoke(definition("store.execution.restore-preview"), { harness: join(root, ".mstar") }, root);
+    const harness = join(root, ".mstar");
+    // The guard refuses a target it cannot resolve, so the fixture harness is a
+    // real directory and the missing `--backup` is the first usage refusal.
+    mkdirSync(harness, { recursive: true });
+    const result = await invoke(definition("store.execution.restore-preview"), { harness }, root);
     expect(result).toMatchObject({
       status: "usage",
       code: "usage",
@@ -144,6 +154,14 @@ describe("store and execution command surface", () => {
     const unresolved = await invoke(definition("store.execution.export"), { harness: join(root, "absent-harness") }, root, harness);
     expect(unresolved).toMatchObject({ status: "usage", code: "usage", exitCode: 2 });
     expect(unresolved.status === "usage" ? unresolved.message : "").toContain("does not resolve to a readable path");
+
+    // 5. A control root this guard cannot resolve refuses too: an incomparable
+    //    pair is never admitted, even when the target itself is a live harness.
+    const absentControl = join(root, "absent-control-root");
+    const incomparable = await invoke(definition("store.execution.export"), { harness }, root, absentControl);
+    expect(incomparable).toMatchObject({ status: "usage", code: "usage", exitCode: 2 });
+    expect(incomparable.status === "usage" ? incomparable.message : "")
+      .toContain(`this invocation's control root ${absentControl} does not resolve to a readable path`);
   });
 
   test("initializes despite symlinked project residuals, previews migration, upgrades and backs up an explicitly named fixture store", async () => {
