@@ -6,6 +6,22 @@ The monorepo root [CHANGELOG.md](../../CHANGELOG.md) summarizes cross-surface re
 
 ## [Unreleased]
 
+## [4.0.8] - 2026-10-24
+
+### Changed
+
+- **A registered delivery-compass pointer is now admitted at registration and repairable afterwards (I-000863).** `mstar iteration register --compass-ref` and the new `mstar workflow compass-ref` resolve the named document against the harness root and store only its canonical harness-relative form; a repository-relative `.mstar/...` spelling, a pointer naming no document, an empty or unparseable compass, an invalid frontmatter field set, and a compass declaring another `iteration_id` are refused before the registration transaction opens, so no workflow row, plan row or catalog entity is published. `workflow compass-ref --workflow <id> --compass <ref> --reason <why>` repairs a pointer a wrong writer already stored: it preserves the workflow/session/plan identities, their rows and their history, replays an identical operation id and conflicts on a different reason.
+- **The `phase-1-lock` readiness checkpoint names the pointer it refuses.** A row storing no pointer, a pointer resolving to another document (including the `.mstar/.mstar/...` double-join), and each authored anchor mirror that disagrees with the registered workflow now report their own diagnostic with the `mstar workflow compass-ref` repair, instead of one silent `binding-invalid`. The extension renders every distinct diagnostic and every distinct next step, not only the first.
+- **A launched child can no longer address a workflow its identity does not declare (I-000866).** `mstar session run` refuses when the inherited identity names another workflow, and the command now participates in the adapter's coordinator-seat scope gate, so the requested workflow must be the one the launch declares.
+- **A launch requires a current-epoch coordinator binding (I-000867).** `mstar session run` compares the binding epoch with the authority epoch and refuses a superseded holder with a recovery pointing at `mstar session recover`.
+- **A committed iteration registration replays after its documents change (I-000868).** The reviewed-compass and plan-document proofs now run after the operation replay lookup in both registration producers and in the CLI transport, so an identical retry returns its receipt even when the compass or plan markdown was emptied, removed or edited; a new operation id still refuses and writes nothing.
+- **Saved registrations keep replaying after the upgrade.** The request identity canonicalizes the plan-row pointers exactly as the previous release did and keeps only the compass spelling lexical; replay accepts both that fingerprint and the pre-upgrade one, so an unchanged retry returns its saved receipt (explicit or derived operation id) instead of `execution.operation-conflict`. A derived id is also computed over the pre-upgrade identity and looked up under both, so a receipt recorded for a non-canonical compass spelling replays too.
+- **A symlinked `--harness` no longer refuses a valid absolute compass.** `iteration register` hands containment to the producer's real-path proof, so an absolute `--compass-ref` under a symlinked harness and an external alias onto an in-root compass register, while an escaping pointer is still refused.
+
+- Version alignment with harness **4.0.8**.
+
+See root [CHANGELOG.md](../../CHANGELOG.md) **4.0.8**.
+
 ## [4.0.7] - 2026-10-23
 
 ### Changed

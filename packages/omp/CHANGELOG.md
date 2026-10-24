@@ -6,6 +6,17 @@ The monorepo root [CHANGELOG.md](../../CHANGELOG.md) summarizes cross-surface re
 
 ## [Unreleased]
 
+## [4.0.8] - 2026-10-24
+
+### Changed
+
+- **A registered delivery-compass pointer is now admitted at registration and repairable afterwards (I-000863).** `mstar iteration register --compass-ref` and the new `mstar workflow compass-ref` resolve the named document against the harness root and store only its canonical harness-relative form; a repository-relative `.mstar/...` spelling, a pointer naming no document, an empty or unparseable compass, an invalid frontmatter field set, and a compass declaring another `iteration_id` are refused before the registration transaction opens, so no workflow row, plan row or catalog entity is published. `workflow compass-ref --workflow <id> --compass <ref> --reason <why>` repairs a pointer a wrong writer already stored: it preserves the workflow/session/plan identities, their rows and their history, replays an identical operation id and conflicts on a different reason.
+- **The `phase-1-lock` readiness checkpoint names the pointer it refuses.** A row storing no pointer, a pointer resolving to another document (including the `.mstar/.mstar/...` double-join), and each authored anchor mirror that disagrees with the registered workflow now report their own diagnostic with the `mstar workflow compass-ref` repair, instead of one silent `binding-invalid`. The extension renders every distinct diagnostic and every distinct next step, not only the first.
+
+- Version alignment with harness **4.0.8**.
+
+See root [CHANGELOG.md](../../CHANGELOG.md) **4.0.8**.
+
 ## [4.0.7] - 2026-10-23
 
 ### Changed

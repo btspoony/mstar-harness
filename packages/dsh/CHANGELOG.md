@@ -6,6 +6,24 @@ The monorepo root [CHANGELOG.md](../../CHANGELOG.md) summarizes cross-surface re
 
 ## [Unreleased]
 
+## [4.0.8] - 2026-10-24
+
+### Changed
+
+- **Removed the unused npm `schemastery` devDependency from the dsh plugin.** The plugin imports the hosted `@deepseek-ai/schemastery` peer fork only, so the devDependency backed no import; `bun.lock` drops it (and its `cosmokit` transitive) with no other dependency change.
+- Upgraded the `@deepseek-ai/dsh-*` peer cohort to `^0.2.1-rc.3` (corridor `dsh-v0.2.1-rc.2` → `dsh-v0.2.1-rc.3`: More menus for browsing/creating plugins; New Session draft fix after switching sessions; DeepSeek API-key adapter model-list updates aligned with account sign-in). Session format v4 unchanged.
+- **A relative control root is refused, never resolved against the launch directory.** `MSTAR_HARNESS_DIR` must now be an absolute path: a relative value refuses the MCP connection at startup with `mcp.control-root-unresolved`, naming the cause and the absolute-path recovery, because the server's launch directory is the host's and never anchors a caller's root. A per-call `harness` selector follows the same rule as `--harness`: a relative value is a named refusal instead of a launch-directory resolution, so a root selector can no longer double-join through the invocation workspace. The refusal recovery text no longer offers the relative form.
+- The mcp `--harness` help and the dsh README document the absolute-only rule.
+- **The dsh delegation contract now states channel once, in one place.** `skills/mstar-host/references/dsh.md` defers its PM-dispatch, SDD-implement and 1–2 read-only rows to the Delegation channels contract instead of mandating one `subagent` call per Assignment, and names the script each 1–2-seat read-only workload actually uses (`mstar-pr-seats` for a PR review, `mstar-audit-fanout` for a codebase audit, `mstar-review-single` for an SDD task review).
+- **The board scope and the prompt path are two different channels.** `dsh-agent-teams.md` states the sibling-worktree case explicitly: a checkout outside the workspace (the normal `…/{repo}.worktrees/<track>` shape) cannot be expressed as a `write_scopes` value, so the prompt carries its absolute path and the field is omitted, while a checkout inside the workspace records its repository-relative prefixes.
+- **One shared `On dsh:` pointer block** replaces the five divergent ones (`mstar-roles/references/project-manager.md`, `mstar-dispatch-gates`, `mstar-review-qc`, `mstar-iteration`, `mstar-sdd` — the last one merged from two adjacent blocks): channel decision, then a pointer to `dsh.md` § Delegation channels + `dsh-agent-teams.md`, with no numeric limits restated.
+- **Sticky implementer SSOT carries its dsh row** (`skills/mstar-sdd/references/sticky-implementer-session.md`): Agent Teams resumes the durable teammate by name via `send_message`, the direct-`subagent` profile uses continuation resume through the recorded id, and the session ledger's `host_agent_id` is defined for both.
+- **The dsh README states the leaf-seat refused CLASSES** instead of naming individual commands, pointing at the shared derivation the CLI `--seat` help reads (`packages/commands/src/coordinator-seat.ts`, mirrored by `packages/dsh/src/gates/coordinator-seat.ts`), so the documented set follows the command layer.
+
+- Version alignment with harness **4.0.8**.
+
+See root [CHANGELOG.md](../../CHANGELOG.md) **4.0.8**.
+
 ## [4.0.7] - 2026-10-23
 
 ### Changed
