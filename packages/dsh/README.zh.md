@@ -249,6 +249,8 @@ mstar 技能通过 dsh skill-filesystem 提供者以**单一规范挂载**接入
 
 其余运行时命令全部走 MCP——`store.*` 命令只在 CLI，不在此发布；旧的 `mstar_<family>_<action>` 工具名不会以别名复活：用家族 + `action` 调用，并用 `mcp__mstar__mstar_schema`（`family: <name>`，或单个叶子契约的 `command: <command-id>`）读取家族真实的 action 与字段。这个表面上的身份、准入与 fail-closed 叶席位拒绝遵循 ADR `docs/adr/dsh-native-identity-channels.md`。
 
+**叶席位拒绝的是「类」，不是命令清单。** 只有当调用会建立或替换 coordinator 席位（绑定或完成 plan、recover 会话、在调用方已验证的实时绑定下拉起子会话），或写入 workflow 作用域的交付 / 生命周期 / 采纳 / 协调者账本状态时，叶席位才会被拒绝——也就是 CLI `mstar mcp --seat` 帮助文本点名的那两类。该集合只在 `packages/commands/src/coordinator-seat.ts`（CLI 的 `--seat leaf` 过滤）中派生一次，并由 `packages/dsh/src/gates/coordinator-seat.ts` 镜像给本宿主的 `tools/pre-execute` 闸门，因此它跟随命令层、不会逐命令漂移；新的席位命令一经发布即对叶席位拒绝。叶席位可执行的 plan 行工作——`plan.prepare` / `plan.progress` / `issue.*` / `sdd.*`——不在此拒绝。
+
 ### Shared MCP connection（显式声明的 control 根）
 
 bundle 补丁只插入**一行** `mstar-mcp`，而这一行就是整个宿主的全部 MCP 通道：插件不自行注册任何 MCP client，不存在按 agent 挂载，subagent 共用父级已有的那一条连接。按 agent 的实例本来也拿不到按调用参数（`PreToolDecision` 没有改写参数的通道），因此它换不来任何能力——只会每个 agent 多一个 Node 进程。
