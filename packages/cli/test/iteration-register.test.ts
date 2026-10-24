@@ -20,7 +20,7 @@
 import { describe, expect, test } from "bun:test";
 import { initializeStore, openStore, readExecutionState, type ExecutionState } from "@mstar-harness/engine";
 import { execFileSync } from "node:child_process";
-import { existsSync, mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 
@@ -98,14 +98,14 @@ function row(id: string): string {
   return JSON.stringify({ id, title: `Plan ${id}`, file: `plans/${id}.md` });
 }
 
-function registerArgs(harness: string, extra: string[] = []): string[] {
+function registerArgs(harness: string, extra: string[] = [], compassRef = COMPASS_REF): string[] {
   return [
     "iteration",
     "register",
     "--workflow",
     WORKFLOW_ID,
     "--compass-ref",
-    COMPASS_REF,
+    compassRef,
     "--branch-base",
     "main",
     "--branch-integration",
@@ -290,6 +290,39 @@ describe("mstar iteration register", () => {
       expect(refused.exitCode).toBe(1);
       expect(message(refused)).toContain("[catalog.registration-invalid]");
       expect(await registeredState(harness)).toEqual(before);
+    });
+  });
+
+  test("a committed registration through a symlink alias replays once its target is deleted", async () => {
+    await setupHarness(async (harness) => {
+      const aliasRef = "iterations/20260918-iteration-register-cli/alias-compass.md";
+      symlinkSync("delivery-compass.md", join(harness, aliasRef));
+      const operation = ["--operation", "op-iteration-register-symlink-alias"];
+
+      const first = runCli(registerArgs(harness, operation, aliasRef));
+      expect(first.exitCode).toBe(0);
+      // The producer stores the canonical pointer of the document the alias
+      // names; only the fingerprint keeps the caller's alias spelling.
+      const before = await registeredState(harness);
+      expect(before.data.workflows[0]!.state.compass_ref).toBe(COMPASS_REF);
+
+      // Deleting the target leaves the alias dangling: the identical operation
+      // id still replays its receipt, because the transport handed the
+      // caller's spelling to the fingerprint instead of resolving it.
+      rmSync(join(harness, COMPASS_REF));
+      const retry = runCli(registerArgs(harness, operation, aliasRef));
+      expect(retry.exitCode).toBe(0);
+      expect(envelope(retry).data).toEqual(envelope(first).data);
+      expect(await registeredState(harness)).toEqual(before);
+
+      // A new operation id cannot commit against the dangling alias.
+      const refused = runCli(registerArgs(harness, ["--operation", "op-iteration-register-symlink-alias-new"], aliasRef));
+      expect(refused.exitCode).toBe(1);
+      expect(message(refused)).toContain("[catalog.registration-invalid]");
+      expect(await registeredState(harness)).toEqual(before);
+
+      // The transport's lexical containment refusal is unchanged.
+      expect(runCli(registerArgs(harness, ["--compass-ref", "../outside-compass.md"])).exitCode).toBe(2);
     });
   });
 
