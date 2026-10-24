@@ -600,7 +600,12 @@ export function scanSource(source: string, file: string): RefusalFinding[] {
     if (ts.isTemplateExpression(node)) {
       return { kind: "texts", texts: [node.head.text + node.templateSpans.map((span) => `${span.expression.getText(sf)}${span.literal.text}`).join("")] };
     }
-    if (node.kind === ts.SyntaxKind.NullKeyword || (ts.isIdentifier(node) && node.text === "undefined")) return { kind: "texts", texts: [] };
+    // `undefined` is absence only when no nearer binding takes the name; a shadowing
+    // binding is an ordinary value and resolves through the identifier path below.
+    if (node.kind === ts.SyntaxKind.NullKeyword) return { kind: "texts", texts: [] };
+    if (ts.isIdentifier(node) && node.text === "undefined" && !hasNearerBinding(scope ?? scopeByNode.get(node), "undefined")) {
+      return { kind: "texts", texts: [] };
+    }
     if (ts.isBinaryExpression(node) && node.operatorToken.kind === ts.SyntaxKind.PlusToken) {
       const left = analyzeMessage(node.left, scope, new Set(seen));
       const right = analyzeMessage(node.right, scope, new Set(seen));
