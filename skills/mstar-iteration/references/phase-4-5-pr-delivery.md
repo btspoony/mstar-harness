@@ -53,6 +53,20 @@
 > **Engine check (when available):** run `mstar iteration push-cadence [--ci-running] [--review-wave]` (or `import { pushCadenceProbe } from "@mstar-harness/engine"` in a host hook) to probe the push gate above. On `fail` -> do not proceed; fix and re-run. Skill text below remains authoritative when the runtime is absent.
 History rewrite / force-with-lease / 改写后证据失效规则 SSOT → `mstar-branch-worktree`「History rewrite 与推送安全」节；本节只管 push 时序。
 
+### 5.1b Two review surfaces（HARD — both must settle）
+
+A PR can carry **two independent review surfaces**, and merge-ready requires both:
+
+| Surface | Owner | Evidence |
+|---|---|---|
+| **Internal PR loop** (only when `reviewed-auto`) | `mstar-pr-loop` | its settled, posted `ship it` on the current head |
+| **External AI review** (Greptile, Bugbot, or any attached review bot) | that bot, on the PR | its check **not failing** on the current head, and no unresolved finding at or above the blocking tier (a P1/must-fix is blocking; a bot failure caused by the review itself is a blocking state) |
+
+- A `ship it` from the internal loop **never** waives an unresolved external finding; an external bot's silence is not evidence either — read its verdict and its inline comments on the current head.
+- If the bot reports findings, treat them like QC findings: confirm each against the code, fix the valid ones, and record why an invalid one is rejected. Re-run the bot only by pushing a new head (§5.1a) or its documented retrigger.
+- A bot check that fails for infrastructure reasons (quota, app error) is still **not green**: state the cause, and either retrigger or obtain the user's written waiver naming the surface and the head.
+- The two surfaces settle independently; do not stop the internal loop because the bot is green, and do not merge because the internal loop is green while the bot is red.
+
 ### 5.1 Loop（repeat until §5.2 第 1–4 项全 `[x]`）
 
 1. **Status** — PR mergeable？required CI？unresolved review threads？**任一 CI/AI review 是否仍在跑？**
@@ -71,7 +85,7 @@ History rewrite / force-with-lease / 改写后证据失效规则 SSOT → `mstar
 | Priority | Helper | When |
 |----------|--------|------|
 | 1 | `babysit` or any `*-babysit` skill（first readable `SKILL.md`） | **Default prefer** — CI green + reviews resolved loop |
-| 2 | `greploop` | **Optional** — only when the **repo** uses Greptile / has `greploop` available; then run for Greptile **5/5** in addition to babysit/`*-babysit` (or fallback) gates |
+| 2 | `greploop` | **Optional helper** — the external bot's check + findings must settle per §5.1b regardless; `greploop` (and its Greptile 5/5 score target) is an optional strengthening on top, never a substitute for that settlement |
 | 3 | neither | Command fallback = babysit-equivalent CI + reviews gates |
 
 When both babysit/`*-babysit` and greploop apply: **babysit/`*-babysit` first**（CI + reviews），then optional greploop for Greptile score. Discovery paths → `mstar-iteration` §5 (iteration command layer).
@@ -82,6 +96,7 @@ When both babysit/`*-babysit` and greploop apply: **babysit/`*-babysit` first**�
 
 - [ ] PR mergeable（无 blocking merge conflicts）
 - [ ] All **required** CI checks green on latest head
+- [ ] **External AI review** settled on the latest head: check not failing, no unresolved blocking finding (or a user-written waiver naming the surface, finding and head) — §5.1b
 - [ ] All review threads **resolved**（或用户书面 waive 特定 thread）
 - [ ] §5.1 review comment + resolve 已覆盖本轮所有 addressed feedback
 - [ ] Host todo `phase-5-pr-merge-ready` 可勾选
@@ -92,12 +107,12 @@ When both babysit/`*-babysit` and greploop apply: **babysit/`*-babysit` first**�
 
 **Merge 是独立的授权动作**：merge-ready、required CI 全绿、QC Approve、review `ship it` **各自单独出现时都不构成** merge 授权。授权只在 `pr_merge_policy` 对应下表**完整**谓词成立时才存在——`reviewed-auto` 要求 settled + 已 posted + `head` 等于当前 PR head 三者同时满足；`owner-gated` 只认下表定义的**人类 owner** 书面批准。
 
-| `pr_merge_policy` | Merge 授权来源 |
+|`pr_merge_policy`|Merge 授权来源|
 |---|---|
-| `reviewed-auto` | 一份 **settled、已 posted**、且 `head` 等于**当前** PR head 的 `ship it` 报告（`mstar-pr-loop` 的 `ship it` 行）——三项缺一不可 |
-| `owner-gated` | **人类 owner 本人**（操作者/用户，**不是**本 harness 的 coordinator 席位）对**当前** PR head 的**显式书面** merge 批准；PM 自己的 owner 席位不构成该批准 |
+|`reviewed-auto`|**同时**满足 (a) 一份 **settled、已 posted**、且 `head` 等于**当前** PR head 的 `ship it` 报告（`mstar-pr-loop` 的 `ship it` 行），与 (b) §5.1b 的外部 AI review 在当前 head 不失败且无未解决的 blocking finding（或用户针对该 finding 的书面 waive）——(a)(b) 缺一不可|
+|`owner-gated`|**人类 owner 本人**（操作者/用户，**不是**本 harness 的 coordinator 席位）对**当前** PR head 的**显式书面** merge 批准；PM 自己的 owner 席位不构成该批准。外部 AI review 的 blocking finding 仍是 merge-ready 前置（§5.1b），owner 批准不豁免它，除非自身即为对该 finding 的书面 waive|
 
-- **`reviewed-auto` 未满足 → STOP**：等 PR 级 review 跑到 settled 的 `ship it`；若该报告 `head` 已不是当前 PR head（中间有 push），重跑该 review 取新报告。恢复路径：给出上述授权报告，或**重新进入 Phase 1 的 §1.2 流程**——加载 `mstar-iteration` → `references/phase-1-prepare.md`，按其「必须与用户显式确认，绝不默认」规则与用户重新确认后改动 compass 记录的 policy，新增 `## Decisions` 行记 `source: user`，并刷新 Phase 4 步骤 5 写入 PR 正文的 policy 行。PM **不得**在 Phase 5 就地改写 `pr_merge_policy`。
+- **`reviewed-auto` 未满足 → STOP**：等 PR 级 review 跑到 settled 的 `ship it`，**并且**等 §5.1b 的外部 AI review 在当前 head settled、无 blocking finding；任一未满足都不得 merge，二者不能互相替代。若授权报告或外部 verdict 的 `head` 已不是当前 PR head（中间有 push），重跑对应面取新结论。恢复路径：给出上述授权报告 + 外部 review 结论，或**重新进入 Phase 1 的 §1.2 流程**——加载 `mstar-iteration` → `references/phase-1-prepare.md`，按其「必须与用户显式确认，绝不默认」规则与用户重新确认后改动 compass 记录的 policy，新增 `## Decisions` 行记 `source: user`，并刷新 Phase 4 步骤 5 写入 PR 正文的 policy 行。PM **不得**在 Phase 5 就地改写 `pr_merge_policy`。
 - **`owner-gated` 未满足 → hard stop**：给出 PR 链接 + merge-ready 证据后**等待**；**人类 owner**（操作者/用户，**不是** coordinator 席位）书面批准前不得 merge，任何自动化证据（mergeable / CI 绿 / QC Approve / `ship it`）都不能替代。恢复路径：人类 owner 书面批准当前 PR head，或**重新进入 Phase 1 的 §1.2 流程**——加载 `mstar-iteration` → `references/phase-1-prepare.md`，按其「必须与用户显式确认，绝不默认」规则与用户重新确认后改动 compass 记录的 policy，新增 `## Decisions` 行记 `source: user`，并刷新 Phase 4 步骤 5 写入 PR 正文的 policy 行。PM **不得**在 Phase 5 就地改写。
 - **`pr_merge_policy` 缺失 → STOP**：**绝不**推断默认值。恢复路径：**重新进入 Phase 1 的 §1.2 流程**——加载 `mstar-iteration` → `references/phase-1-prepare.md`，按其「必须与用户显式确认，绝不默认」规则与用户确认该字段，写入 compass frontmatter 并在 `## Decisions` 记 `source: user`。
 

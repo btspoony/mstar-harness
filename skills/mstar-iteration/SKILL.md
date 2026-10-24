@@ -31,7 +31,7 @@ Phase 3: iteration-close
 Phase 4: PR delivery（开 PR）
      ↓
 Phase 5: PR merge-ready loop —— 至 mergeable + CI 全绿 + reviews resolved
-         ├ reviewed-auto：跑 PR 级 review loop（mstar-pr-loop）→ 当前 head 上 settled、已 posted 的 ship it = merge 授权
+         ├ reviewed-auto：跑 PR 级 review loop（mstar-pr-loop）→ 当前 head 上 settled、已 posted 的 ship it，**并且**外部 AI review（§5.1b）在当前 head 不失败、无 blocking finding = merge 授权
          └ owner-gated：停在 merge-ready → 等人类 owner 对当前 PR head 的书面批准
      ↓
 Phase 6: post-merge close —— merge 授权完成、PR merged 后 §6.1–§6.4
@@ -122,7 +122,7 @@ Phase 6: post-merge close —— merge 授权完成、PR merged 后 §6.1–§6.
 - **不要将 Phase 4 开 PR 等同于迭代交付完成** — 必须完成 Phase 5 §5.2 merge-ready loop
 - **不要将 §5.2 merge-ready exit 或 PR merge 当作生命周期终点** — merged 后必须进入 Phase 6（`references/phase-6-post-merge-close.md` §6.1–§6.4）；禁止为通过 close 释放 lease 或伪造 Done/关闭 residual
 - **不要在 Phase 5 CI 仍跑或 AI review 波次未结束时 push**（§5.1a）— 本地可提前修，push 等 idle
-- **不要在缺 §5.3 授权时 merge PR** — merge-ready / CI 绿 / QC Approve / review `ship it` 各自都不构成 merge 授权；`ship it` 仅在 `reviewed-auto` 下、且 settled、已 posted、`head` 等于当前 PR head 时授权，`owner-gated` 只认**人类 owner**（操作者/用户，不是 coordinator 席位）的书面批准
+- **不要在缺 §5.3 授权时 merge PR** — merge-ready / CI 绿 / QC Approve / review `ship it` 各自都不构成 merge 授权；`reviewed-auto` 下须**同时**满足 settled、已 posted、`head` 等于当前 PR head 的 `ship it`，**以及** §5.1b 的外部 AI review 在当前 head 无 blocking finding，`owner-gated` 只认**人类 owner**（操作者/用户，不是 coordinator 席位）的书面批准；不得因为自家 review 通过就忽略外部 bot 的 P1
 - **不要在 integration worktree 或主 checkout（control root）上直接编辑产品代码** — Phase 5 修复走 fix feature worktree，review 后 merge 回 integration worktree（`phase-4-5-pr-delivery.md` §5.0）
 - **不要在缺 `iteration_base_branch` / `target_branch` 时默认 `main` / `master`**
 - **不要在 Phase 1 §1.6 由 product/architect 向 `{KNOWLEDGE_DIR}/` 新增**（知识 → iteration-close **`mstar-compound`**）
