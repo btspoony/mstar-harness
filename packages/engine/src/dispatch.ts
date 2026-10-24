@@ -131,7 +131,7 @@ const REQUIRED_FIELDS: ReadonlyArray<{ key: keyof AssignmentFields; label: strin
  * `qa-engineer` the QA gate seat, so they carry the same bounded-round rule
  * as the three QC seats. An `audit` `Task category` triggers the same fields
  * independently — audit execution is read-only review work. */
-const REVIEW_SEAT_ROLES: readonly string[] = ["qc-specialist", "qc-specialist-2", "qc-specialist-3", "code-reviewer", "qa-engineer"];
+export const REVIEW_SEAT_ROLES: readonly string[] = ["qc-specialist", "qc-specialist-2", "qc-specialist-3", "code-reviewer", "qa-engineer"];
 
 /**
  * Assignment labels carrying the review-seat Budget cap. The PM template
@@ -140,10 +140,10 @@ const REVIEW_SEAT_ROLES: readonly string[] = ["qc-specialist", "qc-specialist-2"
  * nor `Working branch` / `Branch policy`, so a hand-written dispatch would
  * otherwise drop the field silently.
  */
-const BUDGET_LABELS: readonly string[] = ["Budget (review / QC seats)", "Budget"];
+export const BUDGET_LABELS: readonly string[] = ["Budget (review / QC seats)", "Budget"];
 
 /** Labels carrying the review-seat `Return shape` (same parenthesized + bare pair). */
-const RETURN_SHAPE_LABELS: readonly string[] = ["Return shape (review / QC seats)", "Return shape"];
+export const RETURN_SHAPE_LABELS: readonly string[] = ["Return shape (review / QC seats)", "Return shape"];
 
 /**
  * Labels carrying the implement/ops-round `Task budget` (capacity contract
