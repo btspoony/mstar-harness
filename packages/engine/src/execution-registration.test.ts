@@ -864,6 +864,95 @@ describe("execution-registration", () => {
     expect(await footprint(fixture.context)).toEqual(accepted);
   });
 
+  test("execution-registration-replays-an-explicit-operation-after-pointer-normalization", async () => {
+    const fixture = await activeFixture("iteration-identity-compat");
+    const iterationId = "iter-20260921-identity-compat";
+    writeReviewedCompass(fixture.context.harnessDir, iterationId);
+    const request = iterationRequest(fixture, iterationId, "op-iteration-identity-compat");
+    const context: ExecutionContext = { ...fixture.context, caller: { ...fixture.caller, workflowId: iterationId } };
+    const committed = await commitExecutionRegistration(context, { ...request, expected: fixture.rootToken });
+    const accepted = await footprint(fixture.context);
+
+    // The previous release hashed the plan row's CANONICAL absolute pointer, so
+    // a retry that re-spells the same document after the upgrade must still
+    // return the saved receipt instead of `execution.operation-conflict`.
+    const absoluteRows: IterationExecutionRequest = {
+      ...request,
+      workflow: {
+        ...request.workflow,
+        options: {
+          ...request.workflow.options,
+          rows: request.workflow.options.rows.map((row) => ({ ...row, file: join(fixture.context.harnessDir, row.file) })),
+        },
+      },
+    };
+    expect(await commitExecutionRegistration(context, { ...absoluteRows, expected: fixture.rootToken })).toEqual(committed);
+
+    // An alias spelling of the SAME compass canonicalizes to the committed
+    // fingerprint: the legacy lookup accepts it on both producers, so a receipt
+    // recorded under the canonical spelling still replays.
+    symlinkSync(join(fixture.context.harnessDir, "delivery-compass.md"), join(fixture.context.harnessDir, "compass-alias.md"));
+    const aliased: IterationExecutionRequest = {
+      ...request,
+      workflow: { ...request.workflow, options: { ...request.workflow.options, compassRef: "compass-alias.md" } },
+    };
+    expect(await commitExecutionRegistration(context, { ...aliased, expected: fixture.rootToken })).toEqual(committed);
+    expect(
+      await registerShippedCatalogExecution(context, {
+        actor: aliased.actor,
+        workflow: aliased.workflow,
+        operationId: aliased.operationId,
+      }),
+    ).toEqual(committed);
+    expect(await footprint(fixture.context)).toEqual(accepted);
+  });
+
+  test("execution-registration-replays-a-derived-operation-after-pointer-normalization", async () => {
+    const fixture = await activeFixture("iteration-derived-compat");
+    const iterationId = "iter-20260921-derived-compat";
+    writeReviewedCompass(fixture.context.harnessDir, iterationId);
+    const request = iterationRequest(fixture, iterationId, "unused-derived-compat");
+    const context: ExecutionContext = { ...fixture.context, caller: { ...fixture.caller, workflowId: iterationId } };
+    const first = await registerShippedCatalogExecution(context, { actor: "project-manager", workflow: request.workflow });
+    const accepted = await footprint(fixture.context);
+
+    // The derived operation id is the previous release's: it is computed over
+    // the canonical plan-row pointers, so re-spelling the same document keeps
+    // the id AND the fingerprint it was committed under.
+    const absoluteRows = {
+      ...request.workflow,
+      options: {
+        ...request.workflow.options,
+        rows: request.workflow.options.rows.map((row) => ({ ...row, file: join(fixture.context.harnessDir, row.file) })),
+      },
+    };
+    const replay = await registerShippedCatalogExecution(context, { actor: "project-manager", workflow: absoluteRows });
+    expect(replay.operationId).toBe(first.operationId);
+    expect(replay).toEqual(first);
+    expect(await footprint(fixture.context)).toEqual(accepted);
+
+    // A derived id through an in-harness compass alias stays stable once the
+    // alias dangles: the identity keeps the caller's spelling, so the retry
+    // finds its own operation instead of deriving a different one.
+    const aliasId = "iter-20260921-derived-alias";
+    const compassPath = join(fixture.context.harnessDir, `iterations/${aliasId}/delivery-compass.md`);
+    writeReviewedCompass(fixture.context.harnessDir, aliasId, `iterations/${aliasId}/delivery-compass.md`);
+    symlinkSync(compassPath, join(fixture.context.harnessDir, "derived-alias.md"));
+    const aliasRequest = iterationRequest(fixture, aliasId, "unused-derived-alias");
+    const aliasWorkflow = {
+      ...aliasRequest.workflow,
+      options: { ...aliasRequest.workflow.options, compassRef: "derived-alias.md" },
+    };
+    const aliasContext: ExecutionContext = { ...fixture.context, caller: { ...fixture.caller, workflowId: aliasId } };
+    const aliasFirst = await registerShippedCatalogExecution(aliasContext, { actor: "project-manager", workflow: aliasWorkflow });
+    const aliasAccepted = await footprint(fixture.context);
+    rmSync(compassPath);
+    const aliasReplay = await registerShippedCatalogExecution(aliasContext, { actor: "project-manager", workflow: aliasWorkflow });
+    expect(aliasReplay.operationId).toBe(aliasFirst.operationId);
+    expect(aliasReplay).toEqual(aliasFirst);
+    expect(await footprint(fixture.context)).toEqual(aliasAccepted);
+  });
+
   test("execution-registration-refuses compass paths outside the ACTIVE iteration harness", async () => {
     const fixture = await activeFixture("iteration-compass-boundary");
     const outsideCompass = join(fixture.workspace, "outside-compass.md");

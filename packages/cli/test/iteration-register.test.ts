@@ -98,12 +98,12 @@ function row(id: string): string {
   return JSON.stringify({ id, title: `Plan ${id}`, file: `plans/${id}.md` });
 }
 
-function registerArgs(harness: string, extra: string[] = [], compassRef = COMPASS_REF): string[] {
+function registerArgs(harness: string, extra: string[] = [], compassRef = COMPASS_REF, workflowId = WORKFLOW_ID): string[] {
   return [
     "iteration",
     "register",
     "--workflow",
-    WORKFLOW_ID,
+    workflowId,
     "--compass-ref",
     compassRef,
     "--branch-base",
@@ -265,10 +265,12 @@ describe("mstar iteration register", () => {
 
   test("a committed registration replays through the CLI once its compass is deleted", async () => {
     await setupHarness(async (harness) => {
-      // The transport keeps its own pointer diagnostics: a pointer escaping the
-      // harness root is still a usage refusal — only the document proof moved
-      // to the producer (I-000868).
-      expect(runCli(registerArgs(harness, ["--compass-ref", "../outside-compass.md"])).exitCode).toBe(2);
+      // A pointer that escapes the harness root is the producer's refusal now:
+      // the transport only checks the flag's shape, so the real-path
+      // containment proof decides (PR #578).
+      const escaping = runCli(registerArgs(harness, ["--compass-ref", "../outside-compass.md"]));
+      expect(escaping.exitCode).toBe(1);
+      expect(message(escaping)).toContain("[catalog.registration-invalid]");
 
       const operation = ["--operation", "op-iteration-register-compass-deleted"];
       const first = runCli(registerArgs(harness, operation));
@@ -321,8 +323,48 @@ describe("mstar iteration register", () => {
       expect(message(refused)).toContain("[catalog.registration-invalid]");
       expect(await registeredState(harness)).toEqual(before);
 
-      // The transport's lexical containment refusal is unchanged.
-      expect(runCli(registerArgs(harness, ["--compass-ref", "../outside-compass.md"])).exitCode).toBe(2);
+      // An escaping pointer is still refused, now by the producer's real-path
+      // containment proof rather than the transport's lexical check.
+      const escaping = runCli(registerArgs(harness, ["--compass-ref", "../outside-compass.md"]));
+      expect(escaping.exitCode).toBe(1);
+      expect(message(escaping)).toContain("[catalog.registration-invalid]");
+    });
+  });
+
+  test("valid compass spellings under a symlinked --harness register (exit 0)", async () => {
+    await setupHarness(async (harness) => {
+      // `--harness` may name a symlink to the real harness. An absolute
+      // `--compass-ref` under that real harness names an in-root document, so
+      // the transport's lexical containment check must not refuse it (PR #578).
+      const realHarness = realpathSync(harness);
+      const linkedRoot = mkdtempSync(join(tmpdir(), "mstar-iteration-register-link-"));
+      const harnessLink = join(linkedRoot, "harness");
+      symlinkSync(realHarness, harnessLink);
+      try {
+        const absolute = runCli(registerArgs(harnessLink, ["--compass-ref", join(realHarness, COMPASS_REF)]));
+        expect(absolute.exitCode).toBe(0);
+        expect(envelope(absolute)).toMatchObject({ command: "iteration.register", status: "ok" });
+
+        // An EXTERNAL alias onto an in-root compass is the same document: the
+        // producer stores its canonical in-root pointer, so the registration
+        // succeeds instead of being refused at the transport.
+        const externalId = "20260918-iteration-register-external";
+        const externalCompass = join(harness, `iterations/${externalId}/delivery-compass.md`);
+        mkdirSync(dirname(externalCompass), { recursive: true });
+        writeFileSync(externalCompass, `${compassFrontmatter(externalId)}\n# External alias compass\n`);
+        const externalAlias = join(linkedRoot, "external-compass.md");
+        symlinkSync(externalCompass, externalAlias);
+        const viaAlias = runCli(registerArgs(harnessLink, [], externalAlias, externalId));
+        expect(viaAlias.exitCode).toBe(0);
+
+        const registered = await registeredState(realHarness);
+        expect(registered.data.workflows.map((view) => [view.state.id, view.state.compass_ref])).toEqual([
+          [WORKFLOW_ID, COMPASS_REF],
+          [externalId, `iterations/${externalId}/delivery-compass.md`],
+        ]);
+      } finally {
+        rmSync(linkedRoot, { recursive: true, force: true });
+      }
     });
   });
 

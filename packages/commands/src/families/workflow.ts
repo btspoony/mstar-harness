@@ -813,17 +813,11 @@ export function getWorkflowCommandDefinitions(): readonly CommandDefinition[] {
       // transport hands `--compass-ref` through unchanged: canonicalization
       // follows symlinks, and settling it here would move the fingerprint of a
       // committed alias once its target is deleted, turning its retry into a
-      // refusal. Containment stays lexical on purpose (no filesystem state):
-      // the producer canonicalizes the STORED pointer and proves the document
-      // only for a new registration (I-000868, PR #578).
-      const rootResolved = path.resolve(harnessDir);
-      const fromRoot = path.relative(rootResolved, path.resolve(rootResolved, input.compassRef));
-      if (fromRoot === ".." || fromRoot.startsWith(`..${path.sep}`) || path.isAbsolute(fromRoot)) {
-        throw new WorkflowInputError(
-          `options.compassRef escapes the harness root - the reviewed compass_ref must address a document inside ` +
-            `${harnessDir}; store the harness-relative pointer of that compass instead`,
-        );
-      }
+      // refusal. Containment is the PRODUCER's post-replay proof: it resolves
+      // the pointer against the real harness root, so an absolute pointer under
+      // a symlinked `--harness` and an external alias onto an in-root compass
+      // are accepted, while a genuinely escaping pointer is still refused for a
+      // new registration (I-000868, PR #578).
       const workflow: CatalogExecutionWorkflow = { kind: "iteration", workflowId: input.workflow, options: { harnessDir, compassRef: input.compassRef, branch: { base: input.branchBase, integration: input.branchIntegration, target: input.branchTargetIteration }, rows: rows as never[], ...(input.project === undefined ? {} : { project: input.project }), ...(input.startedAt === undefined ? {} : { startedAt: input.startedAt }) } };
       const identity: ExecutionIdentity = context.executionIdentity ?? {
         source: context.host === undefined ? "local" : "host",

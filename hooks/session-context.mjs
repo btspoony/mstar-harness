@@ -13160,7 +13160,7 @@ function readOperationReplay(tx, input) {
   const recorded = readCommittedOperation(tx.db, tx.epoch, input.operationId);
   if (recorded === null)
     return null;
-  if (recorded.requestHash !== input.requestHash) {
+  if (recorded.requestHash !== input.requestHash && recorded.requestHash !== input.legacyRequestHash) {
     const problem = {
       component: "operation",
       path: "operationId",
@@ -15977,7 +15977,7 @@ function validateDelta(delta, kind) {
     binding: { catalogKind: expectedBindingKind, catalogId }
   };
 }
-function validateRequest(request) {
+function validateCatalogExecutionRequest(request) {
   if (!isPlainObject(request))
     invalid3("a catalog execution request object is required");
   const operationId = requireText(request.operationId, "request.operationId");
@@ -16093,7 +16093,7 @@ function assertRegisteredPlanDocuments(workflow) {
     resolveRegisteredPlanFile({ harnessRoot: resolve10(workflow.options.harnessDir), planId: row.id, file: row.file });
   }
 }
-function normalizeIterationWorkflow(workflow) {
+function normalizeIterationRowFiles(workflow) {
   if (!isPlainObject(workflow) || workflow.kind !== "iteration")
     return workflow;
   const options = workflow.options;
@@ -16101,11 +16101,9 @@ function normalizeIterationWorkflow(workflow) {
     return workflow;
   const rows = options.rows;
   const harnessDir = options.harnessDir;
-  const compassRef = options.compassRef;
-  if (!Array.isArray(rows) || typeof harnessDir !== "string" || !isAbsolute6(harnessDir) || typeof compassRef !== "string" || compassRef.trim() === "")
+  if (!Array.isArray(rows) || typeof harnessDir !== "string" || !isAbsolute6(harnessDir))
     return workflow;
-  const normalizedCompassRef = canonicalIterationCompassRef(compassRef, harnessDir, (detail) => new CatalogRegistrationError("catalog.registration-invalid", detail));
-  let changed = normalizedCompassRef !== compassRef;
+  let changed = false;
   const resolvedRows = rows.map((row) => {
     if (!isPlainObject(row))
       return row;
@@ -16121,10 +16119,14 @@ function normalizeIterationWorkflow(workflow) {
   });
   if (!changed)
     return workflow;
-  return {
-    ...workflow,
-    options: { ...options, compassRef: normalizedCompassRef, rows: resolvedRows }
-  };
+  return { ...workflow, options: { ...options, rows: resolvedRows } };
+}
+function canonicalRegistrationIdentity(request) {
+  const validated = validateCatalogExecutionRequest(request);
+  if (validated.workflow.kind !== "iteration")
+    return validated;
+  const workflow = normalizeIterationRowFiles(validated.workflow);
+  return workflow === validated.workflow ? validated : { ...validated, workflow };
 }
 function normalizeIterationPlanPaths(request) {
   if (!isPlainObject(request))
@@ -16132,10 +16134,22 @@ function normalizeIterationPlanPaths(request) {
   const workflow = request.workflow;
   if (!isPlainObject(workflow) || workflow.kind !== "iteration")
     return request;
-  const normalized = normalizeIterationWorkflow(workflow);
-  if (normalized === workflow)
+  const options = workflow.options;
+  if (!isPlainObject(options))
     return request;
-  return { ...request, workflow: normalized };
+  const compassRef = options.compassRef;
+  const harnessDir = options.harnessDir;
+  if (!Array.isArray(options.rows) || typeof harnessDir !== "string" || !isAbsolute6(harnessDir) || typeof compassRef !== "string" || compassRef.trim() === "")
+    return request;
+  const normalizedCompassRef = canonicalIterationCompassRef(compassRef, harnessDir, (detail) => new CatalogRegistrationError("catalog.registration-invalid", detail));
+  const withRows = normalizeIterationRowFiles(workflow);
+  if (normalizedCompassRef === compassRef && withRows === workflow)
+    return request;
+  const rows = withRows.options.rows;
+  return {
+    ...request,
+    workflow: { ...workflow, options: { ...options, compassRef: normalizedCompassRef, rows } }
+  };
 }
 function assertDeliveryRegistrationFor(options, at) {
   const deliveryKind = options.deliveryKind;
@@ -16182,7 +16196,7 @@ function executionPlanFor(context, request) {
   };
 }
 function resolveCatalogExecutionPlan(context, request) {
-  return executionPlanFor(context, validateRequest(normalizeIterationPlanPaths(request)));
+  return executionPlanFor(context, validateCatalogExecutionRequest(normalizeIterationPlanPaths(request)));
 }
 function workflowEntryOf(plan, snapshot) {
   const entry = {
@@ -18839,7 +18853,7 @@ function validateRecord(record, out) {
   if (!isStringBound(record.runId, 36) || !UUID_V4_RE.test(record.runId)) {
     out.push(violation9(CODE_SCHEMA, `record.runId must be a canonical lowercase RFC4122 v4 UUID; got ${JSON.stringify(record.runId ?? null)}`));
   }
-  const requestState = validateRequest2(record.request, out);
+  const requestState = validateRequest(record.request, out);
   if (isPlainObject5(record.command)) {
     requireExactKeys(record.command, COMMAND_KEYS, [], "record.command", out);
     const argv = record.command.argv;
@@ -18938,7 +18952,7 @@ function validateProducer(producer, out) {
     out.push(violation9(CODE_SCHEMA, "record.producer.version must be a nonempty string"));
   }
 }
-function validateRequest2(request, out) {
+function validateRequest(request, out) {
   if (!isPlainObject5(request)) {
     out.push(violation9(CODE_SCHEMA, "record.request must be a JSON object"));
     return null;
@@ -28817,32 +28831,42 @@ function canonicalIntent(value) {
   }
   return envelope;
 }
-function registrationRequestHash(caller, plan) {
+function registrationRequestHash(caller, request) {
   return semanticRequestHash({
     operation: COMMIT_REGISTRATION_OPERATION,
-    address: { workflow_id: plan.workflowId },
+    address: { workflow_id: request.workflow.workflowId },
     caller,
-    intent: selectSemanticFields(canonicalIntent(plan.request), REGISTRATION_SEMANTICS)
+    intent: selectSemanticFields(canonicalIntent(request), REGISTRATION_SEMANTICS)
   });
 }
+function legacyRegistrationRequestHash(caller, request) {
+  try {
+    return registrationRequestHash(caller, normalizeIterationPlanPaths(request));
+  } catch {
+    return null;
+  }
+}
 async function commitExecutionRegistration(context, request) {
-  const plan = resolveCatalogExecutionPlan(context, request);
-  const operationId = plan.request.operationId;
-  const creation = resolveCreateWorkflow(context.caller, workflowEntryOf(plan, plan.snapshot), plan.snapshot, operationId);
-  const requestHash4 = registrationRequestHash(context.caller, plan);
+  const identity = canonicalRegistrationIdentity(request);
+  const requestHash4 = registrationRequestHash(context.caller, identity);
+  const legacyRequestHash = legacyRegistrationRequestHash(context.caller, identity);
   return withExecutionTransaction(context, (tx) => {
     if (tx.execution.authorityState !== "active") {
       throw new ExecutionError("execution.not-active", `state: ${tx.execution.authorityState}; registration requires the active execution authority. Upgrade required: mstar store upgrade --operator <name>.`);
     }
     const replayed = readOperationReplay(tx, {
-      operationId,
+      operationId: identity.operationId,
       requestHash: requestHash4,
-      workflowId: plan.workflowId,
+      legacyRequestHash,
+      workflowId: identity.workflow.workflowId,
       planId: null,
       token: { kind: "root", key: [] }
     });
     if (replayed !== null)
       return replayed.data;
+    const plan = resolveCatalogExecutionPlan(context, request);
+    const operationId = plan.request.operationId;
+    const creation = resolveCreateWorkflow(context.caller, workflowEntryOf(plan, plan.snapshot), plan.snapshot, operationId);
     assertRegisteredCompassDocument(plan.request.workflow);
     assertRegisteredPlanDocuments(plan.request.workflow);
     assertExecutionToken(request.expected, {
@@ -28916,33 +28940,36 @@ function catalogDeltaFor(workflow) {
 }
 async function registerShippedCatalogExecution(context, input) {
   const initialDelta = catalogDeltaFor(input.workflow);
-  const canonical2 = resolveCatalogExecutionPlan(context, {
+  const drafted = canonicalRegistrationIdentity({
     actor: input.actor,
     operationId: input.operationId ?? "request-derived",
     expectedCatalogRevision: 0,
     workflow: input.workflow,
     delta: initialDelta
   });
-  const workflow = canonical2.request.workflow;
-  const delta = catalogDeltaFor(workflow);
-  const intent = { actor: input.actor, workflow, delta };
+  const intent = { actor: input.actor, workflow: drafted.workflow, delta: catalogDeltaFor(drafted.workflow) };
   const operationId = input.operationId ?? `op-${createHash18("sha256").update(stableJson(intent), "utf8").digest("hex").slice(0, 24)}`;
   const request = {
     ...intent,
     operationId,
     expectedCatalogRevision: 0
   };
+  const identity = canonicalRegistrationIdentity(request);
+  const requestHash4 = registrationRequestHash(context.caller, identity);
+  const legacyRequestHash = legacyRegistrationRequestHash(context.caller, identity);
   const resolved = await withExecutionTransaction(context, (tx) => {
     const expected = executionRootTokenOf(tx);
     const replayed = readOperationReplay(tx, {
-      operationId,
-      requestHash: registrationRequestHash(context.caller, canonical2),
-      workflowId: canonical2.workflowId,
+      operationId: identity.operationId,
+      requestHash: requestHash4,
+      legacyRequestHash,
+      workflowId: identity.workflow.workflowId,
       planId: null,
       token: { kind: "root", key: [] }
     });
     if (replayed !== null)
       return { replayed: replayed.data };
+    const canonical2 = resolveCatalogExecutionPlan(context, request);
     assertRegisteredCompassDocument(canonical2.request.workflow);
     assertRegisteredPlanDocuments(canonical2.request.workflow);
     const versions = readCatalogStoreVersionsOn(tx.db);
