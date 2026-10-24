@@ -537,7 +537,7 @@ describe("refusal quality scanner", () => {
     expect(scan(`(flag ? "Run mstar status validate." : "Register the workflow first with mstar workflow register.") ?? "Run mstar status validate."`)).toEqual([]);
   });
 
-  test("proves an omitted wrapper recovery argument through its literal fallback", () => {
+  test("fails closed on an omitted wrapper recovery argument (deliberate limitation)", () => {
     const findings = scanSource(`
       function refused(command: string, code: string, message: string, details?: Record<string, unknown>, recovery?: string) {
         return refusalEnvelope({ command, status: "refused", code, exitCode: 1, message, details: details ?? {},
@@ -555,7 +555,7 @@ describe("refusal quality scanner", () => {
       }
       spaceFallback();
     `, "packages/commands/src/fixture.ts");
-    expect(findings.map(({ classification }) => classification)).toEqual(["missing-recovery", "missing-recovery"]);
+    expect(findings.map(({ classification }) => classification)).toEqual(["missing-recovery", "missing-recovery", "missing-recovery"]);
   });
 
   test("a stale allowlist entry reports its tracking issue and refresh action", () => {

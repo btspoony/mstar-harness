@@ -466,7 +466,6 @@ export function scanSource(source: string, file: string): RefusalFinding[] {
     helpers: ReadonlySet<string>;
     bindings: ReadonlyMap<string, ts.Expression>;
     bindingScope?: Scope;
-    omitted: ReadonlySet<string>;
     bound: ReadonlySet<string>;
   }
   const RECOVERY_EMPTY: RecoveryText = { outcomes: new Set<RecoveryOutcome>(["empty"]) };
@@ -476,8 +475,7 @@ export function scanSource(source: string, file: string): RefusalFinding[] {
   const recoveryContext = (
     bindings: ReadonlyMap<string, ts.Expression> = new Map(),
     bindingScope?: Scope,
-    omitted: ReadonlySet<string> = new Set(),
-  ): RecoveryContext => ({ seen: new Set(), helpers: new Set(), bindings, bindingScope, omitted, bound: new Set() });
+  ): RecoveryContext => ({ seen: new Set(), helpers: new Set(), bindings, bindingScope, bound: new Set() });
   // The nearest binding of any name wins: a shadowed `undefined` is a value, not absence.
   const hasNearerBinding = (scope: Scope | undefined, name: string): boolean => {
     for (let current = scope; current; current = current.parent) {
@@ -554,13 +552,11 @@ export function scanSource(source: string, file: string): RefusalFinding[] {
       // A wrapper parameter takes the argument its call site passes, but only from that
       // wrapper's own scope: a same-named parameter of another function is a different value.
       const boundValue = context.bindings.get(node.text);
-      const inBindingScope = enclosingFunctionScope(scope) === context.bindingScope;
-      if (boundValue && !context.bound.has(node.text) && inBindingScope) {
+      if (boundValue && !context.bound.has(node.text) && enclosingFunctionScope(scope) === context.bindingScope) {
         return recoveryTextOf(boundValue, {
           ...context, seen: new Set(context.seen), bound: new Set(context.bound).add(node.text),
         });
       }
-      if (context.bindingScope !== undefined && inBindingScope && context.omitted.has(node.text)) return RECOVERY_NULLISH;
       return undefined;
     }
     if (node.kind === ts.SyntaxKind.NullKeyword) return RECOVERY_NULLISH;
@@ -573,7 +569,7 @@ export function scanSource(source: string, file: string): RefusalFinding[] {
       const helpers = new Set(context.helpers).add(name);
       // The callee's parameters are its own: the caller's bindings and scope do not follow.
       const proven = returns.map((expression) => recoveryTextOf(expression, {
-        seen: new Set(), helpers, bindings: new Map(), bindingScope: undefined, omitted: new Set(), bound: new Set(),
+        seen: new Set(), helpers, bindings: new Map(), bindingScope: undefined, bound: new Set(),
         scope: scopeByNode.get(expression),
       }));
       const texts = proven.flatMap((result) => (result && hasOnlyText(result) ? [result.text!] : []));
@@ -624,17 +620,19 @@ export function scanSource(source: string, file: string): RefusalFinding[] {
   };
   let grammar: CliGrammar | undefined;
   const getGrammar = () => grammar ??= extractCliGrammar();
-  const callBindings = (wrapper: RefusalWrapperDescriptor, call: ts.CallExpression): { bindings: Map<string, ts.Expression>; omitted: Set<string> } => {
+  // Deliberate limitation: a parameter that is neither passed nor defaulted is not proven
+  // through the wrapper's fallback. Name-based substitution cannot tell the wrapper's own
+  // omitted parameter from a caller alias of the same name, so such an identifier stays
+  // unproven; a site that relies on the wrapper default must pass the argument explicitly,
+  // or the wrapper must reference its fallback directly.
+  const callBindings = (wrapper: RefusalWrapperDescriptor, call: ts.CallExpression): Map<string, ts.Expression> => {
     const bindings = new Map<string, ts.Expression>();
-    const omitted = new Set<string>();
     wrapper.parameters.forEach((parameter, index) => {
       if (!ts.isIdentifier(parameter.name)) return;
       const actual = call.arguments[index] ?? parameter.initializer;
-      // An argument that is neither passed nor defaulted is `undefined` at runtime.
       if (actual) bindings.set(parameter.name.text, actual);
-      else omitted.add(parameter.name.text);
     });
-    return { bindings, omitted };
+    return bindings;
   };
   const resolveBound = (
     expression: ts.Expression,
@@ -698,7 +696,6 @@ export function scanSource(source: string, file: string): RefusalFinding[] {
     bindings = new Map<string, ts.Expression>(),
     unprovenParameters: ReadonlySet<string> = new Set(),
     bindingScope?: Scope,
-    omitted: ReadonlySet<string> = new Set(),
   ): void => {
     const variants = envelopeInput(input, bindings, unprovenParameters);
     const predicateNote = (alternative: ObjectAlternative): string => alternative.independentPredicates.size > 0
@@ -730,7 +727,7 @@ export function scanSource(source: string, file: string): RefusalFinding[] {
       const statusMayBeRefused = unprovenFields.has("status")
         || (!!status && ts.isIdentifier(status) && unprovenParameters.has(status.text))
         || codeValue(status) !== "usage";
-      const provenRecovery = recoveryTextOf(recovery, recoveryContext(bindings, bindingScope, omitted));
+      const provenRecovery = recoveryTextOf(recovery, recoveryContext(bindings, bindingScope));
       const provenText = provenRecovery && hasOnlyText(provenRecovery) ? provenRecovery.text : undefined;
       return statusMayBeRefused && (
         unprovenFields.has("recovery")
@@ -791,8 +788,8 @@ export function scanSource(source: string, file: string): RefusalFinding[] {
       const callee = node.expression.getText(sf).split(".").at(-1);
       const wrapper = callee ? wrappers.get(callee) : undefined;
       if (wrapper) {
-        const { bindings, omitted } = callBindings(wrapper, node);
-        if (ts.isCallExpression(wrapper.inner)) checkEnvelope(node, wrapper.inner.arguments[0], bindings, new Set(), enclosingFunctionScope(scopeByNode.get(wrapper.inner)), omitted);
+        const bindings = callBindings(wrapper, node);
+        if (ts.isCallExpression(wrapper.inner)) checkEnvelope(node, wrapper.inner.arguments[0], bindings, new Set(), enclosingFunctionScope(scopeByNode.get(wrapper.inner)));
         else checkCoordinationError(node, wrapper.inner.arguments?.[0], wrapper.inner.arguments?.[1], bindings);
       } else if (callee === "refusalEnvelope") {
         const wrapperBody = wrapperBodies.get(node);
