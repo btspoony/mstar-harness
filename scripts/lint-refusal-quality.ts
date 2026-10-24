@@ -402,6 +402,10 @@ export function scanSource(source: string, file: string): RefusalFinding[] {
     for (let current = scope; current; current = current.parent) {
       const declaration = current.declarations.get(name);
       if (declaration) return declaration;
+      // A nearer binding this map cannot resolve — a parameter, catch binding, destructured
+      // name or uninitialized variable — shadows any outer declaration. Fail closed instead
+      // of proving the outer value.
+      if (current.shadowNames.has(name)) return undefined;
     }
     return undefined;
   };

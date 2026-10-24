@@ -586,6 +586,19 @@ describe("refusal quality scanner", () => {
     expect(findings.every(({ classification }) => classification === "missing-recovery")).toBe(true);
   });
 
+  test("does not resolve an inner parameter to an outer const of the same name", () => {
+    const scan = (call: string) => scanSource(`
+      const recovery = "Run mstar status validate.";
+      function refused(recovery: string) {
+        return refusalEnvelope({ command: "x", status: "refused", code: "x.blocked", message: "Blocked",
+          recovery: recovery ?? "Run mstar status validate." });
+      }
+      ${call}
+    `, "packages/commands/src/fixture.ts").map(({ classification }) => classification);
+    expect(scan("refused(dynamicRecovery());")).toEqual(["missing-recovery"]);
+    expect(scan(`refused("Register the workflow first with mstar workflow register.");`)).toEqual([]);
+  });
+
   test("a stale allowlist entry reports its tracking issue and refresh action", () => {
     const snippet = `refusalEnvelope({ code: "x.bad" })`;
     const finding = {
