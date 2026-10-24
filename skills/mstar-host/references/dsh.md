@@ -900,6 +900,8 @@ plus `Execute as` / `Delegation` / `Task category` as the first lines:
 Execute as: qc-specialist
 Delegation: forbidden
 Task category: audit
+**Budget (review / QC seats)**: /1 round — one full pass over the review range
+**Return shape (review / QC seats)**: the verdict envelope (seat, verdict, summary, findings); stop when the range and its directly affected interfaces are covered
 ```
 
 Role binding on dsh is prompt-only (there is no `agent` field), and the same
