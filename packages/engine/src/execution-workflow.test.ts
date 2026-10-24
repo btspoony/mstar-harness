@@ -3738,6 +3738,51 @@ describe("execution-workflow: 4.1 the registered-compass repair", () => {
     expect(storedCompassRef(fixture)).toBe(`.mstar/${COMPASS_REF}`);
   });
 
+  test("a staged authority refuses a committed retry exactly like every other operation, and ACTIVE still replays", async () => {
+    const fixture = await workflowFixture("compass-ref-staged", [], "iteration");
+    writeOwnCompass(fixture);
+    plantCompassRef(fixture, `.mstar/${COMPASS_REF}`);
+    const repair = {
+      kind: "compass-ref" as const,
+      compassPath: COMPASS_REF,
+      reason: "record the pointer registration refused",
+    };
+    const repaired = await workflowMutation(fixture, "op-compass-ref-staged", repair);
+    expect(repaired.replayed).toBe(false);
+    const published = await workflowFootprint(fixture.context);
+    // The CAS token is captured while the store is still readable: a staged
+    // store serves no ordinary read, so deriving it later would refuse in the
+    // caller instead of in the route under test.
+    const expected = await liveWorkflowToken(fixture);
+
+    // A staged authority serves no workflow transition at all, and a committed
+    // receipt is not an exception: the retry refuses with the SAME typed cause
+    // another operation kind gets on this store state, and the recorded pointer
+    // and every row stay as they were.
+    withRaw(fixture.context, (db) => {
+      db.prepare("update execution_meta set authority_state = 'staged' where id = 1").run();
+    });
+    const stagedBefore = await workflowFootprint(fixture.context);
+    const lifecycle = await refusalOf(() =>
+      workflowMutation(fixture, "op-compass-ref-staged-other", { kind: "lifecycle", status: "paused", reason: "staged" }, { expected }),
+    );
+    const replayRefusal = await refusalOf(() => workflowMutation(fixture, "op-compass-ref-staged", repair, { expected }));
+    expect(replayRefusal.code).toBe("execution.not-active");
+    expect(replayRefusal).toEqual({ ...replayRefusal, code: lifecycle.code, message: lifecycle.message });
+    expect(await workflowFootprint(fixture.context)).toEqual(stagedBefore);
+    expect(storedCompassRef(fixture)).toBe(COMPASS_REF);
+
+    // Back on an ACTIVE authority the identical retry still replays the
+    // recorded receipt: no re-application, no new receipt, no revision bump.
+    withRaw(fixture.context, (db) => {
+      db.prepare("update execution_meta set authority_state = 'active' where id = 1").run();
+    });
+    expect(await workflowFootprint(fixture.context)).toEqual(published);
+    const replay = await workflowMutation(fixture, "op-compass-ref-staged", repair, { expected });
+    expect(replay.replayed).toBe(true);
+    expect(await workflowFootprint(fixture.context)).toEqual(published);
+  });
+
   test("a compass that vanishes between the read and the commit is refused at the boundary", async () => {
     const fixture = await workflowFixture("compass-ref-vanish", [], "iteration");
     writeOwnCompass(fixture);

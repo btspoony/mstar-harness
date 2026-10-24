@@ -12297,7 +12297,7 @@ function withExecutionTransaction(context, transition) {
     }
   });
 }
-async function withExecutionReadTransaction(context, body) {
+async function withExecutionReadTransaction(context, body, requires = "ordinary execution reads require an active authority") {
   const handle = await openStore(context, "read");
   try {
     if (handle.execution === null) {
@@ -12308,7 +12308,7 @@ async function withExecutionReadTransaction(context, body) {
     try {
       const meta = readExecutionMetaRow(db);
       if (meta.authorityState !== "active") {
-        throw new ExecutionError("execution.not-active", `the execution authority is ${meta.authorityState}; ordinary execution reads require an active authority. ` + `A staged store is inspectable only through migration diagnostics.`);
+        throw new ExecutionError("execution.not-active", `the execution authority is ${meta.authorityState}; ${requires}. ` + `A staged store is inspectable only through migration diagnostics.`);
       }
       const store = readStoreIdentity(db);
       const result = body({ db, storeId: store.storeId, epoch: store.epoch, execution: meta });
@@ -13154,7 +13154,7 @@ async function readWorkflowOperationReplayBeforeProof(context, read, input) {
     if (replay === null)
       return null;
     return { replay, storeId: tx.storeId, epoch: tx.epoch, revision: requireWorkflowState(tx, read.workflowId).revision };
-  });
+  }, "a workflow transition requires an active authority");
 }
 function readOperationReplay(tx, input) {
   const recorded = readCommittedOperation(tx.db, tx.epoch, input.operationId);
