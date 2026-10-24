@@ -43,6 +43,7 @@ import {
 } from "./catalog.js";
 import {
   assertRegisteredCompassDocument,
+  assertRegisteredPlanDocuments,
   bindingInputOf,
   pendingRegistrationOf,
   refusePendingRegistration,
@@ -157,6 +158,8 @@ function registrationRequestHash(caller: ExecutionCaller, plan: CatalogExecution
  * - `catalog.registration-invalid` — a NEW iteration registration names no
  *   non-empty reviewed compass for this workflow; a committed operation id
  *   replays its receipt instead (I-000868);
+ * - `plan-path.*` — a NEW iteration registration names a plan row whose
+ *   document is missing, unreadable or not that plan's; same replay rule;
  * - `execution.token-kind` / `execution.scope-mismatch` / `store.stale-epoch` /
  *   `execution.stale-token` — `expected` is not this store's CURRENT root token;
  * - `catalog.revision-conflict` — the catalog moved past the revision the delta
@@ -207,11 +210,12 @@ export async function commitExecutionRegistration(
     });
     if (replayed !== null) return replayed.data;
 
-    // §3.1 the reviewed compass document is proven only for a NEW registration:
-    // the committed attempt already proved it, so its receipt replays even when
-    // the document has since changed, while a fresh operation id is refused
-    // before anything is written (I-000868).
+    // §3.1 the reviewed documents are proven only for a NEW registration: the
+    // committed attempt already proved them, so its receipt replays even when
+    // they have since been removed or edited, while a fresh operation id is
+    // refused before anything is written (I-000868).
     assertRegisteredCompassDocument(plan.request.workflow);
+    assertRegisteredPlanDocuments(plan.request.workflow);
 
     // §3.1 CAS: the parent (root) token of THIS store, epoch and revision.
     assertExecutionToken(request.expected, {
@@ -384,9 +388,11 @@ export async function registerShippedCatalogExecution(
       token: { kind: "root", key: [] },
     });
     if (replayed !== null) return { replayed: replayed.data };
-    // A NEW shipped registration proves its reviewed compass here; the replayed
-    // operation id above already proved it and keeps its receipt (I-000868).
+    // A NEW shipped registration proves its reviewed documents here; the
+    // replayed operation id above already proved them and keeps its receipt
+    // (I-000868).
     assertRegisteredCompassDocument(canonical.request.workflow);
+    assertRegisteredPlanDocuments(canonical.request.workflow);
     const versions = readCatalogStoreVersionsOn(tx.db);
     if (input.expected !== undefined) {
       // The ADDRESS half keeps its own precise refusal; the REVISION half is

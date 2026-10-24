@@ -34,7 +34,7 @@ import {
   type SnapshotCoordination,
 } from "./coordination-write.js";
 import { canonicalizeNearestExisting, resolvePlanDir } from "./path.js";
-import { resolveRegisteredPlanFile } from "./plan-path.js";
+import { canonicalRegisteredPlanPath, resolveRegisteredPlanFile } from "./plan-path.js";
 import { validatePlanRow, validateWorkflowEntry, type PlanRow, type WorkflowEntry } from "./status.js";
 
 /** Snapshot file name inside the legacy `workflows/<id>/` document. */
@@ -1250,8 +1250,31 @@ export type RegisterIterationWorkflowOptions = {
  * of the resolved path, so an in-root symlink whose target lies outside the
  * harness is refused here - the same canonical read `readPrepareCompass`
  * performs later - rather than being stored and failing at amendment time.
+ * The canonical form WITHOUT that existence proof is
+ * `canonicalIterationCompassRef`, for a caller that must decide an idempotent
+ * replay before it reads the mutable document (I-000868).
  */
 export function normalizeIterationCompassRef(
+  ref: string,
+  harnessRoot: string,
+  refuse: (detail: string) => Error,
+): string {
+  const canonical = canonicalIterationCompassRef(ref, harnessRoot, refuse);
+  const path = canonicalizeNearestExisting(resolve(harnessRoot, canonical));
+  if (!existsSync(path) || !statSync(path).isFile()) {
+    throw refuse(reviewedCompassMissing(ref, harnessRoot));
+  }
+  return canonical;
+}
+
+/**
+ * The same pointer in its canonical stored form, WITHOUT requiring the
+ * document to exist: containment and canonical spelling are facts about the
+ * pointer, so registration can decide an idempotent operation replay and the
+ * request fingerprint before it touches the reviewed document, and prove the
+ * document itself only for a genuinely new operation (I-000868).
+ */
+export function canonicalIterationCompassRef(
   ref: string,
   harnessRoot: string,
   refuse: (detail: string) => Error,
@@ -1271,9 +1294,6 @@ export function normalizeIterationCompassRef(
           `document inside ${harnessRoot}; store the harness-relative pointer of that compass instead`,
       );
     }
-    if (!existsSync(canon) || !statSync(canon).isFile()) {
-      throw refuse(reviewedCompassMissing(ref, harnessRoot));
-    }
     return relative(rootCanon, canon).split(sep).join("/");
   }
   const canon = canonicalizeNearestExisting(resolve(harnessRoot, ref));
@@ -1282,9 +1302,6 @@ export function normalizeIterationCompassRef(
       `options.compassRef escapes the harness root - the reviewed compass_ref must address a document inside ` +
         `${harnessRoot}; store the harness-relative pointer of that compass instead`,
     );
-  }
-  if (!existsSync(canon) || !statSync(canon).isFile()) {
-    throw refuse(reviewedCompassMissing(ref, harnessRoot));
   }
   return relative(rootCanon, canon).split(sep).join("/");
 }
@@ -1328,15 +1345,17 @@ export function iterationWorkflowSnapshot(
     compass_ref: options.compassRef,
     branch: { base: options.branch.base, integration: options.branch.integration, target: options.branch.target },
     // Each row stores the RESOLVED canonical pointer (E07 parity with the plan
-    // producer): the reviewed spelling is input, and the resolver proves and
-    // reads the document it names before anything is written. Only the POINTER is
+    // producer): the reviewed spelling is input, and the resolver settles the
+    // one registered target before anything is written. Only the POINTER is
     // resolved here — the iteration row's id and title are the reviewed
     // declarations, which `derivePlanRegistration` would additionally constrain
-    // against the document body (the plan producer's R1 rule, not this route's).
+    // against the document body (the plan producer's R1 rule, not this route's),
+    // and the document itself is proven inside the registration transaction
+    // after the operation replay (`assertRegisteredPlanDocuments`).
     plans: options.rows.map((r) => ({
       id: r.id,
       title: r.title,
-      file: resolveRegisteredPlanFile({ harnessRoot: resolve(options.harnessDir), planId: r.id, file: r.file }).planPath,
+      file: canonicalRegisteredPlanPath({ harnessRoot: resolve(options.harnessDir), planId: r.id, file: r.file }).planPath,
       status: "Todo",
       metadata: {
         iteration_refs: [options.compassRef],

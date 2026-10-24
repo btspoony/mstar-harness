@@ -20,14 +20,14 @@ import {
 import { isPlainObject } from "./coordination-write.js";
 import { assertSafePathComponent, canonicalizeNearestExisting } from "./path.js";
 import { parseCompassFrontmatter, validateCompassFrontmatter } from "./iteration.js";
-import { resolveRegisteredPlanFile } from "./plan-path.js";
+import { canonicalRegisteredPlanPath, resolveRegisteredPlanFile } from "./plan-path.js";
 import { openStore, type StoreContext, type StoreDb } from "./store-db.js";
 import { validateWorkflowEntry, type WorkflowEntry } from "./status.js";
 import {
   assertDeliveryRegistrationCoherence,
+  canonicalIterationCompassRef,
   derivePlanRegistration,
   iterationWorkflowSnapshot,
-  normalizeIterationCompassRef,
   planWorkflowSnapshot,
   stableJson,
   type RegisterIterationWorkflowOptions,
@@ -450,13 +450,30 @@ export function assertRegisteredCompassDocument(workflow: CatalogExecutionWorkfl
 }
 
 /**
+ * The plan documents of one canonical iteration registration, proven readable
+ * and self-declaring. Run by the producers INSIDE their transaction after the
+ * operation replay, next to `assertRegisteredCompassDocument`: a committed
+ * operation id returns its recorded receipt even when its documents have since
+ * been removed or edited (I-000868).
+ */
+export function assertRegisteredPlanDocuments(workflow: CatalogExecutionWorkflow): void {
+  if (workflow.kind !== "iteration") return;
+  for (const row of workflow.options.rows) {
+    resolveRegisteredPlanFile({ harnessRoot: resolve(workflow.options.harnessDir), planId: row.id, file: row.file });
+  }
+}
+
+/**
  * Canonicalize selected iteration plan and compass pointers before deriving
  * the snapshot or deterministic operation id. Plan inputs are unchanged.
  *
- * The pointer's own document is NOT proven here: the registration transaction
- * proves it after the operation replay (see `assertRegisteredCompassDocument`),
- * so a committed operation id still returns its receipt when the compass has
- * since changed (I-000868).
+ * Only POINTER facts run here: a spelling, containment or target-identity
+ * refusal is decided from the reviewed request alone, so the request
+ * fingerprint and the stored pointer do not move when the documents later do.
+ * The documents themselves are proven after the operation replay (see
+ * `assertRegisteredCompassDocument` / `assertRegisteredPlanDocuments`), so a
+ * committed operation id still returns its receipt once they are gone, emptied
+ * or rewritten (I-000868).
  */
 function normalizeIterationWorkflow(workflow: CatalogExecutionWorkflow): CatalogExecutionWorkflow {
   if (!isPlainObject(workflow) || workflow.kind !== "iteration") return workflow;
@@ -472,7 +489,7 @@ function normalizeIterationWorkflow(workflow: CatalogExecutionWorkflow): Catalog
     typeof compassRef !== "string" ||
     compassRef.trim() === ""
   ) return workflow;
-  const normalizedCompassRef = normalizeIterationCompassRef(
+  const normalizedCompassRef = canonicalIterationCompassRef(
     compassRef,
     harnessDir,
     (detail) => new CatalogRegistrationError("catalog.registration-invalid", detail),
@@ -483,7 +500,7 @@ function normalizeIterationWorkflow(workflow: CatalogExecutionWorkflow): Catalog
     const id = row.id;
     const file = row.file;
     if (typeof id !== "string" || id.trim() === "" || typeof file !== "string" || file.trim() === "") return row;
-    const planPath = resolveRegisteredPlanFile({ harnessRoot: harnessDir, planId: id, file }).planPath;
+    const planPath = canonicalRegisteredPlanPath({ harnessRoot: harnessDir, planId: id, file }).planPath;
     if (planPath === file) return row;
     changed = true;
     return { ...row, file: planPath };

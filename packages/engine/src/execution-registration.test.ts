@@ -687,6 +687,56 @@ describe("execution-registration", () => {
     expect(await footprint(fixture.context)).toEqual(accepted);
   });
 
+  test("execution-registration-replays-a-committed-iteration-whose-documents-were-deleted", async () => {
+    const fixture = await activeFixture("iteration-compass-deleted-replay");
+    const iterationId = "iter-20260921-compass-deleted";
+    writeReviewedCompass(fixture.context.harnessDir, iterationId);
+    const request = iterationRequest(fixture, iterationId, "op-iteration-compass-deleted");
+    const context: ExecutionContext = { ...fixture.context, caller: { ...fixture.caller, workflowId: iterationId } };
+    const shipped = { actor: "project-manager", workflow: request.workflow, operationId: request.operationId };
+    const committed = await registerShippedCatalogExecution(context, { ...shipped, expected: fixture.rootToken });
+    const accepted = await footprint(fixture.context);
+
+    // The reviewed compass is REMOVED after the commit: the recorded operation
+    // still replays its receipt from both producers instead of resolving a
+    // document the committed intent already proved.
+    rmSync(join(fixture.context.harnessDir, "delivery-compass.md"));
+    expect(await registerShippedCatalogExecution(context, { ...shipped, expected: fixture.rootToken })).toEqual(committed);
+    expect(await commitExecutionRegistration(context, { ...request, expected: fixture.rootToken })).toEqual(committed);
+    expect(await footprint(fixture.context)).toEqual(accepted);
+
+    // A NEW operation id against the now-missing compass is still refused, and
+    // the refusal publishes nothing.
+    const refusal = await refusalOf(() =>
+      registerShippedCatalogExecution(context, { ...shipped, operationId: "op-iteration-compass-deleted-new" }),
+    );
+    expect(refusal.code).toBe("catalog.registration-invalid");
+    expect(await footprint(fixture.context)).toEqual(accepted);
+
+    // The rows' plan documents follow the same rule: a committed registration
+    // still replays once its plan markdown is gone, while a new operation id
+    // naming that missing document is refused without rows.
+    const planDeletedId = "iter-20260921-plan-deleted";
+    writeReviewedCompass(fixture.context.harnessDir, planDeletedId);
+    const planDeletedRequest = iterationRequest(fixture, planDeletedId, "op-iteration-plan-deleted");
+    const planDeletedShipped = {
+      actor: "project-manager",
+      workflow: planDeletedRequest.workflow,
+      operationId: planDeletedRequest.operationId,
+    };
+    const planDeletedContext: ExecutionContext = { ...fixture.context, caller: { ...fixture.caller, workflowId: planDeletedId } };
+    const planDeletedCommitted = await registerShippedCatalogExecution(planDeletedContext, planDeletedShipped);
+    const bothAccepted = await footprint(fixture.context);
+    rmSync(join(fixture.context.harnessDir, "plans", `${planDeletedId}-plan.md`));
+    expect(await registerShippedCatalogExecution(planDeletedContext, planDeletedShipped)).toEqual(planDeletedCommitted);
+    expect(await footprint(fixture.context)).toEqual(bothAccepted);
+    const planRefusal = await refusalOf(() =>
+      registerShippedCatalogExecution(planDeletedContext, { ...planDeletedShipped, operationId: "op-iteration-plan-deleted-new" }),
+    );
+    expect(planRefusal.code).toBe("plan-path.not-a-file");
+    expect(await footprint(fixture.context)).toEqual(bothAccepted);
+  });
+
   test("execution-registration-canonicalizes an in-root compass symlink for ACTIVE iteration registration", async () => {
     const fixture = await activeFixture("iteration-compass-alias");
     const iterationId = "iter-20260921-compass-alias";
