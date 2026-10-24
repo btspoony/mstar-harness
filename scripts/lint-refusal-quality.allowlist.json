@@ -31,7 +31,7 @@
   },
   {
     "signature": "missing-recovery:packages/commands/src/families/dashboard.ts:04750519a45c",
-    "justification": "Engine-supplied recovery text forwarded through a local refusal adapter whose caller passes engine facts (family-refusal.ts type-checks the string but proves no reachable command); strict static proof cannot cover it — see I-000872.",
+    "justification": "Local `new Error(...)` carries no recovery fact, so the adapter's literal fallback (`Resolve the reported dashboard startup issue, then rerun mstar dashboard.`) is the text that runs; the adapter destructures `recovery` from `engineErrorFacts(error)`, which strict static proof cannot evaluate — see I-000872.",
     "trackingIssue": "I-000872",
     "expectedCount": 1
   },
