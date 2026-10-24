@@ -519,7 +519,8 @@ export function scanSource(source: string, file: string): RefusalFinding[] {
       const fallsBack = node.operatorToken.kind === ts.SyntaxKind.QuestionQuestionToken
         ? fallsBackOnNullish
         : fallsBackOnNullish || left.outcomes.has("empty");
-      const outcomes = new Set<RecoveryOutcome>([...left.outcomes].filter((outcome) => outcome !== "nullish" && (node.operatorToken.kind === ts.SyntaxKind.BarBarToken || outcome !== "empty")));
+      // `||` also consumes the empty string; `??` keeps it, so an empty left arm stays blank.
+      const outcomes = new Set<RecoveryOutcome>([...left.outcomes].filter((outcome) => outcome !== "nullish" && !(node.operatorToken.kind === ts.SyntaxKind.BarBarToken && outcome === "empty")));
       if (fallsBack) for (const outcome of right.outcomes) outcomes.add(outcome);
       const text = left.outcomes.has("text") ? left.text : right.text;
       return { outcomes, ...(text !== undefined ? { text } : {}) };

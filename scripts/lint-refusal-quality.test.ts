@@ -497,17 +497,15 @@ describe("refusal quality scanner", () => {
   });
 
   test("distinguishes an empty string from a nullish recovery", () => {
-    const findings = scanSource(`
-      refusalEnvelope({ command: "x", status: "refused", code: "x.blocked", message: "Blocked",
-        recovery: "" ?? "Run mstar status validate." });
-      refusalEnvelope({ command: "x", status: "refused", code: "x.blocked", message: "Blocked",
-        recovery: "   " ?? "Run mstar status validate." });
-      refusalEnvelope({ command: "x", status: "refused", code: "x.blocked", message: "Blocked",
-        recovery: (flag ? "" : undefined) ?? "Run mstar status validate." });
-      refusalEnvelope({ command: "x", status: "refused", code: "x.blocked", message: "Blocked",
-        recovery: (flag ? "" : "Run mstar status validate.") || "Register the workflow first with mstar workflow register." });
-    `, "packages/commands/src/fixture.ts");
-    expect(findings.map(({ classification }) => classification)).toEqual(["missing-recovery", "missing-recovery", "missing-recovery"]);
+    const scan = (recovery: string) => scanSource(
+      `refusalEnvelope({ command: "x", status: "refused", code: "x.blocked", message: "Blocked", recovery: ${recovery} });`,
+      "packages/commands/src/fixture.ts",
+    );
+    expect(scan(`"" ?? "Run mstar status validate."`).map(({ classification }) => classification)).toEqual(["missing-recovery"]);
+    expect(scan(`"" || "Run mstar status validate."`)).toEqual([]);
+    expect(scan(`"   " ?? "Run mstar status validate."`).map(({ classification }) => classification)).toEqual(["missing-recovery"]);
+    expect(scan(`(flag ? "" : undefined) ?? "Run mstar status validate."`).map(({ classification }) => classification)).toEqual(["missing-recovery"]);
+    expect(scan(`(flag ? "" : "Run mstar status validate.") || "Register the workflow first with mstar workflow register."`)).toEqual([]);
   });
 
   test("keeps a helper's parameters out of the caller's wrapper bindings", () => {
