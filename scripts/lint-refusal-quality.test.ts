@@ -361,6 +361,32 @@ describe("refusal quality scanner", () => {
     expect(findings.map(({ classification }) => classification)).toEqual(["missing-recovery", "missing-recovery", "missing-recovery"]);
   });
 
+  test("keeps failing uninitialized, destructured and catch-clause shadows of the proven helper", () => {
+    const findings = scanSource(`
+      function provenRecovery(workflow: string): string {
+        return \`Rerun mstar session run --workflow \${workflow} --role coordinator.\`;
+      }
+      function uninitializedLocal(workflow: string) {
+        let provenRecovery: () => string;
+        provenRecovery = () => "";
+        refusalEnvelope({ command: "x", status: "refused", code: "x.blocked", message: "Blocked",
+          recovery: provenRecovery() });
+      }
+      function destructuredLocal(workflow: string) {
+        const { provenRecovery } = { provenRecovery: () => "" };
+        refusalEnvelope({ command: "x", status: "refused", code: "x.blocked", message: "Blocked",
+          recovery: provenRecovery() });
+      }
+      function catchClauseLocal(workflow: string) {
+        try { noop(); } catch (provenRecovery) {
+          refusalEnvelope({ command: "x", status: "refused", code: "x.blocked", message: "Blocked",
+            recovery: provenRecovery() });
+        }
+      }
+    `, "packages/commands/src/fixture.ts");
+    expect(findings.map(({ classification }) => classification)).toEqual(["missing-recovery", "missing-recovery", "missing-recovery"]);
+  });
+
   test("a stale allowlist entry reports its tracking issue and refresh action", () => {
     const snippet = `refusalEnvelope({ code: "x.bad" })`;
     const finding = {
