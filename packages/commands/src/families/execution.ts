@@ -89,20 +89,31 @@ function targetRefusal(id: string, supplied: string): CommandEnvelope {
   });
 }
 /**
- * The guard's verdict on one path, or `null` when the path does not resolve.
+ * The guard's view of one path: its filesystem identity, or why it has none.
  *
  * The control root arrives as a Git-derived realpath while `--harness` is only
  * resolved lexically, so a symlinked spelling of the same live directory used
- * to compare unequal. `real` collapses that alias, and the device/inode pair
- * settles the case `realpath` alone cannot (bind mounts, case-folding volumes).
+ * to compare unequal. `real` collapses that alias and `dev`+`ino` settles what
+ * `realpath` alone cannot (bind mounts, case-folding volumes).
+ *
+ * `absent` (`ENOENT`) is a path that does not exist — an explicit
+ * `harness_dir`/`MSTAR_HARNESS_DIR` that has not been scaffolded yet, and which
+ * therefore protects no live store. Every other failure (permissions, a symlink
+ * loop, a non-directory ancestor) is a comparison this guard could not make.
  */
-function filesystemIdentity(target: string): { real: string; dev: number; ino: number } | null {
+type IdentityProbe =
+  | { kind: "identity"; real: string; dev: number; ino: number }
+  | { kind: "absent" }
+  | { kind: "unreadable"; reason: string };
+
+function probeIdentity(target: string): IdentityProbe {
   try {
     const real = realpathSync(target);
     const stats = statSync(real);
-    return { real, dev: stats.dev, ino: stats.ino };
-  } catch {
-    return null;
+    return { kind: "identity", real, dev: stats.dev, ino: stats.ino };
+  } catch (error) {
+    const code = (error as NodeJS.ErrnoException).code;
+    return code === "ENOENT" ? { kind: "absent" } : { kind: "unreadable", reason: code ?? String(error) };
   }
 }
 
@@ -125,26 +136,32 @@ function executionContext(target: string, invocation: InvocationContext, verb: s
   if (invocation.controlRoot !== null) {
     // Same spelling decides without touching the filesystem.
     if (root === path.resolve(invocation.controlRoot)) throw controlRootRefusal(verb, root, null);
-    // A comparison this guard could not resolve never admits: an unreadable
-    // side is refused rather than assumed different from the other.
-    const control = filesystemIdentity(invocation.controlRoot);
-    if (control === null) {
+    const control = probeIdentity(invocation.controlRoot);
+    // An absent control root protects no live store: an explicit harness_dir
+    // that has not been scaffolded is left to the operation's own store check.
+    if (control.kind === "unreadable") {
       throw new SddScriptError(
-        `${verb}: this invocation's control root ${invocation.controlRoot} does not resolve to a readable path, so ${root} cannot be compared with it by filesystem identity. `
-        + "Run the call from a checkout whose control root exists, or from one where no control root is discovered.",
+        `${verb}: this invocation's control root ${invocation.controlRoot} cannot be resolved for identity comparison (${control.reason}), so ${root} cannot be compared with it. `
+        + "Run the call from a checkout whose control root is readable, or from one where no control root is discovered.",
         2,
       );
     }
-    const named = filesystemIdentity(root);
-    if (named === null) {
-      throw new SddScriptError(
-        `${verb}: the target ${root} does not resolve to a readable path, so it cannot be compared with this invocation's control root ${control.real}. `
-        + "Pass --harness <absolute-path> naming an existing harness directory.",
-        2,
-      );
-    }
-    if (named.real === control.real || (named.dev === control.dev && named.ino === control.ino)) {
-      throw controlRootRefusal(verb, root, named.real);
+    if (control.kind === "identity") {
+      const named = probeIdentity(root);
+      // Neither an absent nor an unreadable target is ever admitted.
+      if (named.kind !== "identity") {
+        const why = named.kind === "absent"
+          ? "does not resolve to a readable path"
+          : `cannot be resolved for identity comparison (${named.reason})`;
+        throw new SddScriptError(
+          `${verb}: the target ${root} ${why}, so it cannot be compared with this invocation's control root ${control.real}. `
+          + "Pass --harness <absolute-path> naming an existing harness directory.",
+          2,
+        );
+      }
+      if (named.real === control.real || (named.dev === control.dev && named.ino === control.ino)) {
+        throw controlRootRefusal(verb, root, named.real);
+      }
     }
   }
   return { harnessDir: root };

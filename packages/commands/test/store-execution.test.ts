@@ -1,6 +1,6 @@
-import { afterAll, afterEach, beforeAll, describe, expect, spyOn, test } from "bun:test";
+import { afterEach, beforeEach, describe, expect, spyOn, test } from "bun:test";
 import * as nodeFs from "node:fs";
-import { copyFileSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { chmodSync, copyFileSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { captureIssue, createExecutionWorkflow, getIssue, initializeStore, openStore, readExecutionState } from "@mstar-harness/engine";
@@ -8,17 +8,19 @@ import { getCommandDefinitions, getExecutionCommandDefinitions, getStoreCommandD
 import type { CommandDefinition, CommandEnvelope, InvocationContext } from "../src/types.js";
 
 const roots: string[] = [];
-const controlRoot = join(tmpdir(), "mstar-command-control-root-not-a-target");
+// The default invocation control root: allocated per test and registered in the
+// same `roots` array, so teardown only ever removes a directory this run made.
+// It is a real directory because `invocation.controlRoot` names the Git-derived
+// main worktree, which exists (I-000700).
+let controlRoot = "";
+beforeEach(() => {
+  controlRoot = mkdtempSync(join(tmpdir(), "mstar-command-control-root-"));
+  roots.push(controlRoot);
+});
 
 afterEach(() => {
   for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true });
 });
-
-// The guard compares filesystem identity, so the invocation's control root must
-// be a resolvable directory: a real invocation's is the Git-derived main
-// worktree. A missing one now refuses instead of admitting (I-000700).
-beforeAll(() => mkdirSync(controlRoot, { recursive: true }));
-afterAll(() => rmSync(controlRoot, { recursive: true, force: true }));
 
 function fixture(label: string): string {
   const root = mkdtempSync(join(tmpdir(), `mstar-${label}-`));
@@ -155,13 +157,25 @@ describe("store and execution command surface", () => {
     expect(unresolved).toMatchObject({ status: "usage", code: "usage", exitCode: 2 });
     expect(unresolved.status === "usage" ? unresolved.message : "").toContain("does not resolve to a readable path");
 
-    // 5. A control root this guard cannot resolve refuses too: an incomparable
-    //    pair is never admitted, even when the target itself is a live harness.
-    const absentControl = join(root, "absent-control-root");
-    const incomparable = await invoke(definition("store.execution.export"), { harness }, root, absentControl);
-    expect(incomparable).toMatchObject({ status: "usage", code: "usage", exitCode: 2 });
-    expect(incomparable.status === "usage" ? incomparable.message : "")
-      .toContain(`this invocation's control root ${absentControl} does not resolve to a readable path`);
+    // 5. An ABSENT control root protects no live store: an explicit harness_dir
+    //    that has not been scaffolded is admitted, and the target reaches its
+    //    own store (which answers for itself).
+    const admitted = await invoke(definition("store.execution.export"), { harness: otherHarness }, root, join(root, "absent-control-root"));
+    expect(admitted.status).toBe("ok");
+
+    // 6. An UNREADABLE control root still refuses: it is not absent, just not
+    //    comparable, so the pair is never admitted.
+    const sealed = join(root, "sealed");
+    mkdirSync(sealed);
+    chmodSync(sealed, 0o000);
+    try {
+      const blocked = await invoke(definition("store.execution.export"), { harness }, root, join(sealed, "unreadable-control"));
+      expect(blocked).toMatchObject({ status: "usage", code: "usage", exitCode: 2 });
+      expect(blocked.status === "usage" ? blocked.message : "")
+        .toContain("cannot be resolved for identity comparison (EACCES)");
+    } finally {
+      chmodSync(sealed, 0o700);
+    }
   });
 
   test("initializes despite symlinked project residuals, previews migration, upgrades and backs up an explicitly named fixture store", async () => {
