@@ -67,8 +67,8 @@
   },
   {
     "signature": "unreachable-recovery:packages/engine/src/coordination-transitions.ts:797425b7a15f",
-    "justification": "Engine-supplied error message: both conditional arms are runtime error text (a caught parameter's `.message` and `String(error)`), so no statically reachable command can be proven — see I-000872.",
-    "trackingIssue": "I-000872",
+    "justification": "The refusal message is runtime error text (`error.message` / `String(error)`) and cannot statically name a reachable command; the refusal's recovery is separate and already present — source fix tracked in I-000883.",
+    "trackingIssue": "I-000883",
     "expectedCount": 1
   }
 ]
