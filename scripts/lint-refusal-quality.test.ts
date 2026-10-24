@@ -626,6 +626,24 @@ describe("refusal quality scanner", () => {
     expect(findings).toEqual([]);
   });
 
+  test("terminates on a self-referential call-site field", () => {
+    const findings = scanSource(`
+      function fail(facts: { code: string; message: string }) {
+        return new CoordinationError(facts.code, facts.message);
+      }
+      fail({ code: facts.code });
+      fail({ message: facts.message });
+    `, "packages/engine/src/fixture.ts");
+    expect(findings.length).toBeGreaterThan(0);
+  });
+
+  test("a loop-local binding does not invalidate an outer one", () => {
+    const scan = (source: string) => scanSource(source, "packages/commands/src/fixture.ts").map(({ classification }) => classification);
+    const refuse = (recovery: string) => `refusalEnvelope({ command: "x", status: "refused", code: "x.blocked", message: "Blocked", recovery: ${recovery} });`;
+    expect(scan(`const recovery = "Run mstar status validate."; for (const recovery of ["x"]) { noop(); } ${refuse("recovery")}`)).toEqual([]);
+    expect(scan(`let recovery = "Run mstar status validate."; for (recovery of ["x"]) { noop(); } ${refuse("recovery")}`)).toEqual(["missing-recovery"]);
+  });
+
   test("tracks writes by declaration, not by name or member access", () => {
     const scan = (source: string) => scanSource(source, "packages/commands/src/fixture.ts").map(({ classification }) => classification);
     const refuse = (recovery: string) => `refusalEnvelope({ command: "x", status: "refused", code: "x.blocked", message: "Blocked", recovery: ${recovery} });`;

@@ -538,8 +538,13 @@ export function scanSource(source: string, file: string): RefusalFinding[] {
     // expression or a declaration that reuses an existing hoisted `var` binding.
     if (ts.isForOfStatement(node) || ts.isForInStatement(node)) {
       if (ts.isVariableDeclarationList(node.initializer)) {
-        for (const declaration of node.initializer.declarations) {
-          if (ts.isIdentifier(declaration.name)) recordBindingWrite(declaration.name.text, scopeByNode.get(declaration), node.getStart());
+        // Only a `var` loop declaration reuses an outer binding; a `let`/`const` loop
+        // declares a fresh binding of its own and writes nothing outside the loop.
+        const reuseOuterBinding = !(node.initializer.flags & (ts.NodeFlags.Const | ts.NodeFlags.Let));
+        if (reuseOuterBinding) {
+          for (const declaration of node.initializer.declarations) {
+            if (ts.isIdentifier(declaration.name)) recordBindingWrite(declaration.name.text, scopeByNode.get(declaration), node.getStart());
+          }
         }
       } else recordBindingTarget(node.initializer, node.getStart());
     }
@@ -806,8 +811,9 @@ export function scanSource(source: string, file: string): RefusalFinding[] {
         values.push(ts.isPropertyAssignment(property) ? property.initializer : property.name);
       }
       // A duplicated key means the last one wins at runtime; one value is the only shape
-      // whose text this check can state with confidence.
-      return values.length === 1 ? resolveBound(values[0]!, bindings, seenBindings, unprovenParameters) : expression;
+      // whose text this check can state with confidence. The base stays marked so a value
+      // that refers back to it (e.g. `{ code: facts.code }`) terminates instead of looping.
+      return values.length === 1 ? resolveBound(values[0]!, bindings, new Set(seenBindings).add(base), unprovenParameters) : expression;
     }
     return expression;
   };
