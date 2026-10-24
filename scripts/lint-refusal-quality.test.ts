@@ -620,6 +620,20 @@ describe("refusal quality scanner", () => {
     expect(scan(`fail({ code: "valid.code", message: badMessage() });`)).toEqual(["unreachable-recovery"]);
   });
 
+  test("checks every message arm and only proves a const message", () => {
+    const scan = (source: string) => scanSource(source, "packages/engine/src/fixture.ts").map(({ classification }) => classification);
+    expect(scan(`new CoordinationError("valid.code", flag ? "Run mstar status validate." : "Use mstar nonexistent --bad");`)).toEqual(["unreachable-recovery"]);
+    expect(scan(`new CoordinationError("valid.code", flag ? "Run mstar status validate." : "Register the workflow first with mstar workflow register.");`)).toEqual([]);
+    expect(scan(`let message = "Run mstar status validate."; message = "Use mstar nonexistent --bad"; new CoordinationError("valid.code", message);`)).toEqual(["unreachable-recovery"]);
+    expect(scan(`const message = "Run mstar status validate."; new CoordinationError("valid.code", message);`)).toEqual([]);
+    expect(scan(`
+      function fail(facts: { code: string; message: string }) {
+        return new CoordinationError(facts.code, facts.message);
+      }
+      fail({ code: "valid.code", message: flag ? "Run mstar status validate." : "Use mstar nonexistent --bad" });
+    `)).toEqual(["unreachable-recovery"]);
+  });
+
   test("a stale allowlist entry reports its tracking issue and refresh action", () => {
     const snippet = `refusalEnvelope({ code: "x.bad" })`;
     const finding = {

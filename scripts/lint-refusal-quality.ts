@@ -584,6 +584,39 @@ export function scanSource(source: string, file: string): RefusalFinding[] {
     }
     return undefined;
   };
+  // Message reachability considers every possible value, not one representative: a
+  // conditional's arms are unioned, and only a const binding proves from its initializer.
+  type MessageAnalysis = { kind: "texts"; texts: string[] } | { kind: "opaque" } | { kind: "mutable" };
+  const MESSAGE_OPAQUE: MessageAnalysis = { kind: "opaque" };
+  const MESSAGE_MUTABLE: MessageAnalysis = { kind: "mutable" };
+  const analyzeMessage = (node: ts.Expression | undefined, scope?: Scope, seen = new Set<ts.VariableDeclaration>()): MessageAnalysis => {
+    if (!node) return MESSAGE_OPAQUE;
+    if (ts.isParenthesizedExpression(node) || ts.isAsExpression(node) || ts.isTypeAssertionExpression(node) || ts.isSatisfiesExpression(node)) {
+      return analyzeMessage(node.expression, scope, seen);
+    }
+    if (ts.isStringLiteralLike(node) || ts.isNoSubstitutionTemplateLiteral(node)) return { kind: "texts", texts: [node.text] };
+    if (ts.isTemplateExpression(node)) {
+      return { kind: "texts", texts: [node.head.text + node.templateSpans.map((span) => `${span.expression.getText(sf)}${span.literal.text}`).join("")] };
+    }
+    if (node.kind === ts.SyntaxKind.NullKeyword || (ts.isIdentifier(node) && node.text === "undefined")) return { kind: "texts", texts: [] };
+    if (ts.isConditionalExpression(node) || (ts.isBinaryExpression(node) && [ts.SyntaxKind.QuestionQuestionToken, ts.SyntaxKind.BarBarToken].includes(node.operatorToken.kind))) {
+      const arms = ts.isConditionalExpression(node)
+        ? [node.whenTrue, node.whenFalse]
+        : [node.left, node.right];
+      const analyzed = arms.map((arm) => analyzeMessage(arm, scope, new Set(seen)));
+      if (analyzed.some((arm) => arm.kind === "mutable")) return MESSAGE_MUTABLE;
+      if (analyzed.some((arm) => arm.kind !== "texts")) return MESSAGE_OPAQUE;
+      return { kind: "texts", texts: analyzed.flatMap((arm) => (arm as { texts: string[] }).texts) };
+    }
+    if (ts.isIdentifier(node)) {
+      const declaration = resolveDeclaration(scope ?? scopeByNode.get(node), node.text);
+      if (!declaration) return MESSAGE_OPAQUE;
+      if ((declaration.parent.flags & ts.NodeFlags.Const) === 0) return MESSAGE_MUTABLE;
+      if (!declaration.initializer || seen.has(declaration)) return MESSAGE_OPAQUE;
+      return analyzeMessage(declaration.initializer, scopeByNode.get(declaration), new Set(seen).add(declaration));
+    }
+    return MESSAGE_OPAQUE;
+  };
   const codeValue = (node: ts.Expression | undefined, scope?: Scope, seen = new Set<ts.VariableDeclaration>()): string | undefined => {
     if (!node) return undefined;
     if (ts.isParenthesizedExpression(node) || ts.isAsExpression(node) || ts.isTypeAssertionExpression(node) || ts.isSatisfiesExpression(node)) {
@@ -788,10 +821,8 @@ export function scanSource(source: string, file: string): RefusalFinding[] {
       addFinding(node, "missing-cause-code", `Rule #341 class 2 (named cause):${detail}`);
     }
     const resolvedMessage = message && resolveBound(message, bindings, new Set(), unprovenParameters);
-    const text = codeValue(resolvedMessage);
     // A call-site object whose property is not a fresh literal cannot prove a reachable
-    // recovery either, and neither can a fresh literal whose value is not provable text, so
-    // the discoverability check fails closed instead of being skipped.
+    // recovery, and neither can a fresh literal whose value is not provable text.
     const messageIsObjectField = message !== undefined
       && ts.isPropertyAccessExpression(message)
       && ts.isIdentifier(message.expression)
@@ -800,10 +831,14 @@ export function scanSource(source: string, file: string): RefusalFinding[] {
       && ts.isPropertyAccessExpression(resolvedMessage)
       && ts.isIdentifier(resolvedMessage.expression)
       && bindings.has(resolvedMessage.expression.text);
-    const opaqueMessage = resolvedIsOpaqueField || (messageIsObjectField && text === undefined);
-    if (opaqueMessage) {
-      addFinding(node, "unreachable-recovery", "Rule #341 class 4 (discoverability): CoordinationError message is a property of a call-site object that is not a fresh literal, so no reachable command can be proven.");
-    } else if (text && /\bmstar\s+[a-z][a-z0-9.-]*/i.test(text) && !recoveryIsReachable(text, getGrammar())) {
+    const analyzedMessage = resolvedMessage === undefined ? MESSAGE_OPAQUE : analyzeMessage(resolvedMessage, scopeByNode.get(resolvedMessage));
+    const unprovableMessage = resolvedIsOpaqueField
+      || (messageIsObjectField && analyzedMessage.kind !== "texts")
+      || analyzedMessage.kind === "mutable";
+    if (unprovableMessage) {
+      addFinding(node, "unreachable-recovery", "Rule #341 class 4 (discoverability): CoordinationError message cannot be proven to name a reachable command (opaque or mutable source).");
+    } else if (analyzedMessage.kind === "texts"
+      && analyzedMessage.texts.some((text) => /\bmstar\s+[a-z][a-z0-9.-]*/i.test(text) && !recoveryIsReachable(text, getGrammar()))) {
       addFinding(node, "unreachable-recovery", "Rule #341 class 4 (discoverability): CoordinationError message references a CLI command absent from the help grammar.");
     }
   };
