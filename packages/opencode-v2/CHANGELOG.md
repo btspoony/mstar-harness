@@ -1,6 +1,14 @@
 # @mstar-harness/opencode-v2 Changelog
 
 
+## [4.0.8] - 2026-10-24
+
+### Changed
+
+- Version alignment with harness **4.0.8**.
+
+See root [CHANGELOG.md](../../CHANGELOG.md) **4.0.8**.
+
 ## [4.0.7] - 2026-10-23
 
 ### Changed

@@ -6,6 +6,32 @@
 
 ## [Unreleased]
 
+## [4.0.8] - 2026-10-24
+
+### Changed
+
+- **已注册的 delivery compass 指针现在在注册时即被接纳校验，且事后可修复（I-000863）。** `mstar iteration register --compass-ref` 与新增的 `mstar workflow compass-ref` 都会把所命名的文档按 harness 根解析，并且只存储其规范的 harness 相对形式；仓库相对写法 `.mstar/...`、不指向任何文档的指针、空文档或无法解析的 compass、非法的 frontmatter 字段集合，以及声明了其它 `iteration_id` 的 compass，都会在注册事务开启之前被拒绝，因此不会发布任何 workflow 行、plan 行或 catalog 实体。`workflow compass-ref --workflow <id> --compass <ref> --reason <why>` 用于修复此前被错误写入者存下的指针：它保留 workflow/session/plan 身份、其行记录与历史，相同 operation id 会重放，reason 不同则冲突。
+- **`phase-1-lock` 就绪检查会指名它所拒绝的指针。** 未存指针的行、解析到另一份文档的指针（包括 `.mstar/.mstar/...` 双重拼接），以及与已注册 workflow 不一致的各个已编写锚点镜像，现在各自报告自己的诊断并给出 `mstar workflow compass-ref` 修复路径，而不再是单个静默的 `binding-invalid`。扩展会渲染每一条不同的诊断与每一个不同的下一步，而不仅是第一条。
+- **被启动的子进程不能再寻址其身份未声明的工作流（I-000866）。** 当继承身份声明了另一个工作流时，`mstar session run` 会拒绝；该命令现在也纳入适配器的 coordinator-seat 范围门禁，因此请求的工作流必须与其启动身份一致。
+- **启动要求当前纪元的 coordinator 绑定（I-000867）。** `mstar session run` 会比较绑定纪元与权威纪元；被取代的持有者会被拒绝，恢复路径指向 `mstar session recover`。
+- **已提交的迭代注册在文档变化后仍可重放（I-000868）。** compass 与 plan 文档的存在性证明改为在注册生产者的 operation replay 查询之后执行（CLI 传输层同理），因此相同重试即使 compass 或 plan markdown 已被清空、删除或修改也会返回其收据；新 operation id 仍会被拒绝且不写入任何行。
+- **升级后已保存的注册仍可重放。** 请求身份对 plan 行指针沿用旧版本的规范化，仅 compass 拼写保持调用方原样；重放同时接受新指纹与升级前指纹，因此未变更的重试（显式或派生 operation id）会返回已保存的收据，而不是 `execution.operation-conflict`。派生 id 也会按升级前的身份再计算一次并同时查询两者，因此以非规范 compass 拼写记录的收据同样可以重放。
+- **符号链接形式的 `--harness` 不再拒绝合法的绝对 compass。** `iteration register` 把包含性检查交给生产者基于真实路径的证明，因此符号链接 harness 下的绝对 `--compass-ref` 以及指向根内 compass 的外部别名都能注册，越界指针仍被拒绝。
+
+### Harness
+
+- **dsh 委派契约现在只在一处陈述通道选择。** `skills/mstar-host/references/dsh.md` 的 PM dispatch、SDD implement 与 1–2 只读席位段落改为指向 Delegation channels 契约，不再强制「每个 Assignment 一次 `subagent` 调用」，并点名每种 1–2 席位只读工作实际使用的脚本（PR 评审用 `mstar-pr-seats`，代码库审计用 `mstar-audit-fanout`，SDD task 评审用 `mstar-review-single`）。
+- **board scope 与 prompt 路径是两条不同通道。** `dsh-agent-teams.md` 显式写明兄弟工作区的情形：工作区之外的检出（`…/{repo}.worktrees/<track>` 这一常规形态）无法表达为 `write_scopes` 值，因此由 prompt 承载其绝对路径并省略该字段；而落在工作区内的检出则记录其仓库相对前缀。
+- **统一的 `On dsh:` 指针块**取代原先五种不同形态（`mstar-roles/references/project-manager.md`、`mstar-dispatch-gates`、`mstar-review-qc`、`mstar-iteration`、`mstar-sdd` —— 最后一个由相邻两块合并）：先给通道决策，再指向 `dsh.md` § Delegation channels + `dsh-agent-teams.md`，不重述任何数量上限。
+- **sticky implementer SSOT 补上 dsh 行**（`skills/mstar-sdd/references/sticky-implementer-session.md`）：Agent Teams 以 `send_message` 按名恢复持久 teammate，direct-`subagent` 档经记录 id 做 continuation resume，会话台账的 `host_agent_id` 对两种模式都有定义。
+- **dsh README 改为陈述叶席位拒绝的「类」**而非逐个命令，并指向 CLI `--seat` 帮助所读取的共享派生（`packages/commands/src/coordinator-seat.ts`，由 `packages/dsh/src/gates/coordinator-seat.ts` 镜像），使文档中的集合跟随命令层。
+- `@deepseek-ai/dsh-*` peer 依赖整组升级到 `^0.2.1-rc.3`（走廊 `dsh-v0.2.1-rc.2` → `dsh-v0.2.1-rc.3`：侧栏／会话／右侧栏「更多」菜单便于浏览与创建插件；切换会话后「新会话」草稿找回修复；DeepSeek API Key 适配器模型列表更新方式与账号登录一致）。Session 格式仍为 v4。
+- **Phase 5 现在要求外部 AI review loop 与自家 PR loop 同时满足。** 附带的 review bot（Greptile、Bugbot 或同类）是第二个 review 面，且是一个 loop：它必须在当前 head 上达到自身通过线（Greptile 为 5/5 分数）、检查不失败、且没有未解决的 blocking finding，此外还要有 PR loop 在当前 head 上 settled、已 posted 的 `ship it`。`ship it` 不能豁免未解决或未达线的外部结论；即使自家 loop 通过，bot 为红也不得 merge。因基础设施原因失败同样不算通过——需重新触发，或取得写明 review 面、finding/分数与 head 的书面 waive。
+
+### 版本对齐
+
+- 提升 monorepo 根、`@mstar-harness/opencode`、`@mstar-harness/opencode-v2`、`@mstar-harness/cli`、`@mstar-harness/engine`、`@mstar-harness/dsh`、Cursor/Codex/Kimi/ZCode/omp/Claude 插件清单、便携式 Agent Plugins 清单及两份 marketplace 清单：**→ 4.0.8**。
+
 ## [4.0.7] - 2026-10-23
 
 ### Harness

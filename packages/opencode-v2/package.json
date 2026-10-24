@@ -1,6 +1,6 @@
 {
   "name": "@mstar-harness/opencode-v2",
-  "version": "4.0.7",
+  "version": "4.0.8",
   "description": "Morning Star harness OpenCode V2 native plugin (@opencode/plugin 2.0.26) — skills bootstrap + engine-backed runtime gates.",
   "license": "MIT",
   "repository": {

@@ -6,6 +6,26 @@ The monorepo root [CHANGELOG.md](../../CHANGELOG.md) summarizes cross-surface re
 
 ## [Unreleased]
 
+## [4.0.8] - 2026-10-24
+
+### Changed
+
+- **A launched child can no longer address a workflow its identity does not declare (I-000866).** `mstar session run` refuses when the inherited identity names another workflow, and the command now participates in the adapter's coordinator-seat scope gate, so the requested workflow must be the one the launch declares.
+- **A launch requires a current-epoch coordinator binding (I-000867).** `mstar session run` compares the binding epoch with the authority epoch and refuses a superseded holder with a recovery pointing at `mstar session recover`.
+- **A committed iteration registration replays after its documents change (I-000868).** The reviewed-compass and plan-document proofs now run after the operation replay lookup in both registration producers and in the CLI transport, so an identical retry returns its receipt even when the compass or plan markdown was emptied, removed or edited; a new operation id still refuses and writes nothing.
+- **Saved registrations keep replaying after the upgrade.** The request identity canonicalizes the plan-row pointers exactly as the previous release did and keeps only the compass spelling lexical; replay accepts both that fingerprint and the pre-upgrade one, so an unchanged retry returns its saved receipt (explicit or derived operation id) instead of `execution.operation-conflict`. A derived id is also computed over the pre-upgrade identity and looked up under both, so a receipt recorded for a non-canonical compass spelling replays too.
+- **A symlinked `--harness` no longer refuses a valid absolute compass.** `iteration register` hands containment to the producer's real-path proof, so an absolute `--compass-ref` under a symlinked harness and an external alias onto an in-root compass register, while an escaping pointer is still refused.
+- **A relative control root is refused, never resolved against the launch directory.** `MSTAR_HARNESS_DIR` must now be an absolute path: a relative value refuses the MCP connection at startup with `mcp.control-root-unresolved`, naming the cause and the absolute-path recovery, because the server's launch directory is the host's and never anchors a caller's root. A per-call `harness` selector follows the same rule as `--harness`: a relative value is a named refusal instead of a launch-directory resolution, so a root selector can no longer double-join through the invocation workspace. The refusal recovery text no longer offers the relative form.
+- The mcp `--harness` help and the dsh README document the absolute-only rule.
+- **`session.run` launches under the caller's verified live coordinator binding and mints no identity.** The launch resolves the claimed session id from `--session-id` or the inherited identity channel and requires it to be the running lifecycle's live coordinator; any other state refuses `session.run-unbound` with the recovery that state actually accepts (ownerless → `plan bind`, foreign/live holder → audited `session recover`, paused → lifecycle resume, failed/stopped → `workflow reopen`, completed → a new lifecycle, unregistered → `workflow register`). No session row or lease is written, and the child carries the verified identity in `MSTAR_EXECUTION_IDENTITY`.
+- An MCP connection publishes no caller identity by default, so a `session.run` call must advertise the id it claims: the launcher opts in with `--trust-caller-session-id` and the call supplies `sessionId`. The `mcp --seat` help and the leaf-seat refusal now name that verified binding instead of a minted identity.
+- **Every dev-command path argument now resolves from one base** (`resolveCliPath(value, context.cwd)`, #537): a relative input is discovered from the invocation workspace's project root — the nearest `package.json`, preferring one declaring `workspaces`, and the workspace itself when no marker exists — so `audit`, `pr-review`, `persist`, `harness scaffold`, `path resolve`, the project plugin root, `store --out` and `iteration gate --compass` answer like the validation family instead of joining the raw workspace directory. Absolute arguments still pass through unchanged, and a run from a monorepo member now reaches the same files as a run from the root.
+- Removed the leftover unused imports in the audit family and the dsh host adapter.
+
+- Version alignment with harness **4.0.8**.
+
+See root [CHANGELOG.md](../../CHANGELOG.md) **4.0.8**.
+
 ## [4.0.7] - 2026-10-23
 
 ### Changed

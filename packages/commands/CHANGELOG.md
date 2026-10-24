@@ -6,6 +6,26 @@ The monorepo root [CHANGELOG.md](../../CHANGELOG.md) summarizes cross-surface re
 
 ## [Unreleased]
 
+## [4.0.8] - 2026-10-24
+
+### Changed
+
+- **A registered delivery-compass pointer is now admitted at registration and repairable afterwards (I-000863).** `mstar iteration register --compass-ref` and the new `mstar workflow compass-ref` resolve the named document against the harness root and store only its canonical harness-relative form; a repository-relative `.mstar/...` spelling, a pointer naming no document, an empty or unparseable compass, an invalid frontmatter field set, and a compass declaring another `iteration_id` are refused before the registration transaction opens, so no workflow row, plan row or catalog entity is published. `workflow compass-ref --workflow <id> --compass <ref> --reason <why>` repairs a pointer a wrong writer already stored: it preserves the workflow/session/plan identities, their rows and their history, replays an identical operation id and conflicts on a different reason.
+- **The `phase-1-lock` readiness checkpoint names the pointer it refuses.** A row storing no pointer, a pointer resolving to another document (including the `.mstar/.mstar/...` double-join), and each authored anchor mirror that disagrees with the registered workflow now report their own diagnostic with the `mstar workflow compass-ref` repair, instead of one silent `binding-invalid`. The extension renders every distinct diagnostic and every distinct next step, not only the first.
+- **A launched child can no longer address a workflow its identity does not declare (I-000866).** `mstar session run` refuses when the inherited identity names another workflow, and the command now participates in the adapter's coordinator-seat scope gate, so the requested workflow must be the one the launch declares.
+- **A launch requires a current-epoch coordinator binding (I-000867).** `mstar session run` compares the binding epoch with the authority epoch and refuses a superseded holder with a recovery pointing at `mstar session recover`.
+- **A committed iteration registration replays after its documents change (I-000868).** The reviewed-compass and plan-document proofs now run after the operation replay lookup in both registration producers and in the CLI transport, so an identical retry returns its receipt even when the compass or plan markdown was emptied, removed or edited; a new operation id still refuses and writes nothing.
+- **Saved registrations keep replaying after the upgrade.** The request identity canonicalizes the plan-row pointers exactly as the previous release did and keeps only the compass spelling lexical; replay accepts both that fingerprint and the pre-upgrade one, so an unchanged retry returns its saved receipt (explicit or derived operation id) instead of `execution.operation-conflict`. A derived id is also computed over the pre-upgrade identity and looked up under both, so a receipt recorded for a non-canonical compass spelling replays too.
+- **A symlinked `--harness` no longer refuses a valid absolute compass.** `iteration register` hands containment to the producer's real-path proof, so an absolute `--compass-ref` under a symlinked harness and an external alias onto an in-root compass register, while an escaping pointer is still refused.
+- **`session.run` launches under the caller's verified live coordinator binding and mints no identity.** The launch resolves the claimed session id from `--session-id` or the inherited identity channel and requires it to be the running lifecycle's live coordinator; any other state refuses `session.run-unbound` with the recovery that state actually accepts (ownerless → `plan bind`, foreign/live holder → audited `session recover`, paused → lifecycle resume, failed/stopped → `workflow reopen`, completed → a new lifecycle, unregistered → `workflow register`). No session row or lease is written, and the child carries the verified identity in `MSTAR_EXECUTION_IDENTITY`.
+- An MCP connection publishes no caller identity by default, so a `session.run` call must advertise the id it claims: the launcher opts in with `--trust-caller-session-id` and the call supplies `sessionId`. The `mcp --seat` help and the leaf-seat refusal now name that verified binding instead of a minted identity.
+- **Every dev-command path argument now resolves from one base** (`resolveCliPath(value, context.cwd)`, #537): a relative input is discovered from the invocation workspace's project root — the nearest `package.json`, preferring one declaring `workspaces`, and the workspace itself when no marker exists — so `audit`, `pr-review`, `persist`, `harness scaffold`, `path resolve`, the project plugin root, `store --out` and `iteration gate --compass` answer like the validation family instead of joining the raw workspace directory. Absolute arguments still pass through unchanged, and a run from a monorepo member now reaches the same files as a run from the root.
+- Removed the leftover unused imports in the audit family and the dsh host adapter.
+
+- Version alignment with harness **4.0.8**.
+
+See root [CHANGELOG.md](../../CHANGELOG.md) **4.0.8**.
+
 ## [4.0.7] - 2026-10-23
 
 ### Changed
