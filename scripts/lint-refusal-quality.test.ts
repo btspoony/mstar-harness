@@ -443,6 +443,26 @@ describe("refusal quality scanner", () => {
     expect(unproven.map(({ classification }) => classification)).toEqual(["missing-recovery"]);
   });
 
+  test("requires both operands of a coalescing recovery to be provable", () => {
+    const proven = scanSource(`
+      const chosen = flag ? \`Rerun mstar session run --workflow \${workflow} --role coordinator.\` : undefined;
+      refusalEnvelope({ command: "x", status: "refused", code: "x.blocked", message: "Blocked",
+        recovery: chosen ?? "Run mstar status validate." });
+    `, "packages/commands/src/fixture.ts");
+    expect(proven).toEqual([]);
+    const unprovenLeft = scanSource(`
+      refusalEnvelope({ command: "x", status: "refused", code: "x.blocked", message: "Blocked",
+        recovery: dynamic() ?? "Run mstar status validate." });
+    `, "packages/commands/src/fixture.ts");
+    expect(unprovenLeft.map(({ classification }) => classification)).toEqual(["missing-recovery"]);
+    const unprovenRight = scanSource(`
+      const chosen = flag ? "Run mstar status validate." : undefined;
+      refusalEnvelope({ command: "x", status: "refused", code: "x.blocked", message: "Blocked",
+        recovery: "Register the workflow first." ?? chosen });
+    `, "packages/commands/src/fixture.ts");
+    expect(unprovenRight.map(({ classification }) => classification)).toEqual(["missing-recovery"]);
+  });
+
   test("a stale allowlist entry reports its tracking issue and refresh action", () => {
     const snippet = `refusalEnvelope({ code: "x.bad" })`;
     const finding = {

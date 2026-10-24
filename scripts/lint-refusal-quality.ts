@@ -452,49 +452,90 @@ export function scanSource(source: string, file: string): RefusalFinding[] {
     collectReturns(statement.body);
     if (returns.length > 0) helperReturns.set(statement, returns);
   }
-  const helperRecoveryText = (call: ts.CallExpression, helpers: ReadonlySet<string>): string | undefined => {
-    if (!ts.isIdentifier(call.expression)) return undefined;
-    const name = call.expression.text;
-    const declaration = resolveFunction(scopeByNode.get(call.expression), name);
-    const returns = declaration && helperReturns.get(declaration);
-    if (!declaration || !returns || helpers.has(name)) return undefined;
-    const seenHelpers = new Set(helpers).add(name);
-    const texts = returns.map((expression) => codeValue(expression, scopeByNode.get(expression), new Set(), true, seenHelpers));
-    return texts.every((text) => text !== undefined && text.trim() !== "") ? texts[0] : undefined;
-  };
-  const codeValue = (node: ts.Expression | undefined, scope?: Scope, seen = new Set<ts.VariableDeclaration>(), recoveryProof = false, helpers: ReadonlySet<string> = new Set()): string | undefined => {
+  // Recovery text proof is tri-state: always text, text on some paths only (`maybe`), or no
+  // text at all (`absent`). Only `text` satisfies a refusal's recovery; `maybe` is usable as
+  // the left arm of `??`/`||` because that operator routes the absent paths to the right arm.
+  type RecoveryText = { kind: "text"; text: string } | { kind: "maybe" } | { kind: "absent" };
+  const RECOVERY_ABSENT: RecoveryText = { kind: "absent" };
+  const recoveryTextOf = (node: ts.Expression | undefined, scope?: Scope, seen = new Set<ts.VariableDeclaration>(), helpers: ReadonlySet<string> = new Set()): RecoveryText | undefined => {
     if (!node) return undefined;
     if (ts.isParenthesizedExpression(node) || ts.isAsExpression(node) || ts.isTypeAssertionExpression(node) || ts.isSatisfiesExpression(node)) {
-      return codeValue(node.expression, scope, seen, recoveryProof, helpers);
+      return recoveryTextOf(node.expression, scope, seen, helpers);
     }
-    if (ts.isStringLiteralLike(node) || ts.isNoSubstitutionTemplateLiteral(node)) return node.text;
+    if (ts.isStringLiteralLike(node) || ts.isNoSubstitutionTemplateLiteral(node)) {
+      return node.text.trim() === "" ? RECOVERY_ABSENT : { kind: "text", text: node.text };
+    }
     if (ts.isTemplateExpression(node)) {
-      if (recoveryProof && !node.templateSpans.every((span) => ts.isIdentifier(span.expression) && DECLARED_SAFE_INTERPOLATIONS[span.expression.text] === true)) return undefined;
-      return node.head.text + node.templateSpans.map((span) => `${span.expression.getText(sf)}${span.literal.text}`).join("");
+      if (!node.templateSpans.every((span) => ts.isIdentifier(span.expression) && DECLARED_SAFE_INTERPOLATIONS[span.expression.text] === true)) return undefined;
+      return { kind: "text", text: node.head.text + node.templateSpans.map((span) => `${span.expression.getText(sf)}${span.literal.text}`).join("") };
     }
+    if (node.kind === ts.SyntaxKind.NullKeyword || (ts.isIdentifier(node) && node.text === "undefined")) return RECOVERY_ABSENT;
+    // Every arm of a conditional chain is analysed; an absent arm makes the chain conditional
+    // (`maybe`) rather than proven, and an unprovable arm makes the whole chain unprovable.
     if (ts.isConditionalExpression(node)) {
-      const whenTrue = codeValue(node.whenTrue, scope, new Set(seen), recoveryProof, helpers);
-      const whenFalse = codeValue(node.whenFalse, scope, new Set(seen), recoveryProof, helpers);
-      return whenTrue?.trim() && whenFalse?.trim() ? whenTrue : undefined;
+      const whenTrue = recoveryTextOf(node.whenTrue, scope, new Set(seen), helpers);
+      const whenFalse = recoveryTextOf(node.whenFalse, scope, new Set(seen), helpers);
+      if (!whenTrue || !whenFalse) return undefined;
+      if (whenTrue.kind === "text" && whenFalse.kind === "text") return whenTrue;
+      if (whenTrue.kind === "absent" && whenFalse.kind === "absent") return RECOVERY_ABSENT;
+      return { kind: "maybe" };
     }
     if (ts.isBinaryExpression(node) && [ts.SyntaxKind.QuestionQuestionToken, ts.SyntaxKind.BarBarToken].includes(node.operatorToken.kind)) {
-      const left = codeValue(node.left, scope, new Set(seen), recoveryProof, helpers);
-      return left?.trim() ? left : codeValue(node.right, scope, new Set(seen), recoveryProof, helpers);
+      const left = recoveryTextOf(node.left, scope, new Set(seen), helpers);
+      const right = recoveryTextOf(node.right, scope, new Set(seen), helpers);
+      // Both operands must be provable, and the right arm must always supply text: these
+      // operators route the left arm's absent paths to the right, so a partial proof of
+      // either operand proves nothing about the value actually used.
+      if (!left || !right || right.kind !== "text") return undefined;
+      return left.kind === "text" ? left : right;
     }
-    // Concatenated recovery text is provable only when both operands are: one unprovable
-    // operand can supply the whole command, so a partial proof proves nothing.
-    if (recoveryProof && ts.isBinaryExpression(node) && node.operatorToken.kind === ts.SyntaxKind.PlusToken) {
-      const left = codeValue(node.left, scope, new Set(seen), recoveryProof, helpers);
-      const right = codeValue(node.right, scope, new Set(seen), recoveryProof, helpers);
-      return left !== undefined && right !== undefined ? left + right : undefined;
+    if (ts.isBinaryExpression(node) && node.operatorToken.kind === ts.SyntaxKind.PlusToken) {
+      const left = recoveryTextOf(node.left, scope, new Set(seen), helpers);
+      const right = recoveryTextOf(node.right, scope, new Set(seen), helpers);
+      if (!left || !right || left.kind !== "text" || right.kind !== "text") return undefined;
+      return { kind: "text", text: left.text + right.text };
     }
     if (ts.isIdentifier(node)) {
       const declaration = resolveDeclaration(scope ?? scopeByNode.get(node), node.text);
       if (!declaration?.initializer || seen.has(declaration)) return undefined;
       seen.add(declaration);
-      return codeValue(declaration.initializer, scopeByNode.get(declaration), seen, recoveryProof, helpers);
+      return recoveryTextOf(declaration.initializer, scopeByNode.get(declaration), seen, helpers);
     }
-    if (recoveryProof && ts.isCallExpression(node)) return helperRecoveryText(node, helpers);
+    if (ts.isCallExpression(node)) {
+      if (!ts.isIdentifier(node.expression)) return undefined;
+      const name = node.expression.text;
+      const declaration = resolveFunction(scopeByNode.get(node.expression), name);
+      const returns = declaration && helperReturns.get(declaration);
+      if (!declaration || !returns || helpers.has(name)) return undefined;
+      const seenHelpers = new Set(helpers).add(name);
+      const proven = returns.map((expression) => recoveryTextOf(expression, scopeByNode.get(expression), new Set(), seenHelpers));
+      const texts = proven.flatMap((result) => (result?.kind === "text" ? [result.text] : []));
+      return texts.length === proven.length ? { kind: "text", text: texts[0]! } : undefined;
+    }
+    return undefined;
+  };
+  const codeValue = (node: ts.Expression | undefined, scope?: Scope, seen = new Set<ts.VariableDeclaration>()): string | undefined => {
+    if (!node) return undefined;
+    if (ts.isParenthesizedExpression(node) || ts.isAsExpression(node) || ts.isTypeAssertionExpression(node) || ts.isSatisfiesExpression(node)) {
+      return codeValue(node.expression, scope, seen);
+    }
+    if (ts.isStringLiteralLike(node) || ts.isNoSubstitutionTemplateLiteral(node)) return node.text;
+    if (ts.isTemplateExpression(node)) return node.head.text + node.templateSpans.map((span) => `${span.expression.getText(sf)}${span.literal.text}`).join("");
+    if (ts.isConditionalExpression(node)) {
+      const whenTrue = codeValue(node.whenTrue, scope, new Set(seen));
+      const whenFalse = codeValue(node.whenFalse, scope, new Set(seen));
+      return whenTrue?.trim() && whenFalse?.trim() ? whenTrue : undefined;
+    }
+    if (ts.isBinaryExpression(node) && [ts.SyntaxKind.QuestionQuestionToken, ts.SyntaxKind.BarBarToken].includes(node.operatorToken.kind)) {
+      const left = codeValue(node.left, scope, new Set(seen));
+      return left?.trim() ? left : codeValue(node.right, scope, new Set(seen));
+    }
+    if (ts.isIdentifier(node)) {
+      const declaration = resolveDeclaration(scope ?? scopeByNode.get(node), node.text);
+      if (!declaration?.initializer || seen.has(declaration)) return undefined;
+      seen.add(declaration);
+      return codeValue(declaration.initializer, scopeByNode.get(declaration), seen);
+    }
     return undefined;
   };
   const isCauseCode = (node: ts.Expression | undefined, scope?: Scope): boolean => {
@@ -618,7 +659,8 @@ export function scanSource(source: string, file: string): RefusalFinding[] {
       const statusMayBeRefused = unprovenFields.has("status")
         || (!!status && ts.isIdentifier(status) && unprovenParameters.has(status.text))
         || codeValue(status) !== "usage";
-      const recoveryText = codeValue(recovery, undefined, new Set(), true);
+      const provenRecovery = recoveryTextOf(recovery);
+      const recoveryText = provenRecovery?.kind === "text" ? provenRecovery.text : undefined;
       return statusMayBeRefused && (
         unprovenFields.has("recovery")
         || (!!recovery && ts.isIdentifier(recovery) && unprovenParameters.has(recovery.text))
