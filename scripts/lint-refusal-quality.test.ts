@@ -477,8 +477,11 @@ describe("refusal quality scanner", () => {
     expect(formatStaleAllowlist(result.stale)).toContain("SYNTH-STALE-COHORT");
     expect(formatStaleAllowlist(result.stale)).toContain("Refresh:");
     expect(formatStaleAllowlist(result.stale)).toContain("matches 1 finding(s) but the entry expects 2");
+    expect(formatStaleAllowlist(result.stale)).toContain("set expectedCount to the observed count (1) after reviewing the extra occurrence");
     const unmatched = applyAllowlist([], [{ signature, justification: "Tracked structured refusal cleanup.", trackingIssue: "SYNTH-STALE-COHORT" }], "/repo");
     expect(formatStaleAllowlist(unmatched.stale)).toContain("no current finding matches this signature");
+    expect(formatStaleAllowlist(unmatched.stale)).toContain("replace the signature with the current finding signature or delete the entry");
+    expect(formatStaleAllowlist(unmatched.stale)).not.toContain("expectedCount");
     expect(formatStaleAllowlist(unmatched.stale)).toContain("SYNTH-STALE-COHORT");
     expect(exitCodeFor(result.findings, result.stale)).toBe(1);
   });

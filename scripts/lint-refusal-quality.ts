@@ -452,11 +452,12 @@ export function scanSource(source: string, file: string): RefusalFinding[] {
     collectReturns(statement.body);
     if (returns.length > 0) helperReturns.set(statement, returns);
   }
-  // Recovery text proof is tri-state: always text, text on some paths only (`maybe`), or no
-  // text at all (`absent`). Only `text` satisfies a refusal's recovery; `maybe` is usable as
-  // the left arm of `??`/`||` because that operator routes the absent paths to the right arm.
+  // Recovery text proof is a small lattice: always text, text on some paths only (`maybe`),
+  // or no text at all (`absent`). Only `text` satisfies a refusal's recovery. `undefined`
+  // means the value is opaque and unproven, which fails closed wherever text is required.
   type RecoveryText = { kind: "text"; text: string } | { kind: "maybe" } | { kind: "absent" };
   const RECOVERY_ABSENT: RecoveryText = { kind: "absent" };
+  const RECOVERY_MAYBE: RecoveryText = { kind: "maybe" };
   const recoveryTextOf = (node: ts.Expression | undefined, scope?: Scope, seen = new Set<ts.VariableDeclaration>(), helpers: ReadonlySet<string> = new Set()): RecoveryText | undefined => {
     if (!node) return undefined;
     if (ts.isParenthesizedExpression(node) || ts.isAsExpression(node) || ts.isTypeAssertionExpression(node) || ts.isSatisfiesExpression(node)) {
@@ -470,22 +471,22 @@ export function scanSource(source: string, file: string): RefusalFinding[] {
       return { kind: "text", text: node.head.text + node.templateSpans.map((span) => `${span.expression.getText(sf)}${span.literal.text}`).join("") };
     }
     if (node.kind === ts.SyntaxKind.NullKeyword || (ts.isIdentifier(node) && node.text === "undefined")) return RECOVERY_ABSENT;
-    // Every arm of a conditional chain is analysed; an absent arm makes the chain conditional
-    // (`maybe`) rather than proven, and an unprovable arm makes the whole chain unprovable.
+    // Every arm of a conditional chain is analysed: an arm with no text is allowed (a `??`
+    // covering it must supply text), an arm that cannot be proven fails the whole chain.
     if (ts.isConditionalExpression(node)) {
       const whenTrue = recoveryTextOf(node.whenTrue, scope, new Set(seen), helpers);
       const whenFalse = recoveryTextOf(node.whenFalse, scope, new Set(seen), helpers);
       if (!whenTrue || !whenFalse) return undefined;
       if (whenTrue.kind === "text" && whenFalse.kind === "text") return whenTrue;
       if (whenTrue.kind === "absent" && whenFalse.kind === "absent") return RECOVERY_ABSENT;
-      return { kind: "maybe" };
+      return RECOVERY_MAYBE;
     }
     if (ts.isBinaryExpression(node) && [ts.SyntaxKind.QuestionQuestionToken, ts.SyntaxKind.BarBarToken].includes(node.operatorToken.kind)) {
       const left = recoveryTextOf(node.left, scope, new Set(seen), helpers);
       const right = recoveryTextOf(node.right, scope, new Set(seen), helpers);
-      // Both operands must be provable, and the right arm must always supply text: these
-      // operators route the left arm's absent paths to the right, so a partial proof of
-      // either operand proves nothing about the value actually used.
+      // Both operands must be provable and the right arm must always supply text: the
+      // operator routes the left arm's absent paths to it, so a partial proof of either
+      // operand says nothing about the value actually used.
       if (!left || !right || right.kind !== "text") return undefined;
       return left.kind === "text" ? left : right;
     }
@@ -806,7 +807,10 @@ export function formatStaleAllowlist(entries: readonly StaleAllowlistEntry[]): s
     const cause = observedCount === 0
       ? "no current finding matches this signature"
       : `the signature matches ${observedCount} finding(s) but the entry expects ${entry.expectedCount}`;
-    return `${entry.signature} tracked by ${entry.trackingIssue}: ${cause}, so the exemption is stale. Refresh: re-run the lint and replace the signature with the current finding signature logged under ${entry.trackingIssue}, correct expectedCount to the observed count, or delete the entry when that cause is fixed.`;
+    const refresh = observedCount === 0
+      ? "replace the signature with the current finding signature or delete the entry"
+      : `set expectedCount to the observed count (${observedCount}) after reviewing the extra occurrence, or delete the entry`;
+    return `${entry.signature} tracked by ${entry.trackingIssue}: ${cause}, so the exemption is stale. Refresh: ${refresh}.`;
   }).join("\n");
 }
 export function countViolations(findings: RefusalFinding[]): number {
@@ -831,7 +835,7 @@ function run(): number {
       for (const finding of result.findings) console.log(`${finding.file}:${finding.line}:${finding.column} ${finding.classification} ${finding.reason}\n  ${finding.snippet}`);
       if (result.used.length) console.log(`Allowlist (${result.used.length}):\n${JSON.stringify(result.used, null, 2)}`);
       if (result.stale.length) console.error(`Stale allowlist entries (refresh required):\n${formatStaleAllowlist(result.stale)}`);
-      console.log(`Refusal-quality: ${countViolations(result.findings)} violations; ${result.used.length} allowlisted`);
+      console.log(`Refusal-quality: ${countViolations(result.findings)} violations; ${result.findings.filter((finding) => finding.classification === "allowlisted").length} allowlisted`);
     }
     return exitCodeFor(result.findings, result.stale);
   } catch (error) { console.error(error instanceof Error ? error.message : String(error)); return 2; }
