@@ -847,12 +847,14 @@ findings. On a Team-only profile the carriers are:
 | Work | Carrier |
 |---|---|
 | SDD task review (one fresh-context reviewer, no roster seat) | § 4 `mstar-review-single` — the one-seat route below |
-| 2-seat **PR review** (`/amazing-pr-review` default tier) or a 2-category audit | § 3 `mstar-pr-seats` with the two domain lenses the tier selected — its guard accepts 2–3 labels (`args.domains must hold 2-3 domain labels`), so two labels are legal; the run's seats are what the tier asked for (plus the cross-domain security seat only when the tier selected one) |
+| 2-seat **PR review** (`/amazing-pr-review` default tier) | § 3 `mstar-pr-seats` with the two domain lenses the tier selected — its guard accepts 2–3 labels (`args.domains must hold 2-3 domain labels`), so two labels are legal; the run's seats are what the tier asked for (plus the cross-domain security seat only when the tier selected one) |
+| 2-category **codebase audit** | § 2 `mstar-audit-fanout` with `categories: [<c1>, <c2>]` — an audit reviews a REPO, not a diff, and § 2's guard asks only for `repo`, `auditRef` and `recon`; `categories` is optional (absent → all nine categories), so two labels are the two-seat form. § 3 is not an audit carrier: it requires `target` and `diffBase` |
 | a 2-seat PR review that still cannot run in that profile | no § 4 substitute and no wrapper: run the deep tier once a `subagent`-capable profile is available, or a single-seat audit |
 
 A § 3 run at two-domain width is a **domain-seat run at the default tier's width**,
 not a "2-seat fan-out" and not one node per seat: the operator sees the one
-`workflow-run` node that run produces.
+`workflow-run` node that run produces. A § 2 run is the same shape at category
+width — one `workflow-run` node, one child per named category.
 
 **One read-only seat is supported when nothing else can carry it.** On a Team
 profile the direct `subagent` rows are disabled, and a task review needs a fresh
@@ -897,7 +899,7 @@ never pass the deferred `agentType` option: the engine rejects it loudly.
 | `/amazing-pr-review deep` | ≥3 | native `workflow` | `mstar-pr-seats` | same |
 | `/amazing-pr-review` default tier | 2 | `subagent`; on a Team-only profile (no `subagent`) § 3 `mstar-pr-seats` with the tier's two domain lenses — `mstar-review-single` is SDD task review only | `mstar-pr-seats` (Team-only) | two subagent cards while `subagent` is available; otherwise that single § 3 run node |
 | Plan QC tri (PM already in session, no extra slash) | 3 | native `workflow` | `mstar-qc-tri` | conversation `workflow-run` node |
-| Any 1–2 read-only delegation | 1–2 | `subagent`; else the script that matches the work — SDD task review → § 4 `mstar-review-single`, PR/audit review → § 3 `mstar-pr-seats` with the two lenses | per the script | subagent cards while `subagent` is available; otherwise the one `workflow-run` node of that run |
+| Any 1–2 read-only delegation | 1–2 | `subagent`; else the script that matches the work — SDD task review → § 4 `mstar-review-single`, PR review → § 3 `mstar-pr-seats` with the two lenses, codebase audit → § 2 `mstar-audit-fanout` with two `categories` | per the script | subagent cards while `subagent` is available; otherwise the one `workflow-run` node of that run |
 
 `meta.name` is the gate identity — keep it kebab-case and on the recommended
 list. With the default Config (`workflowNames` unset) every name is *unknown*,

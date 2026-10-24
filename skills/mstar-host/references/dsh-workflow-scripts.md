@@ -44,7 +44,8 @@ return everything in the result payload.
 | `/amazing-pr-review deep` | § 3 | `mstar-pr-seats` | 3–4 (2–3 domain + optional cross-domain security) |
 | SDD task review that must not take a Team roster seat | § 4 | `mstar-review-single` | 1 (one fresh-context reviewer per task) |
 | `/amazing-pr-review` default tier on a Team-only profile (no `subagent`) | § 3 | `mstar-pr-seats` | 2 domain lenses the tier selected (the guard accepts 2–3 labels); the optional security seat only when the tier selected one — never a teammate, never `mstar-review-single` (§ 4 is SDD task review) |
-| Any other 1–2 read-only delegation | § 4 only for an SDD **task** review; § 3 for a 2-seat PR/audit review | `mstar-review-single` / `mstar-pr-seats` | `subagent` carries 1–2 seats; with the Team layer mounted (and `subagent` disabled) the script follows the work, not the seat count |
+| 2-category codebase audit on a Team-only profile (no `subagent`) | § 2 | `mstar-audit-fanout` | 2 `categories` labels (the guard takes any non-empty list; omitted → all nine) — an audit carrier, never § 3 (which needs `target` + `diffBase`) |
+| Any other 1–2 read-only delegation | § 4 only for an SDD **task** review; § 3 for a 2-seat PR review; § 2 for a 2-category codebase audit | `mstar-review-single` / `mstar-pr-seats` / `mstar-audit-fanout` | `subagent` carries 1–2 seats; with the Team layer mounted (and `subagent` disabled) the script follows the work, not the seat count |
 
 ## 1. `mstar-qc-tri` — plan QC tri-review
 
