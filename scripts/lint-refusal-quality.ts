@@ -372,6 +372,7 @@ export function scanSource(source: string, file: string): RefusalFinding[] {
     const kind = ts.isFunctionLike(node) ? "function" : ts.isBlock(node) ? "block" : undefined;
     const scope: Scope = kind ? { parent: inherited, kind, declarations: new Map(), functions: new Map(), shadowNames: new Set() } : inherited;
     scopeByNode.set(node, scope);
+    if (ts.isFunctionExpression(node) && node.name) scope.shadowNames.add(node.name.text);
     if (ts.isFunctionDeclaration(node) && node.name) inherited.functions.set(node.name.text, node);
     if (ts.isParameter(node)) collectBindingNames(node.name, scope.shadowNames);
     if (ts.isVariableDeclaration(node)) {

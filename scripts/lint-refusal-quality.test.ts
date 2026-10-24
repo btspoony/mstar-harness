@@ -387,6 +387,20 @@ describe("refusal quality scanner", () => {
     expect(findings.map(({ classification }) => classification)).toEqual(["missing-recovery", "missing-recovery", "missing-recovery"]);
   });
 
+  test("keeps failing a named function expression that reuses the proven helper's name", () => {
+    const findings = scanSource(`
+      function provenRecovery(workflow: string): string {
+        return \`Rerun mstar session run --workflow \${workflow} --role coordinator.\`;
+      }
+      const localRecovery = function provenRecovery(flag: boolean): string {
+        refusalEnvelope({ command: "x", status: "refused", code: "x.blocked", message: "Blocked",
+          recovery: provenRecovery(flag) });
+        return flag ? "" : provenRecovery(false);
+      };
+    `, "packages/commands/src/fixture.ts");
+    expect(findings.map(({ classification }) => classification)).toEqual(["missing-recovery"]);
+  });
+
   test("a stale allowlist entry reports its tracking issue and refresh action", () => {
     const snippet = `refusalEnvelope({ code: "x.bad" })`;
     const finding = {
