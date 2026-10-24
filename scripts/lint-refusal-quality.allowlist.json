@@ -64,11 +64,5 @@
     "justification": "Engine-supplied recovery text forwarded through a local refusal adapter whose caller passes engine facts (family-refusal.ts type-checks the string but proves no reachable command); strict static proof cannot cover it — see I-000872.",
     "trackingIssue": "I-000872",
     "expectedCount": 1
-  },
-  {
-    "signature": "unreachable-recovery:packages/engine/src/coordination-transitions.ts:797425b7a15f",
-    "justification": "The refusal message is runtime error text (`error.message` / `String(error)`) and cannot statically name a reachable command; the refusal's recovery is separate and already present — source fix tracked in I-000883.",
-    "trackingIssue": "I-000883",
-    "expectedCount": 1
   }
 ]
