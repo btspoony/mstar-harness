@@ -359,7 +359,7 @@ export function findRefusalWrappers(source: ts.SourceFile): Map<string, RefusalW
  */
 export function scanSource(source: string, file: string): RefusalFinding[] {
   const sf = ts.createSourceFile(file, source, ts.ScriptTarget.Latest, true, ts.ScriptKind.TS);
-  interface Scope { parent?: Scope; kind: "source" | "function" | "block"; declarations: Map<string, ts.VariableDeclaration>; functions: Map<string, ts.FunctionDeclaration>; shadowNames: Set<string>; }
+  interface Scope { parent?: Scope; kind: "source" | "function" | "block" | "class"; declarations: Map<string, ts.VariableDeclaration>; functions: Map<string, ts.FunctionDeclaration>; shadowNames: Set<string>; }
   const scopeByNode = new WeakMap<ts.Node, Scope>();
   const sourceScope: Scope = { kind: "source", declarations: new Map(), functions: new Map(), shadowNames: new Set() };
   // Every binding form the parser sees names a shadowing binding, initializer or not:
@@ -369,22 +369,24 @@ export function scanSource(source: string, file: string): RefusalFinding[] {
     for (const element of name.elements) if (!ts.isOmittedExpression(element)) collectBindingNames(element.name, into);
   };
   const buildScopes = (node: ts.Node, inherited: Scope): void => {
-    const kind = ts.isFunctionLike(node) ? "function" : ts.isBlock(node) ? "block" : undefined;
+    const kind: Scope["kind"] | undefined = ts.isFunctionLike(node) ? "function" : ts.isClassLike(node) ? "class" : ts.isBlock(node) ? "block" : undefined;
     const scope: Scope = kind ? { parent: inherited, kind, declarations: new Map(), functions: new Map(), shadowNames: new Set() } : inherited;
     scopeByNode.set(node, scope);
-    if (ts.isFunctionExpression(node) && node.name) scope.shadowNames.add(node.name.text);
+    // A named function or class expression binds its own name inside its own body only.
+    if ((ts.isFunctionExpression(node) || ts.isClassExpression(node)) && node.name) scope.shadowNames.add(node.name.text);
     if (ts.isFunctionDeclaration(node) && node.name) inherited.functions.set(node.name.text, node);
     if (ts.isParameter(node)) collectBindingNames(node.name, scope.shadowNames);
     if (ts.isVariableDeclaration(node)) {
       let target = scope;
       if (!(node.parent.flags & (ts.NodeFlags.Const | ts.NodeFlags.Let))) {
-        while (target.parent && target.kind === "block") target = target.parent;
+        while (target.parent && target.kind !== "function" && target.kind !== "source") target = target.parent;
       }
       collectBindingNames(node.name, target.shadowNames);
       if (ts.isIdentifier(node.name) && node.initializer) target.declarations.set(node.name.text, node);
     }
     if ((ts.isClassDeclaration(node) || ts.isEnumDeclaration(node) || ts.isImportSpecifier(node) || ts.isNamespaceImport(node) || ts.isImportClause(node) || ts.isImportEqualsDeclaration(node))
       && node.name && ts.isIdentifier(node.name)) inherited.shadowNames.add(node.name.text);
+    if (ts.isModuleDeclaration(node) && node.name && ts.isIdentifier(node.name)) inherited.shadowNames.add(node.name.text);
     ts.forEachChild(node, (child) => buildScopes(child, scope));
   };
   buildScopes(sf, sourceScope);
