@@ -2,7 +2,7 @@
 
 Reuse the **same implementer subagent** across multiple tasks in one plan when tasks are tightly coupled, same `Execute as` role, and same `Working branch`. **L2 task reviewers stay fresh per task** — do not sticky reviewers.
 
-SSOT for mode selection and host resume → this file. Per-task artifacts → **`file-handoffs.md`**.
+SSOT for mode selection and host resume → this file (the main skill's dsh continuation-resume clause defers to § Host mapping here). Per-task artifacts → **`file-handoffs.md`**.
 
 **Parallel ready tasks use fresh sessions and task-specific artifact paths inside one canonical per-plan SDD root** (`mstar-sdd` § Ready-task scheduling). Never resume the same session concurrently or share its ledger between tracks; PM alone updates shared context/progress; parallel leaves consume immutable absolute artifact paths, not shared-context helpers.
 
@@ -27,7 +27,7 @@ SSOT for mode selection and host resume → this file. Per-task artifacts → **
 ```
 
 - **Task 1** (or first task after `fresh` reset): `SDD implementer session: fresh` or `sticky` (starts sticky ledger).
-- **Task 2+** with sticky: `SDD implementer session: sticky` + host **resume** (Cursor) or continuation prompt (fallback).
+- **Task 2+** with sticky: `SDD implementer session: sticky` + the host's own resume route (§ Host mapping) or the continuation prompt (fallback).
 
 ## Session ledger: `implementer-session.json`
 
@@ -46,6 +46,8 @@ PM writes/updates at `{SDD_DIR}/implementer-session.json` when starting or conti
   "started_at": "2026-07-07T00:00:00Z"
 }
 ```
+
+`host` names the host the ledger belongs to, and `host_agent_id` is the same field on every host: what a resume addresses. On **dsh** that is the durable teammate's `target` in Agent Teams mode, or the continuable `subagent` id on a direct-only profile (no resume token exists there — the id is the resume handle).
 
 After each completed task review, PM sets `last_task` to N. **Do not** resume if `host_agent_id` is missing — fall back to `fresh` for that task.
 
@@ -95,7 +97,7 @@ Max **3** tasks per micro-batch without user override. See `project-manager.md` 
 | **Cursor** | `Task` with `resume: <host_agent_id>` — **`mstar-host/references/cursor.md`** § SDD sticky |
 | **OpenCode** | Resume only if task tool supports it; else micro-batch or `fresh` per task |
 | **Codex** | Thread resume only when callable multi-agent tool documents agent id; else micro-batch or `fresh` |
-| **dsh** | Continue the SAME delegation target with `send_message` — the Team teammate's `target`, or a direct `subagent` child's `agent_id` on a direct-only profile; no resume token exists, and a second child is never spawned for the same work — **`mstar-host/references/dsh.md`** § Pick the delegation channel before you delegate |
+| **dsh** | **Agent Teams mode (default):** the durable teammate is resumed by name — `send_message` with its `target` — so the teammate, not a resume token, carries the context. **Direct-`subagent` mode:** continuation resume through the recorded continuable id (`send_message`, which takes `agent_id` there). Either way a second child is never spawned for the same work — **`mstar-host/references/dsh.md`** § Pick the delegation channel before you delegate + § Delegation channels |
 
 ## PM NEVER (sticky)
 

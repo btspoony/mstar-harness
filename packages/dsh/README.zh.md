@@ -249,6 +249,8 @@ mstar 技能通过 dsh skill-filesystem 提供者以**单一规范挂载**接入
 
 其余运行时命令全部走 MCP——`store.*` 命令只在 CLI，不在此发布；旧的 `mstar_<family>_<action>` 工具名不会以别名复活：用家族 + `action` 调用，并用 `mcp__mstar__mstar_schema`（`family: <name>`，或单个叶子契约的 `command: <command-id>`）读取家族真实的 action 与字段。这个表面上的身份、准入与 fail-closed 叶席位拒绝遵循 ADR `docs/adr/dsh-native-identity-channels.md`。
 
+**叶席位拒绝的是「类」，不是命令清单。** 只有当调用会建立或替换 coordinator 席位（绑定或完成 plan、recover 会话、在调用方已验证的实时绑定下拉起子会话），或写入 workflow 作用域的交付 / 生命周期 / 采纳 / 协调者账本状态时，叶席位才会被拒绝——也就是 CLI `mstar mcp --seat` 帮助文本点名的那两类。该集合只在 `packages/commands/src/coordinator-seat.ts`（CLI 的 `--seat leaf` 过滤）中派生一次，并由 `packages/dsh/src/gates/coordinator-seat.ts` 镜像给本宿主的 `tools/pre-execute` 闸门，因此它跟随命令层、不会逐命令漂移：新增的 workflow 家族 action 一经发布即对叶席位拒绝，而其它新增席位命令在 `coordinator-seat.ts` 中只登记一次，并由 `packages/dsh/src/gates/coordinator-seat.ts` 镜像、由 `packages/dsh/tests/leaf-seat.spec.ts` 固定。这两类之外的都不受该席位检查拒绝。叶席位可执行的**读取**工作：`plan.show`、`workflow-note.coverage`、`sdd.workspace`、`issue.list` / `issue.show`。它**仍被允许的写入**（经既有绑定或非 workflow 家族行事）：`plan.prepare` / `plan.progress`、`issue.add` / `issue.close`、`sdd.task-brief`、`sdd.evidence.*`。两处列表都只是举例；以上派生才是权威。
+
 ### Shared MCP connection（显式声明的 control 根）
 
 bundle 补丁只插入**一行** `mstar-mcp`，而这一行就是整个宿主的全部 MCP 通道：插件不自行注册任何 MCP client，不存在按 agent 挂载，subagent 共用父级已有的那一条连接。按 agent 的实例本来也拿不到按调用参数（`PreToolDecision` 没有改写参数的通道），因此它换不来任何能力——只会每个 agent 多一个 Node 进程。
@@ -256,7 +258,7 @@ bundle 补丁只插入**一行** `mstar-mcp`，而这一行就是整个宿主的
 **control 根是「声明」出来的，绝不推断。** 它按一条有序规则解析，启动 cwd 从不是候选——那个目录属于**宿主**，它说不出调用方属于哪个工作区，采用它会把写入落到不相干的项目上：
 
 1. 连接钉——`mstar mcp --harness <绝对路径>`，否则服务器环境中非空的 `MSTAR_HARNESS_DIR`；
-2. 否则由被准入的**这次调用**通过工具的 `harness` 字段指名根（绝对路径，或相对于服务器启动目录的路径）；
+2. 否则由被准入的**这次调用**通过工具的 `harness` 字段指名根（绝对路径；相对选择器以同一具名原因被拒绝，因为启动目录从不锚定调用方的根）；
 3. 契约不读取任何根的**无根命令类**以空根运行——`harness.scaffold`（建立根本身就是它的操作），以及 `schema`、`path.resolve`、`host.*`、`doctor` 与 `lint` / `skill.lint` / `qc.validate-report` 之类的只读校验器：它们只按显式输入作答，因此从不解析隐式 harness 路径；
 4. 否则该调用以 `[mcp.control-root-unresolved]` 被拒绝，并点名原因与全部恢复路径——两条启动方恢复路径对任何命令都成立，而按调用的 `harness` 选择器是**依工具而定的**（不发布该字段的命令无法接受它）。
 

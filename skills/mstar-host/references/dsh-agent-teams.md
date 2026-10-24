@@ -62,7 +62,7 @@ task id.
 | `subject` | `<planId> / Task <n> — <role>` | concise title, 200 characters |
 | `description` | a coordination summary — task id, plan row, files in scope, acceptance criteria | complete details, 16384 characters. **Never the `## Assignment` header region** (see below) |
 | `blocked_by` | task ids mirroring the plan rows this row depends on | ids must exist; a blocked task cannot be claimed or reassigned |
-| `write_scopes` | the repository-relative prefixes this row may modify (never the checkout path) | workspace-relative only; absolute paths and `..` segments are refused — a sibling worktree is named in the prompt instead |
+| `write_scopes` | the repository-relative prefixes this row may modify (never the checkout path) | workspace-relative only; absolute paths and `..` segments are refused. A checkout inside the workspace records its prefixes; a checkout entirely outside it (a sibling `…/{repo}.worktrees/<track>`) omits the field — the prompt is the whole address (§ Worktree hand-off and write isolation) |
 | owner | the teammate target executing the row | assigned by `claim` or Lead-only `reassign` |
 
 ### Exactly one gated carrier per Assignment — every time
@@ -230,13 +230,14 @@ cheap escape once the roster is full.
   A teammate that is never told which checkout belongs to it will edit the shared
   cwd, so the initial prompt must name the absolute worktree path, the branch,
   and the files it owns. `write_scopes` is a DIFFERENT field: it is
-  workspace-relative and refuses absolute paths and `..` segments, so never paste
-  a checkout path into it. Record the repository-relative prefixes the track
-  modifies (for example `packages/dsh/src/gates/`) — the same path means the same
-  file inside every worktree of that repository — and omit the field when the
-  track only reads or when its scope cannot be expressed (a checkout outside the
-  workspace): the prompt is the authority, `write_scopes` is only the advisory
-  echo.
+  workspace-relative and refuses absolute paths and `..` segments, so the
+  checkout path never goes into it. Where the checkout sits decides the rest:
+  a checkout **inside** the workspace records the track's repository-relative
+  prefixes (for example `packages/dsh/src/gates/`); a checkout **entirely
+  outside** the workspace (the normal `…/{repo}.worktrees/<track>` shape) omits
+  the field, because no workspace-relative value can name it, and the prompt is
+  the whole address; a track that only reads omits it too. The prompt is the
+  authority; `write_scopes` is only the advisory echo.
 - **`write_scopes` is advisory, not a lock.** Overlapping scopes on in-progress
   tasks surface as `writeScopeWarnings`; they never block a write. Bash,
   formatters, and code generators are not covered by the filesystem version
