@@ -138,6 +138,53 @@ describe("checkSeatBounding — seat header blocks carry the bounding labels", (
     expect(result.rows).toHaveLength(2);
   });
 
+  test("F-1: a marker that owns a line but is not fenced yields the per-document coverage row", () => {
+    // Both shapes the review named: the fence removed, and the marker re-indented
+    // into a 4-space code block (which is not a fence at all).
+    for (const lines of [
+      ["# Example", "", "## Assignment", "", `Execute as: ${seat}`, "Delegation: forbidden", "Task category: audit", ""],
+      ["# Example", "", "    ## Assignment", `    Execute as: ${seat}`, "    Delegation: forbidden", "    Task category: audit", ""],
+    ]) {
+      const text = lines.join("\n");
+      const result = checkSeatBounding([{ rel: "fixture.md", text }]);
+      expect(result.blocks).toBe(0);
+      const coverage = result.rows.filter((row) => row.includes("no fenced segment was scanned"));
+      expect(coverage).toHaveLength(1);
+      expect(coverage[0]).toStartWith(`fixture.md:${lineOf(text, /^\s*## Assignment/)} `);
+      expect(coverage[0]).toContain("1 `## Assignment` marker line(s) but no fenced segment was scanned");
+      // ... and the run-level row also fires, because nothing was scanned at all.
+      expect(result.rows.some((row) => row.includes("the seat-bounding gate scanned nothing"))).toBe(true);
+    }
+  });
+
+  test("F-1: a corpus with no marker at all yields the zero-coverage row", () => {
+    const result = checkSeatBounding([{ rel: "fixture.md", text: "# Empty\n\nnothing about dispatches here\n" }]);
+    expect(result.blocks).toBe(0);
+    expect(result.rows).toHaveLength(1);
+    expect(result.rows[0]).toContain("no fenced `## Assignment` segment was found in any gated document");
+    expect(result.rows[0]).toContain("the seat-bounding gate scanned nothing");
+  });
+
+  test("F-1: an inline marker mention is prose, not a coverage hole", () => {
+    // The doc mentions the marker mid-line and carries no segment; a sibling doc
+    // does, so neither the per-document nor the run-level floor may fire.
+    const docs: Doc[] = [
+      { rel: "inline.md", text: "# Doc\n\nThe `## Assignment` header region is parsed by the engine.\n" },
+      { rel: "real.md", text: payload([`Execute as: ${nonSeat}`, "Delegation: forbidden", "Task category: logic"]) },
+    ];
+    const result = checkSeatBounding(docs);
+    expect(result.blocks).toBe(1);
+    expect(result.rows).toEqual([]);
+  });
+
+  test("F-1: the three real dsh documents scan their segments and stay clean", () => {
+    const docs: Doc[] = DOCS.map((rel) => ({ rel, text: read(rel) }));
+    const result = checkSeatBounding(docs);
+    // Derived, never pinned: the floor is "at least one segment", not a count.
+    expect(result.blocks).toBeGreaterThan(0);
+    expect(result.rows).toEqual([]);
+  });
+
   test("several Assignment segments in one fence are each checked", () => {
     const text = [
       "```ts",
@@ -472,7 +519,9 @@ describe("dsh-contract-lint executable — the current tree passes", () => {
     expect(stderr).toBe("");
     expect(status).toBe(0);
     expect(stdout).toContain("dsh-contract-lint: OK");
-    expect(stdout).toContain("Assignment header block(s) scanned");
+    const scanned = stdout.match(/(\d+) Assignment header block\(s\) scanned/);
+    expect(scanned).not.toBeNull();
+    expect(Number(scanned![1])).toBeGreaterThan(0);
     expect(stdout).toContain("carrier vocabulary");
     expect(stdout).toContain("README pin");
     expect(stdout).toContain(`${Object.keys(carrierMap()).length} carrier tools`);

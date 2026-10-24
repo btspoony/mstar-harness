@@ -36,7 +36,10 @@
  * not a body follows it, so a shape demo copied for a seat cannot skip the
  * bounding contract. Both fence characters count (backtick and tilde, CommonMark
  * closing rule), and an unbalanced fence is itself a row: the tail of such a
- * document would otherwise fall outside every scan.
+ * document would otherwise fall outside every scan. Check 1 also has a coverage
+ * floor: a run that scans no segment, or a document whose markers exist but are
+ * not fenced, is a row — an empty scan must never read as "all seats are
+ * bounded".
  *
  * Usage: bun run scripts/dsh-contract-lint.ts
  * Exit 0 = the documents match their authorities; exit 1 = at least one row.
@@ -70,6 +73,8 @@ const ASSIGNMENT_HEADING = /##\s+Assignment\s*$/;
 /** A fence line: three or more backticks or tildes, plus its info string. */
 const FENCE_OPEN = /^\s*(`{3,}|~{3,})(.*)$/;
 const EXECUTE_AS = /Execute as/i;
+/** A marker that OWNS its line (leading whitespace allowed — a 4-space indent is the code-block shape). */
+const ASSIGNMENT_MARKER_LINE = /^\s*#{1,6}\s+Assignment\s*$/;
 
 export type Doc = { rel: string; text: string };
 
@@ -156,6 +161,7 @@ export function checkSeatBounding(docs: readonly Doc[]): { rows: string[]; block
   const rows: string[] = [];
   let blocks = 0;
   for (const doc of docs) {
+    const before = blocks;
     for (const block of fencedBlocks(doc.text)) {
       block.lines.forEach((line, index) => {
         if (!ASSIGNMENT_HEADING.test(line)) return;
@@ -181,6 +187,26 @@ export function checkSeatBounding(docs: readonly Doc[]): { rows: string[]; block
         }
       });
     }
+    // Coverage floor, per document: the marker owns a line but no fenced
+    // segment came out of it — de-fenced, 4-space indented, or a renamed fence.
+    // An inline mention (mid-line) is prose, not a marker, so it stays clean.
+    const markerLines = doc.text
+      .split(/\r?\n/)
+      .flatMap((line, index) => (ASSIGNMENT_MARKER_LINE.test(line) ? [index + 1] : []));
+    if (markerLines.length > 0 && blocks === before) {
+      rows.push(
+        `${doc.rel}:${markerLines[0]} ${markerLines.length} \`## Assignment\` marker line(s) but no fenced segment was scanned - `
+          + "the marker sits outside a fenced block (de-fenced, 4-space indented, or a renamed fence), so its seats are unchecked",
+      );
+    }
+  }
+  if (blocks === 0) {
+    // Run-level: nothing at all was scanned, which is indistinguishable from a
+    // gate that has been switched off by its own inputs.
+    rows.push(
+      "seat bounding: no fenced `## Assignment` segment was found in any gated document - "
+        + "the seat-bounding gate scanned nothing (expected the host docs' Assignment prompt templates)",
+    );
   }
   return { rows, blocks };
 }
