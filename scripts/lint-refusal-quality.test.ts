@@ -639,6 +639,7 @@ describe("refusal quality scanner", () => {
       }
       fail({ code: "valid.code", message: flag ? "Run mstar status validate." : dynamicMessage() });
     `)).toEqual(["unreachable-recovery"]);
+    expect(scan(`new CoordinationError("valid.code", flag ? "Run mstar status validate." : dynamicMessage());`)).toEqual(["unreachable-recovery"]);
   });
 
   test("a stale allowlist entry reports its tracking issue and refresh action", () => {

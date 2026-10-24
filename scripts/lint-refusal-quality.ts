@@ -601,6 +601,13 @@ export function scanSource(source: string, file: string): RefusalFinding[] {
       return { kind: "texts", texts: [node.head.text + node.templateSpans.map((span) => `${span.expression.getText(sf)}${span.literal.text}`).join("")] };
     }
     if (node.kind === ts.SyntaxKind.NullKeyword || (ts.isIdentifier(node) && node.text === "undefined")) return { kind: "texts", texts: [] };
+    if (ts.isBinaryExpression(node) && node.operatorToken.kind === ts.SyntaxKind.PlusToken) {
+      const left = analyzeMessage(node.left, scope, new Set(seen));
+      const right = analyzeMessage(node.right, scope, new Set(seen));
+      if (left.kind === "mutable" || right.kind === "mutable") return MESSAGE_MUTABLE;
+      if (left.kind !== "texts" || right.kind !== "texts" || left.texts.length !== 1 || right.texts.length !== 1) return MESSAGE_OPAQUE;
+      return { kind: "texts", texts: [left.texts[0]! + right.texts[0]!] };
+    }
     if (ts.isConditionalExpression(node) || (ts.isBinaryExpression(node) && [ts.SyntaxKind.QuestionQuestionToken, ts.SyntaxKind.BarBarToken].includes(node.operatorToken.kind))) {
       const arms = ts.isConditionalExpression(node)
         ? [node.whenTrue, node.whenFalse]
@@ -835,9 +842,15 @@ export function scanSource(source: string, file: string): RefusalFinding[] {
       && ts.isIdentifier(resolvedMessage.expression)
       && bindings.has(resolvedMessage.expression.text);
     const analyzedMessage = resolvedMessage === undefined ? MESSAGE_OPAQUE : analyzeMessage(resolvedMessage, scopeByNode.get(resolvedMessage));
+    // Any union arm that is opaque or mutable leaves a message this check cannot vouch
+    // for, so it fails closed wherever the arm is, not only behind an object field.
+    const unionMessage = resolvedMessage !== undefined
+      && (ts.isConditionalExpression(resolvedMessage)
+        || (ts.isBinaryExpression(resolvedMessage) && [ts.SyntaxKind.QuestionQuestionToken, ts.SyntaxKind.BarBarToken].includes(resolvedMessage.operatorToken.kind)));
     const unprovableMessage = resolvedIsOpaqueField
       || (messageIsObjectField && analyzedMessage.kind !== "texts")
-      || analyzedMessage.kind === "mutable";
+      || analyzedMessage.kind === "mutable"
+      || (unionMessage && analyzedMessage.kind !== "texts");
     if (analyzedMessage.texts.some((text) => /\bmstar\s+[a-z][a-z0-9.-]*/i.test(text) && !recoveryIsReachable(text, getGrammar()))) {
       addFinding(node, "unreachable-recovery", "Rule #341 class 4 (discoverability): CoordinationError message references a CLI command absent from the help grammar.");
     } else if (unprovableMessage) {
