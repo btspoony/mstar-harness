@@ -661,17 +661,27 @@ export function scanSource(source: string, file: string): RefusalFinding[] {
     }
     // A property value is known only when the object is a fresh inline literal at this call
     // site. A const-bound object does not freeze its properties, so it is never resolved.
-    if (ts.isPropertyAccessExpression(expression) && ts.isIdentifier(expression.expression)) {
+    // Only the fields this check serves are read; a spread or computed key could override
+    // them, so such a literal is not a supported shape and stays unresolved.
+    if (ts.isPropertyAccessExpression(expression) && ts.isIdentifier(expression.expression)
+      && (expression.name.text === "code" || expression.name.text === "message")) {
       const base = expression.expression.text;
       if (unprovenParameters.has(base) || !bindings.has(base) || seenBindings.has(base)) return expression;
       const actual = resolveBound(bindings.get(base)!, bindings, new Set(seenBindings).add(base), unprovenParameters);
       if (!ts.isObjectLiteralExpression(actual)) return expression;
+      const overridable = actual.properties.some((property) =>
+        !(ts.isPropertyAssignment(property) || ts.isShorthandPropertyAssignment(property))
+        || ts.isComputedPropertyName(property.name));
+      if (overridable) return expression;
+      const values: ts.Expression[] = [];
       for (const property of actual.properties) {
-        if (!ts.isPropertyAssignment(property)) continue;
-        const name = ts.isIdentifier(property.name) || ts.isStringLiteralLike(property.name) ? property.name.text : undefined;
-        if (name === expression.name.text) return resolveBound(property.initializer, bindings, seenBindings, unprovenParameters);
+        const name = (ts.isIdentifier(property.name) || ts.isStringLiteralLike(property.name)) ? property.name.text : undefined;
+        if (name !== expression.name.text) continue;
+        values.push(ts.isPropertyAssignment(property) ? property.initializer : property.name);
       }
-      return expression;
+      // A duplicated key means the last one wins at runtime; one value is the only shape
+      // whose text this check can state with confidence.
+      return values.length === 1 ? resolveBound(values[0]!, bindings, seenBindings, unprovenParameters) : expression;
     }
     return expression;
   };
@@ -779,7 +789,15 @@ export function scanSource(source: string, file: string): RefusalFinding[] {
     }
     const resolvedMessage = message && resolveBound(message, bindings, new Set(), unprovenParameters);
     const text = codeValue(resolvedMessage);
-    if (text && /\bmstar\s+[a-z][a-z0-9.-]*/i.test(text) && !recoveryIsReachable(text, getGrammar())) {
+    // A call-site object whose property is not a fresh literal cannot prove a reachable
+    // recovery either, so the discoverability check fails closed instead of being skipped.
+    const opaqueMessage = resolvedMessage !== undefined
+      && ts.isPropertyAccessExpression(resolvedMessage)
+      && ts.isIdentifier(resolvedMessage.expression)
+      && bindings.has(resolvedMessage.expression.text);
+    if (opaqueMessage) {
+      addFinding(node, "unreachable-recovery", "Rule #341 class 4 (discoverability): CoordinationError message is a property of a call-site object that is not a fresh literal, so no reachable command can be proven.");
+    } else if (text && /\bmstar\s+[a-z][a-z0-9.-]*/i.test(text) && !recoveryIsReachable(text, getGrammar())) {
       addFinding(node, "unreachable-recovery", "Rule #341 class 4 (discoverability): CoordinationError message references a CLI command absent from the help grammar.");
     }
   };

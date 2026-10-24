@@ -610,7 +610,13 @@ describe("refusal quality scanner", () => {
     expect(scan(`fail({ code: "", message: "Use mstar nonexistent --bad" });`))
       .toEqual(["missing-cause-code", "unreachable-recovery"]);
     expect(scan(`fail({ code: "valid.code", message: "Run mstar status validate." });`)).toEqual([]);
-    expect(scan("fail(facts);")).toEqual(["missing-cause-code"]);
+    expect(scan("fail(facts);")).toEqual(["missing-cause-code", "unreachable-recovery"]);
+    expect(scan(`fail({ code: "valid.code", message: "Run mstar status validate.", ...{ code: "", message: "Use mstar nonexistent --bad" } });`))
+      .toEqual(["missing-cause-code", "unreachable-recovery"]);
+    expect(scan(`fail({ code: "valid.code", code: "", message: "Use mstar nonexistent --bad" });`))
+      .toEqual(["missing-cause-code", "unreachable-recovery"]);
+    expect(scan(`fail({ ["code"]: "", message: "Use mstar nonexistent --bad" });`))
+      .toEqual(["missing-cause-code", "unreachable-recovery"]);
   });
 
   test("a stale allowlist entry reports its tracking issue and refresh action", () => {
