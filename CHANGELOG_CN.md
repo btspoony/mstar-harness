@@ -6,6 +6,22 @@
 
 ## [Unreleased]
 
+## [4.0.9] - 2026-10-24
+
+### Harness
+
+- 新增 `scripts/dsh-contract-lint.ts`（由 `drift-lint` CI 任务执行）：对受跟踪的 dsh 宿主文档做三道机器门禁 —— 审查席位的 `Budget` + `Return shape` 必填、carrier 字段词表、以及 `packages/dsh` README 语言对哈希 pin。每条违规输出一行 `file:line` 具名记录。
+- 从 engine dispatch 模块与源码入口导出 `REVIEW_SEAT_ROLES`、`BUDGET_LABELS`、`RETURN_SHAPE_LABELS`，使检查器读取 Assignment 解析器消费的同一份权威，而不是重写一份。
+- 修正 dsh workflow 脚本中的席位模板：`Budget (review / QC seats)` / `Return shape (review / QC seats)` 标签改为加粗形式 —— 这是引擎解析器唯一接受的括号形式，此前的普通形式在派发时被静默拒绝。
+- 补充 **dsh PR review 发布入口**（MCP 和 CLI），链接 audit 所属的报告正文与归档契约，并明确包括 Team-only profile 在内均仅由主代理发布。
+- **引擎权威守卫按操作类别统一陈述原因。** 已提交的 `workflow.compass-ref` 重试在 staged 权威下现在给出与其他操作相同的 transition 原因（其他 reader 文案逐字节不变；ACTIVE 重放行为不变）。`store execution export|restore|restore-preview` 的 control-root 守卫改为按文件系统身份比较——`realpath`，以 `dev`+`ino` 作为并列判定——因此指向活根的 symlink 拼写会被拒绝；无法解析的比较会拒绝而非放行；而显式配置但尚未脚手架化的 control root 因不存在受保护的活 store 而被允许。
+- **拒绝质量 lint 可静态证明插值恢复文本。** 由 helper 或模板构造的恢复文本，在插值全部属于显式声明的安全标识符（`workflow`、`holderList`）时通过静态证明；计算表达式、被遮蔽的 helper 及其他标识符一律 fail closed。`I-000865` 的两条 allowlist 条目已移除，过期的 allowlist 哈希现在会报出对应 issue 与需要执行的刷新。
+- **拒绝质量 lint：12 个引擎提供的恢复文本站点以 `I-000872` 说明豁免。** `packages/commands/src/families/family-refusal.ts` 只校验字符串类型，无法证明可到达命令，因此严格静态证明覆盖不到这些拒绝；它们以 11 条内容哈希 allowlist 条目（一个签名覆盖两个调用点）记录，并为每个站点写明实际原因。可静态证明的恢复文本仍无需任何条目即可通过。
+
+### 版本对齐
+
+- 提升 monorepo 根、`@mstar-harness/opencode`、`@mstar-harness/opencode-v2`、`@mstar-harness/cli`、`@mstar-harness/engine`、`@mstar-harness/dsh`、Cursor/Codex/Kimi/ZCode/omp/Claude 插件清单、便携式 Agent Plugins 清单及两份 marketplace 清单：**→ 4.0.9**。
+
 ## [4.0.8] - 2026-10-24
 
 ### Changed

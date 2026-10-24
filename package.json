@@ -1,6 +1,6 @@
 {
   "name": "morning-star",
-  "version": "4.0.8",
+  "version": "4.0.9",
   "description": "Morning Star — harness engineering workflow platform: TS Harness Workflow Engine + judgment skills, shipped as an Agent Plugin",
   "private": true,
   "type": "module",
@@ -42,7 +42,7 @@
   },
   "packageManager": "bun@1.4.0",
   "dependencies": {
-    "@mstar-harness/engine": "^4.0.8"
+    "@mstar-harness/engine": "^4.0.9"
   },
   "devDependencies": {
     "@oh-my-pi/pi-coding-agent": "^18.11.0",
