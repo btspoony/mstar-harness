@@ -43,7 +43,8 @@ return everything in the result payload.
 | `/codebase-audit` large-repo category fan-out | § 2 | `mstar-audit-fanout` | 9 (one per audit category) |
 | `/amazing-pr-review deep` | § 3 | `mstar-pr-seats` | 3–4 (2–3 domain + optional cross-domain security) |
 | SDD task review that must not take a Team roster seat | § 4 | `mstar-review-single` | 1 (one fresh-context reviewer per task) |
-| Any other 1–2 read-only delegation | § 4 per seat (only when `subagent` is unavailable) | `mstar-review-single` | `subagent` carries 1–2 seats; with the Team layer mounted (and `subagent` disabled) run one § 4 single-seat run per seat — never a teammate, never a 2-seat fan-out |
+| `/amazing-pr-review` default tier on a Team-only profile (no `subagent`) | § 3 | `mstar-pr-seats` | 2 domain lenses the tier selected (the guard accepts 2–3 labels); the optional security seat only when the tier selected one — never a teammate, never `mstar-review-single` (§ 4 is SDD task review) |
+| Any other 1–2 read-only delegation | § 4 only for an SDD **task** review; § 3 for a 2-seat PR/audit review | `mstar-review-single` / `mstar-pr-seats` | `subagent` carries 1–2 seats; with the Team layer mounted (and `subagent` disabled) the script follows the work, not the seat count |
 
 ## 1. `mstar-qc-tri` — plan QC tri-review
 
@@ -333,9 +334,11 @@ return seats
 
 Domain seats (2–3) plus an optional independent cross-domain security seat, all read-only, all
 returning findings with a merge class and **no verdict** — synthesis (dedupe, tiered vet, tally,
-verdict, posting) stays with the main agent, exactly as the `pr` variant requires. Do not use this
-script for the `default` tier (two seats → `subagent`) or `quick` (one seat). Its 3–4 seats are
-within the child pool (`maxActiveSubagents`, default 8) by construction.
+verdict, posting) stays with the main agent, exactly as the `pr` variant requires. On a
+`subagent`-capable profile do not use this script for the `default` tier (two seats → `subagent`) or
+`quick` (one seat); on a Team-only profile it IS the `default`-tier carrier, run with the tier's two
+domain lenses (the guard below accepts 2–3 labels). Its 3–4 seats are within the child pool
+(`maxActiveSubagents`, default 8) by construction.
 
 **`meta`**
 
@@ -473,7 +476,10 @@ teammate exhausts it. One seat is far below the child pool, so no chunking appli
 `workflow-run` node instead of a subagent card; that is the price of keeping the reviewer off the
 roster.
 
-**This is Mode A, the SDD task reviewer.** The header therefore carries a `Task category` that is
+**This is Mode A, the SDD task reviewer, and the only mode it has.** Its argument guard requires
+`planId`, `taskId`, `reviewCwd`, `branch`, `briefPath` and `implementerReport`, so a PR or audit
+review cannot be routed here — placeholder task fields would force this mode and return a task-review
+report instead of findings. The header therefore carries a `Task category` that is
 NOT `audit`: an `audit` category selects `code-reviewer` Mode B (the codebase-audit executor) and
 would run the wrong workflow entirely. **Writable work never uses this route** (a workflow child has
 no per-child pre-start veto seam).
