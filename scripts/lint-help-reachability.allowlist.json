@@ -13,5 +13,10 @@
     "signature": "capability-unreachable:packages/commands/src/families/workflow.ts:751a9919ef73",
     "justification": "The selected workflow verb determines the recovery route; each branch is a registered command and workflow command tests cover the runtime-selected path.",
     "trackingIssue": "Rule #341"
+  },
+  {
+    "signature": "capability-unreachable:packages/commands/src/families/session.ts:42a9f5d7c3fb",
+    "justification": "The recovery names the registered `mstar session run` verb with its required workflow/role options and a positional placeholder; the checker's tokenizer does not accept the angle-bracket placeholder here, while the emitted command is executable and the launch-scope tests cover it.",
+    "trackingIssue": "I-000865"
   }
 ]

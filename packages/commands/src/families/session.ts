@@ -313,12 +313,11 @@ export function getSessionCommandDefinitions(): readonly CommandDefinition[] {
         // coordinator just because it holds a live session id.
         const declaredWorkflow = context.executionIdentity?.workflowId;
         if (declaredWorkflow !== undefined && declaredWorkflow !== workflow) {
-          // reachability: manual — the corrected launch takes the runtime workflow id and the caller's argv, so no single statically provable invocation can be interpolated
           return refusalEnvelope({
             command: "session.run", status: "usage", code: "command.invalid-input", exitCode: 2,
             message: `session.run cannot launch workflow "${workflow}" from an identity launched for workflow "${declaredWorkflow}".`,
             details: { workflowId: workflow, declaredWorkflowId: declaredWorkflow },
-            recovery: "Launch under the workflow the inherited identity declares, then rerun mstar session run.",
+            recovery: "Launch under the workflow the inherited identity declares, or rerun mstar session run --workflow <workflow-id> --role coordinator <command>.",
           });
         }
         if (root === null) {
