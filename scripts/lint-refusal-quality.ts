@@ -357,6 +357,14 @@ export function findRefusalWrappers(source: ts.SourceFile): Map<string, RefusalW
  * Its call-site arguments are substituted and checked; wrapper chains are not followed.
  * Cause and recovery-presence checks apply only to the recognized refusal channels.
  */
+/**
+ * Interpolation identifiers this repository's refusal corpus declares safe: a whole value
+ * substituted into recovery prose, never a caller-controlled command fragment. Every member
+ * is in use — `workflow` (packages/commands/src/families/session.ts unboundRecovery) and
+ * `holderList` (packages/commands/src/families/workflow.ts). Adding a name is a decision,
+ * not a convenience: an interpolated identifier outside this set fails closed.
+ */
+const DECLARED_SAFE_INTERPOLATIONS: Readonly<Record<string, true>> = { workflow: true, holderList: true };
 export function scanSource(source: string, file: string): RefusalFinding[] {
   const sf = ts.createSourceFile(file, source, ts.ScriptTarget.Latest, true, ts.ScriptKind.TS);
   interface Scope { parent?: Scope; kind: "source" | "function" | "block" | "class"; declarations: Map<string, ts.VariableDeclaration>; functions: Map<string, ts.FunctionDeclaration>; shadowNames: Set<string>; }
@@ -461,7 +469,7 @@ export function scanSource(source: string, file: string): RefusalFinding[] {
     }
     if (ts.isStringLiteralLike(node) || ts.isNoSubstitutionTemplateLiteral(node)) return node.text;
     if (ts.isTemplateExpression(node)) {
-      if (recoveryProof && !node.templateSpans.every((span) => ts.isIdentifier(span.expression))) return undefined;
+      if (recoveryProof && !node.templateSpans.every((span) => ts.isIdentifier(span.expression) && DECLARED_SAFE_INTERPOLATIONS[span.expression.text] === true)) return undefined;
       return node.head.text + node.templateSpans.map((span) => `${span.expression.getText(sf)}${span.literal.text}`).join("");
     }
     if (ts.isConditionalExpression(node)) {

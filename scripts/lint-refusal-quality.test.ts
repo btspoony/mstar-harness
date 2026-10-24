@@ -416,6 +416,20 @@ describe("refusal quality scanner", () => {
     expect(findings.map(({ classification }) => classification)).toEqual(["missing-recovery"]);
   });
 
+  test("fails every interpolation outside the declared-safe identifier set", () => {
+    const findings = scanSource(`
+      refusalEnvelope({ command: "x", status: "refused", code: "x.blocked", message: "Blocked",
+        recovery: \`Rerun mstar session run --workflow \${userInput} --role coordinator.\` });
+      refusalEnvelope({ command: "x", status: "refused", code: "x.blocked", message: "Blocked",
+        recovery: \`Rerun mstar session run --workflow \${someLocalVar} --role coordinator.\` });
+      refusalEnvelope({ command: "x", status: "refused", code: "x.blocked", message: "Blocked",
+        recovery: \`Rerun mstar session run --workflow \${obj.field} --role coordinator.\` });
+      refusalEnvelope({ command: "x", status: "refused", code: "x.blocked", message: "Blocked",
+        recovery: \`Rerun mstar session run --workflow \${workflow} --role coordinator.\` });
+    `, "packages/commands/src/fixture.ts");
+    expect(findings.map(({ classification }) => classification)).toEqual(["missing-recovery", "missing-recovery", "missing-recovery"]);
+  });
+
   test("a stale allowlist entry reports its tracking issue and refresh action", () => {
     const snippet = `refusalEnvelope({ code: "x.bad" })`;
     const finding = {
