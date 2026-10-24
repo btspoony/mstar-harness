@@ -129,6 +129,10 @@ test("CLI scope gate constrains a minted identity to the scope it declares", () 
   // A legacy route that ignores the identity is not constrained by this gate.
   expect(mintedIdentityScopeProblem(identity, { coordinator: true, workflow: "wf-elsewhere" }, "plan.bind")).toBeUndefined();
   expect(mintedIdentityScopeProblem(identity, { resume: "/tmp/x.json", workflow: "wf-elsewhere" }, "plan.bind")).toBeUndefined();
+  // `session.run` states the coordinator seat it launches: an inherited identity
+  // minted for another workflow never re-targets it, and its own launches.
+  expect(mintedIdentityScopeProblem(identity, { workflow: identity.workflowId, role: "coordinator" }, "session.run")).toBeUndefined();
+  expect(mintedIdentityScopeProblem(identity, { workflow: "wf-elsewhere", role: "coordinator" }, "session.run")).toBeDefined();
   // A malformed reference stays the family's own typed refusal.
   expect(mintedIdentityScopeProblem(identity, { sessionRef: "not-a-wire", operation: "op" }, "plan.progress")).toBeUndefined();
 });

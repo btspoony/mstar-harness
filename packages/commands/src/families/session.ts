@@ -305,6 +305,18 @@ export function getSessionCommandDefinitions(): readonly CommandDefinition[] {
         const root = resolveProcessHarnessDir(context.cwd, harness);
         let observed: BindingState | null = null;
         let coordinator: ExecutionSessionRef | null = null;
+        // The inherited launch identity declares the one workflow it may address:
+        // a child launched for another lifecycle never becomes this one's
+        // coordinator just because it holds a live session id.
+        const declaredWorkflow = context.executionIdentity?.workflowId;
+        if (declaredWorkflow !== undefined && declaredWorkflow !== workflow) {
+          return refusalEnvelope({
+            command: "session.run", status: "usage", code: "command.invalid-input", exitCode: 2,
+            message: `session.run cannot launch workflow "${workflow}" from an identity launched for workflow "${declaredWorkflow}".`,
+            details: { workflowId: workflow, declaredWorkflowId: declaredWorkflow },
+            recovery: `Launch under the workflow the inherited identity declares (mstar session run --workflow ${declaredWorkflow} --role coordinator ...), or start from a session whose identity is not scoped to another workflow.`,
+          });
+        }
         if (root === null) {
           observed = "unregistered";
         } else {

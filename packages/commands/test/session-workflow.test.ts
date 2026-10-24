@@ -13,6 +13,7 @@ import {
   mutateExecutionWorkflow,
   openStore,
   readExecutionState,
+  type ExecutionIdentity,
   type ExecutionToken,
 } from "@mstar-harness/engine";
 import { getCommandDefinitions } from "../src/index.js";
@@ -307,6 +308,14 @@ async function launchBound(harness: string, claimed: string) {
   );
 }
 
+/** One launch that also carries the inherited minted identity of its caller. */
+async function launchInherited(harness: string, claimed: string, executionIdentity: ExecutionIdentity) {
+  return definition("session.run").execute(
+    { workflow: RUN_WORKFLOW, role: "coordinator", argv: [process.execPath, "-e", IDENTITY_PROBE], harness },
+    testContext({ sessionId: claimed, executionIdentity }),
+  );
+}
+
 function recoveryOf(envelope: { details?: Record<string, unknown> }): string {
   const recovery = envelope.details?.recovery;
   return typeof recovery === "string" ? recovery : "";
@@ -416,5 +425,23 @@ describe("session.run bound identity", () => {
       // Registering the id cannot succeed for a lifecycle the authority holds.
       expect(recoveryOf(result), status).not.toContain("mstar workflow register");
     }
+  });
+
+  test("refuses an inherited identity that declares another workflow", async () => {
+    const { harness } = await runFixture("scoped-identity", { bind: RUN_CLAIMED });
+    const foreign = await launchInherited(harness, RUN_CLAIMED, {
+      source: "local", sessionId: RUN_CLAIMED, workflowId: "wf-elsewhere", role: "coordinator",
+    });
+    expect(foreign).toMatchObject({
+      command: "session.run", status: "usage", code: "command.invalid-input",
+      details: { workflowId: RUN_WORKFLOW, declaredWorkflowId: "wf-elsewhere" },
+    });
+    // The recovery names the workflow the inherited identity actually declares.
+    expect(recoveryOf(foreign)).toContain("--workflow wf-elsewhere");
+    // The legitimate case is untouched: the same identity on its own workflow.
+    const own = await launchInherited(harness, RUN_CLAIMED, {
+      source: "local", sessionId: RUN_CLAIMED, workflowId: RUN_WORKFLOW, role: "coordinator",
+    });
+    expect(own.status).toBe("ok");
   });
 });
