@@ -642,6 +642,8 @@ describe("refusal quality scanner", () => {
     const refuse = (recovery: string) => `refusalEnvelope({ command: "x", status: "refused", code: "x.blocked", message: "Blocked", recovery: ${recovery} });`;
     expect(scan(`const recovery = "Run mstar status validate."; for (const recovery of ["x"]) { noop(); } ${refuse("recovery")}`)).toEqual([]);
     expect(scan(`let recovery = "Run mstar status validate."; for (recovery of ["x"]) { noop(); } ${refuse("recovery")}`)).toEqual(["missing-recovery"]);
+    expect(scan(`let recovery = "Run mstar status validate."; for (const recovery of [""]) { ${refuse("recovery")} }`)).toEqual(["missing-recovery"]);
+    expect(scan(`var recovery = "Run mstar status validate."; var recovery; ${refuse("recovery")}`)).toEqual([]);
   });
 
   test("tracks writes by declaration, not by name or member access", () => {

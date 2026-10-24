@@ -379,7 +379,12 @@ export function scanSource(source: string, file: string): RefusalFinding[] {
   const buildScopes = (node: ts.Node, inherited: Scope): void => {
     // A catch clause is its own scope: its binding belongs to the catch block, not to the
     // enclosing function, so it must shadow rather than resolve outward.
-    const kind: Scope["kind"] | undefined = ts.isFunctionLike(node) ? "function" : ts.isClassLike(node) ? "class" : ts.isBlock(node) || ts.isCatchClause(node) ? "block" : undefined;
+    // A `for (let|const x of …)` head binds x for the loop only, so the loop opens a scope.
+    const loopScope = (ts.isForOfStatement(node) || ts.isForInStatement(node) || ts.isForStatement(node))
+      && node.initializer !== undefined
+      && ts.isVariableDeclarationList(node.initializer)
+      && (node.initializer.flags & (ts.NodeFlags.Const | ts.NodeFlags.Let)) !== 0;
+    const kind: Scope["kind"] | undefined = ts.isFunctionLike(node) ? "function" : ts.isClassLike(node) ? "class" : ts.isBlock(node) || ts.isCatchClause(node) || loopScope ? "block" : undefined;
     const scope: Scope = kind ? { parent: inherited, kind, declarations: new Map(), functions: new Map(), shadowNames: new Set() } : inherited;
     scopeByNode.set(node, scope);
     // A named function or class expression binds its own name inside its own body only.
@@ -410,11 +415,17 @@ export function scanSource(source: string, file: string): RefusalFinding[] {
     for (let current = scope; current; current = current.parent) {
       const declarations = current.declarations.get(name);
       if (declarations) {
-        // A redeclaration without an initializer supplies no value: keep the nearest preceding
-        // declaration that has one. If this scope declares the name but none precedes the use
-        // with a value, fail closed rather than escaping to an outer scope.
-        const preceding = declarations.filter((declaration) => declaration.getEnd() <= useStart && declaration.initializer);
-        return preceding.length > 0 ? { declaration: preceding[preceding.length - 1]!, owner: current } : undefined;
+        const preceding = declarations.filter((declaration) => declaration.getEnd() <= useStart);
+        if (preceding.length === 0) return undefined;
+        // Walk back from the nearest preceding declaration: a block-scoped binding with no
+        // initializer is a real binding that supplies no value and shadows everything beyond
+        // it, while a bare `var` is the same hoisted binding and keeps the earlier value.
+        for (let index = preceding.length - 1; index >= 0; index -= 1) {
+          const declaration = preceding[index]!;
+          if (declaration.initializer) return { declaration, owner: current };
+          if ((declaration.parent.flags & (ts.NodeFlags.Const | ts.NodeFlags.Let)) !== 0) return undefined;
+        }
+        return undefined;
       }
       if (current.shadowNames.has(name)) return undefined;
     }
