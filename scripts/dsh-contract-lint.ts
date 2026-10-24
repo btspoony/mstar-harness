@@ -5,34 +5,37 @@
  * Three prose contracts that only review luck protected, each now one named
  * `file:line <reason>` row (exit 1) instead of a reviewer's memory:
  *
- * 1. Seat bounding (#555 acceptance 1) — every Assignment header block in
+ * 1. Seat bounding (#555 acceptance 1) — every Assignment in
  *    `skills/mstar-host/references/{dsh,dsh-workflow-scripts,dsh-agent-teams}.md`
- *    whose `Execute as` role is a review seat must carry a `Budget` label AND a
- *    `Return shape` label, exactly the shape `validateAssignmentFields`
- *    enforces at dispatch. A header block is the lines between the
- *    `## Assignment` heading and the blank line (or heading) that closes it.
+ *    that the engine's own field gate demands bounding fields for (a review
+ *    seat, or an `audit` round) must carry a `Budget` label AND a `Return shape`
+ *    label. The engine decides: each `## Assignment` segment is handed whole to
+ *    `validateAssignmentFields`, and only its `budget-missing` /
+ *    `return-shape-missing` rows are reported, so the checker never re-derives
+ *    the header extent, the seat list or the audit trigger.
  * 2. Carrier vocabulary (#555 acceptance 2) — every `<tool>.<field>` carrier
  *    citation in those documents must match the owning carrier map, and
  *    `dsh-agent-teams.md` must still name every carrier tool.
  * 3. README pin (I-000829) — `packages/dsh/README.i18n.yaml` records exactly
- *    the sibling `README*.md` files of its package, and each recorded blob
- *    hash equals `git hash-object <file>`.
+ *    the sibling `README*.md` files of its package, one record each, and each
+ *    recorded blob hash equals `git hash-object <file>`.
  *
- * Authority rule: the role list, the two label sets and the carrier map are
- * read from their owning source, never restated here. The engine symbols are
- * imported from the source entry (`../packages/engine/src/index.ts`), the same
- * convention `scripts/drift-lint.ts` uses: the package export resolves to the
- * gitignored `dist` build, which a fresh checkout has not built yet. The dsh
- * carrier map cannot be imported at all (`packages/dsh/package.json` exports no
- * `./src/*` subpath, and its module graph pulls the cordis/dsh runtime plus the
- * engine dist), so it is read structurally from its source file — the
+ * Authority rule: the label sets and the carrier map are read from their owning
+ * source, never restated here. The engine symbols are imported from the source
+ * entry (`../packages/engine/src/index.ts`), the same convention
+ * `scripts/drift-lint.ts` uses: the package export resolves to the gitignored
+ * `dist` build, which a fresh checkout has not built yet. The dsh carrier map
+ * cannot be imported at all (`packages/dsh/package.json` exports no `./src/*`
+ * subpath, and its module graph pulls the cordis/dsh runtime plus the engine
+ * dist), so it is read structurally from its source file — the
  * `packages/dsh/src/gates/dispatch.ts` declaration, precedent
- * `scripts/lint-ascii-literals.ts`. An unparseable map fails loudly; there is
- * no literal fallback.
+ * `scripts/lint-ascii-literals.ts`. An unparseable — or partially parsed — map
+ * is named line by line; there is no literal fallback.
  *
- * Check 1 is strict: every fenced `## Assignment` header block is read, whether
- * or not a body follows it, so a shape demo copied for a seat cannot skip the
- * bounding contract.
+ * Check 1 is strict: every fenced `## Assignment` segment is read, whether or
+ * not a body follows it, so a shape demo copied for a seat cannot skip the
+ * bounding contract. An unbalanced fence is itself a row: the tail of such a
+ * document would otherwise fall outside every scan.
  *
  * Usage: bun run scripts/dsh-contract-lint.ts
  * Exit 0 = the documents match their authorities; exit 1 = at least one row.
@@ -43,8 +46,8 @@ import { join } from "node:path";
 import {
   BUDGET_LABELS,
   RETURN_SHAPE_LABELS,
-  REVIEW_SEAT_ROLES,
   parseAssignmentFields,
+  validateAssignmentFields,
 } from "../packages/engine/src/index.ts";
 
 /** The dsh host documents the gates read (relative to the repo root). */
@@ -61,32 +64,29 @@ export const TEAM_DOC = "skills/mstar-host/references/dsh-agent-teams.md";
 export const README_RECORDER = "packages/dsh/README.i18n.yaml";
 const README_PACKAGE_DIR = "packages/dsh";
 const BLANK = /^\s*$/;
-const HEADING = /^#{1,6}\s/;
 // The marker opens a prompt template literal (`agent(`## Assignment`), so it need not start the line.
 const ASSIGNMENT_HEADING = /##\s+Assignment\s*$/;
+const FENCE = /^\s*```/;
+const EXECUTE_AS = /Execute as/i;
 
 export type Doc = { rel: string; text: string };
 
-/** Engine-absent-value semantics: absent, blank, or an explicit `N/A`. */
-function absent(value: string | undefined): boolean {
-  return value === undefined || value.trim() === "" || value.trim().toLowerCase() === "n/a";
-}
-
 /**
- * The engine's role-token normalization for the `Execute as` value (strip a
- * `@` mention, first whitespace token, case-insensitive). Kept to these three
- * steps so `Execute as: @QC-Specialist-2 (security lens)` still resolves.
+ * The engine field codes carrying the bounding contract, mapped to the label
+ * names (and their accepted forms) used in the failure row. The CODES are the
+ * engine's; only the human-readable wording lives here.
  */
-function roleToken(value: string | undefined): string {
-  return (value ?? "").trim().replace(/^@/, "").toLowerCase().split(/\s+/)[0] ?? "";
-}
+const BOUNDING_CODES: Record<string, { label: string; labels: readonly string[] }> = {
+  "assignment.field.budget-missing": { label: "Budget", labels: BUDGET_LABELS },
+  "assignment.field.return-shape-missing": { label: "Return shape", labels: RETURN_SHAPE_LABELS },
+};
 
-/** Fenced blocks (` ``` `-delimited) with the 1-based line of their first content line. */
+/** Fenced blocks (` ``` `-delimited) with the 1-based line number of their first content line. */
 export function fencedBlocks(text: string): Array<{ line: number; lines: string[] }> {
   const blocks: Array<{ line: number; lines: string[] }> = [];
   let current: { line: number; lines: string[] } | null = null;
   text.split(/\r?\n/).forEach((raw, index) => {
-    if (/^\s*```/.test(raw)) {
+    if (FENCE.test(raw)) {
       if (current === null) current = { line: index + 2, lines: [] };
       else {
         blocks.push(current);
@@ -101,42 +101,59 @@ export function fencedBlocks(text: string): Array<{ line: number; lines: string[
 }
 
 /**
- * Check 1 — seat bounding. Every `## Assignment` header block whose role is a
- * review seat carries a `Budget` and a `Return shape` label; the labels are the
- * engine's own, and the field values come from the engine parser that consumes
- * them (so the check and the dispatch gate agree on what a label is). No header
- * shape is skipped: a fence that ends at its own header is read like any other.
+ * Unbalanced fences hide the document tail from every scan (the closing line
+ * never arrives), so an odd fence count is a failure, named at the last fence.
  */
-export function checkSeatBounding(
-  docs: readonly Doc[],
-  seats: readonly string[] = REVIEW_SEAT_ROLES,
-): { rows: string[]; blocks: number } {
+export function checkFenceParity(docs: readonly Doc[]): string[] {
+  const rows: string[] = [];
+  for (const doc of docs) {
+    const fences = doc.text
+      .split(/\r?\n/)
+      .map((line, index) => ({ line, index }))
+      .filter(({ line }) => FENCE.test(line));
+    if (fences.length % 2 === 1) {
+      const last = fences[fences.length - 1]!;
+      rows.push(
+        `${doc.rel}:${last.index + 1} unbalanced fences (${fences.length} fence lines) - `
+          + "the document tail after the last fence is never scanned",
+      );
+    }
+  }
+  return rows;
+}
+
+/**
+ * Check 1 — seat bounding. Each `## Assignment` segment inside a fence runs to
+ * the next `## Assignment` or the fence end and is handed whole to the engine's
+ * `validateAssignmentFields`; its bounding rows become one named row each.
+ * Header extent, review-seat membership and the `audit` trigger are therefore
+ * the engine's, never re-derived here.
+ */
+export function checkSeatBounding(docs: readonly Doc[]): { rows: string[]; blocks: number } {
   const rows: string[] = [];
   let blocks = 0;
   for (const doc of docs) {
     for (const block of fencedBlocks(doc.text)) {
-      // One fence can carry several prompts (a shared template rendered per seat).
       block.lines.forEach((line, index) => {
         if (!ASSIGNMENT_HEADING.test(line)) return;
-        // The header block runs from the first field line to the blank line that
-        // closes it (or to the fence end / the next heading).
-        let start = index + 1;
-        while (start < block.lines.length && BLANK.test(block.lines[start]!)) start++;
-        let end = start;
-        while (end < block.lines.length && !BLANK.test(block.lines[end]!) && !HEADING.test(block.lines[end]!)) end++;
         blocks++;
-        const fields = parseAssignmentFields(["## Assignment", ...block.lines.slice(start, end)].join("\n"));
-        const role = roleToken(fields.executeAs);
-        if (!seats.includes(role)) return;
-        for (const [label, labels, value] of [
-          ["Budget", BUDGET_LABELS, fields.budget],
-          ["Return shape", RETURN_SHAPE_LABELS, fields.returnShape],
-        ] as const) {
-          if (!absent(value)) continue;
-          const code = label === "Budget" ? "budget" : "return-shape";
+        // The segment ends at the next Assignment marker or the fence end; the
+        // engine's own header-region rule (body markers) decides what it reads.
+        let end = index + 1;
+        while (end < block.lines.length && !ASSIGNMENT_HEADING.test(block.lines[end]!)) end++;
+        const segment = block.lines.slice(index, end);
+        const text = segment.join("\n");
+        const executeAs = parseAssignmentFields(text).executeAs?.trim();
+        // Point at the role line when there is one, else at the marker itself.
+        const roleOffset = segment.findIndex((segLine) => EXECUTE_AS.test(segLine));
+        const at = block.line + index + (roleOffset === -1 ? 0 : roleOffset);
+        const subject = `Assignment (Execute as: ${executeAs === undefined || executeAs === "" ? "(absent)" : executeAs})`;
+        for (const violation of validateAssignmentFields(text, { writable: false }).violations) {
+          const bounding = BOUNDING_CODES[violation.code];
+          if (bounding === undefined) continue;
           rows.push(
-            `${doc.rel}:${block.line + start} review seat "${role}" header has no ${label} label - `
-              + `add one of ${labels.map((l) => `"${l}"`).join(" / ")} (dispatch would report assignment.field.${code}-missing)`,
+            `${doc.rel}:${at} ${subject} header has no ${bounding.label} label - `
+              + `add one of ${bounding.labels.map((label) => `"${label}"`).join(" / ")} (dispatch reports ${violation.code})`,
           );
         }
       });
@@ -145,33 +162,52 @@ export function checkSeatBounding(
   return { rows, blocks };
 }
 
+/* ------------------------------------------------------------------ */
+/* Carrier map (read structurally from its owning declaration)         */
+/* ------------------------------------------------------------------ */
+
+export type CarrierMap =
+  | { error: string }
+  | { map: Record<string, string>; line: number; problems: Array<{ line: number; text: string }> };
+
 /**
- * Check 2 — carrier vocabulary. Parses the carrier map out of its owning
- * declaration; every `<tool>.<field>` citation must match the map's value for
- * that tool, and `teamDoc` must name every tool. An unparseable declaration is
- * one named failure row, never a literal fallback.
+ * Parse `TEAM_DISPATCH_TOOLS` out of its declaration. Every non-blank,
+ * non-comment line inside the braces must be a complete `name: 'field'` entry;
+ * anything else is reported line by line (a trailing comment, a partial or
+ * renamed entry) — a skipped line would silently shrink the authority.
  */
-export function parseCarrierMap(source: string): { map: Record<string, string>; line: number } | { error: string } {
+export function parseCarrierMap(source: string): CarrierMap {
   const lines = source.split(/\r?\n/);
   const at = lines.findIndex((line) => /export\s+const\s+TEAM_DISPATCH_TOOLS\s*(?::[^=]*)?=\s*\{/.test(line));
   if (at === -1) return { error: "could not locate the `export const TEAM_DISPATCH_TOOLS = {` declaration" };
   const map: Record<string, string> = {};
+  const problems: Array<{ line: number; text: string }> = [];
   for (let i = at + 1; i < lines.length; i++) {
     const line = lines[i]!;
     if (/^\}\s*(?:as const|satisfies\b)/.test(line) || /^\}\s*$/.test(line)) {
-      return Object.keys(map).length === 0
-        ? { error: `TEAM_DISPATCH_TOOLS (line ${at + 1}) declares no tool entries` }
-        : { map, line: at + 1 };
+      if (Object.keys(map).length === 0) return { error: `TEAM_DISPATCH_TOOLS (line ${at + 1}) declares no tool entries` };
+      return { map, line: at + 1, problems };
     }
+    if (BLANK.test(line) || /^\s*(?:\/\/|\/?\*)/.test(line)) continue;
     const entry = line.match(/^\s*([A-Za-z_$][\w$]*)\s*:\s*['"]([^'"]*)['"]\s*,?\s*$/);
     if (entry) map[entry[1]!] = entry[2]!;
+    else problems.push({ line: i + 1, text: line.trim() });
   }
   return { error: `TEAM_DISPATCH_TOOLS (line ${at + 1}) is not closed before end of file` };
 }
 
-function escapeRegExp(text: string): string {
-  return text.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-}
+/**
+ * A carrier citation, recognised WITHOUT consulting the map: a snake_case tool
+ * name dotted with a field (`` `send_message.message` ``). The boundary is the
+ * tool-name shape, which is what lets a citation survive the tool disappearing
+ * from the map — a map-anchored pattern would go silent exactly then.
+ *
+ * shortcut: bare tool mentions (no dotted field) cannot be scanned this way
+ * without matching every snake_case token in the prose, so they are only
+ * checked for the map's own keys (the team-document leg); upgrade if a second
+ * carrier family appears.
+ */
+const CARRIER_CITATION = /\b([a-z][a-z0-9]*(?:_[a-z0-9]+)+)\.([A-Za-z_$][\w$]*)\b/g;
 
 export function checkCarrierVocabulary(
   docs: readonly Doc[],
@@ -181,16 +217,23 @@ export function checkCarrierVocabulary(
   const rows: string[] = [];
   const tools = Object.keys(carrier);
   let citations = 0;
-  if (tools.length === 0) return { rows: ["carrier vocabulary: the owning map is empty - no tool to check"], citations, tools: 0 };
-  const citation = new RegExp(`\\b(${tools.map(escapeRegExp).join("|")})\\.([A-Za-z_$][\\w$]*)`, "g");
+  if (tools.length === 0) {
+    return { rows: ["carrier vocabulary: the owning map is empty - no tool to check"], citations, tools: 0 };
+  }
   for (const doc of docs) {
     doc.text.split(/\r?\n/).forEach((line, index) => {
-      for (const match of line.matchAll(citation)) {
+      for (const match of line.matchAll(CARRIER_CITATION)) {
         citations++;
         const [raw, tool, field] = match;
+        if (!Object.hasOwn(carrier, tool!)) {
+          rows.push(`${doc.rel}:${index + 1} carrier citation "${raw}" names tool "${tool}", which is not in the carrier map`);
+          continue;
+        }
         const expected = carrier[tool!];
         if (expected !== field) {
-          rows.push(`${doc.rel}:${index + 1} carrier field "${raw}" is not in the carrier map - ${tool} carries "${expected ?? "nothing"}"`);
+          rows.push(
+            `${doc.rel}:${index + 1} carrier field "${raw}" is not in the carrier map - ${tool} carries "${expected ?? "nothing"}"`,
+          );
         }
       }
     });
@@ -208,6 +251,10 @@ export function checkCarrierVocabulary(
   return { rows, citations, tools: tools.length };
 }
 
+/* ------------------------------------------------------------------ */
+/* README pin                                                          */
+/* ------------------------------------------------------------------ */
+
 export type ReadmePinInput = {
   recorderRel: string;
   recorderText: string;
@@ -219,13 +266,24 @@ export type ReadmePinInput = {
   hashOf: (rel: string) => string | undefined;
 };
 
-/** Check 3 — README pin: the recorder names exactly its package's README pair, and every recorded hash is the file's current blob hash. */
+/** Check 3 — README pin: the recorder names exactly its package's README pair once, and every recorded hash is the file's current blob hash. */
 export function checkReadmePin(input: ReadmePinInput): { rows: string[]; recorded: number } {
   const rows: string[] = [];
   const recordedAt = new Map<string, { hash: string; line: number }>();
   input.recorderText.split(/\r?\n/).forEach((line, index) => {
     const match = line.match(/^\s*([A-Za-z0-9._-]+\.md)\s*:\s*([0-9a-f]{40})\s*$/);
-    if (match) recordedAt.set(match[1]!, { hash: match[2]!, line: index + 1 });
+    if (!match) return;
+    const name = match[1]!;
+    const first = recordedAt.get(name);
+    if (first !== undefined) {
+      // Last-record-wins would let a stale duplicate hide behind a fresh one.
+      rows.push(
+        `${input.recorderRel}:${index + 1} records "${name}" a second time (first record at line ${first.line}) - `
+          + "one record per sibling; delete the duplicate",
+      );
+      return;
+    }
+    recordedAt.set(name, { hash: match[2]!, line: index + 1 });
   });
   const siblings = [...input.siblings].sort();
   const siblingSet = new Set(siblings);
@@ -291,33 +349,48 @@ function readmeSiblings(root: string): string[] {
     .sort();
 }
 
+const CARRIER_SOURCE_REL = "packages/dsh/src/gates/dispatch.ts";
+
 if (import.meta.main) {
   const root = process.cwd();
   const rows: string[] = [];
 
   const docs = readDocs(root, rows);
+  rows.push(...checkFenceParity(docs));
 
   const seats = checkSeatBounding(docs);
   rows.push(...seats.rows);
 
-  const carrierSourceRel = "packages/dsh/src/gates/dispatch.ts";
   const carrierSource = (() => {
     try {
-      return readFileSync(join(root, carrierSourceRel), "utf8");
+      return readFileSync(join(root, CARRIER_SOURCE_REL), "utf8");
     } catch {
       return null;
     }
   })();
   let carrierSummary = "carrier map unread";
-  let carriers: { rows: string[]; citations: number; tools: number } = { rows: [], citations: 0, tools: 0 };
   if (carrierSource === null) {
-    rows.push(`${carrierSourceRel}:1 could not read the carrier map source - the check has no authority to compare against`);
+    rows.push(
+      `${CARRIER_SOURCE_REL}:1 could not read the carrier map source - the check has no authority to compare against`,
+    );
   } else {
     const parsed = parseCarrierMap(carrierSource);
     if ("error" in parsed) {
-      rows.push(`${carrierSourceRel}:1 ${parsed.error} - the check has no authority to compare against and does not fall back to a literal copy`);
+      rows.push(
+        `${CARRIER_SOURCE_REL}:1 ${parsed.error} - the check has no authority to compare against and does not fall back to a literal copy`,
+      );
+    } else if (parsed.problems.length > 0) {
+      // A partially parsed map is not an authority: name every unreadable line
+      // and skip the vocabulary scan rather than compare against a short map.
+      for (const problem of parsed.problems) {
+        rows.push(
+          `${CARRIER_SOURCE_REL}:${problem.line} carrier map entry is not a complete \`name: 'field'\` line: `
+            + `${JSON.stringify(problem.text)} - fix the declaration (a trailing comment or a partial entry would silently drop the tool)`,
+        );
+      }
+      carrierSummary = `${parsed.problems.length} unparsed carrier map line(s), vocabulary not checked`;
     } else {
-      carriers = checkCarrierVocabulary(docs, parsed.map);
+      const carriers = checkCarrierVocabulary(docs, parsed.map);
       rows.push(...carriers.rows);
       carrierSummary = `${carriers.tools} carrier tools, ${carriers.citations} field citations across ${docs.length} documents`;
     }

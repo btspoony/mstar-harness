@@ -23,6 +23,7 @@ import {
   DOCS,
   TEAM_DOC,
   checkCarrierVocabulary,
+  checkFenceParity,
   checkReadmePin,
   checkSeatBounding,
   parseCarrierMap,
@@ -48,22 +49,40 @@ function payload(header: readonly string[], body = "Operator: keep this body."):
   return ["# Example", "", "```ts", "## Assignment", "", ...header, "", body, "```", ""].join("\n");
 }
 
+/** The 1-based line of the first line matching `pattern` in `text`. */
+function lineOf(text: string, pattern: RegExp): number {
+  return text.split("\n").findIndex((line) => pattern.test(line)) + 1;
+}
+
 describe("checkSeatBounding — seat header blocks carry the bounding labels", () => {
   const seat = REVIEW_SEAT_ROLES[0]!;
   const nonSeat = "zz-not-a-review-seat";
+  const boundingLabels = (label: string): string => (label === "Budget" ? BUDGET_LABELS[0]! : RETURN_SHAPE_LABELS[0]!);
 
   test("a review-seat payload without the labels yields one row per label", () => {
     const text = payload([`Execute as: ${seat}`, "Delegation: forbidden", "Task category: audit"]);
     const doc: Doc = { rel: "fixture.md", text };
     const { rows, blocks } = checkSeatBounding([doc]);
-    const executeAsLine = text.split("\n").findIndex((line) => line.startsWith("Execute as:")) + 1;
     expect(blocks).toBe(1);
     expect(rows).toHaveLength(2);
-    expect(rows[0]).toStartWith(`fixture.md:${executeAsLine} `);
-    expect(rows[0]).toContain(`review seat "${seat}"`);
-    expect(rows[0]).toContain(BUDGET_LABELS[0]!);
+    expect(rows[0]).toStartWith(`fixture.md:${lineOf(text, /^Execute as:/)} `);
+    expect(rows[0]).toContain(`Execute as: ${seat}`);
+    expect(rows[0]).toContain(boundingLabels("Budget"));
     expect(rows[0]).toContain("assignment.field.budget-missing");
-    expect(rows[1]).toContain(RETURN_SHAPE_LABELS[0]!);
+    expect(rows[1]).toContain(boundingLabels("Return shape"));
+    expect(rows[1]).toContain("assignment.field.return-shape-missing");
+  });
+
+  test("F1: the header extent is the engine's, so a blank line between fields does not skip the gate", () => {
+    // Would pass silently under a "header ends at the first blank line" reading,
+    // yet the dispatch gate refuses it: the engine scans the whole region.
+    const text = payload(["Delegation: forbidden", "", `Execute as: ${seat}`, "Task category: audit"]);
+    // The engine finds the role across the blank line; the rows below prove the
+    // checker inherited that extent instead of closing the header early.
+    expect(parseAssignmentFields(["## Assignment", "Delegation: forbidden", "", `Execute as: ${seat}`].join("\n")).executeAs).toBe(seat);
+    const { rows } = checkSeatBounding([{ rel: "fixture.md", text }]);
+    expect(rows).toHaveLength(2);
+    expect(rows[0]).toContain("assignment.field.budget-missing");
     expect(rows[1]).toContain("assignment.field.return-shape-missing");
   });
 
@@ -86,9 +105,20 @@ describe("checkSeatBounding — seat header blocks carry the bounding labels", (
     }
   });
 
-  test("a non-seat payload is not gated", () => {
-    const text = payload([`Execute as: ${nonSeat}`, "Delegation: forbidden", "Task category: logic"]);
-    expect(checkSeatBounding([{ rel: "fixture.md", text }]).rows).toEqual([]);
+  test("every engine review-seat role is gated (the seat list stays the engine's)", () => {
+    for (const role of REVIEW_SEAT_ROLES) {
+      const text = payload([`Execute as: ${role}`, "Delegation: forbidden", "Task category: review"]);
+      expect(checkSeatBounding([{ rel: "fixture.md", text }]).rows).toHaveLength(2);
+    }
+  });
+
+  test("F6: an audit round on a non-seat role is gated too, exactly as the engine does", () => {
+    const audit = payload([`Execute as: ${nonSeat}`, "Delegation: forbidden", "Task category: audit"]);
+    const rows = checkSeatBounding([{ rel: "fixture.md", text: audit }]).rows;
+    expect(rows).toHaveLength(2);
+    // ... while the same role on a normal round needs no bounding labels.
+    const normal = payload([`Execute as: ${nonSeat}`, "Delegation: forbidden", "Task category: logic"]);
+    expect(checkSeatBounding([{ rel: "fixture.md", text: normal }]).rows).toEqual([]);
   });
 
   test("a fence that ends at its own header is still gated (no shape is skipped)", () => {
@@ -97,6 +127,44 @@ describe("checkSeatBounding — seat header blocks carry the bounding labels", (
     expect(result.blocks).toBe(1);
     expect(result.rows).toHaveLength(2);
   });
+
+  test("several Assignment segments in one fence are each checked", () => {
+    const text = [
+      "```ts",
+      "## Assignment",
+      "",
+      `Execute as: ${seat}`,
+      "Delegation: forbidden",
+      "Task category: audit",
+      "body one",
+      "## Assignment",
+      "",
+      `Execute as: ${seat}`,
+      "Delegation: forbidden",
+      "Task category: audit",
+      "body two",
+      "```",
+      "",
+    ].join("\n");
+    const result = checkSeatBounding([{ rel: "fixture.md", text }]);
+    expect(result.blocks).toBe(2);
+    expect(result.rows).toHaveLength(4);
+  });
+});
+
+describe("checkFenceParity — an unbalanced fence cannot hide a document tail", () => {
+  test("F4: an odd fence count is a named row at the last fence", () => {
+    const text = ["```ts", "## Assignment", "", "Execute as: x", "```", "", "```ts", "unclosed tail", ""].join("\n");
+    const rows = checkFenceParity([{ rel: "fixture.md", text }]);
+    const lastFence = text.split("\n").reduce((last, line, index) => (/^\s*```/.test(line) ? index : last), 0);
+    expect(rows).toHaveLength(1);
+    expect(rows[0]).toStartWith(`fixture.md:${lastFence + 1} `);
+    expect(rows[0]).toContain("unbalanced fences (3 fence lines)");
+  });
+
+  test("balanced fences pass", () => {
+    expect(checkFenceParity([{ rel: "fixture.md", text: "```ts\nbody\n```\n" }])).toEqual([]);
+  });
 });
 
 describe("checkCarrierVocabulary — citations match the owning carrier map", () => {
@@ -104,7 +172,10 @@ describe("checkCarrierVocabulary — citations match the owning carrier map", ()
   const tools = Object.keys(map);
   const tool = tools[0]!;
 
-  test("the owning declaration parses into a non-empty map", () => {
+  test("the owning declaration parses into a complete map", () => {
+    const parsed = parseCarrierMap(read(CARRIER_SOURCE));
+    if ("error" in parsed) throw new Error(parsed.error);
+    expect(parsed.problems).toEqual([]);
     expect(tools.length).toBeGreaterThan(0);
     expect(typeof map[tool]).toBe("string");
   });
@@ -134,6 +205,19 @@ describe("checkCarrierVocabulary — citations match the owning carrier map", ()
     expect(rows[0]).toContain(map[tool]!);
   });
 
+  test("F2: a citation for a tool dropped from the map still reddens (pattern is map-independent)", () => {
+    const dropped = tools[tools.length - 1]!;
+    const partial = Object.fromEntries(Object.entries(map).filter(([name]) => name !== dropped));
+    const docs: Doc[] = [
+      { rel: TEAM_DOC, text: Object.keys(partial).map((name) => `\`${name}.${partial[name]}\``).join(" and ") },
+      { rel: "fixture.md", text: `Still cited: \`${dropped}.${map[dropped]}\`.` },
+    ];
+    const rows = checkCarrierVocabulary(docs, partial).rows;
+    expect(rows).toHaveLength(1);
+    expect(rows[0]).toStartWith("fixture.md:1 ");
+    expect(rows[0]).toContain(`names tool "${dropped}", which is not in the carrier map`);
+  });
+
   test("a carrier tool dropped from the team document yields a named row", () => {
     const missing = tools[tools.length - 1]!;
     const text = tools
@@ -151,6 +235,31 @@ describe("checkCarrierVocabulary — citations match the owning carrier map", ()
       error: "could not locate the `export const TEAM_DISPATCH_TOOLS = {` declaration",
     });
     expect(checkCarrierVocabulary([{ rel: TEAM_DOC, text: "" }], {}).rows[0]).toContain("owning map is empty");
+  });
+
+  test("F3: a partially parsed declaration is reported line by line", () => {
+    const source = [
+      "const x = 1",
+      "export const TEAM_DISPATCH_TOOLS = {",
+      `  ${tool}: '${map[tool]}',`,
+      `  ${tool}_second: 'field', // trailing comment`,
+      "} as const",
+    ].join("\n");
+    const parsed = parseCarrierMap(source);
+    if ("error" in parsed) throw new Error(`unexpected error: ${parsed.error}`);
+    expect(parsed.problems).toHaveLength(1);
+    expect(parsed.problems[0]).toEqual({ line: 4, text: `${tool}_second: 'field', // trailing comment` });
+    // The valid entry is still parsed, but the caller must not treat the map as
+    // an authority while a line went unread.
+    expect(parsed.map).toEqual({ [tool]: map[tool]! });
+  });
+
+  test("F3: a comment-only line inside the declaration is not a problem", () => {
+    const parsed = parseCarrierMap(
+      ["export const TEAM_DISPATCH_TOOLS = {", "  // a note", "  /* another */", `  ${tool}: '${map[tool]}',`, "} as const"].join("\n"),
+    );
+    if ("error" in parsed) throw new Error(parsed.error);
+    expect(parsed.problems).toEqual([]);
   });
 });
 
@@ -195,6 +304,23 @@ describe("checkReadmePin — recorded blob hashes equal git hash-object", () => 
     expect(rows[0]).toContain(hash("a"));
     expect(rows[0]).toContain(hash("c"));
     expect(rows[0]).toContain(siblingPath(siblings[0]!));
+  });
+
+  test("F5: a duplicate record for the same sibling is named, so a stale duplicate cannot hide", () => {
+    const rows = checkReadmePin({
+      recorderRel,
+      recorderText: recorder([
+        [siblings[0]!, hash("a")],
+        [siblings[0]!, hash("d")],
+        [siblings[1]!, hash("b")],
+      ]),
+      packageDir,
+      siblings,
+      hashOf: (rel) => (rel === siblingPath(siblings[0]!) ? hash("a") : hash("b")),
+    }).rows;
+    expect(rows).toHaveLength(1);
+    expect(rows[0]).toStartWith(`${recorderRel}:3 `);
+    expect(rows[0]).toContain(`records "${siblings[0]}" a second time (first record at line 2)`);
   });
 
   test("a missing sibling entry and a non-sibling entry are each named", () => {
