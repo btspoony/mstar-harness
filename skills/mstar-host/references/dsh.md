@@ -821,6 +821,24 @@ No-argument iteration-drive resumes the primary coordinator's workflow; nonempty
   resumed by name on the Team channel, and a recorded continuable-subagent id on
   the direct one.
 
+## PR-review posting
+
+- **Route:** the main agent (the command's orchestrator) posts at Stage 3 through
+  MCP **`mstar_pr_review`** (`mcp__mstar__mstar_pr_review`) with
+  `action: "post"`, `pr: "<n>"` and `bodyFile: "<absolute-body-path>"`, or
+  CLI `mstar pr-review post --pr <n> --body-file <path>`; optional inline
+  findings use `findings: "<file.json>"` / `--findings <file.json>`.
+  MCP workspace/control-root requirements remain those in § MCP delivery.
+  Read-only seats never post, including on a Team-only profile.
+- **Body and event:** follow **mstar-audit** →
+  [§ Report template](../../mstar-audit/references/pr-review.md#report-template-github-review-body)
+  and publish with event **`COMMENT`**, per
+  [§ Comment posting](../../mstar-audit/references/pr-review.md#comment-posting).
+- **Save before cleanup:** the main agent must save the local report whether
+  posting succeeds, fails, or is `n/a-no-pr`; dsh seat completion or POST failure
+  never waives that obligation. Archive details belong to **mstar-audit** →
+  [§ Local report archive](../../mstar-audit/references/pr-review.md#local-report-archive).
+
 ## Read-only fan-out via the `workflow` tool
 
 dsh also exposes the upstream **`workflow`** tool
