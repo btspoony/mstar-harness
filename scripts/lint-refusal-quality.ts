@@ -583,6 +583,9 @@ export function scanSource(source: string, file: string): RefusalFinding[] {
       const declaration = resolveDeclaration(scope, node.text);
       if (declaration) {
         if (!declaration.initializer || context.seen.has(declaration)) return undefined;
+        // The initializer has not run yet if it comes later in the file: a hoisted `var` is
+        // still `undefined` here and a `let`/`const` is in its temporal dead zone.
+        if (declaration.getEnd() > node.getStart()) return undefined;
         // A `const` binding cannot change; a `let`/`var` proves from its initializer only when
         // no write resolves to this exact declaration.
         if ((declaration.parent.flags & ts.NodeFlags.Const) === 0 && writtenDeclarations.has(declaration)) return undefined;
@@ -663,6 +666,7 @@ export function scanSource(source: string, file: string): RefusalFinding[] {
     if (ts.isIdentifier(node)) {
       const declaration = resolveDeclaration(scope ?? scopeByNode.get(node), node.text);
       if (!declaration) return MESSAGE_OPAQUE;
+      if (declaration.getEnd() > node.getStart()) return MESSAGE_OPAQUE;
       if ((declaration.parent.flags & ts.NodeFlags.Const) === 0 && writtenDeclarations.has(declaration)) return MESSAGE_MUTABLE;
       if (!declaration.initializer || seen.has(declaration)) return MESSAGE_OPAQUE;
       return analyzeMessage(declaration.initializer, scopeByNode.get(declaration), new Set(seen).add(declaration));

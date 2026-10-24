@@ -568,6 +568,14 @@ describe("refusal quality scanner", () => {
     expect(scan(`const stable = "Run mstar status validate."; ${refuse("stable")}`)).toEqual([]);
   });
 
+  test("proves a declaration only after its initializer runs", () => {
+    const scan = (source: string) => scanSource(source, "packages/commands/src/fixture.ts").map(({ classification }) => classification);
+    const refuse = (recovery: string) => `refusalEnvelope({ command: "x", status: "refused", code: "x.blocked", message: "Blocked", recovery: ${recovery} });`;
+    expect(scan(`function f() { ${refuse("hoisted")} var hoisted = "Run mstar status validate."; }`)).toEqual(["missing-recovery"]);
+    expect(scan(`function f() { var hoisted = "Run mstar status validate."; ${refuse("hoisted")} }`)).toEqual([]);
+    expect(scan(`function f() { ${refuse("tdz")} let tdz = "Run mstar status validate."; }`)).toEqual(["missing-recovery"]);
+  });
+
   test("tracks writes by declaration, not by name or member access", () => {
     const scan = (source: string) => scanSource(source, "packages/commands/src/fixture.ts").map(({ classification }) => classification);
     const refuse = (recovery: string) => `refusalEnvelope({ command: "x", status: "refused", code: "x.blocked", message: "Blocked", recovery: ${recovery} });`;
