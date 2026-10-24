@@ -632,6 +632,13 @@ describe("refusal quality scanner", () => {
       }
       fail({ code: "valid.code", message: flag ? "Run mstar status validate." : "Use mstar nonexistent --bad" });
     `)).toEqual(["unreachable-recovery"]);
+    expect(scan(`new CoordinationError("valid.code", flag ? "Use mstar nonexistent --bad" : dynamicMessage());`)).toEqual(["unreachable-recovery"]);
+    expect(scan(`
+      function fail(facts: { code: string; message: string }) {
+        return new CoordinationError(facts.code, facts.message);
+      }
+      fail({ code: "valid.code", message: flag ? "Run mstar status validate." : dynamicMessage() });
+    `)).toEqual(["unreachable-recovery"]);
   });
 
   test("a stale allowlist entry reports its tracking issue and refresh action", () => {

@@ -586,9 +586,11 @@ export function scanSource(source: string, file: string): RefusalFinding[] {
   };
   // Message reachability considers every possible value, not one representative: a
   // conditional's arms are unioned, and only a const binding proves from its initializer.
-  type MessageAnalysis = { kind: "texts"; texts: string[] } | { kind: "opaque" } | { kind: "mutable" };
-  const MESSAGE_OPAQUE: MessageAnalysis = { kind: "opaque" };
-  const MESSAGE_MUTABLE: MessageAnalysis = { kind: "mutable" };
+  // `texts` carries the arms whose text is known even when another arm is opaque or
+  // mutable, so a known unreachable command is never discarded by a sibling arm.
+  type MessageAnalysis = { kind: "texts" | "opaque" | "mutable"; texts: string[] };
+  const MESSAGE_OPAQUE: MessageAnalysis = { kind: "opaque", texts: [] };
+  const MESSAGE_MUTABLE: MessageAnalysis = { kind: "mutable", texts: [] };
   const analyzeMessage = (node: ts.Expression | undefined, scope?: Scope, seen = new Set<ts.VariableDeclaration>()): MessageAnalysis => {
     if (!node) return MESSAGE_OPAQUE;
     if (ts.isParenthesizedExpression(node) || ts.isAsExpression(node) || ts.isTypeAssertionExpression(node) || ts.isSatisfiesExpression(node)) {
@@ -604,9 +606,10 @@ export function scanSource(source: string, file: string): RefusalFinding[] {
         ? [node.whenTrue, node.whenFalse]
         : [node.left, node.right];
       const analyzed = arms.map((arm) => analyzeMessage(arm, scope, new Set(seen)));
-      if (analyzed.some((arm) => arm.kind === "mutable")) return MESSAGE_MUTABLE;
-      if (analyzed.some((arm) => arm.kind !== "texts")) return MESSAGE_OPAQUE;
-      return { kind: "texts", texts: analyzed.flatMap((arm) => (arm as { texts: string[] }).texts) };
+      const texts = analyzed.flatMap((arm) => arm.texts);
+      if (analyzed.some((arm) => arm.kind === "mutable")) return { kind: "mutable", texts };
+      if (analyzed.some((arm) => arm.kind === "opaque")) return { kind: "opaque", texts };
+      return { kind: "texts", texts };
     }
     if (ts.isIdentifier(node)) {
       const declaration = resolveDeclaration(scope ?? scopeByNode.get(node), node.text);
@@ -835,11 +838,10 @@ export function scanSource(source: string, file: string): RefusalFinding[] {
     const unprovableMessage = resolvedIsOpaqueField
       || (messageIsObjectField && analyzedMessage.kind !== "texts")
       || analyzedMessage.kind === "mutable";
-    if (unprovableMessage) {
-      addFinding(node, "unreachable-recovery", "Rule #341 class 4 (discoverability): CoordinationError message cannot be proven to name a reachable command (opaque or mutable source).");
-    } else if (analyzedMessage.kind === "texts"
-      && analyzedMessage.texts.some((text) => /\bmstar\s+[a-z][a-z0-9.-]*/i.test(text) && !recoveryIsReachable(text, getGrammar()))) {
+    if (analyzedMessage.texts.some((text) => /\bmstar\s+[a-z][a-z0-9.-]*/i.test(text) && !recoveryIsReachable(text, getGrammar()))) {
       addFinding(node, "unreachable-recovery", "Rule #341 class 4 (discoverability): CoordinationError message references a CLI command absent from the help grammar.");
+    } else if (unprovableMessage) {
+      addFinding(node, "unreachable-recovery", "Rule #341 class 4 (discoverability): CoordinationError message cannot be proven to name a reachable command (opaque or mutable source).");
     }
   };
   const visit = (node: ts.Node): void => {
