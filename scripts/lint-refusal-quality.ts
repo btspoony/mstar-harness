@@ -453,10 +453,12 @@ export function scanSource(source: string, file: string): RefusalFinding[] {
     if (returns.length > 0) helperReturns.set(statement, returns);
   }
   // Recovery text proof tracks which runtime outcomes an expression can produce: non-blank
-  // text, the empty string, or a nullish value. The operators differ — `??` falls back only
-  // on nullish, `||` also on the empty string — so one merge rule would prove text that the
-  // runtime never uses. `undefined` here means unproven, which fails closed.
-  type RecoveryOutcome = "text" | "empty" | "nullish";
+  // text, whitespace-only text, the empty string, or a nullish value. Whitespace is truthy,
+  // so it is its own outcome: no operator drops it, and an arm that produces it can never be
+  // masked by a sibling arm's real text. `??` falls back only on nullish and `||` also on the
+  // empty string, so one merge rule would prove text the runtime never uses. `undefined`
+  // here means unproven, which fails closed.
+  type RecoveryOutcome = "text" | "blank" | "empty" | "nullish";
   interface RecoveryText { outcomes: Set<RecoveryOutcome>; text?: string; }
   interface RecoveryContext {
     scope?: Scope;
@@ -493,8 +495,8 @@ export function scanSource(source: string, file: string): RefusalFinding[] {
       return recoveryTextOf(node.expression, context);
     }
     if (ts.isStringLiteralLike(node) || ts.isNoSubstitutionTemplateLiteral(node)) {
-      // A whitespace-only string is truthy text; only the empty string is blank.
-      return node.text === "" ? RECOVERY_EMPTY : recoveryText(node.text);
+      if (node.text === "") return RECOVERY_EMPTY;
+      return { outcomes: new Set<RecoveryOutcome>([node.text.trim() === "" ? "blank" : "text"]), text: node.text };
     }
     if (ts.isTemplateExpression(node)) {
       if (!node.templateSpans.every((span) => ts.isIdentifier(span.expression) && DECLARED_SAFE_INTERPOLATIONS[span.expression.text] === true)) return undefined;
@@ -530,7 +532,9 @@ export function scanSource(source: string, file: string): RefusalFinding[] {
       const right = recoveryTextOf(node.right, { ...context, seen: new Set(context.seen) });
       if (!left || !right || left.outcomes.has("nullish") || right.outcomes.has("nullish")) return undefined;
       const outcomes = new Set<RecoveryOutcome>(
-        [...left.outcomes].flatMap((a) => [...right.outcomes].map((b): RecoveryOutcome => (a === "text" || b === "text" ? "text" : "empty"))),
+        [...left.outcomes].flatMap((a) => [...right.outcomes].map((b): RecoveryOutcome => (a === "text" || b === "text"
+          ? "text"
+          : a === "blank" || b === "blank" ? "blank" : "empty"))),
       );
       const text = left.text !== undefined && right.text !== undefined ? left.text + right.text : undefined;
       return { outcomes, ...(text !== undefined ? { text } : {}) };

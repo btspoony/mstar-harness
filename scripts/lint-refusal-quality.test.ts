@@ -527,6 +527,16 @@ describe("refusal quality scanner", () => {
     expect(findings.map(({ classification }) => classification)).toEqual(["missing-recovery"]);
   });
 
+  test("keeps a whitespace-only arm from being masked by a sibling arm's text", () => {
+    const scan = (recovery: string) => scanSource(
+      `refusalEnvelope({ command: "x", status: "refused", code: "x.blocked", message: "Blocked", recovery: ${recovery} });`,
+      "packages/commands/src/fixture.ts",
+    );
+    expect(scan(`(flag ? "Run mstar status validate." : "   ") ?? "Run mstar status validate."`).map(({ classification }) => classification)).toEqual(["missing-recovery"]);
+    expect(scan(`(flag ? "Run mstar status validate." : "   ") || "Run mstar status validate."`).map(({ classification }) => classification)).toEqual(["missing-recovery"]);
+    expect(scan(`(flag ? "Run mstar status validate." : "Register the workflow first with mstar workflow register.") ?? "Run mstar status validate."`)).toEqual([]);
+  });
+
   test("a stale allowlist entry reports its tracking issue and refresh action", () => {
     const snippet = `refusalEnvelope({ code: "x.bad" })`;
     const finding = {
