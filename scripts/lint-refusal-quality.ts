@@ -407,7 +407,10 @@ export function scanSource(source: string, file: string): RefusalFinding[] {
     for (let current = scope; current; current = current.parent) {
       const declarations = current.declarations.get(name);
       if (declarations) {
-        const preceding = declarations.filter((declaration) => declaration.getEnd() <= useStart);
+        // A redeclaration without an initializer supplies no value: keep the nearest preceding
+        // declaration that has one. If this scope declares the name but none precedes the use
+        // with a value, fail closed rather than escaping to an outer scope.
+        const preceding = declarations.filter((declaration) => declaration.getEnd() <= useStart && declaration.initializer);
         return preceding.length > 0 ? { declaration: preceding[preceding.length - 1]!, owner: current } : undefined;
       }
       if (current.shadowNames.has(name)) return undefined;
@@ -608,8 +611,14 @@ export function scanSource(source: string, file: string): RefusalFinding[] {
         const { declaration, owner } = resolved;
         if (!declaration.initializer || context.seen.has(declaration)) return undefined;
         // A `const` binding cannot change; a `let`/`var` proves from its initializer only when
-        // no write to this binding falls between that declaration and this use.
-        if ((declaration.parent.flags & ts.NodeFlags.Const) === 0 && isWrittenBetween(owner, node.text, declaration, node.getStart())) return undefined;
+        // no write to this binding falls between that declaration and this use. A read inside
+        // another function body is captured: source order says nothing about call order, so
+        // any write to the binding anywhere in the file fails closed.
+        if ((declaration.parent.flags & ts.NodeFlags.Const) === 0) {
+          if (enclosingFunctionScope(scope) !== enclosingFunctionScope(owner)) {
+            if ((writesByScope.get(owner)?.get(node.text) ?? []).length > 0) return undefined;
+          } else if (isWrittenBetween(owner, node.text, declaration, node.getStart())) return undefined;
+        }
         return recoveryTextOf(declaration.initializer, {
           ...context, scope: scopeByNode.get(declaration), seen: new Set(context.seen).add(declaration),
         });
@@ -688,7 +697,11 @@ export function scanSource(source: string, file: string): RefusalFinding[] {
       const resolved = resolveDeclaration(scope ?? scopeByNode.get(node), node.text, node.getStart());
       if (!resolved) return MESSAGE_OPAQUE;
       const { declaration, owner } = resolved;
-      if ((declaration.parent.flags & ts.NodeFlags.Const) === 0 && isWrittenBetween(owner, node.text, declaration, node.getStart())) return MESSAGE_MUTABLE;
+      if ((declaration.parent.flags & ts.NodeFlags.Const) === 0) {
+        const captured = enclosingFunctionScope(scope ?? scopeByNode.get(node)) !== enclosingFunctionScope(owner);
+        const writes = writesByScope.get(owner)?.get(node.text) ?? [];
+        if (captured ? writes.length > 0 : isWrittenBetween(owner, node.text, declaration, node.getStart())) return MESSAGE_MUTABLE;
+      }
       if (!declaration.initializer || seen.has(declaration)) return MESSAGE_OPAQUE;
       return analyzeMessage(declaration.initializer, scopeByNode.get(declaration), new Set(seen).add(declaration));
     }

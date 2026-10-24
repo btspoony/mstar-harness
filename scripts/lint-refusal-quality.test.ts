@@ -585,6 +585,23 @@ describe("refusal quality scanner", () => {
     expect(scan(`var recovery = "Run mstar status validate."; recovery = dynamicRecovery(); var recovery = "Register the workflow first with mstar workflow register."; ${refuse("recovery")}`)).toEqual([]);
   });
 
+  test("fails closed when a mutable binding is captured and written anywhere", () => {
+    const findings = scanSource(`
+      let recovery = "Run mstar status validate.";
+      function helper(): string { return recovery; }
+      recovery = "";
+      refusalEnvelope({ command: "x", status: "refused", code: "x.blocked", message: "Blocked", recovery: helper() });
+    `, "packages/commands/src/fixture.ts");
+    expect(findings.map(({ classification }) => classification)).toEqual(["missing-recovery"]);
+  });
+
+  test("keeps an earlier initializer through a bare redeclaration", () => {
+    const scan = (source: string) => scanSource(source, "packages/commands/src/fixture.ts").map(({ classification }) => classification);
+    const refuse = (recovery: string) => `refusalEnvelope({ command: "x", status: "refused", code: "x.blocked", message: "Blocked", recovery: ${recovery} });`;
+    expect(scan(`var recovery = "Run mstar status validate."; var recovery; ${refuse("recovery")}`)).toEqual([]);
+    expect(scan(`let recovery = "Run mstar status validate."; recovery = dynamicRecovery(); ${refuse("recovery")}`)).toEqual(["missing-recovery"]);
+  });
+
   test("tracks writes by declaration, not by name or member access", () => {
     const scan = (source: string) => scanSource(source, "packages/commands/src/fixture.ts").map(({ classification }) => classification);
     const refuse = (recovery: string) => `refusalEnvelope({ command: "x", status: "refused", code: "x.blocked", message: "Blocked", recovery: ${recovery} });`;
