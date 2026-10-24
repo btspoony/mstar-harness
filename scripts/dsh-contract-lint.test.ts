@@ -28,6 +28,7 @@ import {
   checkSeatBounding,
   parseCarrierMap,
   scanFences,
+  SEAT_TEMPLATE_DOC,
   type Doc,
 } from "./dsh-contract-lint.ts";
 
@@ -148,13 +149,65 @@ describe("checkSeatBounding — seat header blocks carry the bounding labels", (
       const text = lines.join("\n");
       const result = checkSeatBounding([{ rel: "fixture.md", text }]);
       expect(result.blocks).toBe(0);
-      const coverage = result.rows.filter((row) => row.includes("no fenced segment was scanned"));
+      const coverage = result.rows.filter((row) => row.includes("marker line(s) in the text but"));
       expect(coverage).toHaveLength(1);
       expect(coverage[0]).toStartWith(`fixture.md:${lineOf(text, /^\s*## Assignment/)} `);
-      expect(coverage[0]).toContain("1 `## Assignment` marker line(s) but no fenced segment was scanned");
+      expect(coverage[0]).toContain("1 `## Assignment` marker line(s) in the text but 0 fenced segment(s) scanned");
       // ... and the run-level row also fires, because nothing was scanned at all.
       expect(result.rows.some((row) => row.includes("the seat-bounding gate scanned nothing"))).toBe(true);
     }
+  });
+
+  test("F-1a: a PARTIAL loss (one fence pair dropped, other templates still scan) is a row", () => {
+    // The round-2 survivor: three bare markers plus one still-fenced template.
+    // The old floor compared "zero segments from this document" and stayed green.
+    const text = [
+      "# Doc",
+      "",
+      "## Assignment",
+      `Execute as: ${seat}`,
+      "Delegation: forbidden",
+      "",
+      "## Assignment",
+      `Execute as: ${seat}`,
+      "Delegation: forbidden",
+      "",
+      "```js",
+      "## Assignment",
+      // A non-seat role, so the fenced segment itself adds no bounding row and
+      // the coverage row is the only one asserted here.
+      `Execute as: ${nonSeat}`,
+      "Delegation: forbidden",
+      "```",
+      "",
+    ].join("\n");
+    const result = checkSeatBounding([{ rel: "fixture.md", text }]);
+    expect(result.blocks).toBe(1);
+    expect(result.rows).toHaveLength(1);
+    const coverage = result.rows.filter((row) => row.includes("marker line(s) in the text but"));
+    expect(coverage).toHaveLength(1);
+    expect(coverage[0]).toStartWith(`fixture.md:${lineOf(text, /^## Assignment/)} `);
+    expect(coverage[0]).toContain("3 `## Assignment` marker line(s) in the text but 1 fenced segment(s) scanned");
+  });
+
+  test("F-1b: the seat-template document yielding no segment is its own row", () => {
+    // A marker rename confined to that file drops markers AND segments together,
+    // so the per-document comparison alone cannot see it.
+    const docs: Doc[] = [
+      { rel: SEAT_TEMPLATE_DOC, text: "# Templates\n\n## Brief\n\nExecute as: x\n" },
+      { rel: "other.md", text: payload([`Execute as: ${nonSeat}`, "Delegation: forbidden", "Task category: logic"]) },
+    ];
+    const result = checkSeatBounding(docs);
+    expect(result.blocks).toBe(1);
+    expect(result.rows).toHaveLength(1);
+    expect(result.rows[0]).toStartWith(`${SEAT_TEMPLATE_DOC}:1 `);
+    expect(result.rows[0]).toContain("the seat-template document yielded no fenced `## Assignment` segment");
+    // The same corpus with a real template there is clean.
+    const healthy: Doc[] = [
+      { rel: SEAT_TEMPLATE_DOC, text: payload([`Execute as: ${nonSeat}`, "Delegation: forbidden", "Task category: logic"]) },
+      docs[1]!,
+    ];
+    expect(checkSeatBounding(healthy).rows).toEqual([]);
   });
 
   test("F-1: a corpus with no marker at all yields the zero-coverage row", () => {

@@ -37,9 +37,9 @@
  * bounding contract. Both fence characters count (backtick and tilde, CommonMark
  * closing rule), and an unbalanced fence is itself a row: the tail of such a
  * document would otherwise fall outside every scan. Check 1 also has a coverage
- * floor: a run that scans no segment, or a document whose markers exist but are
- * not fenced, is a row — an empty scan must never read as "all seats are
- * bounded".
+ * floor: a document whose markers outnumber its scanned segments, a run that
+ * scans no segment at all, and the seat-template document yielding none are rows
+ * — an empty or partial scan must never read as "all seats are bounded".
  *
  * Usage: bun run scripts/dsh-contract-lint.ts
  * Exit 0 = the documents match their authorities; exit 1 = at least one row.
@@ -64,6 +64,9 @@ export const DOCS = [
 /** The document that must keep naming every carrier tool. */
 export const TEAM_DOC = "skills/mstar-host/references/dsh-agent-teams.md";
 
+/** The canonical seat-template document: check 1 must keep reading segments from it. */
+export const SEAT_TEMPLATE_DOC = "skills/mstar-host/references/dsh-workflow-scripts.md";
+
 /** The dsh package whose README language pair is pinned. */
 export const README_RECORDER = "packages/dsh/README.i18n.yaml";
 const README_PACKAGE_DIR = "packages/dsh";
@@ -73,8 +76,6 @@ const ASSIGNMENT_HEADING = /##\s+Assignment\s*$/;
 /** A fence line: three or more backticks or tildes, plus its info string. */
 const FENCE_OPEN = /^\s*(`{3,}|~{3,})(.*)$/;
 const EXECUTE_AS = /Execute as/i;
-/** A marker that OWNS its line (leading whitespace allowed — a 4-space indent is the code-block shape). */
-const ASSIGNMENT_MARKER_LINE = /^\s*#{1,6}\s+Assignment\s*$/;
 
 export type Doc = { rel: string; text: string };
 
@@ -159,6 +160,7 @@ export function checkFenceParity(docs: readonly Doc[]): string[] {
  */
 export function checkSeatBounding(docs: readonly Doc[]): { rows: string[]; blocks: number } {
   const rows: string[] = [];
+  const perDoc = new Map<string, number>();
   let blocks = 0;
   for (const doc of docs) {
     const before = blocks;
@@ -187,18 +189,33 @@ export function checkSeatBounding(docs: readonly Doc[]): { rows: string[]; block
         }
       });
     }
-    // Coverage floor, per document: the marker owns a line but no fenced
-    // segment came out of it — de-fenced, 4-space indented, or a renamed fence.
-    // An inline mention (mid-line) is prose, not a marker, so it stays clean.
-    const markerLines = doc.text
+    // Coverage floor, per document: every marker in the text must have become a
+    // scanned segment. Comparing the two catches a PARTIAL loss too (one fence
+    // pair dropped while other templates still scan), which a "zero segments
+    // from this document" test cannot see. A marker is the segmentation pattern
+    // itself, so a mid-line prose mention (which does not end with the marker)
+    // is not counted; a 4-space indent is.
+    const scanned = blocks - before;
+    perDoc.set(doc.rel, scanned);
+    const markers = doc.text
       .split(/\r?\n/)
-      .flatMap((line, index) => (ASSIGNMENT_MARKER_LINE.test(line) ? [index + 1] : []));
-    if (markerLines.length > 0 && blocks === before) {
+      .flatMap((line, index) => (ASSIGNMENT_HEADING.test(line) ? [index + 1] : []));
+    if (markers.length > scanned) {
       rows.push(
-        `${doc.rel}:${markerLines[0]} ${markerLines.length} \`## Assignment\` marker line(s) but no fenced segment was scanned - `
-          + "the marker sits outside a fenced block (de-fenced, 4-space indented, or a renamed fence), so its seats are unchecked",
+        `${doc.rel}:${markers[0]} ${markers.length} \`## Assignment\` marker line(s) in the text but ${scanned} fenced segment(s) scanned - `
+          + "the marker sits outside a scanned fence (de-fenced, 4-space indented, or a renamed fence), so those seats are unchecked",
       );
     }
+  }
+  // The seat-template document is the canonical prompt corpus: losing its
+  // segments (a marker rename confined to that file) is invisible to the
+  // per-document marker comparison, because markers and segments drop together.
+  const seenTemplate = docs.find((doc) => doc.rel === SEAT_TEMPLATE_DOC);
+  if (seenTemplate !== undefined && (perDoc.get(SEAT_TEMPLATE_DOC) ?? 0) === 0) {
+    rows.push(
+      `${SEAT_TEMPLATE_DOC}:1 the seat-template document yielded no fenced \`## Assignment\` segment - `
+        + "its Assignment prompt templates are the corpus check 1 exists to read; a renamed or removed marker there disables the gate",
+    );
   }
   if (blocks === 0) {
     // Run-level: nothing at all was scanned, which is indistinguishable from a
