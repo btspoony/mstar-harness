@@ -3114,6 +3114,13 @@ export function readOperationReplay<T>(
   input: {
     operationId: string;
     requestHash: string;
+    /**
+     * The previous release's fingerprint of the SAME intent, when one exists:
+     * a receipt recorded before the identity form changed still replays for an
+     * unchanged retry instead of conflicting with its own operation id (PR
+     * #578). Absent when this call has no compatible older form.
+     */
+    legacyRequestHash?: string | null;
     workflowId: string;
     planId: string | null;
     token: { kind: ExecutionKind; key: readonly string[] };
@@ -3121,7 +3128,7 @@ export function readOperationReplay<T>(
 ): ExecutionReceipt<T> | null {
   const recorded = readCommittedOperation(tx.db, tx.epoch, input.operationId);
   if (recorded === null) return null;
-  if (recorded.requestHash !== input.requestHash) {
+  if (recorded.requestHash !== input.requestHash && recorded.requestHash !== input.legacyRequestHash) {
     // §4.1 (A13) the operation id is already committed for a DIFFERENT semantic
     // intent: the receipt is not restored and the requested effect is withheld,
     // and the typed cause names both so the caller sees the mismatch instead of

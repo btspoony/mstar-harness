@@ -6,7 +6,7 @@ import {
   PLAN_PARALLELISM_VALUES,
   WORKFLOW_COMPOUND_OUTCOMES, WORKFLOW_DELIVERY_KINDS, WORKFLOW_LIFECYCLE_STATUSES,
   adoptTerminalWorkflow, createFsStore, decodeExecutionSessionRef,
-  executionContextFor, mutateExecutionWorkflow, normalizeIterationCompassRef, registerShippedCatalogExecution,
+  executionContextFor, mutateExecutionWorkflow, registerShippedCatalogExecution,
   reopenExecutionWorkflow, resolveProcessHarnessDir, setArtifactStore,
   type ActivationAttestation,
   type CatalogExecutionWorkflow, type ExecutionIdentity, type ExecutionToken, type WorkflowCompoundOutcome,
@@ -809,15 +809,16 @@ export function getWorkflowCommandDefinitions(): readonly CommandDefinition[] {
       }
       const harnessDir = resolveProcessHarnessDir(context.cwd, input.harness);
       if (harnessDir === null) return refusalEnvelope({ command: "iteration.register", status: "usage", code: "command.invalid-input", exitCode: 2, message: "harness dir not found; supply harness" });
-      // Normalize BEFORE the registration workflow/catalog plan is composed:
-      // the catalog identity is derived from this same value, so the caller's
-      // absolute-in-root spelling must reach every consumer in the stored
-      // (harness-relative) contract form — otherwise the producer's own
-      // normalization would disagree with the catalog plan and the post-write
-      // identity check would refuse an otherwise-successful registration
-      // (Greptile #301 issue 1).
-      const compassRef = normalizeIterationCompassRef(input.compassRef, harnessDir, (detail) => new WorkflowInputError(detail));
-      const workflow: CatalogExecutionWorkflow = { kind: "iteration", workflowId: input.workflow, options: { harnessDir, compassRef, branch: { base: input.branchBase, integration: input.branchIntegration, target: input.branchTargetIteration }, rows: rows as never[], ...(input.project === undefined ? {} : { project: input.project }), ...(input.startedAt === undefined ? {} : { startedAt: input.startedAt }) } };
+      // The producer's request fingerprint is the caller's spelling, so this
+      // transport hands `--compass-ref` through unchanged: canonicalization
+      // follows symlinks, and settling it here would move the fingerprint of a
+      // committed alias once its target is deleted, turning its retry into a
+      // refusal. Containment is the PRODUCER's post-replay proof: it resolves
+      // the pointer against the real harness root, so an absolute pointer under
+      // a symlinked `--harness` and an external alias onto an in-root compass
+      // are accepted, while a genuinely escaping pointer is still refused for a
+      // new registration (I-000868, PR #578).
+      const workflow: CatalogExecutionWorkflow = { kind: "iteration", workflowId: input.workflow, options: { harnessDir, compassRef: input.compassRef, branch: { base: input.branchBase, integration: input.branchIntegration, target: input.branchTargetIteration }, rows: rows as never[], ...(input.project === undefined ? {} : { project: input.project }), ...(input.startedAt === undefined ? {} : { startedAt: input.startedAt }) } };
       const identity: ExecutionIdentity = context.executionIdentity ?? {
         source: context.host === undefined ? "local" : "host",
         sessionId: context.sessionId ?? "",

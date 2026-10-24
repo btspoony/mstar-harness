@@ -166,6 +166,7 @@ __export(exports_engine, {
   assignmentHeaderRegion: () => assignmentHeaderRegion,
   backupStore: () => backupStore,
   bindExecutionSession: () => bindExecutionSession,
+  canonicalIterationCompassRef: () => canonicalIterationCompassRef,
   canonicalizeNearestExisting: () => canonicalizeNearestExisting,
   captureIssue: () => captureIssue,
   captureProjectionSources: () => captureProjectionSources,
@@ -13159,7 +13160,7 @@ function readOperationReplay(tx, input) {
   const recorded = readCommittedOperation(tx.db, tx.epoch, input.operationId);
   if (recorded === null)
     return null;
-  if (recorded.requestHash !== input.requestHash) {
+  if (recorded.requestHash !== input.requestHash && recorded.requestHash !== input.legacyRequestHash) {
     const problem = {
       component: "operation",
       path: "operationId",
@@ -15119,7 +15120,17 @@ function describePointerValue(value) {
     return "an array";
   return `a ${typeof value}`;
 }
-function resolveRegisteredPlanFile(input) {
+function planPointerRefusal(context) {
+  return (code2, message, extra = {}) => new PlanPathError(code2, message, {
+    received: context.file,
+    form: context.form,
+    base: context.base,
+    expected: context.expected,
+    permitted: context.permitted,
+    ...extra
+  });
+}
+function planPointerContext(input) {
   const { harnessRoot, planId, file } = input;
   if (typeof planId !== "string" || typeof file !== "string") {
     throw new PlanPathError("plan-path.invalid-pointer", "a plan pointer needs a plan id and a file path as strings; received " + `${describePointerValue(planId)} as the plan id and ${describePointerValue(file)} as the file`, { plan_id: typeof planId === "string" ? planId : null, form: null });
@@ -15132,7 +15143,7 @@ function resolveRegisteredPlanFile(input) {
     `canonical absolute path ${expected}`,
     `normalized harness-relative path resolved against ${base}`
   ];
-  const refusal = (code2, message, extra = {}) => new PlanPathError(code2, message, { received: file, form, base, expected, permitted, ...extra });
+  const refusal = planPointerRefusal({ planId, file, base, planDir, expected, form, permitted });
   try {
     assertSafePathComponent(planId, "plan id");
   } catch (error) {
@@ -15155,6 +15166,16 @@ function resolveRegisteredPlanFile(input) {
   if (candidate !== expected) {
     throw refusal("plan-path.invalid-pointer", `plan ${planId} file ${JSON.stringify(file)} resolves to ${candidate}, not the registered plan file ${expected}; permitted forms are ${permitted.join(" or ")}`, { plan_id: planId, actual: candidate });
   }
+  return { planId, file, base, planDir, expected, form, permitted };
+}
+function canonicalRegisteredPlanPath(input) {
+  const { planDir, expected } = planPointerContext(input);
+  return { planPath: expected, planDir };
+}
+function resolveRegisteredPlanFile(input) {
+  const context = planPointerContext(input);
+  const { planId, expected, planDir } = context;
+  const refusal = planPointerRefusal(context);
   let isFile2 = false;
   try {
     isFile2 = existsSync10(expected) && statSync4(expected).isFile();
@@ -15633,6 +15654,14 @@ function planWorkflowSnapshot(workflowId, options, startedAt) {
   return snapshot;
 }
 function normalizeIterationCompassRef(ref, harnessRoot, refuse) {
+  const canonical2 = canonicalIterationCompassRef(ref, harnessRoot, refuse);
+  const path2 = canonicalizeNearestExisting(resolve9(harnessRoot, canonical2));
+  if (!existsSync11(path2) || !statSync5(path2).isFile()) {
+    throw refuse(reviewedCompassMissing(ref, harnessRoot));
+  }
+  return canonical2;
+}
+function canonicalIterationCompassRef(ref, harnessRoot, refuse) {
   const rootCanon = canonicalizeNearestExisting(harnessRoot);
   const prefix = rootCanon.endsWith("/") ? rootCanon : `${rootCanon}/`;
   if (isAbsolute5(ref)) {
@@ -15640,17 +15669,11 @@ function normalizeIterationCompassRef(ref, harnessRoot, refuse) {
     if (canon2 !== rootCanon && !canon2.startsWith(prefix)) {
       throw refuse(`options.compassRef resolves outside the harness root - the reviewed compass_ref must address a ` + `document inside ${harnessRoot}; store the harness-relative pointer of that compass instead`);
     }
-    if (!existsSync11(canon2) || !statSync5(canon2).isFile()) {
-      throw refuse(reviewedCompassMissing(ref, harnessRoot));
-    }
     return relative3(rootCanon, canon2).split(sep6).join("/");
   }
   const canon = canonicalizeNearestExisting(resolve9(harnessRoot, ref));
   if (canon !== rootCanon && !canon.startsWith(prefix)) {
     throw refuse(`options.compassRef escapes the harness root - the reviewed compass_ref must address a document inside ` + `${harnessRoot}; store the harness-relative pointer of that compass instead`);
-  }
-  if (!existsSync11(canon) || !statSync5(canon).isFile()) {
-    throw refuse(reviewedCompassMissing(ref, harnessRoot));
   }
   return relative3(rootCanon, canon).split(sep6).join("/");
 }
@@ -15672,7 +15695,7 @@ function iterationWorkflowSnapshot(workflowId, options, startedAt) {
     plans: options.rows.map((r) => ({
       id: r.id,
       title: r.title,
-      file: resolveRegisteredPlanFile({ harnessRoot: resolve9(options.harnessDir), planId: r.id, file: r.file }).planPath,
+      file: canonicalRegisteredPlanPath({ harnessRoot: resolve9(options.harnessDir), planId: r.id, file: r.file }).planPath,
       status: "Todo",
       metadata: {
         iteration_refs: [options.compassRef],
@@ -15954,7 +15977,7 @@ function validateDelta(delta, kind) {
     binding: { catalogKind: expectedBindingKind, catalogId }
   };
 }
-function validateRequest(request) {
+function validateCatalogExecutionRequest(request) {
   if (!isPlainObject(request))
     invalid3("a catalog execution request object is required");
   const operationId = requireText(request.operationId, "request.operationId");
@@ -16058,7 +16081,19 @@ function assertReviewedCompassDocument(workflowId, harnessDir, compassRef) {
     throw invalid4(`options.compassRef names the compass of iteration ${JSON.stringify(String(doc.iteration_id))}, not of workflow ` + `${workflowId} (${path2}); registration records this iteration's own reviewed delivery compass`);
   }
 }
-function normalizeIterationWorkflow(workflow) {
+function assertRegisteredCompassDocument(workflow) {
+  if (workflow.kind !== "iteration")
+    return;
+  assertReviewedCompassDocument(workflow.workflowId, workflow.options.harnessDir, workflow.options.compassRef);
+}
+function assertRegisteredPlanDocuments(workflow) {
+  if (workflow.kind !== "iteration")
+    return;
+  for (const row of workflow.options.rows) {
+    resolveRegisteredPlanFile({ harnessRoot: resolve10(workflow.options.harnessDir), planId: row.id, file: row.file });
+  }
+}
+function normalizeIterationRowFiles(workflow) {
   if (!isPlainObject(workflow) || workflow.kind !== "iteration")
     return workflow;
   const options = workflow.options;
@@ -16066,11 +16101,9 @@ function normalizeIterationWorkflow(workflow) {
     return workflow;
   const rows = options.rows;
   const harnessDir = options.harnessDir;
-  const compassRef = options.compassRef;
-  if (!Array.isArray(rows) || typeof harnessDir !== "string" || !isAbsolute6(harnessDir) || typeof compassRef !== "string" || compassRef.trim() === "")
+  if (!Array.isArray(rows) || typeof harnessDir !== "string" || !isAbsolute6(harnessDir))
     return workflow;
-  const normalizedCompassRef = normalizeIterationCompassRef(compassRef, harnessDir, (detail) => new CatalogRegistrationError("catalog.registration-invalid", detail));
-  let changed = normalizedCompassRef !== compassRef;
+  let changed = false;
   const resolvedRows = rows.map((row) => {
     if (!isPlainObject(row))
       return row;
@@ -16078,21 +16111,22 @@ function normalizeIterationWorkflow(workflow) {
     const file = row.file;
     if (typeof id !== "string" || id.trim() === "" || typeof file !== "string" || file.trim() === "")
       return row;
-    const planPath = resolveRegisteredPlanFile({ harnessRoot: harnessDir, planId: id, file }).planPath;
+    const planPath = canonicalRegisteredPlanPath({ harnessRoot: harnessDir, planId: id, file }).planPath;
     if (planPath === file)
       return row;
     changed = true;
     return { ...row, file: planPath };
   });
-  if (typeof workflow.workflowId === "string") {
-    assertReviewedCompassDocument(workflow.workflowId, harnessDir, normalizedCompassRef);
-  }
   if (!changed)
     return workflow;
-  return {
-    ...workflow,
-    options: { ...options, compassRef: normalizedCompassRef, rows: resolvedRows }
-  };
+  return { ...workflow, options: { ...options, rows: resolvedRows } };
+}
+function canonicalRegistrationIdentity(request) {
+  const validated = validateCatalogExecutionRequest(request);
+  if (validated.workflow.kind !== "iteration")
+    return validated;
+  const workflow = normalizeIterationRowFiles(validated.workflow);
+  return workflow === validated.workflow ? validated : { ...validated, workflow };
 }
 function normalizeIterationPlanPaths(request) {
   if (!isPlainObject(request))
@@ -16100,10 +16134,22 @@ function normalizeIterationPlanPaths(request) {
   const workflow = request.workflow;
   if (!isPlainObject(workflow) || workflow.kind !== "iteration")
     return request;
-  const normalized = normalizeIterationWorkflow(workflow);
-  if (normalized === workflow)
+  const options = workflow.options;
+  if (!isPlainObject(options))
     return request;
-  return { ...request, workflow: normalized };
+  const compassRef = options.compassRef;
+  const harnessDir = options.harnessDir;
+  if (!Array.isArray(options.rows) || typeof harnessDir !== "string" || !isAbsolute6(harnessDir) || typeof compassRef !== "string" || compassRef.trim() === "")
+    return request;
+  const normalizedCompassRef = canonicalIterationCompassRef(compassRef, harnessDir, (detail) => new CatalogRegistrationError("catalog.registration-invalid", detail));
+  const withRows = normalizeIterationRowFiles(workflow);
+  if (normalizedCompassRef === compassRef && withRows === workflow)
+    return request;
+  const rows = withRows.options.rows;
+  return {
+    ...request,
+    workflow: { ...workflow, options: { ...options, compassRef: normalizedCompassRef, rows } }
+  };
 }
 function assertDeliveryRegistrationFor(options, at) {
   const deliveryKind = options.deliveryKind;
@@ -16150,7 +16196,7 @@ function executionPlanFor(context, request) {
   };
 }
 function resolveCatalogExecutionPlan(context, request) {
-  return executionPlanFor(context, validateRequest(normalizeIterationPlanPaths(request)));
+  return executionPlanFor(context, validateCatalogExecutionRequest(normalizeIterationPlanPaths(request)));
 }
 function workflowEntryOf(plan, snapshot) {
   const entry = {
@@ -18807,7 +18853,7 @@ function validateRecord(record, out) {
   if (!isStringBound(record.runId, 36) || !UUID_V4_RE.test(record.runId)) {
     out.push(violation9(CODE_SCHEMA, `record.runId must be a canonical lowercase RFC4122 v4 UUID; got ${JSON.stringify(record.runId ?? null)}`));
   }
-  const requestState = validateRequest2(record.request, out);
+  const requestState = validateRequest(record.request, out);
   if (isPlainObject5(record.command)) {
     requireExactKeys(record.command, COMMAND_KEYS, [], "record.command", out);
     const argv = record.command.argv;
@@ -18906,7 +18952,7 @@ function validateProducer(producer, out) {
     out.push(violation9(CODE_SCHEMA, "record.producer.version must be a nonempty string"));
   }
 }
-function validateRequest2(request, out) {
+function validateRequest(request, out) {
   if (!isPlainObject5(request)) {
     out.push(violation9(CODE_SCHEMA, "record.request must be a JSON object"));
     return null;
@@ -28785,32 +28831,58 @@ function canonicalIntent(value) {
   }
   return envelope;
 }
-function registrationRequestHash(caller, plan) {
+function registrationRequestHash(caller, request) {
   return semanticRequestHash({
     operation: COMMIT_REGISTRATION_OPERATION,
-    address: { workflow_id: plan.workflowId },
+    address: { workflow_id: request.workflow.workflowId },
     caller,
-    intent: selectSemanticFields(canonicalIntent(plan.request), REGISTRATION_SEMANTICS)
+    intent: selectSemanticFields(canonicalIntent(request), REGISTRATION_SEMANTICS)
   });
 }
+function legacyRegistrationRequestHash(caller, request) {
+  try {
+    return registrationRequestHash(caller, normalizeIterationPlanPaths(request));
+  } catch {
+    return null;
+  }
+}
+function derivedOperationId(intent) {
+  return `op-${createHash18("sha256").update(stableJson(intent), "utf8").digest("hex").slice(0, 24)}`;
+}
+function legacyDerivedOperationId(actor, identity) {
+  let legacy;
+  try {
+    legacy = normalizeIterationPlanPaths(identity);
+  } catch {
+    return null;
+  }
+  if (legacy.workflow === identity.workflow)
+    return null;
+  return derivedOperationId({ actor, workflow: legacy.workflow, delta: catalogDeltaFor(legacy.workflow) });
+}
 async function commitExecutionRegistration(context, request) {
-  const plan = resolveCatalogExecutionPlan(context, request);
-  const operationId = plan.request.operationId;
-  const creation = resolveCreateWorkflow(context.caller, workflowEntryOf(plan, plan.snapshot), plan.snapshot, operationId);
-  const requestHash4 = registrationRequestHash(context.caller, plan);
+  const identity = canonicalRegistrationIdentity(request);
+  const requestHash4 = registrationRequestHash(context.caller, identity);
+  const legacyRequestHash = legacyRegistrationRequestHash(context.caller, identity);
   return withExecutionTransaction(context, (tx) => {
     if (tx.execution.authorityState !== "active") {
       throw new ExecutionError("execution.not-active", `state: ${tx.execution.authorityState}; registration requires the active execution authority. Upgrade required: mstar store upgrade --operator <name>.`);
     }
     const replayed = readOperationReplay(tx, {
-      operationId,
+      operationId: identity.operationId,
       requestHash: requestHash4,
-      workflowId: plan.workflowId,
+      legacyRequestHash,
+      workflowId: identity.workflow.workflowId,
       planId: null,
       token: { kind: "root", key: [] }
     });
     if (replayed !== null)
       return replayed.data;
+    const plan = resolveCatalogExecutionPlan(context, request);
+    const operationId = plan.request.operationId;
+    const creation = resolveCreateWorkflow(context.caller, workflowEntryOf(plan, plan.snapshot), plan.snapshot, operationId);
+    assertRegisteredCompassDocument(plan.request.workflow);
+    assertRegisteredPlanDocuments(plan.request.workflow);
     assertExecutionToken(request.expected, {
       kind: "root",
       storeId: tx.storeId,
@@ -28882,33 +28954,51 @@ function catalogDeltaFor(workflow) {
 }
 async function registerShippedCatalogExecution(context, input) {
   const initialDelta = catalogDeltaFor(input.workflow);
-  const canonical2 = resolveCatalogExecutionPlan(context, {
+  const drafted = canonicalRegistrationIdentity({
     actor: input.actor,
     operationId: input.operationId ?? "request-derived",
     expectedCatalogRevision: 0,
     workflow: input.workflow,
     delta: initialDelta
   });
-  const workflow = canonical2.request.workflow;
-  const delta = catalogDeltaFor(workflow);
-  const intent = { actor: input.actor, workflow, delta };
-  const operationId = input.operationId ?? `op-${createHash18("sha256").update(stableJson(intent), "utf8").digest("hex").slice(0, 24)}`;
+  const intent = { actor: input.actor, workflow: drafted.workflow, delta: catalogDeltaFor(drafted.workflow) };
+  const operationId = input.operationId ?? derivedOperationId(intent);
   const request = {
     ...intent,
     operationId,
     expectedCatalogRevision: 0
   };
+  const identity = canonicalRegistrationIdentity(request);
+  const requestHash4 = registrationRequestHash(context.caller, identity);
+  const legacyRequestHash = legacyRegistrationRequestHash(context.caller, identity);
+  const legacyOperationId = input.operationId === undefined ? legacyDerivedOperationId(input.actor, identity) : null;
   const resolved = await withExecutionTransaction(context, (tx) => {
     const expected = executionRootTokenOf(tx);
     const replayed = readOperationReplay(tx, {
-      operationId,
-      requestHash: registrationRequestHash(context.caller, canonical2),
-      workflowId: canonical2.workflowId,
+      operationId: identity.operationId,
+      requestHash: requestHash4,
+      legacyRequestHash,
+      workflowId: identity.workflow.workflowId,
       planId: null,
       token: { kind: "root", key: [] }
     });
     if (replayed !== null)
       return { replayed: replayed.data };
+    if (legacyOperationId !== null) {
+      const legacyReplayed = readOperationReplay(tx, {
+        operationId: legacyOperationId,
+        requestHash: requestHash4,
+        legacyRequestHash,
+        workflowId: identity.workflow.workflowId,
+        planId: null,
+        token: { kind: "root", key: [] }
+      });
+      if (legacyReplayed !== null)
+        return { replayed: legacyReplayed.data };
+    }
+    const canonical2 = resolveCatalogExecutionPlan(context, request);
+    assertRegisteredCompassDocument(canonical2.request.workflow);
+    assertRegisteredPlanDocuments(canonical2.request.workflow);
     const versions = readCatalogStoreVersionsOn(tx.db);
     if (input.expected !== undefined) {
       assertExecutionToken(input.expected, {

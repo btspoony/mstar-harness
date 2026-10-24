@@ -156,17 +156,39 @@ function describePointerValue(value: unknown): string {
   return `a ${typeof value}`;
 }
 
+/** One pointer whose spelling, containment and canonical target were accepted. */
+type PlanPointerContext = {
+  planId: string;
+  file: string;
+  base: string;
+  planDir: string;
+  expected: string;
+  form: PointerForm;
+  permitted: string[];
+};
+
+/** The typed refusal of one pointer, naming the received form and both accepted ones. */
+function planPointerRefusal(
+  context: PlanPointerContext,
+): (code: PlanPathRefusalCode, message: string, extra?: Record<string, unknown>) => PlanPathError {
+  return (code, message, extra = {}) =>
+    new PlanPathError(code, message, {
+      received: context.file,
+      form: context.form,
+      base: context.base,
+      expected: context.expected,
+      permitted: context.permitted,
+      ...extra,
+    });
+}
+
 /**
- * Resolve a caller-supplied plan pointer to the one registered plan file.
- *
- * Accepts a canonical (normalized) absolute path or a normalized
- * harness-root-relative path. The spelling must be normalized and a relative
- * one must stay inside the harness root; the resolved real file must then be
- * exactly `{PLAN_DIR}/<planId>.md` and must declare that same `plan_id`.
- * Anything else refuses with the received form, the base it was resolved
- * against, the expected canonical target and the permitted forms.
+ * Settle one pointer's spelling, containment and canonical target: every check
+ * that is a fact about the POINTER. The document itself is not read, so the
+ * target stays decidable after the file was removed — the file proof is
+ * `resolveRegisteredPlanFile`'s own second half.
  */
-export function resolveRegisteredPlanFile(input: RegisteredPlanFileInput): RegisteredPlanFile {
+function planPointerContext(input: RegisteredPlanFileInput): PlanPointerContext {
   const { harnessRoot, planId, file } = input;
   // The shared exported contract (§4), so the pointer SHAPE is settled before
   // any path API sees a value: a JavaScript caller or a decoded payload can
@@ -193,8 +215,7 @@ export function resolveRegisteredPlanFile(input: RegisteredPlanFileInput): Regis
     `canonical absolute path ${expected}`,
     `normalized harness-relative path resolved against ${base}`,
   ];
-  const refusal = (code: PlanPathRefusalCode, message: string, extra: Record<string, unknown> = {}): PlanPathError =>
-    new PlanPathError(code, message, { received: file, form, base, expected, permitted, ...extra });
+  const refusal = planPointerRefusal({ planId, file, base, planDir, expected, form, permitted });
 
   try {
     assertSafePathComponent(planId, "plan id");
@@ -243,6 +264,35 @@ export function resolveRegisteredPlanFile(input: RegisteredPlanFileInput): Regis
       { plan_id: planId, actual: candidate },
     );
   }
+  return { planId, file, base, planDir, expected, form, permitted };
+}
+
+/**
+ * The canonical `{PLAN_DIR}/<planId>.md` one accepted pointer names, without
+ * reading the document. Registration canonicalizes the pointer this way before
+ * the operation replay, so the stored pointer and the request fingerprint are
+ * decided by path facts alone and a removed or edited document cannot move
+ * them; the document proof is `resolveRegisteredPlanFile`.
+ */
+export function canonicalRegisteredPlanPath(input: RegisteredPlanFileInput): { planPath: string; planDir: string } {
+  const { planDir, expected } = planPointerContext(input);
+  return { planPath: expected, planDir };
+}
+
+/**
+ * Resolve a caller-supplied plan pointer to the one registered plan file.
+ *
+ * Accepts a canonical (normalized) absolute path or a normalized
+ * harness-root-relative path. The spelling must be normalized and a relative
+ * one must stay inside the harness root; the resolved real file must then be
+ * exactly `{PLAN_DIR}/<planId>.md` and must declare that same `plan_id`.
+ * Anything else refuses with the received form, the base it was resolved
+ * against, the expected canonical target and the permitted forms.
+ */
+export function resolveRegisteredPlanFile(input: RegisteredPlanFileInput): RegisteredPlanFile {
+  const context = planPointerContext(input);
+  const { planId, expected, planDir } = context;
+  const refusal = planPointerRefusal(context);
 
   let isFile = false;
   try {

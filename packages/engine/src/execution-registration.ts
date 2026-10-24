@@ -42,14 +42,17 @@ import {
   type ComposedStoreRevision,
 } from "./catalog.js";
 import {
+  assertRegisteredCompassDocument,
+  assertRegisteredPlanDocuments,
   bindingInputOf,
+  canonicalRegistrationIdentity,
+  normalizeIterationPlanPaths,
   pendingRegistrationOf,
   refusePendingRegistration,
   resolveCatalogExecutionPlan,
   workflowEntryOf,
   writeBinding,
   type CatalogExecutionCatalogDelta,
-  type CatalogExecutionPlan,
   type CatalogExecutionReceipt,
   type CatalogExecutionRequest,
   type CatalogExecutionWorkflow,
@@ -119,14 +122,69 @@ function canonicalIntent(value: unknown): unknown {
  * workflow it registers, the trusted caller and the reviewed selection above, in
  * the DB authority's own canonical form (`semanticRequestHash`). One fingerprint
  * definition for the frames, so "the same intent" means one thing on this store.
+ *
+ * The intent is the request's IDENTITY form (`canonicalRegistrationIdentity`):
+ * plan-row pointers are canonical exactly as the previous release hashed them,
+ * while the compass keeps the caller's own spelling. Canonicalizing the compass
+ * follows symlinks, so hashing its resolved form would move the identity of a
+ * committed alias once its target is deleted and turn its retry into a conflict
+ * (PR #578). Only the stored pointer and the new-registration proof are
+ * canonical.
  */
-function registrationRequestHash(caller: ExecutionCaller, plan: CatalogExecutionPlan): string {
+function registrationRequestHash(caller: ExecutionCaller, request: CatalogExecutionRequest): string {
   return semanticRequestHash({
     operation: COMMIT_REGISTRATION_OPERATION,
-    address: { workflow_id: plan.workflowId },
+    address: { workflow_id: request.workflow.workflowId },
     caller,
-    intent: selectSemanticFields(canonicalIntent(plan.request), REGISTRATION_SEMANTICS),
+    intent: selectSemanticFields(canonicalIntent(request), REGISTRATION_SEMANTICS),
   });
+}
+
+/**
+ * The fingerprint the previous release recorded for the same intent: the
+ * request with the compass canonicalized too. Receipts committed before this
+ * version are looked up under it as well, so an unchanged retry still replays
+ * after the upgrade; a genuinely different intent matches neither form. A
+ * pointer that no longer resolves (an external alias whose target was deleted)
+ * cannot have produced a legacy receipt this call can match, so it contributes
+ * no second fingerprint rather than refusing the retry.
+ */
+function legacyRegistrationRequestHash(caller: ExecutionCaller, request: CatalogExecutionRequest): string | null {
+  try {
+    return registrationRequestHash(caller, normalizeIterationPlanPaths(request));
+  } catch {
+    return null;
+  }
+}
+
+/** The operation id a registration derives from its intent: the intent's stable form, hashed. */
+function derivedOperationId(intent: {
+  actor: string;
+  workflow: CatalogExecutionWorkflow;
+  delta: CatalogExecutionCatalogDelta;
+}): string {
+  return `op-${createHash("sha256").update(stableJson(intent), "utf8").digest("hex").slice(0, 24)}`;
+}
+
+/**
+ * The derived operation id the previous release recorded for the same intent:
+ * the same derivation over the LEGACY identity form (compass canonicalized too).
+ * The live derivation keeps the caller's compass spelling, so a non-canonical
+ * spelling now derives a DIFFERENT id than the receipt the previous release
+ * committed — the retry looks its receipt up under both ids instead. Null when
+ * this call has no distinct older form: a plan intent had none, and a pointer
+ * that no longer resolves cannot have produced a legacy receipt this call can
+ * match (same rule as `legacyRegistrationRequestHash`).
+ */
+function legacyDerivedOperationId(actor: string, identity: CatalogExecutionRequest): string | null {
+  let legacy: CatalogExecutionRequest;
+  try {
+    legacy = normalizeIterationPlanPaths(identity);
+  } catch {
+    return null;
+  }
+  if (legacy.workflow === identity.workflow) return null;
+  return derivedOperationId({ actor, workflow: legacy.workflow, delta: catalogDeltaFor(legacy.workflow) });
 }
 
 /**
@@ -153,6 +211,11 @@ function registrationRequestHash(caller: ExecutionCaller, plan: CatalogExecution
  * - `execution.not-active` — the execution authority is not active;
  * - `execution.operation-conflict` — this operation id is already committed for
  *   a different reviewed intent (another producer call, delta or actor);
+ * - `catalog.registration-invalid` — a NEW iteration registration names no
+ *   non-empty reviewed compass for this workflow; a committed operation id
+ *   replays its receipt instead (I-000868);
+ * - `plan-path.*` — a NEW iteration registration names a plan row whose
+ *   document is missing, unreadable or not that plan's; same replay rule;
  * - `execution.token-kind` / `execution.scope-mismatch` / `store.stale-epoch` /
  *   `execution.stale-token` — `expected` is not this store's CURRENT root token;
  * - `catalog.revision-conflict` — the catalog moved past the revision the delta
@@ -172,13 +235,15 @@ export async function commitExecutionRegistration(
   context: ExecutionContext,
   request: CatalogExecutionRequest & { expected: ExecutionToken },
 ): Promise<CatalogExecutionReceipt> {
-  const plan = resolveCatalogExecutionPlan(context, request);
-  const operationId = plan.request.operationId;
-  // The entry/snapshot pair the review describes, resolved before the
-  // transaction: the identity anchors, the new/unbound/unleased requirement and
-  // the plan rows' own seals are the C3 creation gates, reused verbatim.
-  const creation = resolveCreateWorkflow(context.caller, workflowEntryOf(plan, plan.snapshot), plan.snapshot, operationId);
-  const requestHash = registrationRequestHash(context.caller, plan);
+  // §4.1 identity BEFORE the pointers are resolved: plan-row pointers are
+  // canonical (the previous release's hash) while the compass keeps the
+  // caller's committed spelling, because canonicalization follows symlinks and
+  // hashing the normalized pointer would move the identity of a committed alias
+  // once its target is deleted (PR #578). The stored pointer and the
+  // new-registration proof below stay canonical.
+  const identity = canonicalRegistrationIdentity(request);
+  const requestHash = registrationRequestHash(context.caller, identity);
+  const legacyRequestHash = legacyRegistrationRequestHash(context.caller, identity);
 
   return withExecutionTransaction(context, (tx) => {
     if (tx.execution.authorityState !== "active") {
@@ -195,13 +260,28 @@ export async function commitExecutionRegistration(
     // authority that changed generation under this call is re-resolved instead
     // of being served (or written to) under a generation that no longer exists.
     const replayed = readOperationReplay<CatalogExecutionReceipt>(tx, {
-      operationId,
+      operationId: identity.operationId,
       requestHash,
-      workflowId: plan.workflowId,
+      legacyRequestHash,
+      workflowId: identity.workflow.workflowId,
       planId: null,
       token: { kind: "root", key: [] },
     });
     if (replayed !== null) return replayed.data;
+
+    // §3.1 only a NEW registration normalizes the pointers (canonical stored
+    // form, containment) and proves the reviewed documents: the committed
+    // attempt already proved them, so its receipt replays even when they have
+    // since been removed, edited or left behind as a dangling alias (I-000868,
+    // PR #578).
+    const plan = resolveCatalogExecutionPlan(context, request);
+    const operationId = plan.request.operationId;
+    // The entry/snapshot pair the review describes: the identity anchors, the
+    // new/unbound/unleased requirement and the plan rows' own seals are the C3
+    // creation gates, reused verbatim.
+    const creation = resolveCreateWorkflow(context.caller, workflowEntryOf(plan, plan.snapshot), plan.snapshot, operationId);
+    assertRegisteredCompassDocument(plan.request.workflow);
+    assertRegisteredPlanDocuments(plan.request.workflow);
 
     // §3.1 CAS: the parent (root) token of THIS store, epoch and revision.
     assertExecutionToken(request.expected, {
@@ -341,23 +421,33 @@ export async function registerShippedCatalogExecution(
   },
 ): Promise<CatalogExecutionReceipt> {
   const initialDelta = catalogDeltaFor(input.workflow);
-  const canonical = resolveCatalogExecutionPlan(context, {
+  // The operation id (supplied or derived) and the request fingerprint are
+  // taken from the request's IDENTITY form: plan-row pointers canonical, as the
+  // previous release hashed them, and the compass in the caller's own spelling,
+  // so a re-spelled plan pointer keeps its derived id and a dangling alias
+  // still replays (I-000868, PR #578). The stored pointer and the
+  // new-registration proof stay canonical below.
+  const drafted = canonicalRegistrationIdentity({
     actor: input.actor,
     operationId: input.operationId ?? "request-derived",
     expectedCatalogRevision: 0,
     workflow: input.workflow,
     delta: initialDelta,
   });
-  const workflow = canonical.request.workflow;
-  const delta = catalogDeltaFor(workflow);
-  const intent = { actor: input.actor, workflow, delta };
-  const operationId =
-    input.operationId ?? `op-${createHash("sha256").update(stableJson(intent), "utf8").digest("hex").slice(0, 24)}`;
+  const intent = { actor: input.actor, workflow: drafted.workflow, delta: catalogDeltaFor(drafted.workflow) };
+  const operationId = input.operationId ?? derivedOperationId(intent);
   const request: CatalogExecutionRequest = {
     ...intent,
     operationId,
     expectedCatalogRevision: 0,
   };
+  const identity = canonicalRegistrationIdentity(request);
+  const requestHash = registrationRequestHash(context.caller, identity);
+  const legacyRequestHash = legacyRegistrationRequestHash(context.caller, identity);
+  // Only a DERIVED id moved with the identity form: a caller-supplied id keeps
+  // its single lookup plus the legacy fingerprint.
+  const legacyOperationId =
+    input.operationId === undefined ? legacyDerivedOperationId(input.actor, identity) : null;
   const resolved = await withExecutionTransaction<
     { replayed: CatalogExecutionReceipt } | { expected: ExecutionToken; catalogRevision: number }
   >(context, (tx) => {
@@ -367,13 +457,35 @@ export async function registerShippedCatalogExecution(
     // `readOperationReplay` (the one idempotency rule) instead of being judged
     // stale before the lookup. Only a genuinely new attempt is constrained.
     const replayed = readOperationReplay<CatalogExecutionReceipt>(tx, {
-      operationId,
-      requestHash: registrationRequestHash(context.caller, canonical),
-      workflowId: canonical.workflowId,
+      operationId: identity.operationId,
+      requestHash,
+      legacyRequestHash,
+      workflowId: identity.workflow.workflowId,
       planId: null,
       token: { kind: "root", key: [] },
     });
     if (replayed !== null) return { replayed: replayed.data };
+    if (legacyOperationId !== null) {
+      // The previous release addressed this same intent by the legacy derived
+      // id: its receipt replays here instead of the retry being judged a NEW
+      // registration (which would refuse `execution.not-empty`).
+      const legacyReplayed = readOperationReplay<CatalogExecutionReceipt>(tx, {
+        operationId: legacyOperationId,
+        requestHash,
+        legacyRequestHash,
+        workflowId: identity.workflow.workflowId,
+        planId: null,
+        token: { kind: "root", key: [] },
+      });
+      if (legacyReplayed !== null) return { replayed: legacyReplayed.data };
+    }
+    // A NEW shipped registration normalizes the pointers (canonical stored
+    // form, containment) and proves its reviewed documents here; the replayed
+    // operation id above already proved them and keeps its receipt (I-000868,
+    // PR #578).
+    const canonical = resolveCatalogExecutionPlan(context, request);
+    assertRegisteredCompassDocument(canonical.request.workflow);
+    assertRegisteredPlanDocuments(canonical.request.workflow);
     const versions = readCatalogStoreVersionsOn(tx.db);
     if (input.expected !== undefined) {
       // The ADDRESS half keeps its own precise refusal; the REVISION half is

@@ -13,6 +13,7 @@ import {
   mutateExecutionWorkflow,
   openStore,
   readExecutionState,
+  type ExecutionIdentity,
   type ExecutionToken,
 } from "@mstar-harness/engine";
 import { getCommandDefinitions } from "../src/index.js";
@@ -200,13 +201,33 @@ async function liveRunToken(harness: string): Promise<ExecutionToken> {
 }
 
 /**
+ * Advance the store's authority generation. A real rotation commits through
+ * store restore (which needs an operator-approved backup image); the fixture
+ * plants only that generation counter so every session row it observes stays
+ * engine-produced.
+ */
+async function advanceAuthorityEpoch(harness: string): Promise<void> {
+  const writer = await openStore({ harnessDir: harness }, "write");
+  try {
+    writer.db.prepare("update store_meta set authority_epoch = authority_epoch + 1 where id = 1").run();
+  } finally {
+    writer.close();
+  }
+}
+
+/**
  * One ACTIVE authority holding a `running` lifecycle, optionally bound to a
  * coordinator and advanced to the lifecycle state a case observes. Every state
  * comes from the engine's own producers, never from editing store rows.
  */
 async function runFixture(
   label: string,
-  options: { bind?: string; status?: "paused" | "stopped" | "failed" | "completed" } = {},
+  options: {
+    bind?: string;
+    status?: "paused" | "stopped" | "failed" | "completed";
+    /** Rotate the authority generation around the coordinator bind. */
+    advanceEpoch?: "before-bind" | "after-bind";
+  } = {},
 ): Promise<{ harness: string }> {
   const root = mkdtempSync(path.join(os.tmpdir(), `session-run-${label}-`));
   roots.push(root);
@@ -239,12 +260,14 @@ async function runFixture(
     expected: initialized.token,
     operationId: `create-${label}`,
   });
+  if (options.advanceEpoch === "before-bind") await advanceAuthorityEpoch(harness);
   if (options.bind === undefined && options.status === undefined) return { harness };
   const bound = await bindExecutionSession(context, {
     workflowId: RUN_WORKFLOW,
     expected: await liveRunToken(harness),
     operationId: `bind-${label}`,
   });
+  if (options.advanceEpoch === "after-bind") await advanceAuthorityEpoch(harness);
   if (options.status === undefined) return { harness };
   if (options.status === "completed") {
     const deliveries = [
@@ -304,6 +327,14 @@ async function launchBound(harness: string, claimed: string) {
   return definition("session.run").execute(
     { workflow: RUN_WORKFLOW, role: "coordinator", argv: [process.execPath, "-e", IDENTITY_PROBE], harness },
     testContext({ sessionId: claimed }),
+  );
+}
+
+/** One launch that also carries the inherited minted identity of its caller. */
+async function launchInherited(harness: string, claimed: string, executionIdentity: ExecutionIdentity) {
+  return definition("session.run").execute(
+    { workflow: RUN_WORKFLOW, role: "coordinator", argv: [process.execPath, "-e", IDENTITY_PROBE], harness },
+    testContext({ sessionId: claimed, executionIdentity }),
   );
 }
 
@@ -416,5 +447,39 @@ describe("session.run bound identity", () => {
       // Registering the id cannot succeed for a lifecycle the authority holds.
       expect(recoveryOf(result), status).not.toContain("mstar workflow register");
     }
+  });
+
+  test("refuses an inherited identity that declares another workflow", async () => {
+    const { harness } = await runFixture("scoped-identity", { bind: RUN_CLAIMED });
+    const foreign = await launchInherited(harness, RUN_CLAIMED, {
+      source: "local", sessionId: RUN_CLAIMED, workflowId: "wf-elsewhere", role: "coordinator",
+    });
+    expect(foreign).toMatchObject({
+      command: "session.run", status: "usage", code: "command.invalid-input",
+      details: { workflowId: RUN_WORKFLOW, declaredWorkflowId: "wf-elsewhere" },
+    });
+    // The refusal names the declared workflow in the message, and the recovery
+    // stays a statically provable command (the id lives in the message instead).
+    expect(foreign.message).toContain("wf-elsewhere");
+    expect(recoveryOf(foreign)).toContain("mstar session run");
+    // The legitimate case is untouched: the same identity on its own workflow.
+    const own = await launchInherited(harness, RUN_CLAIMED, {
+      source: "local", sessionId: RUN_CLAIMED, workflowId: RUN_WORKFLOW, role: "coordinator",
+    });
+    expect(own.status).toBe("ok");
+  });
+
+  test("refuses a coordinator row left at an earlier authority epoch and launches at the current one", async () => {
+    // The row is ACTIVE and names the claimed session, but the authority has
+    // since moved generation: it no longer authorizes a launch.
+    const stale = await runFixture("stale-epoch", { bind: RUN_CLAIMED, advanceEpoch: "after-bind" });
+    const refused = await launchBound(stale.harness, RUN_CLAIMED);
+    expect(refused).toMatchObject({ status: "refused", code: "session.run-unbound", details: { state: "stale-epoch" } });
+    expect(recoveryOf(refused)).toContain("mstar session recover");
+
+    // A coordinator bound at the current epoch launches normally.
+    const current = await runFixture("current-epoch", { bind: RUN_CLAIMED, advanceEpoch: "before-bind" });
+    const launched = await launchBound(current.harness, RUN_CLAIMED);
+    expect(launched.status).toBe("ok");
   });
 });

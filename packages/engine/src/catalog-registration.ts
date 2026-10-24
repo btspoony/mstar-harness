@@ -20,14 +20,14 @@ import {
 import { isPlainObject } from "./coordination-write.js";
 import { assertSafePathComponent, canonicalizeNearestExisting } from "./path.js";
 import { parseCompassFrontmatter, validateCompassFrontmatter } from "./iteration.js";
-import { resolveRegisteredPlanFile } from "./plan-path.js";
+import { canonicalRegisteredPlanPath, resolveRegisteredPlanFile } from "./plan-path.js";
 import { openStore, type StoreContext, type StoreDb } from "./store-db.js";
 import { validateWorkflowEntry, type WorkflowEntry } from "./status.js";
 import {
   assertDeliveryRegistrationCoherence,
+  canonicalIterationCompassRef,
   derivePlanRegistration,
   iterationWorkflowSnapshot,
-  normalizeIterationCompassRef,
   planWorkflowSnapshot,
   stableJson,
   type RegisterIterationWorkflowOptions,
@@ -312,8 +312,16 @@ function validateDelta(delta: unknown, kind: CatalogExecutionKind): CatalogExecu
   };
 }
 
-/** Shape gate over one reviewed request before ACTIVE registration commits it. */
-function validateRequest(request: unknown): CatalogExecutionRequest {
+/**
+ * Shape gate over one reviewed request before ACTIVE registration commits it.
+ *
+ * It validates and canonicalizes every non-pointer field (actor, delta,
+ * workflow shape) while leaving the caller's pointer spelling untouched: the
+ * replay identity built on top of it is `canonicalRegistrationIdentity`, which
+ * adds the pre-change canonical plan-row normalization but keeps the compass
+ * spelling (PR #578).
+ */
+export function validateCatalogExecutionRequest(request: unknown): CatalogExecutionRequest {
   if (!isPlainObject(request)) invalid("a catalog execution request object is required");
   const operationId = requireText(request.operationId, "request.operationId");
   const actor = requireText(request.actor, "request.actor");
@@ -438,65 +446,123 @@ function assertReviewedCompassDocument(workflowId: string, harnessDir: string, c
 }
 
 /**
- * Canonicalize selected iteration plan and compass pointers before deriving
- * the snapshot or deterministic operation id. Plan inputs are unchanged.
- *
- * The compass pointer must ALSO name a real, valid reviewed compass for THIS
- * iteration — the document the registration is about to make every later reader
- * resolve through. It is proven here, before the ACTIVE transaction opens, so a
- * registration that names a nonexistent document or another iteration's compass
- * publishes no workflow, no row and no catalog entity (I-000863).
+ * The reviewed-compass proof of one canonical registration request, run by the
+ * producers INSIDE their transaction after the operation replay: a genuinely
+ * new registration must name this iteration's own non-empty reviewed compass,
+ * while a committed operation id returns its recorded receipt even when the
+ * document has since been emptied or rewritten (I-000868).
  */
-function normalizeIterationWorkflow(workflow: CatalogExecutionWorkflow): CatalogExecutionWorkflow {
+export function assertRegisteredCompassDocument(workflow: CatalogExecutionWorkflow): void {
+  if (workflow.kind !== "iteration") return;
+  assertReviewedCompassDocument(workflow.workflowId, workflow.options.harnessDir, workflow.options.compassRef);
+}
+
+/**
+ * The plan documents of one canonical iteration registration, proven readable
+ * and self-declaring. Run by the producers INSIDE their transaction after the
+ * operation replay, next to `assertRegisteredCompassDocument`: a committed
+ * operation id returns its recorded receipt even when its documents have since
+ * been removed or edited (I-000868).
+ */
+export function assertRegisteredPlanDocuments(workflow: CatalogExecutionWorkflow): void {
+  if (workflow.kind !== "iteration") return;
+  for (const row of workflow.options.rows) {
+    resolveRegisteredPlanFile({ harnessRoot: resolve(workflow.options.harnessDir), planId: row.id, file: row.file });
+  }
+}
+
+/**
+ * Canonicalize the iteration plan-row pointers of one workflow, without
+ * touching the compass spelling. The row pointer is the one field whose
+ * canonical form (an absolute path derived from the plan root) the previous
+ * release hashed; keeping it here keeps a retry that re-spells the same
+ * document (`plans/x.md` vs its absolute form) on its committed operation id.
+ */
+function normalizeIterationRowFiles(workflow: CatalogExecutionWorkflow): CatalogExecutionWorkflow {
   if (!isPlainObject(workflow) || workflow.kind !== "iteration") return workflow;
   const options: unknown = workflow.options;
   if (!isPlainObject(options)) return workflow;
   const rows = options.rows;
   const harnessDir = options.harnessDir;
-  const compassRef = options.compassRef;
-  if (
-    !Array.isArray(rows) ||
-    typeof harnessDir !== "string" ||
-    !isAbsolute(harnessDir) ||
-    typeof compassRef !== "string" ||
-    compassRef.trim() === ""
-  ) return workflow;
-  const normalizedCompassRef = normalizeIterationCompassRef(
-    compassRef,
-    harnessDir,
-    (detail) => new CatalogRegistrationError("catalog.registration-invalid", detail),
-  );
-  let changed = normalizedCompassRef !== compassRef;
+  if (!Array.isArray(rows) || typeof harnessDir !== "string" || !isAbsolute(harnessDir)) return workflow;
+  let changed = false;
   const resolvedRows = rows.map((row) => {
     if (!isPlainObject(row)) return row;
     const id = row.id;
     const file = row.file;
     if (typeof id !== "string" || id.trim() === "" || typeof file !== "string" || file.trim() === "") return row;
-    const planPath = resolveRegisteredPlanFile({ harnessRoot: harnessDir, planId: id, file }).planPath;
+    const planPath = canonicalRegisteredPlanPath({ harnessRoot: harnessDir, planId: id, file }).planPath;
     if (planPath === file) return row;
     changed = true;
     return { ...row, file: planPath };
   });
-  // Last, and still before the ACTIVE transaction: the pointer must name this
-  // iteration's own valid reviewed compass. A malformed id is the request
-  // validator's own refusal, so it never reaches this comparison.
-  if (typeof workflow.workflowId === "string") {
-    assertReviewedCompassDocument(workflow.workflowId, harnessDir, normalizedCompassRef);
-  }
   if (!changed) return workflow;
-  return {
-    ...workflow,
-    options: { ...options, compassRef: normalizedCompassRef, rows: resolvedRows },
-  } as unknown as CatalogExecutionWorkflow;
+  return { ...workflow, options: { ...options, rows: resolvedRows } } as unknown as CatalogExecutionWorkflow;
 }
 
-function normalizeIterationPlanPaths(request: CatalogExecutionRequest): CatalogExecutionRequest {
+/**
+ * The REGISTRATION IDENTITY form of one request, shared by both producers and
+ * their request fingerprints: the pre-change canonical normalization of every
+ * field (the iteration plan-row pointers included) with the compass pointer
+ * kept in the caller's own spelling.
+ *
+ * Those are two different facts. The row pointer is canonical so a retry that
+ * re-spells the same document keeps the identity the previous release gave it
+ * (Greptile, PR #578); the compass spelling is lexical because canonicalizing
+ * follows symlinks, and a committed alias whose target was later deleted must
+ * still replay instead of conflicting with its own retry (I-000868). Only a
+ * NEW registration resolves the compass for the stored pointer and for the
+ * containment/document proof.
+ */
+export function canonicalRegistrationIdentity(request: unknown): CatalogExecutionRequest {
+  const validated = validateCatalogExecutionRequest(request);
+  if (validated.workflow.kind !== "iteration") return validated;
+  const workflow = normalizeIterationRowFiles(validated.workflow);
+  return workflow === validated.workflow ? validated : { ...validated, workflow };
+}
+
+/**
+ * The PROOF-side canonical form: every iteration pointer resolved (plan rows
+ * and compass) before the stored snapshot is derived. Plan inputs are
+ * unchanged.
+ *
+ * Only POINTER facts run here: a spelling, containment or target-identity
+ * refusal is decided from the reviewed request alone, so the STORED pointer
+ * does not move when the documents later do. The compass resolution follows
+ * symlinks, so this form also supplies the LEGACY replay fingerprint (the
+ * request the previous release hashed); the live identity keeps the caller's
+ * compass spelling (`canonicalRegistrationIdentity`). The documents themselves
+ * are proven after the operation replay (`assertRegisteredCompassDocument` /
+ * `assertRegisteredPlanDocuments`), so a committed operation id still returns
+ * its receipt once they are gone, emptied or rewritten (I-000868, PR #578).
+ */
+export function normalizeIterationPlanPaths(request: CatalogExecutionRequest): CatalogExecutionRequest {
   if (!isPlainObject(request)) return request;
   const workflow = request.workflow;
   if (!isPlainObject(workflow) || workflow.kind !== "iteration") return request;
-  const normalized = normalizeIterationWorkflow(workflow);
-  if (normalized === workflow) return request;
-  return { ...request, workflow: normalized };
+  const options: unknown = workflow.options;
+  if (!isPlainObject(options)) return request;
+  const compassRef = options.compassRef;
+  const harnessDir = options.harnessDir;
+  if (
+    !Array.isArray(options.rows) ||
+    typeof harnessDir !== "string" ||
+    !isAbsolute(harnessDir) ||
+    typeof compassRef !== "string" ||
+    compassRef.trim() === ""
+  ) return request;
+  const normalizedCompassRef = canonicalIterationCompassRef(
+    compassRef,
+    harnessDir,
+    (detail) => new CatalogRegistrationError("catalog.registration-invalid", detail),
+  );
+  const withRows = normalizeIterationRowFiles(workflow);
+  if (normalizedCompassRef === compassRef && withRows === workflow) return request;
+  const rows = (withRows.options as Record<string, unknown>).rows;
+  return {
+    ...request,
+    workflow: { ...workflow, options: { ...options, compassRef: normalizedCompassRef, rows } } as unknown as CatalogExecutionWorkflow,
+  };
 }
 
 /**
@@ -576,7 +642,10 @@ function executionPlanFor(context: StoreContext, request: CatalogExecutionReques
  * pure derivation leaves the ACTIVE registration composer to commit the result.
  */
 export function resolveCatalogExecutionPlan(context: StoreContext, request: unknown): CatalogExecutionPlan {
-  return executionPlanFor(context, validateRequest(normalizeIterationPlanPaths(request as CatalogExecutionRequest)));
+  return executionPlanFor(
+    context,
+    validateCatalogExecutionRequest(normalizeIterationPlanPaths(request as CatalogExecutionRequest)),
+  );
 }
 
 /**

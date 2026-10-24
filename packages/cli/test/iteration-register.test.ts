@@ -20,7 +20,7 @@
 import { describe, expect, test } from "bun:test";
 import { initializeStore, openStore, readExecutionState, type ExecutionState } from "@mstar-harness/engine";
 import { execFileSync } from "node:child_process";
-import { existsSync, mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 
@@ -98,14 +98,14 @@ function row(id: string): string {
   return JSON.stringify({ id, title: `Plan ${id}`, file: `plans/${id}.md` });
 }
 
-function registerArgs(harness: string, extra: string[] = []): string[] {
+function registerArgs(harness: string, extra: string[] = [], compassRef = COMPASS_REF, workflowId = WORKFLOW_ID): string[] {
   return [
     "iteration",
     "register",
     "--workflow",
-    WORKFLOW_ID,
+    workflowId,
     "--compass-ref",
-    COMPASS_REF,
+    compassRef,
     "--branch-base",
     "main",
     "--branch-integration",
@@ -260,6 +260,111 @@ describe("mstar iteration register", () => {
       expect(retry.exitCode).toBe(0);
       expect(envelope(retry)).toMatchObject({ command: "iteration.register", status: "ok", code: "iteration.register.ok" });
       expect(await registeredState(harness)).toEqual(before);
+    });
+  });
+
+  test("a committed registration replays through the CLI once its compass is deleted", async () => {
+    await setupHarness(async (harness) => {
+      // A pointer that escapes the harness root is the producer's refusal now:
+      // the transport only checks the flag's shape, so the real-path
+      // containment proof decides (PR #578).
+      const escaping = runCli(registerArgs(harness, ["--compass-ref", "../outside-compass.md"]));
+      expect(escaping.exitCode).toBe(1);
+      expect(message(escaping)).toContain("[catalog.registration-invalid]");
+
+      const operation = ["--operation", "op-iteration-register-compass-deleted"];
+      const first = runCli(registerArgs(harness, operation));
+      expect(first.exitCode).toBe(0);
+      const before = await registeredState(harness);
+
+      // The reviewed compass is removed after the commit: the identical
+      // operation id still returns its recorded receipt instead of resolving a
+      // document the committed intent already proved (I-000868).
+      rmSync(join(harness, COMPASS_REF));
+      const retry = runCli(registerArgs(harness, operation));
+      expect(retry.exitCode).toBe(0);
+      expect(envelope(retry).data).toEqual(envelope(first).data);
+      expect(await registeredState(harness)).toEqual(before);
+
+      // A NEW operation id against the now-missing compass is still refused,
+      // and the refusal publishes nothing.
+      const refused = runCli(registerArgs(harness, ["--operation", "op-iteration-register-compass-deleted-new"]));
+      expect(refused.exitCode).toBe(1);
+      expect(message(refused)).toContain("[catalog.registration-invalid]");
+      expect(await registeredState(harness)).toEqual(before);
+    });
+  });
+
+  test("a committed registration through a symlink alias replays once its target is deleted", async () => {
+    await setupHarness(async (harness) => {
+      const aliasRef = "iterations/20260918-iteration-register-cli/alias-compass.md";
+      symlinkSync("delivery-compass.md", join(harness, aliasRef));
+      const operation = ["--operation", "op-iteration-register-symlink-alias"];
+
+      const first = runCli(registerArgs(harness, operation, aliasRef));
+      expect(first.exitCode).toBe(0);
+      // The producer stores the canonical pointer of the document the alias
+      // names; only the fingerprint keeps the caller's alias spelling.
+      const before = await registeredState(harness);
+      expect(before.data.workflows[0]!.state.compass_ref).toBe(COMPASS_REF);
+
+      // Deleting the target leaves the alias dangling: the identical operation
+      // id still replays its receipt, because the transport handed the
+      // caller's spelling to the fingerprint instead of resolving it.
+      rmSync(join(harness, COMPASS_REF));
+      const retry = runCli(registerArgs(harness, operation, aliasRef));
+      expect(retry.exitCode).toBe(0);
+      expect(envelope(retry).data).toEqual(envelope(first).data);
+      expect(await registeredState(harness)).toEqual(before);
+
+      // A new operation id cannot commit against the dangling alias.
+      const refused = runCli(registerArgs(harness, ["--operation", "op-iteration-register-symlink-alias-new"], aliasRef));
+      expect(refused.exitCode).toBe(1);
+      expect(message(refused)).toContain("[catalog.registration-invalid]");
+      expect(await registeredState(harness)).toEqual(before);
+
+      // An escaping pointer is still refused, now by the producer's real-path
+      // containment proof rather than the transport's lexical check.
+      const escaping = runCli(registerArgs(harness, ["--compass-ref", "../outside-compass.md"]));
+      expect(escaping.exitCode).toBe(1);
+      expect(message(escaping)).toContain("[catalog.registration-invalid]");
+    });
+  });
+
+  test("valid compass spellings under a symlinked --harness register (exit 0)", async () => {
+    await setupHarness(async (harness) => {
+      // `--harness` may name a symlink to the real harness. An absolute
+      // `--compass-ref` under that real harness names an in-root document, so
+      // the transport's lexical containment check must not refuse it (PR #578).
+      const realHarness = realpathSync(harness);
+      const linkedRoot = mkdtempSync(join(tmpdir(), "mstar-iteration-register-link-"));
+      const harnessLink = join(linkedRoot, "harness");
+      symlinkSync(realHarness, harnessLink);
+      try {
+        const absolute = runCli(registerArgs(harnessLink, ["--compass-ref", join(realHarness, COMPASS_REF)]));
+        expect(absolute.exitCode).toBe(0);
+        expect(envelope(absolute)).toMatchObject({ command: "iteration.register", status: "ok" });
+
+        // An EXTERNAL alias onto an in-root compass is the same document: the
+        // producer stores its canonical in-root pointer, so the registration
+        // succeeds instead of being refused at the transport.
+        const externalId = "20260918-iteration-register-external";
+        const externalCompass = join(harness, `iterations/${externalId}/delivery-compass.md`);
+        mkdirSync(dirname(externalCompass), { recursive: true });
+        writeFileSync(externalCompass, `${compassFrontmatter(externalId)}\n# External alias compass\n`);
+        const externalAlias = join(linkedRoot, "external-compass.md");
+        symlinkSync(externalCompass, externalAlias);
+        const viaAlias = runCli(registerArgs(harnessLink, [], externalAlias, externalId));
+        expect(viaAlias.exitCode).toBe(0);
+
+        const registered = await registeredState(realHarness);
+        expect(registered.data.workflows.map((view) => [view.state.id, view.state.compass_ref])).toEqual([
+          [WORKFLOW_ID, COMPASS_REF],
+          [externalId, `iterations/${externalId}/delivery-compass.md`],
+        ]);
+      } finally {
+        rmSync(linkedRoot, { recursive: true, force: true });
+      }
     });
   });
 

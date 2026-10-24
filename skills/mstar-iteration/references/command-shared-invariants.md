@@ -49,14 +49,14 @@ The primary coordinator projects the entire selected iteration into the table be
 | plan-wave todos | 进入 Phase 2 | 各 plan `Done` |
 | `phase-3-iteration-close` | 仅剩 1 个非 `Done` plan | Phase 3 §3.5 exit 全 `[x]` |
 | `phase-4-create-pr` | Phase 3 完成后 | PR 已创建并记录 URL/number |
-| `phase-5-pr-merge-ready` | Phase 4 完成后 | Phase 5 merge-ready：§5.2 第 1–4 项全 `[x]`（第 6 项是 merge 前置、第 7 项 merged 后才可勾，均不属于本 todo） |
-| `phase-6-post-merge-close` | §5.2 第 6 项（§5.3 授权）成立后 PR **已 merge**（mergeable ≠ merged） | Phase 6 §6.1–§6.4 完成（`mstar status workflow-close --workflow <id>` exit 0 + 投影一致） |
+| `phase-5-pr-merge-ready` | Phase 4 完成后 | Phase 5 merge-ready：§5.2 第 1–5 项全 `[x]`（第 7 项是 merge 前置、第 8 项 merged 后才可勾，均不属于本 todo） |
+| `phase-6-post-merge-close` | §5.2 第 7 项（§5.3 授权）成立后 PR **已 merge**（mergeable ≠ merged） | Phase 6 §6.1–§6.4 完成（`mstar status workflow-close --workflow <id>` exit 0 + 投影一致） |
 
 Phase/gate 转换按 **`mstar-host`**「Phase-transition todo refresh (host-agnostic)」刷新：依据 ACTIVE 执行行与 authored plan 证据勾掉完成项，保留未决 gate / 未来 phase，再追加下一批；todos 只是投影，不授权转换。
 
 ## Continuous execution STOP list（重叠行；start / drive / loop 共有）
 
-Execute **`mstar-iteration` §2.6**（Continuous execution SSOT：自 Phase 2 进入至 Phase 5 merge-ready（§5.2 第 1–4 项全 `[x]`）前 PM **连续编排**，进度汇报后下一条必须是 dispatch 或下一 phase 步骤，不向用户例行 yes/no check-in；`reviewed-auto` 下继续至 §5.3 授权成立并 merge，`owner-gated` 在此停等**人类 owner**（操作者/用户，不是 coordinator 席位）的书面批准）。
+Execute **`mstar-iteration` §2.6**（Continuous execution SSOT：自 Phase 2 进入至 Phase 5 merge-ready（§5.2 第 1–5 项全 `[x]`）前 PM **连续编排**，进度汇报后下一条必须是 dispatch 或下一 phase 步骤，不向用户例行 yes/no check-in；`reviewed-auto` 下继续至 §5.3 授权成立并 merge，`owner-gated` 在此停等**人类 owner**（操作者/用户，不是 coordinator 席位）的书面批准）。
 
 **合法 STOP（仅此升级用户）**：
 

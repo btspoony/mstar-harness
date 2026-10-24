@@ -234,6 +234,7 @@ type BindingState =
   | "no-store"
   | "unregistered"
   | "ownerless"
+  | "stale-epoch"
   | "foreign-holder"
   | "paused"
   | "completed"
@@ -249,6 +250,8 @@ function unboundRecovery(state: BindingState, workflow: string): string {
   switch (state) {
     case "ownerless":
       return `Bind a coordinator first: run mstar plan bind --execution --workflow ${workflow} --coordinator as the workflow's creator or through ownerless adoption, then retry mstar session run.`;
+    case "stale-epoch":
+      return `This workflow's coordinator row belongs to an earlier store epoch, so it no longer authorizes a launch. Under explicit operator authorization run the audited mstar session recover to rebind the coordinator at the current epoch, then launch under the recovered identity.`;
     case "foreign-holder":
       return "A foreign or still-live coordinator holds this workflow. Under explicit operator authorization run the audited mstar session recover, then launch under the recovered identity; plan bind never replaces a live holder.";
     case "paused":
@@ -305,11 +308,24 @@ export function getSessionCommandDefinitions(): readonly CommandDefinition[] {
         const root = resolveProcessHarnessDir(context.cwd, harness);
         let observed: BindingState | null = null;
         let coordinator: ExecutionSessionRef | null = null;
+        // The inherited launch identity declares the one workflow it may address:
+        // a child launched for another lifecycle never becomes this one's
+        // coordinator just because it holds a live session id.
+        const declaredWorkflow = context.executionIdentity?.workflowId;
+        if (declaredWorkflow !== undefined && declaredWorkflow !== workflow) {
+          return refusalEnvelope({
+            command: "session.run", status: "usage", code: "command.invalid-input", exitCode: 2,
+            message: `session.run cannot launch workflow "${workflow}" from an identity launched for workflow "${declaredWorkflow}".`,
+            details: { workflowId: workflow, declaredWorkflowId: declaredWorkflow },
+            recovery: "Launch under the workflow the inherited identity declares, or rerun mstar session run --workflow <workflow-id> --role coordinator <command>.",
+          });
+        }
         if (root === null) {
           observed = "unregistered";
         } else {
           try {
-            const graph = (await readExecutionState({ harnessDir: root })).data;
+            const read = await readExecutionState({ harnessDir: root });
+            const graph = read.data;
             const held = graph.workflows.find(({ state }) => state.id === workflow);
             if (held === undefined) {
               // An adopted close leaves ACTIVE membership exactly like a local
@@ -322,6 +338,11 @@ export function getSessionCommandDefinitions(): readonly CommandDefinition[] {
               observed = held.state.status;
             } else if (held.coordinator === null) {
               observed = "ownerless";
+            } else if (held.coordinator.epoch !== read.epoch) {
+              // The read publishes active session rows without an epoch filter,
+              // so a row left at an earlier authority generation is visible but
+              // authorizes nothing: only the current epoch's binding launches.
+              observed = "stale-epoch";
             } else if (held.coordinator.sessionId !== claimedId) {
               observed = "foreign-holder";
             } else {
