@@ -268,9 +268,12 @@ rides alongside both as the read-only fan-out surface.
 **Parallel writable tracks are a Team workload, not a Team exclusion.** The
 channel does not create checkouts for you — that stays the repository's worktree
 procedure (one writable seat per worktree, L2 isolation) — but a teammate runs a
-full agent toolset and enters its assigned checkout itself. Record each track's
-prefix on its board task (`write_scopes` is advisory and never a lock), keep
-disjoint seats in disjoint directories, and leave integration to the Lead.
+full agent toolset and enters its assigned checkout itself. A track whose
+checkout is inside the workspace records its prefixes on its board task
+(`write_scopes` is advisory and never a lock); a sibling checkout entirely
+outside the workspace omits the field, its prompt being the whole address
+(`references/dsh-agent-teams.md` § Worktree hand-off and write isolation).
+Keep disjoint seats in disjoint directories, and leave integration to the Lead.
 
 **Every Assignment has EXACTLY one gated carrier.** `spawn_teammate.prompt`,
 `team_task_create.description`, `team_task_update.description` and
@@ -829,11 +832,14 @@ run is recorded as durable `tool-workflow/*` session events and the stock dsh UI
 node the operator expands by phase and member. Use it for **read-only fan-out of
 N ≥ 3 seats** — plan QC tri, large-repo audit categories, `/amazing-pr-review
 deep` seats — and copy the `script` + `meta` + `args` from this skill →
-`references/dsh-workflow-scripts.md`. For **1–2** seats a direct delegation is the
-cheaper default — **`subagent`**, or a teammate when the Team layer is mounted —
-following the tool's own guidance: the two-seat default tier of
-`/amazing-pr-review` shows two subagent cards and no `workflow-run` node, and
-that is expected.
+`references/dsh-workflow-scripts.md`. For **1–2** seats **`subagent`** is the
+carrier — read-only fan-out never takes a teammate at any N. Where the Team layer
+disables `subagent`, a 2-seat read-only review runs as **two separate one-seat
+`workflow` runs, one per lens** — each a `mstar-review-single` run, never a
+2-seat `workflow` fan-out (that width is reserved for N ≥ 3). Following the
+tool's own guidance: the two-seat default tier of `/amazing-pr-review` shows two
+subagent cards and no `workflow-run` node while `subagent` is available, and one
+`workflow-run` node per seat when it is not.
 
 **One read-only seat is supported when nothing else can carry it.** On a Team
 profile the direct `subagent` rows are disabled, and a task review needs a fresh
@@ -876,9 +882,9 @@ never pass the deferred `agentType` option: the engine rejects it loudly.
 |---|---|---|---|---|
 | `/codebase-audit` (large repo) | ≥3 | native `workflow` | `mstar-audit-fanout` | conversation `workflow-run` node |
 | `/amazing-pr-review deep` | ≥3 | native `workflow` | `mstar-pr-seats` | same |
-| `/amazing-pr-review` default tier | 2 | `subagent` (or the mounted channel's equivalent when the Team layer disables it) | — | two subagent cards, no node (expected) |
+| `/amazing-pr-review` default tier | 2 | `subagent`; else two separate one-seat `workflow` runs (one per lens) when the Team layer disables it | — | two subagent cards, no node — or one `workflow-run` node per seat when `subagent` is unavailable |
 | Plan QC tri (PM already in session, no extra slash) | 3 | native `workflow` | `mstar-qc-tri` | conversation `workflow-run` node |
-| Any 1–2 read-only delegation | 1–2 | `subagent`, else the one-seat `workflow` run when the Team layer disables it | — | subagent cards, or one `workflow-run` node when `subagent` is unavailable |
+| Any 1–2 read-only delegation | 1–2 | `subagent`; else a single-seat `workflow` run per seat when the Team layer disables it | — | subagent cards while `subagent` is available; otherwise one `workflow-run` node per seat |
 
 `meta.name` is the gate identity — keep it kebab-case and on the recommended
 list. With the default Config (`workflowNames` unset) every name is *unknown*,
