@@ -48,10 +48,10 @@ import {
   pendingRegistrationOf,
   refusePendingRegistration,
   resolveCatalogExecutionPlan,
+  validateCatalogExecutionRequest,
   workflowEntryOf,
   writeBinding,
   type CatalogExecutionCatalogDelta,
-  type CatalogExecutionPlan,
   type CatalogExecutionReceipt,
   type CatalogExecutionRequest,
   type CatalogExecutionWorkflow,
@@ -121,13 +121,19 @@ function canonicalIntent(value: unknown): unknown {
  * workflow it registers, the trusted caller and the reviewed selection above, in
  * the DB authority's own canonical form (`semanticRequestHash`). One fingerprint
  * definition for the frames, so "the same intent" means one thing on this store.
+ *
+ * The intent is the VALIDATED request as the caller sent it, pointers spelled as
+ * committed: canonicalization follows symlinks, so hashing the normalized
+ * pointer would move the identity of a committed alias once its target is
+ * deleted and turn its retry into a conflict or a refusal (PR #578). Only the
+ * stored pointer and the new-registration proof are canonical.
  */
-function registrationRequestHash(caller: ExecutionCaller, plan: CatalogExecutionPlan): string {
+function registrationRequestHash(caller: ExecutionCaller, request: CatalogExecutionRequest): string {
   return semanticRequestHash({
     operation: COMMIT_REGISTRATION_OPERATION,
-    address: { workflow_id: plan.workflowId },
+    address: { workflow_id: request.workflow.workflowId },
     caller,
-    intent: selectSemanticFields(canonicalIntent(plan.request), REGISTRATION_SEMANTICS),
+    intent: selectSemanticFields(canonicalIntent(request), REGISTRATION_SEMANTICS),
   });
 }
 
@@ -179,13 +185,13 @@ export async function commitExecutionRegistration(
   context: ExecutionContext,
   request: CatalogExecutionRequest & { expected: ExecutionToken },
 ): Promise<CatalogExecutionReceipt> {
-  const plan = resolveCatalogExecutionPlan(context, request);
-  const operationId = plan.request.operationId;
-  // The entry/snapshot pair the review describes, resolved before the
-  // transaction: the identity anchors, the new/unbound/unleased requirement and
-  // the plan rows' own seals are the C3 creation gates, reused verbatim.
-  const creation = resolveCreateWorkflow(context.caller, workflowEntryOf(plan, plan.snapshot), plan.snapshot, operationId);
-  const requestHash = registrationRequestHash(context.caller, plan);
+  // §4.1 identity BEFORE the pointers are canonicalized: canonicalization
+  // follows symlinks, so hashing the normalized pointer would move the identity
+  // of a committed alias once its target is deleted and refuse its own retry
+  // (PR #578). The caller's committed spelling is the operation identity; the
+  // stored pointer and the new-registration proof below stay canonical.
+  const identity = validateCatalogExecutionRequest(request);
+  const requestHash = registrationRequestHash(context.caller, identity);
 
   return withExecutionTransaction(context, (tx) => {
     if (tx.execution.authorityState !== "active") {
@@ -202,18 +208,25 @@ export async function commitExecutionRegistration(
     // authority that changed generation under this call is re-resolved instead
     // of being served (or written to) under a generation that no longer exists.
     const replayed = readOperationReplay<CatalogExecutionReceipt>(tx, {
-      operationId,
+      operationId: identity.operationId,
       requestHash,
-      workflowId: plan.workflowId,
+      workflowId: identity.workflow.workflowId,
       planId: null,
       token: { kind: "root", key: [] },
     });
     if (replayed !== null) return replayed.data;
 
-    // §3.1 the reviewed documents are proven only for a NEW registration: the
-    // committed attempt already proved them, so its receipt replays even when
-    // they have since been removed or edited, while a fresh operation id is
-    // refused before anything is written (I-000868).
+    // §3.1 only a NEW registration normalizes the pointers (canonical stored
+    // form, containment) and proves the reviewed documents: the committed
+    // attempt already proved them, so its receipt replays even when they have
+    // since been removed, edited or left behind as a dangling alias (I-000868,
+    // PR #578).
+    const plan = resolveCatalogExecutionPlan(context, request);
+    const operationId = plan.request.operationId;
+    // The entry/snapshot pair the review describes: the identity anchors, the
+    // new/unbound/unleased requirement and the plan rows' own seals are the C3
+    // creation gates, reused verbatim.
+    const creation = resolveCreateWorkflow(context.caller, workflowEntryOf(plan, plan.snapshot), plan.snapshot, operationId);
     assertRegisteredCompassDocument(plan.request.workflow);
     assertRegisteredPlanDocuments(plan.request.workflow);
 
@@ -355,16 +368,13 @@ export async function registerShippedCatalogExecution(
   },
 ): Promise<CatalogExecutionReceipt> {
   const initialDelta = catalogDeltaFor(input.workflow);
-  const canonical = resolveCatalogExecutionPlan(context, {
-    actor: input.actor,
-    operationId: input.operationId ?? "request-derived",
-    expectedCatalogRevision: 0,
-    workflow: input.workflow,
-    delta: initialDelta,
-  });
-  const workflow = canonical.request.workflow;
-  const delta = catalogDeltaFor(workflow);
-  const intent = { actor: input.actor, workflow, delta };
+  // The caller's committed pointer spelling is the operation identity: the
+  // fingerprint and the derived operation id are taken from the request as
+  // received, BEFORE canonicalization resolves symlinks, so a dangling alias
+  // cannot move the identity of the registration it already committed
+  // (I-000868, PR #578). `commitExecutionRegistration` derives the same
+  // identity and normalizes the pointer only for a new registration.
+  const intent = { actor: input.actor, workflow: input.workflow, delta: initialDelta };
   const operationId =
     input.operationId ?? `op-${createHash("sha256").update(stableJson(intent), "utf8").digest("hex").slice(0, 24)}`;
   const request: CatalogExecutionRequest = {
@@ -372,6 +382,8 @@ export async function registerShippedCatalogExecution(
     operationId,
     expectedCatalogRevision: 0,
   };
+  const identity = validateCatalogExecutionRequest(request);
+  const requestHash = registrationRequestHash(context.caller, identity);
   const resolved = await withExecutionTransaction<
     { replayed: CatalogExecutionReceipt } | { expected: ExecutionToken; catalogRevision: number }
   >(context, (tx) => {
@@ -381,16 +393,18 @@ export async function registerShippedCatalogExecution(
     // `readOperationReplay` (the one idempotency rule) instead of being judged
     // stale before the lookup. Only a genuinely new attempt is constrained.
     const replayed = readOperationReplay<CatalogExecutionReceipt>(tx, {
-      operationId,
-      requestHash: registrationRequestHash(context.caller, canonical),
-      workflowId: canonical.workflowId,
+      operationId: identity.operationId,
+      requestHash,
+      workflowId: identity.workflow.workflowId,
       planId: null,
       token: { kind: "root", key: [] },
     });
     if (replayed !== null) return { replayed: replayed.data };
-    // A NEW shipped registration proves its reviewed documents here; the
-    // replayed operation id above already proved them and keeps its receipt
-    // (I-000868).
+    // A NEW shipped registration normalizes the pointers (canonical stored
+    // form, containment) and proves its reviewed documents here; the replayed
+    // operation id above already proved them and keeps its receipt (I-000868,
+    // PR #578).
+    const canonical = resolveCatalogExecutionPlan(context, request);
     assertRegisteredCompassDocument(canonical.request.workflow);
     assertRegisteredPlanDocuments(canonical.request.workflow);
     const versions = readCatalogStoreVersionsOn(tx.db);

@@ -312,8 +312,17 @@ function validateDelta(delta: unknown, kind: CatalogExecutionKind): CatalogExecu
   };
 }
 
-/** Shape gate over one reviewed request before ACTIVE registration commits it. */
-function validateRequest(request: unknown): CatalogExecutionRequest {
+/**
+ * Shape gate over one reviewed request before ACTIVE registration commits it.
+ *
+ * Exported as the IDENTITY form of the request: it validates and canonicalizes
+ * every non-pointer field (actor, delta, workflow shape) while leaving the
+ * caller's pointer spelling untouched. Producers hash the operation replay on
+ * this form BEFORE `normalizeIterationPlanPaths` resolves symlinks, so a
+ * committed alias whose target is later deleted keeps its identity instead of
+ * conflicting with its own retry (PR #578).
+ */
+export function validateCatalogExecutionRequest(request: unknown): CatalogExecutionRequest {
   if (!isPlainObject(request)) invalid("a catalog execution request object is required");
   const operationId = requireText(request.operationId, "request.operationId");
   const actor = requireText(request.actor, "request.actor");
@@ -468,12 +477,14 @@ export function assertRegisteredPlanDocuments(workflow: CatalogExecutionWorkflow
  * the snapshot or deterministic operation id. Plan inputs are unchanged.
  *
  * Only POINTER facts run here: a spelling, containment or target-identity
- * refusal is decided from the reviewed request alone, so the request
- * fingerprint and the stored pointer do not move when the documents later do.
- * The documents themselves are proven after the operation replay (see
- * `assertRegisteredCompassDocument` / `assertRegisteredPlanDocuments`), so a
- * committed operation id still returns its receipt once they are gone, emptied
- * or rewritten (I-000868).
+ * refusal is decided from the reviewed request alone, so the STORED pointer
+ * does not move when the documents later do. This is the PROOF-side form: the
+ * operation identity keeps the caller's spelling, because it must survive the
+ * target's deletion (see `validateCatalogExecutionRequest` / the producers'
+ * pre-normalization request hash, PR #578). The documents themselves are proven
+ * after the operation replay (see `assertRegisteredCompassDocument` /
+ * `assertRegisteredPlanDocuments`), so a committed operation id still returns
+ * its receipt once they are gone, emptied or rewritten (I-000868).
  */
 function normalizeIterationWorkflow(workflow: CatalogExecutionWorkflow): CatalogExecutionWorkflow {
   if (!isPlainObject(workflow) || workflow.kind !== "iteration") return workflow;
@@ -598,7 +609,10 @@ function executionPlanFor(context: StoreContext, request: CatalogExecutionReques
  * pure derivation leaves the ACTIVE registration composer to commit the result.
  */
 export function resolveCatalogExecutionPlan(context: StoreContext, request: unknown): CatalogExecutionPlan {
-  return executionPlanFor(context, validateRequest(normalizeIterationPlanPaths(request as CatalogExecutionRequest)));
+  return executionPlanFor(
+    context,
+    validateCatalogExecutionRequest(normalizeIterationPlanPaths(request as CatalogExecutionRequest)),
+  );
 }
 
 /**

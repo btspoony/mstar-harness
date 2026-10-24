@@ -1251,8 +1251,11 @@ export type RegisterIterationWorkflowOptions = {
  * harness is refused here - the same canonical read `readPrepareCompass`
  * performs later - rather than being stored and failing at amendment time.
  * The canonical form WITHOUT that existence proof is
- * `canonicalIterationCompassRef`, for a caller that must decide an idempotent
- * replay before it reads the mutable document (I-000868).
+ * `canonicalIterationCompassRef`, for a caller that must settle the STORED
+ * pointer before it reads the mutable document. It is the proof-side form, not
+ * the replay identity: a committed registration identifies its retry by the
+ * caller's own pointer spelling, decided before this normalization, so a
+ * dangling alias still replays (I-000868, PR #578).
  */
 export function normalizeIterationCompassRef(
   ref: string,
