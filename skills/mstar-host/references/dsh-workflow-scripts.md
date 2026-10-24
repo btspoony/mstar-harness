@@ -137,8 +137,8 @@ const seats = await parallel([
 Execute as: qc-specialist
 Delegation: forbidden
 Task category: audit
-Budget (review / QC seats): /1 round — one full pass over the review range
-Return shape (review / QC seats): the verdict envelope (seat, verdict, summary, findings); stop when the range and its directly affected interfaces are covered
+**Budget (review / QC seats)**: /1 round — one full pass over the review range
+**Return shape (review / QC seats)**: the verdict envelope (seat, verdict, summary, findings); stop when the range and its directly affected interfaces are covered
 
 plan_id: ${a.planId}
 Review range: ${a.range}
@@ -159,8 +159,8 @@ Return ONLY the JSON object matching the provided schema (seat, verdict, summary
 Execute as: qc-specialist-2
 Delegation: forbidden
 Task category: audit
-Budget (review / QC seats): /1 round — one full pass over the review range
-Return shape (review / QC seats): the verdict envelope (seat, verdict, summary, findings); stop when the range and its directly affected interfaces are covered
+**Budget (review / QC seats)**: /1 round — one full pass over the review range
+**Return shape (review / QC seats)**: the verdict envelope (seat, verdict, summary, findings); stop when the range and its directly affected interfaces are covered
 
 plan_id: ${a.planId}
 Review range: ${a.range}
@@ -181,8 +181,8 @@ Return ONLY the JSON object matching the provided schema (seat, verdict, summary
 Execute as: qc-specialist-3
 Delegation: forbidden
 Task category: audit
-Budget (review / QC seats): /1 round — one full pass over the review range
-Return shape (review / QC seats): the verdict envelope (seat, verdict, summary, findings); stop when the range and its directly affected interfaces are covered
+**Budget (review / QC seats)**: /1 round — one full pass over the review range
+**Return shape (review / QC seats)**: the verdict envelope (seat, verdict, summary, findings); stop when the range and its directly affected interfaces are covered
 
 plan_id: ${a.planId}
 Review range: ${a.range}
@@ -302,8 +302,8 @@ const seatPrompt = (category) => `## Assignment
 Execute as: code-reviewer
 Delegation: forbidden
 Task category: audit
-Budget (review / QC seats): /1 round — one pass over the assigned categories
-Return shape (review / QC seats): the seat findings in the audit format; stop when the assigned categories or the budget bound are reached
+**Budget (review / QC seats)**: /1 round — one pass over the assigned categories
+**Return shape (review / QC seats)**: the seat findings in the audit format; stop when the assigned categories or the budget bound are reached
 
 Audit category: ${category}
 Repo under audit: ${a.repo}
@@ -430,8 +430,8 @@ const seatPrompt = (domain, extra) => `## Assignment
 Execute as: code-reviewer
 Delegation: forbidden
 Task category: audit
-Budget (review / QC seats): /1 round — one pass over the assigned categories
-Return shape (review / QC seats): the seat findings in the audit format; stop when the assigned categories or the budget bound are reached
+**Budget (review / QC seats)**: /1 round — one pass over the assigned categories
+**Return shape (review / QC seats)**: the seat findings in the audit format; stop when the assigned categories or the budget bound are reached
 
 Review target: ${a.target}
 Review worktree: ${a.worktree}
@@ -586,8 +586,8 @@ const seat = await agent(`## Assignment
 Execute as: code-reviewer
 Delegation: forbidden
 Task category: review
-Budget (review / QC seats): /1 round — one pass over the task diff
-Return shape (review / QC seats): the canonical Mode A report (reportMarkdown) + taskQuality; stop when the task diff and its directly affected interfaces are covered
+**Budget (review / QC seats)**: /1 round — one pass over the task diff
+**Return shape (review / QC seats)**: the canonical Mode A report (reportMarkdown) + taskQuality; stop when the task diff and its directly affected interfaces are covered
 
 plan_id: ${a.planId}
 Task: ${a.taskId}

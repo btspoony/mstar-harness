@@ -1038,7 +1038,7 @@ jobs:
         run: bun run cli:build
 
       - name: Test scripts
-        run: bun test scripts/ascii-literal-utils.test.ts scripts/build-zcode-hooks.test.ts scripts/ci-dep-guard.test.ts scripts/ci-packed-manifest-guard.test.ts scripts/drift-lint.test.ts scripts/escape-dist-literals.test.ts scripts/extract-changelog-section.test.ts scripts/lint-ascii-literals.test.ts scripts/lint-refusal-quality.test.ts scripts/lint-help-reachability.test.ts scripts/lint-overdesign-backtest.test.ts scripts/opencode-v2-smoke.test.ts scripts/prepare-release.test.ts scripts/release-preflight.test.ts
+        run: bun test scripts/ascii-literal-utils.test.ts scripts/build-zcode-hooks.test.ts scripts/ci-dep-guard.test.ts scripts/ci-packed-manifest-guard.test.ts scripts/drift-lint.test.ts scripts/dsh-contract-lint.test.ts scripts/escape-dist-literals.test.ts scripts/extract-changelog-section.test.ts scripts/lint-ascii-literals.test.ts scripts/lint-refusal-quality.test.ts scripts/lint-help-reachability.test.ts scripts/lint-overdesign-backtest.test.ts scripts/opencode-v2-smoke.test.ts scripts/prepare-release.test.ts scripts/release-preflight.test.ts
 
       # Bundled artifacts and hand-written ZCode hook behavior/parse checks.
       - name: Test hooks
@@ -1168,3 +1168,11 @@ jobs:
 
       - name: Repository drift validation
         run: bun run validation:drift
+
+      # Machine gates for the tracked dsh host documents: review-seat bounding
+      # (#555 acceptance 1), carrier vocabulary (#555 acceptance 2) and the
+      # packages/dsh README language-pair pin (I-000829). The authorities (seat
+      # list, label sets, carrier map) come from their owning source, so a
+      # renamed role/label/carrier reddens this job instead of drifting.
+      - name: DSH contract validation
+        run: bun run lint:dsh-contract
