@@ -359,13 +359,15 @@ export function findRefusalWrappers(source: ts.SourceFile): Map<string, RefusalW
  */
 export function scanSource(source: string, file: string): RefusalFinding[] {
   const sf = ts.createSourceFile(file, source, ts.ScriptTarget.Latest, true, ts.ScriptKind.TS);
-  interface Scope { parent?: Scope; kind: "source" | "function" | "block"; declarations: Map<string, ts.VariableDeclaration>; }
+  interface Scope { parent?: Scope; kind: "source" | "function" | "block"; declarations: Map<string, ts.VariableDeclaration>; functions: Map<string, ts.FunctionDeclaration>; params: Set<string>; }
   const scopeByNode = new WeakMap<ts.Node, Scope>();
-  const sourceScope: Scope = { kind: "source", declarations: new Map() };
+  const sourceScope: Scope = { kind: "source", declarations: new Map(), functions: new Map(), params: new Set() };
   const buildScopes = (node: ts.Node, inherited: Scope): void => {
     const kind = ts.isFunctionLike(node) ? "function" : ts.isBlock(node) ? "block" : undefined;
-    const scope: Scope = kind ? { parent: inherited, kind, declarations: new Map() } : inherited;
+    const scope: Scope = kind ? { parent: inherited, kind, declarations: new Map(), functions: new Map(), params: new Set() } : inherited;
     scopeByNode.set(node, scope);
+    if (ts.isFunctionDeclaration(node) && node.name) inherited.functions.set(node.name.text, node);
+    if (ts.isParameter(node) && ts.isIdentifier(node.name)) scope.params.add(node.name.text);
     if (ts.isVariableDeclaration(node) && ts.isIdentifier(node.name) && node.initializer) {
       let target = scope;
       if (!(node.parent.flags & (ts.NodeFlags.Const | ts.NodeFlags.Let))) {
@@ -379,6 +381,16 @@ export function scanSource(source: string, file: string): RefusalFinding[] {
   const resolveDeclaration = (scope: Scope | undefined, name: string): ts.VariableDeclaration | undefined => {
     for (let current = scope; current; current = current.parent) {
       const declaration = current.declarations.get(name);
+      if (declaration) return declaration;
+    }
+    return undefined;
+  };
+  // A function name is proven only against the binding the call site actually sees; a
+  // nearer variable, parameter or function declaration of the same name fails closed.
+  const resolveFunction = (scope: Scope | undefined, name: string): ts.FunctionDeclaration | undefined => {
+    for (let current = scope; current; current = current.parent) {
+      if (current.declarations.has(name) || current.params.has(name)) return undefined;
+      const declaration = current.functions.get(name);
       if (declaration) return declaration;
     }
     return undefined;
@@ -407,7 +419,7 @@ export function scanSource(source: string, file: string): RefusalFinding[] {
   }
   // A recovery placeholder is one whole value substituted into literal text: `${workflow}`,
   // never a computed expression that could rewrite the command path around it.
-  const stringHelperReturns = new Map<string, ts.Expression[]>();
+  const helperReturns = new Map<ts.FunctionDeclaration, ts.Expression[]>();
   for (const statement of sf.statements) {
     if (!ts.isFunctionDeclaration(statement) || !statement.name || !statement.body) continue;
     if (statement.type?.getText(sf) !== "string") continue;
@@ -418,19 +430,22 @@ export function scanSource(source: string, file: string): RefusalFinding[] {
       ts.forEachChild(node, collectReturns);
     };
     collectReturns(statement.body);
-    if (returns.length > 0) stringHelperReturns.set(statement.name.text, returns);
+    if (returns.length > 0) helperReturns.set(statement, returns);
   }
-  const helperRecoveryText = (call: ts.CallExpression): string | undefined => {
+  const helperRecoveryText = (call: ts.CallExpression, helpers: ReadonlySet<string>): string | undefined => {
     if (!ts.isIdentifier(call.expression)) return undefined;
-    const returns = stringHelperReturns.get(call.expression.text);
-    if (!returns) return undefined;
-    const texts = returns.map((expression) => codeValue(expression, scopeByNode.get(expression)));
+    const name = call.expression.text;
+    const declaration = resolveFunction(scopeByNode.get(call.expression), name);
+    const returns = declaration && helperReturns.get(declaration);
+    if (!declaration || !returns || helpers.has(name)) return undefined;
+    const seenHelpers = new Set(helpers).add(name);
+    const texts = returns.map((expression) => codeValue(expression, scopeByNode.get(expression), new Set(), true, seenHelpers));
     return texts.every((text) => text !== undefined && text.trim() !== "") ? texts[0] : undefined;
   };
-  const codeValue = (node: ts.Expression | undefined, scope?: Scope, seen = new Set<ts.VariableDeclaration>(), recoveryProof = false): string | undefined => {
+  const codeValue = (node: ts.Expression | undefined, scope?: Scope, seen = new Set<ts.VariableDeclaration>(), recoveryProof = false, helpers: ReadonlySet<string> = new Set()): string | undefined => {
     if (!node) return undefined;
     if (ts.isParenthesizedExpression(node) || ts.isAsExpression(node) || ts.isTypeAssertionExpression(node) || ts.isSatisfiesExpression(node)) {
-      return codeValue(node.expression, scope, seen, recoveryProof);
+      return codeValue(node.expression, scope, seen, recoveryProof, helpers);
     }
     if (ts.isStringLiteralLike(node) || ts.isNoSubstitutionTemplateLiteral(node)) return node.text;
     if (ts.isTemplateExpression(node)) {
@@ -438,21 +453,21 @@ export function scanSource(source: string, file: string): RefusalFinding[] {
       return node.head.text + node.templateSpans.map((span) => `${span.expression.getText(sf)}${span.literal.text}`).join("");
     }
     if (ts.isConditionalExpression(node)) {
-      const whenTrue = codeValue(node.whenTrue, scope, new Set(seen), recoveryProof);
-      const whenFalse = codeValue(node.whenFalse, scope, new Set(seen), recoveryProof);
+      const whenTrue = codeValue(node.whenTrue, scope, new Set(seen), recoveryProof, helpers);
+      const whenFalse = codeValue(node.whenFalse, scope, new Set(seen), recoveryProof, helpers);
       return whenTrue?.trim() && whenFalse?.trim() ? whenTrue : undefined;
     }
     if (ts.isBinaryExpression(node) && [ts.SyntaxKind.QuestionQuestionToken, ts.SyntaxKind.BarBarToken].includes(node.operatorToken.kind)) {
-      const left = codeValue(node.left, scope, new Set(seen), recoveryProof);
-      return left?.trim() ? left : codeValue(node.right, scope, new Set(seen), recoveryProof);
+      const left = codeValue(node.left, scope, new Set(seen), recoveryProof, helpers);
+      return left?.trim() ? left : codeValue(node.right, scope, new Set(seen), recoveryProof, helpers);
     }
     if (ts.isIdentifier(node)) {
       const declaration = resolveDeclaration(scope ?? scopeByNode.get(node), node.text);
       if (!declaration?.initializer || seen.has(declaration)) return undefined;
       seen.add(declaration);
-      return codeValue(declaration.initializer, scopeByNode.get(declaration), seen, recoveryProof);
+      return codeValue(declaration.initializer, scopeByNode.get(declaration), seen, recoveryProof, helpers);
     }
-    if (recoveryProof && ts.isCallExpression(node)) return helperRecoveryText(node);
+    if (recoveryProof && ts.isCallExpression(node)) return helperRecoveryText(node, helpers);
     return undefined;
   };
   const isCauseCode = (node: ts.Expression | undefined, scope?: Scope): boolean => {

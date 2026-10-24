@@ -327,6 +327,40 @@ describe("refusal quality scanner", () => {
     expect(findings.map(({ classification }) => classification)).toEqual(["missing-recovery", "missing-recovery", "missing-recovery"]);
   });
 
+  test("keeps failing a helper return whose interpolation is computed", () => {
+    const findings = scanSource(`
+      function interpolatedRecovery(argv: string[]): string {
+        return \`Run mstar status validate \${argv.join(" ")}\`;
+      }
+      refusalEnvelope({ command: "x", status: "refused", code: "x.blocked", message: "Blocked",
+        recovery: interpolatedRecovery(argv) });
+    `, "packages/commands/src/fixture.ts");
+    expect(findings.map(({ classification }) => classification)).toEqual(["missing-recovery"]);
+  });
+
+  test("keeps failing a shadowed helper that shares the proven helper's name", () => {
+    const findings = scanSource(`
+      function provenRecovery(workflow: string): string {
+        return \`Rerun mstar session run --workflow \${workflow} --role coordinator.\`;
+      }
+      function localConstant(workflow: string) {
+        const provenRecovery = () => "";
+        refusalEnvelope({ command: "x", status: "refused", code: "x.blocked", message: "Blocked",
+          recovery: provenRecovery() });
+      }
+      function localFunction(workflow: string) {
+        function provenRecovery(): string { return ""; }
+        refusalEnvelope({ command: "x", status: "refused", code: "x.blocked", message: "Blocked",
+          recovery: provenRecovery() });
+      }
+      function localParameter(provenRecovery: () => string) {
+        refusalEnvelope({ command: "x", status: "refused", code: "x.blocked", message: "Blocked",
+          recovery: provenRecovery() });
+      }
+    `, "packages/commands/src/fixture.ts");
+    expect(findings.map(({ classification }) => classification)).toEqual(["missing-recovery", "missing-recovery", "missing-recovery"]);
+  });
+
   test("a stale allowlist entry reports its tracking issue and refresh action", () => {
     const snippet = `refusalEnvelope({ code: "x.bad" })`;
     const finding = {
