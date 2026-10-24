@@ -1,12 +1,1 @@
-[
-  {
-    "signature": "missing-recovery:packages/commands/src/families/workflow.ts:751a9919ef73",
-    "justification": "The recovery text is chosen per refusal code at runtime and each branch names a supported operator action (status validate, a new lifecycle, or a lifecycle resume); it is not a manual escape. Tracking the static-proof gap in I-000865.",
-    "trackingIssue": "I-000865"
-  },
-  {
-    "signature": "missing-recovery:packages/commands/src/families/session.ts:046d20963bcc",
-    "justification": "The recovery names the state-specific supported command and the runtime workflow id; it is not a manual escape. Tracking the static-proof gap in I-000865.",
-    "trackingIssue": "I-000865"
-  }
-]
+[]

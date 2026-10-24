@@ -1,4 +1,4 @@
-import { applyAllowlist, countViolations, exitCodeFor, normalizeSnippet, parseAllowlist, scanSource, signatureFor, validateAllowlistEntries } from "./lint-refusal-quality";
+import { applyAllowlist, countViolations, exitCodeFor, formatStaleAllowlist, normalizeSnippet, parseAllowlist, scanSource, signatureFor, validateAllowlistEntries } from "./lint-refusal-quality";
 
 describe("refusal quality scanner", () => {
   test("finds missing cause codes without enforcing recovery reachability", () => {
@@ -57,7 +57,7 @@ describe("refusal quality scanner", () => {
     const result = applyAllowlist([finding], [{
       signature, justification: "Tracked structured refusal cleanup.", trackingIssue: "SYNTH-REFUSAL-COHORT", expectedCount: 3,
     }], "/repo");
-    expect(result.stale).toEqual([signature]);
+    expect(result.stale.map(({ signature: staleSignature }) => staleSignature)).toEqual([signature]);
     expect(exitCodeFor(result.findings, result.stale)).toBe(1);
   });
 
@@ -284,5 +284,62 @@ describe("refusal quality scanner", () => {
     `, "packages/engine/src/fixture.ts");
     expect(findings.map(({ classification }) => classification)).toEqual(["missing-recovery"]);
     expect(findings[0]?.reason).toContain("flag = true");
+  });
+
+  test("proves recovery text from a same-file string helper with declared-safe placeholders", () => {
+    const findings = scanSource(`
+      function unboundRecovery(state: string, workflow: string): string {
+        switch (state) {
+          case "paused":
+            return \`Resume the lifecycle first with mstar workflow lifecycle --workflow \${workflow} --status running, then retry mstar session run.\`;
+          case "unregistered":
+            return "Register the workflow first with mstar workflow register.";
+        }
+      }
+      refusalEnvelope({ command: "session.run", status: "refused", code: "session.run-unbound", message: "Unbound",
+        recovery: unboundRecovery(state, workflow) });
+    `, "packages/commands/src/fixture.ts");
+    expect(findings).toEqual([]);
+  });
+
+  test("proves a fallback recovery chain of literal and placeholder-template branches", () => {
+    const findings = scanSource(`
+      const holderList = "a, b";
+      const recovery = flag ? \`Add every listed session (\${holderList}) and retry.\` : undefined;
+      refusalEnvelope({ command: "x", status: "refused", code: "x.blocked", message: "Blocked",
+        recovery: recovery ?? (flag ? "Run mstar status validate." : "Register a new lifecycle through mstar workflow register.") });
+    `, "packages/commands/src/fixture.ts");
+    expect(findings).toEqual([]);
+  });
+
+  test("keeps failing recovery text whose interpolation is not a declared-safe placeholder", () => {
+    const findings = scanSource(`
+      function dynamicRecovery(code: string): string {
+        return buildRecovery(code);
+      }
+      refusalEnvelope({ command: "x", status: "refused", code: "x.blocked", message: "Blocked",
+        recovery: \`Run mstar status validate \${argv.join(" ")}\` });
+      refusalEnvelope({ command: "x", status: "refused", code: "x.blocked", message: "Blocked",
+        recovery: dynamicRecovery(code) });
+      refusalEnvelope({ command: "x", status: "refused", code: "x.blocked", message: "Blocked",
+        recovery: \`Run mstar status validate \${flag ? "one" : "two"}\` });
+    `, "packages/commands/src/fixture.ts");
+    expect(findings.map(({ classification }) => classification)).toEqual(["missing-recovery", "missing-recovery", "missing-recovery"]);
+  });
+
+  test("a stale allowlist entry reports its tracking issue and refresh action", () => {
+    const snippet = `refusalEnvelope({ code: "x.bad" })`;
+    const finding = {
+      file: "packages/commands/src/fixture.ts", line: 1, column: 1, classification: "missing-recovery" as const,
+      reason: "missing recovery", snippet,
+    };
+    const signature = signatureFor("missing-recovery", finding.file, snippet);
+    const result = applyAllowlist([finding], [{
+      signature, justification: "Tracked structured refusal cleanup.", trackingIssue: "SYNTH-STALE-COHORT", expectedCount: 2,
+    }], "/repo");
+    expect(result.stale.map(({ trackingIssue }) => trackingIssue)).toEqual(["SYNTH-STALE-COHORT"]);
+    expect(formatStaleAllowlist(result.stale)).toContain("SYNTH-STALE-COHORT");
+    expect(formatStaleAllowlist(result.stale)).toContain("Refresh:");
+    expect(exitCodeFor(result.findings, result.stale)).toBe(1);
   });
 });

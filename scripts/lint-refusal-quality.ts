@@ -405,25 +405,54 @@ export function scanSource(source: string, file: string): RefusalFinding[] {
     for (const argument of wrapper.inner.arguments ?? []) visitArgument(argument);
     if (usesParameter) wrapperBodies.set(wrapper.inner, { name, parameters });
   }
-  const codeValue = (node: ts.Expression | undefined, scope?: Scope, seen = new Set<ts.VariableDeclaration>()): string | undefined => {
+  // A recovery placeholder is one whole value substituted into literal text: `${workflow}`,
+  // never a computed expression that could rewrite the command path around it.
+  const stringHelperReturns = new Map<string, ts.Expression[]>();
+  for (const statement of sf.statements) {
+    if (!ts.isFunctionDeclaration(statement) || !statement.name || !statement.body) continue;
+    if (statement.type?.getText(sf) !== "string") continue;
+    const returns: ts.Expression[] = [];
+    const collectReturns = (node: ts.Node): void => {
+      if (node !== statement.body && ts.isFunctionLike(node)) return;
+      if (ts.isReturnStatement(node)) { if (node.expression) returns.push(node.expression); return; }
+      ts.forEachChild(node, collectReturns);
+    };
+    collectReturns(statement.body);
+    if (returns.length > 0) stringHelperReturns.set(statement.name.text, returns);
+  }
+  const helperRecoveryText = (call: ts.CallExpression): string | undefined => {
+    if (!ts.isIdentifier(call.expression)) return undefined;
+    const returns = stringHelperReturns.get(call.expression.text);
+    if (!returns) return undefined;
+    const texts = returns.map((expression) => codeValue(expression, scopeByNode.get(expression)));
+    return texts.every((text) => text !== undefined && text.trim() !== "") ? texts[0] : undefined;
+  };
+  const codeValue = (node: ts.Expression | undefined, scope?: Scope, seen = new Set<ts.VariableDeclaration>(), recoveryProof = false): string | undefined => {
     if (!node) return undefined;
+    if (ts.isParenthesizedExpression(node) || ts.isAsExpression(node) || ts.isTypeAssertionExpression(node) || ts.isSatisfiesExpression(node)) {
+      return codeValue(node.expression, scope, seen, recoveryProof);
+    }
     if (ts.isStringLiteralLike(node) || ts.isNoSubstitutionTemplateLiteral(node)) return node.text;
-    if (ts.isTemplateExpression(node)) return node.head.text + node.templateSpans.map((span) => `${span.expression.getText(sf)}${span.literal.text}`).join("");
+    if (ts.isTemplateExpression(node)) {
+      if (recoveryProof && !node.templateSpans.every((span) => ts.isIdentifier(span.expression))) return undefined;
+      return node.head.text + node.templateSpans.map((span) => `${span.expression.getText(sf)}${span.literal.text}`).join("");
+    }
     if (ts.isConditionalExpression(node)) {
-      const whenTrue = codeValue(node.whenTrue, scope, new Set(seen));
-      const whenFalse = codeValue(node.whenFalse, scope, new Set(seen));
+      const whenTrue = codeValue(node.whenTrue, scope, new Set(seen), recoveryProof);
+      const whenFalse = codeValue(node.whenFalse, scope, new Set(seen), recoveryProof);
       return whenTrue?.trim() && whenFalse?.trim() ? whenTrue : undefined;
     }
     if (ts.isBinaryExpression(node) && [ts.SyntaxKind.QuestionQuestionToken, ts.SyntaxKind.BarBarToken].includes(node.operatorToken.kind)) {
-      const left = codeValue(node.left, scope, new Set(seen));
-      return left?.trim() ? left : codeValue(node.right, scope, new Set(seen));
+      const left = codeValue(node.left, scope, new Set(seen), recoveryProof);
+      return left?.trim() ? left : codeValue(node.right, scope, new Set(seen), recoveryProof);
     }
     if (ts.isIdentifier(node)) {
       const declaration = resolveDeclaration(scope ?? scopeByNode.get(node), node.text);
       if (!declaration?.initializer || seen.has(declaration)) return undefined;
       seen.add(declaration);
-      return codeValue(declaration.initializer, scopeByNode.get(declaration), seen);
+      return codeValue(declaration.initializer, scopeByNode.get(declaration), seen, recoveryProof);
     }
+    if (recoveryProof && ts.isCallExpression(node)) return helperRecoveryText(node);
     return undefined;
   };
   const isCauseCode = (node: ts.Expression | undefined, scope?: Scope): boolean => {
@@ -547,7 +576,7 @@ export function scanSource(source: string, file: string): RefusalFinding[] {
       const statusMayBeRefused = unprovenFields.has("status")
         || (!!status && ts.isIdentifier(status) && unprovenParameters.has(status.text))
         || codeValue(status) !== "usage";
-      const recoveryText = codeValue(recovery);
+      const recoveryText = codeValue(recovery, undefined, new Set(), true);
       return statusMayBeRefused && (
         unprovenFields.has("recovery")
         || (!!recovery && ts.isIdentifier(recovery) && unprovenParameters.has(recovery.text))
@@ -663,7 +692,7 @@ function loadAllowlist(path: string): AllowlistEntry[] {
   return parseAllowlist(readFileSync(path, "utf8"));
 }
 function statSafe(path: string): boolean { try { return statSync(path).isFile(); } catch { return false; } }
-export function applyAllowlist(findings: RefusalFinding[], entries: AllowlistEntry[], repoRoot: string): { findings: RefusalFinding[]; stale: string[]; used: AllowlistEntry[] } {
+export function applyAllowlist(findings: RefusalFinding[], entries: AllowlistEntry[], repoRoot: string): { findings: RefusalFinding[]; stale: AllowlistEntry[]; used: AllowlistEntry[] } {
   const validated = validateAllowlistEntries(entries);
   const bySignature = new Map(validated.map((entry) => [entry.signature, entry]));
   const output: RefusalFinding[] = [];
@@ -679,12 +708,15 @@ export function applyAllowlist(findings: RefusalFinding[], entries: AllowlistEnt
     matched.add(signature);
     output.push({ ...finding, classification: "allowlisted", reason: `${finding.classification}: ${finding.reason} Allowlisted: ${entry.justification} (${entry.trackingIssue}).` });
   }
-  return { findings: output, stale: validated.filter((entry) => counts.get(entry.signature) !== entry.expectedCount).map((entry) => entry.signature), used: validated.filter((entry) => matched.has(entry.signature)) };
+  return { findings: output, stale: validated.filter((entry) => counts.get(entry.signature) !== entry.expectedCount), used: validated.filter((entry) => matched.has(entry.signature)) };
+}
+export function formatStaleAllowlist(entries: readonly AllowlistEntry[]): string {
+  return entries.map((entry) => `${entry.signature} tracked by ${entry.trackingIssue}: no current finding matches this signature, so the exemption is stale. Refresh: re-run the lint and replace the signature with the current finding signature logged under ${entry.trackingIssue}, or delete the entry when that cause is fixed.`).join("\n");
 }
 export function countViolations(findings: RefusalFinding[]): number {
   return findings.filter((finding) => finding.classification !== "allowlisted" && finding.classification !== "manual-recovery").length;
 }
-export function exitCodeFor(findings: RefusalFinding[], stale: string[]): 0 | 1 {
+export function exitCodeFor(findings: RefusalFinding[], stale: readonly AllowlistEntry[]): 0 | 1 {
   return countViolations(findings) === 0 && stale.length === 0 ? 0 : 1;
 }
 function run(): number {
@@ -702,7 +734,7 @@ function run(): number {
     else {
       for (const finding of result.findings) console.log(`${finding.file}:${finding.line}:${finding.column} ${finding.classification} ${finding.reason}\n  ${finding.snippet}`);
       if (result.used.length) console.log(`Allowlist (${result.used.length}):\n${JSON.stringify(result.used, null, 2)}`);
-      if (result.stale.length) console.error(`Stale allowlist entries: ${result.stale.join(", ")}`);
+      if (result.stale.length) console.error(`Stale allowlist entries (refresh required):\n${formatStaleAllowlist(result.stale)}`);
       console.log(`Refusal-quality: ${countViolations(result.findings)} violations; ${result.used.length} allowlisted`);
     }
     return exitCodeFor(result.findings, result.stale);
