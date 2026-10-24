@@ -878,7 +878,7 @@ never pass the deferred `agentType` option: the engine rejects it loudly.
 | `/amazing-pr-review deep` | ≥3 | native `workflow` | `mstar-pr-seats` | same |
 | `/amazing-pr-review` default tier | 2 | `subagent` (or the mounted channel's equivalent when the Team layer disables it) | — | two subagent cards, no node (expected) |
 | Plan QC tri (PM already in session, no extra slash) | 3 | native `workflow` | `mstar-qc-tri` | conversation `workflow-run` node |
-| Any 1–2 read-only delegation | 1–2 | `subagent` (or a teammate / one-seat `workflow` run when the Team layer disables it) | — | expected |
+| Any 1–2 read-only delegation | 1–2 | `subagent`, else the one-seat `workflow` run when the Team layer disables it | — | subagent cards, or one `workflow-run` node when `subagent` is unavailable |
 
 `meta.name` is the gate identity — keep it kebab-case and on the recommended
 list. With the default Config (`workflowNames` unset) every name is *unknown*,

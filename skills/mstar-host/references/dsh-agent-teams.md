@@ -230,17 +230,15 @@ cheap escape once the roster is full.
   A teammate that is never told which checkout belongs to it will edit the shared
   cwd, so the initial prompt must name the absolute worktree path, the branch,
   and the files it owns. `write_scopes` is a DIFFERENT field: it is
-  workspace-relative and refuses absolute paths and `..` segments, so never paste
-  a checkout path into it. Record the repository-relative prefixes the track
-  modifies (for example `packages/dsh/src/gates/`) — the same path means the same
-  file inside every worktree of that repository — and omit the field when the
-  track only reads. **The sibling-worktree case:** a checkout outside the
-  workspace (the normal `…/{repo}.worktrees/<track>` shape) cannot be expressed
-  as a board scope at all, so the prompt path plus the workspace-relative
-  portion of the track's files is the supported form — and when no portion of
-  that checkout is inside the workspace, the board scope is omitted and the
-  prompt is the whole address. The prompt is the authority; `write_scopes` is
-  only the advisory echo.
+  workspace-relative and refuses absolute paths and `..` segments, so the
+  checkout path never goes into it. Record the repository-relative prefixes the
+  track modifies (for example `packages/dsh/src/gates/`) — the same path means
+  the same file inside every worktree of that repository — and omit the field
+  when the track only reads. **A checkout entirely outside the workspace** (the
+  normal `…/{repo}.worktrees/<track>` shape) cannot be expressed as a board
+  scope at all, so there the field is omitted and the prompt is the whole
+  address. The prompt is the authority; `write_scopes` is only the advisory
+  echo.
 - **`write_scopes` is advisory, not a lock.** Overlapping scopes on in-progress
   tasks surface as `writeScopeWarnings`; they never block a write. Bash,
   formatters, and code generators are not covered by the filesystem version
