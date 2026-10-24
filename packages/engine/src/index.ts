@@ -212,6 +212,9 @@ export type {
   ValidateAssignmentFieldsOptions,
 } from "./dispatch.js";
 export {
+  BUDGET_LABELS,
+  RETURN_SHAPE_LABELS,
+  REVIEW_SEAT_ROLES,
   antiRecursionPrecheck,
   assertDefaultBranchProtected,
   assertTriIdentity,
