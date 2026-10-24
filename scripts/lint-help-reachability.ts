@@ -9,7 +9,7 @@
 import { readFileSync, readdirSync, statSync } from "node:fs";
 import { relative, resolve } from "node:path";
 import ts from "typescript5";
-import { applyAllowlist, countViolations, exitCodeFor, parseAllowlist, extractCliGrammar, findRefusalWrappers, objectAlternatives, recoveryFailure, type AllowlistEntry, type CliGrammar, type RefusalFinding, type RefusalWrapperDescriptor } from "./lint-refusal-quality";
+import { applyAllowlist, countViolations, exitCodeFor, formatStaleAllowlist, parseAllowlist, extractCliGrammar, findRefusalWrappers, objectAlternatives, recoveryFailure, type AllowlistEntry, type CliGrammar, type RefusalFinding, type RefusalWrapperDescriptor } from "./lint-refusal-quality";
 
 export type HelpReachabilityFinding = RefusalFinding;
 
@@ -362,7 +362,7 @@ export function run(argv: string[] = process.argv.slice(2), options: { root?: st
       for (const row of violations) console.log(`${row.file}:${row.line}:${row.column} ${row.classification} ${row.reason}\n  ${row.snippet}`);
       for (const row of manualRecoveries) console.log(`manual recovery (authorized): ${row.file}:${row.line} — ${row.reason}`);
       if (applied.used.length) console.log(`Allowlist (${applied.used.length}):\n${JSON.stringify(applied.used, null, 2)}`);
-      if (applied.stale.length) console.error(`Stale allowlist entries: ${applied.stale.join(", ")}`);
+      if (applied.stale.length) console.error(`Stale allowlist entries (refresh required):\n${formatStaleAllowlist(applied.stale)}`);
       console.log(`Help-reachability: ${countViolations(violations)} violations; ${manualRecoveries.length} manual recoveries; ${applied.used.length} allowlisted`);
     }
     return exitCodeFor(violations, applied.stale);

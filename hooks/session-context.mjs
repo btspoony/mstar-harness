@@ -15721,7 +15721,7 @@ function projectBucketOf(row) {
   try {
     assertSafePathComponent(metadata.project_id, "metadata.project_id");
   } catch (error) {
-    throw new CoordinationError("coordination.invalid-input", error instanceof Error ? error.message : String(error), { field: "metadata.project_id" });
+    throw new CoordinationError("coordination.invalid-input", "Invalid metadata.project_id: it must be a single safe path component. Correct the plan row's project_id, then retry. Inspect workflow state with mstar status validate.", { field: "metadata.project_id", cause: error instanceof Error ? error.message : String(error) });
   }
   return metadata.project_id;
 }

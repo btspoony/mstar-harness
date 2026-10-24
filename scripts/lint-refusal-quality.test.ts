@@ -1,4 +1,4 @@
-import { applyAllowlist, countViolations, exitCodeFor, normalizeSnippet, parseAllowlist, scanSource, signatureFor, validateAllowlistEntries } from "./lint-refusal-quality";
+import { applyAllowlist, countViolations, exitCodeFor, formatStaleAllowlist, normalizeSnippet, parseAllowlist, scanSource, signatureFor, validateAllowlistEntries } from "./lint-refusal-quality";
 
 describe("refusal quality scanner", () => {
   test("finds missing cause codes without enforcing recovery reachability", () => {
@@ -57,7 +57,7 @@ describe("refusal quality scanner", () => {
     const result = applyAllowlist([finding], [{
       signature, justification: "Tracked structured refusal cleanup.", trackingIssue: "SYNTH-REFUSAL-COHORT", expectedCount: 3,
     }], "/repo");
-    expect(result.stale).toEqual([signature]);
+    expect(result.stale.map(({ entry }) => entry.signature)).toEqual([signature]);
     expect(exitCodeFor(result.findings, result.stale)).toBe(1);
   });
 
@@ -284,5 +284,501 @@ describe("refusal quality scanner", () => {
     `, "packages/engine/src/fixture.ts");
     expect(findings.map(({ classification }) => classification)).toEqual(["missing-recovery"]);
     expect(findings[0]?.reason).toContain("flag = true");
+  });
+
+  test("proves recovery text from a same-file string helper with declared-safe placeholders", () => {
+    const findings = scanSource(`
+      function unboundRecovery(state: string, workflow: string): string {
+        switch (state) {
+          case "paused":
+            return \`Resume the lifecycle first with mstar workflow lifecycle --workflow \${workflow} --status running, then retry mstar session run.\`;
+          case "unregistered":
+            return "Register the workflow first with mstar workflow register.";
+        }
+      }
+      refusalEnvelope({ command: "session.run", status: "refused", code: "session.run-unbound", message: "Unbound",
+        recovery: unboundRecovery(state, workflow) });
+    `, "packages/commands/src/fixture.ts");
+    expect(findings).toEqual([]);
+  });
+
+  test("proves a fallback recovery chain of literal and placeholder-template branches", () => {
+    const findings = scanSource(`
+      const holderList = "a, b";
+      const recovery = flag ? \`Add every listed session (\${holderList}) and retry.\` : undefined;
+      refusalEnvelope({ command: "x", status: "refused", code: "x.blocked", message: "Blocked",
+        recovery: recovery ?? (flag ? "Run mstar status validate." : "Register a new lifecycle through mstar workflow register.") });
+    `, "packages/commands/src/fixture.ts");
+    expect(findings).toEqual([]);
+  });
+
+  test("keeps failing recovery text whose interpolation is not a declared-safe placeholder", () => {
+    const findings = scanSource(`
+      function dynamicRecovery(code: string): string {
+        return buildRecovery(code);
+      }
+      refusalEnvelope({ command: "x", status: "refused", code: "x.blocked", message: "Blocked",
+        recovery: \`Run mstar status validate \${argv.join(" ")}\` });
+      refusalEnvelope({ command: "x", status: "refused", code: "x.blocked", message: "Blocked",
+        recovery: dynamicRecovery(code) });
+      refusalEnvelope({ command: "x", status: "refused", code: "x.blocked", message: "Blocked",
+        recovery: \`Run mstar status validate \${flag ? "one" : "two"}\` });
+    `, "packages/commands/src/fixture.ts");
+    expect(findings.map(({ classification }) => classification)).toEqual(["missing-recovery", "missing-recovery", "missing-recovery"]);
+  });
+
+  test("keeps failing a helper return whose interpolation is computed", () => {
+    const findings = scanSource(`
+      function interpolatedRecovery(argv: string[]): string {
+        return \`Run mstar status validate \${argv.join(" ")}\`;
+      }
+      refusalEnvelope({ command: "x", status: "refused", code: "x.blocked", message: "Blocked",
+        recovery: interpolatedRecovery(argv) });
+    `, "packages/commands/src/fixture.ts");
+    expect(findings.map(({ classification }) => classification)).toEqual(["missing-recovery"]);
+  });
+
+  test("keeps failing a shadowed helper that shares the proven helper's name", () => {
+    const findings = scanSource(`
+      function provenRecovery(workflow: string): string {
+        return \`Rerun mstar session run --workflow \${workflow} --role coordinator.\`;
+      }
+      function localConstant(workflow: string) {
+        const provenRecovery = () => "";
+        refusalEnvelope({ command: "x", status: "refused", code: "x.blocked", message: "Blocked",
+          recovery: provenRecovery() });
+      }
+      function localFunction(workflow: string) {
+        function provenRecovery(): string { return ""; }
+        refusalEnvelope({ command: "x", status: "refused", code: "x.blocked", message: "Blocked",
+          recovery: provenRecovery() });
+      }
+      function localParameter(provenRecovery: () => string) {
+        refusalEnvelope({ command: "x", status: "refused", code: "x.blocked", message: "Blocked",
+          recovery: provenRecovery() });
+      }
+    `, "packages/commands/src/fixture.ts");
+    expect(findings.map(({ classification }) => classification)).toEqual(["missing-recovery", "missing-recovery", "missing-recovery"]);
+  });
+
+  test("keeps failing uninitialized, destructured and catch-clause shadows of the proven helper", () => {
+    const findings = scanSource(`
+      function provenRecovery(workflow: string): string {
+        return \`Rerun mstar session run --workflow \${workflow} --role coordinator.\`;
+      }
+      function uninitializedLocal(workflow: string) {
+        let provenRecovery: () => string;
+        provenRecovery = () => "";
+        refusalEnvelope({ command: "x", status: "refused", code: "x.blocked", message: "Blocked",
+          recovery: provenRecovery() });
+      }
+      function destructuredLocal(workflow: string) {
+        const { provenRecovery } = { provenRecovery: () => "" };
+        refusalEnvelope({ command: "x", status: "refused", code: "x.blocked", message: "Blocked",
+          recovery: provenRecovery() });
+      }
+      function catchClauseLocal(workflow: string) {
+        try { noop(); } catch (provenRecovery) {
+          refusalEnvelope({ command: "x", status: "refused", code: "x.blocked", message: "Blocked",
+            recovery: provenRecovery() });
+        }
+      }
+    `, "packages/commands/src/fixture.ts");
+    expect(findings.map(({ classification }) => classification)).toEqual(["missing-recovery", "missing-recovery", "missing-recovery"]);
+  });
+
+  test("keeps failing a named function expression that reuses the proven helper's name", () => {
+    const findings = scanSource(`
+      function provenRecovery(workflow: string): string {
+        return \`Rerun mstar session run --workflow \${workflow} --role coordinator.\`;
+      }
+      const localRecovery = function provenRecovery(flag: boolean): string {
+        refusalEnvelope({ command: "x", status: "refused", code: "x.blocked", message: "Blocked",
+          recovery: provenRecovery(flag) });
+        return flag ? "" : provenRecovery(false);
+      };
+    `, "packages/commands/src/fixture.ts");
+    expect(findings.map(({ classification }) => classification)).toEqual(["missing-recovery"]);
+  });
+
+  test("keeps failing a class expression whose own name reuses the proven helper's name", () => {
+    const findings = scanSource(`
+      function provenRecovery(workflow: string): string {
+        return \`Rerun mstar session run --workflow \${workflow} --role coordinator.\`;
+      }
+      const Local = class provenRecovery {
+        static refusal(flag: boolean) {
+          refusalEnvelope({ command: "x", status: "refused", code: "x.blocked", message: "Blocked",
+            recovery: provenRecovery(flag) });
+        }
+      };
+    `, "packages/commands/src/fixture.ts");
+    expect(findings.map(({ classification }) => classification)).toEqual(["missing-recovery"]);
+  });
+
+  test("fails every interpolation outside the declared-safe identifier set", () => {
+    const findings = scanSource(`
+      refusalEnvelope({ command: "x", status: "refused", code: "x.blocked", message: "Blocked",
+        recovery: \`Rerun mstar session run --workflow \${userInput} --role coordinator.\` });
+      refusalEnvelope({ command: "x", status: "refused", code: "x.blocked", message: "Blocked",
+        recovery: \`Rerun mstar session run --workflow \${someLocalVar} --role coordinator.\` });
+      refusalEnvelope({ command: "x", status: "refused", code: "x.blocked", message: "Blocked",
+        recovery: \`Rerun mstar session run --workflow \${obj.field} --role coordinator.\` });
+      refusalEnvelope({ command: "x", status: "refused", code: "x.blocked", message: "Blocked",
+        recovery: \`Rerun mstar session run --workflow \${workflow} --role coordinator.\` });
+    `, "packages/commands/src/fixture.ts");
+    expect(findings.map(({ classification }) => classification)).toEqual(["missing-recovery", "missing-recovery", "missing-recovery"]);
+  });
+
+  test("proves concatenated recovery text only when both operands are provable", () => {
+    const proven = scanSource(`
+      refusalEnvelope({ command: "x", status: "refused", code: "x.blocked", message: "Blocked",
+        recovery: \`Rerun mstar session run --workflow \${workflow} --role coordinator. \` + "Then retry." });
+    `, "packages/commands/src/fixture.ts");
+    expect(proven).toEqual([]);
+    const unproven = scanSource(`
+      refusalEnvelope({ command: "x", status: "refused", code: "x.blocked", message: "Blocked",
+        recovery: "Run mstar status validate " + buildSuffix() });
+    `, "packages/commands/src/fixture.ts");
+    expect(unproven.map(({ classification }) => classification)).toEqual(["missing-recovery"]);
+  });
+
+  test("requires both operands of a coalescing recovery to be provable", () => {
+    const proven = scanSource(`
+      const chosen = flag ? \`Rerun mstar session run --workflow \${workflow} --role coordinator.\` : undefined;
+      refusalEnvelope({ command: "x", status: "refused", code: "x.blocked", message: "Blocked",
+        recovery: chosen ?? "Run mstar status validate." });
+    `, "packages/commands/src/fixture.ts");
+    expect(proven).toEqual([]);
+    const unprovenLeft = scanSource(`
+      refusalEnvelope({ command: "x", status: "refused", code: "x.blocked", message: "Blocked",
+        recovery: dynamic() ?? "Run mstar status validate." });
+    `, "packages/commands/src/fixture.ts");
+    expect(unprovenLeft.map(({ classification }) => classification)).toEqual(["missing-recovery"]);
+    const unprovenRight = scanSource(`
+      const chosen = flag ? "Run mstar status validate." : undefined;
+      refusalEnvelope({ command: "x", status: "refused", code: "x.blocked", message: "Blocked",
+        recovery: "Register the workflow first." ?? chosen });
+    `, "packages/commands/src/fixture.ts");
+    expect(unprovenRight.map(({ classification }) => classification)).toEqual(["missing-recovery"]);
+  });
+
+  test("proves a wrapper recovery from its call-site argument and fails a dynamic one", () => {
+    const findings = scanSource(`
+      function refused(recovery?: string) {
+        return refusalEnvelope({ command: "x", status: "refused", code: "x.blocked", message: "Blocked",
+          recovery: recovery ?? "Run mstar status validate." });
+      }
+      function outer(runtimeRecovery: string) {
+        refused(runtimeRecovery);
+      }
+      refused("Register the workflow first with mstar workflow register.");
+    `, "packages/commands/src/fixture.ts");
+    expect(findings.map(({ classification }) => classification)).toEqual(["missing-recovery"]);
+    expect(findings[0]?.line).toBe(7);
+  });
+
+  test("keeps failing a recovery whose undefined is shadowed by a binding", () => {
+    const findings = scanSource(`
+      function fromConstant() {
+        const undefined = "";
+        refusalEnvelope({ command: "x", status: "refused", code: "x.blocked", message: "Blocked", recovery: undefined });
+      }
+      function fromParameter(undefined: string) {
+        refusalEnvelope({ command: "x", status: "refused", code: "x.blocked", message: "Blocked", recovery: undefined });
+      }
+      function fromCatch() {
+        try { noop(); } catch (undefined) {
+          refusalEnvelope({ command: "x", status: "refused", code: "x.blocked", message: "Blocked", recovery: undefined });
+        }
+      }
+    `, "packages/commands/src/fixture.ts");
+    expect(findings.map(({ classification }) => classification)).toEqual(["missing-recovery", "missing-recovery", "missing-recovery"]);
+  });
+
+  test("distinguishes an empty string from a nullish recovery", () => {
+    const scan = (recovery: string) => scanSource(
+      `refusalEnvelope({ command: "x", status: "refused", code: "x.blocked", message: "Blocked", recovery: ${recovery} });`,
+      "packages/commands/src/fixture.ts",
+    );
+    expect(scan(`"" ?? "Run mstar status validate."`).map(({ classification }) => classification)).toEqual(["missing-recovery"]);
+    expect(scan(`"" || "Run mstar status validate."`)).toEqual([]);
+    expect(scan(`"   " ?? "Run mstar status validate."`).map(({ classification }) => classification)).toEqual(["missing-recovery"]);
+    expect(scan(`(flag ? "" : undefined) ?? "Run mstar status validate."`).map(({ classification }) => classification)).toEqual(["missing-recovery"]);
+    expect(scan(`(flag ? "" : "Run mstar status validate.") || "Register the workflow first with mstar workflow register."`)).toEqual([]);
+  });
+
+  test("keeps a helper's parameters out of the caller's wrapper bindings", () => {
+    const findings = scanSource(`
+      function helper(recovery: string): string {
+        return recovery;
+      }
+      function refused(recovery?: string) {
+        return refusalEnvelope({ command: "x", status: "refused", code: "x.blocked", message: "Blocked",
+          recovery: helper(dynamicRecovery()) });
+      }
+      refused("Run mstar status validate.");
+      function literalHelper(unused: string): string {
+        return "Register the workflow first with mstar workflow register.";
+      }
+      refusalEnvelope({ command: "x", status: "refused", code: "x.blocked", message: "Blocked",
+        recovery: literalHelper(dynamicRecovery()) });
+    `, "packages/commands/src/fixture.ts");
+    expect(findings.map(({ classification }) => classification)).toEqual(["missing-recovery"]);
+  });
+
+  test("keeps a whitespace-only arm from being masked by a sibling arm's text", () => {
+    const scan = (recovery: string) => scanSource(
+      `refusalEnvelope({ command: "x", status: "refused", code: "x.blocked", message: "Blocked", recovery: ${recovery} });`,
+      "packages/commands/src/fixture.ts",
+    );
+    expect(scan(`(flag ? "Run mstar status validate." : "   ") ?? "Run mstar status validate."`).map(({ classification }) => classification)).toEqual(["missing-recovery"]);
+    expect(scan(`(flag ? "Run mstar status validate." : "   ") || "Run mstar status validate."`).map(({ classification }) => classification)).toEqual(["missing-recovery"]);
+    expect(scan(`(flag ? "Run mstar status validate." : "Register the workflow first with mstar workflow register.") ?? "Run mstar status validate."`)).toEqual([]);
+  });
+
+  test("fails closed on an omitted wrapper recovery argument (deliberate limitation)", () => {
+    const findings = scanSource(`
+      function refused(command: string, code: string, message: string, details?: Record<string, unknown>, recovery?: string) {
+        return refusalEnvelope({ command, status: "refused", code, exitCode: 1, message, details: details ?? {},
+          recovery: recovery ?? "Run mstar status validate." });
+      }
+      refused("x", "x.code", "Blocked");
+      function blankFallback(recovery?: string) {
+        return refusalEnvelope({ command: "x", status: "refused", code: "x.blocked", message: "Blocked",
+          recovery: recovery ?? "" });
+      }
+      blankFallback();
+      function spaceFallback(recovery?: string) {
+        return refusalEnvelope({ command: "x", status: "refused", code: "x.blocked", message: "Blocked",
+          recovery: recovery ?? "   " });
+      }
+      spaceFallback();
+    `, "packages/commands/src/fixture.ts");
+    expect(findings.map(({ classification }) => classification)).toEqual(["missing-recovery", "missing-recovery", "missing-recovery"]);
+  });
+
+  test("proves a let binding only while no write resolves to that declaration", () => {
+    const scan = (source: string) => scanSource(source, "packages/commands/src/fixture.ts").map(({ classification }) => classification);
+    const refuse = (recovery: string) => `refusalEnvelope({ command: "x", status: "refused", code: "x.blocked", message: "Blocked", recovery: ${recovery} });`;
+    expect(scan(`let recovery = "Run mstar status validate."; recovery = dynamicRecovery(); ${refuse("recovery")}`)).toEqual(["missing-recovery"]);
+    expect(scan(`let untouched = "Run mstar status validate."; ${refuse("untouched")}`)).toEqual([]);
+    expect(scan(`var hoisted = "Run mstar status validate."; ${refuse("hoisted")}`)).toEqual([]);
+    expect(scan(`let looped = "Run mstar status validate."; for (looped of [""]) { noop(); } ${refuse("looped")}`)).toEqual(["missing-recovery"]);
+    expect(scan(`const stable = "Run mstar status validate."; ${refuse("stable")}`)).toEqual([]);
+  });
+
+  test("proves a declaration only after its initializer runs", () => {
+    const scan = (source: string) => scanSource(source, "packages/commands/src/fixture.ts").map(({ classification }) => classification);
+    const refuse = (recovery: string) => `refusalEnvelope({ command: "x", status: "refused", code: "x.blocked", message: "Blocked", recovery: ${recovery} });`;
+    expect(scan(`function f() { ${refuse("hoisted")} var hoisted = "Run mstar status validate."; }`)).toEqual(["missing-recovery"]);
+    expect(scan(`function f() { var hoisted = "Run mstar status validate."; ${refuse("hoisted")} }`)).toEqual([]);
+    expect(scan(`function f() { ${refuse("tdz")} let tdz = "Run mstar status validate."; }`)).toEqual(["missing-recovery"]);
+  });
+
+  test("resolves a repeated var to the nearest preceding declaration", () => {
+    const scan = (source: string) => scanSource(source, "packages/commands/src/fixture.ts").map(({ classification }) => classification);
+    const refuse = (recovery: string) => `refusalEnvelope({ command: "x", status: "refused", code: "x.blocked", message: "Blocked", recovery: ${recovery} });`;
+    expect(scan(`var recovery = "Run mstar status validate."; for (var recovery of [""]) { noop(); } ${refuse("recovery")}`)).toEqual(["missing-recovery"]);
+    expect(scan(`function f() { ${refuse("recovery")} var recovery = "Run mstar status validate."; }`)).toEqual(["missing-recovery"]);
+    expect(scan(`var recovery = "Run mstar status validate."; var recovery = "Register the workflow first with mstar workflow register."; ${refuse("recovery")}`)).toEqual([]);
+    expect(scan(`var recovery = "Run mstar status validate."; recovery = dynamicRecovery(); var recovery = "Register the workflow first with mstar workflow register."; ${refuse("recovery")}`)).toEqual([]);
+  });
+
+  test("fails closed when a mutable binding is captured and written anywhere", () => {
+    const findings = scanSource(`
+      let recovery = "Run mstar status validate.";
+      function helper(): string { return recovery; }
+      recovery = "";
+      refusalEnvelope({ command: "x", status: "refused", code: "x.blocked", message: "Blocked", recovery: helper() });
+    `, "packages/commands/src/fixture.ts");
+    expect(findings.map(({ classification }) => classification)).toEqual(["missing-recovery"]);
+  });
+
+  test("keeps an earlier initializer through a bare redeclaration", () => {
+    const scan = (source: string) => scanSource(source, "packages/commands/src/fixture.ts").map(({ classification }) => classification);
+    const refuse = (recovery: string) => `refusalEnvelope({ command: "x", status: "refused", code: "x.blocked", message: "Blocked", recovery: ${recovery} });`;
+    expect(scan(`var recovery = "Run mstar status validate."; var recovery; ${refuse("recovery")}`)).toEqual([]);
+    expect(scan(`let recovery = "Run mstar status validate."; recovery = dynamicRecovery(); ${refuse("recovery")}`)).toEqual(["missing-recovery"]);
+  });
+
+  test("a catch binding shadows an outer var and proves nothing", () => {
+    const findings = scanSource(`
+      var recovery = "Run mstar status validate.";
+      try { throw ""; } catch (recovery) {
+        refusalEnvelope({ command: "x", status: "refused", code: "x.blocked", message: "Blocked", recovery });
+      }
+    `, "packages/commands/src/fixture.ts");
+    expect(findings.map(({ classification }) => classification)).toEqual(["missing-recovery"]);
+  });
+
+  test("a wrapper call-site binding still proves inside a catch block", () => {
+    const findings = scanSource(`
+      function refused(recovery?: string) {
+        return refusalEnvelope({ command: "x", status: "refused", code: "x.blocked", message: "Blocked",
+          recovery: recovery ?? "Run mstar status validate." });
+      }
+      var recovery = "Run mstar status validate.";
+      try { throw ""; } catch (recovery) {
+        refused("Register the workflow first with mstar workflow register.");
+      }
+    `, "packages/commands/src/fixture.ts");
+    expect(findings).toEqual([]);
+  });
+
+  test("terminates on a self-referential call-site field", () => {
+    const findings = scanSource(`
+      function fail(facts: { code: string; message: string }) {
+        return new CoordinationError(facts.code, facts.message);
+      }
+      fail({ code: facts.code });
+      fail({ message: facts.message });
+    `, "packages/engine/src/fixture.ts");
+    expect(findings.length).toBeGreaterThan(0);
+  });
+
+  test("a loop-local binding does not invalidate an outer one", () => {
+    const scan = (source: string) => scanSource(source, "packages/commands/src/fixture.ts").map(({ classification }) => classification);
+    const refuse = (recovery: string) => `refusalEnvelope({ command: "x", status: "refused", code: "x.blocked", message: "Blocked", recovery: ${recovery} });`;
+    expect(scan(`const recovery = "Run mstar status validate."; for (const recovery of ["x"]) { noop(); } ${refuse("recovery")}`)).toEqual([]);
+    expect(scan(`let recovery = "Run mstar status validate."; for (recovery of ["x"]) { noop(); } ${refuse("recovery")}`)).toEqual(["missing-recovery"]);
+    expect(scan(`let recovery = "Run mstar status validate."; for (const recovery of [""]) { ${refuse("recovery")} }`)).toEqual(["missing-recovery"]);
+    expect(scan(`var recovery = "Run mstar status validate."; var recovery; ${refuse("recovery")}`)).toEqual([]);
+  });
+
+  test("tracks writes by declaration, not by name or member access", () => {
+    const scan = (source: string) => scanSource(source, "packages/commands/src/fixture.ts").map(({ classification }) => classification);
+    const refuse = (recovery: string) => `refusalEnvelope({ command: "x", status: "refused", code: "x.blocked", message: "Blocked", recovery: ${recovery} });`;
+    expect(scan(`let recovery = "Run mstar status validate."; cache[recovery] = value; ${refuse("recovery")}`)).toEqual([]);
+    expect(scan(`let recovery = "Run mstar status validate."; obj.recovery = ""; ${refuse("recovery")}`)).toEqual([]);
+    expect(scan(`
+      function first() {
+        let recovery = "Run mstar status validate.";
+        return ${refuse("recovery")}
+      }
+      function second() {
+        let recovery = "Run mstar status validate.";
+        recovery = dynamicRecovery();
+        return ${refuse("recovery")}
+      }
+    `)).toEqual(["missing-recovery"]);
+  });
+
+  test("fails closed on a property access even from a const object", () => {
+    const findings = scanSource(`
+      const facts = { recovery: "Run mstar status validate." };
+      const alias = facts;
+      alias.recovery = "";
+      refusalEnvelope({ command: "x", status: "refused", code: "x.blocked", message: "Blocked",
+        recovery: facts.recovery });
+      function refused(input: { recovery?: string }) {
+        return refusalEnvelope({ command: "x", status: "refused", code: "x.blocked", message: "Blocked",
+          recovery: input.recovery ?? "Run mstar status validate." });
+      }
+      refused(facts);
+    `, "packages/commands/src/fixture.ts");
+    expect(findings.length).toBeGreaterThan(0);
+    expect(findings.every(({ classification }) => classification === "missing-recovery")).toBe(true);
+  });
+
+  test("does not resolve an inner parameter to an outer const of the same name", () => {
+    const scan = (call: string) => scanSource(`
+      const recovery = "Run mstar status validate.";
+      function refused(recovery: string) {
+        return refusalEnvelope({ command: "x", status: "refused", code: "x.blocked", message: "Blocked",
+          recovery: recovery ?? "Run mstar status validate." });
+      }
+      ${call}
+    `, "packages/commands/src/fixture.ts").map(({ classification }) => classification);
+    expect(scan("refused(dynamicRecovery());")).toEqual(["missing-recovery"]);
+    expect(scan(`refused("Register the workflow first with mstar workflow register.");`)).toEqual([]);
+  });
+
+  test("reads error-wrapper fields from an inline object literal only", () => {
+    const scan = (call: string) => scanSource(`
+      function fail(facts: { code: string; message: string }) {
+        return new CoordinationError(facts.code, facts.message);
+      }
+      const facts = { code: "", message: "Use mstar nonexistent --bad" };
+      ${call}
+    `, "packages/engine/src/fixture.ts").map(({ classification }) => classification);
+    expect(scan(`fail({ code: "", message: "Use mstar nonexistent --bad" });`))
+      .toEqual(["missing-cause-code", "unreachable-recovery"]);
+    expect(scan(`fail({ code: "valid.code", message: "Run mstar status validate." });`)).toEqual([]);
+    expect(scan("fail(facts);")).toEqual(["missing-cause-code", "unreachable-recovery"]);
+    expect(scan(`fail({ code: "valid.code", message: "Run mstar status validate.", ...{ code: "", message: "Use mstar nonexistent --bad" } });`))
+      .toEqual(["missing-cause-code", "unreachable-recovery"]);
+    expect(scan(`fail({ code: "valid.code", code: "", message: "Use mstar nonexistent --bad" });`))
+      .toEqual(["missing-cause-code", "unreachable-recovery"]);
+    expect(scan(`fail({ ["code"]: "", message: "Use mstar nonexistent --bad" });`))
+      .toEqual(["missing-cause-code", "unreachable-recovery"]);
+    expect(scan(`fail({ code: "valid.code", message: badMessage() });`)).toEqual(["unreachable-recovery"]);
+  });
+
+  test("checks every message arm and only proves a const message", () => {
+    const scan = (source: string) => scanSource(source, "packages/engine/src/fixture.ts").map(({ classification }) => classification);
+    expect(scan(`new CoordinationError("valid.code", flag ? "Run mstar status validate." : "Use mstar nonexistent --bad");`)).toEqual(["unreachable-recovery"]);
+    expect(scan(`new CoordinationError("valid.code", flag ? "Run mstar status validate." : "Register the workflow first with mstar workflow register.");`)).toEqual([]);
+    expect(scan(`let message = "Run mstar status validate."; message = "Use mstar nonexistent --bad"; new CoordinationError("valid.code", message);`)).toEqual(["unreachable-recovery"]);
+    expect(scan(`const message = "Run mstar status validate."; new CoordinationError("valid.code", message);`)).toEqual([]);
+    expect(scan(`
+      function fail(facts: { code: string; message: string }) {
+        return new CoordinationError(facts.code, facts.message);
+      }
+      fail({ code: "valid.code", message: flag ? "Run mstar status validate." : "Use mstar nonexistent --bad" });
+    `)).toEqual(["unreachable-recovery"]);
+    expect(scan(`new CoordinationError("valid.code", flag ? "Use mstar nonexistent --bad" : dynamicMessage());`)).toEqual(["unreachable-recovery"]);
+    expect(scan(`
+      function fail(facts: { code: string; message: string }) {
+        return new CoordinationError(facts.code, facts.message);
+      }
+      fail({ code: "valid.code", message: flag ? "Run mstar status validate." : dynamicMessage() });
+    `)).toEqual(["unreachable-recovery"]);
+    expect(scan(`new CoordinationError("valid.code", flag ? "Run mstar status validate." : dynamicMessage());`)).toEqual(["unreachable-recovery"]);
+    expect(scan(`
+      function run() {
+        const undefined = "Use mstar nonexistent --bad";
+        return new CoordinationError("valid.code", undefined);
+      }
+    `)).toEqual(["unreachable-recovery"]);
+  });
+
+  test("carries the union shape through a resolved binding", () => {
+    const scan = (source: string) => scanSource(source, "packages/engine/src/fixture.ts").map(({ classification }) => classification);
+    expect(scan(`
+      const message = flag ? "Run mstar status validate." : dynamicMessage();
+      new CoordinationError("valid.code", message);
+    `)).toEqual(["unreachable-recovery"]);
+    expect(scan(`
+      const message = flag ? "Run mstar status validate." : "Register the workflow first with mstar workflow register.";
+      new CoordinationError("valid.code", message);
+    `)).toEqual([]);
+  });
+
+  test("a stale allowlist entry reports its tracking issue and refresh action", () => {
+    const snippet = `refusalEnvelope({ code: "x.bad" })`;
+    const finding = {
+      file: "packages/commands/src/fixture.ts", line: 1, column: 1, classification: "missing-recovery" as const,
+      reason: "missing recovery", snippet,
+    };
+    const signature = signatureFor("missing-recovery", finding.file, snippet);
+    const result = applyAllowlist([finding], [{
+      signature, justification: "Tracked structured refusal cleanup.", trackingIssue: "SYNTH-STALE-COHORT", expectedCount: 2,
+    }], "/repo");
+    expect(result.stale.map(({ entry }) => entry.trackingIssue)).toEqual(["SYNTH-STALE-COHORT"]);
+    expect(formatStaleAllowlist(result.stale)).toContain("SYNTH-STALE-COHORT");
+    expect(formatStaleAllowlist(result.stale)).toContain("Refresh:");
+    expect(formatStaleAllowlist(result.stale)).toContain("matches 1 finding(s) but the entry expects 2");
+    expect(formatStaleAllowlist(result.stale)).toContain("set expectedCount to the observed count (1) after confirming the remaining occurrences");
+    const unmatched = applyAllowlist([], [{ signature, justification: "Tracked structured refusal cleanup.", trackingIssue: "SYNTH-STALE-COHORT" }], "/repo");
+    expect(formatStaleAllowlist(unmatched.stale)).toContain("no current finding matches this signature");
+    expect(formatStaleAllowlist(unmatched.stale)).toContain("replace the signature with the current finding signature or delete the entry");
+    expect(formatStaleAllowlist(unmatched.stale)).not.toContain("expectedCount");
+    expect(formatStaleAllowlist(unmatched.stale)).toContain("SYNTH-STALE-COHORT");
+    const overflow = applyAllowlist([finding, { ...finding, line: 2 }], [{
+      signature, justification: "Tracked structured refusal cleanup.", trackingIssue: "SYNTH-STALE-COHORT", expectedCount: 1,
+    }], "/repo");
+    expect(formatStaleAllowlist(overflow.stale)).toContain("set expectedCount to the observed count (2) after confirming the extra occurrence");
+    expect(exitCodeFor(result.findings, result.stale)).toBe(1);
   });
 });

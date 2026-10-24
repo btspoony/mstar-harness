@@ -357,28 +357,86 @@ export function findRefusalWrappers(source: ts.SourceFile): Map<string, RefusalW
  * Its call-site arguments are substituted and checked; wrapper chains are not followed.
  * Cause and recovery-presence checks apply only to the recognized refusal channels.
  */
+/**
+ * Interpolation identifiers this repository's refusal corpus declares safe: a whole value
+ * substituted into recovery prose, never a caller-controlled command fragment. Every member
+ * is in use — `workflow` (packages/commands/src/families/session.ts unboundRecovery) and
+ * `holderList` (packages/commands/src/families/workflow.ts). Adding a name is a decision,
+ * not a convenience: an interpolated identifier outside this set fails closed.
+ */
+const DECLARED_SAFE_INTERPOLATIONS: Readonly<Record<string, true>> = { workflow: true, holderList: true };
 export function scanSource(source: string, file: string): RefusalFinding[] {
   const sf = ts.createSourceFile(file, source, ts.ScriptTarget.Latest, true, ts.ScriptKind.TS);
-  interface Scope { parent?: Scope; kind: "source" | "function" | "block"; declarations: Map<string, ts.VariableDeclaration>; }
+  interface Scope { parent?: Scope; kind: "source" | "function" | "block" | "class"; declarations: Map<string, ts.VariableDeclaration[]>; functions: Map<string, ts.FunctionDeclaration>; shadowNames: Set<string>; }
   const scopeByNode = new WeakMap<ts.Node, Scope>();
-  const sourceScope: Scope = { kind: "source", declarations: new Map() };
+  const sourceScope: Scope = { kind: "source", declarations: new Map(), functions: new Map(), shadowNames: new Set() };
+  // Every binding form the parser sees names a shadowing binding, initializer or not:
+  // `let f: () => string;`, `const { f } = …`, `catch (f)`, class and import names.
+  const collectBindingNames = (name: ts.BindingName, into: Set<string>): void => {
+    if (ts.isIdentifier(name)) { into.add(name.text); return; }
+    for (const element of name.elements) if (!ts.isOmittedExpression(element)) collectBindingNames(element.name, into);
+  };
   const buildScopes = (node: ts.Node, inherited: Scope): void => {
-    const kind = ts.isFunctionLike(node) ? "function" : ts.isBlock(node) ? "block" : undefined;
-    const scope: Scope = kind ? { parent: inherited, kind, declarations: new Map() } : inherited;
+    // A catch clause is its own scope: its binding belongs to the catch block, not to the
+    // enclosing function, so it must shadow rather than resolve outward.
+    // A `for (let|const x of …)` head binds x for the loop only, so the loop opens a scope.
+    const loopScope = (ts.isForOfStatement(node) || ts.isForInStatement(node) || ts.isForStatement(node))
+      && node.initializer !== undefined
+      && ts.isVariableDeclarationList(node.initializer)
+      && (node.initializer.flags & (ts.NodeFlags.Const | ts.NodeFlags.Let)) !== 0;
+    const kind: Scope["kind"] | undefined = ts.isFunctionLike(node) ? "function" : ts.isClassLike(node) ? "class" : ts.isBlock(node) || ts.isCatchClause(node) || loopScope ? "block" : undefined;
+    const scope: Scope = kind ? { parent: inherited, kind, declarations: new Map(), functions: new Map(), shadowNames: new Set() } : inherited;
     scopeByNode.set(node, scope);
-    if (ts.isVariableDeclaration(node) && ts.isIdentifier(node.name) && node.initializer) {
+    // A named function or class expression binds its own name inside its own body only.
+    if ((ts.isFunctionExpression(node) || ts.isClassExpression(node)) && node.name) scope.shadowNames.add(node.name.text);
+    if (ts.isFunctionDeclaration(node) && node.name) inherited.functions.set(node.name.text, node);
+    if (ts.isParameter(node)) collectBindingNames(node.name, scope.shadowNames);
+    if (ts.isVariableDeclaration(node)) {
       let target = scope;
-      if (!(node.parent.flags & (ts.NodeFlags.Const | ts.NodeFlags.Let))) {
-        while (target.parent && target.kind === "block") target = target.parent;
+      const catchBinding = ts.isCatchClause(node.parent);
+      if (!catchBinding && !(node.parent.flags & (ts.NodeFlags.Const | ts.NodeFlags.Let))) {
+        while (target.parent && target.kind !== "function" && target.kind !== "source") target = target.parent;
       }
-      target.declarations.set(node.name.text, node);
+      collectBindingNames(node.name, target.shadowNames);
+      // Every declaration of a name is kept in source order: a repeated `var` is one binding
+      // with several declarations, and the nearest preceding one is what a use sees.
+      if (ts.isIdentifier(node.name)) target.declarations.set(node.name.text, [...(target.declarations.get(node.name.text) ?? []), node]);
     }
+    if ((ts.isClassDeclaration(node) || ts.isEnumDeclaration(node) || ts.isImportSpecifier(node) || ts.isNamespaceImport(node) || ts.isImportClause(node) || ts.isImportEqualsDeclaration(node))
+      && node.name && ts.isIdentifier(node.name)) inherited.shadowNames.add(node.name.text);
+    if (ts.isModuleDeclaration(node) && node.name && ts.isIdentifier(node.name)) inherited.shadowNames.add(node.name.text);
     ts.forEachChild(node, (child) => buildScopes(child, scope));
   };
   buildScopes(sf, sourceScope);
-  const resolveDeclaration = (scope: Scope | undefined, name: string): ts.VariableDeclaration | undefined => {
+  // The nearest declaration that textually precedes the use wins; a scope that binds the name
+  // without a preceding declaration shadows outer ones and fails closed. The owning scope comes
+  // back with it so writes to that same binding can be attributed.
+  const resolveDeclaration = (scope: Scope | undefined, name: string, useStart: number): { declaration: ts.VariableDeclaration; owner: Scope } | undefined => {
     for (let current = scope; current; current = current.parent) {
-      const declaration = current.declarations.get(name);
+      const declarations = current.declarations.get(name);
+      if (declarations) {
+        const preceding = declarations.filter((declaration) => declaration.getEnd() <= useStart);
+        if (preceding.length === 0) return undefined;
+        // Walk back from the nearest preceding declaration: a block-scoped binding with no
+        // initializer is a real binding that supplies no value and shadows everything beyond
+        // it, while a bare `var` is the same hoisted binding and keeps the earlier value.
+        for (let index = preceding.length - 1; index >= 0; index -= 1) {
+          const declaration = preceding[index]!;
+          if (declaration.initializer) return { declaration, owner: current };
+          if ((declaration.parent.flags & (ts.NodeFlags.Const | ts.NodeFlags.Let)) !== 0) return undefined;
+        }
+        return undefined;
+      }
+      if (current.shadowNames.has(name)) return undefined;
+    }
+    return undefined;
+  };
+  // A function name is proven only against the binding the call site actually sees: any
+  // nearer binding of that name — in any declaration form — fails closed.
+  const resolveFunction = (scope: Scope | undefined, name: string): ts.FunctionDeclaration | undefined => {
+    for (let current = scope; current; current = current.parent) {
+      if (current.shadowNames.has(name)) return undefined;
+      const declaration = current.functions.get(name);
       if (declaration) return declaration;
     }
     return undefined;
@@ -405,8 +463,274 @@ export function scanSource(source: string, file: string): RefusalFinding[] {
     for (const argument of wrapper.inner.arguments ?? []) visitArgument(argument);
     if (usesParameter) wrapperBodies.set(wrapper.inner, { name, parameters });
   }
+  // A recovery placeholder is one whole value substituted into literal text: `${workflow}`,
+  // never a computed expression that could rewrite the command path around it.
+  const helperReturns = new Map<ts.FunctionDeclaration, ts.Expression[]>();
+  for (const statement of sf.statements) {
+    if (!ts.isFunctionDeclaration(statement) || !statement.name || !statement.body) continue;
+    if (statement.type?.getText(sf) !== "string") continue;
+    const returns: ts.Expression[] = [];
+    const collectReturns = (node: ts.Node): void => {
+      if (node !== statement.body && ts.isFunctionLike(node)) return;
+      if (ts.isReturnStatement(node)) { if (node.expression) returns.push(node.expression); return; }
+      ts.forEachChild(node, collectReturns);
+    };
+    collectReturns(statement.body);
+    if (returns.length > 0) helperReturns.set(statement, returns);
+  }
+  // Recovery text proof tracks which runtime outcomes an expression can produce: non-blank
+  // text, whitespace-only text, the empty string, or a nullish value. Whitespace is truthy,
+  // so it is its own outcome: no operator drops it, and an arm that produces it can never be
+  // masked by a sibling arm's real text. `??` falls back only on nullish and `||` also on the
+  // empty string, so one merge rule would prove text the runtime never uses. `undefined`
+  // here means unproven, which fails closed.
+  type RecoveryOutcome = "text" | "blank" | "empty" | "nullish";
+  interface RecoveryText { outcomes: Set<RecoveryOutcome>; text?: string; }
+  interface RecoveryContext {
+    scope?: Scope;
+    seen: Set<ts.VariableDeclaration>;
+    helpers: ReadonlySet<string>;
+    bindings: ReadonlyMap<string, ts.Expression>;
+    bindingScope?: Scope;
+    bound: ReadonlySet<string>;
+  }
+  const RECOVERY_EMPTY: RecoveryText = { outcomes: new Set<RecoveryOutcome>(["empty"]) };
+  const RECOVERY_NULLISH: RecoveryText = { outcomes: new Set<RecoveryOutcome>(["nullish"]) };
+  const recoveryText = (text: string): RecoveryText => ({ outcomes: new Set<RecoveryOutcome>(["text"]), text });
+  const hasOnlyText = (recovery: RecoveryText): boolean => recovery.outcomes.size === 1 && recovery.outcomes.has("text");
+  const recoveryContext = (
+    bindings: ReadonlyMap<string, ts.Expression> = new Map(),
+    bindingScope?: Scope,
+  ): RecoveryContext => ({ seen: new Set(), helpers: new Set(), bindings, bindingScope, bound: new Set() });
+  // The nearest binding of any name wins: a shadowed `undefined` is a value, not absence.
+  const hasNearerBinding = (scope: Scope | undefined, name: string): boolean => {
+    for (let current = scope; current; current = current.parent) {
+      if (current.shadowNames.has(name) || current.functions.has(name)) return true;
+    }
+    return false;
+  };
+  // Writes are tracked by BINDING, not by declaration node or bare name: one binding is a
+  // (scope, name) pair, so repeated `var` declarations of the same name share its writes while
+  // a same-named binding in another scope has its own. `cache[recovery] = …` and
+  // `obj.recovery = …` read those names and are not writes to the binding. A write counts only
+  // when it falls between the resolved declaration and the use.
+  const writesByScope = new Map<Scope, Map<string, number[]>>();
+  const recordBindingWrite = (name: string, scope: Scope | undefined, position: number): void => {
+    for (let current = scope; current; current = current.parent) {
+      if (!current.declarations.has(name) && !current.shadowNames.has(name)) continue;
+      const writes = writesByScope.get(current) ?? new Map<string, number[]>();
+      writes.set(name, [...(writes.get(name) ?? []), position]);
+      writesByScope.set(current, writes);
+      return;
+    }
+  };
+  const recordBindingTarget = (target: ts.Expression, position: number): void => {
+    if (ts.isParenthesizedExpression(target)) { recordBindingTarget(target.expression, position); return; }
+    if (ts.isIdentifier(target)) { recordBindingWrite(target.text, scopeByNode.get(target), position); return; }
+    if (ts.isArrayLiteralExpression(target)) {
+      for (const element of target.elements) if (!ts.isOmittedExpression(element)) recordBindingTarget(element, position);
+      return;
+    }
+    if (ts.isObjectLiteralExpression(target)) {
+      for (const property of target.properties) {
+        if (ts.isPropertyAssignment(property)) recordBindingTarget(property.initializer, position);
+        else if (ts.isShorthandPropertyAssignment(property)) recordBindingTarget(property.name, position);
+        else if (ts.isSpreadAssignment(property)) recordBindingTarget(property.expression, position);
+      }
+    }
+  };
+  const collectWrittenDeclarations = (node: ts.Node): void => {
+    if (ts.isBinaryExpression(node)
+      && node.operatorToken.kind >= ts.SyntaxKind.FirstAssignment
+      && node.operatorToken.kind <= ts.SyntaxKind.LastAssignment) recordBindingTarget(node.left, node.getStart());
+    if ((ts.isPrefixUnaryExpression(node) || ts.isPostfixUnaryExpression(node))
+      && (node.operator === ts.SyntaxKind.PlusPlusToken || node.operator === ts.SyntaxKind.MinusMinusToken)) recordBindingTarget(node.operand, node.getStart());
+    // `for (x of …)` / `for (x in …)` writes x on every iteration, whether the target is an
+    // expression or a declaration that reuses an existing hoisted `var` binding.
+    if (ts.isForOfStatement(node) || ts.isForInStatement(node)) {
+      if (ts.isVariableDeclarationList(node.initializer)) {
+        // Only a `var` loop declaration reuses an outer binding; a `let`/`const` loop
+        // declares a fresh binding of its own and writes nothing outside the loop.
+        const reuseOuterBinding = !(node.initializer.flags & (ts.NodeFlags.Const | ts.NodeFlags.Let));
+        if (reuseOuterBinding) {
+          for (const declaration of node.initializer.declarations) {
+            if (ts.isIdentifier(declaration.name)) recordBindingWrite(declaration.name.text, scopeByNode.get(declaration), node.getStart());
+          }
+        }
+      } else recordBindingTarget(node.initializer, node.getStart());
+    }
+    ts.forEachChild(node, collectWrittenDeclarations);
+  };
+  collectWrittenDeclarations(sf);
+  const isWrittenBetween = (owner: Scope, name: string, declaration: ts.VariableDeclaration, useStart: number): boolean =>
+    (writesByScope.get(owner)?.get(name) ?? []).some((position) => position > declaration.getStart() && position <= useStart);
+  const enclosingFunctionScope = (scope: Scope | undefined): Scope | undefined => {
+    for (let current = scope; current; current = current.parent) {
+      if (current.kind === "function" || current.kind === "source") return current;
+    }
+    return undefined;
+  };
+  const recoveryTextOf = (node: ts.Expression | undefined, context: RecoveryContext): RecoveryText | undefined => {
+    if (!node) return undefined;
+    if (ts.isParenthesizedExpression(node) || ts.isAsExpression(node) || ts.isTypeAssertionExpression(node) || ts.isSatisfiesExpression(node)) {
+      return recoveryTextOf(node.expression, context);
+    }
+    if (ts.isStringLiteralLike(node) || ts.isNoSubstitutionTemplateLiteral(node)) {
+      if (node.text === "") return RECOVERY_EMPTY;
+      return { outcomes: new Set<RecoveryOutcome>([node.text.trim() === "" ? "blank" : "text"]), text: node.text };
+    }
+    if (ts.isTemplateExpression(node)) {
+      if (!node.templateSpans.every((span) => ts.isIdentifier(span.expression) && DECLARED_SAFE_INTERPOLATIONS[span.expression.text] === true)) return undefined;
+      return recoveryText(node.head.text + node.templateSpans.map((span) => `${span.expression.getText(sf)}${span.literal.text}`).join(""));
+    }
+    // Every arm of a conditional chain is analysed: the value can be any arm's outcome, and
+    // an arm that cannot be proven fails the whole chain.
+    if (ts.isConditionalExpression(node)) {
+      const whenTrue = recoveryTextOf(node.whenTrue, { ...context, seen: new Set(context.seen) });
+      const whenFalse = recoveryTextOf(node.whenFalse, { ...context, seen: new Set(context.seen) });
+      if (!whenTrue || !whenFalse) return undefined;
+      const text = whenTrue.text ?? whenFalse.text;
+      return { outcomes: new Set([...whenTrue.outcomes, ...whenFalse.outcomes]), ...(text !== undefined ? { text } : {}) };
+    }
+    if (ts.isBinaryExpression(node) && [ts.SyntaxKind.QuestionQuestionToken, ts.SyntaxKind.BarBarToken].includes(node.operatorToken.kind)) {
+      const left = recoveryTextOf(node.left, { ...context, seen: new Set(context.seen) });
+      const right = recoveryTextOf(node.right, { ...context, seen: new Set(context.seen) });
+      // Both operands must be provable and the right arm must always supply text: a partial
+      // proof of either operand says nothing about the value actually used.
+      if (!left || !right || !hasOnlyText(right)) return undefined;
+      const fallsBackOnNullish = left.outcomes.has("nullish");
+      const fallsBack = node.operatorToken.kind === ts.SyntaxKind.QuestionQuestionToken
+        ? fallsBackOnNullish
+        : fallsBackOnNullish || left.outcomes.has("empty");
+      // `||` also consumes the empty string; `??` keeps it, so an empty left arm stays blank.
+      const outcomes = new Set<RecoveryOutcome>([...left.outcomes].filter((outcome) => outcome !== "nullish" && !(node.operatorToken.kind === ts.SyntaxKind.BarBarToken && outcome === "empty")));
+      if (fallsBack) for (const outcome of right.outcomes) outcomes.add(outcome);
+      const text = left.outcomes.has("text") ? left.text : right.text;
+      return { outcomes, ...(text !== undefined ? { text } : {}) };
+    }
+    if (ts.isBinaryExpression(node) && node.operatorToken.kind === ts.SyntaxKind.PlusToken) {
+      const left = recoveryTextOf(node.left, { ...context, seen: new Set(context.seen) });
+      const right = recoveryTextOf(node.right, { ...context, seen: new Set(context.seen) });
+      if (!left || !right || left.outcomes.has("nullish") || right.outcomes.has("nullish")) return undefined;
+      const outcomes = new Set<RecoveryOutcome>(
+        [...left.outcomes].flatMap((a) => [...right.outcomes].map((b): RecoveryOutcome => (a === "text" || b === "text"
+          ? "text"
+          : a === "blank" || b === "blank" ? "blank" : "empty"))),
+      );
+      const text = left.text !== undefined && right.text !== undefined ? left.text + right.text : undefined;
+      return { outcomes, ...(text !== undefined ? { text } : {}) };
+    }
+    if (ts.isIdentifier(node)) {
+      const scope = context.scope ?? scopeByNode.get(node);
+      if (node.text === "undefined") return hasNearerBinding(scope, node.text) ? undefined : RECOVERY_NULLISH;
+      // Resolution is position-aware, so a hoisted `var` read and a `let`/`const` temporal
+      // dead zone both fail closed before any initializer is considered.
+      const resolved = resolveDeclaration(scope, node.text, node.getStart());
+      if (resolved) {
+        const { declaration, owner } = resolved;
+        if (!declaration.initializer || context.seen.has(declaration)) return undefined;
+        // A `const` binding cannot change; a `let`/`var` proves from its initializer only when
+        // no write to this binding falls between that declaration and this use. A read inside
+        // another function body is captured: source order says nothing about call order, so
+        // any write to the binding anywhere in the file fails closed.
+        if ((declaration.parent.flags & ts.NodeFlags.Const) === 0) {
+          if (enclosingFunctionScope(scope) !== enclosingFunctionScope(owner)) {
+            if ((writesByScope.get(owner)?.get(node.text) ?? []).length > 0) return undefined;
+          } else if (isWrittenBetween(owner, node.text, declaration, node.getStart())) return undefined;
+        }
+        return recoveryTextOf(declaration.initializer, {
+          ...context, scope: scopeByNode.get(declaration), seen: new Set(context.seen).add(declaration),
+        });
+      }
+      // A wrapper parameter takes the argument its call site passes, but only from that
+      // wrapper's own scope: a same-named parameter of another function is a different value.
+      const boundValue = context.bindings.get(node.text);
+      if (boundValue && !context.bound.has(node.text) && enclosingFunctionScope(scope) === context.bindingScope) {
+        return recoveryTextOf(boundValue, {
+          ...context, seen: new Set(context.seen), bound: new Set(context.bound).add(node.text),
+        });
+      }
+      return undefined;
+    }
+    if (node.kind === ts.SyntaxKind.NullKeyword) return RECOVERY_NULLISH;
+    if (ts.isCallExpression(node)) {
+      if (!ts.isIdentifier(node.expression)) return undefined;
+      const name = node.expression.text;
+      const declaration = resolveFunction(scopeByNode.get(node.expression), name);
+      const returns = declaration && helperReturns.get(declaration);
+      if (!declaration || !returns || context.helpers.has(name)) return undefined;
+      const helpers = new Set(context.helpers).add(name);
+      // The callee's parameters are its own: the caller's bindings and scope do not follow.
+      const proven = returns.map((expression) => recoveryTextOf(expression, {
+        seen: new Set(), helpers, bindings: new Map(), bindingScope: undefined, bound: new Set(),
+        scope: scopeByNode.get(expression),
+      }));
+      const texts = proven.flatMap((result) => (result && hasOnlyText(result) ? [result.text!] : []));
+      return texts.length === proven.length ? recoveryText(texts[0]!) : undefined;
+    }
+    return undefined;
+  };
+  // Message reachability considers every possible value, not one representative: a
+  // conditional's arms are unioned, and only a const binding proves from its initializer.
+  // `texts` carries the arms whose text is known even when another arm is opaque or
+  // mutable, so a known unreachable command is never discarded by a sibling arm. `union`
+  // records that the value came from a conditional / `??` / `||`, directly or through a
+  // resolved binding, so that shape is not lost when a binding is followed.
+  type MessageAnalysis = { kind: "texts" | "opaque" | "mutable"; texts: string[]; union: boolean };
+  const MESSAGE_OPAQUE: MessageAnalysis = { kind: "opaque", texts: [], union: false };
+  const MESSAGE_MUTABLE: MessageAnalysis = { kind: "mutable", texts: [], union: false };
+  const analyzeMessage = (node: ts.Expression | undefined, scope?: Scope, seen = new Set<ts.VariableDeclaration>()): MessageAnalysis => {
+    if (!node) return MESSAGE_OPAQUE;
+    if (ts.isParenthesizedExpression(node) || ts.isAsExpression(node) || ts.isTypeAssertionExpression(node) || ts.isSatisfiesExpression(node)) {
+      return analyzeMessage(node.expression, scope, seen);
+    }
+    if (ts.isStringLiteralLike(node) || ts.isNoSubstitutionTemplateLiteral(node)) return { kind: "texts", texts: [node.text], union: false };
+    if (ts.isTemplateExpression(node)) {
+      return { kind: "texts", texts: [node.head.text + node.templateSpans.map((span) => `${span.expression.getText(sf)}${span.literal.text}`).join("")], union: false };
+    }
+    // `undefined` is absence only when no nearer binding takes the name; a shadowing
+    // binding is an ordinary value and resolves through the identifier path below.
+    if (node.kind === ts.SyntaxKind.NullKeyword) return { kind: "texts", texts: [], union: false };
+    if (ts.isIdentifier(node) && node.text === "undefined" && !hasNearerBinding(scope ?? scopeByNode.get(node), "undefined")) {
+      return { kind: "texts", texts: [], union: false };
+    }
+    if (ts.isBinaryExpression(node) && node.operatorToken.kind === ts.SyntaxKind.PlusToken) {
+      const left = analyzeMessage(node.left, scope, new Set(seen));
+      const right = analyzeMessage(node.right, scope, new Set(seen));
+      const union = left.union || right.union;
+      if (left.kind === "mutable" || right.kind === "mutable") return { ...MESSAGE_MUTABLE, union };
+      if (left.kind !== "texts" || right.kind !== "texts" || left.texts.length !== 1 || right.texts.length !== 1) return { ...MESSAGE_OPAQUE, union };
+      return { kind: "texts", texts: [left.texts[0]! + right.texts[0]!], union };
+    }
+    if (ts.isConditionalExpression(node) || (ts.isBinaryExpression(node) && [ts.SyntaxKind.QuestionQuestionToken, ts.SyntaxKind.BarBarToken].includes(node.operatorToken.kind))) {
+      const arms = ts.isConditionalExpression(node)
+        ? [node.whenTrue, node.whenFalse]
+        : [node.left, node.right];
+      const analyzed = arms.map((arm) => analyzeMessage(arm, scope, new Set(seen)));
+      const texts = analyzed.flatMap((arm) => arm.texts);
+      if (analyzed.some((arm) => arm.kind === "mutable")) return { kind: "mutable", texts, union: true };
+      if (analyzed.some((arm) => arm.kind === "opaque")) return { kind: "opaque", texts, union: true };
+      return { kind: "texts", texts, union: true };
+    }
+    if (ts.isIdentifier(node)) {
+      const resolved = resolveDeclaration(scope ?? scopeByNode.get(node), node.text, node.getStart());
+      if (!resolved) return MESSAGE_OPAQUE;
+      const { declaration, owner } = resolved;
+      if ((declaration.parent.flags & ts.NodeFlags.Const) === 0) {
+        const captured = enclosingFunctionScope(scope ?? scopeByNode.get(node)) !== enclosingFunctionScope(owner);
+        const writes = writesByScope.get(owner)?.get(node.text) ?? [];
+        if (captured ? writes.length > 0 : isWrittenBetween(owner, node.text, declaration, node.getStart())) return MESSAGE_MUTABLE;
+      }
+      if (!declaration.initializer || seen.has(declaration)) return MESSAGE_OPAQUE;
+      return analyzeMessage(declaration.initializer, scopeByNode.get(declaration), new Set(seen).add(declaration));
+    }
+    return MESSAGE_OPAQUE;
+  };
   const codeValue = (node: ts.Expression | undefined, scope?: Scope, seen = new Set<ts.VariableDeclaration>()): string | undefined => {
     if (!node) return undefined;
+    if (ts.isParenthesizedExpression(node) || ts.isAsExpression(node) || ts.isTypeAssertionExpression(node) || ts.isSatisfiesExpression(node)) {
+      return codeValue(node.expression, scope, seen);
+    }
     if (ts.isStringLiteralLike(node) || ts.isNoSubstitutionTemplateLiteral(node)) return node.text;
     if (ts.isTemplateExpression(node)) return node.head.text + node.templateSpans.map((span) => `${span.expression.getText(sf)}${span.literal.text}`).join("");
     if (ts.isConditionalExpression(node)) {
@@ -419,7 +743,7 @@ export function scanSource(source: string, file: string): RefusalFinding[] {
       return left?.trim() ? left : codeValue(node.right, scope, new Set(seen));
     }
     if (ts.isIdentifier(node)) {
-      const declaration = resolveDeclaration(scope ?? scopeByNode.get(node), node.text);
+      const declaration = resolveDeclaration(scope ?? scopeByNode.get(node), node.text, node.getStart())?.declaration;
       if (!declaration?.initializer || seen.has(declaration)) return undefined;
       seen.add(declaration);
       return codeValue(declaration.initializer, scopeByNode.get(declaration), seen);
@@ -445,13 +769,17 @@ export function scanSource(source: string, file: string): RefusalFinding[] {
   };
   let grammar: CliGrammar | undefined;
   const getGrammar = () => grammar ??= extractCliGrammar();
+  // Deliberate limitation: a parameter that is neither passed nor defaulted is not proven
+  // through the wrapper's fallback. Name-based substitution cannot tell the wrapper's own
+  // omitted parameter from a caller alias of the same name, so such an identifier stays
+  // unproven; a site that relies on the wrapper default must pass the argument explicitly,
+  // or the wrapper must reference its fallback directly.
   const callBindings = (wrapper: RefusalWrapperDescriptor, call: ts.CallExpression): Map<string, ts.Expression> => {
     const bindings = new Map<string, ts.Expression>();
     wrapper.parameters.forEach((parameter, index) => {
-      if (ts.isIdentifier(parameter.name)) {
-        const actual = call.arguments[index] ?? parameter.initializer;
-        if (actual) bindings.set(parameter.name.text, actual);
-      }
+      if (!ts.isIdentifier(parameter.name)) return;
+      const actual = call.arguments[index] ?? parameter.initializer;
+      if (actual) bindings.set(parameter.name.text, actual);
     });
     return bindings;
   };
@@ -459,39 +787,44 @@ export function scanSource(source: string, file: string): RefusalFinding[] {
     expression: ts.Expression,
     bindings: Map<string, ts.Expression>,
     seenBindings = new Set<string>(),
-    seenDeclarations = new Set<ts.VariableDeclaration>(),
     unprovenParameters: ReadonlySet<string> = new Set(),
   ): ts.Expression => {
     if (ts.isParenthesizedExpression(expression) || ts.isAsExpression(expression) || ts.isTypeAssertionExpression(expression) || ts.isSatisfiesExpression(expression)) {
-      return resolveBound(expression.expression, bindings, seenBindings, seenDeclarations, unprovenParameters);
+      return resolveBound(expression.expression, bindings, seenBindings, unprovenParameters);
     }
+    // Substitution is limited to a wrapper call-site parameter; a direct field keeps its
+    // identifier, and that identifier's own proof decides whether it holds text.
     if (ts.isIdentifier(expression)) {
       if (unprovenParameters.has(expression.text)) return expression;
       if (bindings.has(expression.text) && !seenBindings.has(expression.text)) {
-        return resolveBound(bindings.get(expression.text)!, bindings, new Set(seenBindings).add(expression.text), seenDeclarations, unprovenParameters);
+        return resolveBound(bindings.get(expression.text)!, bindings, new Set(seenBindings).add(expression.text), unprovenParameters);
       }
-      const declaration = resolveDeclaration(scopeByNode.get(expression), expression.text);
-      if (declaration?.initializer && !seenDeclarations.has(declaration)) {
-        return resolveBound(declaration.initializer, bindings, seenBindings, new Set(seenDeclarations).add(declaration), unprovenParameters);
-      }
+      return expression;
     }
-    if (ts.isPropertyAccessExpression(expression) && ts.isIdentifier(expression.expression) && bindings.has(expression.expression.text)) {
-      const baseName = expression.expression.text;
-      const actual = resolveBound(bindings.get(baseName)!, bindings, new Set(seenBindings).add(baseName), seenDeclarations, unprovenParameters);
-      const object = ts.isIdentifier(actual)
-        ? resolveDeclaration(scopeByNode.get(actual), actual.text)?.initializer
-        : actual;
-      if (object && ts.isObjectLiteralExpression(object)) {
-        for (const property of object.properties) {
-          if (ts.isPropertyAssignment(property)) {
-            const name = ts.isIdentifier(property.name) || ts.isStringLiteralLike(property.name) ? property.name.text : undefined;
-            if (name === expression.name.text) return resolveBound(property.initializer, bindings, seenBindings, seenDeclarations, unprovenParameters);
-          }
-          if (ts.isShorthandPropertyAssignment(property) && property.name.text === expression.name.text) {
-            return resolveBound(property.name, bindings, seenBindings, seenDeclarations, unprovenParameters);
-          }
-        }
+    // A property value is known only when the object is a fresh inline literal at this call
+    // site. A const-bound object does not freeze its properties, so it is never resolved.
+    // Only the fields this check serves are read; a spread or computed key could override
+    // them, so such a literal is not a supported shape and stays unresolved.
+    if (ts.isPropertyAccessExpression(expression) && ts.isIdentifier(expression.expression)
+      && (expression.name.text === "code" || expression.name.text === "message")) {
+      const base = expression.expression.text;
+      if (unprovenParameters.has(base) || !bindings.has(base) || seenBindings.has(base)) return expression;
+      const actual = resolveBound(bindings.get(base)!, bindings, new Set(seenBindings).add(base), unprovenParameters);
+      if (!ts.isObjectLiteralExpression(actual)) return expression;
+      const overridable = actual.properties.some((property) =>
+        !(ts.isPropertyAssignment(property) || ts.isShorthandPropertyAssignment(property))
+        || ts.isComputedPropertyName(property.name));
+      if (overridable) return expression;
+      const values: ts.Expression[] = [];
+      for (const property of actual.properties) {
+        const name = (ts.isIdentifier(property.name) || ts.isStringLiteralLike(property.name)) ? property.name.text : undefined;
+        if (name !== expression.name.text) continue;
+        values.push(ts.isPropertyAssignment(property) ? property.initializer : property.name);
       }
+      // A duplicated key means the last one wins at runtime; one value is the only shape
+      // whose text this check can state with confidence. The base stays marked so a value
+      // that refers back to it (e.g. `{ code: facts.code }`) terminates instead of looping.
+      return values.length === 1 ? resolveBound(values[0]!, bindings, new Set(seenBindings).add(base), unprovenParameters) : expression;
     }
     return expression;
   };
@@ -501,10 +834,10 @@ export function scanSource(source: string, file: string): RefusalFinding[] {
     unprovenParameters: ReadonlySet<string> = new Set(),
   ): ObjectAlternative[] => {
     if (!input) return [];
-    const resolved = resolveBound(input, bindings, new Set(), new Set(), unprovenParameters);
+    const resolved = resolveBound(input, bindings, new Set(), unprovenParameters);
     return objectAlternatives(resolved).map((alternative) => ({
       ...alternative,
-      fields: new Map([...alternative.fields].map(([key, value]) => [key, resolveBound(value, bindings, new Set(), new Set(), unprovenParameters)])),
+      fields: new Map([...alternative.fields].map(([key, value]) => [key, resolveBound(value, bindings, new Set(), unprovenParameters)])),
     }));
   };
   const addFinding = (node: ts.Node, classification: RefusalClassification, reason: string): void => {
@@ -516,6 +849,7 @@ export function scanSource(source: string, file: string): RefusalFinding[] {
     input: ts.Expression | undefined,
     bindings = new Map<string, ts.Expression>(),
     unprovenParameters: ReadonlySet<string> = new Set(),
+    bindingScope?: Scope,
   ): void => {
     const variants = envelopeInput(input, bindings, unprovenParameters);
     const predicateNote = (alternative: ObjectAlternative): string => alternative.independentPredicates.size > 0
@@ -547,13 +881,14 @@ export function scanSource(source: string, file: string): RefusalFinding[] {
       const statusMayBeRefused = unprovenFields.has("status")
         || (!!status && ts.isIdentifier(status) && unprovenParameters.has(status.text))
         || codeValue(status) !== "usage";
-      const recoveryText = codeValue(recovery);
+      const provenRecovery = recoveryTextOf(recovery, recoveryContext(bindings, bindingScope));
+      const provenText = provenRecovery && hasOnlyText(provenRecovery) ? provenRecovery.text : undefined;
       return statusMayBeRefused && (
         unprovenFields.has("recovery")
         || (!!recovery && ts.isIdentifier(recovery) && unprovenParameters.has(recovery.text))
         || !recovery
-        || recoveryText === undefined
-        || recoveryText.trim() === ""
+        || provenText === undefined
+        || provenText.trim() === ""
       );
     });
     if (missingRecovery) {
@@ -583,16 +918,41 @@ export function scanSource(source: string, file: string): RefusalFinding[] {
     bindings = new Map<string, ts.Expression>(),
     unprovenParameters: ReadonlySet<string> = new Set(),
   ): void => {
-    const resolvedCode = code && resolveBound(code, bindings, new Set(), new Set(), unprovenParameters);
+    const resolvedCode = code && resolveBound(code, bindings, new Set(), unprovenParameters);
     const unprovenCode = resolvedCode !== undefined && ts.isIdentifier(resolvedCode) && unprovenParameters.has(resolvedCode.text);
-    if (unprovenCode || !isCauseCode(resolvedCode)) {
+    // A call-site object argument whose property is not a fresh inline literal cannot prove
+    // the cause; a locally built object (e.g. an engine witness) keeps the property-name rule.
+    const opaqueCause = resolvedCode !== undefined
+      && ts.isPropertyAccessExpression(resolvedCode)
+      && ts.isIdentifier(resolvedCode.expression)
+      && bindings.has(resolvedCode.expression.text);
+    if (unprovenCode || opaqueCause || !isCauseCode(resolvedCode)) {
       const detail = unprovenCode ? ` wrapper parameter \`${resolvedCode.text}\` does not prove a stable cause code.` : " supply a stable code to CoordinationError.";
       addFinding(node, "missing-cause-code", `Rule #341 class 2 (named cause):${detail}`);
     }
-    const resolvedMessage = message && resolveBound(message, bindings, new Set(), new Set(), unprovenParameters);
-    const text = codeValue(resolvedMessage);
-    if (text && /\bmstar\s+[a-z][a-z0-9.-]*/i.test(text) && !recoveryIsReachable(text, getGrammar())) {
+    const resolvedMessage = message && resolveBound(message, bindings, new Set(), unprovenParameters);
+    // A call-site object whose property is not a fresh literal cannot prove a reachable
+    // recovery, and neither can a fresh literal whose value is not provable text.
+    const messageIsObjectField = message !== undefined
+      && ts.isPropertyAccessExpression(message)
+      && ts.isIdentifier(message.expression)
+      && bindings.has(message.expression.text);
+    const resolvedIsOpaqueField = resolvedMessage !== undefined
+      && ts.isPropertyAccessExpression(resolvedMessage)
+      && ts.isIdentifier(resolvedMessage.expression)
+      && bindings.has(resolvedMessage.expression.text);
+    const analyzedMessage = resolvedMessage === undefined ? MESSAGE_OPAQUE : analyzeMessage(resolvedMessage, scopeByNode.get(resolvedMessage));
+    // Any union arm that is opaque or mutable leaves a message this check cannot vouch for.
+    // The union flag travels through resolved bindings, so a `const` bound to such a
+    // conditional fails closed too.
+    const unprovableMessage = resolvedIsOpaqueField
+      || (messageIsObjectField && analyzedMessage.kind !== "texts")
+      || analyzedMessage.kind === "mutable"
+      || (analyzedMessage.union && analyzedMessage.kind !== "texts");
+    if (analyzedMessage.texts.some((text) => /\bmstar\s+[a-z][a-z0-9.-]*/i.test(text) && !recoveryIsReachable(text, getGrammar()))) {
       addFinding(node, "unreachable-recovery", "Rule #341 class 4 (discoverability): CoordinationError message references a CLI command absent from the help grammar.");
+    } else if (unprovableMessage) {
+      addFinding(node, "unreachable-recovery", "Rule #341 class 4 (discoverability): CoordinationError message cannot be proven to name a reachable command (opaque or mutable source).");
     }
   };
   const visit = (node: ts.Node): void => {
@@ -608,7 +968,7 @@ export function scanSource(source: string, file: string): RefusalFinding[] {
       const wrapper = callee ? wrappers.get(callee) : undefined;
       if (wrapper) {
         const bindings = callBindings(wrapper, node);
-        if (ts.isCallExpression(wrapper.inner)) checkEnvelope(node, wrapper.inner.arguments[0], bindings);
+        if (ts.isCallExpression(wrapper.inner)) checkEnvelope(node, wrapper.inner.arguments[0], bindings, new Set(), enclosingFunctionScope(scopeByNode.get(wrapper.inner)));
         else checkCoordinationError(node, wrapper.inner.arguments?.[0], wrapper.inner.arguments?.[1], bindings);
       } else if (callee === "refusalEnvelope") {
         const wrapperBody = wrapperBodies.get(node);
@@ -663,7 +1023,8 @@ function loadAllowlist(path: string): AllowlistEntry[] {
   return parseAllowlist(readFileSync(path, "utf8"));
 }
 function statSafe(path: string): boolean { try { return statSync(path).isFile(); } catch { return false; } }
-export function applyAllowlist(findings: RefusalFinding[], entries: AllowlistEntry[], repoRoot: string): { findings: RefusalFinding[]; stale: string[]; used: AllowlistEntry[] } {
+export interface StaleAllowlistEntry { entry: AllowlistEntry; observedCount: number; }
+export function applyAllowlist(findings: RefusalFinding[], entries: AllowlistEntry[], repoRoot: string): { findings: RefusalFinding[]; stale: StaleAllowlistEntry[]; used: AllowlistEntry[] } {
   const validated = validateAllowlistEntries(entries);
   const bySignature = new Map(validated.map((entry) => [entry.signature, entry]));
   const output: RefusalFinding[] = [];
@@ -679,12 +1040,31 @@ export function applyAllowlist(findings: RefusalFinding[], entries: AllowlistEnt
     matched.add(signature);
     output.push({ ...finding, classification: "allowlisted", reason: `${finding.classification}: ${finding.reason} Allowlisted: ${entry.justification} (${entry.trackingIssue}).` });
   }
-  return { findings: output, stale: validated.filter((entry) => counts.get(entry.signature) !== entry.expectedCount).map((entry) => entry.signature), used: validated.filter((entry) => matched.has(entry.signature)) };
+  return {
+    findings: output,
+    stale: validated
+      .filter((entry) => counts.get(entry.signature) !== entry.expectedCount)
+      .map((entry) => ({ entry, observedCount: counts.get(entry.signature) ?? 0 })),
+    used: validated.filter((entry) => matched.has(entry.signature)),
+  };
+}
+export function formatStaleAllowlist(entries: readonly StaleAllowlistEntry[]): string {
+  return entries.map(({ entry, observedCount }) => {
+    const cause = observedCount === 0
+      ? "no current finding matches this signature"
+      : `the signature matches ${observedCount} finding(s) but the entry expects ${entry.expectedCount}`;
+    const refresh = observedCount === 0
+      ? "replace the signature with the current finding signature or delete the entry"
+      : observedCount > entry.expectedCount
+        ? `set expectedCount to the observed count (${observedCount}) after confirming the extra occurrence, or delete the entry`
+        : `set expectedCount to the observed count (${observedCount}) after confirming the remaining occurrences, or delete the entry`;
+    return `${entry.signature} tracked by ${entry.trackingIssue}: ${cause}, so the exemption is stale. Refresh: ${refresh}.`;
+  }).join("\n");
 }
 export function countViolations(findings: RefusalFinding[]): number {
   return findings.filter((finding) => finding.classification !== "allowlisted" && finding.classification !== "manual-recovery").length;
 }
-export function exitCodeFor(findings: RefusalFinding[], stale: string[]): 0 | 1 {
+export function exitCodeFor(findings: RefusalFinding[], stale: readonly StaleAllowlistEntry[]): 0 | 1 {
   return countViolations(findings) === 0 && stale.length === 0 ? 0 : 1;
 }
 function run(): number {
@@ -702,8 +1082,8 @@ function run(): number {
     else {
       for (const finding of result.findings) console.log(`${finding.file}:${finding.line}:${finding.column} ${finding.classification} ${finding.reason}\n  ${finding.snippet}`);
       if (result.used.length) console.log(`Allowlist (${result.used.length}):\n${JSON.stringify(result.used, null, 2)}`);
-      if (result.stale.length) console.error(`Stale allowlist entries: ${result.stale.join(", ")}`);
-      console.log(`Refusal-quality: ${countViolations(result.findings)} violations; ${result.used.length} allowlisted`);
+      if (result.stale.length) console.error(`Stale allowlist entries (refresh required):\n${formatStaleAllowlist(result.stale)}`);
+      console.log(`Refusal-quality: ${countViolations(result.findings)} violations; ${result.findings.filter((finding) => finding.classification === "allowlisted").length} allowlisted`);
     }
     return exitCodeFor(result.findings, result.stale);
   } catch (error) { console.error(error instanceof Error ? error.message : String(error)); return 2; }
