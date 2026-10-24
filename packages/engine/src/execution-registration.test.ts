@@ -953,6 +953,55 @@ describe("execution-registration", () => {
     expect(await footprint(fixture.context)).toEqual(aliasAccepted);
   });
 
+  test("execution-registration-replays-a-derived-operation-recorded-under-the-legacy-id", async () => {
+    const fixture = await activeFixture("iteration-derived-legacy-id");
+    const iterationId = "iter-20260921-derived-legacy-id";
+    const compassRef = `iterations/${iterationId}/delivery-compass.md`;
+    writeReviewedCompass(fixture.context.harnessDir, iterationId, compassRef);
+    // The non-canonical spelling the previous release recorded: it resolves to
+    // the reviewed compass, so the legacy identity form hashes the same intent
+    // the canonical spelling does.
+    symlinkSync(
+      join(fixture.context.harnessDir, compassRef),
+      join(fixture.context.harnessDir, "legacy-derived-compass.md"),
+    );
+    const request = iterationRequest(fixture, iterationId, "unused-derived-legacy-id");
+    const context: ExecutionContext = { ...fixture.context, caller: { ...fixture.caller, workflowId: iterationId } };
+    const canonicalWorkflow = {
+      ...request.workflow,
+      options: { ...request.workflow.options, compassRef },
+    };
+
+    // The previous release derived its operation id over the CANONICAL identity,
+    // so registering the canonical spelling seeds that exact address together
+    // with the exact fingerprint it recorded.
+    const committed = await registerShippedCatalogExecution(context, {
+      actor: "project-manager",
+      workflow: canonicalWorkflow,
+    });
+    const accepted = await footprint(fixture.context);
+
+    // The non-canonical spelling now derives a DIFFERENT live id: only the
+    // legacy derived id addresses the recorded receipt, which replays instead
+    // of the retry being judged a new (already committed) lifecycle.
+    const aliasedWorkflow = {
+      ...canonicalWorkflow,
+      options: { ...canonicalWorkflow.options, compassRef: "legacy-derived-compass.md" },
+    };
+    expect(await registerShippedCatalogExecution(context, { actor: "project-manager", workflow: aliasedWorkflow })).toEqual(
+      committed,
+    );
+    expect(await footprint(fixture.context)).toEqual(accepted);
+
+    // A genuinely different intent matches neither derived id: the normal
+    // creation rules refuse the already-committed workflow identity.
+    const refusal = await refusalOf(() =>
+      registerShippedCatalogExecution(context, { actor: "project-manager-alt", workflow: aliasedWorkflow }),
+    );
+    expect(refusal.code).toBe("execution.not-empty");
+    expect(await footprint(fixture.context)).toEqual(accepted);
+  });
+
   test("execution-registration-refuses compass paths outside the ACTIVE iteration harness", async () => {
     const fixture = await activeFixture("iteration-compass-boundary");
     const outsideCompass = join(fixture.workspace, "outside-compass.md");

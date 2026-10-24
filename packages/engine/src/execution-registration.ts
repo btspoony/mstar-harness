@@ -157,6 +157,36 @@ function legacyRegistrationRequestHash(caller: ExecutionCaller, request: Catalog
   }
 }
 
+/** The operation id a registration derives from its intent: the intent's stable form, hashed. */
+function derivedOperationId(intent: {
+  actor: string;
+  workflow: CatalogExecutionWorkflow;
+  delta: CatalogExecutionCatalogDelta;
+}): string {
+  return `op-${createHash("sha256").update(stableJson(intent), "utf8").digest("hex").slice(0, 24)}`;
+}
+
+/**
+ * The derived operation id the previous release recorded for the same intent:
+ * the same derivation over the LEGACY identity form (compass canonicalized too).
+ * The live derivation keeps the caller's compass spelling, so a non-canonical
+ * spelling now derives a DIFFERENT id than the receipt the previous release
+ * committed — the retry looks its receipt up under both ids instead. Null when
+ * this call has no distinct older form: a plan intent had none, and a pointer
+ * that no longer resolves cannot have produced a legacy receipt this call can
+ * match (same rule as `legacyRegistrationRequestHash`).
+ */
+function legacyDerivedOperationId(actor: string, identity: CatalogExecutionRequest): string | null {
+  let legacy: CatalogExecutionRequest;
+  try {
+    legacy = normalizeIterationPlanPaths(identity);
+  } catch {
+    return null;
+  }
+  if (legacy.workflow === identity.workflow) return null;
+  return derivedOperationId({ actor, workflow: legacy.workflow, delta: catalogDeltaFor(legacy.workflow) });
+}
+
 /**
  * §7 register one execution lifecycle together with its reviewed catalog delta,
  * atomically, on an ACTIVE execution authority.
@@ -405,8 +435,7 @@ export async function registerShippedCatalogExecution(
     delta: initialDelta,
   });
   const intent = { actor: input.actor, workflow: drafted.workflow, delta: catalogDeltaFor(drafted.workflow) };
-  const operationId =
-    input.operationId ?? `op-${createHash("sha256").update(stableJson(intent), "utf8").digest("hex").slice(0, 24)}`;
+  const operationId = input.operationId ?? derivedOperationId(intent);
   const request: CatalogExecutionRequest = {
     ...intent,
     operationId,
@@ -415,6 +444,10 @@ export async function registerShippedCatalogExecution(
   const identity = canonicalRegistrationIdentity(request);
   const requestHash = registrationRequestHash(context.caller, identity);
   const legacyRequestHash = legacyRegistrationRequestHash(context.caller, identity);
+  // Only a DERIVED id moved with the identity form: a caller-supplied id keeps
+  // its single lookup plus the legacy fingerprint.
+  const legacyOperationId =
+    input.operationId === undefined ? legacyDerivedOperationId(input.actor, identity) : null;
   const resolved = await withExecutionTransaction<
     { replayed: CatalogExecutionReceipt } | { expected: ExecutionToken; catalogRevision: number }
   >(context, (tx) => {
@@ -432,6 +465,20 @@ export async function registerShippedCatalogExecution(
       token: { kind: "root", key: [] },
     });
     if (replayed !== null) return { replayed: replayed.data };
+    if (legacyOperationId !== null) {
+      // The previous release addressed this same intent by the legacy derived
+      // id: its receipt replays here instead of the retry being judged a NEW
+      // registration (which would refuse `execution.not-empty`).
+      const legacyReplayed = readOperationReplay<CatalogExecutionReceipt>(tx, {
+        operationId: legacyOperationId,
+        requestHash,
+        legacyRequestHash,
+        workflowId: identity.workflow.workflowId,
+        planId: null,
+        token: { kind: "root", key: [] },
+      });
+      if (legacyReplayed !== null) return { replayed: legacyReplayed.data };
+    }
     // A NEW shipped registration normalizes the pointers (canonical stored
     // form, containment) and proves its reviewed documents here; the replayed
     // operation id above already proved them and keeps its receipt (I-000868,
