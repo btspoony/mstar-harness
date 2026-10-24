@@ -487,6 +487,40 @@ export function scanSource(source: string, file: string): RefusalFinding[] {
     }
     return false;
   };
+  // Writes are tracked by declaration identity, not by name: `cache[recovery] = …` and
+  // `obj.recovery = …` read those names, and a same-named binding in another scope is a
+  // different declaration. Only a target that binds the variable itself counts.
+  const writtenDeclarations = new Set<ts.VariableDeclaration>();
+  const recordBindingTarget = (target: ts.Expression): void => {
+    if (ts.isParenthesizedExpression(target)) { recordBindingTarget(target.expression); return; }
+    if (ts.isIdentifier(target)) {
+      const declaration = resolveDeclaration(scopeByNode.get(target), target.text);
+      if (declaration) writtenDeclarations.add(declaration);
+      return;
+    }
+    if (ts.isArrayLiteralExpression(target)) {
+      for (const element of target.elements) if (!ts.isOmittedExpression(element)) recordBindingTarget(element);
+      return;
+    }
+    if (ts.isObjectLiteralExpression(target)) {
+      for (const property of target.properties) {
+        if (ts.isPropertyAssignment(property)) recordBindingTarget(property.initializer);
+        else if (ts.isShorthandPropertyAssignment(property)) recordBindingTarget(property.name);
+        else if (ts.isSpreadAssignment(property)) recordBindingTarget(property.expression);
+      }
+    }
+  };
+  const collectWrittenDeclarations = (node: ts.Node): void => {
+    if (ts.isBinaryExpression(node)
+      && node.operatorToken.kind >= ts.SyntaxKind.FirstAssignment
+      && node.operatorToken.kind <= ts.SyntaxKind.LastAssignment) recordBindingTarget(node.left);
+    if ((ts.isPrefixUnaryExpression(node) || ts.isPostfixUnaryExpression(node))
+      && (node.operator === ts.SyntaxKind.PlusPlusToken || node.operator === ts.SyntaxKind.MinusMinusToken)) recordBindingTarget(node.operand);
+    // `for (x of …)` / `for (x in …)` binds x on every iteration, like an assignment.
+    if ((ts.isForOfStatement(node) || ts.isForInStatement(node)) && !ts.isVariableDeclarationList(node.initializer)) recordBindingTarget(node.initializer);
+    ts.forEachChild(node, collectWrittenDeclarations);
+  };
+  collectWrittenDeclarations(sf);
   const enclosingFunctionScope = (scope: Scope | undefined): Scope | undefined => {
     for (let current = scope; current; current = current.parent) {
       if (current.kind === "function" || current.kind === "source") return current;
@@ -549,9 +583,9 @@ export function scanSource(source: string, file: string): RefusalFinding[] {
       const declaration = resolveDeclaration(scope, node.text);
       if (declaration) {
         if (!declaration.initializer || context.seen.has(declaration)) return undefined;
-        // Only a `const` binding is immutable; a `let`/`var` may hold anything by the time the
-        // refusal is built, so it never proves from its initializer.
-        if ((declaration.parent.flags & ts.NodeFlags.Const) === 0) return undefined;
+        // A `const` binding cannot change; a `let`/`var` proves from its initializer only when
+        // no write resolves to this exact declaration.
+        if ((declaration.parent.flags & ts.NodeFlags.Const) === 0 && writtenDeclarations.has(declaration)) return undefined;
         return recoveryTextOf(declaration.initializer, {
           ...context, scope: scopeByNode.get(declaration), seen: new Set(context.seen).add(declaration),
         });
@@ -626,7 +660,7 @@ export function scanSource(source: string, file: string): RefusalFinding[] {
     if (ts.isIdentifier(node)) {
       const declaration = resolveDeclaration(scope ?? scopeByNode.get(node), node.text);
       if (!declaration) return MESSAGE_OPAQUE;
-      if ((declaration.parent.flags & ts.NodeFlags.Const) === 0) return MESSAGE_MUTABLE;
+      if ((declaration.parent.flags & ts.NodeFlags.Const) === 0 && writtenDeclarations.has(declaration)) return MESSAGE_MUTABLE;
       if (!declaration.initializer || seen.has(declaration)) return MESSAGE_OPAQUE;
       return analyzeMessage(declaration.initializer, scopeByNode.get(declaration), new Set(seen).add(declaration));
     }

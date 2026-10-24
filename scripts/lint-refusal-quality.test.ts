@@ -558,15 +558,32 @@ describe("refusal quality scanner", () => {
     expect(findings.map(({ classification }) => classification)).toEqual(["missing-recovery", "missing-recovery", "missing-recovery"]);
   });
 
-  test("proves only a const binding from its initializer", () => {
+  test("proves a let binding only while no write resolves to that declaration", () => {
     const scan = (source: string) => scanSource(source, "packages/commands/src/fixture.ts").map(({ classification }) => classification);
-    const envelope = (recovery: string) => `refusalEnvelope({ command: "x", status: "refused", code: "x.blocked", message: "Blocked", recovery: ${recovery} });`;
-    expect(scan(`let recovery = "Run mstar status validate."; recovery = ""; ${envelope("recovery")}`)).toEqual(["missing-recovery"]);
-    expect(scan(`let untouched = "Run mstar status validate."; ${envelope("untouched")}`)).toEqual(["missing-recovery"]);
-    expect(scan(`let looped = "Run mstar status validate."; for (looped of [""]) { noop(); } ${envelope("looped")}`)).toEqual(["missing-recovery"]);
-    expect(scan(`var hoisted = "Run mstar status validate."; ${envelope("hoisted")}`)).toEqual(["missing-recovery"]);
-    expect(scan(`const stable = "Run mstar status validate."; ${envelope("stable")}`)).toEqual([]);
-    expect(scan(`const stable = "Run mstar status validate."; ${envelope(`stable ?? "Register the workflow first with mstar workflow register."`)}`)).toEqual([]);
+    const refuse = (recovery: string) => `refusalEnvelope({ command: "x", status: "refused", code: "x.blocked", message: "Blocked", recovery: ${recovery} });`;
+    expect(scan(`let recovery = "Run mstar status validate."; recovery = dynamicRecovery(); ${refuse("recovery")}`)).toEqual(["missing-recovery"]);
+    expect(scan(`let untouched = "Run mstar status validate."; ${refuse("untouched")}`)).toEqual([]);
+    expect(scan(`var hoisted = "Run mstar status validate."; ${refuse("hoisted")}`)).toEqual([]);
+    expect(scan(`let looped = "Run mstar status validate."; for (looped of [""]) { noop(); } ${refuse("looped")}`)).toEqual(["missing-recovery"]);
+    expect(scan(`const stable = "Run mstar status validate."; ${refuse("stable")}`)).toEqual([]);
+  });
+
+  test("tracks writes by declaration, not by name or member access", () => {
+    const scan = (source: string) => scanSource(source, "packages/commands/src/fixture.ts").map(({ classification }) => classification);
+    const refuse = (recovery: string) => `refusalEnvelope({ command: "x", status: "refused", code: "x.blocked", message: "Blocked", recovery: ${recovery} });`;
+    expect(scan(`let recovery = "Run mstar status validate."; cache[recovery] = value; ${refuse("recovery")}`)).toEqual([]);
+    expect(scan(`let recovery = "Run mstar status validate."; obj.recovery = ""; ${refuse("recovery")}`)).toEqual([]);
+    expect(scan(`
+      function first() {
+        let recovery = "Run mstar status validate.";
+        return ${refuse("recovery")}
+      }
+      function second() {
+        let recovery = "Run mstar status validate.";
+        recovery = dynamicRecovery();
+        return ${refuse("recovery")}
+      }
+    `)).toEqual(["missing-recovery"]);
   });
 
   test("fails closed on a property access even from a const object", () => {
