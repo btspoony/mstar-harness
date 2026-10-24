@@ -1,4 +1,4 @@
-import { readFileSync, writeFileSync } from "node:fs";
+import { readFileSync, realpathSync, statSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import {
   SddScriptError,
@@ -88,17 +88,61 @@ function targetRefusal(id: string, supplied: string): CommandEnvelope {
     }],
   });
 }
+/**
+ * The guard's verdict on one path, or `null` when the path does not resolve.
+ *
+ * The control root arrives as a Git-derived realpath while `--harness` is only
+ * resolved lexically, so a symlinked spelling of the same live directory used
+ * to compare unequal. `real` collapses that alias, and the device/inode pair
+ * settles the case `realpath` alone cannot (bind mounts, case-folding volumes).
+ */
+function filesystemIdentity(target: string): { real: string; dev: number; ino: number } | null {
+  try {
+    const real = realpathSync(target);
+    const stats = statSync(real);
+    return { real, dev: stats.dev, ino: stats.ino };
+  } catch {
+    return null;
+  }
+}
+
+function controlRootRefusal(verb: string, target: string, real: string | null): SddScriptError {
+  const cause = real === null || real === target
+    ? `the resolved target ${target} is this invocation's control root`
+    : `the resolved target ${target} resolves to ${real}, which is this invocation's control root`;
+  return new SddScriptError(
+    `${verb}: ${cause}, and a control root is not an admitted execution target. `
+    + "Pass --harness <absolute-path> naming a harness other than this control root, or invoke from a checkout where no control root is discovered. "
+    + "To back up or move a control root's own store, use mstar store backup.",
+    2,
+  );
+}
+
 function executionContext(target: string, invocation: InvocationContext, verb: string): StoreContext {
   // `target` is an absolute path (validated by the caller): resolving an
   // absolute value never consults the invocation directory.
   const root = path.resolve(target);
-  if (invocation.controlRoot !== null && root === path.resolve(invocation.controlRoot)) {
-    throw new SddScriptError(
-      `${verb}: the resolved target ${root} is this invocation's control root, and a control root is not an admitted execution target. `
-      + "Pass --harness <absolute-path> naming a harness other than this control root, or invoke from a checkout where no control root is discovered. "
-      + "To back up or move a control root's own store, use mstar store backup.",
-      2,
-    );
+  if (invocation.controlRoot !== null) {
+    // Same spelling decides without touching the filesystem.
+    if (root === path.resolve(invocation.controlRoot)) throw controlRootRefusal(verb, root, null);
+    // An unresolvable control root names no live directory to protect, so only
+    // the same-spelling refusal above applies to it.
+    const control = filesystemIdentity(invocation.controlRoot);
+    if (control !== null) {
+      const named = filesystemIdentity(root);
+      // A comparison this guard could not resolve never admits: the target is
+      // refused instead of being assumed different from the control root.
+      if (named === null) {
+        throw new SddScriptError(
+          `${verb}: the target ${root} does not resolve to a readable path, so it cannot be compared with this invocation's control root ${control.real}. `
+          + "Pass --harness <absolute-path> naming an existing harness directory.",
+          2,
+        );
+      }
+      if (named.real === control.real || (named.dev === control.dev && named.ino === control.ino)) {
+        throw controlRootRefusal(verb, root, named.real);
+      }
+    }
   }
   return { harnessDir: root };
 }

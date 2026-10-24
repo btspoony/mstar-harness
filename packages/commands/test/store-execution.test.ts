@@ -106,6 +106,46 @@ describe("store and execution command surface", () => {
     }
   });
 
+  test("the control-root guard decides by filesystem identity, not by spelling", async () => {
+    const root = fixture("execution-identity");
+    const harness = join(root, ".mstar");
+    mkdirSync(harness, { recursive: true });
+    const store = await initializeStore({ harnessDir: harness });
+    store.close();
+
+    // 1. A symlink whose target IS the invocation's control root is refused by
+    // every verb: the spelling differs, the live directory does not.
+    const alias = join(root, "alias-harness");
+    symlinkSync(harness, alias);
+    for (const id of ["store.execution.export", "store.execution.restore-preview", "store.execution.restore"]) {
+      const refused = await invoke(definition(id), { harness: alias }, root, harness);
+      expect(refused).toMatchObject({ status: "usage", code: "usage", exitCode: 2 });
+      const message = refused.status === "usage" ? refused.message : "";
+      expect(message).toContain(`the resolved target ${alias} resolves to ${realpathSync(harness)}, which is this invocation's control root`);
+      expect(message).toContain("mstar store backup");
+    }
+
+    // 2. The plain same-path case keeps its own refusal.
+    const plain = await invoke(definition("store.execution.export"), { harness }, root, harness);
+    expect(plain).toMatchObject({ status: "usage", code: "usage", exitCode: 2 });
+    expect(plain.status === "usage" ? plain.message : "")
+      .toContain(`the resolved target ${harness} is this invocation's control root`);
+
+    // 3. A genuinely different harness stays admitted and exports its own store.
+    const other = fixture("execution-identity-other");
+    const otherHarness = join(other, ".mstar");
+    mkdirSync(otherHarness, { recursive: true });
+    const otherStore = await initializeStore({ harnessDir: otherHarness });
+    otherStore.close();
+    const exported = await invoke(definition("store.execution.export"), { harness: otherHarness }, root, harness);
+    expect(exported.status).toBe("ok");
+
+    // 4. A target this guard cannot resolve is refused, never admitted.
+    const unresolved = await invoke(definition("store.execution.export"), { harness: join(root, "absent-harness") }, root, harness);
+    expect(unresolved).toMatchObject({ status: "usage", code: "usage", exitCode: 2 });
+    expect(unresolved.status === "usage" ? unresolved.message : "").toContain("does not resolve to a readable path");
+  });
+
   test("initializes despite symlinked project residuals, previews migration, upgrades and backs up an explicitly named fixture store", async () => {
     const root = fixture("store-lifecycle");
     const harness = join(root, ".mstar");
