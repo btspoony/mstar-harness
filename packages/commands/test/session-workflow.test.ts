@@ -458,8 +458,10 @@ describe("session.run bound identity", () => {
       command: "session.run", status: "usage", code: "command.invalid-input",
       details: { workflowId: RUN_WORKFLOW, declaredWorkflowId: "wf-elsewhere" },
     });
-    // The recovery names the workflow the inherited identity actually declares.
-    expect(recoveryOf(foreign)).toContain("--workflow wf-elsewhere");
+    // The refusal names the declared workflow in the message, and the recovery
+    // stays a statically provable command (the id lives in the message instead).
+    expect(foreign.message).toContain("wf-elsewhere");
+    expect(recoveryOf(foreign)).toContain("mstar session run");
     // The legitimate case is untouched: the same identity on its own workflow.
     const own = await launchInherited(harness, RUN_CLAIMED, {
       source: "local", sessionId: RUN_CLAIMED, workflowId: RUN_WORKFLOW, role: "coordinator",
