@@ -263,6 +263,36 @@ describe("mstar iteration register", () => {
     });
   });
 
+  test("a committed registration replays through the CLI once its compass is deleted", async () => {
+    await setupHarness(async (harness) => {
+      // The transport keeps its own pointer diagnostics: a pointer escaping the
+      // harness root is still a usage refusal — only the document proof moved
+      // to the producer (I-000868).
+      expect(runCli(registerArgs(harness, ["--compass-ref", "../outside-compass.md"])).exitCode).toBe(2);
+
+      const operation = ["--operation", "op-iteration-register-compass-deleted"];
+      const first = runCli(registerArgs(harness, operation));
+      expect(first.exitCode).toBe(0);
+      const before = await registeredState(harness);
+
+      // The reviewed compass is removed after the commit: the identical
+      // operation id still returns its recorded receipt instead of resolving a
+      // document the committed intent already proved (I-000868).
+      rmSync(join(harness, COMPASS_REF));
+      const retry = runCli(registerArgs(harness, operation));
+      expect(retry.exitCode).toBe(0);
+      expect(envelope(retry).data).toEqual(envelope(first).data);
+      expect(await registeredState(harness)).toEqual(before);
+
+      // A NEW operation id against the now-missing compass is still refused,
+      // and the refusal publishes nothing.
+      const refused = runCli(registerArgs(harness, ["--operation", "op-iteration-register-compass-deleted-new"]));
+      expect(refused.exitCode).toBe(1);
+      expect(message(refused)).toContain("[catalog.registration-invalid]");
+      expect(await registeredState(harness)).toEqual(before);
+    });
+  });
+
   test("a distinct registration intent refuses an occupied ACTIVE workflow identity", async () => {
     await setupHarness(async (harness) => {
       expect(runCli(registerArgs(harness)).exitCode).toBe(0);

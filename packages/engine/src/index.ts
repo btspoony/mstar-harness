@@ -147,6 +147,7 @@ export {
   isTerminalSnapshot,
   LEGACY_WORKTREE_PATH_CODE,
   deliveryEvidenceViolations,
+  canonicalIterationCompassRef,
   normalizeIterationCompassRef,
   validateIntegrationMergeLease,
   WORKFLOW_COMPOUND_OUTCOMES,
