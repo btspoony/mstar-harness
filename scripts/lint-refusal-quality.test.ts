@@ -558,23 +558,32 @@ describe("refusal quality scanner", () => {
     expect(findings.map(({ classification }) => classification)).toEqual(["missing-recovery", "missing-recovery", "missing-recovery"]);
   });
 
-  test("proves only an immutable binding from its initializer", () => {
+  test("proves only a const binding from its initializer", () => {
     const scan = (source: string) => scanSource(source, "packages/commands/src/fixture.ts").map(({ classification }) => classification);
     const envelope = (recovery: string) => `refusalEnvelope({ command: "x", status: "refused", code: "x.blocked", message: "Blocked", recovery: ${recovery} });`;
-    expect(scan(`let reassigned = "Run mstar status validate."; reassigned = dynamicRecovery(); ${envelope(`reassigned ?? "Run mstar status validate."`)}`))
-      .toEqual(["missing-recovery"]);
-    expect(scan(`const stable = "Run mstar status validate."; ${envelope(`stable ?? "Run mstar status validate."`)}`)).toEqual([]);
-    expect(scan(`let untouched = "Register the workflow first with mstar workflow register."; ${envelope(`untouched ?? "Run mstar status validate."`)}`)).toEqual([]);
-    const wrapper = scan(`
-      function refused() {
-        let chosen = "Run mstar status validate.";
-        chosen = dynamicRecovery();
-        return ${envelope(`chosen ?? "Run mstar status validate."`)}
+    expect(scan(`let recovery = "Run mstar status validate."; recovery = ""; ${envelope("recovery")}`)).toEqual(["missing-recovery"]);
+    expect(scan(`let untouched = "Run mstar status validate."; ${envelope("untouched")}`)).toEqual(["missing-recovery"]);
+    expect(scan(`let looped = "Run mstar status validate."; for (looped of [""]) { noop(); } ${envelope("looped")}`)).toEqual(["missing-recovery"]);
+    expect(scan(`var hoisted = "Run mstar status validate."; ${envelope("hoisted")}`)).toEqual(["missing-recovery"]);
+    expect(scan(`const stable = "Run mstar status validate."; ${envelope("stable")}`)).toEqual([]);
+    expect(scan(`const stable = "Run mstar status validate."; ${envelope(`stable ?? "Register the workflow first with mstar workflow register."`)}`)).toEqual([]);
+  });
+
+  test("fails closed on a property access even from a const object", () => {
+    const findings = scanSource(`
+      const facts = { recovery: "Run mstar status validate." };
+      const alias = facts;
+      alias.recovery = "";
+      refusalEnvelope({ command: "x", status: "refused", code: "x.blocked", message: "Blocked",
+        recovery: facts.recovery });
+      function refused(input: { recovery?: string }) {
+        return refusalEnvelope({ command: "x", status: "refused", code: "x.blocked", message: "Blocked",
+          recovery: input.recovery ?? "Run mstar status validate." });
       }
-      refused();
-    `);
-    expect(wrapper.length).toBeGreaterThan(0);
-    expect(wrapper.every((classification) => classification === "missing-recovery")).toBe(true);
+      refused(facts);
+    `, "packages/commands/src/fixture.ts");
+    expect(findings.length).toBeGreaterThan(0);
+    expect(findings.every(({ classification }) => classification === "missing-recovery")).toBe(true);
   });
 
   test("a stale allowlist entry reports its tracking issue and refresh action", () => {

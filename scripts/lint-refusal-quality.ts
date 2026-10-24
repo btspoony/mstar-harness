@@ -398,26 +398,6 @@ export function scanSource(source: string, file: string): RefusalFinding[] {
     ts.forEachChild(node, (child) => buildScopes(child, scope));
   };
   buildScopes(sf, sourceScope);
-  // A mutable binding is not proof: `let x = "literal"; x = dynamic();` still proves from the
-  // initializer unless the name is tracked. Names assigned anywhere in the file (assignment or
-  // increment/decrement, including destructuring targets) are therefore treated as mutable.
-  const assignedNames = new Set<string>();
-  const collectAssignedNames = (node: ts.Node): void => {
-    if (ts.isBinaryExpression(node)
-      && node.operatorToken.kind >= ts.SyntaxKind.FirstAssignment
-      && node.operatorToken.kind <= ts.SyntaxKind.LastAssignment) {
-      const collectTargets = (target: ts.Node): void => {
-        if (ts.isIdentifier(target)) assignedNames.add(target.text);
-        else ts.forEachChild(target, collectTargets);
-      };
-      collectTargets(node.left);
-    }
-    if ((ts.isPrefixUnaryExpression(node) || ts.isPostfixUnaryExpression(node))
-      && (node.operator === ts.SyntaxKind.PlusPlusToken || node.operator === ts.SyntaxKind.MinusMinusToken)
-      && ts.isIdentifier(node.operand)) assignedNames.add(node.operand.text);
-    ts.forEachChild(node, collectAssignedNames);
-  };
-  collectAssignedNames(sf);
   const resolveDeclaration = (scope: Scope | undefined, name: string): ts.VariableDeclaration | undefined => {
     for (let current = scope; current; current = current.parent) {
       const declaration = current.declarations.get(name);
@@ -565,10 +545,9 @@ export function scanSource(source: string, file: string): RefusalFinding[] {
       const declaration = resolveDeclaration(scope, node.text);
       if (declaration) {
         if (!declaration.initializer || context.seen.has(declaration)) return undefined;
-        // Only an immutable binding proves from its initializer; a `let`/`var` must also be
-        // free of any assignment in the file, otherwise the value may no longer be that text.
-        const immutable = (declaration.parent.flags & ts.NodeFlags.Const) !== 0 || !assignedNames.has(node.text);
-        if (!immutable) return undefined;
+        // Only a `const` binding is immutable; a `let`/`var` may hold anything by the time the
+        // refusal is built, so it never proves from its initializer.
+        if ((declaration.parent.flags & ts.NodeFlags.Const) === 0) return undefined;
         return recoveryTextOf(declaration.initializer, {
           ...context, scope: scopeByNode.get(declaration), seen: new Set(context.seen).add(declaration),
         });
@@ -662,38 +641,17 @@ export function scanSource(source: string, file: string): RefusalFinding[] {
     expression: ts.Expression,
     bindings: Map<string, ts.Expression>,
     seenBindings = new Set<string>(),
-    seenDeclarations = new Set<ts.VariableDeclaration>(),
     unprovenParameters: ReadonlySet<string> = new Set(),
   ): ts.Expression => {
     if (ts.isParenthesizedExpression(expression) || ts.isAsExpression(expression) || ts.isTypeAssertionExpression(expression) || ts.isSatisfiesExpression(expression)) {
-      return resolveBound(expression.expression, bindings, seenBindings, seenDeclarations, unprovenParameters);
+      return resolveBound(expression.expression, bindings, seenBindings, unprovenParameters);
     }
+    // Substitution is limited to a wrapper call-site parameter; a direct field keeps its
+    // identifier, and that identifier's own proof decides whether it holds text.
     if (ts.isIdentifier(expression)) {
       if (unprovenParameters.has(expression.text)) return expression;
       if (bindings.has(expression.text) && !seenBindings.has(expression.text)) {
-        return resolveBound(bindings.get(expression.text)!, bindings, new Set(seenBindings).add(expression.text), seenDeclarations, unprovenParameters);
-      }
-      const declaration = resolveDeclaration(scopeByNode.get(expression), expression.text);
-      if (declaration?.initializer && !seenDeclarations.has(declaration)) {
-        return resolveBound(declaration.initializer, bindings, seenBindings, new Set(seenDeclarations).add(declaration), unprovenParameters);
-      }
-    }
-    if (ts.isPropertyAccessExpression(expression) && ts.isIdentifier(expression.expression) && bindings.has(expression.expression.text)) {
-      const baseName = expression.expression.text;
-      const actual = resolveBound(bindings.get(baseName)!, bindings, new Set(seenBindings).add(baseName), seenDeclarations, unprovenParameters);
-      const object = ts.isIdentifier(actual)
-        ? resolveDeclaration(scopeByNode.get(actual), actual.text)?.initializer
-        : actual;
-      if (object && ts.isObjectLiteralExpression(object)) {
-        for (const property of object.properties) {
-          if (ts.isPropertyAssignment(property)) {
-            const name = ts.isIdentifier(property.name) || ts.isStringLiteralLike(property.name) ? property.name.text : undefined;
-            if (name === expression.name.text) return resolveBound(property.initializer, bindings, seenBindings, seenDeclarations, unprovenParameters);
-          }
-          if (ts.isShorthandPropertyAssignment(property) && property.name.text === expression.name.text) {
-            return resolveBound(property.name, bindings, seenBindings, seenDeclarations, unprovenParameters);
-          }
-        }
+        return resolveBound(bindings.get(expression.text)!, bindings, new Set(seenBindings).add(expression.text), unprovenParameters);
       }
     }
     return expression;
@@ -704,10 +662,10 @@ export function scanSource(source: string, file: string): RefusalFinding[] {
     unprovenParameters: ReadonlySet<string> = new Set(),
   ): ObjectAlternative[] => {
     if (!input) return [];
-    const resolved = resolveBound(input, bindings, new Set(), new Set(), unprovenParameters);
+    const resolved = resolveBound(input, bindings, new Set(), unprovenParameters);
     return objectAlternatives(resolved).map((alternative) => ({
       ...alternative,
-      fields: new Map([...alternative.fields].map(([key, value]) => [key, resolveBound(value, bindings, new Set(), new Set(), unprovenParameters)])),
+      fields: new Map([...alternative.fields].map(([key, value]) => [key, resolveBound(value, bindings, new Set(), unprovenParameters)])),
     }));
   };
   const addFinding = (node: ts.Node, classification: RefusalClassification, reason: string): void => {
@@ -788,13 +746,13 @@ export function scanSource(source: string, file: string): RefusalFinding[] {
     bindings = new Map<string, ts.Expression>(),
     unprovenParameters: ReadonlySet<string> = new Set(),
   ): void => {
-    const resolvedCode = code && resolveBound(code, bindings, new Set(), new Set(), unprovenParameters);
+    const resolvedCode = code && resolveBound(code, bindings, new Set(), unprovenParameters);
     const unprovenCode = resolvedCode !== undefined && ts.isIdentifier(resolvedCode) && unprovenParameters.has(resolvedCode.text);
     if (unprovenCode || !isCauseCode(resolvedCode)) {
       const detail = unprovenCode ? ` wrapper parameter \`${resolvedCode.text}\` does not prove a stable cause code.` : " supply a stable code to CoordinationError.";
       addFinding(node, "missing-cause-code", `Rule #341 class 2 (named cause):${detail}`);
     }
-    const resolvedMessage = message && resolveBound(message, bindings, new Set(), new Set(), unprovenParameters);
+    const resolvedMessage = message && resolveBound(message, bindings, new Set(), unprovenParameters);
     const text = codeValue(resolvedMessage);
     if (text && /\bmstar\s+[a-z][a-z0-9.-]*/i.test(text) && !recoveryIsReachable(text, getGrammar())) {
       addFinding(node, "unreachable-recovery", "Rule #341 class 4 (discoverability): CoordinationError message references a CLI command absent from the help grammar.");
