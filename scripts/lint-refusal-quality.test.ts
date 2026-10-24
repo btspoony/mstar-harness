@@ -558,6 +558,25 @@ describe("refusal quality scanner", () => {
     expect(findings.map(({ classification }) => classification)).toEqual(["missing-recovery", "missing-recovery", "missing-recovery"]);
   });
 
+  test("proves only an immutable binding from its initializer", () => {
+    const scan = (source: string) => scanSource(source, "packages/commands/src/fixture.ts").map(({ classification }) => classification);
+    const envelope = (recovery: string) => `refusalEnvelope({ command: "x", status: "refused", code: "x.blocked", message: "Blocked", recovery: ${recovery} });`;
+    expect(scan(`let reassigned = "Run mstar status validate."; reassigned = dynamicRecovery(); ${envelope(`reassigned ?? "Run mstar status validate."`)}`))
+      .toEqual(["missing-recovery"]);
+    expect(scan(`const stable = "Run mstar status validate."; ${envelope(`stable ?? "Run mstar status validate."`)}`)).toEqual([]);
+    expect(scan(`let untouched = "Register the workflow first with mstar workflow register."; ${envelope(`untouched ?? "Run mstar status validate."`)}`)).toEqual([]);
+    const wrapper = scan(`
+      function refused() {
+        let chosen = "Run mstar status validate.";
+        chosen = dynamicRecovery();
+        return ${envelope(`chosen ?? "Run mstar status validate."`)}
+      }
+      refused();
+    `);
+    expect(wrapper.length).toBeGreaterThan(0);
+    expect(wrapper.every((classification) => classification === "missing-recovery")).toBe(true);
+  });
+
   test("a stale allowlist entry reports its tracking issue and refresh action", () => {
     const snippet = `refusalEnvelope({ code: "x.bad" })`;
     const finding = {

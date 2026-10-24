@@ -398,6 +398,26 @@ export function scanSource(source: string, file: string): RefusalFinding[] {
     ts.forEachChild(node, (child) => buildScopes(child, scope));
   };
   buildScopes(sf, sourceScope);
+  // A mutable binding is not proof: `let x = "literal"; x = dynamic();` still proves from the
+  // initializer unless the name is tracked. Names assigned anywhere in the file (assignment or
+  // increment/decrement, including destructuring targets) are therefore treated as mutable.
+  const assignedNames = new Set<string>();
+  const collectAssignedNames = (node: ts.Node): void => {
+    if (ts.isBinaryExpression(node)
+      && node.operatorToken.kind >= ts.SyntaxKind.FirstAssignment
+      && node.operatorToken.kind <= ts.SyntaxKind.LastAssignment) {
+      const collectTargets = (target: ts.Node): void => {
+        if (ts.isIdentifier(target)) assignedNames.add(target.text);
+        else ts.forEachChild(target, collectTargets);
+      };
+      collectTargets(node.left);
+    }
+    if ((ts.isPrefixUnaryExpression(node) || ts.isPostfixUnaryExpression(node))
+      && (node.operator === ts.SyntaxKind.PlusPlusToken || node.operator === ts.SyntaxKind.MinusMinusToken)
+      && ts.isIdentifier(node.operand)) assignedNames.add(node.operand.text);
+    ts.forEachChild(node, collectAssignedNames);
+  };
+  collectAssignedNames(sf);
   const resolveDeclaration = (scope: Scope | undefined, name: string): ts.VariableDeclaration | undefined => {
     for (let current = scope; current; current = current.parent) {
       const declaration = current.declarations.get(name);
@@ -545,6 +565,10 @@ export function scanSource(source: string, file: string): RefusalFinding[] {
       const declaration = resolveDeclaration(scope, node.text);
       if (declaration) {
         if (!declaration.initializer || context.seen.has(declaration)) return undefined;
+        // Only an immutable binding proves from its initializer; a `let`/`var` must also be
+        // free of any assignment in the file, otherwise the value may no longer be that text.
+        const immutable = (declaration.parent.flags & ts.NodeFlags.Const) !== 0 || !assignedNames.has(node.text);
+        if (!immutable) return undefined;
         return recoveryTextOf(declaration.initializer, {
           ...context, scope: scopeByNode.get(declaration), seen: new Set(context.seen).add(declaration),
         });
