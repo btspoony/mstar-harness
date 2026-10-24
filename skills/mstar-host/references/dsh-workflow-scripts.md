@@ -43,7 +43,7 @@ return everything in the result payload.
 | `/codebase-audit` large-repo category fan-out | § 2 | `mstar-audit-fanout` | 9 (one per audit category) |
 | `/amazing-pr-review deep` | § 3 | `mstar-pr-seats` | 3–4 (2–3 domain + optional cross-domain security) |
 | SDD task review that must not take a Team roster seat | § 4 | `mstar-review-single` | 1 (one fresh-context reviewer per task) |
-| Any other 1–2 read-only delegation | — | — | prefer `subagent` (or a teammate) — no script, no `workflow-run` node |
+| Any other 1–2 read-only delegation | § 4 per seat (only when `subagent` is unavailable) | `mstar-review-single` | `subagent` carries 1–2 seats; with the Team layer mounted (and `subagent` disabled) run one § 4 single-seat run per seat — never a teammate, never a 2-seat fan-out |
 
 ## 1. `mstar-qc-tri` — plan QC tri-review
 
