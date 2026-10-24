@@ -1271,6 +1271,12 @@ export function withExecutionTransaction<T>(
 async function withExecutionReadTransaction<T>(
   context: StoreContext,
   body: (tx: ExecutionTransaction) => T,
+  /**
+   * The clause the refusal states when the authority is not active. A read that
+   * decides a TRANSITION's replay is that transition's gate, so it refuses in
+   * the transition's vocabulary instead of describing itself as an ordinary read.
+   */
+  requires: string = "ordinary execution reads require an active authority",
 ): Promise<T> {
   const handle = await openStore(context, "read");
   try {
@@ -1288,7 +1294,7 @@ async function withExecutionReadTransaction<T>(
       if (meta.authorityState !== "active") {
         throw new ExecutionError(
           "execution.not-active",
-          `the execution authority is ${meta.authorityState}; ordinary execution reads require an active authority. ` +
+          `the execution authority is ${meta.authorityState}; ${requires}. ` +
             `A staged store is inspectable only through migration diagnostics.`,
         );
       }
@@ -3075,6 +3081,10 @@ export async function readPlanOperationReplayBeforeProof<T>(
  * a revoked or foreign session never replays another actor's receipt. The
  * committing transaction repeats this lookup under its own handle, so a receipt
  * committed in the gap is still served and a conflict still refused.
+ *
+ * The authority gate this read opens is the TRANSITION's, not a plain reader's:
+ * on a staged authority the retry refuses in the same vocabulary every other
+ * workflow operation uses, instead of reporting its own read intent (I-000864).
  */
 export async function readWorkflowOperationReplayBeforeProof<T>(
   context: ExecutionContext,
@@ -3099,7 +3109,7 @@ export async function readWorkflowOperationReplayBeforeProof<T>(
     // against, read in the SAME snapshot as the receipt: a replay must not be
     // reported against a state this read did not see.
     return { replay, storeId: tx.storeId, epoch: tx.epoch, revision: requireWorkflowState(tx, read.workflowId).revision };
-  });
+  }, "a workflow transition requires an active authority");
 }
 
 /**

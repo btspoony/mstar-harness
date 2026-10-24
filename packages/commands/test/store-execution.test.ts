@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, spyOn, test } from "bun:test";
+import { afterEach, beforeEach, describe, expect, spyOn, test } from "bun:test";
 import * as nodeFs from "node:fs";
 import { copyFileSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -8,7 +8,15 @@ import { getCommandDefinitions, getExecutionCommandDefinitions, getStoreCommandD
 import type { CommandDefinition, CommandEnvelope, InvocationContext } from "../src/types.js";
 
 const roots: string[] = [];
-const controlRoot = join(tmpdir(), "mstar-command-control-root-not-a-target");
+// The default invocation control root: allocated per test and registered in the
+// same `roots` array, so teardown only ever removes a directory this run made.
+// It is a real directory because `invocation.controlRoot` names the Git-derived
+// main worktree, which exists (I-000700).
+let controlRoot = "";
+beforeEach(() => {
+  controlRoot = mkdtempSync(join(tmpdir(), "mstar-command-control-root-"));
+  roots.push(controlRoot);
+});
 
 afterEach(() => {
   for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true });
@@ -78,7 +86,11 @@ describe("store and execution command surface", () => {
   });
   test("execution restore-preview preserves usage code, status, and authored message", async () => {
     const root = fixture("execution-usage");
-    const result = await invoke(definition("store.execution.restore-preview"), { harness: join(root, ".mstar") }, root);
+    const harness = join(root, ".mstar");
+    // The guard refuses a target it cannot resolve, so the fixture harness is a
+    // real directory and the missing `--backup` is the first usage refusal.
+    mkdirSync(harness, { recursive: true });
+    const result = await invoke(definition("store.execution.restore-preview"), { harness }, root);
     expect(result).toMatchObject({
       status: "usage",
       code: "usage",
@@ -104,6 +116,64 @@ describe("store and execution command surface", () => {
       expect(message).toContain("no control root is discovered");
       expect(message).toContain("mstar store backup");
     }
+  });
+
+  test("the control-root guard decides by filesystem identity, not by spelling", async () => {
+    const root = fixture("execution-identity");
+    const harness = join(root, ".mstar");
+    mkdirSync(harness, { recursive: true });
+    const store = await initializeStore({ harnessDir: harness });
+    store.close();
+
+    // 1. A symlink whose target IS the invocation's control root is refused by
+    // every verb: the spelling differs, the live directory does not.
+    const alias = join(root, "alias-harness");
+    symlinkSync(harness, alias);
+    for (const id of ["store.execution.export", "store.execution.restore-preview", "store.execution.restore"]) {
+      const refused = await invoke(definition(id), { harness: alias }, root, harness);
+      expect(refused).toMatchObject({ status: "usage", code: "usage", exitCode: 2 });
+      const message = refused.status === "usage" ? refused.message : "";
+      expect(message).toContain(`the resolved target ${alias} resolves to ${realpathSync(harness)}, which is this invocation's control root`);
+      expect(message).toContain("mstar store backup");
+    }
+
+    // 2. The plain same-path case keeps its own refusal.
+    const plain = await invoke(definition("store.execution.export"), { harness }, root, harness);
+    expect(plain).toMatchObject({ status: "usage", code: "usage", exitCode: 2 });
+    expect(plain.status === "usage" ? plain.message : "")
+      .toContain(`the resolved target ${harness} is this invocation's control root`);
+
+    // 3. A genuinely different harness stays admitted and exports its own store.
+    const other = fixture("execution-identity-other");
+    const otherHarness = join(other, ".mstar");
+    mkdirSync(otherHarness, { recursive: true });
+    const otherStore = await initializeStore({ harnessDir: otherHarness });
+    otherStore.close();
+    const exported = await invoke(definition("store.execution.export"), { harness: otherHarness }, root, harness);
+    expect(exported.status).toBe("ok");
+
+    // 4. A target this guard cannot resolve is refused, never admitted.
+    const unresolved = await invoke(definition("store.execution.export"), { harness: join(root, "absent-harness") }, root, harness);
+    expect(unresolved).toMatchObject({ status: "usage", code: "usage", exitCode: 2 });
+    expect(unresolved.status === "usage" ? unresolved.message : "").toContain("does not resolve to a readable path");
+
+    // 5. An ABSENT control root protects no live store: an explicit harness_dir
+    //    that has not been scaffolded is admitted, and the target reaches its
+    //    own store (which answers for itself).
+    const admitted = await invoke(definition("store.execution.export"), { harness: otherHarness }, root, join(root, "absent-control-root"));
+    expect(admitted.status).toBe("ok");
+
+    // 6. A control root that fails to resolve for a reason other than absence
+    //    still refuses. A self-referential symlink yields ELOOP for every uid,
+    //    unlike a permission-denied directory root would simply traverse.
+    const looped = join(root, "looped");
+    mkdirSync(looped);
+    const controlLoop = join(looped, "control-loop");
+    symlinkSync("control-loop", controlLoop);
+    const blocked = await invoke(definition("store.execution.export"), { harness }, root, controlLoop);
+    expect(blocked).toMatchObject({ status: "usage", code: "usage", exitCode: 2 });
+    expect(blocked.status === "usage" ? blocked.message : "")
+      .toContain("cannot be resolved for identity comparison (ELOOP)");
   });
 
   test("initializes despite symlinked project residuals, previews migration, upgrades and backs up an explicitly named fixture store", async () => {
