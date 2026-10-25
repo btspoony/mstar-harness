@@ -29,7 +29,7 @@ export type EngineErrorFacts = Readonly<{
 const SHARED_RECOVERY: Readonly<Record<string, string>> = {
   "milestone.project-mismatch":
     "The issue and the milestone must belong to the same project. When the issue sits in the wrong project, move it first: " +
-    "`mstar issue move --id <issue-id> --payload '{\"projectId\":\"<target-project>\",\"reason\":\"<text>\"}' --expect <issue-revision> --actor project-manager`. " +
+    "`mstar issue move --id <issue-id> --payload '{\"projectId\":\"<target-project>\",\"reason\":\"<text>\"}' --expect <issue-revision> --expect-store <store-revision> --actor project-manager`. " +
     "When the milestone is the wrong side, assign one that belongs to the issue's project " +
     "(`mstar milestone list --project <project-id>` names the existing ids) or create it with " +
     "`mstar milestone add --project <project-id> --name <name> --ordinal <n> --expect-store <store-revision> --operation <operation-id>`.",

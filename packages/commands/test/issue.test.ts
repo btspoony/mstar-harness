@@ -648,7 +648,7 @@ describe("issue command family", () => {
     if (page.status === "ok") expect((page.data as { items: unknown[] }).items).toHaveLength(1);
   });
 
-  test("published move action reassigns the project under a revision CAS", async () => {
+  test("published move action reassigns the project under issue and store revision CAS", async () => {
     const context = await testContext();
     const added = await executeCommand("issue.add", {
       payload: capture(), operationId: "move-seed", actor: "project-manager",
@@ -669,12 +669,24 @@ describe("issue command family", () => {
 
     const command = definition("issue.move");
     expect(command.input.safeParse({
-      id: seed.issueId, actor: "project-manager", payload: { projectId: "proj-b", reason: "belongs to b" },
+      id: seed.issueId, actor: "project-manager", expect: seed.revision, payload: { projectId: "proj-b", reason: "belongs to b" },
     }).success).toBe(false);
     expect(command.requirements).toContainEqual(expect.objectContaining({ name: "expect", route: "cli", required: true }));
+    expect(command.requirements).toContainEqual(expect.objectContaining({ name: "expectStore", route: "cli", required: true }));
+
+    const beforeMove = await issueState(context);
+    if (beforeMove.storeMetaRevision === null) throw new Error("the seeded store reports no revision");
+    const stale = await command.execute({
+      id: seed.issueId, expect: seed.revision, expectStore: beforeMove.storeMetaRevision - 1,
+      actor: "project-manager", operationId: "move-stale-store",
+      payload: { projectId: "proj-b", reason: "stale store view" },
+    }, context);
+    expect(stale).toMatchObject({ status: "refused", code: "milestone.revision-conflict" });
+    expect(await issueState(context)).toEqual(beforeMove);
 
     const moved = await command.execute({
-      id: seed.issueId, expect: seed.revision, actor: "project-manager", operationId: "move-public",
+      id: seed.issueId, expect: seed.revision, expectStore: beforeMove.storeMetaRevision,
+      actor: "project-manager", operationId: "move-public",
       payload: { projectId: "proj-b", reason: "belongs to b" },
     }, context);
     expect(moved).toMatchObject({
@@ -685,15 +697,18 @@ describe("issue command family", () => {
     const shown = await executeCommand("issue.show", { id: seed.issueId }, context);
     expect(shown).toMatchObject({ status: "ok", data: { projectId: "proj-b", milestoneId: null } });
 
+    const afterMove = await issueState(context);
+    if (afterMove.storeMetaRevision === null) throw new Error("the moved store reports no revision");
     const refused = await command.execute({
-      id: seed.issueId, expect: seed.revision + 1, actor: "project-manager", operationId: "move-absent",
+      id: seed.issueId, expect: seed.revision + 1, expectStore: afterMove.storeMetaRevision,
+      actor: "project-manager", operationId: "move-absent",
       payload: { projectId: "proj-absent", reason: "typo" },
     }, context);
-    expect(refused).toMatchObject({
-      status: "refused",
-      code: "issue.not-found",
-      details: expect.objectContaining({ projectId: "proj-absent", recovery: expect.stringContaining("mstar issue move") }),
-    });
+    expect(refused).toMatchObject({ status: "refused", code: "issue.not-found" });
+    if (refused.status === "refused") {
+      expect(refused.details?.projectId).toBe("proj-absent");
+      expect(refused.details?.recovery).toEqual(expect.stringContaining("mstar catalog register"));
+    }
   });
 
   test("milestone project mismatch refusal names the cause and both alignment routes", () => {
@@ -706,6 +721,7 @@ describe("issue command family", () => {
       expect.stringContaining("The issue and the milestone must belong to the same project"),
     );
     expect(envelope.details?.recovery).toEqual(expect.stringContaining("mstar issue move"));
+    expect(envelope.details?.recovery).toEqual(expect.stringContaining("--expect-store"));
     expect(envelope.details?.recovery).toEqual(expect.stringContaining("mstar milestone add"));
   });
 

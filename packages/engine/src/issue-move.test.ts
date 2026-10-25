@@ -4,7 +4,7 @@ import { mkdirSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { appendOccurrence, captureIssue, computeIdentityKey, getIssue, IssueError, moveIssue, type CaptureInput, type IssueReceipt } from "./issue.js";
-import { addMilestone } from "./milestone-store.js";
+import { addMilestone, updateMilestone } from "./milestone-store.js";
 import { initializeStore, type StoreContext, type StoreDb } from "./store-db.js";
 
 const root = mkdtempSync(join(tmpdir(), "issue-move-"));
@@ -85,7 +85,7 @@ describe("issue project move", () => {
       context,
       movedIssue.issueId,
       { projectId: projectB, reason: "finding belongs to the other project" },
-      { actor: "project-manager", operationId: "move-succeeds", expectedRevision: movedIssue.revision },
+      { actor: "project-manager", operationId: "move-succeeds", expectedRevision: movedIssue.revision, expectedStoreRevision: before },
     );
     expect(receipt).toEqual({ issueId: movedIssue.issueId, revision: 2, storeRevision: before + 1, created: false });
     expect(revision()).toBe(before + 1);
@@ -101,6 +101,26 @@ describe("issue project move", () => {
     expect(detail.identityKey).toBe(computeIdentityKey(projectB, triple.sourceIdentity, triple.rootCauseKey, triple.acceptanceKey));
   });
 
+  test("refuses a stale store revision without writing anything", async () => {
+    const before = revision();
+    await expect(
+      moveIssue(
+        context,
+        missingTargetIssue.issueId,
+        { projectId: projectB, reason: "stale store view" },
+        {
+          actor: "project-manager",
+          operationId: "move-stale-store",
+          expectedRevision: missingTargetIssue.revision,
+          expectedStoreRevision: before - 1,
+        },
+      ),
+    ).rejects.toMatchObject({ code: "milestone.revision-conflict", details: { expectedStoreRevision: before - 1 } });
+    expect(issueRow(missingTargetIssue.issueId).project_id).toBe(projectA);
+    expect(revision()).toBe(before);
+    expect(operation("move-stale-store")).toBeUndefined();
+  });
+
   test("refuses an unregistered target project and writes nothing", async () => {
     const before = revision();
     await expect(
@@ -108,7 +128,12 @@ describe("issue project move", () => {
         context,
         missingTargetIssue.issueId,
         { projectId: "project-absent", reason: "typo" },
-        { actor: "project-manager", operationId: "move-missing-project", expectedRevision: missingTargetIssue.revision },
+        {
+          actor: "project-manager",
+          operationId: "move-missing-project",
+          expectedRevision: missingTargetIssue.revision,
+          expectedStoreRevision: before,
+        },
       ),
     ).rejects.toMatchObject({ code: "issue.not-found", details: { projectId: "project-absent" } });
     expect(issueRow(missingTargetIssue.issueId).project_id).toBe(projectA);
@@ -120,7 +145,7 @@ describe("issue project move", () => {
         context,
         "I-999999",
         { projectId: projectB, reason: "unknown issue" },
-        { actor: "project-manager", operationId: "move-unknown-issue", expectedRevision: 1 },
+        { actor: "project-manager", operationId: "move-unknown-issue", expectedRevision: 1, expectedStoreRevision: before },
       ),
     ).rejects.toMatchObject({ code: "issue.not-found" });
     await expect(
@@ -128,7 +153,7 @@ describe("issue project move", () => {
         context,
         missingTargetIssue.issueId,
         { projectId: projectB, reason: "wrong seat" },
-        { actor: "qa-engineer", operationId: "move-wrong-seat", expectedRevision: missingTargetIssue.revision },
+        { actor: "qa-engineer", operationId: "move-wrong-seat", expectedRevision: missingTargetIssue.revision, expectedStoreRevision: before },
       ),
     ).rejects.toMatchObject({ code: "issue.scope-refused" });
   });
@@ -139,11 +164,24 @@ describe("issue project move", () => {
       context,
       collisionCandidate.issueId,
       { projectId: projectB, reason: "would duplicate an existing finding" },
-      { actor: "project-manager", operationId: "move-collision", expectedRevision: collisionCandidate.revision },
+      {
+        actor: "project-manager",
+        operationId: "move-collision",
+        expectedRevision: collisionCandidate.revision,
+        expectedStoreRevision: before,
+      },
     ).then(() => undefined, (caught: unknown) => caught);
-    expect(error).toBeInstanceOf(IssueError);
-    expect(error).toMatchObject({ code: "issue.ambiguous-identity", details: { collidingIssueId: collidingIssue.issueId } });
-    expect(error instanceof Error ? error.message : "").toContain(collidingIssue.issueId);
+    if (!(error instanceof IssueError)) throw new Error(`expected an IssueError refusal, received ${String(error)}`);
+    expect(error.code).toBe("issue.ambiguous-identity");
+    expect(error.details.collidingIssueId).toBe(collidingIssue.issueId);
+    expect(error.message).toContain(collidingIssue.issueId);
+    // Assert the recovery text as one string: Bun's `toMatchObject` writes a
+    // nested asymmetric matcher back into the received object, so repeated
+    // matcher assertions against `details` would corrupt the value under test.
+    const recovery = String(error.details.recovery);
+    expect(recovery).toContain(`mstar issue supersede --id ${collisionCandidate.issueId}`);
+    expect(recovery).toContain(`"canonicalIssueId":"${collidingIssue.issueId}"`);
+    expect(recovery).not.toContain(`mstar issue duplicate --id ${collidingIssue.issueId}`);
     expect(issueRow(collisionCandidate.issueId).project_id).toBe(projectA);
     expect(issueRow(collisionCandidate.issueId).revision).toBe(collisionCandidate.revision);
     expect(issueRow(collisionCandidate.issueId).identity_key).toBe(
@@ -154,17 +192,18 @@ describe("issue project move", () => {
   });
 
   test("requires the caller's issue revision and replays an exact operation", async () => {
+    const before = revision();
     const request = { projectId: projectB, reason: "revision cas" };
     await expect(
-      moveIssue(context, casIssue.issueId, request, { actor: "project-manager", operationId: "move-no-revision" }),
+      moveIssue(context, casIssue.issueId, request, { actor: "project-manager", operationId: "move-no-revision", expectedStoreRevision: before }),
     ).rejects.toMatchObject({ code: "issue.revision-conflict" });
     await expect(
-      moveIssue(context, casIssue.issueId, request, { actor: "project-manager", operationId: "move-stale-revision", expectedRevision: 7 }),
+      moveIssue(context, casIssue.issueId, request, { actor: "project-manager", operationId: "move-stale-revision", expectedRevision: 7, expectedStoreRevision: before }),
     ).rejects.toMatchObject({ code: "issue.revision-conflict" });
     expect(issueRow(casIssue.issueId).project_id).toBe(projectA);
 
     const operationId = "move-cas";
-    const mutation = { actor: "project-manager", operationId, expectedRevision: casIssue.revision };
+    const mutation = { actor: "project-manager", operationId, expectedRevision: casIssue.revision, expectedStoreRevision: before };
     const first = await moveIssue(context, casIssue.issueId, request, mutation);
     expect(first.revision).toBe(casIssue.revision + 1);
     expect(await moveIssue(context, casIssue.issueId, request, mutation)).toEqual(first);
@@ -175,13 +214,43 @@ describe("issue project move", () => {
 
   test("treats a move to the issue's current project as a recorded no-op", async () => {
     const before = revision();
-    const mutation = { actor: "project-manager", operationId: "move-noop", expectedRevision: 2 };
+    const mutation = { actor: "project-manager", operationId: "move-noop", expectedRevision: 2, expectedStoreRevision: before };
     const receipt = await moveIssue(context, movedIssue.issueId, { projectId: projectB, reason: "already there" }, mutation);
     expect(receipt).toEqual({ issueId: movedIssue.issueId, revision: 2, storeRevision: before, created: false });
     expect(await moveIssue(context, movedIssue.issueId, { projectId: projectB, reason: "already there" }, mutation)).toEqual(receipt);
     expect(issueRow(movedIssue.issueId).revision).toBe(2);
     expect(revision()).toBe(before);
     expect(operation("move-noop")).toBeDefined();
+  });
+
+  test("clears a dropped milestone even though its status blocks assignment", async () => {
+    const issue = await captureIssue(
+      context,
+      capture(projectA, "occ-dropped", { sourceIdentity: "review/dropped", rootCauseKey: "root-dropped", acceptanceKey: "accept-dropped" }),
+      { actor: "project-manager", operationId: "capture-dropped" },
+    );
+    const dropped = await addMilestone(
+      context,
+      { projectId: projectA, name: "Dropped milestone", target: null, ordinal: 9 },
+      { operationId: "milestone-dropped", expectedStoreRevision: revision() },
+    );
+    await updateMilestone(
+      context,
+      projectA,
+      dropped.milestoneId,
+      { status: "dropped" },
+      { operationId: "milestone-dropped-status", expectedStoreRevision: revision() },
+    );
+    db.prepare("update issues set milestone_id = ? where id = ?").run(dropped.milestoneId, issue.issueId);
+    const before = revision();
+    const receipt = await moveIssue(
+      context,
+      issue.issueId,
+      { projectId: projectB, reason: "the finding outlived its milestone" },
+      { actor: "project-manager", operationId: "move-dropped-milestone", expectedRevision: issue.revision, expectedStoreRevision: before },
+    );
+    expect(receipt.revision).toBe(issue.revision + 1);
+    expect(issueRow(issue.issueId)).toMatchObject({ project_id: projectB, milestone_id: null });
   });
 
   test("accepts a recurrence under the identity the move installed", async () => {

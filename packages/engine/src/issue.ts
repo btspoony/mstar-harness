@@ -1778,23 +1778,37 @@ export async function reopenIssue(
  * `identity_key` is derived from the project, so it is recomputed for the
  * target and the UNIQUE column stays a real dedup boundary: an identity the
  * target project already holds refuses instead of merging two findings. A
- * milestone is project-scoped, so the same UPDATE clears `milestone_id`. Every
- * refusal runs before the first write, so nothing is changed.
+ * milestone is project-scoped, so the same UPDATE clears `milestone_id` —
+ * including one that is already delivered or dropped, whose status only
+ * restricts assignment. Every refusal runs before the first write, so nothing
+ * is changed.
+ *
+ * The caller also pins the shared store revision it planned against (the
+ * `assignIssueMilestone` pattern): a store that moved under the request
+ * refuses instead of moving an issue against a stale view.
  */
 export function moveIssueOn(
   db: StoreDb,
   issueId: string,
   input: IssueMove,
-  mutation: AuthorizedIssueMutation,
+  mutation: AuthorizedIssueMutation & { expectedStoreRevision: number },
   composed?: ComposedTransactionRevision,
 ): IssueReceipt {
   const projectId = requireNonblank("projectId", input.projectId);
   const reason = requireNonblank("reason", input.reason);
+  if (!Number.isSafeInteger(mutation.expectedStoreRevision) || mutation.expectedStoreRevision < 0) {
+    throw new IssueError("issue.scope-refused", "expectedStoreRevision is required for a project move");
+  }
   const hash = requestHash("moveIssue", {
     issueId,
     projectId,
     reason,
-    mutation: { operationId: mutation.operationId, actor: mutation.actor, expectedRevision: mutation.expectedRevision },
+    mutation: {
+      operationId: mutation.operationId,
+      actor: mutation.actor,
+      expectedRevision: mutation.expectedRevision,
+      expectedStoreRevision: mutation.expectedStoreRevision,
+    },
   });
   const existingOp = lookupOperation(db, mutation.operationId);
   if (existingOp) return replayOrConflict(existingOp, hash);
@@ -1803,11 +1817,21 @@ export function moveIssueOn(
     | { id: string; project_id: string; revision: number }
     | undefined;
   if (!issue) throw new IssueError("issue.not-found", `Issue ${issueId} does not exist`);
+  if (readMeta(db).revision !== mutation.expectedStoreRevision) {
+    throw moveRefusal(
+      "milestone.revision-conflict",
+      `expectedStoreRevision ${mutation.expectedStoreRevision} does not match the current store revision; nothing was changed.`,
+      {
+        expectedStoreRevision: mutation.expectedStoreRevision,
+        recovery: `Run \`mstar issue list --project <project-id>\` and read the current \`storeRevision\`, then rerun \`mstar issue move --id ${issueId} --payload '{"projectId":"<target>","reason":"<text>"}' --expect <issue-revision> --expect-store <current-store-revision> --actor project-manager\`.`,
+      },
+    );
+  }
   requireExpectedRevision(mutation, issue.revision);
   if (!db.prepare("select 1 as ok from catalog_entities where kind = 'project' and id = ?").get(projectId)) {
     throw moveRefusal("issue.not-found", `Project ${projectId} is not a registered catalog project; nothing was changed.`, {
       projectId,
-      recovery: `Run \`mstar catalog list --kind project\` to read the registered project ids, then rerun \`mstar issue move --id ${issueId} --payload '{"projectId":"<target>","reason":"<text>"}' --expect ${issue.revision} --actor project-manager\`.`,
+      recovery: `Register the target project with \`mstar catalog register --kind project --id <project-id> --title <title> --root-kind projects --path projects/<project-id> --actor project-manager --operation-id <operation-id>\` (run \`mstar catalog list --kind project\` to read the registered ids), then rerun \`mstar issue move --id ${issueId} --payload '{"projectId":"<target>","reason":"<text>"}' --expect ${issue.revision} --expect-store ${mutation.expectedStoreRevision} --actor project-manager\`.`,
     });
   }
 
@@ -1840,7 +1864,7 @@ export function moveIssueOn(
       `Moving ${issueId} to ${projectId} would reuse the identity held by issue ${collision.id}; nothing was changed.`,
       {
         collidingIssueId: collision.id,
-        recovery: `Read the colliding issue with \`mstar issue show --id ${collision.id}\`. Close it as a duplicate with \`mstar issue duplicate --id ${collision.id} --payload '{"reason":"<text>","canonicalIssueId":"${issueId}"}' --expect <issue-revision> --actor project-manager\`, or move ${issueId} to another project.`,
+        recovery: `Read the surviving issue with \`mstar issue show --id ${collision.id}\`. Retire ${issueId} in its favour with \`mstar issue supersede --id ${issueId} --payload '{"reason":"<text>","canonicalIssueId":"${collision.id}"}' --expect <issue-revision> --actor project-manager\`, or move ${issueId} to another project.`,
       },
     );
   }
@@ -1875,7 +1899,7 @@ export async function moveIssue(
   context: StoreContext,
   issueId: string,
   input: IssueMove,
-  mutation: MutationContext,
+  mutation: MutationContext & { expectedStoreRevision: number },
 ): Promise<IssueReceipt> {
   requireCaptureSeat(mutation.actor);
   requireNonblank("projectId", input.projectId);
