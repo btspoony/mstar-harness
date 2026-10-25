@@ -21,11 +21,15 @@
 import type { Context as ClientContext } from '@deepseek-ai/cordis'
 import type {} from '@deepseek-ai/dsh-client-locale/client'
 import type {} from '@deepseek-ai/dsh-client-ui-renderer/client'
+import type {} from '@deepseek-ai/dsh-client-ui-layout/client'
+import type {} from '@deepseek-ai/dsh-client-ui-sidebar/client'
 import type {} from '@deepseek-ai/dsh-client-ui-sidebar-right/client'
-import { MSTAR_PANEL_ID, mstarPanelDefinition } from './panel/definition.ts'
+import { createElement } from 'react'
+import { MSTAR_PANEL_ID, MSTAR_PANEL_ROW_ORDER, mstarPanelDefinition } from './panel/definition.ts'
 import { MstarWorkflowPickerClient, type MstarWorkflowPickerConnection } from './panel/workflow-picker-client.ts'
 import { MstarPanelSnapshotClient } from './panel/panel-snapshot-client.ts'
 import { MstarPanelTitle } from './panel/MstarPanelTitle.tsx'
+import { SidebarRowIcon } from './panel/SidebarRowIcon.tsx'
 import { en, NS, zh } from './panel/locale.ts'
 import { createPanelStore } from './panel/panel-store.ts'
 import { PanelView } from './panel/PanelView.tsx'
@@ -35,9 +39,19 @@ import { PanelView } from './panel/PanelView.tsx'
  * locale + the wire + the tab-type registry). `sessions` is load-bearing as
  * the session standard scope's wait and `connection` carries the
  * engine-status transport; `sidebarRightTabs` is the registry `apply`
- * registers the page tab type into.
+ * registers the page tab type into; `layout` is the panel-selection face the
+ * panel's own surfaces drive (a cordis service, so it is declared here before
+ * any selection can be reached).
  */
-export const inject = ['slots', 'sessions', 'locale', 'connection', 'sidebarRightTabs']
+export const inject = ['slots', 'sessions', 'locale', 'connection', 'sidebarRightTabs', 'layout']
+
+/**
+ * The main-area seat's body until the unified panel screen lands: one landmark
+ * element, so the seat is identifiable and empty rather than absent. It is
+ * replaced by the real screen at this one identifier.
+ */
+const MainSeatPlaceholder = () =>
+  createElement('section', { 'data-mstar-panel': 'main', 'aria-label': 'Morning Star workflow' })
 
 export function apply(ctx: ClientContext): void {
   const connection = (ctx as unknown as { connection?: MstarWorkflowPickerConnection }).connection
@@ -53,6 +67,28 @@ export function apply(ctx: ClientContext): void {
   ctx.effect(
     () => ctx.sidebarRightTabs.register(mstarPanelDefinition(t)),
     'ui-mstar-panel: tab type',
+  )
+  // The unified panel's two seats: one sidebar row, and the keyed central panel
+  // its id opens. The row's list id IS the main key — that is what makes the row
+  // open THIS panel — and the key is root-scoped, so it carries no Session
+  // binding (the Conversation keeps the reserved `conversation` key).
+  ctx.effect(
+    () => ctx.slots.inject('sidebar.panellist', () => ctx.slots.register({
+      name: 'sidebar.panellist',
+      id: MSTAR_PANEL_ID,
+      order: MSTAR_PANEL_ROW_ORDER,
+      label: () => t('view.mstar-workflow'),
+      locale: NS,
+    }, SidebarRowIcon)),
+    'ui-mstar-panel: sidebar row',
+  )
+  ctx.effect(
+    () => ctx.slots.inject('main', () => ctx.slots.register({
+      name: 'main',
+      key: MSTAR_PANEL_ID,
+      locale: NS,
+    }, MainSeatPlaceholder)),
+    'ui-mstar-panel: main seat',
   )
   // The body seat closes over the two clients exactly as the old view-tab
   // registration did: the transport is a plugin-level concern, never a
