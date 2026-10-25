@@ -31,7 +31,7 @@ import {
   MS_THEME_ATTRIBUTE,
   Nav,
   Overview,
-  copyFor,
+  useCopy,
   type IssueQuery,
 } from "@mstar-harness/ui";
 
@@ -103,13 +103,10 @@ function useOverview(enabled: boolean): OverviewOutcome {
   return outcome;
 }
 
-/** One dictionary for the whole shell: sections are handed to screens as props. */
-const COPY = copyFor("en");
-
 /** The landing page: the shared Overview behind the one aggregated read. */
 function OverviewDestination() {
   const outcome = useOverview(true);
-  const copy = COPY;
+  const copy = useCopy();
 
   if (outcome.kind === "loading") return null;
 
@@ -160,15 +157,16 @@ function useIssues(query: IssueQuery): IssuesOutcome {
 function IssuesDestination(props: { address: Address }) {
   const query = routeFilters(props.address);
   const outcome = useIssues(query);
+  const copy = useCopy();
 
   if (outcome.kind === "loading") return null;
   if (outcome.kind === "failed") {
     return (
       <EmptyState
         arm="unavailable"
-        labelWord={COPY.state.unavailable.labelWord}
-        heading={COPY.issues.pageTitle}
-        body={COPY.state.unavailable.body}
+        labelWord={copy.state.unavailable.labelWord}
+        heading={copy.issues.pageTitle}
+        body={copy.state.unavailable.body}
         reason={outcome.message}
       />
     );
@@ -178,7 +176,7 @@ function IssuesDestination(props: { address: Address }) {
     <Issues
       model={outcome.model}
       query={query}
-      copy={issuesCopy(COPY)}
+      copy={issuesCopy(copy)}
       options={{ ...ISSUE_FILTER_OPTIONS, project: [] }}
       onQueryChange={(next) => {
         // A filter change replaces: Back should step through destinations, not
@@ -196,6 +194,7 @@ function issueQueryString(query: IssueQuery): string {
 
 /** One issue, behind its own read. */
 function IssueDetailDestination(props: { id: string }) {
+  const copy = useCopy();
   const [outcome, setOutcome] = useState<IssueDetailOutcome>({ kind: "loading" });
   useEffect(() => {
     const controller = new AbortController();
@@ -215,9 +214,9 @@ function IssueDetailDestination(props: { id: string }) {
     return (
       <EmptyState
         arm="unavailable"
-        labelWord={COPY.state.unavailable.labelWord}
-        heading={COPY.issueDetail.identityHeading}
-        body={COPY.state.unavailable.body}
+        labelWord={copy.state.unavailable.labelWord}
+        heading={copy.issueDetail.identityHeading}
+        body={copy.state.unavailable.body}
         reason={outcome.message}
       />
     );
@@ -235,7 +234,7 @@ function IssueDetailDestination(props: { id: string }) {
           ? { data: null, projection: NO_PROJECTION }
           : outcome.read
       }
-      copy={issueDetailCopy(COPY)}
+      copy={issueDetailCopy(copy)}
       onBack={() => {
         const parent = parentAddress(parseRoute(window.location.hash));
         if (parent !== null) navigate(parent.route, parent.query, "push");
