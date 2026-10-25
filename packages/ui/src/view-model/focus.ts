@@ -148,10 +148,17 @@ export function focusModel(input: {
   phase?: "loading" | "loaded";
 }): FocusModel {
   const binding = focusBinding(input.selection);
-  const resolvedWorkflow = resolveMember(input.workflow, {
-    phase: input.phase,
-    whenNull: binding.kind === "unbound" ? "not-applicable" : "absent",
-  });
+  // `whenNull` answers only "the read succeeded and returned nothing", and its
+  // domain is `absent` / `empty` — `not-applicable` is a statement about the
+  // SUBJECT, which the resolver reads from the member's own arm. An unbound
+  // session therefore gets its `not-applicable` from here, explicitly, instead of
+  // smuggling that word through the null meaning.
+  const resolvedWorkflow: Resolved<import("@mstar-harness/engine").WorkflowDTO | null> =
+    (input.phase ?? "loaded") === "loading"
+      ? { kind: "loading" }
+      : binding.kind === "unbound" && input.workflow.state === "read" && input.workflow.data === null
+        ? { kind: "not-applicable", reason: "no active workflow" }
+        : resolveMember(input.workflow, { phase: input.phase, whenNull: "absent" });
 
   const workflowModel: Resolved<FocusWorkflow | null> =
     resolvedWorkflow.kind === "populated"

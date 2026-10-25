@@ -14,6 +14,14 @@ import { branchAnchors, workflowDetailModel, workflowListModel, workflowRow } fr
 import { iterationDetailModel, iterationListModel, iterationRow } from "./iterations.ts";
 import { projectIdentity, projectListModel, projectRow, roadmapFeatureArm } from "./projects.ts";
 
+/**
+ * `IterationListDTO.attribution` (contract §4) arrives with the engine plan's
+ * branch; until it is merged the member comes from the package's temporary
+ * `contracts.ts` mirror, so the fixture names that explicitly instead of
+ * pretending the engine already declares it.
+ */
+type IterationWithAttribution = { attribution: "present" | "absent" };
+
 const projection = (generation: number | null) => ({
   generation,
   freshness: "current" as const,
@@ -194,14 +202,20 @@ describe("iterations", () => {
 
   test("a project that attributes no iteration is absent, not empty", () => {
     const data = { items: [], total: 0 } as IterationListDTO;
-    const absent = iterationListModel({ data: { ...data, attribution: "absent" }, projection: projection(3) });
+    const absent = iterationListModel({
+      data: { ...data, attribution: "absent" } as IterationListDTO & IterationWithAttribution,
+      projection: projection(3),
+    });
     expect(absent.attribution).toBe("absent");
     expect(absent.rows).toEqual({ kind: "absent" });
   });
 
   test("an attributing project with no rows is empty", () => {
     const data = { items: [], total: 0 } as IterationListDTO;
-    const empty = iterationListModel({ data: { ...data, attribution: "present" }, projection: projection(3) });
+    const empty = iterationListModel({
+      data: { ...data, attribution: "present" } as IterationListDTO & IterationWithAttribution,
+      projection: projection(3),
+    });
     expect(empty.rows).toEqual({ kind: "empty" });
   });
 

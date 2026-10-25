@@ -229,6 +229,7 @@ describe("the detail fact block", () => {
     transitions: [],
     relations: [],
     provenance: [],
+    projectMoves: [],
     ...over,
   });
 

@@ -7,6 +7,8 @@
  * The parts D30 removed (migration provenance, evidence JSON, external-link
  * validation) are deliberately **not** carried over: nothing renders them.
  */
+import type { ReadProjection } from "@mstar-harness/engine";
+
 
 /** The copy for a value the record does not carry. */
 export const UNKNOWN_DATE = "Date unknown";
@@ -70,12 +72,15 @@ export type ProjectionState =
   | { kind: "stale"; reasons: readonly string[] }
   | { kind: "unavailable"; reasons: readonly string[] };
 
-/** Map one read projection to that state. Reasons are the sources' own messages. */
-export function projectionState(projection: {
-  generation: number | null;
-  freshness: "current" | "stale" | "unavailable";
-  diagnostics: ReadonlyArray<{ sourceKey: string; message: string }>;
-}): ProjectionState {
+/**
+ * Map one read projection to that state. Reasons are the sources' own messages.
+ *
+ * The parameter IS the engine's `ReadProjection`: a narrower local shape would
+ * silently drop the fields the engine adds (it carries `reason` beside
+ * `sourceKey` and `message`), and a caller holding the real projection would
+ * then fail to type-check against this reader.
+ */
+export function projectionState(projection: ReadProjection): ProjectionState {
   const reasons = projection.diagnostics.map((diagnostic) => `${diagnostic.sourceKey}: ${diagnostic.message}`);
   if (projection.freshness === "current") return { kind: "current" };
   if (projection.freshness === "stale") return { kind: "stale", reasons };

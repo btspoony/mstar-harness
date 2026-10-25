@@ -409,6 +409,46 @@ describe("Focus — the fact set of §8.2", () => {
     expect(unbound.workflow.kind).toBe("not-applicable");
   });
 
+  // The four absence states are distinguished by what the SUBJECT is, not by
+  // which string the caller happened to pass. An unbound session cannot own a
+  // workflow at all, so a successful read that returned nothing is still
+  // `not-applicable`; a bound session in the same read state has lost its
+  // record, which is `absent`. Collapsing these two is the defect this pair
+  // guards — it is exactly what `whenNull: "not-applicable"` used to do, and it
+  // does not type-check because `not-applicable` is not a null meaning.
+  test("unbound + a read that returned nothing is not-applicable", () => {
+    const unbound = focusModel({
+      enforcement: "soft",
+      selection: null,
+      workflow: { state: "read", data: null },
+      iteration: null,
+    });
+    expect(unbound.workflow).toEqual({ kind: "not-applicable", reason: "no active workflow" });
+  });
+
+  test("bound + a read that returned nothing is absent, not not-applicable", () => {
+    const bound = focusModel({
+      enforcement: "soft",
+      selection: { kind: "active", workflowId: "w", dir: "workflows/w" },
+      workflow: { state: "read", data: null },
+      iteration: null,
+    });
+    expect(bound.workflow).toEqual({ kind: "absent" });
+  });
+
+  test("a pending read stays loading for both bindings, and never borrows an absence", () => {
+    for (const selection of [null, { kind: "active" as const, workflowId: "w", dir: "workflows/w" }]) {
+      const pending = focusModel({
+        enforcement: "soft",
+        selection,
+        workflow: { state: "read", data: null },
+        iteration: null,
+        phase: "loading",
+      });
+      expect(pending.workflow.kind).toBe("loading");
+    }
+  });
+
   test("the enforcement flag is the only digest fact rendered", () => {
     expect(model.enforcement).toBe("soft");
   });
