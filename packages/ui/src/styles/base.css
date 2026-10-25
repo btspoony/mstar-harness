@@ -20,12 +20,9 @@
   box-sizing: border-box;
 }
 
-html,
-body {
-  margin: 0;
-  padding: 0;
-}
-
+/* The product surface, not the document: `html`/`body` belong to whatever page
+   embeds the product, and styling them document-wide is how a shared component
+   sheet escapes into a host it knows nothing about. The host owns its page shell. */
 [data-ms-theme="light"] {
   color-scheme: light;
 }
@@ -34,7 +31,7 @@ body {
   color-scheme: dark;
 }
 
-body {
+.ms-container {
   background: var(--ms-bg-canvas);
   color: var(--ms-text-primary);
   font-family: var(--ms-font-sans);
@@ -45,85 +42,79 @@ body {
   text-rendering: optimizeLegibility;
 }
 
-h1,
-h2,
-h3,
-h4 {
+.ms-container h1, .ms-container h2, .ms-container h3, .ms-container .ms-container h4 {
   margin: 0;
   font-weight: var(--ms-fw-semibold);
 }
 
-h1 {
+.ms-container h1 {
   font-size: var(--ms-fs-16);
   line-height: var(--ms-lh-16);
   letter-spacing: -0.01em;
 }
 
-h2 {
+.ms-container h2 {
   font-size: var(--ms-fs-14);
   line-height: var(--ms-lh-14);
   font-weight: var(--ms-fw-medium);
 }
 
-h3,
-h4 {
+.ms-container h3,
+.ms-container h4 {
   font-size: var(--ms-fs-12);
   line-height: var(--ms-lh-12);
   font-weight: var(--ms-fw-medium);
 }
 
-p {
+.ms-container p {
   margin: 0;
   font-size: var(--ms-fs-13);
   line-height: var(--ms-lh-13);
 }
 
-small,
+.ms-container small,
 [data-ms-size="meta"] {
   font-size: var(--ms-fs-11);
   line-height: var(--ms-lh-11);
 }
 
-code,
-kbd,
-pre,
-samp {
+.ms-container code,
+.ms-container kbd,
+.ms-container pre,
+.ms-container samp {
   font-family: var(--ms-font-mono);
   font-size: var(--ms-fs-12);
   line-height: var(--ms-lh-12);
   font-variant-numeric: tabular-nums;
 }
 
-pre {
+.ms-container pre {
   margin: 0;
   overflow: auto;
 }
 
-a {
+.ms-container a {
   color: var(--ms-accent);
   text-decoration: none;
 }
 
-a:hover {
+.ms-container a:hover {
   text-decoration: underline;
 }
 
-hr {
+.ms-container hr {
   height: 0;
   margin: var(--ms-space-3) 0;
   border: 0;
   border-top: var(--ms-hairline);
 }
 
-button,
-input,
-select,
-textarea {
+.ms-container button, .ms-container input, .ms-container select, .ms-container textarea {
   font: inherit;
   color: inherit;
 }
 
-::selection {
+.ms-container ::selection {
   background: var(--ms-accent-soft);
 }
 

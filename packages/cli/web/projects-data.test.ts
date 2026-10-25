@@ -104,10 +104,10 @@ describe("the projects list", () => {
     expect(html).toContain("_default");
   });
 
-  test("outcome 2 — no generation is unavailable, never an empty list", () => {
-    const html = renderList([], 0, null);
-    expect(html).toContain('data-ms-absence="unavailable"');
-    expect(html).not.toContain('data-ms-absence="empty"');
+  test("a successful read with no published generation still lists projects", () => {
+    const html = renderList([project()], 1, null);
+    expect(html).not.toContain('data-ms-absence="unavailable"');
+    expect(html).toContain("engine");
   });
 
   test("outcome 3 — a whole-read failure mounts no list", async () => {
@@ -187,16 +187,18 @@ describe("the roadmap read", () => {
     expect(roadmapBody(roadmapFeatureArm({ data: bare, projection })).kind).toBe("empty");
   });
 
-  test("no generation is unavailable, never absent", async () => {
-    const unavailable = (async () =>
+  test("a roadmap that reads but is unprojected is still absent, not unavailable", async () => {
+    // `data: null` is an absence whether or not a projection exists; the roadmap is
+    // not a projected view, so a null generation must not turn absence into failure.
+    const unprojected = (async () =>
       new Response(JSON.stringify({ data: null, projection: { ...projection, generation: null } }), {
         status: 200,
         headers: { "content-type": "application/json" },
       })) as unknown as typeof fetch;
-    const result = await readRoadmap(unavailable, "engine");
+    const result = await readRoadmap(unprojected, "engine");
     expect(result.status).toBe("ready");
     if (result.status !== "ready") return;
-    expect(result.roadmap.kind).toBe("unavailable");
+    expect(result.roadmap.kind).toBe("absent");
   });
 
   test("a 404 is absent, through the same outcome", async () => {

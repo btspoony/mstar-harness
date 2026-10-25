@@ -105,6 +105,8 @@ export function iterationListModel(read: {
     whenNull: "empty",
     isEmpty: (list) => list.items.length === 0,
     whenEmpty: attribution === "absent" ? "absent" : "empty",
+    // Iteration rows and their compass come from the execution projection.
+    requiresProjection: true,
   });
   const rows: Resolved<readonly IterationRow[]> =
     resolved.kind === "populated" ? { kind: "populated", value: resolved.value.items.map(iterationRow) } : resolved;
@@ -166,6 +168,7 @@ export function iterationDetailModel(read: {
 }): Resolved<IterationDetailModel> {
   const arm = resolveRecord(read, {
     unavailableReason: "the execution projection for this iteration could not be read",
+    requiresProjection: true,
   });
   if (arm.kind !== "populated") return arm;
   const iteration = arm.value;

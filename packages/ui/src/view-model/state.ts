@@ -51,6 +51,15 @@ export type ResolveOptions<T> = {
    */
   readonly isEmpty?: (value: T) => boolean;
   /**
+   * Whether the payload lives in the execution projection.
+   *
+   * Default `false`: the store-backed views (issues, projects, roadmap) answer
+   * successful envelopes with `generation: null`, and vetoing those made a working
+   * read render as `unavailable` everywhere. The views whose rows come *from* the
+   * projection set this, and keep the veto.
+   */
+  readonly requiresProjection?: boolean;
+  /**
    * Which arm an empty collection earns. Defaults to `empty`; a caller whose
    * domain distinguishes "nothing matched" from "this store attributes nothing
    * here" passes `absent` — the decision stays in the resolver, the judgement
@@ -141,6 +150,7 @@ export function resolveRead<T>(
   read: { readonly data: T; readonly projection: { readonly generation: number | null } },
   options: ResolveOptions<T>,
 ): Resolved<T> {
+  const requiresProjection = options.requiresProjection ?? false;
   if ((options.phase ?? "loaded") === "loading") return { kind: "loading" };
   // A host mapping that omits the projection or the payload must reach the
   // promised `unavailable` arm, not throw inside a renderer. The types say these
@@ -148,7 +158,11 @@ export function resolveRead<T>(
   if (read?.projection === undefined) {
     return { kind: "unavailable", reason: "the read envelope carries no projection" };
   }
-  if (read.projection.generation === null) {
+  // Only a read whose rows *live in* the projection may be vetoed by a missing
+  // generation. The store-backed views (issues, projects, roadmap) answer successful
+  // envelopes with `generation: null` — treating that as a failure made a working
+  // read render as unavailable everywhere.
+  if (requiresProjection && read.projection.generation === null) {
     return { kind: "unavailable", reason: "the execution projection has no valid generation" };
   }
   if (read.data === undefined) {
@@ -169,6 +183,15 @@ export type RecordResolveOptions = {
    * arm only — never for a `null` payload, which is `absent`.
    */
   readonly unavailableReason: string;
+  /**
+   * Whether the payload lives in the execution projection.
+   *
+   * Default `false`: most reads are store-backed and answer successful envelopes with
+   * `generation: null`. Only the views whose rows come *from* the projection
+   * (workflows, iterations and their details) set this, and for them a missing
+   * generation still means `unavailable`.
+   */
+  readonly requiresProjection?: boolean;
 };
 
 /**
@@ -195,7 +218,9 @@ export function resolveRecord<T>(
   if (read?.projection === undefined) {
     return { kind: "unavailable", reason: options.unavailableReason };
   }
-  if (read.projection.generation === null) return { kind: "unavailable", reason: options.unavailableReason };
+  if ((options.requiresProjection ?? false) && read.projection.generation === null) {
+    return { kind: "unavailable", reason: options.unavailableReason };
+  }
   // A host mapping that omits the payload is a failure to state, not an absence:
   // `undefined` is not `null`, and treating it as a value would hand a record
   // screen `populated(undefined)`, which throws on first property access.

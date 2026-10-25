@@ -124,12 +124,19 @@ describe("the list state machine", () => {
     expect(model.hasPrevious).toBe(false);
   });
 
-  test("no valid projection is unavailable, never empty", () => {
-    const model = issueListModel({ data: page([]), projection: projection(null) }, {
+  test("no published generation still reads the store", () => {
+    // Issues are store-backed: `generation: null` accompanies a *successful* read, so
+    // vetoing it made every working list render as unavailable.
+    const empty = issueListModel({ data: page([]), projection: projection(null) }, {
       filters: DEFAULT_ISSUE_FILTERS,
       offset: 0,
     });
-    expect(model.rows.kind).toBe("unavailable");
+    expect(empty.rows.kind).toBe("empty");
+    const populated = issueListModel({ data: page([summary()]), projection: projection(null) }, {
+      filters: DEFAULT_ISSUE_FILTERS,
+      offset: 0,
+    });
+    expect(populated.rows.kind).toBe("populated");
   });
 
   test("a row carries exactly the §8.2 facts and the tone the label needs", () => {

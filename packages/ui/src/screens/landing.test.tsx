@@ -135,6 +135,7 @@ const overviewCopy: OverviewCopy = {
   pageTitle: "Overview",
   workflowsHeading: "Active workflows",
   workflowsEmpty: "Active workflows",
+  workflowsTruncated: (shown: number, total: number) => `showing ${shown} of ${total}`,
   plansProgress: (done, total) => `${done}/${total} plans`,
   residualsHeading: "Open residuals",
   residualsTotal: (open) => `${open} open`,

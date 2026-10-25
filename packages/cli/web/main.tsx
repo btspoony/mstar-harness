@@ -60,6 +60,7 @@ import {
 } from "./iterations-data";
 import {
   ISSUE_FILTER_OPTIONS,
+  keepPreviousOnLoad,
   issueDetailCopy,
   issueDetailOutcome,
   issuesCopy,
@@ -94,6 +95,8 @@ import {
 } from "./workflows-data";
 import {
   LIST_DESTINATIONS,
+  detailReturnTarget,
+  initialAddress,
   parentAddress,
   parseRoute,
   routeFilters,
@@ -184,7 +187,7 @@ function useIssues(query: IssueQuery): IssuesOutcome {
     let current = true;
     setOutcome({ kind: "loading" });
     void readIssues(fetch, query, controller.signal).then((result) => {
-      if (current) setOutcome(issuesOutcome(result, query));
+      if (current) setOutcome((previous) => keepPreviousOnLoad(previous, issuesOutcome(result, query)));
     });
     return () => {
       current = false;
@@ -211,6 +214,8 @@ function IssueListScreen(props: {
   onOpen?: (id: string) => void;
 }) {
   const query = props.scope === null ? props.query : { ...props.query, filters: { ...props.query.filters, project: props.scope } };
+  // The previous rows stay painted while the next read is in flight, so the search box
+  // is never unmounted between keystrokes.
   const outcome = useIssues(query);
   const copy = useCopy();
 
@@ -309,8 +314,8 @@ function IssueDetailDestination(props: { id: string }) {
       }
       copy={issueDetailCopy(copy)}
       onBack={() => {
-        const parent = parentAddress(parseRoute(window.location.hash));
-        if (parent !== null) navigate(parent.route, parent.query, "push");
+        const target = detailReturnTarget(parseRoute(window.location.hash));
+        if (target !== null) navigate(target.route, target.query, "push");
       }}
     />
   );
@@ -391,8 +396,8 @@ function WorkflowDetailDestination(props: { id: string }) {
       model={outcome.model}
       copy={workflowDetailCopy(copy)}
       onBack={() => {
-        const parent = parentAddress(parseRoute(window.location.hash));
-        if (parent !== null) navigate(parent.route, parent.query, "push");
+        const target = detailReturnTarget(parseRoute(window.location.hash));
+        if (target !== null) navigate(target.route, target.query, "push");
       }}
     />
   );
@@ -476,8 +481,8 @@ function IterationDetailDestination(props: { id: string; address: Address }) {
       model={outcome.model}
       copy={iterationDetailCopy(copy)}
       onBack={() => {
-        const parent = parentAddress(parseRoute(window.location.hash));
-        if (parent !== null) navigate(parent.route, parent.query, "push");
+        const target = detailReturnTarget(parseRoute(window.location.hash));
+        if (target !== null) navigate(target.route, target.query, "push");
       }}
       onOpenWorkflow={(id) => {
         navigate({ name: "workflow", id }, props.address.query, "push");
@@ -600,7 +605,11 @@ function ProjectDetailDestination(props: { address: Address; feature: ProjectFea
             navigate(target.route, target.query, "replace");
           }}
           onOpen={(id) => {
-            navigate({ name: "issue", id }, props.address.query, "push");
+            // The project is the only trace of the page this record was opened from:
+            // without it the breadcrumb and Escape landed on the store-wide list.
+            const params = new URLSearchParams(props.address.query);
+            params.set("project", projectId);
+            navigate({ name: "issue", id }, params.toString(), "push");
           }}
         />
       }
@@ -613,6 +622,10 @@ function ProjectDetailDestination(props: { address: Address; feature: ProjectFea
       copy={projectDetailCopy(copy)}
       onBack={() => {
         navigate({ name: "projects" }, "", "push");
+      }}
+      onClearScope={() => {
+        // Clearing the scope is leaving the project, not merely dropping a filter.
+        navigate({ name: "issues" }, "", "push");
       }}
     />
   );
@@ -633,7 +646,9 @@ function Shell(props: {
   onThemeChange: (theme: Theme) => void;
   onLocaleChange: (locale: Locale) => void;
 }) {
-  const [address, setAddress] = useState<Address>(() => parseRoute(window.location.hash));
+  const [address, setAddress] = useState<Address>(() =>
+    initialAddress(window.location.hash, window.location.search),
+  );
   const copy = useCopy();
   const projects = useProjects();
   const projectIds = projects.kind === "ready" ? projectOptions(projects.model) : [];
@@ -772,7 +787,11 @@ function Boot() {
     // The attribute is the only channel: the shared package selects its dark tokens
     // through `[data-ms-theme="dark"]`, and a media query over product colours would
     // be a second mechanism that can disagree with this one.
+    // Two places on purpose: `#app` is the product wrapper, and `:root` is where the
+    // base sheet's `body` rules read the scheme. Setting only the wrapper left the page
+    // canvas and inherited text light in a dark UI.
     document.getElementById("app")?.setAttribute(MS_THEME_ATTRIBUTE, theme);
+    document.documentElement.setAttribute(MS_THEME_ATTRIBUTE, theme);
     // `color-scheme` is what makes native controls (the two selects) and the initial
     // canvas follow the theme; pinned to `light` they stayed light in a dark page.
     document.documentElement.style.colorScheme = theme;

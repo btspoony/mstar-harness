@@ -15,6 +15,7 @@ import { IssueDetail as IssueDetailScreen, Issues, copyFor } from "@mstar-harnes
 
 import {
   ISSUE_FILTER_OPTIONS,
+  keepPreviousOnLoad,
   issueDetailCopy,
   issueDetailOutcome,
   issueDetailPath,
@@ -173,11 +174,12 @@ describe("the list read", () => {
     expect(outcome.model.total).toBe(120);
   });
 
-  test("outcome 2 — no projection generation is unavailable, never 'nothing here'", () => {
-    const html = renderList([], 0, { ...projection, generation: null });
-    expect(html).toContain('data-ms-absence="unavailable"');
-    expect(html).toContain("no valid generation");
-    expect(html).not.toContain('data-ms-absence="empty"');
+  test("a successful read with no published generation is not unavailable", () => {
+    // Issues are store-backed: the engine answers `generation: null` on success, so
+    // vetoing it made every working list render as unavailable.
+    const html = renderList([summary()], 1, { ...projection, generation: null });
+    expect(html).not.toContain('data-ms-absence="unavailable"');
+    expect(html).toContain("I-000870");
   });
 
   test("outcome 3 — a whole-read failure mounts no list", async () => {
@@ -291,5 +293,30 @@ describe("the detail read", () => {
     const absent = issueDetailOutcome({ status: "absent" });
     const failed = issueDetailOutcome({ status: "error", message: "refused" });
     expect([ok.kind, absent.kind, failed.kind]).toEqual(["ready", "absent", "failed"]);
+  });
+});
+
+describe("P1: a keystroke must not unmount the search box", () => {
+  test("a read in flight keeps the previous rows painted", () => {
+    // Every keystroke starts a read and sets `loading`; the screen returned `null`
+    // while loading, so the input unmounted and the reader lost focus mid-typing.
+    const ready = issuesOutcome({ status: "ready", envelope: listEnvelope([summary()], 1) }, query);
+    if (ready.kind !== "ready") throw new Error("expected ready");
+    const duringSecondKeystroke = keepPreviousOnLoad(ready, { kind: "loading" });
+    expect(duringSecondKeystroke).toEqual(ready);
+    // Three keystrokes in a row: still painted, still the same component tree.
+    const third = keepPreviousOnLoad(duringSecondKeystroke, { kind: "loading" });
+    expect(third.kind).toBe("ready");
+  });
+
+  test("the first load is still a load: nothing to paint yet", () => {
+    const first = keepPreviousOnLoad(null, { kind: "loading" });
+    expect(first.kind).toBe("loading");
+  });
+
+  test("a failure replaces the rows rather than hiding behind them", () => {
+    const ready = issuesOutcome({ status: "ready", envelope: listEnvelope([], 0) }, query);
+    const failed = keepPreviousOnLoad(ready, { kind: "failed", message: "refused" });
+    expect(failed).toEqual({ kind: "failed", message: "refused" });
   });
 });

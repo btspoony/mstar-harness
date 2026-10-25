@@ -86,6 +86,7 @@ export const en = {
   overview: {
     pageTitle: "Overview",
     workflowsHeading: "Active workflows",
+    workflowsTruncated: (shown: number, total: number) => `Showing ${shown} of ${total}`,
     plansProgress: (done: number, total: number) => `${done}/${total} plans`,
     residualsHeading: "Open residuals",
     residualsTotal: (open: number) => `${open} open`,

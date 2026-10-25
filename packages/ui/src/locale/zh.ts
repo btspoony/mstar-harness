@@ -73,6 +73,7 @@ export const zh: Copy = {
   overview: {
     pageTitle: "总览",
     workflowsHeading: "进行中的工作流",
+    workflowsTruncated: (shown: number, total: number) => `显示 ${shown} / ${total}`,
     plansProgress: (done, total) => `${done}/${total} 个计划`,
     residualsHeading: "未关闭的遗留项",
     residualsTotal: (open) => `共 ${open} 项未关闭`,

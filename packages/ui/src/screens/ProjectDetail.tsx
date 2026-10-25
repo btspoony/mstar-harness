@@ -81,6 +81,8 @@ export type ProjectDetailProps = {
   iterations: React.ReactNode;
   copy: ProjectDetailCopy;
   onBack?: () => void;
+  /** Leaving the project's scope — the chip's own affordance. Omitted, there is no chip button. */
+  onClearScope?: () => void;
 };
 
 /** One milestone of the roadmap board: status, target, progress, open, issues. */
@@ -299,14 +301,19 @@ export function ProjectDetail(props: ProjectDetailProps) {
           <div className={css.scopeRow}>
             <span className={css.scopeChip} data-ms-scope-chip={identity.projectId}>
               {copy.scope.label(identity.projectId)}
-              <button
-                type="button"
-                className={css.scopeClear}
-                aria-label={copy.scope.clear}
-                data-ms-scope-clear={identity.projectId}
-              >
-                ×
-              </button>
+              {/* No callback, no button: a control that looks removable and is not is
+                  worse than a chip that simply states the scope. */}
+              {props.onClearScope === undefined ? null : (
+                <button
+                  type="button"
+                  className={css.scopeClear}
+                  aria-label={copy.scope.clear}
+                  data-ms-scope-clear={identity.projectId}
+                  onClick={props.onClearScope}
+                >
+                  ×
+                </button>
+              )}
             </span>
           </div>
           {feature === "issues" ? props.issues : props.iterations}

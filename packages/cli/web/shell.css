@@ -12,6 +12,19 @@
  * read as spacing, not as a second design system.
  */
 
+/* The page shell is the host's: the shared sheet styles the product surface and
+   deliberately leaves `html`/`body` alone, so a host that embeds it keeps its page. */
+html,
+body {
+  margin: 0;
+  padding: 0;
+  background: var(--ms-bg-canvas);
+  color: var(--ms-text-primary);
+  font-family: var(--ms-font-sans);
+  font-size: var(--ms-fs-13);
+  line-height: var(--ms-lh-13);
+}
+
 /* Visible only when focused — it must be reachable, and it must not be a permanent
    element on a read-only page. */
 .skip-link {

@@ -95,8 +95,23 @@ export type OverviewIteration = {
 };
 
 /** The landing view model. */
+/**
+ * The workflows member, with the truncation fact.
+ *
+ * The engine caps this member at 50. Mapping straight to rows dropped `total`, so a
+ * truncated overview looked like the whole set — the same defect the workflows list
+ * avoids by carrying `total` and `truncated` beside its rows.
+ */
+export type OverviewWorkflows = {
+  readonly kind: "populated";
+  readonly value: readonly OverviewWorkflowRow[];
+  readonly total: number;
+  readonly shown: number;
+  readonly truncated: boolean;
+};
+
 export type OverviewModel = {
-  workflows: Resolved<readonly OverviewWorkflowRow[]>;
+  workflows: OverviewWorkflows | Exclude<Resolved<readonly OverviewWorkflowRow[]>, { kind: "populated" }>;
   residuals: Resolved<ResidualModel>;
   milestones: Resolved<readonly MilestoneRow[]>;
   /** `null` when the project has no iteration yet — the `empty` arm. */
@@ -174,7 +189,13 @@ export function overviewModel(
   return {
     workflows:
       workflows.kind === "populated"
-        ? { kind: "populated", value: workflows.value.items.map(overviewWorkflowRow) }
+        ? {
+            kind: "populated",
+            value: workflows.value.items.map(overviewWorkflowRow),
+            total: workflows.value.total,
+            shown: workflows.value.items.length,
+            truncated: workflows.value.total > workflows.value.items.length,
+          }
         : workflows,
     residuals:
       residuals.kind === "populated"
