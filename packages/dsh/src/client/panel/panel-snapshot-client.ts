@@ -50,6 +50,14 @@ export interface PanelSnapshotTarget {
   readonly projectId?: string
 }
 
+/**
+ * Per-request deadline. A wedged gateway must not leave a read pending forever:
+ * the request is aborted at this bound and the caller gets an explicit
+ * `unavailable` reason. This is the ONLY timer in the read path — it bounds one
+ * request and schedules no follow-up (no poll, no retry).
+ */
+export const PANEL_READ_DEADLINE_MS = 5_000
+
 /** Guarded string (missing/illegal → null). */
 function str(value: unknown): string | null {
   return typeof value === 'string' && value !== '' ? value : null
@@ -131,8 +139,10 @@ export class MstarPanelSnapshotClient {
     if (target.workflowId !== undefined) args.workflowId = target.workflowId
     if (target.iterationId !== undefined) args.iterationId = target.iterationId
     if (target.projectId !== undefined) args.projectId = target.projectId
+    const controller = new AbortController()
+    const deadline = setTimeout(() => controller.abort(), PANEL_READ_DEADLINE_MS)
     try {
-      const result = await this.connection.rpc.call(ENGINE_STATUS_CHANNEL, PANEL_SNAPSHOT_ENDPOINT, { args })
+      const result = await this.connection.rpc.call(ENGINE_STATUS_CHANNEL, PANEL_SNAPSHOT_ENDPOINT, { args }, controller.signal)
       if (result === null || typeof result !== 'object') return { kind: 'unavailable', reason: 'malformed-answer' }
       if (result.ok !== true) {
         const error = result.error as { code?: unknown; message?: unknown } | null | undefined
@@ -140,7 +150,12 @@ export class MstarPanelSnapshotClient {
       }
       return parsePanelSnapshotRead(result.value)
     } catch (error) {
-      return { kind: 'unavailable', reason: `transport-error: ${String(error)}` }
+      return {
+        kind: 'unavailable',
+        reason: controller.signal.aborted ? `timeout: no answer in ${PANEL_READ_DEADLINE_MS}ms` : `transport-error: ${String(error)}`,
+      }
+    } finally {
+      clearTimeout(deadline)
     }
   }
 
@@ -164,11 +179,18 @@ export class MstarPanelSnapshotClient {
     const args: Record<string, unknown> = { sessionId: input.sessionId, cwd: input.cwd, view: input.view }
     if (input.params !== undefined) args.params = input.params
     if (input.id !== undefined) args.id = input.id
+    const controller = new AbortController()
+    const deadline = setTimeout(() => controller.abort(), PANEL_READ_DEADLINE_MS)
     try {
-      const result = await this.connection.rpc.call(ENGINE_STATUS_CHANNEL, DASHBOARD_VIEW_ENDPOINT, { args })
+      const result = await this.connection.rpc.call(ENGINE_STATUS_CHANNEL, DASHBOARD_VIEW_ENDPOINT, { args }, controller.signal)
       return parseDashboardViewRead(result)
     } catch (error) {
-      return { kind: 'unavailable', reason: `transport-error: ${String(error)}` }
+      return {
+        kind: 'unavailable',
+        reason: controller.signal.aborted ? `timeout: no answer in ${PANEL_READ_DEADLINE_MS}ms` : `transport-error: ${String(error)}`,
+      }
+    } finally {
+      clearTimeout(deadline)
     }
   }
 }

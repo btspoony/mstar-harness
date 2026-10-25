@@ -212,12 +212,44 @@ describe('dashboardView — the client reads once, on demand', () => {
     await new Promise((resolve) => setTimeout(resolve, 30))
     expect(gateway.calls.length).toBe(settled)
     expect(settled).toBe(2)
-    // And neither source file can schedule one.
+    // The only timer the read path may hold is the per-request DEADLINE (it
+    // bounds one request and schedules no follow-up). A polling interval, a
+    // retry timer or a visibility gate is the defect.
     for (const file of ['panel-snapshot-client.ts', 'use-mstar-session-digest.ts', 'once-reader.ts']) {
       const source = require('node:fs').readFileSync(join(import.meta.dir, '..', 'src/client/panel', file), 'utf8') as string
       expect(source).not.toContain('setInterval')
-      expect(source).not.toContain('setTimeout')
+      expect(source).not.toContain('visible')
     }
+    // And the deadline is named in exactly one place.
+    expect(require('../src/client/panel/panel-snapshot-client.ts').PANEL_READ_DEADLINE_MS).toBe(5_000)
+  })
+
+  it('a reader created while the identity was empty still reads the populated one (no captured closure)', async () => {
+    // THE PRE-FIX DEFECT: the hook created the reader with `useState` and the
+    // read closure captured the FIRST render's props (`cwd: ''`, `view: ''`).
+    // One reader, NO remount: the empty phase must not read, and the populated
+    // phase must read with the props of THAT call.
+    const { OnceReader } = require('../src/client/panel/once-reader.ts') as typeof import('../src/client/panel/once-reader.ts')
+    const gateway = stubGateway()
+    gateway.replyFor(DASHBOARD_VIEW_ENDPOINT, gatewayOk({ kind: 'ok', envelope: { data: { items: [] }, projection: {} } }))
+    const client = new MstarPanelSnapshotClient(gateway.connection)
+    let reads = 0
+    const reader = new OnceReader<{ kind: 'ok' } & Record<string, unknown>>()
+    const empty = async () => { reads += 0 }
+    // Phase 1: no identity — nothing may read.
+    reader.begin(null, client, empty as never)
+    await new Promise((resolve) => setTimeout(resolve, 5))
+    expect(reads).toBe(0)
+
+    // Phase 2: the populated identity arrives on the SAME reader; the read must
+    // use the closure passed to THIS begin call.
+    reader.begin('s-1|/proj|iterations|', client, async () => {
+      reads += 1
+      return { kind: 'ok' }
+    })
+    await new Promise((resolve) => setTimeout(resolve, 5))
+    expect(reads).toBe(1)
+    expect(gateway.calls).toHaveLength(0) // this reader's own callback replaced the transport call
   })
 
   it('the hook that drives it holds no timer and no visibility gate', () => {

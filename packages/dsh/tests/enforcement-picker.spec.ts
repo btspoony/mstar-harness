@@ -31,7 +31,6 @@ const WORKFLOW = {
 function render(over: {
   snapshot?: PanelSnapshot
   scheme?: 'light' | 'dark'
-  enforcementLine?: boolean
   select?: ((workflowId: string) => void) | null
 } = {}): string {
   return renderToStaticMarkup(
@@ -44,45 +43,37 @@ function render(over: {
       navLabel: 'Morning Star Workflow',
       onSelect: () => {},
       select: over.select ?? null,
-      ...(over.enforcementLine === true ? { enforcementLine: true } : {}),
     }),
   )
 }
 
-/* ------------------- Task 6 — the enforcement line ------------------- */
+/* ------------------- Task 6 — the enforcement flag ------------------- */
 
-describe('enforcement line — one literal flag, or its own unavailable arm', () => {
-  it('renders `hard` and `soft` as the literal enum with the status treatment', () => {
-    const hard = render({ enforcementLine: true })
-    expect(hard).toContain('data-ms-enforcement-line="hard"')
+describe('enforcement flag — the shared screen is the ONE line', () => {
+  it('renders `hard` and `soft` as the literal enum, from the digest member', () => {
+    const hard = render({})
+    expect(hard).toContain('data-ms-enforcement="hard"')
     expect(hard).toContain('Enforcement hard')
-    expect(hard).toContain('data-ms-tone="warning"')
 
-    const soft = render({ snapshot: { ...SNAPSHOT, enforcement: { hard: false, source: 'compass' } } as unknown as PanelSnapshot, enforcementLine: true })
-    expect(soft).toContain('data-ms-enforcement-line="soft"')
+    const soft = render({ snapshot: { ...SNAPSHOT, enforcement: { hard: false, source: 'compass' } } as unknown as PanelSnapshot })
+    expect(soft).toContain('data-ms-enforcement="soft"')
     expect(soft).toContain('Enforcement soft')
-    expect(soft).not.toContain('data-ms-enforcement-line="hard"')
   })
 
-  it('an unreadable member renders its own unavailable line, never a guessed soft', () => {
-    const markup = render({ snapshot: { ...SNAPSHOT, enforcement: null } as unknown as PanelSnapshot, enforcementLine: true })
-    expect(markup).toContain('data-ms-enforcement-line="unavailable"')
-    expect(markup).not.toContain('data-ms-enforcement-line="soft"')
-    expect(markup).not.toContain('data-ms-enforcement-line="hard"')
-    // The shared screen's own line says the same thing rather than guessing.
-    expect(markup).toContain('Enforcement unavailable')
+  it('a failed enforcement read says unavailable, never a guessed soft', () => {
+    const markup = render({ snapshot: { ...SNAPSHOT, enforcement: null } as unknown as PanelSnapshot })
+    expect(markup).toContain('data-ms-enforcement="unavailable"')
+    expect(markup).not.toContain('data-ms-enforcement="soft"')
+    expect(markup).not.toContain('data-ms-enforcement="hard"')
+    // One line only: the host's duplicate component is deleted.
+    expect(markup).not.toContain('data-ms-enforcement-line')
   })
 
   it('renders no knowledge count, categories or inventory (D30)', () => {
-    const markup = render({ enforcementLine: true })
+    const markup = render({})
     expect(markup).not.toContain('data-ms-knowledge')
-    expect(markup).not.toContain('41')
     expect(markup).not.toContain('docCount')
     expect(markup).not.toContain('specs')
-  })
-
-  it('the main-area seat renders no enforcement line (session chrome only)', () => {
-    expect(render()).not.toContain('data-ms-enforcement-line')
   })
 })
 
@@ -96,7 +87,7 @@ describe('workflow picker — mounted inside Focus, unchanged behaviour', () => 
         selection: { kind: 'error', code: 'workflow.multi-active', message: 'two active', activeWorkflowIds: ['wf-a', 'wf-b'] },
       } as unknown as PanelSnapshot,
       select: () => {},
-      enforcementLine: true,
+
     })
     const focusAt = markup.indexOf('data-ms-screen="focus"')
     const pickerAt = markup.indexOf('data-ms-picker')

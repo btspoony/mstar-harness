@@ -36,7 +36,8 @@ export type PanelWorkspaceView<T> =
 
 /** The session-scoped facts the dashboard has no DTO for. */
 export interface SessionDigest {
-  readonly enforcement: EnforcementFlag
+  /** The harness flag, or null when the read failed (never a guessed `soft`). */
+  readonly enforcement: EnforcementFlag | null
   /** Carried, never rendered (D30 rule 3). */
   readonly knowledge: MstarHarnessState['knowledge'] | null
   /** This session's workflow binding, or null when nothing is bound. */

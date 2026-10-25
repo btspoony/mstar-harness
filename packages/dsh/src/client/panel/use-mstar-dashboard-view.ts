@@ -49,17 +49,13 @@ export function useMstarDashboardView(seats: MstarDashboardViewSeats): {
   const key = sessionId === null || cwd === null || view === null
     ? null
     : `${sessionId}\u0000${cwd}\u0000${view}\u0000${id ?? ''}\u0000${paramsKey}`
-  const [reader] = useState(() => cachedReader<DashboardViewRead>(
-    client,
-    key,
-    (read) => new OnceReader<DashboardViewRead>(read),
-    (face) => face.readView({
-      sessionId: sessionId ?? '',
-      cwd: cwd ?? '',
-      view: view ?? '',
-      ...(paramsKey === '' ? {} : { params: JSON.parse(paramsKey) as Record<string, string | undefined> }),
-      ...(id === undefined ? {} : { id }),
-    }),
-  ))
-  return useOnceReader(reader, key, client)
+  const [reader] = useState(() => cachedReader<DashboardViewRead>(client, key, () => new OnceReader<DashboardViewRead>()))
+  // Rebuilt every render from THIS render's props (view/id/params included).
+  return useOnceReader(reader, key, client, (face) => face.readView({
+    sessionId: sessionId ?? '',
+    cwd: cwd ?? '',
+    view: view ?? '',
+    ...(paramsKey === '' ? {} : { params: JSON.parse(paramsKey) as Record<string, string | undefined> }),
+    ...(id === undefined ? {} : { id }),
+  }))
 }

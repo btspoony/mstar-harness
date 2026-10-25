@@ -170,11 +170,13 @@ function pickIterationId(list: IterationListDTO, workflowId: string | undefined)
  * or compass is its own absent signal, never a reason to drop a workspace whose
  * five store views all answered.
  */
-function enforcementOf(harnessDir: string): EnforcementFlag {
+function enforcementOf(harnessDir: string): EnforcementFlag | null {
   try {
     return resolveRepoEnforcement(harnessDir)
   } catch {
-    return { hard: false, source: 'none' }
+    // NOT `{ hard: false }`: a failed read is not a genuine soft flag, and the
+    // product would say "soft" for a store it could not read.
+    return null
   }
 }
 

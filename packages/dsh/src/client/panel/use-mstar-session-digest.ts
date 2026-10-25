@@ -44,12 +44,11 @@ export function useMstarSessionDigest(seats: MstarSessionDigestSeats): {
 } {
   const { client, sessionId, cwd } = seats
   const key = sessionId === null || cwd === null ? null : `${sessionId}\u0000${cwd}`
-  const [reader] = useState(() => cachedReader<PanelSnapshotRead>(
-    client,
-    key,
-    (read) => new OnceReader<PanelSnapshotRead>(read),
-    (face) => face.readDigest({ sessionId: sessionId ?? '', cwd: cwd ?? '' }),
-  ))
-  const { state, reload } = useOnceReader(reader, key, client)
+  const [reader] = useState(() => cachedReader<PanelSnapshotRead>(client, key, () => new OnceReader<PanelSnapshotRead>()))
+  // The read closure is rebuilt every render from THIS render's props, so a
+  // reader first created while the session/cwd were still empty cannot keep
+  // reading with them.
+  const { state, reload } = useOnceReader(reader, key, client, (face) =>
+    face.readDigest({ sessionId: sessionId ?? '', cwd: cwd ?? '' }))
   return { state, reload }
 }

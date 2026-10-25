@@ -42,7 +42,6 @@ import { useMstarSessionDigest } from './use-mstar-session-digest.ts'
 import { useMstarDashboardView, type MstarDashboardViewState } from './use-mstar-dashboard-view.ts'
 import { useMstarWorkflowPicker, type UseSessions } from './use-mstar-workflow-picker.ts'
 import type { PanelDestination } from './panel-store.ts'
-import { EnforcementLine } from './EnforcementLine.tsx'
 import type { ColorScheme, HostThemeFace } from './theme.ts'
 
 /**
@@ -172,19 +171,14 @@ export function PanelShell(props: {
   navLabel: string
   onSelect: (destination: string) => void
   select: ((workflowId: string) => void) | null
-  /**
-   * Render the host's own ENFORCEMENT line as the Focus destination's last line
-   * (the sidebar seat). The main-area panel leaves it out, per IA §7: the flag is
-   * a session-chrome fact, not a full-page one.
-   */
-  enforcementLine?: boolean
 }): React.ReactElement {
   const copy = copyFor(props.locale)
   const selection: SessionBinding | null = props.snapshot.selection
   // The flag is a literal enum; an unreadable member says so rather than
   // guessing `soft` (the host's own line renders the arm's detail).
-  const flag = props.snapshot.enforcement !== null && props.snapshot.enforcement !== undefined
-    && typeof props.snapshot.enforcement.hard === 'boolean'
+  // A failed enforcement read is NOT a soft flag: it says `unavailable`, so the
+  // shared screen's own line cannot be mistaken for a genuine `soft`.
+  const flag = typeof props.snapshot.enforcement?.hard === 'boolean'
     ? (props.snapshot.enforcement.hard ? 'hard' : 'soft')
     : 'unavailable'
   const model = focusModel({
@@ -209,9 +203,6 @@ export function PanelShell(props: {
                   copy={focusCopy(copy)}
                   {...(props.select === null ? {} : { onPick: props.select })}
                 />
-                {props.enforcementLine === true
-                  ? <EnforcementLine enforcement={props.snapshot.enforcement} enforce={copy.focus.enforcementLabel} />
-                  : null}
               </>
             )
             : null}
@@ -290,8 +281,6 @@ export type PanelSeatProps = {
   panelSnapshot?: MstarPanelSnapshotClient
   localeFace?: HostLocaleFace
   themeFace?: HostThemeFace
-  /** Render the host's enforcement line (the sidebar seat does; the main panel does not). */
-  enforcementLine?: boolean
 }
 
 export function PanelSeat(props: PanelSeatProps): React.ReactElement | null {
@@ -367,7 +356,6 @@ export function PanelSeat(props: PanelSeatProps): React.ReactElement | null {
       destination={destination}
       locale={locale}
       scheme={scheme}
-      {...(props.enforcementLine === true ? { enforcementLine: true } : {})}
       navLabel={t('view.mstar-workflow')}
       onSelect={onSelect}
       select={select}

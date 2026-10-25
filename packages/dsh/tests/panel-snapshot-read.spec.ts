@@ -71,7 +71,7 @@ describe('readPanelSnapshot — the shrunken contract', () => {
       expect(gone in snapshot).toBe(false)
     }
     // The enforcement flag always answers, degraded in place rather than absent.
-    expect(typeof snapshot.enforcement.hard).toBe('boolean')
+    expect(typeof snapshot.enforcement?.hard).toBe('boolean')
   })
 
   it('carries `knowledge` (never rendered) instead of removing it', async () => {
@@ -112,7 +112,7 @@ describe('readPanelSnapshot — the shrunken contract', () => {
       expect(degraded.iteration.state).toBe('unavailable')
       if (degraded.iteration.state === 'unavailable') expect(degraded.iteration.reason).toContain('projection unavailable')
       // The rest of the digest is unaffected: one member degrades only itself.
-      expect(typeof degraded.enforcement.hard).toBe('boolean')
+      expect(typeof degraded.enforcement?.hard).toBe('boolean')
     } finally {
       spy.mockRestore()
     }

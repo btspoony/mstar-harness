@@ -236,7 +236,7 @@ describe('panelSnapshot endpoint — server-side harness resolution', () => {
     const result = await endpointOf(app).panelSnapshot('ses_persisted', app.root)
     expect(result.kind).toBe('ok')
     if (result.kind !== 'ok') throw new Error('unreachable')
-    expect(typeof result.snapshot.enforcement.hard).toBe('boolean')
+    expect(typeof result.snapshot.enforcement?.hard).toBe('boolean')
   })
 })
 

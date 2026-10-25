@@ -26,8 +26,14 @@ export class OnceReader<T extends { kind: string }> {
   private state: OnceState<T> = { kind: 'waiting' }
   private key: string | null = null
   private readonly listeners = new Set<() => void>()
-
-  constructor(private readonly read: (client: MstarPanelSnapshotClient) => Promise<T>) {}
+  /**
+   * The read for the CURRENT identity. It is a field, not a constructor
+   * capture: a reader cached for a seat must always read with that render's
+   * props (`cwd`, `view`, `id`), never with the props of the render that
+   * created it — the first render often has none (`waiting`), and a captured
+   * closure would fire `readView({ cwd: '', view: '' })` forever.
+   */
+  private read: ((client: MstarPanelSnapshotClient) => Promise<T>) | null = null
 
   /** Current snapshot (stable reference until an answer lands). */
   readonly getSnapshot = (): OnceState<T> => this.state
@@ -46,7 +52,16 @@ export class OnceReader<T extends { kind: string }> {
    * @param key - the identity string; a new key is a new read.
    * @param client - the transport face, or undefined when none is injected.
    */
-  begin(key: string | null, client: MstarPanelSnapshotClient | undefined): void {
+  begin(
+    key: string | null,
+    client: MstarPanelSnapshotClient | undefined,
+    read: (client: MstarPanelSnapshotClient) => Promise<T>,
+  ): void {
+    // The read closure is refreshed on EVERY call, before the identity check:
+    // the identity may be unchanged while the props behind the read are not
+    // (a re-render with a resolved `cwd`), and a stale closure is exactly the
+    // defect this ordering prevents.
+    this.read = read
     if (key === null || client === undefined) {
       if (this.state.kind !== 'waiting') this.write({ kind: 'waiting' })
       this.key = null
@@ -57,7 +72,9 @@ export class OnceReader<T extends { kind: string }> {
     this.write({ kind: 'loading' })
     queueMicrotask(() => {
       const requested = key
-      void this.read(client).then((answer) => {
+      const read = this.read
+      if (read === null) return
+      void read(client).then((answer) => {
         // A superseded answer (the identity moved) never lands.
         if (this.key === requested) this.write(answer)
       })
@@ -93,10 +110,9 @@ const READERS = new WeakMap<object, Map<string, OnceReader<{ kind: string }>>>()
 export function cachedReader<T extends { kind: string }>(
   client: object | undefined,
   key: string | null,
-  make: (read: (face: MstarPanelSnapshotClient) => Promise<T>) => OnceReader<T>,
-  read: (face: MstarPanelSnapshotClient) => Promise<T>,
+  make: () => OnceReader<T>,
 ): OnceReader<T> {
-  if (client === undefined || key === null) return make(read)
+  if (client === undefined || key === null) return make()
   let byKey = READERS.get(client)
   if (byKey === undefined) {
     byKey = new Map()
@@ -104,7 +120,7 @@ export function cachedReader<T extends { kind: string }>(
   }
   const found = byKey.get(key)
   if (found !== undefined) return found as OnceReader<T>
-  const reader = make(read)
+  const reader = make()
   byKey.set(key, reader as OnceReader<{ kind: string }>)
   return reader
 }
@@ -120,6 +136,7 @@ export function useOnceReader<T extends { kind: string }>(
   reader: OnceReader<T>,
   key: string | null,
   client: MstarPanelSnapshotClient | undefined,
+  read: (face: MstarPanelSnapshotClient) => Promise<T>,
 ): { readonly state: OnceState<T>; readonly reload: () => void } {
   const [nonce, setNonce] = useState(0)
   const reload = useCallback(() => {
@@ -128,7 +145,7 @@ export function useOnceReader<T extends { kind: string }>(
   }, [reader])
   // The call belongs in the render path: it must also run under SSR, and it is
   // idempotent per identity (see `begin`).
-  reader.begin(nonce === 0 ? key : `${key ?? ''}#${nonce}`, client)
+  reader.begin(nonce === 0 ? key : `${key ?? ''}#${nonce}`, client, read)
   const state = useSyncExternalStore(reader.subscribe, reader.getSnapshot, reader.getSnapshot)
   return { state, reload }
 }
