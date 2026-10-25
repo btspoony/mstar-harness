@@ -744,7 +744,7 @@ export function getWorkflowCommandDefinitions(): readonly CommandDefinition[] {
       },
       [{ key: "sessionId", context: "sessionId" }],
       {
-        expect: `Optional checked CAS: the closed header's terminal token published by \`mstar status validate\`. When omitted the engine resolves the current terminal header revision inside the guarded transaction and checks it there; only a token you pass explicitly enters the request fingerprint, so repeating the same --operation without --expect replays the committed reopen. ${TOKEN_SUPPLIES.workflow}`,
+        expect: `Optional checked CAS on the closed header's current terminal token. \`mstar status validate\` publishes that header as an identity row (id, status, revision) and never its token, so the token is not published anywhere: when omitted the engine resolves the current terminal header revision inside the guarded transaction and checks it there. Only a token you pass explicitly enters the request fingerprint, so repeating the same --operation without --expect replays the committed reopen.`,
         operation: "Optional idempotency/replay id; when omitted one id is generated for this invocation.",
         reason: "Required. Why the terminal lifecycle is reopened; recorded with the transition as the operator-facing justification.",
         attestation: "Required absolute JSON path to the operator's recovery-scope document: version, attestedAt, operator.actor, operator.authorizationRef and a stoppedSessions array (possibly empty); consumers is optional and ignored. SELF-REPORTED operator authorization — the structure is validated, host liveness is never verified.",
