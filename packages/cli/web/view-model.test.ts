@@ -48,7 +48,6 @@ import {
   roadmapState,
   unassignedIssuesLine,
 } from "./views/roadmap";
-import { workflowBranchFields, workflowDetailState, workflowListState } from "./views/workflows";
 
 type IssueOccurrence = IssueDetail["occurrences"][number];
 type IssueTransition = IssueDetail["transitions"][number];
@@ -360,32 +359,6 @@ const EMPTY_WORKFLOWS: WorkflowListDTO = { items: [], total: 0 };
 const EMPTY_ITERATIONS: IterationListDTO = { items: [], total: 0, attribution: "absent" };
 
 describe("projection disclosure", () => {
-  test("stale projection disclosures appear on execution views, and the roadmap discloses freshness without calling its content stale", () => {
-    const views = [
-      workflowListState(envelope({ items: [workflow()], total: 1 }, STALE_PROJECTION)),
-      iterationListState(envelope({ items: [iteration()], total: 1 }, STALE_PROJECTION)),
-    ];
-    for (const view of views) {
-      expect(view.disclosure).not.toBeNull();
-      const lines = disclosureLines(view.disclosure!);
-      expect(lines[0]).toContain("stale");
-      const copy = lines.join("\n");
-      expect(copy).toContain("workflows/20260918-dashboard/snapshot.json");
-      expect(copy).toContain("missing");
-      expect(copy).toContain(`Last successful build: ${BUILT_AT}.`);
-      expect(copy).toContain(`Last checked: ${CHECKED_AT}.`);
-    }
-    // The roadmap now discloses the projection state too — but as execution
-    // freshness only, never as a claim on its store-authoritative content
-    // (covered further in the milestone tests below).
-    expect(projectionDisclosure(roadmapState(envelope(roadmap(), STALE_PROJECTION)).freshness.projection)).not.toBeNull();
-  });
-
-  test("a current projection leaves execution views nothing to disclose", () => {
-    expect(workflowListState(envelope(EMPTY_WORKFLOWS)).disclosure).toBeNull();
-    expect(iterationListState(envelope(EMPTY_ITERATIONS)).disclosure).toBeNull();
-  });
-
   test("a projection disclosure with no recorded diagnostic says so instead of naming a source", () => {
     const lines = disclosureLines({ freshness: "unavailable", diagnostics: [], builtAt: null, checkedAt: "" });
     expect(lines[0]).toContain("unavailable");
@@ -398,29 +371,6 @@ describe("projection disclosure", () => {
 });
 
 describe("catalog and projection authority", () => {
-  test("an unavailable first projection is not an empty workflow catalog", () => {
-    // No valid generation: the list says unavailable, never "no workflows".
-    expect(workflowListState(envelope(EMPTY_WORKFLOWS, UNAVAILABLE_PROJECTION)).content).toEqual({
-      kind: "unavailable",
-    });
-    // A published generation with no rows is the empty case…
-    expect(workflowListState(envelope(EMPTY_WORKFLOWS)).content).toEqual({ kind: "empty" });
-    // …and a stale retained generation still lists what it has.
-    const stale = workflowListState(envelope({ items: [workflow()], total: 1 }, STALE_PROJECTION));
-    expect(stale.content).toEqual({ kind: "listed", total: 1 });
-  });
-
-  test("row payloads served without a valid generation stay unavailable, never listed", () => {
-    // W-001: the list paints only on `listed`, so rows arriving alongside no
-    // valid generation must not become a listed state — the whole point of the
-    // "unreadable source is never rendered as work" STOP rule.
-    const rows = workflowListState(envelope({ items: [workflow()], total: 1 }, UNAVAILABLE_PROJECTION));
-    expect(rows.content).toEqual({ kind: "unavailable" });
-    expect(rows.disclosure).not.toBeNull();
-    // The identical payload with a published generation is the one listed case.
-    expect(workflowListState(envelope({ items: [workflow()], total: 1 })).content).toEqual({ kind: "listed", total: 1 });
-  });
-
   test("the iteration list stays catalog-driven while the execution projection is unavailable", () => {
     const listed = iterationListState(envelope({ items: [iteration()], total: 1 }, UNAVAILABLE_PROJECTION));
     expect(listed.content).toEqual({ kind: "listed", total: 1 });
@@ -451,47 +401,10 @@ describe("catalog and projection authority", () => {
     expect(iterationPlanRow(iterationPlan(), false).execution).toEqual({ kind: "unknown" });
   });
 
-  test("a workflow detail paints no projected facts without a valid generation", () => {
-    // The row itself is a projection fact: with no valid generation the detail
-    // is `unavailable` (with its disclosure), never a loaded page of projected
-    // status/phase/plan/lease values. A null payload is the server's own shape
-    // for that same state, so both spellings land in one place.
-    const missingPayload = workflowDetailState(envelope(null, UNAVAILABLE_PROJECTION));
-    expect(missingPayload.kind).toBe("unavailable");
-    expect(missingPayload.disclosure).not.toBeNull();
-    // Defensive: projected rows handed in alongside no valid generation must not
-    // become painted work either.
-    const contradictory = workflowDetailState(envelope(workflow(), UNAVAILABLE_PROJECTION));
-    expect(contradictory.kind).toBe("unavailable");
-    expect(contradictory.disclosure).not.toBeNull();
-    // A published generation is the one loaded case, and a current one discloses
-    // nothing.
-    const loaded = workflowDetailState(envelope(workflow()));
-    expect(loaded.kind === "loaded" ? loaded.workflow.id : null).toBe("20260918-dashboard");
-    expect(loaded.disclosure).toBeNull();
-  });
-
   // Issue #499 review F3: the projection DTO's `branch.source` field carries the
   // DELIVERY branch (`branch.work`). Next to the new `branch.base` anchor, a
   // "branch source" label would present the delivery branch as the branch the
   // workflow was created from — the exact ambiguity the anchor rename removes.
-  test("the workflow detail labels the projected delivery branch as the work branch", () => {
-    const painted = workflowBranchFields({
-      base: "main",
-      source: "feature/delivery",
-      integration: "integration/iter",
-      target: "release",
-    })
-      .map(([label, value]) => Field({ label, children: textOrAbsent(value) }))
-      .map((field) => renderedText(field).join("\n"));
-    expect(painted).toEqual([
-      "Projected branch base\nmain",
-      "Projected branch work\nfeature/delivery",
-      "Projected branch integration\nintegration/iter",
-      "Projected branch target\nrelease",
-    ]);
-  });
-
   test("the compass is projected content: no valid generation means unknown, never absent", () => {
     const compass = {
       iterationId: "iter-20260918-issue-store-dashboard",

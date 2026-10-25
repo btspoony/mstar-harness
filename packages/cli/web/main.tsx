@@ -31,10 +31,13 @@ import {
   MS_THEME_ATTRIBUTE,
   Nav,
   Overview,
+  WorkflowDetail,
+  Workflows,
   useCopy,
   type IssueQuery,
 } from "@mstar-harness/ui";
 
+import { ABSENT_PROJECTION } from "./absent-projection";
 import {
   ISSUE_FILTER_OPTIONS,
   issueDetailCopy,
@@ -48,6 +51,16 @@ import {
   type IssuesOutcome,
 } from "./issues-data";
 import { overviewCopy, overviewOutcome, readOverview, type OverviewOutcome } from "./overview-data";
+import {
+  readWorkflowDetail,
+  readWorkflows,
+  workflowDetailCopy,
+  workflowDetailOutcome,
+  workflowsCopy,
+  workflowsOutcome,
+  type WorkflowDetailOutcome,
+  type WorkflowsOutcome,
+} from "./workflows-data";
 import {
   LIST_DESTINATIONS,
   parentAddress,
@@ -231,7 +244,7 @@ function IssueDetailDestination(props: { id: string }) {
       // package-wide ruling reads as absent.
       read={
         outcome.kind === "absent"
-          ? { data: null, projection: NO_PROJECTION }
+          ? { data: null, projection: ABSENT_PROJECTION }
           : outcome.read
       }
       copy={issueDetailCopy(copy)}
@@ -243,22 +256,87 @@ function IssueDetailDestination(props: { id: string }) {
   );
 }
 
-/**
- * The projection value for a 404.
- *
- * A `null` payload is the `absent` arm under the package-wide ruling, and the
- * screen's resolver reads the payload before the projection matters — so this
- * value only has to be a *published* generation (not `null`, which would mean
- * "the projection could not be read"). It is not a claim about freshness: a 404
- * for a record is not a statement about the store.
- */
-const NO_PROJECTION = {
-  generation: 1,
-  freshness: "current" as const,
-  builtAt: null,
-  checkedAt: "",
-  diagnostics: [],
-};
+/** The Workflows list, behind its own read. */
+function WorkflowsDestination() {
+  const [outcome, setOutcome] = useState<WorkflowsOutcome>({ kind: "loading" });
+  const copy = useCopy();
+  useEffect(() => {
+    const controller = new AbortController();
+    let current = true;
+    void readWorkflows(fetch, controller.signal).then((result) => {
+      if (current) setOutcome(workflowsOutcome(result));
+    });
+    return () => {
+      current = false;
+      controller.abort();
+    };
+  }, []);
+
+  if (outcome.kind === "loading") return null;
+  if (outcome.kind === "failed") {
+    return (
+      <EmptyState
+        arm="unavailable"
+        labelWord={copy.state.unavailable.labelWord}
+        heading={copy.workflows.pageTitle}
+        body={copy.state.unavailable.body}
+        reason={outcome.message}
+      />
+    );
+  }
+
+  return (
+    <Workflows
+      model={outcome.model}
+      copy={workflowsCopy(copy)}
+      onOpen={(id) => {
+        navigate({ name: "workflow", id }, "", "push");
+      }}
+    />
+  );
+}
+
+/** One workflow, behind its own read. */
+function WorkflowDetailDestination(props: { id: string }) {
+  const [outcome, setOutcome] = useState<WorkflowDetailOutcome>({ kind: "loading" });
+  const copy = useCopy();
+  useEffect(() => {
+    const controller = new AbortController();
+    let current = true;
+    setOutcome({ kind: "loading" });
+    void readWorkflowDetail(fetch, props.id, controller.signal).then((result) => {
+      if (current) setOutcome(workflowDetailOutcome(result));
+    });
+    return () => {
+      current = false;
+      controller.abort();
+    };
+  }, [props.id]);
+
+  if (outcome.kind === "loading") return null;
+  if (outcome.kind === "failed") {
+    return (
+      <EmptyState
+        arm="unavailable"
+        labelWord={copy.state.unavailable.labelWord}
+        heading={copy.workflowDetail.executionHeading}
+        body={copy.state.unavailable.body}
+        reason={outcome.message}
+      />
+    );
+  }
+
+  return (
+    <WorkflowDetail
+      model={outcome.model}
+      copy={workflowDetailCopy(copy)}
+      onBack={() => {
+        const parent = parentAddress(parseRoute(window.location.hash));
+        if (parent !== null) navigate(parent.route, parent.query, "push");
+      }}
+    />
+  );
+}
 
 /** The shell: skip link, header with the shared navigation, the main region, footer. */
 function Shell() {
@@ -319,6 +397,8 @@ function Shell() {
         {address.route.name === "overview" ? <OverviewDestination /> : null}
         {address.route.name === "issues" ? <IssuesDestination address={address} /> : null}
         {address.route.name === "issue" ? <IssueDetailDestination id={address.route.id} /> : null}
+        {address.route.name === "workflows" ? <WorkflowsDestination /> : null}
+        {address.route.name === "workflow" ? <WorkflowDetailDestination id={address.route.id} /> : null}
       </main>
       <footer className="app-footer">Read-only · Make changes with the CLI</footer>
     </div>
