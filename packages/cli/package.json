@@ -46,8 +46,6 @@
     "@mstar-harness/ui": "workspace:*",
     "@types/react": "~18.3.1",
     "@types/react-dom": "~18.3.1",
-    "htm": "^3.1.1",
-    "preact": "^11.0.1",
     "react": "^18.3.1",
     "react-dom": "^18.3.1"
   }
