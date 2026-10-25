@@ -99,20 +99,23 @@ export function storeLocale(store: Store, locale: Locale): void {
  * falling back to memory means the switches still work for the session; only the
  * remembering is lost.
  */
-export function browserStore(): Store {
+export function browserStore(): { store: Store; persisted: boolean } {
   try {
     const storage = globalThis.localStorage;
     storage.getItem(THEME_KEY);
-    return storage;
+    return { store: storage, persisted: true };
   } catch {
     const memory = new Map<string, string>();
     return {
-      getItem: (key) => memory.get(key) ?? null,
-      setItem: (key, value) => {
-        memory.set(key, value);
-      },
-      removeItem: (key) => {
-        memory.delete(key);
+      persisted: false,
+      store: {
+        getItem: (key) => memory.get(key) ?? null,
+        setItem: (key, value) => {
+          memory.set(key, value);
+        },
+        removeItem: (key) => {
+          memory.delete(key);
+        },
       },
     };
   }

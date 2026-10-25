@@ -44,6 +44,8 @@ import {
   type ProjectFeature,
 } from "@mstar-harness/ui";
 
+import "./shell.css";
+
 import { ABSENT_PROJECTION } from "./absent-projection";
 import { browserStore, resolveLocale, resolveTheme, storeLocale, storeTheme, type Theme } from "./prefs";
 import {
@@ -612,6 +614,8 @@ const DEFAULT_ISSUES: IssueQuery = {
 function Shell(props: {
   locale: Locale;
   theme: Theme;
+  /** Whether the two choices will survive this visit. */
+  persisted: boolean;
   onThemeChange: (theme: Theme) => void;
   onLocaleChange: (locale: Locale) => void;
 }) {
@@ -686,6 +690,7 @@ function Shell(props: {
             ]}
             onChange={(value) => props.onLocaleChange(value === "zh" ? "zh" : "en")}
           />
+          {props.persisted ? null : <p className="app-switch-note">{copy.shell.store.sessionOnly}</p>}
         </div>
       </header>
       {/* Only the landing destination is mounted (Task 3); the four lists arrive in
@@ -743,7 +748,10 @@ function navItemFor(route: Route): string | null {
  * *says* (its dictionary).
  */
 function Boot() {
-  const [store] = useState(browserStore);
+  // Resolved once: a browser that blocks storage gets a session-only one, and that
+  // fact is disclosed rather than hidden — a reader who believes their choice was
+  // remembered and finds it gone next visit has been misled by silence.
+  const [{ store, persisted }] = useState(browserStore);
   const [theme, setTheme] = useState<Theme>(() => resolveTheme(store));
   const [locale, setLocale] = useState<Locale>(() => resolveLocale(store));
 
@@ -757,12 +765,23 @@ function Boot() {
 
   useEffect(() => {
     storeLocale(store, locale);
+    // The document's language follows the switch. Rendered copy is only half of what
+    // declares a language: assistive technology reads `<html lang>` for pronunciation
+    // and translation tools read it for what to offer, so leaving it at the shell's
+    // initial value tells both of them the wrong thing after a switch.
+    document.documentElement.lang = locale;
   }, [store, locale]);
 
   return (
     <StrictMode>
       <LocaleProvider locale={locale}>
-        <Shell locale={locale} theme={theme} onThemeChange={setTheme} onLocaleChange={setLocale} />
+        <Shell
+          locale={locale}
+          theme={theme}
+          persisted={persisted}
+          onThemeChange={setTheme}
+          onLocaleChange={setLocale}
+        />
       </LocaleProvider>
     </StrictMode>
   );

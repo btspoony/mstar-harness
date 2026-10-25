@@ -45,6 +45,9 @@ export const zh: Copy = {
     nav: { primary: "主导航" },
     theme: { label: "配色方案", light: "浅色", dark: "深色" },
     language: { label: "语言", en: "English", zh: "中文" },
+    store: {
+      sessionOnly: "此浏览器禁止存储，因此这些选择仅在本次会话内有效。",
+    },
   },
 
   common: {

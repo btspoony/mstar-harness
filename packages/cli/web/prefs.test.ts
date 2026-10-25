@@ -78,9 +78,11 @@ describe("theme resolution", () => {
       },
     });
     try {
-      const store = browserStore();
+      const { store, persisted } = browserStore();
       storeTheme(store, "dark");
       expect(resolveTheme(store, darkOs(false))).toBe("dark");
+      // The fallback says so, so the shell can disclose it instead of pretending.
+      expect(persisted).toBe(false);
     } finally {
       if (original === undefined) delete (globalThis as { localStorage?: unknown }).localStorage;
       else Object.defineProperty(globalThis, "localStorage", original);
@@ -153,11 +155,19 @@ describe("the shell's own copy", () => {
     expect(copyFor("en").shell.language.zh).toBe("中文");
   });
 
+  test("a session-only store is disclosed in both languages", () => {
+    for (const locale of ["en", "zh"] as const) {
+      expect(copyFor(locale).shell.store.sessionOnly).not.toBe("");
+    }
+    expect(copyFor("zh").shell.store.sessionOnly).not.toBe(copyFor("en").shell.store.sessionOnly);
+  });
+
   test("the English and Chinese shell sections carry the same shape", () => {
     const shape = (copy: ReturnType<typeof copyFor>): string[] => [
       ...Object.keys(copy.shell).sort(),
       ...Object.keys(copy.shell.theme).sort(),
       ...Object.keys(copy.shell.language).sort(),
+      ...Object.keys(copy.shell.store).sort(),
     ];
     expect(shape(copyFor("zh"))).toEqual(shape(copyFor("en")));
   });

@@ -58,6 +58,9 @@ export const en = {
     nav: { primary: "Primary" },
     theme: { label: "Colour scheme", light: "Light", dark: "Dark" },
     language: { label: "Language", en: "English", zh: "中文" },
+    store: {
+      sessionOnly: "This browser blocks storage, so these choices last for this session only.",
+    },
   },
 
   common: {
