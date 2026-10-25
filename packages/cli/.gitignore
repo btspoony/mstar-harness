@@ -1,1 +1,4 @@
 dist/
+.tmp-assets.generated.ts
+.tmp-from-package.generated.ts
+.tmp-from-root.generated.ts

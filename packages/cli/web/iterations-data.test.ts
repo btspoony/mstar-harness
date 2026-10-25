@@ -1,0 +1,229 @@
+/**
+ * The host's envelope handling for the Iterations pair.
+ *
+ * What is asserted here is the host's half: the three outcomes stay distinct, the
+ * `attribution` arm decides which absence a zero-row read lands in (and the two are
+ * different pages), a `null` payload with a generation is `absent` while one
+ * without is `unavailable`, and the gate is a position rather than a count.
+ */
+import { describe, expect, test } from "bun:test";
+import { createElement } from "react";
+import { renderToStaticMarkup } from "react-dom/server";
+import type { IterationDTO, IterationListDTO, ReadEnvelope } from "@mstar-harness/engine";
+import { IterationDetail, Iterations, copyFor, iterationDetailModel, iterationListModel } from "@mstar-harness/ui";
+
+import { ABSENT_PROJECTION } from "./absent-projection";
+import {
+  iterationDetailCopy,
+  iterationDetailOutcome,
+  iterationDetailPath,
+  iterationsCopy,
+  iterationsOutcome,
+  iterationsPath,
+  readIterationDetail,
+  readIterations,
+} from "./iterations-data";
+
+const projection = {
+  generation: 7,
+  freshness: "current" as const,
+  builtAt: "2026-10-25T05:00:00.000Z",
+  checkedAt: "2026-10-25T05:01:00.000Z",
+  diagnostics: [],
+};
+
+/** A compass at the fourth reachable step; the fifth is never marked. */
+const gate = {
+  step: "pr-delivery",
+  steps: [
+    { id: "start", at: "2026-10-01T00:00:00.000Z" },
+    { id: "execute", at: "2026-10-02T00:00:00.000Z" },
+    { id: "close", at: "2026-10-03T00:00:00.000Z" },
+  ],
+} as unknown as IterationDTO["gateStep"];
+
+const iteration = (over: Partial<IterationDTO> = {}): IterationDTO =>
+  ({
+    iterationId: "iter-1",
+    catalog: null,
+    compass: null,
+    workflow: null,
+    plans: [],
+    documents: [],
+    badges: [],
+    gateStep: gate,
+    ...over,
+  }) as unknown as IterationDTO;
+
+const listEnvelope = (
+  items: IterationDTO[],
+  total: number,
+  attribution: IterationListDTO["attribution"] = "present",
+  generation: number | null = 7,
+): ReadEnvelope<IterationListDTO> => ({
+  data: { items, total, attribution } as IterationListDTO,
+  storeRevision: 1224,
+  catalogRevision: 9,
+  projection: { ...projection, generation },
+});
+
+const renderList = (
+  items: IterationDTO[],
+  total: number,
+  attribution: IterationListDTO["attribution"] = "present",
+  generation: number | null = 7,
+): string => {
+  const outcome = iterationsOutcome({ status: "ready", envelope: listEnvelope(items, total, attribution, generation) });
+  if (outcome.kind !== "ready") throw new Error("expected a ready list");
+  return renderToStaticMarkup(
+    createElement(Iterations, { model: outcome.model, copy: iterationsCopy(copyFor("en")) }),
+  );
+};
+
+describe("the list read", () => {
+  test("the path scopes by project, and only when the route owns a project", () => {
+    expect(iterationsPath(null)).toBe("/api/iterations");
+    expect(iterationsPath("engine")).toBe("/api/iterations?project=engine");
+    expect(iterationDetailPath("iter/1")).toBe("/api/iterations/iter%2F1");
+  });
+
+  test("outcome 1 — a healthy read lists the iterations", () => {
+    const outcome = iterationsOutcome({ status: "ready", envelope: listEnvelope([iteration()], 1) });
+    expect(outcome.kind).toBe("ready");
+    if (outcome.kind !== "ready") return;
+    expect(outcome.model.rows.kind).toBe("populated");
+    expect(outcome.model.total).toBe(1);
+  });
+
+  test("outcome 2 — no generation is unavailable, never 'nothing here'", () => {
+    const html = renderList([], 0, "present", null);
+    expect(html).toContain('data-ms-absence="unavailable"');
+    expect(html).not.toContain('data-ms-absence="empty"');
+    expect(html).not.toContain('data-ms-absence="absent"');
+  });
+
+  test("the two attribution empties are two different pages", () => {
+    // `present` with no rows: this project has none.
+    const none = renderList([], 0, "present");
+    // `absent` with no rows: the store attributes no iteration to any project.
+    const notAttributed = renderList([], 0, "absent");
+    expect(none).toContain('data-ms-absence="empty"');
+    expect(none).not.toContain('data-ms-absence="absent"');
+    expect(notAttributed).toContain('data-ms-absence="absent"');
+    expect(notAttributed).not.toContain('data-ms-absence="empty"');
+    expect(none).not.toBe(notAttributed);
+  });
+
+  test("the read's scope statement travels with the rows", () => {
+    expect(renderList([iteration()], 1, "present")).toContain("Iterations are attributed to projects.");
+    expect(renderList([iteration()], 1, "absent")).toContain("No iteration is attributed to any project.");
+  });
+
+  test("outcome 3 — a whole-read failure mounts no list", async () => {
+    const failing = (async () => {
+      throw new Error("connection refused");
+    }) as unknown as typeof fetch;
+    const result = await readIterations(failing, null);
+    expect(result.status).toBe("error");
+    expect(iterationsOutcome(result).kind).toBe("failed");
+  });
+
+  test("the contraction holds: no document inventory, no milestone ids, no revision counters", () => {
+    const html = renderList([iteration()], 1);
+    for (const removed of ["documents", "milestone", "revision", "dossier"]) {
+      expect(html.toLowerCase()).not.toContain(removed);
+    }
+  });
+
+  test("a row without a compass says so instead of inventing a step", () => {
+    const html = renderList([iteration({ gateStep: null })], 1);
+    expect(html).toContain("No compass");
+  });
+});
+
+describe("the detail read", () => {
+  test("outcome 1 — a readable iteration renders its gate position", () => {
+    const outcome = iterationDetailOutcome({
+      status: "ready",
+      envelope: { data: iteration(), storeRevision: 1, catalogRevision: 1, projection },
+    });
+    expect(outcome.kind).toBe("ready");
+    if (outcome.kind !== "ready") return;
+    expect(outcome.model.kind).toBe("populated");
+    const html = renderToStaticMarkup(
+      createElement(IterationDetail, { model: outcome.model, copy: iterationDetailCopy(copyFor("en")) }),
+    );
+    expect(html).toContain("iter-1");
+    expect(html).toContain("PR delivery");
+    // The fifth step is named and never marked as current.
+    expect(html).not.toContain("step 5 of 5");
+    expect(html).not.toContain('data-ms-gate-step-current="merge-ready"');
+  });
+
+  test("a null payload WITH no generation is unavailable — not a 404", () => {
+    const outcome = iterationDetailOutcome({
+      status: "ready",
+      envelope: { data: null, storeRevision: 1, catalogRevision: 1, projection: { ...projection, generation: null } },
+    });
+    expect(outcome.kind).toBe("ready");
+    if (outcome.kind !== "ready") return;
+    expect(outcome.model.kind).toBe("unavailable");
+  });
+
+  test("a null payload WITH a published generation is absent", () => {
+    const outcome = iterationDetailOutcome({
+      status: "ready",
+      envelope: { data: null, storeRevision: 1, catalogRevision: 1, projection },
+    });
+    expect(outcome.kind).toBe("ready");
+    if (outcome.kind !== "ready") return;
+    expect(outcome.model.kind).toBe("absent");
+  });
+
+  test("a 404 is absent, expressed through the shared constant", async () => {
+    const notFound = (async () =>
+      new Response(JSON.stringify({ error: { code: "not-found", message: "no such record" } }), {
+        status: 404,
+        headers: { "content-type": "application/json" },
+      })) as unknown as typeof fetch;
+    const result = await readIterationDetail(notFound, "gone");
+    expect(result.status).toBe("absent");
+    const outcome = iterationDetailOutcome(result);
+    expect(outcome.kind).toBe("ready");
+    if (outcome.kind !== "ready") return;
+    expect(outcome.model.kind).toBe("absent");
+    expect(iterationDetailModel({ data: null, projection: ABSENT_PROJECTION }).kind).toBe("absent");
+  });
+
+  test("every other refusal is a failure, not an absence", async () => {
+    const refused = (async () =>
+      new Response(JSON.stringify({ error: { code: "store.not-active", message: "the store is staged" } }), {
+        status: 503,
+        headers: { "content-type": "application/json" },
+      })) as unknown as typeof fetch;
+    const result = await readIterationDetail(refused, "iter-1");
+    expect(result).toEqual({ status: "error", message: "the store is staged" });
+  });
+
+  test("a body that is not an envelope is a failure", async () => {
+    const nonsense = (async () =>
+      new Response(JSON.stringify({ hello: "world" }), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      })) as unknown as typeof fetch;
+    expect((await readIterationDetail(nonsense, "iter-1")).status).toBe("error");
+  });
+
+  test("the three outcomes are distinct presentations", () => {
+    const ok = iterationDetailOutcome({
+      status: "ready",
+      envelope: { data: iteration(), storeRevision: 1, catalogRevision: 1, projection },
+    });
+    const absent = iterationDetailOutcome({ status: "absent" });
+    const failed = iterationDetailOutcome({ status: "error", message: "refused" });
+    expect([ok.kind, absent.kind, failed.kind]).toEqual(["ready", "ready", "failed"]);
+    if (ok.kind !== "ready" || absent.kind !== "ready") return;
+    expect(ok.model.kind).toBe("populated");
+    expect(absent.model.kind).toBe("absent");
+  });
+});

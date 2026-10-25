@@ -13,9 +13,15 @@
   // The dashboard server and generated assets are owned by @mstar-harness/commands;
   // the web asset generator remains in CLI build/typecheck order so fresh builds
   // write the module consumed by that package.
+  //
+  // `web/` is included here rather than in a second project: a separate config is
+  // the thing a later edit forgets to update, and the React tree would then ship
+  // typechecked by nothing. `jsx: react-jsx` matches the shared package, and the
+  // DOM libs are what its components are written against.
   "compilerOptions": {
     "target": "ES2022",
-    "lib": ["ES2024"],
+    "jsx": "react-jsx",
+    "lib": ["ES2024", "DOM", "DOM.Iterable"],
     "module": "ESNext",
     "moduleResolution": "Bundler",
     "strict": true,
@@ -23,6 +29,10 @@
     "noEmit": true,
     "types": ["node"]
   },
-  "include": ["src"],
-  "exclude": ["src/**/*.test.ts"]
+  "include": ["src", "web"],
+  // Package tests run under `bun test`, which no tsc project here serves types
+  // for; excluding them keeps the production tree typechecked without pretending
+  // to check the fixtures. `scripts/` stays out too: the generator is a Bun script
+  // with Bun globals, and it has its own suite under `bun test`.
+  "exclude": ["src/**/*.test.ts", "web/**/*.test.ts", "web/**/*.test.tsx"]
 }

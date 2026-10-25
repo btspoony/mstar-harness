@@ -41,6 +41,24 @@ export const zh: Copy = {
     },
   },
 
+  shell: {
+    nav: {
+      primary: "主导航",
+      overview: "总览",
+      issues: "问题",
+      workflows: "工作流",
+      iterations: "迭代",
+      projects: "项目",
+    },
+    skipLink: "跳到主要内容",
+    footer: "只读 · 请通过 CLI 进行修改",
+    theme: { label: "配色方案", light: "浅色", dark: "深色" },
+    language: { label: "语言", en: "English", zh: "中文" },
+    store: {
+      sessionOnly: "此浏览器禁止存储，因此这些选择仅在本次会话内有效。",
+    },
+  },
+
   common: {
     previous: "上一页",
     next: "下一页",

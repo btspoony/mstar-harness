@@ -1,0 +1,92 @@
+/**
+ * The shell's own chrome: the skip link, the header with its two switches, the main
+ * region and the footer.
+ *
+ * Deliberately colour-free. Every product colour comes from a token in the shared
+ * sheet, and a tone there is never the only channel — the shared layer separates
+ * tones by luminance and forces colours in `forced-colors` mode. A host rule that
+ * added colour meaning would sit outside both guarantees, so the only colour used
+ * here is `currentColor`, for borders that must follow the theme.
+ *
+ * Layout only: this file is the last thing that may touch the shell, and it should
+ * read as spacing, not as a second design system.
+ */
+
+/* Visible only when focused — it must be reachable, and it must not be a permanent
+   element on a read-only page. */
+.skip-link {
+  position: absolute;
+  left: 0.5rem;
+  top: -3rem;
+  z-index: 10;
+  padding: 0.5rem 0.75rem;
+  border: 1px solid currentColor;
+  border-radius: 0.25rem;
+  background: inherit;
+  font: inherit;
+  transition: top 120ms ease-out;
+}
+
+.skip-link:focus-visible {
+  top: 0.5rem;
+}
+
+.app-shell {
+  display: flex;
+  flex-direction: column;
+  min-height: 100vh;
+}
+
+.app-header {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.75rem 1.5rem;
+  padding: 0.75rem 1rem;
+  border-bottom: 1px solid currentColor;
+}
+
+.app-title {
+  font-weight: 600;
+}
+
+.app-controls {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.75rem;
+  margin-inline-start: auto;
+}
+
+/* A labelled control, not a default form widget: the label is always visible, and
+   the select keeps the platform's own interaction model. */
+.app-switch {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.375rem;
+  font-size: 0.875rem;
+}
+
+.app-switch-label {
+  white-space: nowrap;
+}
+
+.app-switch select {
+  padding: 0.25rem 0.375rem;
+  border: 1px solid currentColor;
+  border-radius: 0.25rem;
+  background: inherit;
+  color: inherit;
+  font: inherit;
+}
+
+.app-main {
+  flex: 1;
+  padding: 1rem;
+}
+
+.app-footer {
+  padding: 0.75rem 1rem;
+  border-top: 1px solid currentColor;
+  font-size: 0.8125rem;
+}

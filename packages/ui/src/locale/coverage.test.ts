@@ -136,10 +136,13 @@ describe("every screen's copy contract is satisfied by both locales", () => {
   });
 
   test("the dictionary carries no string the screens cannot consume", () => {
-    // `common` and `state` are shared vocabularies; every other section maps to
-    // exactly one screen, so a section without a screen is dead copy.
+    // `common`, `state` and `shell` are shared vocabularies; every other section
+    // maps to exactly one screen, so a section without a screen is dead copy.
+    // `shell` is the host's own chrome — the navigation landmark's accessible name
+    // and the two switch labels — which no shared screen renders but which reaches
+    // the reader through assistive technology.
     const sections = Object.keys(en);
-    const shared = ["state", "common"];
+    const shared = ["state", "common", "shell"];
     const screenSections = sections.filter((section) => !shared.includes(section));
     expect(new Set(screenSections).size).toBe(Object.keys(english).length);
   });

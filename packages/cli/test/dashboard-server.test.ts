@@ -602,16 +602,25 @@ describe("inlined-artifact serving (built CLI, no source asset directory)", () =
       });
       expect(new URL(url).searchParams.get("token")).toMatch(/^[0-9a-f-]{36}$/);
 
+      // This test just ran `bun run build`, which regenerates the inlined assets
+      // module. Comparing against the module this file imported at load time would
+      // compare the *previous* build's bytes with the new build's server — the
+      // mismatch that made the first run after any source change fail with no
+      // assertion naming the cause. Read the generated module as it is now.
+      const generated = (await import(
+        new URL("../../commands/src/dashboard/assets.generated.ts", import.meta.url).href
+      )) as typeof import("../../commands/src/dashboard/assets.generated");
+
       try {
         const shell = await raw(url);
         expect(shell.status).toBe(200);
-        expect(shell.body).toBe(dashboardHtml);
+        expect(shell.body).toBe(generated.dashboardHtml);
         const js = await raw(new URL("/assets/app.js", url).href);
         expect(js.status).toBe(200);
-        expect(js.body).toBe(dashboardJs);
+        expect(js.body).toBe(generated.dashboardJs);
         const css = await raw(new URL("/assets/app.css", url).href);
         expect(css.status).toBe(200);
-        expect(css.body).toBe(dashboardCss);
+        expect(css.body).toBe(generated.dashboardCss);
         const issues = await raw(new URL("/api/issues", url).href);
         expect(issues.status).toBe(200);
         expect((JSON.parse(issues.body) as { data: { total: number } }).data.total).toBe(1);
