@@ -86,9 +86,14 @@ describe('project detail — one absence authority, an empty arm, and a per-proj
     expect(markup).not.toContain('no project record')
   })
 
-  it('a project read with no published generation answers `unavailable`', () => {
+  it('a project read with no published generation agrees with the shared arm', () => {
+    // `roadmapFeatureArm` resolves through `resolveRecord` without requiring a
+    // projection, so a null project row is `absent` (the project declared no
+    // roadmap) whether or not a generation was published. The dashboard maps
+    // the same envelope through the same arm; this pins that they agree.
     const markup = renderState({ kind: 'ok', envelope: { data: null, projection: projectionOf(null) } })
-    expect(markup).toContain('data-ms-absence="unavailable"')
+    expect(markup).toContain('data-ms-absence="absent"')
+    expect(markup).not.toContain('data-ms-absence="unavailable"')
   })
 
   it('a successful-but-empty feature read draws an explicit empty arm', () => {
