@@ -96,6 +96,30 @@ describe('P2 — an unreadable workflow is not a missing one', () => {
     } as never))
   }
 
+  it('the split holds for BOTH record details (iteration too — the arm the earlier test missed)', () => {
+    const { createElement } = require('react') as typeof import('react')
+    const { renderToStaticMarkup } = require('react-dom/server') as typeof import('react-dom/server')
+    const { PanelShell } = require('../src/client/panel/panel-shell.tsx') as typeof import('../src/client/panel/panel-shell.tsx')
+    const projectionOf = (generation: number | null) => ({ generation, freshness: generation === null ? 'unavailable' : 'current', builtAt: null, checkedAt: '', diagnostics: [] })
+    const renderIteration = (generation: number | null): string =>
+      renderToStaticMarkup(createElement(PanelShell, {
+        snapshot: { enforcement: { hard: false, source: 'compass' }, knowledge: null, selection: null, iteration: { state: 'not-applicable', reason: 'standalone' } },
+        workflow: { state: 'read', data: { id: 'wf-1', type: 'plan', status: 'running', phase: null, branch: { base: null, source: null, integration: null, target: null }, plans: [] } },
+        destination: 'iterations',
+        locale: 'en',
+        navLabel: 'Morning Star Workflow',
+        onSelect: () => {},
+        select: null,
+        detail: { view: 'iteration-detail', id: 'iter-1', state: { kind: 'ok', envelope: { data: null, projection: projectionOf(generation) } } },
+        onBack: () => {},
+      } as never))
+    // Fresh/stale projection: the iteration is NOT "missing".
+    expect(renderIteration(null)).toContain('data-ms-absence="unavailable"')
+    expect(renderIteration(null)).not.toContain('data-ms-absence="absent"')
+    // Published generation + null record: it really does not exist.
+    expect(renderIteration(1)).toContain('data-ms-absence="absent"')
+  })
+
   it('a null record with a published generation is ABSENT; with no generation it is UNAVAILABLE', () => {
     const absent = renderDetail({ kind: 'ok', envelope: { data: null, projection: projection(1) } })
     expect(absent).toContain('data-ms-absence="absent"')

@@ -8,6 +8,8 @@
 import { describe, expect, it } from 'bun:test'
 import { createElement } from 'react'
 import { renderToStaticMarkup } from 'react-dom/server'
+import { readFileSync } from 'node:fs'
+import { join } from 'node:path'
 import { en as uiEn } from '@mstar-harness/ui'
 import { ProjectDetailDestination } from '../src/client/panel/destinations.tsx'
 
@@ -61,5 +63,42 @@ describe('project detail — three tabs, Roadmap the default, scoped issue list'
     expect(markup).toContain('data-ms-screen="project-detail"')
     expect(markup).toContain(uiEn.projectDetail.features.roadmap)
     expect(markup).not.toContain('a project issue')
+  })
+})
+
+describe('project detail — one absence authority, an empty arm, and a per-project default', () => {
+  const projectionOf = (generation: number | null) => ({ generation, freshness: generation === null ? 'unavailable' : 'current', builtAt: null, checkedAt: '', diagnostics: [] })
+  const renderState = (state: unknown, over: { issues?: unknown; feature?: string } = {}) =>
+    renderToStaticMarkup(createElement(ProjectDetailDestination, {
+      id: 'proj-1',
+      state,
+      locale: 'en',
+      onBack: () => {},
+      issues: over.issues ?? envelope(ISSUES),
+      iterations: envelope({ items: [], total: 0, attribution: 'absent' }),
+      ...(over.feature === undefined ? {} : { initialFeature: over.feature }),
+    } as never))
+
+  it('an unknown project answers `absent` (the shared roadmap arm), not an error', () => {
+    // Red: the pre-fix adapter answered "unavailable / no project record".
+    const markup = renderState({ kind: 'ok', envelope: { data: null, projection: projectionOf(1) } })
+    expect(markup).toContain('data-ms-absence="absent"')
+    expect(markup).not.toContain('no project record')
+  })
+
+  it('a project read with no published generation answers `unavailable`', () => {
+    const markup = renderState({ kind: 'ok', envelope: { data: null, projection: projectionOf(null) } })
+    expect(markup).toContain('data-ms-absence="unavailable"')
+  })
+
+  it('a successful-but-empty feature read draws an explicit empty arm', () => {
+    // Red: `ReadState` returned null for an `ok` read, so the slot drew nothing.
+    const markup = renderState(envelope(ROADMAP), { issues: envelope(null), feature: 'issues' })
+    expect(markup).toContain('data-ms-absence="empty"')
+  })
+
+  it('the page is keyed by project, so a second project starts at the Roadmap default', () => {
+    const source = readFileSync(join(import.meta.dir, '..', 'src/client/panel/destinations.tsx'), 'utf8')
+    expect(source).toContain('<ProjectDetailDestination\n          key={id}')
   })
 })
