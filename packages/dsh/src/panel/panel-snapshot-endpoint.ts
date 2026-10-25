@@ -42,11 +42,34 @@ import type { TypertContribution } from '@deepseek-ai/dsh-typert-registry'
 import { TypertRemoteService } from '@deepseek-ai/dsh-typert-protocol'
 import type { HarnessResolver } from '../gates/_shared.ts'
 import {
+  MSTAR_DASHBOARD_VIEW_METHOD,
   MSTAR_PANEL_SNAPSHOT_METHOD,
   MSTAR_PANEL_SNAPSHOT_NAMESPACE,
 } from '../engine-status-wire.ts'
+import { readDashboardView, type DashboardView, type ReadEnvelope } from '@mstar-harness/engine'
 import type { PanelSnapshotRead } from './panel-snapshot.ts'
 import { readPanelSnapshot, type PanelRetainedReader } from './read-panel-snapshot.ts'
+
+/**
+ * One per-view read's answer. The engine's own envelope passes through
+ * unmodified (`data` may be `null` for a detail view that resolves to nothing —
+ * that is an answer, not a failure), and the two non-answers keep their own
+ * kinds so the client never decodes a wire token.
+ */
+export type DashboardViewRead =
+  | { readonly kind: 'ok'; readonly envelope: ReadEnvelope<unknown> }
+  | { readonly kind: 'no-harness' }
+  | { readonly kind: 'unavailable'; readonly reason: string }
+
+/** A query-parameter record: strings only, exactly what the engine's view layer validates. */
+function queryParams(value: unknown): Record<string, string | undefined> {
+  if (value === null || typeof value !== 'object' || Array.isArray(value)) return {}
+  const params: Record<string, string | undefined> = {}
+  for (const [key, raw] of Object.entries(value as Record<string, unknown>)) {
+    if (typeof raw === 'string') params[key] = raw
+  }
+  return params
+}
 
 /** The contributing package identity (also the invocation id prefix). */
 const CONTRIBUTING_PACKAGE = '@mstar-harness/dsh'
@@ -187,6 +210,76 @@ export class MstarPanelSnapshotGateway extends TypertRemoteService {
   }
 
   /**
+   * Serve ONE engine dashboard view for a session — the per-view read path the
+   * screens use (plan dsh-panel-unification Task 4a). It rides the same typert
+   * contribution and the same server-side validation chain as
+   * {@link panelSnapshot}: the client asserts its session and workspace, never
+   * the ids or the store.
+   *
+   * @param sessionId - the session whose workspace is read (client-asserted).
+   * @param cwd - the workspace the client believes it is reading (client-asserted,
+   *   and required to equal the server-resolved session cwd).
+   * @param view - the engine `DashboardView` name (`workflow-detail`, `iterations`, …).
+   * @param params - the view's own query parameters, strings only.
+   * @param id - the detail record id, for the three detail views.
+   * @returns the engine read envelope, the `no-harness` kind, or an explicit reason.
+   */
+  async dashboardView(
+    sessionId: string,
+    cwd: string,
+    view: string,
+    params?: Record<string, string | undefined>,
+    id?: string,
+  ): Promise<DashboardViewRead> {
+    try {
+      const target = await this.resolveTarget(sessionId, cwd)
+      if (target.kind !== 'ok') return target.kind === 'no-harness' ? { kind: 'no-harness' } : { kind: 'unavailable', reason: target.reason }
+      const name = nonEmptyString(view)
+      if (name === undefined) return { kind: 'unavailable', reason: 'invalid-view' }
+      const envelope = await readDashboardView({
+        context: { harnessDir: target.harnessDir },
+        view: name as DashboardView,
+        params: queryParams(params),
+        ...(nonEmptyString(id) === undefined ? {} : { id: nonEmptyString(id) as string }),
+      })
+      return { kind: 'ok', envelope: envelope as ReadEnvelope<unknown> }
+    } catch (error) {
+      // A view the engine refuses (unknown name, unsafe id, a store fault) is a
+      // degraded READ, never a transport error: the screen renders the reason.
+      this.ctx.logger(ENDPOINT_LOGGER).warn(
+        `dashboardView(${String(view)}) failed for ${String(sessionId)} (answering unavailable): ${(error as Error)?.message ?? error}`,
+      )
+      return { kind: 'unavailable', reason: (error as Error)?.message ?? 'internal-error' }
+    }
+  }
+
+  /**
+   * The shared argument chain: shape → server-resolved session → store root →
+   * cwd equality. Both invocations take it, so a second read path cannot drift
+   * from the first one's trust rules.
+   */
+  private async resolveTarget(
+    sessionId: unknown,
+    cwd: unknown,
+  ): Promise<
+    | { readonly kind: 'ok'; readonly harnessDir: string; readonly sessionId: string; readonly cwd: string }
+    | { readonly kind: 'no-harness' }
+    | { readonly kind: 'unavailable'; readonly reason: string }
+  > {
+    const sid = nonEmptyString(sessionId)
+    if (sid === undefined) return { kind: 'unavailable', reason: 'invalid-session-id' }
+    const claimed = nonEmptyString(cwd)
+    if (claimed === undefined) return { kind: 'unavailable', reason: 'invalid-cwd' }
+    if (isRefusedPath(claimed)) return { kind: 'unavailable', reason: 'cwd-refused' }
+    const session = await this.resolveSessionCwd(sid)
+    if (session.kind !== 'ok') return { kind: 'unavailable', reason: session.reason }
+    if (claimed !== session.cwd) return { kind: 'unavailable', reason: 'cwd-mismatch' }
+    const harnessDir = this.bootHarnessDir ?? this.resolver.forWorkspace(session.cwd)
+    if (harnessDir === null || harnessDir === '') return { kind: 'no-harness' }
+    return { kind: 'ok', harnessDir, sessionId: sid, cwd: session.cwd }
+  }
+
+  /**
    * The carrier cancellation of THIS call, when the gateway is serving one.
    * `ctx.invocation` is set by the typert gateway for the duration of a Remote
    * call and absent otherwise (an in-process caller), so this reads the real
@@ -309,6 +402,30 @@ export function mstarPanelSnapshotInvocation(): TypertContribution['invocations'
       { name: 'workflowId', wire: 'workflowId', source: 'json', codec: { mode: 'src-json' } },
       { name: 'iterationId', wire: 'iterationId', source: 'json', codec: { mode: 'src-json' } },
       { name: 'projectId', wire: 'projectId', source: 'json', codec: { mode: 'src-json' } },
+    ],
+    result: { mode: 'src-json' },
+  }
+}
+
+/**
+ * The per-view invocation descriptor: `mstar/dashboardView` with the same
+ * session/cwd assertion as the snapshot read, the view name, its query
+ * parameters and the detail id. Carried by `mstarEngineStatusContribution()`
+ * for the same one-contribution-per-face reason as the snapshot descriptor.
+ */
+export function mstarDashboardViewInvocation(): TypertContribution['invocations'][number] {
+  return {
+    id: `${CONTRIBUTING_PACKAGE}#${MSTAR_PANEL_SNAPSHOT_NAMESPACE}/${MSTAR_DASHBOARD_VIEW_METHOD}`,
+    service: PANEL_SNAPSHOT_SERVICE,
+    namespace: MSTAR_PANEL_SNAPSHOT_NAMESPACE,
+    method: MSTAR_DASHBOARD_VIEW_METHOD,
+    invocation: { kind: 'direct' },
+    parameters: [
+      { name: 'sessionId', wire: 'sessionId', source: 'json', codec: { mode: 'src-json' } },
+      { name: 'cwd', wire: 'cwd', source: 'json', codec: { mode: 'src-json' } },
+      { name: 'view', wire: 'view', source: 'json', codec: { mode: 'src-json' } },
+      { name: 'params', wire: 'params', source: 'json', codec: { mode: 'src-json' } },
+      { name: 'id', wire: 'id', source: 'json', codec: { mode: 'src-json' } },
     ],
     result: { mode: 'src-json' },
   }

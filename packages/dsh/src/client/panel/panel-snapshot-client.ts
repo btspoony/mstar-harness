@@ -32,13 +32,15 @@
 
 import type { ConnectionRpcResult } from '@deepseek-ai/dsh-client-connection/client'
 import type { PanelSnapshot, PanelSnapshotRead } from '../../panel/panel-snapshot.ts'
-import { ENGINE_STATUS_CHANNEL, PANEL_SNAPSHOT_ENDPOINT } from '../../engine-status-wire.ts'
+import type { ReadEnvelope } from '@mstar-harness/engine'
+import type { DashboardViewRead } from '../../panel/panel-snapshot-endpoint.ts'
+import { DASHBOARD_VIEW_ENDPOINT, ENGINE_STATUS_CHANNEL, PANEL_SNAPSHOT_ENDPOINT } from '../../engine-status-wire.ts'
 
 /**
  * The endpoint path the client calls — the `mstar` namespace (shared with the
  * engine-status channel) plus the method the host descriptor registers.
  */
-export { PANEL_SNAPSHOT_ENDPOINT }
+export { DASHBOARD_VIEW_ENDPOINT, PANEL_SNAPSHOT_ENDPOINT }
 
 /**
  * The panel's view: a closed set — no shape can be both data and empty.
@@ -161,6 +163,30 @@ export function parsePanelSnapshotRead(value: unknown): PanelSnapshotRead {
   // dedicated card rather than leaking a wire reason token into the UI.
   if (row.kind === 'no-harness') return { kind: 'no-harness' }
   if (row.kind === 'unavailable') return { kind: 'unavailable', reason: str(row.reason) ?? 'malformed-answer' }
+  return { kind: 'unavailable', reason: 'malformed-answer' }
+}
+
+/**
+ * Validate one per-view answer into the closed {@link DashboardViewRead} union.
+ * The envelope is passed through as the engine produced it; only the two
+ * non-answers are decoded here.
+ */
+export function parseDashboardViewRead(value: unknown): DashboardViewRead {
+  const row = value as { ok?: unknown; value?: unknown; error?: { code?: unknown; message?: unknown } } | null | undefined
+  if (row === null || typeof row !== 'object') return { kind: 'unavailable', reason: 'malformed-answer' }
+  if (row.ok !== true) {
+    return { kind: 'unavailable', reason: str(row.error?.message) ?? str(row.error?.code) ?? 'transport-error' }
+  }
+  const payload = row.value as { kind?: unknown; envelope?: unknown; reason?: unknown } | null | undefined
+  if (payload === null || typeof payload !== 'object') return { kind: 'unavailable', reason: 'malformed-answer' }
+  if (payload.kind === 'ok') {
+    const envelope = payload.envelope as { data?: unknown } | null | undefined
+    return envelope !== null && typeof envelope === 'object' && 'data' in envelope
+      ? { kind: 'ok', envelope: envelope as ReadEnvelope<unknown> }
+      : { kind: 'unavailable', reason: 'malformed-answer' }
+  }
+  if (payload.kind === 'no-harness') return { kind: 'no-harness' }
+  if (payload.kind === 'unavailable') return { kind: 'unavailable', reason: str(payload.reason) ?? 'malformed-answer' }
   return { kind: 'unavailable', reason: 'malformed-answer' }
 }
 
@@ -307,6 +333,33 @@ export class MstarPanelSnapshotClient {
       // Only the CURRENT target may keep the interval alive; a stale target's
       // answer already returned above.
       if (this.target === target) this.schedule()
+    }
+  }
+
+  /**
+   * Read ONE engine dashboard view — the per-view path (Task 4a).
+   *
+   * ONE request per call and NOTHING else: no state write, no subscription, no
+   * visibility gate, and NO TIMER of any kind (not even a deadline) — the caller
+   * owns the cadence, and 4b deletes the polling loop this client still runs for
+   * the digest. Every failure mode is still an explicit kind, never a throw.
+   */
+  async readView(input: {
+    sessionId: string
+    cwd: string
+    view: string
+    params?: Record<string, string | undefined>
+    id?: string
+  }): Promise<DashboardViewRead> {
+    if (this.connection === undefined) return { kind: 'unavailable', reason: 'no-connection' }
+    const args: Record<string, unknown> = { sessionId: input.sessionId, cwd: input.cwd, view: input.view }
+    if (input.params !== undefined) args.params = input.params
+    if (input.id !== undefined) args.id = input.id
+    try {
+      const result = await this.connection.rpc.call(ENGINE_STATUS_CHANNEL, DASHBOARD_VIEW_ENDPOINT, { args })
+      return parseDashboardViewRead(result)
+    } catch (error) {
+      return { kind: 'unavailable', reason: `transport-error: ${String(error)}` }
     }
   }
 

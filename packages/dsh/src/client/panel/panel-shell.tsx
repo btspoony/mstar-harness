@@ -35,12 +35,13 @@ import {
   type Locale,
   type SessionBinding,
 } from '@mstar-harness/ui'
-import type { IterationGateStep } from '@mstar-harness/engine'
+import type { IterationGateStep, IterationListDTO, WorkflowDTO } from '@mstar-harness/engine'
 import css from './panel.module.css'
 import type { PanelSnapshot } from '../../panel/panel-snapshot.ts'
 import type { MstarWorkflowPickerClient } from './workflow-picker-client.ts'
 import type { MstarPanelSnapshotClient } from './panel-snapshot-client.ts'
 import { useMstarPanelSnapshot } from './use-mstar-panel-snapshot.ts'
+import { useMstarDashboardView, type MstarDashboardViewState } from './use-mstar-dashboard-view.ts'
 import { useMstarWorkflowPicker, type UseSessions } from './use-mstar-workflow-picker.ts'
 import type { PanelDestination } from './panel-store.ts'
 
@@ -108,19 +109,29 @@ export function PanelShell(props: {
   navLabel: string
   onSelect: (destination: string) => void
   select: ((workflowId: string) => void) | null
+  /**
+   * The session's delivery as the per-view `iterations` read proves it: a value
+   * wins, `null` means "the bound plans are delivered standalone", and
+   * `undefined` means the envelope's own member is the only evidence.
+   */
+  delivery?: { iterationId: string; gateStep: IterationGateStep | null } | null
+  /** A per-view `workflow-detail` repair for an envelope whose member is not readable. */
+  workflowOverride?: WorkflowDTO
 }): React.ReactElement {
   const copy = copyFor(props.locale)
   const read = props.snapshot.workspace.workflow
   const workflow =
-    read.state === 'ok'
-      ? ({ state: 'read', data: read.data } as const)
-      : ({ state: read.state, reason: read.reason } as const)
+    props.workflowOverride !== undefined
+      ? ({ state: 'read', data: props.workflowOverride } as const)
+      : read.state === 'ok'
+        ? ({ state: 'read', data: read.data } as const)
+        : ({ state: read.state, reason: read.reason } as const)
   const selection: SessionBinding | null = props.snapshot.retained.selection
   const model = focusModel({
     enforcement: props.snapshot.enforcement.hard ? 'hard' : 'soft',
     selection,
     workflow,
-    iteration: deliveryOf(props.snapshot),
+    iteration: props.delivery === undefined ? deliveryOf(props.snapshot) : props.delivery,
   })
   return (
     <LocaleProvider locale={props.locale}>
@@ -168,6 +179,39 @@ function useProductLocale(face: HostLocaleFace | undefined): Locale {
     read,
   )
   return productLocale(active)
+}
+
+/**
+ * The per-view `workflow-detail` repair, when it produced one. `undefined` means
+ * "the envelope's member stands" — either it is readable, or no repair was read.
+ */
+function workflowViewOverride(state: MstarDashboardViewState): WorkflowDTO | undefined {
+  if (state.kind !== 'ok') return undefined
+  const data = state.envelope.data as WorkflowDTO | null
+  return data === null ? undefined : data
+}
+
+/**
+ * The delivery line as the per-view `iterations` read proves it.
+ *
+ * `undefined` = that read has no answer yet (the envelope's member is the only
+ * evidence); `null` = the read answered and none of the bound workflow's plans
+ * is attributed to an iteration, so the plans are delivered standalone.
+ */
+export function deliveryFromView(
+  state: MstarDashboardViewState,
+  planIds: readonly string[],
+): { iterationId: string; gateStep: IterationGateStep | null } | null | undefined {
+  if (state.kind !== 'ok') return undefined
+  const list = state.envelope.data as IterationListDTO | null
+  if (list === null) return undefined
+  const bound = new Set(planIds)
+  for (const item of list.items) {
+    if (item.plans.some((plan) => bound.has(plan.planId))) {
+      return { iterationId: item.iterationId, gateStep: item.gateStep }
+    }
+  }
+  return null
 }
 
 /** The session's workspace directory (the host cross-checks it against the session). */
@@ -218,6 +262,30 @@ export function PanelSeat(props: PanelSeatProps): React.ReactElement | null {
     ? snapshotView.snapshot
     : snapshotView.state === 'loading' ? snapshotView.previous : null
 
+  // The per-view reads (Task 4a). Both are one-shot and identity-keyed: a view
+  // with no subject asks for nothing, and a changed subject reads once.
+  const wireSession = sessionId === undefined ? null : String(sessionId)
+  const selection = snapshot?.retained.selection ?? null
+  const boundWorkflowId =
+    selection !== null && (selection.kind === 'active' || selection.kind === 'terminal') ? selection.workflowId : null
+  const workflowMember = snapshot?.workspace.workflow
+  const iterationsView = useMstarDashboardView({
+    client: panelSnapshot,
+    sessionId: wireSession,
+    cwd,
+    view: snapshot !== null && boundWorkflowId !== null ? 'iterations' : null,
+    params: { limit: '200' },
+  })
+  const workflowView = useMstarDashboardView({
+    client: panelSnapshot,
+    sessionId: wireSession,
+    cwd,
+    view: snapshot !== null && boundWorkflowId !== null && workflowMember !== undefined && workflowMember.state !== 'ok'
+      ? 'workflow-detail'
+      : null,
+    ...(boundWorkflowId === null ? {} : { id: boundWorkflowId }),
+  })
+
   // Every hook runs before the early returns (hooks rule).
   if (!visible) return null
   if (snapshotView.state === 'waiting') {
@@ -246,6 +314,11 @@ export function PanelSeat(props: PanelSeatProps): React.ReactElement | null {
   }
   if (snapshot.harnessDir === null) return <NoHarness t={t} />
 
+  const repaired = workflowViewOverride(workflowView.state)
+  const planIds =
+    workflowMember !== undefined && workflowMember.state === 'ok' && workflowMember.data !== null
+      ? workflowMember.data.plans.map((plan) => plan.planId)
+      : repaired?.plans.map((plan) => plan.planId) ?? []
   return (
     <PanelShell
       snapshot={snapshot}
@@ -254,6 +327,8 @@ export function PanelSeat(props: PanelSeatProps): React.ReactElement | null {
       navLabel={t('view.mstar-workflow')}
       onSelect={onSelect}
       select={select}
+      delivery={deliveryFromView(iterationsView.state, planIds)}
+      {...(repaired === undefined ? {} : { workflowOverride: repaired })}
     />
   )
 }
