@@ -197,6 +197,8 @@ export function ProjectsDestination({ state, locale, onOpen }: DestinationProps)
 /* ------------------------------- detail routes ------------------------------- */
 
 import {
+  EmptyState,
+  roadmapFeatureArm,
   IssueDetail,
   WorkflowDetail,
   IterationDetail,
@@ -235,7 +237,7 @@ export type DetailProps = {
  * not be made) — the shared resolvers own that split, this adapter only passes
  * the envelope through.
  */
-export function DetailBody({ view, state, locale, onBack, onOpenWorkflow, projectIterations, projectIssues }: DetailProps): React.ReactElement {
+export function DetailBody({ view, id, state, locale, onBack, onOpenWorkflow, projectIterations, projectIssues }: DetailProps): React.ReactElement {
   const copy = copyFor(locale)
   if (state.kind !== 'ok') return <ReadState state={state} copy={copy} />
   const envelope = state.envelope
@@ -268,11 +270,9 @@ export function DetailBody({ view, state, locale, onBack, onOpenWorkflow, projec
       // `null` has two causes and the projection tells them apart: no published
       // generation means the read could not be made (`unavailable`), a published
       // one means the record does not exist (`absent`).
-      const model = data === null
-        ? envelope.projection.generation === null
-          ? ({ kind: 'unavailable', reason: copy.state.unavailable.body } as const)
-          : ({ kind: 'absent' } as const)
-        : workflowDetailModel({ data: data as WorkflowDTO, projection: envelope.projection })
+      // One absence authority: the shared model resolves a null record by the
+      // projection generation (no generation → `unavailable` with its own cause).
+      const model = workflowDetailModel({ data: data as WorkflowDTO | null, projection: envelope.projection })
       return <WorkflowDetail model={model} copy={{ ...copy.workflowDetail, absence: {
         'not-applicable': { ...copy.state['not-applicable'], heading: copy.workflowDetail.catalogHeading },
         absent: { ...copy.state.absent, heading: copy.workflowDetail.catalogHeading },
@@ -281,9 +281,9 @@ export function DetailBody({ view, state, locale, onBack, onOpenWorkflow, projec
       } }} onBack={onBack} />
     }
     case 'iteration-detail': {
-      const model = data === null
-        ? ({ kind: 'absent' } as const)
-        : iterationDetailModel({ data: data as IterationDTO, projection: envelope.projection })
+      // Same for the iteration: a null record is NOT `absent` when the execution
+      // projection has no generation — the shared model answers `unavailable`.
+      const model = iterationDetailModel({ data: data as IterationDTO | null, projection: envelope.projection })
       return (
         <IterationDetail
           model={model}
@@ -300,6 +300,8 @@ export function DetailBody({ view, state, locale, onBack, onOpenWorkflow, projec
     case 'project-detail': {
       return (
         <ProjectDetailDestination
+          key={id}
+          id={id}
           state={state}
           locale={locale}
           onBack={onBack}
@@ -320,6 +322,7 @@ export function DetailBody({ view, state, locale, onBack, onOpenWorkflow, projec
  * `issues?project=<id>` and `iterations?project=<id>`.
  */
 export function ProjectDetailDestination(props: {
+  id: string
   state: MstarDashboardViewState
   locale: Locale
   onBack: () => void
@@ -332,9 +335,11 @@ export function ProjectDetailDestination(props: {
   const [feature, setFeature] = React.useState<ProjectFeature>(props.initialFeature ?? 'roadmap')
   if (props.state.kind !== 'ok') return <ReadState state={props.state} copy={copy} />
   const data = props.state.envelope.data
-  if (data === null) return <ReadState state={{ kind: 'unavailable', reason: 'no project record' }} copy={copy} />
   const envelope = props.state.envelope
-  const roadmap = roadmapBody(resolveRead({ data: data as never, projection: envelope.projection }, { whenNull: 'absent' }))
+  // The shared arm owns the decision (unknown project → `absent`, no generation →
+  // `unavailable`), so both hosts answer a project the same way.
+  const featureArm = roadmapFeatureArm({ data: data as never, projection: envelope.projection })
+  const roadmap = roadmapBody(featureArm)
   const iterationsCopy = {
     ...copy.iterations,
     notStarted: copy.workflowDetail.fields.notStarted,
@@ -355,7 +360,9 @@ export function ProjectDetailDestination(props: {
   const issuesState = props.issues ?? ({ kind: 'waiting' } as const)
   return (
     <ProjectDetail
-      identity={projectIdentity((data as never as { catalog: never }).catalog)}
+      identity={featureArm.kind === 'populated'
+        ? projectIdentity((featureArm.value as never as { catalog: never }).catalog)
+        : { projectId: props.id, title: props.id, description: null, lifecycle: 'active', lifecycleTone: 'neutral', path: `projects/${props.id}` }}
       feature={feature}
       onFeatureChange={(next: ProjectFeature) => setFeature(next)}
       roadmap={roadmap as never}
@@ -370,7 +377,16 @@ export function ProjectDetailDestination(props: {
               onQueryChange={() => {}}
             />
           )
-          : <ReadState state={issuesState} copy={copy} />
+          : issuesState.kind === 'ok'
+            ? (
+              <EmptyState
+                arm="empty"
+                labelWord={copy.state.empty.labelWord}
+                heading={copy.issues.pageTitle}
+                body={copy.state.empty.body}
+              />
+            )
+            : <ReadState state={issuesState} copy={copy} />
       }
       iterations={
         iterationsState.kind === 'ok' && iterationsState.envelope.data !== null
@@ -383,7 +399,16 @@ export function ProjectDetailDestination(props: {
               copy={iterationsCopy}
             />
           )
-          : <ReadState state={iterationsState} copy={copy} />
+          : iterationsState.kind === 'ok'
+            ? (
+              <EmptyState
+                arm="empty"
+                labelWord={copy.state.empty.labelWord}
+                heading={copy.iterations.pageTitle}
+                body={copy.state.empty.body}
+              />
+            )
+            : <ReadState state={iterationsState} copy={copy} />
       }
       copy={{
         ...copy.projectDetail,
