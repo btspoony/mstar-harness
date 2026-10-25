@@ -298,7 +298,10 @@ async function execute(id: string, input: Input, invocation: InvocationContext):
       if (input.iteration !== undefined) filter.iterationId = input.iteration;
       if (input.limit !== undefined) filter.limit = input.limit;
       if (input.offset !== undefined) filter.offset = input.offset;
-      return envelope(id, await listCatalog(context, filter));
+      const page = await listCatalog(context, filter);
+      // A page answers "which rows exist", so the per-row filesystem disclosure
+      // stays out of it; `catalog show` addresses one row and keeps it.
+      return envelope(id, { ...page, items: page.items.map(({ absolutePath: _absolutePath, sourceHash: _sourceHash, ...item }) => item) });
     }
     if (verb === "show") return envelope(id, await getCatalog(context, {
       kind: oneOf(input.kind, entityKinds, "kind"), id: requireValue(input.id, "id"),

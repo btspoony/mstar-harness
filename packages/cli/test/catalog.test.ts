@@ -318,10 +318,13 @@ describe("mstar catalog domain verbs", () => {
     expect(linked.exitCode).toBe(0);
 
     const shown = jsonOf(runCli(["catalog", "show", "document", "doc-contract"], workspace)).data as {
-      entity: { revision: number; lifecycle: string; title: string };
+      entity: { revision: number; lifecycle: string; title: string; absolutePath: string; sourceHash: string | null };
       links: { relation: string; toId: string }[];
     };
     expect(shown.entity).toMatchObject({ revision: 2, lifecycle: "active", title: "Contract" });
+    // A one-row read keeps the resolved location and digest a page omits.
+    expect(shown.entity.absolutePath.endsWith("/specs/contract.md")).toBe(true);
+    expect(shown.entity).toHaveProperty("sourceHash");
     expect(shown.links).toEqual([{ fromKind: "document", fromId: "doc-contract", relation: "belongs-to", toKind: "project", toId: "proj-a", ordinal: null }]);
 
     // A stale revision is a domain refusal, not a usage error.
@@ -347,9 +350,11 @@ describe("mstar catalog domain verbs", () => {
     expect(renamed.exitCode).toBe(0);
     expect((jsonOf(renamed).data as { revision: number }).revision).toBe(3);
 
-    const filtered = jsonOf(runCli(["catalog", "list", "--kind", "project"], workspace)).data as { total: number; items: { id: string }[] };
+    const filtered = jsonOf(runCli(["catalog", "list", "--kind", "project"], workspace)).data as { total: number; items: Record<string, unknown>[] };
     expect(filtered.total).toBe(1);
-    expect(filtered.items[0]!.id).toBe("proj-a");
+    expect(filtered.items[0]).toMatchObject({ id: "proj-a", relativePath: "proj-a" });
+    expect(filtered.items[0]).not.toHaveProperty("absolutePath");
+    expect(filtered.items[0]).not.toHaveProperty("sourceHash");
 
     const missing = runCli(["catalog", "show", "plan", "no-such-plan"], workspace);
     expect(missing.exitCode).toBe(1);
