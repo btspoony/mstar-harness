@@ -12,7 +12,7 @@
  * IA §4. This module only orders them and names the arm each one starts in; the
  * rows come from the issue and iteration transforms.
  */
-import type { ProjectListDTO, RoadmapDTO } from "@mstar-harness/engine";
+import type { ProjectListDTO, RoadmapContent, RoadmapDTO } from "@mstar-harness/engine";
 
 import type { Resolved } from "./state.ts";
 import { resolveRead } from "./state.ts";
@@ -45,11 +45,13 @@ export function projectRow(item: ProjectListDTO["items"][number]): ProjectRow {
   };
 }
 
+export type ProjectListModel = { rows: Resolved<readonly ProjectRow[]>; total: number };
+
 /** The list state. The catalog does not depend on the projection. */
 export function projectListModel(read: {
   data: ProjectListDTO;
   projection: { generation: number | null };
-}): { rows: Resolved<readonly ProjectRow[]>; total: number } {
+}): ProjectListModel {
   const rows = resolveRead(
     { data: read.data.items, projection: read.projection },
     { whenNull: "empty", isEmpty: (items) => items.length === 0 },
@@ -57,6 +59,82 @@ export function projectListModel(read: {
   return {
     rows: rows.kind === "populated" ? { kind: "populated", value: rows.value.map(projectRow) } : rows,
     total: read.data.total,
+  };
+}
+
+/**
+ * One row of a {@link RoadmapModel}'s goal list: a goal's title and whether it is
+ * checked, plus its depth so a sub-goal reads as one without a second list.
+ */
+export type RoadmapGoal = {
+  ordinal: number;
+  /** 0 for a top-level goal; 1 for a goal under one. */
+  depth: number;
+  checked: boolean;
+  title: string;
+};
+
+/** One milestone of the roadmap board. */
+export type RoadmapMilestone = {
+  milestoneId: string;
+  name: string;
+  status: string | null;
+  target: string | null;
+  progress: { done: number; total: number } | null;
+  openIssues: number;
+  /** The issues assigned to this milestone: id, title, disposition. */
+  issues: readonly { id: string; title: string; disposition: string }[];
+};
+
+/**
+ * The Roadmap feature's body.
+ *
+ * `direction` and `goals` come from the stored Markdown; the milestone board comes
+ * from the milestone read, which is authoritative and independent of the file
+ * (`RoadmapDTO` §4: a project with milestones and no content answers
+ * `content: null` and still carries them). A project with neither is the
+ * `absent` arm and never reaches this model.
+ */
+export type RoadmapModel = {
+  direction: string | null;
+  goals: readonly RoadmapGoal[];
+  milestones: readonly RoadmapMilestone[];
+  /** Issues with no milestone: a count, and the reason they are not on the board. */
+  unassignedIssues: number;
+  /** The stored Markdown, for the collapsed disclosure. */
+  markdown: string | null;
+};
+
+/**
+ * Build the roadmap body.
+ *
+ * `depth` is derived from `parentOrdinal` because the board renders a flat list
+ * with an indent: a nested list would make a sub-goal's check state read as its
+ * parent's, and the stored document is flat with parent references.
+ */
+export function roadmapModel(read: RoadmapDTO, content: RoadmapContent | null): RoadmapModel {
+  const parents = new Set((content?.goals ?? []).map((goal) => goal.ordinal));
+  return {
+    direction: content?.direction ?? null,
+    goals: (content?.goals ?? []).map((goal) => ({
+      ordinal: goal.ordinal,
+      depth: goal.parentOrdinal !== null && parents.has(goal.parentOrdinal) ? 1 : 0,
+      checked: goal.checked,
+      title: goal.title,
+    })),
+    milestones: read.milestones.milestones.map((milestone) => ({
+      milestoneId: milestone.milestoneId,
+      name: milestone.name,
+      status: milestone.status,
+      target: milestone.target,
+      progress: milestone.totalIssues === 0 ? null : { done: milestone.resolvedIssues, total: milestone.totalIssues },
+      openIssues: milestone.openIssues,
+      issues: read.milestones.issues
+        .filter((issue) => issue.milestoneId === milestone.milestoneId)
+        .map((issue) => ({ id: issue.id, title: issue.title, disposition: issue.disposition })),
+    })),
+    unassignedIssues: read.milestones.unassignedIssues,
+    markdown: content?.contentMarkdown ?? null,
   };
 }
 
@@ -97,9 +175,16 @@ export const DEFAULT_PROJECT_FEATURE: ProjectFeature = "roadmap";
 /**
  * The arm a feature's body starts in, given the roadmap read.
  *
- * `absent` is the case IA §5 cares about: a project with **no roadmap authority
- * row** says so instead of rendering an empty board. A roadmap that exists with
- * no milestones is `empty`, not `absent` — the concept is declared.
+ * Two different zeroes, and IA §4 says they must never collapse:
+ *
+ *  - a project with **no roadmap authority row** (`_default` is the real case) is
+ *    `absent` — no direction, no goals, no milestone set, and no empty board or
+ *    zero-width bar to imply otherwise;
+ *  - a roadmap that exists with an empty milestone set is `empty` — the concept is
+ *    declared and the set happens to be empty.
+ *
+ * `null` here means absent, not unreadable: a failed read answers `unavailable`
+ * through `projection`/the transport, so a `null` payload cannot be a failure.
  */
 export function roadmapFeatureArm(read: {
   data: RoadmapDTO | null;
@@ -111,4 +196,16 @@ export function roadmapFeatureArm(read: {
   if (read.data === null) return { kind: "absent" };
   if (read.data.authority.state === "absent") return { kind: "absent" };
   return { kind: "populated", value: read.data };
+}
+
+/**
+ * The Roadmap feature's arm, resolving one level further than the read: a
+ * populated roadmap with no milestones *and* no content is the `empty` arm of the
+ * feature body, while an absent roadmap never becomes a board.
+ */
+export function roadmapBody(raw: Resolved<RoadmapDTO>): Resolved<RoadmapModel> {
+  if (raw.kind !== "populated") return raw;
+  const model = roadmapModel(raw.value, raw.value.content);
+  if (model.milestones.length === 0 && model.goals.length === 0) return { kind: "empty" };
+  return { kind: "populated", value: model };
 }
