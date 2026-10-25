@@ -1,0 +1,222 @@
+/**
+ * Base layer for `@mstar-harness/ui` — reset, typography, focus ring and the
+ * two contract hooks the components rely on (the named container and the
+ * forced-colors treatment of the status dot).
+ *
+ * This file styles ELEMENTS, never a component's class. A component's own
+ * rules live in its sibling `*.module.css`; the only selectors here are
+ * element selectors, `[data-ms-*]` contract attributes and the `.ms-container`
+ * layout hook. Every colour comes from a token — a bare colour literal in this
+ * file fails the token contract test.
+ *
+ * Typography is deliberately small: the product register is a dense developer
+ * tool (DESIGN.md § Type ramp). 13/20 is the base; 14 is the only emphasis step
+ * above it, 16 the screen title, 20 the page title.
+ */
+
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+
+html,
+body {
+  margin: 0;
+  padding: 0;
+}
+
+[data-ms-theme="light"] {
+  color-scheme: light;
+}
+
+[data-ms-theme="dark"] {
+  color-scheme: dark;
+}
+
+body {
+  background: var(--ms-bg-canvas);
+  color: var(--ms-text-primary);
+  font-family: var(--ms-font-sans);
+  font-size: var(--ms-fs-13);
+  line-height: var(--ms-lh-13);
+  font-weight: var(--ms-fw-regular);
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
+}
+
+h1,
+h2,
+h3,
+h4 {
+  margin: 0;
+  font-weight: var(--ms-fw-semibold);
+}
+
+h1 {
+  font-size: var(--ms-fs-16);
+  line-height: var(--ms-lh-16);
+  letter-spacing: -0.01em;
+}
+
+h2 {
+  font-size: var(--ms-fs-14);
+  line-height: var(--ms-lh-14);
+  font-weight: var(--ms-fw-medium);
+}
+
+h3,
+h4 {
+  font-size: var(--ms-fs-12);
+  line-height: var(--ms-lh-12);
+  font-weight: var(--ms-fw-medium);
+}
+
+p {
+  margin: 0;
+  font-size: var(--ms-fs-13);
+  line-height: var(--ms-lh-13);
+}
+
+small,
+[data-ms-size="meta"] {
+  font-size: var(--ms-fs-11);
+  line-height: var(--ms-lh-11);
+}
+
+code,
+kbd,
+pre,
+samp {
+  font-family: var(--ms-font-mono);
+  font-size: var(--ms-fs-12);
+  line-height: var(--ms-lh-12);
+  font-variant-numeric: tabular-nums;
+}
+
+pre {
+  margin: 0;
+  overflow: auto;
+}
+
+a {
+  color: var(--ms-accent);
+  text-decoration: none;
+}
+
+a:hover {
+  text-decoration: underline;
+}
+
+hr {
+  height: 0;
+  margin: var(--ms-space-3) 0;
+  border: 0;
+  border-top: var(--ms-hairline);
+}
+
+button,
+input,
+select,
+textarea {
+  font: inherit;
+  color: inherit;
+}
+
+::selection {
+  background: var(--ms-accent-soft);
+}
+
+/*
+ * Focus ring: 2px accent with a 2px surface gap. Never removed — a host may
+ * restyle it, but the product never ships `outline: none` on a focusable node.
+ */
+:focus-visible {
+  outline: 2px solid var(--ms-accent);
+  outline-offset: 2px;
+  border-radius: var(--ms-radius-xs);
+}
+
+/**
+ * The layout container. Product layout reflows by the width a view is GIVEN,
+ * so every page body and every host pane declares this container and the
+ * components write `@container pane (…)` against it. A viewport media query is
+ * allowed only for window chrome (DESIGN.md § Container width).
+ *
+ * `min-inline-size: 0` is the other half of the contract: a container that can
+ * gain a horizontal scrollbar because a descendant overflows is not a
+ * container, it is the page.
+ */
+.ms-container {
+  container: pane / inline-size;
+  min-inline-size: 0;
+}
+
+/**
+ * Forced colors: the status dot stops depending on colour.
+ *
+ * In forced-colors mode every background is forced to the system palette, so
+ * five tone-coloured dots become five identical dots. The product already
+ * carries the literal enum text beside every dot (DESIGN.md § Status
+ * treatments), which is the primary channel; this block restores the SECOND
+ * channel by giving each tone its own SHAPE. Shape survives greyscale, print,
+ * high-contrast and a colour-blind reader.
+ *
+ * The default dot box (size, radius, colour) is `StatusDot`'s; this block only
+ * takes over when colour is unavailable, which is why it targets the contract
+ * attribute rather than the component class.
+ */
+@media (forced-colors: active) {
+  [data-ms-tone] {
+    background: CanvasText;
+    border: 1px solid CanvasText;
+    border-radius: var(--ms-radius-full);
+  }
+
+  [data-ms-tone="danger"] {
+    background: CanvasText;
+    border-color: CanvasText;
+    border-radius: var(--ms-radius-full);
+    transform: none;
+  }
+
+  [data-ms-tone="warning"] {
+    background: Canvas;
+    border-color: CanvasText;
+    border-width: 2px;
+    border-radius: var(--ms-radius-full);
+    transform: none;
+  }
+
+  [data-ms-tone="success"] {
+    background: CanvasText;
+    border-color: CanvasText;
+    border-radius: 0;
+    transform: none;
+  }
+
+  [data-ms-tone="neutral"] {
+    background: Canvas;
+    border-color: CanvasText;
+    border-radius: 0;
+    transform: none;
+  }
+
+  [data-ms-tone="purple"] {
+    background: CanvasText;
+    border-color: CanvasText;
+    border-radius: 0;
+    transform: rotate(45deg);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
+}

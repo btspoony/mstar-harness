@@ -1,0 +1,75 @@
+.row,
+.rowTall {
+  display: flex;
+  align-items: center;
+  gap: var(--ms-space-2);
+  min-inline-size: 0;
+  min-block-size: 26px;
+  border-block-end: var(--ms-hairline);
+  font-size: var(--ms-fs-12);
+  line-height: var(--ms-lh-12);
+}
+
+.rowTall {
+  align-items: flex-start;
+  padding-block: 6px;
+  min-block-size: var(--ms-row-h);
+}
+
+.row:last-child,
+.rowTall:last-child {
+  border-block-end: 0;
+}
+
+.leading {
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+}
+
+.primary {
+  min-inline-size: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-family: var(--ms-font-mono);
+  color: var(--ms-text-primary);
+}
+
+.meta {
+  flex: none;
+  color: var(--ms-text-muted);
+  font-family: var(--ms-font-mono);
+  font-size: var(--ms-fs-11);
+}
+
+.trailing {
+  margin-inline-start: auto;
+  flex: none;
+  color: var(--ms-text-muted);
+  font-family: var(--ms-font-mono);
+  font-size: var(--ms-fs-11);
+}
+
+[role="button"]:hover {
+  background: var(--ms-bg-hover);
+}
+
+[role="button"]:focus-visible {
+  outline: 2px solid var(--ms-accent);
+  outline-offset: -2px;
+}
+
+/* Below the stack floor the meta and the trailing value drop to a second line. */
+@container pane (max-width: 479px) {
+  .row {
+    flex-wrap: wrap;
+    row-gap: 1px;
+    padding-block: 4px;
+  }
+
+  .meta {
+    flex: 1 1 100%;
+    padding-inline-start: 11px;
+  }
+}

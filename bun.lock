@@ -5,7 +5,7 @@
     "": {
       "name": "morning-star",
       "dependencies": {
-        "@mstar-harness/engine": "^4.0.8",
+        "@mstar-harness/engine": "^4.0.9",
       },
       "devDependencies": {
         "@oh-my-pi/pi-coding-agent": "^18.11.0",
@@ -25,7 +25,7 @@
     },
     "packages/cli": {
       "name": "@mstar-harness/cli",
-      "version": "4.0.8",
+      "version": "4.0.9",
       "bin": {
         "mstar-harness": "dist/mstar-harness.js",
         "mstar": "dist/mstar-harness.js",
@@ -41,13 +41,14 @@
         "@mstar-harness/commands": "workspace:*",
         "@mstar-harness/engine": "workspace:*",
         "@mstar-harness/judgment": "workspace:*",
+        "@mstar-harness/ui": "workspace:*",
         "htm": "^3.1.1",
         "preact": "^11.0.1",
       },
     },
     "packages/commands": {
       "name": "@mstar-harness/commands",
-      "version": "4.0.8",
+      "version": "4.0.9",
       "dependencies": {
         "@mstar-harness/engine": "workspace:*",
         "@mstar-harness/judgment": "workspace:*",
@@ -61,7 +62,7 @@
     },
     "packages/dsh": {
       "name": "@mstar-harness/dsh",
-      "version": "4.0.8",
+      "version": "4.0.9",
       "dependencies": {
         "zod": "^4.2.0",
       },
@@ -70,6 +71,7 @@
         "@deepseek-ai/dsh-util-code-language": "0.2.1-rc.3",
         "@mstar-harness/commands": "workspace:*",
         "@mstar-harness/engine": "workspace:*",
+        "@mstar-harness/ui": "workspace:*",
         "@shikijs/langs": "^4.5.0",
         "@tanstack/react-virtual": "3.14.19",
         "@types/node": "^26.6.4",
@@ -173,7 +175,7 @@
     },
     "packages/engine": {
       "name": "@mstar-harness/engine",
-      "version": "4.0.8",
+      "version": "4.0.9",
       "dependencies": {
         "mdast-util-from-markdown": "^2.0.3",
         "mdast-util-gfm": "^3.1.0",
@@ -198,7 +200,7 @@
     },
     "packages/omp": {
       "name": "@mstar-harness/omp",
-      "version": "4.0.8",
+      "version": "4.0.9",
       "devDependencies": {
         "@mstar-harness/commands": "workspace:*",
         "@mstar-harness/engine": "workspace:*",
@@ -213,7 +215,7 @@
     },
     "packages/opencode": {
       "name": "@mstar-harness/opencode",
-      "version": "4.0.8",
+      "version": "4.0.9",
       "dependencies": {
         "@opencode-ai/plugin": "1.4.8",
       },
@@ -224,7 +226,7 @@
     },
     "packages/opencode-v2": {
       "name": "@mstar-harness/opencode-v2",
-      "version": "4.0.8",
+      "version": "4.0.9",
       "dependencies": {
         "@opencode/plugin": "2.0.26",
         "@opencode/schema": "2.0.26",
@@ -233,6 +235,20 @@
       "devDependencies": {
         "@mstar-harness/commands": "workspace:*",
         "@mstar-harness/engine": "workspace:*",
+      },
+    },
+    "packages/ui": {
+      "name": "@mstar-harness/ui",
+      "version": "4.0.9",
+      "devDependencies": {
+        "@mstar-harness/engine": "workspace:*",
+        "@types/node": "^26.6.4",
+        "@types/react": "~18.3.1",
+        "@types/react-dom": "~18.3.1",
+        "bun-types": "^1.2.17",
+        "react": "^18.3.1",
+        "react-dom": "^18.3.1",
+        "typescript": "^7.0.2",
       },
     },
   },
@@ -579,6 +595,8 @@
 
     "@mstar-harness/opencode-v2": ["@mstar-harness/opencode-v2@workspace:packages/opencode-v2"],
 
+    "@mstar-harness/ui": ["@mstar-harness/ui@workspace:packages/ui"],
+
     "@npmcli/agent": ["@npmcli/agent@4.0.2", "", { "dependencies": { "agent-base": "^7.1.0", "http-proxy-agent": "^7.0.0", "https-proxy-agent": "^7.0.1", "lru-cache": "^11.2.1", "socks-proxy-agent": "^8.0.3" } }, "sha512-EUEuWAxnL07Sp5/iC/1X6Xj+XThUvnbei9zfRWZdEXa7lss9RTHMhAHBeg+MZ5To9s/gGaSI+UwZTPdYMvKSeg=="],
 
     "@npmcli/arborist": ["@npmcli/arborist@9.4.0", "", { "dependencies": { "@isaacs/string-locale-compare": "^1.1.0", "@npmcli/fs": "^5.0.0", "@npmcli/installed-package-contents": "^4.0.0", "@npmcli/map-workspaces": "^5.0.0", "@npmcli/metavuln-calculator": "^9.0.2", "@npmcli/name-from-folder": "^4.0.0", "@npmcli/node-gyp": "^5.0.0", "@npmcli/package-json": "^7.0.0", "@npmcli/query": "^5.0.0", "@npmcli/redact": "^4.0.0", "@npmcli/run-script": "^10.0.0", "bin-links": "^6.0.0", "cacache": "^20.0.1", "common-ancestor-path": "^2.0.0", "hosted-git-info": "^9.0.0", "json-stringify-nice": "^1.1.4", "lru-cache": "^11.2.1", "minimatch": "^10.0.3", "nopt": "^9.0.0", "npm-install-checks": "^8.0.0", "npm-package-arg": "^13.0.0", "npm-pick-manifest": "^11.0.1", "npm-registry-fetch": "^19.0.0", "pacote": "^21.0.2", "parse-conflict-json": "^5.0.1", "proc-log": "^6.0.0", "proggy": "^4.0.0", "promise-all-reject-late": "^1.0.0", "promise-call-limit": "^3.0.1", "semver": "^7.3.7", "ssri": "^13.0.0", "treeverse": "^3.0.0", "walk-up-path": "^4.0.0" }, "bin": { "arborist": "bin/index.js" } }, "sha512-4Bm8hNixJG/sii1PMnag0V9i/sGOX9VRzFrUiZMSBJpGlLR38f+Btl85d07G9GL56xO0l0OZjvrGNYsDYp0xKA=="],
@@ -844,6 +862,8 @@
     "@types/prop-types": ["@types/prop-types@15.7.15", "", {}, "sha512-F6bEyamV9jKGAFBEmlQnesRPGOQqS2+Uwi0Em15xenOxHaf2hv6L8YCVn3rPdPJOiJfPiCnLIRyvwVaqMY3MIw=="],
 
     "@types/react": ["@types/react@18.3.31", "", { "dependencies": { "@types/prop-types": "*", "csstype": "^3.2.2" } }, "sha512-vfEqpXTvwT91yhmwdfouStN2hSKwTvyRs8qpLfADyrq/kxDw0hZM7Wk9Ug1FELj8hIby+S/+kQCSRFF32nv2Qw=="],
+
+    "@types/react-dom": ["@types/react-dom@18.3.7", "", { "peerDependencies": { "@types/react": "^18.0.0" } }, "sha512-MEe3UeoENYVFXzoXEWsvcpg6ZvlrFNlOQ7EOsvhI3CfAXwzPfO8Qwuxd40nepsYKqyyVQnTdEfv68q91yLcKrQ=="],
 
     "@types/unist": ["@types/unist@3.0.3", "", {}, "sha512-ko/gIFJRv177XgZsZcBwnqJN5x/Gien8qNOn0D5bQU/zAzVf9Zt3BlcUiLqhV9y4ARk0GbT3tnUiPNgnTXzc/Q=="],
 
@@ -1427,7 +1447,7 @@
 
     "powershell-utils": ["powershell-utils@0.2.1", "", {}, "sha512-C+y9x90UElAddDZmV4qOx9W53B61PO7cIqWz2dQsWlwswuq4mr8NEwytdGKboYbQlGZ3awrkTeNvcZiZNHnQ8A=="],
 
-    "preact": ["preact@11.0.1", "", { "peerDependencies": { "preact-render-to-string": ">=6.7.0" }, "optionalPeers": ["preact-render-to-string"] }, "sha512-TNNwEq++jYNHy747LziCjPRVgEwnLSOIOAw/oYcjI3Tdnubx2EXtt76I0an8PATvUWtx/DX1kFIg1eFN+O/fkw=="],
+    "preact": ["preact@11.0.2", "", { "peerDependencies": { "preact-render-to-string": ">=6.7.0" }, "optionalPeers": ["preact-render-to-string"] }, "sha512-ofG+Lqznbt13JKDjdWPLTo5ONBqcNgidqnLRzJBG6PZjzGXOLRd5y9r448+HUofTyDbgKWVrPhHP0IgcxEZslQ=="],
 
     "proc-log": ["proc-log@6.1.0", "", {}, "sha512-iG+GYldRf2BQ0UDUAd6JQ/RwzaQy6mXmsk/IzlYyal4A4SNFw54MeH4/tLkF4I5WoWG9SQwuqWzS99jaFQHBuQ=="],
 

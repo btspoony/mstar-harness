@@ -1,0 +1,301 @@
+/**
+ * The Chinese copy.
+ *
+ * Typed as `Copy` (which is `typeof en`), so a key present in one locale and
+ * missing in the other is a `tsc` error rather than a runtime fallback. The parity
+ * test then checks the runtime shape, because a type can be satisfied by a cast
+ * and a test cannot.
+ *
+ * The same three rules as `en.ts` hold here: no enum value, id, path or timestamp
+ * (those stay literal English — a Chinese `open` would break a copy-paste into the
+ * CLI); no key for a fact IA §8 removed; and the two copy constraints the read
+ * model fixes — the plan line is the plan's *recorded* progress, and the five gate
+ * steps are all named while only the first four can be marked.
+ */
+import type { Copy } from "./en.ts";
+
+export const zh: Copy = {
+  state: {
+    "not-applicable": {
+      labelWord: "无法判定",
+      body: "这一项无法对应到具体对象，因此答案尚未确定。",
+    },
+    absent: {
+      labelWord: "未声明此概念",
+      body: "该记录没有声明这一项。",
+      pointer: "这个概念在本项目的其他位置存在。",
+    },
+    empty: {
+      labelWord: "空",
+      body: "读取成功，但目前没有内容。",
+      hint: "这里还没有创建任何内容。",
+    },
+    "empty-filtered": {
+      labelWord: "空",
+      body: "没有记录符合当前筛选条件。",
+      hint: "清除某个筛选条件可能会看到更多。",
+    },
+    unavailable: {
+      labelWord: "不可读",
+      body: "这一项读取失败。",
+    },
+  },
+
+  common: {
+    previous: "上一页",
+    next: "下一页",
+    clear: "清除筛选",
+    anyOption: "全部",
+    notKnown: "未知",
+    dateUnknown: "日期未知",
+    none: "无",
+    dash: "—",
+  },
+
+  overview: {
+    pageTitle: "总览",
+    workflowsHeading: "进行中的工作流",
+    plansProgress: (done, total) => `${done}/${total} 个计划`,
+    residualsHeading: "未关闭的遗留项",
+    residualsTotal: (open) => `共 ${open} 项未关闭`,
+    iterationHeading: "交付",
+    iterationNoIteration: "还没有迭代",
+    gateStep: (step, of) => `第 ${step} / ${of} 步`,
+    milestonesHeading: "里程碑",
+    milestonesSummary: (milestones, open) => `${milestones} 个里程碑 · ${open} 项未关闭`,
+    milestoneProgress: (done, total) => `${done}/${total}`,
+    milestoneOpen: (open) => `${open} 项未关闭`,
+    projection: {
+      current: "最新",
+      stale: "已过期",
+      unavailable: "不可读",
+    },
+    severityLabels: {
+      critical: "致命",
+      high: "高",
+      medium: "中",
+      low: "低",
+      nit: "细微",
+    },
+  },
+
+  focus: {
+    pageTitle: "当前会话",
+    bindingBound: (workflowId) => `已绑定到 ${workflowId}`,
+    bindingTerminal: (workflowId) => `${workflowId} 已终止`,
+    bindingUnbound: "本会话尚未绑定任何工作流。",
+    pickerLabel: "选择工作流",
+    boardHeading: "计划",
+    boardEmpty: "计划",
+    groupHeading: (status, count) => `${status} · ${count}`,
+    plansProgress: (done, total) => `${done}/${total}`,
+    progressLabel: "已记录进展",
+    blockedLabel: "已记录阻塞原因",
+    progressAbsent: "该计划没有记录进展。",
+    planStatusAbsent: "未记录状态",
+    deliveryHeading: "交付",
+    deliveryLine: (iterationId, step, of) => `${iterationId} · 第 ${step} / ${of} 步`,
+    deliveryNoIteration: "无迭代",
+    deliveryUnknownStep: "迭代 · 未记录交付步骤",
+    enforcementLabel: (flag) => `强制执行：${flag}`,
+  },
+
+  issues: {
+    pageTitle: "问题",
+    tableCaption: "问题",
+    columns: {
+      id: "编号",
+      title: "标题",
+      severity: "严重度",
+      disposition: "处置",
+      kind: "类型",
+      project: "项目",
+      milestone: "里程碑",
+      lastActivity: "最近活动",
+    },
+    filters: {
+      disposition: "处置",
+      project: "项目",
+      kind: "类型",
+      severity: "严重度",
+      search: "搜索",
+      clear: "清除筛选",
+    },
+    resultSummary: (total) => `${total} 条结果`,
+    range: (from, to, total) => `第 ${from}–${to} 条，共 ${total} 条`,
+  },
+
+  issueDetail: {
+    breadcrumb: { label: "位置导航", current: "问题" },
+    identityHeading: "事实",
+    fields: {
+      id: "编号",
+      project: "项目",
+      milestone: "里程碑",
+      kind: "类型",
+      severity: "严重度",
+      disposition: "处置",
+      owner: "负责人",
+      occurrences: "出现次数",
+      registeredAt: "登记时间",
+      closedAt: "关闭时间",
+      noMilestone: "无",
+      noOwner: "未指派",
+    },
+    occurrenceCount: (count) => `已出现 ${count} 次`,
+    impactHeading: "影响",
+    acceptanceHeading: "验收标准",
+    closureNoteHeading: "关闭说明",
+  },
+
+  workflows: {
+    pageTitle: "工作流",
+    tableCaption: "工作流",
+    columns: {
+      id: "编号",
+      title: "标题",
+      status: "状态",
+      root: "注册位置",
+      updated: "更新时间",
+      plans: "计划",
+    },
+    plansProgress: (done, total) => `${done}/${total} 个计划`,
+    truncated: (shown, total) => `显示 ${shown} / ${total} 条`,
+    noCatalogTitle: "无目录记录",
+    noRoot: "—",
+    executionUnavailable: "该工作流的执行投影读取失败。",
+  },
+
+  workflowDetail: {
+    breadcrumb: { label: "位置导航", current: "工作流" },
+    executionHeading: "执行",
+    planTableHeading: "计划",
+    catalogHeading: "目录",
+    fields: {
+      id: "编号",
+      type: "类型",
+      status: "状态",
+      phase: "阶段",
+      startedAt: "开始时间",
+      endedAt: "结束时间",
+      updatedAt: "更新时间",
+      branchBase: "分支基线",
+      branchSource: "分支来源",
+      branchIntegration: "分支集成分支",
+      branchTarget: "分支目标",
+      root: "注册位置",
+      title: "标题",
+      lifecycle: "生命周期",
+      documentKind: "文档类型",
+      notStarted: "未开始",
+      noCatalog: "无目录记录",
+    },
+    planColumns: { planId: "计划", title: "标题", status: "状态", progress: "进展", doneAt: "完成时间" },
+    planProgressAbsent: "没有记录进展。",
+    executionUnavailableLead: "执行信息不可读",
+    absence: {
+      "not-applicable": {
+        labelWord: "无法判定",
+        heading: "工作流",
+        body: "这次读取无法对应到具体项目，因此工作流尚未确定。",
+      },
+      absent: {
+        labelWord: "未声明此概念",
+        heading: "工作流",
+        body: "这里没有该工作流，它可能已被退役或从未注册。",
+        pointer: "工作流列表展示存储中实际存在的内容。",
+      },
+      empty: {
+        labelWord: "空",
+        heading: "工作流",
+        body: "读取成功，但该工作流尚未记录任何内容。",
+        hint: "首次注册计划时会创建这条记录。",
+      },
+      unavailable: { labelWord: "不可读", heading: "工作流", body: "该工作流读取失败。" },
+    },
+  },
+
+  iterations: {
+    pageTitle: "迭代",
+    tableCaption: "迭代",
+    columns: {
+      id: "迭代",
+      title: "标题",
+      lifecycle: "生命周期",
+      execution: "罗盘",
+      delivery: "交付",
+      plans: "计划",
+      started: "开始时间",
+    },
+    gateStep: (step, of) => `第 ${step} / ${of} 步`,
+    noCompass: "无罗盘",
+    plansProgress: (done, total) => `${done}/${total} 个计划`,
+    attribution: (arm) => (arm === "present" ? "迭代按项目归属。" : "没有任何迭代归属到项目。"),
+  },
+
+  iterationDetail: {
+    breadcrumb: { label: "位置导航", current: "迭代" },
+    compassHeading: "罗盘",
+    planTableHeading: "计划",
+    catalogHeading: "目录",
+    executionHeading: "执行",
+    fields: {
+      id: "迭代",
+      title: "标题",
+      lifecycle: "生命周期",
+      root: "注册位置",
+      compassStatus: "罗盘状态",
+      startedAt: "开始时间",
+      endedAt: "结束时间",
+      workflow: "工作流",
+      noWorkflow: "无",
+      noCompass: "无罗盘",
+      noSummary: "未记录摘要",
+      notStarted: "未开始",
+    },
+    gateStep: (step, of) => `第 ${step} / ${of} 步`,
+    gateStepLabels: {
+      start: "启动",
+      execute: "执行",
+      close: "收口",
+      "pr-delivery": "PR 交付",
+      "merge-ready": "可合并",
+    },
+    gateNoCompass: "交付",
+    planColumns: { planId: "计划", title: "标题", status: "状态", progress: "进展", doneAt: "完成时间" },
+    planProgressAbsent: "没有记录进展。",
+  },
+
+  projects: {
+    pageTitle: "项目",
+    tableCaption: "项目",
+    columns: { title: "标题", id: "编号", lifecycle: "生命周期", openIssues: "未关闭", description: "描述" },
+    openIssues: (count) => `${count} 项未关闭`,
+    noDescription: "—",
+  },
+
+  projectDetail: {
+    breadcrumb: { label: "位置导航", trail: "项目" },
+    fields: { title: "身份", id: "编号", lifecycle: "生命周期", path: "路径", description: "描述", noDescription: "—" },
+    tabLabel: "项目功能",
+    features: { roadmap: "路线图", issues: "问题", iterations: "迭代" },
+    roadmap: {
+      directionHeading: "方向",
+      goalsHeading: "目标",
+      milestonesHeading: "里程碑",
+      markdownHeading: "已存储的文档",
+      noDirection: "路线图没有记录方向。",
+      goalChecked: "已完成",
+      goalUnchecked: "未完成",
+      milestoneProgress: (done, total) => `${done}/${total}`,
+      milestoneOpen: (open) => `${open} 项未关闭`,
+      noTarget: "无目标日期",
+      unassigned: (count) => `${count} 项未归属里程碑`,
+      absentNextStep: (features) => `本项目仍可使用：${features}。`,
+    },
+    scope: {
+      label: (projectId) => `项目：${projectId}`,
+      clear: "清除项目范围",
+    },
+  },
+};

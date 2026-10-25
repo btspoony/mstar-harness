@@ -1,0 +1,40 @@
+/* The clip. `min-inline-size: 0` lets the element shrink inside a flex or grid
+   cell instead of forcing the cell wider, which is what keeps a table column
+   from pushing its neighbour out of the container. */
+.truncated,
+.truncatedBlock {
+  display: inline-block;
+  min-inline-size: 0;
+  max-inline-size: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  vertical-align: bottom;
+  border-radius: var(--ms-radius-xs);
+}
+
+.truncatedBlock {
+  display: block;
+  inline-size: 100%;
+}
+
+/* The keyboard path to the full value: the same string the element carries,
+   surfaced as an overlay so nothing is hidden from a reader who cannot hover. */
+.truncated:focus-visible::after,
+.truncatedBlock:focus-visible::after {
+  content: attr(data-ms-full);
+  position: absolute;
+  z-index: 1;
+  margin-block-start: 2px;
+  padding: var(--ms-space-1) var(--ms-space-2);
+  max-inline-size: 48ch;
+  border: var(--ms-hairline);
+  border-radius: var(--ms-radius-sm);
+  background: var(--ms-bg-surface);
+  color: var(--ms-text-primary);
+  font-family: var(--ms-font-sans);
+  font-size: var(--ms-fs-12);
+  line-height: var(--ms-lh-12);
+  white-space: normal;
+  overflow-wrap: anywhere;
+}

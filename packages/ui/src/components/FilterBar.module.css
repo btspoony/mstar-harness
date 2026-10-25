@@ -1,0 +1,123 @@
+.wrap {
+  display: flex;
+  flex-direction: column;
+  gap: var(--ms-space-2);
+  padding-block: var(--ms-space-2);
+}
+
+.fields {
+  display: flex;
+  align-items: center;
+  gap: var(--ms-space-2);
+  flex-wrap: wrap;
+}
+
+.field {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--ms-space-1);
+  min-inline-size: 0;
+}
+
+.fieldLabel {
+  font-size: var(--ms-fs-11);
+  color: var(--ms-text-muted);
+}
+
+.select {
+  block-size: 26px;
+  min-inline-size: 96px;
+  padding: 0 var(--ms-space-1);
+  border: var(--ms-hairline);
+  border-radius: var(--ms-radius-sm);
+  background: var(--ms-bg-surface);
+  color: var(--ms-text-primary);
+  font-size: var(--ms-fs-12);
+}
+
+.search {
+  block-size: 26px;
+  flex: 1 1 200px;
+  min-inline-size: 0;
+  padding: 0 var(--ms-space-2);
+  border: var(--ms-hairline);
+  border-radius: var(--ms-radius-sm);
+  background: var(--ms-bg-surface);
+  color: var(--ms-text-primary);
+  font-size: var(--ms-fs-12);
+}
+
+.clear {
+  block-size: 26px;
+  padding: 0 var(--ms-space-2);
+  border: var(--ms-hairline);
+  border-radius: var(--ms-radius-sm);
+  background: var(--ms-bg-surface);
+  color: var(--ms-text-primary);
+  font-size: var(--ms-fs-12);
+  cursor: pointer;
+}
+
+.clear:disabled {
+  color: var(--ms-text-muted);
+  background: var(--ms-bg-inset);
+  cursor: default;
+}
+
+.summary {
+  margin-inline-start: auto;
+  font-family: var(--ms-font-mono);
+  font-size: var(--ms-fs-11);
+  color: var(--ms-text-muted);
+}
+
+.chips {
+  display: flex;
+  align-items: center;
+  gap: var(--ms-space-1);
+  flex-wrap: wrap;
+}
+
+.chip {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--ms-space-1);
+  block-size: 18px;
+  padding: 0 var(--ms-space-1);
+  border: var(--ms-hairline);
+  border-radius: var(--ms-radius-xs);
+  background: var(--ms-bg-inset);
+  color: var(--ms-text-secondary);
+  font-family: var(--ms-font-mono);
+  font-size: var(--ms-fs-11);
+}
+
+.chipClear {
+  border: 0;
+  padding: 0;
+  background: none;
+  color: var(--ms-text-muted);
+  font-size: var(--ms-fs-11);
+  cursor: pointer;
+}
+
+/* Below the table floor the fields take the full width instead of shrinking. */
+@container pane (max-width: 619px) {
+  .field {
+    flex: 1 1 45%;
+  }
+
+  .select {
+    inline-size: 100%;
+    min-inline-size: 0;
+  }
+
+  .search {
+    flex: 1 1 100%;
+  }
+
+  .summary {
+    flex: 1 1 100%;
+    margin-inline-start: 0;
+  }
+}
