@@ -5,7 +5,7 @@
     "": {
       "name": "morning-star",
       "dependencies": {
-        "@mstar-harness/engine": "^4.0.8",
+        "@mstar-harness/engine": "^4.0.9",
       },
       "devDependencies": {
         "@oh-my-pi/pi-coding-agent": "^18.11.0",
@@ -25,7 +25,7 @@
     },
     "packages/cli": {
       "name": "@mstar-harness/cli",
-      "version": "4.0.8",
+      "version": "4.0.9",
       "bin": {
         "mstar-harness": "dist/mstar-harness.js",
         "mstar": "dist/mstar-harness.js",
@@ -47,7 +47,7 @@
     },
     "packages/commands": {
       "name": "@mstar-harness/commands",
-      "version": "4.0.8",
+      "version": "4.0.9",
       "dependencies": {
         "@mstar-harness/engine": "workspace:*",
         "@mstar-harness/judgment": "workspace:*",
@@ -61,7 +61,7 @@
     },
     "packages/dsh": {
       "name": "@mstar-harness/dsh",
-      "version": "4.0.8",
+      "version": "4.0.9",
       "dependencies": {
         "zod": "^4.2.0",
       },
@@ -173,7 +173,7 @@
     },
     "packages/engine": {
       "name": "@mstar-harness/engine",
-      "version": "4.0.8",
+      "version": "4.0.9",
       "dependencies": {
         "mdast-util-from-markdown": "^2.0.3",
         "mdast-util-gfm": "^3.1.0",
@@ -198,7 +198,7 @@
     },
     "packages/omp": {
       "name": "@mstar-harness/omp",
-      "version": "4.0.8",
+      "version": "4.0.9",
       "devDependencies": {
         "@mstar-harness/commands": "workspace:*",
         "@mstar-harness/engine": "workspace:*",
@@ -213,7 +213,7 @@
     },
     "packages/opencode": {
       "name": "@mstar-harness/opencode",
-      "version": "4.0.8",
+      "version": "4.0.9",
       "dependencies": {
         "@opencode-ai/plugin": "1.4.8",
       },
@@ -224,7 +224,7 @@
     },
     "packages/opencode-v2": {
       "name": "@mstar-harness/opencode-v2",
-      "version": "4.0.8",
+      "version": "4.0.9",
       "dependencies": {
         "@opencode/plugin": "2.0.26",
         "@opencode/schema": "2.0.26",
@@ -233,6 +233,21 @@
       "devDependencies": {
         "@mstar-harness/commands": "workspace:*",
         "@mstar-harness/engine": "workspace:*",
+      },
+    },
+    "packages/ui": {
+      "name": "@mstar-harness/ui",
+      "version": "4.0.9",
+      "dependencies": {
+        "@mstar-harness/engine": "workspace:*",
+      },
+      "devDependencies": {
+        "@types/node": "^26.6.4",
+        "@types/react": "~18.3.1",
+        "bun-types": "^1.2.17",
+        "react": "^18.3.1",
+        "react-dom": "^18.3.1",
+        "typescript": "^7.0.2",
       },
     },
   },
@@ -578,6 +593,8 @@
     "@mstar-harness/opencode": ["@mstar-harness/opencode@workspace:packages/opencode"],
 
     "@mstar-harness/opencode-v2": ["@mstar-harness/opencode-v2@workspace:packages/opencode-v2"],
+
+    "@mstar-harness/ui": ["@mstar-harness/ui@workspace:packages/ui"],
 
     "@npmcli/agent": ["@npmcli/agent@4.0.2", "", { "dependencies": { "agent-base": "^7.1.0", "http-proxy-agent": "^7.0.0", "https-proxy-agent": "^7.0.1", "lru-cache": "^11.2.1", "socks-proxy-agent": "^8.0.3" } }, "sha512-EUEuWAxnL07Sp5/iC/1X6Xj+XThUvnbei9zfRWZdEXa7lss9RTHMhAHBeg+MZ5To9s/gGaSI+UwZTPdYMvKSeg=="],
 
