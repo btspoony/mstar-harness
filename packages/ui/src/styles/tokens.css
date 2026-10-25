@@ -1,0 +1,124 @@
+/**
+ * Morning Star design tokens — the implementation of `DESIGN.md`.
+ *
+ * `DESIGN.md` is the token SSOT; this file is its only CSS implementation.
+ * One name set, two value sets: `:root` holds the light values and
+ * `[data-ms-theme="dark"]` holds the dark ones under the SAME names, so no
+ * component ever asks which theme it is in.
+ *
+ * The scheme is an ATTRIBUTE, never a media query (plan Technical decisions
+ * §4): the host sets `data-ms-theme="dark"` on the product wrapper from its own
+ * resolved colour scheme. No `--ms-*` value aliases a host token such as
+ * `--dsw-*`, so both hosts consume this file unchanged.
+ *
+ * Shape of this file: typography → spacing → shape → colour roles → dark.
+ * One declaration per line: the token contract test parses them line-wise
+ * (`src/styles/tokens.test.ts`).
+ */
+
+:root {
+  /* ---- families -------------------------------------------------------- */
+  --ms-font-sans: system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", "Noto Sans SC", Arial, sans-serif;
+  --ms-font-mono: ui-monospace, SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace;
+
+  /* ---- type ramp (size / line-height pair per step) --------------------- */
+  --ms-fs-11: 11px;
+  --ms-lh-11: 16px;
+  --ms-fs-12: 12px;
+  --ms-lh-12: 16px;
+  --ms-fs-13: 13px;
+  --ms-lh-13: 20px;
+  --ms-fs-14: 14px;
+  --ms-lh-14: 20px;
+  --ms-fs-16: 16px;
+  --ms-lh-16: 24px;
+  --ms-fs-20: 20px;
+  --ms-lh-20: 28px;
+  --ms-fw-regular: 400;
+  --ms-fw-medium: 500;
+  --ms-fw-semibold: 600;
+
+  /* ---- spacing rhythm (4px base) --------------------------------------- */
+  --ms-space-1: 4px;
+  --ms-space-2: 8px;
+  --ms-space-3: 12px;
+  --ms-space-4: 16px;
+  --ms-space-6: 24px;
+  --ms-space-8: 32px;
+  --ms-space-12: 48px;
+
+  /* ---- shape ----------------------------------------------------------- */
+  --ms-row-h: 32px;
+  --ms-row-h-sm: 28px;
+  --ms-header-h: 44px;
+  --ms-radius-xs: 2px;
+  --ms-radius-sm: 4px;
+  --ms-radius-md: 6px;
+  --ms-radius-full: 999px;
+  --ms-hairline: 1px solid var(--ms-border-hairline);
+
+  /* ---- colour roles — light -------------------------------------------- */
+  --ms-bg-canvas: #f6f7f8;
+  --ms-bg-surface: #ffffff;
+  --ms-bg-inset: #f1f2f4;
+  --ms-bg-hover: #f5f6f7;
+  --ms-bg-selected: #edf3fe;
+  --ms-border-hairline: #e3e5e9;
+  --ms-border-strong: #8b8f96;
+  --ms-text-primary: #191c20;
+  --ms-text-secondary: #565d67;
+  --ms-text-muted: #6d727b;
+  --ms-accent: #2d6be5;
+  --ms-accent-soft: #eaf0fd;
+  --ms-success: #197f4f;
+  --ms-warning: #96590a;
+  --ms-danger: #b7271f;
+  --ms-neutral: #747b8a;
+  --ms-purple: #693da2;
+}
+
+/* Layout constants — documentation, not custom properties.
+ *
+ * A container query condition cannot read a custom property
+ * (`@container pane (max-width: var(--x))` is invalid CSS), so the breakpoints
+ * live here as constants and are written literally in the rules that use them.
+ * `DESIGN.md` § Container width states the same numbers; the token contract
+ * test proves the two lists agree. Below the two floors a component must
+ * degrade instead of shrinking:
+ *
+ *   900px  --ms-reflow-2col     two-column compositions fold to one column
+ *   620px  --ms-reflow-table    table columns collapse into a two-line row
+ *   480px  --ms-reflow-stack    chrome stacks, navigation wraps
+ *   300px  --ms-table-floor     below this a table scrolls inside its own
+ *                              labelled container, never the page
+ *   220px  --ms-chart-floor     below this the chart is omitted and its
+ *                              tabular alternative stands alone
+ */
+
+/*
+ * ---- colour roles — dark -------------------------------------------------
+ *
+ * A designed palette, not an inversion: surfaces lift ~4% per layer and every
+ * status tone is re-tuned for contrast on the dark ground. It redeclares
+ * exactly the colour roles above and nothing else — typography, spacing and
+ * shape do not change with the scheme.
+ */
+[data-ms-theme="dark"] {
+  --ms-bg-canvas: #0c0e11;
+  --ms-bg-surface: #14171b;
+  --ms-bg-inset: #1a1e23;
+  --ms-bg-hover: #1c2127;
+  --ms-bg-selected: #182338;
+  --ms-border-hairline: #242930;
+  --ms-border-strong: #5a6573;
+  --ms-text-primary: #e7eaee;
+  --ms-text-secondary: #a4acb7;
+  --ms-text-muted: #7c8491;
+  --ms-accent: #7aa2ff;
+  --ms-accent-soft: #1a2740;
+  --ms-success: #4ec289;
+  --ms-warning: #e8ae61;
+  --ms-danger: #e47a72;
+  --ms-neutral: #878f9a;
+  --ms-purple: #bb91e8;
+}

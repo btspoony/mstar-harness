@@ -161,6 +161,7 @@ export const VERSION_SURFACES: readonly VersionSurface[] = [
   { label: "@mstar-harness/opencode", path: "packages/opencode/package.json" },
   { label: "@mstar-harness/engine", path: "packages/engine/package.json" },
   { label: "@mstar-harness/commands", path: "packages/commands/package.json" },
+  { label: "@mstar-harness/ui", path: "packages/ui/package.json" },
   { label: "@mstar-harness/opencode-v2", path: "packages/opencode-v2/package.json" },
   { label: "@mstar-harness/dsh", path: "packages/dsh/package.json" },
   { label: "@mstar-harness/omp", path: "packages/omp/package.json" },

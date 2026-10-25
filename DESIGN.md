@@ -1,68 +1,71 @@
 ---
-version: 0.1.0
-name: Morning Star Local Dashboard
-description: A quiet, readable light-theme dashboard for local governance records and execution visibility. Read-only by design.
+version: 1.0.0
+name: "Morning Star Unified Design System"
+description: "One design system for the Morning Star harness: the standalone dashboard and the DeepSeek Harness panel render the same tokens, type ramp, density and status treatments. One name set, two value sets — light and dark are declared under the same names, never as a second file."
+
 colors:
-  background-100: "#ffffff"
-  background-200: "#f5f7fa"
-  background-300: "#edf1f6"
-  gray-400: "#d5dce5"
-  gray-600: "#8995a6"
-  gray-900: "#506070"
-  gray-1000: "#1c2430"
-  blue-700: "#1756b8"
-  blue-800: "#12458f"
-  blue-100: "#eaf1ff"
-  red-700: "#b42318"
-  red-100: "#fff0ed"
-  amber-700: "#a35300"
-  amber-100: "#fff5e5"
-  green-700: "#147d48"
-  green-100: "#eaf8ef"
-  purple-700: "#7042a0"
+  # Surface roles. bg-canvas is the page ground; bg-surface is a panel or table;
+  # bg-inset is a chip, track or code block; bg-hover / bg-selected are row states.
+  accent: "#2d6be5"
+  accent-soft: "#eaf0fd"
+  bg-canvas: "#f6f7f8"
+  bg-hover: "#f5f6f7"
+  bg-inset: "#f1f2f4"
+  bg-selected: "#edf3fe"
+  bg-surface: "#ffffff"
+  # Border roles. hairline separates; border-strong is a control boundary (>=3:1).
+  border-hairline: "#e3e5e9"
+  border-strong: "#8b8f96"
+  # Text roles. primary = titles/values, secondary = labels, muted = timestamps.
+  # All three clear 4.5:1 on both bg-surface and bg-canvas.
+  text-primary: "#191c20"
+  text-secondary: "#565d67"
+  text-muted: "#6d727b"
+  # Status tones, ordered by lightness so greyscale keeps them apart.
+  danger: "#b7271f"
+  warning: "#96590a"
+  success: "#197f4f"
+  neutral: "#747b8a"
+  purple: "#693da2"
+
 typography:
-  heading-28:
-    fontFamily: "system-ui, -apple-system, BlinkMacSystemFont, Segoe UI, sans-serif"
-    fontSize: 28px
-    fontWeight: 600
-    lineHeight: 1.25
-    letterSpacing: -0.02em
-  heading-20:
-    fontFamily: "system-ui, -apple-system, BlinkMacSystemFont, Segoe UI, sans-serif"
+  page-title:
+    fontFamily: "system-ui, -apple-system, Segoe UI, Roboto, Helvetica Neue, Noto Sans SC, Arial, sans-serif"
     fontSize: 20px
     fontWeight: 600
-    lineHeight: 1.4
+    lineHeight: 28px
     letterSpacing: -0.01em
-  copy-16:
-    fontFamily: "system-ui, -apple-system, BlinkMacSystemFont, Segoe UI, sans-serif"
+  screen-title:
+    fontFamily: "system-ui, -apple-system, Segoe UI, Roboto, Helvetica Neue, Noto Sans SC, Arial, sans-serif"
     fontSize: 16px
-    fontWeight: 400
-    lineHeight: 1.6
-    letterSpacing: 0
-  copy-14:
-    fontFamily: "system-ui, -apple-system, BlinkMacSystemFont, Segoe UI, sans-serif"
-    fontSize: 14px
-    fontWeight: 400
-    lineHeight: 1.5
-    letterSpacing: 0
-  label-14:
-    fontFamily: "system-ui, -apple-system, BlinkMacSystemFont, Segoe UI, sans-serif"
-    fontSize: 14px
     fontWeight: 600
-    lineHeight: 1.4
-    letterSpacing: 0
-  button-14:
-    fontFamily: "system-ui, -apple-system, BlinkMacSystemFont, Segoe UI, sans-serif"
+    lineHeight: 24px
+    letterSpacing: -0.01em
+  emphasis:
+    fontFamily: "system-ui, -apple-system, Segoe UI, Roboto, Helvetica Neue, Noto Sans SC, Arial, sans-serif"
     fontSize: 14px
-    fontWeight: 600
-    lineHeight: 1.4
+    fontWeight: 500
+    lineHeight: 20px
     letterSpacing: 0
-  copy-13-mono:
-    fontFamily: "ui-monospace, SFMono-Regular, Menlo, Consolas, monospace"
+  body:
+    fontFamily: "system-ui, -apple-system, Segoe UI, Roboto, Helvetica Neue, Noto Sans SC, Arial, sans-serif"
     fontSize: 13px
     fontWeight: 400
-    lineHeight: 1.6
+    lineHeight: 20px
     letterSpacing: 0
+  meta:
+    fontFamily: "system-ui, -apple-system, Segoe UI, Roboto, Helvetica Neue, Noto Sans SC, Arial, sans-serif"
+    fontSize: 12px
+    fontWeight: 400
+    lineHeight: 16px
+    letterSpacing: 0
+  mono-meta:
+    fontFamily: "ui-monospace, SFMono-Regular, Menlo, Consolas, Liberation Mono, monospace"
+    fontSize: 11px
+    fontWeight: 400
+    lineHeight: 16px
+    letterSpacing: -0.01em
+
 spacing:
   base: 4px
   1: 4px
@@ -71,105 +74,299 @@ spacing:
   4: 16px
   6: 24px
   8: 32px
-  10: 40px
-  16: 64px
-  24: 96px
+  12: 48px
+
 rounded:
-  sm: 6px
-  md: 10px
+  xs: 2px
+  sm: 4px
+  md: 6px
   full: 9999px
-components:
-  button-primary:
-    backgroundColor: "{colors.blue-700}"
-    textColor: "{colors.background-100}"
-    typography: "{typography.button-14}"
-    rounded: "{rounded.sm}"
-    padding: "0 16px"
-    height: 44px
-  button-secondary:
-    backgroundColor: "{colors.background-100}"
-    textColor: "{colors.gray-1000}"
-    borderColor: "{colors.gray-600}"
-    typography: "{typography.button-14}"
-    rounded: "{rounded.sm}"
-    padding: "0 16px"
-    height: 44px
-  input:
-    backgroundColor: "{colors.background-100}"
-    textColor: "{colors.gray-1000}"
-    borderColor: "{colors.gray-600}"
-    typography: "{typography.copy-16}"
-    rounded: "{rounded.sm}"
-    padding: "0 12px"
-    height: 44px
 ---
 
-<!-- COMPLETENESS_LEVEL: 1 — last audited 2026-09-18 -->
+# Morning Star Unified Design System
 
-# Morning Star Local Dashboard
+One product, one implementation, two hosts. This document is the **single token
+authority** for both the standalone dashboard (`mstar dashboard`) and the DeepSeek
+Harness panel. `packages/ui/src/styles/tokens.css` is its only CSS implementation and
+`packages/ui/src/styles/base.css` its only element layer; a token that exists in one and
+not the other is a defect, and `packages/ui/src/styles/tokens.test.ts` fails on it.
 
-## Overview
+The register is a **restrained developer tool** — the company of Linear, Vercel and
+Raycast internals. Compact rows, strong typographic hierarchy, almost no decoration,
+tables and lists doing the work, colour reserved for status. Not a marketing page and not
+a spacious card dashboard.
 
-A local, read-only information surface for people reviewing confirmed findings, execution progress and direction. Prioritize readable evidence and truthful state over decorative metrics. White surfaces, a cool neutral page, restrained blue navigation, compact tables and generous detail text. No gradients, ornamental cards, remote fonts or marketing hero. This is the light theme only; dark mode and a full design-system library are not current requirements.
+## One name set, two value sets
 
-Frontmatter is the sole token-value authority. Body rules explain its use. Components consume tokens rather than inventing alternate color/spacing scales.
+The light values are the frontmatter above. The dark values live **in the same file** —
+`tokens.css` declares the same names in a `[data-ms-theme="dark"]` block — and there is
+deliberately **no `DESIGN.dark.md`**. Two files would let the two value sets drift apart
+name by name, which is exactly the failure this system exists to prevent; the parity
+guarantee is a test (`dark redeclares exactly the colour roles and no non-colour token`)
+instead of a convention two files must remember.
 
-## Information architecture
+The scheme reaches the tree as an **attribute, never a media query**. A host sets
+`data-ms-theme="light|dark"` on the product wrapper from whatever it resolved — the dsh
+host passes its own `ctx.theme`, the dashboard passes its stored preference or the OS
+preference. There is no `"system"` value and no `prefers-color-scheme` rule anywhere in
+the package: a component never asks which theme it is in, and a host that offers "follow
+the OS" resolves it itself before setting the attribute.
 
-Four primary destinations: **Issues** (default), **Workflows**, **Iterations**, **Roadmap**. Use a simple top navigation and project selector. Issues contains list, selected detail and one issue-flow chart panel; the chart is not a fifth destination. The persistent footer reads “Read-only · Make changes with the CLI”. No create/edit/close/drag-to-state affordances.
+No `--ms-*` value may alias a host token (`--dsw-*` or any other). The token sheet is the
+same file in both builds; the only thing that differs is who computed the attribute.
 
-Issue list defaults to open items across all projects, sorted by severity then latest real activity then stable ID. Filters remain visible with a clear-filters action. Clicking a row/title opens a detail region/page; back preserves filters and focus. Detail displays identity, impact, acceptance, evidence, occurrences, disposition transitions and relations, without nesting cards inside cards.
+## Colour roles
 
-Workflows show projected phase/progress/leases with freshness disclosure. Iterations show catalog membership and documents independently from execution state. Roadmap shows project direction/goals as text, not editable checkboxes. Status badges must name whether they describe catalog lifecycle, issue disposition or projected execution; never use the same unlabeled “status” for all three.
+Every role is a **role**, not a shade: a component asks for the meaning it wants. Contrast
+figures below are measured, not estimated — WCAG 2.x relative-luminance ratio against the
+ground named in the last column.
 
-## Colors and typography
+| Role | Light | Dark | Means | Contrast |
+| --- | --- | --- | --- | --- |
+| `bg-canvas` | `#f6f7f8` | `#0c0e11` | The page ground | — |
+| `bg-surface` | `#ffffff` | `#14171b` | A panel, table or popover body | — |
+| `bg-inset` | `#f1f2f4` | `#1a1e23` | Chips, progress tracks, code blocks | — |
+| `bg-hover` | `#f5f6f7` | `#1c2127` | Row hover | — |
+| `bg-selected` | `#edf3fe` | `#182338` | Selected row, applied filter | — |
+| `border-hairline` | `#e3e5e9` | `#242930` | A separator, never a boundary | 1.26:1 light / 1.23:1 dark — decorative only |
+| `border-strong` | `#8b8f96` | `#5a6573` | A control or input boundary | **3.03:1 / 3.26:1** on `bg-canvas` |
+| `text-primary` | `#191c20` | `#e7eaee` | Titles and values | **17.10:1 / 14.90:1** on `bg-surface` |
+| `text-secondary` | `#565d67` | `#a4acb7` | Labels, secondary values | **6.65:1 / 7.84:1** |
+| `text-muted` | `#6d727b` | `#7c8491` | Timestamps and field labels | **4.84:1 / 4.77:1** on surface, **4.51:1 / 5.12:1** on canvas |
+| `accent` | `#2d6be5` | `#7aa2ff` | Links, focus ring, active navigation | **4.50:1 / 7.77:1** on `bg-canvas` |
+| `accent-soft` | `#eaf0fd` | `#1a2740` | Chart area, quiet active row | — |
+| `success` | `#197f4f` | `#4ec289` | Resolved, done, delivered | **5.01:1 / 8.05:1** on `bg-surface` |
+| `warning` | `#96590a` | `#e8ae61` | Stale, violations, `high` | **5.63:1 / 9.12:1** |
+| `danger` | `#b7271f` | `#e47a72` | `critical`, failures | **6.32:1 / 6.27:1** |
+| `neutral` | `#747b8a` | `#878f9a` | `open`, `Todo`, inactive | **4.25:1 / 5.50:1** |
+| `purple` | `#693da2` | `#bb91e8` | Terminal lifecycle | **7.53:1 / 7.13:1** |
 
-Primary body text uses gray-1000; secondary text uses gray-900. Blue is links/focus/selection, not success. Red signals error or critical/high severity with a text label; amber signals stale/warning; green signals resolved only, not waived/duplicate/superseded. Neutral/purple terminal labels remain textually distinct. No information conveyed only by color.
+Rules:
 
-Use heading-28 once per view, heading-20 for detail sections. Tables and helper text use copy-14; evidence and longer prose use copy-16. IDs, hashes and timestamps use mono; numeric columns use tabular figures. Wrap long paths/untrusted text with overflow-wrap, never squeeze columns to illegibility. Truncation requires a keyboard-accessible way to read the full text. Dates retain their precision; absent dates say “Date unknown”, not zero or the import time.
+- **Every colour role clears the contrast its job needs.** Text roles clear 4.5:1 against
+  both `bg-surface` and `bg-canvas`; `border-strong` clears the 3:1 a control boundary
+  needs; the five status tones clear 3:1 as non-text graphics. `border-hairline` is the
+  one deliberate exception and is a **separator only** — nothing may be identified on
+  screen by a hairline alone.
+- **`accent` is not success.** Blue is links, focus and selection. Green means resolved;
+  amber means stale or violated; red means failed or `critical`; purple is reserved for
+  terminal lifecycle. A status never borrows the accent colour.
+- **No component writes a colour literal.** A hex value outside `tokens.css` fails the
+  token contract test.
 
-## Spacing and responsive layout
+## Type ramp
 
-Rhythm: 8px inside a control group, 16px between related groups, 32px between sections. Desktop content max-width 1440px, side padding 32px; smaller screens 16px. Flat white table/detail regions with 1px separators, not stacked ornamental cards.
+Six steps, no more. The base is **13/20** — smaller than a web page and larger than a
+terminal, because this is a dense surface read at arm's length.
 
-| Breakpoint | Min width | Layout |
-|---|---:|---|
-| sm | 480px | Filters wrap naturally; one-column detail |
-| md | 768px | Navigation and filters share rows when space permits |
-| lg | 1024px | Optional issue list/detail split, minimum readable detail width 360px |
-| xl | 1440px | Cap content width; no stretched text paragraphs |
+| Step | Size / line | Weight | Used for |
+| --- | --- | --- | --- |
+| `page-title` | 20 / 28 | 600 | The one page title a host shell shows |
+| `screen-title` | 16 / 24 | 600 | A destination's title, a record's title |
+| `emphasis` | 14 / 20 | 500 | The single emphasis step above base — a section lead, a highlighted value |
+| `body` | 13 / 20 | 400 | Row titles, field values, prose |
+| `meta` | 12 / 16 | 400–500 | Column headers, field labels, chips |
+| `mono-meta` | 11 / 16 | 400 | Timestamps, ids, paths, enum values |
 
-Below sm, keep headings, filters, freshness notice and navigation visible; issue rows collapse secondary metadata below title instead of causing page-wide horizontal scroll. Data tables may scroll inside a labelled container. Chart keeps readable axes and an accessible table alternative; do not scale text down to fit a phone.
+- Sans for copy, mono for identifiers. **Numerals are tabular** in every column that can
+  align: counts, progress fractions, timestamps.
+- Prose never goes below 13px. Mono never goes above 12px inside a row.
+- No step exists "for a bigger screen": the container gets narrower, the ramp does not
+  grow.
 
-## Controls, focus and accessibility
+## Spacing, row heights, borders, radius
 
-Navigation, filters and inputs have visible labels and a minimum 44px target. Buttons are navigation/query actions only. Hover: primary blue-800, secondary background-200; active background-300 for neutral controls. Focus-visible outline 2px blue-700 with 2px surface gap; never remove focus. Disabled controls use neutral fill/text and native disabled semantics, not merely opacity. Input errors add red border plus a specific message associated by aria-describedby.
+The rhythm is **4px**, and the whole layout is a multiple of it.
 
-Use semantic header/nav/main/footer, native buttons/links/selects, table captions/headers and exactly one h1. Skip-to-content link, keyboard-accessible details and filters, visible focus and Escape/back behavior where appropriate. Announce loaded results and source errors with a polite live region without moving focus. Focus returns to the originating issue link when closing details. Do not rely on hover tooltips for evidence.
+| Token | Value | Used for |
+| --- | --- | --- |
+| `space-1` | 4px | Dot gap, inline gap |
+| `space-2` | 8px | Inside a control group |
+| `space-3` | 12px | Panel padding and the gap between panels |
+| `space-4` | 16px | Between blocks and between columns |
+| `space-6` | 24px | A detail column's gutter |
+| `space-8` | 32px | A section break |
+| `space-12` | 48px | Page top rhythm |
+| `row-h` | 32px | A table row |
+| `row-h-sm` | 28px | A dense side list |
+| `header-h` | 44px | A host navigation bar |
+| `radius-xs` | 2px | Chips, badges |
+| `radius-sm` | 4px | Inputs, buttons |
+| `radius-md` | 6px | Panels |
+| `radius-full` | 9999px | Dots, progress tracks |
 
-Text contrast target WCAG AA: at least 4.5:1 body text and 3:1 large text/interactive boundaries. Use tested foreground/surface pairs from these tokens; muted border gray-400 is decorative only. Severity/status labels combine text with shape/icon only when the icon adds meaning. No external icon/font dependency is required.
+- **One hairline separates groups.** No nested cards, no card shadows, no elevation scale:
+  hierarchy comes from type, spacing and borders. The only shadow in the system is the
+  focus layer.
+- No row grows to fit a badge. Metadata goes on the second line of the same cell (§
+  Container width) or it does not belong in the row.
+- Focus is `2px solid var(--ms-accent)` with a `2px` offset, and is **never** removed.
 
-## Empty, stale and error states
+## Status treatments
 
-- **No issues yet:** “No issues captured. Use the CLI to record a confirmed finding.” A CLI command hint is text, not a fake web mutation button.
-- **No matches:** “No issues match these filters.” Provide Clear Filters, preserve navigation.
-- **No catalog records / no execution data:** distinguish an empty registered catalog from an iteration that has never started execution.
-- **Stale projection:** amber notice on every affected view names source and reason, shows last successful build time and checked time. Retained data is explicitly labelled stale, not current.
-- **Unavailable initial projection:** show unavailable state and diagnostic, never zero active workflows or “all clear”.
-- **Store/runtime failure:** server startup refusal or structured error state; never an empty success page. Error copy says what failed and the safe next action, without leaking secrets or raw stacks.
+**The dot is not the signal — the label is.** Every status renders as a 6px dot, the
+literal enum text (`open`, `resolved`, `InProgress`, `Done`, `running`, `phase-2-execute`),
+and a weight: `critical` and `high` carry 500, everything else 400. No filled pill, no
+tinted row background, no coloured border. Colour is a secondary cue.
 
-## History and chart honesty
+`StatusDot` takes the label as a **required** prop, so a dot-only usage does not
+type-check. Enum values are never translated; they are identifier text.
 
-History contains only recorded occurrences and disposition transitions. Migrated records carry a visible migration/source label. A migrated closed record shows capture and closure only; unknown intermediate events/durations are absent. Render source data as text, never raw HTML or unsanitized Markdown.
+### Rule 1 — tone luminance separation
 
-One chart family: cumulative captured vs retired issues. Solid blue capture and dashed neutral/purple retirement lines also have explicit labels. Every terminal disposition counts retired; retired never means all were fixed. Known-dated gap is shown alongside authoritative current open count; missing dates are disclosed and excluded from dated buckets, not imputed. Pre-store dates are labelled register history. Include a tabular data alternative and an empty/incomplete-history message.
+The five tones must stay distinguishable **in greyscale**: a printed report, a screenshot
+in a review, a projector, a colour-blind reader. Every tone therefore sits in its own
+lightness band, with a minimum gap of **3 L\*** (CIE L\*) between neighbours. Re-ordering a
+value or adding a tone means re-checking the gaps, not just the hue.
 
-## Motion, elevation and content
+| Tone | Light | L\* | Dark | L\* |
+| --- | --- | ---: | --- | ---: |
+| `purple` (terminal) | `#693da2` | 35.9 | `#bb91e8` | 67.0 |
+| `danger` | `#b7271f` | 40.6 | `#e47a72` | 63.0 |
+| `warning` | `#96590a` | 43.7 | `#e8ae61` | 75.0 |
+| `success` | `#197f4f` | 46.9 | `#4ec289` | 70.9 |
+| `neutral` | `#747b8a` | 51.5 | `#878f9a` | 59.1 |
 
-No animation is needed for data changes. Optional focus/hover transition ≤120ms ease-out; prefers-reduced-motion removes it. No chart entrance animation or looping refresh effects. Hierarchy comes from type, spacing and borders; avoid shadows except a restrained focus layer. No modal is required for the basic IA.
+Light order: purple < danger < warning < success < neutral, gaps **4.7 / 3.1 / 3.2 / 4.6**.
+Dark order: neutral < danger < purple < success < warning, gaps **3.9 / 4.0 / 3.9 / 4.1**.
+The order differs between themes on purpose — each theme is tuned against its own ground —
+so the **gap** is the invariant, never the order.
 
-Use plain, precise labels and short action verbs: View Issue, Clear Filters, Back to Issues. Retain original severity/disposition vocabulary in details. Do not call stale, missing or refused data healthy. Avoid congratulatory “successfully”, fabricated timestamps and unsupported speed/reliability claims.
+### Rule 2 — forced colors
 
-## Completeness and upgrade boundary
+In forced-colors mode every background is replaced by the system palette and five coloured
+dots become five identical dots. `base.css` restores the second channel by giving each tone
+a distinct **shape** under `@media (forced-colors: active)`:
 
-Level 1 is intentional: concrete palette, body/heading typography, nine-step spacing, radii and breakpoints are complete; common controls and accessibility/state rules are additionally specified. No claim of Level 2 full scales or Level 3 dual-theme coverage. Revisit broader component/token scales only when a new approved UI requirement needs them; do not infer dark mode from system preference.
+| Tone | Shape |
+| --- | --- |
+| `danger` | Filled circle |
+| `warning` | Hollow circle (2px ring) |
+| `success` | Filled square |
+| `neutral` | Hollow square |
+| `purple` | Filled diamond |
+
+Shape survives greyscale, print, high-contrast mode and a colour-blind reader. With Rule 1
+and the always-present label, status has three independent channels and depends on none of
+them being colour.
+
+## Status versus the four absence states
+
+Colour and tone say *how bad a record is*; they must never be borrowed to say *why there
+is nothing to show*. Each absence state owns a **copy family and a structural mark**, and a
+generic "no data" treatment is a defect:
+
+| State | Tone | Structural mark |
+| --- | --- | --- |
+| `not-applicable` | none — `text-muted` | Heading stays; the body is one sentence naming the undetermined subject |
+| `absent` | none — `text-muted` | Heading + absence line + a pointer to where the concept does exist. No zeroed counters, no empty grid |
+| `empty` | none — `text-secondary` | Heading + one explanatory line + the point-of-entry hint |
+| `unavailable` | `warning` | The panel keeps its place and its neighbours, and carries the read's own reason verbatim |
+| `populated` | the record's own tone | Normal rendering |
+
+`unavailable` is **per member, not per page**: one failed member degrades that member only.
+An undetermined value is never rendered as `0` — `0` means "the read succeeded and there is
+nothing", and a dash with a reason means "not known".
+
+## Container width
+
+**Product layout responds to the width a view is given, never to the viewport.** The
+viewport describes the window chrome; a screen describes its column. Every page body and
+every host pane declares `container: pane / inline-size` (the `.ms-container` hook in
+`base.css`), and components write `@container pane (…)` against it.
+
+A container query condition cannot read a custom property, so the breakpoints are
+**documented constants**, stated here and written literally in `tokens.css` and in the
+rules that use them. The token contract test proves the two lists agree.
+
+| Constant | Value | What changes below it |
+| --- | --- | --- |
+| `reflow-2col` | **900px** | Two-column detail and overview compositions fold to one column |
+| `reflow-table` | **620px** | Table columns collapse into a two-line row: primary cell on line 1, secondary facts as inline meta on line 2. Filters wrap to full-width fields |
+| `reflow-stack` | **480px** | Chrome stacks, navigation wraps, panel heads stack |
+| `table-floor` | **300px** | Below this a table scrolls inside its own labelled container, never the page |
+| `chart-floor` | **220px** | Below this the chart is omitted; its tabular alternative stands alone |
+
+- The dashboard's product area is the 1440px case; the dsh right Sidebar is the same
+  components at **720px** (its push default) and **400px** (dragged narrow). Same tree,
+  different container, no second implementation.
+- A component that cannot degrade below a floor **states the floor** rather than squeezing
+  into illegibility: a truncated cell always exposes its full text (hover `title`, plus a
+  focus-reachable affordance for keyboard), and a table below its floor scrolls inside its
+  labelled container.
+- Breakpoints are inherited: a new component reuses these five constants or it is a
+  review defect.
+
+## Token surface and how to change it
+
+The `--ms-*` custom properties are the whole contract; `packages/ui/src/index.ts` exports
+the scheme attribute, the tone vocabulary and the container name so no host re-types a
+string.
+
+Adding, renaming or removing a token is a **four-part change**, because each part is a
+check the others cannot make:
+
+1. `DESIGN.md` frontmatter (this document is the authority) — `colors` / `typography` /
+   `spacing` / `rounded`.
+2. `packages/ui/src/styles/tokens.css` — the same name in `:root` and, if it is a colour,
+   in `[data-ms-theme="dark"]` under the same name.
+3. A consumer, or an entry in `CONSUMED_BY_LATER_TASK` in `tokens.test.ts` naming the task
+   that will consume it. A token nobody consumes and nobody claims is deleted, not kept
+   "for later".
+4. `bun test packages/ui` — parity, consumption, no bare colour literal, no
+   `prefers-color-scheme`, the forced-colors block, and `DESIGN.md` ↔ `tokens.css` name-set
+   equality.
+
+## Predecessors — what this supersedes
+
+This document replaces the dashboard-only token set that stood here before it (a light-only
+palette with a Level-1 completeness marker) and **retires** `packages/dsh/DESIGN.md` and
+`packages/dsh/DESIGN.dark.md`. The panel's design contract was a second, competing token
+set that mapped host aliases one by one; both files were deleted rather than reduced to a
+pointer, because a `DESIGN.md` carrying a token frontmatter *is* a competing set and one
+without it fails this repository's own design-document lint. The panel's remaining
+host-specific obligation — resolving `--ms-*` through the host's own theme — belongs to the
+dsh adapter plan, not to a design document.
+
+The confirmed prototype (`iterations/iter-20261025-frontend-unification/prototypes/
+design-v1.html`, screen `Design tokens`) is the visual source of this system. Three values
+were corrected here for a measured reason rather than a preference: `text-muted`,
+`border-strong` and `accent` were raised to clear 4.5:1 (text) and 3:1 (control boundary)
+on their documented grounds, and the five status tones were re-spaced to the 3-L\*
+separation of Rule 1. The prototype's spacing rhythm, type ramp, row heights, radius scale,
+dot-based status treatment and container breakpoints are adopted unchanged.
+
+## Known tooling limitation — checklist key names
+
+The repository's design-document completeness checker (`mstar-design-md` →
+`completenessLevel`) scores a frontmatter by looking for fixed **legacy key names**
+(`background-100`, `gray-1000`, `blue-700`, `red-700`, `amber-700`, `copy-13`, `heading-20`, …).
+This system names roles, not shades, so the checker reports the colour and type items as
+missing even though the role set is complete — the frontmatter token validation itself
+passes. The equivalence is recorded here rather than satisfied by adding alias keys, because
+a second naming system in the same frontmatter is precisely the competing-token defect this
+document removes.
+
+| Checklist key it looks for | Role that carries it here |
+| --- | --- |
+| `background-100` | `bg-surface` |
+| `gray-1000` / `gray-900` | `text-primary` / `text-secondary` |
+| `blue-700` (accent scale) | `accent` |
+| `red-700` / `amber-700` | `danger` / `warning` |
+| `green-700` | `success` |
+| `copy-13` / `copy-14` | `body` / `emphasis` |
+| `heading-20` / `heading-28` | `screen-title` / `page-title` |
+
+A future change to the checker should teach it the role vocabulary; until then the gate that
+runs on every write (`validateDesignTokenFrontmatter`) is green, and the completeness score
+is a known false negative for this document.
+
+## Accessibility floor
+
+- Body text 4.5:1, control boundaries 3:1, status graphics 3:1 — measured in both themes
+  (tables above).
+- Status never depends on colour alone: label text, weight, and a distinct shape under
+  forced colors.
+- Focus is visible on every focusable element and is never suppressed.
+- `prefers-reduced-motion` removes motion; the product ships almost none to begin with.
+- No remote font, no CDN, no network request from any component: the asset budget is zero.
