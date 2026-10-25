@@ -185,6 +185,6 @@
     "typescript": "^7.0.2",
     "use-sync-external-store": "1.7.0",
     "vitest": "^5.0.3",
-    "zustand": "~4.4.7"
+    "zustand": "~5.0.16"
   }
 }
