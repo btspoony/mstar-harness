@@ -52,7 +52,6 @@ export type WorkflowDetailCopy = {
     lifecycle: string;
     documentKind: string;
     notStarted: string;
-    running: string;
     noCatalog: string;
   };
   planColumns: { planId: string; title: string; status: string; progress: string; doneAt: string };

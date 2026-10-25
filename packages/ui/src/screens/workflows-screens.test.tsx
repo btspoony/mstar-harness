@@ -138,7 +138,6 @@ const detailCopy: WorkflowDetailCopy = {
     lifecycle: "Lifecycle",
     documentKind: "Document kind",
     notStarted: "not started",
-    running: "running",
     noCatalog: "no catalog row",
   },
   planColumns: { planId: "Plan", title: "Title", status: "Status", progress: "Progress", doneAt: "Done" },

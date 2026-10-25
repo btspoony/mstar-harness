@@ -46,6 +46,7 @@ export type IterationDetailCopy = {
     noWorkflow: string;
     noCompass: string;
     noSummary: string;
+    notStarted: string;
   };
   /** `step N of 5` — the delivery position line. */
   gateStep: (step: number, of: number) => string;
@@ -54,7 +55,6 @@ export type IterationDetailCopy = {
   gateNoCompass: string;
   planColumns: { planId: string; title: string; status: string; progress: string; doneAt: string };
   planProgressAbsent: string;
-  fields_notStarted: string;
   unavailable: { labelWord: string; heading: string; body: string };
   absent: { labelWord: string; heading: string; body: string; pointer: string };
 };
@@ -83,7 +83,7 @@ function planColumns(copy: IterationDetailCopy): DataTableColumn<IterationPlanRo
       render: (plan) => (
         <span className={css.statusCell}>
           {plan.status === null ? (
-            <span className={css.muted}>{copy.fields_notStarted}</span>
+            <span className={css.muted}>{copy.fields.notStarted}</span>
           ) : (
             <StatusDot label={plan.status} tone={plan.statusTone as Tone} mono />
           )}

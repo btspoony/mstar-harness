@@ -1,0 +1,313 @@
+/**
+ * The English copy. This file is the **source list**: `zh.ts` is typed against
+ * `typeof en`, so a key missing on either side fails `tsc` before any test runs,
+ * and the parity test covers the runtime shape.
+ *
+ * Three rules this file is written to keep:
+ *
+ *  1. **No enum value, id, path or timestamp appears here.** `open`, `InProgress`,
+ *     `running`, `plans:…md`, `2026-10-25T…` are identifier text the product
+ *     renders verbatim; translating one would break a copy-paste into the CLI. The
+ *     parity test asserts their absence by scanning this file's values.
+ *  2. **No key exists for a fact IA §8 marks not-rendered.** There is no
+ *     occurrence, history, provenance, relation, lease, document, counter, trend,
+ *     identity-line or knowledge-rollup family — a translation pass cannot
+ *     resurrect a removed surface by adding a string.
+ *  3. **Two copy constraints the read model fixes.** The in-progress plan line
+ *     says the plan's *recorded* progress (and, when blocked, its *recorded*
+ *     reason) — never "the first uncompleted step", because the store carries no
+ *     checklist. The five gate-step labels name all five steps while the read can
+ *     only mark one of the first four.
+ */
+
+export const en = {
+  /** The four absence states own four key families; there is no "no data". */
+  state: {
+    "not-applicable": {
+      labelWord: "n/a",
+      body: "This does not resolve to a subject, so the answer is undetermined.",
+    },
+    absent: {
+      labelWord: "not declared",
+      body: "The record declares nothing here.",
+      pointer: "The concept exists elsewhere in this project.",
+    },
+    empty: {
+      labelWord: "empty",
+      body: "The read succeeded and there is nothing to show.",
+      hint: "Nothing has been created here yet.",
+    },
+    /** A filtered list's empty result — its own family, never the store's. */
+    "empty-filtered": {
+      labelWord: "empty",
+      body: "No record matches the current filters.",
+      hint: "Clearing a filter may reveal more.",
+    },
+    unavailable: {
+      labelWord: "unavailable",
+      body: "This could not be read.",
+    },
+  },
+
+  common: {
+    previous: "Previous",
+    next: "Next",
+    clear: "Clear filters",
+    anyOption: "Any",
+    notKnown: "Not known",
+    dateUnknown: "Date unknown",
+    none: "None",
+    dash: "—",
+  },
+
+  overview: {
+    pageTitle: "Overview",
+    workflowsHeading: "Active workflows",
+    plansProgress: (done: number, total: number) => `${done}/${total} plans`,
+    residualsHeading: "Open residuals",
+    residualsTotal: (open: number) => `${open} open`,
+    iterationHeading: "Delivery",
+    iterationNoIteration: "No iteration yet",
+    gateStep: (step: number, of: number) => `step ${step} of ${of}`,
+    milestonesHeading: "Milestones",
+    milestonesSummary: (milestones: number, open: number) => `${milestones} milestones · ${open} open`,
+    milestoneProgress: (done: number, total: number) => `${done}/${total}`,
+    milestoneOpen: (open: number) => `${open} open`,
+    projection: {
+      current: "current",
+      stale: "stale",
+      unavailable: "unavailable",
+    },
+    severityLabels: {
+      critical: "Critical",
+      high: "High",
+      medium: "Medium",
+      low: "Low",
+      nit: "Nit",
+    },
+  },
+
+  focus: {
+    pageTitle: "Focus",
+    bindingBound: (workflowId: string) => `Bound to ${workflowId}`,
+    bindingTerminal: (workflowId: string) => `${workflowId} is terminal`,
+    bindingUnbound: "No workflow is bound to this session.",
+    pickerLabel: "Pick a workflow",
+    boardHeading: "Plans",
+    boardEmpty: "Plans",
+    groupHeading: (status: string, count: number) => `${status} · ${count}`,
+    plansProgress: (done: number, total: number) => `${done}/${total}`,
+    /** The plan's RECORDED next move. Never "the first uncompleted step" (D26). */
+    progressLabel: "Recorded progress",
+    /** The plan's RECORDED blocked reason. */
+    blockedLabel: "Recorded blocked reason",
+    progressAbsent: "This plan records no progress.",
+    deliveryHeading: "Delivery",
+    deliveryLine: (iterationId: string, step: number, of: number) => `${iterationId} · step ${step} of ${of}`,
+    deliveryNoIteration: "No iteration",
+    enforcementLabel: (flag: string) => `Enforcement ${flag}`,
+  },
+
+  issues: {
+    pageTitle: "Issues",
+    tableCaption: "Issues",
+    columns: {
+      id: "ID",
+      title: "Title",
+      severity: "Severity",
+      disposition: "Disposition",
+      kind: "Kind",
+      project: "Project",
+      milestone: "Milestone",
+      lastActivity: "Last activity",
+    },
+    filters: {
+      disposition: "Disposition",
+      project: "Project",
+      kind: "Kind",
+      severity: "Severity",
+      search: "Search",
+      clear: "Clear filters",
+    },
+    resultSummary: (total: number) => `${total} results`,
+    range: (from: number, to: number, total: number) => `${from}–${to} of ${total}`,
+  },
+
+  issueDetail: {
+    breadcrumb: { label: "Breadcrumb", current: "Issues" },
+    identityHeading: "Fact",
+    fields: {
+      id: "ID",
+      project: "Project",
+      milestone: "Milestone",
+      kind: "Kind",
+      severity: "Severity",
+      disposition: "Disposition",
+      owner: "Owner",
+      occurrences: "Occurrences",
+      registeredAt: "Registered",
+      closedAt: "Closed",
+      noMilestone: "None",
+      noOwner: "Unassigned",
+    },
+    /** The count is the surviving fact; the rows it used to summarise are gone. */
+    occurrenceCount: (count: number) => `${count} seen`,
+    impactHeading: "Impact",
+    acceptanceHeading: "Acceptance criteria",
+    closureNoteHeading: "Closure note",
+  },
+
+  workflows: {
+    pageTitle: "Workflows",
+    tableCaption: "Workflows",
+    columns: {
+      id: "ID",
+      title: "Title",
+      status: "Status",
+      root: "Root",
+      updated: "Updated",
+      plans: "Plans",
+    },
+    plansProgress: (done: number, total: number) => `${done}/${total} plans`,
+    truncated: (shown: number, total: number) => `Showing ${shown} of ${total}`,
+    noCatalogTitle: "No catalog row",
+    noRoot: "—",
+    /** The degradation reason, not a badge. */
+    executionUnavailable: "The execution projection for this workflow could not be read.",
+  },
+
+  workflowDetail: {
+    breadcrumb: { label: "Breadcrumb", current: "Workflows" },
+    executionHeading: "Execution",
+    planTableHeading: "Plans",
+    catalogHeading: "Catalog",
+    fields: {
+      id: "ID",
+      type: "Type",
+      status: "Status",
+      phase: "Phase",
+      startedAt: "Started",
+      endedAt: "Ended",
+      updatedAt: "Updated",
+      branchBase: "Branch base",
+      branchSource: "Branch source",
+      branchIntegration: "Branch integration",
+      branchTarget: "Branch target",
+      root: "Root",
+      title: "Title",
+      lifecycle: "Lifecycle",
+      documentKind: "Document kind",
+      notStarted: "Not started",
+      noCatalog: "No catalog row",
+    },
+    planColumns: { planId: "Plan", title: "Title", status: "Status", progress: "Progress", doneAt: "Completed" },
+    planProgressAbsent: "Records no progress.",
+    executionUnavailableLead: "Execution unavailable",
+  },
+
+  iterations: {
+    pageTitle: "Iterations",
+    tableCaption: "Iterations",
+    columns: {
+      id: "Iteration",
+      title: "Title",
+      lifecycle: "Lifecycle",
+      execution: "Compass",
+      delivery: "Delivery",
+      plans: "Plans",
+      started: "Started",
+    },
+    gateStep: (step: number, of: number) => `step ${step} of ${of}`,
+    noCompass: "No compass",
+    plansProgress: (done: number, total: number) => `${done}/${total} plans`,
+    attribution: (arm: "present" | "absent"): string =>
+      arm === "present" ? "Iterations are attributed to projects." : "No iteration is attributed to any project.",
+  },
+
+  iterationDetail: {
+    breadcrumb: { label: "Breadcrumb", current: "Iterations" },
+    compassHeading: "Compass",
+    planTableHeading: "Plans",
+    catalogHeading: "Catalog",
+    executionHeading: "Execution",
+    fields: {
+      id: "Iteration",
+      title: "Title",
+      lifecycle: "Lifecycle",
+      root: "Root",
+      compassStatus: "Compass status",
+      startedAt: "Started",
+      endedAt: "Ended",
+      workflow: "Workflow",
+      noWorkflow: "None",
+      noCompass: "No compass",
+      noSummary: "No summary recorded",
+      notStarted: "Not started",
+    },
+    gateStep: (step: number, of: number) => `step ${step} of ${of}`,
+    /** All five steps are named; the read can only mark one of the first four. */
+    gateStepLabels: {
+      start: "Start",
+      execute: "Execute",
+      close: "Close",
+      "pr-delivery": "PR delivery",
+      "merge-ready": "Merge ready",
+    },
+    gateNoCompass: "Delivery",
+    planColumns: { planId: "Plan", title: "Title", status: "Status", progress: "Progress", doneAt: "Completed" },
+    planProgressAbsent: "Records no progress.",
+  },
+
+  projects: {
+    pageTitle: "Projects",
+    tableCaption: "Projects",
+    columns: { title: "Title", id: "ID", lifecycle: "Lifecycle", openIssues: "Open", description: "Description" },
+    openIssues: (count: number) => `${count} open`,
+    noDescription: "—",
+  },
+
+  projectDetail: {
+    breadcrumb: { label: "Breadcrumb", trail: "Projects" },
+    fields: { title: "Identity", id: "ID", lifecycle: "Lifecycle", path: "Path", description: "Description", noDescription: "—" },
+    tabLabel: "Project features",
+    /** The fixed three features, in their fixed order (IA §4). */
+    features: { roadmap: "Roadmap", issues: "Issues", iterations: "Iterations" },
+    roadmap: {
+      directionHeading: "Direction",
+      goalsHeading: "Goals",
+      milestonesHeading: "Milestones",
+      markdownHeading: "Stored document",
+      noDirection: "The roadmap records no direction.",
+      goalChecked: "Checked",
+      goalUnchecked: "Open",
+      milestoneProgress: (done: number, total: number) => `${done}/${total}`,
+      milestoneOpen: (open: number) => `${open} open`,
+      noTarget: "No target",
+      unassigned: (count: number) => `${count} unassigned`,
+      absentNextStep: (features: string) => `This project still has: ${features}.`,
+    },
+    scope: {
+      label: (projectId: string) => `project: ${projectId}`,
+      clear: "Clear the project scope",
+    },
+  },
+} as const;
+
+/**
+ * The shape every locale must provide: `en`'s **key set and function signatures**
+ * with the string literals widened.
+ *
+ * Without the widening, `as const` would type each English string as its own
+ * literal and no translation could satisfy `Copy` — the type would demand
+ * Chinese copy equal to the English. Widening keeps the structure exact (a missing
+ * or extra key still fails) and leaves the function signatures alone, so a locale
+ * cannot change `plansProgress`'s arity.
+ */
+type Widen<T> = T extends string
+  ? string
+  : T extends (...args: infer A) => infer R
+    ? (...args: A) => R
+    : { readonly [K in keyof T]: Widen<T[K]> };
+
+/** The copy tree every locale must provide. `zh.ts` is typed against it. */
+export type Copy = Widen<typeof en>;

@@ -138,6 +138,7 @@ const detailCopy: IterationDetailCopy = {
     noWorkflow: "none",
     noCompass: "no compass",
     noSummary: "no summary recorded",
+    notStarted: "not started",
   },
   gateStep: (step, of) => `step ${step} of ${of}`,
   gateStepLabels: {
@@ -150,7 +151,6 @@ const detailCopy: IterationDetailCopy = {
   gateNoCompass: "Delivery",
   planColumns: { planId: "Plan", title: "Title", status: "Status", progress: "Progress", doneAt: "Done" },
   planProgressAbsent: "records no progress",
-  fields_notStarted: "not started",
   unavailable: { labelWord: "unavailable", heading: "Iteration", body: "the read failed" },
   absent: { labelWord: "absent", heading: "Iteration", body: "no compass recorded", pointer: "back to the list" },
 };

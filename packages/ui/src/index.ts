@@ -102,6 +102,17 @@ export type { IterationDetailCopy, IterationDetailProps } from "./screens/Iterat
 export type { ProjectsCopy, ProjectsProps } from "./screens/Projects.tsx";
 export type { ProjectDetailCopy, ProjectDetailProps } from "./screens/ProjectDetail.tsx";
 
+/**
+ * The bilingual dictionary and the provider (Task 5).
+ *
+ * A screen's `*Copy` prop stays the shape; the dictionary is what fills it in
+ * each locale, and `useCopy()` is how a host hands it down.
+ */
+export { en, zh, copyFor, isLocale, absenceCopy, LOCALES } from "./locale/index.ts";
+export type { Copy, Locale, AbsenceCopyKey } from "./locale/index.ts";
+export { LocaleProvider, useCopy, useLocale } from "./locale/LocaleProvider.tsx";
+export type { LocaleContextValue, LocaleProviderProps } from "./locale/LocaleProvider.tsx";
+
 import { TONES, type Tone } from "./view-model/status.ts";
 
 /**
