@@ -7,7 +7,14 @@
  */
 import { describe, expect, test } from "bun:test";
 
-import { absenceCopyFamily, isAbsence, resolveMember, resolveRead, resolveSubjectMember } from "./state.ts";
+import {
+  absenceCopyFamily,
+  isAbsence,
+  resolveMember,
+  resolveRead,
+  resolveRecord,
+  resolveSubjectMember,
+} from "./state.ts";
 
 const read = <T>(data: T) => ({ state: "read" as const, data });
 
@@ -121,6 +128,30 @@ describe("an un-resolved subject is not-applicable, and only the resolver decide
       unresolvedReason: "n/a",
     });
     expect(arm).toEqual({ kind: "populated", value: ["a"] });
+  });
+});
+
+describe("a single-record read never claims absence for a null record", () => {
+  const projection = (generation: number | null) => ({ generation });
+
+  test("a null record is unavailable with the read's own reason, not absent", () => {
+    const arm = resolveRecord({ data: null, projection: projection(4) }, { unreadableReason: "record not readable" });
+    expect(arm).toEqual({ kind: "unavailable", reason: "record not readable" });
+  });
+
+  test("no projection generation is unavailable even when a record is present", () => {
+    const arm = resolveRecord({ data: { id: "I-1" }, projection: projection(null) }, { unreadableReason: "no generation" });
+    expect(arm).toEqual({ kind: "unavailable", reason: "no generation" });
+  });
+
+  test("a readable record is populated", () => {
+    const arm = resolveRecord({ data: { id: "I-1" }, projection: projection(4) }, { unreadableReason: "n/a" });
+    expect(arm).toEqual({ kind: "populated", value: { id: "I-1" } });
+  });
+
+  test("a pending read stays loading", () => {
+    const arm = resolveRecord({ data: null, projection: projection(4) }, { phase: "loading", unreadableReason: "n/a" });
+    expect(arm.kind).toBe("loading");
   });
 });
 

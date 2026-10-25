@@ -1,0 +1,185 @@
+/**
+ * `IssueDetail` — where the contraction cut deepest (IA §8.1, §8.2).
+ *
+ * The whole page is: one fact block (id, title, project, milestone, kind,
+ * severity, disposition, owner, **the occurrence count**, registered date, closed
+ * date), two long-text fields (impact, acceptance), and — only when the issue is
+ * closed — its closure note.
+ *
+ * It does **not** render occurrence rows, disposition transitions, provenance,
+ * relations, `externalUrl` / `externalId` / `provider` / `identityKey`, or
+ * `revision` / `createdAt` / `updatedAt`. The DTO still carries every one of
+ * them: §8.1 removes *drawing*, not data. The occurrence **count** stays, because
+ * "this keeps coming back" is a property of the problem while when and from where
+ * it came back is the log.
+ *
+ * The component cannot reach those facts by accident — `IssueDetailModel` does not
+ * carry them — and the test asserts the absence anyway, so a future field added
+ * to the model fails here instead of shipping.
+ */
+import { Collapsible } from "../components/Collapsible.tsx";
+import { EmptyState } from "../components/EmptyState.tsx";
+import { Field } from "../components/Field.tsx";
+import { FieldGroup } from "../components/FieldGroup.tsx";
+import { StatusDot } from "../components/StatusDot.tsx";
+import { TruncatedText } from "../components/TruncatedText.tsx";
+import { resolveRecord } from "../view-model/state.ts";
+import type { IssueDetailModel } from "../view-model/issues.ts";
+import type { Tone } from "../view-model/status.ts";
+import type { ReadProjection } from "@mstar-harness/engine";
+import css from "./IssueDetail.module.css";
+
+/** Every visible string this screen needs. Task 5 supplies them. */
+export type IssueDetailCopy = {
+  /** The trail back to the list. */
+  breadcrumb: { label: string; current: string };
+  identityHeading: string;
+  fields: {
+    id: string;
+    project: string;
+    milestone: string;
+    kind: string;
+    severity: string;
+    disposition: string;
+    owner: string;
+    occurrences: string;
+    registeredAt: string;
+    closedAt: string;
+    noMilestone: string;
+    noOwner: string;
+  };
+  /** `Seen 2 times` — the count, never the rows. */
+  occurrenceCount: (count: number) => string;
+  impactHeading: string;
+  acceptanceHeading: string;
+  closureNoteHeading: string;
+  absence: {
+    unavailable: { labelWord: string; heading: string; body: string };
+    absent: { labelWord: string; heading: string; body: string; pointer: string };
+  };
+};
+
+export type IssueDetailProps = {
+  /** The record read: `null` means unreadable, never "no such issue". */
+  read: { data: IssueDetailModel | null; projection: ReadProjection };
+  copy: IssueDetailCopy;
+  onBack?: () => void;
+  phase?: "loading" | "loaded";
+};
+
+export function IssueDetail(props: IssueDetailProps) {
+  const { copy } = props;
+  // A record read has a different `null` meaning from a list, and the resolver
+  // owns that decision (IA §5); the screen only chooses copy for the arm.
+  const record = resolveRecord(props.read, {
+    phase: props.phase,
+    unreadableReason: "this issue could not be read",
+  });
+
+  return (
+    <article className={css.page} data-ms-screen="issue-detail">
+      <nav className={css.trail} aria-label={copy.breadcrumb.label}>
+        {props.onBack === undefined ? null : (
+          <button type="button" className={css.crumb} onClick={props.onBack}>
+            {copy.breadcrumb.current}
+          </button>
+        )}
+      </nav>
+
+      {record.kind === "populated" ? (
+        <>
+          <header className={css.head}>
+            <h1 className={css.title}>
+              <TruncatedText text={record.value.title} />
+            </h1>
+            <p className={css.statusLine}>
+              {/* Dot + literal enum + weight: never colour alone. */}
+              <StatusDot
+                label={record.value.severity}
+                tone={record.value.severityTone as Tone}
+                emphasis={record.value.severityEmphasised}
+                mono
+              />
+              <StatusDot label={record.value.disposition} tone={record.value.dispositionTone as Tone} mono />
+            </p>
+          </header>
+
+          <FieldGroup title={copy.identityHeading}>
+            <Field label={copy.fields.id} mono>
+              {record.value.id}
+            </Field>
+            <Field label={copy.fields.project} mono>
+              {record.value.projectId}
+            </Field>
+            <Field label={copy.fields.milestone} mono>
+              {record.value.milestoneId ?? copy.fields.noMilestone}
+            </Field>
+            <Field label={copy.fields.kind} mono>
+              {record.value.kind}
+            </Field>
+            <Field label={copy.fields.severity} mono>
+              {record.value.severity}
+            </Field>
+            <Field label={copy.fields.disposition} mono>
+              {record.value.disposition}
+            </Field>
+            <Field label={copy.fields.owner} mono>
+              {record.value.owner ?? copy.fields.noOwner}
+            </Field>
+            {/* The count is the surviving fact: one integer, no rows. */}
+            <Field label={copy.fields.occurrences} mono>
+              <span data-ms-occurrence-count={record.value.occurrenceCount}>
+                {copy.occurrenceCount(record.value.occurrenceCount)}
+              </span>
+            </Field>
+            <Field label={copy.fields.registeredAt} mono>
+              {record.value.registeredAt}
+            </Field>
+            <Field label={copy.fields.closedAt} mono>
+              {record.value.closedAt ?? "—"}
+            </Field>
+          </FieldGroup>
+
+          {record.value.impact === null ? null : (
+            <section className={css.block} data-ms-impact="">
+              <h2 className={css.heading}>{copy.impactHeading}</h2>
+              <p className={css.longText}>{record.value.impact}</p>
+            </section>
+          )}
+
+          {record.value.acceptance === null ? null : (
+            <section className={css.block} data-ms-acceptance="">
+              <h2 className={css.heading}>{copy.acceptanceHeading}</h2>
+              <p className={css.longText}>{record.value.acceptance}</p>
+            </section>
+          )}
+
+          {/* The closure note is a closed issue's fact; an open one has none. */}
+          {record.value.closureNote === null ? null : (
+            <Collapsible summary={copy.closureNoteHeading} defaultOpen>
+              <p className={css.longText} data-ms-closure-note="">
+                {record.value.closureNote}
+              </p>
+            </Collapsible>
+          )}
+        </>
+      ) : record.kind === "unavailable" ? (
+        <EmptyState
+          arm="unavailable"
+          labelWord={copy.absence.unavailable.labelWord}
+          heading={copy.absence.unavailable.heading}
+          body={copy.absence.unavailable.body}
+          reason={record.reason}
+        />
+      ) : (
+        <EmptyState
+          arm="absent"
+          labelWord={copy.absence.absent.labelWord}
+          heading={copy.absence.absent.heading}
+          body={copy.absence.absent.body}
+          pointer={copy.absence.absent.pointer}
+        />
+      )}
+    </article>
+  );
+}

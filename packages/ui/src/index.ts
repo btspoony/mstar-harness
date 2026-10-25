@@ -79,8 +79,13 @@ export type { AppliedFilter, FilterBarProps, FilterField, FilterOption } from ".
 export { Overview } from "./screens/Overview.tsx";
 export { Focus } from "./screens/Focus.tsx";
 
+export { Issues } from "./screens/Issues.tsx";
+export { IssueDetail } from "./screens/IssueDetail.tsx";
+
 export type { OverviewCopy, OverviewProps } from "./screens/Overview.tsx";
 export type { FocusCopy, FocusProps } from "./screens/Focus.tsx";
+export type { IssuesCopy, IssuesProps } from "./screens/Issues.tsx";
+export type { IssueDetailCopy, IssueDetailProps } from "./screens/IssueDetail.tsx";
 
 import { TONES, type Tone } from "./view-model/status.ts";
 

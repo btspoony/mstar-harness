@@ -145,6 +145,37 @@ export function resolveRead<T>(
   return { kind: "populated", value };
 }
 
+/** How to resolve a single-record read. */
+export type RecordResolveOptions = {
+  /** The transport's read phase. */
+  readonly phase?: ReadPhase;
+  /**
+   * The reason to state when the record cannot be read. A `null` record is
+   * **never** "no such record" — the read boundary does not distinguish "absent"
+   * from "unreadable", so claiming absence would be a guess.
+   */
+  readonly unreadableReason: string;
+};
+
+/**
+ * Resolve a single-record read (`data: T | null` plus the projection disclosure).
+ *
+ * This exists because a record read has a different `null` meaning from a list:
+ * a list that comes back empty is genuinely empty, while a record that comes
+ * back `null` means the read could not produce it. Both the dashboard and the
+ * panel treat that as `unavailable`, and the screens must not each decide it —
+ * the same reason the aggregate resolver exists.
+ */
+export function resolveRecord<T>(
+  read: { readonly data: T | null; readonly projection: { readonly generation: number | null } },
+  options: RecordResolveOptions,
+): Resolved<T> {
+  if ((options.phase ?? "loaded") === "loading") return { kind: "loading" };
+  if (read.projection.generation === null) return { kind: "unavailable", reason: options.unreadableReason };
+  if (read.data === null) return { kind: "unavailable", reason: options.unreadableReason };
+  return { kind: "populated", value: read.data };
+}
+
 /**
  * The copy key family one absent arm maps to. The four states own four families
  * (IA §5 rule 5) and `populated` owns none — a generic "no data" key is the exact
