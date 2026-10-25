@@ -678,6 +678,7 @@ export type {
   OccurrenceInput,
   TerminalDisposition,
   IssuePayloadName,
+  IssueProjectMove,
   PayloadFieldSchema,
 } from "./issue.js";
 export {

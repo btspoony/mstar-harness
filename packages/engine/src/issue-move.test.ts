@@ -5,7 +5,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { appendOccurrence, captureIssue, computeIdentityKey, getIssue, IssueError, moveIssue, type CaptureInput, type IssueReceipt } from "./issue.js";
 import { addMilestone, updateMilestone } from "./milestone-store.js";
-import { initializeStore, type StoreContext, type StoreDb } from "./store-db.js";
+import { initializeStore, MIGRATIONS, openStore, upgradeStore, type StoreContext, type StoreDb } from "./store-db.js";
 
 const root = mkdtempSync(join(tmpdir(), "issue-move-"));
 const context: StoreContext = { harnessDir: join(root, ".mstar") };
@@ -87,8 +87,39 @@ describe("issue project move", () => {
       { projectId: projectB, reason: "finding belongs to the other project" },
       { actor: "project-manager", operationId: "move-succeeds", expectedRevision: movedIssue.revision, expectedStoreRevision: before },
     );
-    expect(receipt).toEqual({ issueId: movedIssue.issueId, revision: 2, storeRevision: before + 1, created: false });
+    expect(receipt).toEqual({
+      issueId: movedIssue.issueId,
+      revision: 2,
+      storeRevision: before + 1,
+      created: false,
+      fromProject: projectA,
+      toProject: projectB,
+    });
     expect(revision()).toBe(before + 1);
+    const moves = db
+      .prepare(
+        "select issue_id, from_project_id, to_project_id, actor, reason, occurred_at, recorded_at, issue_revision from issue_project_moves where issue_id = ? order by id",
+      )
+      .all(movedIssue.issueId) as Array<{
+      issue_id: string;
+      from_project_id: string;
+      to_project_id: string;
+      actor: string;
+      reason: string;
+      occurred_at: string;
+      recorded_at: string;
+      issue_revision: number;
+    }>;
+    expect(moves).toHaveLength(1);
+    expect(moves[0]).toMatchObject({
+      issue_id: movedIssue.issueId,
+      from_project_id: projectA,
+      to_project_id: projectB,
+      actor: "project-manager",
+      reason: "finding belongs to the other project",
+      issue_revision: 2,
+    });
+    expect(moves[0]?.occurred_at).toBe(moves[0]?.recorded_at);
     expect(issueRow(movedIssue.issueId)).toEqual({
       project_id: projectB,
       identity_key: computeIdentityKey(projectB, triple.sourceIdentity, triple.rootCauseKey, triple.acceptanceKey),
@@ -99,6 +130,14 @@ describe("issue project move", () => {
     expect(detail.projectId).toBe(projectB);
     expect(detail.milestoneId).toBeNull();
     expect(detail.identityKey).toBe(computeIdentityKey(projectB, triple.sourceIdentity, triple.rootCauseKey, triple.acceptanceKey));
+    expect(detail.projectMoves).toEqual([{
+      fromProject: projectA,
+      toProject: projectB,
+      actor: "project-manager",
+      reason: "finding belongs to the other project",
+      occurredAt: moves[0]?.occurred_at,
+      issueRevision: 2,
+    }]);
   });
 
   test("refuses a stale store revision without writing anything", async () => {
@@ -216,11 +255,48 @@ describe("issue project move", () => {
     const before = revision();
     const mutation = { actor: "project-manager", operationId: "move-noop", expectedRevision: 2, expectedStoreRevision: before };
     const receipt = await moveIssue(context, movedIssue.issueId, { projectId: projectB, reason: "already there" }, mutation);
-    expect(receipt).toEqual({ issueId: movedIssue.issueId, revision: 2, storeRevision: before, created: false });
+    // The operation record is a write, so the no-op advances the store revision
+    // exactly once, the same way a composed caller receives its commit.
+    expect(receipt).toEqual({
+      issueId: movedIssue.issueId,
+      revision: 2,
+      storeRevision: before + 1,
+      created: false,
+      fromProject: projectB,
+      toProject: projectB,
+    });
     expect(await moveIssue(context, movedIssue.issueId, { projectId: projectB, reason: "already there" }, mutation)).toEqual(receipt);
     expect(issueRow(movedIssue.issueId).revision).toBe(2);
-    expect(revision()).toBe(before);
+    expect(revision()).toBe(before + 1);
     expect(operation("move-noop")).toBeDefined();
+    // The project never changed, so no history row is appended: the earlier
+    // real move remains the only one.
+    expect(db.prepare("select count(*) as n from issue_project_moves where issue_id = ?").get(movedIssue.issueId)).toEqual({ n: 1 });
+  });
+
+  test("a schema-12 store gains the empty project-move ledger on upgrade and keeps its issues", async () => {
+    const legacy: StoreContext = { harnessDir: join(root, "v12-harness") };
+    mkdirSync(legacy.harnessDir, { recursive: true });
+    const legacyHandle = await initializeStore(legacy);
+    legacyHandle.db.prepare(
+      "insert into issues(id, project_id, title, kind, severity, impact, acceptance, created_at, updated_at, identity_key) " +
+        "values('I-900001', 'legacy-project', 'Legacy finding', 'bug', 'high', 'impact', 'acceptance', 'now', 'now', 'legacy-identity')",
+    ).run();
+    legacyHandle.db.exec("drop table issue_project_moves");
+    legacyHandle.db.prepare("delete from schema_version where version = 13").run();
+    legacyHandle.close();
+
+    expect(await upgradeStore(legacy)).toEqual({ schemaVersion: MIGRATIONS.length });
+    const upgraded = await openStore(legacy, "read");
+    try {
+      expect(upgraded.schemaVersion).toBe(MIGRATIONS.length);
+      expect(upgraded.db.prepare("select count(*) as n from issue_project_moves").get()).toEqual({ n: 0 });
+      expect(upgraded.db.prepare("select id, project_id from issues order by id").all()).toEqual([
+        { id: "I-900001", project_id: "legacy-project" },
+      ]);
+    } finally {
+      upgraded.close();
+    }
   });
 
   test("clears a dropped milestone even though its status blocks assignment", async () => {

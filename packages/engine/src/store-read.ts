@@ -679,6 +679,12 @@ function issuesMilestoneColumn(db: StoreDb): boolean {
   );
 }
 
+function issuesProjectMovesTable(db: StoreDb): boolean {
+  // Same tolerance for a store below migration 13: the ledger table does not
+  // exist yet, and its history is simply empty rather than a read failure.
+  return db.prepare("select 1 from sqlite_master where type = 'table' and name = 'issue_project_moves'").get() !== undefined;
+}
+
 function readIssuePage(db: StoreDb, filter: IssueFilter): IssuePage {
   const { limit, offset } = paging(filter.limit, filter.offset);
   const { where, params } = bindIssueFilter(filter);
@@ -863,6 +869,30 @@ function readIssueDetail(db: StoreDb, id: string): IssueDetail {
     importedAt: row.imported_at,
   }));
 
+  const projectMoves = issuesProjectMovesTable(db)
+    ? (
+        db
+          .prepare(
+            "select from_project_id, to_project_id, actor, reason, occurred_at, issue_revision from issue_project_moves where issue_id = ? order by id asc",
+          )
+          .all(id) as Array<{
+          from_project_id: string;
+          to_project_id: string;
+          actor: string;
+          reason: string;
+          occurred_at: string;
+          issue_revision: number;
+        }>
+      ).map((row) => ({
+        fromProject: row.from_project_id,
+        toProject: row.to_project_id,
+        actor: row.actor,
+        reason: row.reason,
+        occurredAt: row.occurred_at,
+        issueRevision: row.issue_revision,
+      }))
+    : [];
+
   return {
     id: issue.id,
     projectId: issue.project_id,
@@ -888,6 +918,7 @@ function readIssueDetail(db: StoreDb, id: string): IssueDetail {
     transitions,
     relations,
     provenance,
+    projectMoves,
   };
 }
 

@@ -233,6 +233,10 @@ export type IssueReceipt = {
   revision: number;
   storeRevision: number;
   created: boolean;
+  /** The project a move left (`fromProject === toProject` for a no-op). */
+  fromProject?: string;
+  /** The project a move entered, or the issue's current project for a no-op. */
+  toProject?: string;
 };
 
 export type IssueFilter = {
@@ -311,6 +315,16 @@ export type IssueProvenance = {
   importedAt: string | null;
 };
 
+/** One recorded project reassignment of an issue (append-only history). */
+export type IssueProjectMove = {
+  fromProject: string;
+  toProject: string;
+  actor: string;
+  reason: string;
+  occurredAt: string;
+  issueRevision: number;
+};
+
 export type IssueDetail = {
   id: string;
   projectId: string;
@@ -336,6 +350,8 @@ export type IssueDetail = {
   transitions: IssueTransition[];
   relations: IssueRelation[];
   provenance: IssueProvenance[];
+  /** Oldest first; empty on a store older than the project-move migration. */
+  projectMoves: IssueProjectMove[];
 };
 
 export type IssueTriage = {
@@ -1167,6 +1183,9 @@ export async function getIssue(context: StoreContext, id: string): Promise<Issue
     // FW-6: same stage gate as listIssues — a staged store is refused, never
     // served as read authority.
     assertIssueStoreActive(db);
+    // The project-move table arrives with migration 13; an older store keeps
+    // reading (empty history) exactly like the milestone column above it.
+    const hasProjectMoves = handle.schemaVersion >= 13;
     const milestoneSelect = handle.schemaVersion >= 7 ? ", milestone_id" : "";
     const issue = db
       .prepare(
@@ -1298,6 +1317,30 @@ export async function getIssue(context: StoreContext, id: string): Promise<Issue
       importedAt: row.imported_at,
     }));
 
+    const projectMoves = hasProjectMoves
+      ? (
+          db
+            .prepare(
+              "select from_project_id, to_project_id, actor, reason, occurred_at, issue_revision from issue_project_moves where issue_id = ? order by id asc",
+            )
+            .all(id) as Array<{
+            from_project_id: string;
+            to_project_id: string;
+            actor: string;
+            reason: string;
+            occurred_at: string;
+            issue_revision: number;
+          }>
+        ).map((row) => ({
+          fromProject: row.from_project_id,
+          toProject: row.to_project_id,
+          actor: row.actor,
+          reason: row.reason,
+          occurredAt: row.occurred_at,
+          issueRevision: row.issue_revision,
+        }))
+      : [];
+
     return {
       id: issue.id,
       projectId: issue.project_id,
@@ -1323,6 +1366,7 @@ export async function getIssue(context: StoreContext, id: string): Promise<Issue
       transitions,
       relations,
       provenance,
+      projectMoves,
     };
   } finally {
     handle.close();
@@ -1799,6 +1843,12 @@ export function moveIssueOn(
   if (!Number.isSafeInteger(mutation.expectedStoreRevision) || mutation.expectedStoreRevision < 0) {
     throw new IssueError("issue.scope-refused", "expectedStoreRevision is required for a project move");
   }
+  const schema = db.prepare("select max(version) as version from schema_version").get() as { version?: number } | undefined;
+  if (!Number.isInteger(schema?.version) || (schema?.version ?? 0) < 13) {
+    throw moveRefusal("issue.schema-outdated", 'Project moves require schema 13; run "mstar store upgrade --operator <name>" first.', {
+      recovery: 'Run `mstar store upgrade --operator <name>` against the selected harness, then rerun the same move.',
+    });
+  }
   const hash = requestHash("moveIssue", {
     issueId,
     projectId,
@@ -1836,7 +1886,16 @@ export function moveIssueOn(
   }
 
   if (issue.project_id === projectId) {
-    const receipt: IssueReceipt = { issueId, revision: issue.revision, storeRevision: readMeta(db).revision, created: false };
+    // A composed caller needs the revision its transaction commits at, exactly
+    // like the real-move branch below; the public route advances it once here.
+    const receipt: IssueReceipt = {
+      issueId,
+      revision: issue.revision,
+      storeRevision: receiptStoreRevision(db, composed),
+      created: false,
+      fromProject: issue.project_id,
+      toProject: projectId,
+    };
     recordOperation(db, mutation.operationId, hash, receipt, nowRfc3339());
     return receipt;
   }
@@ -1878,8 +1937,22 @@ export function moveIssueOn(
     at,
     issueId,
   );
+  // The reason lives in its own append-only ledger: a move leaves the
+  // disposition untouched, so an `issue_transitions` row would claim a
+  // lifecycle change that did not happen.
+  db.prepare(
+    "insert into issue_project_moves(issue_id, from_project_id, to_project_id, actor, reason, occurred_at, recorded_at, issue_revision) " +
+      "values (?, ?, ?, ?, ?, ?, ?, ?)",
+  ).run(issueId, issue.project_id, projectId, mutation.actor, reason, at, at, revision);
   const storeRevision = receiptStoreRevision(db, composed);
-  const receipt: IssueReceipt = { issueId, revision, storeRevision, created: false };
+  const receipt: IssueReceipt = {
+    issueId,
+    revision,
+    storeRevision,
+    created: false,
+    fromProject: issue.project_id,
+    toProject: projectId,
+  };
   recordOperation(db, mutation.operationId, hash, receipt, at);
   return receipt;
 }

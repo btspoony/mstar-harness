@@ -266,6 +266,9 @@ const EXECUTION_COVERAGE_MIGRATION_VERSION =
 /** The migration that introduced project milestones (both tables exist from here). */
 const MILESTONE_MIGRATION_VERSION =
   MIGRATIONS.find((migration) => migration.name === "project-milestones")?.version ?? Number.POSITIVE_INFINITY;
+/** The migration that introduced the append-only project-move history. */
+const PROJECT_MOVES_MIGRATION_VERSION =
+  MIGRATIONS.find((migration) => migration.name === "issue-project-moves")?.version ?? Number.POSITIVE_INFINITY;
 /** The migration that introduced the native Dsh host-state domain. */
 const DSH_MIGRATION_VERSION =
   MIGRATIONS.find((migration) => migration.name === "dsh-host-ledgers")?.version ?? Number.POSITIVE_INFINITY;
@@ -358,7 +361,7 @@ type AuthorityTable = {
   /** The row's own authority revision column, when the table carries one. */
   revisionColumn?: string;
   /** True when the table only exists once its introducing migration applied. */
-  requires?: "catalog" | "execution" | "roadmap" | "milestone" | "host";
+  requires?: "catalog" | "execution" | "roadmap" | "milestone" | "projectMoves" | "host";
 };
 
 function text(row: Record<string, unknown>, column: string): string {
@@ -460,6 +463,14 @@ const AUTHORITY_TABLES: readonly AuthorityTable[] = [
     columns: ["id", "issue_id", "from_disposition", "to_disposition", "actor", "occurred_at", "recorded_at", "reason", "evidence_json", "imported", "issue_revision"],
     orderBy: "id",
     key: (row) => `transition:${text(row, "id")}`,
+  },
+  {
+    domain: "issue",
+    table: "issue_project_moves",
+    columns: ["id", "issue_id", "from_project_id", "to_project_id", "actor", "reason", "occurred_at", "recorded_at", "issue_revision"],
+    orderBy: "id",
+    key: (row) => `project-move:${text(row, "id")}`,
+    requires: "projectMoves",
   },
   {
     domain: "issue",
@@ -698,6 +709,7 @@ const REPLACEMENT_ORDER: readonly string[] = [
   "project_milestones",
   "project_roadmaps",
   "issues",
+  "issue_project_moves",
   "occurrences",
   "relations",
   "provenance",
@@ -753,6 +765,7 @@ type TableAvailability = {
   executionCoverage: boolean;
   roadmap: boolean;
   milestone: boolean;
+  projectMoves: boolean;
   host: boolean;
   provenanceOrigin: boolean;
   dshLegacyProvenance: boolean;
@@ -773,6 +786,7 @@ function availabilityOf(schemaVersion: number): TableAvailability {
     executionCoverage: schemaVersion >= EXECUTION_COVERAGE_MIGRATION_VERSION,
     roadmap: schemaVersion >= ROADMAP_MIGRATION_VERSION,
     milestone: schemaVersion >= MILESTONE_MIGRATION_VERSION,
+    projectMoves: schemaVersion >= PROJECT_MOVES_MIGRATION_VERSION,
     host: schemaVersion >= DSH_MIGRATION_VERSION,
     provenanceOrigin: schemaVersion >= PROVENANCE_ORIGIN_MIGRATION_VERSION,
     dshLegacyProvenance: schemaVersion >= DSH_LEGACY_PROVENANCE_MIGRATION_VERSION,
@@ -785,6 +799,7 @@ function available(table: AuthorityTable, availability: TableAvailability): bool
   if (table.requires === "execution") return availability.execution;
   if (table.requires === "roadmap") return availability.roadmap;
   if (table.requires === "milestone") return availability.milestone;
+  if (table.requires === "projectMoves") return availability.projectMoves;
   if (table.requires === "host") return availability.host;
   return true;
 }
@@ -1457,12 +1472,13 @@ function recoveryPointPath(context: StoreContext, root: string, backupPath: stri
  * content-based — a row is a difference unless BOTH sides hold it with the same
  * digest — because that is what makes a changed child or provenance row visible:
  * the tables §2.2 keeps outside the authority (`occurrences`, `relations`,
- * `provenance`, `issue_transitions`, `catalog_links`, `catalog_operations`,
- * `catalog_execution_bindings`, `execution_registry`, `execution_operations`,
- * `execution_migrations`, `migration_receipts`, `store_operations`,
- * `issue_counter`) carry no authority revision of their own, so their presence
- * marker `1` alone cannot disclose a content change. It decides only whether the
- * row is LISTED in the readable inventory; it admits and refuses nothing.
+ * `provenance`, `issue_transitions`, `issue_project_moves`, `catalog_links`,
+ * `catalog_operations`, `catalog_execution_bindings`, `execution_registry`,
+ * `execution_operations`, `execution_migrations`, `migration_receipts`,
+ * `store_operations`, `issue_counter`) carry no authority revision of their own,
+ * so their presence marker `1` alone cannot disclose a content change. It
+ * decides only whether the row is LISTED in the readable inventory; it admits
+ * and refuses nothing.
  */
 function diffSides(
   live: LiveRead,
