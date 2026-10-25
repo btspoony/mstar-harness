@@ -303,7 +303,7 @@ function DestinationBody(props: {
 function NoHarness({ t, locale }: { t: TranslateNS<'mstar-panel'>; locale: Locale }): React.ReactElement {
   const copy = copyFor(locale)
   return (
-    <div className={css.state} data-mstar-panel="no-harness" data-mstar-reason="no-harness">
+    <div className={css.state}>
       <EmptyState
         arm="absent"
         labelWord={copy.state.absent.labelWord}
@@ -311,6 +311,30 @@ function NoHarness({ t, locale }: { t: TranslateNS<'mstar-panel'>; locale: Local
         body={t('empty.no-harness')}
       />
       <p className={css.hint}>{t('empty.no-harness-hint')}</p>
+    </div>
+  )
+}
+
+/**
+ * The state frame. EVERY early arm of the seat renders inside it, carrying the
+ * host's resolved scheme: the surfaces (`Notice` / `EmptyState`) paint `--ms-*`
+ * tokens, and outside a `data-ms-theme` carrier they would paint the light set
+ * under a dark host.
+ */
+function StateFrame(props: {
+  scheme: ColorScheme
+  panel: string
+  reason?: string
+  children: React.ReactNode
+}): React.ReactElement {
+  return (
+    <div
+      className={css.shell}
+      data-ms-theme={props.scheme}
+      data-mstar-panel={props.panel}
+      {...(props.reason === undefined ? {} : { 'data-mstar-reason': props.reason })}
+    >
+      {props.children}
     </div>
   )
 }
@@ -529,24 +553,36 @@ export function PanelSeat(props: PanelSeatProps): React.ReactElement | null {
   if (!visible) return null
   if (digest.kind === 'waiting') {
     return (
-      <div className={css.state} data-mstar-panel="waiting">
-        <p data-mstar-empty="waiting">{t('empty.waiting')}</p>
-      </div>
+      <StateFrame scheme={scheme} panel="waiting">
+        <div className={css.state}>
+          <p data-mstar-empty="waiting">{t('empty.waiting')}</p>
+        </div>
+      </StateFrame>
     )
   }
-  if (digest.kind === 'no-harness') return <NoHarness t={t} locale={locale} />
+  if (digest.kind === 'no-harness') {
+    return (
+      <StateFrame scheme={scheme} panel="no-harness" reason="no-harness">
+        <NoHarness t={t} locale={locale} />
+      </StateFrame>
+    )
+  }
   if (digest.kind === 'unavailable') {
     return (
-      <div className={css.state} data-mstar-panel="unavailable" data-mstar-reason={digest.reason}>
-        <Notice reason={t(failureKey(digest.reason))} lead={t('state.failure.heading')} tone="warning" />
-      </div>
+      <StateFrame scheme={scheme} panel="unavailable" reason={digest.reason}>
+        <div className={css.state}>
+          <Notice reason={t(failureKey(digest.reason))} lead={t('state.failure.heading')} tone="warning" />
+        </div>
+      </StateFrame>
     )
   }
   if (snapshot === null) {
     return (
-      <div className={css.state} data-mstar-panel="loading">
-        <p data-mstar-empty="loading">{t('empty.loading')}</p>
-      </div>
+      <StateFrame scheme={scheme} panel="loading">
+        <div className={css.state}>
+          <p data-mstar-empty="loading">{t('empty.loading')}</p>
+        </div>
+      </StateFrame>
     )
   }
 

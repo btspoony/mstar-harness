@@ -149,6 +149,20 @@ function isRefusedPath(cwd: string): boolean {
   return cwd.split(/[\\/]+/).includes('..')
 }
 
+/**
+ * The ONE cwd acceptance rule, taken by both invocations (`panelSnapshot` and
+ * `dashboardView`): the client's claim must be the resolved session's own — never
+ * a close match, never another session's workspace.
+ *
+ * A `boot` resolution is compared like any other: the resolved workspace is the
+ * one the host was launched in, and a claim naming anything else is refused.
+ * Treating `boot` as a special case let the digest accept a request the per-view
+ * read refused, which is how a panel rendered and then failed every destination.
+ */
+function cwdAccepted(session: { readonly cwd: string; readonly source: 'live' | 'persisted' | 'boot' }, claimed: string): boolean {
+  return claimed === session.cwd
+}
+
 /** An id that could be a catalog id: no separators, no traversal segment. */
 function isUnsafeId(value: string): boolean {
   return value === '.' || value === '..' || /[/\\\u0000]/.test(value)
@@ -295,7 +309,7 @@ export class MstarPanelSnapshotGateway extends TypertRemoteService {
     if (isRefusedPath(claimed)) return { kind: 'unavailable', reason: 'cwd-refused' }
     const session = await this.resolveSessionCwd(sid)
     if (session.kind !== 'ok') return { kind: 'unavailable', reason: session.reason }
-    if (claimed !== session.cwd) return { kind: 'unavailable', reason: 'cwd-mismatch' }
+    if (!cwdAccepted(session, claimed)) return { kind: 'unavailable', reason: 'cwd-mismatch' }
     const harnessDir = this.bootHarnessDir ?? this.resolver.forWorkspace(session.cwd)
     if (harnessDir === null || harnessDir === '') return { kind: 'no-harness' }
     return { kind: 'ok', harnessDir, sessionId: sid, cwd: session.cwd }
@@ -343,12 +357,10 @@ export class MstarPanelSnapshotGateway extends TypertRemoteService {
     // `no-harness` kind, which the panel renders as its inactive state.
     const harnessDir = this.bootHarnessDir ?? this.resolver.forWorkspace(session.cwd)
 
-    // (4) The asserted cwd must be the resolved session's own — never a
-    // close match, and never a claim onto another session's workspace.
-    // A `boot` resolution carries no session-asserted address: the read target is
-    // the plugin's own launch workspace, so there is nothing to compare and no
-    // client claim is honoured either way.
-    if (session.source !== 'boot' && claimed !== session.cwd) return unavailable('cwd-mismatch')
+    // (4) The asserted cwd must be the resolved session's own — the same rule
+    // `dashboardView` takes through `resolveTarget`, so the two paths cannot
+    // disagree about who may read this workspace.
+    if (!cwdAccepted(session, claimed)) return unavailable('cwd-mismatch')
 
     // An explicit `null` is ABSENT — `refusedId` above already accepted it as
     // such — so the forward site must agree. `String(null)` would hand the
