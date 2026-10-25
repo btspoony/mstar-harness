@@ -153,11 +153,21 @@ export function IterationsDestination({ state, locale, onOpen }: DestinationProp
   if (data === null) return <ReadState state={{ kind: 'unavailable', reason: 'no iteration list' }} copy={copy} />
   return (
     <div data-ms-destination-body="iterations">
-      <Iterations
-        model={iterationListModel({ data: data as IterationListDTO, projection: state.envelope.projection })}
-        copy={screenCopy}
-        {...(onOpen === undefined ? {} : { onOpen })}
-      />
+      <>
+        <Iterations
+          model={iterationListModel({ data: data as IterationListDTO, projection: state.envelope.projection })}
+          copy={screenCopy}
+          {...(onOpen === undefined ? {} : { onOpen })}
+        />
+        {/* Same disclosure shape as the Workflows list and the Overview members:
+            the reader keeps an explicit page and the screen says how much of the
+            store it is showing, so a cap is never silent. */}
+        {(data as IterationListDTO).total > (data as IterationListDTO).items.length ? (
+          <p className={css.truncated} data-ms-truncated={(data as IterationListDTO).total}>
+            {copy.workflows.truncated((data as IterationListDTO).items.length, (data as IterationListDTO).total)}
+          </p>
+        ) : null}
+      </>
     </div>
   )
 }

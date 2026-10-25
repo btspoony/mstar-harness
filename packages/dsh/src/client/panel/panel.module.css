@@ -102,3 +102,12 @@
   font-size: var(--ms-fs-12);
   line-height: var(--ms-lh-12);
 }
+
+/* A truncated page's disclosure (the screen keeps its own; this is the host's
+ * line for a list whose screen has no truncation member yet). */
+.truncated {
+  margin: 0;
+  padding: var(--ms-space-2) var(--ms-space-3);
+  font-size: var(--ms-fs-12);
+  line-height: var(--ms-lh-12);
+}
