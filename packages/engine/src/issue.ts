@@ -152,6 +152,15 @@ export const ISSUE_PAYLOAD_SCHEMAS = {
   IssueReopen: {
     reason: { required: true, type: "string", description: "Reason for reopening; nonblank", nonblankWhenPresent: true },
   },
+  IssueMove: {
+    projectId: {
+      required: true,
+      type: "string",
+      description: "Target project; must be a registered catalog project",
+      nonblankWhenPresent: true,
+    },
+    reason: { required: true, type: "string", description: "Reason for moving the issue; nonblank", nonblankWhenPresent: true },
+  },
   IssueLink: {
     relation: { required: false, type: "string", description: "Issue relation; pair with issueId", values: ["related", "blocks", "duplicate-of", "superseded-by"] },
     issueId: { required: false, type: "string", description: "Target issue id; required with relation" },
@@ -205,6 +214,7 @@ export const ISSUE_ACTIONS = {
   triage: { payload: "IssueTriage", read: false, cas: true, disposition: null },
   close: { payload: "ClosureEvidence", read: false, cas: true, disposition: "resolved" },
   reopen: { payload: "IssueReopen", read: false, cas: true, disposition: null },
+  move: { payload: "IssueMove", read: false, cas: true, disposition: null },
   waive: { payload: "ClosureEvidence", read: false, cas: true, disposition: "waived" },
   duplicate: { payload: "ClosureEvidence", read: false, cas: true, disposition: "duplicate" },
   supersede: { payload: "ClosureEvidence", read: false, cas: true, disposition: "superseded" },
@@ -356,6 +366,14 @@ export type ClosureEvidence = {
   alignmentRef?: string;
 };
 export type IssueReopen = { reason: string };
+
+/**
+ * A project reassignment carries the target project and its audit reason. The
+ * issue's project-scoped identity is recomputed from the recorded occurrence
+ * triple, and any milestone membership is cleared because a milestone belongs
+ * to exactly one project.
+ */
+export type IssueMove = { projectId: string; reason: string };
 
 export type IssueLink =
   | { relation: "related" | "blocks" | "duplicate-of" | "superseded-by"; issueId: string }
@@ -1437,7 +1455,7 @@ async function authorizeMutation(
 }
 function requireExpectedRevision(mutation: MutationContext, current: number): void {
   if (mutation.expectedRevision === undefined) {
-    throw new IssueError("issue.revision-conflict", "expectedRevision is mandatory for triage, disposition and relation changes");
+    throw new IssueError("issue.revision-conflict", "expectedRevision is mandatory for triage, disposition, relation and project changes");
   }
   if (mutation.expectedRevision !== current) {
     throw new IssueError(
@@ -1748,6 +1766,121 @@ export async function reopenIssue(
   requireCaptureSeat(mutation.actor);
   requireNonblank("reason", payload.reason);
   return withWrite(context, (handle) => reopenIssueOn(handle.db, issueId, payload, mutation));
+}
+
+/**
+ * One project reassignment on a handle the caller already owns and has already
+ * authorized, composed like `captureIssueOn`: the seat, the request validation
+ * and the transaction belong to the transport, and a caller that owns its
+ * transaction passes the `ComposedTransactionRevision` its single
+ * store-revision advance commits at.
+ *
+ * `identity_key` is derived from the project, so it is recomputed for the
+ * target and the UNIQUE column stays a real dedup boundary: an identity the
+ * target project already holds refuses instead of merging two findings. A
+ * milestone is project-scoped, so the same UPDATE clears `milestone_id`. Every
+ * refusal runs before the first write, so nothing is changed.
+ */
+export function moveIssueOn(
+  db: StoreDb,
+  issueId: string,
+  input: IssueMove,
+  mutation: AuthorizedIssueMutation,
+  composed?: ComposedTransactionRevision,
+): IssueReceipt {
+  const projectId = requireNonblank("projectId", input.projectId);
+  const reason = requireNonblank("reason", input.reason);
+  const hash = requestHash("moveIssue", {
+    issueId,
+    projectId,
+    reason,
+    mutation: { operationId: mutation.operationId, actor: mutation.actor, expectedRevision: mutation.expectedRevision },
+  });
+  const existingOp = lookupOperation(db, mutation.operationId);
+  if (existingOp) return replayOrConflict(existingOp, hash);
+
+  const issue = db.prepare("select id, project_id, revision from issues where id = ?").get(issueId) as
+    | { id: string; project_id: string; revision: number }
+    | undefined;
+  if (!issue) throw new IssueError("issue.not-found", `Issue ${issueId} does not exist`);
+  requireExpectedRevision(mutation, issue.revision);
+  if (!db.prepare("select 1 as ok from catalog_entities where kind = 'project' and id = ?").get(projectId)) {
+    throw moveRefusal("issue.not-found", `Project ${projectId} is not a registered catalog project; nothing was changed.`, {
+      projectId,
+      recovery: `Run \`mstar catalog list --kind project\` to read the registered project ids, then rerun \`mstar issue move --id ${issueId} --payload '{"projectId":"<target>","reason":"<text>"}' --expect ${issue.revision} --actor project-manager\`.`,
+    });
+  }
+
+  if (issue.project_id === projectId) {
+    const receipt: IssueReceipt = { issueId, revision: issue.revision, storeRevision: readMeta(db).revision, created: false };
+    recordOperation(db, mutation.operationId, hash, receipt, nowRfc3339());
+    return receipt;
+  }
+
+  // The identity triple is the recorded observation, never a re-capture input:
+  // every occurrence of one issue carries the same triple, so the earliest one
+  // is representative.
+  const occurrence = db
+    .prepare("select source_identity, root_cause_key, acceptance_key from occurrences where issue_id = ? order by id asc limit 1")
+    .get(issueId) as { source_identity: string; root_cause_key: string; acceptance_key: string } | undefined;
+  if (!occurrence) {
+    throw moveRefusal(
+      "issue.ambiguous-identity",
+      `Issue ${issueId} has no recorded occurrence identity, so its project-scoped identity cannot be recomputed; nothing was changed.`,
+      {
+        recovery: `Capture the finding against the target project with \`mstar issue add --payload '<CaptureInput JSON>'\`; without a recorded source/root-cause/acceptance triple the move has no identity to carry.`,
+      },
+    );
+  }
+  const identityKey = computeIdentityKey(projectId, occurrence.source_identity, occurrence.root_cause_key, occurrence.acceptance_key);
+  const collision = db.prepare("select id from issues where identity_key = ?").get(identityKey) as { id: string } | undefined;
+  if (collision) {
+    throw moveRefusal(
+      "issue.ambiguous-identity",
+      `Moving ${issueId} to ${projectId} would reuse the identity held by issue ${collision.id}; nothing was changed.`,
+      {
+        collidingIssueId: collision.id,
+        recovery: `Read the colliding issue with \`mstar issue show --id ${collision.id}\`. Close it as a duplicate with \`mstar issue duplicate --id ${collision.id} --payload '{"reason":"<text>","canonicalIssueId":"${issueId}"}' --expect <issue-revision> --actor project-manager\`, or move ${issueId} to another project.`,
+      },
+    );
+  }
+
+  const at = nowRfc3339();
+  const revision = issue.revision + 1;
+  db.prepare("update issues set project_id = ?, identity_key = ?, milestone_id = null, revision = ?, updated_at = ? where id = ?").run(
+    projectId,
+    identityKey,
+    revision,
+    at,
+    issueId,
+  );
+  const storeRevision = receiptStoreRevision(db, composed);
+  const receipt: IssueReceipt = { issueId, revision, storeRevision, created: false };
+  recordOperation(db, mutation.operationId, hash, receipt, at);
+  return receipt;
+}
+
+function moveRefusal(code: IssueErrorCode, message: string, details: Record<string, unknown>): IssueError {
+  const error = new IssueError(code, message);
+  error.details = details;
+  return error;
+}
+
+/**
+ * The public project-move route. The seat check and the request validation run
+ * BEFORE the store is opened (the public contract's refusal precedence), and
+ * this route owns the transaction the body runs in.
+ */
+export async function moveIssue(
+  context: StoreContext,
+  issueId: string,
+  input: IssueMove,
+  mutation: MutationContext,
+): Promise<IssueReceipt> {
+  requireCaptureSeat(mutation.actor);
+  requireNonblank("projectId", input.projectId);
+  requireNonblank("reason", input.reason);
+  return withWrite(context, (handle) => moveIssueOn(handle.db, issueId, input, mutation));
 }
 
 export async function assignIssueMilestone(

@@ -1088,6 +1088,7 @@ const CONTROL_ROOT_CLASS: Readonly<Record<string, "root" | "none">> = {
   "harness.scaffold": "none", "host.detect": "none", "host.skill-root": "none",
   "issue.add": "root", "issue.close": "root", "issue.duplicate": "root",
   "issue.export": "root", "issue.link": "root", "issue.list": "root",
+  "issue.move": "root",
   "issue.occurrence": "root", "issue.reopen": "root", "issue.show": "root",
   "issue.supersede": "root", "issue.triage": "root", "issue.waive": "root",
   "iteration.gate": "root", "iteration.push-cadence": "none", "iteration.register": "root",

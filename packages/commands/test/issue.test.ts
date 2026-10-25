@@ -4,6 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import { initializeStore, ISSUE_ACTION_NAMES, openStore } from "@mstar-harness/engine";
 import { admitCommandInput, executeCommand, getCommandDefinitions, getCommandSchemas } from "../src/index.js";
+import { failure as milestoneFailure } from "../src/families/milestone.js";
 import type { CommandEffects, InvocationContext } from "../src/types.js";
 import { z } from "zod";
 
@@ -647,8 +648,69 @@ describe("issue command family", () => {
     if (page.status === "ok") expect((page.data as { items: unknown[] }).items).toHaveLength(1);
   });
 
+  test("published move action reassigns the project under a revision CAS", async () => {
+    const context = await testContext();
+    const added = await executeCommand("issue.add", {
+      payload: capture(), operationId: "move-seed", actor: "project-manager",
+    }, context);
+    expect(added.status).toBe("ok");
+    if (added.status !== "ok") return;
+    const seed = added.data as { issueId: string; revision: number };
+    const harnessDir = context.controlRoot;
+    if (harnessDir === null) throw new Error("test context must provide an isolated harness");
+    const store = await openStore({ harnessDir }, "write");
+    try {
+      store.db.prepare(
+        "insert into catalog_entities(kind,id,title,root_kind,relative_path,registered_at,updated_at) values('project','proj-b','Project B','projects','proj-b/roadmap.md','now','now')",
+      ).run();
+    } finally {
+      store.close();
+    }
+
+    const command = definition("issue.move");
+    expect(command.input.safeParse({
+      id: seed.issueId, actor: "project-manager", payload: { projectId: "proj-b", reason: "belongs to b" },
+    }).success).toBe(false);
+    expect(command.requirements).toContainEqual(expect.objectContaining({ name: "expect", route: "cli", required: true }));
+
+    const moved = await command.execute({
+      id: seed.issueId, expect: seed.revision, actor: "project-manager", operationId: "move-public",
+      payload: { projectId: "proj-b", reason: "belongs to b" },
+    }, context);
+    expect(moved).toMatchObject({
+      status: "ok",
+      code: "issue.move.ok",
+      data: { issueId: seed.issueId, revision: seed.revision + 1, operationId: "move-public" },
+    });
+    const shown = await executeCommand("issue.show", { id: seed.issueId }, context);
+    expect(shown).toMatchObject({ status: "ok", data: { projectId: "proj-b", milestoneId: null } });
+
+    const refused = await command.execute({
+      id: seed.issueId, expect: seed.revision + 1, actor: "project-manager", operationId: "move-absent",
+      payload: { projectId: "proj-absent", reason: "typo" },
+    }, context);
+    expect(refused).toMatchObject({
+      status: "refused",
+      code: "issue.not-found",
+      details: expect.objectContaining({ projectId: "proj-absent", recovery: expect.stringContaining("mstar issue move") }),
+    });
+  });
+
+  test("milestone project mismatch refusal names the cause and both alignment routes", () => {
+    const envelope = milestoneFailure(
+      "milestone.assign",
+      Object.assign(new Error("Issue does not belong to the requested project"), { code: "milestone.project-mismatch" }),
+    );
+    expect(envelope).toMatchObject({ status: "refused", code: "milestone.project-mismatch" });
+    expect(envelope.details?.recovery).toEqual(
+      expect.stringContaining("The issue and the milestone must belong to the same project"),
+    );
+    expect(envelope.details?.recovery).toEqual(expect.stringContaining("mstar issue move"));
+    expect(envelope.details?.recovery).toEqual(expect.stringContaining("mstar milestone add"));
+  });
+
   test("addressed issue mutations publish issue id and revision CAS minima", () => {
-    const addressed = ["occurrence", "triage", "close", "reopen", "waive", "duplicate", "supersede", "link"];
+    const addressed = ["occurrence", "triage", "close", "reopen", "move", "waive", "duplicate", "supersede", "link"];
     for (const verb of addressed) {
       const command = definition(`issue.${verb}`);
       for (const route of ["cli", "mcp"] as const) {
@@ -663,7 +725,7 @@ describe("issue command family", () => {
       expect(command.requirements).not.toContainEqual(expect.objectContaining({ name: "id", required: true }));
       expect(command.cli.options).toContainEqual(expect.objectContaining({ key: "id", required: false }));
     }
-    for (const verb of ["triage", "close", "reopen", "waive", "duplicate", "supersede", "link"]) {
+    for (const verb of ["triage", "close", "reopen", "move", "waive", "duplicate", "supersede", "link"]) {
       expect(definition(`issue.${verb}`).requirements).toContainEqual(
         expect.objectContaining({ name: "expect", required: true, constraint: expect.stringContaining("mstar issue show") }),
       );

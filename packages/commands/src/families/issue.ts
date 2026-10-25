@@ -11,6 +11,7 @@ import {
   ISSUE_PAYLOAD_SCHEMAS,
   linkIssue,
   listIssues,
+  moveIssue,
   reopenIssue,
   resolveProcessHarnessDir,
   triageIssue,
@@ -19,6 +20,7 @@ import {
   type IssueActionSpec,
   type IssueFilter,
   type IssueLink,
+  type IssueMove,
   type IssuePayloadName,
   type IssueReopen,
   type IssueTriage,
@@ -208,6 +210,12 @@ async function execute(id: string, input: IssueInput, invocation: InvocationCont
         write,
       ));
     }
+    if (id === "issue.move") return await runMutation((write) => moveIssue(
+      context,
+      requiredId(input),
+      validatePayload(input, "IssueMove", "move") as IssueMove,
+      write,
+    ));
     const defaultDisposition = terminalDisposition[id.slice("issue.".length)];
     if (defaultDisposition !== undefined) {
       const disposition = (input.disposition as TerminalDisposition | undefined) ?? defaultDisposition;
