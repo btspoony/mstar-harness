@@ -229,14 +229,39 @@ describe('panelSnapshot endpoint — server-side harness resolution', () => {
     const app = (booted = await bootApp({ sessionsService: 'fake', harnessDir: null }))
     await app.ctx.plugin(FakeSessionController)
     const controller = app.ctx.get('sessionController') as FakeSessionController
+    // The host's real shape: `SessionInspection extends SessionStorageMetadata
+    // { meta: SessionHeader }` (`@deepseek-ai/dsh-session-persistence`) — the
+    // workspace lives at `meta.cwd`, not `header.cwd`.
     controller.handler = async (sessionId: string) =>
-      sessionId === 'ses_persisted' ? { header: { cwd: app.root } } : { header: {} }
+      sessionId === 'ses_persisted'
+        ? { meta: { id: sessionId, version: 4, createdAt: 0, cwd: app.root, isSeeded: false }, inheritedEventCount: 0, events: [] }
+        : { meta: { id: sessionId, version: 4, createdAt: 0, isSeeded: false }, inheritedEventCount: 0, events: [] }
     await seedStore(app.harnessDir)
 
     const result = await endpointOf(app).panelSnapshot('ses_persisted', app.root)
     expect(result.kind).toBe('ok')
     if (result.kind !== 'ok') throw new Error('unreachable')
     expect(typeof result.snapshot.enforcement?.hard).toBe('boolean')
+  })
+
+  it('both surfaces genuinely silent: the read lands on the launch workspace', async () => {
+    const app = (booted = await bootApp({ sessionsService: 'fake', harnessDir: null }))
+    await app.ctx.plugin(FakeSessionController)
+    const controller = app.ctx.get('sessionController') as FakeSessionController
+    // No cwd on EITHER surface: the persisted header is real-shaped and empty.
+    controller.handler = async (sessionId: string) => ({ meta: { id: sessionId, version: 4, createdAt: 0, isSeeded: false }, inheritedEventCount: 0, events: [] })
+    await seedStore(app.harnessDir)
+
+    const endpoint = endpointOf(app)
+    // With both surfaces silent the read falls back to the launch workspace, so
+    // the pre-fix shape no longer produces the false `session-cwd-absent`: the
+    // read still answers, from the boot workspace rather than the session's own.
+    const result = await endpoint.panelSnapshot('ses_guessed', process.cwd())
+    // Before the shape fix this same fixture answered `{ kind: 'unavailable',
+    // reason: 'session-cwd-absent' }`. The read now resolves the launch
+    // workspace; this test process runs outside a harness workspace, so the
+    // honest answer is `no-harness` (a state), never a false unavailability.
+    expect(result).toEqual({ kind: 'no-harness' })
   })
 })
 

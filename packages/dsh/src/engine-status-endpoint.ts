@@ -127,10 +127,26 @@ function nonEmptyString(value: unknown): string | undefined {
   return typeof value === 'string' && value.trim() !== '' ? value : undefined
 }
 
-/** The `header.cwd` of a structural session/inspection object, or undefined. */
+/**
+ * The `SessionHeader` of either session surface, or undefined.
+ *
+ * The two surfaces carry it under DIFFERENT keys, read from the host's own types:
+ * a live `Session` exposes `header: SessionHeader`
+ * (`@deepseek-ai/dsh-session` `Session.header`), while a persisted inspection
+ * exposes `meta: SessionHeader` (`@deepseek-ai/dsh-session-persistence`
+ * `SessionInspection extends SessionStorageMetadata { meta: SessionHeader }`).
+ * Reading only `header` made every cold session answer `session-cwd-absent`
+ * while its workspace was right there.
+ */
+function sessionHeaderOf(value: unknown): { cwd?: unknown } | undefined {
+  const row = value as { header?: unknown; meta?: unknown } | null | undefined
+  const header = row?.header ?? row?.meta
+  return header !== null && typeof header === 'object' ? (header as { cwd?: unknown }) : undefined
+}
+
+/** The session's workspace directory from either surface (`header.cwd` / `meta.cwd`). */
 function headerCwdOf(value: unknown): string | undefined {
-  const header = (value as { header?: { cwd?: unknown } } | null | undefined)?.header
-  return nonEmptyString(header?.cwd)
+  return nonEmptyString(sessionHeaderOf(value)?.cwd)
 }
 
 /**
@@ -157,7 +173,7 @@ function isRefusedPath(cwd: string): boolean {
 
 /** The resolved session cwd, or the explicit reason the session is unusable. */
 type SessionCwdResolution =
-  | { readonly kind: 'ok'; readonly cwd: string; readonly source: 'live' | 'persisted' }
+  | { readonly kind: 'ok'; readonly cwd: string; readonly source: 'live' | 'persisted' | 'boot' }
   | { readonly kind: 'unavailable'; readonly reason: string }
 
 /**
@@ -335,8 +351,11 @@ export class MstarEngineStatusGateway extends TypertRemoteService {
       return { kind: 'unavailable', reason: 'session-inspect-failed' }
     }
     const persistedCwd = headerCwdOf(inspection)
-    if (persistedCwd === undefined) return { kind: 'unavailable', reason: 'session-cwd-absent' }
-    return { kind: 'ok', cwd: persistedCwd, source: 'persisted' }
+    if (persistedCwd !== undefined) return { kind: 'ok', cwd: persistedCwd, source: 'persisted' }
+    // Both surfaces silent: read the workspace the host was launched in.
+    const boot = nonEmptyString(process.cwd())
+    if (boot !== undefined) return { kind: 'ok', cwd: boot, source: 'boot' }
+    return { kind: 'unavailable', reason: 'session-cwd-absent' }
   }
 }
 
