@@ -337,8 +337,8 @@ without it fails this repository's own design-document lint. The panel's remaini
 host-specific obligation — resolving `--ms-*` through the host's own theme — belongs to the
 dsh adapter plan, not to a design document.
 
-The confirmed prototype (`iterations/iter-20261025-frontend-unification/prototypes/
-design-v1.html`, screen `Design tokens`) is the visual source of this system. Three values
+The confirmed prototype (the iteration's prototype record, screen `Design tokens`) is the
+visual source of this system. Three values
 were corrected here for a measured reason rather than a preference: `text-muted`,
 `border-strong` and `accent` were raised to clear 4.5:1 (text) and 3:1 (control boundary) on
 their documented grounds, and the light `success`/`warning`, light `danger`/`purple` and the
