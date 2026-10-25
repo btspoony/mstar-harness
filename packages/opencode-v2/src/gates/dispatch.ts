@@ -7,7 +7,7 @@ import type { DispatchGateApi } from "../engine-seams";
 import { defaultStatusLogger, type StatusLogger } from "../log";
 
 /**
- * SDK pin receipt: `@opencode/plugin@2.0.26/dist/effect/tool.d.ts:1` imports
+ * SDK pin receipt: `@opencode/plugin@2.1.3/dist/effect/tool.d.ts:1` imports
  * `Tool` from `@opencode/schema/tool`; the pinned schema's
  * `dist/tool.d.ts:40` declares `Tool.Error`. `execute.before` receives
  * `event.agent` as the caller and leaves tool arguments in `input: unknown`.
