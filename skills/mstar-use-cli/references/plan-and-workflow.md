@@ -64,7 +64,7 @@ Complete may atomically entail InProgress → InReview → Done with sufficient 
 
 ```text
 mstar session run --workflow <id> --role coordinator <argv...> [--session-id <id>] [--harness <path>]
-mstar session recover --workflow <id> (--prior-session <id> | --unowned) --reason <text> --attestation <absolute-json> --expect <workflow-token> --operation <id> [--harness <path>] [--session-id <id>]
+mstar session recover --workflow <id> (--prior-session <id> | --unowned) --reason <text> --attestation <absolute-json> [--expect <workflow-token>] --operation <id> [--harness <path>] [--session-id <id>]
 ```
 
 The launcher verifies the caller's session identity (`--session-id` or the inherited identity channel) against the workflow's live coordinator binding and hands that exact identity to the child; an id that is not the running lifecycle's live coordinator is refused (`session.run-unbound`) with the recovery for the observed state. It never mints or derives an id, and it does not bind a workflow. Coordinator bootstrap remains workflow-wide and limited to one owner. Read-only resume reports current own context; it never restarts execution or replaces a stopped owner. Recovery replaces the explicitly stopped workflow coordinator, never a row identity. The stop attestation must name the real prior owner; `--unowned` explicitly means no recorded coordinator. No age/idle/TTL takeover. Any authorizationRef names a real external user/operator authorization event, not an agent-invented task reference.

@@ -19,13 +19,15 @@ import { refusalEnvelope, type RefusalDiagnostic } from "../envelope.js";
 import { commandEnvelopeSchema } from "../envelope.js";
 import { decodeInputDiagnostics } from "../input-diagnostics.js";
 import { engineErrorFacts } from "./family-refusal.js";
-import { TOKEN_SUPPLIES } from "../identity-supplies.js";
 import type { CommandDefinition, CommandEnvelope, InvocationContext } from "../types.js";
 
 const command = <I, O>(definition: CommandDefinition<I, O>): CommandDefinition<I, O> => definition;
 const SESSION_ROLES = ["coordinator"] as const;
-/** Recovery compares the addressed workflow's own CAS token. */
-const SESSION_RECOVER_EXPECT_HELP = `required CAS token: ${TOKEN_SUPPLIES.workflow}`;
+/** Recovery compares the addressed workflow's own CAS token, derived when omitted. */
+const SESSION_RECOVER_EXPECT_HELP =
+  "optional CAS token on the addressed header. An ACTIVE workflow's token is `mstar status validate` output data.workflows[].token; " +
+  "a closed one is published as an identity row only, so omit this option and the verb reads the addressed header's current token itself. " +
+  "Either way the transition is CAS-guarded.";
 
 function ok<T>(id: string, data: T): CommandEnvelope<T> {
   return { version: 1, command: id, status: "ok", code: `${id}.ok`, exitCode: 0, data };
@@ -138,13 +140,13 @@ function attestationParserCause(error: unknown): string {
   return location === undefined ? fact : `${fact} (${location})`;
 }
 
-/** The recovered caller inputs of `session.recover`, all non-optional. */
+/** The recovered caller inputs of `session.recover`; `expect` may be omitted for the derived CAS. */
 type RecoverInputs = Readonly<{
   workflow: string;
   priorSessionId: string | null;
   reason: string;
   attestationPath: string;
-  expect: string;
+  expect?: string;
   operation: string;
   sessionId: string;
   harness: string | undefined;
@@ -173,7 +175,6 @@ function resolveRecoverInputs(
   const missing = [
     ...(reason === undefined ? ["reason"] : []),
     ...(attestation === undefined ? ["attestation"] : []),
-    ...(expect === undefined ? ["expect"] : []),
     ...(operation === undefined ? ["operation"] : []),
     ...(sessionId === undefined || sessionId.trim() === "" ? ["sessionId"] : []),
   ];
@@ -189,7 +190,7 @@ function resolveRecoverInputs(
   ];
   if (
     diagnostics.length > 0 ||
-    reason === undefined || attestation === undefined || expect === undefined || operation === undefined ||
+    reason === undefined || attestation === undefined || operation === undefined ||
     sessionId === undefined
   ) {
     return { ok: false, diagnostics };
@@ -406,23 +407,27 @@ export function getSessionCommandDefinitions(): readonly CommandDefinition[] {
       cli: { path: ["session", "recover"], aliases: [], arguments: [], options: [
         { key: "workflow", flags: "--workflow <id>", required: true }, { key: "priorSession", flags: "--prior-session <id>", required: false, help: "Exactly one of --prior-session or --unowned=true is required." },
         { key: "unowned", flags: "--unowned", required: false, help: "Only true selects ownerless recovery; false is not an alternative." }, { key: "reason", flags: "--reason <text>", required: true },
-        { key: "attestation", flags: "--attestation <path>", required: true }, { key: "expect", flags: "--expect <token>", required: true, help: SESSION_RECOVER_EXPECT_HELP },
+        { key: "attestation", flags: "--attestation <path>", required: true }, { key: "expect", flags: "--expect <token>", required: false, help: SESSION_RECOVER_EXPECT_HELP },
         { key: "operation", flags: "--operation <id>", required: true }, { key: "harness", flags: "--harness <path>", required: false },
         { key: "sessionId", flags: "--session-id <value>", required: false, context: "sessionId" },
       ] },
       input: recoverInput, output: commandEnvelopeSchema, effects: ["write"],
       requirements: [
-        ...(["workflow", "reason", "attestation", "expect", "operation"] as const).flatMap((name) => [
-          { name, ownership: "caller" as const, route: "cli" as const, required: true, ...(name === "expect" ? { tokenKind: "workflow" as const } : {}) },
-          { name, ownership: "caller" as const, route: "mcp" as const, required: true, ...(name === "expect" ? { tokenKind: "workflow" as const } : {}) },
+        ...(["workflow", "reason", "attestation", "operation"] as const).flatMap((name) => [
+          { name, ownership: "caller" as const, route: "cli" as const, required: true },
+          { name, ownership: "caller" as const, route: "mcp" as const, required: true },
         ]),
+        ...(["cli", "mcp"] as const).map((route) => ({
+          name: "expect" as const, ownership: "caller" as const, route, required: false, tokenKind: "workflow" as const,
+          constraint: "CAS on the addressed workflow's current token; when omitted this verb reads that token itself inside the guarded transaction, so the terminal held-lease release needs no published token",
+        })),
         ...(["cli", "mcp"] as const).flatMap((route) => [
           { name: "priorSession", ownership: "caller" as const, route, required: false, alternatives: { cardinality: "exactly-one" as const, members: [{ name: "priorSession" }, { name: "unowned", whenTrue: true }] }, constraint: "exactly one of priorSession or unowned=true" },
           { name: "unowned", ownership: "caller" as const, route, required: false, constraint: "only true selects ownerless recovery; false does not select this alternative" },
           { name: "sessionId", ownership: "caller" as const, route, required: true, constraint: "current operator's acquired conversation identity; never derive or substitute it" },
         ]),
       ],
-      description: "Recover a stopped workflow coordinator through active DB authority. Requires the current operator identity, workflow CAS token, replay id, reason and operator attestation; specify exactly one prior session or --unowned=true. Recovery never resumes a session.",
+      description: "Recover a stopped workflow coordinator through active DB authority. Requires the current operator identity, replay id, reason and operator attestation; specify exactly one prior session or --unowned=true. --expect is an optional CAS token: when omitted this verb reads the addressed header's current token itself inside the guarded transaction. Recovery never resumes a session.",
       async execute(raw, context: InvocationContext) {
         const parsed = recoverInput.safeParse(raw);
         if (!parsed.success) return refusalEnvelope({ command: "session.recover", status: "usage", code: "command.invalid-input", exitCode: 2, message: "Invalid input.", diagnostics: decodeInputDiagnostics(parsed.error, raw) });
@@ -442,7 +447,7 @@ export function getSessionCommandDefinitions(): readonly CommandDefinition[] {
           const parsedAttestation = readAttestationDocument(attestationPath);
           const contextForCaller = executionContextFor({ harnessDir: root }, identity);
           const receipt = await recoverExecutionCoordinator(contextForCaller, {
-            expected: expect as never, operationId: operation, priorSessionId, reason,
+            ...(expect === undefined ? {} : { expected: expect as never }), operationId: operation, priorSessionId, reason,
             attestation: parsedAttestation,
           });
           return ok("session.recover", receipt);

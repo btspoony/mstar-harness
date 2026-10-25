@@ -8659,7 +8659,7 @@ async function evaluatePostMergeCloseFromExecutionAuthority(context, workflowId)
               status = parsed.status;
           } catch {}
           if (status !== "released") {
-            violations.push(violation3("high", "PHASE6_DANGLING_LEASE", "The workflow still carries a held integration merge mutex; completed close cannot release it, and failed/stopped close needs an attested recovery of the exact recorded coordinator holder before terminal close.", "Cause: the workflow is stopped and its integration merge lease remains held by the recorded coordinator. Run `mstar status validate` (with no arguments), then locate this workflow by `id` in the returned `data.terminalUnregistered[]` collection, or in `data.terminalAdoptions[]` for an adopted close (a closed lifecycle is out of `data.workflows[]`), and use the matching `token` that entry publishes as the `--expect` value for `mstar session recover --workflow <id> --prior-session <holder-id> --reason <text> --attestation <absolute-json> --expect <workflow-token> --operation <id>`. That is the terminal lease release: it proceeds only while the lease is still held and the attestation names exactly that recorded holder as stopped, and it releases the lease alone — the terminal header, snapshot, registry membership and session rows stay exactly as recorded."));
+            violations.push(violation3("high", "PHASE6_DANGLING_LEASE", "The workflow still carries a held integration merge mutex; completed close cannot release it, and failed/stopped close needs an attested recovery of the exact recorded coordinator holder before terminal close.", "Cause: the workflow is stopped and its integration merge lease remains held by the recorded coordinator. Run `mstar status validate` (with no arguments), then locate this workflow by `id` in the returned `data.authority.terminalUnregistered[]` collection, or in `data.authority.terminalAdoptions[]` for an adopted close (a closed lifecycle is out of `data.workflows[]`); that row publishes the terminal status and the header revision. Then run `mstar session recover --workflow <id> --prior-session <holder-id> --reason <text> --attestation <absolute-json> --operation <id>`: omit `--expect` and the verb derives the terminal header's current CAS token itself inside the guarded transaction (pass `--expect <workflow-token>` when you already hold the token). That is the terminal lease release: it proceeds only while the lease is still held and the attestation names exactly that recorded holder as stopped, and it releases the lease alone — the terminal header, snapshot, registry membership and session rows stay exactly as recorded."));
           }
         }
       }
@@ -28472,7 +28472,7 @@ function recoverCoordinatorRequestHash(caller, workflowId, input) {
   return createHash17("sha256").update(serializeExecutionValue({
     operation: RECOVER_COORDINATOR_OPERATION,
     workflow_id: workflowId,
-    expected: input.expected,
+    expected: input.expected ?? "current",
     caller: {
       session_id: caller.sessionId,
       role: caller.role,
@@ -28516,6 +28516,7 @@ async function recoverExecutionCoordinator(context, input) {
       throw new ExecutionError("execution.not-active", `the execution authority is ${tx.execution.authorityState}; recovering a coordinator requires an active authority. A staged store is inspectable only through migration diagnostics.`);
     }
     const header = requireWorkflowState(tx, workflowId);
+    const expected = input.expected ?? executionToken("workflow", tx.storeId, tx.epoch, [workflowId], header.revision);
     const status = String(header.state.status ?? "");
     if (WORKFLOW_TERMINAL_STATUSES.includes(status)) {
       return releaseTerminalHeldLease(tx, {
@@ -28526,7 +28527,7 @@ async function recoverExecutionCoordinator(context, input) {
         attestation,
         operationId,
         requestHash: requestHash4,
-        expected: input.expected,
+        expected,
         status,
         revision: header.revision
       });
@@ -28543,7 +28544,7 @@ async function recoverExecutionCoordinator(context, input) {
       requireLiveCoordinator(tx, workflowId, caller.sessionId);
       return replay;
     }
-    assertExecutionToken(input.expected, {
+    assertExecutionToken(expected, {
       kind: "workflow",
       storeId: tx.storeId,
       epoch: tx.epoch,

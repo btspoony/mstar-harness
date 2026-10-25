@@ -80,24 +80,25 @@ function expectAdoptionRefusal(result: CommandEnvelope, firstLine: string, recov
 /**
  * Command envelope `data` is validated at this boundary instead of cast, so the
  * terminal-state reads below come from parsed data. The schema mirrors the
- * advertised `status.validate` shape (`ExecutionState`).
+ * advertised `status.validate` shape: a closed lifecycle lives inside
+ * `authority` as an identity row. Fields a row no longer publishes stay
+ * DECLARED, so the exact pins below fail if a command surface serves one again.
  */
+const terminalRowSchema = z.object({
+  id: z.string(), status: z.enum(["completed", "stopped", "failed"]), revision: z.number(),
+  token: z.string().optional(), actor_session_id: z.string().optional(), reason: z.string().optional(),
+  lifecycle_adopted_at: z.string().optional(), adopt_reason: z.string().optional(), operation_id: z.string().optional(),
+  warnings: z.array(z.object({
+    code: z.literal("recovery.holder-live"), holder: z.string(), epoch: z.number(),
+    observed_state: z.literal("active"), attested_at: z.string(),
+  })).optional(),
+  plans: z.array(z.object({ id: z.string(), file: z.string(), status: z.string() })).optional(),
+});
 const terminalStateSchema = z.object({
-  terminalUnregistered: z.array(z.object({
-    id: z.string(), status: z.enum(["completed", "stopped", "failed"]), revision: z.number(),
-    // Declared so the pins below stay exact: a fixture with no surviving
-    // receipt and no plan rows must serve none of them.
-    actor_session_id: z.string().optional(), reason: z.string().optional(),
-    warnings: z.array(z.object({
-      code: z.literal("recovery.holder-live"), holder: z.string(), epoch: z.number(),
-      observed_state: z.literal("active"), attested_at: z.string(),
-    })).optional(),
-    plans: z.array(z.object({ id: z.string(), file: z.string(), status: z.string() })).optional(),
-  })).optional(),
-  terminalAdoptions: z.array(z.object({
-    id: z.string(), status: z.enum(["completed", "stopped", "failed"]), revision: z.number(),
-    lifecycle_adopted_at: z.string(), adopt_reason: z.string(),
-  })).optional(),
+  authority: z.object({
+    terminalUnregistered: z.array(terminalRowSchema).optional(),
+    terminalAdoptions: z.array(terminalRowSchema).optional(),
+  }),
 });
 const adoptionReceiptSchema = z.object({ replayed: z.boolean() }).passthrough();
 /**
@@ -115,11 +116,11 @@ const settlementReceiptSchema = z.object({
   }).passthrough().optional(),
 }).passthrough();
 function terminalState(data: unknown): {
-  terminalUnregistered: NonNullable<z.infer<typeof terminalStateSchema>["terminalUnregistered"]>;
-  terminalAdoptions: NonNullable<z.infer<typeof terminalStateSchema>["terminalAdoptions"]>;
+  terminalUnregistered: z.infer<typeof terminalRowSchema>[];
+  terminalAdoptions: z.infer<typeof terminalRowSchema>[];
 } {
   const parsed = terminalStateSchema.parse(data);
-  return { terminalUnregistered: parsed.terminalUnregistered ?? [], terminalAdoptions: parsed.terminalAdoptions ?? [] };
+  return { terminalUnregistered: parsed.authority.terminalUnregistered ?? [], terminalAdoptions: parsed.authority.terminalAdoptions ?? [] };
 }
 /** One `select count(*) as n` row, parsed rather than asserted. */
 function countRow(row: unknown): number {
@@ -196,7 +197,7 @@ test("workflow adopt-terminal publishes revision source, replays, and reports ad
   expect(status.status).toBe("ok");
   if (status.status === "ok") {
     expect(terminalState(status.data).terminalAdoptions)
-      .toMatchObject([{ id: "wf-command", status: "stopped", revision: 2, lifecycle_adopted_at: expect.any(String), adopt_reason: input.reason }]);
+      .toEqual([{ id: "wf-command", status: "stopped", revision: 2 }]);
   }
   const schema = await executeCommand("schema", { command: "workflow.adopt-terminal" }, invocation(root));
   const descriptorSchema = z.object({
@@ -589,7 +590,7 @@ test("an unregistered header that never closed is adopted into a terminal state 
   expect(status.status).toBe("ok");
   if (status.status !== "ok") throw new Error("expected status validate success");
   expect(terminalState(status.data).terminalAdoptions)
-    .toMatchObject([{ id: "wf-command", status: "stopped", revision: 2, lifecycle_adopted_at: expect.any(String) }]);
+    .toEqual([{ id: "wf-command", status: "stopped", revision: 2 }]);
   await withWriter(harness, (db) => {
     expect(db.prepare("select json_extract(state_json, '$.status') as status, json_extract(state_json, '$.ended_at') as ended_at from execution_workflows where workflow_id = ?").get("wf-command"))
       .toMatchObject({ status: "stopped", ended_at: expect.any(String) });
@@ -640,7 +641,7 @@ test("a failed header carrying no recorded stop reason is adopted like any other
   expect(status.status).toBe("ok");
   if (status.status !== "ok") throw new Error("expected status validate success");
   expect(terminalState(status.data).terminalAdoptions)
-    .toMatchObject([{ id: "wf-command", status: "failed", revision: 2, lifecycle_adopted_at: expect.any(String) }]);
+    .toEqual([{ id: "wf-command", status: "failed", revision: 2 }]);
 });
 
 test("missing-header refusal directs to new registration, not adoption", async () => {
