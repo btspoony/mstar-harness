@@ -1,48 +1,56 @@
 /**
- * The workflow panel's entry store: the selected internal section, keyed by the sidebar tab record's id.
+ * The workflow panel's entry store: the active DESTINATION, keyed by the sidebar
+ * tab record's id.
  *
  * Why a slot store and not `useState`: a docked sidebar body is UNMOUNTED
  * whenever another tab in the pane becomes active (and the sidebar layout is
- * memory-only), so component state would silently reset the section on every
- * glance at the file tree. The store instance is framework-cached per
- * (entry, session) and survives the unmount by construction; keying inside
- * the state by `tab.id` keeps two panes showing the panel independent. The
- * registration passes the handle as the seat's `store` option, so the body
- * receives `useStore` + the baked `select` action through its props share.
+ * memory-only), so component state would silently reset the destination on every
+ * glance at the file tree. The store instance is framework-cached per (entry,
+ * session) and survives the unmount by construction; keying the state by
+ * `tab.id` keeps two panes showing the panel independent. The registration
+ * passes the handle as the seat's `store` option, so the body receives
+ * `useStore` + the baked `select` action through its props share.
  */
 
 import { defineStore } from '@deepseek-ai/dsh-client-store'
 
-/** The panel's three internal sections (one sidebar tab, three sections). */
-export type PanelSection = 'tasks' | 'roadmap' | 'events'
-
 /**
- * Is this string a legal panel section? The store's `select` refuses anything
- * else, so a stale or hand-written `'agents'` (the retired tab) can never be
- * written into the state and never reaches a render.
+ * The panel's destinations: the five product destinations plus this host's
+ * session landing. The ids are the shared nav's ids (IA §8.2 order), so the
+ * store never invents a vocabulary of its own.
  */
-export function isPanelSection(value: unknown): value is PanelSection {
-  return value === 'tasks' || value === 'roadmap' || value === 'events'
+export type PanelDestination = 'focus' | 'overview' | 'issues' | 'workflows' | 'iterations' | 'projects'
+
+/** Legal destinations, in nav order. */
+const DESTINATIONS: readonly PanelDestination[] = ['focus', 'overview', 'issues', 'workflows', 'iterations', 'projects']
+
+/**
+ * Is this string a legal destination? The store's `select` refuses anything
+ * else, so a stale or hand-written id can never be written into the state and
+ * never reaches a render.
+ */
+export function isPanelDestination(value: unknown): value is PanelDestination {
+  return typeof value === 'string' && (DESTINATIONS as readonly string[]).includes(value)
 }
 
-/** The entry-store state: the selected section per sidebar tab record. */
+/** The entry-store state: the active destination per sidebar tab record. */
 export interface PanelStoreState {
-  byTab: Record<string, PanelSection | undefined>
+  byTab: Record<string, PanelDestination | undefined>
 }
 
 /**
- * The panel entry store handle. `undefined` reads as the `'tasks'` default —
- * the body applies `?? 'tasks'` at the read site, so nothing writes the
- * default into the state.
+ * The panel entry store handle. `undefined` reads as the `'focus'` default — the
+ * body applies `?? 'focus'` at the read site, so nothing writes the default into
+ * the state.
  */
 export function createPanelStore() {
   return defineStore({
     init: (): PanelStoreState => ({ byTab: {} }),
     actions: {
-      select(d, tabId: string, section: PanelSection): void {
-        // A refused id leaves the previous section untouched (never a blank body).
-        if (!isPanelSection(section)) return
-        d.byTab[tabId] = section
+      select(d, tabId: string, destination: PanelDestination): void {
+        // A refused id leaves the previous destination untouched (never a blank body).
+        if (!isPanelDestination(destination)) return
+        d.byTab[tabId] = destination
       },
     },
   })

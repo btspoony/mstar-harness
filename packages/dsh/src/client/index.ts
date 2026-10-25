@@ -103,7 +103,7 @@ export function apply(ctx: ClientContext): void {
       key: MSTAR_PANEL_ID,
       locale: NS,
       store: panelStore,
-    }, (props: Parameters<typeof PanelView>[0]) => PanelView({ ...props, picker, panelSnapshot }))),
+    }, (props: Parameters<typeof PanelView>[0]) => PanelView({ ...props, picker, panelSnapshot, localeFace: ctx.locale }))),
     'ui-mstar-panel: panel body',
   )
   ctx.effect(

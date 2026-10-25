@@ -120,10 +120,11 @@ function isWorkspaceView(value: unknown): boolean {
 }
 
 /**
- * Is this the complete envelope the projection reads UNGUARDED? Every member
- * `projectGraph` dereferences must be here, or the whole panel throws on a
+ * Is this the complete envelope the panel reads UNGUARDED? Every member the
+ * seat's adapter dereferences must be here, or the whole panel throws on a
  * version-skewed or truncated answer. A `null` ledger is legal (advisory read
- * failed); a present one must carry the events array.
+ * failed); a present one must carry the events array — Task 4 retires the
+ * ledger member with the read path that produces it.
  */
 function isSnapshotEnvelope(value: unknown): value is PanelSnapshot {
   if (value === null || typeof value !== 'object') return false
