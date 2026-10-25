@@ -127,10 +127,26 @@ function nonEmptyString(value: unknown): string | undefined {
   return typeof value === 'string' && value.trim() !== '' ? value : undefined
 }
 
-/** The `header.cwd` of a structural session/inspection object, or undefined. */
+/**
+ * The `SessionHeader` of either session surface, or undefined.
+ *
+ * The two surfaces carry it under DIFFERENT keys, read from the host's own types:
+ * a live `Session` exposes `header: SessionHeader`
+ * (`@deepseek-ai/dsh-session` `Session.header`), while a persisted inspection
+ * exposes `meta: SessionHeader` (`@deepseek-ai/dsh-session-persistence`
+ * `SessionInspection extends SessionStorageMetadata { meta: SessionHeader }`).
+ * Reading only `header` made every cold session answer `session-cwd-absent`
+ * while its workspace was right there.
+ */
+function sessionHeaderOf(value: unknown): { cwd?: unknown } | undefined {
+  const row = value as { header?: unknown; meta?: unknown } | null | undefined
+  const header = row?.header ?? row?.meta
+  return header !== null && typeof header === 'object' ? (header as { cwd?: unknown }) : undefined
+}
+
+/** The session's workspace directory from either surface (`header.cwd` / `meta.cwd`). */
 function headerCwdOf(value: unknown): string | undefined {
-  const header = (value as { header?: { cwd?: unknown } } | null | undefined)?.header
-  return nonEmptyString(header?.cwd)
+  return nonEmptyString(sessionHeaderOf(value)?.cwd)
 }
 
 /**
@@ -157,7 +173,7 @@ function isRefusedPath(cwd: string): boolean {
 
 /** The resolved session cwd, or the explicit reason the session is unusable. */
 type SessionCwdResolution =
-  | { readonly kind: 'ok'; readonly cwd: string; readonly source: 'live' | 'persisted' }
+  | { readonly kind: 'ok'; readonly cwd: string; readonly source: 'live' | 'persisted' | 'boot' }
   | { readonly kind: 'unavailable'; readonly reason: string }
 
 /**
@@ -310,13 +326,18 @@ export class MstarEngineStatusGateway extends TypertRemoteService {
     return source.selection
   }
 
-  
   /**
-   * Resolve the authoritative cwd of one session: the LIVE session first
-   * (`ctx.sessions.get(id)`), then the session controller's persisted
-   * `inspect(id)` fallback for a session that is not currently attached.
-   * A missing service, a missing session or a cwd-less header is an explicit
-   * unavailable reason, never a guess.
+   * Resolve the workspace of one session, in order: the LIVE session's header
+   * (`ctx.sessions.get(id)` → `Session.header.cwd`), then the persisted
+   * inspection (`inspect(id)` → `SessionInspection.meta.cwd`) for a session that
+   * is not attached, then — only when BOTH surfaces are genuinely silent — the
+   * workspace this host was launched in (`process.cwd()`).
+   *
+   * The last step is not a guess about the session: it is the plugin's own launch
+   * workspace, the only one it can observe without a new host API, and it is
+   * never the caller's claim (a client-asserted cwd is compared, not adopted).
+   * A missing service, a missing session or an unreadable inspection keeps its
+   * own explicit reason.
    */
   private async resolveSessionCwd(sessionId: string): Promise<SessionCwdResolution> {
     const sessions = this.ctx.get('sessions') as SessionsView | undefined
@@ -335,8 +356,11 @@ export class MstarEngineStatusGateway extends TypertRemoteService {
       return { kind: 'unavailable', reason: 'session-inspect-failed' }
     }
     const persistedCwd = headerCwdOf(inspection)
-    if (persistedCwd === undefined) return { kind: 'unavailable', reason: 'session-cwd-absent' }
-    return { kind: 'ok', cwd: persistedCwd, source: 'persisted' }
+    if (persistedCwd !== undefined) return { kind: 'ok', cwd: persistedCwd, source: 'persisted' }
+    // Both surfaces silent: read the workspace the host was launched in.
+    const boot = nonEmptyString(process.cwd())
+    if (boot !== undefined) return { kind: 'ok', cwd: boot, source: 'boot' }
+    return { kind: 'unavailable', reason: 'session-cwd-absent' }
   }
 }
 

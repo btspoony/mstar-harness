@@ -66,6 +66,14 @@ interface EndpointView {
     iterationId?: unknown,
     projectId?: unknown,
   ): Promise<PanelSnapshotRead>
+
+  dashboardView(
+    sessionId: unknown,
+    cwd: unknown,
+    view: unknown,
+    params?: Record<string, string | undefined>,
+    id?: unknown,
+  ): Promise<{ kind: string; reason?: string }>
 }
 
 /** Structural view of the fake sessions registry (the harness's driver). */
@@ -229,14 +237,78 @@ describe('panelSnapshot endpoint — server-side harness resolution', () => {
     const app = (booted = await bootApp({ sessionsService: 'fake', harnessDir: null }))
     await app.ctx.plugin(FakeSessionController)
     const controller = app.ctx.get('sessionController') as FakeSessionController
+    // The host's real shape: `SessionInspection extends SessionStorageMetadata
+    // { meta: SessionHeader }` (`@deepseek-ai/dsh-session-persistence`) — the
+    // workspace lives at `meta.cwd`, not `header.cwd`.
     controller.handler = async (sessionId: string) =>
-      sessionId === 'ses_persisted' ? { header: { cwd: app.root } } : { header: {} }
+      sessionId === 'ses_persisted'
+        ? { meta: { id: sessionId, version: 4, createdAt: 0, cwd: app.root, isSeeded: false }, inheritedEventCount: 0, events: [] }
+        : { meta: { id: sessionId, version: 4, createdAt: 0, isSeeded: false }, inheritedEventCount: 0, events: [] }
     await seedStore(app.harnessDir)
 
     const result = await endpointOf(app).panelSnapshot('ses_persisted', app.root)
     expect(result.kind).toBe('ok')
     if (result.kind !== 'ok') throw new Error('unreachable')
     expect(typeof result.snapshot.enforcement?.hard).toBe('boolean')
+  })
+
+  it('both surfaces genuinely silent: the read lands on the launch workspace', async () => {
+    const app = (booted = await bootApp({ sessionsService: 'fake', harnessDir: null }))
+    await app.ctx.plugin(FakeSessionController)
+    const controller = app.ctx.get('sessionController') as FakeSessionController
+    // No cwd on EITHER surface: the persisted header is real-shaped and empty.
+    controller.handler = async (sessionId: string) => ({ meta: { id: sessionId, version: 4, createdAt: 0, isSeeded: false }, inheritedEventCount: 0, events: [] })
+    await seedStore(app.harnessDir)
+
+    const endpoint = endpointOf(app)
+    // With both surfaces silent the read falls back to the launch workspace, so
+    // the pre-fix shape no longer produces the false `session-cwd-absent`: the
+    // read still answers, from the boot workspace rather than the session's own.
+    const result = await endpoint.panelSnapshot('ses_guessed', process.cwd())
+    // Before the shape fix this same fixture answered `{ kind: 'unavailable',
+    // reason: 'session-cwd-absent' }`. The read now resolves the launch
+    // workspace; this test process runs outside a harness workspace, so the
+    // honest answer is `no-harness` (a state), never a false unavailability.
+    expect(result).toEqual({ kind: 'no-harness' })
+  })
+})
+
+describe('the two invocations accept a workspace by ONE rule', () => {
+  /** Collapse either answer to the only thing this parity test is about. */
+  const verdict = (read: { kind: string; reason?: string }): string =>
+    read.kind === 'unavailable' ? `unavailable:${read.reason ?? ''}` : `accepted:${read.kind}`
+
+  async function bootSilent(): Promise<{ endpoint: ReturnType<typeof endpointOf> }> {
+    const app = (booted = await bootApp({ sessionsService: 'fake', harnessDir: null }))
+    await app.ctx.plugin(FakeSessionController)
+    const controller = app.ctx.get('sessionController') as FakeSessionController
+    // BOTH session surfaces silent: the resolver answers `source: 'boot'`.
+    controller.handler = async (sessionId: string) => ({
+      meta: { id: sessionId, version: 4, createdAt: 0, isSeeded: false },
+      inheritedEventCount: 0,
+      events: [],
+    })
+    await seedStore(app.harnessDir)
+    return { endpoint: endpointOf(app) }
+  }
+
+  it('a boot-resolved session: panelSnapshot and dashboardView agree (claim = the launch workspace)', async () => {
+    const { endpoint } = await bootSilent()
+    const digest = await endpoint.panelSnapshot('ses_silent', process.cwd())
+    const view = await endpoint.dashboardView('ses_silent', process.cwd(), 'overview')
+    // Red on the pre-fix code: the digest accepted the request while every
+    // destination refused it (`cwd-mismatch`), so the panel rendered and then
+    // failed each view.
+    expect(verdict(view)).toBe(verdict(digest))
+    expect(verdict(digest)).not.toContain('cwd-mismatch')
+  })
+
+  it('a foreign claim is refused by BOTH, with the same reason', async () => {
+    const { endpoint } = await bootSilent()
+    const digest = await endpoint.panelSnapshot('ses_silent', '/elsewhere')
+    const view = await endpoint.dashboardView('ses_silent', '/elsewhere', 'overview')
+    expect(verdict(digest)).toBe('unavailable:cwd-mismatch')
+    expect(verdict(view)).toBe(verdict(digest))
   })
 })
 

@@ -116,10 +116,26 @@ function nonEmptyString(value: unknown): string | undefined {
   return typeof value === 'string' && value.trim() !== '' ? value : undefined
 }
 
-/** The `header.cwd` of a structural session/inspection object, or undefined. */
+/**
+ * The `SessionHeader` of either session surface, or undefined.
+ *
+ * The two surfaces carry it under DIFFERENT keys, read from the host's own types:
+ * a live `Session` exposes `header: SessionHeader`
+ * (`@deepseek-ai/dsh-session` `Session.header`), while a persisted inspection
+ * exposes `meta: SessionHeader` (`@deepseek-ai/dsh-session-persistence`
+ * `SessionInspection extends SessionStorageMetadata { meta: SessionHeader }`).
+ * Reading only `header` made every cold session answer `session-cwd-absent`
+ * while its workspace was right there.
+ */
+function sessionHeaderOf(value: unknown): { cwd?: unknown } | undefined {
+  const row = value as { header?: unknown; meta?: unknown } | null | undefined
+  const header = row?.header ?? row?.meta
+  return header !== null && typeof header === 'object' ? (header as { cwd?: unknown }) : undefined
+}
+
+/** The session's workspace directory from either surface (`header.cwd` / `meta.cwd`). */
 function headerCwdOf(value: unknown): string | undefined {
-  const header = (value as { header?: { cwd?: unknown } } | null | undefined)?.header
-  return nonEmptyString(header?.cwd)
+  return nonEmptyString(sessionHeaderOf(value)?.cwd)
 }
 
 /**
@@ -131,6 +147,20 @@ function isRefusedPath(cwd: string): boolean {
   if (cwd.includes('\0')) return true
   if (!isAbsolute(cwd)) return true
   return cwd.split(/[\\/]+/).includes('..')
+}
+
+/**
+ * The ONE cwd acceptance rule, taken by both invocations (`panelSnapshot` and
+ * `dashboardView`): the client's claim must be the resolved session's own — never
+ * a close match, never another session's workspace.
+ *
+ * A `boot` resolution is compared like any other: the resolved workspace is the
+ * one the host was launched in, and a claim naming anything else is refused.
+ * Treating `boot` as a special case let the digest accept a request the per-view
+ * read refused, which is how a panel rendered and then failed every destination.
+ */
+function cwdAccepted(session: { readonly cwd: string; readonly source: 'live' | 'persisted' | 'boot' }, claimed: string): boolean {
+  return claimed === session.cwd
 }
 
 /** An id that could be a catalog id: no separators, no traversal segment. */
@@ -151,9 +181,15 @@ function refusedId(value: unknown, name: string): string | undefined {
   return isUnsafeId(id) ? `${name}-id-refused` : undefined
 }
 
-/** The resolved session cwd, or the explicit reason the session is unusable. */
+/**
+ * The resolved session cwd, or the explicit reason the session is unusable.
+ * `source` records WHICH surface answered: `live` (`Session.header.cwd`),
+ * `persisted` (`SessionInspection.meta.cwd`) or `boot` (neither declared a
+ * workspace, so the plugin reads the workspace the host was launched in and the
+ * client's claim is not used as an address).
+ */
 type SessionCwdResolution =
-  | { readonly kind: 'ok'; readonly cwd: string }
+  | { readonly kind: 'ok'; readonly cwd: string; readonly source: 'live' | 'persisted' | 'boot' }
   | { readonly kind: 'unavailable'; readonly reason: string }
 
 /**
@@ -273,7 +309,7 @@ export class MstarPanelSnapshotGateway extends TypertRemoteService {
     if (isRefusedPath(claimed)) return { kind: 'unavailable', reason: 'cwd-refused' }
     const session = await this.resolveSessionCwd(sid)
     if (session.kind !== 'ok') return { kind: 'unavailable', reason: session.reason }
-    if (claimed !== session.cwd) return { kind: 'unavailable', reason: 'cwd-mismatch' }
+    if (!cwdAccepted(session, claimed)) return { kind: 'unavailable', reason: 'cwd-mismatch' }
     const harnessDir = this.bootHarnessDir ?? this.resolver.forWorkspace(session.cwd)
     if (harnessDir === null || harnessDir === '') return { kind: 'no-harness' }
     return { kind: 'ok', harnessDir, sessionId: sid, cwd: session.cwd }
@@ -321,9 +357,10 @@ export class MstarPanelSnapshotGateway extends TypertRemoteService {
     // `no-harness` kind, which the panel renders as its inactive state.
     const harnessDir = this.bootHarnessDir ?? this.resolver.forWorkspace(session.cwd)
 
-    // (4) The asserted cwd must be the resolved session's own — never a
-    // close match, and never a claim onto another session's workspace.
-    if (claimed !== session.cwd) return unavailable('cwd-mismatch')
+    // (4) The asserted cwd must be the resolved session's own — the same rule
+    // `dashboardView` takes through `resolveTarget`, so the two paths cannot
+    // disagree about who may read this workspace.
+    if (!cwdAccepted(session, claimed)) return unavailable('cwd-mismatch')
 
     // An explicit `null` is ABSENT — `refusedId` above already accepted it as
     // such — so the forward site must agree. `String(null)` would hand the
@@ -360,7 +397,7 @@ export class MstarPanelSnapshotGateway extends TypertRemoteService {
     const sessions = this.ctx.get('sessions') as SessionsView | undefined
     const live = typeof sessions?.get === 'function' ? sessions.get(sessionId) : undefined
     const liveCwd = headerCwdOf(live)
-    if (liveCwd !== undefined) return { kind: 'ok', cwd: liveCwd }
+    if (liveCwd !== undefined) return { kind: 'ok', cwd: liveCwd, source: 'live' }
 
     const controller = this.ctx.get('sessionController') as SessionControllerView | undefined
     if (typeof controller?.inspect !== 'function') {
@@ -373,8 +410,13 @@ export class MstarPanelSnapshotGateway extends TypertRemoteService {
       return { kind: 'unavailable', reason: 'session-inspect-failed' }
     }
     const persistedCwd = headerCwdOf(inspection)
-    if (persistedCwd === undefined) return { kind: 'unavailable', reason: 'session-cwd-absent' }
-    return { kind: 'ok', cwd: persistedCwd }
+    if (persistedCwd !== undefined) return { kind: 'ok', cwd: persistedCwd, source: 'persisted' }
+    // Both surfaces are genuinely silent: the session declares no workspace. Read
+    // the one the host was launched in rather than claiming the workspace has
+    // nothing — the client's claim is still not an address (see `serve`).
+    const boot = nonEmptyString(process.cwd())
+    if (boot !== undefined) return { kind: 'ok', cwd: boot, source: 'boot' }
+    return { kind: 'unavailable', reason: 'session-cwd-absent' }
   }
 }
 

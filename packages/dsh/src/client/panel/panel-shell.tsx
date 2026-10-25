@@ -23,6 +23,8 @@ import * as React from 'react'
 import type { TranslateNS } from '@deepseek-ai/dsh-client-ui-slots'
 import type { SessionId } from '@deepseek-ai/dsh-session'
 import {
+  EmptyState,
+  Notice,
   Focus,
   LocaleProvider,
   Nav,
@@ -52,6 +54,7 @@ import {
 import { useMstarDashboardView, type MstarDashboardViewState } from './use-mstar-dashboard-view.ts'
 import { useMstarWorkflowPicker, type UseSessions } from './use-mstar-workflow-picker.ts'
 import type { PanelDestination } from './panel-store.ts'
+import type { PanelKey } from './locale.ts'
 import type { ColorScheme, HostThemeFace } from './theme.ts'
 
 /**
@@ -293,14 +296,66 @@ function DestinationBody(props: {
   }
 }
 
-/** The "no harness" state: one line, no card, no chrome. */
-function NoHarness({ t }: { t: TranslateNS<'mstar-panel'> }): React.ReactElement {
+/**
+ * The "no harness" state: the shared ABSENT arm (an explanation, not an error),
+ * with the host's own hint as its detail line.
+ */
+function NoHarness({ t, locale }: { t: TranslateNS<'mstar-panel'>; locale: Locale }): React.ReactElement {
+  const copy = copyFor(locale)
   return (
-    <div className={css.state} data-mstar-panel="no-harness">
-      <p data-mstar-empty="no-harness">{t('empty.no-harness')}</p>
+    <div className={css.state}>
+      <EmptyState
+        arm="absent"
+        labelWord={copy.state.absent.labelWord}
+        heading={t('state.failure.heading')}
+        body={t('empty.no-harness')}
+      />
       <p className={css.hint}>{t('empty.no-harness-hint')}</p>
     </div>
   )
+}
+
+/**
+ * The state frame. EVERY early arm of the seat renders inside it, carrying the
+ * host's resolved scheme: the surfaces (`Notice` / `EmptyState`) paint `--ms-*`
+ * tokens, and outside a `data-ms-theme` carrier they would paint the light set
+ * under a dark host.
+ */
+function StateFrame(props: {
+  scheme: ColorScheme
+  panel: string
+  reason?: string
+  children: React.ReactNode
+}): React.ReactElement {
+  return (
+    <div
+      className={css.shell}
+      data-ms-theme={props.scheme}
+      data-mstar-panel={props.panel}
+      {...(props.reason === undefined ? {} : { 'data-mstar-reason': props.reason })}
+    >
+      {props.children}
+    </div>
+  )
+}
+
+/**
+ * The reader-facing sentence for one internal failure reason. The CODE is a
+ * diagnostic token, never copy: every reason the endpoint can emit has a
+ * human sentence, and a reason this build does not know answers the generic
+ * sentence rather than printing the token.
+ */
+const FAILURE_KEYS: Record<string, PanelKey> = {
+  'session-absent': 'state.failure.session-absent',
+  'session-cwd-absent': 'state.failure.session-cwd-absent',
+  'session-inspect-failed': 'state.failure.session-inspect-failed',
+  'cwd-mismatch': 'state.failure.cwd-mismatch',
+  'malformed-answer': 'state.failure.malformed-answer',
+}
+
+/** The dictionary key that explains one reason code (unknown → the generic one). */
+export function failureKey(reason: string): PanelKey {
+  return FAILURE_KEYS[reason] ?? 'state.failure.unknown'
 }
 
 /** Stable no-op subscribe (a seat composed without a locale face). */
@@ -393,11 +448,6 @@ export type PanelSeatProps = {
   panelSnapshot?: MstarPanelSnapshotClient
   localeFace?: HostLocaleFace
   themeFace?: HostThemeFace
-  /**
-   * The seat is the main-area panel: the host gives a non-`conversation` key no
-   * session, so an absent session is a FACT to state, not a read still pending.
-   */
-  sessionFreeMainPanel?: boolean
 }
 
 export function PanelSeat(props: PanelSeatProps): React.ReactElement | null {
@@ -501,35 +551,38 @@ export function PanelSeat(props: PanelSeatProps): React.ReactElement | null {
 
   // Every hook runs before the early returns (hooks rule).
   if (!visible) return null
-  if (props.sessionFreeMainPanel === true && sessionId === undefined) {
-    return (
-      <div className={css.state} data-mstar-panel="no-session">
-        <p data-mstar-empty="no-session">{t('empty.no-session')}</p>
-      </div>
-    )
-  }
   if (digest.kind === 'waiting') {
     return (
-      <div className={css.state} data-mstar-panel="waiting">
-        <p data-mstar-empty="waiting">{t('empty.waiting')}</p>
-      </div>
+      <StateFrame scheme={scheme} panel="waiting">
+        <div className={css.state}>
+          <p data-mstar-empty="waiting">{t('empty.waiting')}</p>
+        </div>
+      </StateFrame>
     )
   }
-  if (digest.kind === 'no-harness') return <NoHarness t={t} />
+  if (digest.kind === 'no-harness') {
+    return (
+      <StateFrame scheme={scheme} panel="no-harness" reason="no-harness">
+        <NoHarness t={t} locale={locale} />
+      </StateFrame>
+    )
+  }
   if (digest.kind === 'unavailable') {
     return (
-      <div className={css.state} data-mstar-panel="unavailable">
-        <p data-mstar-empty="unavailable" data-mstar-unavailable-reason={digest.reason}>
-          {t('empty.unavailable', { reason: digest.reason })}
-        </p>
-      </div>
+      <StateFrame scheme={scheme} panel="unavailable" reason={digest.reason}>
+        <div className={css.state}>
+          <Notice reason={t(failureKey(digest.reason))} lead={t('state.failure.heading')} tone="warning" />
+        </div>
+      </StateFrame>
     )
   }
   if (snapshot === null) {
     return (
-      <div className={css.state} data-mstar-panel="loading">
-        <p data-mstar-empty="loading">{t('empty.loading')}</p>
-      </div>
+      <StateFrame scheme={scheme} panel="loading">
+        <div className={css.state}>
+          <p data-mstar-empty="loading">{t('empty.loading')}</p>
+        </div>
+      </StateFrame>
     )
   }
 

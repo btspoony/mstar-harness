@@ -8,7 +8,6 @@
  * - the destination's home: the entry store, keyed by the sidebar tab id, so the
  *   destination survives the body's unmount when another pane tab activates;
  * - the host's "open the full page" affordance, whose handler is the plugin
- *   entry's `ctx.layout.selectPanel` call (`selectMstarPanel`).
  *
  * The transport states, the adapter and the shell all come from `panel-shell.tsx`
  * — the same module the keyed `main` panel mounts, so the two seats cannot drift.
@@ -48,18 +47,10 @@ export interface MstarPanelBodyProps
   localeFace?: HostLocaleFace
   /** The host's colour scheme, so the product flips its own token block. */
   themeFace?: HostThemeFace
-  /** Render the host's enforcement line (session chrome: the sidebar does, the main panel does not). */
-  enforcementLine?: boolean
-  /**
-   * Open this panel in the host's main area (the plugin entry binds
-   * `ctx.layout.selectPanel`). Absent in a composition without the layout
-   * service — the affordance then does not render, rather than doing nothing.
-   */
-  openMainPanel?: () => void
 }
 
 export function PanelView(props: MstarPanelBodyProps) {
-  const { t, useSessions, sessionId, picker, panelSnapshot, localeFace, themeFace, enforcementLine, openMainPanel, useTabInfo, useStore, actions } = props
+  const { t, useSessions, sessionId, picker, panelSnapshot, localeFace, themeFace, useTabInfo, useStore, actions } = props
   const tabInfo = useTabInfo()
   const tabId = tabInfo.tab.id
   const stored = useStore((s) => s.byTab[tabId])
@@ -68,13 +59,6 @@ export function PanelView(props: MstarPanelBodyProps) {
   if (!tabInfo.tab.visible) return null
   return (
     <div className={css.root} data-mstar-seat="sidebar">
-      {openMainPanel === undefined ? null : (
-        <div className={css.toolbar}>
-          <button type="button" className={css.openMain} data-mstar-open-main="" onClick={openMainPanel}>
-            {t('panel.open-full-page')}
-          </button>
-        </div>
-      )}
       <PanelSeat
         visible={tabInfo.tab.visible}
         destination={destination}
@@ -86,7 +70,6 @@ export function PanelView(props: MstarPanelBodyProps) {
         {...(panelSnapshot === undefined ? {} : { panelSnapshot })}
         {...(localeFace === undefined ? {} : { localeFace })}
         {...(themeFace === undefined ? {} : { themeFace })}
-        {...(enforcementLine === true ? { enforcementLine: true } : {})}
       />
     </div>
   )
