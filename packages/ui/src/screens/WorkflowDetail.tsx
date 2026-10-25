@@ -58,7 +58,13 @@ export type WorkflowDetailCopy = {
   /** The plan records no progress note — its own absent line. */
   planProgressAbsent: string;
   executionUnavailableLead: string;
-  unavailable: { labelWord: string; heading: string; body: string };
+  /** The four absence arms, each with its own copy family (IA §5). */
+  absence: {
+    "not-applicable": { labelWord: string; heading: string; body: string };
+    absent: { labelWord: string; heading: string; body: string; pointer: string };
+    empty: { labelWord: string; heading: string; body: string; hint: string };
+    unavailable: { labelWord: string; heading: string; body: string };
+  };
 };
 
 export type WorkflowDetailProps = {
@@ -86,7 +92,7 @@ function planColumns(copy: WorkflowDetailCopy): DataTableColumn<WorkflowPlanRow>
           {plan.status === null ? (
             <span className={css.muted}>{copy.fields.notStarted}</span>
           ) : (
-            <StatusDot label={plan.status} tone={plan.statusTone as Tone} mono />
+            <StatusDot label={plan.status} tone={plan.statusTone} mono />
           )}
           {plan.phase === null ? null : <span className={css.phase}>{plan.phase}</span>}
         </span>
@@ -226,13 +232,37 @@ export function WorkflowDetail(props: WorkflowDetailProps) {
             />
           </section>
         </>
-      ) : props.model.kind === "loading" ? null : (
+      ) : props.model.kind === "loading" ? null : props.model.kind === "absent" ? (
         <EmptyState
-          arm={props.model.kind}
-          labelWord={copy.unavailable.labelWord}
-          heading={copy.unavailable.heading}
-          body={copy.unavailable.body}
-          reason={props.model.kind === "unavailable" ? props.model.reason : undefined}
+          arm="absent"
+          labelWord={copy.absence.absent.labelWord}
+          heading={copy.absence.absent.heading}
+          body={copy.absence.absent.body}
+          pointer={copy.absence.absent.pointer}
+        />
+      ) : props.model.kind === "empty" ? (
+        <EmptyState
+          arm="empty"
+          labelWord={copy.absence.empty.labelWord}
+          heading={copy.absence.empty.heading}
+          body={copy.absence.empty.body}
+          hint={copy.absence.empty.hint}
+        />
+      ) : props.model.kind === "not-applicable" ? (
+        <EmptyState
+          arm="not-applicable"
+          labelWord={copy.absence["not-applicable"].labelWord}
+          heading={copy.absence["not-applicable"].heading}
+          body={copy.absence["not-applicable"].body}
+          detail={props.model.reason}
+        />
+      ) : (
+        <EmptyState
+          arm="unavailable"
+          labelWord={copy.absence.unavailable.labelWord}
+          heading={copy.absence.unavailable.heading}
+          body={copy.absence.unavailable.body}
+          reason={props.model.reason}
         />
       )}
     </article>

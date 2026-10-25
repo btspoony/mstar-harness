@@ -40,9 +40,13 @@ export type FocusCopy = {
   blockedLabel: string;
   /** The plan records neither progress nor a blocked reason. */
   progressAbsent: string;
+  /** The store has not recorded a status for this plan. */
+  planStatusAbsent: string;
   deliveryHeading: string;
   deliveryLine: (iterationId: string, step: number, of: number) => string;
   deliveryNoIteration: string;
+  /** The iteration records no compass, so no step is proven — never `step 0 of 5`. */
+  deliveryUnknownStep: string;
   enforcementLabel: (flag: string) => string;
   absence: {
     "not-applicable": { labelWord: string; body: string };
@@ -115,7 +119,15 @@ function Plan(props: { plan: FocusPlan; copy: FocusCopy }) {
     <div className={css.plan} data-ms-plan={plan.planId}>
       <p className={css.planHead}>
         <TruncatedText text={plan.planId} />
-        <StatusDot label={plan.status ?? ""} tone={plan.statusTone as Tone} mono />
+        {/* A plan the store has not given a status yet is named as such. The
+            empty string used to satisfy StatusDot's required label while
+            rendering a colour-only dot — the exact failure the required prop
+            exists to prevent. */}
+        {plan.status === null ? (
+          <span className={css.noteAbsent}>{copy.planStatusAbsent}</span>
+        ) : (
+          <StatusDot label={plan.status} tone={plan.statusTone} mono />
+        )}
       </p>
       {plan.blockedReason === null ? null : (
         <p className={css.blocked} data-ms-blocked-reason="">
@@ -212,11 +224,9 @@ export function Focus(props: FocusProps) {
         <p className={css.delivery} data-ms-delivery={model.delivery.kind}>
           {model.delivery.kind === "no-iteration"
             ? copy.deliveryNoIteration
-            : copy.deliveryLine(
-                model.delivery.iterationId,
-                model.delivery.position?.step ?? 0,
-                model.delivery.position?.of ?? 5,
-              )}
+            : model.delivery.position === null
+              ? copy.deliveryUnknownStep
+              : copy.deliveryLine(model.delivery.iterationId, model.delivery.position.step, model.delivery.position.of)}
         </p>
       </section>
 

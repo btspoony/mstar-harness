@@ -14,7 +14,7 @@
 import type { WorkflowDTO, WorkflowListDTO, WorkflowPlanDTO } from "@mstar-harness/engine";
 
 import type { Resolved } from "./state.ts";
-import { resolveRead } from "./state.ts";
+import { resolveRead, resolveRecord } from "./state.ts";
 import { planStatusTone, type Tone } from "./status.ts";
 import { formatDate, type ProjectionState } from "./format.ts";
 
@@ -203,11 +203,11 @@ export function workflowDetailModel(read: {
   data: WorkflowDTO | null;
   projection: { generation: number | null };
 }): Resolved<WorkflowDetailModel> {
-  if (read.projection.generation === null) {
-    return { kind: "unavailable", reason: "the execution projection for this workflow could not be read" };
-  }
-  if (read.data === null) return { kind: "absent" };
-  const workflow = read.data;
+  const arm = resolveRecord(read, {
+    unavailableReason: "the execution projection for this workflow could not be read",
+  });
+  if (arm.kind !== "populated") return arm;
+  const workflow = arm.value;
   const catalog = workflow.catalog;
   return {
     kind: "populated",

@@ -75,7 +75,7 @@ export function Iterations(props: IterationsProps) {
       secondary: true,
       render: (row) => (
         <span className={css.statusCell}>
-          <StatusDot label={row.compassStatus ?? copy.noCompass} tone={row.compassTone as Tone} mono />
+          <StatusDot label={row.compassStatus ?? copy.noCompass} tone={row.compassTone} mono />
         </span>
       ),
     },

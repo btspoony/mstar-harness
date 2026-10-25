@@ -308,6 +308,53 @@ describe("ProjectDetail — no roadmap row is absent, an empty milestone set is 
     expect(html).not.toContain('data-ms-absence="absent"');
   });
 
+  test("a roadmap with only a direction keeps rendering it (E)", () => {
+    // Before the fix this answered `empty` because goals and milestones were both
+    // absent — hiding content the reader can act on behind "nothing here".
+    const onlyDirection = roadmap({
+      content: {
+        contentMarkdown: "",
+        frontmatter: { project_id: "engine", title: "Engine roadmap", status: "active", created_at: "2026-08-09" },
+        direction: "One product, two hosts.",
+        goals: [],
+        milestones: [],
+        sections: [],
+      },
+      milestones: { projectId: "engine", milestones: [], issues: [], unassignedIssues: 0 },
+    });
+    const html = renderDetail({ roadmap: roadmapBody(roadmapFeatureArm({ data: onlyDirection, projection })) });
+    expect(html).toContain('data-ms-feature="roadmap"');
+    expect(html).toContain("One product, two hosts.");
+    expect(html).not.toContain('data-ms-absence="empty"');
+  });
+
+  test("a roadmap with only a stored document keeps rendering it (E)", () => {
+    const onlyMarkdown = roadmap({
+      content: {
+        contentMarkdown: "## Notes\n\nStored direction lives here.",
+        frontmatter: { project_id: "engine", title: "Engine roadmap", status: "active", created_at: "2026-08-09" },
+        direction: null,
+        goals: [],
+        milestones: [],
+        sections: [],
+      },
+      milestones: { projectId: "engine", milestones: [], issues: [], unassignedIssues: 0 },
+    });
+    const html = renderDetail({ roadmap: roadmapBody(roadmapFeatureArm({ data: onlyMarkdown, projection })) });
+    expect(html).toContain('data-ms-roadmap-markdown=""');
+    expect(html).toContain("Stored direction lives here.");
+    expect(html).not.toContain('data-ms-absence="empty"');
+  });
+
+  test("a truly empty roadmap is still the empty arm (E)", () => {
+    const nothing = roadmap({
+      content: null,
+      milestones: { projectId: "engine", milestones: [], issues: [], unassignedIssues: 0 },
+    });
+    const html = renderDetail({ roadmap: roadmapBody(roadmapFeatureArm({ data: nothing, projection })) });
+    expect(html).toContain('data-ms-absence="empty"');
+  });
+
   test("a failed read is unavailable, carrying the store's message", () => {
     const html = renderDetail({
       roadmap: roadmapBody(roadmapFeatureArm({ data: null, projection: { ...projection, generation: null } })),

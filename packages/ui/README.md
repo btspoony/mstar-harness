@@ -136,7 +136,13 @@ right and is wrong.
    falls back to `en`. `useCopy()` returns the whole tree — hand each screen its own section
    (`copy.overview`, `copy.focus`, …) through that screen's `*Copy` prop.
 
-9. **A single-record read's `null` means absent.** If your transport can fail a read, it must answer
+9. **Derive the models once per read, not once per render.** Every `*Model` function walks the
+   whole DTO (`issueListModel` maps every row, `overviewModel` maps every workflow). Call them when a
+   read lands, and memoise against that read — a host that re-derives inside a render pays O(rows) on
+   every keystroke, and a search box that re-reads per character pays it twice. Debounce the search
+   before it reaches a read; derive after the read, never during typing.
+
+10. **A single-record read's `null` means absent.** If your transport can fail a read, it must answer
    the `unavailable` arm with the store's reason rather than a `null` payload — the resolvers treat
    `null` as "the subject declares nothing here", and collapsing the two would make one fact have two
    answers again.

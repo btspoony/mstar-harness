@@ -12,7 +12,6 @@ import {
   longText,
   progressText,
   projectionState,
-  projectionUnavailable,
   textOr,
 } from "./format.ts";
 
@@ -91,8 +90,9 @@ describe("the projection state replaces the removed counters", () => {
     expect(serialized).not.toContain("generation");
   });
 
-  test("no generation means no projected rows", () => {
-    expect(projectionUnavailable({ generation: null })).toBe(true);
-    expect(projectionUnavailable({ generation: 0 })).toBe(false);
+  test("no generation means no projected rows — asserted through the resolver that owns it", () => {
+    // `projectionUnavailable` was deleted: it duplicated the resolver's failure
+    // arm and had no production caller. The rule is asserted in state.test.ts.
+    expect(projectionState({ ...base, generation: null, freshness: "unavailable" }).kind).toBe("unavailable");
   });
 });

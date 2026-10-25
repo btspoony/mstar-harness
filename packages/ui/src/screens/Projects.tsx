@@ -50,7 +50,7 @@ export function Projects(props: ProjectsProps) {
       key: "lifecycle",
       header: copy.columns.lifecycle,
       secondary: true,
-      render: (row) => <StatusDot label={row.lifecycle} tone={row.lifecycleTone as Tone} mono />,
+      render: (row) => <StatusDot label={row.lifecycle} tone={row.lifecycleTone} mono />,
     },
     {
       key: "openIssues",

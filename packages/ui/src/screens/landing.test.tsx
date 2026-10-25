@@ -176,6 +176,7 @@ const focusCopy: FocusCopy = {
   deliveryHeading: "Delivery",
   deliveryLine: (id, step, of) => `${id} · step ${step} of ${of}`,
   deliveryNoIteration: "No iteration",
+  deliveryUnknownStep: "Iteration · no delivery step recorded",
   enforcementLabel: (flag) => `enforcement ${flag}`,
   absence: {
     "not-applicable": { labelWord: "n/a", body: "no active workflow" },
@@ -273,6 +274,29 @@ describe("Overview — what it shows, in the IA §3.1 order", () => {
     );
     expect(stale).toContain('data-ms-projection="stale"');
     expect(stale).toContain("compass: compass could not be parsed");
+  });
+});
+
+describe("Overview — the loading phase, and the literal severity", () => {
+  test("a pending read renders no absence arm, and does not crash", () => {
+    // D: the arm coercion used to hit `copy.absence["loading"]`, which is
+    // undefined — a white screen in exactly the phase a first paint is in.
+    const html = renderToStaticMarkup(
+      <Overview
+        model={overviewModel(overviewRead(), { projection, phase: "loading" })}
+        copy={overviewCopy}
+      />,
+    );
+    expect(html).toContain("data-ms-screen=\"overview\"");
+    expect(html).not.toContain("data-ms-absence=");
+  });
+
+  test("a severity row's label is the literal enum, never a translation", () => {
+    // F: `copy.severityLabels` is presentational hook only; the contract value is
+    // what renders, so it stays copyable into the CLI.
+    const html = overview();
+    expect(html).toContain("<dt>critical</dt>");
+    expect(html).not.toContain("<dt>Critical</dt>");
   });
 });
 
@@ -445,6 +469,15 @@ describe("Focus — what it shows, in the IA §3.2 order", () => {
   test("the enforcement flag is the last line", () => {
     expect(html).toContain('data-ms-enforcement="soft"');
     expect(html).toContain("enforcement soft");
+  });
+});
+
+describe("Focus — an unknown delivery step is its own state", () => {
+  test("an iteration with no proven step never renders `step 0 of 5`", () => {
+    // G: `position?.step ?? 0` used to produce a measured-looking zero.
+    const html = focus({ iteration: { iterationId: "iter-1", gateStep: null } });
+    expect(html).not.toContain("step 0 of 5");
+    expect(html).toContain("no delivery step recorded");
   });
 });
 

@@ -15,7 +15,7 @@
 import type { ProjectListDTO, RoadmapContent, RoadmapDTO } from "@mstar-harness/engine";
 
 import type { Resolved } from "./state.ts";
-import { resolveRead } from "./state.ts";
+import { resolveRead, resolveRecord } from "./state.ts";
 import { lifecycleTone, type Tone } from "./status.ts";
 import { countText } from "./format.ts";
 
@@ -190,22 +190,31 @@ export function roadmapFeatureArm(read: {
   data: RoadmapDTO | null;
   projection: { generation: number | null };
 }): Resolved<RoadmapDTO> {
-  if (read.projection.generation === null) {
-    return { kind: "unavailable", reason: "the roadmap read could not be completed" };
-  }
-  if (read.data === null) return { kind: "absent" };
-  if (read.data.authority.state === "absent") return { kind: "absent" };
-  return { kind: "populated", value: read.data };
+  const arm = resolveRecord(read, { unavailableReason: "the roadmap read could not be completed" });
+  if (arm.kind !== "populated") return arm;
+  // Domain judgement on top of the resolved arm: the project has a catalog row
+  // but no roadmap authority row, so the concept is undeclared.
+  if (arm.value.authority.state === "absent") return { kind: "absent" };
+  return arm;
 }
 
 /**
- * The Roadmap feature's arm, resolving one level further than the read: a
- * populated roadmap with no milestones *and* no content is the `empty` arm of the
- * feature body, while an absent roadmap never becomes a board.
+ * The Roadmap feature's arm, resolving one level further than the read.
+ *
+ * `empty` is reserved for a roadmap with **nothing at all to show** — no
+ * milestones, no goals, no direction and no stored markdown. An earlier version
+ * tested only the first two, which hid an existing direction and a stored
+ * document behind "the roadmap has no milestones": content the reader can act on,
+ * declared empty. Anything that exists is rendered.
  */
 export function roadmapBody(raw: Resolved<RoadmapDTO>): Resolved<RoadmapModel> {
   if (raw.kind !== "populated") return raw;
   const model = roadmapModel(raw.value, raw.value.content);
-  if (model.milestones.length === 0 && model.goals.length === 0) return { kind: "empty" };
-  return { kind: "populated", value: model };
+  const hasContent =
+    model.milestones.length > 0 ||
+    model.goals.length > 0 ||
+    model.direction !== null ||
+    model.markdown !== null ||
+    model.unassignedIssues > 0;
+  return hasContent ? { kind: "populated", value: model } : { kind: "empty" };
 }

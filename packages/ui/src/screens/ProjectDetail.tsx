@@ -92,7 +92,7 @@ function Milestone(props: { milestone: RoadmapModel["milestones"][number]; copy:
         <span className={css.milestoneName}>
           <TruncatedText text={milestone.name} />
         </span>
-        {milestone.status === null ? null : <StatusDot label={milestone.status} tone={milestoneStatusTone(milestone.status) as Tone} mono />}
+        {milestone.status === null ? null : <StatusDot label={milestone.status} tone={milestoneStatusTone(milestone.status)} mono />}
         <span className={css.meta}>{milestone.target ?? copy.roadmap.noTarget}</span>
         {milestone.progress === null ? null : (
           <span className={css.milestoneProgress}>
@@ -261,7 +261,7 @@ export function ProjectDetail(props: ProjectDetailProps) {
           <TruncatedText text={identity.title} />
         </h1>
         <p className={css.subhead}>
-          <StatusDot label={identity.lifecycle} tone={identity.lifecycleTone as Tone} mono />
+          <StatusDot label={identity.lifecycle} tone={identity.lifecycleTone} mono />
           <span className={css.mono}>{identity.path}</span>
         </p>
         {identity.description === null ? null : <p className={css.description}>{identity.description}</p>}

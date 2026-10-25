@@ -70,7 +70,7 @@ export function Workflows(props: WorkflowsProps) {
       header: copy.columns.status,
       render: (row) => (
         <span className={css.statusCell}>
-          <StatusDot label={row.status} tone={row.statusTone as Tone} mono />
+          <StatusDot label={row.status} tone={row.statusTone} mono />
           {row.phase === null ? null : <span className={css.phase}>{row.phase}</span>}
         </span>
       ),
@@ -123,11 +123,13 @@ export function Workflows(props: WorkflowsProps) {
             </p>
           ) : null}
           {/* A degradation reason, stated once per row that carries it. */}
-          {model.rows.value
-            .filter((row) => row.executionUnavailableReason !== null)
-            .map((row) => (
-              <Notice key={row.id} reason={row.executionUnavailableReason as string} lead={row.id} />
-            ))}
+          {/* `flatMap`, not `filter().map()`: the narrowing survives inside the
+              callback, so the reason is a string here rather than a cast. */}
+          {model.rows.value.flatMap((row) =>
+            row.executionUnavailableReason === null
+              ? []
+              : [<Notice key={row.id} reason={row.executionUnavailableReason} lead={row.id} />],
+          )}
         </>
       ) : model.rows.kind === "unavailable" ? (
         <EmptyState

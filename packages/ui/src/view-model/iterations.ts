@@ -20,7 +20,7 @@ import type {
 } from "@mstar-harness/engine";
 
 import type { Resolved } from "./state.ts";
-import { resolveRead } from "./state.ts";
+import { resolveRead, resolveRecord } from "./state.ts";
 import { compassStatusTone, gateStepPosition, gateSteps, planStatusTone, type GateStepId, type GateStepPosition, type Tone } from "./status.ts";
 import { formatDate } from "./format.ts";
 
@@ -98,14 +98,16 @@ export function iterationListModel(read: {
   const attribution: IterationListDTO["attribution"] = read.data.attribution;
   // Zero rows mean different things depending on attribution (contract §4): a
   // store that attributes no iteration to any project answers `absent` — the
-  // project's silence is a fact about the store — while an attributing store
-  // with no scoped rows answers `empty`.
-  const projectionUnavailable = read.projection.generation === null;
-  const rows: Resolved<readonly IterationRow[]> = projectionUnavailable
-    ? { kind: "unavailable", reason: "the execution projection has no valid generation" }
-    : read.data.items.length === 0
-      ? { kind: attribution === "absent" ? "absent" : "empty" }
-      : { kind: "populated", value: read.data.items.map(iterationRow) };
+  // project's silence is a fact about the store — while an attributing store with
+  // no scoped rows answers `empty`. The resolver owns the arm; `attribution` is
+  // the domain judgement that picks it.
+  const resolved = resolveRead(read, {
+    whenNull: "empty",
+    isEmpty: (list) => list.items.length === 0,
+    whenEmpty: attribution === "absent" ? "absent" : "empty",
+  });
+  const rows: Resolved<readonly IterationRow[]> =
+    resolved.kind === "populated" ? { kind: "populated", value: resolved.value.items.map(iterationRow) } : resolved;
   return { rows, total: read.data.total, attribution };
 }
 
@@ -162,11 +164,11 @@ export function iterationDetailModel(read: {
   data: IterationDTO | null;
   projection: { generation: number | null };
 }): Resolved<IterationDetailModel> {
-  if (read.projection.generation === null) {
-    return { kind: "unavailable", reason: "the execution projection for this iteration could not be read" };
-  }
-  if (read.data === null) return { kind: "absent" };
-  const iteration = read.data;
+  const arm = resolveRecord(read, {
+    unavailableReason: "the execution projection for this iteration could not be read",
+  });
+  if (arm.kind !== "populated") return arm;
+  const iteration = arm.value;
   const step = iterationGateStep(iteration);
   return {
     kind: "populated",

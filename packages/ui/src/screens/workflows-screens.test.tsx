@@ -143,7 +143,12 @@ const detailCopy: WorkflowDetailCopy = {
   planColumns: { planId: "Plan", title: "Title", status: "Status", progress: "Progress", doneAt: "Done" },
   planProgressAbsent: "records no progress",
   executionUnavailableLead: "Execution unavailable",
-  unavailable: { labelWord: "unavailable", heading: "Workflow", body: "the read failed" },
+  absence: {
+    "not-applicable": { labelWord: "n/a", heading: "Workflow", body: "no project resolves" },
+    absent: { labelWord: "not declared", heading: "Workflow", body: "no such workflow here", pointer: "see the list" },
+    empty: { labelWord: "empty", heading: "Workflow", body: "nothing recorded yet", hint: "start one" },
+    unavailable: { labelWord: "unavailable", heading: "Workflow", body: "the read failed" },
+  },
 };
 
 const renderDetail = (record: WorkflowDTO | null, generation: number | null = 7): string =>
@@ -328,10 +333,17 @@ describe("WorkflowDetail — NEGATIVE: leases, adoption audit, pin badges", () =
 });
 
 describe("WorkflowDetail — the record read: null is absent, a failed read is unavailable", () => {
-  test("a null record is the absent arm", () => {
+  test("a null record is the absent arm — with absent copy, not unavailable copy", () => {
     const html = renderDetail(null);
     expect(html).toContain('data-ms-absence="absent"');
     expect(html).not.toContain('data-ms-absence="unavailable"');
+    // The attribute being right while the copy is wrong is exactly how this
+    // regression stayed green: assert the words a reader sees.
+    expect(html).toContain('data-ms-label-word="">not declared<');
+    expect(html).toContain("no such workflow here");
+    expect(html).toContain("see the list");
+    expect(html).not.toContain('data-ms-label-word="">unavailable<');
+    expect(html).not.toContain("the read failed");
   });
 
   test("a failed read is unavailable and states the reason", () => {

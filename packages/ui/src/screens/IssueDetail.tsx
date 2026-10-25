@@ -60,7 +60,11 @@ export type IssueDetailCopy = {
 };
 
 export type IssueDetailProps = {
-  /** The record read: `null` means unreadable, never "no such issue". */
+  /**
+   * The record read. `null` means **absent** — the issue declares nothing here —
+   * and a failed read arrives as a projection with no generation, which resolves
+   * to `unavailable` (the package-wide ruling; README item 9).
+   */
   read: { data: IssueDetailModel | null; projection: ReadProjection };
   copy: IssueDetailCopy;
   onBack?: () => void;
@@ -96,11 +100,11 @@ export function IssueDetail(props: IssueDetailProps) {
               {/* Dot + literal enum + weight: never colour alone. */}
               <StatusDot
                 label={record.value.severity}
-                tone={record.value.severityTone as Tone}
+                tone={record.value.severityTone}
                 emphasis={record.value.severityEmphasised}
                 mono
               />
-              <StatusDot label={record.value.disposition} tone={record.value.dispositionTone as Tone} mono />
+              <StatusDot label={record.value.disposition} tone={record.value.dispositionTone} mono />
             </p>
           </header>
 

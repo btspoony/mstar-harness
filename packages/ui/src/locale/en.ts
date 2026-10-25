@@ -102,9 +102,11 @@ export const en = {
     /** The plan's RECORDED blocked reason. */
     blockedLabel: "Recorded blocked reason",
     progressAbsent: "This plan records no progress.",
+    planStatusAbsent: "Status not recorded",
     deliveryHeading: "Delivery",
     deliveryLine: (iterationId: string, step: number, of: number) => `${iterationId} · step ${step} of ${of}`,
     deliveryNoIteration: "No iteration",
+    deliveryUnknownStep: "Iteration · no delivery step recorded",
     enforcementLabel: (flag: string) => `Enforcement ${flag}`,
   },
 
@@ -203,6 +205,26 @@ export const en = {
     planColumns: { planId: "Plan", title: "Title", status: "Status", progress: "Progress", doneAt: "Completed" },
     planProgressAbsent: "Records no progress.",
     executionUnavailableLead: "Execution unavailable",
+    absence: {
+      "not-applicable": {
+        labelWord: "n/a",
+        heading: "Workflow",
+        body: "No project resolves for this read, so the workflow is undetermined.",
+      },
+      absent: {
+        labelWord: "not declared",
+        heading: "Workflow",
+        body: "This workflow is not here. It may have been retired or never registered.",
+        pointer: "The workflow list shows what the store holds.",
+      },
+      empty: {
+        labelWord: "empty",
+        heading: "Workflow",
+        body: "The read succeeded and this workflow records nothing yet.",
+        hint: "Its first plan registration creates the record.",
+      },
+      unavailable: { labelWord: "unavailable", heading: "Workflow", body: "This workflow could not be read." },
+    },
   },
 
   iterations: {

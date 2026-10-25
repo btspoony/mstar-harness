@@ -87,7 +87,4 @@ export function projectionState(projection: ReadProjection): ProjectionState {
   return { kind: "unavailable", reasons };
 }
 
-/** Whether a projection can carry projected rows at all. */
-export function projectionUnavailable(projection: { generation: number | null }): boolean {
-  return projection.generation === null;
-}
+

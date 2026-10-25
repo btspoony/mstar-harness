@@ -165,6 +165,35 @@ describe("a single-record read: null is absent, a failed read is unavailable", (
   });
 });
 
+describe("a malformed envelope reaches the unavailable arm, not a throw", () => {
+  // A host mapping is a trust boundary: a member it forgot is a failure to state,
+  // not a renderer crash.
+  test("an envelope with no projection", () => {
+    const arm = resolveRead({ data: [], projection: undefined } as unknown as {
+      data: never[];
+      projection: { generation: number | null };
+    }, { whenNull: "empty", isEmpty: (rows: readonly unknown[]) => rows.length === 0 });
+    expect(arm.kind).toBe("unavailable");
+    expect(arm.kind === "unavailable" ? arm.reason : "").toContain("no projection");
+  });
+
+  test("an envelope with no payload", () => {
+    const arm = resolveRead({ data: undefined, projection: { generation: 4 } } as unknown as {
+      data: readonly unknown[];
+      projection: { generation: number | null };
+    }, { whenNull: "empty" });
+    expect(arm.kind).toBe("unavailable");
+  });
+
+  test("a record read with no projection", () => {
+    const arm = resolveRecord({ data: null, projection: undefined } as unknown as {
+      data: null;
+      projection: { generation: number | null };
+    }, { unavailableReason: "read failed" });
+    expect(arm).toEqual({ kind: "unavailable", reason: "read failed" });
+  });
+});
+
 describe("a plain envelope read resolves through the same arms", () => {
   const projection = (generation: number | null) => ({ generation, diagnostics: [], freshness: "current" as const, builtAt: null, checkedAt: "" });
 

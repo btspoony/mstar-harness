@@ -85,7 +85,7 @@ function planColumns(copy: IterationDetailCopy): DataTableColumn<IterationPlanRo
           {plan.status === null ? (
             <span className={css.muted}>{copy.fields.notStarted}</span>
           ) : (
-            <StatusDot label={plan.status} tone={plan.statusTone as Tone} mono />
+            <StatusDot label={plan.status} tone={plan.statusTone} mono />
           )}
           {plan.phase === null ? null : <span className={css.phase}>{plan.phase}</span>}
         </span>
@@ -156,7 +156,9 @@ function IterationDetailBody(props: {
                 <button
                   type="button"
                   className={css.crumb}
-                  onClick={() => props.onOpenWorkflow?.(value.workflowId as string)}
+                  onClick={() => {
+                    if (value.workflowId !== null) props.onOpenWorkflow?.(value.workflowId);
+                  }}
                 >
                   {value.workflowId}
                 </button>
@@ -169,7 +171,7 @@ function IterationDetailBody(props: {
               {value.compassStatus === null ? (
                 <span className={css.muted}>{copy.fields.noCompass}</span>
               ) : (
-                <StatusDot label={value.compassStatus} tone={value.compassTone as Tone} mono />
+                <StatusDot label={value.compassStatus} tone={value.compassTone} mono />
               )}
             </Field>
             <Field label={copy.fields.title}>

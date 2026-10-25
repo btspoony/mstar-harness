@@ -71,7 +71,8 @@ export type OverviewProps = {
 
 /** Render one absence arm from the arm the model already resolved. */
 function Absence(props: {
-  arm: AbsenceArm;
+  /** The arm the model resolved, which may still be `loading`. */
+  arm: AbsenceArm | "loading";
   copy: OverviewCopy;
   heading: string;
   /** The read's own message — `unavailable`. Never a re-worded copy string. */
@@ -80,12 +81,16 @@ function Absence(props: {
   detail?: string;
 }) {
   const { arm, copy } = props;
+  // A pending read has no subject state yet. Rendering an absence arm for it
+  // would claim a state the transport has not reached — and crash, because the
+  // subset type below has no `loading` key.
+  if (arm === "loading") return null;
   return (
     <EmptyState
       arm={arm}
-      labelWord={copy.absence[arm].labelWord}
+      labelWord={copy.absence[arm as AbsenceArm].labelWord}
       heading={props.heading}
-      body={copy.absence[arm].body}
+      body={copy.absence[arm as AbsenceArm].body}
       reason={arm === "unavailable" ? props.reason : undefined}
       detail={arm === "not-applicable" ? props.detail : undefined}
       pointer={arm === "absent" ? copy.absence.absent.pointer : undefined}
@@ -107,7 +112,7 @@ function WorkflowRowView(props: { row: OverviewWorkflowRow; copy: OverviewCopy }
         </>
       }
       trailing={props.copy.plansProgress(row.plansDone, row.plansTotal)}
-      leading={<StatusDot label={row.status} tone={row.statusTone as Tone} />}
+      leading={<StatusDot label={row.status} tone={row.statusTone} />}
     />
   );
 }
@@ -171,10 +176,13 @@ export function Overview(props: OverviewProps) {
           <h2 className={css.heading} id="ms-overview-residuals">
             {copy.residualsHeading}
           </h2>
+          {/* The row label is the literal enum: contract values stay English and
+              untranslated so they can be copied into the CLI. `data-ms-severity` is
+              the hook for anything presentational. */}
           {model.residuals.kind === "populated" ? (
             <FieldGroup title={copy.residualsTotal(model.residuals.value.total)} columns={1}>
               {model.residuals.value.rows.map((row) => (
-                <Field key={row.severity} label={copy.severityLabels[row.severity] ?? row.severity}>
+                <Field key={row.severity} label={row.severity}>
                   <span
                     className={row.emphasised ? css.countEmphasised : css.count}
                     data-ms-severity={row.severity}

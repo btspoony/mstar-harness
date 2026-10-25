@@ -92,9 +92,11 @@ export const zh: Copy = {
     progressLabel: "已记录进展",
     blockedLabel: "已记录阻塞原因",
     progressAbsent: "该计划没有记录进展。",
+    planStatusAbsent: "未记录状态",
     deliveryHeading: "交付",
     deliveryLine: (iterationId, step, of) => `${iterationId} · 第 ${step} / ${of} 步`,
     deliveryNoIteration: "无迭代",
+    deliveryUnknownStep: "迭代 · 未记录交付步骤",
     enforcementLabel: (flag) => `强制执行：${flag}`,
   },
 
@@ -191,6 +193,26 @@ export const zh: Copy = {
     planColumns: { planId: "计划", title: "标题", status: "状态", progress: "进展", doneAt: "完成时间" },
     planProgressAbsent: "没有记录进展。",
     executionUnavailableLead: "执行信息不可读",
+    absence: {
+      "not-applicable": {
+        labelWord: "无法判定",
+        heading: "工作流",
+        body: "这次读取无法对应到具体项目，因此工作流尚未确定。",
+      },
+      absent: {
+        labelWord: "未声明此概念",
+        heading: "工作流",
+        body: "这里没有该工作流，它可能已被退役或从未注册。",
+        pointer: "工作流列表展示存储中实际存在的内容。",
+      },
+      empty: {
+        labelWord: "空",
+        heading: "工作流",
+        body: "读取成功，但该工作流尚未记录任何内容。",
+        hint: "首次注册计划时会创建这条记录。",
+      },
+      unavailable: { labelWord: "不可读", heading: "工作流", body: "该工作流读取失败。" },
+    },
   },
 
   iterations: {

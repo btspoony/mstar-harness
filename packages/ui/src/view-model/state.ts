@@ -50,6 +50,13 @@ export type ResolveOptions<T> = {
    * empty (a single record).
    */
   readonly isEmpty?: (value: T) => boolean;
+  /**
+   * Which arm an empty collection earns. Defaults to `empty`; a caller whose
+   * domain distinguishes "nothing matched" from "this store attributes nothing
+   * here" passes `absent` — the decision stays in the resolver, the judgement
+   * stays in the caller.
+   */
+  readonly whenEmpty?: NullMeaning;
 };
 
 /**
@@ -72,7 +79,7 @@ export function resolveMember<T>(member: OverviewMember<T>, options: ResolveOpti
       const value = member.data;
       // `read` with a null payload: the authority answered and holds nothing.
       if (value === null) return { kind: options.whenNull };
-      if (options.isEmpty !== undefined && options.isEmpty(value)) return { kind: "empty" };
+      if (options.isEmpty !== undefined && options.isEmpty(value)) return { kind: options.whenEmpty ?? "empty" };
       return { kind: "populated", value };
     }
   }
@@ -126,22 +133,30 @@ export function resolveSubjectMember<T>(
  *
  * This exists so a screen does not need two resolvers: a view that answers with
  * a DTO directly is expressed as a `read` member with its projection-derived
- * state, and everything downstream is identical. `projectionUnavailable`
- * promotes the whole read to `unavailable` — a projected view with no valid
- * generation has no rows to show, and reporting `empty` would claim the store
- * is idle (`workflowListState`'s rule, preserved).
+ * state, and everything downstream is identical. A projection with no valid
+ * generation promotes the whole read to `unavailable` — a projected view with no
+ * rows to show must not report `empty`, which would claim the store is idle.
  */
 export function resolveRead<T>(
   read: { readonly data: T; readonly projection: { readonly generation: number | null } },
   options: ResolveOptions<T>,
 ): Resolved<T> {
   if ((options.phase ?? "loaded") === "loading") return { kind: "loading" };
+  // A host mapping that omits the projection or the payload must reach the
+  // promised `unavailable` arm, not throw inside a renderer. The types say these
+  // are present; a transport boundary is exactly where that stops being true.
+  if (read?.projection === undefined) {
+    return { kind: "unavailable", reason: "the read envelope carries no projection" };
+  }
   if (read.projection.generation === null) {
     return { kind: "unavailable", reason: "the execution projection has no valid generation" };
   }
+  if (read.data === undefined) {
+    return { kind: "unavailable", reason: "the read envelope carries no payload" };
+  }
   const value = read.data;
   if (value === null) return { kind: options.whenNull };
-  if (options.isEmpty !== undefined && options.isEmpty(value)) return { kind: "empty" };
+  if (options.isEmpty !== undefined && options.isEmpty(value)) return { kind: options.whenEmpty ?? "empty" };
   return { kind: "populated", value };
 }
 
@@ -175,6 +190,11 @@ export function resolveRecord<T>(
   options: RecordResolveOptions,
 ): Resolved<T> {
   if ((options.phase ?? "loaded") === "loading") return { kind: "loading" };
+  // Same boundary guard as `resolveRead`: a malformed envelope is a failure, and
+  // a failure is the `unavailable` arm — not a thrown renderer.
+  if (read?.projection === undefined) {
+    return { kind: "unavailable", reason: options.unavailableReason };
+  }
   if (read.projection.generation === null) return { kind: "unavailable", reason: options.unavailableReason };
   if (read.data === null) return { kind: "absent" };
   return { kind: "populated", value: read.data };

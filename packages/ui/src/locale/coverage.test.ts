@@ -76,7 +76,12 @@ function screens(copy: Copy) {
   };
   const workflowDetail: WorkflowDetailCopy = {
     ...copy.workflowDetail,
-    unavailable: { ...copy.state.unavailable, heading: copy.workflowDetail.executionHeading },
+    absence: {
+      "not-applicable": { ...copy.state["not-applicable"], heading: copy.workflowDetail.catalogHeading },
+      absent: { ...copy.state.absent, heading: copy.workflowDetail.catalogHeading },
+      empty: { ...copy.state.empty, heading: copy.workflowDetail.catalogHeading },
+      unavailable: { ...copy.state.unavailable, heading: copy.workflowDetail.catalogHeading },
+    },
   };
   const iterations: IterationsCopy = {
     ...copy.iterations,
