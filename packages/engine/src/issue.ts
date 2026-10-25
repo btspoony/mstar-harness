@@ -237,6 +237,11 @@ export type IssueReceipt = {
   fromProject?: string;
   /** The project a move entered, or the issue's current project for a no-op. */
   toProject?: string;
+  /**
+   * The milestone a real move cleared (a milestone belongs to one project);
+   * `null` when the issue had none or the move was a same-project no-op.
+   */
+  clearedMilestoneId?: string | null;
 };
 
 export type IssueFilter = {
@@ -1863,8 +1868,8 @@ export function moveIssueOn(
   const existingOp = lookupOperation(db, mutation.operationId);
   if (existingOp) return replayOrConflict(existingOp, hash);
 
-  const issue = db.prepare("select id, project_id, revision from issues where id = ?").get(issueId) as
-    | { id: string; project_id: string; revision: number }
+  const issue = db.prepare("select id, project_id, revision, milestone_id from issues where id = ?").get(issueId) as
+    | { id: string; project_id: string; revision: number; milestone_id: string | null }
     | undefined;
   if (!issue) throw new IssueError("issue.not-found", `Issue ${issueId} does not exist`);
   if (readMeta(db).revision !== mutation.expectedStoreRevision) {
@@ -1895,6 +1900,7 @@ export function moveIssueOn(
       created: false,
       fromProject: issue.project_id,
       toProject: projectId,
+      clearedMilestoneId: null,
     };
     recordOperation(db, mutation.operationId, hash, receipt, nowRfc3339());
     return receipt;
@@ -1952,6 +1958,10 @@ export function moveIssueOn(
     created: false,
     fromProject: issue.project_id,
     toProject: projectId,
+    // The association must not survive the project change
+    // (`issues_milestone_project_update` forbids a foreign-project milestone),
+    // so the receipt names what the move removed.
+    clearedMilestoneId: issue.milestone_id,
   };
   recordOperation(db, mutation.operationId, hash, receipt, at);
   return receipt;

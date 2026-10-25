@@ -65,15 +65,16 @@
  * revision when its table carries one, and `null` when the row is absent on
  * that side. The child rows and the provenance tables §2.2 keeps outside the
  * authority (`occurrences`, `relations`, `provenance`, `issue_transitions`,
- * `catalog_links`, `catalog_operations`, `catalog_execution_bindings`,
- * `execution_registry`, `execution_operations`, `execution_migrations`,
- * `migration_receipts`, `store_operations`, `issue_counter`) have no revision
- * of their own, so they report the presence marker `1` on a side that holds
- * them: `null` stays reserved for absence, and an entry whose markers are both
- * `1` means the row exists on BOTH sides with different content — the entry
- * itself is the disclosure. `execution_migrations` matters here: a retirement
- * receipt is provenance (§2.2) rather than authority, and restoring a
- * pre-retirement point drops it, so it is listed rather than hidden.
+ * `issue_project_moves`, `catalog_links`, `catalog_operations`,
+ * `catalog_execution_bindings`, `execution_registry`, `execution_operations`,
+ * `execution_migrations`, `migration_receipts`, `store_operations`,
+ * `issue_counter`) have no revision of their own, so they report the presence
+ * marker `1` on a side that holds them: `null` stays reserved for absence, and
+ * an entry whose markers are both `1` means the row exists on BOTH sides with
+ * different content — the entry itself is the disclosure. `execution_migrations`
+ * matters here: a retirement receipt is provenance (§2.2) rather than authority,
+ * and restoring a pre-retirement point drops it, so it is listed rather than
+ * hidden.
  *
  * The recorded `lossDigest` is the canonical description of the loss the
  * preview disclosed: it is computed over the two stores'

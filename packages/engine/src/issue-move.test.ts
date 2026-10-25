@@ -18,6 +18,7 @@ let missingTargetIssue: IssueReceipt;
 let collidingIssue: IssueReceipt;
 let collisionCandidate: IssueReceipt;
 let casIssue: IssueReceipt;
+let assignedMilestoneId = "";
 
 function capture(projectId: string, occurrenceKey: string, keys = triple): CaptureInput {
   return {
@@ -68,6 +69,7 @@ beforeAll(async () => {
     { operationId: "milestone-a", expectedStoreRevision: revision() },
   );
   db.prepare("update issues set milestone_id = ? where id = ?").run(milestone.milestoneId, movedIssue.issueId);
+  assignedMilestoneId = milestone.milestoneId;
   missingTargetIssue = await captureIssue(context, capture(projectA, "occ-missing-target", { sourceIdentity: "review/missing", rootCauseKey: "root-missing", acceptanceKey: "accept-missing" }), { actor: "project-manager", operationId: "capture-missing-target" });
   collidingIssue = await captureIssue(context, capture(projectB, "occ-collide-b", { sourceIdentity: "review/collide", rootCauseKey: "root-collide", acceptanceKey: "accept-collide" }), { actor: "project-manager", operationId: "capture-collide-b" });
   collisionCandidate = await captureIssue(context, capture(projectA, "occ-collide-a", { sourceIdentity: "review/collide", rootCauseKey: "root-collide", acceptanceKey: "accept-collide" }), { actor: "project-manager", operationId: "capture-collide-a" });
@@ -94,8 +96,18 @@ describe("issue project move", () => {
       created: false,
       fromProject: projectA,
       toProject: projectB,
+      clearedMilestoneId: assignedMilestoneId,
     });
     expect(revision()).toBe(before + 1);
+    const storedReceipt = db
+      .prepare("select result_json from store_operations where operation_id = ?")
+      .get("move-succeeds") as { result_json: string };
+    expect(JSON.parse(storedReceipt.result_json)).toMatchObject({
+      issueId: movedIssue.issueId,
+      fromProject: projectA,
+      toProject: projectB,
+      clearedMilestoneId: assignedMilestoneId,
+    });
     const moves = db
       .prepare(
         "select issue_id, from_project_id, to_project_id, actor, reason, occurred_at, recorded_at, issue_revision from issue_project_moves where issue_id = ? order by id",
@@ -264,6 +276,7 @@ describe("issue project move", () => {
       created: false,
       fromProject: projectB,
       toProject: projectB,
+      clearedMilestoneId: null,
     });
     expect(await moveIssue(context, movedIssue.issueId, { projectId: projectB, reason: "already there" }, mutation)).toEqual(receipt);
     expect(issueRow(movedIssue.issueId).revision).toBe(2);
@@ -326,6 +339,15 @@ describe("issue project move", () => {
       { actor: "project-manager", operationId: "move-dropped-milestone", expectedRevision: issue.revision, expectedStoreRevision: before },
     );
     expect(receipt.revision).toBe(issue.revision + 1);
+    expect(receipt.clearedMilestoneId).toBe(dropped.milestoneId);
+    const stored = db
+      .prepare("select result_json from store_operations where operation_id = ?")
+      .get("move-dropped-milestone") as { result_json: string };
+    expect(JSON.parse(stored.result_json)).toMatchObject({
+      fromProject: projectA,
+      toProject: projectB,
+      clearedMilestoneId: dropped.milestoneId,
+    });
     expect(issueRow(issue.issueId)).toMatchObject({ project_id: projectB, milestone_id: null });
   });
 

@@ -14458,7 +14458,7 @@ function moveIssueOn(db, issueId, input, mutation, composed) {
   const existingOp = lookupOperation2(db, mutation.operationId);
   if (existingOp)
     return replayOrConflict(existingOp, hash);
-  const issue = db.prepare("select id, project_id, revision from issues where id = ?").get(issueId);
+  const issue = db.prepare("select id, project_id, revision, milestone_id from issues where id = ?").get(issueId);
   if (!issue)
     throw new IssueError("issue.not-found", `Issue ${issueId} does not exist`);
   if (readMeta(db).revision !== mutation.expectedStoreRevision) {
@@ -14481,7 +14481,8 @@ function moveIssueOn(db, issueId, input, mutation, composed) {
       storeRevision: receiptStoreRevision(db, composed),
       created: false,
       fromProject: issue.project_id,
-      toProject: projectId
+      toProject: projectId,
+      clearedMilestoneId: null
     };
     recordOperation(db, mutation.operationId, hash, receipt2, nowRfc33392());
     return receipt2;
@@ -14511,7 +14512,8 @@ function moveIssueOn(db, issueId, input, mutation, composed) {
     storeRevision,
     created: false,
     fromProject: issue.project_id,
-    toProject: projectId
+    toProject: projectId,
+    clearedMilestoneId: issue.milestone_id
   };
   recordOperation(db, mutation.operationId, hash, receipt, at);
   return receipt;
