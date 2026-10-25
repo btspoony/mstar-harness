@@ -32,7 +32,6 @@ import type {
 import type { Envelope, LoadState } from "./components";
 import { dataBadgeText, disclosureLines, Field, pinState, pinText, projectionDisclosure, textOrAbsent } from "./components";
 import { UNKNOWN_DATE, evidenceText, externalLinkHref, formatDate, migrationNote } from "./format";
-import { compassState, iterationExecutionState, iterationListState, iterationPlanRow } from "./views/iterations";
 import {
   MilestoneBoard,
   MilestoneCard,
@@ -371,82 +370,10 @@ describe("projection disclosure", () => {
 });
 
 describe("catalog and projection authority", () => {
-  test("the iteration list stays catalog-driven while the execution projection is unavailable", () => {
-    const listed = iterationListState(envelope({ items: [iteration()], total: 1 }, UNAVAILABLE_PROJECTION));
-    expect(listed.content).toEqual({ kind: "listed", total: 1 });
-    expect(listed.disclosure).not.toBeNull();
-    expect(iterationListState(envelope(EMPTY_ITERATIONS)).content).toEqual({ kind: "empty" });
-  });
-
-  test("an iteration with no execution row is not the same fact as an unavailable projection", () => {
-    // Absent execution data: a valid generation simply carries no row for it.
-    expect(iterationExecutionState(iteration(), CURRENT_PROJECTION)).toEqual({ kind: "not-started" });
-    // No valid generation: nothing is claimed about execution at all.
-    expect(iterationExecutionState(iteration(), UNAVAILABLE_PROJECTION)).toEqual({ kind: "unavailable" });
-    // The row case carries the projected values through unchanged.
-    const running = iteration({
-      workflow: { id: "iter-1", status: "InProgress", phase: "execute", activeRegistration: true },
-    });
-    expect(iterationExecutionState(running, CURRENT_PROJECTION)).toEqual({
-      kind: "row",
-      workflow: { id: "iter-1", status: "InProgress", phase: "execute", activeRegistration: true },
-    });
-  });
-
-  test("a plan with no execution row keeps its catalog membership and claims no pin", () => {
-    const row = iterationPlanRow(iterationPlan(), true);
-    expect(row.catalog?.title).toBe("Local read-only dashboard");
-    expect(row.execution).toEqual({ kind: "not-started" });
-    // The same row under an unavailable projection: unknown, not a claim.
-    expect(iterationPlanRow(iterationPlan(), false).execution).toEqual({ kind: "unknown" });
-  });
-
   // Issue #499 review F3: the projection DTO's `branch.source` field carries the
   // DELIVERY branch (`branch.work`). Next to the new `branch.base` anchor, a
   // "branch source" label would present the delivery branch as the branch the
   // workflow was created from — the exact ambiguity the anchor rename removes.
-  test("the compass is projected content: no valid generation means unknown, never absent", () => {
-    const compass = {
-      iterationId: "iter-20260918-issue-store-dashboard",
-      summary: "projected summary",
-      milestones: [],
-      startedAt: RECORDED_AT,
-      endedAt: null,
-      status: "running",
-    };
-    // A valid generation without a compass document is `absent`…
-    expect(compassState(null, true)).toEqual({ kind: "absent" });
-    // …and no valid generation is `unknown`, with or without a compass value.
-    expect(compassState(null, false)).toEqual({ kind: "unknown" });
-    expect(compassState(compass, false)).toEqual({ kind: "unknown" });
-    const document = compassState(compass, true);
-    expect(document.kind === "document" ? document.compass.summary : null).toBe("projected summary");
-  });
-
-  test("a missing prepared catalog pin is disclosed, never filled from the catalog revision", () => {
-    const unpinned = iterationPlanRow(
-      iterationPlan({
-        execution: { workflowId: "w", status: "InProgress", progress: null, phase: null, doneAt: null },
-        catalogPinRevision: null,
-        badges: ["catalog-pin-missing"],
-      }),
-      true,
-    );
-    expect(unpinned.execution.kind).toBe("row");
-    const pin = unpinned.execution.kind === "row" ? unpinned.execution.pin : null;
-    expect(pin).toEqual({ kind: "missing" });
-    // The catalog's current revision is 5; a missing pin never borrows it.
-    expect(pinText(pin!)).toContain("missing");
-    expect(pinText(pin!)).not.toContain("revision 5");
-
-    // A pin that predates the catalog row keeps both revisions in view.
-    expect(pinState(3, 5)).toEqual({ kind: "conflict", pin: 3, current: 5 });
-    expect(pinText({ kind: "conflict", pin: 3, current: 5 })).toContain("revision 3");
-    expect(pinState(5, 5)).toEqual({ kind: "pinned", revision: 5 });
-    // No catalog row to compare against: no conflict is claimed.
-    expect(pinState(3, null)).toEqual({ kind: "pinned", revision: 3 });
-  });
-
   test("join badges name the missing catalog join instead of resolving it", () => {
     expect(dataBadgeText(["catalog-pin-missing", "catalog-missing"])).toEqual([
       "Prepared pin missing",

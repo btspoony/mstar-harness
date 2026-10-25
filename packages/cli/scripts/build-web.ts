@@ -63,12 +63,20 @@ const outPath = process.argv[2] === undefined ? defaultOutPath : path.resolve(pr
 async function main(): Promise<void> {
   const shellHtml = readFileSync(path.join(webDir, "shell.html"), "utf8");
 
+  // `Bun.build` resolves workspace dependencies (and their `react`) relative to the
+  // process working directory, not to the entry point. Without this anchor the same
+  // source produced two different bundles depending on whether the generator was
+  // invoked from the repo root or from `packages/cli` — so "byte-deterministic" held
+  // only for a fixed working directory.
+  const callerCwd = process.cwd();
+  process.chdir(cliRoot);
   const bundle = await Bun.build({
     entrypoints: [path.join(webDir, "main.tsx")],
     target: "browser",
     minify: true,
     define: { "process.env.NODE_ENV": '"production"' },
   });
+  process.chdir(callerCwd);
   if (!bundle.success) {
     console.error("build-web: main.tsx bundle failed");
     for (const log of bundle.logs) console.error(String(log));

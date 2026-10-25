@@ -26,6 +26,8 @@ import {
   EmptyState,
   IssueDetail,
   Issues,
+  IterationDetail,
+  Iterations,
   LocaleProvider,
   MS_CONTAINER_CLASS,
   MS_THEME_ATTRIBUTE,
@@ -38,6 +40,16 @@ import {
 } from "@mstar-harness/ui";
 
 import { ABSENT_PROJECTION } from "./absent-projection";
+import {
+  iterationDetailCopy,
+  iterationDetailOutcome,
+  iterationsCopy,
+  iterationsOutcome,
+  readIterationDetail,
+  readIterations,
+  type IterationDetailOutcome,
+  type IterationsOutcome,
+} from "./iterations-data";
 import {
   ISSUE_FILTER_OPTIONS,
   issueDetailCopy,
@@ -338,6 +350,93 @@ function WorkflowDetailDestination(props: { id: string }) {
   );
 }
 
+/** The Iterations list, behind its own read. */
+function IterationsDestination() {
+  const [outcome, setOutcome] = useState<IterationsOutcome>({ kind: "loading" });
+  const copy = useCopy();
+  useEffect(() => {
+    const controller = new AbortController();
+    let current = true;
+    // No project scope on this route: the list destination is store-wide, and the
+    // project-scoped read belongs to the project detail's feature (batch 4).
+    void readIterations(fetch, null, controller.signal).then((result) => {
+      if (current) setOutcome(iterationsOutcome(result));
+    });
+    return () => {
+      current = false;
+      controller.abort();
+    };
+  }, []);
+
+  if (outcome.kind === "loading") return null;
+  if (outcome.kind === "failed") {
+    return (
+      <EmptyState
+        arm="unavailable"
+        labelWord={copy.state.unavailable.labelWord}
+        heading={copy.iterations.pageTitle}
+        body={copy.state.unavailable.body}
+        reason={outcome.message}
+      />
+    );
+  }
+
+  return (
+    <Iterations
+      model={outcome.model}
+      copy={iterationsCopy(copy)}
+      onOpen={(iterationId) => {
+        navigate({ name: "iteration", id: iterationId }, "", "push");
+      }}
+    />
+  );
+}
+
+/** One iteration, behind its own read. */
+function IterationDetailDestination(props: { id: string }) {
+  const [outcome, setOutcome] = useState<IterationDetailOutcome>({ kind: "loading" });
+  const copy = useCopy();
+  useEffect(() => {
+    const controller = new AbortController();
+    let current = true;
+    setOutcome({ kind: "loading" });
+    void readIterationDetail(fetch, props.id, controller.signal).then((result) => {
+      if (current) setOutcome(iterationDetailOutcome(result));
+    });
+    return () => {
+      current = false;
+      controller.abort();
+    };
+  }, [props.id]);
+
+  if (outcome.kind === "loading") return null;
+  if (outcome.kind === "failed") {
+    return (
+      <EmptyState
+        arm="unavailable"
+        labelWord={copy.state.unavailable.labelWord}
+        heading={copy.iterationDetail.compassHeading}
+        body={copy.state.unavailable.body}
+        reason={outcome.message}
+      />
+    );
+  }
+
+  return (
+    <IterationDetail
+      model={outcome.model}
+      copy={iterationDetailCopy(copy)}
+      onBack={() => {
+        const parent = parentAddress(parseRoute(window.location.hash));
+        if (parent !== null) navigate(parent.route, parent.query, "push");
+      }}
+      onOpenWorkflow={(id) => {
+        navigate({ name: "workflow", id }, "", "push");
+      }}
+    />
+  );
+}
+
 /** The shell: skip link, header with the shared navigation, the main region, footer. */
 function Shell() {
   const [address, setAddress] = useState<Address>(() => parseRoute(window.location.hash));
@@ -399,6 +498,8 @@ function Shell() {
         {address.route.name === "issue" ? <IssueDetailDestination id={address.route.id} /> : null}
         {address.route.name === "workflows" ? <WorkflowsDestination /> : null}
         {address.route.name === "workflow" ? <WorkflowDetailDestination id={address.route.id} /> : null}
+        {address.route.name === "iterations" ? <IterationsDestination /> : null}
+        {address.route.name === "iteration" ? <IterationDetailDestination id={address.route.id} /> : null}
       </main>
       <footer className="app-footer">Read-only · Make changes with the CLI</footer>
     </div>
