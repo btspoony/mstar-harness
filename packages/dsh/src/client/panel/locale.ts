@@ -28,6 +28,10 @@ export type PanelKey =
   | 'empty.unavailable'
   | 'empty.no-harness'
   | 'empty.no-harness-hint'
+  | 'empty.no-session'
+  | 'state.pick.pending'
+  | 'state.pick.selected'
+  | 'state.pick.failed'
 
 declare module '@deepseek-ai/dsh-client-ui-slots' {
   interface LocaleNamespaceMap {
@@ -45,6 +49,10 @@ export const zh: LocaleDictOf<'mstar-panel'> = {
   'empty.unavailable': '工作区快照不可用：{reason}',
   'empty.no-harness': '未检测到工作区 harness',
   'empty.no-harness-hint': '此工作区未声明 {HARNESS_DIR}，因此没有可读取的内容。',
+  'empty.no-session': '此面板没有会话绑定（主面板不绑定会话），因此没有会话事实可显示。',
+  'state.pick.pending': '正在提交选择…',
+  'state.pick.selected': '已绑定 {workflowId}',
+  'state.pick.failed': '选择失败：{reason}',
 }
 
 /** en dictionary (the host's fallback locale). */
@@ -57,4 +65,8 @@ export const en: LocaleDictOf<'mstar-panel'> = {
   'empty.unavailable': 'The workspace snapshot is unavailable: {reason}',
   'empty.no-harness': 'No workspace harness detected',
   'empty.no-harness-hint': 'This workspace declares no {HARNESS_DIR}, so there is nothing to read.',
+  'empty.no-session': 'This panel has no session binding (a main-area panel is not session-bound), so there are no session facts to show.',
+  'state.pick.pending': 'Committing your pick…',
+  'state.pick.selected': 'Bound to {workflowId}',
+  'state.pick.failed': 'Pick failed: {reason}',
 }

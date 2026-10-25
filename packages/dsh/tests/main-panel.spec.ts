@@ -301,6 +301,18 @@ describe('main seat — it owns the same transport states as the sidebar', () =>
     expect(markup).not.toContain('data-ms-shell')
   })
 
+  it('a session-less main key says so instead of waiting forever', () => {
+    // A non-`conversation` main key gets NO session from the host, so the seat
+    // states the fact rather than rendering an indefinite wait.
+    const locale = localeRuntime()
+    const markup = renderToStaticMarkup(createElement(MainPanelView, {
+      t: locale.bind(NS),
+    } as never))
+    expect(markup).toContain('data-mstar-panel="no-session"')
+    expect(markup).toContain(en['empty.no-session'])
+    expect(markup).not.toContain('data-mstar-panel="waiting"')
+  })
+
   it('no-harness keeps its own anchor', async () => {
     const locale = localeRuntime()
     const gateway = stubGateway(gatewayOk({ kind: 'no-harness' }))

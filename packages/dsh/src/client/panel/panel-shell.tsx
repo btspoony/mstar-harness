@@ -38,7 +38,15 @@ import css from './panel.module.css'
 import type { PanelSnapshot } from '../../panel/panel-snapshot.ts'
 import type { MstarWorkflowPickerClient } from './workflow-picker-client.ts'
 import type { MstarPanelSnapshotClient } from './panel-snapshot-client.ts'
+import { issueQuery as serializeIssueQuery, parseIssueQuery, type IssueQuery } from '@mstar-harness/ui'
 import { useMstarSessionDigest } from './use-mstar-session-digest.ts'
+import {
+  IssuesDestination,
+  IterationsDestination,
+  OverviewDestination,
+  ProjectsDestination,
+  WorkflowsDestination,
+} from './destinations.tsx'
 import { useMstarDashboardView, type MstarDashboardViewState } from './use-mstar-dashboard-view.ts'
 import { useMstarWorkflowPicker, type UseSessions } from './use-mstar-workflow-picker.ts'
 import type { PanelDestination } from './panel-store.ts'
@@ -171,6 +179,11 @@ export function PanelShell(props: {
   navLabel: string
   onSelect: (destination: string) => void
   select: ((workflowId: string) => void) | null
+  /** The ACTIVE destination's per-view read (one request, issued by the seat). */
+  reads?: Partial<Record<PanelDestination, MstarDashboardViewState>>
+  /** Issues owns the only interactive seat a destination has (its filter query). */
+  issueQuery?: IssueQuery
+  onIssueQueryChange?: (query: IssueQuery) => void
 }): React.ReactElement {
   const copy = copyFor(props.locale)
   const selection: SessionBinding | null = props.snapshot.selection
@@ -195,21 +208,54 @@ export function PanelShell(props: {
           <Nav items={navItems(copy)} activeId={props.destination} onSelect={props.onSelect} label={props.navLabel} />
         </div>
         <div className={css.scroll} data-mstar-scroll>
-          {props.destination === 'focus'
-            ? (
-              <>
-                <Focus
-                  model={model}
-                  copy={focusCopy(copy)}
-                  {...(props.select === null ? {} : { onPick: props.select })}
-                />
-              </>
-            )
-            : null}
+          {props.destination === 'focus' ? (
+            <Focus
+              model={model}
+              copy={focusCopy(copy)}
+              {...(props.select === null ? {} : { onPick: props.select })}
+            />
+          ) : (
+            <DestinationBody
+              destination={props.destination}
+              state={props.reads?.[props.destination] ?? { kind: 'waiting' }}
+              locale={props.locale}
+              issueQuery={props.issueQuery}
+              onIssueQueryChange={props.onIssueQueryChange}
+            />
+          )}
         </div>
       </div>
     </LocaleProvider>
   )
+}
+
+/** One destination's body: its shared screen, or its own read state. */
+function DestinationBody(props: {
+  destination: Exclude<PanelDestination, 'focus'>
+  state: MstarDashboardViewState
+  locale: Locale
+  issueQuery?: IssueQuery
+  onIssueQueryChange?: (query: IssueQuery) => void
+}): React.ReactElement {
+  const shared = { state: props.state, locale: props.locale }
+  switch (props.destination) {
+    case 'overview':
+      return <OverviewDestination {...shared} />
+    case 'issues':
+      return (
+        <IssuesDestination
+          {...shared}
+          {...(props.issueQuery === undefined ? {} : { query: props.issueQuery })}
+          {...(props.onIssueQueryChange === undefined ? {} : { onQueryChange: props.onIssueQueryChange })}
+        />
+      )
+    case 'workflows':
+      return <WorkflowsDestination {...shared} />
+    case 'iterations':
+      return <IterationsDestination {...shared} />
+    case 'projects':
+      return <ProjectsDestination {...shared} />
+  }
 }
 
 /** The "no harness" state: one line, no card, no chrome. */
@@ -281,6 +327,11 @@ export type PanelSeatProps = {
   panelSnapshot?: MstarPanelSnapshotClient
   localeFace?: HostLocaleFace
   themeFace?: HostThemeFace
+  /**
+   * The seat is the main-area panel: the host gives a non-`conversation` key no
+   * session, so an absent session is a FACT to state, not a read still pending.
+   */
+  sessionFreeMainPanel?: boolean
 }
 
 export function PanelSeat(props: PanelSeatProps): React.ReactElement | null {
@@ -290,13 +341,10 @@ export function PanelSeat(props: PanelSeatProps): React.ReactElement | null {
   const locale = useProductLocale(localeFace)
   const scheme = useProductScheme(themeFace)
   // The picker's WRITE half only: the selection it shows rides the digest.
-  const { select } = useMstarWorkflowPicker({ useSessions, sessionId, picker })
+  const { pick, select } = useMstarWorkflowPicker({ useSessions, sessionId, picker })
 
-  const digest = useMstarSessionDigest({
-    client: panelSnapshot,
-    sessionId: wireSession,
-    cwd,
-  }).state
+  const digestReader = useMstarSessionDigest({ client: panelSnapshot, sessionId: wireSession, cwd })
+  const digest = digestReader.state
   const snapshot = digest.kind === 'ok' ? digest.snapshot : null
   const selection = snapshot?.selection ?? null
   const boundWorkflowId =
@@ -319,9 +367,46 @@ export function PanelSeat(props: PanelSeatProps): React.ReactElement | null {
     view: snapshot !== null && workflow.state === 'read' && workflow.data !== null ? 'iterations' : null,
     params: { limit: '200' },
   })
+  // The ACTIVE destination's own view: one read, only while it is shown. The
+  // Iterations destination reuses the delivery read above — one request, not two.
+  const [issueQueryState, setIssueQueryState] = React.useState<IssueQuery>(() => parseIssueQuery(''))
+  // The screen's query IS the read's filter set: the shared serializer produces
+  // the `/api`-style parameters the engine view layer validates.
+  const issueParams = React.useMemo(
+    () => Object.fromEntries(new URLSearchParams(serializeIssueQuery(issueQueryState)).entries()),
+    [issueQueryState],
+  )
+  const destinationView = useMstarDashboardView({
+    client: panelSnapshot,
+    sessionId: wireSession,
+    cwd,
+    view: snapshot === null || destination === 'focus' || destination === 'iterations' ? null : destination,
+    ...(destination === 'issues' ? { params: issueParams } : {}),
+  })
+  const destinationRead = destination === 'iterations' ? iterationsView.state : destinationView.state
+
+  // (b) The workflow pick is the product's only write: once the commit lands,
+  // every read that DEPENDS on the binding re-reads — the digest (selection),
+  // the bound workflow, the delivery iteration and the active destination.
+  const pickReloadKey = pick.state === 'selected' ? pick.workflowId : null
+  React.useEffect(() => {
+    if (pickReloadKey === null) return
+    digestReader.reload()
+    workflowView.reload()
+    iterationsView.reload()
+    destinationView.reload()
+    // A new commit is a new key; the first mount is not a commit.
+  }, [pickReloadKey])
 
   // Every hook runs before the early returns (hooks rule).
   if (!visible) return null
+  if (props.sessionFreeMainPanel === true && sessionId === undefined) {
+    return (
+      <div className={css.state} data-mstar-panel="no-session">
+        <p data-mstar-empty="no-session">{t('empty.no-session')}</p>
+      </div>
+    )
+  }
   if (digest.kind === 'waiting') {
     return (
       <div className={css.state} data-mstar-panel="waiting">
@@ -347,12 +432,26 @@ export function PanelSeat(props: PanelSeatProps): React.ReactElement | null {
     )
   }
 
+  const pickLine = pick.state === 'idle'
+    ? null
+    : (
+      <p className={css.pickState} data-mstar-pick={pick.state}>
+        {pick.state === 'pending'
+          ? t('state.pick.pending')
+          : pick.state === 'selected' ? t('state.pick.selected', { workflowId: pick.workflowId }) : t('state.pick.failed', { reason: pick.reason ?? '' })}
+      </p>
+    )
   return (
+    <>
+    {pickLine}
     <PanelShell
       snapshot={snapshot}
       workflow={workflow}
       {...(phase === 'loading' ? { phase } : {})}
       delivery={deliveryFromView(iterationsView.state, planIds)}
+      reads={{ [destination]: destinationRead }}
+      issueQuery={issueQueryState}
+      onIssueQueryChange={setIssueQueryState}
       destination={destination}
       locale={locale}
       scheme={scheme}
@@ -360,5 +459,6 @@ export function PanelSeat(props: PanelSeatProps): React.ReactElement | null {
       onSelect={onSelect}
       select={select}
     />
+    </>
   )
 }

@@ -98,6 +98,51 @@ function shell(
   )
 }
 
+/** The per-view payload of one destination (the smallest shape its screen reads). */
+function destinationRead(id: (typeof PANEL_DESTINATIONS)[number]): unknown {
+  const envelope = (data: unknown) => ({
+    kind: 'ok',
+    envelope: {
+      data,
+      projection: { generation: 1, freshness: 'current', builtAt: null, checkedAt: '', diagnostics: [] },
+    },
+  })
+  switch (id) {
+    case 'overview':
+      return envelope({
+        workflows: { state: 'read', data: { items: [], total: 0 } },
+        residuals: { state: 'read', data: { open: 0, bySeverity: { critical: 0, high: 0, medium: 0, low: 0, nit: 0 } } },
+        milestones: { state: 'not-applicable', reason: 'no project' },
+        latestIteration: { state: 'read', data: null },
+        issueFlow: { state: 'read', data: { buckets: [], unknownCaptureDates: 0, unknownClosureDates: 0, currentOpen: 0, incompleteHistory: false } },
+      })
+    case 'issues':
+      return envelope({ items: [], total: 0, storeRevision: 1 })
+    case 'workflows':
+      return envelope({ items: [], total: 0 })
+    case 'iterations':
+      return envelope({ items: [], total: 0, attribution: 'absent' })
+    case 'projects':
+      return envelope({ items: [], total: 0 })
+  }
+}
+
+/** Render the shell for one destination with its read answered. */
+function shellWith(snap: PanelSnapshot, id: (typeof PANEL_DESTINATIONS)[number]): string {
+  return renderToStaticMarkup(
+    createElement(PanelShell, {
+      snapshot: snap,
+      workflow: { state: 'read', data: WORKFLOW } as never,
+      destination: id,
+      locale: 'en',
+      navLabel: 'Morning Star Workflow',
+      onSelect: () => {},
+      select: null,
+      reads: { [id]: destinationRead(id) as never },
+    } as never),
+  )
+}
+
 /** The nav item the markup marks `aria-current="page"` (attribute order is React's). */
 function currentItem(markup: string): string | null {
   for (const tag of markup.match(/<button[^>]*>/g) ?? []) {
@@ -200,9 +245,12 @@ describe('sidebar shell — the five destinations are reachable from the shared 
     expect(currentItem(shell())).toBe('focus')
     expect(currentItem(shell(snapshot(), 'issues'))).toBe('issues')
     expect(currentItem(shell(snapshot(), 'projects'))).toBe('projects')
-    // A destination whose screen lands in its own round renders no body — and
-    // never a fabricated absence state.
-    expect(shell(snapshot(), 'issues')).not.toContain('data-ms-screen=')
+    // Every destination renders its own shared screen: no nav target is an
+    // empty landmark (Task 8).
+    for (const id of PANEL_DESTINATIONS) {
+      const markup = shellWith(snapshot(), id)
+      expect(markup).toContain(`data-ms-screen="${id}"`)
+    }
   })
 })
 

@@ -83,3 +83,17 @@
 .openMain:focus-visible {
   opacity: 1;
 }
+
+/* A destination's own read state (before its screen can render). */
+.destinationState {
+  margin: 0;
+  padding: var(--ms-space-3);
+}
+
+/* The pick's own state line (the only write in the product). */
+.pickState {
+  margin: 0;
+  padding: var(--ms-space-2) var(--ms-space-3);
+  font-size: var(--ms-fs-12);
+  line-height: var(--ms-lh-12);
+}

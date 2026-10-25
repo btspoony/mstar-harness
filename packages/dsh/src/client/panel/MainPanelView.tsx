@@ -57,6 +57,7 @@ export function MainPanelView(props: MstarMainPanelProps) {
           if (isPanelDestination(next)) setDestination(next)
         }}
         t={t}
+        sessionFreeMainPanel
         {...(sessionId === undefined ? {} : { sessionId })}
         {...(useSessions === undefined ? {} : { useSessions })}
         {...(picker === undefined ? {} : { picker })}
