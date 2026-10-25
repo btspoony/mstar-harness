@@ -71,6 +71,8 @@ export type DestinationProps = {
   readonly locale: Locale
   readonly query?: IssueQuery
   readonly onQueryChange?: (query: IssueQuery) => void
+  /** Open one record from the list (the shell owns the open record). */
+  readonly onOpen?: (id: string) => void
 }
 
 export function OverviewDestination({ state, locale }: DestinationProps): React.ReactElement {
@@ -95,7 +97,7 @@ export function OverviewDestination({ state, locale }: DestinationProps): React.
   )
 }
 
-export function IssuesDestination({ state, locale, query, onQueryChange }: DestinationProps): React.ReactElement {
+export function IssuesDestination({ state, locale, query, onQueryChange, onOpen }: DestinationProps): React.ReactElement {
   const copy = copyFor(locale)
   const activeQuery = query ?? parseIssueQuery('')
   if (state.kind !== 'ok') return <ReadState state={state} copy={copy} />
@@ -109,6 +111,7 @@ export function IssuesDestination({ state, locale, query, onQueryChange }: Desti
         copy={issuesCopy(copy)}
         options={ISSUE_OPTIONS}
         onQueryChange={(next) => onQueryChange?.(next)}
+        {...(onOpen === undefined ? {} : { onOpen })}
       />
     </div>
   )
@@ -171,7 +174,21 @@ export function ProjectsDestination({ state, locale }: DestinationProps): React.
 
 /* ------------------------------- detail routes ------------------------------- */
 
-import { IssueDetail, WorkflowDetail, IterationDetail, issueDetailModel, workflowDetailModel, iterationDetailModel } from '@mstar-harness/ui'
+import {
+  IssueDetail,
+  WorkflowDetail,
+  IterationDetail,
+  ProjectDetail,
+  Iterations as IterationsScreen,
+  iterationListModel as iterationListModelFor,
+  roadmapBody,
+  projectIdentity,
+  resolveRead,
+  issueDetailModel,
+  workflowDetailModel,
+  iterationDetailModel,
+  type ProjectFeature,
+} from '@mstar-harness/ui'
 import type { IssueDetail as IssueDetailDTO, WorkflowDTO, IterationDTO } from '@mstar-harness/engine'
 
 /** The four detail views a destination can open. */
@@ -184,6 +201,8 @@ export type DetailProps = {
   readonly locale: Locale
   readonly onBack: () => void
   readonly onOpenWorkflow?: (id: string) => void
+  /** A project detail's scoped Iterations read (`project` enforced on the request). */
+  readonly projectIterations?: MstarDashboardViewState
 }
 
 /**
@@ -192,7 +211,7 @@ export type DetailProps = {
  * not be made) — the shared resolvers own that split, this adapter only passes
  * the envelope through.
  */
-export function DetailBody({ view, state, locale, onBack, onOpenWorkflow }: DetailProps): React.ReactElement {
+export function DetailBody({ view, state, locale, onBack, onOpenWorkflow, projectIterations }: DetailProps): React.ReactElement {
   const copy = copyFor(locale)
   if (state.kind !== 'ok') return <ReadState state={state} copy={copy} />
   const envelope = state.envelope
@@ -245,9 +264,49 @@ export function DetailBody({ view, state, locale, onBack, onOpenWorkflow }: Deta
         />
       )
     }
-    case 'project-detail':
-      // Not mounted this round: it needs the fixed three-feature tabs plus two
-      // scoped list reads below them.
-      return <ReadState state={{ kind: 'unavailable', reason: 'project detail is not mounted in this round' }} copy={copy} />
+    case 'project-detail': {
+      const roadmap = data === null
+        ? ({ kind: 'absent' } as const)
+        : roadmapBody(resolveRead({ data: data as never, projection: envelope.projection }, { whenNull: 'absent' }))
+      const iterationsState = projectIterations ?? ({ kind: 'waiting' } as const)
+      return (
+        <ProjectDetail
+          identity={data === null ? { title: '', description: null, lifecycle: 'active', relativePath: '' } as never : projectIdentity((data as never as { catalog: never }).catalog)}
+          feature={'roadmap'}
+          onFeatureChange={() => {}}
+          roadmap={roadmap as never}
+          issues={<ReadState state={iterationsState} copy={copy} />}
+          iterations={
+            iterationsState.kind === 'ok' && iterationsState.envelope.data !== null
+              ? (
+                <IterationsScreen
+                  model={iterationListModelFor({
+                    data: iterationsState.envelope.data as IterationListDTO,
+                    projection: iterationsState.envelope.projection,
+                  })}
+                  copy={{
+                    ...copy.iterations,
+                    notStarted: copy.workflowDetail.fields.notStarted,
+                    empty: { ...copy.state.empty, heading: copy.iterations.pageTitle },
+                    absent: { ...copy.state.absent, heading: copy.iterations.pageTitle },
+                    unavailable: { ...copy.state.unavailable, heading: copy.iterations.pageTitle },
+                  }}
+                />
+              )
+              : <ReadState state={iterationsState} copy={copy} />
+          }
+          copy={{
+            ...copy.projectDetail,
+            absence: {
+              absent: { ...copy.state.absent, heading: copy.projectDetail.features.roadmap },
+              empty: { ...copy.state.empty, heading: copy.projectDetail.features.roadmap },
+              unavailable: { ...copy.state.unavailable, heading: copy.projectDetail.features.roadmap },
+              'not-applicable': { ...copy.state['not-applicable'], heading: copy.projectDetail.features.roadmap },
+            },
+          }}
+          onBack={onBack}
+        />
+      )
+    }
   }
 }

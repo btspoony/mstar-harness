@@ -189,6 +189,10 @@ export function PanelShell(props: {
   /** The open detail route, or null for the destination's list. */
   detail?: { view: DetailView; id: string; state: MstarDashboardViewState } | null
   onBack?: () => void
+  /** Open one record from its destination's list (the shell owns the open record). */
+  onOpen?: (view: DetailView, id: string) => void
+  /** A project detail's scoped Iterations read. */
+  projectIterations?: MstarDashboardViewState
 }): React.ReactElement {
   const copy = copyFor(props.locale)
   const selection: SessionBinding | null = props.snapshot.selection
@@ -220,6 +224,7 @@ export function PanelShell(props: {
               state={props.detail.state}
               locale={props.locale}
               onBack={props.onBack ?? (() => {})}
+              {...(props.projectIterations === undefined ? {} : { projectIterations: props.projectIterations })}
             />
           )}
           {props.detail !== null && props.detail !== undefined ? null : props.destination === 'focus' ? (
@@ -235,6 +240,7 @@ export function PanelShell(props: {
               locale={props.locale}
               issueQuery={props.issueQuery}
               onIssueQueryChange={props.onIssueQueryChange}
+              onOpen={props.onOpen}
             />
           )}
         </div>
@@ -253,8 +259,13 @@ function DestinationBody(props: {
   /** The open detail route, or null for the destination's list. */
   detail?: { view: DetailView; id: string; state: MstarDashboardViewState } | null
   onBack?: () => void
+  /** Open one record from its destination's list (the shell owns the open record). */
+  onOpen?: (view: DetailView, id: string) => void
+  /** A project detail's scoped Iterations read. */
+  projectIterations?: MstarDashboardViewState
 }): React.ReactElement {
   const shared = { state: props.state, locale: props.locale }
+  const open = props.onOpen
   switch (props.destination) {
     case 'overview':
       return <OverviewDestination {...shared} />
@@ -264,6 +275,7 @@ function DestinationBody(props: {
           {...shared}
           {...(props.issueQuery === undefined ? {} : { query: props.issueQuery })}
           {...(props.onIssueQueryChange === undefined ? {} : { onQueryChange: props.onIssueQueryChange })}
+          {...(open === undefined ? {} : { onOpen: (id: string) => open('issue-detail', id) })}
         />
       )
     case 'workflows':
@@ -401,6 +413,23 @@ export function PanelSeat(props: PanelSeatProps): React.ReactElement | null {
     ...(destination === 'issues' ? { params: issueParams } : {}),
   })
   const destinationRead = destination === 'iterations' ? iterationsView.state : destinationView.state
+  // The open record (list → detail), and its own read.
+  const [detail, setDetail] = React.useState<{ view: DetailView; id: string } | null>(null)
+  React.useEffect(() => { setDetail(null) }, [destination])
+  const detailView = useMstarDashboardView({
+    client: panelSnapshot,
+    sessionId: wireSession,
+    cwd,
+    view: detail === null ? null : detail.view,
+    ...(detail === null ? {} : { id: detail.id }),
+  })
+  const projectIterationsView = useMstarDashboardView({
+    client: panelSnapshot,
+    sessionId: wireSession,
+    cwd,
+    view: detail !== null && detail.view === 'project-detail' ? 'iterations' : null,
+    ...(detail !== null && detail.view === 'project-detail' ? { params: { project: detail.id, limit: '200' } } : {}),
+  })
 
   // (b) The workflow pick is the product's only write: once the commit lands,
   // every read that DEPENDS on the binding re-reads — the digest (selection),
@@ -469,6 +498,10 @@ export function PanelSeat(props: PanelSeatProps): React.ReactElement | null {
       reads={{ [destination]: destinationRead }}
       issueQuery={issueQueryState}
       onIssueQueryChange={setIssueQueryState}
+      detail={detail === null ? null : { ...detail, state: detailView.state }}
+      onOpen={(view, id) => setDetail({ view, id })}
+      onBack={() => setDetail(null)}
+      projectIterations={projectIterationsView.state}
       destination={destination}
       locale={locale}
       scheme={scheme}

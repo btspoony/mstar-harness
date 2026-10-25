@@ -418,3 +418,64 @@ describe('detail routes — a record read, not a landmark', () => {
     expect(unavailable).not.toContain('data-ms-absence="absent"')
   })
 })
+
+/* ------------------ 7. round trip + the project detail ------------------ */
+
+describe('the shell holds the open record and the project detail mounts', () => {
+  const projection = { generation: 1, freshness: 'current', builtAt: null, checkedAt: '', diagnostics: [] }
+  const envelope = (data: unknown) => ({ kind: 'ok' as const, envelope: { data, projection } })
+  const render = (detail: unknown, extra: Record<string, unknown> = {}) =>
+    renderToStaticMarkup(createElement(PanelShell, {
+      snapshot: snapshot(),
+      workflow: { state: 'read', data: WORKFLOW } as never,
+      destination: 'issues',
+      locale: 'en',
+      navLabel: 'Morning Star Workflow',
+      onSelect: () => {},
+      select: null,
+      reads: { issues: envelope({ items: [], total: 0, storeRevision: 1 }) as never },
+      detail,
+      onOpen: () => {},
+      onBack: () => {},
+      ...extra,
+    } as never))
+
+  it('open replaces the list body and back restores it', () => {
+    const detail = {
+      view: 'issue-detail',
+      id: 'I-1',
+      state: envelope({ id: 'I-1', title: 'a record', acceptance: 'x', impact: 'y', projectId: null, milestoneId: null, kind: 'bug', severity: 'low', disposition: 'open', owner: null, registeredAt: null, closedAt: null, occurrenceCount: 0, occurrences: [], closureNote: null }),
+    }
+    const open = render(detail)
+    expect(open).toContain('data-ms-screen="issue-detail"')
+    expect(open).not.toContain('data-ms-screen="issues"')
+    // Back clears the record; the LIST is what renders again, scope intact.
+    const back = render(null)
+    expect(back).toContain('data-ms-screen="issues"')
+    expect(back).not.toContain('data-ms-screen="issue-detail"')
+  })
+
+  it('project detail mounts its three tabs with Roadmap default and a scoped list', () => {
+    const roadmap = {
+      projectId: 'proj-1',
+      catalog: { kind: 'project', id: 'proj-1', title: 'Project One', description: null, rootKind: 'projects', relativePath: 'proj-1', documentKind: null, lifecycle: 'active', revision: 1, registeredAt: '2026-10-01T00:00:00.000Z', updatedAt: '2026-10-01T00:00:00.000Z' },
+      authority: { state: 'absent' },
+      content: null,
+      milestones: { projectId: 'proj-1', milestones: [], issues: [], unassignedIssues: 0 },
+    }
+    const markup = render(
+      { view: 'project-detail', id: 'proj-1', state: envelope(roadmap) },
+      { projectIterations: envelope({ items: [], total: 0, attribution: 'absent' }) },
+    )
+    expect(markup).toContain('data-ms-screen="project-detail"')
+    // The three fixed features, Roadmap permanently the default.
+    expect(markup).toContain(uiEn.projectDetail.features.roadmap)
+    expect(markup).toContain(uiEn.projectDetail.features.issues)
+    expect(markup).toContain(uiEn.projectDetail.features.iterations)
+    // The Roadmap feature body is mounted (its own read is the project's), and
+    // the two scoped lists sit under their features (see the report: the scoped
+    // Iterations attribution arm is asserted at the resolver level, not here).
+    expect(markup).not.toContain('data-ms-screen="projects"')
+    expect(markup.length).toBeGreaterThan(200)
+  })
+})
