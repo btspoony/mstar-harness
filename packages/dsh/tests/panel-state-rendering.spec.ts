@@ -35,7 +35,7 @@ function localeRuntime(active: 'en' | 'zh'): LocaleRuntime {
 }
 
 /** Render the seat with a digest transport answering `payload`. */
-async function renderSeat(payload: unknown, active: 'en' | 'zh' = 'en'): Promise<string> {
+async function renderSeat(payload: unknown, active: 'en' | 'zh' = 'en', scheme?: 'light' | 'dark'): Promise<string> {
   const locale = localeRuntime(active)
   const gateway = stubGateway()
   gateway.replyFor(PANEL_SNAPSHOT_ENDPOINT, gatewayOk(payload))
@@ -53,6 +53,7 @@ async function renderSeat(payload: unknown, active: 'en' | 'zh' = 'en'): Promise
           selector({ byId: { [SESSION]: { id: SESSION, cwd: SESSION_CWD } } })) as never,
         panelSnapshot: client,
         localeFace: locale,
+        ...(scheme === undefined ? {} : { themeFace: { getSnapshot: () => scheme, subscribe: () => () => {} } }),
       } as never)))
   }
   return markup
@@ -118,5 +119,30 @@ describe('failure reasons render as human sentences, never as tokens', () => {
         expect({ key, value }).not.toMatchObject({ value: expect.stringContaining('{reason}') })
       }
     }
+  })
+})
+
+describe('every failure arm carries the host scheme', () => {
+  it('a dark host themes the failure state (the carrier is an ancestor of the message)', async () => {
+    const markup = await renderSeat({ kind: 'unavailable', reason: 'session-cwd-absent' }, 'en', 'dark')
+    // The shared surfaces paint `--ms-*`: outside a `data-ms-theme` carrier they
+    // render the light token set under a dark host — the pre-fix behaviour, where
+    // these arms returned BEFORE `PanelShell`'s wrapper existed.
+    expect(markup).toContain('data-ms-theme="dark"')
+    expect(markup).toContain('data-ms-notice-tone="warning"')
+    expect(markup.indexOf('data-ms-theme="dark"')).toBeLessThan(markup.indexOf('data-ms-notice-tone'))
+  })
+
+  it('the light host gets the light carrier, and no-harness/loading/waiting arms get one too', async () => {
+    for (const payload of [{ kind: 'unavailable', reason: 'session-absent' }, { kind: 'no-harness' }, { kind: 'ok', snapshot: null }]) {
+      const markup = await renderSeat(payload, 'en', 'light')
+      expect(markup).toContain('data-ms-theme="light"')
+    }
+  })
+
+  it('a dark host themes the no-harness absence too', async () => {
+    const markup = await renderSeat({ kind: 'no-harness' }, 'en', 'dark')
+    expect(markup).toContain('data-ms-theme="dark"')
+    expect(markup.indexOf('data-ms-theme="dark"')).toBeLessThan(markup.indexOf('data-ms-absence'))
   })
 })
