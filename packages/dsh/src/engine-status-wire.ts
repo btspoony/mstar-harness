@@ -48,3 +48,15 @@ export const MSTAR_PANEL_SNAPSHOT_NAMESPACE = 'mstar'
 export const MSTAR_PANEL_SNAPSHOT_METHOD = 'panelSnapshot'
 /** The endpoint path the panel calls on every poll tick. */
 export const PANEL_SNAPSHOT_ENDPOINT = `${MSTAR_PANEL_SNAPSHOT_NAMESPACE}/${MSTAR_PANEL_SNAPSHOT_METHOD}`
+/**
+ * Wire method of the per-view read → `/api/mstar/dashboardView`.
+ *
+ * One invocation answers every engine `DashboardView` (`workflow-detail`, the
+ * `iterations` list, …), exactly as `/api/<view>` answers the dashboard: the
+ * screens read the same engine views through their own transport, and the
+ * plugin re-reads no store state the dashboard cannot. It rides the SAME typert
+ * contribution as `panelSnapshot` (one contribution per package face).
+ */
+export const MSTAR_DASHBOARD_VIEW_METHOD = 'dashboardView'
+/** The endpoint path a screen calls for its own view (one request per read). */
+export const DASHBOARD_VIEW_ENDPOINT = `${MSTAR_PANEL_SNAPSHOT_NAMESPACE}/${MSTAR_DASHBOARD_VIEW_METHOD}`

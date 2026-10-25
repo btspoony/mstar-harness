@@ -56,7 +56,7 @@ import {
 // admits one contribution per `<package>#<face>`, so a second `register` from
 // the same package is refused. Its descriptor names its own service and the
 // shared `mstar` namespace, so nothing here changes for the two above.
-import { mstarPanelSnapshotInvocation } from './panel/panel-snapshot-endpoint.ts'
+import { mstarDashboardViewInvocation, mstarPanelSnapshotInvocation } from './panel/panel-snapshot-endpoint.ts'
 
 // The wire address is declared ONCE for both halves (`./engine-status-wire.ts`)
 // and re-exported here for the host-side consumers that already import this
@@ -376,6 +376,10 @@ export function mstarEngineStatusContribution(): TypertContribution {
       // The panel's store-backed read rides this contribution (one per package
       // face) while serving from its OWN service — see the import note above.
       mstarPanelSnapshotInvocation(),
+      // The per-view read (Task 4a): one invocation answers every engine
+      // dashboard view, so a screen reads its own view instead of receiving a
+      // polled envelope of five.
+      mstarDashboardViewInvocation(),
     ],
   }
 }

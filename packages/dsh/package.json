@@ -146,6 +146,9 @@
     "access": "public"
   },
   "devDependencies": {
+    "@deepseek-ai/dsh-client-ui-layout": "^0.2.1-rc.3",
+    "@deepseek-ai/dsh-client-ui-sidebar": "^0.2.1-rc.3",
+    "@deepseek-ai/dsh-client-ui-theme": "^0.2.1-rc.3",
     "@deepseek-ai/dsh-session-format-v3-to-v4": "0.2.1-rc.3",
     "@deepseek-ai/dsh-util-code-language": "0.2.1-rc.3",
     "@mstar-harness/commands": "workspace:*",
