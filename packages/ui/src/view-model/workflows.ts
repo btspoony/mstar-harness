@@ -37,6 +37,16 @@ export type WorkflowRow = {
   plansDone: number;
   plansTotal: number;
   startedAt: string;
+  /** The projected updated time — the row's own freshness, not the envelope's. */
+  updatedAt: string;
+  /**
+   * Where the catalog registered this workflow (`rootKind:relativePath`), or
+   * `null` when the row has no catalog entry. One cell: it is what a reader types
+   * to reach the record, and it is not the `{HARNESS_DIR}` identity line.
+   */
+  root: string | null;
+  /** The catalog title, when the row has one; `null` means no catalog row. */
+  title: string | null;
   branch: BranchAnchors;
   /** The store's own reason when the execution projection could not be read. */
   executionUnavailableReason: string | null;
@@ -93,23 +103,47 @@ export function workflowRow(workflow: WorkflowDTO): WorkflowRow {
     plansDone: tally.done,
     plansTotal: tally.total,
     startedAt: formatDate(workflow.startedAt),
+    updatedAt: formatDate(workflow.updatedAt),
+    root: workflow.catalog === null ? null : `${workflow.catalog.rootKind}:${workflow.catalog.relativePath}`,
+    title: workflow.catalog?.title ?? null,
     branch: branchAnchors(workflow.branch),
     executionUnavailableReason: executionUnavailableReason(workflow.badges),
   };
 }
 
-/** The list state: `listed` / `empty` / `unavailable` (no valid projection). */
+/**
+ * The list state: `listed` / `empty` / `unavailable` (no valid projection), plus
+ * the truncation disclosure.
+ *
+ * `total` is the unpaged count the store reports; the page length is not it. A
+ * list that reported `items.length` as its total would silently claim a truncated
+ * page is the whole store, so the disclosure is computed from `total` alone and
+ * the page length only ever appears as the "showing" side.
+ */
+export type WorkflowListModel = {
+  rows: Resolved<readonly WorkflowRow[]>;
+  /** The store's unpaged count — never the page length. */
+  total: number;
+  /** How many rows this page actually carries. */
+  shown: number;
+  /** `total > shown`: the store holds more than this page. */
+  truncated: boolean;
+};
+
 export function workflowListModel(read: {
   data: WorkflowListDTO;
   projection: { generation: number | null };
-}): { rows: Resolved<readonly WorkflowRow[]>; total: number } {
+}): WorkflowListModel {
   const rows = resolveRead(
     { data: read.data.items, projection: read.projection },
     { whenNull: "empty", isEmpty: (items) => items.length === 0 },
   );
+  const shown = rows.kind === "populated" ? rows.value.length : 0;
   return {
     rows: rows.kind === "populated" ? { kind: "populated", value: rows.value.map(workflowRow) } : rows,
     total: read.data.total,
+    shown,
+    truncated: read.data.total > shown,
   };
 }
 
@@ -125,14 +159,26 @@ export type WorkflowPlanRow = {
   doneAt: string | null;
 };
 
-/** The detail model: anchors, dates and the plan table. */
+/** The catalog identity of a workflow, when it has one. */
+export type WorkflowCatalog = {
+  title: string;
+  lifecycle: string;
+  /** `rootKind:relativePath` — the same one-cell form the list uses. */
+  root: string;
+  /** The `documentKind` the catalog row declares, or `null` when it declares none. */
+  documentKind: string | null;
+};
+
+/** The detail model: execution, catalog identity, dates and the plan table. */
 export type WorkflowDetailModel = {
-  /** `null` when the read has no valid projection (the reason rides along). */
-  workflow: WorkflowRow | null;
+  workflow: WorkflowRow;
+  catalog: WorkflowCatalog | null;
+  startedAt: string;
   updatedAt: string;
   endedAt: string | null;
+  /** The store's own reason when the execution projection could not be read. */
+  executionUnavailableReason: string | null;
   plans: readonly WorkflowPlanRow[];
-  projection: ProjectionState;
 };
 
 /** One plan row. */
@@ -160,14 +206,25 @@ export function workflowDetailModel(read: {
     return { kind: "unavailable", reason: "the execution projection for this workflow could not be read" };
   }
   const workflow = read.data;
+  const catalog = workflow.catalog;
   return {
     kind: "populated",
     value: {
       workflow: workflowRow(workflow),
+      catalog:
+        catalog === null
+          ? null
+          : {
+              title: catalog.title,
+              lifecycle: catalog.lifecycle,
+              root: `${catalog.rootKind}:${catalog.relativePath}`,
+              documentKind: catalog.documentKind,
+            },
+      startedAt: formatDate(workflow.startedAt),
       updatedAt: formatDate(workflow.updatedAt),
       endedAt: workflow.endedAt,
+      executionUnavailableReason: executionUnavailableReason(workflow.badges),
       plans: workflow.plans.map(workflowPlanRow),
-      projection: { kind: "current" },
     },
   };
 }
