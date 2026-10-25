@@ -22,6 +22,12 @@
  *    is gone (compass D30); the page's only validity fact is the projection state,
  *    which arrives at runtime.
  *
+ * **Order matters.** After this generator runs, `packages/commands` must be
+ * rebuilt before `bun test packages/cli`: the server serves the generated module
+ * from `packages/commands/dist` while the tests import it from source, so a stale
+ * `dist` fails the server suite with a byte mismatch that looks like a race. The
+ * package's `build` and `typecheck:src` scripts already run both in order.
+ *
  * Determinism: inputs are read from the repo only; no timestamp, random id or
  * absolute build path is embedded. Running the generator twice on unchanged
  * inputs produces byte-identical output (verified by the script itself after each

@@ -24,17 +24,39 @@ import { StrictMode, useCallback, useEffect, useState } from "react";
 import { createRoot } from "react-dom/client";
 import {
   EmptyState,
+  IssueDetail,
+  Issues,
   LocaleProvider,
   MS_CONTAINER_CLASS,
   MS_THEME_ATTRIBUTE,
   Nav,
   Overview,
   copyFor,
-  useCopy,
+  type IssueQuery,
 } from "@mstar-harness/ui";
 
+import {
+  ISSUE_FILTER_OPTIONS,
+  issueDetailCopy,
+  issueDetailOutcome,
+  issuesCopy,
+  issuesOutcome,
+  issuesPath,
+  readIssueDetail,
+  readIssues,
+  type IssueDetailOutcome,
+  type IssuesOutcome,
+} from "./issues-data";
 import { overviewCopy, overviewOutcome, readOverview, type OverviewOutcome } from "./overview-data";
-import { LIST_DESTINATIONS, parentAddress, parseRoute, routeHash, type Address, type Route } from "./route";
+import {
+  LIST_DESTINATIONS,
+  parentAddress,
+  parseRoute,
+  routeFilters,
+  routeHash,
+  type Address,
+  type Route,
+} from "./route";
 
 /** The navigation entries: the four lists, in the product's order. */
 const NAV_ITEMS = LIST_DESTINATIONS.map((id) => ({ id, label: id[0]!.toUpperCase() + id.slice(1) }));
@@ -81,10 +103,13 @@ function useOverview(enabled: boolean): OverviewOutcome {
   return outcome;
 }
 
+/** One dictionary for the whole shell: sections are handed to screens as props. */
+const COPY = copyFor("en");
+
 /** The landing page: the shared Overview behind the one aggregated read. */
 function OverviewDestination() {
   const outcome = useOverview(true);
-  const copy = useCopy();
+  const copy = COPY;
 
   if (outcome.kind === "loading") return null;
 
@@ -104,6 +129,137 @@ function OverviewDestination() {
 
   return <Overview model={outcome.model} copy={overviewCopy(copy)} />;
 }
+
+/**
+ * The Issues list, behind its own read.
+ *
+ * The query is the address bar's: the screen reports a whole query change and this
+ * destination turns it into history — `replace` for a filter change, so Back steps
+ * through destinations rather than keystrokes.
+ */
+function useIssues(query: IssueQuery): IssuesOutcome {
+  const [outcome, setOutcome] = useState<IssuesOutcome>({ kind: "loading" });
+  const key = `${query.filters.disposition}|${query.filters.project}|${query.filters.kind}|${query.filters.severity}|${query.filters.q}|${query.offset}`;
+  useEffect(() => {
+    const controller = new AbortController();
+    let current = true;
+    setOutcome({ kind: "loading" });
+    void readIssues(fetch, query, controller.signal).then((result) => {
+      if (current) setOutcome(issuesOutcome(result, query));
+    });
+    return () => {
+      current = false;
+      controller.abort();
+    };
+    // The key is the request's identity: a new object with the same values must not
+    // refetch on every render.
+  }, [key]);
+  return outcome;
+}
+
+function IssuesDestination(props: { address: Address }) {
+  const query = routeFilters(props.address);
+  const outcome = useIssues(query);
+
+  if (outcome.kind === "loading") return null;
+  if (outcome.kind === "failed") {
+    return (
+      <EmptyState
+        arm="unavailable"
+        labelWord={COPY.state.unavailable.labelWord}
+        heading={COPY.issues.pageTitle}
+        body={COPY.state.unavailable.body}
+        reason={outcome.message}
+      />
+    );
+  }
+
+  return (
+    <Issues
+      model={outcome.model}
+      query={query}
+      copy={issuesCopy(COPY)}
+      options={{ ...ISSUE_FILTER_OPTIONS, project: [] }}
+      onQueryChange={(next) => {
+        // A filter change replaces: Back should step through destinations, not
+        // through every keystroke.
+        navigate({ name: "issues" }, new URLSearchParams(issueQueryString(next)).toString(), "replace");
+      }}
+    />
+  );
+}
+
+/** The query string for one query, through the shared pair's field order. */
+function issueQueryString(query: IssueQuery): string {
+  return issuesPath(query).split("?")[1] ?? "";
+}
+
+/** One issue, behind its own read. */
+function IssueDetailDestination(props: { id: string }) {
+  const [outcome, setOutcome] = useState<IssueDetailOutcome>({ kind: "loading" });
+  useEffect(() => {
+    const controller = new AbortController();
+    let current = true;
+    setOutcome({ kind: "loading" });
+    void readIssueDetail(fetch, props.id, controller.signal).then((result) => {
+      if (current) setOutcome(issueDetailOutcome(result));
+    });
+    return () => {
+      current = false;
+      controller.abort();
+    };
+  }, [props.id]);
+
+  if (outcome.kind === "loading") return null;
+  if (outcome.kind === "failed") {
+    return (
+      <EmptyState
+        arm="unavailable"
+        labelWord={COPY.state.unavailable.labelWord}
+        heading={COPY.issueDetail.identityHeading}
+        body={COPY.state.unavailable.body}
+        reason={outcome.message}
+      />
+    );
+  }
+
+  return (
+    <IssueDetail
+      // `absent` has no envelope of its own: the record is not there, which is the
+      // `absent` arm rather than an unreadable one. The projection passed alongside
+      // is the list's honest "no generation" value only when a read failed, and a
+      // 404 never carries one — so the screen is handed a null payload, which the
+      // package-wide ruling reads as absent.
+      read={
+        outcome.kind === "absent"
+          ? { data: null, projection: NO_PROJECTION }
+          : outcome.read
+      }
+      copy={issueDetailCopy(COPY)}
+      onBack={() => {
+        const parent = parentAddress(parseRoute(window.location.hash));
+        if (parent !== null) navigate(parent.route, parent.query, "push");
+      }}
+    />
+  );
+}
+
+/**
+ * The projection value for a 404.
+ *
+ * A `null` payload is the `absent` arm under the package-wide ruling, and the
+ * screen's resolver reads the payload before the projection matters — so this
+ * value only has to be a *published* generation (not `null`, which would mean
+ * "the projection could not be read"). It is not a claim about freshness: a 404
+ * for a record is not a statement about the store.
+ */
+const NO_PROJECTION = {
+  generation: 1,
+  freshness: "current" as const,
+  builtAt: null,
+  checkedAt: "",
+  diagnostics: [],
+};
 
 /** The shell: skip link, header with the shared navigation, the main region, footer. */
 function Shell() {
@@ -162,6 +318,8 @@ function Shell() {
           a placeholder that would claim a state the dashboard cannot answer. */}
       <main id="main" className="app-main" data-ms-route={routeHash(address.route)}>
         {address.route.name === "overview" ? <OverviewDestination /> : null}
+        {address.route.name === "issues" ? <IssuesDestination address={address} /> : null}
+        {address.route.name === "issue" ? <IssueDetailDestination id={address.route.id} /> : null}
       </main>
       <footer className="app-footer">Read-only · Make changes with the CLI</footer>
     </div>
