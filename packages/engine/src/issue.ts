@@ -1831,7 +1831,7 @@ export function moveIssueOn(
   if (!db.prepare("select 1 as ok from catalog_entities where kind = 'project' and id = ?").get(projectId)) {
     throw moveRefusal("issue.not-found", `Project ${projectId} is not a registered catalog project; nothing was changed.`, {
       projectId,
-      recovery: `Register the target project with \`mstar catalog register --kind project --id <project-id> --title <title> --root-kind projects --path projects/<project-id> --actor project-manager --operation-id <operation-id>\` (run \`mstar catalog list --kind project\` to read the registered ids), then rerun \`mstar issue move --id ${issueId} --payload '{"projectId":"<target>","reason":"<text>"}' --expect ${issue.revision} --expect-store ${mutation.expectedStoreRevision} --actor project-manager\`.`,
+      recovery: `Register the target project with \`mstar catalog register --kind project --id <project-id> --title <title> --root-kind projects --path projects/<project-id> --actor project-manager --operation-id <operation-id>\` (run \`mstar catalog list --kind project\` to read the registered ids), then read the fresh \`storeRevision\` from \`mstar issue list --project <project-id>\` and rerun \`mstar issue move --id ${issueId} --payload '{"projectId":"<target>","reason":"<text>"}' --expect ${issue.revision} --expect-store <current-store-revision> --actor project-manager\`.`,
     });
   }
 
