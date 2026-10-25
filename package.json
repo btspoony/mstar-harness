@@ -1,7 +1,7 @@
 {
   "name": "morning-star",
   "version": "4.0.9",
-  "description": "Morning Star — harness engineering workflow platform: TS Harness Workflow Engine + judgment skills, shipped as an Agent Plugin",
+  "description": "Morning Star \u2014 harness engineering workflow platform: TS Harness Workflow Engine + judgment skills, shipped as an Agent Plugin",
   "private": true,
   "type": "module",
   "workspaces": [
@@ -14,7 +14,7 @@
     "dsh:bundle-assets": "bun run --cwd packages/dsh bundle-assets",
     "omp:bundle-assets": "bun run --cwd packages/omp bundle-assets",
     "typecheck": "bun run typecheck:prepare && bunx tsc --pretty false && bun run --cwd packages/cli typecheck:src && bun run --cwd packages/dsh typecheck:src",
-    "typecheck:prepare": "bun run engine:build && bun run judgment:build && bun run --cwd packages/commands build",
+    "typecheck:prepare": "bun run engine:build && bun run judgment:build && bun run --cwd packages/commands build && bun run ui:build",
     "engine:build": "bun run --cwd packages/engine build",
     "commands:build": "bun run --cwd packages/commands build",
     "judgment:build": "bun run --cwd packages/judgment build",
@@ -38,7 +38,8 @@
     "lint:ascii-literals": "bun scripts/lint-ascii-literals.ts",
     "lint:hash-gates": "bun scripts/lint-hash-gates.ts",
     "lint:refusal-quality": "bun scripts/lint-refusal-quality.ts",
-    "lint:help-reachability": "bun scripts/lint-help-reachability.ts"
+    "lint:help-reachability": "bun scripts/lint-help-reachability.ts",
+    "ui:build": "bun run --cwd packages/ui build"
   },
   "packageManager": "bun@1.4.0",
   "dependencies": {

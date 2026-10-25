@@ -384,6 +384,26 @@ async function buildInPackageRoot(outdir: string, mode: ClientBundleMode): Promi
           build.onLoad({ filter: /\.module\.css$/ }, (args) => cssModuleContents(args.path))
         },
       },
+      {
+        // Plain-`.css` sheets arrive from the shared layer (`@mstar-harness/ui`
+        // ships `tokens.css` + `base.css` as global sheets: `:root` custom
+        // properties and element rules, where a class-hash pass would buy
+        // nothing). They become the same `<style data-plugin>` tag the module
+        // transform emits, so the product's tokens/base layer reach the panel
+        // with one mechanism instead of a second stylesheet path. The more
+        // specific `\.module\.css$` plugin above still wins for module files;
+        // the guard keeps that true even if loader order ever changes.
+        name: 'dsh-plain-css-inline',
+        setup(build) {
+          build.onLoad({ filter: /\.css$/ }, (args) => {
+            if (args.path.endsWith('.module.css')) return undefined
+            return {
+              contents: styleInjectionContents(readFileSync(args.path, 'utf8'), args.path),
+              loader: 'js',
+            }
+          })
+        },
+      },
     ],
   })
 

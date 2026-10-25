@@ -1,0 +1,101 @@
+/**
+ * The filter row: fields, the applied chips, and the clear affordance.
+ *
+ * State is the caller's — this renders `filters` and reports changes, because
+ * the address bar is the host adapter's (the dashboard keeps the query string in
+ * the URL; the dsh pane keeps it in its own state). What the component owns is
+ * the shape: fields wrap instead of shrinking, an applied filter is a chip the
+ * reader can remove one at a time, and "clear" is disabled while nothing is
+ * applied so it never lies about being useful.
+ */
+import type { ReactNode } from "react";
+
+import css from "./FilterBar.module.css";
+
+export type FilterOption = { value: string; label: string };
+
+export type FilterField = {
+  /** The filter's own key in the caller's filter object. */
+  key: string;
+  /** Localized field label. */
+  label: string;
+  value: string;
+  options: readonly FilterOption[];
+};
+
+export type AppliedFilter = {
+  key: string;
+  /** The chip's own text: `severity: high`. */
+  text: string;
+};
+
+export type FilterBarProps = {
+  fields: readonly FilterField[];
+  onFieldChange: (key: string, value: string) => void;
+  /** The free-text search box, when the screen has one. */
+  search?: { value: string; placeholder: string; onChange: (value: string) => void };
+  applied: readonly AppliedFilter[];
+  onClearFilter: (key: string) => void;
+  onClearAll: () => void;
+  clearLabel: string;
+  /** Result count line, e.g. `26 results`. */
+  resultSummary: ReactNode;
+};
+
+export function FilterBar(props: FilterBarProps) {
+  const nothingApplied = props.applied.length === 0;
+  return (
+    <div className={css.wrap}>
+      <div className={css.fields}>
+        {props.fields.map((field) => (
+          <label key={field.key} className={css.field}>
+            <span className={css.fieldLabel}>{field.label}</span>
+            <select
+              className={css.select}
+              value={field.value}
+              data-ms-filter={field.key}
+              onChange={(event) => props.onFieldChange(field.key, event.target.value)}
+            >
+              {field.options.map((option) => (
+                <option key={option.value} value={option.value}>
+                  {option.label}
+                </option>
+              ))}
+            </select>
+          </label>
+        ))}
+        {props.search === undefined ? null : (
+          <input
+            type="search"
+            className={css.search}
+            value={props.search.value}
+            placeholder={props.search.placeholder}
+            aria-label={props.search.placeholder}
+            onChange={(event) => props.search?.onChange(event.target.value)}
+          />
+        )}
+        <button type="button" className={css.clear} disabled={nothingApplied} onClick={props.onClearAll}>
+          {props.clearLabel}
+        </button>
+        <span className={css.summary}>{props.resultSummary}</span>
+      </div>
+      {nothingApplied ? null : (
+        <div className={css.chips} data-ms-applied-filters="">
+          {props.applied.map((chip) => (
+            <span key={chip.key} className={css.chip}>
+              {chip.text}
+              <button
+                type="button"
+                className={css.chipClear}
+                aria-label={chip.text}
+                onClick={() => props.onClearFilter(chip.key)}
+              >
+                ×
+              </button>
+            </span>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}

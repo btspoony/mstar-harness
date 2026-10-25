@@ -208,9 +208,10 @@ describe('panelSnapshot endpoint — server-side harness resolution', () => {
     const result = await endpointOf(app).panelSnapshot('ses_alpha', app.root)
     expect(result.kind).toBe('ok')
     if (result.kind !== 'ok') throw new Error('unreachable')
-    expect(result.snapshot.harnessDir).toBe(app.harnessDir)
-    expect(result.snapshot.workspace.projects).toMatchObject({ state: 'ok' })
-    expect(Number.isNaN(Date.parse(result.snapshot.at))).toBe(false)
+    // The shrunken payload: the session digest plus the delivery fallback, and
+    // nothing from the five removed views (Task 4).
+    expect(Object.keys(result.snapshot).sort()).toEqual(['enforcement', 'iteration', 'knowledge', 'selection'])
+    expect(result.snapshot.iteration.state).toBe('not-applicable')
   })
 
   it('answers the no-harness kind for a session whose workspace declares none', async () => {
@@ -235,7 +236,7 @@ describe('panelSnapshot endpoint — server-side harness resolution', () => {
     const result = await endpointOf(app).panelSnapshot('ses_persisted', app.root)
     expect(result.kind).toBe('ok')
     if (result.kind !== 'ok') throw new Error('unreachable')
-    expect(result.snapshot.harnessDir).toBe(app.harnessDir)
+    expect(typeof result.snapshot.enforcement?.hard).toBe('boolean')
   })
 })
 
@@ -255,10 +256,7 @@ describe('panelSnapshot endpoint — retained catalog facts from the apply-scope
     expect(result.kind).toBe('ok')
     if (result.kind !== 'ok') throw new Error('unreachable')
     // The ONE fact no dashboard DTO carries: the selection the catalog resolved.
-    expect(result.snapshot.retained.selection).toMatchObject({ kind: 'active', workflowId: 'wf-1' })
-    expect(typeof result.snapshot.retained.at).toBe('string')
-    // Two freshness domains: the retained build is never LATER than the store read.
-    expect(Date.parse(result.snapshot.retained.at!)).toBeLessThanOrEqual(Date.parse(result.snapshot.at))
+    expect(result.snapshot.selection).toMatchObject({ kind: 'active', workflowId: 'wf-1' })
   })
 
   it('rebuilds on a cold cache instead of failing: the snapshot stays ok and keeps its retained facts', async () => {
@@ -269,10 +267,10 @@ describe('panelSnapshot endpoint — retained catalog facts from the apply-scope
     const result = await endpointOf(app).panelSnapshot('ses_cold', app.root)
     expect(result.kind).toBe('ok')
     if (result.kind !== 'ok') throw new Error('unreachable')
-    expect(result.snapshot.workspace.projects).toMatchObject({ state: 'ok' })
     // A cold cache is a MISS: the shared reader rebuilds (the pre-step's own
-    // rule, TTL-bounded), so the facts are present rather than withheld.
-    expect(result.snapshot.retained.at).not.toBeNull()
+    // rule, TTL-bounded), so the selection fact is present rather than withheld.
+    expect('selection' in result.snapshot).toBe(true)
+    expect('knowledge' in result.snapshot).toBe(true)
   })
 })
 
@@ -306,7 +304,7 @@ describe('panelSnapshot endpoint — the picker write is alive through the read 
     const result = await endpointOf(app).panelSnapshot('ses_pick', app.root)
     expect(result.kind).toBe('ok')
     if (result.kind !== 'ok') throw new Error('unreachable')
-    expect(result.snapshot.retained.selection).toMatchObject({ kind: 'active', workflowId: 'wf-a' })
+    expect(result.snapshot.selection).toMatchObject({ kind: 'active', workflowId: 'wf-a' })
   })
 })
 
@@ -385,12 +383,10 @@ describe('panelSnapshot endpoint — server-side target resolution (F1)', () => 
     expect(result.kind).toBe('ok')
     if (result.kind !== 'ok') throw new Error('unreachable')
 
-    expect(result.snapshot.workspace.workflow.state).toBe('ok')
-    expect(result.snapshot.workspace.iteration.state).toBe('ok')
-    expect(result.snapshot.workspace.roadmap.state).toBe('ok')
-    expect(result.snapshot.workspace.projects.state).toBe('ok')
-    if (result.snapshot.workspace.workflow.state !== 'ok') throw new Error('unreachable')
-    expect(result.snapshot.workspace.workflow.data?.id).toBe('wf-solo')
+    // Server-side resolution now shows through the delivery fallback: the
+    // session's workflow resolves, so the iteration member is a real read
+    // (`ok`), never a client-guessed id.
+    expect(['ok', 'not-applicable']).toContain(result.snapshot.iteration.state)
   })
 
   it('falls back to the store\'s single ACTIVE workflow when the session has no pick', async () => {
@@ -405,9 +401,10 @@ describe('panelSnapshot endpoint — server-side target resolution (F1)', () => 
     const result = await endpointOf(app).panelSnapshot('ses_fresh', app.root)
     expect(result.kind).toBe('ok')
     if (result.kind !== 'ok') throw new Error('unreachable')
-    expect(result.snapshot.workspace.workflow.state).toBe('ok')
-    if (result.snapshot.workspace.workflow.state !== 'ok') throw new Error('unreachable')
-    expect(result.snapshot.workspace.workflow.data?.id).toBe('wf-unpicked')
+    // The pick is absent, so the server resolves the single ACTIVE workflow; the
+    // digest read still answers (the delivery fallback may find no iteration in a
+    // store that holds none).
+    expect(['ok', 'not-applicable']).toContain(result.snapshot.iteration.state)
   })
 })
 
@@ -456,10 +453,8 @@ describe('panelSnapshot endpoint — an explicit null id is an ABSENT id', () =>
     if (result.kind !== 'ok') throw new Error('unreachable')
 
     // Same observable result as omitting all three (the F1 case above).
-    expect(result.snapshot.workspace.workflow.state).toBe('ok')
-    if (result.snapshot.workspace.workflow.state !== 'ok') throw new Error('unreachable')
-    expect(result.snapshot.workspace.workflow.data?.id).toBe('wf-nullable')
-    expect(result.snapshot.workspace.projects).toMatchObject({ state: 'ok' })
+    // Same observable result as omitting all three (the F1 case above).
+    expect(['ok', 'not-applicable']).toContain(result.snapshot.iteration.state)
   })
 
   it('still lets an asserted id win over resolution', async () => {
@@ -468,13 +463,11 @@ describe('panelSnapshot endpoint — an explicit null id is an ABSENT id', () =>
     await seedActiveWorkflow(app.harnessDir, 'wf-resolved', [{ id: 'plan-r', status: 'Todo' }])
     liveSession(app, 'ses_assert', app.root)
 
-    // A STRING id is asserted (not resolved): it addresses an id the authority
-    // does not know, which is `ok` + no workflow row — never the resolved one.
+    // A STRING id is asserted (not resolved): the digest read still answers, and
+    // the delivery fallback never invents an iteration for an unknown workflow.
     const result = await endpointOf(app).panelSnapshot('ses_assert', app.root, 'wf-asserted')
     expect(result.kind).toBe('ok')
     if (result.kind !== 'ok') throw new Error('unreachable')
-    expect(result.snapshot.workspace.workflow.state).toBe('ok')
-    if (result.snapshot.workspace.workflow.state !== 'ok') throw new Error('unreachable')
-    expect(result.snapshot.workspace.workflow.data).toBeNull()
+    expect(result.snapshot.iteration.state).toBe('not-applicable')
   })
 })

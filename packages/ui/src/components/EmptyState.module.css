@@ -1,0 +1,63 @@
+/* The panel keeps its place: an absence does not collapse the grid it sits in. */
+.wrap {
+  display: flex;
+  flex-direction: column;
+  gap: var(--ms-space-1);
+  padding: var(--ms-space-3) 0;
+  min-block-size: 48px;
+}
+
+.head {
+  display: flex;
+  align-items: baseline;
+  gap: var(--ms-space-2);
+  margin: 0;
+  min-inline-size: 0;
+}
+
+/* The label word is text, not colour: it is what keeps four states apart in
+   greyscale and under forced colors. */
+.labelWord {
+  flex: none;
+  font-family: var(--ms-font-mono);
+  font-size: var(--ms-fs-11);
+  line-height: var(--ms-lh-11);
+  color: var(--ms-text-muted);
+  text-transform: lowercase;
+}
+
+.heading {
+  font-size: var(--ms-fs-13);
+  line-height: var(--ms-lh-13);
+  color: var(--ms-text-primary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.body {
+  margin: 0;
+  font-size: var(--ms-fs-12);
+  line-height: var(--ms-lh-12);
+  color: var(--ms-text-secondary);
+  max-inline-size: 72ch;
+}
+
+.reason {
+  margin: 0;
+  font-family: var(--ms-font-mono);
+  font-size: var(--ms-fs-11);
+  line-height: var(--ms-lh-11);
+  color: var(--ms-warning);
+  overflow-wrap: anywhere;
+}
+
+.detail,
+.pointer,
+.hint {
+  margin: 0;
+  overflow-wrap: anywhere;
+  font-size: var(--ms-fs-12);
+  line-height: var(--ms-lh-12);
+  color: var(--ms-text-muted);
+}

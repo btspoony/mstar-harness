@@ -1,0 +1,36 @@
+{
+  "name": "@mstar-harness/ui",
+  "version": "4.0.9",
+  "description": "Host-agnostic React presentation layer for the Morning Star harness: design tokens, view models, components and bilingual copy.",
+  "private": true,
+  "license": "MIT",
+  "type": "module",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./src/index.ts"
+    },
+    "./styles/tokens.css": "./src/styles/tokens.css",
+    "./styles/base.css": "./src/styles/base.css",
+    "./package.json": "./package.json"
+  },
+  "files": [
+    "dist"
+  ],
+  "scripts": {
+    "build": "rm -rf dist && bunx tsc --emitDeclarationOnly",
+    "test": "bun test",
+    "typecheck": "bunx tsc --noEmit"
+  },
+  "devDependencies": {
+    "@mstar-harness/engine": "workspace:*",
+    "@types/node": "^26.6.4",
+    "@types/react": "~18.3.1",
+    "@types/react-dom": "~18.3.1",
+    "bun-types": "^1.2.17",
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1",
+    "typescript": "^7.0.2"
+  }
+}

@@ -1,7 +1,7 @@
 /**
  * The picker's data hook: this session's commit state plus a commit function.
  *
- * Deliberately NOT a data path — the panel's read is `useMstarPanelSnapshot`
+ * Deliberately NOT a data path — the panel's read is `useMstarSessionDigest`
  * (the polled store-backed snapshot). What the picker contributes is the control
  * feedback for the workflow selection: `pick` (pending / selected / failed, this
  * session only) and `select` (null exactly when no commit can be made: no

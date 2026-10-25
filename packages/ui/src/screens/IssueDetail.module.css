@@ -1,0 +1,82 @@
+.page {
+  display: flex;
+  flex-direction: column;
+  gap: var(--ms-space-3);
+  min-inline-size: 0;
+  padding: var(--ms-space-3) 0 var(--ms-space-6);
+  max-inline-size: 96ch;
+}
+
+.trail {
+  display: flex;
+  align-items: baseline;
+  gap: var(--ms-space-1);
+  min-block-size: 16px;
+}
+
+.crumb {
+  border: 0;
+  padding: 0;
+  background: none;
+  color: var(--ms-accent);
+  font-size: var(--ms-fs-11);
+  line-height: var(--ms-lh-11);
+  cursor: pointer;
+}
+
+.crumb:hover {
+  text-decoration: underline;
+}
+
+.head {
+  display: flex;
+  flex-direction: column;
+  gap: var(--ms-space-1);
+  min-inline-size: 0;
+}
+
+.title {
+  margin: 0;
+  font-size: var(--ms-fs-20);
+  line-height: var(--ms-lh-20);
+  font-weight: var(--ms-fw-semibold);
+  letter-spacing: -0.01em;
+  color: var(--ms-text-primary);
+  min-inline-size: 0;
+}
+
+.statusLine {
+  display: flex;
+  align-items: center;
+  gap: var(--ms-space-3);
+  margin: 0;
+}
+
+.block {
+  display: flex;
+  flex-direction: column;
+  gap: var(--ms-space-1);
+  padding-block-start: var(--ms-space-3);
+  border-block-start: var(--ms-hairline);
+  min-inline-size: 0;
+}
+
+.heading {
+  margin: 0;
+  font-size: var(--ms-fs-12);
+  line-height: var(--ms-lh-12);
+  font-weight: var(--ms-fw-medium);
+  color: var(--ms-text-secondary);
+}
+
+/* The two long-text fields are the reason the page exists: readable measure,
+   stored line breaks kept, no interpretation. */
+.longText {
+  margin: 0;
+  font-size: var(--ms-fs-13);
+  line-height: var(--ms-lh-13);
+  color: var(--ms-text-primary);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  max-inline-size: 72ch;
+}

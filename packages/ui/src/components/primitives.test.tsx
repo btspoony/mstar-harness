@@ -1,0 +1,445 @@
+/**
+ * The primitive branches that carry meaning.
+ *
+ * Rendering assertions run through `react-dom/server`, so they are about markup
+ * and structure, never about paint. The two CSS-owned rules (the container
+ * collapse and the truncation overlay) are asserted against the module sheet
+ * text, because that is where the rule lives — a markup test cannot prove a
+ * `@container` query.
+ */
+import { describe, expect, test } from "bun:test";
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
+import { renderToStaticMarkup } from "react-dom/server";
+
+import { Badge } from "./Badge.tsx";
+import { Breadcrumb } from "./Breadcrumb.tsx";
+import { Collapsible } from "./Collapsible.tsx";
+import { DataTable, type DataTableColumn } from "./DataTable.tsx";
+import { EmptyState, listEmptyFamily } from "./EmptyState.tsx";
+import { Field } from "./Field.tsx";
+import { FieldGroup } from "./FieldGroup.tsx";
+import { FilterBar } from "./FilterBar.tsx";
+import { LiveRegion } from "./LiveRegion.tsx";
+import { Nav } from "./Nav.tsx";
+import { Notice } from "./Notice.tsx";
+import { Pager, hasNext, hasPrevious, pageRange } from "./Pager.tsx";
+import { ProgressBar, progressPercent } from "./ProgressBar.tsx";
+import { Row } from "./Row.tsx";
+import { StatusDot } from "./StatusDot.tsx";
+import { Tabs } from "./Tabs.tsx";
+import { TruncatedText } from "./TruncatedText.tsx";
+
+const moduleCss = (name: string): string => readFileSync(join(import.meta.dir, `${name}.module.css`), "utf8");
+const render = (node: Parameters<typeof renderToStaticMarkup>[0]): string => renderToStaticMarkup(node);
+
+describe("StatusDot — the label is the signal, colour is secondary", () => {
+  test("the literal enum label is rendered as text beside the dot", () => {
+    const html = render(<StatusDot label="InProgress" tone="neutral" />);
+    expect(html).toContain("InProgress");
+    // The dot is decorative; the label carries the meaning.
+    expect(html).toContain('aria-hidden="true"');
+  });
+
+  test("the tone rides on an attribute, so CSS and forced colors can hook it", () => {
+    const html = render(<StatusDot label="critical" tone="danger" emphasis />);
+    expect(html).toContain('data-ms-tone="danger"');
+    expect(html).toContain('data-ms-emphasis="true"');
+  });
+
+  test("no colour is written into markup: the tone is a name, not a value", () => {
+    const html = render(<StatusDot label="open" tone="neutral" />);
+    expect(html).not.toMatch(/#[0-9a-f]{3,8}/i);
+    expect(html).not.toContain("rgb(");
+  });
+});
+
+describe("DataTable — the collapse rule", () => {
+  type RowT = { id: string; title: string; project: string; severity: string };
+  const rows: RowT[] = [{ id: "I-000870", title: "A title", project: "engine", severity: "critical" }];
+  const columns: DataTableColumn<RowT>[] = [
+    { key: "id", header: "ID", render: (row) => row.id },
+    { key: "title", header: "Title", render: (row) => row.title },
+    { key: "project", header: "Project", render: (row) => row.project, secondary: true },
+    { key: "severity", header: "Severity", render: (row) => row.severity, secondary: true },
+  ];
+
+  test("secondary columns are marked in the header and the body alike", () => {
+    const html = render(
+      <DataTable
+        caption="Issues"
+        columns={columns}
+        rows={rows}
+        rowKey={(row) => row.id}
+        meta={(row) => `${row.project} · ${row.severity}`}
+      />,
+    );
+    expect(html.match(/data-ms-col="secondary"/g)?.length).toBe(4); // 2 columns × (th + td)
+  });
+
+  test("the collapsed row keeps the primary cell and grows a meta line from the same data", () => {
+    const html = render(
+      <DataTable
+        caption="Issues"
+        columns={columns}
+        rows={rows}
+        rowKey={(row) => row.id}
+        meta={(row) => `${row.project} · ${row.severity}`}
+      />,
+    );
+    expect(html).toContain('data-ms-row-meta=""');
+    expect(html).toContain("engine · critical");
+  });
+
+  test("the second line sits in the FIRST cell, so a collapsed row is still one record", () => {
+    const html = render(
+      <DataTable
+        caption="Issues"
+        columns={columns}
+        rows={rows}
+        rowKey={(row) => row.id}
+        meta={(row) => row.project}
+      />,
+    );
+    const firstCell = html.slice(html.indexOf("<td"), html.indexOf("</td>"));
+    expect(firstCell).toContain("data-ms-row-meta");
+  });
+
+  test("the collapse is a container query at the declared floor, not a viewport query", () => {
+    const css = moduleCss("DataTable");
+    expect(css).toContain("@container pane (max-width: 619px)");
+    expect(css).not.toContain("@media");
+    // Below the floor the secondary columns go and the meta line arrives.
+    expect(css).toContain('td[data-ms-col="secondary"]');
+    expect(css).toContain("display: none");
+    expect(css).toMatch(/\.rowMeta\s*\{\s*display: block;/);
+  });
+
+  test("an empty body renders the caller's absence node inside the table", () => {
+    const html = render(
+      <DataTable
+        caption="Issues"
+        columns={columns}
+        rows={[]}
+        rowKey={(row) => row.id}
+        emptyBody={<EmptyState arm="empty" labelWord="empty" heading="Issues" body="nothing here" />}
+      />,
+    );
+    expect(html).toContain('data-ms-absence="empty"');
+  });
+});
+
+describe("Pager — the bounds are computed, never offered", () => {
+  test("the first page has no previous", () => {
+    expect(hasPrevious(0)).toBe(false);
+    expect(hasPrevious(50)).toBe(true);
+  });
+
+  test("a full last page offers no next", () => {
+    expect(hasNext(0, 50, 26)).toBe(false);
+    expect(hasNext(0, 50, 51)).toBe(true);
+    expect(hasNext(50, 50, 100)).toBe(false);
+  });
+
+  test("the range is 1-based and clamped to the total", () => {
+    expect(pageRange(0, 50, 26)).toEqual({ from: 1, to: 26 });
+    expect(pageRange(50, 50, 120)).toEqual({ from: 51, to: 100 });
+    expect(pageRange(0, 50, 0)).toEqual({ from: 0, to: 0 });
+  });
+
+  test("the disabled state is in the markup, not only in behaviour", () => {
+    const html = render(
+      <Pager
+        total={26}
+        offset={0}
+        pageSize={50}
+        onOffsetChange={() => {}}
+        previousLabel="Previous"
+        nextLabel="Next"
+        rangeLabel={(from, to, total) => `${from}–${to} of ${total}`}
+      />,
+    );
+    expect(html.match(/disabled=""/g)?.length).toBe(2);
+    expect(html).toContain("1–26 of 26");
+  });
+});
+
+describe("EmptyState — four arms, four structures, one label word each", () => {
+  const arms = ["not-applicable", "absent", "empty", "unavailable"] as const;
+
+  test("each arm renders its own structural hook", () => {
+    for (const arm of arms) {
+      const html = render(
+        <EmptyState arm={arm} labelWord={arm} heading="Roadmap" body="a sentence" reason="why" pointer="see X" hint="create one" />,
+      );
+      expect(html).toContain(`data-ms-absence="${arm}"`);
+      expect(html).toContain(`>${arm}<`); // the label word is text, not colour
+    }
+  });
+
+  test("the four arms are structurally distinct, not four copies of one line", () => {
+    const html = Object.fromEntries(
+      arms.map((arm) => [
+        arm,
+        render(
+          <EmptyState arm={arm} labelWord={arm} heading="Roadmap" body="a sentence" reason="why" pointer="see X" hint="create one" />,
+        ),
+      ]),
+    );
+    // unavailable carries the read's own reason and nothing else extra
+    expect(html.unavailable).toContain('data-ms-reason=""');
+    expect(html.unavailable).not.toContain('data-ms-pointer=""');
+    // absent carries a pointer to where the concept does exist
+    expect(html.absent).toContain('data-ms-pointer=""');
+    expect(html.absent).not.toContain('data-ms-reason=""');
+    // empty carries the point-of-entry hint
+    expect(html.empty).toContain('data-ms-hint=""');
+    expect(html.empty).not.toContain('data-ms-pointer=""');
+    // not-applicable carries neither: the subject is undetermined, so there is
+    // nowhere to point and nothing to create
+    expect(html["not-applicable"]).not.toContain('data-ms-pointer=""');
+    expect(html["not-applicable"]).not.toContain('data-ms-hint=""');
+    expect(html["not-applicable"]).not.toContain('data-ms-reason=""');
+    expect(new Set(Object.values(html)).size).toBe(4);
+  });
+
+  test("the heading stays even when the body is absent (IA §5 structure)", () => {
+    const html = render(<EmptyState arm="absent" labelWord="absent" heading="Milestones" body="no roadmap row" />);
+    expect(html).toContain("Milestones");
+  });
+
+  test("filtered-empty and store-empty are different copy families", () => {
+    expect(listEmptyFamily(true)).toEqual({ arm: "empty", family: "state.empty.filtered" });
+    expect(listEmptyFamily(false)).toEqual({ arm: "empty", family: "state.empty.store" });
+  });
+});
+
+describe("TruncatedText — the one truncation affordance (D24)", () => {
+  const html = render(<TruncatedText text="a very long stored value that clips" />);
+
+  test("the FULL text is the element's content, so selection and find still work", () => {
+    expect(html).toContain("a very long stored value that clips");
+  });
+
+  test("it is focusable, and carries the same string in data-ms-full and title", () => {
+    expect(html).toContain('tabindex="0"');
+    expect(html).toContain('data-ms-full="a very long stored value that clips"');
+    expect(html).toContain('title="a very long stored value that clips"');
+  });
+
+  test("the keyboard overlay is CSS sourced from attr(data-ms-full)", () => {
+    const css = moduleCss("TruncatedText");
+    expect(css).toContain(":focus-visible::after");
+    expect(css).toContain("content: attr(data-ms-full)");
+  });
+});
+
+describe("Notice — a reason in place, never a page", () => {
+  test("the read's own reason is carried verbatim", () => {
+    const html = render(<Notice reason="no such table: projection_workflows" lead="Could not read workflows" />);
+    expect(html).toContain("no such table: projection_workflows");
+    expect(html).toContain('data-ms-reason=""');
+    expect(html).toContain('role="status"');
+  });
+
+  test("it is not an EmptyState: no absence arm is rendered", () => {
+    const html = render(<Notice reason="failed" />);
+    expect(html).not.toContain("data-ms-absence");
+  });
+});
+
+describe("Nav and Tabs — the active state is text plus a marker", () => {
+  test("only the active destination carries aria-current", () => {
+    const html = render(
+      <Nav
+        items={[
+          { id: "overview", label: "Overview" },
+          { id: "issues", label: "Issues" },
+        ]}
+        activeId="issues"
+        onSelect={() => {}}
+        label="Destinations"
+      />,
+    );
+    expect(html.match(/aria-current="page"/g)?.length).toBe(1);
+    expect(html.indexOf('aria-current="page"')).toBeGreaterThan(html.indexOf('data-ms-nav-item="issues"') - 80);
+  });
+
+  test("the nav marks its landmark with the caller's label", () => {
+    const html = render(<Nav items={[]} activeId={null} onSelect={() => {}} label="Destinations" />);
+    expect(html).toContain('aria-label="Destinations"');
+    expect(html).not.toContain("aria-current");
+  });
+
+  test("a tab strip is a tablist with one selected tab", () => {
+    const html = render(
+      <Tabs
+        tabs={[
+          { id: "roadmap", label: "Roadmap" },
+          { id: "issues", label: "Issues", count: 14 },
+        ]}
+        activeId="issues"
+        onSelect={() => {}}
+        label="Project features"
+      />,
+    );
+    expect(html).toContain('role="tablist"');
+    expect(html.match(/aria-selected="true"/g)?.length).toBe(1);
+    expect(html).toContain("aria-controls=\"ms-tabpanel-issues\"");
+    expect(html).toContain(">14<");
+  });
+});
+
+describe("Breadcrumb — a detail can always say where it came from", () => {
+  test("the trail is links and the current record is not", () => {
+    const html = render(
+      <Breadcrumb
+        trail={[{ id: "projects", label: "Projects" }]}
+        onSelect={() => {}}
+        label="Breadcrumb"
+        current="engine"
+      />,
+    );
+    expect(html).toContain("Projects");
+    expect(html).toContain('aria-current="page"');
+    expect(html).toContain("engine");
+  });
+});
+
+describe("ProgressBar — a measured fraction, never a series", () => {
+  test("the percentage is clamped", () => {
+    expect(progressPercent(3, 6)).toBe(50);
+    expect(progressPercent(9, 6)).toBe(100);
+    expect(progressPercent(-1, 6)).toBe(0);
+    expect(progressPercent(0, 0)).toBe(0);
+  });
+
+  test("a screen reader gets the same numbers as the bar", () => {
+    const html = render(<ProgressBar done={3} total={6} label="plans" />);
+    expect(html).toContain('role="progressbar"');
+    expect(html).toContain('aria-valuenow="3"');
+    expect(html).toContain('aria-valuemax="6"');
+  });
+
+  test("the bar's width is the clamped percentage", () => {
+    expect(render(<ProgressBar done={3} total={6} />)).toContain("inline-size:50%");
+  });
+});
+
+describe("the remaining primitives keep their contract", () => {
+  test("Field renders a label/value pair", () => {
+    const html = render(<Field label="Project" mono>engine</Field>);
+    expect(html).toContain("<dt");
+    expect(html).toContain("Project");
+    expect(html).toContain("engine");
+  });
+
+  test("FieldGroup is a definition list whose columns are the caller's", () => {
+    const html = render(
+      <FieldGroup title="Identity" columns={1}>
+        <Field label="Kind">project</Field>
+      </FieldGroup>,
+    );
+    expect(html).toContain("<dl");
+    expect(html).toContain('data-ms-columns="1"');
+    expect(html).toContain("Identity");
+  });
+
+  test("Row exposes its slots and is keyboard-operable when it activates", () => {
+    const html = render(<Row primary="20261025-x" trailing="3/6" onActivate={() => {}} />);
+    expect(html).toContain('role="button"');
+    expect(html).toContain('tabindex="0"');
+    expect(html).toContain("3/6");
+  });
+
+  test("Row without an activation is plain content, not a fake button", () => {
+    const html = render(<Row primary="20261025-x" />);
+    expect(html).not.toContain('role="button"');
+    expect(html).not.toContain("tabindex");
+  });
+
+  test("Badge renders its child and an optional tone", () => {
+    const html = render(<Badge tone="warning">catalog-missing</Badge>);
+    expect(html).toContain("catalog-missing");
+    expect(html).toContain('data-ms-badge-tone="warning"');
+  });
+
+  test("Collapsible is a native disclosure", () => {
+    const html = render(
+      <Collapsible summary="Direction">
+        <p>text</p>
+      </Collapsible>,
+    );
+    expect(html).toContain("<details");
+    expect(html).toContain("<summary");
+    expect(html).toContain("Direction");
+  });
+
+  test("LiveRegion is a polite status region", () => {
+    const html = render(<LiveRegion message="26 results" />);
+    expect(html).toContain('role="status"');
+    expect(html).toContain('aria-live="polite"');
+    expect(html).toContain("26 results");
+  });
+
+  test("FilterBar disables clear while nothing is applied", () => {
+    const html = render(
+      <FilterBar
+        fields={[{ key: "severity", label: "Severity", value: "", options: [{ value: "", label: "Any" }] }]}
+        onFieldChange={() => {}}
+        applied={[]}
+        onClearFilter={() => {}}
+        onClearAll={() => {}}
+        clearLabel="Clear filters"
+        resultSummary="26 results"
+      />,
+    );
+    expect(html).toContain("disabled");
+    expect(html).not.toContain("data-ms-applied-filters");
+  });
+
+  test("FilterBar shows one chip per applied filter", () => {
+    const html = render(
+      <FilterBar
+        fields={[]}
+        onFieldChange={() => {}}
+        applied={[
+          { key: "severity", text: "severity: high" },
+          { key: "project", text: "project: engine" },
+        ]}
+        onClearFilter={() => {}}
+        onClearAll={() => {}}
+        clearLabel="Clear filters"
+        resultSummary="5 results"
+      />,
+    );
+    expect(html).toContain("severity: high");
+    expect(html).toContain("project: engine");
+    expect(html).toContain('data-ms-applied-filters=""');
+  });
+});
+
+describe("the component layer obeys the token rules", () => {
+  test("no component sheet hard-codes a colour", () => {
+    const offenders: string[] = [];
+    for (const name of ["StatusDot", "Badge", "ProgressBar", "TruncatedText", "Notice", "EmptyState", "LiveRegion", "Pager", "DataTable", "Field", "FieldGroup", "Row", "Collapsible", "Nav", "Breadcrumb", "Tabs", "FilterBar"]) {
+      const css = moduleCss(name);
+      if (/#[0-9a-f]{3,8}\b/i.test(css)) offenders.push(`${name}.module.css`);
+    }
+    expect(offenders).toEqual([]);
+  });
+
+  test("no component sheet selects a scheme from the viewport", () => {
+    for (const name of ["StatusDot", "DataTable", "Nav", "FilterBar"]) {
+      expect(moduleCss(name)).not.toContain("prefers-color-scheme");
+    }
+  });
+
+  test("product layout reflow is always a container query", () => {
+    for (const name of ["DataTable", "Field", "FieldGroup", "Row", "Nav", "FilterBar", "Tabs"]) {
+      const css = moduleCss(name);
+      if (css.includes("@container")) expect(css).toContain("@container pane");
+      expect(css).not.toContain("@media (max-width");
+    }
+  });
+});

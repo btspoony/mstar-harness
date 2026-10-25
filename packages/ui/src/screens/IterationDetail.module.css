@@ -1,0 +1,144 @@
+.page {
+  display: flex;
+  flex-direction: column;
+  gap: var(--ms-space-3);
+  min-inline-size: 0;
+  padding: var(--ms-space-3) 0 var(--ms-space-6);
+}
+
+.trail {
+  display: flex;
+  align-items: baseline;
+  min-block-size: 16px;
+}
+
+.crumb {
+  border: 0;
+  padding: 0;
+  background: none;
+  color: var(--ms-accent);
+  font-size: inherit;
+  cursor: pointer;
+}
+
+.crumb:hover {
+  text-decoration: underline;
+}
+
+.head {
+  min-inline-size: 0;
+}
+
+.title {
+  margin: 0;
+  font-family: var(--ms-font-mono);
+  font-size: var(--ms-fs-20);
+  line-height: var(--ms-lh-20);
+  font-weight: var(--ms-fw-semibold);
+  letter-spacing: -0.01em;
+  color: var(--ms-text-primary);
+  min-inline-size: 0;
+}
+
+.mono {
+  font-family: var(--ms-font-mono);
+  font-size: var(--ms-fs-11);
+  line-height: var(--ms-lh-11);
+  color: var(--ms-text-secondary);
+}
+
+.muted {
+  color: var(--ms-text-muted);
+}
+
+.statusCell {
+  display: inline-flex;
+  align-items: baseline;
+  gap: var(--ms-space-2);
+  min-inline-size: 0;
+}
+
+.phase {
+  font-family: var(--ms-font-mono);
+  font-size: var(--ms-fs-11);
+  color: var(--ms-text-muted);
+}
+
+.progress {
+  display: block;
+  min-inline-size: 0;
+  color: var(--ms-text-secondary);
+}
+
+.gate {
+  display: flex;
+  flex-direction: column;
+  gap: var(--ms-space-1);
+  padding-block-start: var(--ms-space-3);
+  border-block-start: var(--ms-hairline);
+}
+
+.heading {
+  margin: 0;
+  font-size: var(--ms-fs-12);
+  line-height: var(--ms-lh-12);
+  font-weight: var(--ms-fw-medium);
+  color: var(--ms-text-secondary);
+}
+
+/* Five steps as a row of labelled marks. Position is an attribute, so the state
+   survives forced colors; the label is text, so it survives greyscale. */
+.steps {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--ms-space-1);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  min-inline-size: 0;
+}
+
+.step {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  flex: 1 1 0;
+  min-inline-size: 0;
+}
+
+.stepMark {
+  display: block;
+  block-size: 3px;
+  border-radius: var(--ms-radius-full);
+  background: var(--ms-bg-inset);
+}
+
+.step[data-ms-step-position="reached"] .stepMark {
+  background: var(--ms-accent);
+}
+
+.step[data-ms-step-position="current"] .stepMark {
+  background: var(--ms-accent);
+  box-shadow: 0 0 0 1px var(--ms-accent);
+}
+
+.stepLabel {
+  font-size: var(--ms-fs-11);
+  line-height: var(--ms-lh-11);
+  color: var(--ms-text-muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.step[data-ms-step-position="current"] .stepLabel {
+  color: var(--ms-text-primary);
+  font-weight: var(--ms-fw-medium);
+}
+
+.plans {
+  display: flex;
+  flex-direction: column;
+  gap: var(--ms-space-1);
+  min-inline-size: 0;
+}

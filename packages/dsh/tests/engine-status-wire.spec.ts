@@ -16,7 +16,12 @@
  * contribution is the picker's durable WRITE, pinned below.
  */
 import { describe, expect, it } from 'bun:test'
-import { ENGINE_STATUS_CHANNEL, PANEL_SNAPSHOT_ENDPOINT, SELECT_WORKFLOW_ENDPOINT } from '../src/engine-status-wire.ts'
+import {
+  DASHBOARD_VIEW_ENDPOINT,
+  ENGINE_STATUS_CHANNEL,
+  PANEL_SNAPSHOT_ENDPOINT,
+  SELECT_WORKFLOW_ENDPOINT,
+} from '../src/engine-status-wire.ts'
 import { mstarEngineStatusContribution } from '../src/engine-status-endpoint.ts'
 import { MstarWorkflowPickerClient } from '../src/client/panel/workflow-picker-client.ts'
 import { stubGateway } from './gateway-stub.ts'
@@ -27,8 +32,12 @@ function contributedEndpoints(): string[] {
 }
 
 describe('panel wire addresses — one declaration, both halves', () => {
-  it('the host contribution serves the picker write and the store-backed read', () => {
-    expect(contributedEndpoints()).toEqual([SELECT_WORKFLOW_ENDPOINT, PANEL_SNAPSHOT_ENDPOINT])
+  it('the host contribution serves the picker write, the store-backed read and the per-view read', () => {
+    expect(contributedEndpoints()).toEqual([
+      SELECT_WORKFLOW_ENDPOINT,
+      PANEL_SNAPSHOT_ENDPOINT,
+      DASHBOARD_VIEW_ENDPOINT,
+    ])
   })
 
   it('the picker calls the shared selectWorkflow literal on the host /api channel', async () => {

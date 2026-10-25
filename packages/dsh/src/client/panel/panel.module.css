@@ -1,861 +1,113 @@
-/* Morning Star workflow panel — inherits dsh web's visual language
- * (dsw design tokens: surfaces, borders, labels, status states). Layout
- * contract (plan sidebar §L2.1): the narrow-column shell is a single flex
- * column with exactly three zones — the section nav (flex: none), the
- * panel-owned scroll body ([data-mstar-scroll], flex: 1 1 auto ·
- * min-height: 0 · the ONLY overflow-y element — the per-page scrollers are
- * retired), and the pinned meta dock (flex: none, version + harness dir).
- * The root never overflows its host: height: 100% + overflow hidden bound
- * to the pane body's definite height, no page scroll, no horizontal
- * overflow. The workspace-state digest is IN FLOW inside the scroll body
- * (the old 300px sibling column and its nested scroller are gone).
+/*
+ * Host-seat layout ONLY (plan dsh-panel-unification Task 2).
  *
- * Width signal (plan sidebar §L2.7): the panel's width is a fraction of the
- * sidebar column, never the viewport, so the shell carries
- * `container-type: inline-size` and the width rules are @container rules —
- * the two viewport media queries are deleted. The shell padding rides the
- * zones because a container query cannot style its own container; the
- * zones are `.root`'s descendants and query fine.
- *
- * Hard metrics (spec §1.2): spacing comes ONLY from the --mstar-space-1..6
- * ramp defined at the root (a panel-scope ramp — not invented --dsw-* names);
- * every color is a verified --dsw-* alias token, so dark mode is the host's
- * token value flip — the panel itself carries ZERO bare hex. Motion: hover
- * feedback 120–150ms, state switches ≤200ms, reduced-motion disables all.
+ * The product brings its own styles: `@mstar-harness/ui` ships the tokens, the
+ * base layer and every component/screen module, and this file may not restate
+ * any of them. What is left is the geometry only this seat knows — the column,
+ * the nav band and the one scroll area — expressed with the shared spacing
+ * tokens so the seam lines up with the product without inventing a scale.
  */
 
-.root,
-.emptyRoot {
-  box-sizing: border-box;
-  color: var(--dsw-alias-label-primary);
-  background: var(--dsw-alias-bg-layer-1);
-  font: var(--dsw-font-xs-13);
-  line-height: 1.6;
-}
-
-/* Panel-scope spacing ramp (spec §1.2) — not dsw token names. Declared on
- * BOTH roots: the degraded branches render `.emptyRoot` as the standalone
- * root (no shell zones at all), so its `--mstar-space-*` references resolve
- * only if the ramp lives on that root too — an undefined custom property
- * drops the declaration (the empty copy sat flush against the pane edge).
- * The shell is the three-zone flex column; `container-type: inline-size` is
- * the width signal for the @container rules below (the host gives a definite
- * height, so inline-size containment does not disturb the height: 100%
- * chain). */
-.root,
-.emptyRoot {
-  --mstar-space-1: 4px;
-  --mstar-space-2: 8px;
-  --mstar-space-3: 12px;
-  --mstar-space-4: 16px;
-  --mstar-space-5: 24px;
-  --mstar-space-6: 32px;
-}
-
+/* The pane body's column: nav on top, one product scroller below, host height. */
 .root {
   display: flex;
   flex-direction: column;
   height: 100%;
   min-height: 0;
-  width: 100%;
-  overflow: hidden;                               /* the root never scrolls — the scroll zone owns scrolling */
-  container-type: inline-size;
 }
 
-/* The panel's group grid (plan sidebar §L4.3): ONE column always below
- * 720px — the plan-status groups (plan board) and the agent groups share
- * this class, so the wide behaviour is one rule, not a second layout. */
-
-.groupGrid {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr);
-  gap: var(--mstar-space-4);
-}
-
-/* Compact rhythm at the narrow floor (the 300px docked column): the shell
- * padding and the group grid gap tighten. The padding rides the zones —
- * a container query cannot style its own container, and `.root` is the
- * container; the zones are descendants and match. */
-
-@container (max-width: 480px) {
-  .scroll {
-    padding: var(--mstar-space-3);
-  }
-
-  .meta {
-    padding: var(--mstar-space-3);
-  }
-
-  .groupGrid {
-    gap: var(--mstar-space-3);
-  }
-}
-
-/* Fullscreen / manually widened column: the group grid spreads to two
- * columns — the ONLY structural change any width makes (one DOM, one
- * structure; width changes the grid, never the tree). */
-
-@container (min-width: 720px) {
-  .groupGrid {
-    grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
-  }
-}
-
-/* Centered empty state (no catalog row yet). The degraded branches keep the
- * whole-root centering — they render no shell zones at all. */
-.emptyRoot {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  height: 100%;
-  min-height: 0;
-  width: 100%;
-  padding: var(--mstar-space-4);
-  overflow: hidden;
-}
-
-/* The centered inactive-state card: a muted frame (no orange — spec §8
- * degraded tone) centered in the free space above the freshness footer
- * (same page-frame flex contract as `.iterationPage` — it is a `.scroll`
- * child too, so grow without shrink-below-content keeps a short pane from
- * squeezing it over the footer; flex: 1 0 auto + inner centering; compact
- * width, text wraps within it). */
-.noHarnessCard {
-  flex: 1 0 auto;
-  width: 100%;
-  max-width: 400px;
-  align-self: center;
+/* The product shell's column (nav band + one scroller), shared by both seats.
+ * It is also the product's container: the shared screens' responsive rules key
+ * off `@container pane`, so the host must declare the container here or the
+ * narrow/wide reflow never fires. */
+.shell {
   display: flex;
   flex-direction: column;
-  align-items: center;
-  justify-content: center;
-  gap: var(--mstar-space-2);
-  padding: var(--mstar-space-5);
-  border: 1px solid var(--dsw-alias-border-l1);
-  border-radius: 8px;
-  background: var(--dsw-alias-bg-layer-1);
-  text-align: center;
+  flex: 1 1 auto;
+  min-height: 0;
+  container-type: inline-size;
+  container-name: pane;
 }
 
-.noHarnessIcon {
-  color: var(--dsw-alias-label-caption);
-  margin-bottom: var(--mstar-space-1);
+/* The shared nav's band: content height, never a scroller. */
+.nav {
+  flex: 0 0 auto;
 }
 
-.noHarnessTitle {
-  margin: 0;
-  max-width: 100%;
-  color: var(--dsw-alias-label-secondary);
-  font: var(--dsw-font-xxs-12);
-  font-weight: 600;
-}
-
-.noHarnessHint {
-  margin: 0;
-  max-width: 100%;
-  color: var(--dsw-alias-label-caption);
-  font: var(--dsw-font-xxxs-11);
-}
-
-/* --- scroll zone: the panel's ONLY scroller (plan sidebar §L2.1/L2.2):
- * the active section page, the in-flow workspace-state digest and the
- * freshness footer all flow inside it; the shell padding rides here (a
- * container query cannot style its own container — see the @container rules
- * at the top). Flex column so the degraded no-harness card can grow and
- * center, and so short content pins the freshness footer to the zone's end. */
-
+/* The product's ONLY scroller in this seat; the host owns the outer height. */
 .scroll {
   flex: 1 1 auto;
   min-height: 0;
-  display: flex;
-  flex-direction: column;
-  padding: var(--mstar-space-4);
   overflow-y: auto;
-  overflow-x: hidden;
 }
 
-/* --- header nav: the section nav, the shell's first zone (plan sidebar
- * §L2.3 — the dsh tab strip above it is host chrome, untouched) --- */
-
-.tabNav {
+/* Transport states before any product screen exists (waiting/loading/…). */
+.state {
   display: flex;
-  flex: none;
-  gap: var(--mstar-space-1);
-  padding: var(--mstar-space-1) var(--mstar-space-2);
-  margin: 0 0 var(--mstar-space-2);
-  border-bottom: 1px solid var(--dsw-alias-border-l1);
+  flex-direction: column;
+  gap: var(--ms-space-2);
+  padding: var(--ms-space-3);
 }
 
-/* Section tab (spec §6.1): borderless button, secondary label, active
- * underline via box-shadow (the T4 audit treats `border-*` shorthand colors as color
- * declarations — `transparent` is not a token, so the underline slot rides
- * box-shadow instead). Tightened for the column (plan sidebar §L2.3):
- * token padding + the --dsw-font-xxs-12 ramp; the three 4-glyph labels fit
- * the 300px floor with no wrap at any width. */
-.tab {
+.hint {
+  font-size: var(--ms-fs-12);
+  line-height: var(--ms-lh-12);
+  opacity: 0.7;
+}
+
+/* The main-area seat: the host owns the area, this wrapper only fills it. */
+.main {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  min-height: 0;
+}
+
+/* The sidebar's host affordance band (above the shared nav, never product chrome). */
+.toolbar {
+  flex: 0 0 auto;
+  display: flex;
+  justify-content: flex-end;
+  padding: var(--ms-space-1) var(--ms-space-2) 0;
+}
+
+/* A bare text control: the host seat styles its OWN affordance and nothing else. */
+.openMain {
   appearance: none;
-  border: 0;
   background: none;
-  padding: var(--mstar-space-1) var(--mstar-space-2);
-  color: var(--dsw-alias-label-secondary);
-  font: var(--dsw-font-xxs-12);
-  cursor: pointer;
-  box-shadow: inset 0 -2px 0 0 transparent;
-  transition: color 150ms ease, box-shadow 150ms ease;   /* hover 120–150ms + state switch ≤200ms */
-}
-
-.tab:hover {
-  color: var(--dsw-alias-label-primary);
-}
-
-.tabActive {
-  color: var(--dsw-alias-state-business-primary);
-  box-shadow: inset 0 -2px 0 0 var(--dsw-alias-state-business-primary);
-}
-
-/* --- IterationTaskPage (spec panel-tabs §3
- * Content Head (collapsible iteration summary + vertical steps) + the five
- * stacked kanban groups. The page is flow content in the panel's single
- * scroll zone (plan sidebar §L2.2 — the page-owned scroll body is retired).
- * Colors are --dsw-* tokens
- * only; spacing rides the --mstar-space-* ramp; motion ≤200ms (killed by the
- * root reduced-motion rule). --- */
-
-/* Page frame flex contract: the page is a `.scroll` child, so it grows
- * WITHOUT shrink-below-content (`flex: 1 0 auto`, no `min-height: 0`).
- * The former `flex: 1` (= 1 1 0%) + `min-height: 0` sized the page to the
- * zone's free space regardless of content — tall content stayed compressed
- * (basis 0), plan groups painted over the in-flow digest, and the single
- * scroller never carried the page. `0` shrink keeps tall content at its
- * content height so [data-mstar-scroll] grows and scrolls it; `1` grow
- * still fills short zones, pinning the digest + freshness footer to the
- * zone end. Never a second scroller. */
-.iterationPage {
-  flex: 1 0 auto;
-  display: flex;
-  flex-direction: column;
-  gap: var(--mstar-space-3);
-}
-
-/* Head frame: inactive keeps the neutral frame (the muted summary note
- * carries the "not started" semantics — never an orange warn box); the
- * active frame gets the business ring. */
-.iterationHead {
-  flex: none;
-  display: flex;
-  flex-direction: column;
-  gap: var(--mstar-space-2);
-  padding: var(--mstar-space-3);
-  border: 1px solid var(--dsw-alias-border-l1);
-  border-radius: 8px;
-  background: var(--dsw-alias-bg-layer-1);
-  color: var(--dsw-alias-label-secondary);
-  transition: border-color 150ms ease;   /* hover 120–150ms window */
-}
-
-.iterationHead:hover {
-  border-color: var(--dsw-alias-border-l2);
-}
-
-.iterationHead[data-iteration-head-active='true'] {
-  border-color: var(--dsw-alias-state-business-primary);
-  box-shadow: 0 0 0 1px var(--dsw-alias-state-business-primary);
-}
-
-.iterationHead[data-iteration-head-active='true']:hover {
-  border-color: var(--dsw-alias-state-business-primary);
-}
-
-/* The summary row IS the toggle (spec §3): borderless button, wraps to one
- * line when collapsed. */
-.iterationSummary {
-  appearance: none;
   border: 0;
-  background: none;
-  display: flex;
-  align-items: center;
-  flex-wrap: wrap;
-  gap: var(--mstar-space-2);
   padding: 0;
-  margin: 0;
-  color: var(--dsw-alias-label-secondary);
-  font: var(--dsw-font-xxxs-11);
+  color: inherit;
   cursor: pointer;
-  text-align: left;
-  transition: color 150ms ease;   /* hover 120–150ms window */
+  font-size: var(--ms-fs-12);
+  line-height: var(--ms-lh-12);
+  opacity: 0.7;
 }
 
-.iterationSummary:hover {
-  color: var(--dsw-alias-label-primary);
+.openMain:hover,
+.openMain:focus-visible {
+  opacity: 1;
 }
 
-.iterationSummaryId {
-  overflow-wrap: anywhere;
-  color: var(--dsw-alias-label-primary);
-  font: var(--dsw-font-xxxs-11);
-  font-weight: 600;
-}
-
-.iterationSummaryVerdict {
-  padding: 0 var(--mstar-space-2);
-  border: 1px solid var(--dsw-alias-border-l2);
-  border-radius: 999px;
-  color: var(--dsw-alias-label-caption);
-  font: var(--dsw-font-xxxs-11);
-  font-weight: 600;
-  letter-spacing: 0.03em;
-}
-
-[data-iteration-head-verdict='pass'] {
-  border-color: var(--dsw-alias-state-success-primary);
-  color: var(--dsw-alias-state-success-primary);
-}
-
-[data-iteration-head-verdict='fail'] {
-  border-color: var(--dsw-alias-state-error-primary);
-  color: var(--dsw-alias-state-error-primary);
-}
-
-.iterationSummaryStatus {
-  color: var(--dsw-alias-state-business-primary);
-  font: var(--dsw-font-xxxs-11);
-  font-weight: 600;
-  letter-spacing: 0.03em;
-}
-
-.iterationSummaryStatusMuted {
-  color: var(--dsw-alias-label-caption);
-  font: var(--dsw-font-xxxs-11);
-}
-
-.iterationSummaryHint {
-  color: var(--dsw-alias-label-caption);
-  font: var(--dsw-font-xxxs-11);
-}
-
-.iterationHeadBody {
-  display: flex;
-  flex-direction: column;
-  gap: var(--mstar-space-2);
-  padding-top: var(--mstar-space-2);
-  border-top: 1px solid var(--dsw-alias-border-l1);
-}
-
-/* Narrow-column head body (spec panel-f4 §2.3 R8 re-shaped by plan sidebar
- * §L4.2): branches (DOM-first) stack ABOVE the vertical stepper — the former
- * LEFT-RIGHT flex row cannot fit the 300px floor. The DOM order is unchanged
- * (branches before steps); only the axis turned. */
-.iterationHeadSplit {
-  display: flex;
-  flex-direction: column;
-  gap: var(--mstar-space-3);
-  min-width: 0;
-}
-
-.iterationHeadSplit > .iterationBranches {
-  min-width: 0;
-}
-
-.iterationHeadSplit > .iterationStepsRow {
-  min-width: 0;
-}
-
-/* Steps (plan sidebar §L4.2): the VERTICAL 5-item stacked stepper — one row
- * per step (badge · phase · chip · reserved verdict seat). The horizontal
- * row and its former `overflow-x: auto` scroller are retired — content flows
- * inside the panel's single scroll zone. The current-step highlight stays on
- * the block itself (honest — the schema knows only current/next/done/idle). */
-.iterationStepsRow {
-  display: flex;
-  flex-direction: column;
-  align-items: stretch;
-  gap: var(--mstar-space-2);
+/* A destination's own read state (before its screen can render). */
+.destinationState {
   margin: 0;
-  padding: 0;
-  list-style: none;
+  padding: var(--ms-space-3);
 }
 
-.iterationStepItem {
-  min-width: 0;
-  display: flex;
-  align-items: center;
-  gap: var(--mstar-space-2);
-}
-
-.iterationStepBadge {
-  flex: none;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  width: 22px;
-  height: 22px;
-  border: 1px solid var(--dsw-alias-border-l2);
-  border-radius: 999px;
-  color: var(--dsw-alias-label-secondary);
-  font: var(--dsw-font-xxxs-11);
-  font-weight: 600;
-  font-variant-numeric: tabular-nums;
-}
-
-.iterationStepPhase {
-  flex: 1 1 auto;
-  overflow-wrap: anywhere;
-  color: var(--dsw-alias-label-secondary);
-  font: var(--dsw-font-xxxs-11);
-}
-
-/* State chip: current = business glow + ring, next = dashed, idle = dim —
- * driven by the step item's `data-step-state` (spec §3 treatment carried
- * over from the zone stepper, now a vertical stack row; the current-step
- * highlight stays on the BLOCK itself — plan Item 1). */
-.iterationStepChip {
-  flex: none;
-  display: inline-flex;
-  align-items: center;
-  padding: 0 var(--mstar-space-2);
-  border: 1px solid var(--dsw-alias-border-l1);
-  border-radius: 999px;
-  color: var(--dsw-alias-label-caption);
-  font: var(--dsw-font-xxxs-11);
-}
-
-[data-step-state='current'] .iterationStepBadge,
-[data-step-state='current'] .iterationStepChip {
-  border-color: var(--dsw-alias-state-business-primary);
-  box-shadow: 0 0 0 1px var(--dsw-alias-state-business-primary);
-  color: var(--dsw-alias-state-business-primary);
-}
-
-[data-step-state='current'] .iterationStepChip {
-  font-weight: 600;
-}
-
-[data-step-state='next'] .iterationStepBadge,
-[data-step-state='next'] .iterationStepChip {
-  border: 1px dashed var(--dsw-alias-state-business-primary);
-  color: var(--dsw-alias-state-business-primary);
-}
-
-[data-step-state='idle'] .iterationStepBadge {
-  border-color: var(--dsw-alias-border-l1);
-  color: var(--dsw-alias-label-caption);
-}
-
-/* Done step : a step
- * BEFORE the current one — the projection derives it explicitly (the
- * state machine), the render layer only styles it (honest — no UI
- * guesswork). A quiet "passed/visited" treatment: the badge keeps its
- * pure number (plan Item 1) with a success border + tint, the chip text
- * dims to muted and gains a leading ✓ (the panel's settled glyph). Clearly
- * apart from idle (no ✓, no success tint) and from current (no business
- * glow / ring / bold). */
-[data-step-state='done'] .iterationStepBadge {
-  border-color: var(--dsw-alias-state-success-primary);
-  color: var(--dsw-alias-state-success-primary);
-}
-
-[data-step-state='done'] .iterationStepChip {
-  color: var(--dsw-alias-label-secondary);
-}
-
-[data-step-state='done'] .iterationStepChip::before {
-  content: '✓';
-  margin-right: var(--mstar-space-1);
-  color: var(--dsw-alias-state-success-primary);
-}
-
-/* Verdict seat (spec panel-f4 §2.3 R9): EVERY step
- * reserves a fixed-height seat at the end of its row — the conditional
- * PASS/FAIL badge fills the seat on the current step only. Every step item
- * has the same children (badge/phase/chip/seat), so the rows align
- * identically — the old in-flow badge (an extra child on the current step)
- * shifted that block. The badge centers in the seat. */
-.iterationVerdictSeat {
-  flex: none;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  height: 22px;
-}
-
-/* Current-step verdict badge (spec §3 + panel-f4 §2.3 R9): PASS/FAIL pill,
- * on the current step only — centered in its reserved seat. */
-.iterationVerdict {
-  display: inline-flex;
-  align-items: center;
-  padding: 0 var(--mstar-space-2);
-  border: 1px solid var(--dsw-alias-border-l2);
-  border-radius: 999px;
-  color: var(--dsw-alias-label-caption);
-  font: var(--dsw-font-xxxs-11);
-  font-weight: 600;
-  letter-spacing: 0.03em;
-}
-
-[data-iteration-verdict='pass'] {
-  border-color: var(--dsw-alias-state-success-primary);
-  color: var(--dsw-alias-state-success-primary);
-}
-
-[data-iteration-verdict='fail'] {
-  border-color: var(--dsw-alias-state-error-primary);
-  color: var(--dsw-alias-state-error-primary);
-}
-
-/* Branch panel (spec §3/§5): rendered only while the iteration is active. */
-.iterationBranches {
-  display: flex;
-  flex-direction: column;
-  gap: var(--mstar-space-1);
-}
-
-.iterationBranchesTitle {
+/* The pick's own state line (the only write in the product). */
+.pickState {
   margin: 0;
-  color: var(--dsw-alias-label-secondary);
-  font: var(--dsw-font-xxs-12);
-  font-weight: 600;
-  letter-spacing: 0.03em;
-  text-transform: uppercase;
+  padding: var(--ms-space-2) var(--ms-space-3);
+  font-size: var(--ms-fs-12);
+  line-height: var(--ms-lh-12);
 }
 
-.iterationBranchList {
-  display: flex;
-  flex-direction: column;
-  gap: var(--mstar-space-1);
-  margin: 0;
-  padding: 0;
-  list-style: none;
-}
-
-.iterationBranchRow {
-  display: flex;
-  align-items: baseline;
-  justify-content: space-between;
-  gap: var(--mstar-space-2);
-  min-width: 0;
-}
-
-.iterationBranchLabel {
-  color: var(--dsw-alias-label-caption);
-  font: var(--dsw-font-xxxs-11);
-}
-
-.iterationBranchValue {
-  overflow-wrap: anywhere;
-  color: var(--dsw-alias-label-secondary);
-  font: var(--dsw-font-xxxs-11);
-  font-weight: 600;
-}
-
-/* Task area: flow content in the panel's scroll zone (plan sidebar §L2.2 —
- * the page's own vertical scroll body is retired; `[data-mstar-scroll]` is
- * the only scroller). A plain stack: the board, then the project rollup. */
-.iterationTasks {
-  display: flex;
-  flex-direction: column;
-  gap: var(--mstar-space-3);
-  min-width: 0;
-}
-
-/* --- workspace-state digest: IN FLOW at the end of the scroll zone (plan
- * sidebar §L2.1) — the former 300px sibling column, borderless (the
- * StateSection carries its own top hairline); the digest's own nested
- * scroller (`data-mstar-sidebar-scroll`) is retired with the per-page
- * scrollers. The meta dock below is the shell's third zone. */
-
-.sidebar {
-  display: flex;
-  flex-direction: column;
-  gap: var(--mstar-space-2);
-  min-width: 0;
-}
-
-/* --- meta dock: version + harness dir, the shell's third zone (spec §5) —
- * flex: none, pinned under the scroll zone, never scrolls. */
-
-.meta {
-  display: flex;
-  flex-direction: column;
-  gap: var(--mstar-space-1);
-  flex: none;
-  padding: var(--mstar-space-3) var(--mstar-space-4);
-  border-top: 1px solid var(--dsw-alias-border-l1);
-  color: var(--dsw-alias-label-caption);
-  font: var(--dsw-font-xxxs-11);
-}
-
-.metaLine {
-  margin: 0;
-  min-width: 0;
-  overflow-wrap: anywhere;
-}
-
-/* --- shared section content --- */
-
-.section {
-  display: flex;
-  flex-direction: column;
-  gap: var(--mstar-space-2);
-  padding-top: var(--mstar-space-3);
-  border-top: 1px solid var(--dsw-alias-border-l1);
-}
-
-.sectionTitle {
-  margin: 0;
-  color: var(--dsw-alias-label-secondary);
-  font: var(--dsw-font-xxs-12);
-  font-weight: 600;
-  letter-spacing: 0.03em;
-  text-transform: uppercase;
-}
-
-/* Sidebar area titles / iteration sub-heading: section-title ramp, 16px apart. */
-.subTitle {
-  margin: var(--mstar-space-4) 0 0;
-  color: var(--dsw-alias-label-secondary);
-  font: var(--dsw-font-xxs-12);
-  font-weight: 600;
-  letter-spacing: 0.03em;
-  text-transform: uppercase;
-}
-
-.defList {
-  display: grid;
-  grid-template-columns: max-content minmax(0, 1fr);
-  gap: var(--mstar-space-1) var(--mstar-space-3);
-  margin: 0;
-}
-
-.defTerm {
-  color: var(--dsw-alias-label-caption);
-}
-
-.defValue {
-  margin: 0;
-  overflow-wrap: anywhere;
-}
-
-.planList,
-.residualList,
-.leaseList,
-.violationList {
-  display: flex;
-  flex-direction: column;
-  gap: var(--mstar-space-1);
-  margin: 0;
-  padding: 0;
-  list-style: none;
-}
-
-.planId,
-.leasePlan,
-.leaseHolder,
-.leaseWorktree,
-.findingSeverity,
-.findingTitle,
-.findingPlan,
-.violationCode,
-.knowledgeCategories {
-  display: inline-block;
-}
-
-.planStatus {
-  display: inline-block;
-  margin-right: var(--mstar-space-2);
-  padding: 0 var(--mstar-space-2);
-  border: 1px solid var(--dsw-alias-border-l2);
-  border-radius: 999px;
-  color: var(--dsw-alias-label-secondary);
-  font: var(--dsw-font-xxxs-11);
-  transition: color 150ms ease, border-color 150ms ease;   /* hover 120–150ms + state switch ≤200ms */
-}
-
-.planStatus:hover {
-  border-color: var(--dsw-alias-label-secondary);
-}
-
-.planStatus[data-status='Done'] {
-  border-color: var(--dsw-alias-state-success-primary);
-  color: var(--dsw-alias-state-success-primary);
-}
-
-.planStatus[data-status='InProgress'] {
-  border-color: var(--dsw-alias-state-business-primary);
-  color: var(--dsw-alias-state-business-primary);
-}
-
-.violationCode {
-  margin-right: var(--mstar-space-2);
-  color: var(--dsw-alias-state-warn-label);
-}
-
-.violationList [data-severity='critical'],
-.violationList [data-severity='high'] {
-  color: var(--dsw-alias-state-error-primary);
-}
-
-/* Residual finding row (spec §5): severity chip + title + owning plan id. */
-.findingSeverity {
-  margin-right: var(--mstar-space-2);
-  padding: 0 var(--mstar-space-2);
-  border: 1px solid var(--dsw-alias-border-l2);
-  border-radius: 999px;
-  color: var(--dsw-alias-label-secondary);
-  font: var(--dsw-font-xxxs-11);
-}
-
-.findingSeverity[data-severity='critical'],
-.findingSeverity[data-severity='high'] {
-  border-color: var(--dsw-alias-state-error-primary);
-  color: var(--dsw-alias-state-error-primary);
-}
-
-.findingSeverity[data-severity='medium'] {
-  border-color: var(--dsw-alias-state-warn-label);
-  color: var(--dsw-alias-state-warn-label);
-}
-
-.findingTitle {
-  margin-right: var(--mstar-space-2);
-}
-
-.findingPlan {
-  color: var(--dsw-alias-label-caption);
-}
-
-/* `+N more` overflow notes (plan board / residual findings caps, spec §5). */
+/* A truncated page's disclosure (the screen keeps its own; this is the host's
+ * line for a list whose screen has no truncation member yet). */
 .truncated {
   margin: 0;
-  color: var(--dsw-alias-label-caption);
-  font: var(--dsw-font-xxxs-11);
-}
-
-.leaseWorktree {
-  margin-left: var(--mstar-space-2);
-  color: var(--dsw-alias-label-caption);
-}
-
-.knowledge {
-  display: flex;
-  flex-wrap: wrap;
-  gap: var(--mstar-space-1) var(--mstar-space-2);
-  margin: 0;
-}
-
-.knowledgeCategories {
-  color: var(--dsw-alias-label-caption);
-}
-
-.direction {
-  margin: 0;
-  overflow-wrap: anywhere;
-}
-
-/* Selection seat : the selected workflow lifecycle —
-   active id (+ multi-active warning) / terminal history view / selection
-   error code + reason. Additive to the state section; never a crash. */
-.selection {
-  margin: 0;
-  overflow-wrap: anywhere;
-}
-
-.selectionId {
-  font-weight: 600;
-}
-
-.selectionMeta,
-.selectionWarning {
-  display: block;
-  color: var(--dsw-alias-label-caption);
-  font: var(--dsw-font-xxxs-11);
-}
-
-.selectionCode {
-  color: var(--dsw-alias-label-secondary);
-  font: var(--dsw-font-xxxs-11);
-  font-weight: 600;
-}
-
-/* Unbound multi-active picker (spec §Picker contract): the copy plus one row
-   per candidate active id, then the commit state. Same pill language as a
-   plan-status chip; the whole seat is additive and never a crash. */
-.picker {
-  display: flex;
-  flex-direction: column;
-  gap: var(--mstar-space-2);
-}
-
-.pickerCopy {
-  margin: 0;
-  color: var(--dsw-alias-label-caption);
-  font: var(--dsw-font-xxxs-11);
-}
-
-.pickerList {
-  display: flex;
-  flex-direction: column;
-  gap: var(--mstar-space-1);
-  margin: 0;
-  padding: 0;
-  list-style: none;
-}
-
-.pickerItem {
-  display: flex;
-  min-width: 0;
-}
-
-.pickerButton {
-  appearance: none;
-  min-width: 0;
-  max-width: 100%;
-  padding: var(--mstar-space-1) var(--mstar-space-2);
-  border: 1px solid var(--dsw-alias-border-l2);
-  border-radius: 999px;
-  background: none;
-  color: var(--dsw-alias-label-secondary);
-  font: var(--dsw-font-xxxs-11);
-  text-align: left;
-  overflow-wrap: anywhere;
-  cursor: pointer;
-  transition: color 150ms ease, border-color 150ms ease;   /* hover 120–150ms + state switch ≤200ms */
-}
-
-.pickerButton:hover:not(:disabled) {
-  color: var(--dsw-alias-label-primary);
-  border-color: var(--dsw-alias-state-business-primary);
-}
-
-.pickerButton:disabled {
-  color: var(--dsw-alias-label-caption);
-  cursor: default;
-}
-
-.pickerStatus {
-  margin: 0;
-  color: var(--dsw-alias-label-caption);
-  font: var(--dsw-font-xxxs-11);
-}
-
-.empty {
-  margin: 0;
-  color: var(--dsw-alias-label-caption);
-}
-
-.freshness {
-  display: flex;
-  flex-wrap: wrap;
-  gap: var(--mstar-space-1) var(--mstar-space-3);
-  padding-top: var(--mstar-space-3);
-  border-top: 1px solid var(--dsw-alias-border-l1);
-  color: var(--dsw-alias-label-caption);
-  font: var(--dsw-font-xxxs-11);
-}
-
-/* Motion off for reduced-motion users (spec §1.2 hard metric). */
-@media (prefers-reduced-motion: reduce) {
-  * {
-    transition: none !important;
-    animation: none !important;
-  }
+  padding: var(--ms-space-2) var(--ms-space-3);
+  font-size: var(--ms-fs-12);
+  line-height: var(--ms-lh-12);
 }

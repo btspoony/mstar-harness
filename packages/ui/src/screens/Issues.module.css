@@ -1,0 +1,31 @@
+.page {
+  display: flex;
+  flex-direction: column;
+  gap: var(--ms-space-2);
+  min-inline-size: 0;
+  padding: var(--ms-space-4) 0 var(--ms-space-6);
+}
+
+.title {
+  margin: 0;
+  font-size: var(--ms-fs-20);
+  line-height: var(--ms-lh-20);
+  font-weight: var(--ms-fw-semibold);
+  letter-spacing: -0.01em;
+  color: var(--ms-text-primary);
+}
+
+.mono {
+  font-family: var(--ms-font-mono);
+  font-size: var(--ms-fs-12);
+  color: var(--ms-text-secondary);
+}
+
+.visuallyHidden {
+  position: absolute;
+  inline-size: 1px;
+  block-size: 1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+}

@@ -1,0 +1,149 @@
+/* The layout IA §3.1 fixes: two columns above the floor, one below, in the same
+   reading order (1 → 5). The columns are a container query, never a viewport one. */
+.page {
+  display: flex;
+  flex-direction: column;
+  gap: var(--ms-space-4);
+  min-inline-size: 0;
+  padding: var(--ms-space-4) 0 var(--ms-space-6);
+}
+
+.title {
+  margin: 0;
+  font-size: var(--ms-fs-20);
+  line-height: var(--ms-lh-20);
+  font-weight: var(--ms-fw-semibold);
+  letter-spacing: -0.01em;
+  color: var(--ms-text-primary);
+}
+
+.body {
+  display: grid;
+  grid-template-columns: minmax(0, 1.35fr) minmax(0, 1fr);
+  gap: var(--ms-space-6);
+  align-items: start;
+}
+
+.panel {
+  display: flex;
+  flex-direction: column;
+  gap: var(--ms-space-1);
+  min-inline-size: 0;
+}
+
+.heading {
+  margin: 0;
+  font-size: var(--ms-fs-12);
+  line-height: var(--ms-lh-12);
+  font-weight: var(--ms-fw-medium);
+  color: var(--ms-text-secondary);
+}
+
+.rows {
+  display: flex;
+  flex-direction: column;
+  min-inline-size: 0;
+}
+
+.count {
+  font-family: var(--ms-font-mono);
+  font-variant-numeric: tabular-nums;
+}
+
+.countEmphasised {
+  font-family: var(--ms-font-mono);
+  font-variant-numeric: tabular-nums;
+  font-weight: var(--ms-fw-semibold);
+  color: var(--ms-text-primary);
+}
+
+.iteration {
+  display: flex;
+  flex-direction: column;
+  gap: var(--ms-space-2);
+  min-inline-size: 0;
+}
+
+.iterationId {
+  margin: 0;
+  font-family: var(--ms-font-mono);
+  font-size: var(--ms-fs-12);
+  line-height: var(--ms-lh-12);
+  color: var(--ms-text-primary);
+  min-inline-size: 0;
+}
+
+/* The five gate steps as a track: the reached and current steps read forward,
+   the ones ahead stay muted. Position is also an attribute, so the state does
+   not depend on the colour. */
+.steps {
+  display: flex;
+  align-items: center;
+  gap: var(--ms-space-1);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  min-inline-size: 0;
+}
+
+.step {
+  flex: 1 1 0;
+  min-inline-size: 0;
+  block-size: 3px;
+  border-radius: var(--ms-radius-full);
+  background: var(--ms-bg-inset);
+  overflow: hidden;
+  text-indent: -9999px;
+  white-space: nowrap;
+}
+
+.step[data-ms-step-position="reached"] {
+  background: var(--ms-accent);
+}
+
+.step[data-ms-step-position="current"] {
+  background: var(--ms-accent);
+  box-shadow: 0 0 0 1px var(--ms-accent);
+}
+
+.gateLine {
+  margin: 0;
+  font-family: var(--ms-font-mono);
+  font-size: var(--ms-fs-11);
+  line-height: var(--ms-lh-11);
+  color: var(--ms-text-muted);
+}
+
+.milestoneProgress {
+  display: flex;
+  align-items: center;
+  gap: var(--ms-space-2);
+  min-inline-size: 120px;
+}
+
+.summary {
+  margin: 0;
+  font-family: var(--ms-font-mono);
+  font-size: var(--ms-fs-11);
+  line-height: var(--ms-lh-11);
+  color: var(--ms-text-muted);
+}
+
+/* The page-validity word, and its reason when it is not current. */
+.projection {
+  margin: 0;
+  padding-block-start: var(--ms-space-2);
+  border-block-start: var(--ms-hairline);
+  font-family: var(--ms-font-mono);
+  font-size: var(--ms-fs-11);
+  line-height: var(--ms-lh-11);
+  color: var(--ms-text-muted);
+}
+
+/* Below the two-column floor the same order reads as one column (IA §3.1). */
+@container pane (max-width: 899px) {
+  .body {
+    grid-template-columns: minmax(0, 1fr);
+    gap: var(--ms-space-4);
+  }
+}
