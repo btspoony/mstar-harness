@@ -83,3 +83,12 @@
 .openMain:focus-visible {
   opacity: 1;
 }
+
+/* The host's enforcement line: last line of the Focus destination, one row. */
+.enforcement {
+  display: flex;
+  align-items: center;
+  gap: var(--ms-space-2);
+  margin: 0;
+  padding: var(--ms-space-2) var(--ms-space-3);
+}

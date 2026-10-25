@@ -42,6 +42,8 @@ import { useMstarSessionDigest } from './use-mstar-session-digest.ts'
 import { useMstarDashboardView, type MstarDashboardViewState } from './use-mstar-dashboard-view.ts'
 import { useMstarWorkflowPicker, type UseSessions } from './use-mstar-workflow-picker.ts'
 import type { PanelDestination } from './panel-store.ts'
+import { EnforcementLine } from './EnforcementLine.tsx'
+import type { ColorScheme, HostThemeFace } from './theme.ts'
 
 /**
  * The host locale face the product needs, declared structurally (the
@@ -164,15 +166,29 @@ export function PanelShell(props: {
   delivery?: { iterationId: string; gateStep: IterationGateStep | null } | null
   destination: PanelDestination
   locale: Locale
+  /** The host's resolved colour scheme (only the scheme is inherited). */
+  scheme?: ColorScheme
   /** Accessible name for the nav landmark (the panel's own name). */
   navLabel: string
   onSelect: (destination: string) => void
   select: ((workflowId: string) => void) | null
+  /**
+   * Render the host's own ENFORCEMENT line as the Focus destination's last line
+   * (the sidebar seat). The main-area panel leaves it out, per IA §7: the flag is
+   * a session-chrome fact, not a full-page one.
+   */
+  enforcementLine?: boolean
 }): React.ReactElement {
   const copy = copyFor(props.locale)
   const selection: SessionBinding | null = props.snapshot.selection
+  // The flag is a literal enum; an unreadable member says so rather than
+  // guessing `soft` (the host's own line renders the arm's detail).
+  const flag = props.snapshot.enforcement !== null && props.snapshot.enforcement !== undefined
+    && typeof props.snapshot.enforcement.hard === 'boolean'
+    ? (props.snapshot.enforcement.hard ? 'hard' : 'soft')
+    : 'unavailable'
   const model = focusModel({
-    enforcement: props.snapshot.enforcement.hard ? 'hard' : 'soft',
+    enforcement: flag,
     selection,
     workflow: props.workflow,
     iteration: props.delivery === undefined ? deliveryOf(props.snapshot, props.workflow) ?? null : props.delivery,
@@ -180,18 +196,23 @@ export function PanelShell(props: {
   })
   return (
     <LocaleProvider locale={props.locale}>
-      <div className={css.shell} data-ms-shell="" data-ms-destination={props.destination}>
+      <div className={css.shell} data-ms-shell="" data-ms-destination={props.destination} data-ms-theme={props.scheme ?? 'light'}>
         <div className={css.nav}>
           <Nav items={navItems(copy)} activeId={props.destination} onSelect={props.onSelect} label={props.navLabel} />
         </div>
         <div className={css.scroll} data-mstar-scroll>
           {props.destination === 'focus'
             ? (
-              <Focus
-                model={model}
-                copy={focusCopy(copy)}
-                {...(props.select === null ? {} : { onPick: props.select })}
-              />
+              <>
+                <Focus
+                  model={model}
+                  copy={focusCopy(copy)}
+                  {...(props.select === null ? {} : { onPick: props.select })}
+                />
+                {props.enforcementLine === true
+                  ? <EnforcementLine enforcement={props.snapshot.enforcement} enforce={copy.focus.enforcementLabel} />
+                  : null}
+              </>
             )
             : null}
         </div>
@@ -225,6 +246,23 @@ function useProductLocale(face: HostLocaleFace | undefined): Locale {
   return productLocale(active)
 }
 
+/** Stable no-op theme subscription (a seat composed without the theme face). */
+const NO_THEME_SUBSCRIBE = (): (() => void) => () => {}
+
+/**
+ * The product's colour scheme, read from the host's theme face (uSES-safe), so a
+ * host theme switch re-renders the wrapper and the shared `[data-ms-theme]`
+ * token block flips with it.
+ */
+function useProductScheme(face: HostThemeFace | undefined): ColorScheme {
+  const read = (): ColorScheme => (face === undefined ? 'light' : face.getSnapshot())
+  return React.useSyncExternalStore(
+    face === undefined ? NO_THEME_SUBSCRIBE : (listener) => face.subscribe(listener),
+    read,
+    read,
+  )
+}
+
 /** The session's workspace directory (the host cross-checks it against the session). */
 function sessionCwd(useSessions: UseSessions | undefined, sessionId: SessionId | undefined): string | null {
   if (useSessions === undefined || sessionId === undefined) return null
@@ -251,13 +289,17 @@ export type PanelSeatProps = {
   picker?: MstarWorkflowPickerClient
   panelSnapshot?: MstarPanelSnapshotClient
   localeFace?: HostLocaleFace
+  themeFace?: HostThemeFace
+  /** Render the host's enforcement line (the sidebar seat does; the main panel does not). */
+  enforcementLine?: boolean
 }
 
 export function PanelSeat(props: PanelSeatProps): React.ReactElement | null {
-  const { t, visible, destination, onSelect, useSessions, sessionId, picker, panelSnapshot, localeFace } = props
+  const { t, visible, destination, onSelect, useSessions, sessionId, picker, panelSnapshot, localeFace, themeFace } = props
   const cwd = sessionCwd(useSessions, sessionId)
   const wireSession = sessionId === undefined ? null : String(sessionId)
   const locale = useProductLocale(localeFace)
+  const scheme = useProductScheme(themeFace)
   // The picker's WRITE half only: the selection it shows rides the digest.
   const { select } = useMstarWorkflowPicker({ useSessions, sessionId, picker })
 
@@ -324,6 +366,8 @@ export function PanelSeat(props: PanelSeatProps): React.ReactElement | null {
       delivery={deliveryFromView(iterationsView.state, planIds)}
       destination={destination}
       locale={locale}
+      scheme={scheme}
+      {...(props.enforcementLine === true ? { enforcementLine: true } : {})}
       navLabel={t('view.mstar-workflow')}
       onSelect={onSelect}
       select={select}

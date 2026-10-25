@@ -24,8 +24,10 @@ import type { MstarPanelSnapshotClient } from './panel-snapshot-client.ts'
 import type { UseSessions } from './use-mstar-workflow-picker.ts'
 import { createPanelStore, isPanelDestination, type PanelDestination } from './panel-store.ts'
 import { PanelSeat, type HostLocaleFace } from './panel-shell.tsx'
+import type { HostThemeFace } from './theme.ts'
 
 export type { HostLocaleFace } from './panel-shell.tsx'
+export type { HostThemeFace } from './theme.ts'
 
 /** The sidebar body seat's props: runtime share, entry store, `t` seat and the plugin-bound clients. */
 export interface MstarPanelBodyProps
@@ -44,6 +46,10 @@ export interface MstarPanelBodyProps
   panelSnapshot?: MstarPanelSnapshotClient
   /** The host's locale runtime, so the product's copy follows the host language. */
   localeFace?: HostLocaleFace
+  /** The host's colour scheme, so the product flips its own token block. */
+  themeFace?: HostThemeFace
+  /** Render the host's enforcement line (session chrome: the sidebar does, the main panel does not). */
+  enforcementLine?: boolean
   /**
    * Open this panel in the host's main area (the plugin entry binds
    * `ctx.layout.selectPanel`). Absent in a composition without the layout
@@ -53,7 +59,7 @@ export interface MstarPanelBodyProps
 }
 
 export function PanelView(props: MstarPanelBodyProps) {
-  const { t, useSessions, sessionId, picker, panelSnapshot, localeFace, openMainPanel, useTabInfo, useStore, actions } = props
+  const { t, useSessions, sessionId, picker, panelSnapshot, localeFace, themeFace, enforcementLine, openMainPanel, useTabInfo, useStore, actions } = props
   const tabInfo = useTabInfo()
   const tabId = tabInfo.tab.id
   const stored = useStore((s) => s.byTab[tabId])
@@ -79,6 +85,8 @@ export function PanelView(props: MstarPanelBodyProps) {
         {...(picker === undefined ? {} : { picker })}
         {...(panelSnapshot === undefined ? {} : { panelSnapshot })}
         {...(localeFace === undefined ? {} : { localeFace })}
+        {...(themeFace === undefined ? {} : { themeFace })}
+        {...(enforcementLine === true ? { enforcementLine: true } : {})}
       />
     </div>
   )

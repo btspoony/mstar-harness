@@ -23,6 +23,7 @@ import type { MstarPanelSnapshotClient } from './panel-snapshot-client.ts'
 import type { UseSessions } from './use-mstar-workflow-picker.ts'
 import { isPanelDestination, type PanelDestination } from './panel-store.ts'
 import { PanelSeat, type HostLocaleFace } from './panel-shell.tsx'
+import type { HostThemeFace } from './theme.ts'
 
 /** The keyed main seat's props: the typed `t` seat plus the plugin-bound clients (no entry store, no tab info). */
 export interface MstarMainPanelProps extends PropsLocale<'mstar-panel'> {
@@ -38,10 +39,12 @@ export interface MstarMainPanelProps extends PropsLocale<'mstar-panel'> {
   panelSnapshot?: MstarPanelSnapshotClient
   /** The host's locale runtime, so the product's copy follows the host language. */
   localeFace?: HostLocaleFace
+  /** The host's colour scheme, so the product flips its own token block. */
+  themeFace?: HostThemeFace
 }
 
 export function MainPanelView(props: MstarMainPanelProps) {
-  const { t, sessionId, useSessions, picker, panelSnapshot, localeFace } = props
+  const { t, sessionId, useSessions, picker, panelSnapshot, localeFace, themeFace } = props
   const [destination, setDestination] = React.useState<PanelDestination>('focus')
   return (
     <div className={css.main} data-mstar-seat="main">
@@ -59,6 +62,7 @@ export function MainPanelView(props: MstarMainPanelProps) {
         {...(picker === undefined ? {} : { picker })}
         {...(panelSnapshot === undefined ? {} : { panelSnapshot })}
         {...(localeFace === undefined ? {} : { localeFace })}
+        {...(themeFace === undefined ? {} : { themeFace })}
       />
     </div>
   )

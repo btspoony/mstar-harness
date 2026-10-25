@@ -134,8 +134,10 @@ function declareSeats(slots: SlotRegistry): () => void {
 }
 
 describe('unified panel — seat registration (plugin entry)', () => {
-  it('declares `layout` in inject beside the five services the entry already waits for', () => {
-    expect(inject).toEqual(['slots', 'sessions', 'locale', 'connection', 'sidebarRightTabs', 'layout'])
+  it('declares `layout` and `theme` in inject beside the five services the entry already waits for', () => {
+    // `layout` is the panel-selection face; `theme` is the colour-scheme face the
+    // product inherits (Task 5). Both are cordis services, so both are declared.
+    expect(inject).toEqual(['slots', 'sessions', 'locale', 'connection', 'sidebarRightTabs', 'layout', 'theme'])
   })
 
   it('keeps the right-Sidebar page tab type registered', () => {

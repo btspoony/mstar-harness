@@ -22,6 +22,7 @@ import type { Context as ClientContext } from '@deepseek-ai/cordis'
 import type {} from '@deepseek-ai/dsh-client-locale/client'
 import type {} from '@deepseek-ai/dsh-client-ui-renderer/client'
 import type {} from '@deepseek-ai/dsh-client-ui-layout/client'
+import type {} from '@deepseek-ai/dsh-client-ui-theme/client'
 import type {} from '@deepseek-ai/dsh-client-ui-sidebar/client'
 import type {} from '@deepseek-ai/dsh-client-ui-sidebar-right/client'
 import { MSTAR_PANEL_ID, MSTAR_PANEL_ROW_ORDER, mstarPanelDefinition, selectMstarPanel } from './panel/definition.ts'
@@ -30,6 +31,7 @@ import { MstarPanelSnapshotClient } from './panel/panel-snapshot-client.ts'
 import { MstarPanelTitle } from './panel/MstarPanelTitle.tsx'
 import { SidebarRowIcon } from './panel/SidebarRowIcon.tsx'
 import { MainPanelView } from './panel/MainPanelView.tsx'
+import { createHostThemeFace } from './panel/theme.ts'
 import { en, NS, zh } from './panel/locale.ts'
 import { createPanelStore } from './panel/panel-store.ts'
 import { PanelView } from './panel/PanelView.tsx'
@@ -43,7 +45,7 @@ import { PanelView } from './panel/PanelView.tsx'
  * panel's own surfaces drive (a cordis service, so it is declared here before
  * any selection can be reached).
  */
-export const inject = ['slots', 'sessions', 'locale', 'connection', 'sidebarRightTabs', 'layout']
+export const inject = ['slots', 'sessions', 'locale', 'connection', 'sidebarRightTabs', 'layout', 'theme']
 
 export function apply(ctx: ClientContext): void {
   const connection = (ctx as unknown as { connection?: MstarWorkflowPickerConnection }).connection
@@ -54,6 +56,12 @@ export function apply(ctx: ClientContext): void {
   // replacement.
   // One RPC face, no store and no timer: nothing to dispose with the fiber.
   const panelSnapshot = new MstarPanelSnapshotClient(connection)
+  // The host's colour SCHEME, never its palette (compass constraint 4): the
+  // product's own `--ms-*` values stay, and the scheme flips the shared
+  // `[data-ms-theme]` token block.
+  const theme = createHostThemeFace(ctx.theme, (listener) => ctx.on('theme/change', listener))
+  ctx.effect(() => () => theme.dispose(), 'ui-mstar-panel: theme bridge')
+  const themeFace = theme.face
   const t = ctx.locale.bind(NS)
   ctx.effect(() => ctx.locale.register(NS, { zh, en }), 'ui-mstar-panel: dictionaries')
   ctx.effect(
@@ -80,7 +88,7 @@ export function apply(ctx: ClientContext): void {
       key: MSTAR_PANEL_ID,
       locale: NS,
     }, (props: Parameters<typeof MainPanelView>[0]) =>
-      MainPanelView({ ...props, picker, panelSnapshot, localeFace: ctx.locale }))),
+      MainPanelView({ ...props, picker, panelSnapshot, localeFace: ctx.locale, themeFace }))),
     'ui-mstar-panel: main seat',
   )
   // The body seat closes over the two clients exactly as the old view-tab
@@ -102,6 +110,10 @@ export function apply(ctx: ClientContext): void {
         picker,
         panelSnapshot,
         localeFace: ctx.locale,
+        themeFace,
+        // The host's own enforcement line: session chrome, so the sidebar seat
+        // renders it and the main-area seat does not.
+        enforcementLine: true,
         // The host's panel-selection face, bound here: the seat's affordance is
         // the first production caller (an unregistered key throws — by then the
         // `main` registration below has run, and both are effect-scoped).
