@@ -663,14 +663,13 @@ describe("mstar workflow reopen — the explicit operator route back from a term
     );
     expect(stopped.exitCode, stopped.stdout).toBe(0);
 
-    // The close retained the plan rows on the terminal header; they are the
-    // baseline the reopened lifecycle must still serve.
+    // The close published the terminal header as an identity row; the plan rows
+    // it retains stay in the store read and must reappear on the reopened
+    // lifecycle below.
     const closed = runCli(["status", "validate"], fixture.root);
     expect(closed.exitCode, closed.stdout).toBe(0);
-    const closedEntry = (dataOf(closed).terminalUnregistered as Array<Record<string, unknown>>)[0]!;
-    expect(closedEntry).toMatchObject({ id: WORKFLOW_ID, status: "stopped" });
-    const retainedRows = closedEntry.plans as Array<{ id: string }>;
-    expect(retainedRows.map((row) => row.id)).toEqual([PLAN_ID]);
+    const closedAuthority = dataOf(closed).authority as { terminalUnregistered?: Array<Record<string, unknown>> };
+    expect(closedAuthority.terminalUnregistered).toEqual([{ id: WORKFLOW_ID, status: "stopped", revision: expect.any(Number) }]);
 
     // `--expect` is omitted on purpose: the engine resolves the retained terminal
     // header revision inside the guarded transaction and checks it there.
@@ -686,7 +685,7 @@ describe("mstar workflow reopen — the explicit operator route back from a term
     };
     const entry = authority.workflows?.find((workflow) => workflow.state.id === WORKFLOW_ID);
     expect(entry?.state.status).toBe("running");
-    expect(entry?.plans.map((row) => row.plan.id)).toEqual(retainedRows.map((row) => row.id));
+    expect(entry?.plans.map((row) => row.plan.id)).toEqual([PLAN_ID]);
     expect(authority.terminalUnregistered).toBeUndefined();
   }, 30_000);
 
