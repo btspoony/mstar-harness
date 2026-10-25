@@ -26122,6 +26122,8 @@ function dashboardView(view, handle, filters) {
       return readProjectList(handle.db);
     case "issue-flow":
       return readIssueFlow(handle.db, text5(filters.projectId) ?? undefined);
+    case "overview":
+      return readOverview(handle.db, filters);
   }
 }
 function bindIssueFilter(filter) {
@@ -26406,6 +26408,10 @@ function projectMembership(db) {
   }
   return membership;
 }
+function iterationAttribution(db) {
+  const linked = db.prepare("select 1 as linked from catalog_links where relation = 'belongs-to' and from_kind = 'iteration' and to_kind = 'project' limit 1").get();
+  return linked === undefined ? "absent" : "present";
+}
 function belongsTo(membership, kind, id, projectId) {
   return membership.get(identityToken(kind, id))?.has(projectId) ?? false;
 }
@@ -26641,8 +26647,18 @@ function composeIteration(iterationId, catalog, generated, planIds, documentIds,
       const document3 = identities.get(identityToken("document", documentId));
       return document3 === undefined ? [] : [document3];
     }),
+    gateStep: gateStepOf(compassRow?.status, plans),
     badges
   };
+}
+function gateStepOf(compassStatus, plans) {
+  if (compassStatus === undefined)
+    return null;
+  if (compassStatus !== "locked" && compassStatus !== "completed")
+    return 1;
+  if (compassStatus === "completed")
+    return 4;
+  return plans.length > 0 && plans.every((plan) => plan.execution?.status === "Done") ? 3 : 2;
 }
 function readIterationList(db, filters) {
   const { limit, offset } = paging(filters.limit, filters.offset);
@@ -26660,7 +26676,8 @@ function readIterationList(db, filters) {
   ]);
   return {
     items: page.map((row) => composeIteration(row.id, identities.get(identityToken("iteration", row.id)) ?? null, generated, planIds.get(row.id) ?? [], documentIds.get(row.id) ?? [], identities)),
-    total: catalogRows.length
+    total: catalogRows.length,
+    attribution: iterationAttribution(db)
   };
 }
 function readIterationDetail(db, filters) {
@@ -26678,6 +26695,60 @@ function readIterationDetail(db, filters) {
   if (catalog === null && compassRow === undefined)
     return null;
   return composeIteration(iterationId, catalog, generated, planIds, documentIds, identities);
+}
+function readOverview(db, filters) {
+  const projectId = text5(filters.projectId);
+  const member = (read) => {
+    try {
+      return { state: "read", data: read() };
+    } catch (error) {
+      if (error instanceof SddScriptError)
+        throw error;
+      return { state: "unavailable", reason: error instanceof Error ? error.message : String(error) };
+    }
+  };
+  const projectionFailure = projectionFailureReason(db);
+  const projected = (read) => projectionFailure === null ? member(read) : { state: "unavailable", reason: projectionFailure };
+  return {
+    workflows: projected(() => activeWorkflows(readWorkflowList(db, { limit: 50 }))),
+    residuals: member(() => readResidualCounts(db)),
+    milestones: projectId === null ? { state: "not-applicable", reason: "no project resolves for this read" } : member(() => readMilestonesOn(db, projectId)),
+    latestIteration: projectId === null ? { state: "not-applicable", reason: "no project resolves for this read" } : projected(() => readLatestIteration(db, projectId)),
+    issueFlow: member(() => readIssueFlow(db, projectId ?? undefined))
+  };
+}
+function projectionFailureReason(db) {
+  const projection = readProjectionBlock(db);
+  if (projection.generation !== null)
+    return null;
+  const reasons = projection.diagnostics.map((diagnostic) => diagnostic.message).filter((message) => message !== "");
+  return reasons.length > 0 ? reasons.join("; ") : "no projection generation has been published and the refresh could not read a coherent source set";
+}
+function activeWorkflows(list2) {
+  return { ...list2, items: list2.items.filter((item) => item.activeRegistration) };
+}
+function readResidualCounts(db) {
+  const bySeverity = { critical: 0, high: 0, medium: 0, low: 0, nit: 0 };
+  const rows = db.prepare("select severity, count(*) as n from issues where disposition = 'open' group by severity").all();
+  for (const row of rows) {
+    if (Object.hasOwn(bySeverity, row.severity))
+      bySeverity[row.severity] = row.n;
+  }
+  const open = bySeverity.critical + bySeverity.high + bySeverity.medium + bySeverity.low + bySeverity.nit;
+  return { open, bySeverity };
+}
+function readLatestIteration(db, projectId) {
+  const list2 = readIterationList(db, { projectId, limit: 200 });
+  let latest = null;
+  let latestKey = "";
+  for (const item of list2.items) {
+    const key = item.compass?.startedAt ?? item.catalog?.updatedAt ?? "";
+    if (latest === null || key > latestKey || key === latestKey && item.iterationId < latest.iterationId) {
+      latest = item;
+      latestKey = key;
+    }
+  }
+  return latest;
 }
 function readRoadmap(db, filters) {
   const projectId = text5(filters.projectId);
@@ -36434,7 +36505,8 @@ var init_engine = __esm(() => {
     "iteration-detail": { needsProjection: true },
     projects: { needsProjection: false },
     roadmap: { needsProjection: false },
-    "issue-flow": { needsProjection: false }
+    "issue-flow": { needsProjection: false },
+    overview: { needsProjection: true }
   };
   ISSUE_KINDS = {
     bug: true,
@@ -36493,7 +36565,8 @@ var init_engine = __esm(() => {
     "iteration-detail": [],
     roadmap: ["project"],
     "issue-flow": ["project"],
-    projects: []
+    projects: [],
+    overview: ["project"]
   };
   DISPOSITIONS3 = { open: true, resolved: true, waived: true, duplicate: true, superseded: true };
   KINDS2 = {
