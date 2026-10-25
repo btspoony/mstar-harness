@@ -19,13 +19,15 @@ import { refusalEnvelope, type RefusalDiagnostic } from "../envelope.js";
 import { commandEnvelopeSchema } from "../envelope.js";
 import { decodeInputDiagnostics } from "../input-diagnostics.js";
 import { engineErrorFacts } from "./family-refusal.js";
-import { TOKEN_SUPPLIES } from "../identity-supplies.js";
 import type { CommandDefinition, CommandEnvelope, InvocationContext } from "../types.js";
 
 const command = <I, O>(definition: CommandDefinition<I, O>): CommandDefinition<I, O> => definition;
 const SESSION_ROLES = ["coordinator"] as const;
 /** Recovery compares the addressed workflow's own CAS token, derived when omitted. */
-const SESSION_RECOVER_EXPECT_HELP = `optional CAS token: ${TOKEN_SUPPLIES.workflow}. When omitted this verb reads the addressed header's current token itself and passes it explicitly, so the transition is always CAS-guarded.`;
+const SESSION_RECOVER_EXPECT_HELP =
+  "optional CAS token on the addressed header. An ACTIVE workflow's token is `mstar status validate` output data.workflows[].token; " +
+  "a closed one is published as an identity row only, so omit this option and the verb reads the addressed header's current token itself. " +
+  "Either way the transition is CAS-guarded.";
 
 function ok<T>(id: string, data: T): CommandEnvelope<T> {
   return { version: 1, command: id, status: "ok", code: `${id}.ok`, exitCode: 0, data };
