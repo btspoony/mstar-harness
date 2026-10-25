@@ -142,16 +142,26 @@ describe("a single-record read: null is absent, a failed read is unavailable", (
     expect(arm).toEqual({ kind: "absent" });
   });
 
-  test("a failed read is unavailable and carries the store's reason", () => {
-    const arm = resolveRecord({ data: null, projection: projection(null) }, { unavailableReason: "read failed" });
+  test("a missing payload is unavailable and carries the store's reason", () => {
+    const arm = resolveRecord({ data: undefined, projection: projection(3) } as never, {
+      unavailableReason: "read failed",
+    });
     expect(arm).toEqual({ kind: "unavailable", reason: "read failed" });
   });
 
-  test("the failure arm wins even when a record is present", () => {
-    // The projection is checked before the payload, so a real failure can never be
-    // mistaken for an absence — or for content.
-    const arm = resolveRecord({ data: { id: "I-1" }, projection: projection(null) }, { unavailableReason: "no generation" });
+  test("a view that needs the projection is vetoed before its payload is read", () => {
+    // For the execution views the projection IS the source, so a missing generation
+    // must beat a present record: it can never be mistaken for content.
+    const arm = resolveRecord({ data: { id: "w-1" }, projection: projection(null) }, {
+      unavailableReason: "no generation",
+      requiresProjection: true,
+    });
     expect(arm).toEqual({ kind: "unavailable", reason: "no generation" });
+  });
+
+  test("a store-backed view is not vetoed by a missing generation", () => {
+    const arm = resolveRecord({ data: { id: "I-1" }, projection: projection(null) }, { unavailableReason: "no generation" });
+    expect(arm.kind).toBe("populated");
   });
 
   test("an omitted payload is unavailable, not a populated undefined", () => {
@@ -207,12 +217,19 @@ describe("a malformed envelope reaches the unavailable arm, not a throw", () => 
 describe("a plain envelope read resolves through the same arms", () => {
   const projection = (generation: number | null) => ({ generation, diagnostics: [], freshness: "current" as const, builtAt: null, checkedAt: "" });
 
-  test("no valid projection generation is unavailable, never empty", () => {
+  test("a store-backed read with no generation is empty, not unavailable", () => {
     const arm = resolveRead({ data: [], projection: projection(null) }, {
       whenNull: "empty",
       isEmpty: (rows: readonly unknown[]) => rows.length === 0,
     });
-    expect(arm.kind).toBe("unavailable");
+    expect(arm.kind).toBe("empty");
+    // The veto belongs to the views that declare it, and survives there.
+    const vetoed = resolveRead({ data: [], projection: projection(null) }, {
+      whenNull: "empty",
+      isEmpty: (rows: readonly unknown[]) => rows.length === 0,
+      requiresProjection: true,
+    });
+    expect(vetoed.kind).toBe("unavailable");
   });
 
   test("a valid generation with no rows is empty", () => {

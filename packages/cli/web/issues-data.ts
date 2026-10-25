@@ -167,6 +167,22 @@ export function issuesOutcome(
   }
 }
 
+/**
+ * Keep the previous rows on screen while the next read is in flight.
+ *
+ * A list that reports `loading` by rendering nothing unmounts its own search box
+ * between keystrokes, so the reader loses focus after every character. Only the first
+ * read has nothing to paint; after that, the last successful view stays until the new
+ * one arrives.
+ *
+ * A failure is *not* held back: it replaces the rows, because stale rows under an
+ * error notice would claim the data is current.
+ */
+export function keepPreviousOnLoad(previous: IssuesOutcome | null, next: IssuesOutcome): IssuesOutcome {
+  if (next.kind === "loading" && previous !== null && previous.kind === "ready") return previous;
+  return next;
+}
+
 /** The detail outcome for a settled read. */
 export function issueDetailOutcome(
   result:

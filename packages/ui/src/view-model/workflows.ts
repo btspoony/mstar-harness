@@ -136,7 +136,9 @@ export function workflowListModel(read: {
 }): WorkflowListModel {
   const rows = resolveRead(
     { data: read.data.items, projection: read.projection },
-    { whenNull: "empty", isEmpty: (items) => items.length === 0 },
+    // The rows come from the execution projection: without a generation they cannot
+    // be trusted, and the veto must stay.
+    { whenNull: "empty", isEmpty: (items) => items.length === 0, requiresProjection: true },
   );
   const shown = rows.kind === "populated" ? rows.value.length : 0;
   return {
@@ -205,6 +207,7 @@ export function workflowDetailModel(read: {
 }): Resolved<WorkflowDetailModel> {
   const arm = resolveRecord(read, {
     unavailableReason: "the execution projection for this workflow could not be read",
+    requiresProjection: true,
   });
   if (arm.kind !== "populated") return arm;
   const workflow = arm.value;

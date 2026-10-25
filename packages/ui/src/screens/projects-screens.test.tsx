@@ -144,11 +144,14 @@ const detailCopy: ProjectDetailCopy = {
   },
 };
 
-const renderDetail = (input: {
-  roadmap?: Resolved<RoadmapModel>;
-  feature?: "roadmap" | "issues" | "iterations";
-  identity?: ReturnType<typeof projectIdentity>;
-}): string =>
+const renderDetail = (
+  input: {
+    roadmap?: Resolved<RoadmapModel>;
+    feature?: "roadmap" | "issues" | "iterations";
+    identity?: ReturnType<typeof projectIdentity>;
+  },
+  onClearScope?: () => void,
+): string =>
   renderToStaticMarkup(
     <ProjectDetailScreen
       identity={input.identity ?? projectIdentity(catalogEntry())}
@@ -159,6 +162,7 @@ const renderDetail = (input: {
       iterations={<div data-ms-scoped-list="iterations" />}
       copy={detailCopy}
       onBack={() => {}}
+      onClearScope={onClearScope}
     />,
   );
 
@@ -356,17 +360,37 @@ describe("ProjectDetail — no roadmap row is absent, an empty milestone set is 
   });
 
   test("a failed read is unavailable, carrying the store's message", () => {
+    // A real failure: the payload is missing, not merely unprojected.
     const html = renderDetail({
-      roadmap: roadmapBody(roadmapFeatureArm({ data: null, projection: { ...projection, generation: null } })),
+      roadmap: roadmapBody(roadmapFeatureArm({ data: undefined as never, projection: { ...projection, generation: null } })),
     });
     expect(html).toContain('data-ms-absence="unavailable"');
     expect(html).toContain("could not be completed");
   });
+
+  test("a roadmap with no published generation still renders its content", () => {
+    // The roadmap is store-backed: `generation: null` on a successful read is not a
+    // failure, and treating it as one emptied the Roadmap feature.
+    const html = renderDetail({
+      roadmap: roadmapBody(roadmapFeatureArm({ data: roadmap(), projection: { ...projection, generation: null } })),
+    });
+    expect(html).not.toContain('data-ms-absence="unavailable"');
+    expect(html).toContain("One product, two hosts");
+  });
 });
 
 describe("ProjectDetail — the scoped features carry a removable scope chip", () => {
+  test("the chip's × only exists when the host can handle it", () => {
+    // It was rendered with no handler and no prop to attach one: a control that looks
+    // removable and does nothing.
+    const withHandler = renderDetail({ feature: "issues" }, () => {});
+    expect(withHandler).toContain('data-ms-scope-clear="engine"');
+    const withoutHandler = renderDetail({ feature: "issues" });
+    expect(withoutHandler).toContain('data-ms-scope-chip="engine"');
+    expect(withoutHandler).not.toContain("data-ms-scope-clear");
+  });
   test("the Issues feature shows the project chip and the scoped list", () => {
-    const html = renderDetail({ feature: "issues" });
+    const html = renderDetail({ feature: "issues" }, () => {});
     expect(html).toContain('data-ms-scope-chip="engine"');
     expect(html).toContain("project: engine");
     expect(html).toContain('data-ms-scope-clear="engine"');
@@ -386,7 +410,7 @@ describe("ProjectDetail — the scoped features carry a removable scope chip", (
     // The clear affordance is a labelled button carrying the project id; the host
     // turns it into a store-wide list. Asserting the hook is what keeps the
     // screen from owning the scope.
-    const html = renderDetail({ feature: "issues" });
+    const html = renderDetail({ feature: "issues" }, () => {});
     expect(html).toContain('aria-label="Clear the project scope"');
   });
 });

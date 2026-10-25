@@ -189,6 +189,26 @@ export function queryFor(route: Route, query: string): string {
 }
 
 /**
+ * The address the page opens at.
+ *
+ * `mstar dashboard --project <id>` seeds the served URL with `?project=<id>`; the hash
+ * carries routing only, so reading the hash alone dropped the launch scope and the
+ * dashboard opened store-wide. The selector applies to the first address and to
+ * nothing else — it is a starting filter, not a sticky one, and a route that scopes
+ * itself (`#project/<id>/...`) already knows better.
+ */
+export function initialAddress(hash: string, search: string): Address {
+  const address = parseRoute(hash);
+  const project = new URLSearchParams(search).get("project");
+  if (project === null || project === "") return address;
+  if (address.route.name === "project") return address;
+  if (parseIssueQuery(address.query).filters.project !== "") return address;
+  const params = new URLSearchParams(address.query);
+  params.set("project", project);
+  return { route: address.route, query: params.toString() };
+}
+
+/**
  * The address one step out, or `null` at the landing destination.
  *
  * Escape and the breadcrumb are the same move from two controls, so they share
@@ -198,6 +218,28 @@ export function queryFor(route: Route, query: string): string {
 export function parentAddress(address: Address): Address | null {
   const parent = parentOf(address.route);
   return parent === null ? null : { route: parent, query: address.query };
+}
+
+/**
+ * Where a detail opened *inside a project* returns to.
+ *
+ * A record opened from `#project/<id>/issues` navigates to `#issue/<id>`, which drops
+ * the project from the route — so the breadcrumb and Escape landed on the store-wide
+ * list and the project was lost. The `project` filter the page scoped the list with is
+ * the only surviving trace, so it names the way back.
+ */
+export function detailReturnTarget(address: Address): Address | null {
+  const project = parseIssueQuery(address.query).filters.project;
+  if (project !== "") {
+    const params = new URLSearchParams(address.query);
+    params.delete("project");
+    const query = params.toString();
+    return {
+      route: { name: "project", id: project, feature: "issues" },
+      query,
+    };
+  }
+  return parentAddress(address);
 }
 
 /** The filters an address carries, decoded through the shared pair. */

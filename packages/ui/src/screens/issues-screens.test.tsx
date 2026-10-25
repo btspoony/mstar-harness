@@ -180,10 +180,19 @@ const detail = (over: Partial<IssueDetail> = {}): IssueDetail => ({
   ...over,
 });
 
-const renderDetail = (record: IssueDetail | null, generation: number | null = 7): string =>
+const renderDetail = (
+  record: IssueDetail | null,
+  generation: number | null = 7,
+  /** A read that failed before any record existed: the payload is missing outright. */
+  failed = false,
+): string =>
   renderToStaticMarkup(
     <IssueDetailScreen
-      read={{ data: record === null ? null : issueDetailModel(record), projection: { ...projection, generation } }}
+      read={
+        failed
+          ? ({ data: undefined, projection: { ...projection, generation: null } } as never)
+          : { data: record === null ? null : issueDetailModel(record), projection: { ...projection, generation } }
+      }
       copy={detailCopy}
     />,
   );
@@ -240,10 +249,13 @@ describe("Issues — the list state machine", () => {
     expect(html).toContain("2 results");
   });
 
-  test("no valid projection is unavailable, and the store's message is carried", () => {
-    const html = renderIssues([], 0, query(), null);
-    expect(html).toContain('data-ms-absence="unavailable"');
-    expect(html).toContain("no valid generation");
+  test("a successful read with no published generation still renders", () => {
+    // The store-backed views answer `generation: null` on success; vetoing that made
+    // every working Issues read render as unavailable. Failures reach the screen
+    // through the absence arms the resolver owns, not through this flag.
+    const html = renderIssues([summary()], 1, query(), null);
+    expect(html).not.toContain('data-ms-absence="unavailable"');
+    expect(html).toContain("I-000870");
   });
 
   test("an empty result under the default filters is store-empty", () => {
@@ -375,8 +387,14 @@ describe("IssueDetail — the record read: null is absent, a failed read is unav
   });
 
   test("a failed read is unavailable, and the reason is stated", () => {
-    const html = renderDetail(detail(), null);
+    const html = renderDetail(detail(), 7, true);
     expect(html).toContain('data-ms-absence="unavailable"');
     expect(html).toContain("this issue could not be read");
+  });
+
+  test("a record with no published generation is still the record", () => {
+    const html = renderDetail(detail(), null);
+    expect(html).not.toContain('data-ms-absence="unavailable"');
+    expect(html).toContain("I-000870");
   });
 });

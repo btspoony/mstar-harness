@@ -34,6 +34,8 @@ export type OverviewCopy = {
   pageTitle: string;
   workflowsHeading: string;
   workflowsEmpty: string;
+  /** `showing N of M` — the workflows member is capped upstream. */
+  workflowsTruncated: (shown: number, total: number) => string;
   /** One workflow row's plan progress. */
   plansProgress: (done: number, total: number) => string;
   residualsHeading: string;
@@ -159,6 +161,13 @@ export function Overview(props: OverviewProps) {
               {model.workflows.value.map((row) => (
                 <WorkflowRowView key={row.id} row={row} copy={copy} />
               ))}
+              {/* The member is capped by the engine, so a truncated set has to say so:
+                  rows that stop at 50 look like all of them. */}
+              {model.workflows.truncated ? (
+                <p className={css.truncated} data-ms-truncated={model.workflows.total}>
+                  {copy.workflowsTruncated(model.workflows.shown, model.workflows.total)}
+                </p>
+              ) : null}
             </div>
           ) : (
             <Absence

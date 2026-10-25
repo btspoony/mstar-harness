@@ -80,7 +80,11 @@ export function parseIssueQuery(search: string): IssueQuery {
   if (project !== null) filters.project = project;
   for (const field of ["disposition", "kind", "severity"] as const) {
     const value = params.get(field);
-    if (value !== null && ACCEPTED[field].includes(value)) filters[field] = value;
+    // An empty value is the "Any" option: it clears the filter rather than being an
+    // unknown literal. Without this, choosing Any re-parsed as the default `open` and
+    // silently filtered the list to open issues.
+    if (value === "") filters[field] = "";
+    else if (value !== null && ACCEPTED[field].includes(value)) filters[field] = value;
   }
   const q = params.get("q");
   if (q !== null) filters.q = q;

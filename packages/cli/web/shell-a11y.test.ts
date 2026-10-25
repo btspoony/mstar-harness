@@ -102,11 +102,14 @@ describe("status survives colour removal", () => {
     // the shared layer separates tones by luminance and forces colours in
     // `forced-colors` mode. The host's own chrome must not add a colour rule that
     // carries meaning — `currentColor` for a border is the one allowed use.
-    const inherited = ["currentColor", "inherit", "transparent", "unset"];
+    // A token reference is not a colour of the host's own: it is the shared sheet's
+    // value, so the shell may paint with it (the page canvas, the text colour) without
+    // introducing a second palette.
+    const allowed = ["currentColor", "inherit", "transparent", "unset", "var(--ms-"];
     const colourDeclarations = shellCss
       .split("\n")
       .filter((line) => /(^|[^-\w])(color|background|background-color)\s*:/.test(line))
-      .filter((line) => !inherited.some((value) => line.includes(value)));
+      .filter((line) => !allowed.some((value) => line.includes(value)));
     expect(colourDeclarations).toEqual([]);
   });
 

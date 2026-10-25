@@ -271,7 +271,8 @@ describe("projects", () => {
   test("the list resolves empty vs unavailable distinctly", () => {
     const data = { items: [], total: 0 } as ProjectListDTO;
     expect(projectListModel({ data, projection: projection(3) }).rows).toEqual({ kind: "empty" });
-    expect(projectListModel({ data, projection: projection(null) }).rows.kind).toBe("unavailable");
+    // Projects are store-backed: no published generation is not a failure.
+    expect(projectListModel({ data, projection: projection(null) }).rows).toEqual({ kind: "empty" });
   });
 
   test("a project with no roadmap authority row is absent, not an empty board", () => {
