@@ -327,6 +327,16 @@ export function destinationReadView(destination: PanelDestination): string | nul
   return destination === 'focus' ? null : destination
 }
 
+/**
+ * The parameters a destination's read carries. Always EXPLICIT: the engine's
+ * default page is 50 rows, and a destination with no pager would silently drop
+ * everything past that. `iterations` asks for the documented ceiling (200) and
+ * the adapter discloses any truncation from the DTO's own `total`.
+ */
+export function destinationReadParams(destination: PanelDestination): Record<string, string> {
+  return destination === 'iterations' ? { limit: '200' } : {}
+}
+
 /** The product locale, read from the host's own locale face (uSES-safe). */
 function useProductLocale(face: HostLocaleFace | undefined): Locale {
   const read = (): string => (face === undefined ? 'en' : face.getSnapshot().active)
@@ -440,7 +450,9 @@ export function PanelSeat(props: PanelSeatProps): React.ReactElement | null {
     // workflow (it needs one), so reusing it left the destination waiting forever
     // for an unbound or fresh session.
     view: snapshot === null ? null : destinationReadView(destination),
-    ...(destination === 'issues' ? { params: issueParams } : {}),
+    ...(destination === 'issues'
+      ? { params: issueParams }
+      : destination === 'iterations' ? { params: destinationReadParams(destination) } : {}),
   })
   const destinationRead = destinationView.state
   // The open record (list → detail), and its own read.
