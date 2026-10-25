@@ -23,6 +23,7 @@
 import { StrictMode, useCallback, useEffect, useState } from "react";
 import { createRoot } from "react-dom/client";
 import {
+  DEFAULT_PROJECT_FEATURE,
   EmptyState,
   IssueDetail,
   Issues,
@@ -33,10 +34,13 @@ import {
   MS_THEME_ATTRIBUTE,
   Nav,
   Overview,
+  ProjectDetail,
+  Projects,
   WorkflowDetail,
   Workflows,
   useCopy,
   type IssueQuery,
+  type ProjectFeature,
 } from "@mstar-harness/ui";
 
 import { ABSENT_PROJECTION } from "./absent-projection";
@@ -63,6 +67,17 @@ import {
   type IssuesOutcome,
 } from "./issues-data";
 import { overviewCopy, overviewOutcome, readOverview, type OverviewOutcome } from "./overview-data";
+import {
+  projectDetailCopy,
+  projectOptions,
+  projectsCopy,
+  projectsOutcome,
+  readProjects,
+  readRoadmap,
+  roadmapOutcome,
+  type ProjectsOutcome,
+  type RoadmapOutcome,
+} from "./projects-data";
 import {
   readWorkflowDetail,
   readWorkflows,
@@ -179,8 +194,21 @@ function useIssues(query: IssueQuery): IssuesOutcome {
   return outcome;
 }
 
-function IssuesDestination(props: { address: Address }) {
-  const query = routeFilters(props.address);
+/**
+ * The Issues list at one scope.
+ *
+ * `scope` is a project id when a project detail renders it, and `null` for the
+ * destination. It is applied to the request and to the query the screen reports,
+ * so the project page owns exactly one authority over the scope.
+ */
+function IssueListScreen(props: {
+  query: IssueQuery;
+  projectIds: readonly string[];
+  scope: string | null;
+  onQueryChange: (query: IssueQuery) => void;
+  onOpen?: (id: string) => void;
+}) {
+  const query = props.scope === null ? props.query : { ...props.query, filters: { ...props.query.filters, project: props.scope } };
   const outcome = useIssues(query);
   const copy = useCopy();
 
@@ -202,11 +230,27 @@ function IssuesDestination(props: { address: Address }) {
       model={outcome.model}
       query={query}
       copy={issuesCopy(copy)}
-      options={{ ...ISSUE_FILTER_OPTIONS, project: [] }}
+      options={{ ...ISSUE_FILTER_OPTIONS, project: props.projectIds }}
+      onQueryChange={props.onQueryChange}
+      onOpen={props.onOpen}
+    />
+  );
+}
+
+function IssuesDestination(props: { address: Address; projectIds: readonly string[] }) {
+  const query = routeFilters(props.address);
+  return (
+    <IssueListScreen
+      query={query}
+      projectIds={props.projectIds}
+      scope={null}
       onQueryChange={(next) => {
         // A filter change replaces: Back should step through destinations, not
         // through every keystroke.
-        navigate({ name: "issues" }, new URLSearchParams(issueQueryString(next)).toString(), "replace");
+        navigate({ name: "issues" }, issueQueryString(next), "replace");
+      }}
+      onOpen={(id) => {
+        navigate({ name: "issue", id }, "", "push");
       }}
     />
   );
@@ -351,22 +395,22 @@ function WorkflowDetailDestination(props: { id: string }) {
 }
 
 /** The Iterations list, behind its own read. */
-function IterationsDestination() {
+/** The Iterations list at one scope: `null` store-wide, or a project's own. */
+function IterationListScreen(props: { scope: string | null; onOpen?: (id: string) => void }) {
   const [outcome, setOutcome] = useState<IterationsOutcome>({ kind: "loading" });
   const copy = useCopy();
   useEffect(() => {
     const controller = new AbortController();
     let current = true;
-    // No project scope on this route: the list destination is store-wide, and the
-    // project-scoped read belongs to the project detail's feature (batch 4).
-    void readIterations(fetch, null, controller.signal).then((result) => {
+    setOutcome({ kind: "loading" });
+    void readIterations(fetch, props.scope, controller.signal).then((result) => {
       if (current) setOutcome(iterationsOutcome(result));
     });
     return () => {
       current = false;
       controller.abort();
     };
-  }, []);
+  }, [props.scope]);
 
   if (outcome.kind === "loading") return null;
   if (outcome.kind === "failed") {
@@ -381,15 +425,11 @@ function IterationsDestination() {
     );
   }
 
-  return (
-    <Iterations
-      model={outcome.model}
-      copy={iterationsCopy(copy)}
-      onOpen={(iterationId) => {
-        navigate({ name: "iteration", id: iterationId }, "", "push");
-      }}
-    />
-  );
+  return <Iterations model={outcome.model} copy={iterationsCopy(copy)} onOpen={props.onOpen} />;
+}
+
+function IterationsDestination() {
+  return <IterationListScreen scope={null} onOpen={(id) => navigate({ name: "iteration", id }, "", "push")} />;
 }
 
 /** One iteration, behind its own read. */
@@ -437,9 +477,140 @@ function IterationDetailDestination(props: { id: string }) {
   );
 }
 
+/**
+ * The project list, read once for the whole shell.
+ *
+ * Obligation 2 of the shared package's README: a component cannot know how a host
+ * enumerates projects, so the host supplies them. One read feeds both consumers —
+ * the Issues filter bar's project vocabulary and the Projects destination — rather
+ * than each fetching its own copy and disagreeing after one of them fails.
+ */
+function useProjects(): ProjectsOutcome {
+  const [outcome, setOutcome] = useState<ProjectsOutcome>({ kind: "loading" });
+  useEffect(() => {
+    const controller = new AbortController();
+    let current = true;
+    void readProjects(fetch, controller.signal).then((result) => {
+      if (current) setOutcome(projectsOutcome(result));
+    });
+    return () => {
+      current = false;
+      controller.abort();
+    };
+  }, []);
+  return outcome;
+}
+
+/** The Projects list. */
+function ProjectsDestination(props: { outcome: ProjectsOutcome }) {
+  const copy = useCopy();
+
+  if (props.outcome.kind === "loading") return null;
+  if (props.outcome.kind === "failed") {
+    return (
+      <EmptyState
+        arm="unavailable"
+        labelWord={copy.state.unavailable.labelWord}
+        heading={copy.projects.pageTitle}
+        body={copy.state.unavailable.body}
+        reason={props.outcome.message}
+      />
+    );
+  }
+
+  return (
+    <Projects
+      model={props.outcome.model}
+      copy={projectsCopy(copy)}
+      onOpen={(projectId) => {
+        // The default feature is the route model's: `#project/<id>` means Roadmap.
+        navigate({ name: "project", id: projectId, feature: DEFAULT_PROJECT_FEATURE }, "", "push");
+      }}
+    />
+  );
+}
+
+/**
+ * One project: the identity head, the three fixed features, and the selected
+ * feature's content. `Roadmap` is the route's default and never "the first
+ * feature with data".
+ */
+function ProjectDetailDestination(props: { address: Address; feature: ProjectFeature; projectIds: readonly string[] }) {
+  const projectId = props.address.route.name === "project" ? props.address.route.id : "";
+  const [outcome, setOutcome] = useState<RoadmapOutcome>({ kind: "loading" });
+  const [identity, setIdentity] = useState<{ title: string; description: string | null } | null>(null);
+  const copy = useCopy();
+
+  useEffect(() => {
+    const controller = new AbortController();
+    let current = true;
+    setOutcome({ kind: "loading" });
+    void readRoadmap(fetch, projectId, controller.signal).then((result) => {
+      if (!current) return;
+      const next = roadmapOutcome(result, projectId);
+      setOutcome(next);
+      if (next.kind === "ready") setIdentity({ title: next.identity.title, description: next.identity.description });
+    });
+    return () => {
+      current = false;
+      controller.abort();
+    };
+  }, [projectId]);
+
+  if (outcome.kind === "loading") return null;
+  if (outcome.kind === "failed") {
+    return (
+      <EmptyState
+        arm="unavailable"
+        labelWord={copy.state.unavailable.labelWord}
+        heading={copy.projects.pageTitle}
+        body={copy.state.unavailable.body}
+        reason={outcome.message}
+      />
+    );
+  }
+
+  return (
+    <ProjectDetail
+      identity={outcome.identity}
+      feature={props.feature}
+      onFeatureChange={(feature) => {
+        navigate({ name: "project", id: projectId, feature }, "", "push");
+      }}
+      roadmap={outcome.roadmap}
+      issues={
+        <IssueListScreen
+          query={{ filters: { ...DEFAULT_ISSUES.filters }, offset: 0 }}
+          projectIds={props.projectIds}
+          scope={projectId}
+          onQueryChange={() => {
+            // The project page owns the scope; a filter change inside it stays here.
+          }}
+          onOpen={(id) => {
+            navigate({ name: "issue", id }, "", "push");
+          }}
+        />
+      }
+      iterations={<IterationListScreen scope={projectId} onOpen={(id) => navigate({ name: "iteration", id }, "", "push")} />}
+      copy={projectDetailCopy(copy)}
+      onBack={() => {
+        navigate({ name: "projects" }, "", "push");
+      }}
+    />
+  );
+}
+
+/** The neutral query a project's Issues feature opens with. */
+const DEFAULT_ISSUES: IssueQuery = {
+  filters: { disposition: "open", project: "", kind: "", severity: "", q: "" },
+  offset: 0,
+};
+
 /** The shell: skip link, header with the shared navigation, the main region, footer. */
 function Shell() {
   const [address, setAddress] = useState<Address>(() => parseRoute(window.location.hash));
+  const projects = useProjects();
+  const projectIds = projects.kind === "ready" ? projectOptions(projects.model) : [];
 
   useEffect(() => {
     const onHashChange = (): void => {
@@ -494,12 +665,20 @@ function Shell() {
           a placeholder that would claim a state the dashboard cannot answer. */}
       <main id="main" className="app-main" data-ms-route={routeHash(address.route)}>
         {address.route.name === "overview" ? <OverviewDestination /> : null}
-        {address.route.name === "issues" ? <IssuesDestination address={address} /> : null}
+        {address.route.name === "issues" ? <IssuesDestination address={address} projectIds={projectIds} /> : null}
         {address.route.name === "issue" ? <IssueDetailDestination id={address.route.id} /> : null}
         {address.route.name === "workflows" ? <WorkflowsDestination /> : null}
         {address.route.name === "workflow" ? <WorkflowDetailDestination id={address.route.id} /> : null}
         {address.route.name === "iterations" ? <IterationsDestination /> : null}
         {address.route.name === "iteration" ? <IterationDetailDestination id={address.route.id} /> : null}
+        {address.route.name === "projects" ? <ProjectsDestination outcome={projects} /> : null}
+        {address.route.name === "project" ? (
+          <ProjectDetailDestination
+            address={address}
+            feature={(address.route as Extract<Route, { name: "project" }>).feature}
+            projectIds={projectIds}
+          />
+        ) : null}
       </main>
       <footer className="app-footer">Read-only · Make changes with the CLI</footer>
     </div>

@@ -17,6 +17,8 @@
  *    Workflows pair pinned, expressed through the same `ABSENT_PROJECTION`.
  */
 import type { IterationDTO, IterationListDTO, ReadEnvelope } from "@mstar-harness/engine";
+
+import { UNREACHABLE, asEnvelope, refusalMessage } from "./read-envelope";
 import {
   iterationDetailModel,
   iterationListModel,
@@ -73,29 +75,6 @@ export type IterationDetailOutcome =
   | { kind: "loading" }
   | { kind: "ready"; model: Resolved<IterationDetailModel> }
   | { kind: "failed"; message: string };
-
-/** The envelope a JSON body is, or `null` when it is not one. */
-export function asEnvelope<T>(body: unknown): ReadEnvelope<T> | null {
-  if (body === null || typeof body !== "object") return null;
-  const candidate = body as { data?: unknown; projection?: unknown };
-  if (candidate.data === undefined || candidate.projection === undefined) return null;
-  const projection = candidate.projection as { generation?: unknown; freshness?: unknown };
-  if (typeof projection.generation !== "number" && projection.generation !== null) return null;
-  if (typeof projection.freshness !== "string") return null;
-  return body as ReadEnvelope<T>;
-}
-
-/** A refusal's message, or the generic one when the body carries none. */
-export function refusalMessage(body: unknown, status: number): string {
-  if (body !== null && typeof body === "object") {
-    const error = (body as { error?: { message?: unknown } }).error;
-    if (error !== undefined && typeof error.message === "string" && error.message !== "") return error.message;
-  }
-  return `The dashboard read was refused (HTTP ${status}).`;
-}
-
-const UNREACHABLE =
-  "The dashboard could not reach its local server. Check that the dashboard is running, then reload.";
 
 /** One list read. `projectId` comes from the route, never from the address bar twice. */
 export async function readIterations(

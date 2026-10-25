@@ -20,6 +20,8 @@
  * module does not even name it in the model it builds.
  */
 import type { OverviewDTO, ReadEnvelope, ReadProjection } from "@mstar-harness/engine";
+
+import { UNREACHABLE, asEnvelope, refusalMessage } from "./read-envelope";
 import {
   overviewModel,
   type Copy,
@@ -94,15 +96,6 @@ export function asOverviewEnvelope(body: unknown): ReadEnvelope<OverviewDTO> | n
   if (typeof projection.generation !== "number" && projection.generation !== null) return null;
   if (typeof projection.freshness !== "string") return null;
   return body as ReadEnvelope<OverviewDTO>;
-}
-
-/** A refusal's message, or the generic one when the body carries none. */
-export function refusalMessage(body: unknown, status: number): string {
-  if (body !== null && typeof body === "object") {
-    const error = (body as { error?: { message?: unknown } }).error;
-    if (error !== undefined && typeof error.message === "string" && error.message !== "") return error.message;
-  }
-  return `The overview read was refused (HTTP ${status}).`;
 }
 
 /**

@@ -13,13 +13,13 @@ import { renderToStaticMarkup } from "react-dom/server";
 import type { IterationDTO, OverviewDTO, ReadEnvelope, WorkflowListDTO } from "@mstar-harness/engine";
 import { Overview, copyFor } from "@mstar-harness/ui";
 
+import { refusalMessage } from "./read-envelope";
 import {
   asOverviewEnvelope,
   overviewCopy,
   overviewFromEnvelope,
   overviewOutcome,
   readOverview,
-  refusalMessage,
 } from "./overview-data";
 
 const projection = {
