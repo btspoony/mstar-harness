@@ -41,6 +41,8 @@ import type { MstarPanelSnapshotClient } from './panel-snapshot-client.ts'
 import { issueQuery as serializeIssueQuery, parseIssueQuery, type IssueQuery } from '@mstar-harness/ui'
 import { useMstarSessionDigest } from './use-mstar-session-digest.ts'
 import {
+  DetailBody,
+  type DetailView,
   IssuesDestination,
   IterationsDestination,
   OverviewDestination,
@@ -184,6 +186,9 @@ export function PanelShell(props: {
   /** Issues owns the only interactive seat a destination has (its filter query). */
   issueQuery?: IssueQuery
   onIssueQueryChange?: (query: IssueQuery) => void
+  /** The open detail route, or null for the destination's list. */
+  detail?: { view: DetailView; id: string; state: MstarDashboardViewState } | null
+  onBack?: () => void
 }): React.ReactElement {
   const copy = copyFor(props.locale)
   const selection: SessionBinding | null = props.snapshot.selection
@@ -208,7 +213,16 @@ export function PanelShell(props: {
           <Nav items={navItems(copy)} activeId={props.destination} onSelect={props.onSelect} label={props.navLabel} />
         </div>
         <div className={css.scroll} data-mstar-scroll>
-          {props.destination === 'focus' ? (
+          {props.detail === null || props.detail === undefined ? null : (
+            <DetailBody
+              view={props.detail.view}
+              id={props.detail.id}
+              state={props.detail.state}
+              locale={props.locale}
+              onBack={props.onBack ?? (() => {})}
+            />
+          )}
+          {props.detail !== null && props.detail !== undefined ? null : props.destination === 'focus' ? (
             <Focus
               model={model}
               copy={focusCopy(copy)}
@@ -236,6 +250,9 @@ function DestinationBody(props: {
   locale: Locale
   issueQuery?: IssueQuery
   onIssueQueryChange?: (query: IssueQuery) => void
+  /** The open detail route, or null for the destination's list. */
+  detail?: { view: DetailView; id: string; state: MstarDashboardViewState } | null
+  onBack?: () => void
 }): React.ReactElement {
   const shared = { state: props.state, locale: props.locale }
   switch (props.destination) {

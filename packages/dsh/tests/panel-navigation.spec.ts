@@ -364,3 +364,57 @@ describe('sidebar shell — the seat still owns its transport states', () => {
   })
 
 })
+
+/* ----------------------------- 6. detail routes ----------------------------- */
+
+describe('detail routes — a record read, not a landmark', () => {
+  const envelope = (data: unknown, generation = 1) => ({
+    state: { kind: 'ok' as const, envelope: { data, projection: { generation, freshness: 'current', builtAt: null, checkedAt: '', diagnostics: [] } } },
+  })
+  const renderDetail = (detail: unknown): string =>
+    renderToStaticMarkup(createElement(PanelShell, {
+      snapshot: snapshot(),
+      workflow: { state: 'read', data: WORKFLOW } as never,
+      destination: 'workflows',
+      locale: 'en',
+      navLabel: 'Morning Star Workflow',
+      onSelect: () => {},
+      select: null,
+      detail,
+      onBack: () => {},
+    } as never))
+
+  it('renders the workflow detail screen for its record', () => {
+    const markup = renderDetail({
+      view: 'workflow-detail',
+      id: 'wf-1',
+      ...envelope({ id: 'wf-1', type: 'plan', status: 'running', phase: 'phase-2-execute', branch: { base: 'main', source: 'feature/wf-1', integration: null, target: 'main' }, startedAt: null, updatedAt: null, plans: [], catalog: null, badges: [] }),
+    })
+    expect(markup).toContain('data-ms-screen="workflow-detail"')
+    expect(markup).not.toContain('data-ms-destination-body="workflows"')
+  })
+
+  it('renders the iteration detail screen for its record', () => {
+    const markup = renderDetail({
+      view: 'iteration-detail',
+      id: 'iter-1',
+      ...envelope({ iterationId: 'iter-1', catalog: null, compass: null, workflow: null, plans: [], documents: [], gateStep: 2, badges: [] }),
+    })
+    expect(markup).toContain('data-ms-screen="iteration-detail"')
+  })
+
+  it('splits absent from unavailable on the issue detail', () => {
+    // ABSENT: the read succeeded and the record declares nothing.
+    const absent = renderDetail({ view: 'issue-detail', id: 'I-404', ...envelope(null) })
+    expect(absent).toContain('data-ms-screen="issue-detail"')
+    expect(absent).toContain('data-ms-absence="absent"')
+    // UNAVAILABLE: the read failed — the store's own reason, never "nothing here".
+    const unavailable = renderDetail({
+      view: 'issue-detail',
+      id: 'I-404',
+      state: { kind: 'unavailable', reason: 'store.not-active: staged' },
+    })
+    expect(unavailable).toContain('store.not-active: staged')
+    expect(unavailable).not.toContain('data-ms-absence="absent"')
+  })
+})

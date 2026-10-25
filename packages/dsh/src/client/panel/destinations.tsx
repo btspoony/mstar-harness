@@ -168,3 +168,86 @@ export function ProjectsDestination({ state, locale }: DestinationProps): React.
     </div>
   )
 }
+
+/* ------------------------------- detail routes ------------------------------- */
+
+import { IssueDetail, WorkflowDetail, IterationDetail, issueDetailModel, workflowDetailModel, iterationDetailModel } from '@mstar-harness/ui'
+import type { IssueDetail as IssueDetailDTO, WorkflowDTO, IterationDTO } from '@mstar-harness/engine'
+
+/** The four detail views a destination can open. */
+export type DetailView = 'issue-detail' | 'workflow-detail' | 'iteration-detail' | 'project-detail'
+
+export type DetailProps = {
+  readonly view: DetailView
+  readonly id: string
+  readonly state: MstarDashboardViewState
+  readonly locale: Locale
+  readonly onBack: () => void
+  readonly onOpenWorkflow?: (id: string) => void
+}
+
+/**
+ * One detail route. A record read's `null` is ABSENT (the record declares
+ * nothing here); a projection with no generation is UNAVAILABLE (the read could
+ * not be made) — the shared resolvers own that split, this adapter only passes
+ * the envelope through.
+ */
+export function DetailBody({ view, state, locale, onBack, onOpenWorkflow }: DetailProps): React.ReactElement {
+  const copy = copyFor(locale)
+  if (state.kind !== 'ok') return <ReadState state={state} copy={copy} />
+  const envelope = state.envelope
+  const data = envelope.data
+  switch (view) {
+    case 'issue-detail': {
+      const issueCopy = {
+        ...copy.issueDetail,
+        absence: {
+          unavailable: { ...copy.state.unavailable, heading: copy.issueDetail.identityHeading },
+          absent: { ...copy.state.absent, heading: copy.issueDetail.identityHeading },
+        },
+      }
+      return (
+        <IssueDetail
+          read={{
+            data: data === null ? null : issueDetailModel(data as IssueDetailDTO),
+            projection: envelope.projection,
+          }}
+          copy={issueCopy}
+          onBack={onBack}
+        />
+      )
+    }
+    case 'workflow-detail': {
+      const model = data === null
+        ? ({ kind: 'absent' } as const)
+        : workflowDetailModel({ data: data as WorkflowDTO, projection: envelope.projection })
+      return <WorkflowDetail model={model} copy={{ ...copy.workflowDetail, absence: {
+        'not-applicable': { ...copy.state['not-applicable'], heading: copy.workflowDetail.catalogHeading },
+        absent: { ...copy.state.absent, heading: copy.workflowDetail.catalogHeading },
+        empty: { ...copy.state.empty, heading: copy.workflowDetail.catalogHeading },
+        unavailable: { ...copy.state.unavailable, heading: copy.workflowDetail.catalogHeading },
+      } }} onBack={onBack} />
+    }
+    case 'iteration-detail': {
+      const model = data === null
+        ? ({ kind: 'absent' } as const)
+        : iterationDetailModel({ data: data as IterationDTO, projection: envelope.projection })
+      return (
+        <IterationDetail
+          model={model}
+          copy={{
+            ...copy.iterationDetail,
+            unavailable: { ...copy.state.unavailable, heading: copy.iterationDetail.catalogHeading },
+            absent: { ...copy.state.absent, heading: copy.iterationDetail.catalogHeading },
+          }}
+          onBack={onBack}
+          {...(onOpenWorkflow === undefined ? {} : { onOpenWorkflow })}
+        />
+      )
+    }
+    case 'project-detail':
+      // Not mounted this round: it needs the fixed three-feature tabs plus two
+      // scoped list reads below them.
+      return <ReadState state={{ kind: 'unavailable', reason: 'project detail is not mounted in this round' }} copy={copy} />
+  }
+}
