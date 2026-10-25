@@ -28,7 +28,8 @@ import { clientExports } from './client-bundles.ts'
 import { bindUseSessions, gatewayOk, SESSION, settleRender, stubGateway, visibleTabKit } from './gateway-stub.ts'
 import { en, NS, zh } from '../src/client/panel/locale.ts'
 import { MstarPanelSnapshotClient } from '../src/client/panel/panel-snapshot-client.ts'
-import { PANEL_DESTINATIONS, PanelShell, PanelView, productLocale } from '../src/client/panel/PanelView.tsx'
+import { PanelView } from '../src/client/panel/PanelView.tsx'
+import { PANEL_DESTINATIONS, PanelShell, productLocale } from '../src/client/panel/panel-shell.tsx'
 import type { PanelSnapshot } from '../src/panel/panel-snapshot.ts'
 
 type LocaleClientExports = typeof import('@deepseek-ai/dsh-client-locale/client')
@@ -276,7 +277,7 @@ describe('sidebar shell — the product copy follows the host locale', () => {
       } as never)),
     )
     client.dispose()
-    expect(markup).toContain('data-mstar-panel="panel"')
+    expect(markup).toContain('data-mstar-seat="sidebar"')
     expect(markup).toContain('data-ms-screen="focus"')
     expect(markup).toContain(uiZh.focus.pageTitle)
   })

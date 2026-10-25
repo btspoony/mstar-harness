@@ -24,12 +24,12 @@ import type {} from '@deepseek-ai/dsh-client-ui-renderer/client'
 import type {} from '@deepseek-ai/dsh-client-ui-layout/client'
 import type {} from '@deepseek-ai/dsh-client-ui-sidebar/client'
 import type {} from '@deepseek-ai/dsh-client-ui-sidebar-right/client'
-import { createElement } from 'react'
-import { MSTAR_PANEL_ID, MSTAR_PANEL_ROW_ORDER, mstarPanelDefinition } from './panel/definition.ts'
+import { MSTAR_PANEL_ID, MSTAR_PANEL_ROW_ORDER, mstarPanelDefinition, selectMstarPanel } from './panel/definition.ts'
 import { MstarWorkflowPickerClient, type MstarWorkflowPickerConnection } from './panel/workflow-picker-client.ts'
 import { MstarPanelSnapshotClient } from './panel/panel-snapshot-client.ts'
 import { MstarPanelTitle } from './panel/MstarPanelTitle.tsx'
 import { SidebarRowIcon } from './panel/SidebarRowIcon.tsx'
+import { MainPanelView } from './panel/MainPanelView.tsx'
 import { en, NS, zh } from './panel/locale.ts'
 import { createPanelStore } from './panel/panel-store.ts'
 import { PanelView } from './panel/PanelView.tsx'
@@ -44,14 +44,6 @@ import { PanelView } from './panel/PanelView.tsx'
  * any selection can be reached).
  */
 export const inject = ['slots', 'sessions', 'locale', 'connection', 'sidebarRightTabs', 'layout']
-
-/**
- * The main-area seat's body until the unified panel screen lands: one landmark
- * element, so the seat is identifiable and empty rather than absent. It is
- * replaced by the real screen at this one identifier.
- */
-const MainSeatPlaceholder = () =>
-  createElement('section', { 'data-mstar-panel': 'main', 'aria-label': 'Morning Star workflow' })
 
 export function apply(ctx: ClientContext): void {
   const connection = (ctx as unknown as { connection?: MstarWorkflowPickerConnection }).connection
@@ -87,7 +79,8 @@ export function apply(ctx: ClientContext): void {
       name: 'main',
       key: MSTAR_PANEL_ID,
       locale: NS,
-    }, MainSeatPlaceholder)),
+    }, (props: Parameters<typeof MainPanelView>[0]) =>
+      MainPanelView({ ...props, picker, panelSnapshot, localeFace: ctx.locale }))),
     'ui-mstar-panel: main seat',
   )
   // The body seat closes over the two clients exactly as the old view-tab
@@ -103,7 +96,17 @@ export function apply(ctx: ClientContext): void {
       key: MSTAR_PANEL_ID,
       locale: NS,
       store: panelStore,
-    }, (props: Parameters<typeof PanelView>[0]) => PanelView({ ...props, picker, panelSnapshot, localeFace: ctx.locale }))),
+    }, (props: Parameters<typeof PanelView>[0]) =>
+      PanelView({
+        ...props,
+        picker,
+        panelSnapshot,
+        localeFace: ctx.locale,
+        // The host's panel-selection face, bound here: the seat's affordance is
+        // the first production caller (an unregistered key throws — by then the
+        // `main` registration below has run, and both are effect-scoped).
+        openMainPanel: () => selectMstarPanel(ctx.layout),
+      }))),
     'ui-mstar-panel: panel body',
   )
   ctx.effect(

@@ -29,6 +29,7 @@ export const NS = 'mstar-panel'
 export type PanelKey =
   | 'view.mstar-workflow'
   | 'guide.description'
+  | 'panel.open-full-page'
   | 'tab.tasks'
   | 'tab.roadmap'
   | 'tab.events'
@@ -160,6 +161,7 @@ declare module '@deepseek-ai/dsh-client-ui-slots' {
 /** zh dictionary (repo bilingual convention; zh is the stub fallback locale). */
 export const zh: LocaleDictOf<'mstar-panel'> = {
   'view.mstar-workflow': '晨星工作流',
+  'panel.open-full-page': '在主页打开',
   'guide.description': '查看工作区状态、计划与迭代进度',
   'tab.tasks': '任务迭代',
   'tab.roadmap': '项目路线图',
@@ -287,6 +289,7 @@ export const zh: LocaleDictOf<'mstar-panel'> = {
 /** en dictionary (default locale). */
 export const en: LocaleDictOf<'mstar-panel'> = {
   'view.mstar-workflow': 'Morning Star Workflow',
+  'panel.open-full-page': 'Open full page',
   'guide.description': 'Workspace state, plans, and iteration progress',
   'tab.tasks': 'Task Iteration',
   'tab.roadmap': 'Roadmap',
