@@ -242,6 +242,27 @@ export function detailReturnTarget(address: Address): Address | null {
   return parentAddress(address);
 }
 
+/**
+ * What Escape does at one address.
+ *
+ * It means "one step out", which exists only on a detail — the four routes that name
+ * a single record or a project's feature. On a list or the landing destination there
+ * is nothing to step out of, and the key must do nothing: in a search box the
+ * reader's intent is to clear the input, and navigating away discarded the filters
+ * they were typing.
+ */
+export function escapeTarget(address: Address): Address | null {
+  switch (address.route.name) {
+    case "issue":
+    case "workflow":
+    case "iteration":
+    case "project":
+      return parentAddress(address);
+    default:
+      return null;
+  }
+}
+
 /** The filters an address carries, decoded through the shared pair. */
 export function routeFilters(address: Address): IssueQuery {
   return parseIssueQuery(address.query);

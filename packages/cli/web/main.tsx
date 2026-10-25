@@ -96,6 +96,7 @@ import {
 import {
   LIST_DESTINATIONS,
   detailReturnTarget,
+  escapeTarget,
   initialAddress,
   parentAddress,
   parseRoute,
@@ -621,7 +622,11 @@ function ProjectDetailDestination(props: { address: Address; feature: ProjectFea
       }
       copy={projectDetailCopy(copy)}
       onBack={() => {
-        navigate({ name: "projects" }, "", "push");
+        // The breadcrumb and Escape are one move from two places: a hardcoded
+        // `projects` target here disagreed with `parentOf` there, so a non-default
+        // feature left the project on one control and stayed in it on the other.
+        const parent = parentAddress(props.address);
+        if (parent !== null) navigate(parent.route, parent.query, "push");
       }}
       onClearScope={() => {
         // Clearing the scope is leaving the project, not merely dropping a filter.
@@ -672,10 +677,12 @@ function Shell(props: {
   const onKeyDown = useCallback(
     (event: React.KeyboardEvent<HTMLElement>) => {
       if (event.key !== "Escape") return;
-      const parent = parentAddress(address);
-      if (parent === null) return;
+      // Only a detail has somewhere to go; in a list's search box the reader wants
+      // the input cleared, not the page changed under them.
+      const target = escapeTarget(address);
+      if (target === null) return;
       event.preventDefault();
-      navigate(parent.route, parent.query, "push");
+      navigate(target.route, target.query, "push");
     },
     [address],
   );
