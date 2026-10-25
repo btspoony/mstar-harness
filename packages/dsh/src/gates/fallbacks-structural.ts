@@ -12,9 +12,9 @@
  * `SeedSkipReason`, `SeedConflict`, `SeedDeclareOutcome`, `EffectiveRole`,
  * `EffectiveRolesReadback`). Drift gates keeping the mirrors in sync:
  *
- * - Runtime: the probe spec's exact-keys `SERVICE_KEYS` 9-tuple +
- *   `RESOLVED_VERSION` pin (`tests/fallbacks-probe.spec.ts`) fails on a
- *   drifted resolver.
+ * - Runtime: the probe spec's `SERVICE_SURFACE` map
+ *   (`tests/fallbacks-probe.spec.ts`) asserts presence + shape of exactly
+ *   these members, so a drifted resolver fails there.
  * - Compile-time: `typecheck:tests` compiles this module's consumers WITH
  *   the real package's `declare module '@deepseek-ai/cordis'` augmentation
  *   active (the tests import the package), so `fallbacksService`'s uncast
@@ -83,8 +83,9 @@ export interface EffectiveRolesReadbackView {
 /**
  * Mirror of upstream `FallbacksService` (dist/index.d.ts) — the named
  * cordis service `ctx.get('llm-fallbacks')` exposes while the plugin is
- * applied. The 9 members are declared in the upstream order; the probe
- * spec's `SERVICE_KEYS` tuple asserts exactly this set and order at runtime.
+ * applied. The 9 mirrored members are declared in the upstream order; the
+ * probe spec's `SERVICE_SURFACE` map asserts their presence and shape at
+ * runtime. Upstream 0.6.8 adds `getAgentRole` — unconsumed, so not mirrored.
  */
 export interface FallbacksServiceView {
   /** Matches the plugin `name`. */

@@ -1,8 +1,8 @@
 /**
- * Native OpenCode V2 entry point (`@opencode/plugin@2.0.26`, pinned by the
+ * Native OpenCode V2 entry point (`@opencode/plugin@2.1.3`, pinned by the
  * package manifest). The installed declarations resolve the effect API as:
  * - `dist/effect/index.d.ts:1`: `Plugin` namespace export;
- * - `dist/effect/plugin.d.ts:54-58`: `Plugin` has `id` and `effect`, and
+ * - `dist/effect/plugin.d.ts:55-59`: `Plugin` has `id` and `effect`, and
  *   `Plugin.define(plugin)` is the constructor;
  * - `dist/effect/agent.d.ts:5-14`: `ctx.agent.transform(editor => ...)`, with
  *   `AgentEditor.update(id, fn)` as its upsert operation;
@@ -11,8 +11,8 @@
  * - `dist/effect/skill.d.ts:5-14`: `ctx.skill.transform(editor => ...)`, with
  *   `SkillEditor.add(info)`.
  * The tag cross-check is
- * https://github.com/anomalyco/opencode/blob/v2.0.26/packages/plugin/src/effect/plugin.ts.
- * These editor transform calls are the exact 2.0.26 registration surface.
+ * https://github.com/anomalyco/opencode/blob/v2.1.3/packages/plugin/src/effect/plugin.ts.
+ * These editor transform calls are the exact 2.1.3 registration surface.
  */
 import fs from "node:fs";
 import { Plugin as NativePlugin, Skill } from "@opencode/plugin/effect";

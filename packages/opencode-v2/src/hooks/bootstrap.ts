@@ -25,9 +25,10 @@ export function loadBootstrapContent(filePath = BOOTSTRAP_FILE): string | null {
 export function addBootstrapToContext(event: ContextEvent, bootstrap: string | null): void {
   if (!bootstrap || event.messages.length === 0) return;
 
-  // `@opencode/plugin` 2.0.26 declares SessionContext.messages as Message[]
-  // (`dist/effect/session.d.ts:22-29`); Message carries top-level `role` and
-  // `content` (`@opencode/ai/dist/schema/messages.d.ts:426-433`).
+  // `@opencode/plugin` 2.1.3 declares the request messages as `Array<Message>`
+  // on `SessionRequest` (`dist/effect/session.d.ts:22-28`), which
+  // `SessionContext` extends (`:29`); Message carries top-level `role` and
+  // `content` (`@opencode/ai` `Message`).
   const firstUser = event.messages.find((message) => message.role === "user");
   if (!firstUser || firstUser.content.length === 0) return;
 

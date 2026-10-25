@@ -27,7 +27,7 @@
     "node": ">=24.18.0"
   },
   "mstar": {
-    "dshLlmFallbacks": "0.6.7"
+    "dshLlmFallbacks": "0.6.8"
   },
   "dependencies": {
     "@modelcontextprotocol/server": "2.1.0",
@@ -44,9 +44,9 @@
     "@mstar-harness/engine": "workspace:*",
     "@mstar-harness/judgment": "workspace:*",
     "@mstar-harness/ui": "workspace:*",
-    "@types/react": "~18.3.1",
-    "@types/react-dom": "~18.3.1",
-    "react": "^18.3.1",
-    "react-dom": "^18.3.1"
+    "@types/react": "~19.3.0",
+    "@types/react-dom": "~19.3.0",
+    "react": "^19.3.1",
+    "react-dom": "^19.3.1"
   }
 }

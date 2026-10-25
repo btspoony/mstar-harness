@@ -14,7 +14,7 @@
  * `packages/opencode/src/mstar.ts`).
  *
  * Projection semantics (shared contract §Q2, pinned from upstream tag
- * `v2.0.26` `packages/schema/src/config/agent.ts` + `packages/schema/src/permission.ts`):
+ * `v2.1.3` `packages/schema/src/config/agent.ts` + `packages/schema/src/permission.ts`):
  * - agent frontmatter `prompt` (the markdown body) → V2 `system`;
  * - legacy `tools` and `permission.*` actions are projected to ordered V2 permission
  *   rules (`{action, resource, effect}`, last-match-wins); legacy `bash` and `task`
@@ -34,12 +34,12 @@ import { fileURLToPath } from "node:url";
 type JsonPrimitive = string | number | boolean | null;
 type JsonObject = Record<string, unknown>;
 
-/** V2 agent-mode literals — `packages/schema/src/config/agent.ts` @ v2.0.26:
+/** V2 agent-mode literals — `packages/schema/src/config/agent.ts` @ v2.1.3:
  * `mode: Schema.Literals(["subagent", "primary", "all"])`. */
 const V2_AGENT_MODES = ["subagent", "primary", "all"] as const;
 export type V2AgentMode = (typeof V2_AGENT_MODES)[number];
 
-/** V2 permission rule — `packages/schema/src/permission.ts` @ v2.0.26:
+/** V2 permission rule — `packages/schema/src/permission.ts` @ v2.1.3:
  * `Rule = { action: string, resource: string, effect: "allow"|"deny"|"ask" }`,
  * `Ruleset = Rule[]` (ordered, last-match-wins). */
 export type PermissionRule = {
@@ -279,7 +279,7 @@ const isPermissionEffect = (value: unknown): value is PermissionRule["effect"] =
   value === "allow" || value === "deny" || value === "ask";
 
 // Legacy harness actions map to V2 permission actions declared at
-// https://github.com/anomalyco/opencode/blob/v2.0.26/packages/schema/src/permission.ts.
+// https://github.com/anomalyco/opencode/blob/v2.1.3/packages/schema/src/permission.ts.
 // The legacy `edit` action covers BOTH V2 file-mutation tools: the V2 plugin
 // grants reviewer/QC roles `write:* = allow`, so an `edit`-only restriction
 // would leave ordinary repository files writable outside the role's declared
