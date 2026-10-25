@@ -30,7 +30,7 @@ import {
   type ProjectFeature,
 } from "@mstar-harness/ui";
 
-import { asEnvelope, refusalMessage } from "./read-envelope";
+import { UNREACHABLE, asEnvelope, refusalMessage } from "./read-envelope";
 
 /** Where the pair answers. */
 export const PROJECTS_PATH = "/api/projects";
@@ -82,9 +82,6 @@ export type RoadmapOutcome =
   | { kind: "ready"; roadmap: Resolved<RoadmapModel>; identity: ProjectIdentity }
   | { kind: "failed"; message: string };
 
-const UNREACHABLE =
-  "The dashboard could not reach its local server. Check that the dashboard is running, then reload.";
-
 /** One list read. */
 export async function readProjects(
   fetchImpl: typeof fetch,
@@ -132,29 +129,39 @@ export async function readRoadmap(
     const envelope = asEnvelope<RoadmapDTO>(body);
     if (envelope === null) return { status: "error", message: "The roadmap read answered with something that is not a read envelope." };
     const arm = roadmapFeatureArm({ data: envelope.data, projection: envelope.projection });
-    // Identity needs a catalog row; an arm without one has no head to render.
-    if (arm.kind !== "populated") return { status: "ready", roadmap: arm, identity: identityFor(projectId, null) };
-    return { status: "ready", roadmap: roadmapBody(arm), identity: projectIdentity(arm.value.catalog) };
+    // The envelope carries the catalog row even when the roadmap authority is absent,
+    // so the head is built from what the store actually said rather than from the id:
+    // a synthesised title, `lifecycle: "unknown"` and a guessed path are invented
+    // facts, and `projectIdentity` already derives the real `rootKind:relativePath`.
+    const catalog = envelope.data?.catalog ?? null;
+    if (catalog === null) {
+      return { status: "ready", roadmap: arm.kind === "populated" ? roadmapBody(arm) : arm, identity: identityFor(projectId) };
+    }
+    return {
+      status: "ready",
+      roadmap: arm.kind === "populated" ? roadmapBody(arm) : arm,
+      identity: projectIdentity(catalog),
+    };
   } catch {
     return { status: "error", message: UNREACHABLE };
   }
 }
 
 /**
- * The identity block when the roadmap read carries no catalog row.
+ * The identity block when the read carries **no catalog row at all**.
  *
- * The route already names the project, so the head can say which project it is even
- * when the projection cannot describe it — a blank identity would leave the reader
- * on a page that does not name itself.
+ * Only reachable for a project the store has no catalog entry for — a 404 or an
+ * unreadable projection. The route still names the project, so the head says where
+ * the reader is; it claims nothing else, because it knows nothing else.
  */
-function identityFor(projectId: string, _catalog: null): ProjectIdentity {
+function identityFor(projectId: string): ProjectIdentity {
   return {
     projectId,
     title: projectId,
     description: null,
     lifecycle: "unknown",
     lifecycleTone: "neutral",
-    path: `projects/${projectId}`,
+    path: projectId,
   };
 }
 
@@ -188,7 +195,7 @@ export function roadmapOutcome(
     case "loading":
       return { kind: "loading" };
     case "absent":
-      return { kind: "ready", roadmap: { kind: "absent" }, identity: identityFor(projectId, null) };
+      return { kind: "ready", roadmap: { kind: "absent" }, identity: identityFor(projectId) };
     case "ready":
       return { kind: "ready", roadmap: result.roadmap, identity: result.identity };
     case "error":

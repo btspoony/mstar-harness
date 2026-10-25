@@ -20,7 +20,7 @@
  * `styles/tokens.css` and `styles/base.css`, and `Bun.build` emits them as the one
  * CSS asset the generator writes. There is no hand-maintained `style.css`.
  */
-import { StrictMode, useCallback, useEffect, useState } from "react";
+import { StrictMode, useCallback, useEffect, useRef, useState } from "react";
 import { createRoot } from "react-dom/client";
 import {
   DEFAULT_PROJECT_FEATURE,
@@ -101,9 +101,7 @@ import {
   type Address,
   type Route,
 } from "./route";
-
-/** The navigation entries: the four lists, in the product's order. */
-const NAV_ITEMS = LIST_DESTINATIONS.map((id) => ({ id, label: id[0]!.toUpperCase() + id.slice(1) }));
+import { navItemFor, scopedIssuesTarget, shellChrome, skipToMain } from "./shell-chrome";
 
 /**
  * Push a destination, or replace the current entry when only the filters changed.
@@ -254,7 +252,9 @@ function IssuesDestination(props: { address: Address; projectIds: readonly strin
         navigate({ name: "issues" }, issueQueryString(next), "replace");
       }}
       onOpen={(id) => {
-        navigate({ name: "issue", id }, "", "push");
+        // The filters travel with the reader: a detail that dropped them would send
+        // them back to an unfiltered list.
+        navigate({ name: "issue", id }, props.address.query, "push");
       }}
     />
   );
@@ -317,7 +317,7 @@ function IssueDetailDestination(props: { id: string }) {
 }
 
 /** The Workflows list, behind its own read. */
-function WorkflowsDestination() {
+function WorkflowsDestination(props: { address: Address }) {
   const [outcome, setOutcome] = useState<WorkflowsOutcome>({ kind: "loading" });
   const copy = useCopy();
   useEffect(() => {
@@ -350,7 +350,7 @@ function WorkflowsDestination() {
       model={outcome.model}
       copy={workflowsCopy(copy)}
       onOpen={(id) => {
-        navigate({ name: "workflow", id }, "", "push");
+        navigate({ name: "workflow", id }, props.address.query, "push");
       }}
     />
   );
@@ -432,12 +432,17 @@ function IterationListScreen(props: { scope: string | null; onOpen?: (id: string
   return <Iterations model={outcome.model} copy={iterationsCopy(copy)} onOpen={props.onOpen} />;
 }
 
-function IterationsDestination() {
-  return <IterationListScreen scope={null} onOpen={(id) => navigate({ name: "iteration", id }, "", "push")} />;
+function IterationsDestination(props: { address: Address }) {
+  return (
+    <IterationListScreen
+      scope={null}
+      onOpen={(id) => navigate({ name: "iteration", id }, props.address.query, "push")}
+    />
+  );
 }
 
 /** One iteration, behind its own read. */
-function IterationDetailDestination(props: { id: string }) {
+function IterationDetailDestination(props: { id: string; address: Address }) {
   const [outcome, setOutcome] = useState<IterationDetailOutcome>({ kind: "loading" });
   const copy = useCopy();
   useEffect(() => {
@@ -475,7 +480,7 @@ function IterationDetailDestination(props: { id: string }) {
         if (parent !== null) navigate(parent.route, parent.query, "push");
       }}
       onOpenWorkflow={(id) => {
-        navigate({ name: "workflow", id }, "", "push");
+        navigate({ name: "workflow", id }, props.address.query, "push");
       }}
     />
   );
@@ -584,18 +589,27 @@ function ProjectDetailDestination(props: { address: Address; feature: ProjectFea
       roadmap={outcome.roadmap}
       issues={
         <IssueListScreen
-          query={{ filters: { ...DEFAULT_ISSUES.filters }, offset: 0 }}
+          // The route carries the feature's own filter state; the page supplies only
+          // the scope. A frozen query with an empty callback made every control inert.
+          query={props.address.query === "" ? DEFAULT_ISSUES : routeFilters({ route: props.address.route, query: props.address.query })}
           projectIds={props.projectIds}
           scope={projectId}
-          onQueryChange={() => {
-            // The project page owns the scope; a filter change inside it stays here.
+          onQueryChange={(next) => {
+            const target = scopedIssuesTarget(projectId, next);
+            // `replace`: a filter change must not become a Back step per keystroke.
+            navigate(target.route, target.query, "replace");
           }}
           onOpen={(id) => {
-            navigate({ name: "issue", id }, "", "push");
+            navigate({ name: "issue", id }, props.address.query, "push");
           }}
         />
       }
-      iterations={<IterationListScreen scope={projectId} onOpen={(id) => navigate({ name: "iteration", id }, "", "push")} />}
+      iterations={
+        <IterationListScreen
+          scope={projectId}
+          onOpen={(id) => navigate({ name: "iteration", id }, props.address.query, "push")}
+        />
+      }
       copy={projectDetailCopy(copy)}
       onBack={() => {
         navigate({ name: "projects" }, "", "push");
@@ -654,16 +668,25 @@ function Shell(props: {
   // A list destination is active when the route is that list or one of its
   // details; the landing destination highlights nothing.
   const activeId = navItemFor(address.route);
+  const chrome = shellChrome(copy);
+  const mainRef = useRef<HTMLElement | null>(null);
 
   return (
     <div className="app-shell" onKeyDown={onKeyDown}>
-      <a className="skip-link" href="#main">
-        Skip to content
+      {/* The hash is the routing channel, so this must move focus rather than
+          navigate: `#main` would resolve to Overview, scroll to top and discard the
+          reader's filters. */}
+      <a
+        className="skip-link"
+        href="#main"
+        onClick={(event) => skipToMain(event, () => mainRef.current)}
+      >
+        {chrome.skipLink}
       </a>
       <header className="app-header">
         <span className="app-title">Morning Star</span>
         <Nav
-          items={NAV_ITEMS}
+          items={chrome.navItems}
           activeId={activeId}
           onSelect={(id) => {
             // A destination change is a push: Back returns to where the reader was.
@@ -696,14 +719,24 @@ function Shell(props: {
       {/* Only the landing destination is mounted (Task 3); the four lists arrive in
           Task 4, and until then their routes resolve but render nothing rather than
           a placeholder that would claim a state the dashboard cannot answer. */}
-      <main id="main" className="app-main" data-ms-route={routeHash(address.route)}>
+      {/* `tabIndex={-1}` makes the landmark a focus target; without it the skip
+          link's focus() call is a no-op and the affordance silently does nothing. */}
+      <main
+        id="main"
+        className="app-main"
+        tabIndex={-1}
+        ref={mainRef}
+        data-ms-route={routeHash(address.route)}
+      >
         {address.route.name === "overview" ? <OverviewDestination /> : null}
         {address.route.name === "issues" ? <IssuesDestination address={address} projectIds={projectIds} /> : null}
         {address.route.name === "issue" ? <IssueDetailDestination id={address.route.id} /> : null}
-        {address.route.name === "workflows" ? <WorkflowsDestination /> : null}
+        {address.route.name === "workflows" ? <WorkflowsDestination address={address} /> : null}
         {address.route.name === "workflow" ? <WorkflowDetailDestination id={address.route.id} /> : null}
-        {address.route.name === "iterations" ? <IterationsDestination /> : null}
-        {address.route.name === "iteration" ? <IterationDetailDestination id={address.route.id} /> : null}
+        {address.route.name === "iterations" ? <IterationsDestination address={address} /> : null}
+        {address.route.name === "iteration" ? (
+          <IterationDetailDestination id={address.route.id} address={address} />
+        ) : null}
         {address.route.name === "projects" ? <ProjectsDestination outcome={projects} /> : null}
         {address.route.name === "project" ? (
           <ProjectDetailDestination
@@ -713,31 +746,11 @@ function Shell(props: {
           />
         ) : null}
       </main>
-      <footer className="app-footer">Read-only · Make changes with the CLI</footer>
+      <footer className="app-footer">{chrome.footer}</footer>
     </div>
   );
 }
 
-/**
- * Which navigation entry a route belongs to: a detail belongs to its list, a
- * project feature to Projects, the landing destination to none.
- */
-function navItemFor(route: Route): string | null {
-  switch (route.name) {
-    case "overview":
-      return null;
-    case "issue":
-      return "issues";
-    case "workflow":
-      return "workflows";
-    case "iteration":
-      return "iterations";
-    case "project":
-      return "projects";
-    default:
-      return route.name;
-  }
-}
 
 /**
  * The two choices the reader owns, and the element that renders them.
@@ -760,6 +773,9 @@ function Boot() {
     // through `[data-ms-theme="dark"]`, and a media query over product colours would
     // be a second mechanism that can disagree with this one.
     document.getElementById("app")?.setAttribute(MS_THEME_ATTRIBUTE, theme);
+    // `color-scheme` is what makes native controls (the two selects) and the initial
+    // canvas follow the theme; pinned to `light` they stayed light in a dark page.
+    document.documentElement.style.colorScheme = theme;
     storeTheme(store, theme);
   }, [store, theme]);
 

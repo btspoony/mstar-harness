@@ -20,14 +20,18 @@
  *    `project=<id>`; a `project` key in the address bar would scope it twice, so it
  *    is dropped on the way in.
  */
-import { issueQuery, parseIssueQuery, type IssueQuery } from "@mstar-harness/ui";
+import {
+  DEFAULT_PROJECT_FEATURE,
+  PROJECT_FEATURES,
+  issueQuery,
+  parseIssueQuery,
+  type IssueQuery,
+  type ProjectFeature,
+} from "@mstar-harness/ui";
 
-/** The features a project detail exposes, in the product's fixed order (IA §4). */
-export const PROJECT_FEATURES = ["roadmap", "issues", "iterations"] as const;
-export type ProjectFeature = (typeof PROJECT_FEATURES)[number];
-
-/** The default feature — always Roadmap, for every project (IA §4). */
-export const DEFAULT_PROJECT_FEATURE: ProjectFeature = "roadmap";
+// The feature vocabulary is the shared package's (IA §4): one list, re-exported so a
+// caller of the route model does not have to reach into the screen layer for it.
+export { DEFAULT_PROJECT_FEATURE, PROJECT_FEATURES, type ProjectFeature };
 
 /** The four list destinations, in navigation order. */
 export const LIST_DESTINATIONS = ["issues", "workflows", "iterations", "projects"] as const;

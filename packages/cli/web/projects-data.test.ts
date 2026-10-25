@@ -155,18 +155,30 @@ describe("the roadmap read", () => {
     expect(result.roadmap.kind).toBe("populated");
   });
 
-  test("no roadmap authority row is ABSENT — not an empty board", async () => {
+  test("no roadmap authority row is ABSENT — and the head keeps the store's own facts", async () => {
+    // An absent authority row still ships a catalog entry. The head must be built
+    // from it: a synthesised title, `lifecycle: "unknown"` and a guessed path would
+    // be three invented facts on a page whose subject is what the store knows.
     const absent = (async () =>
       new Response(
-        JSON.stringify({ data: roadmap({ authority: { state: "absent" } as never }), projection }),
+        JSON.stringify({
+          data: roadmap({
+            catalog: catalogEntry({ id: "_default", title: "Default", lifecycle: "staging" }) as never,
+            authority: { state: "absent" } as never,
+          }),
+          projection,
+        }),
         { status: 200, headers: { "content-type": "application/json" } },
       )) as unknown as typeof fetch;
     const result = await readRoadmap(absent, "_default");
     expect(result.status).toBe("ready");
     if (result.status !== "ready") return;
-    // The arm is `absent`, and the detail head still names the project.
     expect(result.roadmap.kind).toBe("absent");
+    // From the catalog, not from the route id.
     expect(result.identity.projectId).toBe("_default");
+    expect(result.identity.title).toBe("Default");
+    expect(result.identity.lifecycle).toBe("staging");
+    expect(result.identity.path).toBe("projects:engine");
   });
 
   test("a roadmap with no content at all is empty, a different arm", () => {

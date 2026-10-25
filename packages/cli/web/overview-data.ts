@@ -87,17 +87,6 @@ export function overviewOutcome(
   }
 }
 
-/** The envelope a JSON body is, or `null` when it is not one. */
-export function asOverviewEnvelope(body: unknown): ReadEnvelope<OverviewDTO> | null {
-  if (body === null || typeof body !== "object") return null;
-  const candidate = body as { data?: unknown; projection?: unknown };
-  if (candidate.data === undefined || candidate.projection === undefined) return null;
-  const projection = candidate.projection as { generation?: unknown; freshness?: unknown };
-  if (typeof projection.generation !== "number" && projection.generation !== null) return null;
-  if (typeof projection.freshness !== "string") return null;
-  return body as ReadEnvelope<OverviewDTO>;
-}
-
 /**
  * Read the aggregated page.
  *
@@ -118,7 +107,7 @@ export async function readOverview(
     });
     const body: unknown = await response.json().catch(() => null);
     if (!response.ok) return { status: "error", message: refusalMessage(body, response.status) };
-    const envelope = asOverviewEnvelope(body);
+    const envelope = asEnvelope<OverviewDTO>(body);
     if (envelope === null) {
       return { status: "error", message: "The overview read answered with something that is not a read envelope." };
     }

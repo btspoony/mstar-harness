@@ -13,9 +13,8 @@ import { renderToStaticMarkup } from "react-dom/server";
 import type { IterationDTO, OverviewDTO, ReadEnvelope, WorkflowListDTO } from "@mstar-harness/engine";
 import { Overview, copyFor } from "@mstar-harness/ui";
 
-import { refusalMessage } from "./read-envelope";
+import { asEnvelope, refusalMessage } from "./read-envelope";
 import {
-  asOverviewEnvelope,
   overviewCopy,
   overviewFromEnvelope,
   overviewOutcome,
@@ -220,7 +219,7 @@ describe("outcome 3 — a whole-read failure mounts no page", () => {
       })) as unknown as typeof fetch;
     const result = await readOverview(nonsense);
     expect(result.status).toBe("error");
-    expect(asOverviewEnvelope({ hello: "world" })).toBeNull();
+    expect(asEnvelope({ hello: "world" })).toBeNull();
   });
 
   test("the three outcomes are three distinct presentations", () => {

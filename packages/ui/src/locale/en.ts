@@ -55,7 +55,16 @@ export const en = {
    * `aria-label` reaches the reader through assistive technology.
    */
   shell: {
-    nav: { primary: "Primary" },
+    nav: {
+      primary: "Primary",
+      overview: "Overview",
+      issues: "Issues",
+      workflows: "Workflows",
+      iterations: "Iterations",
+      projects: "Projects",
+    },
+    skipLink: "Skip to content",
+    footer: "Read-only · Make changes with the CLI",
     theme: { label: "Colour scheme", light: "Light", dark: "Dark" },
     language: { label: "Language", en: "English", zh: "中文" },
     store: {
