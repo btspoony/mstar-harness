@@ -251,8 +251,17 @@ export function DetailBody({ view, state, locale, onBack, onOpenWorkflow, projec
       )
     }
     case 'workflow-detail': {
+      // `data: null` has two causes: the record does not exist (absent) and the
+      // workflow could not be read (a projection with no generation →
+      // unavailable). `resolveRead` owns that split; bypassing it collapsed the
+      // two arms.
+      // `null` has two causes and the projection tells them apart: no published
+      // generation means the read could not be made (`unavailable`), a published
+      // one means the record does not exist (`absent`).
       const model = data === null
-        ? ({ kind: 'absent' } as const)
+        ? envelope.projection.generation === null
+          ? ({ kind: 'unavailable', reason: copy.state.unavailable.body } as const)
+          : ({ kind: 'absent' } as const)
         : workflowDetailModel({ data: data as WorkflowDTO, projection: envelope.projection })
       return <WorkflowDetail model={model} copy={{ ...copy.workflowDetail, absence: {
         'not-applicable': { ...copy.state['not-applicable'], heading: copy.workflowDetail.catalogHeading },

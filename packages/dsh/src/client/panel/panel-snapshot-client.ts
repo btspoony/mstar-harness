@@ -71,8 +71,12 @@ function str(value: unknown): string | null {
 function isDigestEnvelope(value: unknown): boolean {
   if (value === null || typeof value !== 'object') return false
   const row = value as { enforcement?: unknown; selection?: unknown; iteration?: unknown }
+  // `enforcement: null` is a MEMBER the server could not read, not a broken
+  // payload: the shared screen renders "unavailable" for it. Treating it as
+  // fatal hid the whole digest (selection, knowledge, iteration) behind one
+  // failed read.
   const enforcement = row.enforcement as { hard?: unknown } | null | undefined
-  if (enforcement === null || typeof enforcement !== 'object' || typeof enforcement.hard !== 'boolean') return false
+  if (enforcement !== null && (typeof enforcement !== 'object' || typeof enforcement.hard !== 'boolean')) return false
   const selection = row.selection
   if (selection !== null && typeof selection !== 'object') return false
   const iteration = row.iteration as { state?: unknown } | null | undefined

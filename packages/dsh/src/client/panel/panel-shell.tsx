@@ -306,6 +306,27 @@ function NoHarness({ t }: { t: TranslateNS<'mstar-panel'> }): React.ReactElement
 /** Stable no-op subscribe (a seat composed without a locale face). */
 const NO_SUBSCRIBE = (): (() => void) => () => {}
 
+/**
+ * The read target for an open detail. The engine has NO `project-detail` view:
+ * a project's page is composed from the views that exist, so the project open
+ * reads its `roadmap` scoped to the project. Every other detail is its own view.
+ */
+export function detailReadTarget(
+  view: DetailView,
+  id: string,
+): { view: string; params?: Record<string, string>; id?: string } {
+  return view === 'project-detail' ? { view: 'roadmap', params: { project: id } } : { view, id }
+}
+
+/**
+ * The view a destination reads. `iterations` reads its own list — the delivery
+ * read is gated on a bound workflow, and a destination must answer for an
+ * unbound (or fresh) session too.
+ */
+export function destinationReadView(destination: PanelDestination): string | null {
+  return destination === 'focus' ? null : destination
+}
+
 /** The product locale, read from the host's own locale face (uSES-safe). */
 function useProductLocale(face: HostLocaleFace | undefined): Locale {
   const read = (): string => (face === undefined ? 'en' : face.getSnapshot().active)
@@ -415,19 +436,28 @@ export function PanelSeat(props: PanelSeatProps): React.ReactElement | null {
     client: panelSnapshot,
     sessionId: wireSession,
     cwd,
-    view: snapshot === null || destination === 'focus' || destination === 'iterations' ? null : destination,
+    // `iterations` reads its OWN list: the delivery read is gated on a bound
+    // workflow (it needs one), so reusing it left the destination waiting forever
+    // for an unbound or fresh session.
+    view: snapshot === null ? null : destinationReadView(destination),
     ...(destination === 'issues' ? { params: issueParams } : {}),
   })
-  const destinationRead = destination === 'iterations' ? iterationsView.state : destinationView.state
+  const destinationRead = destinationView.state
   // The open record (list → detail), and its own read.
   const [detail, setDetail] = React.useState<{ view: DetailView; id: string } | null>(null)
   React.useEffect(() => { setDetail(null) }, [destination])
+  // The engine has no `project-detail` view: a project's page is composed from
+  // the views that exist — its `roadmap` (project-scoped), plus the scoped
+  // `issues` / `iterations` reads below.
   const detailView = useMstarDashboardView({
     client: panelSnapshot,
     sessionId: wireSession,
     cwd,
-    view: detail === null ? null : detail.view,
-    ...(detail === null ? {} : { id: detail.id }),
+    view: detail === null ? null : detailReadTarget(detail.view, detail.id).view,
+    ...(detail === null ? {} : (() => {
+      const target = detailReadTarget(detail.view, detail.id)
+      return { ...(target.params === undefined ? {} : { params: target.params }), ...(target.id === undefined ? {} : { id: target.id }) }
+    })()),
   })
   const projectIssuesView = useMstarDashboardView({
     client: panelSnapshot,
