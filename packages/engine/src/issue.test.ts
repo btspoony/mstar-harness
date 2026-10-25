@@ -1246,7 +1246,7 @@ describe("issue action vocabulary", () => {
     // Golden list: these tokens are a published surface, so a change here must
     // be deliberate rather than a copy drifting.
     expect(ISSUE_ACTION_NAMES).toEqual([
-      "add", "list", "show", "occurrence", "triage", "close", "reopen", "waive", "duplicate", "supersede", "link", "export",
+      "add", "list", "show", "occurrence", "triage", "close", "reopen", "move", "waive", "duplicate", "supersede", "link", "export",
     ]);
     const registry = Object.keys(ISSUE_PAYLOAD_SCHEMAS);
     for (const [verb, action] of Object.entries(ISSUE_ACTIONS)) {
@@ -1255,7 +1255,7 @@ describe("issue action vocabulary", () => {
       if (action.disposition !== null) expect(["close", "waive", "duplicate", "supersede"]).toContain(verb);
     }
     expect(ISSUE_ACTION_NAMES.filter((verb) => ISSUE_ACTIONS[verb].read)).toEqual(["list", "show", "export"]);
-    expect(ISSUE_ACTION_NAMES.filter((verb) => ISSUE_ACTIONS[verb].cas)).toEqual(["triage", "close", "reopen", "waive", "duplicate", "supersede", "link"]);
+    expect(ISSUE_ACTION_NAMES.filter((verb) => ISSUE_ACTIONS[verb].cas)).toEqual(["triage", "close", "reopen", "move", "waive", "duplicate", "supersede", "link"]);
     expect(ISSUE_ACTION_NAMES.flatMap((verb) => {
       const disposition = ISSUE_ACTIONS[verb].disposition;
       return disposition === null ? [] : [[verb, disposition]];
