@@ -8,7 +8,7 @@
  *
  * | arm | means | structure |
  * | --- | --- | --- |
- * | `not-applicable` | the subject does not resolve | heading + one sentence naming the undetermined subject |
+ * | `not-applicable` | the subject does not resolve | heading + one sentence naming the undetermined subject (`detail`) |
  * | `absent` | the concept is not declared | heading + absence line + a pointer to where it does exist |
  * | `empty` | the read succeeded, nothing there | heading + explanatory line + the point-of-entry hint |
  * | `unavailable` | the read failed | heading + the read's own reason, warning tone, panel keeps its place |
@@ -38,6 +38,13 @@ export type EmptyStateProps = {
   body: string;
   /** The read's own reason — `unavailable` only. */
   reason?: string;
+  /**
+   * Which subject the answer is undetermined FOR — `not-applicable` only. It is
+   * not the read's failure (`reason`) and not a pointer to another screen: it is
+   * the fact the read could not scope, stated so the reader knows what is
+   * missing rather than only that something is.
+   */
+  detail?: string;
   /** Where the concept DOES exist — `absent` only. */
   pointer?: ReactNode;
   /** The operation that would create a record — `empty` only. */
@@ -57,6 +64,11 @@ export function EmptyState(props: EmptyStateProps) {
       {props.arm === "unavailable" ? (
         <p className={css.reason} data-ms-reason="">
           {props.reason ?? props.body}
+        </p>
+      ) : null}
+      {props.arm === "not-applicable" && props.detail !== undefined ? (
+        <p className={css.detail} data-ms-detail="">
+          {props.detail}
         </p>
       ) : null}
       {props.arm === "absent" && props.pointer !== undefined ? (

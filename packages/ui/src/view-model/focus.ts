@@ -22,7 +22,7 @@
  */
 import type { SessionBinding } from "./contracts.ts";
 import type { Resolved } from "./state.ts";
-import { resolveMember } from "./state.ts";
+import { resolveSubjectMember } from "./state.ts";
 import { bucketPlans, gateStepPosition, gateSteps, planProgress, type GateStepId, type GateStepPosition, type PlanStatusLiteral, type Tone } from "./status.ts";
 import type { IterationGateStep } from "./contracts.ts";
 
@@ -148,17 +148,19 @@ export function focusModel(input: {
   phase?: "loading" | "loaded";
 }): FocusModel {
   const binding = focusBinding(input.selection);
-  // `whenNull` answers only "the read succeeded and returned nothing", and its
-  // domain is `absent` / `empty` — `not-applicable` is a statement about the
-  // SUBJECT, which the resolver reads from the member's own arm. An unbound
-  // session therefore gets its `not-applicable` from here, explicitly, instead of
-  // smuggling that word through the null meaning.
-  const resolvedWorkflow: Resolved<import("@mstar-harness/engine").WorkflowDTO | null> =
-    (input.phase ?? "loaded") === "loading"
-      ? { kind: "loading" }
-      : binding.kind === "unbound" && input.workflow.state === "read" && input.workflow.data === null
-        ? { kind: "not-applicable", reason: "no active workflow" }
-        : resolveMember(input.workflow, { phase: input.phase, whenNull: "absent" });
+  // The subject question ("is this session bound at all") is answered by the
+  // resolver, not here: `state.ts` owns every absence decision, and an unbound
+  // session is `not-applicable` while a bound one whose record vanished is
+  // `absent`. Eight screens follow this one, so the decision gets one home.
+  const resolvedWorkflow: Resolved<import("@mstar-harness/engine").WorkflowDTO | null> = resolveSubjectMember(
+    input.workflow,
+    {
+      phase: input.phase,
+      whenNull: "absent",
+      subjectResolves: binding.kind !== "unbound",
+      unresolvedReason: "no active workflow",
+    },
+  );
 
   const workflowModel: Resolved<FocusWorkflow | null> =
     resolvedWorkflow.kind === "populated"

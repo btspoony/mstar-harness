@@ -78,6 +78,48 @@ export function resolveMember<T>(member: OverviewMember<T>, options: ResolveOpti
   }
 }
 
+/** How to resolve a member whose subject may not exist at all. */
+export type SubjectResolveOptions<T> = ResolveOptions<T> & {
+  /**
+   * Whether the subject this member belongs to resolves. `false` means "there is
+   * no such subject here" — an unbound session, a project that does not exist —
+   * and it is what separates `not-applicable` from `absent`.
+   */
+  readonly subjectResolves: boolean;
+  /** The subject-level reason, used when it does not resolve. */
+  readonly unresolvedReason: string;
+};
+
+/**
+ * Resolve a member whose subject may be missing entirely.
+ *
+ * This exists so `not-applicable` has exactly ONE decision point. It is not a
+ * null meaning (`NullMeaning` is `absent` / `empty`): a read that answers `null`
+ * says nothing about whether the subject exists, and a caller that decided that
+ * question itself would become a second authority — which is how the same screen
+ * ends up calling the same state two different things.
+ *
+ * Precedence, and the reason for it:
+ *
+ *   1. `loading` — a pending read has no subject state yet, so it borrows none.
+ *   2. the member's own arm — when the read itself says `not-applicable` or
+ *      `unavailable`, that answer wins; the subject test cannot override a
+ *      statement the store already made.
+ *   3. the subject test — an un-resolved subject is `not-applicable` for a
+ *      *successful* read, because "there is nothing here" and "this thing does
+ *      not exist" are different facts.
+ *   4. the ordinary null / emptiness rules.
+ */
+export function resolveSubjectMember<T>(
+  member: OverviewMember<T>,
+  options: SubjectResolveOptions<T>,
+): Resolved<T> {
+  if ((options.phase ?? "loaded") === "loading") return { kind: "loading" };
+  if (member.state !== "read") return resolveMember(member, options);
+  if (!options.subjectResolves) return { kind: "not-applicable", reason: options.unresolvedReason };
+  return resolveMember(member, options);
+}
+
 /**
  * Resolve a plain envelope read (the `ReadEnvelope` views: issues, workflows,
  * iterations, projects, roadmap) into the same arms.

@@ -70,6 +70,18 @@ export type { BreadcrumbProps, Crumb } from "./components/Breadcrumb.tsx";
 export type { TabItem, TabsProps } from "./components/Tabs.tsx";
 export type { AppliedFilter, FilterBarProps, FilterField, FilterOption } from "./components/FilterBar.tsx";
 
+/**
+ * The business screens (Task 4), one batch at a time. Each takes its data, its
+ * copy and its compact/locale decisions as props: fetching, routing and the host
+ * shell stay with the adapter, and every absence arm it renders was resolved by
+ * `state.ts` before it arrived.
+ */
+export { Overview } from "./screens/Overview.tsx";
+export { Focus } from "./screens/Focus.tsx";
+
+export type { OverviewCopy, OverviewProps } from "./screens/Overview.tsx";
+export type { FocusCopy, FocusProps } from "./screens/Focus.tsx";
+
 import { TONES, type Tone } from "./view-model/status.ts";
 
 /**

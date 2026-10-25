@@ -1,5 +1,5 @@
 /**
- * An enum-ish marker: a join badge, a lifecycle word, a plan pin.
+ * An enum-ish marker: a catalog lifecycle word, an issue kind, a project id.
  *
  * Mono and small, because a badge sits inside dense rows and must never grow a
  * row (`DESIGN.md` § Spacing). It is decorative in the sense that the text is

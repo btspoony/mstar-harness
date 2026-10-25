@@ -40,13 +40,10 @@ const DESIGN_PATH = join(PKG_ROOT, "..", "..", "DESIGN.md");
 const CONSUMED_BY_LATER_TASK: Readonly<Record<string, string>> = {
   "--ms-bg-selected": "Task 3 (selected row, applied filter)",
   "--ms-border-strong": "Task 3 (input and control borders)",
-  "--ms-space-6": "Task 3 (detail column gutter)",
   "--ms-space-8": "Task 3 (section break)",
   "--ms-space-12": "Task 3 (page top rhythm)",
   "--ms-row-h-sm": "Task 3 (dense side lists)",
   "--ms-radius-md": "Task 3 (panels)",
-  "--ms-fs-20": "Task 4 (page title)",
-  "--ms-lh-20": "Task 4 (page title)",
 };
 
 /** Every `*.css` file under `src`, excluding the two global sheets. */

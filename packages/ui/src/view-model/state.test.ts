@@ -7,7 +7,7 @@
  */
 import { describe, expect, test } from "bun:test";
 
-import { absenceCopyFamily, isAbsence, resolveMember, resolveRead } from "./state.ts";
+import { absenceCopyFamily, isAbsence, resolveMember, resolveRead, resolveSubjectMember } from "./state.ts";
 
 const read = <T>(data: T) => ({ state: "read" as const, data });
 
@@ -69,6 +69,58 @@ describe("loading is a phase, not a subject state", () => {
     expect(new Set(families).size).toBe(4);
     expect(absenceCopyFamily("populated")).toBeNull();
     expect(absenceCopyFamily("loading")).toBeNull();
+  });
+});
+
+describe("an un-resolved subject is not-applicable, and only the resolver decides", () => {
+  // The point of this entry point: one decision point for `not-applicable`. A
+  // screen that derived the arm itself would be a second authority, and the same
+  // read would then be called two different things in two places.
+  test("subject un-resolved + a successful read that returned nothing → not-applicable", () => {
+    const arm = resolveSubjectMember(read(null), {
+      whenNull: "absent",
+      subjectResolves: false,
+      unresolvedReason: "no active workflow",
+    });
+    expect(arm).toEqual({ kind: "not-applicable", reason: "no active workflow" });
+  });
+
+  test("subject resolved + the same read → absent, not not-applicable", () => {
+    const arm = resolveSubjectMember(read(null), {
+      whenNull: "absent",
+      subjectResolves: true,
+      unresolvedReason: "no active workflow",
+    });
+    expect(arm).toEqual({ kind: "absent" });
+  });
+
+  test("a statement the store already made wins over the subject test", () => {
+    // An unavailable read is not the resolver's to reinterpret.
+    const arm = resolveSubjectMember({ state: "unavailable", reason: "read failed" }, {
+      whenNull: "absent",
+      subjectResolves: false,
+      unresolvedReason: "no active workflow",
+    });
+    expect(arm).toEqual({ kind: "unavailable", reason: "read failed" });
+  });
+
+  test("a pending read never borrows the subject answer", () => {
+    const arm = resolveSubjectMember(read(null), {
+      phase: "loading",
+      whenNull: "absent",
+      subjectResolves: false,
+      unresolvedReason: "no active workflow",
+    });
+    expect(arm.kind).toBe("loading");
+  });
+
+  test("a populated read passes through untouched", () => {
+    const arm = resolveSubjectMember(read(["a"]), {
+      whenNull: "empty",
+      subjectResolves: true,
+      unresolvedReason: "n/a",
+    });
+    expect(arm).toEqual({ kind: "populated", value: ["a"] });
   });
 });
 
