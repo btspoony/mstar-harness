@@ -43,7 +43,16 @@ import {
 const cliRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const commandsRoot = path.resolve(cliRoot, "../commands");
 const webDir = path.join(cliRoot, "web");
-const outPath = path.join(commandsRoot, "src", "dashboard", "assets.generated.ts");
+/**
+ * Where the generated module goes.
+ *
+ * The default is the module the CLI build consumes. An optional first argument
+ * overrides it, which is what lets the build test assert the real generator's
+ * output without rewriting a tracked file — a test that rewrites the artifact the
+ * build owns races any concurrent build of the same tree.
+ */
+const defaultOutPath = path.join(commandsRoot, "src", "dashboard", "assets.generated.ts");
+const outPath = process.argv[2] === undefined ? defaultOutPath : path.resolve(process.argv[2]);
 
 async function main(): Promise<void> {
   const shellHtml = readFileSync(path.join(webDir, "shell.html"), "utf8");

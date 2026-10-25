@@ -22,8 +22,18 @@
  */
 import { StrictMode, useCallback, useEffect, useState } from "react";
 import { createRoot } from "react-dom/client";
-import { LocaleProvider, MS_CONTAINER_CLASS, MS_THEME_ATTRIBUTE, Nav } from "@mstar-harness/ui";
+import {
+  EmptyState,
+  LocaleProvider,
+  MS_CONTAINER_CLASS,
+  MS_THEME_ATTRIBUTE,
+  Nav,
+  Overview,
+  copyFor,
+  useCopy,
+} from "@mstar-harness/ui";
 
+import { overviewCopy, overviewOutcome, readOverview, type OverviewOutcome } from "./overview-data";
 import { LIST_DESTINATIONS, parentAddress, parseRoute, routeHash, type Address, type Route } from "./route";
 
 /** The navigation entries: the four lists, in the product's order. */
@@ -43,6 +53,56 @@ function navigate(route: Route, query: string, mode: "push" | "replace"): void {
   // `pushState`/`replaceState` do not fire `hashchange`; the listener below only
   // sees Back/Forward and hand-edited hashes.
   window.dispatchEvent(new HashChangeEvent("hashchange"));
+}
+
+/**
+ * The aggregated read, once per mount.
+ *
+ * The outcome is the host's, the model is the shared layer's: this hook never
+ * unwraps a member or decides an absence — it fetches, hands the envelope over and
+ * keeps the three outcomes apart.
+ */
+function useOverview(enabled: boolean): OverviewOutcome {
+  const [outcome, setOutcome] = useState<OverviewOutcome>({ kind: "loading" });
+  useEffect(() => {
+    if (!enabled) return;
+    const controller = new AbortController();
+    let current = true;
+    setOutcome({ kind: "loading" });
+    void readOverview(fetch, controller.signal).then((result) => {
+      if (!current) return;
+      setOutcome(overviewOutcome(result));
+    });
+    return () => {
+      current = false;
+      controller.abort();
+    };
+  }, [enabled]);
+  return outcome;
+}
+
+/** The landing page: the shared Overview behind the one aggregated read. */
+function OverviewDestination() {
+  const outcome = useOverview(true);
+  const copy = useCopy();
+
+  if (outcome.kind === "loading") return null;
+
+  if (outcome.kind === "failed") {
+    // A whole-read failure has nothing to render. One honest statement beats a page
+    // whose every panel would be an absence arm for a read that never happened.
+    return (
+      <EmptyState
+        arm="unavailable"
+        labelWord={copy.state.unavailable.labelWord}
+        heading={copy.overview.pageTitle}
+        body={copy.state.unavailable.body}
+        reason={outcome.message}
+      />
+    );
+  }
+
+  return <Overview model={outcome.model} copy={overviewCopy(copy)} />;
 }
 
 /** The shell: skip link, header with the shared navigation, the main region, footer. */
@@ -97,10 +157,12 @@ function Shell() {
           label="Primary"
         />
       </header>
-      {/* The main region resolves the URL but renders no destination yet: Tasks 3–4
-          mount the screens. Rendering an empty container makes no claim, where
-          placeholder copy would claim a state the dashboard cannot answer. */}
-      <main id="main" className="app-main" data-ms-route={routeHash(address.route)} />
+      {/* Only the landing destination is mounted (Task 3); the four lists arrive in
+          Task 4, and until then their routes resolve but render nothing rather than
+          a placeholder that would claim a state the dashboard cannot answer. */}
+      <main id="main" className="app-main" data-ms-route={routeHash(address.route)}>
+        {address.route.name === "overview" ? <OverviewDestination /> : null}
+      </main>
       <footer className="app-footer">Read-only · Make changes with the CLI</footer>
     </div>
   );
