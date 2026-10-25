@@ -41,8 +41,9 @@
         "@mstar-harness/commands": "workspace:*",
         "@mstar-harness/engine": "workspace:*",
         "@mstar-harness/judgment": "workspace:*",
+        "@mstar-harness/ui": "workspace:*",
         "htm": "^3.1.1",
-        "preact": "^11.0.1",
+        "preact": "^10.27.4",
       },
     },
     "packages/commands": {
@@ -70,6 +71,7 @@
         "@deepseek-ai/dsh-util-code-language": "0.2.1-rc.3",
         "@mstar-harness/commands": "workspace:*",
         "@mstar-harness/engine": "workspace:*",
+        "@mstar-harness/ui": "workspace:*",
         "@shikijs/langs": "^4.5.0",
         "@tanstack/react-virtual": "3.14.19",
         "@types/node": "^26.6.4",
@@ -1447,7 +1449,7 @@
 
     "powershell-utils": ["powershell-utils@0.2.1", "", {}, "sha512-C+y9x90UElAddDZmV4qOx9W53B61PO7cIqWz2dQsWlwswuq4mr8NEwytdGKboYbQlGZ3awrkTeNvcZiZNHnQ8A=="],
 
-    "preact": ["preact@11.0.1", "", { "peerDependencies": { "preact-render-to-string": ">=6.7.0" }, "optionalPeers": ["preact-render-to-string"] }, "sha512-TNNwEq++jYNHy747LziCjPRVgEwnLSOIOAw/oYcjI3Tdnubx2EXtt76I0an8PATvUWtx/DX1kFIg1eFN+O/fkw=="],
+    "preact": ["preact@10.29.8", "", { "peerDependencies": { "preact-render-to-string": ">=5" }, "optionalPeers": ["preact-render-to-string"] }, "sha512-ej2aVZ+vZ8WO7tvlQWRM9N63A0KzF9q4mWJfDUHgYaIofWY9hu74QdnQrjoPMmZi2/nZ5gN0bJCQF49xQqx09Q=="],
 
     "proc-log": ["proc-log@6.1.0", "", {}, "sha512-iG+GYldRf2BQ0UDUAd6JQ/RwzaQy6mXmsk/IzlYyal4A4SNFw54MeH4/tLkF4I5WoWG9SQwuqWzS99jaFQHBuQ=="],
 

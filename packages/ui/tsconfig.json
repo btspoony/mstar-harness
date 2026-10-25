@@ -7,11 +7,21 @@
     "strict": true,
     "jsx": "react-jsx",
     "skipLibCheck": true,
-    "types": ["bun-types", "react"],
+    "types": [
+      "bun-types",
+      "react"
+    ],
     "declaration": true,
     "emitDeclarationOnly": true,
     "rootDir": "src",
     "outDir": "dist"
   },
-  "include": ["src"]
+  "include": [
+    "src"
+  ],
+  "exclude": [
+    "dist",
+    "**/*.test.ts",
+    "**/*.test.tsx"
+  ]
 }

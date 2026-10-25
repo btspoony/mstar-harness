@@ -20,7 +20,8 @@
   ],
   "scripts": {
     "build": "rm -rf dist && bunx tsc --emitDeclarationOnly",
-    "test": "bun test"
+    "test": "bun test",
+    "typecheck": "bunx tsc --noEmit"
   },
   "devDependencies": {
     "@types/node": "^26.6.4",

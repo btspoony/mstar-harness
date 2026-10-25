@@ -24,7 +24,7 @@ import type { SessionBinding } from "./session.ts";
 import type { Resolved } from "./state.ts";
 import { resolveSubjectMember } from "./state.ts";
 import { bucketPlans, gateStepPosition, gateSteps, planProgress, type GateStepId, type GateStepPosition, type PlanStatusLiteral, type Tone } from "./status.ts";
-import type { IterationGateStep } from "@mstar-harness/engine";
+import type { IterationGateStep, WorkflowDTO } from "@mstar-harness/engine";
 
 /** The session's delivery position, or the explicit "no iteration" arm. */
 export type DeliveryLine =
@@ -140,7 +140,7 @@ export function focusModel(input: {
   enforcement: string;
   selection: SessionBinding | null;
   workflow:
-    | { state: "read"; data: import("@mstar-harness/engine").WorkflowDTO | null }
+    | { state: "read"; data: WorkflowDTO | null }
     | { state: "not-applicable"; reason: string }
     | { state: "unavailable"; reason: string };
   /** The iteration that contains the bound workflow's plans, or `null`. */
@@ -152,7 +152,7 @@ export function focusModel(input: {
   // resolver, not here: `state.ts` owns every absence decision, and an unbound
   // session is `not-applicable` while a bound one whose record vanished is
   // `absent`. Eight screens follow this one, so the decision gets one home.
-  const resolvedWorkflow: Resolved<import("@mstar-harness/engine").WorkflowDTO | null> = resolveSubjectMember(
+  const resolvedWorkflow: Resolved<WorkflowDTO | null> = resolveSubjectMember(
     input.workflow,
     {
       phase: input.phase,
