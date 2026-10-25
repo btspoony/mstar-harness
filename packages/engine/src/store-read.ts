@@ -651,6 +651,8 @@ function dashboardView(view: DashboardView, handle: StoreHandle, filters: Dashbo
       return readProjectList(handle.db);
     case "issue-flow":
       return readIssueFlow(handle.db, text(filters.projectId) ?? undefined);
+    case "overview":
+      return readOverview(handle.db, filters);
   }
 }
 
@@ -1561,6 +1563,13 @@ function composeIteration(
  * Close / PR delivery), from facts the DTO already carries. No compass row is
  * the absent arm -- null, not step 1. Step 5 (Merge ready) is never derived:
  * the merge happens outside the harness and no store row records it.
+ *
+ * A compass ROW with no status is a defensive arm, not a store state the
+ * producer can create (`validateCompassShape` admits only the closed status
+ * values), and it answers step 1 for the same reason an unproven status does:
+ * the row proves a compass exists and nothing further. A `completed` compass
+ * answers 4 even when a plan row is not `Done` -- close wrote `completed`, and a
+ * stale plan row cannot un-close the iteration.
  */
 function gateStepOf(
   compassStatus: string | null | undefined,
@@ -1623,6 +1632,83 @@ function readIterationDetail(db: StoreDb, filters: DashboardFilters): IterationD
   const catalog = identities.get(identityToken("iteration", iterationId)) ?? null;
   if (catalog === null && compassRow === undefined) return null;
   return composeIteration(iterationId, catalog, generated, planIds, documentIds, identities);
+}
+
+// ---------------------------------------------------------------------------
+// Aggregated overview view
+// ---------------------------------------------------------------------------
+
+/**
+ * The aggregated "what is the state right now" read: every member is produced
+ * inside its own `try`, so one failed reader degrades that member only, and
+ * the two project-scoped members answer `not-applicable` when no project
+ * resolves. All of it is read inside the one `run(handle)` transaction, so the
+ * members share one store snapshot.
+ */
+function readOverview(db: StoreDb, filters: DashboardFilters): OverviewDTO {
+  const projectId = text(filters.projectId);
+  const member = <T>(read: () => T): OverviewMember<T> => {
+    try {
+      return { state: "read", data: read() };
+    } catch (error) {
+      return { state: "unavailable", reason: error instanceof Error ? error.message : String(error) };
+    }
+  };
+  const scoped = <T>(read: (projectId: string) => T): OverviewMember<T> =>
+    projectId === null ? { state: "not-applicable", reason: "no project resolves for this read" } : member(() => read(projectId));
+
+  return {
+    workflows: member(() => activeWorkflows(readWorkflowList(db, { limit: 50 }))),
+    residuals: member(() => readResidualCounts(db)),
+    milestones: scoped((id) => readMilestonesOn(db, id)),
+    latestIteration: scoped((id) => readLatestIteration(db, id)),
+    issueFlow: member(() => readIssueFlow(db, projectId ?? undefined)),
+  };
+}
+
+/**
+ * The active-registered workflows with their plans. The projection serves
+ * registry members, which are the active ones, so this filter is today the
+ * identity; it is the member's declared contract, not a claim about the rows.
+ */
+function activeWorkflows(list: WorkflowListDTO): WorkflowListDTO {
+  const items = list.items.filter((item) => item.activeRegistration);
+  // shortcut: the 50-row page is this member's whole window; a store with more
+  // active workflows than that is out of scope (report §2 member sources).
+  return { items, total: items.length };
+}
+
+/** Open residuals by severity: all five literals, and `open` is their sum (D20). */
+function readResidualCounts(db: StoreDb): { open: number; bySeverity: ResidualCounts } {
+  const bySeverity: ResidualCounts = { critical: 0, high: 0, medium: 0, low: 0, nit: 0 };
+  const rows = db
+    .prepare("select severity, count(*) as n from issues where disposition = 'open' group by severity")
+    .all() as Array<{ severity: string; n: number }>;
+  for (const row of rows) {
+    if (Object.hasOwn(bySeverity, row.severity)) bySeverity[row.severity as keyof ResidualCounts] = row.n;
+  }
+  const open = bySeverity.critical + bySeverity.high + bySeverity.medium + bySeverity.low + bySeverity.nit;
+  return { open, bySeverity };
+}
+
+/**
+ * The project's latest iteration: newest compass start date, falling back to
+ * the catalog's own update, with the id ascending on a tie.
+ */
+function readLatestIteration(db: StoreDb, projectId: string): IterationDTO | null {
+  // shortcut: the winner is picked from the 200-row page; a project with more
+  // iterations than that is out of scope for this aggregation.
+  const list = readIterationList(db, { projectId, limit: 200 });
+  let latest: IterationDTO | null = null;
+  let latestKey = "";
+  for (const item of list.items) {
+    const key = item.compass?.startedAt ?? item.catalog?.updatedAt ?? "";
+    if (latest === null || key > latestKey || (key === latestKey && item.iterationId < latest.iterationId)) {
+      latest = item;
+      latestKey = key;
+    }
+  }
+  return latest;
 }
 
 // ---------------------------------------------------------------------------

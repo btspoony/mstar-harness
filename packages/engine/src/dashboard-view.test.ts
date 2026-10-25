@@ -7,23 +7,29 @@
  * validation implementation. Every case runs the layer against the real store
  * boundary; nothing is mocked.
  */
-import { mkdirSync, mkdtempSync, rmSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterAll, describe, expect, test } from "bun:test";
 import { MAX_DASHBOARD_SEARCH_LENGTH, dashboardFailure, dashboardFilters, readDashboardView } from "./dashboard-view.js";
-import { registerCatalogEntity } from "./catalog.js";
+import { catalogRootDir, linkCatalogEntities, registerCatalogEntity } from "./catalog.js";
+import { createExecutionWorkflow, readExecutionState } from "./execution-store.js";
 import { captureIssue, getIssue } from "./issue.js";
-import { initializeStore } from "./store-db.js";
-import { queryDashboard } from "./store-read.js";
+import { addMilestone } from "./milestone-store.js";
+import { initializeStore, openStore } from "./store-db.js";
+import { queryDashboard, withStoreRead } from "./store-read.js";
+import type { CatalogEntityInput, CatalogOperation } from "./catalog.js";
 import type { IssueDetail } from "./issue.js";
+import type { MilestoneRead } from "./milestone-store.js";
 import type { StoreContext } from "./store-db.js";
 import type {
   DashboardView,
   DashboardViewData,
   IterationDTO,
+  IterationGateStep,
   IterationListDTO,
   OverviewDTO,
+  OverviewMember,
   ReadEnvelope,
 } from "./store-read.js";
 
@@ -166,7 +172,7 @@ describe("overview read-model contract", () => {
     expect(() => queryDashboard("not-a-view" as DashboardView)).toThrow(/unknown dashboard view "not-a-view"/);
   });
 
-  test("the aggregated DTO is the five wrapped members the contract fixes", () => {
+  test("the aggregated DTO is the five wrapped members the type contract fixes", () => {
     const overview = {
       workflows: { state: "read", data: { items: [], total: 0 } },
       residuals: { state: "read", data: { open: 0, bySeverity: { critical: 0, high: 0, medium: 0, low: 0, nit: 0 } } },
@@ -174,7 +180,8 @@ describe("overview read-model contract", () => {
       latestIteration: { state: "read", data: null },
       issueFlow: { state: "unavailable", reason: "the store answered with an error" },
     } satisfies OverviewDTO;
-    // A member the read did not produce is an arm, never an empty collection or a 0.
+    // The type contract only: the arms are named here, and the live reads below
+    // are what pin the behaviour each member answers with.
     expect(Object.keys(overview)).toEqual(["workflows", "residuals", "milestones", "latestIteration", "issueFlow"]);
     expect(overview.milestones.state).toBe("not-applicable");
     const declared: DashboardViewData["overview"] = overview;
@@ -197,5 +204,342 @@ describe("overview read-model contract", () => {
     expect((detail.data as IterationDTO).gateStep).toBeNull();
     const listed = await readDashboardView({ context, view: "iterations" });
     expect((listed.data as IterationListDTO).items[0]?.gateStep).toBeNull();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Overview fixture: catalog rows, compass documents, projected workflows
+// ---------------------------------------------------------------------------
+
+const STARTED_AT = "2026-09-18T00:00:00.000Z";
+
+/**
+ * One iteration per store-provable gate step (spec §3): the compass status and
+ * the iteration's plan execution status are the only inputs. `iter-done` is the
+ * pinned interpretation of the overlapping rows — a `completed` compass answers
+ * step 4 even while a plan row is not `Done` (close writes `completed`; a stale
+ * plan row cannot un-close it). `iter-none` answers `null` and has no compass.
+ */
+const GATE_CASES: ReadonlyArray<{
+  iterationId: string;
+  status: string;
+  startDate: string;
+  endDate?: string;
+  planStatus: string;
+  gateStep: IterationGateStep;
+}> = [
+  { iterationId: "iter-open", status: "active", startDate: "2026-09-01", planStatus: "Todo", gateStep: 1 },
+  { iterationId: "iter-flight", status: "locked", startDate: "2026-09-20", planStatus: "InProgress", gateStep: 2 },
+  { iterationId: "iter-close", status: "locked", startDate: "2026-09-10", planStatus: "Done", gateStep: 3 },
+  { iterationId: "iter-done", status: "completed", startDate: "2026-09-05", endDate: "2026-09-25", planStatus: "InProgress", gateStep: 4 },
+];
+
+function operation(operationId: string): CatalogOperation {
+  return { actor: "project-manager", operationId };
+}
+
+function compassDoc(entry: { iterationId: string; status: string; startDate: string; endDate?: string }): string {
+  return [
+    "---",
+    `iteration_id: ${entry.iterationId}`,
+    `start_date: ${entry.startDate}`,
+    `status: ${entry.status}`,
+    ...(entry.endDate === undefined ? [] : [`end_date: ${entry.endDate}`]),
+    "iteration_base_branch: main",
+    "target_branch: main",
+    "plans: []",
+    "---",
+    "",
+    `# ${entry.iterationId} delivery compass`,
+    "",
+    "The store is the one read authority.",
+    "",
+  ].join("\n");
+}
+
+function readMember<T>(member: OverviewMember<T>): T {
+  if (member.state !== "read") throw new Error(`expected a read member, received ${member.state}: ${member.reason}`);
+  return member.data;
+}
+
+async function storeRevision(context: StoreContext): Promise<number> {
+  const handle = await openStore(context, "read");
+  try {
+    return (handle.db.prepare("select revision from store_meta where id = 1").get() as { revision: number }).revision;
+  } finally {
+    handle.close();
+  }
+}
+
+/** One plan workflow per gate case: the plan row's workflow id is the plan id. */
+async function createPlanWorkflow(context: StoreContext, planId: string, planStatus: string): Promise<void> {
+  const initialized = await readExecutionState(context);
+  await createExecutionWorkflow(
+    { harnessDir: context.harnessDir, caller: { sessionId: "dashboard-view-fixture", role: "coordinator", workflowId: planId } },
+    {
+      entry: { id: planId, type: "plan", started_at: STARTED_AT, dir: `workflows/${planId}` },
+      snapshot: {
+        schema_version: 1,
+        id: planId,
+        type: "plan",
+        status: "running",
+        started_at: STARTED_AT,
+        updated_at: STARTED_AT,
+        phase: "phase-2-execute",
+        branch: { base: "main", source: `feature/${planId}`, target: "main" },
+        plans: [{ id: planId, title: planId, file: `plans/${planId}.md`, status: planStatus }],
+        delivery_kind: "development",
+      } as never,
+      expected: initialized.token,
+      operationId: `create-${planId}`,
+    },
+  );
+}
+
+/**
+ * A store with one project, four compass-bearing iterations (one per gate step)
+ * plus a compass-less one, one active plan workflow per iteration, a milestone
+ * and issues across three of the five severities.
+ */
+async function scopedOverviewWorkspace(name: string): Promise<StoreContext> {
+  const context = await workspace(name);
+  const register = async (input: CatalogEntityInput): Promise<void> => {
+    await registerCatalogEntity(context, input, operation(`register-${input.kind}-${input.id}`));
+  };
+
+  await register({ kind: "project", id: "proj-a", title: "Project A", rootKind: "projects", relativePath: "proj-a" });
+  await register({ kind: "iteration", id: "iter-none", title: "Iteration without compass", rootKind: "iterations", relativePath: "iter-none" });
+
+  for (const entry of GATE_CASES) {
+    await register({ kind: "iteration", id: entry.iterationId, title: entry.iterationId, rootKind: "iterations", relativePath: entry.iterationId });
+    await linkCatalogEntities(
+      context,
+      { from: { kind: "iteration", id: entry.iterationId }, relation: "belongs-to", to: { kind: "project", id: "proj-a" } },
+      operation(`link-${entry.iterationId}-project`),
+    );
+    await register({
+      kind: "document",
+      id: `doc-${entry.iterationId}`,
+      title: `${entry.iterationId} compass`,
+      rootKind: "iterations",
+      relativePath: `${entry.iterationId}/delivery-compass.md`,
+      documentKind: "compass",
+    });
+    await linkCatalogEntities(
+      context,
+      { from: { kind: "iteration", id: entry.iterationId }, relation: "documents", to: { kind: "document", id: `doc-${entry.iterationId}` } },
+      operation(`link-doc-${entry.iterationId}`),
+    );
+    const planId = `p-${entry.iterationId}`;
+    await register({ kind: "plan", id: planId, title: planId, rootKind: "plans", relativePath: `${planId}.md` });
+    await linkCatalogEntities(
+      context,
+      { from: { kind: "plan", id: planId }, relation: "belongs-to", to: { kind: "iteration", id: entry.iterationId } },
+      operation(`link-${planId}-iteration`),
+    );
+    await createPlanWorkflow(context, planId, entry.planStatus);
+    mkdirSync(join(catalogRootDir(context, "iterations"), entry.iterationId), { recursive: true });
+    writeFileSync(
+      join(catalogRootDir(context, "iterations"), entry.iterationId, "delivery-compass.md"),
+      compassDoc(entry),
+    );
+  }
+
+  await addMilestone(
+    context,
+    { projectId: "proj-a", name: "Read boundary", target: "2026-09-30", ordinal: 0 },
+    { operationId: "add-milestone-read-boundary", expectedStoreRevision: await storeRevision(context) },
+  );
+
+  for (const [id, severity] of [
+    ["I-critical-1", "critical"],
+    ["I-critical-2", "critical"],
+    ["I-high-1", "high"],
+    ["I-nit-1", "nit"],
+    ["I-nit-2", "nit"],
+    ["I-nit-3", "nit"],
+  ] as const) {
+    await captureIssue(
+      context,
+      {
+        projectId: "proj-a",
+        title: `Residual ${id}`,
+        severity,
+        kind: "bug",
+        impact: "The overview residual count must reconcile against the issue list",
+        acceptance: "Every severity literal is present, zero included",
+        sourceIdentity: id,
+        rootCauseKey: id,
+        acceptanceKey: id,
+        occurrenceKey: id,
+        sourceKind: "test",
+        location: "dashboard-view.test.ts",
+        observedBehavior: `Residual ${id}`,
+        evidence: ["isolated fixture"],
+        discoveredAt: RECORDED_AT,
+      },
+      { actor: "project-manager", operationId: `capture-${id}` },
+    );
+  }
+  return context;
+}
+
+let scopedContext: Promise<StoreContext> | undefined;
+
+/** One store shared by the read-only assertions below (the fixture is expensive). */
+function scopedOverview(): Promise<StoreContext> {
+  return (scopedContext ??= scopedOverviewWorkspace("overview-scoped-"));
+}
+
+describe("overview read model", () => {
+  test("every member answers from one store read", async () => {
+    const context = await scopedOverview();
+    const envelope = await readDashboardView({ context, view: "overview", params: { project: "proj-a" } });
+    const overview = envelope.data as OverviewDTO;
+
+    // Active-registered workflows with their plans: several of them, one per
+    // gate-case plan workflow, all of them registry members.
+    const workflows = readMember(overview.workflows);
+    expect(workflows.items.map((item) => item.id).sort()).toEqual([
+      "p-iter-close",
+      "p-iter-done",
+      "p-iter-flight",
+      "p-iter-open",
+    ]);
+    expect(workflows.items.every((item) => item.activeRegistration)).toBe(true);
+    expect(workflows.total).toBe(workflows.items.length);
+
+    // Residuals: all five severity literals, the two empty ones as 0, and
+    // `open` equals their sum (D20: the total is never a second query).
+    expect(overview.residuals).toEqual({
+      state: "read",
+      data: { open: 6, bySeverity: { critical: 2, high: 1, medium: 0, low: 0, nit: 3 } },
+    });
+
+    // Milestones: the resolved project's grouping, populated.
+    const milestones: MilestoneRead = readMember(overview.milestones);
+    expect(milestones.projectId).toBe("proj-a");
+    expect(milestones.milestones.map((milestone) => milestone.name)).toEqual(["Read boundary"]);
+
+    // Latest iteration: the newest compass start date inside the project, and
+    // it reuses IterationDTO, so the gate step travels with it.
+    const latest = readMember(overview.latestIteration);
+    expect(latest?.iterationId).toBe("iter-flight");
+    expect(latest?.gateStep).toBe(2);
+
+    // Issue flow: the project-scoped series reconciles with the open total.
+    expect(readMember(overview.issueFlow).currentOpen).toBe(6);
+
+    // One envelope, one revision: every member came from the same read.
+    expect(typeof envelope.storeRevision).toBe("number");
+  });
+
+  test("gateStep follows the store-provable mapping and attribution discloses its source", async () => {
+    const context = await scopedOverview();
+    const listed = await readDashboardView({ context, view: "iterations" });
+    const list = listed.data as IterationListDTO;
+    const byIteration = Object.fromEntries(list.items.map((item) => [item.iterationId, item.gateStep]));
+    expect(byIteration).toEqual({
+      "iter-close": 3,
+      "iter-done": 4,
+      "iter-flight": 2,
+      "iter-none": null,
+      "iter-open": 1,
+    });
+    expect(list.attribution).toBe("present");
+  });
+
+  test("without a project the two project-scoped members answer not-applicable only", async () => {
+    const context = await workspace("overview-unscoped-");
+    await registerCatalogEntity(
+      context,
+      { kind: "iteration", id: "iter-loose", title: "Loose iteration", rootKind: "iterations", relativePath: "iter-loose" },
+      operation("register-iter-loose"),
+    );
+
+    const overview = (await readDashboardView({ context, view: "overview" })).data as OverviewDTO;
+    expect(overview.milestones).toEqual({ state: "not-applicable", reason: "no project resolves for this read" });
+    expect(overview.latestIteration).toEqual({ state: "not-applicable", reason: "no project resolves for this read" });
+    // The store-wide members still answer; none of them is project-scoped.
+    expect(readMember(overview.workflows)).toEqual({ items: [], total: 0 });
+    expect(readMember(overview.residuals)).toEqual({
+      open: 0,
+      bySeverity: { critical: 0, high: 0, medium: 0, low: 0, nit: 0 },
+    });
+    expect(readMember(overview.issueFlow).currentOpen).toBe(0);
+
+    // An iteration the store never attributed to a project: the absent arm, not empty.
+    const listed = await readDashboardView({ context, view: "iterations" });
+    expect((listed.data as IterationListDTO).attribution).toBe("absent");
+  });
+
+  test("a resolved project with no roadmap answers milestones with data, never not-applicable", async () => {
+    const context = await workspace("overview-empty-project-");
+    await registerCatalogEntity(
+      context,
+      { kind: "project", id: "proj-empty", title: "Empty project", rootKind: "projects", relativePath: "proj-empty" },
+      operation("register-proj-empty"),
+    );
+
+    const overview = (await readDashboardView({ context, view: "overview", params: { project: "proj-empty" } }))
+      .data as OverviewDTO;
+    expect(readMember(overview.milestones)).toEqual({
+      projectId: "proj-empty",
+      milestones: [],
+      issues: [],
+      unassignedIssues: 0,
+    });
+    // No iteration in the project is the empty arm of the same member, never unavailable.
+    expect(overview.latestIteration).toEqual({ state: "read", data: null });
+  });
+
+  test("a compass row with no status answers the least step the store can prove", async () => {
+    const context = await scopedOverview();
+    // The producer cannot write this row (`validateCompassShape` admits only the
+    // closed status values), so the arm is pinned by doctoring one projected
+    // column AFTER a real read and reading again WITHOUT the refresh, which
+    // would rebuild the row from its compass document.
+    await readDashboardView({ context, view: "iterations" });
+    const handle = await openStore(context, "write");
+    try {
+      handle.db.prepare("update projection_compasses set status = null where iteration_id = 'iter-open'").run();
+      handle.db.prepare("update store_meta set revision = revision + 1 where id = 1").run();
+    } finally {
+      handle.close();
+    }
+
+    const listed = await withStoreRead(context, { ...queryDashboard("iterations"), needsProjection: false });
+    const row = (listed.data as IterationListDTO).items.find((item) => item.iterationId === "iter-open");
+    expect(row?.compass?.status).toBeNull();
+    // A compass that records no status proves its own existence and nothing
+    // further: step 1, never a step the store cannot show.
+    expect(row?.gateStep).toBe(1);
+  });
+
+  test("one throwing reader degrades only its own member", async () => {
+    const context = await workspace("overview-unavailable-");
+    await registerCatalogEntity(
+      context,
+      { kind: "project", id: "proj-a", title: "Project A", rootKind: "projects", relativePath: "proj-a" },
+      operation("register-proj-a"),
+    );
+    // Remove the one table the milestone member reads; every other reader is
+    // untouched, so only `milestones` may answer `unavailable`.
+    const handle = await openStore(context, "write");
+    try {
+      handle.db.exec("drop table project_milestones");
+      handle.db.prepare("update store_meta set revision = revision + 1 where id = 1").run();
+    } finally {
+      handle.close();
+    }
+
+    const overview = (await readDashboardView({ context, view: "overview", params: { project: "proj-a" } }))
+      .data as OverviewDTO;
+    expect(overview.milestones.state).toBe("unavailable");
+    // The reason is the store's own message, not a rewritten one.
+    expect(overview.milestones.state === "unavailable" ? overview.milestones.reason : "").toContain("project_milestones");
+    for (const member of [overview.workflows, overview.residuals, overview.latestIteration, overview.issueFlow] as const) {
+      expect(member.state).toBe("read");
+    }
   });
 });
