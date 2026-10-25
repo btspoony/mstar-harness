@@ -1,6 +1,6 @@
 /**
- * Every failure on this surface is a DESIGNED state, in both languages
- * (plan 20261026-dsh-panel-entry-and-unavailable Task 3).
+ * Every failure on this surface is a DESIGNED state, in both languages: the
+ * shared state surfaces plus a human sentence per reason.
  *
  * The defect this pins: the panel rendered `工作区快照不可用：session-cwd-absent` — a
  * bare interpolated internal token. Now each reason has a human sentence through

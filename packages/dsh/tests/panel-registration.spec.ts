@@ -1,5 +1,5 @@
 /**
- * Seat registration — ONE entry (plan 20261026-dsh-panel-entry-and-unavailable Task 1).
+ * Seat registration — ONE entry: the session's right-pane tab type and its seats.
  *
  * The Morning Star product is per-repository state, so it must NOT appear in the
  * host's global panel list beside Plugins / Automation / Context-insight. The
