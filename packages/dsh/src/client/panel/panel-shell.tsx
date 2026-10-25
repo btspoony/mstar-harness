@@ -326,7 +326,6 @@ const FAILURE_KEYS: Record<string, PanelKey> = {
   'session-cwd-absent': 'state.failure.session-cwd-absent',
   'session-inspect-failed': 'state.failure.session-inspect-failed',
   'cwd-mismatch': 'state.failure.cwd-mismatch',
-  'no-harness': 'state.failure.no-harness',
   'malformed-answer': 'state.failure.malformed-answer',
 }
 
@@ -425,11 +424,6 @@ export type PanelSeatProps = {
   panelSnapshot?: MstarPanelSnapshotClient
   localeFace?: HostLocaleFace
   themeFace?: HostThemeFace
-  /**
-   * The seat is the main-area panel: the host gives a non-`conversation` key no
-   * session, so an absent session is a FACT to state, not a read still pending.
-   */
-  sessionFreeMainPanel?: boolean
 }
 
 export function PanelSeat(props: PanelSeatProps): React.ReactElement | null {
@@ -533,13 +527,6 @@ export function PanelSeat(props: PanelSeatProps): React.ReactElement | null {
 
   // Every hook runs before the early returns (hooks rule).
   if (!visible) return null
-  if (props.sessionFreeMainPanel === true && sessionId === undefined) {
-    return (
-      <div className={css.state} data-mstar-panel="no-session">
-        <p data-mstar-empty="no-session">{t('empty.no-session')}</p>
-      </div>
-    )
-  }
   if (digest.kind === 'waiting') {
     return (
       <div className={css.state} data-mstar-panel="waiting">

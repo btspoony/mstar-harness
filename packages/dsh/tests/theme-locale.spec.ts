@@ -34,7 +34,6 @@ const WORKFLOW = {
 function render(over: {
   snapshot?: PanelSnapshot
   scheme?: 'light' | 'dark'
-  enforcementLine?: boolean
   select?: ((workflowId: string) => void) | null
 } = {}): string {
   const { renderToStaticMarkup } = require('react-dom/server') as typeof import('react-dom/server')
@@ -48,7 +47,6 @@ function render(over: {
       navLabel: 'Morning Star Workflow',
       onSelect: () => {},
       select: over.select ?? null,
-      ...(over.enforcementLine === true ? { enforcementLine: true } : {}),
     }),
   )
 }

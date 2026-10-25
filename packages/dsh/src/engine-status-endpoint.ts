@@ -326,13 +326,18 @@ export class MstarEngineStatusGateway extends TypertRemoteService {
     return source.selection
   }
 
-  
   /**
-   * Resolve the authoritative cwd of one session: the LIVE session first
-   * (`ctx.sessions.get(id)`), then the session controller's persisted
-   * `inspect(id)` fallback for a session that is not currently attached.
-   * A missing service, a missing session or a cwd-less header is an explicit
-   * unavailable reason, never a guess.
+   * Resolve the workspace of one session, in order: the LIVE session's header
+   * (`ctx.sessions.get(id)` → `Session.header.cwd`), then the persisted
+   * inspection (`inspect(id)` → `SessionInspection.meta.cwd`) for a session that
+   * is not attached, then — only when BOTH surfaces are genuinely silent — the
+   * workspace this host was launched in (`process.cwd()`).
+   *
+   * The last step is not a guess about the session: it is the plugin's own launch
+   * workspace, the only one it can observe without a new host API, and it is
+   * never the caller's claim (a client-asserted cwd is compared, not adopted).
+   * A missing service, a missing session or an unreadable inspection keeps its
+   * own explicit reason.
    */
   private async resolveSessionCwd(sessionId: string): Promise<SessionCwdResolution> {
     const sessions = this.ctx.get('sessions') as SessionsView | undefined
