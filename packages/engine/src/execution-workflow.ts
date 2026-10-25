@@ -1926,14 +1926,14 @@ const RECOVER_COORDINATOR_OPERATION = "recoverExecutionCoordinator";
 function recoverCoordinatorRequestHash(
   caller: ExecutionCaller,
   workflowId: string,
-  input: { expected: ExecutionToken; priorSessionId: string | null; reason: string; attestation: ActivationAttestation },
+  input: { expected?: ExecutionToken; priorSessionId: string | null; reason: string; attestation: ActivationAttestation },
 ): string {
   return createHash("sha256")
     .update(
       serializeExecutionValue({
         operation: RECOVER_COORDINATOR_OPERATION,
         workflow_id: workflowId,
-        expected: input.expected,
+        expected: input.expected ?? "current",
         caller: {
           session_id: caller.sessionId,
           role: caller.role,
@@ -1987,10 +1987,15 @@ function recoverCoordinatorRequestHash(
  * the exact registered held attempt with applicable renewed stop evidence.
  * Both record a fresh workflow operation; only that predecessor's claim may be
  * settled. Operator evidence does not establish observed process termination.
+ *
+ * The CAS is the addressed header revision. An omitted `expected` resolves to
+ * the current revision's token inside the transaction — the same derivation
+ * `workflow.reopen` and `workflow.adopt-terminal` apply — so only the CALLER's
+ * explicit token enters the request hash and an identical retry still replays.
  */
 export async function recoverExecutionCoordinator(
   context: ExecutionContext,
-  input: { expected: ExecutionToken; operationId: string; priorSessionId: string | null; reason: string; attestation: ActivationAttestation },
+  input: { expected?: ExecutionToken; operationId: string; priorSessionId: string | null; reason: string; attestation: ActivationAttestation },
 ): Promise<ExecutionReceipt<ExecutionSessionRef>> {
   const caller = context.caller;
   if (caller?.role !== "coordinator") {
@@ -2051,6 +2056,9 @@ export async function recoverExecutionCoordinator(
       );
     }
     const header = requireWorkflowState(tx, workflowId);
+    // The omitted expectation is the current revision's token, resolved under
+    // the same lock that checks it.
+    const expected = input.expected ?? executionToken("workflow", tx.storeId, tx.epoch, [workflowId], header.revision);
     const status = String(header.state.status ?? "");
     if ((WORKFLOW_TERMINAL_STATUSES as readonly string[]).includes(status)) {
       return releaseTerminalHeldLease(tx, {
@@ -2061,7 +2069,7 @@ export async function recoverExecutionCoordinator(
         attestation,
         operationId,
         requestHash,
-        expected: input.expected,
+        expected,
         status,
         revision: header.revision,
       });
@@ -2080,7 +2088,7 @@ export async function recoverExecutionCoordinator(
       requireLiveCoordinator(tx, workflowId, caller.sessionId);
       return replay;
     }
-    assertExecutionToken(input.expected, {
+    assertExecutionToken(expected, {
       kind: "workflow",
       storeId: tx.storeId,
       epoch: tx.epoch,
@@ -2288,8 +2296,9 @@ function reopenWorkflowRequestHash(
  * Reopening binds NO coordinator: the session rows stay as they are, and the
  * ordinary `bind`/`recover` routes resume ownership afterwards.
  *
- * The CAS is the terminal header revision — the token `status validate`
- * publishes in `terminalUnregistered[].token` — and it is checked BEFORE any
+ * The CAS is the terminal header revision's token — `status validate` publishes
+ * that header as an identity row (id, status, revision) only, so the token is
+ * derived here when the caller omits it — and it is checked BEFORE any
  * write, so a stale token leaves no footprint. An omitted `expected` resolves to
  * the current revision inside the transaction, so only the CALLER's explicit
  * token enters the request hash: an identical retry after a committed reopen

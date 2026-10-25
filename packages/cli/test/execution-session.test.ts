@@ -1042,37 +1042,29 @@ async function storedLease(fixture: Fixture): Promise<Record<string, unknown>> {
 }
 
 /**
- * The terminal workflow's CAS token, read through the route the violation
- * advertises: `mstar status validate` publishes the retained header (the close
- * removed its registry row, so `data.workflows[]` never carries it) with the
- * token that header's revision addresses. Nothing here constructs the token.
+ * The terminal workflow's CAS token, read from the authority's retained header:
+ * the close removed its registry row, so `data.workflows[]` never carries it,
+ * and `status validate` publishes the header as an identity row only. Nothing
+ * here constructs the token.
  */
-function terminalTokenFromStatus(fixture: Fixture): string {
-  const validated = runCli(["status", "validate"], fixture);
-  expect(validated.exitCode, validated.stdout).toBe(0);
-  const terminal = fieldOf(dataOf(validated), "terminalUnregistered");
-  if (!Array.isArray(terminal)) throw new Error(`status validate carries no terminalUnregistered collection: ${validated.stdout}`);
-  const entry = terminal.find((candidate) => stringMember(candidate, "id") === WORKFLOW_ID);
-  const token = entry === undefined ? undefined : stringMember(entry, "token");
-  if (token === undefined) throw new Error(`terminalUnregistered carries no token for ${WORKFLOW_ID}: ${validated.stdout}`);
-  return token;
+async function terminalTokenOf(fixture: Fixture): Promise<string> {
+  const read = await readExecutionAuthority(fixture.context);
+  const entry = read.data.terminalUnregistered?.find((candidate) => candidate.id === WORKFLOW_ID);
+  if (entry === undefined) throw new Error(`the authority retains no unregistered terminal header for ${WORKFLOW_ID}`);
+  return entry.token;
 }
 
 /**
- * The adopted terminal workflow's CAS token, read through the same route for
- * the OTHER terminal shape: an adopted close is published in
- * `data.terminalAdoptions[]`, never in `terminalUnregistered[]`. Nothing here
- * constructs the token either.
+ * The adopted terminal workflow's CAS token, read from the same authority route
+ * for the OTHER terminal shape: an adopted close is recorded in
+ * `terminalAdoptions`, never in `terminalUnregistered`. Nothing here constructs
+ * the token either.
  */
-function terminalAdoptionTokenFromStatus(fixture: Fixture): string {
-  const validated = runCli(["status", "validate"], fixture);
-  expect(validated.exitCode, validated.stdout).toBe(0);
-  const adopted = fieldOf(dataOf(validated), "terminalAdoptions");
-  if (!Array.isArray(adopted)) throw new Error(`status validate carries no terminalAdoptions collection: ${validated.stdout}`);
-  const entry = adopted.find((candidate) => stringMember(candidate, "id") === WORKFLOW_ID);
-  const token = entry === undefined ? undefined : stringMember(entry, "token");
-  if (token === undefined) throw new Error(`terminalAdoptions carries no token for ${WORKFLOW_ID}: ${validated.stdout}`);
-  return token;
+async function terminalAdoptionTokenOf(fixture: Fixture): Promise<string> {
+  const read = await readExecutionAuthority(fixture.context);
+  const entry = read.data.terminalAdoptions?.find((candidate) => candidate.id === WORKFLOW_ID);
+  if (entry === undefined) throw new Error(`the authority retains no adopted terminal header for ${WORKFLOW_ID}`);
+  return entry.token;
 }
 
 /** The violation codes the phase-6 post-merge close gate reports, from either envelope arm. */
@@ -1129,8 +1121,9 @@ describe("mstar session recover — a terminal workflow's held lease", () => {
     const attestationPath = join(fixture.root, "terminal-attestation.json");
     writeJson(attestationPath, attestationFor(COORDINATOR_ID));
     const successor: ExecutionIdentity = { ...coordinatorIdentity(), sessionId: SUCCESSOR_ID };
-    // The advertised invocation, verbatim: the token is the one `status
-    // validate` publishes for this closed lifecycle, not a local fabrication.
+    // The advertised invocation: the release omits `--expect`, and the verb
+    // derives the frozen header's token inside the guarded transaction — the
+    // operator route `status validate` now names.
     const released = runCli(
       [
         "session",
@@ -1143,8 +1136,6 @@ describe("mstar session recover — a terminal workflow's held lease", () => {
         "release the stopped holder's terminal lease",
         "--attestation",
         attestationPath,
-        "--expect",
-        terminalTokenFromStatus(fixture),
         "--operation",
         "release-terminal",
         "--harness",
@@ -1176,8 +1167,9 @@ describe("mstar session recover — a terminal workflow's held lease", () => {
   test("the spawned release clears the held lease of an ADOPTED terminal lifecycle", async () => {
     // The other terminal shape: the header left the ACTIVE registry and was
     // settled through terminal adoption, so `status validate` publishes it in
-    // `data.terminalAdoptions[]` and the gate's recovery must be reachable from
-    // that collection too — never from a locally rebuilt token.
+    // `data.authority.terminalAdoptions[]` as an identity row. The gate's
+    // recovery must stay reachable for that shape too, and an explicit token
+    // read from the authority must remain an admissible CAS.
     const fixture = await activeFixture("mstar-terminal-lease-adopted");
     const identity = coordinatorIdentity();
     const initial = await readExecutionAuthority(fixture.context);
@@ -1255,7 +1247,7 @@ describe("mstar session recover — a terminal workflow's held lease", () => {
         "--attestation",
         releaseAttestationPath,
         "--expect",
-        terminalAdoptionTokenFromStatus(fixture),
+        await terminalAdoptionTokenOf(fixture),
         "--operation",
         "release-adopted-terminal",
         "--harness",
@@ -2460,13 +2452,13 @@ describe("status validate — public authority reads", () => {
 });
 
 /**
- * `terminalAdoptions` is a SIBLING of `authority`, so a redaction that walks
- * only the authority subtree leaves `actor_session_id` readable — the third
- * omission of that shape. This fixture records an adoption and pins the whole
- * envelope.
+ * A closed lifecycle is published as an identity row: the header's token, plan
+ * rows and adoption attribution — including the adopter's session id — stay in
+ * the store read, so the adopter id can never reach the envelope. This fixture
+ * records an adoption and pins the whole envelope.
  */
 describe("status validate — adopted workflows", () => {
-  test("redacts the adopter session id on the sibling terminalAdoptions key", async () => {
+  test("publishes an adopted header as an identity row, never its token or adopter session", async () => {
     const fixture = await activeFixture("mstar-status-adoption");
     const handle = await openStore(fixture.context, "write");
     try {
@@ -2491,11 +2483,17 @@ describe("status validate — adopted workflows", () => {
 
     const result = runCli(["status", "validate"], fixture);
     expect(result.exitCode, result.stdout).toBe(0);
-    const payload = JSON.parse(result.stdout) as { data?: { terminalAdoptions?: Array<Record<string, unknown>> } };
-    expect(payload.data?.terminalAdoptions?.[0]).toMatchObject({
-      actor_session_id: "[redacted]",
-      adopt_reason: "legacy closeout",
-    });
+    const payload = JSON.parse(result.stdout) as {
+      data?: { terminalAdoptions?: unknown; authority?: { terminalAdoptions?: Array<Record<string, unknown>> } };
+    };
+    // The terminal collections live inside `authority` only, and each row is
+    // the identity triple — a token or attribution field would show as a key.
+    expect(payload.data).not.toHaveProperty("terminalAdoptions");
+    const rows = payload.data?.authority?.terminalAdoptions;
+    expect(rows).toHaveLength(1);
+    expect(rows?.[0]).toMatchObject({ id: "wf-adopted-legacy", status: "stopped" });
+    expect(Object.keys(rows?.[0] ?? {}).sort()).toEqual(["id", "revision", "status"]);
+    expect(rows?.[0]).not.toHaveProperty("token");
     expect(JSON.stringify(payload)).not.toContain("session-adopter-live");
   });
 });

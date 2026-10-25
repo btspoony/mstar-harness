@@ -116,7 +116,7 @@ export function getStatusCommandDefinitions(): readonly CommandDefinition[] {
       input: z.object({ path: z.string().min(1).optional() }),
       output,
       effects: ["read", "validate"],
-      description: "Validate the control root's ACTIVE execution authority (the pre-activation status.json / snapshot file route is retired). The output carries the execution CAS tokens a caller records as --expect: the store's root token at data.token, each workflow's token at data.workflows[].token, each plan's token at data.authority.workflows[].planTokens[<planId>], and a closed lifecycle's retained header token at data.terminalUnregistered[].token or data.terminalAdoptions[].token (either is the one such token a terminal held-lease release takes).",
+      description: "Validate the control root's ACTIVE execution authority (the pre-activation status.json / snapshot file route is retired). The output carries the execution CAS tokens a caller records as --expect: the store's root token at data.token, each workflow's token at data.workflows[].token, and each plan's token at data.authority.workflows[].planTokens[<planId>]. Closed lifecycles are published as identity rows only — { id, status, revision } in data.authority.terminalUnregistered[] or data.authority.terminalAdoptions[], never their token, plan rows or session attribution: a CAS-guarded terminal transition (workflow reopen, workflow adopt-terminal, the session recover held-lease release) derives its own expectation when the explicit option is omitted.",
       async execute(input, context) {
         const parsed = z.object({ path: z.string().min(1).optional() }).safeParse(input);
         if (!parsed.success) return invalid("status.validate", parsed.error);
@@ -136,15 +136,19 @@ export function getStatusCommandDefinitions(): readonly CommandDefinition[] {
             const authority = await resolveCurrentAuthority({ harnessDir });
             const read = await readExecutionAuthority({ harnessDir });
             // The WHOLE envelope goes through the walker, not only `authority`:
-            // `terminalAdoptions[].actor_session_id` is a live session id on a
-            // sibling key, and a per-subtree allow-list is what let it through
-            // three times before.
+            // an ACTIVE workflow's coordinator session id is a live session id
+            // inside the subtree, and a per-key allow-list is what let one
+            // through three times before.
             return ok("status.validate", redactSessionIds({
-              authority: read.data,
+              // Terminal headers are identity rows only: their CAS token, plan
+              // rows, reason and adoption attribution stay in the store read.
+              authority: {
+                ...read.data,
+                ...("terminalUnregistered" in read.data ? { terminalUnregistered: (read.data.terminalUnregistered ?? []).map(({ id, status, revision }) => ({ id, status, revision })) } : {}),
+                ...("terminalAdoptions" in read.data ? { terminalAdoptions: (read.data.terminalAdoptions ?? []).map(({ id, status, revision }) => ({ id, status, revision })) } : {}),
+              },
               token: read.token,
               workflows: "workflows" in read.data ? read.data.workflows.map((entry) => ({ id: entry.state.id, token: entry.workflowToken })) : [],
-              terminalUnregistered: "terminalUnregistered" in read.data ? read.data.terminalUnregistered : [],
-              terminalAdoptions: "terminalAdoptions" in read.data ? read.data.terminalAdoptions : [],
               state: authority.route,
             }) as Record<string, unknown>);
           } catch (error) {

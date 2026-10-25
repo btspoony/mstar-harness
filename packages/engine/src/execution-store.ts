@@ -209,8 +209,9 @@ export type ExecutionState = {
   /**
    * Terminal headers outside ACTIVE registry membership, including their CAS
    * revision and the workflow token that revision addresses: the registry row a
-   * live workflow's token is read from is gone, so this is the only published
-   * address a terminal-only write (the held-lease release) can be given.
+   * live workflow's token is read from is gone, so this is the address a
+   * terminal-only write (the held-lease release, an explicit reopen token)
+   * takes. Command surfaces publish the header as an identity row only.
    */
   terminalUnregistered?: Array<{
     id: string;

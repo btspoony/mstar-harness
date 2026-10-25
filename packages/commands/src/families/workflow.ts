@@ -351,9 +351,9 @@ function makeDefinition(
           required: false,
           tokenKind: "workflow" as const,
           constraint:
-            "checked CAS on the closed header's current terminal token, exactly as `mstar status validate` publishes it " +
-            "(terminalUnregistered[].token or terminalAdoptions[].token); when omitted this verb reads that token itself and " +
-            "passes it explicitly, so the transition is always CAS-guarded",
+            "checked CAS on the closed header's current terminal token; `mstar status validate` publishes that header as an identity row " +
+            "(id, status, revision) only, and when omitted this verb reads the token itself and passes it explicitly, so the transition " +
+            "is always CAS-guarded",
         },
         { name: "operation", ownership: "caller" as const, route, required: false, constraint: "optional replay id; omitted creates one fresh id for this invocation" },
         { name: "reason", ownership: "caller" as const, route, required: true, constraint: "recorded with the transition: the operator-facing justification, never generated from the request" },
@@ -705,7 +705,7 @@ export function getWorkflowCommandDefinitions(): readonly CommandDefinition[] {
     ),
     makeDefinition(
       "workflow.reopen",
-      "Return a failed or stopped workflow to running on the SAME id. The header keeps its identity anchors, plan rows, session rows and retained operation receipts; the lifecycle simply re-enters the ACTIVE registry, and the ordinary bind/recover routes resume ownership afterwards. Reopening a terminal workflow takes an EXPLICIT operator authorization: a coordinator identity addressing this workflow, a non-empty --reason, and --attestation <absolute-json>, the recovery-scope document whose operator + reason are the authorization (no installed consumer is required and an empty stoppedSessions is valid). The attestation is SELF-REPORTED operator evidence: its structure is validated, the operator's authorization is never verified against host liveness. --expect is the closed header's current terminal token exactly as `mstar status validate` publishes it in terminalUnregistered[].token (or terminalAdoptions[].token for an adopted close); when omitted this verb reads that token from the authority and passes it explicitly, so the transition is always CAS-guarded. `completed` is never reopened and this route has no override — register a new lifecycle instead. An omitted --operation gets one generated id for this invocation.",
+      "Return a failed or stopped workflow to running on the SAME id. The header keeps its identity anchors, plan rows, session rows and retained operation receipts; the lifecycle simply re-enters the ACTIVE registry, and the ordinary bind/recover routes resume ownership afterwards. Reopening a terminal workflow takes an EXPLICIT operator authorization: a coordinator identity addressing this workflow, a non-empty --reason, and --attestation <absolute-json>, the recovery-scope document whose operator + reason are the authorization (no installed consumer is required and an empty stoppedSessions is valid). The attestation is SELF-REPORTED operator evidence: its structure is validated, the operator's authorization is never verified against host liveness. --expect is the closed header's current terminal token; `mstar status validate` publishes the header itself as an identity row (id, status, revision) in data.authority.terminalUnregistered[] (or data.authority.terminalAdoptions[] for an adopted close), never its token, and when --expect is omitted this verb derives that token from the authority and passes it explicitly, so the transition is always CAS-guarded. `completed` is never reopened and this route has no override — register a new lifecycle instead. An omitted --operation gets one generated id for this invocation.",
       "write",
       ["workflow", "harness", "expect", "operation", "reason", "attestation"],
       async (input, context) => {
