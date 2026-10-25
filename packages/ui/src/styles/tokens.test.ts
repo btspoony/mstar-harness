@@ -198,14 +198,16 @@ describe("tokens.css — declaration is consumed or claimed", () => {
  * of shipping, which is exactly how the prototype's `warning`/`success` pair
  * ended up 0.7 L\* apart (indistinguishable in greyscale).
  *
- * The floor is 2.5, not 3.0, because the FROZEN prototype palette's tightest
- * pair measures 2.76 (`purple` 36.92 / `danger` 39.69) and the L2 review ruled
- * that pair must not move. A floor above the frozen palette would only be
- * satisfiable by overriding the review, so the rule states the floor the palette
- * actually meets and the guard enforces that one. `DESIGN.md` carries the same
- * number; the two must not disagree.
+ * The floor is 3.0 and the palette moves to meet it, never the reverse (compass
+ * D24). The frozen prototype palette could not meet it: its tightest pair
+ * measured 2.76 (`purple` 36.92 / `danger` 39.69), so both tones were re-spaced
+ * — light `danger` #b7271f at 40.6 L\*, `purple` #693da2 at 35.9 L\* — and the
+ * resulting minimum gap is 3.1. The failure this rule exists to catch is still
+ * recorded: the prototype's `warning`/`success` pair sat 0.7 L\* apart, i.e.
+ * indistinguishable in greyscale. `DESIGN.md` carries the same number; the two
+ * must not disagree.
  */
-const MIN_TONE_GAP = 2.5;
+const MIN_TONE_GAP = 3.0;
 
 /** CIE L\* of an sRGB hex colour (D65, the same measure DESIGN.md quotes). */
 function lightnessLStar(hex: string): number {
@@ -261,8 +263,10 @@ describe("DESIGN.md Rule 1 — tone luminance separation", () => {
   }
 
   test("DESIGN.md quotes the same floor the guard enforces", () => {
-    // The document escapes the asterisk for Markdown (`2.5 L\*`), so match either form.
-    expect(read(DESIGN_PATH)).toMatch(new RegExp(`${MIN_TONE_GAP} L\\\\?\\*`));
+    // The document writes the floor with one decimal and escapes the asterisk for
+    // Markdown (`3.0 L\*`); match either the escaped or the bare form.
+    const floor = MIN_TONE_GAP.toFixed(1);
+    expect(read(DESIGN_PATH)).toMatch(new RegExp(`${floor} L\\\\?\\*`));
   });
 });
 

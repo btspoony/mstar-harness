@@ -22,11 +22,11 @@ colors:
   text-secondary: "#565d67"
   text-muted: "#6d727b"
   # Status tones, ordered by lightness so greyscale keeps them apart.
-  danger: "#b3261e"
+  danger: "#b7271f"
   warning: "#96590a"
   success: "#197f4f"
   neutral: "#747b8a"
-  purple: "#6c3fa6"
+  purple: "#693da2"
 
 typography:
   page-title:
@@ -137,9 +137,9 @@ ground named in the last column.
 | `accent-soft` | `#eaf0fd` | `#1a2740` | Chart area, quiet active row | — |
 | `success` | `#197f4f` | `#4ec289` | Resolved, done, delivered | **5.01:1 / 8.05:1** on `bg-surface` |
 | `warning` | `#96590a` | `#e8ae61` | Stale, violations, `high` | **5.63:1 / 9.12:1** |
-| `danger` | `#b3261e` | `#e47a72` | `critical`, failures | **6.54:1 / 6.27:1** |
+| `danger` | `#b7271f` | `#e47a72` | `critical`, failures | **6.32:1 / 6.27:1** |
 | `neutral` | `#747b8a` | `#878f9a` | `open`, `Todo`, inactive | **4.25:1 / 5.50:1** |
-| `purple` | `#6c3fa6` | `#bb91e8` | Terminal lifecycle | **7.24:1 / 7.13:1** |
+| `purple` | `#693da2` | `#bb91e8` | Terminal lifecycle | **7.53:1 / 7.13:1** |
 
 Rules:
 
@@ -216,25 +216,27 @@ type-check. Enum values are never translated; they are identifier text.
 
 The five tones must stay distinguishable **in greyscale**: a printed report, a screenshot
 in a review, a projector, a colour-blind reader. Every tone therefore sits in its own
-lightness band, with a minimum gap of **2.5 L\*** (CIE L\*) between neighbours. Re-ordering a
+lightness band, with a minimum gap of **3.0 L\*** (CIE L\*) between neighbours. Re-ordering a
 value or adding a tone means re-checking the gaps, not just the hue.
 
-The floor is 2.5 rather than 3 because the frozen prototype palette's tightest pair —
-`purple` 36.92 / `danger` 39.69 — measures **2.76 L\***, and that pair is a confirmed design
-value that does not move for this rule. A floor the frozen palette cannot meet would only be
-satisfiable by overriding the design, so the rule states the floor the palette actually meets
-and `tokens.test.ts` enforces exactly that number. The gap that motivated the rule remains
-caught: the earlier `warning`/`success` pair sat **0.7 L\*** apart, far below either floor.
+**The palette moves to fit the floor; the floor is never lowered to fit the palette** (compass
+D24). The frozen prototype palette did not clear it — its tightest pair, `purple` 36.92 /
+`danger` 39.69, measures 2.76 L\* — so both tones were re-spaced to `purple` 35.9 and `danger`
+40.6, giving a minimum gap of **3.1** across the light set and **3.9** in dark. The gap that
+originally motivated the rule is still recorded so a future re-tune recognises the failure
+mode: the prototype's `warning`/`success` pair sat **0.7 L\*** apart, indistinguishable in
+greyscale. `tokens.test.ts` enforces the floor, and asserts this document quotes the same
+number.
 
 | Tone | Light | L\* | Dark | L\* |
 | --- | --- | ---: | --- | ---: |
-| `purple` (terminal) | `#6c3fa6` | 36.9 | `#bb91e8` | 67.0 |
-| `danger` | `#b3261e` | 39.7 | `#e47a72` | 63.0 |
+| `purple` (terminal) | `#693da2` | 35.9 | `#bb91e8` | 67.0 |
+| `danger` | `#b7271f` | 40.6 | `#e47a72` | 63.0 |
 | `warning` | `#96590a` | 43.7 | `#e8ae61` | 75.0 |
 | `success` | `#197f4f` | 46.9 | `#4ec289` | 70.9 |
 | `neutral` | `#747b8a` | 51.5 | `#878f9a` | 59.1 |
 
-Light order: purple < danger < warning < success < neutral, gaps **2.8 / 4.0 / 3.2 / 4.6**.
+Light order: purple < danger < warning < success < neutral, gaps **4.7 / 3.1 / 3.2 / 4.6**.
 Dark order: neutral < danger < purple < success < warning, gaps **3.9 / 4.0 / 3.9 / 4.1**.
 The order differs between themes on purpose — each theme is tuned against its own ground —
 so the **gap** is the invariant, never the order.
@@ -339,10 +341,11 @@ The confirmed prototype (`iterations/iter-20261025-frontend-unification/prototyp
 design-v1.html`, screen `Design tokens`) is the visual source of this system. Three values
 were corrected here for a measured reason rather than a preference: `text-muted`,
 `border-strong` and `accent` were raised to clear 4.5:1 (text) and 3:1 (control boundary) on
-their documented grounds; light `success` and the dark tones crowded at 65–67 L\* were
-re-spaced for Rule 1; and the light `danger` / `purple` pair was restored to the prototype
-values, whose 2.76 L\* gap is what Rule 1's floor is calibrated to. The prototype's spacing rhythm, type ramp, row heights, radius scale,
-dot-based status treatment and container breakpoints are adopted unchanged.
+their documented grounds, and the light `success`/`warning`, light `danger`/`purple` and the
+dark tones were re-spaced for Rule 1 (the prototype's tightest pair sat at 2.76 L\* against a
+3.0 floor; the delivered minimum is 3.1 light / 3.9 dark). The prototype's spacing rhythm, type
+ramp, row heights, radius scale, dot-based status treatment and container breakpoints are
+adopted unchanged.
 
 ## Known tooling limitation — checklist key names
 
