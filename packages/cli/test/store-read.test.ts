@@ -262,7 +262,7 @@ describe("dashboard views over a real store", () => {
     expect(workflows.data as WorkflowListDTO).toEqual({ items: [], total: 0 });
 
     const iterations = await readDashboardView({ context, view: "iterations" });
-    expect(iterations.data as IterationListDTO).toEqual({ items: [], total: 0 });
+    expect(iterations.data as IterationListDTO).toEqual({ items: [], total: 0, attribution: "absent" });
 
     const roadmap = await readDashboardView({ context, view: "roadmap", params: { project: "proj-absent" } });
     expect(roadmap.data as RoadmapDTO | null).toBeNull();

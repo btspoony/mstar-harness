@@ -12,11 +12,20 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterAll, describe, expect, test } from "bun:test";
 import { MAX_DASHBOARD_SEARCH_LENGTH, dashboardFailure, dashboardFilters, readDashboardView } from "./dashboard-view.js";
+import { registerCatalogEntity } from "./catalog.js";
 import { captureIssue, getIssue } from "./issue.js";
 import { initializeStore } from "./store-db.js";
+import { queryDashboard } from "./store-read.js";
 import type { IssueDetail } from "./issue.js";
 import type { StoreContext } from "./store-db.js";
-import type { DashboardView, DashboardViewData, ReadEnvelope } from "./store-read.js";
+import type {
+  DashboardView,
+  DashboardViewData,
+  IterationDTO,
+  IterationListDTO,
+  OverviewDTO,
+  ReadEnvelope,
+} from "./store-read.js";
 
 const ROOT = mkdtempSync(join(tmpdir(), "mstar-dashboard-view-"));
 const RECORDED_AT = "2026-10-22T00:00:00.000Z";
@@ -134,5 +143,59 @@ describe("readDashboardView over a real store", () => {
     const harness = join(mkdtempSync(join(ROOT, "uninitialized-")), ".mstar");
     const failure = await readDashboardView({ context: { harnessDir: harness }, view: "issues" }).catch((error: unknown) => error);
     expect(dashboardFailure(failure)).toMatchObject({ code: "store.not-initialized" });
+  });
+});
+
+describe("overview read-model contract", () => {
+  test("overview is a registered view that refreshes the projection and reads only `project`", () => {
+    const query = queryDashboard("overview");
+    expect(query.view).toBe("overview");
+    // It joins projected workflow/plan/compass rows with non-projected issue
+    // and milestone tables, so it takes the same refresh `workflows` does.
+    expect(query.needsProjection).toBe(true);
+    expect(dashboardFilters("overview", { project: "proj-a" })).toEqual({ projectId: "proj-a" });
+    for (const field of ["limit", "offset", "severity", "disposition", "kind", "q"]) {
+      expect(() => dashboardFilters("overview", { [field]: "1" })).toThrow(
+        new RegExp(`"${field}" is not a supported overview query parameter`),
+      );
+    }
+  });
+
+  test("an unknown view name is still refused by both halves", () => {
+    expect(() => dashboardFilters("not-a-view" as DashboardView)).toThrow(/unknown dashboard view "not-a-view"/);
+    expect(() => queryDashboard("not-a-view" as DashboardView)).toThrow(/unknown dashboard view "not-a-view"/);
+  });
+
+  test("the aggregated DTO is the five wrapped members the contract fixes", () => {
+    const overview = {
+      workflows: { state: "read", data: { items: [], total: 0 } },
+      residuals: { state: "read", data: { open: 0, bySeverity: { critical: 0, high: 0, medium: 0, low: 0, nit: 0 } } },
+      milestones: { state: "not-applicable", reason: "no project resolves for this read" },
+      latestIteration: { state: "read", data: null },
+      issueFlow: { state: "unavailable", reason: "the store answered with an error" },
+    } satisfies OverviewDTO;
+    // A member the read did not produce is an arm, never an empty collection or a 0.
+    expect(Object.keys(overview)).toEqual(["workflows", "residuals", "milestones", "latestIteration", "issueFlow"]);
+    expect(overview.milestones.state).toBe("not-applicable");
+    const declared: DashboardViewData["overview"] = overview;
+    expect(declared.issueFlow).toEqual({ state: "unavailable", reason: "the store answered with an error" });
+  });
+
+  test("a live iterations read carries the attribution disclosure and the gate step", async () => {
+    const context = await workspace("overview-contract-");
+    const empty = await readDashboardView({ context, view: "iterations" });
+    // No `belongs-to` link from any iteration: a project's silence has no source.
+    expect(empty.data as IterationListDTO).toEqual({ items: [], total: 0, attribution: "absent" });
+
+    await registerCatalogEntity(
+      context,
+      { kind: "iteration", id: "iter-contract", title: "Iteration contract", rootKind: "iterations", relativePath: "iter-contract" },
+      { actor: "project-manager", operationId: "register-iteration-contract" },
+    );
+    const detail = await readDashboardView({ context, view: "iteration-detail", id: "iter-contract" });
+    // A catalog-only iteration records no compass, so the step is the absent-arm null.
+    expect((detail.data as IterationDTO).gateStep).toBeNull();
+    const listed = await readDashboardView({ context, view: "iterations" });
+    expect((listed.data as IterationListDTO).items[0]?.gateStep).toBeNull();
   });
 });

@@ -562,6 +562,7 @@ function iteration(overrides: Partial<IterationDTO> = {}): IterationDTO {
     workflow: null,
     plans: [],
     documents: [],
+    gateStep: null,
     badges: [],
     ...overrides,
   };
@@ -643,7 +644,7 @@ function roadmap(overrides: Partial<RoadmapDTO> = {}): RoadmapDTO {
 }
 
 const EMPTY_WORKFLOWS: WorkflowListDTO = { items: [], total: 0 };
-const EMPTY_ITERATIONS: IterationListDTO = { items: [], total: 0 };
+const EMPTY_ITERATIONS: IterationListDTO = { items: [], total: 0, attribution: "absent" };
 
 describe("projection disclosure", () => {
   test("stale projection disclosures appear on execution views, and the roadmap discloses freshness without calling its content stale", () => {

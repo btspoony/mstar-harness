@@ -98,7 +98,8 @@ export type DashboardView =
   | "iteration-detail"
   | "projects"
   | "roadmap"
-  | "issue-flow";
+  | "issue-flow"
+  | "overview";
 
 /**
  * Request filters. Only the fields a view needs are read: `id` for the three
@@ -224,6 +225,13 @@ export type IterationPlanDTO = {
 };
 
 /**
+ * The iteration lifecycle steps a store read can prove: Start / Execute /
+ * Close / PR delivery. Step 5 (Merge ready) has no store row -- the merge
+ * happens outside the harness -- so it is never the answer.
+ */
+export type IterationGateStep = 1 | 2 | 3 | 4;
+
+/**
  * One iteration. Membership comes from the catalog -- plan and document
  * membership is disclosed even before any workflow starts -- and the execution
  * projection only adds the compass and the plan execution overlay.
@@ -235,10 +243,17 @@ export type IterationDTO = {
   workflow: { id: string; status: string; phase: string | null; activeRegistration: boolean } | null;
   plans: IterationPlanDTO[];
   documents: CatalogIdentityDTO[];
+  /** The furthest step the store proves; null when the iteration records no compass. */
+  gateStep: IterationGateStep | null;
   badges: DashboardBadge[];
 };
 
-export type IterationListDTO = { items: IterationDTO[]; total: number };
+/**
+ * `attribution` discloses whether a project's iteration scoping has a source
+ * at all: `absent` + zero scoped rows is "this store attributes no iteration to
+ * a project", `present` + zero scoped rows is "nothing here yet".
+ */
+export type IterationListDTO = { items: IterationDTO[]; total: number; attribution: "present" | "absent" };
 
 /** One project and its current open-issue count. */
 export type ProjectListItem = { project: CatalogIdentityDTO; openIssues: number };
@@ -287,6 +302,38 @@ export type IssueFlow = {
   incompleteHistory: boolean;
 };
 
+/**
+ * One member of an aggregate read: the authority answered (`read`), no subject
+ * resolved (`not-applicable`), or the read failed (`unavailable`, the store's
+ * own message). Never a flattened null, so one failed member degrades only
+ * itself.
+ */
+export type OverviewMember<T> =
+  | { readonly state: "read"; readonly data: T }
+  | { readonly state: "not-applicable"; readonly reason: string }
+  | { readonly state: "unavailable"; readonly reason: string };
+
+/** The five closed severity literals, always all present, never omitted. */
+export type ResidualCounts = { critical: number; high: number; medium: number; low: number; nit: number };
+
+/**
+ * The aggregated "what is the state right now" read: one store snapshot's
+ * worth of active workflows, open residuals, the resolved project's milestones
+ * and latest iteration, and the dated issue flow.
+ */
+export type OverviewDTO = {
+  /** Active-registered workflows with their plans. */
+  workflows: OverviewMember<WorkflowListDTO>;
+  /** Open residuals by severity plus the reconciling total (the sum of the five). */
+  residuals: OverviewMember<{ open: number; bySeverity: ResidualCounts }>;
+  /** The resolved project's milestone grouping. */
+  milestones: OverviewMember<MilestoneRead>;
+  /** The resolved project's latest iteration, carrying `gateStep`. */
+  latestIteration: OverviewMember<IterationDTO | null>;
+  /** The dated issue flow with its own incomplete-history disclosure. */
+  issueFlow: OverviewMember<IssueFlow>;
+};
+
 /** The DTO each dashboard view answers with. */
 export type DashboardViewData = {
   issues: IssuePage;
@@ -298,6 +345,7 @@ export type DashboardViewData = {
   projects: ProjectListDTO;
   roadmap: RoadmapDTO | null;
   "issue-flow": IssueFlow;
+  overview: OverviewDTO;
 };
 
 /** Which views refresh projected execution rows (contract §6 refresh rule). */
@@ -311,6 +359,9 @@ const DASHBOARD_VIEWS: Record<DashboardView, { needsProjection: boolean }> = {
   projects: { needsProjection: false },
   roadmap: { needsProjection: false },
   "issue-flow": { needsProjection: false },
+  // Joins projected workflow/plan/compass rows with non-projected issue and
+  // milestone tables, so it takes the refresh the two iteration views take.
+  overview: { needsProjection: true },
 };
 // ---------------------------------------------------------------------------
 // Small conversions
@@ -1114,6 +1165,16 @@ function projectMembership(db: StoreDb): Map<string, Set<string>> {
   return membership;
 }
 
+/** Whether ANY iteration is linked `belongs-to` a project (IA §5 empty vs absent). */
+function iterationAttribution(db: StoreDb): IterationListDTO["attribution"] {
+  const linked = db
+    .prepare(
+      "select 1 as linked from catalog_links where relation = 'belongs-to' and from_kind = 'iteration' and to_kind = 'project' limit 1",
+    )
+    .get();
+  return linked === undefined ? "absent" : "present";
+}
+
 function belongsTo(
   membership: Map<string, Set<string>>,
   kind: string,
@@ -1490,8 +1551,25 @@ function composeIteration(
       const document = identities.get(identityToken("document", documentId));
       return document === undefined ? [] : [document];
     }),
+    gateStep: gateStepOf(compassRow?.status, plans),
     badges,
   };
+}
+
+/**
+ * The furthest iteration-lifecycle step the STORE PROVES (Start / Execute /
+ * Close / PR delivery), from facts the DTO already carries. No compass row is
+ * the absent arm -- null, not step 1. Step 5 (Merge ready) is never derived:
+ * the merge happens outside the harness and no store row records it.
+ */
+function gateStepOf(
+  compassStatus: string | null | undefined,
+  plans: readonly IterationPlanDTO[],
+): IterationGateStep | null {
+  if (compassStatus === undefined) return null;
+  if (compassStatus !== "locked" && compassStatus !== "completed") return 1;
+  if (compassStatus === "completed") return 4;
+  return plans.every((plan) => plan.execution?.status === "Done") ? 3 : 2;
 }
 
 function readIterationList(db: StoreDb, filters: DashboardFilters): IterationListDTO {
@@ -1525,6 +1603,9 @@ function readIterationList(db: StoreDb, filters: DashboardFilters): IterationLis
       ),
     ),
     total: catalogRows.length,
+    // One list-level disclosure: whether ANY iteration is attributed to a
+    // project, so a project's empty Iterations feature can tell a fact from a gap.
+    attribution: iterationAttribution(db),
   };
 }
 
