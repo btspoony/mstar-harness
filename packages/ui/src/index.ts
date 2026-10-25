@@ -28,6 +28,48 @@ export * from "./view-model/projects.ts";
 export * from "./view-model/overview.ts";
 export * from "./view-model/focus.ts";
 
+/**
+ * The primitives (Task 3). Each is exported by name, not by a namespace glob:
+ * the API both hosts mount should be readable in one list, and a component that
+ * later stops existing (a `Sparkline` with the trend it drew) disappears from
+ * this file rather than lingering behind a wildcard.
+ */
+export { StatusDot } from "./components/StatusDot.tsx";
+export { Badge } from "./components/Badge.tsx";
+export { ProgressBar, progressPercent } from "./components/ProgressBar.tsx";
+export { TruncatedText } from "./components/TruncatedText.tsx";
+export { Notice } from "./components/Notice.tsx";
+export { EmptyState, listEmptyFamily } from "./components/EmptyState.tsx";
+export { LiveRegion } from "./components/LiveRegion.tsx";
+export { Pager, hasNext, hasPrevious, pageRange } from "./components/Pager.tsx";
+export { DataTable } from "./components/DataTable.tsx";
+export { Field } from "./components/Field.tsx";
+export { FieldGroup } from "./components/FieldGroup.tsx";
+export { Row } from "./components/Row.tsx";
+export { Collapsible } from "./components/Collapsible.tsx";
+export { Nav } from "./components/Nav.tsx";
+export { Breadcrumb } from "./components/Breadcrumb.tsx";
+export { Tabs } from "./components/Tabs.tsx";
+export { FilterBar } from "./components/FilterBar.tsx";
+
+export type { StatusDotProps } from "./components/StatusDot.tsx";
+export type { BadgeProps } from "./components/Badge.tsx";
+export type { ProgressBarProps } from "./components/ProgressBar.tsx";
+export type { TruncatedTextProps } from "./components/TruncatedText.tsx";
+export type { NoticeProps } from "./components/Notice.tsx";
+export type { AbsenceArm, EmptyStateProps } from "./components/EmptyState.tsx";
+export type { LiveRegionProps } from "./components/LiveRegion.tsx";
+export type { PagerProps } from "./components/Pager.tsx";
+export type { DataTableColumn, DataTableProps } from "./components/DataTable.tsx";
+export type { FieldProps } from "./components/Field.tsx";
+export type { FieldGroupProps } from "./components/FieldGroup.tsx";
+export type { RowProps } from "./components/Row.tsx";
+export type { CollapsibleProps } from "./components/Collapsible.tsx";
+export type { NavItem, NavProps } from "./components/Nav.tsx";
+export type { BreadcrumbProps, Crumb } from "./components/Breadcrumb.tsx";
+export type { TabItem, TabsProps } from "./components/Tabs.tsx";
+export type { AppliedFilter, FilterBarProps, FilterField, FilterOption } from "./components/FilterBar.tsx";
+
 import { TONES, type Tone } from "./view-model/status.ts";
 
 /**

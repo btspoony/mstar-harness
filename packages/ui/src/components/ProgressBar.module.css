@@ -1,0 +1,19 @@
+.track {
+  display: block;
+  inline-size: 100%;
+  block-size: 4px;
+  background: var(--ms-bg-inset);
+  border-radius: var(--ms-radius-full);
+  overflow: hidden;
+}
+
+.fill {
+  display: block;
+  block-size: 100%;
+  border-radius: var(--ms-radius-full);
+  background: var(--ms-accent);
+}
+
+[data-ms-progress-tone="success"] .fill {
+  background: var(--ms-success);
+}
