@@ -18,7 +18,7 @@
  * aggregate DTO still carries `issueFlow` — the read model is unchanged — and
  * this module **never reads it**, so no screen can render it by accident.
  */
-import type { OverviewRead, ResidualCounts } from "./contracts.ts";
+import type { IterationGateStep, OverviewDTO, ResidualCounts } from "@mstar-harness/engine";
 import type { Resolved } from "./state.ts";
 import { resolveMember } from "./state.ts";
 import { SEVERITIES, gateStepPosition, gateSteps, severityTone, type GateStepId, type GateStepPosition, type Tone } from "./status.ts";
@@ -26,7 +26,6 @@ import { projectionState, type ProjectionState } from "./format.ts";
 import type { WorkflowRow } from "./workflows.ts";
 import { workflowRow, workflowStatusTone } from "./workflows.ts";
 import { iterationGateStep } from "./iterations.ts";
-import type { IterationGateStep } from "./contracts.ts";
 
 /** How many milestones the landing view shows. IA §3.1: up to three. */
 export const OVERVIEW_MILESTONE_LIMIT = 3;
@@ -146,7 +145,7 @@ function milestoneRow(milestone: {
  * resolves to `loading` and none of them claims `empty`.
  */
 export function overviewModel(
-  read: OverviewRead,
+  read: OverviewDTO,
   options: {
     projection: Parameters<typeof projectionState>[0];
     phase?: "loading" | "loaded";

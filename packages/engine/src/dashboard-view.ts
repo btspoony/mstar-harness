@@ -34,6 +34,9 @@ const VIEW_QUERY_FIELDS: Record<DashboardView, readonly string[]> = {
   roadmap: ["project"],
   "issue-flow": ["project"],
   projects: [],
+  // `project` scopes milestones, latestIteration and issueFlow; the view reads
+  // no page window and no issue filter, so both keep refusing.
+  overview: ["project"],
 };
 
 const DISPOSITIONS: Record<string, true> = { open: true, resolved: true, waived: true, duplicate: true, superseded: true };

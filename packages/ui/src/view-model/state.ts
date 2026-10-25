@@ -13,7 +13,7 @@
  *
  * `populated` is the default case, not a fifth absence arm.
  */
-import type { OverviewMember } from "./contracts.ts";
+import type { OverviewMember } from "@mstar-harness/engine";
 
 /** The arm a screen renders. */
 export type Resolved<T> =

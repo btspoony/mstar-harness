@@ -17,7 +17,7 @@
 import "./styles/tokens.css";
 import "./styles/base.css";
 
-export * from "./view-model/contracts.ts";
+export * from "./view-model/session.ts";
 export * from "./view-model/format.ts";
 export * from "./view-model/state.ts";
 export * from "./view-model/status.ts";

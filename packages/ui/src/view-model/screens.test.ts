@@ -8,9 +8,9 @@
  * that happens.
  */
 import { describe, expect, test } from "bun:test";
-import type { IterationDTO, RoadmapDTO, WorkflowDTO, WorkflowListDTO } from "@mstar-harness/engine";
+import type { IterationDTO, OverviewDTO, RoadmapDTO, WorkflowDTO, WorkflowListDTO } from "@mstar-harness/engine";
 
-import type { OverviewRead } from "./contracts.ts";
+
 import { overviewModel, residualModel } from "./overview.ts";
 import { focusModel } from "./focus.ts";
 
@@ -79,9 +79,7 @@ const iteration = (over: Partial<IterationDTO> = {}): IterationDTO =>
   plans: [],
   documents: [],
   badges: [],
-  // The member the engine's read-model track publishes (contract §3). Until it
-  // lands on this branch the transform reads it structurally; the test fixes the
-  // shape so the swap to an engine import cannot change behaviour.
+  // The engine's own member (contract §3): 1..4, or null when there is no compass.
   gateStep: 2,
   ...over,
 }) as IterationDTO & { gateStep: 2 };
@@ -127,7 +125,7 @@ const roadmap = (milestoneCount: number): RoadmapDTO => ({
 
 const read = <T>(data: T) => ({ state: "read" as const, data });
 
-const overviewRead = (over: Partial<OverviewRead> = {}): OverviewRead => ({
+const overviewRead = (over: Partial<OverviewDTO> = {}): OverviewDTO => ({
   workflows: read<WorkflowListDTO>({ items: [workflow()], total: 1 }),
   residuals: read({
     open: 26,
@@ -199,18 +197,6 @@ describe("Overview — the fact set of §8.2", () => {
     expect(block.steps).toHaveLength(5);
     expect(block.steps.filter((step) => step.position === "current")).toHaveLength(1);
     expect(block.planCount).toBe(0);
-  });
-
-  test("when the DTO carries no gateStep member, nothing is marked (never a guess)", () => {
-    const withoutMember = overviewModel(
-      overviewRead({ latestIteration: read(iteration({ gateStep: undefined } as Partial<IterationDTO>)) }),
-      { projection },
-    );
-    if (withoutMember.latestIteration.kind !== "populated" || withoutMember.latestIteration.value === null) {
-      throw new Error("expected the iteration block");
-    }
-    expect(withoutMember.latestIteration.value.gateStep).toBeNull();
-    expect(withoutMember.latestIteration.value.steps.every((step) => step.position === "ahead")).toBe(true);
   });
 
   test("an iteration with no compass row marks no step", () => {

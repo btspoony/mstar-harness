@@ -23,6 +23,8 @@ export const DASHBOARD_API_VIEWS = {
   "/api/iterations": "iterations",
   "/api/roadmap": "roadmap",
   "/api/projects": "projects",
+  // The aggregated read: one list-shaped route whose only filter is `project`.
+  "/api/overview": "overview",
 } as const;
 
 /** Detail resource → contract §6 view. */

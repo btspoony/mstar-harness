@@ -20,11 +20,11 @@
  * The progress line is the plan's recorded note — never "the first uncompleted
  * step", because the store carries no checklist (contract §5).
  */
-import type { SessionBinding } from "./contracts.ts";
+import type { SessionBinding } from "./session.ts";
 import type { Resolved } from "./state.ts";
 import { resolveSubjectMember } from "./state.ts";
 import { bucketPlans, gateStepPosition, gateSteps, planProgress, type GateStepId, type GateStepPosition, type PlanStatusLiteral, type Tone } from "./status.ts";
-import type { IterationGateStep } from "./contracts.ts";
+import type { IterationGateStep } from "@mstar-harness/engine";
 
 /** The session's delivery position, or the explicit "no iteration" arm. */
 export type DeliveryLine =

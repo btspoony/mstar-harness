@@ -14,7 +14,7 @@ import { renderToStaticMarkup } from "react-dom/server";
 import type { IterationDTO, IterationListDTO } from "@mstar-harness/engine";
 
 import { iterationDetailModel, iterationListModel } from "../view-model/iterations.ts";
-import type { IterationAttribution } from "../view-model/contracts.ts";
+
 import { Iterations, type IterationsCopy } from "./Iterations.tsx";
 import { IterationDetail as IterationDetailScreen, type IterationDetailCopy } from "./IterationDetail.tsx";
 
@@ -107,13 +107,13 @@ const iterationsCopy: IterationsCopy = {
 const renderList = (
   items: IterationDTO[],
   total: number,
-  attribution: IterationAttribution = "present",
+  attribution: IterationListDTO["attribution"] = "present",
   generation: number | null = 7,
 ): string =>
   renderToStaticMarkup(
     <Iterations
       model={iterationListModel({
-        data: { items, total, attribution } as IterationListDTO & { attribution: IterationAttribution },
+        data: { items, total, attribution } ,
         projection: { ...projection, generation },
       })}
       copy={iterationsCopy}
@@ -284,7 +284,7 @@ describe("IterationDetail — the gate display is four labels plus a never-marke
 
   test("step 5 is NEVER marked, at any store value", () => {
     for (const gateStep of [1, 2, 3, 4] as const) {
-      const page = renderDetail(iteration({ gateStep } as Partial<IterationDTO> & { gateStep: number }));
+      const page = renderDetail(iteration({ gateStep } ));
       const marked = page.match(/<li[^>]*data-ms-step="([^"]+)"[^>]*data-ms-step-position="current"/);
       expect(marked?.[1]).toBe(["start", "execute", "close", "pr-delivery"][gateStep - 1] as string);
       expect(marked?.[1]).not.toBe("merge-ready");

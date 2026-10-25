@@ -12,7 +12,7 @@ import { describe, expect, test } from "bun:test";
 import { renderToStaticMarkup } from "react-dom/server";
 import type { IterationDTO, WorkflowDTO, WorkflowListDTO } from "@mstar-harness/engine";
 
-import type { OverviewRead } from "../view-model/contracts.ts";
+import type { OverviewDTO } from "@mstar-harness/engine";
 import { overviewModel } from "../view-model/overview.ts";
 import { focusModel } from "../view-model/focus.ts";
 import { Overview, type OverviewCopy } from "./Overview.tsx";
@@ -114,12 +114,20 @@ const milestones = (count: number) => ({
   unassignedIssues: 3,
 });
 
-const overviewRead = (over: Partial<OverviewRead> = {}): OverviewRead => ({
+const overviewRead = (over: Partial<OverviewDTO> = {}): OverviewDTO => ({
   workflows: read<WorkflowListDTO>({ items: [workflow()], total: 1 }),
   residuals: read({ open: 26, bySeverity: { critical: 2, high: 5, medium: 9, low: 7, nit: 3 } }),
   milestones: read(milestones(5)),
   latestIteration: read(iteration()),
-  issueFlow: read({ currentOpen: 26 }),
+  // §8.1 removes the trend from the UI, but the DTO member is the engine's
+  // contract and stays; the fixture fills it so the type is honest.
+  issueFlow: read({
+    buckets: [],
+    unknownCaptureDates: 0,
+    unknownClosureDates: 0,
+    incompleteHistory: false,
+    currentOpen: 26,
+  }),
   ...over,
 });
 
@@ -147,7 +155,7 @@ const overviewCopy: OverviewCopy = {
   severityLabels: { critical: "Critical", high: "High", medium: "Medium", low: "Low", nit: "Nit" },
 };
 
-const overview = (over: Partial<OverviewRead> = {}, compact?: boolean): string =>
+const overview = (over: Partial<OverviewDTO> = {}, compact?: boolean): string =>
   renderToStaticMarkup(
     <Overview model={overviewModel(overviewRead(over), { projection })} copy={overviewCopy} compact={compact} />,
   );
@@ -231,7 +239,7 @@ describe("Overview — what it shows, in the IA §3.1 order", () => {
     for (const gateStep of [1, 2, 3, 4] as const) {
       // `gateStep` (contract §3) arrives with the engine plan's branch; until then
       // the member comes from the package's contract mirror and is cast here.
-      const page = overview({ latestIteration: read(iteration({ gateStep } as Partial<IterationDTO> & { gateStep: number })) });
+      const page = overview({ latestIteration: read(iteration({ gateStep } )) });
       const marked = page.match(/<li data-ms-step="([^"]+)" data-ms-step-position="current"/);
       expect(marked).not.toBeNull();
       expect(marked?.[1]).not.toBe("merge-ready");

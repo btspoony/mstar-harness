@@ -12,9 +12,13 @@
  * is a fact (`absent`) or a gap (`present` + no rows) — the list model carries
  * both so a scoped screen can pick the right arm without re-deriving it.
  */
-import type { IterationDTO, IterationListDTO, IterationPlanDTO } from "@mstar-harness/engine";
+import type {
+  IterationDTO,
+  IterationGateStep,
+  IterationListDTO,
+  IterationPlanDTO,
+} from "@mstar-harness/engine";
 
-import type { IterationAttribution, IterationGateStep } from "./contracts.ts";
 import type { Resolved } from "./state.ts";
 import { resolveRead } from "./state.ts";
 import { compassStatusTone, gateStepPosition, gateSteps, planStatusTone, type GateStepId, type GateStepPosition, type Tone } from "./status.ts";
@@ -29,15 +33,12 @@ function planTally(iteration: IterationDTO): { done: number; total: number } {
 /**
  * The iteration's delivery step, as the store proves it (contract §3).
  *
- * The engine will carry `gateStep` on the DTO; until that member is published
- * this reads it structurally and falls back to `null` (the `absent` arm) rather
- * than deriving a step in the presentation layer — a second derivation is a
- * second truth, and the spec says the store is the only source.
+ * It is the engine's own member — plain property access, no shape check. The
+ * presentation layer never derives a step: a second derivation would be a second
+ * truth, and the spec says the store is the only source.
  */
 export function iterationGateStep(iteration: IterationDTO): IterationGateStep | null {
-  const carried = (iteration as IterationDTO & { gateStep?: IterationGateStep | null }).gateStep;
-  if (carried === 1 || carried === 2 || carried === 3 || carried === 4) return carried;
-  return null;
+  return iteration.gateStep;
 }
 
 /** One iteration list row. */
@@ -87,15 +88,14 @@ export type IterationListModel = {
   rows: Resolved<readonly IterationRow[]>;
   total: number;
   /** Whether this store attributes any iteration to a project (contract §4). */
-  attribution: IterationAttribution;
+  attribution: IterationListDTO["attribution"];
 };
 
 export function iterationListModel(read: {
   data: IterationListDTO;
   projection: { generation: number | null };
 }): IterationListModel {
-  const readAttribution = (read.data as IterationListDTO & { attribution?: IterationAttribution }).attribution;
-  const attribution: IterationAttribution = readAttribution === "absent" ? "absent" : "present";
+  const attribution: IterationListDTO["attribution"] = read.data.attribution;
   // Zero rows mean different things depending on attribution (contract §4): a
   // store that attributes no iteration to any project answers `absent` — the
   // project's silence is a fact about the store — while an attributing store
