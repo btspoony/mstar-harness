@@ -86,7 +86,9 @@ describe("the query string is the filters' home", () => {
     const address = parseRoute("#issues?severity=critical&disposition=open&limit=50");
     expect(address.route).toEqual({ name: "issues" });
     expect(address.query).toBe("severity=critical&disposition=open&limit=50");
-    expect(routeFilters(address).filters).toEqual({ ...routeFilters(address).filters, severity: "critical", disposition: "open" });
+    // `toMatchObject` on literal expectations: spreading the parsed filters into
+    // the expected value made this pass for any parse at all.
+    expect(routeFilters(address).filters).toMatchObject({ severity: "critical", disposition: "open" });
   });
 
   test("every filter key round-trips through the shared pair unchanged", () => {
