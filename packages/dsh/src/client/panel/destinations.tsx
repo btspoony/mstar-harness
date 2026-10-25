@@ -314,6 +314,23 @@ export function DetailBody({ view, id, state, locale, onBack, onOpenWorkflow, pr
 }
 
 /**
+ * The project's identity, from wherever the envelope actually carries a catalog
+ * row. An `absent` roadmap authority is NOT permission to invent identity: the
+ * project exists (its catalog row is in the same envelope) even when it declares
+ * no roadmap, so the title/path/lifecycle come from that row. Only a genuinely
+ * missing catalog row falls back — and the fallback claims less, not more.
+ */
+export function projectIdentityOf(
+  id: string,
+  data: unknown,
+): { projectId: string; title: string; description: string | null; lifecycle: string; lifecycleTone: 'neutral'; path: string } {
+  const catalog = (data as { catalog?: Parameters<typeof projectIdentity>[0] | null } | null | undefined)?.catalog
+  if (catalog !== null && catalog !== undefined) return projectIdentity(catalog) as never
+  // Nothing is known: no guessed path, no guessed lifecycle.
+  return { projectId: id, title: id, description: null, lifecycle: 'unknown', lifecycleTone: 'neutral', path: '' }
+}
+
+/**
  * `project-detail` — the only place the product expresses its hierarchy.
  *
  * The adapter owns the FEATURE state: the fixed three tabs, with `Roadmap`
@@ -360,9 +377,7 @@ export function ProjectDetailDestination(props: {
   const issuesState = props.issues ?? ({ kind: 'waiting' } as const)
   return (
     <ProjectDetail
-      identity={featureArm.kind === 'populated'
-        ? projectIdentity((featureArm.value as never as { catalog: never }).catalog)
-        : { projectId: props.id, title: props.id, description: null, lifecycle: 'active', lifecycleTone: 'neutral', path: `projects/${props.id}` }}
+      identity={projectIdentityOf(props.id, data)}
       feature={feature}
       onFeatureChange={(next: ProjectFeature) => setFeature(next)}
       roadmap={roadmap as never}
