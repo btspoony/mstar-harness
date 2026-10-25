@@ -63,6 +63,14 @@
   min-height: 0;
 }
 
+/* The main-area seat: the host owns the area, this wrapper only fills it. */
+.main {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  min-height: 0;
+}
+
 /* The sidebar's host affordance band (above the shared nav, never product chrome). */
 .toolbar {
   flex: 0 0 auto;
