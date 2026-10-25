@@ -30,6 +30,8 @@ const ROADMAP = {
 
 const ISSUES = { items: [{ id: 'I-1', title: 'a project issue', severity: 'high', disposition: 'open', projectId: 'proj-1' }], total: 1, storeRevision: 2 }
 
+const emptyEnvelope = () => ({ kind: 'ok' as const, envelope: { data: null, projection: { generation: 1, freshness: 'current', builtAt: null, checkedAt: '', diagnostics: [] } } })
+
 function render(over: { issues?: unknown; feature?: string } = {}): string {
   return renderToStaticMarkup(createElement(ProjectDetailDestination, {
     state: envelope(ROADMAP),
@@ -100,5 +102,42 @@ describe('project detail — one absence authority, an empty arm, and a per-proj
   it('the page is keyed by project, so a second project starts at the Roadmap default', () => {
     const source = readFileSync(join(import.meta.dir, '..', 'src/client/panel/destinations.tsx'), 'utf8')
     expect(source).toContain('<ProjectDetailDestination\n          key={id}')
+  })
+})
+
+describe('project identity — the catalog row is the identity, not a guess', () => {
+  it('a project with a catalog row but an absent roadmap shows the catalog title and path', () => {
+    // The roadmap authority is absent; the ENVELOPE still carries the catalog row.
+    const markup = renderToStaticMarkup(createElement(ProjectDetailDestination, {
+      id: 'proj-1',
+      state: envelope({ ...ROADMAP, catalog: { ...ROADMAP.catalog, title: 'Real Project Title', lifecycle: 'archived', relativePath: 'projects/real' } }),
+      locale: 'en',
+      onBack: () => {},
+      issues: envelope(ISSUES),
+      iterations: envelope({ items: [], total: 0, attribution: 'absent' }),
+    } as never))
+    expect(markup).toContain('Real Project Title')
+    expect(markup).toContain('projects/real')
+    // Not the guessed metadata the pre-fix page printed.
+    expect(markup).not.toContain('projects/proj-1')
+    // The roadmap BODY's own arm is unchanged: the project declares no roadmap.
+    expect(markup).toContain('data-ms-absence="absent"')
+  })
+
+  it('a project with no catalog row still renders its tabs and claims nothing it does not know', () => {
+    const markup = renderToStaticMarkup(createElement(ProjectDetailDestination, {
+      id: 'proj-1',
+      state: emptyEnvelope(),
+      locale: 'en',
+      onBack: () => {},
+      issues: envelope({ items: [], total: 0, storeRevision: 1 }),
+      iterations: envelope({ items: [], total: 0, attribution: 'absent' }),
+    } as never))
+    // The page renders (three features) instead of an error or a blank landmark.
+    expect(markup).toContain('data-ms-screen="project-detail"')
+    expect(markup).toContain(uiEn.projectDetail.features.roadmap)
+    // The fallback does not claim a lifecycle or a made-up path.
+    expect(markup).not.toContain('active')
+    expect(markup).not.toContain('projects/proj-1')
   })
 })
