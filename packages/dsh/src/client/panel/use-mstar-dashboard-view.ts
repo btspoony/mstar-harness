@@ -1,24 +1,19 @@
 /**
  * The panel's per-view read hook (plan dsh-panel-unification Task 4a): ONE read
- * when the view identity changes, plus an explicit `reload()`.
+ * per view identity, plus an explicit `reload()`.
  *
- * Deliberately unlike `useMstarPanelSnapshot`:
- * - NO interval and no self-chaining timer — the caller decides when to read;
- * - NO visibility gating — a screen that mounts asks once, and 4b removes the
- *   polling loop the digest hook still runs; building a second reactive path
- *   here would have to be deleted again;
- * - NO store: the answer belongs to the component that asked for it, so two
- *   screens reading different views cannot overwrite each other.
- *
- * A read that cannot start (no client, no session, no workspace directory, no
- * view) is `waiting`: nothing was asked, so nothing failed.
+ * NO interval, NO visibility gate, NO shared store: the answer belongs to the
+ * component that asked, so two screens reading different views cannot overwrite
+ * each other, and the read is scheduled exactly once per identity (see
+ * `once-reader.ts` for why this is render-safe).
  *
  * @module @mstar-harness/dsh/client/panel/use-mstar-dashboard-view
  */
 
-import { useCallback, useEffect, useState } from 'react'
+import { useState } from 'react'
 import type { DashboardViewRead } from '../../panel/panel-snapshot-endpoint.ts'
 import type { MstarPanelSnapshotClient } from './panel-snapshot-client.ts'
+import { OnceReader, cachedReader, useOnceReader } from './once-reader.ts'
 
 /** The hook's state: a read phase plus the read's own answer kinds. */
 export type MstarDashboardViewState =
@@ -51,33 +46,20 @@ export function useMstarDashboardView(seats: MstarDashboardViewSeats): {
 } {
   const { client, sessionId, cwd, view, id } = seats
   const paramsKey = seats.params === undefined ? '' : JSON.stringify(seats.params)
-  const [nonce, setNonce] = useState(0)
-  const [state, setState] = useState<MstarDashboardViewState>({ kind: 'waiting' })
-  const reload = useCallback(() => setNonce((value) => value + 1), [])
-
-  useEffect(() => {
-    if (client === undefined || sessionId === null || cwd === null || view === null) {
-      setState({ kind: 'waiting' })
-      return
-    }
-    let live = true
-    setState({ kind: 'loading' })
-    void client
-      .readView({
-        sessionId,
-        cwd,
-        view,
-        ...(paramsKey === '' ? {} : { params: JSON.parse(paramsKey) as Record<string, string | undefined> }),
-        ...(id === undefined ? {} : { id }),
-      })
-      .then((read) => {
-        if (live) setState(read)
-      })
-    return () => {
-      live = false
-    }
-    // The identity is the whole key: a new identity is a new read.
-  }, [client, sessionId, cwd, view, paramsKey, id, nonce])
-
-  return { state, reload }
+  const key = sessionId === null || cwd === null || view === null
+    ? null
+    : `${sessionId}\u0000${cwd}\u0000${view}\u0000${id ?? ''}\u0000${paramsKey}`
+  const [reader] = useState(() => cachedReader<DashboardViewRead>(
+    client,
+    key,
+    (read) => new OnceReader<DashboardViewRead>(read),
+    (face) => face.readView({
+      sessionId: sessionId ?? '',
+      cwd: cwd ?? '',
+      view: view ?? '',
+      ...(paramsKey === '' ? {} : { params: JSON.parse(paramsKey) as Record<string, string | undefined> }),
+      ...(id === undefined ? {} : { id }),
+    }),
+  ))
+  return useOnceReader(reader, key, client)
 }

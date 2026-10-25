@@ -1,19 +1,17 @@
 /**
  * The unified product's shell for this host: the ONE implementation both seats
- * mount (plan dsh-panel-unification Task 3).
+ * mount (plan dsh-panel-unification Tasks 3–4).
  *
  * The right-Sidebar tab and the keyed `main` panel are the same product at two
  * sizes — same nav, same destination ids, same screens, same copy, same absence
  * decisions. Everything they share lives here, so a prop only one seat can
  * supply becomes a prop of this module instead of a second call site:
  *
- * - `PANEL_DESTINATIONS` is the destination set, in IA §8.2 order. The nav, the
- *   entry store's vocabulary and both seats read it; no seat writes its own list.
- * - `PanelSeat` owns the transport states and the adapter work (snapshot →
- *   shared view model, host locale → product locale, picker commit). A seat adds
- *   only what it alone owns: the sidebar gates on tab visibility and keeps the
- *   destination in its entry store; the main panel is always visible and keeps
- *   the destination in component state.
+ * - `PANEL_DESTINATIONS` is the destination set, in IA §8.2 order.
+ * - `PanelSeat` owns the transport states and the adapter work. Its data is the
+ *   SESSION DIGEST (enforcement / knowledge / selection, plus the delivery
+ *   fallback) read once, plus two per-view reads (`workflow-detail`, `iterations`)
+ *   issued by the screen that needs them. Nothing polls.
  * - `PanelShell` is the pure composition (provider + nav + destination body), so
  *   a test can render any destination without a transport.
  *
@@ -40,7 +38,7 @@ import css from './panel.module.css'
 import type { PanelSnapshot } from '../../panel/panel-snapshot.ts'
 import type { MstarWorkflowPickerClient } from './workflow-picker-client.ts'
 import type { MstarPanelSnapshotClient } from './panel-snapshot-client.ts'
-import { useMstarPanelSnapshot } from './use-mstar-panel-snapshot.ts'
+import { useMstarSessionDigest } from './use-mstar-session-digest.ts'
 import { useMstarDashboardView, type MstarDashboardViewState } from './use-mstar-dashboard-view.ts'
 import { useMstarWorkflowPicker, type UseSessions } from './use-mstar-workflow-picker.ts'
 import type { PanelDestination } from './panel-store.ts'
@@ -84,54 +82,101 @@ function focusCopy(copy: Copy): FocusCopy {
   }
 }
 
-/** The session's delivery line: the iteration that holds one of the bound workflow's plans. */
-function deliveryOf(snapshot: PanelSnapshot): { iterationId: string; gateStep: IterationGateStep | null } | null {
-  const workflowRead = snapshot.workspace.workflow
-  const iterationRead = snapshot.workspace.iteration
-  if (workflowRead.state !== 'ok' || workflowRead.data === null) return null
-  if (iterationRead.state !== 'ok' || iterationRead.data === null) return null
-  const boundPlanIds = new Set(workflowRead.data.plans.map((plan) => plan.planId))
-  if (!iterationRead.data.plans.some((plan) => boundPlanIds.has(plan.planId))) return null
-  return { iterationId: iterationRead.data.iterationId, gateStep: iterationRead.data.gateStep }
+/**
+ * The session's delivery line from the ENVELOPE's iteration member — the
+ * fallback used while the per-view `iterations` read has no answer.
+ */
+function deliveryOf(
+  snapshot: PanelSnapshot,
+  workflow: WorkflowMember,
+): { iterationId: string; gateStep: IterationGateStep | null } | null | undefined {
+  const read = snapshot.iteration
+  if (read.state !== 'ok') return undefined
+  if (read.data === null) return null
+  // Membership, not proximity: an iteration that holds none of the bound
+  // workflow's plans is not this session's delivery (IA §3.2 item 4).
+  const bound = new Set(workflow.state === 'read' && workflow.data !== null ? workflow.data.plans.map((plan) => plan.planId) : [])
+  if (!read.data.plans.some((plan) => bound.has(plan.planId))) return null
+  return { iterationId: read.data.iterationId, gateStep: read.data.gateStep }
+}
+
+/** The bound workflow as the shared model wants it: a three-state member. */
+export type WorkflowMember =
+  | { readonly state: 'read'; readonly data: WorkflowDTO | null }
+  | { readonly state: 'not-applicable'; readonly reason: string }
+  | { readonly state: 'unavailable'; readonly reason: string }
+
+/** Map one per-view read of `workflow-detail` onto the member the model takes. */
+export function workflowMemberOf(state: MstarDashboardViewState): {
+  readonly member: WorkflowMember
+  readonly phase: 'loading' | 'loaded'
+} {
+  switch (state.kind) {
+    case 'ok':
+      return { member: { state: 'read', data: state.envelope.data as WorkflowDTO | null }, phase: 'loaded' }
+    case 'unavailable':
+      return { member: { state: 'unavailable', reason: state.reason }, phase: 'loaded' }
+    case 'no-harness':
+      return { member: { state: 'not-applicable', reason: 'no harness root resolves for this workspace' }, phase: 'loaded' }
+    case 'waiting':
+    case 'loading':
+      // A pending read has no subject state: the model's `phase` says so, and the
+      // screen renders nothing rather than an arm the transport has not reached.
+      return { member: { state: 'not-applicable', reason: 'no workflow read yet' }, phase: 'loading' }
+  }
 }
 
 /**
- * The pure shell: provider, nav, and the active destination's body.
+ * The delivery line as the per-view `iterations` read proves it.
  *
- * A destination whose screen lands in its own round renders NO body — an absence
- * arm here would claim a read that never happened.
+ * `undefined` = no answer (the digest's iteration member is the only evidence);
+ * `null` = the read answered and none of the bound workflow's plans is
+ * attributed to an iteration, so the plans are delivered standalone.
  */
+export function deliveryFromView(
+  state: MstarDashboardViewState,
+  planIds: readonly string[],
+): { iterationId: string; gateStep: IterationGateStep | null } | null | undefined {
+  if (state.kind !== 'ok') return undefined
+  const list = state.envelope.data as IterationListDTO | null
+  if (list === null) return undefined
+  const bound = new Set(planIds)
+  for (const item of list.items) {
+    if (item.plans.some((plan) => bound.has(plan.planId))) {
+      return { iterationId: item.iterationId, gateStep: item.gateStep }
+    }
+  }
+  return null
+}
+
+/** The pure shell: provider, nav, and the active destination's body. */
 export function PanelShell(props: {
   snapshot: PanelSnapshot
-  destination: PanelDestination
-  locale: Locale
-  /** Accessible name for the nav landmark (the panel's own name). */
-  navLabel: string
-  onSelect: (destination: string) => void
-  select: ((workflowId: string) => void) | null
+  /** The bound workflow as the per-view `workflow-detail` read answered it. */
+  workflow: WorkflowMember
+  /** A pending workflow read: the board renders no arm for a fact not yet known. */
+  phase?: 'loading' | 'loaded'
   /**
    * The session's delivery as the per-view `iterations` read proves it: a value
    * wins, `null` means "the bound plans are delivered standalone", and
    * `undefined` means the envelope's own member is the only evidence.
    */
   delivery?: { iterationId: string; gateStep: IterationGateStep | null } | null
-  /** A per-view `workflow-detail` repair for an envelope whose member is not readable. */
-  workflowOverride?: WorkflowDTO
+  destination: PanelDestination
+  locale: Locale
+  /** Accessible name for the nav landmark (the panel's own name). */
+  navLabel: string
+  onSelect: (destination: string) => void
+  select: ((workflowId: string) => void) | null
 }): React.ReactElement {
   const copy = copyFor(props.locale)
-  const read = props.snapshot.workspace.workflow
-  const workflow =
-    props.workflowOverride !== undefined
-      ? ({ state: 'read', data: props.workflowOverride } as const)
-      : read.state === 'ok'
-        ? ({ state: 'read', data: read.data } as const)
-        : ({ state: read.state, reason: read.reason } as const)
-  const selection: SessionBinding | null = props.snapshot.retained.selection
+  const selection: SessionBinding | null = props.snapshot.selection
   const model = focusModel({
     enforcement: props.snapshot.enforcement.hard ? 'hard' : 'soft',
     selection,
-    workflow,
-    iteration: props.delivery === undefined ? deliveryOf(props.snapshot) : props.delivery,
+    workflow: props.workflow,
+    iteration: props.delivery === undefined ? deliveryOf(props.snapshot, props.workflow) ?? null : props.delivery,
+    ...(props.phase === undefined ? {} : { phase: props.phase }),
   })
   return (
     <LocaleProvider locale={props.locale}>
@@ -174,44 +219,10 @@ function useProductLocale(face: HostLocaleFace | undefined): Locale {
   const active = React.useSyncExternalStore(
     face === undefined ? NO_SUBSCRIBE : (listener) => face.subscribe(listener),
     read,
-    // The server render path must answer the SAME value as the client read,
-    // never a fixed default.
+    // The server render path must answer the SAME value as the client read.
     read,
   )
   return productLocale(active)
-}
-
-/**
- * The per-view `workflow-detail` repair, when it produced one. `undefined` means
- * "the envelope's member stands" — either it is readable, or no repair was read.
- */
-function workflowViewOverride(state: MstarDashboardViewState): WorkflowDTO | undefined {
-  if (state.kind !== 'ok') return undefined
-  const data = state.envelope.data as WorkflowDTO | null
-  return data === null ? undefined : data
-}
-
-/**
- * The delivery line as the per-view `iterations` read proves it.
- *
- * `undefined` = that read has no answer yet (the envelope's member is the only
- * evidence); `null` = the read answered and none of the bound workflow's plans
- * is attributed to an iteration, so the plans are delivered standalone.
- */
-export function deliveryFromView(
-  state: MstarDashboardViewState,
-  planIds: readonly string[],
-): { iterationId: string; gateStep: IterationGateStep | null } | null | undefined {
-  if (state.kind !== 'ok') return undefined
-  const list = state.envelope.data as IterationListDTO | null
-  if (list === null) return undefined
-  const bound = new Set(planIds)
-  for (const item of list.items) {
-    if (item.plans.some((plan) => bound.has(plan.planId))) {
-      return { iterationId: item.iterationId, gateStep: item.gateStep }
-    }
-  }
-  return null
 }
 
 /** The session's workspace directory (the host cross-checks it against the session). */
@@ -222,12 +233,9 @@ function sessionCwd(useSessions: UseSessions | undefined, sessionId: SessionId |
 }
 
 /**
- * One seat's body: the transport states, the adapter and the shell.
- *
- * `visible` is the seat's own gate: the sidebar collapses its column (nothing
- * may render or poll), while the main panel is always visible. Everything else
- * is identical by construction, which is what keeps the two seats one
- * implementation.
+ * One seat's body: the digest read, the two per-view reads, the adapter and the
+ * shell. `visible` is the seat's own gate (a collapsed sidebar column renders
+ * nothing; the main panel is always visible).
  */
 export type PanelSeatProps = {
   /** The seat's visibility gate (`useTabInfo().tab.visible` for the sidebar; always true for the main panel). */
@@ -248,59 +256,54 @@ export type PanelSeatProps = {
 export function PanelSeat(props: PanelSeatProps): React.ReactElement | null {
   const { t, visible, destination, onSelect, useSessions, sessionId, picker, panelSnapshot, localeFace } = props
   const cwd = sessionCwd(useSessions, sessionId)
-  const snapshotView = useMstarPanelSnapshot({
-    visible,
-    client: panelSnapshot,
-    sessionId: sessionId === undefined ? null : String(sessionId),
-    cwd,
-  })
-  const locale = useProductLocale(localeFace)
-  // The picker's WRITE half only: the selection it shows rides the snapshot.
-  const { select } = useMstarWorkflowPicker({ useSessions, sessionId, picker })
-  // A refresh keeps painting the last good snapshot; only the FIRST read has none.
-  const snapshot = snapshotView.state === 'ok'
-    ? snapshotView.snapshot
-    : snapshotView.state === 'loading' ? snapshotView.previous : null
-
-  // The per-view reads (Task 4a). Both are one-shot and identity-keyed: a view
-  // with no subject asks for nothing, and a changed subject reads once.
   const wireSession = sessionId === undefined ? null : String(sessionId)
-  const selection = snapshot?.retained.selection ?? null
-  const boundWorkflowId =
-    selection !== null && (selection.kind === 'active' || selection.kind === 'terminal') ? selection.workflowId : null
-  const workflowMember = snapshot?.workspace.workflow
-  const iterationsView = useMstarDashboardView({
+  const locale = useProductLocale(localeFace)
+  // The picker's WRITE half only: the selection it shows rides the digest.
+  const { select } = useMstarWorkflowPicker({ useSessions, sessionId, picker })
+
+  const digest = useMstarSessionDigest({
     client: panelSnapshot,
     sessionId: wireSession,
     cwd,
-    view: snapshot !== null && boundWorkflowId !== null ? 'iterations' : null,
-    params: { limit: '200' },
-  })
+  }).state
+  const snapshot = digest.kind === 'ok' ? digest.snapshot : null
+  const selection = snapshot?.selection ?? null
+  const boundWorkflowId =
+    selection !== null && (selection.kind === 'active' || selection.kind === 'terminal') ? selection.workflowId : null
+
+  // The per-view reads: one each, issued only once their subject exists.
   const workflowView = useMstarDashboardView({
     client: panelSnapshot,
     sessionId: wireSession,
     cwd,
-    view: snapshot !== null && boundWorkflowId !== null && workflowMember !== undefined && workflowMember.state !== 'ok'
-      ? 'workflow-detail'
-      : null,
+    view: snapshot !== null && boundWorkflowId !== null ? 'workflow-detail' : null,
     ...(boundWorkflowId === null ? {} : { id: boundWorkflowId }),
+  })
+  const { member: workflow, phase } = workflowMemberOf(workflowView.state)
+  const planIds = workflow.state === 'read' && workflow.data !== null ? workflow.data.plans.map((plan) => plan.planId) : []
+  const iterationsView = useMstarDashboardView({
+    client: panelSnapshot,
+    sessionId: wireSession,
+    cwd,
+    view: snapshot !== null && workflow.state === 'read' && workflow.data !== null ? 'iterations' : null,
+    params: { limit: '200' },
   })
 
   // Every hook runs before the early returns (hooks rule).
   if (!visible) return null
-  if (snapshotView.state === 'waiting') {
+  if (digest.kind === 'waiting') {
     return (
       <div className={css.state} data-mstar-panel="waiting">
         <p data-mstar-empty="waiting">{t('empty.waiting')}</p>
       </div>
     )
   }
-  if (snapshotView.state === 'no-harness') return <NoHarness t={t} />
-  if (snapshotView.state === 'unavailable') {
+  if (digest.kind === 'no-harness') return <NoHarness t={t} />
+  if (digest.kind === 'unavailable') {
     return (
       <div className={css.state} data-mstar-panel="unavailable">
-        <p data-mstar-empty="unavailable" data-mstar-unavailable-reason={snapshotView.reason}>
-          {t('empty.unavailable', { reason: snapshotView.reason })}
+        <p data-mstar-empty="unavailable" data-mstar-unavailable-reason={digest.reason}>
+          {t('empty.unavailable', { reason: digest.reason })}
         </p>
       </div>
     )
@@ -312,23 +315,18 @@ export function PanelSeat(props: PanelSeatProps): React.ReactElement | null {
       </div>
     )
   }
-  if (snapshot.harnessDir === null) return <NoHarness t={t} />
 
-  const repaired = workflowViewOverride(workflowView.state)
-  const planIds =
-    workflowMember !== undefined && workflowMember.state === 'ok' && workflowMember.data !== null
-      ? workflowMember.data.plans.map((plan) => plan.planId)
-      : repaired?.plans.map((plan) => plan.planId) ?? []
   return (
     <PanelShell
       snapshot={snapshot}
+      workflow={workflow}
+      {...(phase === 'loading' ? { phase } : {})}
+      delivery={deliveryFromView(iterationsView.state, planIds)}
       destination={destination}
       locale={locale}
       navLabel={t('view.mstar-workflow')}
       onSelect={onSelect}
       select={select}
-      delivery={deliveryFromView(iterationsView.state, planIds)}
-      {...(repaired === undefined ? {} : { workflowOverride: repaired })}
     />
   )
 }

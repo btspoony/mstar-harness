@@ -52,8 +52,8 @@ export function apply(ctx: ClientContext): void {
   // The store-backed read: the panel polls `mstar/panelSnapshot` while its tab
   // is visible (the hook drives start/stop) — the retired emission read's
   // replacement.
+  // One RPC face, no store and no timer: nothing to dispose with the fiber.
   const panelSnapshot = new MstarPanelSnapshotClient(connection)
-  ctx.effect(() => () => panelSnapshot.dispose(), 'ui-mstar-panel: panel-snapshot client')
   const t = ctx.locale.bind(NS)
   ctx.effect(() => ctx.locale.register(NS, { zh, en }), 'ui-mstar-panel: dictionaries')
   ctx.effect(

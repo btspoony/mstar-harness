@@ -1,82 +1,41 @@
 /**
- * The panel's host-side read service: one `PanelSnapshot` composed from the
- * control-root `store.db` authorities.
+ * The panel's host-side digest read: the session-scoped facts no dashboard DTO
+ * carries — `enforcement`, `knowledge`, `selection` — plus the ONE envelope read
+ * the per-view path does not replace (`iteration`, the delivery line's
+ * no-answer fallback).
  *
- * WHY: the panel used to render whatever the model last saw (an emitted
- * catalog payload), so it was empty before the first emission, frozen while
- * the model was idle, and bounded by a 60 s cache. The store already holds
- * every authority the panel needs, and the engine's dashboard view layer
- * serves them to both the CLI dashboard and this plugin.
+ * WHY the shrink (plan dsh-panel-unification Task 4, compass D23): the panel
+ * used to compose FIVE dashboard views on every poll tick. Each of those views
+ * is a `DashboardView` the dashboard already serves, so every screen now reads
+ * its own view through `mstar/dashboardView` when it mounts and nothing polls.
+ * What is left here is what no view answers.
  *
- * SEQUENTIAL BY CONSTRUCTION: the views are read one `await` at a time, never
- * with `Promise.all`. `withStoreRead` may refresh the execution/roadmap
- * projections — a WRITE — so two concurrent views would race on the same
- * derived rows.
- *
- * MEASURED projection cost (three `needsProjection` views per snapshot:
- * `iterations`, `workflow-detail`, `iteration-detail`): the refresh does NOT
- * rewrite derived rows when nothing changed. `refreshProjections` captures the
- * sources, and `publishGeneration` short-circuits on an unchanged source-set
- * hash plus an unchanged render digest (`packages/engine/src/projection.ts:1162`
- * — no delete, no insert, no generation bump; only a `checked_at`/health row
- * move when a retained stale health row must clear). The paid cost is therefore
- * one source capture plus one empty write transaction per bearing view, not a
- * projection rewrite; the structure is left alone deliberately.
- *
- * TARGETS ARE RESOLVED SERVER-SIDE: the browser supplies only
- * `{ sessionId, cwd }`, so the workflow/iteration/project ids are resolved here
- * from the session's durable picker record and the harness catalog — never
- * required from the client, and never taken over by a client claim (an asserted
- * id wins only because it is first choice, and it is still read against the
- * server-resolved harness root).
+ * SEQUENTIAL BY CONSTRUCTION: the iteration fallback may refresh the execution
+ * projections (a WRITE), so reads never overlap.
  *
  * DEGRADATION IS EXPLICIT: a member that refuses becomes
- * `{ state: 'unavailable', reason }` (the store's own message) and never
- * aborts the rest; the snapshot is `unavailable` only when nothing could be
- * read at all. A store fault never throws out of here.
+ * `{ state: 'unavailable', reason }` (the store's own message); the digest is
+ * `unavailable` only when the store itself could not answer. A store fault
+ * never throws out of here.
  *
  * @module @mstar-harness/dsh/panel/read-panel-snapshot
  */
 
-import { readFileSync } from 'node:fs'
-import { join } from 'node:path'
 import {
-  _DEFAULT_PROJECT,
   readDashboardView,
   resolveRepoEnforcement,
   type DashboardView,
   type DashboardViewData,
   type EnforcementFlag,
+  type IterationDTO,
   type IterationListDTO,
-  type ProjectListDTO,
   type ReadEnvelope,
   type StoreContext,
 } from '@mstar-harness/engine'
-import { AGENT_FLOW_DEFAULT_LIMIT, readAgentFlow } from '../gates/agent-flow.ts'
 import { readExecutionWorkflowSource, type SessionHint } from '../gates/workflow-selection.ts'
 import { readWorkflowSessionBinding } from '../engine-status-store.ts'
-import type { AgentFlowView, MstarEngineStatusPayload } from '../types.ts'
+import type { MstarEngineStatusPayload } from '../types.ts'
 import type { PanelSnapshot, PanelSnapshotRead, PanelWorkspaceView } from './panel-snapshot.ts'
-
-/**
- * The plugin's own manifest version (single-version invariant; own manifest
- * first). Same two-depth probe as the catalog's: the source layout is one
- * level below the package root, the bundled `dist/index.js` the other.
- */
-function panelVersion(): string {
-  for (const rel of ['../package.json', '../../package.json'] as const) {
-    try {
-      const pkg = JSON.parse(readFileSync(new URL(rel, import.meta.url), 'utf8')) as { version?: string }
-      if (typeof pkg.version === 'string' && pkg.version !== '') return pkg.version
-    } catch {
-      // no manifest at this depth — try the next
-    }
-  }
-  return '0.0.0'
-}
-
-/** The engine's documented page ceiling (`paging()` refuses >200). */
-const ISSUE_PAGE_LIMIT = '200'
 
 /** The store's own failure text, verbatim; a non-Error carries its string form. */
 function reasonOf(error: unknown): string {
@@ -164,19 +123,6 @@ async function readRetained(
 }
 
 /**
- * The dsh ledger window for the selected workflow. Advisory: a missing or
- * unreadable ledger answers `null` and never fails the snapshot.
- */
-function readLedger(harnessDir: string, workflowId: string | undefined): AgentFlowView | null {
-  if (workflowId === undefined) return null
-  try {
-    return readAgentFlow(join(harnessDir, 'workflows', workflowId), workflowId, AGENT_FLOW_DEFAULT_LIMIT, harnessDir)
-  } catch {
-    return null
-  }
-}
-
-/**
  * The workflow the session is addressing, server-side: the durable picker
  * record folded with the session's structural identity, exactly as the retired
  * emission read answered it (`selectActiveWorkflow` is the same fold, so an
@@ -203,17 +149,6 @@ async function resolveWorkflowId(
   } catch {
     return undefined
   }
-}
-
-/**
- * The project the roadmap is scoped to: the catalog's `_default` row (the
- * fallback identity every project-less flow uses), else the single resolvable
- * project. Several projects with no `_default` answer undefined — the roadmap
- * member then says `not-applicable` rather than picking one.
- */
-function pickProjectId(list: ProjectListDTO): string | undefined {
-  const ids = list.items.map((item) => item.project.id)
-  return ids.includes(_DEFAULT_PROJECT) ? _DEFAULT_PROJECT : ids.length === 1 ? ids[0] : undefined
 }
 
 /**
@@ -288,91 +223,43 @@ export async function readPanelSnapshot(input: {
     const context: StoreContext = { harnessDir: root }
     const { sessionId, cwd } = scope
 
-    // The projects view is read FIRST and reused twice: it names the roadmap's
-    // project and it is a snapshot member. Nothing else can resolve a project
-    // identity, and it bears no projection.
-    const projectsView = await readView(context, 'projects', {}, undefined, scope.signal)
-    const projectId = scope.projectId ?? (projectsView.state === 'ok' ? pickProjectId(projectsView.data) : undefined)
-
     // The selected workflow comes from the session's durable pick (server-side),
-    // never from the browser: the panel only ever asserts `{ sessionId, cwd }`.
+    // never from the browser: the client asserts only `{ sessionId, cwd }`.
     const workflowId = scope.workflowId ?? (sessionId !== undefined && cwd !== undefined
       ? await resolveWorkflowId(root, sessionId, cwd)
       : undefined)
 
-    // The iteration is a catalog identity too. Reading the list is the only
-    // honest join (a plan row carries no iteration back-reference), so it is
-    // read only when the caller did not name one.
+    // The delivery fallback: the iteration whose own lifecycle IS the selected
+    // workflow, else the single registered one. Reading the list is the only
+    // honest join (a plan row carries no iteration back-reference).
     let iterationId = scope.iterationId
     if (iterationId === undefined) {
-      // Deliberately unscoped by project: iteration membership is a catalog
-      // relation, and a filtered page would hide the very iteration this read
-      // is trying to resolve.
       const list = await readView(context, 'iterations', {}, undefined, scope.signal)
+      if (list.state === 'unavailable') {
+        // The store refused the only read that could answer: that IS the whole
+        // answer, and its own message travels verbatim.
+        return { kind: 'unavailable', reason: list.reason }
+      }
       iterationId = list.state === 'ok' ? pickIterationId(list.data, workflowId) : undefined
     }
-
-    // One `await` per view, in dependency order (detail → roadmap → workspace):
-    // `withStoreRead` refreshes projections, so these must not overlap.
-    const workflow = workflowId === undefined
-      ? { state: 'not-applicable', reason: 'no workflow selected' } as const
-      : await readView(context, 'workflow-detail', {}, workflowId, scope.signal)
-    const iteration = iterationId === undefined
-      ? { state: 'not-applicable', reason: 'no iteration selected' } as const
+    const iteration: PanelWorkspaceView<IterationDTO | null> = iterationId === undefined
+      ? { state: 'not-applicable', reason: 'no iteration selected' }
       : await readView(context, 'iteration-detail', {}, iterationId, scope.signal)
-    // The roadmap view needs a project identity; without one nothing is read
-    // (`dashboardFilters` refuses a roadmap read without it, and a refusal is
-    // not what "no project resolved" means).
-    const roadmap = projectId === undefined
-      ? { state: 'not-applicable', reason: 'no project resolved' } as const
-      : await readView(context, 'roadmap', { project: projectId }, undefined, scope.signal)
-    // The issue page feeds the roadmap's milestone↔issue severity join, so it
-    // asks for the engine's full page (200, the documented ceiling) instead of
-    // the default 50 — beyond that the join would render as unknown.
-    const issues = await readView(
-      context,
-      'issues',
-      projectId === undefined ? { limit: ISSUE_PAGE_LIMIT } : { project: projectId, limit: ISSUE_PAGE_LIMIT },
-      undefined,
-      scope.signal,
-    )
-
-    // Stamped once, after the last read: the panel's freshness is the instant
-    // the whole snapshot was assembled.
-    const at = new Date().toISOString()
-    const views = { workflow, iteration, roadmap, issues, projects: projectsView }
-
-    const members = Object.values(views)
-    const attempted = members.filter((member) => member.state !== 'not-applicable')
-    if (attempted.length > 0 && attempted.every((member) => member.state === 'unavailable')) {
-      // Nothing was read: the store is the failure (absent, staged, corrupt), and
-      // its own message is the answer — a snapshot of five degraded members would
-      // read as a workspace that answered.
-      return { kind: 'unavailable', reason: (members.find((member) => member.state === 'unavailable') as { reason: string }).reason }
-    }
 
     // The catalog facts come LAST: a cache miss rebuilds the payload, which
-    // reads the store and can refresh projections, so it must never overlap the
-    // views above. Its freshness is its own (`builtAt`), not the store-read `at`.
+    // reads the store and can refresh projections, so it must never overlap a
+    // view read above.
     assertLive(scope.signal)
     const retainedRead = await readRetained(scope.retained, root, sessionId, cwd)
 
+    // The three facts no dashboard DTO carries are REUSED from the catalog
+    // cache, never re-derived here: the knowledge digest and the session
+    // selection stay owned by the catalog build.
     const snapshot: PanelSnapshot = {
-      at,
-      version: panelVersion(),
-      harnessDir: root,
       enforcement: enforcementOf(root),
-      workspace: views,
-      // The three facts no dashboard DTO carries are REUSED from the catalog
-      // cache, never re-derived here: iteration-gate evaluation and the knowledge
-      // digest stay owned by the catalog build.
-      retained: {
-        iterationGate: retainedRead?.payload.iteration ?? null,
-        knowledge: retainedRead?.payload.state?.knowledge ?? null,
-        selection: retainedRead?.payload.state?.selection ?? null,
-        at: retainedRead === null ? null : new Date(retainedRead.builtAt).toISOString(),
-      },
-      ledger: readLedger(root, workflowId),
+      knowledge: retainedRead?.payload.state?.knowledge ?? null,
+      selection: retainedRead?.payload.state?.selection ?? null,
+      iteration,
     }
     return { kind: 'ok', snapshot }
   }

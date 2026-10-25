@@ -20,7 +20,7 @@ import { renderToStaticMarkup } from 'react-dom/server'
 import { en as uiEn } from '@mstar-harness/ui'
 import type { IterationListDTO } from '@mstar-harness/engine'
 import { bootApp, seedStore, type BootResult } from './harness.ts'
-import { gatewayOk, stubGateway } from './gateway-stub.ts'
+import { gatewayOk, settleRender, stubGateway } from './gateway-stub.ts'
 import {
   PANEL_SNAPSHOT_SERVICE,
   mstarDashboardViewInvocation,
@@ -33,6 +33,7 @@ import {
   MSTAR_PANEL_SNAPSHOT_NAMESPACE,
 } from '../src/engine-status-wire.ts'
 import { MstarPanelSnapshotClient } from '../src/client/panel/panel-snapshot-client.ts'
+import { PANEL_SNAPSHOT_ENDPOINT } from '../src/engine-status-wire.ts'
 import { PanelShell, deliveryFromView } from '../src/client/panel/panel-shell.tsx'
 import type { PanelSnapshot } from '../src/panel/panel-snapshot.ts'
 
@@ -68,6 +69,19 @@ function liveSession(app: BootResult, id: string, cwd: string): void {
 }
 
 /* ------------------- 1. the invocation is registered and answers ------------------- */
+
+
+/**
+ * Settle the seat's chained reads: the digest lands, then the per-view reads it
+ * enables (`workflow-detail`, `iterations`), each one render later.
+ */
+async function settledSeat(render: () => string): Promise<string> {
+  let markup = ''
+  for (let pass = 0; pass < 4; pass += 1) {
+    markup = await settleRender(render)
+  }
+  return markup
+}
 
 describe('dashboardView — one invocation, every engine view', () => {
   it('registers mstar/dashboardView beside the snapshot read on the same contribution', async () => {
@@ -146,7 +160,7 @@ describe('dashboardView — the client reads once, on demand', () => {
   it('issues exactly one request and schedules nothing', async () => {
     const gateway = stubGateway()
     gateway.replyFor(DASHBOARD_VIEW_ENDPOINT, gatewayOk({ kind: 'ok', envelope: { data: { items: [], total: 0 }, projection: {} } }))
-    const client = new MstarPanelSnapshotClient(gateway.connection, { pollIntervalMs: 0 })
+    const client = new MstarPanelSnapshotClient(gateway.connection)
 
     const read = await client.readView({ sessionId: 's-1', cwd: '/proj', view: 'iterations', params: { limit: '200' } })
     expect(read.kind).toBe('ok')
@@ -160,26 +174,50 @@ describe('dashboardView — the client reads once, on demand', () => {
     await new Promise((resolve) => setTimeout(resolve, 25))
     expect(gateway.calls.filter((call) => call.endpoint === DASHBOARD_VIEW_ENDPOINT)).toHaveLength(1)
     expect(gateway.calls).toHaveLength(1)
-    client.dispose()
   })
 
   it('degrades every failure to an explicit kind, never a throw', async () => {
     const gateway = stubGateway()
     gateway.replyFor(DASHBOARD_VIEW_ENDPOINT, { ok: false, error: { code: 'transport.closed', message: 'socket closed' } })
-    const client = new MstarPanelSnapshotClient(gateway.connection, { pollIntervalMs: 0 })
+    const client = new MstarPanelSnapshotClient(gateway.connection)
     expect(await client.readView({ sessionId: 's-1', cwd: '/proj', view: 'issues' })).toEqual({
       kind: 'unavailable',
       reason: 'socket closed',
     })
 
     // No transport at all is its own reason, not an empty answer.
-    const bare = new MstarPanelSnapshotClient(undefined, { pollIntervalMs: 0 })
+    const bare = new MstarPanelSnapshotClient(undefined)
     expect(await bare.readView({ sessionId: 's-1', cwd: '/proj', view: 'issues' })).toEqual({
       kind: 'unavailable',
       reason: 'no-connection',
     })
-    client.dispose()
-    bare.dispose()
+  })
+
+  it('the panel\'s reads schedule NOTHING: one request, then silence', async () => {
+    // The retirement proof: the 5-second poll and its self-chaining timer are gone.
+    // `readDigest` and `readView` each issue one request and schedule no follow-up.
+    const gateway = stubGateway()
+    gateway.replyFor(PANEL_SNAPSHOT_ENDPOINT, gatewayOk({ kind: 'ok', snapshot: {
+      enforcement: { hard: false, source: 'compass' },
+      knowledge: null,
+      selection: null,
+      iteration: { state: 'not-applicable', reason: 'none' },
+    } }))
+    gateway.replyFor(DASHBOARD_VIEW_ENDPOINT, gatewayOk({ kind: 'ok', envelope: { data: null, projection: {} } }))
+    const client = new MstarPanelSnapshotClient(gateway.connection)
+    await client.readDigest({ sessionId: 's-1', cwd: '/proj' })
+    await client.readView({ sessionId: 's-1', cwd: '/proj', view: 'iterations' })
+    const settled = gateway.calls.length
+    // Nothing is queued behind the answers: no interval, no retry, no re-read.
+    await new Promise((resolve) => setTimeout(resolve, 30))
+    expect(gateway.calls.length).toBe(settled)
+    expect(settled).toBe(2)
+    // And neither source file can schedule one.
+    for (const file of ['panel-snapshot-client.ts', 'use-mstar-session-digest.ts', 'once-reader.ts']) {
+      const source = require('node:fs').readFileSync(join(import.meta.dir, '..', 'src/client/panel', file), 'utf8') as string
+      expect(source).not.toContain('setInterval')
+      expect(source).not.toContain('setTimeout')
+    }
   })
 
   it('the hook that drives it holds no timer and no visibility gate', () => {
@@ -241,39 +279,25 @@ describe('dashboardView — the delivery line is derived from the iterations vie
   })
 
   it('the shell renders the per-view delivery when it has one', () => {
+    const workflowFixture = {
+      id: 'wf-main',
+      type: 'plan',
+      status: 'running',
+      phase: 'phase-2-execute',
+      branch: { base: 'main', source: 'feature/main', integration: null, target: 'main' },
+      plans: [{ planId: 'p-run', status: 'InProgress', progress: null }],
+    }
     const snapshot = {
-      at: '2026-10-25T10:00:00.000Z',
-      version: '4.0.9',
-      harnessDir: '/proj/.mstar',
       enforcement: { hard: false, source: 'compass' },
-      workspace: {
-        workflow: {
-          state: 'ok',
-          data: {
-            id: 'wf-main',
-            type: 'plan',
-            status: 'running',
-            phase: 'phase-2-execute',
-            branch: { base: 'main', source: 'feature/main', integration: null, target: 'main' },
-            plans: [{ planId: 'p-run', status: 'InProgress', progress: null }],
-          },
-        },
-        iteration: { state: 'not-applicable', reason: 'unused in this case' },
-        roadmap: { state: 'not-applicable', reason: 'no project resolves' },
-        issues: { state: 'ok', data: { items: [], total: 0 } },
-        projects: { state: 'ok', data: { items: [], total: 0 } },
-      },
-      retained: {
-        iterationGate: null,
-        knowledge: null,
-        selection: { kind: 'active', workflowId: 'wf-main', dir: 'workflows/wf-main' },
-        at: null,
-      },
-      ledger: null,
+      knowledge: null,
+      selection: { kind: 'active', workflowId: 'wf-main', dir: 'workflows/wf-main' },
+      iteration: { state: 'not-applicable', reason: 'unused in this case' },
+      workflowFixture,
     } as unknown as PanelSnapshot
     const render = (delivery: { iterationId: string; gateStep: 4 | null } | null): string =>
       renderToStaticMarkup(createElement(PanelShell, {
         snapshot,
+        workflow: { state: 'read', data: (snapshot as unknown as { workflowFixture: unknown }).workflowFixture as never },
         destination: 'focus',
         locale: 'en',
         navLabel: 'Morning Star Workflow',

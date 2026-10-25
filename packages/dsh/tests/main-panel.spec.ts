@@ -22,7 +22,8 @@ import { join } from 'node:path'
 import type { LocaleRuntime } from '@deepseek-ai/dsh-client-locale/client'
 import { en as uiEn, zh as uiZh } from '@mstar-harness/ui'
 import { clientExports } from './client-bundles.ts'
-import { bindUseSessions, gatewayOk, SESSION, settleRender, stubGateway, visibleTabKit } from './gateway-stub.ts'
+import { bindUseSessions, gatewayOk, SESSION, settleRender, stubGateway, visibleTabKit, type GatewayStub } from './gateway-stub.ts'
+import { DASHBOARD_VIEW_ENDPOINT, PANEL_SNAPSHOT_ENDPOINT } from '../src/engine-status-wire.ts'
 import { en, NS, zh } from '../src/client/panel/locale.ts'
 import { MstarPanelSnapshotClient } from '../src/client/panel/panel-snapshot-client.ts'
 import { PanelView } from '../src/client/panel/PanelView.tsx'
@@ -40,33 +41,45 @@ const PKG_DIR = join(import.meta.dir, '..')
 
 const ok = (data: unknown) => ({ state: 'ok', data })
 
-const SNAPSHOT = {
-  at: '2026-10-25T10:00:00.000Z',
-  version: '4.0.9',
-  harnessDir: '/proj/.mstar',
+const DIGEST = {
   enforcement: { hard: false, source: 'compass' },
-  workspace: {
-    workflow: ok({
-      id: 'wf-main',
-      type: 'plan',
-      status: 'running',
-      phase: 'phase-2-execute',
-      branch: { base: 'main', source: 'feature/main', integration: null, target: 'main' },
-      plans: [{ planId: 'p-run', status: 'InProgress', progress: 'mounting the main seat' }],
-    }),
-    iteration: ok({ iterationId: 'iter-main', gateStep: 3, plans: [{ planId: 'p-run' }] }),
-    roadmap: { state: 'not-applicable', reason: 'no project resolves' },
-    issues: ok({ items: [], total: 0 }),
-    projects: ok({ items: [], total: 0 }),
-  },
-  retained: {
-    iterationGate: null,
-    knowledge: null,
-    selection: { kind: 'active', workflowId: 'wf-main', dir: 'workflows/wf-main' },
-    at: null,
-  },
-  ledger: null,
+  knowledge: null,
+  selection: { kind: 'active', workflowId: 'wf-main', dir: 'workflows/wf-main' },
+  iteration: { state: 'ok', data: { iterationId: 'iter-main', gateStep: 3, plans: [{ planId: 'p-run' }] } },
 } as unknown as PanelSnapshot
+
+const WORKFLOW = {
+  id: 'wf-main',
+  type: 'plan',
+  status: 'running',
+  phase: 'phase-2-execute',
+  branch: { base: 'main', source: 'feature/main', integration: null, target: 'main' },
+  plans: [{ planId: 'p-run', status: 'InProgress', progress: 'mounting the main seat' }],
+}
+
+const ITERATIONS = {
+  items: [
+    { iterationId: 'iter-main', gateStep: 3, plans: [{ planId: 'p-run' }] },
+  ],
+  total: 1,
+  attribution: 'present',
+}
+
+/**
+ * Answer the two invocations independently: the digest on `panelSnapshot`, the
+ * per-view reads on `dashboardView` (by the requested view name).
+ */
+function stubPanel(): GatewayStub {
+  const gateway = stubGateway()
+  gateway.replyFor(PANEL_SNAPSHOT_ENDPOINT, gatewayOk({ kind: 'ok', snapshot: DIGEST }))
+  gateway.replyWith((_sessionId, _cwd, payload) => {
+    const view = (payload as { args?: { view?: string } } | null)?.args?.view
+    if (view === 'workflow-detail') return gatewayOk({ kind: 'ok', envelope: { data: WORKFLOW, projection: {} } })
+    if (view === 'iterations') return gatewayOk({ kind: 'ok', envelope: { data: ITERATIONS, projection: {} } })
+    return gatewayOk({ kind: 'ok', envelope: { data: null, projection: {} } })
+  })
+  return gateway
+}
 
 function localeRuntime(active = 'en'): LocaleRuntime {
   const locale = new LocaleRuntimeCtor(new Context())
@@ -77,9 +90,9 @@ function localeRuntime(active = 'en'): LocaleRuntime {
 
 /** Render the main seat with a live snapshot transport. */
 async function mainSeat(locale: LocaleRuntime): Promise<string> {
-  const gateway = stubGateway(gatewayOk({ kind: 'ok', snapshot: SNAPSHOT }))
-  const client = new MstarPanelSnapshotClient(gateway.connection, { pollIntervalMs: 0 })
-  const markup = await settleRender(() =>
+  const gateway = stubPanel()
+  const client = new MstarPanelSnapshotClient(gateway.connection)
+  const markup = await settledSeat(() =>
     renderToStaticMarkup(createElement(MainPanelView, {
       sessionId: SESSION,
       useSessions: bindUseSessions(),
@@ -88,15 +101,14 @@ async function mainSeat(locale: LocaleRuntime): Promise<string> {
       localeFace: locale,
     } as never)),
   )
-  client.dispose()
   return markup
 }
 
 /** Render the sidebar seat with the same transport and data. */
 async function sidebarSeat(locale: LocaleRuntime): Promise<string> {
-  const gateway = stubGateway(gatewayOk({ kind: 'ok', snapshot: SNAPSHOT }))
-  const client = new MstarPanelSnapshotClient(gateway.connection, { pollIntervalMs: 0 })
-  const markup = await settleRender(() =>
+  const gateway = stubPanel()
+  const client = new MstarPanelSnapshotClient(gateway.connection)
+  const markup = await settledSeat(() =>
     renderToStaticMarkup(createElement(PanelView, {
       sessionId: SESSION,
       useSessions: bindUseSessions(),
@@ -106,7 +118,6 @@ async function sidebarSeat(locale: LocaleRuntime): Promise<string> {
       ...visibleTabKit(),
     } as never)),
   )
-  client.dispose()
   return markup
 }
 
@@ -121,6 +132,19 @@ function screens(markup: string): string[] {
 }
 
 /* --------------------------- 1. one implementation --------------------------- */
+
+
+/**
+ * Settle the seat's chained reads: the digest lands, then the per-view reads it
+ * enables (`workflow-detail`, `iterations`), each one render later.
+ */
+async function settledSeat(render: () => string): Promise<string> {
+  let markup = ''
+  for (let pass = 0; pass < 4; pass += 1) {
+    markup = await settleRender(render)
+  }
+  return markup
+}
 
 describe('main seat — the same product, one implementation', () => {
   it('both seats resolve the SAME destination set from one source', async () => {
@@ -206,9 +230,9 @@ describe('main seat — host chrome is the host’s', () => {
 
   it('the affordance label follows the host locale', async () => {
     const locale = localeRuntime('zh')
-    const gateway = stubGateway(gatewayOk({ kind: 'ok', snapshot: SNAPSHOT }))
-    const client = new MstarPanelSnapshotClient(gateway.connection, { pollIntervalMs: 0 })
-    const markup = await settleRender(() =>
+    const gateway = stubPanel()
+    const client = new MstarPanelSnapshotClient(gateway.connection)
+    const markup = await settledSeat(() =>
       renderToStaticMarkup(createElement(PanelView, {
         sessionId: SESSION,
         useSessions: bindUseSessions(),
@@ -219,7 +243,6 @@ describe('main seat — host chrome is the host’s', () => {
         ...visibleTabKit(),
       } as never)),
     )
-    client.dispose()
     expect(markup).toContain(zh['panel.open-full-page'])
   })
 })
@@ -227,9 +250,9 @@ describe('main seat — host chrome is the host’s', () => {
 /** Render the sidebar seat with the host's open-main handler present. */
 async function sidebarSeatOpener(): Promise<string> {
   const locale = localeRuntime()
-  const gateway = stubGateway(gatewayOk({ kind: 'ok', snapshot: SNAPSHOT }))
-  const client = new MstarPanelSnapshotClient(gateway.connection, { pollIntervalMs: 0 })
-  const markup = await settleRender(() =>
+  const gateway = stubPanel()
+  const client = new MstarPanelSnapshotClient(gateway.connection)
+  const markup = await settledSeat(() =>
     renderToStaticMarkup(createElement(PanelView, {
       sessionId: SESSION,
       useSessions: bindUseSessions(),
@@ -240,7 +263,6 @@ async function sidebarSeatOpener(): Promise<string> {
       ...visibleTabKit(),
     } as never)),
   )
-  client.dispose()
   return markup
 }
 
@@ -268,7 +290,7 @@ describe('main seat — the placeholder is gone', () => {
 describe('main seat — it owns the same transport states as the sidebar', () => {
   it('waiting: no transport renders the waiting anchor, not the product', async () => {
     const locale = localeRuntime()
-    const markup = await settleRender(() =>
+    const markup = await settledSeat(() =>
       renderToStaticMarkup(createElement(MainPanelView, {
         sessionId: SESSION,
         useSessions: bindUseSessions(),
@@ -282,8 +304,8 @@ describe('main seat — it owns the same transport states as the sidebar', () =>
   it('no-harness keeps its own anchor', async () => {
     const locale = localeRuntime()
     const gateway = stubGateway(gatewayOk({ kind: 'no-harness' }))
-    const client = new MstarPanelSnapshotClient(gateway.connection, { pollIntervalMs: 0 })
-    const markup = await settleRender(() =>
+    const client = new MstarPanelSnapshotClient(gateway.connection)
+    const markup = await settledSeat(() =>
       renderToStaticMarkup(createElement(MainPanelView, {
         sessionId: SESSION,
         useSessions: bindUseSessions(),
@@ -291,7 +313,6 @@ describe('main seat — it owns the same transport states as the sidebar', () =>
         panelSnapshot: client,
       } as never)),
     )
-    client.dispose()
     expect(markup).toContain('data-mstar-panel="no-harness"')
     expect(markup).not.toContain('data-ms-shell')
   })

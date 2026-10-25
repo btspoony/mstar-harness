@@ -42,8 +42,8 @@ export interface GatewayStub {
   readonly calls: GatewayCall[]
   /** Answer every later call with these envelopes (the last one repeats). */
   reply(...envelopes: unknown[]): void
-  /** Answer every later call from a function of the asserted request. */
-  replyWith(reply: (sessionId: string, cwd: string) => unknown): void
+  /** Answer every later call from a function of the asserted request (its payload is the third argument). */
+  replyWith(reply: (sessionId: string, cwd: string, payload: unknown) => unknown): void
   /** Answer ONE endpoint permanently (a second data path beside the queued one). */
   replyFor(endpoint: string, value: unknown): void
 }
@@ -56,7 +56,7 @@ export interface GatewayStub {
 export function stubGateway(...envelopes: unknown[]): GatewayStub {
   const calls: GatewayCall[] = []
   let queue = envelopes.length > 0 ? [...envelopes] : [undefined]
-  let byRequest: ((sessionId: string, cwd: string) => unknown) | null = null
+  let byRequest: ((sessionId: string, cwd: string, payload: unknown) => unknown) | null = null
   const byEndpoint = new Map<string, unknown>()
   const connection: MstarPanelSnapshotConnection = {
     rpc: {
@@ -64,7 +64,7 @@ export function stubGateway(...envelopes: unknown[]): GatewayStub {
         calls.push({ channel, endpoint, payload })
         const args = (payload as { args?: { sessionId?: string; cwd?: string } } | null)?.args ?? {}
         if (byEndpoint.has(endpoint)) return Promise.resolve(byEndpoint.get(endpoint) as never)
-        if (byRequest !== null) return Promise.resolve(byRequest(args.sessionId ?? '', args.cwd ?? '') as never)
+        if (byRequest !== null) return Promise.resolve(byRequest(args.sessionId ?? '', args.cwd ?? '', payload) as never)
         const next = queue.length > 1 ? queue.shift() : queue[0]
         return Promise.resolve(next as never)
       },

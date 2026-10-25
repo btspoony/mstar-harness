@@ -42,6 +42,12 @@ type Member = { state: 'ok'; data: unknown } | { state: 'not-applicable' | 'unav
 
 const ok = (data: unknown): Member => ({ state: 'ok', data })
 
+/** The workflow member the shell takes: the per-view read's three-state answer. */
+type RenderWorkflowMember =
+  | { readonly state: 'read'; readonly data: unknown }
+  | { readonly state: 'not-applicable'; readonly reason: string }
+  | { readonly state: 'unavailable'; readonly reason: string }
+
 const WORKFLOW = {
   id: 'wf-focus',
   type: 'plan',
@@ -57,36 +63,32 @@ const WORKFLOW = {
 }
 
 /** A snapshot whose bound workflow is `wf-focus` and whose iteration holds one of its plans. */
-function snapshot(over: { selection?: unknown; workflow?: Member; iteration?: Member; enforcement?: unknown } = {}): PanelSnapshot {
+/** The session digest the seat reads (Task 4: enforcement / knowledge / selection + the delivery fallback). */
+function snapshot(over: { selection?: unknown; iteration?: Member; enforcement?: unknown } = {}): PanelSnapshot {
   return {
-    at: '2026-10-25T10:00:00.000Z',
-    version: '4.0.9',
-    harnessDir: '/proj/.mstar',
     enforcement: over.enforcement ?? { hard: true, source: 'compass' },
-    workspace: {
-      workflow: over.workflow ?? ok(WORKFLOW),
-      iteration: over.iteration ?? ok({ iterationId: 'iter-shell', gateStep: 2, plans: [{ planId: 'p-run' }] }),
-      roadmap: { state: 'not-applicable', reason: 'no project resolves' },
-      issues: ok({ items: [], total: 0 }),
-      projects: ok({ items: [], total: 0 }),
-    },
-    retained: {
-      iterationGate: null,
-      knowledge: { docCount: 41, categories: [] },
-      selection: over.selection === undefined
-        ? { kind: 'active', workflowId: 'wf-focus', dir: 'workflows/wf-focus' }
-        : over.selection,
-      at: null,
-    },
-    ledger: null,
+    knowledge: { docCount: 41, categories: [] },
+    selection: over.selection === undefined
+      ? { kind: 'active', workflowId: 'wf-focus', dir: 'workflows/wf-focus' }
+      : over.selection,
+    iteration: over.iteration ?? ok({ iterationId: 'iter-shell', gateStep: 2, plans: [{ planId: 'p-run' }] }),
   } as unknown as PanelSnapshot
 }
 
-/** Render the pure shell for one destination. */
-function shell(snap: PanelSnapshot = snapshot(), destination: (typeof PANEL_DESTINATIONS)[number] | 'focus' = 'focus', locale: 'en' | 'zh' = 'en'): string {
+/**
+ * Render the pure shell for one destination. `workflow` is the per-view
+ * `workflow-detail` member the seat hands down (Task 4).
+ */
+function shell(
+  snap: PanelSnapshot = snapshot(),
+  destination: (typeof PANEL_DESTINATIONS)[number] | 'focus' = 'focus',
+  locale: 'en' | 'zh' = 'en',
+  workflow: RenderWorkflowMember = { state: 'read', data: WORKFLOW },
+): string {
   return renderToStaticMarkup(
     createElement(PanelShell, {
       snapshot: snap,
+      workflow: workflow as never,
       destination,
       locale,
       navLabel: 'Morning Star Workflow',
@@ -113,6 +115,19 @@ function localeRuntime(active = 'en'): LocaleRuntime {
 }
 
 /* ------------------------------ 1. landing ------------------------------ */
+
+
+/**
+ * Settle the seat's chained reads: the digest lands, then the per-view reads it
+ * enables (`workflow-detail`, `iterations`), each one render later.
+ */
+async function settledSeat(render: () => string): Promise<string> {
+  let markup = ''
+  for (let pass = 0; pass < 4; pass += 1) {
+    markup = await settleRender(render)
+  }
+  return markup
+}
 
 describe('sidebar shell — Focus is the landing view', () => {
   const markup = shell()
@@ -223,10 +238,14 @@ describe('sidebar shell — unbound and degraded sessions never fabricate conten
   it('renders the picker (not a fabricated workflow) when the session is unbound', () => {
     // An unbound session's host read answers `not-applicable`: there is no
     // workflow to describe, and the selection arrives as the pickable error.
-    const markup = shell(snapshot({
-      selection: { kind: 'error', code: 'workflow.multi-active', message: 'two workflows are active', activeWorkflowIds: ['wf-a', 'wf-b'] },
-      workflow: { state: 'not-applicable', reason: 'no workflow is bound to this session' },
-    }))
+    const markup = shell(
+      snapshot({
+        selection: { kind: 'error', code: 'workflow.multi-active', message: 'two workflows are active', activeWorkflowIds: ['wf-a', 'wf-b'] },
+      }),
+      'focus',
+      'en',
+      { state: 'not-applicable', reason: 'no workflow is bound to this session' },
+    )
     expect(markup).toContain('data-ms-binding="error"')
     expect(markup).toContain('data-ms-picker=""')
     expect(markup).toContain('wf-a')
@@ -237,7 +256,7 @@ describe('sidebar shell — unbound and degraded sessions never fabricate conten
   })
 
   it('keeps an unreadable workflow a member-level arm while the rest still renders', () => {
-    const markup = shell(snapshot({ workflow: { state: 'unavailable', reason: 'execution projection unavailable' } }))
+    const markup = shell(snapshot(), 'focus', 'en', { state: 'unavailable', reason: 'execution projection unavailable' })
     expect(markup).toContain('data-ms-binding="bound"')
     expect(markup).toContain('execution projection unavailable')
     expect(markup).toContain('data-ms-enforcement="hard"')
@@ -262,24 +281,20 @@ describe('sidebar shell — the product copy follows the host locale', () => {
     expect(markup).not.toContain(uiEn.focus.bindingBound('wf-focus'))
   })
 
-  it('the seat passes the host locale through to the shell', async () => {
+  it('the seat renders its transport state until the digest answers (effects do not run under SSR)', () => {
+    // The digest hook reads in an effect, which `renderToStaticMarkup` never
+    // runs: the seat's LOADED state is a browser-render concern (Task 7/e2e),
+    // while the same shell is covered directly by the pure cases above.
     const locale = localeRuntime('zh')
-    const gateway = stubGateway(gatewayOk({ kind: 'ok', snapshot: snapshot() }))
-    const client = new MstarPanelSnapshotClient(gateway.connection, { pollIntervalMs: 0 })
-    const markup = await settleRender(() =>
-      renderToStaticMarkup(createElement(PanelView, {
-        sessionId: SESSION,
-        useSessions: bindUseSessions(),
-        t: locale.bind(NS),
-        panelSnapshot: client,
-        localeFace: locale,
-        ...visibleTabKit(),
-      } as never)),
-    )
-    client.dispose()
+    const markup = renderToStaticMarkup(createElement(PanelView, {
+      sessionId: SESSION,
+      useSessions: bindUseSessions(),
+      t: locale.bind(NS),
+      localeFace: locale,
+      ...visibleTabKit(),
+    } as never))
     expect(markup).toContain('data-mstar-seat="sidebar"')
-    expect(markup).toContain('data-ms-screen="focus"')
-    expect(markup).toContain(uiZh.focus.pageTitle)
+    expect(markup).toContain('data-mstar-empty="waiting"')
   })
 })
 
@@ -288,7 +303,7 @@ describe('sidebar shell — the product copy follows the host locale', () => {
 describe('sidebar shell — the seat still owns its transport states', () => {
   it('waiting: no transport injected renders the waiting anchor and no product', async () => {
     const locale = localeRuntime('en')
-    const markup = await settleRender(() =>
+    const markup = await settledSeat(() =>
       renderToStaticMarkup(createElement(PanelView, {
         sessionId: SESSION,
         useSessions: bindUseSessions(),
@@ -300,21 +315,4 @@ describe('sidebar shell — the seat still owns its transport states', () => {
     expect(markup).not.toContain('data-ms-shell')
   })
 
-  it('no-harness: its own anchor and copy, and no product shell', async () => {
-    const locale = localeRuntime('en')
-    const gateway = stubGateway(gatewayOk({ kind: 'no-harness' }))
-    const client = new MstarPanelSnapshotClient(gateway.connection, { pollIntervalMs: 0 })
-    const markup = await settleRender(() =>
-      renderToStaticMarkup(createElement(PanelView, {
-        sessionId: SESSION,
-        useSessions: bindUseSessions(),
-        t: locale.bind(NS),
-        panelSnapshot: client,
-        ...visibleTabKit(),
-      } as never)),
-    )
-    client.dispose()
-    expect(markup).toContain('data-mstar-panel="no-harness"')
-    expect(markup).not.toContain('data-ms-shell')
-  })
 })
