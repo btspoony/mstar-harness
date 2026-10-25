@@ -49,6 +49,17 @@ export const en = {
     },
   },
 
+  /**
+   * The shell's own text: the navigation landmark's accessible name and the two
+   * switch labels. `nav.primary` is copy even though nothing renders it, because an
+   * `aria-label` reaches the reader through assistive technology.
+   */
+  shell: {
+    nav: { primary: "Primary" },
+    theme: { label: "Colour scheme", light: "Light", dark: "Dark" },
+    language: { label: "Language", en: "English", zh: "中文" },
+  },
+
   common: {
     previous: "Previous",
     next: "Next",

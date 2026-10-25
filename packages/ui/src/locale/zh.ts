@@ -41,6 +41,12 @@ export const zh: Copy = {
     },
   },
 
+  shell: {
+    nav: { primary: "主导航" },
+    theme: { label: "配色方案", light: "浅色", dark: "深色" },
+    language: { label: "语言", en: "English", zh: "中文" },
+  },
+
   common: {
     previous: "上一页",
     next: "下一页",

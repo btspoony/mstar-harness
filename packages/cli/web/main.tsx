@@ -40,10 +40,12 @@ import {
   Workflows,
   useCopy,
   type IssueQuery,
+  type Locale,
   type ProjectFeature,
 } from "@mstar-harness/ui";
 
 import { ABSENT_PROJECTION } from "./absent-projection";
+import { browserStore, resolveLocale, resolveTheme, storeLocale, storeTheme, type Theme } from "./prefs";
 import {
   iterationDetailCopy,
   iterationDetailOutcome,
@@ -607,8 +609,14 @@ const DEFAULT_ISSUES: IssueQuery = {
 };
 
 /** The shell: skip link, header with the shared navigation, the main region, footer. */
-function Shell() {
+function Shell(props: {
+  locale: Locale;
+  theme: Theme;
+  onThemeChange: (theme: Theme) => void;
+  onLocaleChange: (locale: Locale) => void;
+}) {
   const [address, setAddress] = useState<Address>(() => parseRoute(window.location.hash));
+  const copy = useCopy();
   const projects = useProjects();
   const projectIds = projects.kind === "ready" ? projectOptions(projects.model) : [];
 
@@ -657,8 +665,28 @@ function Shell() {
             // A destination change is a push: Back returns to where the reader was.
             navigate({ name: id as (typeof LIST_DESTINATIONS)[number] }, "", "push");
           }}
-          label="Primary"
+          label={copy.shell.nav.primary}
         />
+        <div className="app-controls">
+          <Switch
+            label={copy.shell.theme.label}
+            value={props.theme}
+            options={[
+              { value: "light", label: copy.shell.theme.light },
+              { value: "dark", label: copy.shell.theme.dark },
+            ]}
+            onChange={(value) => props.onThemeChange(value === "dark" ? "dark" : "light")}
+          />
+          <Switch
+            label={copy.shell.language.label}
+            value={props.locale}
+            options={[
+              { value: "en", label: copy.shell.language.en },
+              { value: "zh", label: copy.shell.language.zh },
+            ]}
+            onChange={(value) => props.onLocaleChange(value === "zh" ? "zh" : "en")}
+          />
+        </div>
       </header>
       {/* Only the landing destination is mounted (Task 3); the four lists arrive in
           Task 4, and until then their routes resolve but render nothing rather than
@@ -706,13 +734,53 @@ function navItemFor(route: Route): string | null {
   }
 }
 
+/**
+ * The two choices the reader owns, and the element that renders them.
+ *
+ * They are host controls, not shared components: which schemes exist and how a
+ * choice is remembered are the host's business, while the shared package owns how a
+ * scheme *looks* (its `[data-ms-theme="dark"]` token block) and what a language
+ * *says* (its dictionary).
+ */
 function Boot() {
+  const [store] = useState(browserStore);
+  const [theme, setTheme] = useState<Theme>(() => resolveTheme(store));
+  const [locale, setLocale] = useState<Locale>(() => resolveLocale(store));
+
+  useEffect(() => {
+    // The attribute is the only channel: the shared package selects its dark tokens
+    // through `[data-ms-theme="dark"]`, and a media query over product colours would
+    // be a second mechanism that can disagree with this one.
+    document.getElementById("app")?.setAttribute(MS_THEME_ATTRIBUTE, theme);
+    storeTheme(store, theme);
+  }, [store, theme]);
+
+  useEffect(() => {
+    storeLocale(store, locale);
+  }, [store, locale]);
+
   return (
     <StrictMode>
-      <LocaleProvider locale="en">
-        <Shell />
+      <LocaleProvider locale={locale}>
+        <Shell locale={locale} theme={theme} onThemeChange={setTheme} onLocaleChange={setLocale} />
       </LocaleProvider>
     </StrictMode>
+  );
+}
+
+/** One switch: a label and a select, both driven by the dictionary. */
+function Switch(props: { label: string; value: string; options: readonly { value: string; label: string }[]; onChange: (value: string) => void }) {
+  return (
+    <label className="app-switch">
+      <span className="app-switch-label">{props.label}</span>
+      <select value={props.value} onChange={(event) => props.onChange(event.target.value)}>
+        {props.options.map((option) => (
+          <option key={option.value} value={option.value}>
+            {option.label}
+          </option>
+        ))}
+      </select>
+    </label>
   );
 }
 
@@ -720,7 +788,6 @@ function Boot() {
 function mount(): void {
   const rootElement = document.getElementById("app");
   if (rootElement === null) return;
-  rootElement.setAttribute(MS_THEME_ATTRIBUTE, "light");
   rootElement.classList.add(MS_CONTAINER_CLASS);
   createRoot(rootElement).render(<Boot />);
 }
