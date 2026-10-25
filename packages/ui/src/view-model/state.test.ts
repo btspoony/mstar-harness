@@ -154,6 +154,16 @@ describe("a single-record read: null is absent, a failed read is unavailable", (
     expect(arm).toEqual({ kind: "unavailable", reason: "no generation" });
   });
 
+  test("an omitted payload is unavailable, not a populated undefined", () => {
+    // `undefined` is not `null`: a host mapping that forgets the member must reach
+    // the failure arm, because `populated(undefined)` throws on first access.
+    const arm = resolveRecord({ data: undefined, projection: projection(4) } as unknown as {
+      data: { id: string } | null;
+      projection: { generation: number | null };
+    }, { unavailableReason: "read failed" });
+    expect(arm).toEqual({ kind: "unavailable", reason: "read failed" });
+  });
+
   test("a readable record is populated", () => {
     const arm = resolveRecord({ data: { id: "I-1" }, projection: projection(4) }, { unavailableReason: "n/a" });
     expect(arm).toEqual({ kind: "populated", value: { id: "I-1" } });

@@ -196,6 +196,10 @@ export function resolveRecord<T>(
     return { kind: "unavailable", reason: options.unavailableReason };
   }
   if (read.projection.generation === null) return { kind: "unavailable", reason: options.unavailableReason };
+  // A host mapping that omits the payload is a failure to state, not an absence:
+  // `undefined` is not `null`, and treating it as a value would hand a record
+  // screen `populated(undefined)`, which throws on first property access.
+  if (read.data === undefined) return { kind: "unavailable", reason: options.unavailableReason };
   if (read.data === null) return { kind: "absent" };
   return { kind: "populated", value: read.data };
 }

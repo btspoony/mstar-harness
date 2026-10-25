@@ -472,6 +472,29 @@ describe("Focus — what it shows, in the IA §3.2 order", () => {
   });
 });
 
+describe("Focus — the loading phase", () => {
+  test("a pending read renders no absence arm, and does not crash", () => {
+    // The same defect Overview had: `copy.absence["loading"]` is undefined, so
+    // the board threw on first paint instead of showing the binding line.
+    const html = renderToStaticMarkup(
+      <Focus
+        model={focusModel({
+          enforcement: "soft",
+          selection: { kind: "active", workflowId: "w", dir: "workflows/w" },
+          workflow: read(workflow()),
+          iteration: null,
+          phase: "loading",
+        })}
+        copy={focusCopy}
+      />,
+    );
+    expect(html).toContain("data-ms-screen=\"focus\"");
+    expect(html).not.toContain("data-ms-absence=");
+    // The facts that do not depend on the read still render.
+    expect(html).toContain('data-ms-binding="bound"');
+  });
+});
+
 describe("Focus — an unknown delivery step is its own state", () => {
   test("an iteration with no proven step never renders `step 0 of 5`", () => {
     // G: `position?.step ?? 0` used to produce a measured-looking zero.

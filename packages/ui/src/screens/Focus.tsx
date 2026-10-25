@@ -204,12 +204,14 @@ export function Focus(props: FocusProps) {
             body={copy.absence.absent.body}
             pointer={copy.absence.absent.pointer}
           />
-        ) : (
+        ) : workflow.kind === "loading" ? null /* A pending read has no subject
+              state yet: rendering an arm would claim one the transport has not
+              reached, and `copy.absence` has no `loading` key to read. */ : (
           <EmptyState
-            arm={workflow.kind as AbsenceArm}
-            labelWord={copy.absence[workflow.kind as AbsenceArm].labelWord}
+            arm={workflow.kind}
+            labelWord={copy.absence[workflow.kind].labelWord}
             heading={copy.boardEmpty}
-            body={copy.absence[workflow.kind as AbsenceArm].body}
+            body={copy.absence[workflow.kind].body}
             reason={workflow.kind === "unavailable" ? workflow.reason : undefined}
             detail={workflow.kind === "not-applicable" ? workflow.reason : undefined}
           />
