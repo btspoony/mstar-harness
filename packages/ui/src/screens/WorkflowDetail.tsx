@@ -17,6 +17,7 @@
  * first uncompleted step" (compass D26): the store carries no checklist and the
  * view contract forbids reading the plan file.
  */
+import { DataTable, type DataTableColumn } from "../components/DataTable.tsx";
 import { EmptyState } from "../components/EmptyState.tsx";
 import { Field } from "../components/Field.tsx";
 import { FieldGroup } from "../components/FieldGroup.tsx";
@@ -67,16 +68,21 @@ export type WorkflowDetailProps = {
   onBack?: () => void;
 };
 
-/** One plan row: identity, status · phase, the recorded progress, the done date. */
-function PlanRowView(props: { plan: WorkflowPlanRow; copy: WorkflowDetailCopy }) {
-  const { plan, copy } = props;
-  return (
-    <tr data-ms-plan-row={plan.planId}>
-      <td>
-        <span className={css.mono}>{plan.planId}</span>
-      </td>
-      <td>{plan.title === null ? <span className={css.muted}>{copy.fields.noCatalog}</span> : <TruncatedText text={plan.title} />}</td>
-      <td>
+/** The plan table's columns: identity, status · phase, recorded progress, done. */
+function planColumns(copy: WorkflowDetailCopy): DataTableColumn<WorkflowPlanRow>[] {
+  return [
+    { key: "planId", header: copy.planColumns.planId, render: (plan) => <span className={css.mono}>{plan.planId}</span> },
+    {
+      key: "title",
+      header: copy.planColumns.title,
+      secondary: true,
+      render: (plan) =>
+        plan.title === null ? <span className={css.muted}>{copy.fields.noCatalog}</span> : <TruncatedText text={plan.title} />,
+    },
+    {
+      key: "status",
+      header: copy.planColumns.status,
+      render: (plan) => (
         <span className={css.statusCell}>
           {plan.status === null ? (
             <span className={css.muted}>{copy.fields.notStarted}</span>
@@ -85,10 +91,14 @@ function PlanRowView(props: { plan: WorkflowPlanRow; copy: WorkflowDetailCopy })
           )}
           {plan.phase === null ? null : <span className={css.phase}>{plan.phase}</span>}
         </span>
-      </td>
-      <td>
-        {/* Recorded progress, or its own absent line — never a derived step. */}
-        {plan.progress === null ? (
+      ),
+    },
+    {
+      key: "progress",
+      header: copy.planColumns.progress,
+      secondary: true,
+      render: (plan) =>
+        plan.progress === null ? (
           <span className={css.muted} data-ms-plan-progress-absent="">
             {copy.planProgressAbsent}
           </span>
@@ -96,13 +106,16 @@ function PlanRowView(props: { plan: WorkflowPlanRow; copy: WorkflowDetailCopy })
           <span className={css.progress} data-ms-plan-progress="">
             <TruncatedText text={plan.progress} />
           </span>
-        )}
-      </td>
-      <td className={css.alignEnd}>
-        <span className={css.mono}>{plan.doneAt ?? "—"}</span>
-      </td>
-    </tr>
-  );
+        ),
+    },
+    {
+      key: "doneAt",
+      header: copy.planColumns.doneAt,
+      secondary: true,
+      align: "end",
+      render: (plan) => <span className={css.mono}>{plan.doneAt ?? "—"}</span>,
+    },
+  ];
 }
 
 export function WorkflowDetail(props: WorkflowDetailProps) {
@@ -205,24 +218,13 @@ export function WorkflowDetail(props: WorkflowDetailProps) {
             <h2 className={css.heading} id="ms-workflow-plans">
               {copy.planTableHeading}
             </h2>
-            <table className={css.table}>
-              <thead>
-                <tr>
-                  <th scope="col">{copy.planColumns.planId}</th>
-                  <th scope="col">{copy.planColumns.title}</th>
-                  <th scope="col">{copy.planColumns.status}</th>
-                  <th scope="col">{copy.planColumns.progress}</th>
-                  <th scope="col" className={css.alignEnd}>
-                    {copy.planColumns.doneAt}
-                  </th>
-                </tr>
-              </thead>
-              <tbody>
-                {props.model.value.plans.map((plan) => (
-                  <PlanRowView key={plan.planId} plan={plan} copy={copy} />
-                ))}
-              </tbody>
-            </table>
+            <DataTable
+              variant="detail"
+              caption={copy.planTableHeading}
+              columns={planColumns(copy)}
+              rows={props.model.value.plans}
+              rowKey={(plan) => plan.planId}
+            />
           </section>
         </>
       ) : props.model.kind === "loading" ? null : (

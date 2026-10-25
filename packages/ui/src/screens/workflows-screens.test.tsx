@@ -270,7 +270,10 @@ describe("WorkflowDetail — execution, anchors, catalog and the plan table", ()
   });
 
   test("the plan table carries planId, title, status · phase, progress and done date", () => {
-    expect(html).toContain('data-ms-plan-row="20261025-unified-ui-shared-layer"');
+    // The plan table is `DataTable variant="detail"`, so rows carry the shared
+    // table's row hook rather than a private one.
+    expect(html).toContain('data-ms-row-key="20261025-unified-ui-shared-layer"');
+    expect(html).toContain('data-ms-table="detail"');
     expect(html).toContain('data-ms-plan-progress=""');
     expect(html).toContain("primitives are landing");
     expect(html).toContain("2026-10-19T01:12:00.000Z");

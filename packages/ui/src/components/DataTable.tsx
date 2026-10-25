@@ -24,22 +24,40 @@ export type DataTableColumn<T> = {
   /** Header text. Localized by the caller (Task 5 owns strings). */
   header: string;
   render: (row: T) => ReactNode;
-  /** Hidden below the container floor; its fact must appear in `meta`. */
+  /**
+   * Below the container floor this column yields. In `list` mode its fact must
+   * reappear in `meta`; in `detail` mode it is simply dropped, because a detail
+   * page has no second line to move it to and the reader can widen the pane.
+   */
   secondary?: boolean;
   /** Right-aligns the cell: counts, fractions, timestamps. */
   align?: "start" | "end";
 };
 
+/**
+ * How the table behaves below the container floor.
+ *
+ * `list` — the record's identity stays on the first line and the yielded columns
+ * become a second line from the same row data, so one row stays one record.
+ *
+ * `detail` — the table sits inside a page that already carries the record, so a
+ * yielded column is dropped instead of restated; a detail table never grows a
+ * meta line.
+ */
+export type DataTableVariant = "list" | "detail";
+
 export type DataTableProps<T> = {
   /** Localized table caption, also the accessible name. */
   caption: string;
+  /** Defaults to `list`. */
+  variant?: DataTableVariant;
   columns: readonly DataTableColumn<T>[];
   rows: readonly T[];
   rowKey: (row: T) => string;
   /**
    * The second line of a collapsed row: the facts the hidden columns carried.
-   * Required in spirit whenever a column is `secondary` — the caller composes it
-   * from the same row data, so there is still one source per fact.
+   * `list` mode only; required in spirit whenever a column is `secondary` there,
+   * and ignored in `detail` mode by contract.
    */
   meta?: (row: T) => ReactNode;
   /** Called on click/Enter/Space on a row; the caller owns navigation. */
@@ -50,8 +68,9 @@ export type DataTableProps<T> = {
 
 export function DataTable<T>(props: DataTableProps<T>) {
   const interactive = props.onRowActivate !== undefined;
+  const detail = props.variant === "detail";
   return (
-    <table className={css.table} aria-label={props.caption}>
+    <table className={css.table} aria-label={props.caption} data-ms-table={detail ? "detail" : "list"}>
       {/* The colgroup carries widths only: the collapse hides cells, and a
           colgroup entry is not a cell. */}
       <colgroup>
@@ -107,7 +126,7 @@ export function DataTable<T>(props: DataTableProps<T>) {
                     data-ms-align={column.align ?? "start"}
                   >
                     {column.render(row)}
-                    {index === 0 && props.meta !== undefined ? (
+                    {!detail && index === 0 && props.meta !== undefined ? (
                       <span className={css.rowMeta} data-ms-row-meta="">
                         {props.meta(row)}
                       </span>

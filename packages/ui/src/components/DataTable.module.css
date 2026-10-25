@@ -71,6 +71,15 @@
 /* The collapse: below 620px of CONTAINER (never viewport), the secondary
    columns go and the primary cell carries the second line. */
 @container pane (max-width: 619px) {
+  /* A detail table drops the yielded columns instead of restating them: the page
+     above already carries the record, so there is no second line to grow. */
+  .table[data-ms-table="detail"] td,
+  .table[data-ms-table="detail"] th {
+    block-size: auto;
+    padding-block: 4px;
+    white-space: normal;
+  }
+
   .table {
     table-layout: fixed;
   }

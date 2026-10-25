@@ -83,14 +83,17 @@ export function iterationRow(iteration: IterationDTO): IterationRow {
  * only loses its execution overlay — so this resolves the rows and reports the
  * attribution separately instead of promoting the whole list to `unavailable`.
  */
+export type IterationListModel = {
+  rows: Resolved<readonly IterationRow[]>;
+  total: number;
+  /** Whether this store attributes any iteration to a project (contract §4). */
+  attribution: IterationAttribution;
+};
+
 export function iterationListModel(read: {
   data: IterationListDTO;
   projection: { generation: number | null };
-}): {
-  rows: Resolved<readonly IterationRow[]>;
-  total: number;
-  attribution: IterationAttribution;
-} {
+}): IterationListModel {
   const readAttribution = (read.data as IterationListDTO & { attribution?: IterationAttribution }).attribution;
   const attribution: IterationAttribution = readAttribution === "absent" ? "absent" : "present";
   // Zero rows mean different things depending on attribution (contract §4): a
@@ -141,6 +144,8 @@ export type IterationDetailModel = {
   summary: string | null;
   steps: Array<{ step: number; id: GateStepId; position: GateStepPosition }>;
   gateStep: IterationGateStep | null;
+  /** `step N of 5`, or `null` — never `0 of 5` (contract §3). */
+  gatePosition: { step: number; of: 5 } | null;
   startedAt: string;
   endedAt: string | null;
   /** The linked workflow's id, or `null` when the iteration has no execution row. */
@@ -174,6 +179,7 @@ export function iterationDetailModel(read: {
       summary: iteration.compass?.summary ?? null,
       steps: gateSteps(step),
       gateStep: step,
+      gatePosition: gateStepPosition(step),
       startedAt: formatDate(iteration.compass?.startedAt ?? null),
       endedAt: iteration.compass?.endedAt ?? null,
       workflowId: iteration.workflow?.id ?? null,

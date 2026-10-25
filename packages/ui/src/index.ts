@@ -89,8 +89,13 @@ export { WorkflowDetail } from "./screens/WorkflowDetail.tsx";
 
 export type { IssuesCopy, IssuesProps } from "./screens/Issues.tsx";
 export type { IssueDetailCopy, IssueDetailProps } from "./screens/IssueDetail.tsx";
+export { Iterations } from "./screens/Iterations.tsx";
+export { IterationDetail } from "./screens/IterationDetail.tsx";
+
 export type { WorkflowsCopy, WorkflowsProps } from "./screens/Workflows.tsx";
 export type { WorkflowDetailCopy, WorkflowDetailProps } from "./screens/WorkflowDetail.tsx";
+export type { IterationsCopy, IterationsProps } from "./screens/Iterations.tsx";
+export type { IterationDetailCopy, IterationDetailProps } from "./screens/IterationDetail.tsx";
 
 import { TONES, type Tone } from "./view-model/status.ts";
 
