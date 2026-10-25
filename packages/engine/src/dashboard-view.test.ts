@@ -345,6 +345,34 @@ async function scopedOverviewWorkspace(name: string): Promise<StoreContext> {
     );
   }
 
+  // A locked iteration with a compass and ZERO plan links: the normal gap
+  // between Phase 1 and the first plan `belongs-to` link. It proves Start, not
+  // Close — `plans.every(...)` would be vacuously true here (qc1/qc3 F-002).
+  await register({ kind: "iteration", id: "iter-no-plan", title: "Locked, no plans", rootKind: "iterations", relativePath: "iter-no-plan" });
+  await linkCatalogEntities(
+    context,
+    { from: { kind: "iteration", id: "iter-no-plan" }, relation: "belongs-to", to: { kind: "project", id: "proj-a" } },
+    operation("link-iter-no-plan-project"),
+  );
+  await register({
+    kind: "document",
+    id: "doc-iter-no-plan",
+    title: "iter-no-plan compass",
+    rootKind: "iterations",
+    relativePath: "iter-no-plan/delivery-compass.md",
+    documentKind: "compass",
+  });
+  await linkCatalogEntities(
+    context,
+    { from: { kind: "iteration", id: "iter-no-plan" }, relation: "documents", to: { kind: "document", id: "doc-iter-no-plan" } },
+    operation("link-doc-iter-no-plan"),
+  );
+  mkdirSync(join(catalogRootDir(context, "iterations"), "iter-no-plan"), { recursive: true });
+  writeFileSync(
+    join(catalogRootDir(context, "iterations"), "iter-no-plan", "delivery-compass.md"),
+    compassDoc({ iterationId: "iter-no-plan", status: "locked", startDate: "2026-08-20" }),
+  );
+
   await addMilestone(
     context,
     { projectId: "proj-a", name: "Read boundary", target: "2026-09-30", ordinal: 0 },
@@ -407,7 +435,8 @@ describe("overview read model", () => {
       "p-iter-open",
     ]);
     expect(workflows.items.every((item) => item.activeRegistration)).toBe(true);
-    expect(workflows.total).toBe(workflows.items.length);
+    // `total` is the reader's unpaged count: the contract's truncation disclosure.
+    expect(workflows.total).toBe(4);
 
     // Residuals: all five severity literals, the two empty ones as 0, and
     // `open` equals their sum (D20: the total is never a second query).
@@ -443,6 +472,8 @@ describe("overview read model", () => {
       "iter-close": 3,
       "iter-done": 4,
       "iter-flight": 2,
+      // Locked compass with zero plan links: Close is not proven (qc1/qc3 F-002).
+      "iter-no-plan": 2,
       "iter-none": null,
       "iter-open": 1,
     });
@@ -514,6 +545,66 @@ describe("overview read model", () => {
     // A compass that records no status proves its own existence and nothing
     // further: step 1, never a step the store cannot show.
     expect(row?.gateStep).toBe(1);
+  });
+
+  test("an unreadable projection is reported per member, not as empty work", async () => {
+    const context = await workspace("overview-projection-unavailable-");
+    await registerCatalogEntity(
+      context,
+      { kind: "project", id: "proj-a", title: "Project A", rootKind: "projects", relativePath: "proj-a" },
+      operation("register-proj-a"),
+    );
+    // A malformed registry entry makes the first projection capture unusable
+    // WITHOUT throwing: the refresh retains health (`freshness: unavailable`,
+    // no published generation), so every projection-dependent reader answers
+    // empty rows. Those rows mean "could not read", never "no active work".
+    const handle = await openStore(context, "write");
+    try {
+      handle.db
+        .prepare(
+          "insert into execution_workflows(workflow_id, creator_session_id, revision, state_json, created_at, updated_at) values ('wf-corrupt', null, 1, ?, ?, ?)",
+        )
+        .run(
+          JSON.stringify({ schema_version: 1, id: "wf-corrupt", type: "plan", status: "running", started_at: STARTED_AT, updated_at: STARTED_AT }),
+          STARTED_AT,
+          STARTED_AT,
+        );
+      handle.db.prepare("insert into execution_registry(workflow_id, entry_json) values ('wf-corrupt', '{ malformed')").run();
+    } finally {
+      handle.close();
+    }
+
+    const envelope = await readDashboardView({ context, view: "overview", params: { project: "proj-a" } });
+    const overview = envelope.data as OverviewDTO;
+    expect(envelope.projection.freshness).toBe("unavailable");
+    expect(envelope.projection.generation).toBeNull();
+    expect(overview.workflows.state).toBe("unavailable");
+    expect(overview.latestIteration.state).toBe("unavailable");
+    // The reason is the store's own projection message, not a rewritten one.
+    expect(overview.workflows.state === "unavailable" ? overview.workflows.reason : "").not.toBe("");
+    // The table readers are untouched: they still answer from the same snapshot.
+    for (const member of [overview.residuals, overview.milestones, overview.issueFlow] as const) {
+      expect(member.state).toBe("read");
+    }
+    // Without a project the iteration member stays not-applicable; the workflow
+    // member has no project scope and still discloses the unreadable projection.
+    const unscoped = (await readDashboardView({ context, view: "overview" })).data as OverviewDTO;
+    expect(unscoped.latestIteration.state).toBe("not-applicable");
+    expect(unscoped.workflows.state).toBe("unavailable");
+  });
+
+  test("the workflows member keeps the unpaged total so a screen can disclose truncation", async () => {
+    const context = await workspace("overview-truncated-");
+    // The member reads one 50-row page; a longer store must still be disclosed,
+    // which is exactly what WorkflowListDTO.total carries (qc3 F-001).
+    for (let index = 0; index < 51; index += 1) {
+      await createPlanWorkflow(context, `p-bulk-${String(index).padStart(2, "0")}`, "Todo");
+    }
+
+    const overview = (await readDashboardView({ context, view: "overview" })).data as OverviewDTO;
+    const workflows = readMember(overview.workflows);
+    expect(workflows.items).toHaveLength(50);
+    expect(workflows.total).toBe(51);
   });
 
   test("one throwing reader degrades only its own member", async () => {

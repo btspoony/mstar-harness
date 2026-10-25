@@ -243,7 +243,11 @@ export type IterationDTO = {
   workflow: { id: string; status: string; phase: string | null; activeRegistration: boolean } | null;
   plans: IterationPlanDTO[];
   documents: CatalogIdentityDTO[];
-  /** The furthest step the store proves; null when the iteration records no compass. */
+  /**
+   * The furthest step the store proves, or null for two causes: the iteration
+   * records no compass, or no execution projection has been published. The
+   * `badges` member tells them apart -- "execution-unavailable" is the second.
+   */
   gateStep: IterationGateStep | null;
   badges: DashboardBadge[];
 };
@@ -1564,6 +1568,16 @@ function composeIteration(
  * the absent arm -- null, not step 1. Step 5 (Merge ready) is never derived:
  * the merge happens outside the harness and no store row records it.
  *
+ * Close needs EVIDENCE: a non-empty plan set whose every row is `Done`. An
+ * empty set is not proof of anything (`every` would be vacuously true), and the
+ * store's own gate agrees -- `evaluatePhaseGate` leaves Execute only with a
+ * non-empty registered set (`iteration.ts` `registered.length > 0`). A locked
+ * iteration with no plan links yet is Execute (2).
+ *
+ * `null` therefore covers two causes, which the DTO distinguishes with its
+ * `badges`: no compass row for this iteration, or no published execution
+ * projection at all (`badges` then carries "execution-unavailable").
+ *
  * A compass ROW with no status is a defensive arm, not a store state the
  * producer can create (`validateCompassShape` admits only the closed status
  * values), and it answers step 1 for the same reason an unproven status does:
@@ -1578,7 +1592,7 @@ function gateStepOf(
   if (compassStatus === undefined) return null;
   if (compassStatus !== "locked" && compassStatus !== "completed") return 1;
   if (compassStatus === "completed") return 4;
-  return plans.every((plan) => plan.execution?.status === "Done") ? 3 : 2;
+  return plans.length > 0 && plans.every((plan) => plan.execution?.status === "Done") ? 3 : 2;
 }
 
 function readIterationList(db: StoreDb, filters: DashboardFilters): IterationListDTO {
@@ -1651,19 +1665,46 @@ function readOverview(db: StoreDb, filters: DashboardFilters): OverviewDTO {
     try {
       return { state: "read", data: read() };
     } catch (error) {
+      // A typed contract refusal keeps its class: the transport's error arm owns
+      // it, and flattening it into a 200 payload would hide the refusal.
+      if (error instanceof SddScriptError) throw error;
       return { state: "unavailable", reason: error instanceof Error ? error.message : String(error) };
     }
   };
-  const scoped = <T>(read: (projectId: string) => T): OverviewMember<T> =>
-    projectId === null ? { state: "not-applicable", reason: "no project resolves for this read" } : member(() => read(projectId));
+  // A projection that never published a generation cannot answer the
+  // projection-dependent members: their empty rows mean "could not read", never
+  // "no active work". They report the store's own retained failure reason.
+  const projectionFailure = projectionFailureReason(db);
+  const projected = <T>(read: () => T): OverviewMember<T> =>
+    projectionFailure === null ? member(read) : { state: "unavailable", reason: projectionFailure };
 
   return {
-    workflows: member(() => activeWorkflows(readWorkflowList(db, { limit: 50 }))),
+    workflows: projected(() => activeWorkflows(readWorkflowList(db, { limit: 50 }))),
     residuals: member(() => readResidualCounts(db)),
-    milestones: scoped((id) => readMilestonesOn(db, id)),
-    latestIteration: scoped((id) => readLatestIteration(db, id)),
+    milestones:
+      projectId === null
+        ? { state: "not-applicable", reason: "no project resolves for this read" }
+        : member(() => readMilestonesOn(db, projectId)),
+    latestIteration:
+      projectId === null
+        ? { state: "not-applicable", reason: "no project resolves for this read" }
+        : projected(() => readLatestIteration(db, projectId)),
     issueFlow: member(() => readIssueFlow(db, projectId ?? undefined)),
   };
+}
+
+/**
+ * The store's own reason for a projection that never published a generation --
+ * the retained capture diagnostics, or the recorded absence of a coherent
+ * source set. `null` means a generation exists (possibly stale) and is readable.
+ */
+function projectionFailureReason(db: StoreDb): string | null {
+  const projection = readProjectionBlock(db);
+  if (projection.generation !== null) return null;
+  const reasons = projection.diagnostics.map((diagnostic) => diagnostic.message).filter((message) => message !== "");
+  return reasons.length > 0
+    ? reasons.join("; ")
+    : "no projection generation has been published and the refresh could not read a coherent source set";
 }
 
 /**
@@ -1672,10 +1713,10 @@ function readOverview(db: StoreDb, filters: DashboardFilters): OverviewDTO {
  * identity; it is the member's declared contract, not a claim about the rows.
  */
 function activeWorkflows(list: WorkflowListDTO): WorkflowListDTO {
-  const items = list.items.filter((item) => item.activeRegistration);
-  // shortcut: the 50-row page is this member's whole window; a store with more
-  // active workflows than that is out of scope (report §2 member sources).
-  return { items, total: items.length };
+  // The reader's own `total` (the unpaged count) and its terminal disclosures
+  // stay: they are how a screen discloses the 50-row truncation this member
+  // reads through. Only the row set is narrowed.
+  return { ...list, items: list.items.filter((item) => item.activeRegistration) };
 }
 
 /** Open residuals by severity: all five literals, and `open` is their sum (D20). */
