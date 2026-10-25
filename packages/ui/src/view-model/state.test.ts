@@ -1,0 +1,101 @@
+/**
+ * The absence-state resolver, and the negative assertions that keep D30's
+ * contraction from being undone by a later transform.
+ *
+ * `state.test.ts` owns two things: the four arms must be four distinct answers
+ * for four distinct inputs, and `loading` must never borrow one of them.
+ */
+import { describe, expect, test } from "bun:test";
+
+import { absenceCopyFamily, isAbsence, resolveMember, resolveRead } from "./state.ts";
+
+const read = <T>(data: T) => ({ state: "read" as const, data });
+
+describe("the four absence arms are distinct answers", () => {
+  test("not-applicable — the subject does not resolve", () => {
+    const arm = resolveMember({ state: "not-applicable", reason: "no project resolves for this read" }, {
+      whenNull: "empty",
+    });
+    expect(arm).toEqual({ kind: "not-applicable", reason: "no project resolves for this read" });
+  });
+
+  test("absent — the subject declares no such concept", () => {
+    const arm = resolveMember(read(null), { whenNull: "absent" });
+    expect(arm).toEqual({ kind: "absent" });
+  });
+
+  test("empty — the read succeeded and the collection holds nothing", () => {
+    const arm = resolveMember(read<readonly string[]>([]), {
+      whenNull: "empty",
+      isEmpty: (rows) => rows.length === 0,
+    });
+    expect(arm).toEqual({ kind: "empty" });
+  });
+
+  test("unavailable — the read failed, carrying the store's own reason", () => {
+    const arm = resolveMember({ state: "unavailable", reason: "no such table: projection_workflows" }, {
+      whenNull: "empty",
+    });
+    expect(arm).toEqual({ kind: "unavailable", reason: "no such table: projection_workflows" });
+  });
+
+  test("populated carries the value", () => {
+    expect(resolveMember(read(["a"]), { whenNull: "empty" })).toEqual({ kind: "populated", value: ["a"] });
+  });
+});
+
+describe("loading is a phase, not a subject state", () => {
+  test("every member reports loading while the transport is reading", () => {
+    for (const member of [
+      read(null),
+      read(["x"]),
+      { state: "not-applicable" as const, reason: "no project" },
+      { state: "unavailable" as const, reason: "failed" },
+    ]) {
+      expect(resolveMember(member, { phase: "loading", whenNull: "empty" }).kind).toBe("loading");
+    }
+  });
+
+  test("loading borrows none of the four absence copy families", () => {
+    expect(absenceCopyFamily("loading")).toBeNull();
+    expect(isAbsence("loading")).toBe(false);
+  });
+
+  test("each absence arm owns its own copy family and populated owns none", () => {
+    const families = (["not-applicable", "absent", "empty", "unavailable"] as const).map((arm) =>
+      absenceCopyFamily(arm),
+    );
+    expect(families).toEqual(["state.not-applicable", "state.absent", "state.empty", "state.unavailable"]);
+    expect(new Set(families).size).toBe(4);
+    expect(absenceCopyFamily("populated")).toBeNull();
+    expect(absenceCopyFamily("loading")).toBeNull();
+  });
+});
+
+describe("a plain envelope read resolves through the same arms", () => {
+  const projection = (generation: number | null) => ({ generation, diagnostics: [], freshness: "current" as const, builtAt: null, checkedAt: "" });
+
+  test("no valid projection generation is unavailable, never empty", () => {
+    const arm = resolveRead({ data: [], projection: projection(null) }, {
+      whenNull: "empty",
+      isEmpty: (rows: readonly unknown[]) => rows.length === 0,
+    });
+    expect(arm.kind).toBe("unavailable");
+  });
+
+  test("a valid generation with no rows is empty", () => {
+    const arm = resolveRead({ data: [], projection: projection(3) }, {
+      whenNull: "empty",
+      isEmpty: (rows: readonly unknown[]) => rows.length === 0,
+    });
+    expect(arm).toEqual({ kind: "empty" });
+  });
+
+  test("a degraded member leaves its neighbours readable (per-member, not per-page)", () => {
+    // The rule IA §5 rule 3 states: one failed member degrades that member only.
+    const failed = resolveMember({ state: "unavailable", reason: "read failed" }, { whenNull: "empty" });
+    const healthy = resolveMember(read(["row"]), { whenNull: "empty" });
+    expect(failed.kind).toBe("unavailable");
+    expect(healthy.kind).toBe("populated");
+  });
+});

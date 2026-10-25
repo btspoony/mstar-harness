@@ -6,9 +6,9 @@
  * step with the source both hosts already bundle, and a copied CSS file could
  * drift from the tokens beside it.
  *
- * Task 1 lands the design system: the token sheet, the base sheet and the
- * scheme contract. Components, view models and the dictionary follow in
- * Tasks 2–5 and are exported from here as they land.
+ * Task 1 landed the design system (tokens, base layer, scheme contract);
+ * Task 2 lands the view-model transforms. Components, screens and the
+ * dictionary follow in Tasks 3–5 and are exported from here as they land.
  *
  * The stylesheets are side-effect imports; a host that wants only the tokens
  * may import `@mstar-harness/ui/styles/tokens.css` directly.
@@ -16,6 +16,19 @@
 
 import "./styles/tokens.css";
 import "./styles/base.css";
+
+export * from "./view-model/contracts.ts";
+export * from "./view-model/format.ts";
+export * from "./view-model/state.ts";
+export * from "./view-model/status.ts";
+export * from "./view-model/issues.ts";
+export * from "./view-model/workflows.ts";
+export * from "./view-model/iterations.ts";
+export * from "./view-model/projects.ts";
+export * from "./view-model/overview.ts";
+export * from "./view-model/focus.ts";
+
+import { TONES, type Tone } from "./view-model/status.ts";
 
 /**
  * The attribute a host sets on the product wrapper to select the value set.
@@ -31,13 +44,14 @@ export const MS_THEME_ATTRIBUTE = "data-ms-theme" as const;
 
 /**
  * The status tone vocabulary, in the order `DESIGN.md` § Status treatments
- * lists it. `StatusDot` (Task 3) takes one of these plus its literal enum
- * label; the forced-colors block in `base.css` gives each a distinct shape.
+ * lists it. The values are owned by `view-model/status.ts` so the transform
+ * layer and the components cannot disagree about them; re-exported here because
+ * `StatusDot` (Task 3) takes one.
  */
-export const MS_TONES = ["danger", "warning", "success", "neutral", "purple"] as const;
+export const MS_TONES = TONES;
 
 /** One status tone. */
-export type MsTone = (typeof MS_TONES)[number];
+export type MsTone = Tone;
 
 /**
  * The container name every reflow rule queries, and the layout hook that
