@@ -1542,6 +1542,30 @@ drop table relations_v12_stage;
 drop table issue_transitions_v12_stage;
 `;
 
+/**
+ * Migration 13 — append-only project-move history.
+ *
+ * A project move changes the issue's project-scoped identity but not its
+ * disposition, so `issue_transitions` (whose from/to columns are dispositions)
+ * is the wrong ledger: an open→open row would pollute lifecycle history. This
+ * table records one row per real move — old/new project, caller actor and
+ * reason, and the issue revision the move produced — and is append-only.
+ */
+export const MIGRATION_13_SQL = `
+create table issue_project_moves(
+  id integer primary key,
+  issue_id text not null references issues(id),
+  from_project_id text not null,
+  to_project_id text not null,
+  actor text not null,
+  reason text not null,
+  occurred_at text not null,
+  recorded_at text not null,
+  issue_revision integer not null
+);
+create index issue_project_moves_issue on issue_project_moves(issue_id, id);
+`;
+
 /** Ordered immutable migrations. Never mutate an applied entry — append only. */
 export const MIGRATIONS: readonly Migration[] = [
   { version: 1, name: "issue-core", sql: MIGRATION_1_SQL },
@@ -1556,6 +1580,7 @@ export const MIGRATIONS: readonly Migration[] = [
   { version: 10, name: "dsh-host-ledgers", sql: MIGRATION_10_SQL },
   { version: 11, name: "dsh-ledger-legacy-provenance", sql: MIGRATION_11_SQL },
   { version: 12, name: "severity-vocabulary-nit", sql: MIGRATION_12_SQL },
+  { version: 13, name: "issue-project-moves", sql: MIGRATION_13_SQL },
 ];
 const DSH_HOST_STATE_MIGRATION = MIGRATIONS.find((migration) => migration.name === "dsh-host-ledgers");
 

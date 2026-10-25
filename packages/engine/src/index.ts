@@ -669,6 +669,7 @@ export type {
   IssueFilter,
   IssueKind,
   IssueLink,
+  IssueMove,
   IssuePage,
   IssueReceipt,
   IssueReopen,
@@ -677,6 +678,7 @@ export type {
   OccurrenceInput,
   TerminalDisposition,
   IssuePayloadName,
+  IssueProjectMove,
   PayloadFieldSchema,
 } from "./issue.js";
 export {
@@ -689,6 +691,8 @@ export {
   getIssue,
   linkIssue,
   listIssues,
+  moveIssue,
+  moveIssueOn,
   reopenIssue,
   reopenIssueOn,
   triageIssue,

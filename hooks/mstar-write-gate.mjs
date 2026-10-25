@@ -14333,6 +14333,15 @@ var init_issue = __esm(() => {
     IssueReopen: {
       reason: { required: true, type: "string", description: "Reason for reopening; nonblank", nonblankWhenPresent: true }
     },
+    IssueMove: {
+      projectId: {
+        required: true,
+        type: "string",
+        description: "Target project; must be a registered catalog project",
+        nonblankWhenPresent: true
+      },
+      reason: { required: true, type: "string", description: "Reason for moving the issue; nonblank", nonblankWhenPresent: true }
+    },
     IssueLink: {
       relation: { required: false, type: "string", description: "Issue relation; pair with issueId", values: ["related", "blocks", "duplicate-of", "superseded-by"] },
       issueId: { required: false, type: "string", description: "Target issue id; required with relation" },
@@ -14364,6 +14373,7 @@ var init_issue = __esm(() => {
     triage: { payload: "IssueTriage", read: false, cas: true, disposition: null },
     close: { payload: "ClosureEvidence", read: false, cas: true, disposition: "resolved" },
     reopen: { payload: "IssueReopen", read: false, cas: true, disposition: null },
+    move: { payload: "IssueMove", read: false, cas: true, disposition: null },
     waive: { payload: "ClosureEvidence", read: false, cas: true, disposition: "waived" },
     duplicate: { payload: "ClosureEvidence", read: false, cas: true, disposition: "duplicate" },
     supersede: { payload: "ClosureEvidence", read: false, cas: true, disposition: "superseded" },
@@ -16427,6 +16437,20 @@ drop table provenance_v12_stage;
 drop table relations_v12_stage;
 drop table issue_transitions_v12_stage;
 `;
+var MIGRATION_13_SQL = `
+create table issue_project_moves(
+  id integer primary key,
+  issue_id text not null references issues(id),
+  from_project_id text not null,
+  to_project_id text not null,
+  actor text not null,
+  reason text not null,
+  occurred_at text not null,
+  recorded_at text not null,
+  issue_revision integer not null
+);
+create index issue_project_moves_issue on issue_project_moves(issue_id, id);
+`;
 var MIGRATIONS;
 var DSH_HOST_STATE_MIGRATION;
 var EXECUTION_TABLE_NAMES;
@@ -16462,7 +16486,8 @@ var init_store_db = __esm(() => {
     { version: 9, name: "execution-coordinator-only", sql: MIGRATION_9_SQL, normalize: normalizeExecutionState },
     { version: 10, name: "dsh-host-ledgers", sql: MIGRATION_10_SQL },
     { version: 11, name: "dsh-ledger-legacy-provenance", sql: MIGRATION_11_SQL },
-    { version: 12, name: "severity-vocabulary-nit", sql: MIGRATION_12_SQL }
+    { version: 12, name: "severity-vocabulary-nit", sql: MIGRATION_12_SQL },
+    { version: 13, name: "issue-project-moves", sql: MIGRATION_13_SQL }
   ];
   DSH_HOST_STATE_MIGRATION = MIGRATIONS.find((migration) => migration.name === "dsh-host-ledgers");
   EXECUTION_TABLE_NAMES = [
@@ -17954,6 +17979,9 @@ function bindIssueFilter(filter) {
 function issuesMilestoneColumn(db) {
   return db.prepare("pragma table_info(issues)").all().some((row) => row.name === "milestone_id");
 }
+function issuesProjectMovesTable(db) {
+  return db.prepare("select 1 from sqlite_master where type = 'table' and name = 'issue_project_moves'").get() !== undefined;
+}
 function readIssuePage(db, filter) {
   const { limit, offset } = paging(filter.limit, filter.offset);
   const { where, params } = bindIssueFilter(filter);
@@ -18034,6 +18062,14 @@ function readIssueDetail(db, id) {
     legacyJson: row.legacy_json,
     importedAt: row.imported_at
   }));
+  const projectMoves = issuesProjectMovesTable(db) ? db.prepare("select from_project_id, to_project_id, actor, reason, occurred_at, issue_revision from issue_project_moves where issue_id = ? order by id asc").all(id).map((row) => ({
+    fromProject: row.from_project_id,
+    toProject: row.to_project_id,
+    actor: row.actor,
+    reason: row.reason,
+    occurredAt: row.occurred_at,
+    issueRevision: row.issue_revision
+  })) : [];
   return {
     id: issue.id,
     projectId: issue.project_id,
@@ -18058,7 +18094,8 @@ function readIssueDetail(db, id) {
     occurrences,
     transitions,
     relations,
-    provenance
+    provenance,
+    projectMoves
   };
 }
 var TERMINAL_DISPOSITIONS = "'resolved', 'waived', 'duplicate', 'superseded'";
@@ -18540,6 +18577,7 @@ var PROVENANCE_ORIGIN_MIGRATION_VERSION = MIGRATIONS.find((migration) => migrati
 var ROADMAP_MIGRATION_VERSION = MIGRATIONS.find((migration) => migration.name === "roadmap-content-authority")?.version ?? Number.POSITIVE_INFINITY;
 var EXECUTION_COVERAGE_MIGRATION_VERSION = MIGRATIONS.find((migration) => migration.name === "execution-coverage-column")?.version ?? Number.POSITIVE_INFINITY;
 var MILESTONE_MIGRATION_VERSION = MIGRATIONS.find((migration) => migration.name === "project-milestones")?.version ?? Number.POSITIVE_INFINITY;
+var PROJECT_MOVES_MIGRATION_VERSION = MIGRATIONS.find((migration) => migration.name === "issue-project-moves")?.version ?? Number.POSITIVE_INFINITY;
 var DSH_MIGRATION_VERSION = MIGRATIONS.find((migration) => migration.name === "dsh-host-ledgers")?.version ?? Number.POSITIVE_INFINITY;
 var EXECUTION_COORDINATOR_ONLY_MIGRATION_VERSION = MIGRATIONS.find((migration) => migration.name === "execution-coordinator-only")?.version ?? Number.POSITIVE_INFINITY;
 var DSH_LEGACY_PROVENANCE_MIGRATION_VERSION = MIGRATIONS.find((migration) => migration.name === "dsh-ledger-legacy-provenance")?.version ?? Number.POSITIVE_INFINITY;

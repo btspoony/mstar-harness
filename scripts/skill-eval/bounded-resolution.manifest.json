@@ -1440,6 +1440,9 @@
       "issue.reopen": {
         "excluded": "Deferred: reopen is guarded by the engine CAS refusal surface (requires --expect revision); eval duplication adds no oracle value until a real regression appears."
       },
+      "issue.move": {
+        "excluded": "Deferred: move is a store-backed mutation guarded by the same issue CAS surface as reopen; its identity-collision and revision refusals are asserted by packages/commands/test/issue.test.ts and packages/engine/src/issue-move.test.ts."
+      },
       "workflow-note.append": {
         "excluded": "Deferred: append-only ledger writes are asserted by engine store tests; bounded-res duplication would mirror engine coverage."
       },

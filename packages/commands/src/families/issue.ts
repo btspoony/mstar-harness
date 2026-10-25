@@ -11,6 +11,7 @@ import {
   ISSUE_PAYLOAD_SCHEMAS,
   linkIssue,
   listIssues,
+  moveIssue,
   reopenIssue,
   resolveProcessHarnessDir,
   triageIssue,
@@ -19,6 +20,7 @@ import {
   type IssueActionSpec,
   type IssueFilter,
   type IssueLink,
+  type IssueMove,
   type IssuePayloadName,
   type IssueReopen,
   type IssueTriage,
@@ -50,6 +52,7 @@ const inputSchema = z.object({
   operationId: z.string().optional(),
   actor: z.string().optional(),
   expect: z.number().int().nonnegative().optional(),
+  expectStore: z.number().int().nonnegative().optional(),
   payload: z.unknown().optional(),
 });
 type IssueInput = z.infer<typeof inputSchema>;
@@ -208,6 +211,21 @@ async function execute(id: string, input: IssueInput, invocation: InvocationCont
         write,
       ));
     }
+    if (id === "issue.move") {
+      const expectStore = input.expectStore;
+      if (expectStore === undefined) {
+        const error = new Error("expectStore is required for a project move") as Error & { code: string; paths: string[] };
+        error.code = "issue.invalid-payload";
+        error.paths = ["expectStore"];
+        throw error;
+      }
+      return await runMutation((write) => moveIssue(
+        context,
+        requiredId(input),
+        validatePayload(input, "IssueMove", "move") as IssueMove,
+        { ...write, expectedStoreRevision: expectStore },
+      ));
+    }
     const defaultDisposition = terminalDisposition[id.slice("issue.".length)];
     if (defaultDisposition !== undefined) {
       const disposition = (input.disposition as TerminalDisposition | undefined) ?? defaultDisposition;
@@ -280,7 +298,7 @@ function cliDefinition(id: string): CommandDefinition<IssueInput, unknown> {
     id: "--id <id>", project: "--project <id>", disposition: "--disposition <disposition>", kind: "--kind <kind>",
     severity: "--severity <severity>", query: "--query <text>", limit: "--limit <n>", offset: "--offset <n>",
     harness: "--harness <path>", file: "--file <path>", operationId: "--operation-id <id>", actor: "--actor <role>",
-    expect: "--expect <n>", payload: "--payload <json>",
+    expect: "--expect <n>", expectStore: "--expect-store <n>", payload: "--payload <json>",
   };
   const requiresIssueId = verb === "show" || (payloadType[verb] !== undefined && verb !== "add");
   const mutationOperationHelp = payloadType[verb] === undefined
@@ -292,16 +310,23 @@ function cliDefinition(id: string): CommandDefinition<IssueInput, unknown> {
     expect: expectedRevisionVerbs[verb] === true
       ? z.number().int().nonnegative()
       : z.number().int().nonnegative().optional(),
+    expectStore: verb === "move"
+      ? z.number().int().nonnegative()
+      : z.number().int().nonnegative().optional(),
   });
   const options = Object.keys(inputSchema.shape).map((key) => ({
     key,
     flags: optionFlags[key]!,
     required: (payloadType[verb] !== undefined && (key === "actor" || (key === "id" && requiresIssueId))) ||
       (verb === "show" && key === "id") ||
-      (expectedRevisionVerbs[verb] === true && key === "expect"),
+      (expectedRevisionVerbs[verb] === true && key === "expect") ||
+      (verb === "move" && key === "expectStore"),
     ...(requiresIssueId && key === "id" ? { help: "Current issue id from `mstar issue show --id <id>`." } : {}),
     ...(expectedRevisionVerbs[verb] === true && key === "expect"
       ? { help: "Exact current issue revision from `mstar issue show --id <id>`; this is a revision CAS, not an execution token." }
+      : {}),
+    ...(verb === "move" && key === "expectStore"
+      ? { help: "Exact current store revision from `mstar issue list` (`storeRevision`); a store that moved since it was read is refused." }
       : {}),
     ...(key === "operationId" && mutationOperationHelp !== undefined ? { help: mutationOperationHelp } : {}),
   }));
@@ -316,6 +341,9 @@ function cliDefinition(id: string): CommandDefinition<IssueInput, unknown> {
         ...(expectedRevisionVerbs[verb] === true
           ? [{ name: "expect", ownership: "caller" as const, route, required: true, tokenKind: "revision" as const, constraint: "fetch the current issue revision from `mstar issue show --id <id>` immediately before this write" }]
           : []),
+        ...(verb === "move"
+          ? [{ name: "expectStore", ownership: "caller" as const, route, required: true, tokenKind: "revision" as const, constraint: "fetch the current `storeRevision` from `mstar issue list` immediately before this write" }]
+          : []),
       ])
     : verb === "show" || verb === "export"
       ? (["cli", "mcp"] as const).map((route) => ({
@@ -329,7 +357,7 @@ function cliDefinition(id: string): CommandDefinition<IssueInput, unknown> {
     input: terminalDisposition[verb] === undefined
       ? commandInput
       : closureInputSchema(commandInput, terminalDisposition[verb]),
-    description: `${verb} issue operation; ${payloadType[verb] === undefined ? "no JSON payload" : `payload schema: mstar schema ${payloadType[verb]}`}. ${requiresIssueId ? "Requires the issue id from `mstar issue show --id <id>`." : ""} ${expectedRevisionVerbs[verb] === true ? "Requires `--expect` with the current revision from `mstar issue show --id <id>`." : ""} Actor vocabulary: project-manager.`,
+    description: `${verb} issue operation; ${payloadType[verb] === undefined ? "no JSON payload" : `payload schema: mstar schema ${payloadType[verb]}`}. ${requiresIssueId ? "Requires the issue id from `mstar issue show --id <id>`." : ""} ${expectedRevisionVerbs[verb] === true ? "Requires `--expect` with the current revision from `mstar issue show --id <id>`." : ""} ${verb === "move" ? "Requires `--expect-store` with the current `storeRevision` from `mstar issue list`." : ""} Actor vocabulary: project-manager.`,
     requirements,
     output: commandEnvelopeSchema,
     effects: readVerbs[verb] === true ? ["read"] : ["write"],

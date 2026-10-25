@@ -152,6 +152,15 @@ export const ISSUE_PAYLOAD_SCHEMAS = {
   IssueReopen: {
     reason: { required: true, type: "string", description: "Reason for reopening; nonblank", nonblankWhenPresent: true },
   },
+  IssueMove: {
+    projectId: {
+      required: true,
+      type: "string",
+      description: "Target project; must be a registered catalog project",
+      nonblankWhenPresent: true,
+    },
+    reason: { required: true, type: "string", description: "Reason for moving the issue; nonblank", nonblankWhenPresent: true },
+  },
   IssueLink: {
     relation: { required: false, type: "string", description: "Issue relation; pair with issueId", values: ["related", "blocks", "duplicate-of", "superseded-by"] },
     issueId: { required: false, type: "string", description: "Target issue id; required with relation" },
@@ -205,6 +214,7 @@ export const ISSUE_ACTIONS = {
   triage: { payload: "IssueTriage", read: false, cas: true, disposition: null },
   close: { payload: "ClosureEvidence", read: false, cas: true, disposition: "resolved" },
   reopen: { payload: "IssueReopen", read: false, cas: true, disposition: null },
+  move: { payload: "IssueMove", read: false, cas: true, disposition: null },
   waive: { payload: "ClosureEvidence", read: false, cas: true, disposition: "waived" },
   duplicate: { payload: "ClosureEvidence", read: false, cas: true, disposition: "duplicate" },
   supersede: { payload: "ClosureEvidence", read: false, cas: true, disposition: "superseded" },
@@ -223,6 +233,15 @@ export type IssueReceipt = {
   revision: number;
   storeRevision: number;
   created: boolean;
+  /** The project a move left (`fromProject === toProject` for a no-op). */
+  fromProject?: string;
+  /** The project a move entered, or the issue's current project for a no-op. */
+  toProject?: string;
+  /**
+   * The milestone a real move cleared (a milestone belongs to one project);
+   * `null` when the issue had none or the move was a same-project no-op.
+   */
+  clearedMilestoneId?: string | null;
 };
 
 export type IssueFilter = {
@@ -301,6 +320,16 @@ export type IssueProvenance = {
   importedAt: string | null;
 };
 
+/** One recorded project reassignment of an issue (append-only history). */
+export type IssueProjectMove = {
+  fromProject: string;
+  toProject: string;
+  actor: string;
+  reason: string;
+  occurredAt: string;
+  issueRevision: number;
+};
+
 export type IssueDetail = {
   id: string;
   projectId: string;
@@ -326,6 +355,8 @@ export type IssueDetail = {
   transitions: IssueTransition[];
   relations: IssueRelation[];
   provenance: IssueProvenance[];
+  /** Oldest first; empty on a store older than the project-move migration. */
+  projectMoves: IssueProjectMove[];
 };
 
 export type IssueTriage = {
@@ -356,6 +387,14 @@ export type ClosureEvidence = {
   alignmentRef?: string;
 };
 export type IssueReopen = { reason: string };
+
+/**
+ * A project reassignment carries the target project and its audit reason. The
+ * issue's project-scoped identity is recomputed from the recorded occurrence
+ * triple, and any milestone membership is cleared because a milestone belongs
+ * to exactly one project.
+ */
+export type IssueMove = { projectId: string; reason: string };
 
 export type IssueLink =
   | { relation: "related" | "blocks" | "duplicate-of" | "superseded-by"; issueId: string }
@@ -1149,6 +1188,9 @@ export async function getIssue(context: StoreContext, id: string): Promise<Issue
     // FW-6: same stage gate as listIssues — a staged store is refused, never
     // served as read authority.
     assertIssueStoreActive(db);
+    // The project-move table arrives with migration 13; an older store keeps
+    // reading (empty history) exactly like the milestone column above it.
+    const hasProjectMoves = handle.schemaVersion >= 13;
     const milestoneSelect = handle.schemaVersion >= 7 ? ", milestone_id" : "";
     const issue = db
       .prepare(
@@ -1280,6 +1322,30 @@ export async function getIssue(context: StoreContext, id: string): Promise<Issue
       importedAt: row.imported_at,
     }));
 
+    const projectMoves = hasProjectMoves
+      ? (
+          db
+            .prepare(
+              "select from_project_id, to_project_id, actor, reason, occurred_at, issue_revision from issue_project_moves where issue_id = ? order by id asc",
+            )
+            .all(id) as Array<{
+            from_project_id: string;
+            to_project_id: string;
+            actor: string;
+            reason: string;
+            occurred_at: string;
+            issue_revision: number;
+          }>
+        ).map((row) => ({
+          fromProject: row.from_project_id,
+          toProject: row.to_project_id,
+          actor: row.actor,
+          reason: row.reason,
+          occurredAt: row.occurred_at,
+          issueRevision: row.issue_revision,
+        }))
+      : [];
+
     return {
       id: issue.id,
       projectId: issue.project_id,
@@ -1305,6 +1371,7 @@ export async function getIssue(context: StoreContext, id: string): Promise<Issue
       transitions,
       relations,
       provenance,
+      projectMoves,
     };
   } finally {
     handle.close();
@@ -1437,7 +1504,7 @@ async function authorizeMutation(
 }
 function requireExpectedRevision(mutation: MutationContext, current: number): void {
   if (mutation.expectedRevision === undefined) {
-    throw new IssueError("issue.revision-conflict", "expectedRevision is mandatory for triage, disposition and relation changes");
+    throw new IssueError("issue.revision-conflict", "expectedRevision is mandatory for triage, disposition, relation and project changes");
   }
   if (mutation.expectedRevision !== current) {
     throw new IssueError(
@@ -1748,6 +1815,179 @@ export async function reopenIssue(
   requireCaptureSeat(mutation.actor);
   requireNonblank("reason", payload.reason);
   return withWrite(context, (handle) => reopenIssueOn(handle.db, issueId, payload, mutation));
+}
+
+/**
+ * One project reassignment on a handle the caller already owns and has already
+ * authorized, composed like `captureIssueOn`: the seat, the request validation
+ * and the transaction belong to the transport, and a caller that owns its
+ * transaction passes the `ComposedTransactionRevision` its single
+ * store-revision advance commits at.
+ *
+ * `identity_key` is derived from the project, so it is recomputed for the
+ * target and the UNIQUE column stays a real dedup boundary: an identity the
+ * target project already holds refuses instead of merging two findings. A
+ * milestone is project-scoped, so the same UPDATE clears `milestone_id` —
+ * including one that is already delivered or dropped, whose status only
+ * restricts assignment. Every refusal runs before the first write, so nothing
+ * is changed.
+ *
+ * The caller also pins the shared store revision it planned against (the
+ * `assignIssueMilestone` pattern): a store that moved under the request
+ * refuses instead of moving an issue against a stale view.
+ */
+export function moveIssueOn(
+  db: StoreDb,
+  issueId: string,
+  input: IssueMove,
+  mutation: AuthorizedIssueMutation & { expectedStoreRevision: number },
+  composed?: ComposedTransactionRevision,
+): IssueReceipt {
+  const projectId = requireNonblank("projectId", input.projectId);
+  const reason = requireNonblank("reason", input.reason);
+  if (!Number.isSafeInteger(mutation.expectedStoreRevision) || mutation.expectedStoreRevision < 0) {
+    throw new IssueError("issue.scope-refused", "expectedStoreRevision is required for a project move");
+  }
+  const schema = db.prepare("select max(version) as version from schema_version").get() as { version?: number } | undefined;
+  if (!Number.isInteger(schema?.version) || (schema?.version ?? 0) < 13) {
+    throw moveRefusal("issue.schema-outdated", 'Project moves require schema 13; run "mstar store upgrade --operator <name>" first.', {
+      recovery: 'Run `mstar store upgrade --operator <name>` against the selected harness, then rerun the same move.',
+    });
+  }
+  const hash = requestHash("moveIssue", {
+    issueId,
+    projectId,
+    reason,
+    mutation: {
+      operationId: mutation.operationId,
+      actor: mutation.actor,
+      expectedRevision: mutation.expectedRevision,
+      expectedStoreRevision: mutation.expectedStoreRevision,
+    },
+  });
+  const existingOp = lookupOperation(db, mutation.operationId);
+  if (existingOp) return replayOrConflict(existingOp, hash);
+
+  const issue = db.prepare("select id, project_id, revision, milestone_id from issues where id = ?").get(issueId) as
+    | { id: string; project_id: string; revision: number; milestone_id: string | null }
+    | undefined;
+  if (!issue) throw new IssueError("issue.not-found", `Issue ${issueId} does not exist`);
+  if (readMeta(db).revision !== mutation.expectedStoreRevision) {
+    throw moveRefusal(
+      "milestone.revision-conflict",
+      `expectedStoreRevision ${mutation.expectedStoreRevision} does not match the current store revision; nothing was changed.`,
+      {
+        expectedStoreRevision: mutation.expectedStoreRevision,
+        recovery: `Run \`mstar issue list --project <project-id>\` and read the current \`storeRevision\`, then rerun \`mstar issue move --id ${issueId} --payload '{"projectId":"<target>","reason":"<text>"}' --expect <issue-revision> --expect-store <current-store-revision> --actor project-manager\`.`,
+      },
+    );
+  }
+  requireExpectedRevision(mutation, issue.revision);
+  if (!db.prepare("select 1 as ok from catalog_entities where kind = 'project' and id = ?").get(projectId)) {
+    throw moveRefusal("issue.not-found", `Project ${projectId} is not a registered catalog project; nothing was changed.`, {
+      projectId,
+      recovery: `Register the target project with \`mstar catalog register --kind project --id <project-id> --title <title> --root-kind projects --path projects/<project-id> --actor project-manager --operation-id <operation-id>\` (run \`mstar catalog list --kind project\` to read the registered ids), then read the fresh \`storeRevision\` from \`mstar issue list --project <project-id>\` and rerun \`mstar issue move --id ${issueId} --payload '{"projectId":"<target>","reason":"<text>"}' --expect ${issue.revision} --expect-store <current-store-revision> --actor project-manager\`.`,
+    });
+  }
+
+  if (issue.project_id === projectId) {
+    // A composed caller needs the revision its transaction commits at, exactly
+    // like the real-move branch below; the public route advances it once here.
+    const receipt: IssueReceipt = {
+      issueId,
+      revision: issue.revision,
+      storeRevision: receiptStoreRevision(db, composed),
+      created: false,
+      fromProject: issue.project_id,
+      toProject: projectId,
+      clearedMilestoneId: null,
+    };
+    recordOperation(db, mutation.operationId, hash, receipt, nowRfc3339());
+    return receipt;
+  }
+
+  // The identity triple is the recorded observation, never a re-capture input:
+  // every occurrence of one issue carries the same triple, so the earliest one
+  // is representative.
+  const occurrence = db
+    .prepare("select source_identity, root_cause_key, acceptance_key from occurrences where issue_id = ? order by id asc limit 1")
+    .get(issueId) as { source_identity: string; root_cause_key: string; acceptance_key: string } | undefined;
+  if (!occurrence) {
+    throw moveRefusal(
+      "issue.ambiguous-identity",
+      `Issue ${issueId} has no recorded occurrence identity, so its project-scoped identity cannot be recomputed; nothing was changed.`,
+      {
+        recovery: `Capture the finding against the target project with \`mstar issue add --payload '<CaptureInput JSON>'\`; without a recorded source/root-cause/acceptance triple the move has no identity to carry.`,
+      },
+    );
+  }
+  const identityKey = computeIdentityKey(projectId, occurrence.source_identity, occurrence.root_cause_key, occurrence.acceptance_key);
+  const collision = db.prepare("select id from issues where identity_key = ?").get(identityKey) as { id: string } | undefined;
+  if (collision) {
+    throw moveRefusal(
+      "issue.ambiguous-identity",
+      `Moving ${issueId} to ${projectId} would reuse the identity held by issue ${collision.id}; nothing was changed.`,
+      {
+        collidingIssueId: collision.id,
+        recovery: `Read the surviving issue with \`mstar issue show --id ${collision.id}\`. Retire ${issueId} in its favour with \`mstar issue supersede --id ${issueId} --payload '{"reason":"<text>","canonicalIssueId":"${collision.id}"}' --expect <issue-revision> --actor project-manager\`, or move ${issueId} to another project.`,
+      },
+    );
+  }
+
+  const at = nowRfc3339();
+  const revision = issue.revision + 1;
+  db.prepare("update issues set project_id = ?, identity_key = ?, milestone_id = null, revision = ?, updated_at = ? where id = ?").run(
+    projectId,
+    identityKey,
+    revision,
+    at,
+    issueId,
+  );
+  // The reason lives in its own append-only ledger: a move leaves the
+  // disposition untouched, so an `issue_transitions` row would claim a
+  // lifecycle change that did not happen.
+  db.prepare(
+    "insert into issue_project_moves(issue_id, from_project_id, to_project_id, actor, reason, occurred_at, recorded_at, issue_revision) " +
+      "values (?, ?, ?, ?, ?, ?, ?, ?)",
+  ).run(issueId, issue.project_id, projectId, mutation.actor, reason, at, at, revision);
+  const storeRevision = receiptStoreRevision(db, composed);
+  const receipt: IssueReceipt = {
+    issueId,
+    revision,
+    storeRevision,
+    created: false,
+    fromProject: issue.project_id,
+    toProject: projectId,
+    // The association must not survive the project change
+    // (`issues_milestone_project_update` forbids a foreign-project milestone),
+    // so the receipt names what the move removed.
+    clearedMilestoneId: issue.milestone_id,
+  };
+  recordOperation(db, mutation.operationId, hash, receipt, at);
+  return receipt;
+}
+
+function moveRefusal(code: IssueErrorCode, message: string, details: Record<string, unknown>): IssueError {
+  const error = new IssueError(code, message);
+  error.details = details;
+  return error;
+}
+
+/**
+ * The public project-move route. The seat check and the request validation run
+ * BEFORE the store is opened (the public contract's refusal precedence), and
+ * this route owns the transaction the body runs in.
+ */
+export async function moveIssue(
+  context: StoreContext,
+  issueId: string,
+  input: IssueMove,
+  mutation: MutationContext & { expectedStoreRevision: number },
+): Promise<IssueReceipt> {
+  requireCaptureSeat(mutation.actor);
+  requireNonblank("projectId", input.projectId);
+  requireNonblank("reason", input.reason);
+  return withWrite(context, (handle) => moveIssueOn(handle.db, issueId, input, mutation));
 }
 
 export async function assignIssueMilestone(

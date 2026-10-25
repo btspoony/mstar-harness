@@ -296,6 +296,9 @@ describe("generated CLI adapter", () => {
     const details = envelope?.details;
     // The offending positional is attributed by argv position and token — the
     // facts a three-call recovery needs — alongside the command's own usage.
+    // The issue family publishes its shared input surface on every verb, so the
+    // `move` action's `--expect-store <n>` joins `--expect <n>` in this usage
+    // line exactly as it does for the rest of the family.
     expect(details).toMatchObject({
       diagnostics: [{
         path: "argv[4]",
@@ -303,7 +306,7 @@ describe("generated CLI adapter", () => {
         token: "BADPOS",
         code: "commander.excessArguments",
         message: error.message,
-        usage: "Usage: mstar issue show --id <id> --project <id> --disposition <disposition> --kind <kind> --severity <severity> --query <text> --limit <n> --offset <n> --harness <path> --file <path> --operation-id <id> --actor <role> --expect <n> --payload <json>",
+        usage: "Usage: mstar issue show --id <id> --project <id> --disposition <disposition> --kind <kind> --severity <severity> --query <text> --limit <n> --offset <n> --harness <path> --file <path> --operation-id <id> --actor <role> --expect <n> --expect-store <n> --payload <json>",
         helpRoute: "mstar issue show --help",
       }],
     });
