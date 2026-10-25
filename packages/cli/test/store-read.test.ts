@@ -69,6 +69,9 @@ describe("route table", () => {
     expect(resolveDashboardRoute("/api/iterations")).toEqual({ view: "iterations" });
     expect(resolveDashboardRoute("/api/roadmap")).toEqual({ view: "roadmap" });
     expect(resolveDashboardRoute("/api/projects")).toEqual({ view: "projects" });
+    // The aggregated read is a list-shaped route with a `project` filter: it has
+    // no detail form, so its path takes no id decode.
+    expect(resolveDashboardRoute("/api/overview")).toEqual({ view: "overview" });
     expect(resolveDashboardRoute("/api/issues/I-000001")).toEqual({ view: "issue-detail", id: "I-000001" });
     expect(resolveDashboardRoute("/api/issues/I%2D1")).toEqual({ view: "issue-detail", id: "I-1" });
     expect(resolveDashboardRoute("/api/workflows/wf-read")).toEqual({ view: "workflow-detail", id: "wf-read" });
@@ -83,6 +86,7 @@ describe("route table", () => {
       "/api/issues/",
       "/api/issue-flow/I-1",
       "/api/roadmap/deep/path",
+      "/api/overview/proj-a",
       "/api/project",
       "/api/issues/../../etc/passwd",
       "//api/issues",
