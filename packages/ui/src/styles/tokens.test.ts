@@ -168,10 +168,16 @@ describe("tokens.css — declaration is consumed or claimed", () => {
     expect(unconsumed).toEqual([]);
   });
 
-  test("no claim is stale: a claimed token is not already consumed", () => {
-    if (!existsSync(BASE_PATH)) return;
-    const base = read(BASE_PATH);
-    const stale = Object.keys(CONSUMED_BY_LATER_TASK).filter((name) => base.includes(`var(${name})`));
+  test("no claim is stale: a claimed token is not already consumed by any package CSS", () => {
+    // Every sheet counts, not just base.css: a component that starts consuming a
+    // claimed token must also drop the claim, or the list quietly becomes an
+    // excuse list that no longer describes reality.
+    const sheets = [TOKENS_PATH, BASE_PATH, ...componentCssFiles()]
+      .filter((file) => existsSync(file))
+      .map(read);
+    const stale = Object.keys(CONSUMED_BY_LATER_TASK).filter((name) =>
+      sheets.some((css) => css.includes(`var(${name})`)),
+    );
     expect(stale).toEqual([]);
   });
 
@@ -180,6 +186,83 @@ describe("tokens.css — declaration is consumed or claimed", () => {
       .filter(([, task]) => !/^Task \d/.test(task))
       .map(([name]) => name);
     expect(unnamed).toEqual([]);
+  });
+});
+
+/**
+ * DESIGN.md Rule 1 — tone luminance separation.
+ *
+ * The five status tones must stay distinguishable in greyscale, so each sits in
+ * its own CIE L\* band and no two neighbours may crowd. This is the machine
+ * guard the design rule needs: re-tuning one tone by eye now fails here instead
+ * of shipping, which is exactly how the prototype's `warning`/`success` pair
+ * ended up 0.7 L\* apart (indistinguishable in greyscale).
+ *
+ * The floor is 2.5, not 3.0, because the FROZEN prototype palette's tightest
+ * pair measures 2.76 (`purple` 36.92 / `danger` 39.69) and the L2 review ruled
+ * that pair must not move. A floor above the frozen palette would only be
+ * satisfiable by overriding the review, so the rule states the floor the palette
+ * actually meets and the guard enforces that one. `DESIGN.md` carries the same
+ * number; the two must not disagree.
+ */
+const MIN_TONE_GAP = 2.5;
+
+/** CIE L\* of an sRGB hex colour (D65, the same measure DESIGN.md quotes). */
+function lightnessLStar(hex: string): number {
+  const value = hex.replace("#", "");
+  const channels = [0, 2, 4].map((i) => parseInt(value.slice(i, i + 2), 16) / 255);
+  const [r, g, b] = channels.map((c) => (c <= 0.04045 ? c / 12.92 : ((c + 0.055) / 1.055) ** 2.4)) as [
+    number,
+    number,
+    number,
+  ];
+  const y = 0.2126 * r + 0.7152 * g + 0.0722 * b;
+  return y > 0.008856 ? 116 * y ** (1 / 3) - 16 : 903.3 * y;
+}
+
+/** The five tone values of one scheme, as declared in tokens.css. */
+function toneValues(selector: string): Record<string, string> {
+  const declared = declarations(block(read(TOKENS_PATH), selector));
+  const tones: Record<string, string> = {};
+  for (const tone of ["danger", "warning", "success", "neutral", "purple"]) {
+    const value = declared.get(`--ms-${tone}`);
+    expect(value).toBeDefined();
+    tones[tone] = value as string;
+  }
+  return tones;
+}
+
+describe("DESIGN.md Rule 1 — tone luminance separation", () => {
+  for (const [scheme, selector] of [
+    ["light", ":root"],
+    ["dark", '[data-ms-theme="dark"]'],
+  ] as const) {
+    test(`${scheme}: every adjacent tone pair is at least ${MIN_TONE_GAP} L* apart`, () => {
+      const tones = toneValues(selector);
+      const ranked = Object.entries(tones)
+        .map(([tone, hex]) => ({ tone, hex, l: lightnessLStar(hex) }))
+        .sort((a, b) => a.l - b.l);
+
+      const gaps = ranked.slice(1).map((entry, i) => ({
+        pair: `${ranked[i]?.tone}→${entry.tone}`,
+        gap: Number((entry.l - (ranked[i]?.l ?? 0)).toFixed(2)),
+      }));
+      expect(gaps).toHaveLength(4);
+
+      const crowded = gaps.filter((g) => g.gap < MIN_TONE_GAP);
+      expect(crowded).toEqual([]);
+    });
+
+    test(`${scheme}: the five tones are all distinct in lightness or hue`, () => {
+      const tones = toneValues(selector);
+      const hexes = Object.values(tones);
+      expect(new Set(hexes).size).toBe(hexes.length);
+    });
+  }
+
+  test("DESIGN.md quotes the same floor the guard enforces", () => {
+    // The document escapes the asterisk for Markdown (`2.5 L\*`), so match either form.
+    expect(read(DESIGN_PATH)).toMatch(new RegExp(`${MIN_TONE_GAP} L\\\\?\\*`));
   });
 });
 
