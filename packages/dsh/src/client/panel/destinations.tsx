@@ -117,7 +117,7 @@ export function IssuesDestination({ state, locale, query, onQueryChange, onOpen 
   )
 }
 
-export function WorkflowsDestination({ state, locale }: DestinationProps): React.ReactElement {
+export function WorkflowsDestination({ state, locale, onOpen }: DestinationProps): React.ReactElement {
   const copy = copyFor(locale)
   const screenCopy = {
     ...copy.workflows,
@@ -130,12 +130,16 @@ export function WorkflowsDestination({ state, locale }: DestinationProps): React
   if (data === null) return <ReadState state={{ kind: 'unavailable', reason: 'no workflow list' }} copy={copy} />
   return (
     <div data-ms-destination-body="workflows">
-      <Workflows model={workflowListModel({ data: data as WorkflowListDTO, projection: state.envelope.projection })} copy={screenCopy} />
+      <Workflows
+        model={workflowListModel({ data: data as WorkflowListDTO, projection: state.envelope.projection })}
+        copy={screenCopy}
+        {...(onOpen === undefined ? {} : { onOpen })}
+      />
     </div>
   )
 }
 
-export function IterationsDestination({ state, locale }: DestinationProps): React.ReactElement {
+export function IterationsDestination({ state, locale, onOpen }: DestinationProps): React.ReactElement {
   const copy = copyFor(locale)
   const screenCopy = {
     ...copy.iterations,
@@ -149,12 +153,16 @@ export function IterationsDestination({ state, locale }: DestinationProps): Reac
   if (data === null) return <ReadState state={{ kind: 'unavailable', reason: 'no iteration list' }} copy={copy} />
   return (
     <div data-ms-destination-body="iterations">
-      <Iterations model={iterationListModel({ data: data as IterationListDTO, projection: state.envelope.projection })} copy={screenCopy} />
+      <Iterations
+        model={iterationListModel({ data: data as IterationListDTO, projection: state.envelope.projection })}
+        copy={screenCopy}
+        {...(onOpen === undefined ? {} : { onOpen })}
+      />
     </div>
   )
 }
 
-export function ProjectsDestination({ state, locale }: DestinationProps): React.ReactElement {
+export function ProjectsDestination({ state, locale, onOpen }: DestinationProps): React.ReactElement {
   const copy = copyFor(locale)
   const screenCopy = {
     ...copy.projects,
@@ -167,7 +175,11 @@ export function ProjectsDestination({ state, locale }: DestinationProps): React.
   if (data === null) return <ReadState state={{ kind: 'unavailable', reason: 'no project list' }} copy={copy} />
   return (
     <div data-ms-destination-body="projects">
-      <Projects model={projectListModel({ data: data as ProjectListDTO, projection: state.envelope.projection })} copy={screenCopy} />
+      <Projects
+        model={projectListModel({ data: data as ProjectListDTO, projection: state.envelope.projection })}
+        copy={screenCopy}
+        {...(onOpen === undefined ? {} : { onOpen })}
+      />
     </div>
   )
 }
@@ -203,6 +215,8 @@ export type DetailProps = {
   readonly onOpenWorkflow?: (id: string) => void
   /** A project detail's scoped Iterations read (`project` enforced on the request). */
   readonly projectIterations?: MstarDashboardViewState
+  /** A project detail's scoped Issues read (`project` enforced on the request). */
+  readonly projectIssues?: MstarDashboardViewState
 }
 
 /**
@@ -211,7 +225,7 @@ export type DetailProps = {
  * not be made) — the shared resolvers own that split, this adapter only passes
  * the envelope through.
  */
-export function DetailBody({ view, state, locale, onBack, onOpenWorkflow, projectIterations }: DetailProps): React.ReactElement {
+export function DetailBody({ view, state, locale, onBack, onOpenWorkflow, projectIterations, projectIssues }: DetailProps): React.ReactElement {
   const copy = copyFor(locale)
   if (state.kind !== 'ok') return <ReadState state={state} copy={copy} />
   const envelope = state.envelope
@@ -265,48 +279,103 @@ export function DetailBody({ view, state, locale, onBack, onOpenWorkflow, projec
       )
     }
     case 'project-detail': {
-      const roadmap = data === null
-        ? ({ kind: 'absent' } as const)
-        : roadmapBody(resolveRead({ data: data as never, projection: envelope.projection }, { whenNull: 'absent' }))
-      const iterationsState = projectIterations ?? ({ kind: 'waiting' } as const)
       return (
-        <ProjectDetail
-          identity={data === null ? { title: '', description: null, lifecycle: 'active', relativePath: '' } as never : projectIdentity((data as never as { catalog: never }).catalog)}
-          feature={'roadmap'}
-          onFeatureChange={() => {}}
-          roadmap={roadmap as never}
-          issues={<ReadState state={iterationsState} copy={copy} />}
-          iterations={
-            iterationsState.kind === 'ok' && iterationsState.envelope.data !== null
-              ? (
-                <IterationsScreen
-                  model={iterationListModelFor({
-                    data: iterationsState.envelope.data as IterationListDTO,
-                    projection: iterationsState.envelope.projection,
-                  })}
-                  copy={{
-                    ...copy.iterations,
-                    notStarted: copy.workflowDetail.fields.notStarted,
-                    empty: { ...copy.state.empty, heading: copy.iterations.pageTitle },
-                    absent: { ...copy.state.absent, heading: copy.iterations.pageTitle },
-                    unavailable: { ...copy.state.unavailable, heading: copy.iterations.pageTitle },
-                  }}
-                />
-              )
-              : <ReadState state={iterationsState} copy={copy} />
-          }
-          copy={{
-            ...copy.projectDetail,
-            absence: {
-              absent: { ...copy.state.absent, heading: copy.projectDetail.features.roadmap },
-              empty: { ...copy.state.empty, heading: copy.projectDetail.features.roadmap },
-              unavailable: { ...copy.state.unavailable, heading: copy.projectDetail.features.roadmap },
-              'not-applicable': { ...copy.state['not-applicable'], heading: copy.projectDetail.features.roadmap },
-            },
-          }}
+        <ProjectDetailDestination
+          state={state}
+          locale={locale}
           onBack={onBack}
+          {...(projectIterations === undefined ? {} : { iterations: projectIterations })}
+          {...(projectIssues === undefined ? {} : { issues: projectIssues })}
         />
       )
     }
   }
+}
+
+/**
+ * `project-detail` — the only place the product expresses its hierarchy.
+ *
+ * The adapter owns the FEATURE state: the fixed three tabs, with `Roadmap`
+ * permanently the default (a constant, never "first non-empty"). Each tab's body
+ * comes from its own project-scoped read: `roadmap` (the project's authority),
+ * `issues?project=<id>` and `iterations?project=<id>`.
+ */
+export function ProjectDetailDestination(props: {
+  state: MstarDashboardViewState
+  locale: Locale
+  onBack: () => void
+  iterations?: MstarDashboardViewState
+  issues?: MstarDashboardViewState
+  /** Test seam: the tab the page opens on. Production always starts at Roadmap. */
+  initialFeature?: ProjectFeature
+}): React.ReactElement {
+  const copy = copyFor(props.locale)
+  const [feature, setFeature] = React.useState<ProjectFeature>(props.initialFeature ?? 'roadmap')
+  if (props.state.kind !== 'ok') return <ReadState state={props.state} copy={copy} />
+  const data = props.state.envelope.data
+  if (data === null) return <ReadState state={{ kind: 'unavailable', reason: 'no project record' }} copy={copy} />
+  const envelope = props.state.envelope
+  const roadmap = roadmapBody(resolveRead({ data: data as never, projection: envelope.projection }, { whenNull: 'absent' }))
+  const iterationsCopy = {
+    ...copy.iterations,
+    notStarted: copy.workflowDetail.fields.notStarted,
+    empty: { ...copy.state.empty, heading: copy.iterations.pageTitle },
+    absent: { ...copy.state.absent, heading: copy.iterations.pageTitle },
+    unavailable: { ...copy.state.unavailable, heading: copy.iterations.pageTitle },
+  }
+  const issuesCopyForProject = {
+    ...copy.issues,
+    pager: { previous: copy.common.previous, next: copy.common.next, range: copy.issues.range },
+    anyOption: copy.common.anyOption,
+    filteredEmpty: { ...copy.state['empty-filtered'], heading: copy.issues.pageTitle },
+    storeEmpty: { ...copy.state.empty, heading: copy.issues.pageTitle },
+    absent: { ...copy.state.absent, heading: copy.issues.pageTitle },
+    unavailable: { ...copy.state.unavailable, heading: copy.issues.pageTitle },
+  }
+  const iterationsState = props.iterations ?? ({ kind: 'waiting' } as const)
+  const issuesState = props.issues ?? ({ kind: 'waiting' } as const)
+  return (
+    <ProjectDetail
+      identity={projectIdentity((data as never as { catalog: never }).catalog)}
+      feature={feature}
+      onFeatureChange={(next: ProjectFeature) => setFeature(next)}
+      roadmap={roadmap as never}
+      issues={
+        issuesState.kind === 'ok' && issuesState.envelope.data !== null
+          ? (
+            <Issues
+              model={issueListModel({ data: issuesState.envelope.data as IssuePage, projection: issuesState.envelope.projection }, parseIssueQuery(''))}
+              query={parseIssueQuery('')}
+              copy={issuesCopyForProject}
+              options={ISSUE_OPTIONS}
+              onQueryChange={() => {}}
+            />
+          )
+          : <ReadState state={issuesState} copy={copy} />
+      }
+      iterations={
+        iterationsState.kind === 'ok' && iterationsState.envelope.data !== null
+          ? (
+            <IterationsScreen
+              model={iterationListModelFor({
+                data: iterationsState.envelope.data as IterationListDTO,
+                projection: iterationsState.envelope.projection,
+              })}
+              copy={iterationsCopy}
+            />
+          )
+          : <ReadState state={iterationsState} copy={copy} />
+      }
+      copy={{
+        ...copy.projectDetail,
+        absence: {
+          absent: { ...copy.state.absent, heading: copy.projectDetail.features.roadmap },
+          empty: { ...copy.state.empty, heading: copy.projectDetail.features.roadmap },
+          unavailable: { ...copy.state.unavailable, heading: copy.projectDetail.features.roadmap },
+          'not-applicable': { ...copy.state['not-applicable'], heading: copy.projectDetail.features.roadmap },
+        },
+      }}
+      onBack={props.onBack}
+    />
+  )
 }

@@ -193,6 +193,8 @@ export function PanelShell(props: {
   onOpen?: (view: DetailView, id: string) => void
   /** A project detail's scoped Iterations read. */
   projectIterations?: MstarDashboardViewState
+  /** A project detail's scoped Issues read. */
+  projectIssues?: MstarDashboardViewState
 }): React.ReactElement {
   const copy = copyFor(props.locale)
   const selection: SessionBinding | null = props.snapshot.selection
@@ -225,6 +227,8 @@ export function PanelShell(props: {
               locale={props.locale}
               onBack={props.onBack ?? (() => {})}
               {...(props.projectIterations === undefined ? {} : { projectIterations: props.projectIterations })}
+              {...(props.projectIssues === undefined ? {} : { projectIssues: props.projectIssues })}
+              {...(props.onOpen === undefined ? {} : { onOpenWorkflow: (id: string) => props.onOpen?.('workflow-detail', id) })}
             />
           )}
           {props.detail !== null && props.detail !== undefined ? null : props.destination === 'focus' ? (
@@ -263,6 +267,8 @@ function DestinationBody(props: {
   onOpen?: (view: DetailView, id: string) => void
   /** A project detail's scoped Iterations read. */
   projectIterations?: MstarDashboardViewState
+  /** A project detail's scoped Issues read. */
+  projectIssues?: MstarDashboardViewState
 }): React.ReactElement {
   const shared = { state: props.state, locale: props.locale }
   const open = props.onOpen
@@ -279,11 +285,11 @@ function DestinationBody(props: {
         />
       )
     case 'workflows':
-      return <WorkflowsDestination {...shared} />
+      return <WorkflowsDestination {...shared} {...(open === undefined ? {} : { onOpen: (id: string) => open('workflow-detail', id) })} />
     case 'iterations':
-      return <IterationsDestination {...shared} />
+      return <IterationsDestination {...shared} {...(open === undefined ? {} : { onOpen: (id: string) => open('iteration-detail', id) })} />
     case 'projects':
-      return <ProjectsDestination {...shared} />
+      return <ProjectsDestination {...shared} {...(open === undefined ? {} : { onOpen: (id: string) => open('project-detail', id) })} />
   }
 }
 
@@ -423,6 +429,13 @@ export function PanelSeat(props: PanelSeatProps): React.ReactElement | null {
     view: detail === null ? null : detail.view,
     ...(detail === null ? {} : { id: detail.id }),
   })
+  const projectIssuesView = useMstarDashboardView({
+    client: panelSnapshot,
+    sessionId: wireSession,
+    cwd,
+    view: detail !== null && detail.view === 'project-detail' ? 'issues' : null,
+    ...(detail !== null && detail.view === 'project-detail' ? { params: { project: detail.id, limit: '200' } } : {}),
+  })
   const projectIterationsView = useMstarDashboardView({
     client: panelSnapshot,
     sessionId: wireSession,
@@ -502,6 +515,7 @@ export function PanelSeat(props: PanelSeatProps): React.ReactElement | null {
       onOpen={(view, id) => setDetail({ view, id })}
       onBack={() => setDetail(null)}
       projectIterations={projectIterationsView.state}
+      projectIssues={projectIssuesView.state}
       destination={destination}
       locale={locale}
       scheme={scheme}
