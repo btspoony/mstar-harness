@@ -150,29 +150,33 @@ export type RecordResolveOptions = {
   /** The transport's read phase. */
   readonly phase?: ReadPhase;
   /**
-   * The reason to state when the record cannot be read. A `null` record is
-   * **never** "no such record" — the read boundary does not distinguish "absent"
-   * from "unreadable", so claiming absence would be a guess.
+   * The reason to state when the read failed. It is used for the `unavailable`
+   * arm only — never for a `null` payload, which is `absent`.
    */
-  readonly unreadableReason: string;
+  readonly unavailableReason: string;
 };
 
 /**
  * Resolve a single-record read (`data: T | null` plus the projection disclosure).
  *
- * This exists because a record read has a different `null` meaning from a list:
- * a list that comes back empty is genuinely empty, while a record that comes
- * back `null` means the read could not produce it. Both the dashboard and the
- * panel treat that as `unavailable`, and the screens must not each decide it —
- * the same reason the aggregate resolver exists.
+ * **`null` means absent, everywhere.** A failed read answers `unavailable` with
+ * the store's reason; the engine guarantees that arm, so `null` cannot also mean
+ * "could not read". An earlier revision of this function read `null` as
+ * `unavailable`, which left the package answering the same fact two ways
+ * (`roadmapFeatureArm` said absent, this said unavailable) with both answers
+ * pinned by tests — the correction is what makes one fact have one answer.
+ *
+ * The failure arms that remain are the projection with no generation and a
+ * transport error, both of which resolve to `unavailable` *before* the payload is
+ * inspected, so a real failure can never be mistaken for an absence.
  */
 export function resolveRecord<T>(
   read: { readonly data: T | null; readonly projection: { readonly generation: number | null } },
   options: RecordResolveOptions,
 ): Resolved<T> {
   if ((options.phase ?? "loaded") === "loading") return { kind: "loading" };
-  if (read.projection.generation === null) return { kind: "unavailable", reason: options.unreadableReason };
-  if (read.data === null) return { kind: "unavailable", reason: options.unreadableReason };
+  if (read.projection.generation === null) return { kind: "unavailable", reason: options.unavailableReason };
+  if (read.data === null) return { kind: "absent" };
   return { kind: "populated", value: read.data };
 }
 

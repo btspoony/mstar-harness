@@ -131,26 +131,36 @@ describe("an un-resolved subject is not-applicable, and only the resolver decide
   });
 });
 
-describe("a single-record read never claims absence for a null record", () => {
+describe("a single-record read: null is absent, a failed read is unavailable", () => {
   const projection = (generation: number | null) => ({ generation });
 
-  test("a null record is unavailable with the read's own reason, not absent", () => {
-    const arm = resolveRecord({ data: null, projection: projection(4) }, { unreadableReason: "record not readable" });
-    expect(arm).toEqual({ kind: "unavailable", reason: "record not readable" });
+  // The ruling, in one place: `null` means absent EVERYWHERE. A failed read
+  // answers `unavailable` with the store's reason, so a null payload cannot also
+  // mean "could not read" — that would give one fact two answers.
+  test("a null record is absent", () => {
+    const arm = resolveRecord({ data: null, projection: projection(4) }, { unavailableReason: "read failed" });
+    expect(arm).toEqual({ kind: "absent" });
   });
 
-  test("no projection generation is unavailable even when a record is present", () => {
-    const arm = resolveRecord({ data: { id: "I-1" }, projection: projection(null) }, { unreadableReason: "no generation" });
+  test("a failed read is unavailable and carries the store's reason", () => {
+    const arm = resolveRecord({ data: null, projection: projection(null) }, { unavailableReason: "read failed" });
+    expect(arm).toEqual({ kind: "unavailable", reason: "read failed" });
+  });
+
+  test("the failure arm wins even when a record is present", () => {
+    // The projection is checked before the payload, so a real failure can never be
+    // mistaken for an absence — or for content.
+    const arm = resolveRecord({ data: { id: "I-1" }, projection: projection(null) }, { unavailableReason: "no generation" });
     expect(arm).toEqual({ kind: "unavailable", reason: "no generation" });
   });
 
   test("a readable record is populated", () => {
-    const arm = resolveRecord({ data: { id: "I-1" }, projection: projection(4) }, { unreadableReason: "n/a" });
+    const arm = resolveRecord({ data: { id: "I-1" }, projection: projection(4) }, { unavailableReason: "n/a" });
     expect(arm).toEqual({ kind: "populated", value: { id: "I-1" } });
   });
 
   test("a pending read stays loading", () => {
-    const arm = resolveRecord({ data: null, projection: projection(4) }, { phase: "loading", unreadableReason: "n/a" });
+    const arm = resolveRecord({ data: null, projection: projection(4) }, { phase: "loading", unavailableReason: "n/a" });
     expect(arm.kind).toBe("loading");
   });
 });

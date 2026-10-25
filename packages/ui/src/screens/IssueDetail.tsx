@@ -73,7 +73,7 @@ export function IssueDetail(props: IssueDetailProps) {
   // owns that decision (IA §5); the screen only chooses copy for the arm.
   const record = resolveRecord(props.read, {
     phase: props.phase,
-    unreadableReason: "this issue could not be read",
+    unavailableReason: "this issue could not be read",
   });
 
   return (

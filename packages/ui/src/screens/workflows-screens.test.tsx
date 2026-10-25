@@ -328,14 +328,16 @@ describe("WorkflowDetail — NEGATIVE: leases, adoption audit, pin badges", () =
   });
 });
 
-describe("WorkflowDetail — the record read", () => {
-  test("an unreadable record is unavailable and states the reason", () => {
+describe("WorkflowDetail — the record read: null is absent, a failed read is unavailable", () => {
+  test("a null record is the absent arm", () => {
     const html = renderDetail(null);
-    expect(html).toContain('data-ms-absence="unavailable"');
-    expect(html).toContain("could not be read");
+    expect(html).toContain('data-ms-absence="absent"');
+    expect(html).not.toContain('data-ms-absence="unavailable"');
   });
 
-  test("no projection generation is unavailable even with a record", () => {
-    expect(renderDetail(workflow(), null)).toContain('data-ms-absence="unavailable"');
+  test("a failed read is unavailable and states the reason", () => {
+    const html = renderDetail(workflow(), null);
+    expect(html).toContain('data-ms-absence="unavailable"');
+    expect(html).toContain("could not be read");
   });
 });

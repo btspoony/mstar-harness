@@ -364,20 +364,19 @@ describe("IssueDetail — NEGATIVE: what §8.1 removed", () => {
   });
 });
 
-describe("IssueDetail — the record read", () => {
-  test("an unreadable record is unavailable, and the reason is stated", () => {
+describe("IssueDetail — the record read: null is absent, a failed read is unavailable", () => {
+  // The package-wide ruling: a null payload means the subject declares nothing
+  // here; a failed read arrives as a projection with no generation and says so
+  // with the store's own reason.
+  test("a null record is the absent arm", () => {
     const html = renderDetail(null);
-    expect(html).toContain('data-ms-absence="unavailable"');
-    expect(html).toContain("this issue could not be read");
+    expect(html).toContain('data-ms-absence="absent"');
+    expect(html).not.toContain('data-ms-absence="unavailable"');
   });
 
-  test("no projection generation is unavailable even with a record", () => {
+  test("a failed read is unavailable, and the reason is stated", () => {
     const html = renderDetail(detail(), null);
     expect(html).toContain('data-ms-absence="unavailable"');
-  });
-
-  test("it never claims the issue does not exist", () => {
-    const html = renderDetail(null);
-    expect(html).not.toContain('data-ms-absence="absent"');
+    expect(html).toContain("this issue could not be read");
   });
 });

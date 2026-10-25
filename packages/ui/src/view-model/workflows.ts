@@ -195,16 +195,18 @@ export function workflowPlanRow(plan: WorkflowPlanDTO): WorkflowPlanRow {
 }
 
 /**
- * The detail's own state. `data === null` or no valid projection is
- * `unavailable` — the page reports the read, never a missing record.
+ * The detail's own state, under the package-wide ruling: **`null` is absent, a
+ * failed read is `unavailable`**. A projection with no generation is the failure;
+ * a null payload means there is no such record here.
  */
 export function workflowDetailModel(read: {
   data: WorkflowDTO | null;
   projection: { generation: number | null };
 }): Resolved<WorkflowDetailModel> {
-  if (read.projection.generation === null || read.data === null) {
+  if (read.projection.generation === null) {
     return { kind: "unavailable", reason: "the execution projection for this workflow could not be read" };
   }
+  if (read.data === null) return { kind: "absent" };
   const workflow = read.data;
   const catalog = workflow.catalog;
   return {

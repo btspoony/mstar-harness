@@ -177,8 +177,10 @@ describe("workflows", () => {
     }
   });
 
-  test("a missing workflow with a valid projection is unavailable, not a record", () => {
-    expect(workflowDetailModel({ data: null, projection: projection(3) }).kind).toBe("unavailable");
+  test("a null record is absent, and a failed read is unavailable", () => {
+    // The package-wide ruling: `null` cannot also mean "could not read".
+    expect(workflowDetailModel({ data: null, projection: projection(3) }).kind).toBe("absent");
+    expect(workflowDetailModel({ data: null, projection: projection(null) }).kind).toBe("unavailable");
   });
 });
 
