@@ -10,6 +10,7 @@
  * finding is ever synthesized.
  */
 import type { IssueDetail, IssueFlow, IssuePage } from "@mstar-harness/engine";
+import { issueQuery, parseIssueQuery } from "@mstar-harness/ui";
 import { html } from "htm/preact";
 import { useEffect, useState } from "preact/hooks";
 
@@ -97,34 +98,10 @@ const ACCEPTED: Record<"disposition" | "kind" | "severity", Record<string, true>
  * offset) falls back to the default instead of being sent to the API, where it
  * would only be refused.
  */
-export function parseIssueQuery(search: string): IssueQuery {
-  const params = new URLSearchParams(search);
-  const filters: IssueFilters = { ...DEFAULT_ISSUE_FILTERS };
-  const project = params.get("project");
-  if (project !== null) filters.project = project;
-  for (const field of ["disposition", "kind", "severity"] as const) {
-    const value = params.get(field);
-    if (value !== null && ACCEPTED[field][value] === true) filters[field] = value;
-  }
-  const q = params.get("q");
-  if (q !== null) filters.q = q;
-  const rawOffset = params.get("offset");
-  const offset = rawOffset !== null && /^[0-9]+$/.test(rawOffset) ? Number(rawOffset) : 0;
-  return { filters, offset };
-}
+// Re-exported from the shared package: the pair has ONE implementation, and the
+// dashboard reads the same keys the panel does. Removed with this screen in Task 4.
+export { parseIssueQuery, issueQuery };
 
-/** The applied query → the API/address-bar query string, in a fixed field order. */
-export function issueQuery(query: IssueQuery): string {
-  const params = new URLSearchParams();
-  params.set("disposition", query.filters.disposition);
-  if (query.filters.project !== "") params.set("project", query.filters.project);
-  if (query.filters.kind !== "") params.set("kind", query.filters.kind);
-  if (query.filters.severity !== "") params.set("severity", query.filters.severity);
-  if (query.filters.q !== "") params.set("q", query.filters.q);
-  params.set("limit", String(PAGE_SIZE));
-  if (query.offset > 0) params.set("offset", String(query.offset));
-  return params.toString();
-}
 
 /** True while nothing beyond the D17 default (open, all projects) is applied. */
 export function isDefaultFilters(filters: IssueFilters): boolean {
