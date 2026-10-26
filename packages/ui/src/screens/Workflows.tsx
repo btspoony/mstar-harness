@@ -37,7 +37,6 @@ export type WorkflowsCopy = {
     root: string;
     updated: string;
     plans: string;
-    badges: string;
   };
   plansProgress: (done: number, total: number) => string;
   /** The filter card's own head. */
@@ -137,31 +136,10 @@ export function Workflows(props: WorkflowsProps) {
     {
       key: "plans",
       header: copy.columns.plans,
-      width: "9%",
+      width: "12%",
       secondary: true,
       align: "end",
       render: (row) => <span className={"mono t-12"}>{copy.plansProgress(row.plansDone, row.plansTotal)}</span>,
-    },
-    {
-      // The prototype's `Join badges`: the store's own join bookkeeping, said in words.
-      key: "badges",
-      header: copy.columns.badges,
-      width: "14%",
-      secondary: true,
-      render: (row) =>
-        row.badges.length === 0 ? (
-          <span className={"muted"}>—</span>
-        ) : (
-          <span className={"chips"}>
-            {row.badges.map((badge) => (
-              // The prototype's two tones: a conflict is the store disagreeing with
-              // itself, a missing pin is an absence. The word is always present.
-              <span key={badge} className={badge.includes("conflict") ? "badge conflict" : "badge missing"}>
-                {badge}
-              </span>
-            ))}
-          </span>
-        ),
     },
   ];
 

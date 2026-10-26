@@ -251,7 +251,6 @@ export const en = {
       root: "Root register",
       updated: "Projected updated",
       plans: "Plans",
-    badges: "Join badges",
     },
     plansProgress: (done: number, total: number) => `${done}/${total} plans`,
     truncated: (shown: number, total: number) => `Showing ${shown} of ${total}`,

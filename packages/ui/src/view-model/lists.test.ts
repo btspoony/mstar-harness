@@ -129,13 +129,11 @@ describe("workflows", () => {
     expect(row.startedAt).toBe("2026-10-25 01:00");
   });
 
-  test("leases and adoption rows are not surfaced; the join badges are", () => {
+  test("NEGATIVE: leases, adoption rows and pin badges are not surfaced", () => {
     const row = workflowRow(workflow());
-    for (const removed of ["leases", "terminalUnregistered", "terminalAdoptions", "plans"]) {
+    for (const removed of ["leases", "terminalUnregistered", "terminalAdoptions", "badges", "plans"]) {
       expect(Object.keys(row)).not.toContain(removed);
     }
-    // The prototype's `Join badges` column renders these, so the row carries them.
-    expect(Object.keys(row)).toContain("badges");
     // The one surviving badge is the reason a state is unavailable, not a chip.
     expect(row.executionUnavailableReason).toBeNull();
     expect(workflowRow(workflow({ badges: ["execution-unavailable"] })).executionUnavailableReason).not.toBeNull();
