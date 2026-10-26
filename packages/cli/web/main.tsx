@@ -176,6 +176,7 @@ function OverviewDestination(props: { query: string }) {
       model={outcome.model}
       copy={overviewCopy(copy)}
       onOpenWorkflow={(id) => navigate({ name: "workflow", id }, props.query, "push")}
+      onOpenIssues={() => navigate({ name: "issues" }, props.query, "push")}
     />
   );
 }

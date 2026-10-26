@@ -21,7 +21,7 @@
  * to one of the six arms, and `Absence` here only chooses the copy. A screen that
  * decided an arm itself would be a second authority.
  */
-import { Fragment } from "react";
+import { Fragment, type KeyboardEvent } from "react";
 
 import { DataTable, type DataTableColumn } from "../components/DataTable.tsx";
 import { progressText } from "../view-model/format.ts";
@@ -126,6 +126,12 @@ export type OverviewProps = {
    * the link rather than rendering a dead control.
    */
   onOpenWorkflow?: (id: string) => void;
+  /**
+   * Open the issue list filtered to one severity. The prototype's residual rows are
+   * links to exactly that (`design-v1.html:1109-1111`); without it they read as dead
+   * text. Absent when the host has no issues destination.
+   */
+  onOpenIssues?: (severity: string) => void;
 };
 
 /** Render one absence arm from the arm the model already resolved. */
@@ -472,6 +478,22 @@ export function Overview(props: OverviewProps) {
                   className="res-row"
                   data-ms-severity={row.severity}
                   data-ms-count={row.count}
+                  // The prototype makes this row a link to the severity-filtered issue
+                  // list. A `dl` may only hold `dt`/`dd`/`div`, so the click target is the
+                  // wrapper with a link role rather than an `<a>`.
+                  {...(props.onOpenIssues === undefined
+                    ? {}
+                    : {
+                        role: "link",
+                        tabIndex: 0,
+                        onClick: () => props.onOpenIssues?.(row.severity),
+                        onKeyDown: (event: KeyboardEvent) => {
+                          if (event.key === "Enter" || event.key === " ") {
+                            event.preventDefault();
+                            props.onOpenIssues?.(row.severity);
+                          }
+                        },
+                      })}
                 >
                   <dt className="sev">
                     <StatusDot label={row.severity} tone={row.tone} mono />
