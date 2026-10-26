@@ -61,7 +61,7 @@
 }
 
 /* Below the stack floor the meta and the trailing value drop to a second line. */
-@container pane (max-width: 479px) {
+@container (max-width: 479px) {
   .row {
     flex-wrap: wrap;
     row-gap: 1px;

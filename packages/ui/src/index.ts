@@ -147,3 +147,11 @@ export const MS_CONTAINER_NAME = "pane" as const;
 
 /** The class that declares the named size container (see `base.css`). */
 export const MS_CONTAINER_CLASS = "ms-container" as const;
+
+/**
+ * The pane frame's two hooks (see `base.css`): a host that owns a pane wraps its
+ * nav band with `MS_PANE_HEAD_CLASS` and its product body with `MS_PANE_BODY_CLASS`
+ * so the band and the closing inset are the shared layer's, not a host's.
+ */
+export const MS_PANE_HEAD_CLASS = "ms-pane-head" as const;
+export const MS_PANE_BODY_CLASS = "ms-pane-body" as const;

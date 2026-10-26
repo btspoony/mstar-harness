@@ -58,7 +58,7 @@
 }
 
 /* A head wraps instead of shrinking its title out of the card (`:736`). */
-@container pane (max-width: 619px) {
+@container (max-width: 619px) {
   .head {
     flex-wrap: wrap;
     row-gap: 2px;

@@ -282,7 +282,15 @@ nothing", and a dash with a reason means "not known".
 **Product layout responds to the width a view is given, never to the viewport.** The
 viewport describes the window chrome; a screen describes its column. Every page body and
 every host pane declares `container: pane / inline-size` (the `.ms-container` hook in
-`base.css`), and components write `@container pane (…)` against it.
+`base.css`), and components write `@container (…)` against it — **unnamed**.
+
+The name is deliberately absent from the query. A CSS-module bundler rewrites a named
+query's prelude into a per-module hash (`@container pane_8f31a`), while the single
+declaration stays in the global sheet as `pane`; nothing then matches and every narrow rule
+in the product is silently dead. That is not a hypothetical: it is why the 400–900px pane
+rendered the wide layout squeezed through two review rounds. `build-web.test.ts` asserts the
+emitted artifact contains no named container query, and the component-layer test asserts no
+module writes one.
 
 A container query condition cannot read a custom property, so the breakpoints are
 **documented constants**, stated here and written literally in `tokens.css` and in the
@@ -299,6 +307,37 @@ rules that use them. The token contract test proves the two lists agree.
 - The dashboard's product area is the 1440px case; the dsh right Sidebar is the same
   components at **720px** (its push default) and **400px** (dragged narrow). Same tree,
   different container, no second implementation.
+
+### Narrow list treatment (the prototype is silent here)
+
+The prototype defines **one** narrow-table precedent — `WorkflowDetail` hiding columns 2
+and 5 below 619px — and no narrow treatment at all for the four list screens. Silence is not
+a licence to ship the wide table squeezed, so the product chooses:
+
+**Priority columns below the floor, a declared-width table above it, and a scroll floor as
+the net.** Concretely, every list table declares a px width for all but one column; that one
+flexible column (the title) takes the rest.
+
+| Band (container) | What the list does |
+| --- | --- |
+| **≥ 900px** | All columns. Declared widths; the flexible title column gets the remainder (measured at 900: 858px table in an 860px card, no scroll). |
+| **620–899px** | All columns, same widths, and the table keeps a floor of `declared widths + 120px`. If the pane is narrower than that floor the **card body scrolls sideways** rather than squeezing any column: measured at 760 the four lists fit (floor 680–716px in a 718px table) with zero truncated cells; at 620 the Issues table scrolls, and every column stays reachable. |
+| **480–619px** | Secondary columns are hidden **by rule** (`display: none`), not by overflow, and each yielded fact reappears on the row's second line. Id, title and the screen's one status column keep their declared widths; the flexible title takes the rest (measured at 420 and 619: narrowest cell 80–112px, zero truncated cells, no sideways scroll). |
+| **≤ 299px** | The collapsed table keeps the documented 300px floor and scrolls inside its own card. |
+
+Two rules make this hold, and both are the defects that shipped:
+
+1. **Widths are declared, never inferred.** `table-layout: fixed` splits an undeclared
+   column set evenly — eight columns of ~90px each gave `I-…`, `d…` and `● runningplan…`.
+2. **No positional column widths.** Collapsing with "first column 20%, second 80%" put the
+   *third* primary column at zero width, which is how a status word lost its own box.
+
+A hidden column costs no width: the `<colgroup>` is gone, so a `display: none` cell no longer
+leaves a column's share behind it.
+
+- **Prose keeps a measure.** Overview's two-column grid folds to one column below 900px, so a
+  card at 420–619px is 360–579px wide and its sentences wrap at 12+ characters per line
+  rather than one. No further cap is applied: the card is the measure.
 - A component that cannot degrade below a floor **states the floor** rather than squeezing
   into illegibility: a truncated cell always exposes its full text (hover `title`, plus a
   focus-reachable affordance for keyboard), and a table below its floor scrolls inside its

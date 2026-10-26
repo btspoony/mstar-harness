@@ -31,6 +31,7 @@ import {
   Iterations,
   LocaleProvider,
   MS_CONTAINER_CLASS,
+  MS_PANE_HEAD_CLASS,
   MS_THEME_ATTRIBUTE,
   Nav,
   Overview,
@@ -705,7 +706,7 @@ function Shell(props: {
       >
         {chrome.skipLink}
       </a>
-      <header className="app-header">
+      <header className={`app-header ${MS_PANE_HEAD_CLASS}`}>
         <span className="app-title">Morning Star</span>
         <Nav
           items={chrome.navItems}

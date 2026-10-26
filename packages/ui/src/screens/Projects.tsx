@@ -46,16 +46,18 @@ export function Projects(props: ProjectsProps) {
       header: copy.columns.title,
       render: (row) => <TruncatedText text={row.title} />,
     },
-    { key: "id", header: copy.columns.id, render: (row) => <span className={css.mono}>{row.projectId}</span> },
+    { key: "id", header: copy.columns.id, width: 96, render: (row) => <span className={css.mono}>{row.projectId}</span> },
     {
       key: "lifecycle",
       header: copy.columns.lifecycle,
+      width: 104,
       secondary: true,
       render: (row) => <StatusDot label={row.lifecycle} tone={row.lifecycleTone} mono />,
     },
     {
       key: "openIssues",
       header: copy.columns.openIssues,
+      width: 88,
       secondary: true,
       align: "end",
       render: (row) => <span className={css.mono}>{copy.openIssues(row.openIssues)}</span>,
@@ -63,6 +65,7 @@ export function Projects(props: ProjectsProps) {
     {
       key: "description",
       header: copy.columns.description,
+      width: 240,
       secondary: true,
       render: (row) =>
         row.description === null ? (

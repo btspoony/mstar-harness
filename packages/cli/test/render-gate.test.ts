@@ -124,7 +124,81 @@ const PROBE = `(() => {
     footHeight: foot.getBoundingClientRect().height,
     buttonCount: buttons.length,
   };
+  // The narrow-band facts: contentWidth is what the frame leaves inside the
+  // screen, and a card that does not fill it is a card that stopped growing.
+  const screenEl = document.querySelector('[data-ms-screen]');
+  const screenBox = screenEl === null ? null : screenEl.getBoundingClientRect();
+  const screenPad = screenEl === null ? null : getComputedStyle(screenEl);
+  const contentWidth = screenBox === null || screenPad === null ? null : screenBox.width
+    - parseFloat(screenPad.paddingLeft) - parseFloat(screenPad.paddingRight);
+  const visibleCells = [...document.querySelectorAll('table tbody tr')]
+    .flatMap((row) => [...row.querySelectorAll('td')])
+    .filter((cell) => getComputedStyle(cell).display !== 'none');
+  const cellWidths = visibleCells.map((cell) => Math.round(cell.getBoundingClientRect().width * 10) / 10);
+  const firstRowVisible = (() => {
+    const row = document.querySelector('table tbody tr');
+    if (row === null) return [];
+    return [...row.querySelectorAll('td')]
+      .filter((cell) => getComputedStyle(cell).display !== 'none')
+      .map((cell) => Math.round(cell.getBoundingClientRect().width * 10) / 10);
+  })();
+  const header = document.querySelector('header.app-header');
+  const h1 = document.querySelector('[data-ms-screen] h1');
+  const summaryEl = document.querySelector('[data-ms-summary]');
+  const centreY = (el) => (el === null ? null : el.getBoundingClientRect().top + el.getBoundingClientRect().height / 2);
+  const band = {
+    contentWidth: contentWidth === null ? null : Math.round(contentWidth * 10) / 10,
+    cardWidths: [...document.querySelectorAll('[data-ms-panel]')].map((card) => Math.round(card.getBoundingClientRect().width * 10) / 10),
+    narrowestCell: cellWidths.length === 0 ? null : Math.min(...cellWidths),
+    identityWidth: firstRowVisible.length === 0 ? null : firstRowVisible[0],
+    visibleCells: cellWidths.length,
+    summaryOverflows: summaryEl === null ? null : summaryEl.scrollWidth > summaryEl.clientWidth + 1,
+    titleOverflows: h1 === null ? null : h1.scrollWidth > h1.clientWidth + 1,
+    // Prose inside a card, measured on its own line boxes: the reported failure was
+    // a sentence wrapping one character per line, and characters-per-line is the
+    // only measurement that sees it.
+    worstPerLine: (() => {
+      let worst = null;
+      const walker = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT);
+      for (let node = walker.nextNode(); node !== null; node = walker.nextNode()) {
+        const text = (node.textContent ?? '').trim();
+        if (text.length < 20) continue;
+        const holder = node.parentElement;
+        if (holder === null || holder.closest('[data-ms-panel]') === null) continue;
+        if (holder.closest('[hidden], [aria-hidden="true"]') !== null) continue;
+        const range = document.createRange();
+        range.selectNodeContents(node);
+        const rects = [...range.getClientRects()];
+        if (rects.length === 0) continue;
+        const perLine = text.length / rects.length;
+        if (worst === null || perLine < worst) worst = Math.round(perLine * 10) / 10;
+      }
+      return worst;
+    })(),
+    hiddenColumns: [...document.querySelectorAll('table thead th')]
+      .filter((th) => getComputedStyle(th).display === 'none').length,
+    tableScrollsSideways: (() => {
+      const scroller = document.querySelector('[data-ms-table-scroller]');
+      if (scroller === null) return null;
+      return scroller.scrollWidth > scroller.clientWidth + 1;
+    })(),
+    summaryLeft: summaryEl === null ? null : Math.round(summaryEl.getBoundingClientRect().left * 10) / 10,
+    baselineDelta: h1 === null || summaryEl === null ? null : Math.abs(centreY(h1) - centreY(summaryEl)),
+    headerHeight: header === null ? null : Math.round(header.getBoundingClientRect().height * 10) / 10,
+    headerHairline: header === null ? null : getComputedStyle(header).borderBottomWidth,
+    controlsInside: (() => {
+      const controls = [...document.querySelectorAll('.app-seg, .app-icon-btn')];
+      return controls.every((el) => {
+        const rect = el.getBoundingClientRect();
+        return rect.width > 0 && rect.right <= window.innerWidth + 0.5 && rect.left >= -0.5;
+      });
+    })(),
+    controlsLabelled: [...document.querySelectorAll('.app-seg, .app-icon-btn')]
+      .every((el) => (el.getAttribute('aria-label') ?? '').trim() !== ''),
+    pageOverflow: document.documentElement.scrollWidth > window.innerWidth + 1,
+  };
   return JSON.stringify({
+    band,
     pager,
     cards: cards.length,
     hasTable: table !== null,
@@ -190,6 +264,21 @@ describe.skipIf(!browserAvailable)("the render gate", () => {
       { operationId: "render-gate-project", actor: "project-manager" },
     );
 
+    // One catalog iteration, so the Iterations screen has a table to squeeze: the
+    // narrow-band anchors are vacuous on an absence arm, and an absence arm is not
+    // what the owner's screenshots showed.
+    await registerCatalogEntity(
+      context,
+      {
+        kind: "iteration",
+        id: "iter-render-gate",
+        title: "The narrow pane is a designed state",
+        rootKind: "iterations",
+        relativePath: "iter-render-gate",
+      },
+      { operationId: "render-gate-iteration", actor: "project-manager" },
+    );
+
     const authority = await readExecutionAuthority(context);
     await createExecutionWorkflow(
       { ...context, caller: { role: "coordinator", sessionId: "render-gate", workflowId: "render-gate-workflow" } },
@@ -237,7 +326,7 @@ describe.skipIf(!browserAvailable)("the render gate", () => {
    * the card is what makes the capture deterministic — and a screen that stopped
    * rendering a card fails here rather than in a human's eyes.
    */
-  async function visit(route: string, screen: string, card = true): Promise<Record<string, unknown>> {
+  async function visit(route: string, screen: string, card = true, capture = route): Promise<Record<string, unknown>> {
     await browser(["open", `${server.url}#${route}`]);
     await browser(["wait", `[data-ms-screen="${screen}"]`]);
     // The detail screens are hairline sections (`design-v1.html:1377`), not cards,
@@ -252,8 +341,16 @@ describe.skipIf(!browserAvailable)("the render gate", () => {
       }
     }
     await browser(["wait", "200"]);
-    await browser(["screenshot", join(CAPTURE_DIR, `${route.replaceAll("/", "-")}.png`)]);
+    await browser(["screenshot", join(CAPTURE_DIR, `${capture.replaceAll("/", "-")}.png`)]);
     return evalJson(PROBE);
+  }
+
+  /** Set the band, then visit: the container is the root element, so the width
+      given to the window IS the width the product is given. */
+  async function visitAt(width: number, route: string, screen: string): Promise<Record<string, unknown>> {
+    await browser(["set", "viewport", String(width), String(VIEWPORT.height)]);
+    // One capture per band, so a reviewer opens the width they are judging.
+    return visit(route, screen, true, `${route}-${width}`);
   }
 
   /** The anchors every screen shares: the header pair, and no chip-coloured tone. */
@@ -305,6 +402,83 @@ describe.skipIf(!browserAvailable)("the render gate", () => {
     expect(Math.abs((pager.buttonCentreY as number) - (pager.rangeCentreY as number))).toBeLessThan(1.5);
     expect(pager.footHeight as number).toBeLessThan(34);
   }, 60_000);
+
+  /**
+   * THE BANDS THAT WERE NEVER TESTED.
+   *
+   * Every earlier round of visual work was verified at 1280px, and the product's
+   * own live width — a 400-900px pane — was never in a gate at all. What shipped
+   * was not a narrow layout: it was the wide layout squeezed, with the collapse
+   * rules dead because the bundler had hashed their container names. These two
+   * bands are the regression net: 760 is the pane's wide band, 420 its narrow one.
+   */
+  for (const width of [760, 420] as const) {
+    for (const [route, screen] of [
+      ["overview", "overview"],
+      ["workflows", "workflows"],
+      ["iterations", "iterations"],
+      ["projects", "projects"],
+      ["issues", "issues"],
+    ] as const) {
+      test(`at ${width}px the ${route} screen still reads: no squeezed cell, a full card, a live header`, async () => {
+        const measured = await visitAt(width, route, screen);
+        sharedAnchors(measured);
+        const band = measured.band as Record<string, number | boolean | null>;
+
+        // The card spans the width it was given (Task 2): a card narrower than its
+        // container leaves the pane looking unfinished, which is what the owner saw.
+        expect(band.contentWidth).not.toBeNull();
+        for (const width of band.cardWidths as number[]) {
+          expect(Math.abs(width - (band.contentWidth as number))).toBeLessThanOrEqual(1);
+        }
+
+        // No column is squeezed below its own identity (Task 1). 44px is five
+        // monospace characters: under that a cell is `I-…`, not an id.
+        if (band.visibleCells !== 0) {
+          expect(band.narrowestCell as number).toBeGreaterThanOrEqual(44);
+          // and the identity column — the first visible one — reads at least
+          // `proj-a` / `I-000001`.
+          expect(band.identityWidth as number).toBeGreaterThanOrEqual(72);
+        }
+
+        // The screen's own title is not squeezed away.
+        expect(band.titleOverflows).toBe(false);
+
+        // Prose in a card stays prose (Task 3): the folded card is a measure, not a
+        // column one character wide.
+        if (band.worstPerLine !== null) expect(band.worstPerLine as number).toBeGreaterThanOrEqual(10);
+
+        // The collapse is a RULE, not an overflow. At 420 the secondary columns are
+        // hidden and the table fits its card without a scrollbar; above the floor
+        // every column shows and the declared widths fit. A dead collapse still
+        // passes a "no squeezed cell" check because the scroll floor rescues it, so
+        // the scrollbar itself is the anchor that tells the two states apart.
+        if (band.visibleCells !== 0) {
+          expect(band.tableScrollsSideways).toBe(false);
+          if (width === 420) expect(band.hiddenColumns as number).toBeGreaterThan(0);
+          if (width === 760) expect(band.hiddenColumns).toBe(0);
+        }
+
+        // The summary line still reads (the Issues screen is the one that has one),
+        // on the title's baseline and inside the frame.
+        if (measured.summary !== null) {
+          expect(String(measured.summary)).not.toBe("");
+          expect(band.summaryOverflows).toBe(false);
+          expect(band.baselineDelta as number).toBeLessThanOrEqual(4);
+        }
+
+        // The header controls stay reachable and labelled, and the page never
+        // scrolls sideways: a horizontal page scrollbar is the layout giving up.
+        expect(band.controlsInside).toBe(true);
+        expect(band.controlsLabelled).toBe(true);
+        expect(band.pageOverflow).toBe(false);
+
+        // The pane's title band exists (Task 4): a header with its closing hairline.
+        expect(band.headerHeight as number).toBeGreaterThan(0);
+        expect(band.headerHairline).toBe("1px");
+      }, 60_000);
+    }
+  }
 
   test("a screen inside a screen does not pay the frame's gutter twice", async () => {
     // `ProjectDetail` embeds the Issues screen (PR 597 F3).

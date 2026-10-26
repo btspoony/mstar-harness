@@ -120,7 +120,7 @@
 }
 
 /* Below the two-column floor the same order reads as one column (IA §3.1). */
-@container pane (max-width: 899px) {
+@container (max-width: 899px) {
   .body {
     grid-template-columns: minmax(0, 1fr);
     gap: var(--ms-space-4);

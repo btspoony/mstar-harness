@@ -98,6 +98,21 @@ describe("the bundle", () => {
     expect(css).toContain("data-ms-theme");
   });
 
+  test("every container query is unnamed, so the bundler cannot hash it away", () => {
+    // THE regression this guards: Bun's CSS-module pass rewrites `@container pane`
+    // into `@container pane_<hash>` — one hash per module — while the single
+    // container declaration lives in the global `base.css` and keeps the plain
+    // name. Nothing matched, so every narrow rule in the product was dead and the
+    // 400-900px pane rendered the wide layout squeezed. An unnamed query has no
+    // prelude to rename, and the emitted artifact is where that is provable.
+    const named = [...css.matchAll(/@container\s+([A-Za-z_][\w-]*)/g)].map((match) => match[1]);
+    expect(named).toEqual([]);
+    // The declaration is still the named one the DESIGN.md contract describes.
+    expect(css).toMatch(/container:\s*pane\s*\/\s*inline-size/);
+    // And the narrow rules survive as conditions.
+    expect(css).toMatch(/@container\s*\([^)]*619px/);
+  });
+
   test("boots a React root and imports no htm or preact value", () => {
     // A root that never calls createRoot is not an entry.
     expect(js).toContain("createRoot");

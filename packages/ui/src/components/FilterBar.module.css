@@ -104,7 +104,7 @@
 }
 
 /* Below the table floor the fields take the full width instead of shrinking. */
-@container pane (max-width: 619px) {
+@container (max-width: 619px) {
   .field {
     flex: 1 1 45%;
   }

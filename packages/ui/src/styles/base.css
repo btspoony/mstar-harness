@@ -171,7 +171,11 @@
 /**
  * The layout container. Product layout reflows by the width a view is GIVEN,
  * so every page body and every host pane declares this container and the
- * components write `@container pane (…)` against it. A viewport media query is
+ * components write `@container (…)` against it — UNNAMED, on purpose: a
+ * CSS-module bundler rewrites a named query's prelude into a per-module hashed
+ * name (`@container pane_8f31a`), which can never match the one declaration in
+ * this global sheet, so a named query is silently dead. One container, unnamed
+ * queries; `tokens.test.ts` keeps both halves true. A viewport media query is
  * allowed only for window chrome (DESIGN.md § Container width).
  *
  * `min-inline-size: 0` is the other half of the contract: a container that can
@@ -181,6 +185,28 @@
 .ms-container {
   container: pane / inline-size;
   min-inline-size: 0;
+}
+
+/**
+ * The pane frame: a head band and a body inset.
+ *
+ * A pane is not one undifferentiated column. The prototype draws its head as a
+ * surface band closed by a hairline, with the body below it inset by 24px
+ * (`design-v1.html:482-488`); the dashboard's window header is the same band at
+ * page scale. Both hosts mount a product surface inside chrome they do not own,
+ * so the band's treatment lives here — one rule, applied by whichever host has a
+ * pane — instead of a fourth copy of two declarations.
+ *
+ * The body inset is additive on purpose: the screen frame already ends with 16px,
+ * and the prototype's pane body ends with 24.
+ */
+.ms-pane-head {
+  background: var(--ms-bg-surface);
+  border-block-end: var(--ms-hairline);
+}
+
+.ms-pane-body {
+  padding-block-end: var(--ms-space-2);
 }
 
 /**

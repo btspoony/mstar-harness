@@ -1,7 +1,17 @@
-/* Fixed layout with caller-declared column widths: the title column absorbs the
-   slack and no cell can push its neighbour out of the container. */
+/* Fixed layout with caller-declared column widths: the flexible (title) column
+   absorbs the slack and no cell can push its neighbour out of the container.
+
+   `--ms-table-floor` is the narrowest this table may become before the card body
+   scrolls instead (`DataTable` computes it from the declared widths plus the
+   flexible column's measure). Below the collapse floor it is switched off: the
+   collapsed form has fewer columns and fits by design. */
+.scroller {
+  overflow-x: auto;
+}
+
 .table {
   inline-size: 100%;
+  min-inline-size: var(--ms-table-floor, 0);
   border-collapse: collapse;
   table-layout: fixed;
 }
@@ -33,6 +43,14 @@
 
 .table tbody tr:last-child td {
   border-block-end: 0;
+}
+
+/* No trailing gap on the last column: the container's own padding already ends
+   the row, and reclaiming this ~12px is what lets a timestamp column show its
+   whole `2026-10-24 09:06` instead of `2026-10-24 …`. */
+.table th:last-child,
+.table td:last-child {
+  padding-inline-end: 0;
 }
 
 .table th[data-ms-align="end"],
@@ -70,7 +88,7 @@
 
 /* The collapse: below 620px of CONTAINER (never viewport), the secondary
    columns go and the primary cell carries the second line. */
-@container pane (max-width: 619px) {
+@container (max-width: 619px) {
   /* A detail table drops the yielded columns instead of restating them: the page
      above already carries the record, so there is no second line to grow. */
   .table[data-ms-table="detail"] td,
@@ -89,12 +107,12 @@
     display: none;
   }
 
-  .table th[data-ms-col="primary"]:first-child {
-    inline-size: 20%;
-  }
-
-  .table th[data-ms-col="primary"]:nth-child(2) {
-    inline-size: 80%;
+  /* No positional widths here: the columns keep the widths their caller declared
+     and the flexible one takes the rest, the same rule as the wide band. A
+     20%-for-the-first-and-80%-for-the-second rule is what zeroed the THIRD
+     primary column (a status word with no width at all). */
+  .table {
+    min-inline-size: 0;
   }
 
   .table td {
@@ -119,5 +137,13 @@
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
+  }
+}
+
+/* The documented table floor (`table-floor`, 300px): under it the collapsed form
+   scrolls inside its own card instead of squeezing. */
+@container (max-width: 299px) {
+  .table {
+    min-inline-size: 300px;
   }
 }

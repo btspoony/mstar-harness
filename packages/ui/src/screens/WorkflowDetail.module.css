@@ -133,7 +133,7 @@
 
 /* Below the table floor the plan table keeps its identity and status columns and
    lets the rest scroll rather than crushing five columns into the pane. */
-@container pane (max-width: 619px) {
+@container (max-width: 619px) {
   .table th:nth-child(2),
   .table td:nth-child(2),
   .table th:nth-child(5),

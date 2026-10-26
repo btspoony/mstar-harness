@@ -12,9 +12,18 @@
  * without a second implementation or a re-render on drag.
  *
  * Column order is the caller's; `secondary: true` marks what the narrow form
- * moves into the meta line.
+ * moves into the meta line, and `width` is the column's share in px — the ONE
+ * flexible column (the title) declares none and absorbs the slack.
+ *
+ * The widths are not decoration. `table-layout: fixed` splits an undeclared
+ * column set evenly, which at 720px of pane gives eight columns ~90px each: the
+ * id shows `I-…`, the title `d…`, and a status word is cut mid-syllable. The
+ * collapse below the floor then re-declared two of them 20/80 BY POSITION, which
+ * put the third primary column at zero width — the `● runningplan…` the owner
+ * reported. Declared widths plus one flexible column is the same answer in both
+ * bands and needs no per-screen positional rule.
  */
-import type { ReactNode } from "react";
+import type { CSSProperties, ReactNode } from "react";
 
 import css from "./DataTable.module.css";
 
@@ -32,6 +41,12 @@ export type DataTableColumn<T> = {
   secondary?: boolean;
   /** Right-aligns the cell: counts, fractions, timestamps. */
   align?: "start" | "end";
+  /**
+   * The column's width in px, for every band. Leave it off exactly one column —
+   * the flexible one (a title) — which then takes the remaining space. Below the
+   * scroll floor the table scrolls instead of squeezing this column to an ellipsis.
+   */
+  width?: number;
 };
 
 /**
@@ -66,18 +81,31 @@ export type DataTableProps<T> = {
   emptyBody?: ReactNode;
 };
 
+/**
+ * The narrowest the table may become before it scrolls instead of squeezing.
+ * Declared columns plus this much for the flexible one: ~15 characters at 13px,
+ * which is a title's first words rather than its first letter.
+ */
+const FLEXIBLE_FLOOR = 120;
+
 export function DataTable<T>(props: DataTableProps<T>) {
   const interactive = props.onRowActivate !== undefined;
   const detail = props.variant === "detail";
+  // The floor is the declared widths plus the flexible column's measure. It is a
+  // custom property, not `min-inline-size`, because the collapsed band below the
+  // floor has to switch it off and an inline style cannot be overridden.
+  const declared = props.columns.reduce((sum, column) => sum + (column.width ?? 0), 0);
+  const floor = declared === 0 ? 0 : declared + FLEXIBLE_FLOOR;
   return (
-    <table className={css.table} aria-label={props.caption} data-ms-table={detail ? "detail" : "list"}>
-      {/* The colgroup carries widths only: the collapse hides cells, and a
-          colgroup entry is not a cell. */}
-      <colgroup>
-        {props.columns.map((column) => (
-          <col key={column.key} data-ms-col-key={column.key} />
-        ))}
-      </colgroup>
+    /* The scroller: the table keeps its floor and the card body scrolls, so no
+       column becomes unreachable when the pane is narrower than the floor. */
+    <div className={css.scroller} data-ms-table-scroller="">
+    <table
+      className={css.table}
+      aria-label={props.caption}
+      data-ms-table={detail ? "detail" : "list"}
+      style={floor === 0 ? undefined : ({ "--ms-table-floor": `${floor}px` } as CSSProperties)}
+    >
       <thead>
         <tr>
           {props.columns.map((column) => (
@@ -86,6 +114,7 @@ export function DataTable<T>(props: DataTableProps<T>) {
               scope="col"
               data-ms-col={column.secondary === true ? "secondary" : "primary"}
               data-ms-align={column.align ?? "start"}
+              style={column.width === undefined ? undefined : { inlineSize: `${column.width}px` }}
             >
               {column.header}
             </th>
@@ -139,5 +168,6 @@ export function DataTable<T>(props: DataTableProps<T>) {
         )}
       </tbody>
     </table>
+    </div>
   );
 }

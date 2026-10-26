@@ -122,31 +122,35 @@ export function Issues(props: IssuesProps) {
   }));
 
   const columns: DataTableColumn<IssueRow>[] = [
-    { key: "id", header: copy.columns.id, render: (row) => <span className={css.mono}>{row.id}</span> },
+    { key: "id", header: copy.columns.id, width: 80, render: (row) => <span className={css.mono}>{row.id}</span> },
     { key: "title", header: copy.columns.title, render: (row) => <TruncatedText text={row.title} /> },
     {
       key: "severity",
       header: copy.columns.severity,
+      width: 76,
       secondary: true,
       render: (row) => <StatusDot label={row.severity} tone={row.severityTone} emphasis={row.severityEmphasised} mono />,
     },
     {
       key: "disposition",
       header: copy.columns.disposition,
+      width: 100,
       secondary: true,
       render: (row) => <StatusDot label={row.disposition} tone={row.dispositionTone} mono />,
     },
-    { key: "kind", header: copy.columns.kind, secondary: true, render: (row) => <span className={css.mono}>{row.kind}</span> },
-    { key: "project", header: copy.columns.project, secondary: true, render: (row) => <span className={css.mono}>{row.projectId}</span> },
+    { key: "kind", header: copy.columns.kind, width: 48, secondary: true, render: (row) => <span className={css.mono}>{row.kind}</span> },
+    { key: "project", header: copy.columns.project, width: 84, secondary: true, render: (row) => <span className={css.mono}>{row.projectId}</span> },
     {
       key: "milestone",
       header: copy.columns.milestone,
+      width: 80,
       secondary: true,
       render: (row) => (row.milestoneId === null ? null : <span className={css.mono}>{row.milestoneId}</span>),
     },
     {
       key: "lastActivity",
       header: copy.columns.lastActivity,
+      width: 96,
       secondary: true,
       align: "end",
       render: (row) => <span className={css.mono}>{row.lastActivity}</span>,
