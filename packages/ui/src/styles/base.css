@@ -452,3 +452,40 @@
   display: block;
   max-width: 100%;
 }
+
+/* The roadmap goal row. `.milestone-name` carries `overflow: hidden` + ellipsis, but it
+   is a <span>, so both were inert: a long goal title ran 1700px wide at a 720px viewport
+   and took the page's horizontal scroll with it. The row is a flex line (dot, title,
+   the visually-hidden state) and the title is the only part that may shrink. */
+.ms-container .milestone-row {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  min-width: 0;
+}
+
+.ms-container .milestone-row > .milestone-name {
+  min-width: 0;
+  flex: 1 1 auto;
+}
+
+/* The board block's name. `.milestone-block-head` is a wrapping flex line, so a name
+   wider than the row has to be allowed to shrink — its inner `.trunc` is a span and the
+   span's ellipsis only works once the flex item it sits in can go below its content
+   width. At 375px the name measured 618px before this. */
+.ms-container .milestone-block-name {
+  min-width: 0;
+  max-width: 100%;
+}
+
+/* `.trunc` is `TruncatedText`'s own span, and the prototype's rule assumes a block-ish
+   box: `overflow: hidden` + `text-overflow: ellipsis` do nothing to an inline element,
+   and neither does a parent's `min-width: 0`. That assumption surfaced three times —
+   a field value at 213px inside a 180px cell, a goal title 1700px wide at a 720px
+   viewport, and a milestone name 585px wide at 375px — so the box is fixed here once
+   rather than at each call site. */
+.ms-container .trunc {
+  display: inline-block;
+  max-width: 100%;
+  vertical-align: bottom;
+}
