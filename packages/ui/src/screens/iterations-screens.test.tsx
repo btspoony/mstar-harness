@@ -282,6 +282,19 @@ describe("IterationDetail — the gate display is four labels plus a never-marke
     expect(html).toContain("step 2 of 5");
   });
 
+  test("the step's state rides a class and a glyph, so it is not colour alone", () => {
+    // The prototype draws the track as a 3px rule per step and colours it by state class;
+    // the class and the glyph are the only non-colour channels, and neither is visible
+    // when an iteration records no compass (every step is `ahead`).
+    const page = renderDetail(iteration({ gateStep: 2 }));
+    expect(page).toContain('class="gate-step is-done"');
+    expect(page).toContain('class="gate-step is-current"');
+    expect(page).toMatch(/class="gate-step is-done"[^>]*>\s*<span class="glyph"[^>]*>✓/);
+    expect(page).toMatch(/class="gate-step is-current"[^>]*>\s*<span class="glyph"[^>]*>●/);
+    // and a step ahead of the store's carries neither the class nor a glyph
+    expect(page).toMatch(/class="gate-step"[^>]*data-ms-step="merge-ready"[^>]*>\s*<span class="glyph"[^>]*><\/span>/);
+  });
+
   test("step 5 is NEVER marked, at any store value", () => {
     for (const gateStep of [1, 2, 3, 4] as const) {
       const page = renderDetail(iteration({ gateStep } ));
