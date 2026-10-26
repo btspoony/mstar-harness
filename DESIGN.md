@@ -709,6 +709,38 @@ Overview — were each compared against the prototype's own DOM, not against a m
 and the comparisons closed. A table of past fixes would grow without bound; this table is
 only the open set.
 
+## The measured baseline, and how to re-take it
+
+Structure matching is not pixel matching. The values below were read from **both** sides
+with `getComputedStyle` at 1440, on the same selectors, and they agree element for element:
+
+| Element | `font-size` / `color` / `padding` |
+| --- | --- |
+| `.screen-head h1` | `16px` / `rgb(231, 234, 238)` / `0` |
+| `.panel-title` | `12px` / `rgb(164, 172, 183)` / `0` |
+| `.panel-meta` | `11px` / `rgb(118, 126, 138)` / `0` |
+| `thead th` | `11px` / `rgb(118, 126, 138)` / `0 10px` |
+| `tbody td` | `13px` / `rgb(231, 234, 238)` / `0 10px` |
+| hairline (any `border-bottom`) | `rgb(36, 41, 48)` |
+| table row height | `32px` |
+
+Screens checked this way: overview, issues, workflows, iterations, projects. The values are
+theme-dependent — these are the **dark** scheme's; `tokens.css` carries both, and the light
+values are the prototype's own light block.
+
+**How to re-take it**, because a table of numbers is only useful if it can be refreshed:
+
+```js
+const pick = (sel) => { const e = document.querySelector(sel); if (!e) return null;
+  const c = getComputedStyle(e); return `${c.fontSize}/${c.color}/${c.padding}`; };
+JSON.stringify({ h1: pick(".screen-head h1"), pt: pick(".panel-title"),
+                 pm: pick(".panel-meta"), th: pick("thead th"), td: pick("tbody td") })
+```
+
+Run that against the prototype (`file://…/design-v1.html`, click the screen's nav button
+first) and against the dashboard, and diff the two strings. A `null` on both sides is a
+match: workflows and iterations have no titled panels, and projects has no table.
+
 ## Verification coverage, stated
 
 Two hosts mount these screens: the dashboard (`packages/cli/web`) and the dsh pane
