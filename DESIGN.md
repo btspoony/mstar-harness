@@ -1660,10 +1660,15 @@ the same five steps and the same theme:
 Class, glyph, top-border colour, weight and size all agree on all five — the only difference
 in the two dumps is whitespace inside `rgb()`.
 
-**One more dead field, found by scanning the models against the components**:
-`IterationDetailModel.workflowActiveRegistration` is declared, populated, and read by nothing.
-That makes seven. The scan is a name-level grep, so it can only find a field that no component
-mentions at all — a field read into a variable and then ignored would not appear.
+**A seventh dead field was found and deleted rather than described**:
+`IterationDetailModel.workflowActiveRegistration` was declared, populated from
+`iteration.workflow.activeRegistration`, and read by nothing. It is gone from the type and
+from the read.
+
+**The scan that found it is a name-level grep**, so it only finds a field that no component
+mentions at all — a field read into a variable and then ignored does not appear. Running it
+again would find nothing more, and the honest state is that the remaining dead-field risk is
+of the second kind, which needs reading each screen rather than grepping.
 
 ## Verification coverage, stated
 

@@ -224,7 +224,6 @@ export type IterationDetailModel = {
   /** The registered workflow's own state, for the prototype's four execution rows. */
   workflowStatus: string | null;
   workflowPhase: string | null;
-  workflowActiveRegistration: boolean;
   plans: readonly IterationPlanRow[];
 };
 
@@ -274,7 +273,6 @@ export function iterationDetailModel(read: {
       workflowId: iteration.workflow?.id ?? null,
       workflowStatus: iteration.workflow?.status ?? null,
       workflowPhase: iteration.workflow?.phase ?? null,
-      workflowActiveRegistration: iteration.workflow?.activeRegistration ?? false,
       plans: iteration.plans.map(iterationPlanRow),
       documents: iteration.documents.map((doc) => ({
         title: doc.title ?? doc.relativePath,
