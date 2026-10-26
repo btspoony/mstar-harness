@@ -214,6 +214,12 @@ const PROBE = `(() => {
       if (scroller === null) return null;
       return scroller.scrollWidth > scroller.clientWidth + 1;
     })(),
+    // scrollWidth reports overflow even when the box cannot scroll, so the scroll
+    // anchor needs both halves: content wider than the card AND a box that scrolls.
+    scrollerOverflowX: (() => {
+      const scroller = document.querySelector('[data-ms-table-scroller]');
+      return scroller === null ? null : getComputedStyle(scroller).overflowX;
+    })(),
     summaryLeft: summaryEl === null ? null : Math.round(summaryEl.getBoundingClientRect().left * 10) / 10,
     baselineDelta: h1 === null || summaryEl === null ? null : Math.abs(centreY(h1) - centreY(summaryEl)),
     headerHeight: header === null ? null : Math.round(header.getBoundingClientRect().height * 10) / 10,
@@ -515,6 +521,10 @@ describe.skipIf(!browserAvailable)("the render gate", () => {
           // assertion inverts — otherwise deleting `overflow-x: auto` passes.
           expect(band.hiddenColumns as number > 0).toBe(sample.collapse);
           expect(band.tableScrollsSideways).toBe(sample.scrolls);
+          // Scroll INSTEAD of squeeze means both halves: the table is wider than the
+          // card where the policy permits it, and the box it sits in can actually
+          // scroll (a `scrollWidth` check alone passes with `overflow-x` deleted).
+          expect(band.scrollerOverflowX).toBe("auto");
           if ("floor" in sample) expect(band.tableWidth as number).toBeGreaterThanOrEqual(sample.floor);
         }
 
