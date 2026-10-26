@@ -1722,7 +1722,35 @@ has no table. Those cells came back `-`, which means *not present*, not *equal*.
 compared on all five screens is `h1`, `.panel` and the accent dot; the rest was compared where
 both sides had the element.
 
-**What is still not compared**: the four detail screens, in either scheme.## Verification coverage, stated
+**The four detail screens, both schemes.** Each was probed on a record that exists:
+`#issue/I-000870`, `#workflow/20261026-narrow-pane-parity`,
+`#iteration/iter-20260811-panel-fixes`, `#project/dsh-integration`.
+
+| | workflow | iteration | project | issue |
+| --- | --- | --- | --- | --- |
+| `.detail-head h1` | ✓ | ✓ | ✓ | ✓ |
+| `.panel` | ✓ | ✓ | ✓ | **absent** |
+| `.panel-title` | ✓ | ✓ | ✓ | **absent** |
+| `.table th` | ✓ | ✓ | absent | **absent** |
+| `.field dt` | ✓ | ✓ | ✓ | ✓ |
+
+Every cell that exists has the same pair of values as the top-level screens — `h1`
+`rgb(231,234,238)`/`rgb(25,28,32)`, `.panel` border `rgb(36,41,48)`/`rgb(227,229,233)`,
+`.panel-title` `rgb(164,172,183)`/`rgb(86,93,103)`, `.table th`
+`rgb(118,126,138)`/`rgb(133,140,150)`, `.field dt` in the muted pair.
+
+**The issue detail has no `.panel` because the prototype's does not either** — its blocks take
+the `.sec` rhythm (a hairline above each, no card border), which is what rounds 140–141 changed
+`fact-block` into. An "absent" cell here is a structural fact about the screen, not a missing
+measurement.
+
+**First probe of this round was invalid, and it was the id**: `#workflow/2026-08-23-pr-deep-review`
+is an `execution_workflows.workflow_id`, but the route takes the *catalog* id the list shows
+(`20261026-narrow-pane-parity`). Every element came back `-`, which reads exactly like a
+screen that renders nothing.
+
+**Still not compared**: any pixel or screenshot diff. Every measurement in this file is a
+computed style on a named element, which cannot see spacing, alignment or ordering.## Verification coverage, stated
 
 Two hosts mount these screens: the dashboard (`packages/cli/web`) and the dsh pane
 (`packages/dsh/src/client/panel`). They share the components but **each owns its own
