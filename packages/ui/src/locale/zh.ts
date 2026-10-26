@@ -88,6 +88,11 @@ export const zh: Copy = {
         ? `有日期历史收在 ${datedOpen} 项未关闭。`
         : `有日期历史收在 ${datedOpen} 项未关闭；${undated} 个事件没有记录日期。`,
     trendTableSummary: "有日期历史（表格替代）",
+      flowDate: "日期",
+      flowCaptured: "新增",
+      flowRetired: "消退",
+      flowOpen: "未决差值",
+      flowOrigin: "来源",
     trendColumns: {
       date: "日期",
       captured: "捕获（累计）",

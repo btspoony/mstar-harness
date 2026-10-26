@@ -102,6 +102,11 @@ export const en = {
         ? `Dated history closes at ${datedOpen} open.`
         : `Dated history closes at ${datedOpen} open; ${undated} events carry no recorded date.`,
     trendTableSummary: "Dated history (table alternative)",
+      flowDate: "Date",
+      flowCaptured: "Captured",
+      flowRetired: "Retired",
+      flowOpen: "Open difference",
+      flowOrigin: "Origin",
     trendColumns: {
       date: "Date",
       captured: "Captured (cumulative)",

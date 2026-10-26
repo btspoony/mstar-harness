@@ -21,7 +21,7 @@ import { LiveRegion } from "../components/LiveRegion.tsx";
 import { Notice } from "../components/Notice.tsx";
 import { Panel, PanelBody, PanelFoot, PanelHead } from "../components/Panel.tsx";
 import { Pager } from "../components/Pager.tsx";
-import { IssueFlowChart } from "../components/IssueFlowChart.tsx";
+import { IssueFlowTable, type IssueFlowTableCopy } from "../components/IssueFlowTable.tsx";
 import { StatusDot } from "../components/StatusDot.tsx";
 import { TruncatedText } from "../components/TruncatedText.tsx";
 import {
@@ -119,6 +119,8 @@ export type IssuesTrendCopy = {
   legend: (dated: number, recorded: number) => string;
   /** The disclosure summary for the same numbers as a table. */
   tableSummary: string;
+  /** The table's own column labels (the prototype's `mini-table`). */
+  table: IssueFlowTableCopy;
 };
 
 /** The filter fields, in the order the bar shows them. */
@@ -223,27 +225,9 @@ export function Issues(props: IssuesProps) {
             meta={props.trendCopy.range(props.trend.firstDate, props.trend.lastDate)}
           />
           <PanelBody>
-            <div className="chart-wrap" data-ms-flow="">
-              <IssueFlowChart
-                variant="full"
-                points={props.trend.points}
-                label={props.trendCopy.chartTitle(props.trend.firstDate, props.trend.lastDate)}
-              />
-              <div className="chart-legend">
-                <span className="legend-item">
-                  <span className="legend-swatch" aria-hidden="true" />
-                  {props.trendCopy.captured}
-                </span>
-                <span className="legend-item">
-                  <span className="legend-swatch dashed" aria-hidden="true" />
-                  {props.trendCopy.retired}
-                </span>
-                <span className="legend-spacer" />
-                <span className="chart-note">
-                  {props.trendCopy.legend(props.trend.datedOpen, props.trend.recordedOpen)}
-                </span>
-              </div>
-            </div>
+            {/* The prototype shows this series as a table on this screen and as a chart on
+                the overview: the issues screen is where exact counts are read. */}
+            <IssueFlowTable series={props.trend} copy={props.trendCopy.table} />
           </PanelBody>
         </Panel>
       )}

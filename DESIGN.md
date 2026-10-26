@@ -857,9 +857,16 @@ the wrong **form** for that screen.
 Why it matters even though the data is the same: the mini table states five numbers per row,
 which a 132px sparkline cannot. A screen meant for reading exact counts gets a shape instead.
 
-**Next step, stated so it is not rediscovered**: build the mini table from the same
-`IssueFlowSeries` the chart consumes, and render it on the issues screen in place of the
-chart. `product.css` already carries `.mini-table` (used by the compass milestones).
+**Shipped**: `IssueFlowTable` renders the same `IssueFlowSeries` as `table.mini-table` with
+the prototype's five columns (`Date · Captured · Retired · Open difference · Origin`), and the
+issues screen uses it in place of the chart. The overview keeps the chart.
+
+The flexible-column floor (`min-width: 120px` on the one column without a width) was checked
+at 1440, 720 and 375, and again under the light scheme: no horizontal scroll in any of them.
+It remains a defect fix rather than parity — the prototype's columns shrink proportionally,
+which is still unexplained.
+
+
 
 ## Verification coverage, stated
 

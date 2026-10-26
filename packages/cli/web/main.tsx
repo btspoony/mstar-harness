@@ -299,6 +299,15 @@ function issuesTrendCopy(copy: ReturnType<typeof useCopy>) {
     retired: copy.overview.trendRetired,
     legend: copy.overview.trendLegend,
     tableSummary: copy.overview.trendTableSummary,
+    table: {
+      columns: {
+        date: copy.overview.flowDate,
+        captured: copy.overview.flowCaptured,
+        retired: copy.overview.flowRetired,
+        open: copy.overview.flowOpen,
+        origin: copy.overview.flowOrigin,
+      },
+    },
   };
 }
 
