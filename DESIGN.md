@@ -485,6 +485,23 @@ as "no information" rather than "the store has no note". The prototype's own cel
 note alone; the absent line is the product's answer to the same question, in the same
 slot.
 
+## A class that exists is not a class that belongs there
+
+Three defects in this interface had the same shape: the class name was real, defined, and
+in the right sheet — and on the wrong element.
+
+| Wrong | Effect | Right |
+| --- | --- | --- |
+| `<section class="fields">` wrapping a `dl.fields` | the two-column grid landed on the section, so the title took column one and every field stacked in column two | `section.sec` + `h3.sec-title` + `dl.fields` |
+| `<tr class="row">` | the generic `.row` sets `display: flex`, which turned the table row into a flex container and every cell into a `block` 20px wide | `tr.is-link`, the prototype's own interactive-row class |
+| `<h1>` outside a `.screen-head` | `.screen-head h1` carries 16/24/600; a bare `h1` fell back to the document heading | `div.screen-head > h1` |
+
+The lesson is mechanical: when a component's class list looks right, check the *element*
+it lands on. A grid or flex class on a container whose child is the intended grid is the
+same defect as a missing class, and it is harder to see because nothing is undefined.
+Every screen's title lives in `.screen-head`, every fact block is a `.sec`, and a table
+row never takes a display mode from a generic list class.
+
 ## Two layout contracts that break the page when confused
 
 **A table row is a table row.** `<tr>` may not carry a class whose rule declares a
