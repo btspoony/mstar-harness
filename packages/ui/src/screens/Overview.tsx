@@ -252,9 +252,10 @@ function WorkflowRowView(props: {
     [copy.branchTarget, branch.target],
   ];
   const drawn = anchors.filter(([, value]) => value !== null);
+  // A div, not a section.panel: this row already sits inside the `Active workflow` panel's
+  // body, and as a panel it made the overview count six where the prototype has five.
   return (
-    <section className="panel" data-ms-overview-workflow="">
-      <div className="wf-summary">
+    <div className="wf-summary" data-ms-overview-workflow="">
         <span className="wf-id">{row.id}</span>
         <span className="muted">{copy.typeLabel}</span>
         <span className="chip">{row.type}</span>
@@ -264,7 +265,6 @@ function WorkflowRowView(props: {
             {copy.openWorkflow}
           </button>
         )}
-      </div>
       <p data-ms-workflow-meta={row.plansTotal}>
         {copy.workflowMeta(row.plansTotal, row.status)}
       </p>
@@ -287,7 +287,7 @@ function WorkflowRowView(props: {
         rows={row.plans}
         rowKey={(plan) => plan.planId}
       />
-    </section>
+    </div>
   );
 }
 
