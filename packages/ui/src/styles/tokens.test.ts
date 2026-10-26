@@ -311,6 +311,15 @@ describe("forced colors: the status dot stops depending on colour", () => {
     expect(offenders).toEqual([]);
   });
 
+  test("a nested screen gives the frame back instead of paying it twice", () => {
+    // `ProjectDetail` embeds the Issues and Iterations screens, so a nested screen
+    // would take a second 20px inset inside the project's own. The reset is what
+    // keeps one gutter per product surface.
+    const base = read(BASE_PATH);
+    expect(base).toMatch(/\.ms-container \[data-ms-screen\] \[data-ms-screen\] \{[^}]*padding: 0;/);
+    expect(base).toMatch(/\.ms-container \[data-ms-screen\] \[data-ms-screen\] \{[^}]*max-inline-size: none;/);
+  });
+
   test("base.css carries a forced-colors block that re-states the dot", () => {
     const base = read(BASE_PATH);
     expect(base).toContain("@media (forced-colors: active)");

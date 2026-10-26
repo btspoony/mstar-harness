@@ -72,7 +72,10 @@ const issuesCopy: IssuesCopy = {
   },
   anyOption: "Any",
   filtersHeading: "Filters",
-  openAcross: (projects) => (projects === null ? "open" : `open across ${projects} projects`),
+  scope: (disposition, projects) => {
+    const word = disposition === "" ? "all" : disposition;
+    return projects === null ? word : `${word} across ${projects} projects`;
+  },
   order: "severity desc, last activity desc, id asc",
   resultSummary: (total) => `${total} results`,
   pager: { previous: "Previous", next: "Next", range: (from, to, total) => `${from}–${to} of ${total}` },
@@ -282,6 +285,20 @@ describe("Issues — the prototype's card and its summary line", () => {
     expect(html).toContain("2");
     expect(html).toContain("open across 2 projects");
     expect(html).toContain("severity desc, last activity desc, id asc");
+  });
+
+  test("the summary names the disposition the filters select, not always `open`", () => {
+    // Default view: the store's open issues.
+    expect(html).toContain("open across 2 projects");
+    // Filtering to a closed disposition must not tell the reader they are looking
+    // at open issues — the same mistake in the opposite direction.
+    const resolved = renderIssues([summary()], 1, query({ disposition: "resolved" }));
+    expect(resolved).toContain("resolved across 1 project");
+    expect(resolved).not.toContain("open across");
+    // "Any" is every disposition, so it says so rather than picking one.
+    const any = renderIssues([summary()], 1, query({ disposition: "" }));
+    expect(any).toContain("all across 1 project");
+    expect(any).not.toContain("open across");
   });
 
   test("a partial page drops the project span instead of inventing one", () => {

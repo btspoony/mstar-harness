@@ -25,7 +25,7 @@ import { mkdirSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
-import { captureIssue, createExecutionWorkflow, initializeStore, openStore, readExecutionAuthority } from "@mstar-harness/engine";
+import { captureIssue, createExecutionWorkflow, initializeStore, openStore, readExecutionAuthority, registerCatalogEntity } from "@mstar-harness/engine";
 import { startDashboard, type RunningDashboard } from "../../commands/src/dashboard/index.ts";
 
 const RECORDED_AT = "2026-10-24T09:06:22.870Z";
@@ -110,7 +110,22 @@ const PROBE = `(() => {
   const timestamps = [...document.querySelectorAll('dd')]
     .map((cell) => cell.textContent.trim()).filter((text) => /\\d{4}-\\d{2}-\\d{2}/.test(text));
   const summary = document.querySelector('[data-ms-summary]');
+  const foot = document.querySelector('[data-ms-panel-foot]');
+  const range = document.querySelector('[data-ms-page-range]');
+  const buttons = foot === null ? [] : [...foot.querySelectorAll('button')];
+  const card = foot === null ? null : foot.closest('[data-ms-panel]');
+  const pager = foot === null ? null : {
+    lastButtonRight: buttons.length === 0 ? null : buttons[buttons.length - 1].getBoundingClientRect().right,
+    footInnerRight: foot.getBoundingClientRect().right - parseFloat(getComputedStyle(foot).paddingRight),
+    cardInnerRight: card === null ? null : card.getBoundingClientRect().right - 1 - 12,
+    buttonCentreY: buttons.length === 0 ? null : buttons[buttons.length - 1].getBoundingClientRect().top
+      + buttons[buttons.length - 1].getBoundingClientRect().height / 2,
+    rangeCentreY: range === null ? null : range.getBoundingClientRect().top + range.getBoundingClientRect().height / 2,
+    footHeight: foot.getBoundingClientRect().height,
+    buttonCount: buttons.length,
+  };
   return JSON.stringify({
+    pager,
     cards: cards.length,
     hasTable: table !== null,
     tableInCard: table !== null && table.closest('[data-ms-panel]') !== null,
@@ -123,6 +138,12 @@ const PROBE = `(() => {
     timestamps: timestamps.slice(0, 3),
     summary: summary === null ? null : summary.textContent.replace(/\\s+/g, ' ').trim(),
     isoInDocument: /\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}/.test(document.body.textContent ?? ''),
+    nested: (() => {
+      const inner = document.querySelector('[data-ms-screen] [data-ms-screen]');
+      if (inner === null) return null;
+      const cs = getComputedStyle(inner);
+      return { padding: cs.paddingTop + ' ' + cs.paddingRight + ' ' + cs.paddingBottom + ' ' + cs.paddingLeft, maxWidth: cs.maxInlineSize };
+    })(),
   });
 })()`;
 
@@ -160,6 +181,14 @@ describe.skipIf(!browserAvailable)("the render gate", () => {
       { actor: "project-manager", operationId: "render-gate-capture" },
     );
     issueId = captured.issueId;
+
+    // A project so `#project/<id>/issues` renders the nested Issues screen — the
+    // double-gutter case (PR 597 F3) only exists on a project feature page.
+    await registerCatalogEntity(
+      context,
+      { kind: "project", id: "proj-a", title: "Render gate project", rootKind: "projects", relativePath: "proj-a" },
+      { operationId: "render-gate-project", actor: "project-manager" },
+    );
 
     const authority = await readExecutionAuthority(context);
     await createExecutionWorkflow(
@@ -223,7 +252,7 @@ describe.skipIf(!browserAvailable)("the render gate", () => {
       }
     }
     await browser(["wait", "200"]);
-    await browser(["screenshot", join(CAPTURE_DIR, `${route.replace("/", "-")}.png`)]);
+    await browser(["screenshot", join(CAPTURE_DIR, `${route.replaceAll("/", "-")}.png`)]);
     return evalJson(PROBE);
   }
 
@@ -264,6 +293,27 @@ describe.skipIf(!browserAvailable)("the render gate", () => {
     // `design-v1.html:1215`: a cell date is `MM-DD` or `MM-DD HH:mm`, never ISO.
     for (const cell of screen.cells as string[]) expect(cell).toMatch(/^\d{2}-\d{2}( \d{2}:\d{2})?$/);
     expect(screen.isoInDocument).toBe(false);
+  }, 60_000);
+
+  test("the pager's controls sit on the foot's trailing edge and its line", async () => {
+    const screen = await visit("issues", "issues");
+    const pager = screen.pager as Record<string, number | null>;
+    // The prototype's foot splits left fact / right controls (`:1345`).
+    expect(pager.buttonCount).toBe(2);
+    expect(Math.abs((pager.lastButtonRight as number) - (pager.footInnerRight as number))).toBeLessThan(2);
+    // and they share the range's centre line rather than standing taller than it.
+    expect(Math.abs((pager.buttonCentreY as number) - (pager.rangeCentreY as number))).toBeLessThan(1.5);
+    expect(pager.footHeight as number).toBeLessThan(34);
+  }, 60_000);
+
+  test("a screen inside a screen does not pay the frame's gutter twice", async () => {
+    // `ProjectDetail` embeds the Issues screen (PR 597 F3).
+    const screen = await visit("project/proj-a/issues", "project-detail");
+    const nested = screen.nested as { padding: string; maxWidth: string } | null;
+    expect(nested).not.toBeNull();
+    expect(nested!.padding).toBe("0px 0px 0px 0px");
+    expect(nested!.maxWidth).toBe("none");
+
   }, 60_000);
 
   test("a detail screen shows its timestamps in the prototype's form", async () => {

@@ -87,6 +87,16 @@
   min-inline-size: 0;
 }
 
+/* A screen embedded in another screen — `ProjectDetail`'s Issues and Iterations
+   tabs — must not pay the page gutter twice. The frame belongs to the product
+   surface; a nested screen is content inside one, so it keeps its own layout but
+   gives up the outer inset, the max width and the centring. */
+.ms-container [data-ms-screen] [data-ms-screen] {
+  max-inline-size: none;
+  margin-inline: 0;
+  padding: 0;
+}
+
 .ms-container [data-ms-screen] h1 {
   margin: 0;
   font-size: var(--ms-fs-16);

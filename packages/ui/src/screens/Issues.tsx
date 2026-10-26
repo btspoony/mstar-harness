@@ -66,10 +66,12 @@ export type IssuesCopy = {
   /** The filter panel's head (`Filters`). */
   filtersHeading: string;
   /**
-   * The result line in the screen head: `open across 4 projects`, or plain
-   * `open` when the page does not hold the whole set (see `projectCount`).
+   * The result line in the screen head: `<disposition> across 4 projects`, or the
+   * disposition alone when the page does not hold the whole set (see
+   * `projectCount`). The disposition is the SELECTED one, so `resolved` is not
+   * described as `open`.
    */
-  openAcross: (projects: number | null) => string;
+  scope: (disposition: string, projects: number | null) => string;
   /** The read's own ordering, stated so a reader knows what "first" means. */
   order: string;
   /** The result line: `26 issues`. */
@@ -172,7 +174,7 @@ export function Issues(props: IssuesProps) {
           <span className={css.count} data-ms-count={model.total}>
             {model.total}
           </span>
-          <span data-ms-scope="">{copy.openAcross(model.projectCount)}</span>
+          <span data-ms-scope="">{copy.scope(filters.disposition, model.projectCount)}</span>
           <span aria-hidden="true">·</span>
           <span className={css.order} data-ms-order="">
             {copy.order}
