@@ -218,10 +218,12 @@ export function WorkflowDetail(props: WorkflowDetailProps) {
             )}
           </FieldGroup>
 
-          <section className={"table"} aria-labelledby="ms-workflow-plans">
-            <h2 id="ms-workflow-plans">
-              {copy.planTableHeading}
-            </h2>
+          <section className="panel" aria-labelledby="ms-workflow-plans">
+            <div className="panel-head">
+              <h2 className="panel-title" id="ms-workflow-plans">
+                {copy.planTableHeading}
+              </h2>
+            </div>
             <DataTable
               variant="detail"
               caption={copy.planTableHeading}

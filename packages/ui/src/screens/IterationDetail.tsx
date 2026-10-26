@@ -206,10 +206,12 @@ function IterationDetailBody(props: {
             </ol>
           </section>
 
-          <section className={"table"} aria-labelledby="ms-iteration-plans">
-            <h2 id="ms-iteration-plans">
-              {copy.planTableHeading}
-            </h2>
+          <section className="panel" aria-labelledby="ms-iteration-plans">
+            <div className="panel-head">
+              <h2 className="panel-title" id="ms-iteration-plans">
+                {copy.planTableHeading}
+              </h2>
+            </div>
             <DataTable
               variant="detail"
               caption={copy.planTableHeading}
