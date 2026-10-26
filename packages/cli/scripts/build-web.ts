@@ -68,13 +68,23 @@ async function main(): Promise<void> {
   // source produced two different bundles depending on whether the generator was
   // invoked from the repo root or from `packages/cli` — so "byte-deterministic" held
   // only for a fixed working directory.
+  const manifest = JSON.parse(
+    readFileSync(path.join(cliRoot, "package.json"), "utf8"),
+  ) as { name: string; version: string };
   const callerCwd = process.cwd();
   process.chdir(cliRoot);
   const bundle = await Bun.build({
     entrypoints: [path.join(webDir, "main.tsx")],
     target: "browser",
     minify: true,
-    define: { "process.env.NODE_ENV": '"production"' },
+    define: {
+      "process.env.NODE_ENV": '"production"',
+      // The product's identity, read from the manifest that owns it rather than written
+      // here: the prototype's identity line names the package and its version, and a
+      // literal in this file would go stale on the next release.
+      __MSTAR_PACKAGE__: JSON.stringify(manifest.name),
+      __MSTAR_VERSION__: JSON.stringify(manifest.version),
+    },
   });
   process.chdir(callerCwd);
   if (!bundle.success) {

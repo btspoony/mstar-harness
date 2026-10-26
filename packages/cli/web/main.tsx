@@ -186,6 +186,7 @@ function OverviewDestination(props: { query: string }) {
     <Overview
       model={outcome.model}
       copy={overviewCopy(copy)}
+      identity={{ packageName: __MSTAR_PACKAGE__, version: __MSTAR_VERSION__ }}
       onOpenWorkflow={(id) => navigate({ name: "workflow", id }, props.query, "push")}
       onOpenIssues={() => navigate({ name: "issues" }, props.query, "push")}
     />

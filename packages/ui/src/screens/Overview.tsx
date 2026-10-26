@@ -114,6 +114,12 @@ export type OverviewProps = {
   model: OverviewModel;
   copy: OverviewCopy;
   /**
+   * The product's identity, for the tail's `.identity-line`. The host supplies it because
+   * only a host knows which package built it and at which version — the shared package has
+   * no manifest of its own, and the prototype's line prints both.
+   */
+  identity?: { packageName: string; version: string };
+  /**
    * The host's own height budget. When it is short, IA §3.1 fixes the drop
    * order: milestones become one summary line first, then the plan table pages.
    * Height is host knowledge, so it arrives as a prop rather than as a viewport
@@ -610,6 +616,15 @@ export function Overview(props: OverviewProps) {
           own line: `.identity-line` is a hairline-topped mono row, not a muted sentence
           under the grid. */}
       <div className="identity-line" data-ms-projection={model.projection.kind}>
+        {props.identity === undefined ? null : (
+          <>
+            <span>{props.identity.packageName}</span>
+            <b className="id-strong">v{props.identity.version}</b>
+            <span className="sep" aria-hidden="true">
+              ·
+            </span>
+          </>
+        )}
         <span>{copy.projection[model.projection.kind]}</span>
       </div>
       {model.projection.kind === "current" ? null : (
