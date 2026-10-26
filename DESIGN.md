@@ -502,6 +502,11 @@ same defect as a missing class, and it is harder to see because nothing is undef
 Every screen's title lives in `.screen-head`, every fact block is a `.sec`, and a table
 row never takes a display mode from a generic list class.
 
+One place deliberately keeps a different element: `.milestone-block-id` is a `<div>`, where
+the prototype uses a `<span>`. Its parent `.milestone-block` sets no `display`, so the
+prototype's `<span>` is inline and a long iteration id runs past the card instead of
+wrapping. The element differs; the rendered type, colour and spacing do not.
+
 ## Two layout contracts that break the page when confused
 
 **A table row is a table row.** `<tr>` may not carry a class whose rule declares a
