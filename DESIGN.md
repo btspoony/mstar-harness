@@ -677,6 +677,29 @@ span edit: it means overriding two recorded decisions and adding a build-time co
 **This entry exists so it is not lost the way round 12's header badge was.** A known,
 reasoned gap belongs in this file; a gap nobody re-reads becomes a surprise at review.
 
+## Where this implementation still differs from the prototype
+
+One table, so the remaining distance can be read at once. Everything here is a known,
+reasoned gap — not undiscovered work.
+
+| # | Prototype | Here | Why | Reversible by |
+| --- | --- | --- | --- | --- |
+| 1 | `.identity-line` states `plugin · vX · {HARNESS_DIR} · projection` | states `projection` only | version is not embedded (`build-web.ts`); `{HARNESS_DIR}` is excluded by D28/D30; no constant names the host package | a build-time constant plus overriding two decisions |
+| 2 | header carries a version badge (`v4.0.9`) | no badge | same missing constant | the same constant |
+| 3 | milestone name is plain text | name ellipses on its own box | the prototype has nothing to truncate; ours must fit arbitrary names | not worth reversing — an ellipsis is the honest form of an unbounded string |
+| 4 | overview / issues trend drawn at two heights | same, **now matched** (88 / 132) | — | closed |
+| 5 | a scope chip with a removable × | same chip, no × when the host passes no callback | the prototype has a control; ours states a fact | passing `onClearScope` from a host |
+
+Rows 1 and 2 are the same missing fact: the build embeds no version. Fixing both means one
+change in `build-web.ts`, not two patches — and that is why they are listed rather than
+patched separately.
+
+**What is deliberately *not* in this table**: everything that has been made to match.
+The screens named here — Issues, Workflows, Iterations, Projects, the three details and
+Overview — were each compared against the prototype's own DOM, not against a memory of it,
+and the comparisons closed. A table of past fixes would grow without bound; this table is
+only the open set.
+
 ## Verification coverage, stated
 
 Two hosts mount these screens: the dashboard (`packages/cli/web`) and the dsh pane
