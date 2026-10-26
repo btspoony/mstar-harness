@@ -196,9 +196,11 @@ describe("Iterations list — the facts of §8.2", () => {
   });
 
   test("an iteration with no compass says so instead of claiming a step", () => {
+    // The list no longer carries a delivery column: the prototype's iterations table has
+    // six columns and the proven step is not one of them. The statement still appears on
+    // the detail screen, and the list never invents `step 0 of 5`.
     const html = renderList([iteration({ compass: null, gateStep: null } as Partial<IterationDTO>)], 1);
     expect(html).toContain("no compass");
-    expect(html).toContain('data-ms-iteration-step="none"');
     expect(html).not.toContain("step 0 of 5");
   });
 

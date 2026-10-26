@@ -102,16 +102,6 @@ export function Iterations(props: IterationsProps) {
       ),
     },
     {
-      key: "delivery",
-      header: copy.columns.delivery,
-      width: "9%",
-      render: (row) => (
-        <span className={"mono t-12"} data-ms-iteration-step={row.gateStep ?? "none"}>
-          {row.gatePosition === null ? copy.noCompass : copy.gateStep(row.gatePosition.step, row.gatePosition.of)}
-        </span>
-      ),
-    },
-    {
       key: "plans",
       header: copy.columns.plans,
       width: "8%",
@@ -134,14 +124,6 @@ export function Iterations(props: IterationsProps) {
       cellClass: "t-num",
       headerClass: "t-num",
       render: (row) => <span>{row.documents}</span>,
-    },
-    {
-      key: "started",
-      header: copy.columns.started,
-      width: "7%",
-      secondary: true,
-      align: "end",
-      render: (row) => <span className={"mono t-12"}>{row.startedAt}</span>,
     },
   ];
 
