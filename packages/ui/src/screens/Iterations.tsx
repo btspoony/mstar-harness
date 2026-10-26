@@ -13,17 +13,27 @@
  * `iterationListModel`; the screen only chooses the copy.
  */
 import { DataTable, type DataTableColumn } from "../components/DataTable.tsx";
-import { Panel, PanelBody } from "../components/Panel.tsx";
+import { FilterBar } from "../components/FilterBar.tsx";
+import { Panel, PanelBody, PanelHead } from "../components/Panel.tsx";
 import { EmptyState, type AbsenceArm } from "../components/EmptyState.tsx";
 import { StatusDot } from "../components/StatusDot.tsx";
 import { TruncatedText } from "../components/TruncatedText.tsx";
-import type { IterationListModel, IterationRow } from "../view-model/iterations.ts";
+import { DEFAULT_ITERATION_FILTERS, type IterationFilters, type IterationListModel, type IterationRow } from "../view-model/iterations.ts";
 import type { Tone } from "../view-model/status.ts";
 
 /** Every visible string this screen needs. Task 5 supplies them. */
 export type IterationsCopy = {
   pageTitle: string;
   tableCaption: string;
+  /** The filter card's own head. */
+  filtersHeading: string;
+  filters: {
+    lifecycle: string;
+    search: string;
+    clear: string;
+    any: string;
+    results: (shown: number, total: number) => string;
+  };
   columns: {
     id: string;
     title: string;
@@ -50,10 +60,17 @@ export type IterationsProps = {
   model: IterationListModel;
   copy: IterationsCopy;
   onOpen?: (iterationId: string) => void;
+  /** The current filter state; absent means unfiltered (a host without filters). */
+  filters?: IterationFilters;
+  onFiltersChange?: (filters: IterationFilters) => void;
 };
+
+/** The filter panel's accessible name; the head carries the id. */
+const FILTERS_HEAD_ID = "ms-iterations-filters";
 
 export function Iterations(props: IterationsProps) {
   const { model, copy } = props;
+  const filters = props.filters ?? DEFAULT_ITERATION_FILTERS;
 
   const columns: DataTableColumn<IterationRow>[] = [
     { key: "id", header: copy.columns.id, width: "18%", render: (row) => <span className={"mono t-12"}>{row.iterationId}</span> },
@@ -131,7 +148,37 @@ export function Iterations(props: IterationsProps) {
 
       {model.rows.kind === "populated" ? (
         <>
-          <Panel>
+          <Panel labelledBy={FILTERS_HEAD_ID}>
+            <PanelHead id={FILTERS_HEAD_ID} title={copy.filtersHeading} />
+            <FilterBar
+              fields={[
+                {
+                  key: "lifecycle",
+                  label: copy.filters.lifecycle,
+                  value: filters.lifecycle,
+                  options: [
+                    { value: "", label: copy.filters.any },
+                    ...model.lifecycles.map((value) => ({ value, label: value })),
+                  ],
+                },
+              ]}
+              onFieldChange={(key, value) => props.onFiltersChange?.({ ...filters, [key]: value })}
+              search={{
+                value: filters.q,
+                placeholder: copy.filters.search,
+                onChange: (value) => props.onFiltersChange?.({ ...filters, q: value }),
+              }}
+              applied={[
+                ...(filters.lifecycle === ""
+                  ? []
+                  : [{ key: "lifecycle", text: `${copy.filters.lifecycle}: ${filters.lifecycle}` }]),
+                ...(filters.q.trim() === "" ? [] : [{ key: "q", text: filters.q }]),
+              ]}
+              onClearFilter={(key) => props.onFiltersChange?.({ ...filters, [key]: "" } as IterationFilters)}
+              onClearAll={() => props.onFiltersChange?.({ ...DEFAULT_ITERATION_FILTERS })}
+              clearLabel={copy.filters.clear}
+              resultSummary={copy.filters.results(model.filtered, model.total)}
+            />
             <PanelBody tight={true}>
               <DataTable
                 caption={copy.tableCaption}

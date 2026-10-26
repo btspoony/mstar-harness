@@ -84,16 +84,26 @@ export function iterationRow(iteration: IterationDTO): IterationRow {
  * only loses its execution overlay — so this resolves the rows and reports the
  * attribution separately instead of promoting the whole list to `unavailable`.
  */
+/** The filters the iteration list offers, mirroring the prototype's row. */
+export type IterationFilters = { lifecycle: string; q: string };
+
+export const DEFAULT_ITERATION_FILTERS: IterationFilters = { lifecycle: "", q: "" };
+
 export type IterationListModel = {
   rows: Resolved<readonly IterationRow[]>;
   total: number;
   /** Whether this store attributes any iteration to a project (contract §4). */
   attribution: IterationListDTO["attribution"];
+  /** The lifecycle values the current rows carry, for the select. */
+  lifecycles: readonly string[];
+  /** How many rows the filters leave. */
+  filtered: number;
 };
 
 export function iterationListModel(read: {
   data: IterationListDTO;
   projection: { generation: number | null };
+  filters?: IterationFilters;
 }): IterationListModel {
   const attribution: IterationListDTO["attribution"] = read.data.attribution;
   // Zero rows mean different things depending on attribution (contract §4): a
@@ -108,9 +118,23 @@ export function iterationListModel(read: {
     // Iteration rows and their compass come from the execution projection.
     requiresProjection: true,
   });
+  const mapped = resolved.kind === "populated" ? resolved.value.items.map(iterationRow) : [];
+  const filters = read.filters ?? DEFAULT_ITERATION_FILTERS;
+  const q = filters.q.trim().toLowerCase();
+  const kept = mapped.filter(
+    (row) =>
+      (filters.lifecycle === "" || row.lifecycle === filters.lifecycle) &&
+      (q === "" || row.iterationId.toLowerCase().includes(q) || (row.title ?? "").toLowerCase().includes(q)),
+  );
   const rows: Resolved<readonly IterationRow[]> =
-    resolved.kind === "populated" ? { kind: "populated", value: resolved.value.items.map(iterationRow) } : resolved;
-  return { rows, total: read.data.total, attribution };
+    resolved.kind === "populated" ? { kind: "populated", value: kept } : resolved;
+  return {
+    rows,
+    total: read.data.total,
+    attribution,
+    lifecycles: [...new Set(mapped.map((row) => row.lifecycle).filter((v): v is string => v !== null))].sort(),
+    filtered: kept.length,
+  };
 }
 
 /** One plan row of an iteration detail's plan table. */

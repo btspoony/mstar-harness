@@ -148,6 +148,8 @@ export function IterationsDestination({ state, locale, onOpen }: DestinationProp
   const copy = copyFor(locale)
   const screenCopy = {
     ...copy.iterations,
+    // The pane keeps the prototype's filter row over the iteration list.
+    filters: copy.iterations.filters,
     notStarted: copy.workflowDetail.fields.notStarted,
     empty: { ...copy.state.empty, heading: copy.iterations.pageTitle },
     absent: { ...copy.state.absent, heading: copy.iterations.pageTitle },

@@ -293,6 +293,14 @@ export const zh: Copy = {
   },
 
   iterations: {
+    filtersHeading: "筛选",
+    filters: {
+      lifecycle: "生命周期",
+      search: "搜索迭代编号或标题",
+      clear: "清除筛选",
+      any: "全部",
+      results: (shown: number, total: number) => shown === total ? `${shown} 条结果` : `${shown} / ${total} 条结果`,
+    },
     pageTitle: "迭代",
     tableCaption: "迭代",
     columns: {

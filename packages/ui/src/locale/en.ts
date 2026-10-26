@@ -314,6 +314,14 @@ export const en = {
   },
 
   iterations: {
+    filtersHeading: "Filters",
+    filters: {
+      lifecycle: "Lifecycle",
+      search: "Search iteration id or title",
+      clear: "Clear filters",
+      any: "Any",
+      results: (shown: number, total: number) => shown === total ? `${shown} results` : `${shown} of ${total} results`,
+    },
     pageTitle: "Iterations",
     tableCaption: "Iterations",
     columns: {
