@@ -1772,7 +1772,26 @@ the shell does not have today.
 
 **The general form**: nine screens of element measurements passed while the frame around all
 nine of them was missing a mark and a version. **An element probe can only find what it is
-told to look for**; the screenshot is what finds the things nobody named.## Verification coverage, stated
+told to look for**; the screenshot is what finds the things nobody named.
+
+**Two of the three things that screenshot suggested were wrong, and checking cost one round
+each:**
+
+- *"The theme button is a gear, the prototype's is not."* The prototype's button holds two
+  svgs — `.icon-sun` and `.icon-moon` — swapped by `[data-theme]`. The sun at 14px reads as a
+  gear in a screenshot. This implementation's paths are **character-for-character the same**,
+  under `.app-icon-*` names and `[data-ms-theme]`; the shapes match.
+- *"The issues subtitle is `134open`."* That is `textContent` again. `.screen-meta` is a flex
+  row with `gap: 6px`, and `copy.scope` already returns `134 open across 4 projects`, which is
+  the prototype's own phrasing.
+
+**What the issues screen did confirm**: seven columns (ID, Title, Project, Kind, Severity,
+Disposition, Last activity), the trend panel above the filters panel, and the ordering line —
+all matching.
+
+**Still outstanding from that screenshot**: the footer's first segment. The prototype opens
+with an open-issue count (`26 open issues`) before the store revision; this implementation
+states only the revision, and the shell has no path to that total today.## Verification coverage, stated
 
 Two hosts mount these screens: the dashboard (`packages/cli/web`) and the dsh pane
 (`packages/dsh/src/client/panel`). They share the components but **each owns its own
