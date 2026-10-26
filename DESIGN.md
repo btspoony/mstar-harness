@@ -914,10 +914,18 @@ settles it.
 | 1 | breadcrumb `Workflows / issue-project-move` | the word `工作流` alone |
 | 2 | meta line `plan · running · phase-2-execute · updated …` | `plan · running · 更新于 2026-10-25` — no phase |
 | 3 | the two top panels are both `.panel` with a head | `执行` is a panel; the right side is a bare `.field` block with **no border**, then `目录` |
-| 4 | `Catalog identity` states six rows (Title, Lifecycle, Revision, Registered, Location, Updated) and the description beneath | four rows; Revision, Registered, Updated and the description are absent |
-| 5 | the plan table has six columns, the last being `Pin` | five |
-| 6 | a `Leases` panel listing two leases | an absence panel: this store holds none |
-| 7 | — | an extra `分支基线` block the prototype does not have |
+| 4 | `Catalog identity` states six rows (Title, Lifecycle, Revision, Registered, Location, Updated) and the description beneath | **closed**: six rows, and the description is a paragraph under them, not a labelled field |
+| 5 | the plan table has six columns, the last being `Pin` | five — **still open** |
+| 6 | a `Leases` panel listing two leases | an absence panel: this store holds none (data, not layout) |
+| 7 | — | **closed**: the extra `分支基线` block is gone |
+
+Rows 1, 3, 4 and 7 were fixed over rounds 114–118. Two notes from doing it:
+
+- The catalog panel had **seven** rows after the first fix, not six: `documentKind` is a row the
+  prototype does not carry. Adding the four missing facts was right; adding them without
+  counting the result was not.
+- Row 2 (the absent `phase`) is data: `workflow.phase` is `null` in this store. Deriving
+  `phase-2-execute` from `status` would be a claim the projection does not make.
 
 Rows 3 and 7 are the same defect twice: the execution panel is a `.panel` while its
 neighbour is a bare `.field` grid, so the two halves of one row do not share a frame. The
