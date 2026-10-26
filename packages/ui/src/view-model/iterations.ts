@@ -65,7 +65,11 @@ export type IterationRow = {
    *  this column beside `Plans`; the count comes from the same `documents` array the
    *  detail screen's inventory renders. */
   documents: number;
-  startedAt: string;
+  /**
+   * `null` when the iteration has no compass: a record that never started states no start
+   * time, and `UNKNOWN_DATE` here would print "Date unknown" beside "no compass".
+   */
+  startedAt: string | null;
   endedAt: string | null;
 };
 
@@ -90,7 +94,8 @@ export function iterationRow(iteration: IterationDTO): IterationRow {
     plansDone: tally.done,
     plansTotal: tally.total,
     documents: iteration.documents.length,
-    startedAt: formatDate(iteration.compass?.startedAt ?? null),
+    startedAt:
+      iteration.compass?.startedAt == null ? null : formatDate(iteration.compass.startedAt),
     endedAt: iteration.compass?.endedAt ?? null,
   };
 }

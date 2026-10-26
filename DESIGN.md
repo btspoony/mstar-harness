@@ -1342,6 +1342,20 @@ panel-body: "panel-body compass-body"
 first prose: "本迭代锁定的 spec 点：..."
 ```
 
+**The no-compass branch had its own defect, and only the browser showed it.** With
+`compass === null`, the head read `no compass · started Date unknown` — the second half
+asserting an unknown start time for an iteration that never started. `formatDate("")` returns
+`UNKNOWN_DATE` by design (a recorded-but-empty date is worth saying), but here there is no
+date to be empty. Both branches now measure:
+
+```
+iter-…authz-recovery  panel-meta: "no compass"
+iter-…panel-fixes     panel-meta: "completed · started 2026-08-11"
+```
+
+**The prototype has no no-compass variant**, so that branch cannot be compared against it —
+only against the rule that a screen states no fact it does not have.
+
 ## Verification coverage, stated
 
 Two hosts mount these screens: the dashboard (`packages/cli/web`) and the dsh pane

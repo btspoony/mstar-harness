@@ -27,6 +27,7 @@ import { EmptyState } from "../components/EmptyState.tsx";
 import { Field } from "../components/Field.tsx";
 import { FieldGroup } from "../components/FieldGroup.tsx";
 import { StatusDot } from "../components/StatusDot.tsx";
+import { UNKNOWN_DATE } from "../view-model/format.ts";
 import { TruncatedText } from "../components/TruncatedText.tsx";
 import type { IterationDetailModel, IterationPlanRow } from "../view-model/iterations.ts";
 import type { Resolved } from "../view-model/state.ts";
@@ -263,7 +264,9 @@ function IterationDetailBody(props: {
                 ) : (
                   <StatusDot label={value.compassStatus} tone={value.compassTone} mono />
                 )}
-                {value.startedAt === null ? null : (
+                {/* `Date unknown` beside `no compass` reads as a contradiction: when the
+                    compass records no start time there is nothing to say, not an unknown one. */}
+                {value.startedAt === null || value.startedAt === UNKNOWN_DATE ? null : (
                   <>
                     <span aria-hidden="true">·</span>
                     <span className={"mono"}>{copy.compassStarted(value.startedAt)}</span>
