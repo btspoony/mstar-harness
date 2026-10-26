@@ -104,9 +104,10 @@ function filterFields(copy: IssuesCopy, options: IssuesProps["options"], filters
     value: filters[key],
     options: [{ value: "", label: copy.anyOption }, ...values.map((value) => ({ value, label: value }))],
   });
+  // The prototype's order on the row: Project | Disposition | Kind | Severity.
   return [
-    build("disposition", options.disposition),
     build("project", options.project),
+    build("disposition", options.disposition),
     build("kind", options.kind),
     build("severity", options.severity),
   ];
