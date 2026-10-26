@@ -32,10 +32,6 @@ import type { Tone } from "../view-model/status.ts";
 /** Every visible string this screen needs. Task 5 supplies them. */
 export type WorkflowDetailCopy = {
   /** The chain's short labels (`Base`), distinct from the fields block's longer ones. */
-  chainBase: string;
-  chainSource: string;
-  chainIntegration: string;
-  chainTarget: string;
   breadcrumb: { label: string; current: string };
   executionHeading: string;
   planTableHeading: string;

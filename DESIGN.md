@@ -930,6 +930,21 @@ looked at, and four of its six facts are missing.
 and `heads: ["执行", "目录", "计划", "租约"]` matched the prototype's four names — because I
 was counting the wrong thing in the wrong order.
 
+## The branch chain is per screen, and the evidence is a screenshot
+
+The overview's active-workflow row prints `Base main → Source … → Integration … → Target main`.
+The workflow detail screen does **not**: the round-113 side-by-side screenshot of the
+prototype's detail screen shows the page ending at the leases table, with no chain above the
+catalog panel. Both screens carry the same four facts; only one draws them as a chain.
+
+The implementation had the chain on both. Removing it from the detail screen left the four
+copy keys (`chainBase`, `chainSource`, `chainIntegration`, `chainTarget`) declared in
+`WorkflowDetailCopy` and defined in both locales but read by nothing — `validation:drift`
+does not look for unreferenced copy keys, so it stayed green. They are gone now.
+
+**The general form**: deleting markup does not delete its strings, and a green drift check
+says nothing about whether a key is still read.
+
 ## Verification coverage, stated
 
 Two hosts mount these screens: the dashboard (`packages/cli/web`) and the dsh pane
