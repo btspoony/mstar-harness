@@ -281,10 +281,13 @@ describe("forced colors: the status dot stops depending on colour", () => {
     expect(base).toContain("@media (forced-colors: active)");
     const start = base.indexOf("@media (forced-colors: active)");
     const forced = base.slice(start);
-    expect(forced).toContain("[data-ms-tone]");
+    // The dot's own attribute, never the bare tone: the wrapper carries the tone as
+    // well, so a bare selector would fill the whole label instead of the 6px box.
+    expect(forced).toContain("[data-ms-dot]");
+    expect(forced).not.toMatch(/\n\s*\[data-ms-tone[\]]/);
     // all five tones get their own shape, so greyscale/forced-colors keeps them apart
     for (const tone of ["danger", "warning", "success", "neutral", "purple"]) {
-      expect(forced).toContain(`[data-ms-tone="${tone}"]`);
+      expect(forced).toContain(`[data-ms-dot][data-ms-tone="${tone}"]`);
     }
   });
 });

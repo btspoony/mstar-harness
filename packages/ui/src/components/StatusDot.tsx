@@ -9,6 +9,12 @@
  *
  * The label is not translated: enum values are identifier text (`open`,
  * `InProgress`, `running`, …) and the dictionary never touches them.
+ *
+ * Both elements carry `data-ms-tone`: the wrapper so a surface can key on the tone
+ * without knowing the hashed class, and the dot so the tone's fill can find it. That
+ * shared attribute is why every PAINTING rule must qualify itself with `.dot` (or the
+ * dot's own `data-ms-dot` in the plain-CSS sheet) — a bare `[data-ms-tone="…"]`
+ * matches the wrapper too and fills the whole label instead of the 6px box.
  */
 import type { Tone } from "../view-model/status.ts";
 import css from "./StatusDot.module.css";
@@ -30,7 +36,7 @@ export function StatusDot(props: StatusDotProps) {
       data-ms-tone={props.tone}
       data-ms-emphasis={props.emphasis === true ? "true" : undefined}
     >
-      <span className={css.dot} data-ms-tone={props.tone} aria-hidden="true" />
+      <span className={css.dot} data-ms-tone={props.tone} data-ms-dot="" aria-hidden="true" />
       <span className={props.mono === true ? css.labelMono : css.label}>{props.label}</span>
     </span>
   );

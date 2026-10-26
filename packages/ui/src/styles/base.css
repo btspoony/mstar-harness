@@ -154,24 +154,30 @@
  * high-contrast and a colour-blind reader.
  *
  * The default dot box (size, radius, colour) is `StatusDot`'s; this block only
- * takes over when colour is unavailable, which is why it targets the contract
- * attribute rather than the component class.
+ * takes over when colour is unavailable, which is why it targets a contract
+ * attribute rather than the component class — a CSS-module class is hashed and a
+ * plain sheet cannot name it.
+ *
+ * It targets `[data-ms-dot]`, the DOT's own attribute, and never `[data-ms-tone]`:
+ * the wrapper carries the tone as well, so a bare tone selector would give the whole
+ * label a solid fill, a dot-shaped border and (for `purple`) a 45° rotation — the
+ * shape channel would erase the text channel it exists to support.
  */
 @media (forced-colors: active) {
-  [data-ms-tone] {
+  [data-ms-dot] {
     background: CanvasText;
     border: 1px solid CanvasText;
     border-radius: var(--ms-radius-full);
   }
 
-  [data-ms-tone="danger"] {
+  [data-ms-dot][data-ms-tone="danger"] {
     background: CanvasText;
     border-color: CanvasText;
     border-radius: var(--ms-radius-full);
     transform: none;
   }
 
-  [data-ms-tone="warning"] {
+  [data-ms-dot][data-ms-tone="warning"] {
     background: Canvas;
     border-color: CanvasText;
     border-width: 2px;
@@ -179,21 +185,21 @@
     transform: none;
   }
 
-  [data-ms-tone="success"] {
+  [data-ms-dot][data-ms-tone="success"] {
     background: CanvasText;
     border-color: CanvasText;
     border-radius: 0;
     transform: none;
   }
 
-  [data-ms-tone="neutral"] {
+  [data-ms-dot][data-ms-tone="neutral"] {
     background: Canvas;
     border-color: CanvasText;
     border-radius: 0;
     transform: none;
   }
 
-  [data-ms-tone="purple"] {
+  [data-ms-dot][data-ms-tone="purple"] {
     background: CanvasText;
     border-color: CanvasText;
     border-radius: 0;

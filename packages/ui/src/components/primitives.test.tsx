@@ -31,6 +31,94 @@ import { Tabs } from "./Tabs.tsx";
 import { TruncatedText } from "./TruncatedText.tsx";
 
 const moduleCss = (name: string): string => readFileSync(join(import.meta.dir, `${name}.module.css`), "utf8");
+const stylesheet = (name: string): string => readFileSync(join(import.meta.dir, "..", "styles", `${name}.css`), "utf8");
+
+/**
+ * Flatten a stylesheet's at-rule blocks for analysis.
+ *
+ * The tone rules live inside `@media (forced-colors: active)` and a plain-CSS file
+ * cannot qualify them with a CSS-module class (those are hashed), so the check that
+ * matters is whether the selectors can match the wrapper. Removing the prelude lines
+ * lets the same matcher see them; the orphaned closing braces produce empty chunks.
+ */
+const unwrapAtRules = (css: string): string => css.replace(/^\s*@[a-z-]+[^{]*\{\s*$/gm, "");
+
+/**
+ * The paint rules of one component sheet, matched against an element by selector
+ * semantics rather than by string shape.
+ *
+ * A rule paints a given element when its **subject** compound (the last one in the
+ * selector) requires nothing the element lacks: same class set, same attribute
+ * values. Pseudo-classes are ignored — they cannot paint unconditionally — and any
+ * other qualified class disqualifies the match, which is exactly the distinction
+ * between `.dot` and a bare `[data-ms-tone]`.
+ */
+type PaintRule = { selector: string; subject: string; paint: string };
+
+function paintRules(css: string): PaintRule[] {
+  const withoutComments = css.replace(/\/\*[\s\S]*?\*\//g, "");
+  const rules: PaintRule[] = [];
+  for (const chunk of withoutComments.split("}")) {
+    const brace = chunk.indexOf("{");
+    if (brace < 0) continue;
+    const selectors = chunk.slice(0, brace);
+    const body = chunk.slice(brace + 1);
+    const paint = /(?:^|[;\s])(background(?:-color)?|border(?:-color|-radius|-width)?|color|transform)\s*:\s*([^;]+)/.exec(body);
+    if (paint === null) continue;
+    for (const selector of selectors.split(",")) {
+      const trimmed = selector.trim();
+      if (trimmed === "" || trimmed.startsWith("@")) continue;
+      // The subject is the last compound of the selector.
+      const subject = trimmed.split(/\s+|>/).filter(Boolean).pop() ?? trimmed;
+      rules.push({ selector: trimmed, subject, paint: `${paint[1]}: ${paint[2]!.trim()}` });
+    }
+  }
+  return rules;
+}
+
+/**
+ * The attributes each `<span>` in a rendered `StatusDot` actually carries.
+ *
+ * Read from the markup rather than hand-written, so the check follows the component:
+ * the matcher is given the real attribute set (tone on both elements, the dot's marker,
+ * its `aria-hidden`) and the two symbolic class names the module's selectors use — the
+ * rendered classes are hashed, so only the source-level names are comparable.
+ */
+function renderedSpans(html: string): Record<string, string>[] {
+  return [...html.matchAll(/<span\b([^>]*)>/g)].map((match) => {
+    const attrs: Record<string, string> = {};
+    for (const [, name, value] of match[1]!.matchAll(/([a-z-]+)(?:="([^"]*)")?/g)) {
+      if (name === "class") continue;
+      attrs[name!] = value ?? "";
+    }
+    return attrs;
+  });
+}
+
+/** The wrapper (tone, no dot marker) and the dot (carries the marker), by what they carry. */
+function statusElements(html: string): { wrapper: { classes: string[]; attrs: Record<string, string> }; dot: { classes: string[]; attrs: Record<string, string> } } {
+  const spans = renderedSpans(html);
+  const wrapper = spans.find((span) => span["data-ms-tone"] !== undefined && span["data-ms-dot"] === undefined);
+  const dot = spans.find((span) => span["data-ms-dot"] !== undefined);
+  if (wrapper === undefined || dot === undefined) throw new Error("StatusDot must render a tone wrapper and a marked dot");
+  return { wrapper: { classes: ["status"], attrs: wrapper }, dot: { classes: ["dot"], attrs: dot } };
+}
+
+/** Whether a rule's subject can match an element with these classes and attributes. */
+function matches(element: { classes: readonly string[]; attrs: Record<string, string> }, rule: PaintRule): boolean {
+  const required = [...rule.subject.matchAll(/\.([A-Za-z0-9_-]+)/g)].map((match) => match[1]!);
+  const conditions = [...rule.subject.matchAll(/\[([a-z-]+)(?:="([^"]*)")?\]/g)];
+  // A subject with no class and no attribute (a bare element selector) is not
+  // keyed on either, so it is outside what this check is about.
+  if (required.length === 0 && conditions.length === 0) return false;
+  for (const name of required) if (!element.classes.includes(name)) return false;
+  for (const [, attr, value] of conditions) {
+    if (element.attrs[attr!] === undefined) return false;
+    if (value !== undefined && element.attrs[attr!] !== value) return false;
+  }
+  return true;
+}
+
 const render = (node: Parameters<typeof renderToStaticMarkup>[0]): string => renderToStaticMarkup(node);
 
 describe("StatusDot — the label is the signal, colour is secondary", () => {
@@ -51,6 +139,44 @@ describe("StatusDot — the label is the signal, colour is secondary", () => {
     const html = render(<StatusDot label="open" tone="neutral" />);
     expect(html).not.toMatch(/#[0-9a-f]{3,8}/i);
     expect(html).not.toContain("rgb(");
+  });
+
+  test("the tone paints the dot and nothing else: the label is never a colour block", () => {
+    // The defect this pins: the tone rules were bare attribute selectors, and the
+    // wrapper carries the same attribute, so every rule matched both elements and
+    // filled the whole label instead of the 6px dot beside it.
+    const rules = paintRules(moduleCss("StatusDot"));
+    const { wrapper, dot } = statusElements(render(<StatusDot label="high" tone="danger" emphasis />));
+
+    const paintingWrapper = rules.filter((rule) => matches(wrapper, rule) && /background/.test(rule.paint));
+    expect(paintingWrapper.map((rule) => rule.selector)).toEqual([]);
+
+    // Not vacuously true: the same attribute does paint the dot.
+    const paintingDot = rules.filter((rule) => matches(dot, rule) && /background/.test(rule.paint));
+    expect(paintingDot.length).toBeGreaterThan(0);
+  });
+
+  test("the forced-colors shape rules draw the dot, never the label", () => {
+    // The same defect one level out: in forced-colors mode these rules give each tone
+    // a SHAPE — the dot's second channel. Bare attribute selectors matched the wrapper
+    // too, so the whole label got a solid fill, a dot-shaped border, and for `purple`
+    // a 45° rotation of the text. A plain-CSS sheet cannot name the CSS-module class,
+    // so the dot carries its own contract attribute.
+    const rules = paintRules(unwrapAtRules(stylesheet("base")));
+    for (const tone of ["danger", "warning", "success", "neutral", "purple"] as const) {
+      const { wrapper, dot } = statusElements(render(<StatusDot label={tone} tone={tone} />));
+      expect(rules.filter((rule) => matches(wrapper, rule))).toEqual([]);
+      expect(rules.filter((rule) => matches(dot, rule)).length).toBeGreaterThan(0);
+    }
+  });
+
+  test("every tone's fill is on the dot, not on the wrapper", () => {
+    const rules = paintRules(moduleCss("StatusDot"));
+    for (const tone of ["danger", "warning", "success", "neutral", "purple"] as const) {
+      const { wrapper, dot } = statusElements(render(<StatusDot label={tone} tone={tone} />));
+      expect(rules.filter((rule) => matches(wrapper, rule) && /background/.test(rule.paint))).toEqual([]);
+      expect(rules.filter((rule) => matches(dot, rule) && /background/.test(rule.paint)).length).toBeGreaterThan(0);
+    }
   });
 });
 
