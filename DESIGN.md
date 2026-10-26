@@ -1318,7 +1318,31 @@ classes that happen to look similar, against a purpose-built rule with its own
 **The honest state of the scan**: it is a **report**, run by hand. It cannot be a hard
 failure — 97 classes hit, most legitimately — and the judgement that separates `.evidence`
 from `.tk-swatch` is still a human one, but the judgement has to cite an instance count, not
-a plausible category.## Verification coverage, stated
+a plausible category.## The Compass panel: three facts in the wrong places
+
+`.compass-body` was the last unused class with a prototype instance behind it, and following
+it found a panel whose **content was right and whose placement was wrong**:
+
+| Fact | The prototype | This implementation, before |
+| --- | --- | --- |
+| compass status | `.panel-meta` in the **head**, as a `.status` dot | a `dt/dd` row in the body's `dl` |
+| `startedAt` | `.panel-meta`, `started <time>` | **carried by the model, rendered nowhere** |
+| the direction summary | `<p class="prose">` as the body's first column | a `dt/dd` row |
+| the body | `panel-body compass-body` (two columns, `1fr : 1.15fr`) | `panel-body`, one column |
+
+So `startedAt` was a **dead field** — the fourth this document has recorded, after the four
+`chain*` keys, `gateStepLabels` and the catalog `revision`. The model read it, the type
+declared it, and no element ever printed it.
+
+Measured after the rewrite, on a real iteration that has a compass:
+
+```
+panel-meta: "completed · started 2026-08-11"
+panel-body: "panel-body compass-body"
+first prose: "本迭代锁定的 spec 点：..."
+```
+
+## Verification coverage, stated
 
 Two hosts mount these screens: the dashboard (`packages/cli/web`) and the dsh pane
 (`packages/dsh/src/client/panel`). They share the components but **each owns its own

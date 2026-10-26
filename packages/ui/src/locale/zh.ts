@@ -365,6 +365,7 @@ export const zh: Copy = {
     documentColumns: { title: "标题", lifecycle: "生命周期", kind: "文档类型", location: "位置", revision: "版本" },
     breadcrumb: { label: "位置导航", root: "迭代", current: "迭代" },
     compassHeading: "罗盘",
+    compassStarted: (at: string) => `开始于 ${at}`,
     planTableHeading: "计划",
     catalogHeading: "目录",
     executionHeading: "执行",

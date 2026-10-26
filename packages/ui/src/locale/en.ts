@@ -387,6 +387,7 @@ export const en = {
     documentColumns: { title: "Title", lifecycle: "Lifecycle", kind: "Document kind", location: "Location", revision: "Revision" },
     breadcrumb: { label: "Breadcrumb", root: "Iterations", current: "Iteration" },
     compassHeading: "Compass",
+    compassStarted: (at: string) => `started ${at}`,
     planTableHeading: "Plans",
     catalogHeading: "Catalog",
     executionHeading: "Execution",

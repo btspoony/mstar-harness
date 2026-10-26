@@ -36,6 +36,8 @@ import type { GateStepId, GateStepPosition, Tone } from "../view-model/status.ts
 export type IterationDetailCopy = {
   breadcrumb: { label: string; root: string; current: string };
   compassHeading: string;
+  /** The head's meta line: `started <time>`, beside the compass status. */
+  compassStarted: (at: string) => string;
   planTableHeading: string;
   catalogHeading: string;
   executionHeading: string;
@@ -254,24 +256,29 @@ function IterationDetailBody(props: {
           <section className="panel" aria-labelledby="ms-iteration-compass">
             <div className="panel-head">
               <h2 className="panel-title" id="ms-iteration-compass">{copy.compassHeading}</h2>
+              {/* The prototype puts the status and the start time in the head, not the body. */}
+              <span className="panel-meta">
+                {value.compassStatus === null ? (
+                  <span className={"muted"}>{copy.fields.noCompass}</span>
+                ) : (
+                  <StatusDot label={value.compassStatus} tone={value.compassTone} mono />
+                )}
+                {value.startedAt === null ? null : (
+                  <>
+                    <span aria-hidden="true">·</span>
+                    <span className={"mono"}>{copy.compassStarted(value.startedAt)}</span>
+                  </>
+                )}
+              </span>
             </div>
-            <div className="panel-body">
-              <dl className="fields">
-            <Field label={copy.fields.compassStatus} mono>
-              {value.compassStatus === null ? (
-                <span className={"muted"}>{copy.fields.noCompass}</span>
-              ) : (
-                <StatusDot label={value.compassStatus} tone={value.compassTone} mono />
-              )}
-            </Field>
-            <Field label={copy.fields.title}>
+            <div className="panel-body compass-body">
               {value.summary === null ? (
-                <span className={"muted"}>{copy.fields.noSummary}</span>
+                <p className={"prose muted"}>{copy.fields.noSummary}</p>
               ) : (
-                <span data-ms-compass-summary="">{value.summary}</span>
+                <p className={"prose"} data-ms-compass-summary="">
+                  {value.summary}
+                </p>
               )}
-            </Field>
-              </dl>
               {/* The prototype's Compass panel ends with its milestones as a mini table:
                   name, target, status. */}
               {value.compassMilestones.length === 0 ? null : (
