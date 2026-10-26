@@ -43,6 +43,7 @@ export { EmptyState, listEmptyFamily } from "./components/EmptyState.tsx";
 export { LiveRegion } from "./components/LiveRegion.tsx";
 export { Pager, hasNext, hasPrevious, pageRange } from "./components/Pager.tsx";
 export { DataTable } from "./components/DataTable.tsx";
+export { Panel, PanelHead, PanelBody, PanelFoot } from "./components/Panel.tsx";
 export { Field } from "./components/Field.tsx";
 export { FieldGroup } from "./components/FieldGroup.tsx";
 export { Row } from "./components/Row.tsx";

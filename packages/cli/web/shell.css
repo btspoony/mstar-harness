@@ -73,26 +73,72 @@ body {
   margin-inline-start: auto;
 }
 
-/* A labelled control, not a default form widget: the label is always visible, and
-   the select keeps the platform's own interaction model. */
-.app-switch {
+/* The two controls are the prototype's (`design-v1.html:180-196`): a segmented
+   language group and an icon button. Both keep a label outside the icon, both are
+   buttons, and neither states its value with a fill colour of its own — the
+   pressed state is `aria-pressed` plus the shape of the icon. They wrap instead of
+   disappearing at a narrow width, because a control a reader cannot reach is not
+   a smaller control but a missing one.
+ */
+.app-seg {
+  display: inline-flex;
+  border: 1px solid currentColor;
+  border-radius: 0.25rem;
+  overflow: hidden;
+}
+
+.app-seg button {
+  border: 0;
+  padding: 0.125rem 0.5rem;
+  background: inherit;
+  color: inherit;
+  font: inherit;
+  font-size: 0.8125rem;
+  cursor: pointer;
+}
+
+.app-seg button + button {
+  border-left: 1px solid currentColor;
+}
+
+/* The pressed choice is a weight and a background from the shared tokens, plus
+   `aria-pressed`: the reader gets the state from three channels, not one hue. */
+.app-seg button[aria-pressed="true"] {
+  background: var(--ms-bg-inset);
+  font-weight: 600;
+}
+
+.app-seg button:focus-visible,
+.app-icon-btn:focus-visible {
+  outline: 2px solid currentColor;
+  outline-offset: 1px;
+}
+
+.app-icon-btn {
+  width: 26px;
+  height: 26px;
   display: inline-flex;
   align-items: center;
-  gap: 0.375rem;
-  font-size: 0.875rem;
-}
-
-.app-switch-label {
-  white-space: nowrap;
-}
-
-.app-switch select {
-  padding: 0.25rem 0.375rem;
+  justify-content: center;
+  padding: 0;
   border: 1px solid currentColor;
   border-radius: 0.25rem;
   background: inherit;
   color: inherit;
-  font: inherit;
+  cursor: pointer;
+}
+
+.app-icon-btn svg {
+  display: block;
+}
+
+/* One shape per scheme, so the control says which one is active without colour. */
+[data-ms-theme="light"] .app-icon-sun {
+  display: none;
+}
+
+[data-ms-theme="dark"] .app-icon-moon {
+  display: none;
 }
 
 .app-main {

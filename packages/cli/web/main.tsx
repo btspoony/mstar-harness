@@ -717,16 +717,11 @@ function Shell(props: {
           label={copy.shell.nav.primary}
         />
         <div className="app-controls">
-          <Switch
-            label={copy.shell.theme.label}
-            value={props.theme}
-            options={[
-              { value: "light", label: copy.shell.theme.light },
-              { value: "dark", label: copy.shell.theme.dark },
-            ]}
-            onChange={(value) => props.onThemeChange(value === "dark" ? "dark" : "light")}
-          />
-          <Switch
+          {/* The prototype's treatment (`design-v1.html:179-196`): a segmented
+              language group and a theme button carrying a shape per scheme — not
+              two native selects. Both are real buttons, so both are reachable by
+              keyboard and neither states its value by colour alone. */}
+          <SegmentedControl
             label={copy.shell.language.label}
             value={props.locale}
             options={[
@@ -735,7 +730,12 @@ function Shell(props: {
             ]}
             onChange={(value) => props.onLocaleChange(value === "zh" ? "zh" : "en")}
           />
-          {props.persisted ? null : <p className="app-switch-note">{copy.shell.store.sessionOnly}</p>}
+          <ThemeButton
+            label={copy.shell.theme.label}
+            theme={props.theme}
+            onChange={props.onThemeChange}
+          />
+          {props.persisted ? null : <p className="app-controls-note">{copy.shell.store.sessionOnly}</p>}
         </div>
       </header>
       {/* Only the landing destination is mounted (Task 3); the four lists arrive in
@@ -829,19 +829,67 @@ function Boot() {
   );
 }
 
-/** One switch: a label and a select, both driven by the dictionary. */
-function Switch(props: { label: string; value: string; options: readonly { value: string; label: string }[]; onChange: (value: string) => void }) {
+/**
+ * One choice among a few, as a segmented group: the prototype's `.seg`
+ * (`design-v1.html:183-189`).
+ *
+ * The pressed button carries `aria-pressed`, so the choice is announced as state
+ * and does not depend on the fill colour. The group is labelled from the
+ * dictionary; each button's own text is its label, so nothing here is icon-only.
+ */
+function SegmentedControl(props: {
+  label: string;
+  value: string;
+  options: readonly { value: string; label: string }[];
+  onChange: (value: string) => void;
+}) {
   return (
-    <label className="app-switch">
-      <span className="app-switch-label">{props.label}</span>
-      <select value={props.value} onChange={(event) => props.onChange(event.target.value)}>
-        {props.options.map((option) => (
-          <option key={option.value} value={option.value}>
-            {option.label}
-          </option>
-        ))}
-      </select>
-    </label>
+    <div className="app-seg" role="group" aria-label={props.label} data-ms-control="language">
+      {props.options.map((option) => (
+        <button
+          key={option.value}
+          type="button"
+          aria-pressed={option.value === props.value}
+          onClick={() => props.onChange(option.value)}
+        >
+          {option.label}
+        </button>
+      ))}
+    </div>
+  );
+}
+
+/**
+ * The scheme switch, as the prototype's icon button (`design-v1.html:191-196`).
+ *
+ * The two icons are different SHAPES (a sun and a moon), and both are hidden from
+ * assistive technology: the accessible name is the dictionary's label, and the
+ * pressed state is announced. So the control reads the same in forced colors and
+ * to a screen reader, and the icon is never the only channel.
+ */
+function ThemeButton(props: {
+  label: string;
+  theme: Theme;
+  onChange: (theme: Theme) => void;
+}) {
+  const dark = props.theme === "dark";
+  return (
+    <button
+      type="button"
+      className="app-icon-btn"
+      aria-label={props.label}
+      aria-pressed={dark}
+      data-ms-control="theme"
+      onClick={() => props.onChange(dark ? "light" : "dark")}
+    >
+      <svg className="app-icon-sun" width="14" height="14" viewBox="0 0 16 16" aria-hidden="true" fill="none" stroke="currentColor" strokeWidth="1.3">
+        <circle cx="8" cy="8" r="3.1" />
+        <path d="M8 1v2M8 13v2M1 8h2M13 8h2M3.1 3.1l1.4 1.4M11.5 11.5l1.4 1.4M12.9 3.1l-1.4 1.4M4.5 11.5l-1.4 1.4" />
+      </svg>
+      <svg className="app-icon-moon" width="14" height="14" viewBox="0 0 16 16" aria-hidden="true" fill="none" stroke="currentColor" strokeWidth="1.3">
+        <path d="M13.2 9.6A5.6 5.6 0 016.4 2.8a5.6 5.6 0 106.8 6.8z" />
+      </svg>
+    </button>
   );
 }
 

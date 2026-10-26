@@ -27,7 +27,7 @@ import {
   severityTone,
   type Tone,
 } from "./status.ts";
-import { UNKNOWN_DATE, formatDate, longText } from "./format.ts";
+import { UNKNOWN_DATE, formatDate, formatShortDate, longText } from "./format.ts";
 
 /** Fixed page size; the read model's own default (`issue contract §5`). */
 export const PAGE_SIZE = 50;
@@ -166,7 +166,7 @@ export function issueRow(issue: IssuePage["items"][number]): IssueRow {
     disposition: issue.disposition,
     dispositionTone: dispositionTone(issue.disposition),
     milestoneId: issue.milestoneId,
-    lastActivity: formatDate(issue.lastActivity),
+    lastActivity: formatShortDate(issue.lastActivity),
   };
 }
 
@@ -174,6 +174,12 @@ export function issueRow(issue: IssuePage["items"][number]): IssueRow {
 export type IssueListModel = {
   rows: Resolved<readonly IssueRow[]>;
   total: number;
+  /**
+   * How many projects this result set spans, or `null` when the page holds only
+   * part of it: a partial page cannot count the projects it never saw, and a
+   * guessed span would be the kind of invented figure the read rules forbid.
+   */
+  projectCount: number | null;
   offset: number;
   pageSize: number;
   /** 1-based page number, for the pager. */
@@ -201,9 +207,11 @@ export function issueListModel(
     rows.kind === "populated" ? { kind: "populated", value: rows.value.map(issueRow) } : rows;
   const total = read.data.total;
   const offset = query.offset;
+  const complete = read.data.items.length === total;
   return {
     rows: mapped,
     total,
+    projectCount: complete ? new Set(read.data.items.map((item) => item.projectId)).size : null,
     offset,
     pageSize: PAGE_SIZE,
     page: Math.floor(offset / PAGE_SIZE) + 1,

@@ -13,6 +13,7 @@
  * `iterationListModel`; the screen only chooses the copy.
  */
 import { DataTable, type DataTableColumn } from "../components/DataTable.tsx";
+import { Panel, PanelBody } from "../components/Panel.tsx";
 import { EmptyState, type AbsenceArm } from "../components/EmptyState.tsx";
 import { StatusDot } from "../components/StatusDot.tsx";
 import { TruncatedText } from "../components/TruncatedText.tsx";
@@ -121,14 +122,18 @@ export function Iterations(props: IterationsProps) {
 
       {model.rows.kind === "populated" ? (
         <>
-          <DataTable
-            caption={copy.tableCaption}
-            columns={columns}
-            rows={model.rows.value}
-            rowKey={(row) => row.iterationId}
-            meta={meta}
-            onRowActivate={props.onOpen === undefined ? undefined : (row) => props.onOpen?.(row.iterationId)}
-          />
+          <Panel>
+            <PanelBody tight={true}>
+              <DataTable
+                caption={copy.tableCaption}
+                columns={columns}
+                rows={model.rows.value}
+                rowKey={(row) => row.iterationId}
+                meta={meta}
+                onRowActivate={props.onOpen === undefined ? undefined : (row) => props.onOpen?.(row.iterationId)}
+              />
+            </PanelBody>
+          </Panel>
           {/* The scope statement: whether this store attributes iterations to a
               project at all. It rides beside the rows, never as a counter. */}
           <p className={css.attribution} data-ms-attribution={model.attribution}>

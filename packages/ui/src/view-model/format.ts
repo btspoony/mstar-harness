@@ -30,6 +30,22 @@ export function formatDate(value: string | null | undefined): string {
 }
 
 /**
+ * The short form a list cell shows (`design-v1.html:1215`): `10-25 13:58`.
+ *
+ * The prototype's table cells print month-day and the time, not the year and not
+ * an ISO string. A date with no time part keeps just the month-day, and a value
+ * that is not a timestamp falls back to `formatDate` so a non-date value still
+ * reads as itself rather than as `NaN`.
+ */
+export function formatShortDate(value: string | null | undefined): string {
+  const full = formatDate(value);
+  const match = /^\d{4}-(\d{2})-(\d{2})(?:[T ](\d{2}):(\d{2}))?/.exec(full);
+  if (match === null) return full;
+  const [, month, day, hour, minute] = match;
+  return hour === undefined ? `${month}-${day}` : `${month}-${day} ${hour}:${minute}`;
+}
+
+/**
  * One long-text field: the stored text with its line breaks preserved and no
  * interpretation. Empty text is `null` so the caller renders its own absence
  * arm rather than an empty paragraph.

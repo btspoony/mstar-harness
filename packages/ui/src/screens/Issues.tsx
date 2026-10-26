@@ -19,6 +19,7 @@ import { EmptyState, listEmptyFamily, type AbsenceArm } from "../components/Empt
 import { FilterBar, type AppliedFilter } from "../components/FilterBar.tsx";
 import { LiveRegion } from "../components/LiveRegion.tsx";
 import { Notice } from "../components/Notice.tsx";
+import { Panel, PanelBody, PanelFoot, PanelHead } from "../components/Panel.tsx";
 import { Pager } from "../components/Pager.tsx";
 import { StatusDot } from "../components/StatusDot.tsx";
 import { TruncatedText } from "../components/TruncatedText.tsx";
@@ -33,6 +34,9 @@ import {
 } from "../view-model/issues.ts";
 import type { Tone } from "../view-model/status.ts";
 import css from "./Issues.module.css";
+
+/** The filter panel's accessible name; the head carries the id. */
+const FILTERS_HEAD_ID = "ms-issues-filters";
 
 /** Every visible string this screen needs. Task 5 supplies them. */
 export type IssuesCopy = {
@@ -59,6 +63,15 @@ export type IssuesCopy = {
   };
   /** The option list for one filter; `""` is the "any" option, labelled here. */
   anyOption: string;
+  /** The filter panel's head (`Filters`). */
+  filtersHeading: string;
+  /**
+   * The result line in the screen head: `open across 4 projects`, or plain
+   * `open` when the page does not hold the whole set (see `projectCount`).
+   */
+  openAcross: (projects: number | null) => string;
+  /** The read's own ordering, stated so a reader knows what "first" means. */
+  order: string;
   /** The result line: `26 issues`. */
   resultSummary: (total: number) => string;
   pager: { previous: string; next: string; range: (from: number, to: number, total: number) => string };
@@ -150,77 +163,101 @@ export function Issues(props: IssuesProps) {
 
   return (
     <article className={css.page} data-ms-screen="issues">
-      <h1 className={css.title}>{copy.pageTitle}</h1>
+      <div className={css.head}>
+        <h1 className={css.title}>{copy.pageTitle}</h1>
+        {/* The prototype's screen meta: the count, its scope, and the ordering
+            the read applies (`design-v1.html:1094-1101`). The count lives here
+            AND in the filter row, so neither is the only place it appears. */}
+        <div className={css.meta} data-ms-summary="">
+          <span className={css.count} data-ms-count={model.total}>
+            {model.total}
+          </span>
+          <span data-ms-scope="">{copy.openAcross(model.projectCount)}</span>
+          <span aria-hidden="true">·</span>
+          <span className={css.order} data-ms-order="">
+            {copy.order}
+          </span>
+        </div>
+      </div>
 
-      <FilterBar
-        fields={filterFields(copy, props.options, filters)}
-        onFieldChange={(key, value) =>
-          props.onQueryChange({
-            // A filter change starts a new result set, so the offset resets.
-            filters: { ...filters, [key]: value } as IssueFilters,
-            offset: 0,
-          })
-        }
-        search={{
-          value: filters.q,
-          placeholder: copy.filters.search,
-          onChange: (value) => props.onQueryChange({ filters: { ...filters, q: value }, offset: 0 }),
-        }}
-        applied={applied}
-        onClearFilter={(key) =>
-          props.onQueryChange({
-            filters: { ...filters, [key]: key === "disposition" ? DEFAULT_ISSUE_FILTERS.disposition : "" } as IssueFilters,
-            offset: 0,
-          })
-        }
-        onClearAll={() => props.onQueryChange({ filters: { ...DEFAULT_ISSUE_FILTERS }, offset: 0 })}
-        clearLabel={copy.filters.clear}
-        resultSummary={copy.resultSummary(model.total)}
-      />
-
-      {model.rows.kind === "populated" ? (
-        <>
-          <DataTable
-            caption={copy.tableCaption}
-            columns={columns}
-            rows={model.rows.value}
-            rowKey={(row) => row.id}
-            meta={meta}
-            onRowActivate={props.onOpen === undefined ? undefined : (row) => props.onOpen?.(row.id)}
-          />
-          <Pager
-            total={model.total}
-            offset={model.offset}
-            pageSize={model.pageSize}
-            onOffsetChange={(offset) => props.onQueryChange({ filters, offset })}
-            previousLabel={copy.pager.previous}
-            nextLabel={copy.pager.next}
-            rangeLabel={copy.pager.range}
-          />
-          <LiveRegion message={copy.resultSummary(model.total)} />
-        </>
-      ) : model.rows.kind === "unavailable" ? (
-        <>
-          <EmptyState
-            arm="unavailable"
-            labelWord={copy.unavailable.labelWord}
-            heading={copy.unavailable.heading}
-            body={copy.unavailable.body}
-            reason={model.rows.reason}
-          />
-          <Notice reason={model.rows.reason} lead={copy.unavailable.heading} />
-        </>
-      ) : (
-        <EmptyState
-          arm={model.rows.kind as AbsenceArm}
-          labelWord={emptyCopy.labelWord}
-          heading={emptyCopy.heading}
-          body={emptyCopy.body}
-          hint={emptyCopy.hint}
-          detail={model.rows.kind === "not-applicable" ? model.rows.reason : undefined}
-          {...(model.rows.kind === "absent" ? { pointer: copy.absent.pointer } : {})}
+      <Panel labelledBy={FILTERS_HEAD_ID}>
+        <PanelHead id={FILTERS_HEAD_ID} title={copy.filtersHeading} />
+        <FilterBar
+          fields={filterFields(copy, props.options, filters)}
+          onFieldChange={(key, value) =>
+            props.onQueryChange({
+              // A filter change starts a new result set, so the offset resets.
+              filters: { ...filters, [key]: value } as IssueFilters,
+              offset: 0,
+            })
+          }
+          search={{
+            value: filters.q,
+            placeholder: copy.filters.search,
+            onChange: (value) => props.onQueryChange({ filters: { ...filters, q: value }, offset: 0 }),
+          }}
+          applied={applied}
+          onClearFilter={(key) =>
+            props.onQueryChange({
+              filters: { ...filters, [key]: key === "disposition" ? DEFAULT_ISSUE_FILTERS.disposition : "" } as IssueFilters,
+              offset: 0,
+            })
+          }
+          onClearAll={() => props.onQueryChange({ filters: { ...DEFAULT_ISSUE_FILTERS }, offset: 0 })}
+          clearLabel={copy.filters.clear}
+          resultSummary={copy.resultSummary(model.total)}
         />
-      )}
+
+        {model.rows.kind === "populated" ? (
+          <>
+            <PanelBody tight={true}>
+              <DataTable
+                caption={copy.tableCaption}
+                columns={columns}
+                rows={model.rows.value}
+                rowKey={(row) => row.id}
+                meta={meta}
+                onRowActivate={props.onOpen === undefined ? undefined : (row) => props.onOpen?.(row.id)}
+              />
+            </PanelBody>
+            <PanelFoot>
+              <Pager
+                total={model.total}
+                offset={model.offset}
+                pageSize={model.pageSize}
+                onOffsetChange={(offset) => props.onQueryChange({ filters, offset })}
+                previousLabel={copy.pager.previous}
+                nextLabel={copy.pager.next}
+                rangeLabel={copy.pager.range}
+              />
+            </PanelFoot>
+            <LiveRegion message={copy.resultSummary(model.total)} />
+          </>
+        ) : model.rows.kind === "unavailable" ? (
+          <PanelBody>
+            <EmptyState
+              arm="unavailable"
+              labelWord={copy.unavailable.labelWord}
+              heading={copy.unavailable.heading}
+              body={copy.unavailable.body}
+              reason={model.rows.reason}
+            />
+            <Notice reason={model.rows.reason} lead={copy.unavailable.heading} />
+          </PanelBody>
+        ) : (
+          <PanelBody>
+            <EmptyState
+              arm={model.rows.kind as AbsenceArm}
+              labelWord={emptyCopy.labelWord}
+              heading={emptyCopy.heading}
+              body={emptyCopy.body}
+              hint={emptyCopy.hint}
+              detail={model.rows.kind === "not-applicable" ? model.rows.reason : undefined}
+              {...(model.rows.kind === "absent" ? { pointer: copy.absent.pointer } : {})}
+            />
+          </PanelBody>
+        )}
+      </Panel>
 
       {/* The family is exported so the dictionary pass can bind the two empties
           to different keys instead of flattening them into one. */}

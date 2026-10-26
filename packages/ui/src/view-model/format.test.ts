@@ -8,6 +8,7 @@ import {
   NOT_KNOWN,
   UNKNOWN_DATE,
   countText,
+  formatShortDate,
   formatDate,
   longText,
   progressText,
@@ -94,5 +95,22 @@ describe("the projection state replaces the removed counters", () => {
     // `projectionUnavailable` was deleted: it duplicated the resolver's failure
     // arm and had no production caller. The rule is asserted in state.test.ts.
     expect(projectionState({ ...base, generation: null, freshness: "unavailable" }).kind).toBe("unavailable");
+  });
+});
+
+describe("formatShortDate — the list cell's own form", () => {
+  test("a timestamp loses its year and keeps month, day and time", () => {
+    // `design-v1.html:1215`: the prototype's list cells print `10-25 13:58`.
+    expect(formatShortDate("2026-10-24T09:06:22.000Z")).toBe("10-24 09:06");
+    expect(formatShortDate("2026-10-25 13:58")).toBe("10-25 13:58");
+  });
+
+  test("a date with no time keeps the two-part form", () => {
+    expect(formatShortDate("2026-10-25")).toBe("10-25");
+  });
+
+  test("an absent or non-date value keeps the honest copy, never NaN", () => {
+    expect(formatShortDate(null)).toBe(UNKNOWN_DATE);
+    expect(formatShortDate("yesterday")).toBe("yesterday");
   });
 });

@@ -43,7 +43,6 @@ const CONSUMED_BY_LATER_TASK: Readonly<Record<string, string>> = {
   "--ms-space-8": "Task 3 (section break)",
   "--ms-space-12": "Task 3 (page top rhythm)",
   "--ms-row-h-sm": "Task 3 (dense side lists)",
-  "--ms-radius-md": "Task 3 (panels)",
   // The prototype contradicts itself on this step: its token sheet labels 20/28 as
   // "page title" (`design-v1.html:2649`), while every screen's actual heading rule is
   // 16/24 (`:210`, `.detail-title` at `:403`). The screens are authoritative — that is

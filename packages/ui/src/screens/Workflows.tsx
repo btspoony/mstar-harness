@@ -16,6 +16,7 @@
  * would claim a truncated page is the whole store.
  */
 import { DataTable, type DataTableColumn } from "../components/DataTable.tsx";
+import { Panel, PanelBody } from "../components/Panel.tsx";
 import { EmptyState, type AbsenceArm } from "../components/EmptyState.tsx";
 import { Notice } from "../components/Notice.tsx";
 import { StatusDot } from "../components/StatusDot.tsx";
@@ -109,14 +110,18 @@ export function Workflows(props: WorkflowsProps) {
 
       {model.rows.kind === "populated" ? (
         <>
-          <DataTable
-            caption={copy.tableCaption}
-            columns={columns}
-            rows={model.rows.value}
-            rowKey={(row) => row.id}
-            meta={meta}
-            onRowActivate={props.onOpen === undefined ? undefined : (row) => props.onOpen?.(row.id)}
-          />
+          <Panel>
+            <PanelBody tight={true}>
+              <DataTable
+                caption={copy.tableCaption}
+                columns={columns}
+                rows={model.rows.value}
+                rowKey={(row) => row.id}
+                meta={meta}
+                onRowActivate={props.onOpen === undefined ? undefined : (row) => props.onOpen?.(row.id)}
+              />
+            </PanelBody>
+          </Panel>
           {model.truncated ? (
             <p className={css.truncated} data-ms-truncated={model.total}>
               {copy.truncated(model.shown, model.total)}

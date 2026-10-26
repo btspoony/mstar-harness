@@ -11,6 +11,7 @@
  * list — a list has no feature body to degrade.
  */
 import { DataTable, type DataTableColumn } from "../components/DataTable.tsx";
+import { Panel, PanelBody } from "../components/Panel.tsx";
 import { EmptyState, type AbsenceArm } from "../components/EmptyState.tsx";
 import { StatusDot } from "../components/StatusDot.tsx";
 import { TruncatedText } from "../components/TruncatedText.tsx";
@@ -80,14 +81,18 @@ export function Projects(props: ProjectsProps) {
       <h1 className={css.title}>{copy.pageTitle}</h1>
 
       {model.rows.kind === "populated" ? (
-        <DataTable
-          caption={copy.tableCaption}
-          columns={columns}
-          rows={model.rows.value}
-          rowKey={(row) => row.projectId}
-          meta={meta}
-          onRowActivate={props.onOpen === undefined ? undefined : (row) => props.onOpen?.(row.projectId)}
-        />
+        <Panel>
+          <PanelBody tight={true}>
+            <DataTable
+              caption={copy.tableCaption}
+              columns={columns}
+              rows={model.rows.value}
+              rowKey={(row) => row.projectId}
+              meta={meta}
+              onRowActivate={props.onOpen === undefined ? undefined : (row) => props.onOpen?.(row.projectId)}
+            />
+          </PanelBody>
+        </Panel>
       ) : model.rows.kind === "unavailable" ? (
         <EmptyState
           arm="unavailable"

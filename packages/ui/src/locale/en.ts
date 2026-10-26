@@ -155,6 +155,12 @@ export const en = {
       search: "Search",
       clear: "Clear filters",
     },
+    filtersHeading: "Filters",
+    // The prototype's screen meta (`design-v1.html:1098`). A partial page cannot
+    // count the projects it never saw, so the span drops rather than guessing.
+    openAcross: (projects: number | null) =>
+      projects === null ? "open" : projects === 1 ? "open across 1 project" : `open across ${projects} projects`,
+    order: "severity desc, last activity desc, id asc",
     resultSummary: (total: number) => `${total} results`,
     range: (from: number, to: number, total: number) => `${from}–${to} of ${total}`,
   },

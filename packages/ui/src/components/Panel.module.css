@@ -1,0 +1,71 @@
+/* The card: the prototype's `.panel` (`design-v1.html:215`). */
+.panel {
+  background: var(--ms-bg-surface);
+  border: var(--ms-hairline);
+  border-radius: var(--ms-radius-md);
+  min-inline-size: 0;
+}
+
+/* `.panel-head` (`:216-220`). */
+.head {
+  display: flex;
+  align-items: center;
+  gap: var(--ms-space-2);
+  min-block-size: 32px;
+  padding: 0 12px;
+  border-block-end: var(--ms-hairline);
+}
+
+/* `.panel-title` (`:221`). */
+.title {
+  margin: 0;
+  font-size: var(--ms-fs-12);
+  line-height: var(--ms-lh-12);
+  font-weight: var(--ms-fw-medium);
+  color: var(--ms-text-secondary);
+  min-inline-size: 0;
+}
+
+/* `.panel-meta` (`:222`). */
+.meta {
+  margin-inline-start: auto;
+  display: flex;
+  align-items: center;
+  gap: var(--ms-space-2);
+  font-size: var(--ms-fs-11);
+  color: var(--ms-text-muted);
+}
+
+/* `.panel-body` (`:223`). */
+.body {
+  padding: 10px 12px;
+}
+
+/* `.panel-body.tight` (`:223`). */
+.tight {
+  padding: 0;
+}
+
+/* `.panel-foot` (`:224`). */
+.foot {
+  display: flex;
+  align-items: center;
+  gap: var(--ms-space-2);
+  padding: 6px 12px;
+  border-block-start: var(--ms-hairline);
+  font-size: var(--ms-fs-11);
+  color: var(--ms-text-muted);
+}
+
+/* A head wraps instead of shrinking its title out of the card (`:736`). */
+@container pane (max-width: 619px) {
+  .head {
+    flex-wrap: wrap;
+    row-gap: 2px;
+    padding-block: 6px;
+  }
+
+  .meta {
+    margin-inline-start: 0;
+  }
+}

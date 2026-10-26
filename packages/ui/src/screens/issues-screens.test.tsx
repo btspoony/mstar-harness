@@ -71,6 +71,9 @@ const issuesCopy: IssuesCopy = {
     clear: "Clear filters",
   },
   anyOption: "Any",
+  filtersHeading: "Filters",
+  openAcross: (projects) => (projects === null ? "open" : `open across ${projects} projects`),
+  order: "severity desc, last activity desc, id asc",
   resultSummary: (total) => `${total} results`,
   pager: { previous: "Previous", next: "Next", range: (from, to, total) => `${from}–${to} of ${total}` },
   filteredEmpty: { labelWord: "empty", heading: "No matches", body: "nothing matched", hint: "clear the filters" },
@@ -204,7 +207,10 @@ describe("Issues — the list facts of §8.2", () => {
     for (const expected of ["I-000870", "The dashboard and the panel disagree", "critical", "open", "bug", "engine", "9f2c4a10"]) {
       expect(html).toContain(expected);
     }
-    expect(html).toContain("2026-10-24T10:00:00.000Z");
+    // The cell shows the prototype's short form (`design-v1.html:1215`), never a
+    // truncated ISO string: the column keeps its width and the value fits.
+    expect(html).toContain("10-24 10:00");
+    expect(html).not.toContain("2026-10-24T10:00:00.000Z");
   });
 
   test("the pager states the range and both bounds", () => {
@@ -239,6 +245,39 @@ describe("Issues — the list facts of §8.2", () => {
     expect(html).not.toContain("storeRevision");
     expect(html).not.toContain("1224");
     expect(html).not.toContain("catalogRevision");
+  });
+});
+
+describe("Issues — the prototype's card and its summary line", () => {
+  const html = renderIssues([summary(), summary({ id: "I-000871", projectId: "dsh-integration" })], 2);
+
+  test("the filters and the table sit in one card, with the prototype's anchors", () => {
+    // `design-v1.html:215-224`: one `.panel`, a head, a tight body for the table,
+    // a foot for the paging facts. Before this, the table and the filter row were
+    // bare children of the screen.
+    expect(html).toContain('data-ms-panel=""');
+    expect(html).toContain('data-ms-panel-head=""');
+    expect(html).toContain('data-ms-panel-body=""');
+    expect(html).toContain('data-ms-panel-foot=""');
+    // One card, not one per block: the filter row lives inside it.
+    expect(html.match(/data-ms-panel=""/g)?.length).toBe(1);
+    // The filter panel's head names it, and the card points at that head.
+    expect(html).toContain('aria-labelledby="ms-issues-filters"');
+    expect(html).toContain('id="ms-issues-filters"');
+  });
+
+  test("the summary line states the count, the scope and the ordering", () => {
+    expect(html).toContain('data-ms-summary=""');
+    expect(html).toContain("2");
+    expect(html).toContain("open across 2 projects");
+    expect(html).toContain("severity desc, last activity desc, id asc");
+  });
+
+  test("a partial page drops the project span instead of inventing one", () => {
+    // The page holds one of 120 rows: it cannot count the projects it never saw.
+    const partial = renderIssues([summary()], 120);
+    expect(partial).toContain("open");
+    expect(partial).not.toContain("open across");
   });
 });
 

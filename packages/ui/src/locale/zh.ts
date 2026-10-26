@@ -140,6 +140,10 @@ export const zh: Copy = {
       search: "搜索",
       clear: "清除筛选",
     },
+    filtersHeading: "筛选",
+    openAcross: (projects) =>
+      projects === null ? "未解决" : projects === 1 ? "未解决，跨 1 个项目" : `未解决，跨 ${projects} 个项目`,
+    order: "严重度降序 · 最近活动降序 · ID 升序",
     resultSummary: (total) => `${total} 条结果`,
     range: (from, to, total) => `第 ${from}–${to} 条，共 ${total} 条`,
   },
