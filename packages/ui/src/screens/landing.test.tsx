@@ -248,12 +248,12 @@ describe("Overview — what it shows, in the IA §3.1 order", () => {
   });
 
   test("the branch chain is drawn when the workflow records one", () => {
-    for (const anchor of ["Base", "Source", "Integration", "Target"]) expect(html).toContain(`<span>${anchor}</span>`);
+    for (const anchor of ["Base", "Source", "Integration", "Target"]) expect(html).toContain(`<span class="muted">${anchor}</span>`);
     expect(html).toContain("<b>main</b>");
     // Exactly one arrow between each adjacent pair; the trend's head states its own
     // range with the same glyph, so the count is taken on the chain's own arrows.
     expect(html).toContain("data-ms-branch");
-    expect((html.match(/<span aria-hidden="true">\u2192<\/span>/g) ?? []).length).toBe(3);
+    expect((html.match(/class="branch-arrow" aria-hidden="true">\u2192</g) ?? []).length).toBe(3);
   });
 
   test("the plan table: five columns, one row per plan, the prototype's cells", () => {
@@ -270,7 +270,7 @@ describe("Overview — what it shows, in the IA §3.1 order", () => {
     expect(html).toContain("primitives are landing");
     expect(html).toContain("Records no progress.");
     // Done: month-day, the prototype's short form.
-    expect(html).toContain("<span>10-19</span>");
+    expect(html).toContain('<span class="t-num">10-19</span>');
   });
 
   test("a plan whose status the store does not record says so, never an empty cell", () => {
@@ -326,7 +326,7 @@ describe("Overview — what it shows, in the IA §3.1 order", () => {
       // `gateStep` (contract §3) arrives with the engine plan's branch; until then
       // the member comes from the package's contract mirror and is cast here.
       const page = overview({ latestIteration: read(iteration({ gateStep } )) });
-      const marked = page.match(/<li data-ms-step="([^"]+)" data-ms-step-position="current"/);
+      const marked = page.match(/<li class="gate-step[^"]*" data-ms-step="([^"]+)" data-ms-step-position="current"/);
       expect(marked).not.toBeNull();
       expect(marked?.[1]).not.toBe("merge-ready");
     }
@@ -382,11 +382,11 @@ describe("Overview — the loading phase, and the literal severity", () => {
     // (the prototype's tally: dot + literal word, count right-aligned).
     const html = overview();
     expect(html).toContain('data-ms-severity="critical"');
-    expect(html).toContain("<span>critical</span>");
+    expect(html).toContain('<span class="label mono">critical</span>');
     // A definition list still groups each severity with its count: `dl` permits a
     // `div` wrapper, so the two-column grid and the grouping coexist.
-    expect(html).toContain("<dt>");
-    expect(html).toContain("<dd>");
+    expect(html).toContain('<dt class="sev">');
+    expect(html).toContain('<dd class="num is-strong">');
     expect(html).not.toContain("<span>Critical</span>");
   });
 });

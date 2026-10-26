@@ -609,16 +609,15 @@ describe("the component layer obeys the token rules", () => {
   });
 
   test("product layout reflow is always an UNNAMED container query", () => {
-    // A named query cannot survive the bundler (see the collapse test above), and a
-    // viewport media query would reflow by the window rather than by the pane the
-    // product is given. Neither is a style choice; both are correctness.
-    for (const name of ["DataTable", "Field", "FieldGroup", "Row", "Nav", "FilterBar", "Tabs", "Panel"]) {
-      const css = moduleCss(name);
-      if (css.includes("@container")) {
-        expect(css).toContain("@container (");
-        expect(css).not.toContain("@container pane");
-      }
-      expect(css).not.toContain("@media (max-width");
+    // A named query cannot survive the bundler, and a viewport media query would
+    // reflow by the window rather than by the pane the product is given. The product
+    // now ships one generated sheet, so the rule is checked on it once.
+    const css = componentSheet();
+    expect(css).not.toContain("@container pane");
+    expect(css).toContain("@container (max-width: 619px)");
+    // Media queries may exist for the host's window chrome only; the product's
+    // reflow is the container's.
+    for (const block of css.match(/@media[^{]+\{/g) ?? []) {
+      expect(block).not.toContain("max-width: 6");
     }
-  });
-});
+  });});
