@@ -1356,7 +1356,28 @@ iter-…panel-fixes     panel-meta: "completed · started 2026-08-11"
 **The prototype has no no-compass variant**, so that branch cannot be compared against it —
 only against the rule that a screen states no fact it does not have.
 
-## Verification coverage, stated
+## A panel inside the pane is not a card
+
+The prototype's pane stacks **borderless** sections: `.pane-body .panel { background:
+transparent; border: 0; border-radius: 0; border-bottom: 1px solid }`, with the head and
+body flush to the pane's own padding. This implementation's pane body carried none of it, so
+a 280px sidebar showed three 1px card borders inside its own 1px border.
+
+Two mistakes on the way to fixing it, both caught by measuring rather than reading:
+
+1. **Specificity.** The first rules were `.ms-pane-body .panel` — same weight as
+   `product.css`'s `.ms-container .panel` and loaded *before* it, so they lost. The rewrite
+   needed `.ms-container.ms-pane-body .panel`.
+2. **A descendant where the same element was meant.** `.ms-container .ms-pane-body .panel`
+   still failed, because the pane div carries **both** classes; the selector asked for a
+   `.ms-pane-body` *inside* a `.ms-container`. Written as one compound selector it applies.
+
+Measured after: the first panel reports `border-top 0px, border-bottom 1px, radius 0px,
+background transparent`, and the last reports `border-bottom 0px` from its `:last-child`
+override.
+
+**Not verified**: the real dsh pane. The rule is measured on a fixture and the dsh package
+builds green, but no screenshot of the running dsh panel with a panel inside it was taken.## Verification coverage, stated
 
 Two hosts mount these screens: the dashboard (`packages/cli/web`) and the dsh pane
 (`packages/dsh/src/client/panel`). They share the components but **each owns its own

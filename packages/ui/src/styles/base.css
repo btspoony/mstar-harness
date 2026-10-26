@@ -235,6 +235,32 @@
   padding-block-end: var(--ms-space-2);
 }
 
+/*
+ * A panel inside the pane is not a card. The prototype's pane stacks borderless sections
+ * separated by one hairline each, with the head and body flush to the pane's own padding —
+ * a 1px card border inside a 280px column would double every edge.
+ */
+.ms-container.ms-pane-body .panel {
+  background: transparent;
+  border: 0;
+  border-radius: 0;
+  border-block-end: var(--ms-hairline);
+}
+
+.ms-container.ms-pane-body .panel:last-child {
+  border-block-end: 0;
+}
+
+.ms-container.ms-pane-body .panel-head {
+  padding-inline: 0;
+  background: transparent;
+}
+
+.ms-container.ms-pane-body .panel-body,
+.ms-container.ms-pane-body .panel-foot {
+  padding-inline: 0;
+}
+
 /**
  * Forced colors: the status dot stops depending on colour.
  *
