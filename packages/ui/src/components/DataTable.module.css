@@ -23,7 +23,7 @@
 
 .table th {
   block-size: 26px;
-  padding: 0 var(--ms-space-2);
+  padding: 0 10px;
   border-block-end: var(--ms-hairline);
   text-align: start;
   font-size: var(--ms-fs-11);
@@ -35,10 +35,13 @@
 
 .table td {
   block-size: var(--ms-row-h);
-  padding: 0 var(--ms-space-2);
+  padding: 0 10px;
+  /* The prototype sets the cell line box to 16px inside a 32px row, and tracks the
+     dense mono register slightly tight. */
+  line-height: var(--ms-lh-12);
+  letter-spacing: -0.01em;
   border-block-end: var(--ms-hairline);
   font-size: var(--ms-fs-13);
-  line-height: var(--ms-lh-13);
   color: var(--ms-text-primary);
   overflow: hidden;
   text-overflow: ellipsis;

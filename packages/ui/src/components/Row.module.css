@@ -1,10 +1,13 @@
 .row,
 .rowTall {
   display: flex;
+  /* The record's hairline is the card's measure, not the text's: a row that shrinks
+     to content draws a stub line and reads as cramped. */
+  inline-size: 100%;
   align-items: center;
   gap: var(--ms-space-2);
   min-inline-size: 0;
-  min-block-size: 26px;
+  min-block-size: var(--ms-row-h-sm);
   border-block-end: var(--ms-hairline);
   font-size: var(--ms-fs-12);
   line-height: var(--ms-lh-12);

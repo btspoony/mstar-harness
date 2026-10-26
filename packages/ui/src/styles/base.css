@@ -53,9 +53,12 @@
   letter-spacing: -0.01em;
 }
 
+/* A level-2 heading in this product is only ever a panel title, and the prototype
+   sets it at 12/16 (`.panel-title`). This block used 14/20 and, being more specific
+   than the panel's own class, silently overrode every card heading. */
 .ms-container h2 {
-  font-size: var(--ms-fs-14);
-  line-height: var(--ms-lh-14);
+  font-size: var(--ms-fs-12);
+  line-height: var(--ms-lh-12);
   font-weight: var(--ms-fw-medium);
 }
 
@@ -83,7 +86,7 @@
   inline-size: 100%;
   max-inline-size: 1440px;
   margin-inline: auto;
-  padding: 14px 20px 16px;
+  padding: 14px 20px 24px;
   min-inline-size: 0;
 }
 

@@ -136,6 +136,11 @@
   color: var(--ms-text-muted);
 }
 
+/* The prototype's `.planboard` title cell: the description reads below the plan id. */
+.secondary {
+  color: var(--ms-text-secondary);
+}
+
 /* `3/6` and its bar, side by side (`design-v1.html:868`). The bar takes a fixed
    measure: `.track` is `inline-size: 100%`, which inside a shrink-to-fit flex row is
    nothing at all, so the width is declared here rather than left to the track. */

@@ -9,7 +9,7 @@
 
 .item {
   block-size: var(--ms-header-h);
-  padding: 0 var(--ms-space-3);
+  padding: 0 11px;
   flex: none;
   border: 0;
   background: none;

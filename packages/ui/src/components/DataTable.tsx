@@ -55,7 +55,7 @@ export type DataTableColumn<T> = {
    * the flexible one (a title) — which then takes the remaining space. Below the
    * scroll floor the table scrolls instead of squeezing this column to an ellipsis.
    */
-  width?: number;
+  width?: number | string;
 };
 
 /**
@@ -140,7 +140,7 @@ export function DataTable<T>(props: DataTableProps<T>) {
               data-ms-col={column.wide === true ? "wide" : column.secondary === true ? "secondary" : "primary"}
               data-ms-col-key={column.key}
               data-ms-align={column.align ?? "start"}
-              style={column.width === undefined ? undefined : { inlineSize: `${column.width}px` }}
+              style={column.width === undefined ? undefined : { inlineSize: typeof column.width === "number" ? `${column.width}px` : column.width }}
             >
               {column.header}
             </th>

@@ -162,14 +162,24 @@ function planColumns(copy: OverviewCopy): DataTableColumn<OverviewPlanRow>[] {
     {
       key: "plan",
       header: copy.planColumns.plan,
-      width: 176,
+      // The prototype gives this column 35% of the table (`.planboard` grid) and the
+      // title absorbs the rest, so the proportion holds at every container width.
+      width: "35%",
       render: (plan) => <span className={css.mono}>{plan.planId}</span>,
     },
     {
       key: "title",
       header: copy.planColumns.title,
       render: (plan) =>
-        plan.title === null ? <span className={css.muted}>{copy.dash}</span> : <TruncatedText text={plan.title} />,
+        plan.title === null ? (
+          <span className={css.muted}>{copy.dash}</span>
+        ) : (
+          // The prototype sets the title in the secondary tone, not the primary one:
+          // the plan id is the row's identifier, the title is its description.
+          <span className={css.secondary}>
+            <TruncatedText text={plan.title} />
+          </span>
+        ),
     },
     {
       key: "status",
@@ -380,6 +390,10 @@ export function Overview(props: OverviewProps) {
           <PanelBody>
           {model.workflows.kind === "populated" ? (
             <div className={css.rows} data-ms-workflows="">
+              {/* Every workflow is rendered: truncating the list to the "active" one
+                  would hide records with no other entry point. Whether the panel should
+                  show only the active workflow (as the prototype's singular heading
+                  suggests) is an open product question, not a rendering detail. */}
               {model.workflows.value.map((row) => (
                 <WorkflowRowView key={row.id} row={row} copy={copy} onOpenWorkflow={props.onOpenWorkflow} />
               ))}
