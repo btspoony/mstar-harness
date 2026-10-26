@@ -410,3 +410,12 @@
     display: none;
   }
 }
+
+/* The residual tally lives in the overview's right column, which is ~460px at every
+   supported width (the grid is `minmax(0,1.85fr) minmax(0,1fr)` of a 1440 cap). The
+   prototype's one-column layout comes from a container query measured against that
+   column; ours measures against `.ms-container`, so the query never fires and the tally
+   stayed two-up. One column is what the column can actually hold. */
+.ms-container .res-grid.res-grid {
+  grid-template-columns: minmax(0, 1fr);
+}
