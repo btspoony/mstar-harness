@@ -185,22 +185,27 @@ function IterationDetailBody(props: {
           {/* The delivery position: four labels, plus a fifth that is never
               marked. The position rides on an attribute too, so the state does
               not depend on the colour. */}
-          <section className={"gate"} aria-labelledby="ms-iteration-gate">
-            <h2 id="ms-iteration-gate">
+          <section className="gate" aria-labelledby="ms-iteration-gate">
+            <h2 className="sec-title" id="ms-iteration-gate">
               {value.gatePosition === null
                 ? copy.gateNoCompass
                 : copy.gateStep(value.gatePosition.step, value.gatePosition.of)}
             </h2>
-            <ol className={"gate-track"} data-ms-gate-steps="">
+            <ol className="gate-track" data-ms-gate-steps="">
               {value.steps.map((step) => (
                 <li
                   key={step.id}
-                  className={"gate-step"}
+                  // The prototype draws the track as a 3px top rule per step and colours
+                  // it by state, so the modifier class carries the state; the data
+                  // attribute stays for the non-colour contract.
+                  className={`gate-step${step.position === "reached" ? " is-done" : step.position === "current" ? " is-current" : ""}`}
                   data-ms-step={step.id}
                   data-ms-step-position={step.position satisfies GateStepPosition}
                 >
-                  <span className={"glyph"} aria-hidden="true" />
-                  <span className={"gate-label"}>{copy.gateStepLabels[step.id]}</span>
+                  <span className="glyph" aria-hidden="true">
+                    {step.position === "reached" ? "✓" : step.position === "current" ? "●" : ""}
+                  </span>
+                  <span className="gate-label">{copy.gateStepLabels[step.id]}</span>
                 </li>
               ))}
             </ol>
