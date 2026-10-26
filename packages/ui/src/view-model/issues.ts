@@ -261,6 +261,16 @@ export type IssueDetailModel = {
   /** The prototype's `Identity keys` panel: the tracker identity, when the store has one. */
   identityKey: string | null;
   provider: string | null;
+  /** The prototype's `Occurrences`: one block per recorded event, newest last. */
+  occurrences: ReadonlyArray<{
+    id: number;
+    sourceKind: string;
+    sourceIdentity: string;
+    observedBehavior: string;
+    location: string | null;
+    recordedAt: string;
+    evidence: readonly string[];
+  }>;
   /** The prototype's `Disposition history` table: every recorded transition. */
   transitions: ReadonlyArray<{
     from: string | null;
@@ -311,6 +321,15 @@ export function issueDetailModel(detail: IssueDetail): IssueDetailModel {
     closureNote: closed ? longText(detail.closureNote) : null,
     identityKey: detail.identityKey ?? null,
     provider: detail.provider ?? null,
+    occurrences: detail.occurrences.map((row) => ({
+      id: row.id,
+      sourceKind: row.sourceKind,
+      sourceIdentity: row.sourceIdentity,
+      observedBehavior: row.observedBehavior,
+      location: row.location ?? null,
+      recordedAt: formatDate(row.recordedAt),
+      evidence: row.evidence,
+    })),
     transitions: detail.transitions.map((row) => ({
       // The prototype prints `—` for the first transition, which has no `from`.
       from: row.fromDisposition ?? null,

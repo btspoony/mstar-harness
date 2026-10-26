@@ -110,6 +110,10 @@ const detailCopy: IssueDetailCopy = {
   sourceLocationLabel: "Location",
   sourceRootCauseLabel: "Root cause key",
   sourceAcceptanceLabel: "Acceptance key",
+  occurrencesHeading: "Occurrences",
+  occurrenceObservedAt: "Observed at",
+  occurrenceLocation: "Location",
+  occurrenceRecorded: "Recorded",
   historyHeading: "Disposition history",
   historyColumns: { from: "From", to: "To", reason: "Reason", actor: "Actor", recorded: "Recorded" },
   historyNote: "Only recorded transitions appear.",
@@ -408,13 +412,12 @@ describe("IssueDetail — the whole page, and nothing more", () => {
 describe("IssueDetail — NEGATIVE: what §8.1 removed", () => {
   const html = renderDetail(detail());
 
-  test("the source panel states the newest occurrence, but never the log", () => {
+  test("the source panel and the occurrence log both render now", () => {
     // The prototype has a `Source` panel (the latest occurrence's provenance) and an
     // `Occurrences` panel (one block per event). Only the first is rendered so far; the
     // event log itself stays out.
-    expect(html).not.toContain("data-ms-occurrence-row");
-    expect(html).not.toContain('data-ms-occurrence="');
     expect(html).toContain("data-ms-issue-source");
+    expect(html).toContain("data-ms-issue-occurrences");
   });
 
   test("no migration bookkeeping is drawn, only a truncated source hash", () => {
@@ -441,7 +444,6 @@ describe("IssueDetail — NEGATIVE: what §8.1 removed", () => {
   test("the model itself cannot carry them: the negative set is enforced by shape", () => {
     const model = issueDetailModel(detail());
     for (const removed of [
-      "occurrences",
       "url",
       "externalId",
       // `provider` and `identityKey` are carried now: the prototype's `Identity keys`

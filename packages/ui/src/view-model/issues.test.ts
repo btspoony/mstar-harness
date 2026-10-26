@@ -240,13 +240,13 @@ describe("the detail fact block", () => {
     ...over,
   });
 
-  test("the occurrence LOG collapses to one integer count", () => {
+  test("the occurrence log is carried whole, beside its count", () => {
     const model = issueDetailModel(detail());
     expect(model.occurrenceCount).toBe(2);
-    expect(Object.keys(model)).not.toContain("occurrences");
+    expect(model.occurrences).toHaveLength(2);
   });
 
-  test("no history, provenance, relations, tracker carry-over or revision is exposed", () => {
+  test("no revision or external URL is exposed", () => {
     const model = issueDetailModel(detail());
     for (const removed of [
       "url",

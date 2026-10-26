@@ -1052,14 +1052,18 @@ column is what is left when six of ten blocks are gone.
 | `Relations` | table (Relation, Issue, Title) | **partial**: the Title column is `—` on every row — the DTO carries `{fromIssue, relation, toIssue}` and no title, so filling it needs a second read or a DTO field |
 | `Provenance` | table (Kind, Target, Source hash, Origin, Imported at) | shipped |
 | `Disposition history` | table (From, To, Reason, Actor, Recorded) plus the prototype's footer note | shipped; this store's issues record no transitions, so it renders on fixture data only |
-| `Occurrences` | one block per event, with its quote and citation | open |
+| `Occurrences` | one block per event, with its quote, location and citations | shipped; verified in the browser |
 
 The data was never missing: `store-read.ts` returns `occurrences`, `transitions`,
 `relations`, `provenance`, `provider` and `identityKey` on the issue detail. The gap was the
 view model, which forwarded sixteen of them and stopped.
 
-**The layout is still one column.** The prototype is two. That follows from the four panels
-still absent — a single column is what four-of-ten removed looks like.
+**All six are rendered.** The screen now states: 影响, 验收标准, 出现记录, 溯源, 来源, 标识键.
+
+**The layout is still one column**, and that is now the largest remaining difference: the
+prototype puts identity, source, impact, acceptance and occurrences on the left, and
+disposition history, relations, provenance and identity keys on the right. With the panels
+present, the two-column split is a layout change rather than a missing-content change.
 
 ## Verification coverage, stated
 

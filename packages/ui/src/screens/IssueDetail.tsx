@@ -63,6 +63,11 @@ export type IssueDetailCopy = {
   /** The `Relations` table's heading and its three column labels. */
   /** The `Provenance` table's heading and its five column labels. */
   /** The `Disposition history` table's heading, its five labels and its footer note. */
+  /** The `Occurrences` panel's heading and its three row labels. */
+  occurrencesHeading: string;
+  occurrenceObservedAt: string;
+  occurrenceLocation: string;
+  occurrenceRecorded: string;
   historyHeading: string;
   historyColumns: { from: string; to: string; reason: string; actor: string; recorded: string };
   historyNote: string;
@@ -181,6 +186,48 @@ export function IssueDetail(props: IssueDetailProps) {
             <section className={"panel"} data-ms-acceptance="">
               <h2>{copy.acceptanceHeading}</h2>
               <p className={"detail-text"}>{record.value.acceptance}</p>
+            </section>
+          )}
+
+          {/* The prototype's `Occurrences`: one block per event, each with its own quote,
+              location and citations. This is the log §8.1 removed; the prototype keeps it. */}
+          {record.value.occurrences.length === 0 ? null : (
+            <section className={"fact-block"} data-ms-issue-occurrences="" aria-labelledby="ms-issue-occurrences">
+              <h2 id="ms-issue-occurrences">{copy.occurrencesHeading}</h2>
+              {record.value.occurrences.map((occurrence) => (
+                <article className={"occurrence"} key={occurrence.id} data-ms-occurrence-row={occurrence.id}>
+                  <div className={"occurrence-head"}>
+                    <span className={"mono"}>{occurrence.sourceIdentity}</span>
+                    <span className={"chip"}>{occurrence.sourceKind}</span>
+                    <span className={"spacer"} />
+                    <span className={"muted t-11"}>
+                      {copy.occurrenceObservedAt} <span className={"mono"}>{occurrence.recordedAt}</span>
+                    </span>
+                  </div>
+                  <p className={"detail-text"}>{occurrence.observedBehavior}</p>
+                  <dl className={"fields"}>
+                    {occurrence.location === null ? null : (
+                      <div className="field">
+                        <dt>{copy.occurrenceLocation}</dt>
+                        <dd className="mono wrap">{occurrence.location}</dd>
+                      </div>
+                    )}
+                    <div className="field">
+                      <dt>{copy.occurrenceRecorded}</dt>
+                      <dd className="mono">{occurrence.recordedAt}</dd>
+                    </div>
+                  </dl>
+                  {occurrence.evidence.length === 0 ? null : (
+                    <ul className={"occurrence-evidence"}>
+                      {occurrence.evidence.map((citation) => (
+                        <li className={"mono t-11"} key={citation}>
+                          {citation}
+                        </li>
+                      ))}
+                    </ul>
+                  )}
+                </article>
+              ))}
             </section>
           )}
 
