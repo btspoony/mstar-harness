@@ -18,8 +18,11 @@ export type FieldGroupProps = {
 
 export function FieldGroup(props: FieldGroupProps) {
   return (
-    <section className="fields">
-      <h3 className="muted">{props.title}</h3>
+    // `.sec` is the prototype's fact block: a hairline, a title, then the fields. It is
+    // deliberately NOT `.fields` — that class is a two-column grid, and putting it on the
+    // section made the title take the first column and pushed every field into the second.
+    <section className="sec">
+      <h3 className="sec-title">{props.title}</h3>
       <dl className="fields" data-ms-columns={props.columns ?? 2}>
         {props.children}
       </dl>
