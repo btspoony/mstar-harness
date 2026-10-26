@@ -195,28 +195,17 @@ function dispositionTone(disposition: string): string {
   return disposition === "resolved" || disposition === "open" ? disposition : "neutral";
 }
 
-/** The Roadmap feature body: direction (collapsed), goals, board, markdown. */
+/**
+ * The Roadmap feature body: the board, then the direction and stored-facts row.
+ *
+ * The goals are **not** a block here. The prototype reports them as one count inside
+ * `Stored facts` (`1 / 3 checked`) and nothing else — a list would be a second, longer
+ * answer to the same question, and the stored markdown below already carries it.
+ */
 function RoadmapFeature(props: { model: RoadmapModel; copy: ProjectDetailCopy }) {
   const { model, copy } = props;
   return (
     <div className={"feature-body"} data-ms-feature="roadmap">
-      {model.goals.length === 0 ? null : (
-        <section className={"panel"} data-ms-goals="">
-          <h3>{copy.roadmap.goalsHeading}</h3>
-          <ul className="goal-list">
-            {model.goals.map((goal) => (
-              <li key={goal.ordinal} className={"milestone-row"} data-ms-goal-depth={goal.depth} data-ms-goal-checked={goal.checked}>
-                {/* The check state is text plus a mark, never colour alone. */}
-                <span className={"dot"} aria-hidden="true">
-                  {goal.checked ? "✓" : "·"}
-                </span>
-                <span className={"milestone-name"}>{goal.title}</span>
-                <span className={"visually-hidden"}>{goal.checked ? copy.roadmap.goalChecked : copy.roadmap.goalUnchecked}</span>
-              </li>
-            ))}
-          </ul>
-        </section>
-      )}
       {model.milestones.length === 0 ? null : (
         <section className={"panel"} data-ms-milestones="">
           <div className="panel-head">

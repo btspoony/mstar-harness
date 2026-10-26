@@ -256,17 +256,14 @@ describe("ProjectDetail — the fixed feature set", () => {
 describe("ProjectDetail — the Roadmap feature", () => {
   const html = renderDetail({});
 
-  test("direction is collapsed, goals carry their check state", () => {
+  test("the direction is a disclosure and the goals are one count, not a list", () => {
+    // The prototype reports goals only as `Goals  1 / 3 checked` inside Stored facts.
+    // A list here would answer the same question twice, at greater length.
     expect(html).toContain("<details");
     expect(html).toContain("One product, two hosts.");
-    expect(html).toContain('data-ms-goal-checked="true"');
-    expect(html).toContain('data-ms-goal-checked="false"');
-    expect(html).toContain("One design system");
-  });
-
-  test("a sub-goal is indented by depth, not nested", () => {
-    expect(html).toContain('data-ms-goal-depth="1"');
-    expect(html).toContain('data-ms-goal-depth="0"');
+    expect(html).toContain("1 / 3");
+    expect(html).not.toContain("data-ms-goal-checked");
+    expect(html).not.toContain("data-ms-goal-depth");
   });
 
   test("the milestone board carries status, target, progress, open count and its issues", () => {
