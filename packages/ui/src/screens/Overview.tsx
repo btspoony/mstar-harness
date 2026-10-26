@@ -9,7 +9,10 @@
  * The trend is drawn from `model.issueFlow`, which maps `overview.issueFlow` without
  * recomputing anything. An unavailable member renders the shared unavailable arm —
  * never an empty chart — and a store with fewer than two dated buckets is `empty`,
- * because a one-point line is a dot pretending to be a trend.
+ * because a one-point line is a dot pretending to be a trend. The numbers the figure
+ * encodes are text beside it: the legend's two open counts, the gap note, and the
+ * dated-history table. The series' cumulative totals are NOT printed — the prototype's
+ * legend does not state them, and its last table row already does.
  *
  * Not here, by construction and by test: the version, `{HARNESS_DIR}`, and any
  * revision counter.
@@ -181,7 +184,9 @@ function TrendPanel(props: { series: IssueFlowSeries; copy: OverviewCopy }) {
           />
           <div className={css.axis}>
             <span>{series.firstDate}</span>
-            <span>{series.middleDate}</span>
+            {/* Two buckets have no distinct middle: labelling the first one twice would
+                read as a third date. */}
+            {series.middleDate === null ? null : <span>{series.middleDate}</span>}
             <span>{series.lastDate}</span>
           </div>
           <div className={css.legend}>

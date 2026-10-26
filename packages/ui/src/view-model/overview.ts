@@ -77,13 +77,14 @@ export type IssueFlowPoint = {
 /** The flow series the trend card draws. Every number is the read's own. */
 export type IssueFlowSeries = {
   readonly points: readonly IssueFlowPoint[];
-  /** The three labels the axis carries: first, middle, last. */
   readonly firstDate: string;
-  readonly middleDate: string;
+  /**
+   * The axis's middle label, or `null` when the series is too short to have a distinct
+   * one: with two buckets the prototype's own `floor((n - 1) / 2)` picks the first
+   * again, and an axis reading first, first, last states one date twice.
+   */
+  readonly middleDate: string | null;
   readonly lastDate: string;
-  /** The cumulative totals the legend states — the last bucket's, not a re-sum. */
-  readonly capturedTotal: number;
-  readonly retiredTotal: number;
   /** What the dated history closes at, beside the store's recorded open count. */
   readonly datedOpen: number;
   readonly recordedOpen: number;
@@ -92,10 +93,15 @@ export type IssueFlowSeries = {
 };
 
 /**
- * Map the read's buckets. The caller guarantees at least two points (a line needs
- * two), so the first/last/middle lookups cannot miss.
+ * Map the read's buckets into the series the card draws, or `null` when there is no
+ * series to draw: a line needs two dated buckets, and a one-point line is a dot
+ * pretending to be a trend.
+ *
+ * The guard lives here, not at the call site, so every caller degrades the same way and
+ * the lookups below are narrowed by it rather than asserted past it.
  */
-export function flowModel(flow: IssueFlow): IssueFlowSeries {
+export function flowModel(flow: IssueFlow): IssueFlowSeries | null {
+  if (flow.buckets.length < 2) return null;
   const points: IssueFlowPoint[] = flow.buckets.map((bucket) => ({
     date: bucket.date,
     captured: bucket.capturedCumulative,
@@ -103,15 +109,16 @@ export function flowModel(flow: IssueFlow): IssueFlowSeries {
     open: bucket.openDifference,
     origin: bucket.origin,
   }));
-  const last = points[points.length - 1] as IssueFlowPoint;
-  const middle = points[Math.floor((points.length - 1) / 2)] as IssueFlowPoint;
+  const first = points[0];
+  const last = points[points.length - 1];
+  if (first === undefined || last === undefined) return null;
+  const middle = points[Math.floor((points.length - 1) / 2)];
   return {
     points,
-    firstDate: points[0]?.date ?? "",
-    middleDate: middle.date,
+    firstDate: first.date,
+    // Below three buckets the middle index is the first one again; the axis drops it.
+    middleDate: points.length < 3 || middle === undefined ? null : middle.date,
     lastDate: last.date,
-    capturedTotal: last.captured,
-    retiredTotal: last.retired,
     datedOpen: last.open,
     recordedOpen: flow.currentOpen,
     undatedEvents: flow.unknownCaptureDates + flow.unknownClosureDates,
@@ -249,11 +256,12 @@ export function overviewModel(
 
   const latestIteration = resolveMember(read.latestIteration, { phase, whenNull: "empty" });
 
-  const issueFlow = resolveMember(read.issueFlow, {
-    phase,
-    whenNull: "empty",
-    isEmpty: (flow) => flow.buckets.length < 2,
-  });
+  // No `isEmpty` here: "fewer than two buckets" is `flowModel`'s guard, and a second
+  // copy of the rule in this call would be the one that drifts.
+  const issueFlow = resolveMember(read.issueFlow, { phase, whenNull: "empty" });
+
+  // The member read succeeded; the mapper decides whether there is a series to draw.
+  const flowSeries = issueFlow.kind === "populated" ? flowModel(issueFlow.value) : null;
 
   return {
     workflows:
@@ -298,7 +306,11 @@ export function overviewModel(
           }
         : latestIteration,
     issueFlow:
-      issueFlow.kind === "populated" ? { kind: "populated", value: flowModel(issueFlow.value) } : issueFlow,
+      issueFlow.kind !== "populated"
+        ? issueFlow
+        : flowSeries === null
+          ? { kind: "empty" }
+          : { kind: "populated", value: flowSeries },
     projection: projectionState(options.projection),
   };
 }

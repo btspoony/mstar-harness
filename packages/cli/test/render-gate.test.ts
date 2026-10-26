@@ -866,9 +866,12 @@ describe.skipIf(!browserAvailable)("the render gate", () => {
     // The table alternative carries one row per dated bucket, so the series has a length
     // a reader can count without the figure.
     expect(band.flowRows as number).toBeGreaterThanOrEqual(2);
-    // First, middle, last: the axis labels the prototype draws.
+    // The axis labels the prototype draws: first, middle, last — and DISTINCT. The
+    // format check alone passed on `first, first, last`, which is what a two-bucket
+    // store produced before the middle label learned to step aside.
     const axis = band.flowAxis as string[];
-    expect(axis.length).toBe(3);
+    expect(axis.length).toBeGreaterThanOrEqual(2);
+    expect(new Set(axis).size).toBe(axis.length);
     for (const label of axis) expect(label).toMatch(/^\d{4}-\d{2}-\d{2}$/);
   }, 60_000);
 

@@ -9,9 +9,11 @@
  * **Greyscale-safe by construction.** Captured is a solid line, retired is dashed,
  * and the legend spells both out. Hue is never the only difference.
  *
- * The numbers the lines encode exist as text beside the chart (the legend totals,
- * the gap note, the dated-history table), so the figure is `role="img"` with its
- * date range as the label — an assistive reader gets the same facts without it.
+ * The numbers the lines encode exist as text beside the chart (the legend's two open
+ * counts, the gap note, the dated-history table), so the figure is `role="img"` with its
+ * date range as the label — an assistive reader gets the same facts without it. The
+ * cumulative totals are deliberately not printed anywhere: the table's last row is
+ * where they are stated.
  */
 import type { IssueFlowPoint } from "../view-model/overview.ts";
 import css from "./IssueFlowChart.module.css";

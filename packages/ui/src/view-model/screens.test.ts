@@ -11,7 +11,7 @@ import { describe, expect, test } from "bun:test";
 import type { IterationDTO, OverviewDTO, RoadmapDTO, WorkflowDTO, WorkflowListDTO } from "@mstar-harness/engine";
 
 
-import { overviewModel, residualModel } from "./overview.ts";
+import { flowModel, overviewModel, residualModel } from "./overview.ts";
 import { focusModel } from "./focus.ts";
 
 const projection = {
@@ -259,12 +259,60 @@ describe("Overview — the fact set of §8.2", () => {
     expect(series.points.length).toBe(3);
     // First, middle and last are the axis labels the card draws.
     expect([series.firstDate, series.middleDate, series.lastDate]).toEqual(["2026-10-10", "2026-10-18", "2026-10-25"]);
-    // The totals are the last bucket's cumulative values, not a re-sum.
-    expect(series.capturedTotal).toBe(900);
-    expect(series.retiredTotal).toBe(350);
+    // Every field the card reads, and only those: a series field nobody renders is a
+    // promise the screen does not keep, so the shape is pinned rather than widened.
+    expect(Object.keys(series).sort()).toEqual([
+      "datedOpen",
+      "firstDate",
+      "lastDate",
+      "middleDate",
+      "points",
+      "recordedOpen",
+      "undatedEvents",
+    ]);
     expect(series.datedOpen).toBe(550);
     expect(series.recordedOpen).toBe(552);
     expect(series.undatedEvents).toBe(2);
+  });
+
+  test("two buckets carry no middle label — the axis would print the first date twice", () => {
+    // `floor((2 - 1) / 2)` is 0, so the prototype's own formula labels first, first,
+    // last. Two labels are the truth; the axis drops the middle rather than repeat it.
+    const two = overviewModel(
+      overviewRead({
+        issueFlow: read({
+          buckets: [
+            { date: "2026-10-10", capturedCumulative: 800, retiredCumulative: 300, openDifference: 500, origin: "store" },
+            { date: "2026-10-25", capturedCumulative: 900, retiredCumulative: 350, openDifference: 550, origin: "store" },
+          ],
+          unknownCaptureDates: 0,
+          unknownClosureDates: 0,
+          currentOpen: 550,
+          incompleteHistory: false,
+        }),
+      }),
+      { projection },
+    );
+    if (two.issueFlow.kind !== "populated") throw new Error("expected populated");
+    expect(two.issueFlow.value.middleDate).toBeNull();
+    expect(two.issueFlow.value.lastDate).toBe("2026-10-25");
+  });
+
+  test("flowModel degrades on a one-bucket input instead of throwing", () => {
+    // The exported mapper is called on its own by nothing today, but a guard that lives
+    // at the call site is a guard the next caller forgets: with one bucket there is no
+    // series, and saying so is its answer.
+    const flow = {
+      buckets: [{ date: "2026-10-10", capturedCumulative: 800, retiredCumulative: 300, openDifference: 500, origin: "store" as const }],
+      unknownCaptureDates: 0,
+      unknownClosureDates: 0,
+      currentOpen: 500,
+      incompleteHistory: false,
+    };
+    expect(flowModel(flow)).toBeNull();
+    expect(flowModel({ ...flow, buckets: [] })).toBeNull();
+    // Two buckets is the minimum, and the guard is not off by one.
+    expect(flowModel({ ...flow, buckets: [flow.buckets[0], { ...flow.buckets[0], date: "2026-10-25" }] })?.points.length).toBe(2);
   });
 
   test("fewer than two dated buckets is the empty arm, not a one-point line", () => {
