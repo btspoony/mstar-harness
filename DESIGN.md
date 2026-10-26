@@ -1598,7 +1598,29 @@ question that was missed: *was the CLI built after the sheets changed?*
 **A test asserted too little, and that is now fixed too.** The panel-head assertion read
 `expect(html).toContain("is-strong")` over the whole page, which passes if any element
 anywhere carries the class. It now slices this head's own `panel-meta` by balanced `<span>`
-nesting and asserts the count, the unit, `is-strong` and the label inside that slice.## Verification coverage, stated
+nesting and asserts the count, the unit, `is-strong` and the label inside that slice.## Comparing whole screens by their panel set
+
+Sampling one element at a time found the panel head. Asking each screen for its full set of
+`.panel-title` strings found another, and confirms the rest:
+
+| Screen | The prototype | This implementation |
+| --- | --- | --- |
+| overview | Active workflow · Issue flow trend · Open residual issues · Milestones · **Latest iteration** | same five, but the fifth read **Delivery** |
+| issues | Issue flow trend · Filters | same |
+| workflows | one panel, no head, one table | same |
+| iterations | one panel, no head, one table | same |
+| projects | Catalog projects, no table | same |
+
+The overview's fifth panel is `Latest iteration` now, in both dictionaries.
+
+**A count that looked like a difference and was not**: the overview shows two `<table>`s here
+and one in the prototype, because this implementation wraps the trend's data table in a
+`<details>` beside the chart and the prototype's own disclosure is `<details class="disc">`
+too — my window into the prototype's body simply ended before it.
+
+**Not resolved**: `Focus.tsx` still renders `copy.deliveryHeading` ("Delivery"), and the
+prototype's `focus` screen has no `.panel-title` at all. Whether that line has a counterpart
+there, and what it is called, is open.## Verification coverage, stated
 
 Two hosts mount these screens: the dashboard (`packages/cli/web`) and the dsh pane
 (`packages/dsh/src/client/panel`). They share the components but **each owns its own

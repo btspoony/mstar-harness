@@ -121,7 +121,7 @@ export const zh: Copy = {
     dash: "—",
     residualsHeading: "未关闭的遗留项",
     residualsTotal: (open) => `${open} 项未关闭 · 全部项目`,
-    iterationHeading: "交付",
+    iterationHeading: "最新迭代",
     iterationNoIteration: "还没有迭代",
     gateStep: (step, of) => `第 ${step} / ${of} 步`,
     milestonesHeading: "里程碑",

@@ -135,7 +135,7 @@ export const en = {
     dash: "—",
     residualsHeading: "Open residuals",
     residualsTotal: (open: number) => `${open} open · all projects`,
-    iterationHeading: "Delivery",
+    iterationHeading: "Latest iteration",
     iterationNoIteration: "No iteration yet",
     gateStep: (step: number, of: number) => `step ${step} of ${of}`,
     milestonesHeading: "Milestones",
