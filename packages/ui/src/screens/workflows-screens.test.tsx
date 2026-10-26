@@ -234,12 +234,17 @@ describe("Workflows list — the state machine", () => {
   });
 });
 
-describe("Workflows list — NEGATIVE: the removed join bookkeeping", () => {
+describe("Workflows list — the join bookkeeping it now surfaces, and the rest it does not", () => {
   const html = renderList([workflow()], 1);
 
-  test("no catalog-pin badge is rendered", () => {
+  test("the catalog-pin badges are rendered, as the prototype's Join badges column", () => {
+    // IA §8.1 used to keep these out of the view. The prototype shows them as a column
+    // (`Join badges`), and that column is the acceptance criterion for this interface —
+    // so the badges travel with the row and the word is always spelled out, never a
+    // colour-only chip. Leases and adoption rows stay out; they are not rows a reader
+    // acts on.
     for (const badge of ["catalog-missing", "catalog-pin-missing", "catalog-pin-conflict"]) {
-      expect(html).not.toContain(badge);
+      expect(renderList([workflow({ badges: [badge] })], 1)).toContain(badge);
     }
   });
 
@@ -249,12 +254,16 @@ describe("Workflows list — NEGATIVE: the removed join bookkeeping", () => {
     expect(html).not.toContain("execution");
   });
 
-  test("the row model cannot carry them: the negative set is enforced by shape", () => {
+  test("leases and adoption rows stay out of the row: the negative set is shape-enforced", () => {
     const model = workflowListModel({ data: { items: [workflow()], total: 1 } as WorkflowListDTO, projection });
     if (model.rows.kind !== "populated") throw new Error("expected rows");
-    for (const removed of ["leases", "terminalUnregistered", "terminalAdoptions", "badges", "plans"]) {
+    // `badges` is now carried — the Join badges column needs it. The rest stays out:
+    // leases are checkout bookkeeping and adoption rows are history, neither of which a
+    // list row acts on.
+    for (const removed of ["leases", "terminalUnregistered", "terminalAdoptions", "plans"]) {
       expect(Object.keys(model.rows.value[0] ?? {})).not.toContain(removed);
     }
+    expect(Object.keys(model.rows.value[0] ?? {})).toContain("badges");
   });
 
   test("execution-unavailable survives as a reason, not as a chip", () => {

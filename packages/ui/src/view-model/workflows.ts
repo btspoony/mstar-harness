@@ -50,6 +50,8 @@ export type WorkflowRow = {
   branch: BranchAnchors;
   /** The store's own reason when the execution projection could not be read. */
   executionUnavailableReason: string | null;
+  /** The join badges the store attached (`catalog-missing`, `catalog-pin-conflict`). */
+  badges: readonly string[];
 };
 
 /** Workflow status → tone: a paused workflow is not an error. */
@@ -108,6 +110,7 @@ export function workflowRow(workflow: WorkflowDTO): WorkflowRow {
     title: workflow.catalog?.title ?? null,
     branch: branchAnchors(workflow.branch),
     executionUnavailableReason: executionUnavailableReason(workflow.badges),
+    badges: workflow.badges,
   };
 }
 
