@@ -1,6 +1,6 @@
 ---
 category: Harness
-packages: cli,ui,dsh
+packages: root,cli,dsh
 ---
 
 - Gave every list table the **prototype's own column widths** and made the wide pane stop
