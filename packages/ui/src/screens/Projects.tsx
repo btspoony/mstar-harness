@@ -42,7 +42,7 @@ export function Projects(props: ProjectsProps) {
   // The prototype's sequence (`design-v1.html:1752-1758`): the id first, then the
   // catalog title, then the lifecycle.
   const columns: DataTableColumn<ProjectRow>[] = [
-    { key: "id", header: copy.columns.id, width: "34%", render: (row) => <span className={"mono t-12"}>{row.projectId}</span> },
+    { key: "id", header: copy.columns.id, width: "24%", render: (row) => <span className={"mono t-12"}>{row.projectId}</span> },
     {
       key: "title",
       header: copy.columns.title,
@@ -51,14 +51,14 @@ export function Projects(props: ProjectsProps) {
     {
       key: "lifecycle",
       header: copy.columns.lifecycle,
-      width: "12%",
+      width: "8%",
       secondary: true,
       render: (row) => <StatusDot label={row.lifecycle} tone={row.lifecycleTone} mono />,
     },
     {
       key: "openIssues",
       header: copy.columns.openIssues,
-      width: "23%",
+      width: "16%",
       secondary: true,
       align: "end",
       render: (row) => <span className={"mono t-12"}>{copy.openIssues(row.openIssues)}</span>,
@@ -66,7 +66,7 @@ export function Projects(props: ProjectsProps) {
     {
       key: "description",
       header: copy.columns.description,
-      width: "10%",
+      width: "7%",
       secondary: true,
       render: (row) =>
         row.description === null ? (
