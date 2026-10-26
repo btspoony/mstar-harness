@@ -14,6 +14,7 @@
  * Every absence goes through `state.ts`: the model resolved each member, and this
  * component only chooses the copy for the arm it was handed.
  */
+import { Fragment } from "react";
 import { EmptyState, type AbsenceArm } from "../components/EmptyState.tsx";
 import { StatusDot } from "../components/StatusDot.tsx";
 import { TruncatedText } from "../components/TruncatedText.tsx";
@@ -183,17 +184,31 @@ export function Focus(props: FocusProps) {
         <div className="panel-body">
         {workflow.kind === "populated" && workflow.value !== null ? (
           <>
-            <p className={"branch-line"} data-ms-workflow="">
-              <TruncatedText text={workflow.value.id} />
-              <span className={"detail-meta"}>
-                {workflow.value.type}
-                {workflow.value.phase === null ? "" : ` · ${workflow.value.phase}`}
+            <div className="wf-summary" data-ms-workflow="">
+              <span className="wf-id">
+                <TruncatedText text={workflow.value.id} />
               </span>
-              <span className={"branch-line"} data-ms-branch-chain="">
-                {[workflow.value.branch.base, workflow.value.branch.source, workflow.value.branch.integration, workflow.value.branch.target]
-                  .map((anchor) => anchor ?? "—")
-                  .join(" → ")}
-              </span>
+              <span className="muted">{workflow.value.type}</span>
+              {workflow.value.phase === null ? null : (
+                <StatusDot label={workflow.value.phase} tone="neutral" mono />
+              )}
+            </div>
+            {/* The prototype draws the chain as one `.branch-line` holding an anchor per
+                label; a single joined string gives the line one item and no arrows. */}
+            <p className="branch-line" data-ms-branch-chain="">
+              {[
+                ["Base", workflow.value.branch.base] as const,
+                ["Source", workflow.value.branch.source] as const,
+                ["Integration", workflow.value.branch.integration] as const,
+                ["Target", workflow.value.branch.target] as const,
+              ].map(([label, value], index) => (
+                <Fragment key={label}>
+                  {index === 0 ? null : <span className="branch-arrow" aria-hidden="true">→</span>}
+                  <span className="branch-anchor">
+                    <span>{label}</span> <b>{value ?? "—"}</b>
+                  </span>
+                </Fragment>
+              ))}
             </p>
             <div className="planboard" role="group" aria-label={copy.boardHeading}>
               {model.groups.map((group) => (

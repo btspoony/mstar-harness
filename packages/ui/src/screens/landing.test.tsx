@@ -531,7 +531,11 @@ describe("Focus — what it shows, in the IA §3.2 order", () => {
   test("the bound workflow's identity and branch chain", () => {
     expect(html).toContain('data-ms-workflow=""');
     expect(html).toContain('data-ms-branch-chain=""');
-    expect(html).toContain("main → issue-project-move");
+    // The chain is the prototype's segmented line: an anchor per label plus an arrow
+    // between them, not one joined string.
+    expect(html).toContain('<span class="branch-anchor"><span>Base</span> <b>main</b></span>');
+    expect(html).toContain('<span class="branch-anchor"><span>Source</span> <b>issue-project-move</b></span>');
+    expect((html.match(/class="branch-arrow"/g) ?? []).length).toBe(3);
   });
 
   test("the plan board is grouped by status, five groups, counts included", () => {
