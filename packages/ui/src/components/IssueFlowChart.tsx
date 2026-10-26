@@ -65,7 +65,12 @@ export function IssueFlowChart(props: IssueFlowChartProps) {
   // The prototype's axis does not start at zero: its three grid lines are evenly spaced
   // and label 800 / 850 / 900 — the series' own floor and ceiling. Drawing from 0 flattens
   // a narrow band into a nearly straight line.
-  const min = Math.min(...points.map((point) => Math.min(point.captured, point.retired)), Infinity);
+  // An empty series has no floor: `Math.min()` of nothing is `Infinity`, and a span of
+  // `ceiling - Infinity` would be `-Infinity` inside every path coordinate.
+  const min =
+    points.length === 0
+      ? 0
+      : Math.min(...points.map((point) => Math.min(point.captured, point.retired)));
   const floor = Number.isFinite(min) ? min : 0;
   const baseline = VIEW_HEIGHT - PAD;
   return (
