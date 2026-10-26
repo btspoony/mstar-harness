@@ -192,16 +192,16 @@ export function Workflows(props: WorkflowsProps) {
               resultSummary={copy.filters.results(model.shown, model.total)}
             />
             </PanelHead>
-            <PanelBody tight={true}>
-              <DataTable
-                caption={copy.tableCaption}
-                columns={columns}
-                rows={model.rows.value}
-                rowKey={(row) => row.id}
-                meta={meta}
-                onRowActivate={props.onOpen === undefined ? undefined : (row) => props.onOpen?.(row.id)}
-              />
-            </PanelBody>
+            {/* No PanelBody around the table: the prototype's `.table-wrap` is a direct
+                child of `.panel`, so the table draws its own full-bleed surface. */}
+            <DataTable
+              caption={copy.tableCaption}
+              columns={columns}
+              rows={model.rows.value}
+              rowKey={(row) => row.id}
+              meta={meta}
+              onRowActivate={props.onOpen === undefined ? undefined : (row) => props.onOpen?.(row.id)}
+            />
             {model.terminalUnregistered === 0 ? null : (
               // The prototype's footer states what the registry does not carry, so a
               // reader knows the four rows are not the whole store.

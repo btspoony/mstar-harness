@@ -247,8 +247,10 @@ describe("Overview — what it shows, in the IA §3.1 order", () => {
     expect(html).toContain("issue-project-move");
     expect(html).toContain("phase-2-execute");
     // The count line is the workflow's own plan total and status, not the page's.
-    expect(html).toContain('data-ms-workflow-meta="2"');
+    // The count and status sit in the panel head beside the title, where the prototype has
+    // them (`span.panel-meta`), not as a paragraph in the body.
     expect(html).toContain("2 plans \u00b7 running");
+    expect(html).not.toContain("data-ms-workflow-meta");
   });
 
   test("the branch chain is drawn when the workflow records one", () => {

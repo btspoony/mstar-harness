@@ -268,9 +268,6 @@ function WorkflowRowView(props: {
           </button>
         )}
       </div>
-      <p data-ms-workflow-meta={row.plansTotal}>
-        {copy.workflowMeta(row.plansTotal, row.status)}
-      </p>
       {drawn.length === 0 ? null : (
         <div className="branch-line" data-ms-branch="">
           {drawn.map(([label, value], index) => (
@@ -409,7 +406,15 @@ export function Overview(props: OverviewProps) {
         <div className="ov-col" data-ms-ov-column="">
         {/* 1 — active work. Never dropped, at any height. */}
         <Panel labelledBy="ms-overview-workflows">
-          <PanelHead id="ms-overview-workflows" title={copy.workflowsHeading} />
+                      <PanelHead
+              id="ms-overview-workflows"
+              title={copy.workflowsHeading}
+              meta={
+                model.workflows.kind === "populated" && model.workflows.value.length > 0
+                  ? copy.workflowMeta(model.workflows.value[0].plansTotal, model.workflows.value[0].status)
+                  : undefined
+              }
+            />
           <PanelBody>
           {model.workflows.kind === "populated" ? (
             <>
