@@ -488,3 +488,12 @@
      prototype's own head spreads 9px — so it bought nothing and explained nothing. */
 }
 
+
+/* A `.trunc` inside a heading. The class is `inline-block` (that is what makes its
+   ellipsis work at all), and an inline-block sits in the line box with its own height and
+   baseline offset: `.detail-title` is 16px/24px, yet measured 31px tall wherever the title
+   wrapped a `TruncatedText`. As a block the label keeps the heading's own line box. */
+.ms-container .detail-title > .trunc {
+  display: block;
+  line-height: inherit;
+}
