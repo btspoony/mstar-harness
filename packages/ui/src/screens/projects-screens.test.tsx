@@ -117,6 +117,12 @@ const renderList = (items: ProjectListDTO["items"], total = items.length, genera
   );
 
 const detailCopy: ProjectDetailCopy = {
+  storedFactsHeading: "Direction",
+  storedFacts: {
+    factsHeading: "Stored facts",
+    columns: { frontmatterStatus: "Frontmatter status", createdAt: "Created at", residualsRef: "Residuals ref", goals: "Goals", sections: "Sections" },
+    note: "Direction is rendered as text; goals are read-only, never checkboxes in the UI.",
+  },
   catalogHeading: "Catalog identity",
   roadmapState: "roadmap present",
   authorityHeading: "Roadmap authority",

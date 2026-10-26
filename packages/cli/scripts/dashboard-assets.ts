@@ -25,7 +25,10 @@
 // branch chain and the workflow header line) plus their two locales. The growth is
 // content the owner asked for, not a dependency; the headroom stays ~10 KB so the
 // next design fix does not need this line edited again.
-export const JS_CEILING = 320 * 1024;
+// Raised, 320 KB to 340 KB: the project detail gained the prototype's Stored facts
+// panel (five rows, their five labels in two locales, and the disclosure `/` link class
+// corrections). That is content the prototype requires, not a dependency.
+export const JS_CEILING = 340 * 1024;
 // Raised, 60 KB to 100 KB: the product's component styles are now generated from the
 // approved prototype and shipped whole (values unchanged, selectors scoped, queries
 // unnamed) instead of being re-typed one screen at a time. Re-typing is exactly what

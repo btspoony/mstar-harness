@@ -45,6 +45,20 @@ export type ProjectDetailCopy = {
   authorityColumns: { state: string; revision: string; contentHash: string; frontmatter: string };
   /** Said when the project declares no roadmap authority row. */
   authorityAbsent: string;
+  /** The left panel of the prototype's last row. */
+  storedFactsHeading: string;
+  /** The right panel: the stored document's own facts. */
+  storedFacts: {
+    factsHeading: string;
+    columns: {
+      frontmatterStatus: string;
+      createdAt: string;
+      residualsRef: string;
+      goals: string;
+      sections: string;
+    };
+    note: string;
+  };
   tabLabel: string;
   /** The three fixed features, in order. `PROJECT_FEATURES` is the id list. */
   features: Record<ProjectFeature, string>;
@@ -199,6 +213,64 @@ function RoadmapFeature(props: { model: RoadmapModel; copy: ProjectDetailCopy })
         <Collapsible summary={copy.roadmap.markdownHeading}>
           <pre data-ms-roadmap-markdown="">{model.markdown}</pre>
         </Collapsible>
+      )}
+      {/* The prototype's last row: the direction and stored markdown on the left, the
+          document's own facts on the right. */}
+      {model.storedFacts === null ? null : (
+        <div className="detail-grid">
+          <section className="panel" aria-labelledby="ms-project-direction">
+            <div className="panel-head">
+              <h2 className="panel-title" id="ms-project-direction">
+                {copy.storedFactsHeading}
+              </h2>
+            </div>
+            <div className="panel-body">
+              {model.direction === null ? (
+                <p className="muted t-12">{copy.roadmap.noDirection}</p>
+              ) : (
+                <p className="prose t-12 secondary" data-ms-direction="">
+                  {model.direction}
+                </p>
+              )}
+            </div>
+          </section>
+          <section className="panel" aria-labelledby="ms-project-stored">
+            <div className="panel-head">
+              <h2 className="panel-title" id="ms-project-stored">
+                {copy.storedFacts.factsHeading}
+              </h2>
+            </div>
+            <div className="panel-body">
+              <dl className="fields">
+                <div className="field">
+                  <dt>{copy.storedFacts.columns.frontmatterStatus}</dt>
+                  <dd className="mono">{model.storedFacts.frontmatterStatus}</dd>
+                </div>
+                <div className="field">
+                  <dt>{copy.storedFacts.columns.createdAt}</dt>
+                  <dd className="mono">{model.storedFacts.createdAt}</dd>
+                </div>
+                <div className="field">
+                  <dt>{copy.storedFacts.columns.residualsRef}</dt>
+                  <dd className="mono trunc">
+                    <TruncatedText text={model.storedFacts.residualsRef} />
+                  </dd>
+                </div>
+                <div className="field">
+                  <dt>{copy.storedFacts.columns.goals}</dt>
+                  <dd className="mono">{model.storedFacts.goals}</dd>
+                </div>
+                <div className="field">
+                  <dt>{copy.storedFacts.columns.sections}</dt>
+                  <dd className="mono">{model.storedFacts.sections}</dd>
+                </div>
+              </dl>
+            </div>
+            <div className="panel-foot">
+              <span className="muted">{copy.storedFacts.note}</span>
+            </div>
+          </section>
+        </div>
       )}
     </div>
   );

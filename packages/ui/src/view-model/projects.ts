@@ -98,6 +98,15 @@ export type RoadmapMilestone = {
 export type RoadmapModel = {
   /** The roadmap's authority row, for the prototype's `Roadmap authority` card. */
   authority: { state: string; revision: string; contentHash: string; frontmatter: string } | null;
+  /** The prototype's `Stored facts` panel: what the stored document itself records.
+   *  Every field comes from the parsed frontmatter, so no extra read is needed. */
+  storedFacts: {
+    frontmatterStatus: string;
+    createdAt: string;
+    residualsRef: string;
+    goals: string;
+    sections: string;
+  } | null;
   direction: string | null;
   goals: readonly RoadmapGoal[];
   milestones: readonly RoadmapMilestone[];
@@ -128,6 +137,16 @@ export function roadmapModel(read: RoadmapDTO, content: RoadmapContent | null): 
             frontmatter: Object.keys(content?.frontmatter ?? {}).join(" · "),
           }
         : null,
+    storedFacts:
+      content === null
+        ? null
+        : {
+            frontmatterStatus: content.frontmatter.status,
+            createdAt: content.frontmatter.created_at,
+            residualsRef: content.frontmatter.residuals_ref ?? "—",
+            goals: `${content.goals.filter((goal) => goal.checked).length} / ${content.goals.length}`,
+            sections: String(content.sections.length),
+          },
     direction: content?.direction ?? null,
     goals: (content?.goals ?? []).map((goal) => ({
       ordinal: goal.ordinal,

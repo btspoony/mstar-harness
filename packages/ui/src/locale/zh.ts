@@ -383,6 +383,18 @@ export const zh: Copy = {
   authorityAbsent: "该项目未声明路线图权威行。",
     breadcrumb: { label: "位置导航", trail: "项目" },
     fields: { title: "身份", id: "编号", lifecycle: "生命周期", path: "路径", description: "描述", noDescription: "—" },
+  storedFactsHeading: "方向",
+  storedFacts: {
+    factsHeading: "存储事实",
+    columns: {
+      frontmatterStatus: "前言状态",
+      createdAt: "创建于",
+      residualsRef: "残留引用",
+      goals: "目标",
+      sections: "章节",
+    },
+    note: "方向以文本呈现；目标是只读的，UI 中从不显示为复选框。",
+  },
     tabLabel: "项目功能",
     features: { roadmap: "路线图", issues: "问题", iterations: "迭代" },
     roadmap: {

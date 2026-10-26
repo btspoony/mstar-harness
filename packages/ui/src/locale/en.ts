@@ -406,6 +406,18 @@ export const en = {
   authorityAbsent: "This project declares no roadmap authority row.",
     breadcrumb: { label: "Breadcrumb", trail: "Projects" },
     fields: { title: "Identity", id: "ID", lifecycle: "Lifecycle", path: "Path", description: "Description", noDescription: "—" },
+  storedFactsHeading: "Direction",
+  storedFacts: {
+    factsHeading: "Stored facts",
+    columns: {
+      frontmatterStatus: "Frontmatter status",
+      createdAt: "Created at",
+      residualsRef: "Residuals ref",
+      goals: "Goals",
+      sections: "Sections",
+    },
+    note: "Direction is rendered as text; goals are read-only, never checkboxes in the UI.",
+  },
     tabLabel: "Project features",
     /** The fixed three features, in their fixed order (IA §4). */
     features: { roadmap: "Roadmap", issues: "Issues", iterations: "Iterations" },
