@@ -511,3 +511,17 @@
 .ms-container .table .t-strong {
   font-weight: 500;
 }
+
+/* A type-scale class ON a table cell. `.table td` sets `font-size: 13px` at
+   (0,2,1) specificity, so `.t-11` at (0,2,0) loses and the cell renders 13px. The
+   prototype never hits this because its cell rules are not scoped the same way; ours are,
+   so the scale classes that a cell can carry need the extra class to win. */
+.ms-container .table .t-11 {
+  font-size: var(--ms-fs-11);
+  line-height: var(--ms-lh-11);
+}
+
+.ms-container .table .t-12 {
+  font-size: var(--ms-fs-12);
+  line-height: var(--ms-lh-12);
+}
