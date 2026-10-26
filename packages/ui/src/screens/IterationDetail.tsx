@@ -199,8 +199,8 @@ function IterationDetailBody(props: {
                   data-ms-step={step.id}
                   data-ms-step-position={step.position satisfies GateStepPosition}
                 >
-                  <span className={"gate-step-mark"} aria-hidden="true" />
-                  <span className={"gate-step-label"}>{copy.gateStepLabels[step.id]}</span>
+                  <span className={"glyph"} aria-hidden="true" />
+                  <span className={"gate-label"}>{copy.gateStepLabels[step.id]}</span>
                 </li>
               ))}
             </ol>

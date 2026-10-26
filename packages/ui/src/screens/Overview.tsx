@@ -238,7 +238,7 @@ function WorkflowRowView(props: {
   ];
   const drawn = anchors.filter(([, value]) => value !== null);
   return (
-    <section className="panel ov-workflow" data-ms-overview-workflow="">
+    <section className="panel" data-ms-overview-workflow="">
       <div className="wf-summary">
         <span className="wf-id">{row.id}</span>
         <span className="muted">{copy.typeLabel}</span>
@@ -329,11 +329,11 @@ function TrendPanel(props: { series: IssueFlowSeries; copy: OverviewCopy }) {
             <span>{series.lastDate}</span>
           </div>
           <div className="chart-legend">
-            <span className="chart-legend-item">
+            <span className="legend-item">
               <span aria-hidden="true" />
               {copy.trendCaptured}
             </span>
-            <span className="chart-legend-item">
+            <span className="legend-item">
               <span className={`$undefined $undefined`} aria-hidden="true" />
               {copy.trendRetired}
             </span>
@@ -516,7 +516,7 @@ export function Overview(props: OverviewProps) {
 
         </div>
 
-        <div className="ov-spanning" data-ms-ov-spanning="">
+        <div className="ov-iteration" data-ms-ov-spanning="">
         <Panel labelledBy="ms-overview-iteration">
           <PanelHead id="ms-overview-iteration" title={copy.iterationHeading} />
           <PanelBody>

@@ -309,3 +309,72 @@
     scroll-behavior: auto !important;
   }
 }
+
+/* --- shells the prototype expresses with different markup ------------------ */
+
+/* The prototype writes an empty state as a sentence (`.sec-note`); the product keeps
+   a structured block so a screen can say why it is empty. These rules give that block
+   the prototype's voice: the same small muted type, no invented chrome. */
+.absence {
+  display: flex;
+  flex-direction: column;
+  gap: var(--ms-space-1);
+  padding: var(--ms-space-2) 0;
+  font-size: var(--ms-fs-11);
+  color: var(--ms-text-muted);
+}
+.absence p { margin: 0; }
+.absence-word { font-family: var(--ms-font-mono); }
+.absence-heading { color: var(--ms-text-secondary); }
+
+/* A generic row, for the surfaces the prototype draws ad hoc (`.res-row`,
+   `.milestone-row`): same measure and hairline as a table row. */
+.row {
+  display: flex;
+  align-items: center;
+  gap: var(--ms-space-2);
+  inline-size: 100%;
+  min-block-size: var(--ms-row-h-sm);
+  border-block-end: var(--ms-hairline);
+  font-size: var(--ms-fs-12);
+  line-height: var(--ms-lh-12);
+}
+.row:last-child { border-block-end: 0; }
+.row-tall { align-items: flex-start; padding-block: 6px; min-block-size: var(--ms-row-h); }
+.row-leading { flex: none; display: inline-flex; align-items: center; }
+.row-primary { min-inline-size: 0; }
+.row-meta-inline { color: var(--ms-text-muted); }
+.row-trailing { margin-inline-start: auto; font-family: var(--ms-font-mono); color: var(--ms-text-secondary); }
+
+/* The prototype has no pager (its lists fit a column); the product paginates, so it
+   borrows the `.panel-foot` treatment. */
+.pager {
+  display: flex;
+  align-items: center;
+  gap: var(--ms-space-2);
+  padding: 6px 12px;
+  border-block-start: var(--ms-hairline);
+  font-size: var(--ms-fs-11);
+  color: var(--ms-text-muted);
+}
+
+/* Not in the prototype: a screen-reader-only label needs no visual form there. */
+.visually-hidden {
+  position: absolute;
+  inline-size: 1px;
+  block-size: 1px;
+  margin: -1px;
+  padding: 0;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  white-space: nowrap;
+  border: 0;
+}
+
+/* The rest of the empty-state block: no separate chrome, just the muted voice. */
+.absence-head { display: flex; align-items: baseline; gap: var(--ms-space-1); }
+.absence-body,
+.absence-detail,
+.absence-reason,
+.absence-hint,
+.absence-pointer { margin: 0; }

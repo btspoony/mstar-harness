@@ -249,10 +249,10 @@ export function ProjectDetail(props: ProjectDetailProps) {
             {copy.breadcrumb.trail}
           </button>
         )}
-        <span className={"breadcrumb-sep"} aria-hidden="true">
+        <span className={""} aria-hidden="true">
           /
         </span>
-        <span className={"breadcrumb-current"} aria-current="page">
+        <span className={""} aria-current="page">
           {identity.projectId}
         </span>
       </nav>

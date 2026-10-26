@@ -326,15 +326,18 @@ Project, Kind, Severity, Disposition, Last activity. A product-only fact sits ne
 belongs to (the milestone follows the project) and never displaces the prototype's sequence;
 `Workflows` (`:1548-1553`), `Iterations` (`:1664-1669`) and `Projects` (`:1757-1762`) follow their
 own prototype tables the same way. Concretely, every list table declares a px width for all but one column; that one
-flexible column (the title) takes the rest. The widths are the prototype's own split
-(`design-v1.html:1196-1198`: id 86, title flexible, project 128, kind 112, severity 100,
-disposition 104, last activity 116), rounded to what the product's own identifiers need — a
-project id like `dsh-integrator` needs 112px, an `improvement` kind 92px.
+flexible column (the title) takes the rest, and the widths are **the prototype's own values
+copied verbatim** (`design-v1.html:1196-1198`): id 86, title flexible, project 128, kind 112,
+severity 100, disposition 104, last activity 116. Workflows is 282/flex/200/150/140/190
+(`:1542`), Iterations 250/flex/190/96/130/64 (`:1659`), Projects 310/flex/110/210/90
+(`:1752`). They are declared on a `<colgroup>`, which is the element `table-layout: fixed`
+actually reads — a width on each `<th>` reproduces the same thing only when the browser
+agrees, and a cell that drills two levels deep does not.
 
 | Band (container) | What the list does |
 | --- | --- |
 | **≥ 900px** | All columns, including the wide-only milestone column. Declared widths; the flexible title column gets the remainder (measured at 1900: 786px of title in an 1398px table, no scroll). |
-| **620–899px** | The prototype's seven columns — the *wide-only* milestone column is hidden by rule (`@container (max-width: 899px)`), and the table keeps a floor of `declared widths + 88px` for the flexible column. The prototype's sidebar at 720px shows seven columns and no milestone (`design-v1.html:2551`), and the eighth column is exactly what pushed the table past its card. Measured at 720: table 678px in a 678px card, every column whole, title 146px — the widest column on the Issues list. Where a list's own declared widths still exceed the floor, the **card body scrolls sideways** rather than squeezing: at 620 the Issues table scrolls, and every column stays reachable.
+| **620–899px** | The prototype's seven columns — the *wide-only* milestone column is hidden by rule (`@container (max-width: 899px)`), and the table keeps a floor of `declared widths + 88px` for the flexible column. Below `reflow-table` the collapse is the prototype's own mechanism: the table carries `data-narrow-cols="2"` (or `3`), and `@container` hides `:nth-child(n+3)` on both the header and the body, while the facts the hidden columns carried move into `.row-meta` **inside the record's first cell**. That is one record in one `<tr>`, not a spanning second row — the prototype never adds one, and neither does the product. The prototype's sidebar at 720px shows seven columns and no milestone (`design-v1.html:2551`), and the eighth column is exactly what pushed the table past its card. Measured at 720: table 678px in a 678px card, every column whole, title 146px — the widest column on the Issues list. Where a list's own declared widths still exceed the floor, the **card body scrolls sideways** rather than squeezing: at 620 the Issues table scrolls, and every column stays reachable.
   The floor is `declared + 88`, not `+ 96`, because the **dsh seat scrolls with `overflow-y: auto`**:
   on a classic-scrollbar platform the vertical bar takes ~15px of a 720px pane, so a card holds
   663px, not the 678px a macOS gate measures. The iterations set is 568px, so 96 would put its
@@ -445,6 +448,29 @@ a squeezed head set a two-glyph title as one glyph per line (measured: a 30.4px,
   labelled container.
 - Breakpoints are inherited: a new component reuses these five constants or it is a
   review defect.
+
+## Where the component styles come from
+
+The product's component styles are **the approved prototype's own stylesheet**, generated
+into `packages/ui/src/styles/product.css` and shipped whole. Generation does two mechanical
+things and changes no value: every selector is scoped under `.ms-container` so the sheet
+cannot leak into a host that reuses a class name, and the container queries lose their name
+(Bundler renaming makes a named query dead — see § Container width). The token blocks and
+the `html`/`body` resets are **excluded**, because the package owns those in `tokens.css`
+and `base.css`; shipping a second copy breaks the page.
+
+This is the design decision, not a shortcut. Hand-translating the prototype screen by screen
+produced three rounds of "close but not the same": column widths that were plausible rather
+than the declared ones, a second line as a spanning row, a title one step too large. The
+sheet is the only artefact that cannot drift from itself, so the implementation renders the
+prototype's own class names (`.panel`, `.panel-head`, `.table`, `.table-wrap`, `colgroup`,
+`.row-meta`, `.status tone-*`, `.nav-btn`, `.filters`, `.filter-field`, `.search`, `.gate-*`,
+`.res-*`, `.wf-*`, `.chart-*`) against it.
+
+Consequence for edits: a surface is changed by changing the prototype and regenerating the
+sheet, not by adding a rule here. When a product-only surface has no prototype counterpart
+(the absence block, the pager, the generic `.row`), `base.css` carries a minimal rule in the
+prototype's own vocabulary and says so.
 
 ## Token surface and how to change it
 

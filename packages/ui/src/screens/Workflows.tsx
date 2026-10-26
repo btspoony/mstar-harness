@@ -72,7 +72,7 @@ export function Workflows(props: WorkflowsProps) {
       render: (row) => (
         <span>
           <StatusDot label={row.status} tone={row.statusTone} mono />
-          {row.phase === null ? null : <span className={"phase"}>{row.phase}</span>}
+          {row.phase === null ? null : <span className={"chip"}>{row.phase}</span>}
         </span>
       ),
     },

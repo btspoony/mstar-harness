@@ -616,7 +616,7 @@ describe("Focus — what it shows, in the IA §3.2 order", () => {
   });
 });
 
-describe("Focus — the loading phase", () => {
+describe("Focus — the loading chip", () => {
   test("a pending read renders no absence arm, and does not crash", () => {
     // The same defect Overview had: `copy.absence["loading"]` is undefined, so
     // the board threw on first paint instead of showing the binding line.

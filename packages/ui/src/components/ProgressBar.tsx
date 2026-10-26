@@ -38,7 +38,7 @@ export function ProgressBar(props: ProgressBarProps) {
       aria-label={props.label}
       data-ms-progress-tone={complete ? "success" : (props.tone ?? "accent")}
     >
-      <span className="bar-fill" style={{ inlineSize: `${percent}%` }} />
+      <i style={{ inlineSize: `${percent}%` }} />
     </span>
   );
 }

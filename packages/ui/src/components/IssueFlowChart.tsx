@@ -61,17 +61,17 @@ export function IssueFlowChart(props: IssueFlowChartProps) {
       data-ms-flow-chart=""
     >
       <title>{props.label}</title>
-      <line className="chart-grid" x1={0} x2={VIEW_WIDTH} y1={PAD} y2={PAD} />
-      <line className="chart-grid" x1={0} x2={VIEW_WIDTH} y1={baseline} y2={baseline} />
+      <line className="grid" x1={0} x2={VIEW_WIDTH} y1={PAD} y2={PAD} />
+      <line className="grid" x1={0} x2={VIEW_WIDTH} y1={baseline} y2={baseline} />
       <path
-        className="chart-captured"
+        className="line-captured"
         d={stepPath(
           points.map((point) => point.captured),
           max,
         )}
       />
       <path
-        className="chart-retired"
+        className="line-retired"
         d={stepPath(
           points.map((point) => point.retired),
           max,
