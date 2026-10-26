@@ -397,3 +397,14 @@
   gap: var(--ms-space-3);
   flex-wrap: wrap;
 }
+
+/* The wide-only column contract. The prototype's sidebar shows seven columns at 720px
+   and the eighth (a milestone on the issue list) is what pushed the table past its
+   card, so below the wide band the column is hidden outright — no second line restates
+   it, because the record's own screen carries the fact. */
+@container (max-width: 899px) {
+  .ms-container .table th[data-ms-col="wide"],
+  .ms-container .table td[data-ms-col="wide"] {
+    display: none;
+  }
+}

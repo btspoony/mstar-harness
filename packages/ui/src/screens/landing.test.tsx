@@ -248,7 +248,7 @@ describe("Overview — what it shows, in the IA §3.1 order", () => {
   });
 
   test("the branch chain is drawn when the workflow records one", () => {
-    for (const anchor of ["Base", "Source", "Integration", "Target"]) expect(html).toContain(`<span class="muted">${anchor}</span>`);
+    for (const anchor of ["Base", "Source", "Integration", "Target"]) expect(html).toContain(`<span>${anchor}</span>`);
     expect(html).toContain("<b>main</b>");
     // Exactly one arrow between each adjacent pair; the trend's head states its own
     // range with the same glyph, so the count is taken on the chain's own arrows.

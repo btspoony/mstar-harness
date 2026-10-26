@@ -259,7 +259,7 @@ function WorkflowRowView(props: {
             <Fragment key={label}>
               {index === 0 ? null : <span className="branch-arrow" aria-hidden="true">→</span>}
               <span className="branch-anchor">
-                <span className="muted">{label}</span> <b>{value}</b>
+                <span>{label}</span> <b>{value}</b>
               </span>
             </Fragment>
           ))}

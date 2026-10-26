@@ -130,6 +130,11 @@ export function DataTable<T>(props: DataTableProps<T>) {
       className="table"
       aria-label={props.caption}
       data-ms-table={detail ? "detail" : "list"}
+      /* The prototype's collapse is positional: the table declares how many columns
+         survive a narrow container and `[data-narrow-cols]` hides `:nth-child(n+3)` on
+         both the header and the body. Without this attribute nothing collapses and the
+         narrow pane shows every column squeezed. */
+      data-narrow-cols={primaryCount}
       style={floor === 0 ? undefined : ({ "--ms-table-floor": `${floor}px` } as CSSProperties)}
     >
       <colgroup>

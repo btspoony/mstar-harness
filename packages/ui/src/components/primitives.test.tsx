@@ -268,6 +268,12 @@ describe("DataTable — the collapse rule", () => {
     // The prototype's mechanism: `data-narrow-cols` hides the columns past the second,
     // and the collapsed facts arrive in `.row-meta`.
     expect(css).toContain("[data-narrow-cols");
+    // and the table must emit it, or the positional rule has nothing to match
+    const html = render(
+      <DataTable caption="Issues" columns={columns} rows={rows} rowKey={(row) => row.id} meta={(row) => row.project} />,
+    );
+    expect(html).toContain('data-narrow-cols="2"');
+    expect(html).toContain('class="row-meta"');
     expect(css).toContain("nth-child(n+3)");
     expect(css).toContain(".row-meta");
   });
