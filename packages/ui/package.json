@@ -23,7 +23,8 @@
     "test": "bun test",
     "typecheck": "bunx tsc --noEmit",
     "check:classes": "bun run scripts/dead-classes.ts",
-    "check:tones": "bun run scripts/tone-table.ts"
+    "check:tones": "bun run scripts/tone-table.ts",
+    "check:selectors": "bun run scripts/selector-diff.ts"
   },
   "devDependencies": {
     "@mstar-harness/engine": "workspace:*",

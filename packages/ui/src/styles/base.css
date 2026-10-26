@@ -616,6 +616,23 @@
 }
 
 /*
+ * The select control's own box. Only the behaviour (`cursor`, `max-width`) and the filter
+ * field's overrides existed, so every `select.ctl` rendered with the browser's default
+ * border, background and font — the prototype's 26px, 4px-radius, hairline-bordered box
+ * was never drawn.
+ */
+.ms-container .ctl {
+  height: 26px;
+  padding: 0 6px;
+  border-radius: var(--ms-radius-sm);
+  border: 1px solid var(--ms-border-hairline);
+  background: var(--ms-bg-surface);
+  color: var(--ms-text-primary);
+  font-family: var(--ms-font-sans);
+  font-size: var(--ms-fs-12);
+}
+
+/*
  * The theme and language switches. The components already name both classes
  * (`.seg` on the language switch, `.icon-btn` on the theme toggle) and neither had a rule —
  * `check:classes` did not notice because `.header-right .seg` made the substring "seg"

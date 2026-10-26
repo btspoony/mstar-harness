@@ -1483,7 +1483,7 @@ Sorting them took one pass, and the largest group is not a gap at all:
 | Group | Selectors | Verdict |
 | --- | --- | --- |
 | the design document's own chrome | `.proto-*` (11), `.pane-stage*` (7), `.pane-tabs`, `.pane-tab*`, `.pane-wrap`, `.pane-shell`, `.pane-ctl` | not product UI — a preview frame with its own width picker |
-| global reset | `*`, `:root`, `html`, `body`, `[data-theme=*]` | in `tokens.css` and `base.css` |
+| global reset | `*`, `:root`, `html`, `body`, `[data-theme=*]` | **`box-sizing` and font smoothing in `base.css`; `html, body` in `packages/cli/web/shell.css`** — the product sheet scopes everything under `.ms-container` and cannot carry a document-level rule |
 | dsh shell | `.dsh-top`, `.host-crumb`, `.dash-main` | **zero** `className` uses; the dsh pane spells its shell differently |
 | controls | `.seg`, `.seg button*`, `.icon-btn`, `.icon-btn svg`, `.icon-btn:hover` | **used by components, defined nowhere** |
 
@@ -1496,7 +1496,19 @@ stylesheet, and `.header-right .seg` was enough to make the string "seg" present
 is *mentioned in a compound selector nobody renders* counts as defined to that check.
 
 **One selector this implementation has and the prototype does not**: `.chart-svg.is-full`, the
-trend chart's expanded height.## Verification coverage, stated
+trend chart's expanded height.
+
+**The control row was not actually reconciled until the next pass.** `.ctl` appeared in both
+sheets, so the diff did not flag it — but the prototype has a bare `.ctl { height: 26px;
+padding: 0 6px; border-radius: 4px; border: 1px solid …; background: …; font-size: 12px }`
+and this implementation only had the behaviour (`cursor`, `max-width`) plus the filter
+field's overrides. Every `select.ctl` therefore drew the browser's default box. It is ported
+now.
+
+**And the diff is a check**: `bun run --cwd packages/ui check:selectors` lists every
+prototype-only selector that is neither defined nor listed in its `NOT_APPLICABLE` table,
+where each entry carries the reason it must not exist here. Today it reports that every one
+is accounted for.## Verification coverage, stated
 
 Two hosts mount these screens: the dashboard (`packages/cli/web`) and the dsh pane
 (`packages/dsh/src/client/panel`). They share the components but **each owns its own
