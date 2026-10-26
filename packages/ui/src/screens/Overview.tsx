@@ -214,6 +214,37 @@ export function Overview(props: OverviewProps) {
           </PanelBody>
         </Panel>
 
+        {/* 3 — milestones, before the iteration: the prototype's sidebar order. */}
+        <Panel labelledBy="ms-overview-milestones">
+          <PanelHead id="ms-overview-milestones" title={copy.milestonesHeading} />
+          <PanelBody>
+          {model.milestones.kind === "populated" ? (
+            props.compact === true ? (
+              <p className={css.summary} data-ms-milestone-summary="">
+                {copy.milestonesSummary(
+                  model.milestones.value.length,
+                  model.milestones.value.reduce((open, row) => open + row.openIssues, 0),
+                )}
+              </p>
+            ) : (
+              <div className={css.rows} data-ms-milestones="">
+                {model.milestones.value.map((row) => (
+                  <MilestoneRowView key={row.milestoneId} row={row} copy={copy} />
+                ))}
+              </div>
+            )
+          ) : (
+            <Absence
+              arm={model.milestones.kind as AbsenceArm}
+              copy={copy}
+              heading={copy.milestonesHeading}
+              reason={model.milestones.kind === "unavailable" ? model.milestones.reason : undefined}
+              detail={model.milestones.kind === "not-applicable" ? model.milestones.reason : undefined}
+            />
+          )}
+          </PanelBody>
+        </Panel>
+
         <Panel labelledBy="ms-overview-iteration">
           <PanelHead id="ms-overview-iteration" title={copy.iterationHeading} />
           <PanelBody>
@@ -259,37 +290,6 @@ export function Overview(props: OverviewProps) {
           </PanelBody>
         </Panel>
       </div>
-
-      {/* 4 — milestones. Below the fold, and the first thing to shorten. */}
-      <Panel labelledBy="ms-overview-milestones">
-        <PanelHead id="ms-overview-milestones" title={copy.milestonesHeading} />
-        <PanelBody>
-        {model.milestones.kind === "populated" ? (
-          props.compact === true ? (
-            <p className={css.summary} data-ms-milestone-summary="">
-              {copy.milestonesSummary(
-                model.milestones.value.length,
-                model.milestones.value.reduce((open, row) => open + row.openIssues, 0),
-              )}
-            </p>
-          ) : (
-            <div className={css.rows} data-ms-milestones="">
-              {model.milestones.value.map((row) => (
-                <MilestoneRowView key={row.milestoneId} row={row} copy={copy} />
-              ))}
-            </div>
-          )
-        ) : (
-          <Absence
-            arm={model.milestones.kind as AbsenceArm}
-            copy={copy}
-            heading={copy.milestonesHeading}
-            reason={model.milestones.kind === "unavailable" ? model.milestones.reason : undefined}
-            detail={model.milestones.kind === "not-applicable" ? model.milestones.reason : undefined}
-          />
-        )}
-        </PanelBody>
-      </Panel>
 
       {/* 5 — the one page-validity fact. Never dropped. */}
       <p className={css.projection} data-ms-projection={model.projection.kind}>

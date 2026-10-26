@@ -284,6 +284,22 @@ describe("DataTable — the collapse rule", () => {
     expect(css).toContain("overflow-wrap: anywhere");
   });
 
+  test("the wide-only columns are hidden below the pane's wide band, not restated", () => {
+    const css = moduleCss("DataTable");
+    // The prototype's sidebar shows seven columns at 720px; the eighth is what pushed
+    // the table past its card. Below 900px it is hidden outright — no second line
+    // restates it, so it may only carry a fact the record's own screen also carries.
+    expect(css).toContain("@container (max-width: 899px)");
+    expect(css).toMatch(/td\[data-ms-col="wide"\]\s*\{\s*display: none;/);
+  });
+
+  test("the pane's head band carries the prototype's nav inset", () => {
+    // `design-v1.html:487`: `.dsh-page-head .app-nav { padding: 0 12px }` on a surface
+    // band with a closing hairline. Both seats mount this class, so the dsh pane's nav
+    // is inset from the pane's edges instead of touching them.
+    expect(stylesheet("base")).toMatch(/\.ms-pane-head\s*\{[^}]*padding-inline: 12px;/);
+  });
+
   test("an empty body renders the caller's absence node inside the table", () => {
     const html = render(
       <DataTable

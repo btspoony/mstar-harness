@@ -1,5 +1,8 @@
-/* The layout IA §3.1 fixes: two columns above the floor, one below, in the same
-   reading order (1 → 5). The columns are a container query, never a viewport one. */
+/* One vertical run of full-width sections, in the prototype's sidebar order:
+   active workflow, residuals, milestones, the latest iteration. The prototype never
+   puts two sections side by side in the pane it approves (`design-v1.html` sidebar
+   focus view: every panel 694px inside a 720px container), and a second column at a
+   wide width only squeezes prose that has nowhere to grow. */
 .page {
   display: flex;
   flex-direction: column;
@@ -12,10 +15,10 @@
 }
 
 .body {
-  display: grid;
-  grid-template-columns: minmax(0, 1.35fr) minmax(0, 1fr);
+  display: flex;
+  flex-direction: column;
   gap: var(--ms-space-6);
-  align-items: start;
+  min-inline-size: 0;
 }
 
 .rows {
@@ -119,10 +122,10 @@
   color: var(--ms-text-muted);
 }
 
-/* Below the two-column floor the same order reads as one column (IA §3.1). */
+/* The run tightens its rhythm below the pane's wide band; it never folds a column,
+   because there is only one. */
 @container (max-width: 899px) {
   .body {
-    grid-template-columns: minmax(0, 1fr);
     gap: var(--ms-space-4);
   }
 }

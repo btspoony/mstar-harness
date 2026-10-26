@@ -40,6 +40,14 @@ export type DataTableColumn<T> = {
    * page has no second line to move it to and the reader can widen the pane.
    */
   secondary?: boolean;
+  /**
+   * A column the wide presentation carries and the pane's width does not. Below
+   * 900px of container it is hidden outright — no second line restates it — because
+   * the prototype's sidebar shows seven columns, not eight, at this width. Only use
+   * it for a fact the record's own screen also carries (an issue's milestone is on
+   * the issue), never for the only place a fact appears.
+   */
+  wide?: boolean;
   /** Right-aligns the cell: counts, fractions, timestamps. */
   align?: "start" | "end";
   /**
@@ -87,7 +95,7 @@ export type DataTableProps<T> = {
  * Declared columns plus this much for the flexible one: ~15 characters at 13px,
  * which is a title's first words rather than its first letter.
  */
-const FLEXIBLE_FLOOR = 120;
+const FLEXIBLE_FLOOR = 96;
 
 export function DataTable<T>(props: DataTableProps<T>) {
   const interactive = props.onRowActivate !== undefined;
@@ -95,11 +103,17 @@ export function DataTable<T>(props: DataTableProps<T>) {
   // The collapse hides exactly the `secondary` columns, so the second line's span is
   // the primary count — not the column count, which would re-open the hidden columns
   // in `table-layout: fixed` and squeeze the title.
-  const primaryCount = props.columns.filter((column) => column.secondary !== true).length;
+  const primaryCount = props.columns.filter((column) => column.secondary !== true && column.wide !== true).length;
   // The floor is the declared widths plus the flexible column's measure. It is a
   // custom property, not `min-inline-size`, because the collapsed band below the
   // floor has to switch it off and an inline style cannot be overridden.
-  const declared = props.columns.reduce((sum, column) => sum + (column.width ?? 0), 0);
+  // Wide-only columns are not part of the floor: below 900px they are not in the
+  // table at all, and counting them would make the floor force a scrollbar at a
+  // width where the pane's own seven columns fit.
+  const declared = props.columns.reduce(
+    (sum, column) => sum + (column.wide === true ? 0 : column.width ?? 0),
+    0,
+  );
   const floor = declared === 0 ? 0 : declared + FLEXIBLE_FLOOR;
   return (
     /* The scroller: the table keeps its floor and the card body scrolls, so no
@@ -117,7 +131,7 @@ export function DataTable<T>(props: DataTableProps<T>) {
             <th
               key={column.key}
               scope="col"
-              data-ms-col={column.secondary === true ? "secondary" : "primary"}
+              data-ms-col={column.wide === true ? "wide" : column.secondary === true ? "secondary" : "primary"}
               data-ms-align={column.align ?? "start"}
               style={column.width === undefined ? undefined : { inlineSize: `${column.width}px` }}
             >
@@ -157,7 +171,7 @@ export function DataTable<T>(props: DataTableProps<T>) {
                 {props.columns.map((column) => (
                   <td
                     key={column.key}
-                    data-ms-col={column.secondary === true ? "secondary" : "primary"}
+                    data-ms-col={column.wide === true ? "wide" : column.secondary === true ? "secondary" : "primary"}
                     data-ms-align={column.align ?? "start"}
                   >
                     {column.render(row)}

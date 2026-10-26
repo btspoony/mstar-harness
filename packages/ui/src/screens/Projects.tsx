@@ -65,7 +65,7 @@ export function Projects(props: ProjectsProps) {
     {
       key: "description",
       header: copy.columns.description,
-      width: 240,
+      width: 180,
       secondary: true,
       render: (row) =>
         row.description === null ? (
