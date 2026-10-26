@@ -466,6 +466,11 @@
 .ms-container .milestone-block-name {
   min-width: 0;
   max-width: 100%;
+  /* The name ellipses on the flex item itself, so no inline-block sits in the line and
+     the baseline stays the text baseline. */
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 /* `.trunc` is `TruncatedText`'s own span, and the prototype's rule assumes a block-ish

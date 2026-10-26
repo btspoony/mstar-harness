@@ -529,6 +529,28 @@ a section that needs rewriting rather than patching: the wrong class was load-be
 So this screen is recorded as **not matching the prototype**, rather than as a difference
 someone should fix with one more class swap.
 
+## A baseline offset is not a defect until you measure the prototype's
+
+The milestone board's head is a flex line whose parts carry different type sizes: the name
+at 13px, the status at 12px, the id and date at 10-11px. Their `top` values therefore differ
+even when the line is perfectly aligned — a 13px ascender starts higher than a 10px one.
+
+Measured `top` spread across that line:
+
+| | spread |
+| --- | --- |
+| the prototype | **9px** |
+| this implementation | **2px** |
+
+The 2px was briefly treated as a bug and "fixed" twice — once by dropping
+`vertical-align: bottom` (which made it 7px, worse), once by moving the ellipsis off an
+inline-block child onto the flex item itself (no change: 2px either way). Neither attempt
+was wrong to try; what was wrong was reading the number as a defect **before** measuring
+the prototype's own. A mixed-size text line is supposed to have a spread.
+
+The lesson is the same one the crowded-pairs table encodes: a measurement only means
+something against the prototype's measurement of the same thing.
+
 ## Verification coverage, stated
 
 Two hosts mount these screens: the dashboard (`packages/cli/web`) and the dsh pane

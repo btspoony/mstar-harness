@@ -115,8 +115,12 @@ function Milestone(props: { milestone: RoadmapModel["milestones"][number]; copy:
   return (
     <section className={"milestone-block"} data-ms-milestone={milestone.milestoneId}>
       <div className={"milestone-block-head"}>
-        <span className={"milestone-block-name"}>
-          <TruncatedText text={milestone.name} />
+        {/* The name truncates on the flex item itself. Wrapping it in an inline-block
+            `.trunc` cost 2px of alignment against the sibling status and date, because an
+            inline-block's baseline is its content's bottom edge and this line aligns on
+            baselines. A block-level flex child ellipses with no such trade-off. */}
+        <span className={"milestone-block-name"} title={milestone.name} tabIndex={0}>
+          {milestone.name}
         </span>
         {milestone.status === null ? null : <StatusDot label={milestone.status} tone={milestoneStatusTone(milestone.status)} mono />}
         <span className={"detail-meta"}>{milestone.target ?? copy.roadmap.noTarget}</span>
