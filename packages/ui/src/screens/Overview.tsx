@@ -406,10 +406,12 @@ export function Overview(props: OverviewProps) {
                 <WorkflowRowView key={row.id} row={row} copy={copy} onOpenWorkflow={props.onOpenWorkflow} />
               ))}
               {model.workflows.value.length > 1 ? (
-                <p className="muted t-11" data-ms-workflows-more={model.workflows.value.length - 1}>
+                // A span: `t-11` sets only type, so a `<p>` would add the document's
+                // paragraph margin under the last workflow.
+                <span className="muted t-11" data-ms-workflows-more={model.workflows.value.length - 1}>
                   {copy.workflowsMore?.(model.workflows.value.length - 1) ??
                     `+${model.workflows.value.length - 1}`}
-                </p>
+                </span>
               ) : null}
               {/* The member is capped by the engine, so a truncated set has to say so:
                   rows that stop at 50 look like all of them. */}
@@ -556,9 +558,9 @@ export function Overview(props: OverviewProps) {
               <Absence arm="empty" copy={copy} heading={copy.iterationNoIteration} />
             ) : (
               <div className="milestone-block" data-ms-iteration="">
-                <p className="milestone-block-id">
+                <div className="milestone-block-id">
                   <TruncatedText text={model.latestIteration.value.iterationId} />
-                </p>
+                </div>
                 <ol className="gate-track" data-ms-gate-steps="">
                   {model.latestIteration.value.steps.map((step) => (
                     <li

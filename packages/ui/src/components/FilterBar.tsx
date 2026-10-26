@@ -63,7 +63,10 @@ export function FilterBar(props: FilterBarProps) {
           </label>
         ))}
         {props.search === undefined ? null : (
-          <span className="search">
+          // A `label`, as the prototype has it: clicking the magnifier's row focuses the
+          // field, which a `span` cannot do. The input keeps its own aria-label so the
+          // accessible name does not depend on the placeholder.
+          <label className="search">
             <input
               type="search"
               value={props.search.value}
@@ -71,7 +74,7 @@ export function FilterBar(props: FilterBarProps) {
               aria-label={props.search.placeholder}
               onChange={(event) => props.search?.onChange(event.target.value)}
             />
-          </span>
+          </label>
         )}
         <button type="button" className="btn" disabled={nothingApplied} onClick={props.onClearAll}>
           {props.clearLabel}
