@@ -177,7 +177,7 @@ export const en = {
     blockedLabel: "Recorded blocked reason",
     progressAbsent: "This plan records no progress.",
     planStatusAbsent: "Status not recorded",
-    deliveryHeading: "Delivery",
+    deliveryHeading: "Latest iteration",
     deliveryLine: (iterationId: string, step: number, of: number) => `${iterationId} · step ${step} of ${of}`,
     deliveryNoIteration: "No iteration",
     deliveryUnknownStep: "Iteration · no delivery step recorded",

@@ -221,7 +221,7 @@ const focusCopy: FocusCopy = {
   progressLabel: "Next",
   blockedLabel: "Blocked",
   progressAbsent: "records no progress",
-  deliveryHeading: "Delivery",
+  deliveryHeading: "Latest iteration",
   deliveryLine: (id, step, of) => `${id} · step ${step} of ${of}`,
   deliveryNoIteration: "No iteration",
   deliveryUnknownStep: "Iteration · no delivery step recorded",
@@ -763,5 +763,16 @@ describe("Focus — the four absence arms and the binding states", () => {
     expect(errored).toContain('data-ms-binding="error"');
     expect(errored).toContain("2 active lifecycles are registered");
     expect(errored).toContain('data-ms-picker=""');
+  });
+});
+
+describe("Focus — the prototype's four panel titles", () => {
+  test("the session's fourth panel is Latest iteration, not Delivery", () => {
+    // The prototype's `session-focus-template` declares four: Active workflow, Open
+    // residual issues, Milestones, Latest iteration. This screen used to title the fourth
+    // `Delivery`, a word the prototype does not use anywhere on that screen.
+    const html = focus({});
+    expect(html).toContain("Latest iteration");
+    expect(html).not.toContain(">Delivery<");
   });
 });

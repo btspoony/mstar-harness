@@ -1618,9 +1618,23 @@ and one in the prototype, because this implementation wraps the trend's data tab
 `<details>` beside the chart and the prototype's own disclosure is `<details class="disc">`
 too — my window into the prototype's body simply ended before it.
 
-**Not resolved**: `Focus.tsx` still renders `copy.deliveryHeading` ("Delivery"), and the
-prototype's `focus` screen has no `.panel-title` at all. Whether that line has a counterpart
-there, and what it is called, is open.## Verification coverage, stated
+**The focus screen was found and answered.** It is a `<template id="session-focus-template">`
+in the prototype, and it declares **four** panel titles: `Active workflow`, `Open residual
+issues`, `Milestones`, **`Latest iteration`**. This implementation titled its fourth panel
+`Delivery` — a word the prototype never uses on that screen. It is `Latest iteration` now, and
+`landing.test.tsx` asserts both the presence of the prototype's word and the absence of the
+old one.
+
+**`focus` is a dsh-panel screen only.** `#focus` is not a dashboard route — it is the pane's
+landing destination (`PanelView.tsx`, `shell-destinations` in `panel-shell.tsx`), so the
+dashboard cannot render it and the GUI's own panel needs a token URL this session does not
+have. The assertions above run against the component through the suite's `focus({})` helper,
+not against a running pane.
+
+**What that leaves open**: the fourth panel's *contents*. The prototype's is an iteration
+block — id, status, an `Open iteration` link, `compass active · phase-1-direction · 3 plans`,
+and the five-step track. This implementation renders the id and `step N of 5`. The title
+matches; the body is thinner.## Verification coverage, stated
 
 Two hosts mount these screens: the dashboard (`packages/cli/web`) and the dsh pane
 (`packages/dsh/src/client/panel`). They share the components but **each owns its own

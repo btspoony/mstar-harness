@@ -161,7 +161,7 @@ export const zh: Copy = {
     blockedLabel: "已记录阻塞原因",
     progressAbsent: "该计划没有记录进展。",
     planStatusAbsent: "未记录状态",
-    deliveryHeading: "交付",
+    deliveryHeading: "最新迭代",
     deliveryLine: (iterationId, step, of) => `${iterationId} · 第 ${step} / ${of} 步`,
     deliveryNoIteration: "无迭代",
     deliveryUnknownStep: "迭代 · 未记录交付步骤",
