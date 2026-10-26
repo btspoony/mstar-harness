@@ -388,7 +388,7 @@ export const zh: Copy = {
     roadmap: {
       directionHeading: "方向",
       goalsHeading: "目标",
-      milestonesHeading: "里程碑",
+      milestonesHeading: "里程碑板",
     milestonesUnit: "个里程碑",
     unassignedUnit: "个未归属问题",
       markdownHeading: "已存储的文档",
@@ -398,7 +398,7 @@ export const zh: Copy = {
       milestoneProgress: (done, total) => `${done}/${total}`,
       milestoneOpen: (open) => `${open} 项未关闭`,
       noTarget: "无目标日期",
-      unassigned: (count) => `${count} 项未归属里程碑`,
+      unassigned: (count) => `${count} 个问题未归属到里程碑`,
       absentNextStep: (features) => `本项目仍可使用：${features}。`,
     },
     scope: {

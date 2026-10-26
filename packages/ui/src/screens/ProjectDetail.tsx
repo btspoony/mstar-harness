@@ -174,7 +174,9 @@ function RoadmapFeature(props: { model: RoadmapModel; copy: ProjectDetailCopy })
               {copy.roadmap.milestonesUnit}
               {model.unassignedIssues === 0 ? null : (
                 <>
-                  <span aria-hidden="true">·</span>
+                  <span aria-hidden="true" className="sep">
+                    ·
+                  </span>
                   <span className="num mono">{model.unassignedIssues}</span>{" "}
                   {copy.roadmap.unassignedUnit}
                 </>

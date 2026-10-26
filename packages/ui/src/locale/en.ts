@@ -412,7 +412,7 @@ export const en = {
     roadmap: {
       directionHeading: "Direction",
       goalsHeading: "Goals",
-      milestonesHeading: "Milestones",
+      milestonesHeading: "Milestone board",
     milestonesUnit: "milestones",
     unassignedUnit: "unassigned issues",
       markdownHeading: "Stored document",
@@ -422,7 +422,7 @@ export const en = {
       milestoneProgress: (done: number, total: number) => `${done}/${total}`,
       milestoneOpen: (open: number) => `${open} open`,
       noTarget: "No target",
-      unassigned: (count: number) => `${count} unassigned`,
+      unassigned: (count: number) => `${count} issues are not assigned to a milestone`,
       absentNextStep: (features: string) => `This project still has: ${features}.`,
     },
     scope: {

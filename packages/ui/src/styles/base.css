@@ -437,3 +437,9 @@
   padding: 0;
   display: block;
 }
+
+/* Panel meta facts read as one line of counts: a small gap around the separator, so
+   `3 milestones · 3 unassigned issues` does not run together. */
+.ms-container .panel-meta > .sep {
+  margin: 0 5px;
+}
