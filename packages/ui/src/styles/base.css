@@ -419,3 +419,21 @@
 .ms-container .res-grid.res-grid {
   grid-template-columns: minmax(0, 1fr);
 }
+
+/* The project detail's feature body. It used to wear `.chip` — an 18px inline badge —
+   which flattened a whole section and only worked by accident, because the badge's
+   inline-flex also kept the goal rows from overlapping. A block container does the same
+   job without pretending a section is a label. */
+.ms-container .feature-body {
+  display: block;
+  min-width: 0;
+}
+
+/* The project detail's goal list. It wore `.fields` — the two-column grid for <dt>/<dd>
+   pairs — so every <li> became a grid cell and the rows drew on top of each other. */
+.ms-container .goal-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: block;
+}

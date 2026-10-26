@@ -104,7 +104,7 @@ function Milestone(props: { milestone: RoadmapModel["milestones"][number]; copy:
         <span className={"detail-meta"}>{copy.roadmap.milestoneOpen(milestone.openIssues)}</span>
       </div>
       {milestone.issues.length === 0 ? null : (
-        <ul className={"fields"}>
+        <ul className="goal-list">
           {milestone.issues.map((issue) => (
             <li key={issue.id} className={"row"}>
               <span className={"mono"}>{issue.id}</span>
@@ -129,7 +129,7 @@ function milestoneStatusTone(status: string): Tone {
 function RoadmapFeature(props: { model: RoadmapModel; copy: ProjectDetailCopy }) {
   const { model, copy } = props;
   return (
-    <div className={"chip"} data-ms-feature="roadmap">
+    <div className={"feature-body"} data-ms-feature="roadmap">
       {model.direction === null ? null : (
         <Collapsible summary={copy.roadmap.directionHeading}>
           <p className={"detail-text"} data-ms-direction="">
@@ -140,7 +140,7 @@ function RoadmapFeature(props: { model: RoadmapModel; copy: ProjectDetailCopy })
       {model.goals.length === 0 ? null : (
         <section className={"panel"} data-ms-goals="">
           <h3>{copy.roadmap.goalsHeading}</h3>
-          <ul className={"fields"}>
+          <ul className="goal-list">
             {model.goals.map((goal) => (
               <li key={goal.ordinal} className={"milestone-row"} data-ms-goal-depth={goal.depth} data-ms-goal-checked={goal.checked}>
                 {/* The check state is text plus a mark, never colour alone. */}
@@ -294,7 +294,7 @@ export function ProjectDetail(props: ProjectDetailProps) {
       {feature === DEFAULT_PROJECT_FEATURE ? (
         <RoadmapArm roadmap={props.roadmap} copy={copy} />
       ) : (
-        <div className={"chip"} data-ms-feature={feature}>
+        <div className={"feature-body"} data-ms-feature={feature}>
           {/* The scope chip: this list is this project's, and the scope is
               removable so the reader can say what they are looking at. */}
           <div className={"chips"}>
