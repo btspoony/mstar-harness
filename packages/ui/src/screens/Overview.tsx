@@ -606,10 +606,12 @@ export function Overview(props: OverviewProps) {
         </div>
       </div>
 
-      {/* 6 — the one page-validity fact. Never dropped. */}
-      <p className="muted" data-ms-projection={model.projection.kind}>
-        {copy.projection[model.projection.kind]}
-      </p>
+      {/* 6 — the one page-validity fact. Never dropped, and stated in the prototype's
+          own line: `.identity-line` is a hairline-topped mono row, not a muted sentence
+          under the grid. */}
+      <div className="identity-line" data-ms-projection={model.projection.kind}>
+        <span>{copy.projection[model.projection.kind]}</span>
+      </div>
       {model.projection.kind === "current" ? null : (
         <Notice reason={model.projection.reasons.join(" · ")} tone="warning" />
       )}
