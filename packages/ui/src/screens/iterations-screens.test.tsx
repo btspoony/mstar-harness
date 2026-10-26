@@ -296,6 +296,19 @@ describe("IterationDetail — catalog, execution, compass, gate steps, plan tabl
     }
   });
 
+  test("the execution panel states the workflow's status and phase", () => {
+    // The fixture registers a workflow as `running` / `phase-2-execute`. No iteration in the
+    // development store does, so this is the only place these two rows are exercised.
+    expect(html).toContain("running");
+    expect(html).toContain("phase-2-execute");
+  });
+
+  test("an iteration with no workflow says so, and states no phase", () => {
+    const bare = renderDetail(iteration({ workflow: null } as Partial<IterationDTO>));
+    expect(bare).toContain("none");
+    expect(bare).not.toContain("phase-2-execute");
+  });
+
   test("the compass status and its summary", () => {
     expect(html).toContain("locked");
     expect(html).toContain('data-ms-compass-summary=""');
