@@ -293,15 +293,11 @@ describe("WorkflowDetail — execution, anchors, catalog and the plan table", ()
     expect(inactive).not.toContain('data-ms-registration');
   });
 
-  test("the four branch anchors are rendered as a chain and as fields", () => {
-    expect(html).toContain('data-ms-branch-chain=""');
-    // The chain is segmented: an anchor per label, an arrow between them.
-    expect((html.match(/class="branch-anchor"/g) ?? []).length).toBe(4);
-    expect((html.match(/class="branch-arrow"/g) ?? []).length).toBe(3);
-    expect(html).toContain('<span class="branch-anchor"><span>Base</span> <b>main</b></span>');
-    for (const label of ["Branch base", "Branch source", "Branch integration", "Branch target"]) {
-      expect(html).toContain(label);
-    }
+  test("the detail screen carries no branch chain (the prototype's does not)", () => {
+    // The overview's active-workflow row DOES show `Base → Source → Integration → Target`.
+    // The detail screen does not: it states the same four facts once, in the catalog and
+    // execution panels, and repeating them as a chain added a frame the prototype lacks.
+    expect(html).not.toContain("data-ms-branch-chain");
   });
 
   test("the catalog identity is one cell with the root-register fact", () => {

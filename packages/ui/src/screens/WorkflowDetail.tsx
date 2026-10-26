@@ -227,44 +227,6 @@ export function WorkflowDetail(props: WorkflowDetailProps) {
             </div>
           </section>
 
-          {/* The four anchors, in delivery order, as one chain and as fields. */}
-          <FieldGroup title={copy.fields.branchBase}>
-            <Field label={copy.fields.branchBase} mono>
-              {props.model.value.workflow.branch.base ?? "—"}
-            </Field>
-            <Field label={copy.fields.branchSource} mono>
-              {props.model.value.workflow.branch.source ?? "—"}
-            </Field>
-            <Field label={copy.fields.branchIntegration} mono>
-              {props.model.value.workflow.branch.integration ?? "—"}
-            </Field>
-            <Field label={copy.fields.branchTarget} mono>
-              {props.model.value.workflow.branch.target ?? "—"}
-            </Field>
-          </FieldGroup>
-
-          {/* The prototype's chain: one anchor per label with an arrow between them. A
-              joined string gives the line a single item and no arrows to style. */}
-          <div className={"branch-line"} data-ms-branch-chain="">
-            {[
-              // Labels come from copy, like every other string on this screen: the
-              // fields block below already uses them, and a hardcoded English label
-              // would mix languages in a localized build.
-              // The chain uses the SHORT labels the prototype prints on the line
-              // (`f.base`), not the longer ones the fields block uses beside it.
-              [copy.chainBase, props.model.value.workflow.branch.base] as const,
-              [copy.chainSource, props.model.value.workflow.branch.source] as const,
-              [copy.chainIntegration, props.model.value.workflow.branch.integration] as const,
-              [copy.chainTarget, props.model.value.workflow.branch.target] as const,
-            ].map(([label, value], index) => (
-              <Fragment key={label}>
-                {index === 0 ? null : <span className="branch-arrow" aria-hidden="true">→</span>}
-                <span className="branch-anchor">
-                  <span>{label}</span> <b>{value ?? "—"}</b>
-                </span>
-              </Fragment>
-            ))}
-          </div>
 
           <section className="panel" aria-labelledby="ms-workflow-catalog">
             <div className="panel-head">
