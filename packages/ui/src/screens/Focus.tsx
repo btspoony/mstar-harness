@@ -19,7 +19,7 @@ import { EmptyState, type AbsenceArm } from "../components/EmptyState.tsx";
 import { StatusDot } from "../components/StatusDot.tsx";
 import { TruncatedText } from "../components/TruncatedText.tsx";
 import type { FocusGroup, FocusModel, FocusPlan, FocusBinding } from "../view-model/focus.ts";
-import type { Tone } from "../view-model/status.ts";
+import type { GateStepId, Tone } from "../view-model/status.ts";
 
 /** Every visible string this screen needs. Task 5 supplies them. */
 export type FocusCopy = {
@@ -48,6 +48,8 @@ export type FocusCopy = {
   /** The store has not recorded a status for this plan. */
   planStatusAbsent: string;
   deliveryHeading: string;
+  /** The fourth panel's step names, shared with the overview's track. */
+  gateStepLabels: Record<GateStepId, string>;
   deliveryLine: (iterationId: string, step: number, of: number) => string;
   deliveryNoIteration: string;
   /** The iteration records no compass, so no step is proven — never `step 0 of 5`. */
@@ -249,13 +251,45 @@ export function Focus(props: FocusProps) {
         <h2 className={"panel-title"} id="ms-focus-delivery">
           {copy.deliveryHeading}
         </h2>
-        <p className={"milestone-block"} data-ms-delivery={model.delivery.kind}>
-          {model.delivery.kind === "no-iteration"
-            ? copy.deliveryNoIteration
-            : model.delivery.position === null
-              ? copy.deliveryUnknownStep
-              : copy.deliveryLine(model.delivery.iterationId, model.delivery.position.step, model.delivery.position.of)}
-        </p>
+        {model.delivery.kind === "no-iteration" ? (
+          <p className={"milestone-block"} data-ms-delivery={model.delivery.kind}>
+            {copy.deliveryNoIteration}
+          </p>
+        ) : (
+          <div className={"milestone-block"} data-ms-delivery={model.delivery.kind}>
+            <p className={"milestone-block-name"}>{model.delivery.iterationId}</p>
+            {/* The five-step track, as the prototype's fourth panel carries it. The model
+                has held `steps` since this screen was written and nothing rendered it. */}
+            <div className="gate-track" role="list" data-ms-focus-steps="">
+              {model.delivery.steps.map((step) => (
+                <div
+                  key={step.id}
+                  role="listitem"
+                  className={
+                    step.position === "reached"
+                      ? "gate-step is-done"
+                      : step.position === "current"
+                        ? "gate-step is-current"
+                        : "gate-step"
+                  }
+                  data-ms-step={step.id}
+                  data-ms-step-position={step.position}
+                  {...(step.position === "current" ? { "aria-current": "step" as const } : {})}
+                >
+                  <span className="glyph" aria-hidden="true">
+                    {step.position === "reached" ? "✓" : step.position === "current" ? "●" : String(step.step)}
+                  </span>
+                  <span className="gate-label">{copy.gateStepLabels[step.id]}</span>
+                </div>
+              ))}
+            </div>
+            <span className={"gate-meta"} data-ms-position={model.delivery.position === null ? "unknown" : "known"}>
+              {model.delivery.position === null
+                ? copy.deliveryUnknownStep
+                : copy.deliveryLine(model.delivery.iterationId, model.delivery.position.step, model.delivery.position.of)}
+            </span>
+          </div>
+        )}
       </section>
 
       {/* 5 — the enforcement flag. One line, last. */}

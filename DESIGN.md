@@ -1631,10 +1631,22 @@ dashboard cannot render it and the GUI's own panel needs a token URL this sessio
 have. The assertions above run against the component through the suite's `focus({})` helper,
 not against a running pane.
 
-**What that leaves open**: the fourth panel's *contents*. The prototype's is an iteration
-block — id, status, an `Open iteration` link, `compass active · phase-1-direction · 3 plans`,
-and the five-step track. This implementation renders the id and `step N of 5`. The title
-matches; the body is thinner.## Verification coverage, stated
+**The body was thinner because a field was never read.** `DeliveryLine.steps` has existed
+since the screen was written — five entries with their positions — and nothing rendered it;
+the panel printed `step 2 of 5` and stopped. It renders the track now, with the prototype's
+own glyphs and state classes (`✓` / `●` / the number, `is-done` / `is-current`), so the fourth
+panel is id, track, and the position line.
+
+**Still open, and honestly so**: the prototype's fourth panel also carries the iteration's
+status, an `Open iteration` link, and `compass active · phase-1-direction · 3 plans`. This
+implementation's `IterationDTO` slice for that screen is `{iterationId, gateStep}`, so those
+three are not a rendering gap — the data is not read.
+
+**On language**: the prototype is English and this dashboard resolves to `zh` by default
+(`locale/index.ts`: anything not `"zh"` is English). That is a locale setting, not a styling
+difference — the headings above are compared against the English dictionary, and the same
+screens render those strings when the switch is on `en`. Every structural claim in this file
+was checked in the dictionary the prototype uses.## Verification coverage, stated
 
 Two hosts mount these screens: the dashboard (`packages/cli/web`) and the dsh pane
 (`packages/dsh/src/client/panel`). They share the components but **each owns its own

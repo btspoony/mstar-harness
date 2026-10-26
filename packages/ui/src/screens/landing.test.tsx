@@ -222,6 +222,13 @@ const focusCopy: FocusCopy = {
   blockedLabel: "Blocked",
   progressAbsent: "records no progress",
   deliveryHeading: "Latest iteration",
+  gateStepLabels: {
+    start: "Start",
+    execute: "Execute",
+    close: "Close",
+    "pr-delivery": "PR delivery",
+    "merge-ready": "Merge ready",
+  },
   deliveryLine: (id, step, of) => `${id} · step ${step} of ${of}`,
   deliveryNoIteration: "No iteration",
   deliveryUnknownStep: "Iteration · no delivery step recorded",
