@@ -252,10 +252,12 @@ function WorkflowRowView(props: {
     [copy.branchTarget, branch.target],
   ];
   const drawn = anchors.filter(([, value]) => value !== null);
-  // A div, not a section.panel: this row already sits inside the `Active workflow` panel's
-  // body, and as a panel it made the overview count six where the prototype has five.
+  // The prototype's panel body holds `.wf-summary` and `.branch-line` as siblings; the plan
+  // table follows them. An earlier version wrapped all three inside `.wf-summary`, which
+  // made one row where the prototype has three.
   return (
-    <div className="wf-summary" data-ms-overview-workflow="">
+    <>
+      <div className="wf-summary" data-ms-overview-workflow="">
         <span className="wf-id">{row.id}</span>
         <span className="muted">{copy.typeLabel}</span>
         <span className="chip">{row.type}</span>
@@ -265,6 +267,7 @@ function WorkflowRowView(props: {
             {copy.openWorkflow}
           </button>
         )}
+      </div>
       <p data-ms-workflow-meta={row.plansTotal}>
         {copy.workflowMeta(row.plansTotal, row.status)}
       </p>
@@ -287,7 +290,7 @@ function WorkflowRowView(props: {
         rows={row.plans}
         rowKey={(plan) => plan.planId}
       />
-    </div>
+    </>
   );
 }
 
@@ -409,7 +412,7 @@ export function Overview(props: OverviewProps) {
           <PanelHead id="ms-overview-workflows" title={copy.workflowsHeading} />
           <PanelBody>
           {model.workflows.kind === "populated" ? (
-            <div data-ms-workflows="">
+            <>
               {/* The prototype's panel is one active workflow with its plans beneath it
                   ("Active workflow", singular). Rendering every workflow put the same
                   five-column header on the page once per record; the rest are named in
@@ -432,7 +435,7 @@ export function Overview(props: OverviewProps) {
                   {copy.workflowsTruncated(model.workflows.shown, model.workflows.total)}
                 </p>
               ) : null}
-            </div>
+            </>
           ) : (
             <Absence
               arm={model.workflows.kind as AbsenceArm}
