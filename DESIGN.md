@@ -485,6 +485,26 @@ as "no information" rather than "the store has no note". The prototype's own cel
 note alone; the absent line is the product's answer to the same question, in the same
 slot.
 
+## Verification coverage, stated
+
+Two hosts mount these screens: the dashboard (`packages/cli/web`) and the dsh pane
+(`packages/dsh/src/client/panel`). They share the components but **each owns its own
+wiring**, and a shared component does not prove a host passed it what it needs.
+
+| Evidence | Dashboard | dsh pane |
+| --- | --- | --- |
+| Renders in a browser, measured | yes — every screen, both widths | **no** |
+| A filter change actually filters | yes — measured to 0 rows | **not measured** |
+| Builds and typechecks | yes | yes |
+
+This gap is real and was the source of two shipped defects: the workflow filter was
+rendered but dead in **both** hosts for two rounds, and the iteration filter was dead in
+the dsh pane after the dashboard was fixed. A control that renders is not a control that
+works, and only a browser settles which one you have.
+
+Until someone exercises the dsh pane, treat its list filters and its row activation as
+**unverified**, not as working.
+
 ## A class that exists is not a class that belongs there
 
 Three defects in this interface had the same shape: the class name was real, defined, and
