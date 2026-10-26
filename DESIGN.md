@@ -241,6 +241,14 @@ Dark order: neutral < danger < purple < success < warning, gaps **3.9 / 4.0 / 3.
 The order differs between themes on purpose — each theme is tuned against its own ground —
 so the **gap** is the invariant, never the order.
 
+**Three adjacent pairs sit below the floor, and they sit below it in the prototype.**
+`danger|purple` (1.01 L*), `purple|success` (2.19) and `success|warning` (0.66) are the
+prototype's own values; the colours are kept as-is because the prototype is the design
+source, and the deviation is recorded by name in `tokens.test.ts`. What still holds: no
+new pair may drift under the floor, and a recorded pair may not get worse than the value
+recorded here. The reader's channel in these three cases is hue — purple is the only
+violet in the set — not lightness.
+
 ### Rule 2 — forced colors
 
 In forced-colors mode every background is replaced by the system palette and five coloured
