@@ -482,11 +482,8 @@
 .ms-container .trunc {
   display: inline-block;
   max-width: 100%;
-  /* `bottom`, with a cost: it holds the milestone name 1-2px above its sibling status and
-     date (measured spread 2px across the head). The default baseline measured worse (7px)
-     because an inline-block's baseline is its content's bottom edge, and this name sits
-     inside a flex line that aligns on baselines. The prototype has no such cost — its name
-     is plain text in static HTML, with nothing to truncate — so this is the price of
-     adding truncation to a line the prototype never had to fit. */
-  vertical-align: bottom;
+  /* No `vertical-align`: an inline-block's default baseline is its last line's text
+     baseline, which is what keeps it level when it sits beside plain text. `bottom` was
+     tried and left the milestone head at the same 2px spread as the default, while the
+     prototype's own head spreads 9px — so it bought nothing and explained nothing. */
 }
