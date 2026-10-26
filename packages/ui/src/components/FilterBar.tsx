@@ -45,13 +45,13 @@ export type FilterBarProps = {
 export function FilterBar(props: FilterBarProps) {
   const nothingApplied = props.applied.length === 0;
   return (
-    <div className={css.wrap}>
-      <div className={css.fields}>
+    <div className="filters">
+      <div className="fields">
         {props.fields.map((field) => (
-          <label key={field.key} className={css.field}>
+          <label key={field.key} className="filter-field">
             <span className={css.fieldLabel}>{field.label}</span>
             <select
-              className={css.select}
+              className="ctl"
               value={field.value}
               data-ms-filter={field.key}
               onChange={(event) => props.onFieldChange(field.key, event.target.value)}
@@ -67,26 +67,26 @@ export function FilterBar(props: FilterBarProps) {
         {props.search === undefined ? null : (
           <input
             type="search"
-            className={css.search}
+            className="search"
             value={props.search.value}
             placeholder={props.search.placeholder}
             aria-label={props.search.placeholder}
             onChange={(event) => props.search?.onChange(event.target.value)}
           />
         )}
-        <button type="button" className={css.clear} disabled={nothingApplied} onClick={props.onClearAll}>
+        <button type="button" className="btn" disabled={nothingApplied} onClick={props.onClearAll}>
           {props.clearLabel}
         </button>
-        <span className={css.summary}>{props.resultSummary}</span>
+        <span className="filters-meta">{props.resultSummary}</span>
       </div>
       {nothingApplied ? null : (
-        <div className={css.chips} data-ms-applied-filters="">
+        <div className="chips" data-ms-applied-filters="">
           {props.applied.map((chip) => (
-            <span key={chip.key} className={css.chip}>
+            <span key={chip.key} className="chip">
               {chip.text}
               <button
                 type="button"
-                className={css.chipClear}
+                className="chip-x"
                 aria-label={chip.text}
                 onClick={() => props.onClearFilter(chip.key)}
               >

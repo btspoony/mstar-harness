@@ -19,9 +19,9 @@ export type FieldGroupProps = {
 
 export function FieldGroup(props: FieldGroupProps) {
   return (
-    <section className={css.group}>
-      <h3 className={css.title}>{props.title}</h3>
-      <dl className={css.list} data-ms-columns={props.columns ?? 2}>
+    <section className="fields">
+      <h3 className="muted">{props.title}</h3>
+      <dl className="fields" data-ms-columns={props.columns ?? 2}>
         {props.children}
       </dl>
     </section>

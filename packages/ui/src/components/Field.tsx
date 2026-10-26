@@ -19,8 +19,8 @@ export type FieldProps = {
 
 export function Field(props: FieldProps) {
   return (
-    <div className={css.field}>
-      <dt className={css.label}>{props.label}</dt>
+    <div className="field">
+      <dt className="field-label">{props.label}</dt>
       <dd className={props.mono === true ? css.valueMono : css.value}>{props.children}</dd>
     </div>
   );

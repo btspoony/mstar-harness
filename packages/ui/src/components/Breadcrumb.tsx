@@ -27,18 +27,18 @@ export type BreadcrumbProps = {
 
 export function Breadcrumb(props: BreadcrumbProps) {
   return (
-    <nav className={css.trail} aria-label={props.label}>
+    <nav className="breadcrumb" aria-label={props.label}>
       {props.trail.map((crumb) => (
-        <span key={crumb.id} className={css.item}>
-          <button type="button" className={css.link} onClick={() => props.onSelect(crumb.id)}>
+        <span key={crumb.id} className="breadcrumb-item">
+          <button type="button" className="link" onClick={() => props.onSelect(crumb.id)}>
             {crumb.label}
           </button>
-          <span className={css.separator} aria-hidden="true">
+          <span className="breadcrumb-sep" aria-hidden="true">
             /
           </span>
         </span>
       ))}
-      <span className={css.current} aria-current="page">
+      <span className="breadcrumb-current" aria-current="page">
         {props.current}
       </span>
     </nav>

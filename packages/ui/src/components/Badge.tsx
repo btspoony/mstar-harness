@@ -18,7 +18,7 @@ export type BadgeProps = {
 
 export function Badge(props: BadgeProps) {
   return (
-    <span className={css.badge} data-ms-badge-tone={props.tone ?? "neutral"}>
+    <span className="badge" data-ms-badge-tone={props.tone ?? "neutral"}>
       {props.children}
     </span>
   );

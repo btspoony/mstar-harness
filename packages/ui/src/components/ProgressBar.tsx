@@ -31,7 +31,7 @@ export function ProgressBar(props: ProgressBarProps) {
   const complete = percent === 100 && props.total > 0;
   return (
     <span
-      className={css.track}
+      className="bar"
       role="progressbar"
       aria-valuenow={props.done}
       aria-valuemin={0}
@@ -39,7 +39,7 @@ export function ProgressBar(props: ProgressBarProps) {
       aria-label={props.label}
       data-ms-progress-tone={complete ? "success" : (props.tone ?? "accent")}
     >
-      <span className={css.fill} style={{ inlineSize: `${percent}%` }} />
+      <span className="bar-fill" style={{ inlineSize: `${percent}%` }} />
     </span>
   );
 }

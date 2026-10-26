@@ -53,31 +53,31 @@ export type EmptyStateProps = {
 
 export function EmptyState(props: EmptyStateProps) {
   return (
-    <section className={css.wrap} data-ms-absence={props.arm}>
-      <p className={css.head}>
-        <span className={css.labelWord} data-ms-label-word="">
+    <section className="absence" data-ms-absence={props.arm}>
+      <p className="absence-head">
+        <span className="absence-word" data-ms-label-word="">
           {props.labelWord}
         </span>
-        <span className={css.heading}>{props.heading}</span>
+        <span className="absence-heading">{props.heading}</span>
       </p>
-      <p className={css.body}>{props.body}</p>
+      <p className="absence-body">{props.body}</p>
       {props.arm === "unavailable" ? (
-        <p className={css.reason} data-ms-reason="">
+        <p className="absence-reason" data-ms-reason="">
           {props.reason ?? props.body}
         </p>
       ) : null}
       {props.arm === "not-applicable" && props.detail !== undefined ? (
-        <p className={css.detail} data-ms-detail="">
+        <p className="absence-detail" data-ms-detail="">
           {props.detail}
         </p>
       ) : null}
       {props.arm === "absent" && props.pointer !== undefined ? (
-        <p className={css.pointer} data-ms-pointer="">
+        <p className="absence-pointer" data-ms-pointer="">
           {props.pointer}
         </p>
       ) : null}
       {props.arm === "empty" && props.hint !== undefined ? (
-        <p className={css.hint} data-ms-hint="">
+        <p className="absence-hint" data-ms-hint="">
           {props.hint}
         </p>
       ) : null}

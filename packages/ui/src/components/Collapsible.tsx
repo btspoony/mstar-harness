@@ -20,9 +20,9 @@ export type CollapsibleProps = {
 
 export function Collapsible(props: CollapsibleProps) {
   return (
-    <details className={css.details} open={props.defaultOpen}>
-      <summary className={css.summary}>{props.summary}</summary>
-      <div className={css.body}>{props.children}</div>
+    <details className="chart-note" open={props.defaultOpen}>
+      <summary className="chart-note">{props.summary}</summary>
+      <div className="chart-note">{props.children}</div>
     </details>
   );
 }

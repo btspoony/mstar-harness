@@ -26,7 +26,7 @@ export type TabsProps = {
 
 export function Tabs(props: TabsProps) {
   return (
-    <div className={css.tabs} role="tablist" aria-label={props.label}>
+    <div className="seg" role="tablist" aria-label={props.label}>
       {props.tabs.map((tab) => {
         const active = tab.id === props.activeId;
         return (
@@ -37,12 +37,12 @@ export function Tabs(props: TabsProps) {
             id={`ms-tab-${tab.id}`}
             aria-selected={active}
             aria-controls={`ms-tabpanel-${tab.id}`}
-            className={css.tab}
+            className="nav-btn"
             data-ms-tab={tab.id}
             onClick={() => props.onSelect(tab.id)}
           >
             {tab.label}
-            {tab.count === undefined ? null : <span className={css.count}>{tab.count}</span>}
+            {tab.count === undefined ? null : <span className="num">{tab.count}</span>}
           </button>
         );
       })}
