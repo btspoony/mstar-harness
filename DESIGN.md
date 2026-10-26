@@ -731,10 +731,15 @@ values are the prototype's own light block.
 **How to re-take it**, because a table of numbers is only useful if it can be refreshed:
 
 ```js
-const pick = (sel) => { const e = document.querySelector(sel); if (!e) return null;
+// `root` is the screen, never the document: the prototype keeps every screen in the DOM
+// with `hidden` on the inactive ones, so a document-wide query answers with whichever
+// screen happens to come first. That mistake reported `.panel-title` values for workflows
+// and iterations — screens that have none.
+const pick = (root, sel) => { const e = root.querySelector(sel); if (!e) return null;
   const c = getComputedStyle(e); return `${c.fontSize}/${c.color}/${c.padding}`; };
-JSON.stringify({ h1: pick(".screen-head h1"), pt: pick(".panel-title"),
-                 pm: pick(".panel-meta"), th: pick("thead th"), td: pick("tbody td") })
+const root = [...document.querySelectorAll('[data-screen="issues"]')].find((e) => e.tagName === "SECTION");
+JSON.stringify(["h1:.screen-head h1", "pt:.panel-title", "pm:.panel-meta", "th:thead th", "td:tbody td"]
+  .map((p) => { const [k, sel] = p.split(":"); return k + "=" + pick(root, sel); }))
 ```
 
 Run that against the prototype (`file://…/design-v1.html`, click the screen's nav button
