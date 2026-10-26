@@ -11,8 +11,15 @@
  *    step is `null`-able and the plan bucket keeps `Blocked` separate.
  */
 
-/** The five status tones of `DESIGN.md` § Status treatments. */
-export const TONES = ["danger", "warning", "success", "neutral", "purple"] as const;
+/**
+ * The status tones of `DESIGN.md` § Status treatments, plus `accent`.
+ *
+ * `accent` is the sixth because the prototype draws three states in it — `tone-running`,
+ * `tone-active` and `tone-inprogress` all resolve to `--ms-accent`. Folding `active` into
+ * `success` made a blue dot green, which the colour-blindness rule does not mind and the
+ * prototype does.
+ */
+export const TONES = ["danger", "warning", "success", "neutral", "purple", "accent"] as const;
 
 /** One status tone. `StatusDot` takes this plus the literal enum label. */
 export type Tone = (typeof TONES)[number];
@@ -127,7 +134,7 @@ export function lifecycleTone(lifecycle: string): Tone {
 export function milestoneStatusTone(status: string | null): Tone {
   switch (status) {
     case "active":
-      return "success";
+      return "accent";
     case "planned":
       return "neutral";
     case "delivered":

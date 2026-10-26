@@ -1382,11 +1382,26 @@ builds green, but no screenshot of the running dsh panel with a panel inside it 
 Rendering the real overview inside `.ms-pane-body` — the first time any screen was seen at
 pane width — turned up three, none of which a computed-style check would have asked for:
 
-**1. Two Tone values had no colour.** `.tone-success` and `.tone-purple` appear nowhere in
-`product.css`; only `.tone-done`, `.tone-resolved` and `.tone-terminal` cover those colours.
-Every dot carrying `Tone = "success"` or `"purple"` therefore rendered in the default neutral
-grey. Both rules now exist, and the three milestone dots measure `rgb(76, 189, 133)` for
-success and `rgb(139, 147, 159)` for neutral.
+**1. Two Tone values had no colour, and a third had the wrong one.** `.tone-success` and
+`.tone-purple` appear nowhere in `product.css`; only `.tone-done`, `.tone-resolved` and
+`.tone-terminal` cover those colours, so every dot carrying either rendered in the default
+neutral grey. Both rules now exist.
+
+**And mapping `active` to `success` was wrong.** The prototype draws `tone-active` as
+`var(--ms-accent)` — a blue dot — where `tone-done` is `var(--ms-success)`. Folding the two
+together made an active milestone green, and the first check only asked whether the dot *had*
+a colour, not which one. `Tone` gained a sixth value, `accent`, with its own rule.
+
+Measured on the three milestone states:
+
+| Milestone status | The prototype's class | Its colour | This implementation |
+| --- | --- | --- | --- |
+| `active` | `tone-active` | `--ms-accent` `#7aa2ff` | `tone-accent` `rgb(122, 162, 255)` |
+| `planned` | `tone-todo` | `--ms-neutral` `#8b939f` | `tone-neutral` `rgb(139, 147, 159)` |
+| `delivered` | `tone-done` | `--ms-success` `#4cbd85` | `tone-success` `rgb(76, 189, 133)` |
+
+**The lesson is the check, not the fix**: "the dot has a colour" and "the dot has the
+prototype's colour" are different questions, and only the first was asked.
 
 **2. The milestone row was two rows in the prototype and one row here.** The prototype's
 `.milestone-top` (dot, name, target) and `.milestone-foot` (bar, counts) stack. As a single

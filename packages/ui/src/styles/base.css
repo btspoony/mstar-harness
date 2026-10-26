@@ -275,6 +275,11 @@
   background: var(--ms-purple);
 }
 
+/* The prototype's `tone-active`: an accent dot, not a success one. */
+.ms-container .tone-accent .dot {
+  background: var(--ms-accent);
+}
+
 /**
  * Forced colors: the status dot stops depending on colour.
  *

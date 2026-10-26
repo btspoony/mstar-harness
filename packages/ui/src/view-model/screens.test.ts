@@ -240,7 +240,7 @@ describe("Overview — the fact set of §8.2", () => {
       milestoneId: "m-0",
       name: "Milestone 0",
       status: "active",
-      statusTone: "success",
+      statusTone: "accent",
       target: "2026-11-07",
       progress: { retired: 6, total: 10 },
       openIssues: 4,
