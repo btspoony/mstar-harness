@@ -444,19 +444,9 @@
   margin: 0 5px;
 }
 
-/* A `.trunc` inside a field's value. The class is inline by default, and `overflow:
-   hidden` does nothing to an inline span — so the value overflowed its own `dd`
-   (measured 213px of content in a 184px cell) instead of ellipsing. As a block it
-   takes the cell's width and the ellipsis applies. */
-.ms-container .field dd > .trunc {
-  display: block;
-  max-width: 100%;
-}
-
-/* The roadmap goal row. `.milestone-name` carries `overflow: hidden` + ellipsis, but it
-   is a <span>, so both were inert: a long goal title ran 1700px wide at a 720px viewport
-   and took the page's horizontal scroll with it. The row is a flex line (dot, title,
-   the visually-hidden state) and the title is the only part that may shrink. */
+/* The roadmap goal row: a flex line (dot, title, the visually-hidden state) where the
+   title is the only part that may shrink. Without the flex line the dot and the title sat
+   on separate baselines. */
 .ms-container .milestone-row {
   display: flex;
   align-items: baseline;

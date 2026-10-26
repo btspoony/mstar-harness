@@ -549,6 +549,38 @@ works, and only a browser settles which one you have.
 Until someone exercises the dsh pane, treat its list filters and its row activation as
 **unverified**, not as working.
 
+## An inline element ignores every overflow rule
+
+`TruncatedText` renders a `<span class="trunc">`, and the prototype's rule for it is
+`overflow: hidden; text-overflow: ellipsis; white-space: nowrap`. **None of those apply to
+an inline element.** The rule was present, the class was on the element, and the text
+still ran past its container.
+
+It surfaced three times before it was fixed at the source, each time as a separate bug:
+
+| Where | Measured | Symptom |
+| --- | --- | --- |
+| a field value in `<dd>` | 213px of content in a 180px cell | spilled out of the cell |
+| a roadmap goal title at 720px | 1700px wide | the page scrolled sideways |
+| a milestone name at 375px | 585px wide | the page scrolled sideways |
+
+The first two were "fixed" at their call sites first (`dd > .trunc { display: block }`,
+a flex rule on the goal row) — true at those two places and nowhere else. The source fix
+is one rule:
+
+```css
+.ms-container .trunc { display: inline-block; max-width: 100%; vertical-align: bottom; }
+```
+
+The call-site patches were then deleted; a rule that only works because a second rule
+happens to hold is debt, not a fix.
+
+**The check that catches this class of bug**: `document.body.scrollWidth >
+document.body.clientWidth`, at 1440 / 720 / 375, on every screen. `scrollWidth >
+clientWidth` on a `<dd>` of *plain text* is not a symptom — that is what an ellipsis
+looks like from the inside. The symptom is a **child element wider than its parent**, or
+the page itself scrolling.
+
 ## A class that exists is not a class that belongs there
 
 Three defects in this interface had the same shape: the class name was real, defined, and
