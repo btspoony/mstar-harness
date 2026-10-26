@@ -376,6 +376,11 @@ export const zh: Copy = {
   },
 
   projectDetail: {
+  catalogHeading: "目录身份",
+  roadmapState: "路线图存在",
+  authorityHeading: "路线图权威",
+  authorityColumns: { state: "状态", revision: "版本", contentHash: "内容哈希", frontmatter: "前言字段" },
+  authorityAbsent: "该项目未声明路线图权威行。",
     breadcrumb: { label: "位置导航", trail: "项目" },
     fields: { title: "身份", id: "编号", lifecycle: "生命周期", path: "路径", description: "描述", noDescription: "—" },
     tabLabel: "项目功能",

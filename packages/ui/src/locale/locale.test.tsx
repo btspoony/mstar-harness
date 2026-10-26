@@ -222,6 +222,9 @@ describe("no key exists for a fact IA §8 marks not-rendered", () => {
     "workflowDetail.leaseColumns.holder",
     "workflowDetail.leaseColumns.worktree",
     "workflowDetail.leaseColumns.expires",
+    // The prototype's project detail has a `Roadmap authority` panel whose Revision
+    // row is part of the answer, not the removed revision counter.
+    "projectDetail.authorityColumns.revision",
   ]);
 
   test("the kept-exception list contains only keys that exist", () => {

@@ -399,6 +399,11 @@ export const en = {
   },
 
   projectDetail: {
+  catalogHeading: "Catalog identity",
+  roadmapState: "roadmap present",
+  authorityHeading: "Roadmap authority",
+  authorityColumns: { state: "State", revision: "Revision", contentHash: "Content hash", frontmatter: "Frontmatter" },
+  authorityAbsent: "This project declares no roadmap authority row.",
     breadcrumb: { label: "Breadcrumb", trail: "Projects" },
     fields: { title: "Identity", id: "ID", lifecycle: "Lifecycle", path: "Path", description: "Description", noDescription: "—" },
     tabLabel: "Project features",

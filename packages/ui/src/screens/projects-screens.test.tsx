@@ -117,6 +117,11 @@ const renderList = (items: ProjectListDTO["items"], total = items.length, genera
   );
 
 const detailCopy: ProjectDetailCopy = {
+  catalogHeading: "Catalog identity",
+  roadmapState: "roadmap present",
+  authorityHeading: "Roadmap authority",
+  authorityColumns: { state: "State", revision: "Revision", contentHash: "Content hash", frontmatter: "Frontmatter" },
+  authorityAbsent: "This project declares no roadmap authority row.",
   breadcrumb: { label: "Breadcrumb", trail: "Projects" },
   fields: { title: "Identity", id: "ID", lifecycle: "Lifecycle", path: "Path", description: "Description", noDescription: "—" },
   tabLabel: "Features",
@@ -232,10 +237,13 @@ describe("ProjectDetail — the fixed feature set", () => {
     expect(html).toContain('aria-current="page"');
   });
 
-  test("NEGATIVE: no envelope counter, catalog revision or source hash", () => {
-    for (const removed of ["storeRevision", "catalogRevision", "builtAt", "checkedAt", "sha256:abcd1234", "2026-10-23T09:42:00.000Z"]) {
+  test("the envelope counters stay out; the roadmap's own hash is shown", () => {
+    // The counters belong to the read envelope, not the record. The content hash is
+    // different: the prototype's `Roadmap authority` panel prints it, so it renders.
+    for (const removed of ["storeRevision", "catalogRevision", "builtAt", "checkedAt"]) {
       expect(html).not.toContain(removed);
     }
+    expect(html).toContain("sha256:abcd1234");
   });
 });
 

@@ -37,6 +37,14 @@ import type { Tone } from "../view-model/status.ts";
 export type ProjectDetailCopy = {
   breadcrumb: { label: string; trail: string };
   fields: { title: string; id: string; lifecycle: string; path: string; description: string; noDescription: string };
+  /** The two identity panels the prototype puts side by side. */
+  catalogHeading: string;
+  /** The roadmap's presence, said beside the title (`roadmap present`). */
+  roadmapState: string;
+  authorityHeading: string;
+  authorityColumns: { state: string; revision: string; contentHash: string; frontmatter: string };
+  /** Said when the project declares no roadmap authority row. */
+  authorityAbsent: string;
   tabLabel: string;
   /** The three fixed features, in order. `PROJECT_FEATURES` is the id list. */
   features: Record<ProjectFeature, string>;
@@ -239,6 +247,8 @@ function RoadmapArm(props: { roadmap: Resolved<RoadmapModel>; copy: ProjectDetai
 
 export function ProjectDetail(props: ProjectDetailProps) {
   const { identity, copy, feature } = props;
+  /** The roadmap's authority row, or `null` when the record declares none. */
+  const authority = props.roadmap.kind === "populated" ? props.roadmap.value.authority : null;
   // The prototype's strip carries a count per feature. Only the roadmap's is derivable
   // here: the issues and iterations panels arrive as rendered nodes from the host, so
   // their counts are the host's facts to pass in.
@@ -266,30 +276,92 @@ export function ProjectDetail(props: ProjectDetailProps) {
       </nav>
 
       <header className="detail-head">
-        <h1 className="detail-title">
-          <TruncatedText text={identity.title} />
-        </h1>
-        <p className={"muted"}>
-          <StatusDot label={identity.lifecycle} tone={identity.lifecycleTone} mono />
-          <span className={"mono"}>{identity.path}</span>
-        </p>
-        {identity.description === null ? null : <p className={"detail-text"}>{identity.description}</p>}
+        <div className="detail-head-main">
+          <h1 className="detail-title">
+            <TruncatedText text={identity.title} />
+          </h1>
+          <div className="detail-meta">
+            <span className="mono">{identity.projectId}</span>
+            <span aria-hidden="true">·</span>
+            <span className="mono">{identity.lifecycle}</span>
+          </div>
+          {identity.description === null ? null : (
+            <p className="prose t-12 secondary">{identity.description}</p>
+          )}
+        </div>
+        <div className="detail-actions">
+          {/* The prototype states the roadmap's presence as a dot + word, then the
+              catalog location beside it. */}
+          <span className={`status tone-${identity.lifecycleTone}`}>
+            <span className="dot" aria-hidden="true" />
+            <span className="label mono">{copy.roadmapState}</span>
+          </span>
+          <span className="mono t-11 muted">{identity.path}</span>
+        </div>
       </header>
 
-      <FieldGroup title={copy.fields.title} columns={2}>
-        <Field label={copy.fields.id} mono>
-          {identity.projectId}
-        </Field>
-        <Field label={copy.fields.lifecycle} mono>
-          {identity.lifecycle}
-        </Field>
-        <Field label={copy.fields.path} mono>
-          {identity.path}
-        </Field>
-        <Field label={copy.fields.description}>
-          {identity.description === null ? <span className={"muted"}>{copy.fields.noDescription}</span> : identity.description}
-        </Field>
-      </FieldGroup>
+      {/* The prototype puts the catalog identity and the roadmap's authority side by
+          side: what the record is, and what backs its roadmap. */}
+      <div className="detail-top">
+        <section className="panel" aria-labelledby="ms-project-catalog">
+          <div className="panel-head">
+            <h2 className="panel-title" id="ms-project-catalog">
+              {copy.catalogHeading}
+            </h2>
+          </div>
+          <div className="panel-body">
+            <dl className="fields">
+              <div className="field">
+                <dt>{copy.fields.id}</dt>
+                <dd className="mono">{identity.projectId}</dd>
+              </div>
+              <div className="field">
+                <dt>{copy.fields.lifecycle}</dt>
+                <dd className="mono">{identity.lifecycle}</dd>
+              </div>
+              <div className="field">
+                <dt>{copy.fields.path}</dt>
+                <dd className="mono wrap">{identity.path}</dd>
+              </div>
+            </dl>
+          </div>
+        </section>
+        <section className="panel" aria-labelledby="ms-project-authority">
+          <div className="panel-head">
+            <h2 className="panel-title" id="ms-project-authority">
+              {copy.authorityHeading}
+            </h2>
+          </div>
+          <div className="panel-body">
+            {authority === null ? (
+              <p className="muted t-12">{copy.authorityAbsent}</p>
+            ) : (
+              <dl className="fields">
+                <div className="field">
+                  <dt>{copy.authorityColumns.state}</dt>
+                  <dd className="mono">{authority.state}</dd>
+                </div>
+                <div className="field">
+                  <dt>{copy.authorityColumns.revision}</dt>
+                  <dd className="mono">{authority.revision}</dd>
+                </div>
+                <div className="field">
+                  <dt>{copy.authorityColumns.contentHash}</dt>
+                  <dd className="mono trunc" title={authority.contentHash}>
+                    <TruncatedText text={authority.contentHash} />
+                  </dd>
+                </div>
+                <div className="field">
+                  <dt>{copy.authorityColumns.frontmatter}</dt>
+                  <dd className="mono trunc">
+                    <TruncatedText text={authority.frontmatter} />
+                  </dd>
+                </div>
+              </dl>
+            )}
+          </div>
+        </section>
+      </div>
 
       {/* The fixed three-feature set. `Roadmap` is always the default. */}
       <Tabs
