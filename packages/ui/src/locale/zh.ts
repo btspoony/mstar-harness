@@ -220,6 +220,9 @@ export const zh: Copy = {
     impactHeading: "影响",
     acceptanceHeading: "验收标准",
     closureNoteHeading: "关闭说明",
+    identityKeysHeading: "标识键",
+    identityKeyLabel: "标识键",
+    providerLabel: "提供方",
   },
 
   workflows: {

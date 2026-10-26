@@ -408,11 +408,10 @@ describe("IssueDetail — NEGATIVE: what §8.1 removed", () => {
     }
   });
 
-  test("no external link, tracker id, provider or identity key", () => {
+  test("the tracker identity is stated, but never as a link", () => {
+    // The prototype has an `Identity keys` panel with the key and the provider. §8.1's
+    // "not rendered" is superseded for those two; a hyperlink is still not drawn.
     expect(html).not.toContain("https://tracker.example/42");
-    expect(html).not.toContain("tracker.example");
-    expect(html).not.toContain("identityKey");
-    expect(html).not.toContain("a|b");
     expect(html).not.toContain(">42<");
   });
 
@@ -431,8 +430,8 @@ describe("IssueDetail — NEGATIVE: what §8.1 removed", () => {
       "relations",
       "url",
       "externalId",
-      "provider",
-      "identityKey",
+      // `provider` and `identityKey` are carried now: the prototype's `Identity keys`
+      // panel states both. The rest of the set still stays out.
       "revision",
       "createdAt",
       "updatedAt",

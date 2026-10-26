@@ -254,8 +254,7 @@ describe("the detail fact block", () => {
       "relations",
       "url",
       "externalId",
-      "provider",
-      "identityKey",
+      // The prototype's `Identity keys` panel states the provider and the key.
       "revision",
       "createdAt",
       "updatedAt",

@@ -240,6 +240,9 @@ export const en = {
     impactHeading: "Impact",
     acceptanceHeading: "Acceptance criteria",
     closureNoteHeading: "Closure note",
+    identityKeysHeading: "Identity keys",
+    identityKeyLabel: "Identity key",
+    providerLabel: "Provider",
   },
 
   workflows: {

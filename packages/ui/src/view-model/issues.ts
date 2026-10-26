@@ -258,6 +258,9 @@ export type IssueDetailModel = {
   acceptance: string | null;
   /** Present only when the issue is closed and the store recorded a note. */
   closureNote: string | null;
+  /** The prototype's `Identity keys` panel: the tracker identity, when the store has one. */
+  identityKey: string | null;
+  provider: string | null;
 };
 
 export function issueDetailModel(detail: IssueDetail): IssueDetailModel {
@@ -280,6 +283,8 @@ export function issueDetailModel(detail: IssueDetail): IssueDetailModel {
     impact: longText(detail.impact),
     acceptance: longText(detail.acceptance),
     closureNote: closed ? longText(detail.closureNote) : null,
+    identityKey: detail.identityKey ?? null,
+    provider: detail.provider ?? null,
   };
 }
 

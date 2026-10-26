@@ -52,6 +52,10 @@ export type IssueDetailCopy = {
   impactHeading: string;
   acceptanceHeading: string;
   closureNoteHeading: string;
+  /** The `Identity keys` panel's heading and its two row labels. */
+  identityKeysHeading: string;
+  identityKeyLabel: string;
+  providerLabel: string;
   absence: {
     unavailable: { labelWord: string; heading: string; body: string };
     absent: { labelWord: string; heading: string; body: string; pointer: string };
@@ -154,6 +158,27 @@ export function IssueDetail(props: IssueDetailProps) {
             <section className={"panel"} data-ms-acceptance="">
               <h2>{copy.acceptanceHeading}</h2>
               <p className={"detail-text"}>{record.value.acceptance}</p>
+            </section>
+          )}
+
+          {/* The prototype's `Identity keys`: the tracker identity, when the store has one. */}
+          {record.value.identityKey === null && record.value.provider === null ? null : (
+            <section className={"fact-block"} aria-labelledby="ms-issue-identity-keys">
+              <h2 id="ms-issue-identity-keys">{copy.identityKeysHeading}</h2>
+              <dl className={"fields"}>
+                {record.value.identityKey === null ? null : (
+                  <div className="field">
+                    <dt>{copy.identityKeyLabel}</dt>
+                    <dd className="mono">{record.value.identityKey}</dd>
+                  </div>
+                )}
+                {record.value.provider === null ? null : (
+                  <div className="field">
+                    <dt>{copy.providerLabel}</dt>
+                    <dd className="mono">{record.value.provider}</dd>
+                  </div>
+                )}
+              </dl>
             </section>
           )}
 
