@@ -322,6 +322,10 @@ export const zh: Copy = {
   },
 
   iterationDetail: {
+    documentsHeading: "文档",
+    documentsCount: (n: number) => `${n} 个文档`,
+    documentsEmpty: "该迭代下没有登记文档。",
+    documentColumns: { title: "标题", lifecycle: "生命周期", kind: "文档类型", location: "位置", revision: "版本" },
     breadcrumb: { label: "位置导航", current: "迭代" },
     compassHeading: "罗盘",
     planTableHeading: "计划",

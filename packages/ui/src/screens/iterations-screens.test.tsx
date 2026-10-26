@@ -130,6 +130,10 @@ const renderList = (
   );
 
 const detailCopy: IterationDetailCopy = {
+  documentsHeading: "Documents",
+  documentsCount: (n) => `${n} documents`,
+  documentsEmpty: "No document is registered under this iteration.",
+  documentColumns: { title: "Title", lifecycle: "Lifecycle", kind: "Document kind", location: "Location", revision: "Revision" },
   breadcrumb: { label: "Breadcrumb", current: "Iterations" },
   compassHeading: "Compass",
   planTableHeading: "Plans",
@@ -332,11 +336,14 @@ describe("IterationDetail — the gate display is four labels plus a never-marke
 describe("IterationDetail — NEGATIVE: what §8.1 removed", () => {
   const html = renderDetail(iteration());
 
-  test("no document inventory, no document count", () => {
-    expect(html).not.toContain("Delivery compass");
-    expect(html).not.toContain("IA spec");
-    expect(html).not.toContain("doc-1");
-    expect(html).not.toMatch(/\bdocuments?\b/i);
+  test("the document inventory is rendered, as the prototype's Documents card", () => {
+    // IA §8.1 kept it out ("documents say nothing about progress"). The prototype's
+    // detail screen has a Documents card and the prototype is the acceptance criterion,
+    // so the inventory is returned and shown. The counters and the milestone-id list
+    // stay out — the screen has no place for them.
+    expect(html).toContain("data-ms-documents");
+    expect(html).toContain("Delivery compass");
+    expect(html).toMatch(/\bdocuments?\b/i);
   });
 
   test("no compass milestone-id list — the roadmap feature owns milestones", () => {
@@ -354,9 +361,11 @@ describe("IterationDetail — NEGATIVE: what §8.1 removed", () => {
   test("the detail model cannot carry them: the negative set is enforced by shape", () => {
     const model = iterationDetailModel({ data: iteration(), projection });
     if (model.kind !== "populated") throw new Error("expected the detail");
-    for (const removed of ["documents", "milestones", "revision", "storeRevision", "catalogRevision", "counters"]) {
+    // `documents` is carried now; the rest stays out.
+    for (const removed of ["milestones", "revision", "storeRevision", "catalogRevision", "counters"]) {
       expect(Object.keys(model.value)).not.toContain(removed);
     }
+    expect(Object.keys(model.value)).toContain("documents");
   });
 });
 

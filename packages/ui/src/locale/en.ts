@@ -344,6 +344,10 @@ export const en = {
   },
 
   iterationDetail: {
+    documentsHeading: "Documents",
+    documentsCount: (n: number) => `${n} documents`,
+    documentsEmpty: "No document is registered under this iteration.",
+    documentColumns: { title: "Title", lifecycle: "Lifecycle", kind: "Document kind", location: "Location", revision: "Revision" },
     breadcrumb: { label: "Breadcrumb", current: "Iterations" },
     compassHeading: "Compass",
     planTableHeading: "Plans",

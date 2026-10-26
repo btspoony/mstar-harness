@@ -33,6 +33,11 @@ export type IterationDetailCopy = {
   planTableHeading: string;
   catalogHeading: string;
   executionHeading: string;
+  /** The prototype's Documents card. */
+  documentsHeading: string;
+  documentsCount: (n: number) => string;
+  documentsEmpty: string;
+  documentColumns: { title: string; lifecycle: string; kind: string; location: string; revision: string };
   fields: {
     id: string;
     title: string;
@@ -250,6 +255,59 @@ function IterationDetailBody(props: {
               rows={value.plans}
               rowKey={(plan) => plan.planId}
             />
+          </section>
+
+          {/* The prototype's Documents card: the catalog inventory under this
+              iteration. It is a fact list, not a progress view — which is why the
+              model carries it only now that the screen has a place for it. */}
+          <section className="panel" aria-labelledby="ms-iteration-documents">
+            <div className="panel-head">
+              <h2 className="panel-title" id="ms-iteration-documents">
+                {copy.documentsHeading}
+              </h2>
+              <span className="panel-meta">
+                {copy.documentsCount(value.documents.length)}
+              </span>
+            </div>
+            <div className="panel-body tight">
+              {value.documents.length === 0 ? (
+                <p className="muted t-12">{copy.documentsEmpty}</p>
+              ) : (
+                <table className="table" data-ms-documents="">
+                  <colgroup>
+                    <col />
+                    <col style={{ width: "14%" }} />
+                    <col style={{ width: "16%" }} />
+                    <col style={{ width: "34%" }} />
+                    <col style={{ width: "10%" }} />
+                  </colgroup>
+                  <thead>
+                    <tr>
+                      <th scope="col">{copy.documentColumns.title}</th>
+                      <th scope="col">{copy.documentColumns.lifecycle}</th>
+                      <th scope="col">{copy.documentColumns.kind}</th>
+                      <th scope="col">{copy.documentColumns.location}</th>
+                      <th scope="col">{copy.documentColumns.revision}</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {value.documents.map((doc) => (
+                      <tr key={doc.location}>
+                        <td>{doc.title}</td>
+                        <td>{doc.lifecycle}</td>
+                        <td className="mono t-12">{doc.documentKind}</td>
+                        <td className="mono t-12">
+                          <TruncatedText text={doc.location} />
+                        </td>
+                        <td className="mono t-12" data-ms-align="end">
+                          {doc.revision}
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              )}
+            </div>
           </section>
         </>
   );

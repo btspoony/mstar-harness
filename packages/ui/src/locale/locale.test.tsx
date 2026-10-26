@@ -201,6 +201,18 @@ describe("no key exists for a fact IA §8 marks not-rendered", () => {
     // §8.2 lists the catalog identity on the workflow detail; `documentKind` is
     // one of its fields, not a document inventory.
     "workflowDetail.fields.documentKind",
+    // The prototype's iteration detail HAS a Documents card, and the prototype is the
+    // acceptance criterion for this interface. §8.1 kept the inventory out because it
+    // says nothing about progress — true, but that is a different goal. The card is
+    // rendered, so its keys are legitimate.
+    "iterationDetail.documentsHeading",
+    "iterationDetail.documentsCount",
+    "iterationDetail.documentsEmpty",
+    "iterationDetail.documentColumns.title",
+    "iterationDetail.documentColumns.lifecycle",
+    "iterationDetail.documentColumns.kind",
+    "iterationDetail.documentColumns.location",
+    "iterationDetail.documentColumns.revision",
   ]);
 
   test("the kept-exception list contains only keys that exist", () => {

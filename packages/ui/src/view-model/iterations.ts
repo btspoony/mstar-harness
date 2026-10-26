@@ -3,10 +3,14 @@
  *
  * IA §8.2: the list carries id, compass status, gate step, plan `done/total` and
  * the dates; the detail carries the compass summary, the five gate steps with the
- * current one marked, the dates, the linked workflow and the plan table. The
- * document inventory, the compass milestone-id list and every counter are **not**
- * returned (IA §8.1): documents say nothing about progress, and the roadmap
- * feature already owns milestones.
+ * current one marked, the dates, the linked workflow, the plan table **and the
+ * document inventory**.
+ *
+ * The inventory is returned because the prototype's detail screen has a Documents
+ * card, and the prototype is this interface's acceptance criterion. IA §8.1 had
+ * excluded it ("documents say nothing about progress"); that reasoning stands, but it
+ * describes a different goal — a progress view — not this one. The compass
+ * milestone-id list and the counters stay out: the Screen has no place for them.
  *
  * `attribution` (contract §4) is what tells a project feature whether its silence
  * is a fact (`absent`) or a gap (`present` + no rows) — the list model carries
@@ -162,8 +166,19 @@ export function iterationPlanRow(plan: IterationPlanDTO): IterationPlanRow {
 }
 
 /** The detail model. */
+/** One row of the prototype's Documents card. */
+export type IterationDocumentRow = {
+  title: string;
+  lifecycle: string;
+  documentKind: string;
+  location: string;
+  revision: string;
+};
+
 export type IterationDetailModel = {
   iterationId: string;
+  /** The catalog's document inventory, for the prototype's Documents card. */
+  documents: readonly IterationDocumentRow[];
   title: string | null;
   lifecycle: string | null;
   compassStatus: string | null;
@@ -213,6 +228,13 @@ export function iterationDetailModel(read: {
       endedAt: iteration.compass?.endedAt ?? null,
       workflowId: iteration.workflow?.id ?? null,
       plans: iteration.plans.map(iterationPlanRow),
+      documents: iteration.documents.map((doc) => ({
+        title: doc.title ?? doc.relativePath,
+        lifecycle: doc.lifecycle ?? "—",
+        documentKind: doc.documentKind ?? "—",
+        location: `${doc.rootKind}:${doc.relativePath}`,
+        revision: String(doc.revision),
+      })),
     },
   };
 }
