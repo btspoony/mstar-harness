@@ -754,6 +754,45 @@ Run that against the prototype (`file://…/design-v1.html`, click the screen's 
 first) and against the dashboard, and diff the two strings. A `null` on both sides is a
 match: workflows and iterations have no titled panels, and projects has no table.
 
+## `.trunc` has three contexts, and each one exists for a reason
+
+`TruncatedText` renders one span, and the rules around it are not one rule applied three
+times — each context was added after a specific measurement:
+
+| Context | Rule | Why it is needed |
+| --- | --- | --- |
+| default | `display: inline-block; max-width: 100%` | `overflow: hidden` and `text-overflow: ellipsis` do nothing to an inline element |
+| inside a `<dd>` | *(covered by the default)* | it overflowed its cell at 213px in a 180px box |
+| inside `.detail-title` | `display: block; line-height: inherit` | as an inline-block it sat in the line box with its own height and baseline, so a 16px/24px heading measured **31px** |
+| inside `.milestone-block-name` | *(no longer truncates — the name ellipses on its own flex item)* | the inline-block cost 2px against sibling type sizes |
+
+The pattern behind all four rows: **an inline-block is a box, and boxes carry height and
+baseline into whatever line they join**. Every one of these came from measuring a specific
+element, not from reading the rule.
+
+If `.trunc` gains a fifth context, measure that element's height and baseline against the
+prototype's before trusting it.
+
+## The light scheme is identical, and the way to check it is not the browser
+
+The dark values above were read in the browser. The light scheme was verified from the
+tokens instead, because both sides drive it differently in the DOM (the prototype toggles
+`data-theme`, this product toggles `data-ms-theme`), and forcing the wrong attribute on the
+prototype produces a page that *looks* light while keeping some dark rules — which is a
+measurement of the wrong thing, not a difference.
+
+| Token | Both sides |
+| --- | --- |
+| `--ms-bg-canvas` | `#f6f7f8` |
+| `--ms-bg-surface` | `#ffffff` |
+| `--ms-text-primary` | `#191c20` |
+| `--ms-text-muted` | `#858c96` |
+| `--ms-border-hairline` | `#e3e5e9` |
+
+`tokens.css` declares these in `:root` (light) and overrides them under
+`[data-ms-theme="dark"]` — the same two-block shape the prototype uses, with a different
+attribute name.
+
 ## Verification coverage, stated
 
 Two hosts mount these screens: the dashboard (`packages/cli/web`) and the dsh pane
