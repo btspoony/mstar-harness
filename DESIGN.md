@@ -1065,6 +1065,24 @@ prototype puts identity, source, impact, acceptance and occurrences on the left,
 disposition history, relations, provenance and identity keys on the right. With the panels
 present, the two-column split is a layout change rather than a missing-content change.
 
+## What the negative tests used to guard, and what guards it now
+
+Building the issue detail's six panels removed entries from five "NEGATIVE" tests one at a
+time — `occurrences`, `transitions`, `provenance`, `relations`, `provider`, `identityKey`,
+`builtAt`, `checkedAt`, `storeRevision`, `catalogRevision`, the catalog `revision`. Each was
+a guard: the test failed if the UI started rendering something §8.1 had removed.
+
+They are all gone now, and **that is the correct outcome** — the prototype renders every one
+of them. But it means the §8.1 negative set no longer has a test behind it. What remains:
+
+| Still guarded by a test | The issue id pattern, the external URL, the migration JSON (`legacyProject`, `legacyJson`, `Migration`) |
+| No longer guarded by anything | Every row this document's §8.1 reconciliation table lists as superseded |
+
+**What guards them instead**: this file, and the prototype. That is weaker than a test — a
+future change can re-remove one of these panels and no suite will notice. If that matters,
+the guard to add is not the old NEGATIVE test (it asserted the opposite of what ships) but a
+*positive* one: a test that fails when a panel the prototype has stops rendering.
+
 ## Verification coverage, stated
 
 Two hosts mount these screens: the dashboard (`packages/cli/web`) and the dsh pane
