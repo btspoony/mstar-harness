@@ -56,7 +56,7 @@ export function Iterations(props: IterationsProps) {
   const { model, copy } = props;
 
   const columns: DataTableColumn<IterationRow>[] = [
-    { key: "id", header: copy.columns.id, width: 250, render: (row) => <span className={"mono t-12"}>{row.iterationId}</span> },
+    { key: "id", header: copy.columns.id, width: "18%", render: (row) => <span className={"mono t-12"}>{row.iterationId}</span> },
     {
       key: "title",
       header: copy.columns.title,

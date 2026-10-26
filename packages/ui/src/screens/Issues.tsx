@@ -125,7 +125,7 @@ export function Issues(props: IssuesProps) {
   // follows the project it belongs to; it is wide-only, so the 720px pane renders the
   // prototype's seven columns in the prototype's order.
   const columns: DataTableColumn<IssueRow>[] = [
-    { key: "id", header: copy.columns.id, width: 86, render: (row) => <span className={"mono t-12"}>{row.id}</span> },
+    { key: "id", header: copy.columns.id, width: "10%", render: (row) => <span className={"mono t-12"}>{row.id}</span> },
     { key: "title", header: copy.columns.title, render: (row) => <TruncatedText text={row.title} /> },
     { key: "project", header: copy.columns.project, width: "12%", secondary: true, render: (row) => <span className={"mono t-12"}>{row.projectId}</span> },
     { key: "kind", header: copy.columns.kind, width: "10%", secondary: true, render: (row) => <span className={"mono t-12"}>{row.kind}</span> },

@@ -42,7 +42,7 @@ export function Projects(props: ProjectsProps) {
   // The prototype's sequence (`design-v1.html:1752-1758`): the id first, then the
   // catalog title, then the lifecycle.
   const columns: DataTableColumn<ProjectRow>[] = [
-    { key: "id", header: copy.columns.id, width: 310, render: (row) => <span className={"mono t-12"}>{row.projectId}</span> },
+    { key: "id", header: copy.columns.id, width: "24%", render: (row) => <span className={"mono t-12"}>{row.projectId}</span> },
     {
       key: "title",
       header: copy.columns.title,
