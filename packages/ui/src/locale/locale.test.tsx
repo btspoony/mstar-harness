@@ -235,6 +235,12 @@ describe("no key exists for a fact IA §8 marks not-rendered", () => {
     "projectDetail.authorityColumns.revision",
     // The head prints `Revision 12`, as the prototype does.
     "projectDetail.revisionLabel",
+    // The prototype's workflow detail lists the catalog's own revision and its two
+    // dates; the IA note that removed "revision" meant the store counter, not this row.
+    "workflowDetail.fields.revision",
+    "workflowDetail.fields.registeredAt",
+    "workflowDetail.fields.catalogUpdatedAt",
+    "workflowDetail.fields.description",
     // The prototype's iterations table has a `Documents` column; it is a count, not
     // the inventory §8.1 excluded.
     "iterations.columns.documents",

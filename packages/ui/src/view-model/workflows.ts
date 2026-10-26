@@ -231,6 +231,12 @@ export type WorkflowCatalog = {
   root: string;
   /** The `documentKind` the catalog row declares, or `null` when it declares none. */
   documentKind: string | null;
+  /** The catalog's own revision counter and the two dates it records. */
+  revision: number;
+  registeredAt: string;
+  updatedAt: string;
+  /** The row's description, or `null` when it has none. */
+  description: string | null;
 };
 
 /** The detail model: execution, catalog identity, dates and the plan table. */
@@ -288,6 +294,10 @@ export function workflowDetailModel(read: {
               title: catalog.title,
               lifecycle: catalog.lifecycle,
               root: `${catalog.rootKind}:${catalog.relativePath}`,
+              revision: catalog.revision,
+              registeredAt: formatDate(catalog.registeredAt),
+              updatedAt: formatDate(catalog.updatedAt),
+              description: catalog.description,
               documentKind: catalog.documentKind,
             },
       startedAt: formatDate(workflow.startedAt),

@@ -61,6 +61,11 @@ export type WorkflowDetailCopy = {
     title: string;
     lifecycle: string;
     documentKind: string;
+    /** The catalog's revision counter and the two dates it records. */
+    revision: string;
+    registeredAt: string;
+    catalogUpdatedAt: string;
+    description: string;
     notStarted: string;
     noCatalog: string;
   };
@@ -141,14 +146,16 @@ export function WorkflowDetail(props: WorkflowDetailProps) {
       {/* The prototype's breadcrumb is `Workflows / <id>`: the section as a link back, the
           record itself as mono text. A `div`, not a `nav` — it has one link and a label. */}
       <div className={"breadcrumb"} aria-label={copy.breadcrumb.label}>
-        {props.onBack === undefined ? null : (
-          <>
-            <button type="button" className={"link"} onClick={props.onBack}>
-              {copy.breadcrumb.root}
-            </button>
-            <span aria-hidden="true">/</span>
-          </>
+        {/* Always shown: the prototype's crumb is `Workflows / <id>` on every render. A
+            host that passes no `onBack` gets the section as text, not a missing crumb. */}
+        {props.onBack === undefined ? (
+          <span>{copy.breadcrumb.root}</span>
+        ) : (
+          <button type="button" className={"link"} onClick={props.onBack}>
+            {copy.breadcrumb.root}
+          </button>
         )}
+        <span aria-hidden="true">/</span>
         <span className={"mono"}>{props.model.kind === "populated" ? props.model.value.workflow.id : copy.breadcrumb.current}</span>
       </div>
 
@@ -252,6 +259,18 @@ export function WorkflowDetail(props: WorkflowDetailProps) {
                 <Field label={copy.fields.documentKind} mono>
                   {props.model.value.catalog.documentKind ?? "—"}
                 </Field>
+                <Field label={copy.fields.revision} mono>
+                  {props.model.value.catalog.revision}
+                </Field>
+                <Field label={copy.fields.registeredAt} mono>
+                  {props.model.value.catalog.registeredAt}
+                </Field>
+                <Field label={copy.fields.catalogUpdatedAt} mono>
+                  {props.model.value.catalog.updatedAt}
+                </Field>
+                {props.model.value.catalog.description === null ? null : (
+                  <Field label={copy.fields.description}>{props.model.value.catalog.description}</Field>
+                )}
               </>
             )}
               </dl>
