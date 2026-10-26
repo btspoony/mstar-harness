@@ -165,6 +165,7 @@ function issueScope(address: Address): string {
 function OverviewDestination(props: { query: string }) {
   const outcome = useOverview(true);
   const copy = useCopy();
+  const revision = outcome.kind === "ready" ? outcome.revision : null;
 
   if (outcome.kind === "loading") return null;
 
@@ -742,6 +743,9 @@ function Shell(props: {
   );
   const copy = useCopy();
   const projects = useProjects();
+  // The footer states the store revision the read was served at, as the prototype does.
+  const shellOutcome = useOverview(true);
+  const revision = shellOutcome.kind === "ready" ? shellOutcome.revision : null;
   const projectIds = projects.kind === "ready" ? projectOptions(projects.model) : [];
 
   useEffect(() => {
@@ -873,7 +877,12 @@ function Shell(props: {
           />
         ) : null}
       </main>
-      <footer className="app-footer">{chrome.footer}</footer>
+      <footer className="app-footer">
+        <span data-ms-store-revision={revision === null ? undefined : revision}>
+          {revision === null ? null : chrome.storeRevision(revision)}
+        </span>
+        <span>{chrome.footer}</span>
+      </footer>
     </div>
   );
 }

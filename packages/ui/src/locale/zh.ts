@@ -52,6 +52,7 @@ export const zh: Copy = {
     },
     skipLink: "跳到主要内容",
     footer: "只读 · 请通过 CLI 进行修改",
+    storeRevision: (n) => `${n} 次存储修订`,
     theme: { label: "配色方案", light: "浅色", dark: "深色" },
     scope: { label: "项目范围", all: "全部项目" },
     language: { label: "语言", en: "English", zh: "中文" },

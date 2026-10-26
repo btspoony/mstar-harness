@@ -32,7 +32,7 @@ import {
 /** What the host knows about the page's read. */
 export type OverviewOutcome =
   | { kind: "loading" }
-  | { kind: "ready"; model: OverviewModel }
+  | { kind: "ready"; model: OverviewModel; revision: number | null }
   | { kind: "failed"; message: string };
 
 /** The path the aggregated read answers on. One read, not five. */
@@ -81,7 +81,11 @@ export function overviewOutcome(
     case "loading":
       return { kind: "loading" };
     case "ready":
-      return { kind: "ready", model: overviewFromEnvelope(result.envelope) };
+      return {
+        kind: "ready",
+        model: overviewFromEnvelope(result.envelope),
+        revision: result.envelope.projection.generation,
+      };
     case "error":
       return { kind: "failed", message: result.message };
   }

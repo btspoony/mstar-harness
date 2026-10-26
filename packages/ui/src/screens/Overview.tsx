@@ -394,13 +394,13 @@ export function Overview(props: OverviewProps) {
       <div className="screen-head">
         <h1>{copy.pageTitle}</h1>
         {/* The prototype states the read's scope under the title: which projects, how many
-            issues are open, and when the read happened. */}
-        <p className="screen-sub" data-ms-screen-sub="">
-          {copy.screenSubtitle(
-            copy.screenScopeAll,
-            model.issueFlow.kind === "populated" ? model.issueFlow.value.recordedOpen : 0,
-          )}
-        </p>
+            issues are open. Only when the read carries that count — "0 open issues" on a
+            pending or failed read would be a claim about the store, not a summary of it. */}
+        {model.issueFlow.kind === "populated" ? (
+          <p className="screen-sub" data-ms-screen-sub="">
+            {copy.screenSubtitle(copy.screenScopeAll, model.issueFlow.value.recordedOpen)}
+          </p>
+        ) : null}
       </div>
 
       <div className="overview-grid">
