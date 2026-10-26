@@ -21,6 +21,7 @@ import { LiveRegion } from "../components/LiveRegion.tsx";
 import { Notice } from "../components/Notice.tsx";
 import { Panel, PanelBody, PanelFoot, PanelHead } from "../components/Panel.tsx";
 import { Pager } from "../components/Pager.tsx";
+import { IssueFlowChart } from "../components/IssueFlowChart.tsx";
 import { StatusDot } from "../components/StatusDot.tsx";
 import { TruncatedText } from "../components/TruncatedText.tsx";
 import {
@@ -33,6 +34,7 @@ import {
   type IssueRow,
 } from "../view-model/issues.ts";
 import type { Tone } from "../view-model/status.ts";
+import type { IssueFlowSeries } from "../view-model/overview.ts";
 
 /** The filter panel's accessible name; the head carries the id. */
 const FILTERS_HEAD_ID = "ms-issues-filters";
@@ -94,6 +96,29 @@ export type IssuesProps = {
   onQueryChange: (query: IssueQuery) => void;
   /** Open one issue; the caller owns routing. */
   onOpen?: (id: string) => void;
+  /**
+   * The issue-flow series the prototype draws above the table. Optional because the
+   * series is a separate read: a host without it renders the table alone, and the panel
+   * simply is not there — never an empty frame.
+   */
+  trend?: IssueFlowSeries;
+  /** The trend panel's strings; required only when `trend` is present. */
+  trendCopy?: IssuesTrendCopy;
+};
+
+/** The strings the issues screen's trend panel needs. */
+export type IssuesTrendCopy = {
+  heading: string;
+  /** `first - last` of the series, for the panel head. */
+  range: (first: string, last: string) => string;
+  /** The accessible name of the figure. */
+  chartTitle: (first: string, last: string) => string;
+  captured: string;
+  retired: string;
+  /** `N dated, M recorded` — the two totals the legend states. */
+  legend: (dated: number, recorded: number) => string;
+  /** The disclosure summary for the same numbers as a table. */
+  tableSummary: string;
 };
 
 /** The filter fields, in the order the bar shows them. */
@@ -183,6 +208,40 @@ export function Issues(props: IssuesProps) {
           </span>
         </div>
       </div>
+
+      {/* The prototype puts the flow trend above the table. It renders only when the
+          host supplies the series: a panel with an empty figure would be a frame. */}
+      {props.trend === undefined || props.trendCopy === undefined ? null : (
+        <Panel labelledBy="ms-issues-trend">
+          <PanelHead
+            id="ms-issues-trend"
+            title={props.trendCopy.heading}
+            meta={props.trendCopy.range(props.trend.firstDate, props.trend.lastDate)}
+          />
+          <PanelBody>
+            <div className="chart-wrap" data-ms-flow="">
+              <IssueFlowChart
+                points={props.trend.points}
+                label={props.trendCopy.chartTitle(props.trend.firstDate, props.trend.lastDate)}
+              />
+              <div className="chart-legend">
+                <span className="legend-item">
+                  <span className="legend-swatch" aria-hidden="true" />
+                  {props.trendCopy.captured}
+                </span>
+                <span className="legend-item">
+                  <span className="legend-swatch dashed" aria-hidden="true" />
+                  {props.trendCopy.retired}
+                </span>
+                <span className="legend-spacer" />
+                <span className="chart-note">
+                  {props.trendCopy.legend(props.trend.datedOpen, props.trend.recordedOpen)}
+                </span>
+              </div>
+            </div>
+          </PanelBody>
+        </Panel>
+      )}
 
       <Panel labelledBy={FILTERS_HEAD_ID}>
         <PanelHead id={FILTERS_HEAD_ID} title={copy.filtersHeading} />
