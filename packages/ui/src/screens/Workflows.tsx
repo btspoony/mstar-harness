@@ -59,7 +59,7 @@ export function Workflows(props: WorkflowsProps) {
   const { model, copy } = props;
 
   const columns: DataTableColumn<WorkflowRow>[] = [
-    { key: "id", header: copy.columns.id, width: "18%", render: (row) => <span className={"mono t-12"}>{row.id}</span> },
+    { key: "id", header: copy.columns.id, width: 282, render: (row) => <span className={"mono t-12"}>{row.id}</span> },
     {
       key: "title",
       header: copy.columns.title,
