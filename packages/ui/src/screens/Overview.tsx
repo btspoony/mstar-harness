@@ -263,7 +263,7 @@ function WorkflowRowView(props: {
         {copy.workflowMeta(row.plansTotal, row.status)}
       </p>
       {drawn.length === 0 ? null : (
-        <p className="branch-line" data-ms-branch="">
+        <div className="branch-line" data-ms-branch="">
           {drawn.map(([label, value], index) => (
             <Fragment key={label}>
               {index === 0 ? null : <span className="branch-arrow" aria-hidden="true">→</span>}
@@ -272,7 +272,7 @@ function WorkflowRowView(props: {
               </span>
             </Fragment>
           ))}
-        </p>
+        </div>
       )}
       <DataTable
         variant="detail"

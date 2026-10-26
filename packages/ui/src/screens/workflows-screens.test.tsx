@@ -262,7 +262,10 @@ describe("WorkflowDetail — execution, anchors, catalog and the plan table", ()
 
   test("the four branch anchors are rendered as a chain and as fields", () => {
     expect(html).toContain('data-ms-branch-chain=""');
-    expect(html).toContain("main → issue-project-move → issue-project-move → main");
+    // The chain is segmented: an anchor per label, an arrow between them.
+    expect((html.match(/class="branch-anchor"/g) ?? []).length).toBe(4);
+    expect((html.match(/class="branch-arrow"/g) ?? []).length).toBe(3);
+    expect(html).toContain('<span class="branch-anchor"><span>Base</span> <b>main</b></span>');
     for (const label of ["Branch base", "Branch source", "Branch integration", "Branch target"]) {
       expect(html).toContain(label);
     }

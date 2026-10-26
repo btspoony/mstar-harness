@@ -195,7 +195,7 @@ export function Focus(props: FocusProps) {
             </div>
             {/* The prototype draws the chain as one `.branch-line` holding an anchor per
                 label; a single joined string gives the line one item and no arrows. */}
-            <p className="branch-line" data-ms-branch-chain="">
+            <div className="branch-line" data-ms-branch-chain="">
               {[
                 ["Base", workflow.value.branch.base] as const,
                 ["Source", workflow.value.branch.source] as const,
@@ -209,7 +209,7 @@ export function Focus(props: FocusProps) {
                   </span>
                 </Fragment>
               ))}
-            </p>
+            </div>
             <div className="planboard" role="group" aria-label={copy.boardHeading}>
               {model.groups.map((group) => (
                 <Group key={group.status} group={group} copy={copy} />

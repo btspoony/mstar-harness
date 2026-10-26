@@ -17,6 +17,7 @@
  * first uncompleted step" (compass D26): the store carries no checklist and the
  * view contract forbids reading the plan file.
  */
+import { Fragment } from "react";
 import { DataTable, type DataTableColumn } from "../components/DataTable.tsx";
 import { EmptyState } from "../components/EmptyState.tsx";
 import { Field } from "../components/Field.tsx";
@@ -188,16 +189,23 @@ export function WorkflowDetail(props: WorkflowDetailProps) {
             </Field>
           </FieldGroup>
 
-          <p className={"branch-line"} data-ms-branch-chain="">
+          {/* The prototype's chain: one anchor per label with an arrow between them. A
+              joined string gives the line a single item and no arrows to style. */}
+          <div className={"branch-line"} data-ms-branch-chain="">
             {[
-              props.model.value.workflow.branch.base,
-              props.model.value.workflow.branch.source,
-              props.model.value.workflow.branch.integration,
-              props.model.value.workflow.branch.target,
-            ]
-              .map((anchor) => anchor ?? "—")
-              .join(" → ")}
-          </p>
+              ["Base", props.model.value.workflow.branch.base] as const,
+              ["Source", props.model.value.workflow.branch.source] as const,
+              ["Integration", props.model.value.workflow.branch.integration] as const,
+              ["Target", props.model.value.workflow.branch.target] as const,
+            ].map(([label, value], index) => (
+              <Fragment key={label}>
+                {index === 0 ? null : <span className="branch-arrow" aria-hidden="true">→</span>}
+                <span className="branch-anchor">
+                  <span>{label}</span> <b>{value ?? "—"}</b>
+                </span>
+              </Fragment>
+            ))}
+          </div>
 
           <FieldGroup title={copy.catalogHeading}>
             {props.model.value.catalog === null ? (
