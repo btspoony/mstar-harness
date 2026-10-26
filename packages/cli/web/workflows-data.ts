@@ -25,6 +25,7 @@ import {
   workflowListModel,
   type Copy,
   type WorkflowDetailCopy,
+  type WorkflowFilters,
   type WorkflowListModel,
   type WorkflowDetailModel,
   type WorkflowsCopy,
@@ -127,6 +128,8 @@ export function workflowsOutcome(
     | { status: "loading" }
     | { status: "ready"; envelope: ReadEnvelope<WorkflowListDTO> }
     | { status: "error"; message: string },
+  /** The list's filter state; the model applies it, so a change re-derives the rows. */
+  filters?: WorkflowFilters,
 ): WorkflowsOutcome {
   switch (result.status) {
     case "loading":
@@ -137,6 +140,7 @@ export function workflowsOutcome(
         model: workflowListModel({
           data: result.envelope.data,
           projection: result.envelope.projection,
+          filters,
         }),
       };
     case "error":

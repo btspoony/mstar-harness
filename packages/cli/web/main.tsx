@@ -40,9 +40,11 @@ import {
   WorkflowDetail,
   Workflows,
   DEFAULT_ITERATION_FILTERS,
+  DEFAULT_WORKFLOW_FILTERS,
   parseIssueQuery,
   useCopy,
   type IterationFilters,
+  type WorkflowFilters,
   type IssueQuery,
   type Locale,
   type ProjectFeature,
@@ -340,13 +342,14 @@ function IssueDetailDestination(props: { id: string }) {
 
 /** The Workflows list, behind its own read. */
 function WorkflowsDestination(props: { address: Address }) {
-  const [outcome, setOutcome] = useState<WorkflowsOutcome>({ kind: "loading" });
+  const [raw, setRaw] = useState<Parameters<typeof workflowsOutcome>[0] | null>(null);
+  const [filters, setFilters] = useState<WorkflowFilters>(DEFAULT_WORKFLOW_FILTERS);
   const copy = useCopy();
   useEffect(() => {
     const controller = new AbortController();
     let current = true;
     void readWorkflows(fetch, controller.signal).then((result) => {
-      if (current) setOutcome(workflowsOutcome(result));
+      if (current) setRaw(result);
     });
     return () => {
       current = false;
@@ -354,6 +357,7 @@ function WorkflowsDestination(props: { address: Address }) {
     };
   }, []);
 
+  const outcome = workflowsOutcome(raw ?? { status: "loading" }, filters);
   if (outcome.kind === "loading") return null;
   if (outcome.kind === "failed") {
     return (
@@ -370,6 +374,8 @@ function WorkflowsDestination(props: { address: Address }) {
   return (
     <Workflows
       model={outcome.model}
+      filters={filters}
+      onFiltersChange={setFilters}
       copy={workflowsCopy(copy)}
       onOpen={(id) => {
         navigate({ name: "workflow", id }, props.address.query, "push");
@@ -423,23 +429,28 @@ function WorkflowDetailDestination(props: { id: string }) {
 /** The Iterations list, behind its own read. */
 /** The Iterations list at one scope: `null` store-wide, or a project's own. */
 function IterationListScreen(props: { scope: string | null; onOpen?: (id: string) => void }) {
-  const [outcome, setOutcome] = useState<IterationsOutcome>({ kind: "loading" });
-  // The list owns its filter state: the read is the same, only the model's view of it
-  // changes, so a filter change re-derives the rows instead of re-fetching.
+  // The read is kept raw, so the model can be rebuilt from the data in hand. A filter
+  // change must NOT re-fetch: it only re-derives the rows, which is what the screen
+  // promises by keeping the filter state here.
+  const [raw, setRaw] = useState<Parameters<typeof iterationsOutcome>[0] | null>(null);
   const [filters, setFilters] = useState<IterationFilters>(DEFAULT_ITERATION_FILTERS);
   const copy = useCopy();
   useEffect(() => {
     const controller = new AbortController();
     let current = true;
-    setOutcome({ kind: "loading" });
+    setRaw(null);
     void readIterations(fetch, props.scope, controller.signal).then((result) => {
-      if (current) setOutcome(iterationsOutcome(result, filters));
+      if (current) setRaw(result);
     });
     return () => {
       current = false;
       controller.abort();
     };
-  }, [props.scope, filters]);
+  }, [props.scope]);
+
+  // The model is derived at render time, so a filter change re-derives the rows from
+  // the envelope already in hand instead of issuing a second read.
+  const outcome = iterationsOutcome(raw ?? { status: "loading" }, filters);
 
   if (outcome.kind === "loading") return null;
   if (outcome.kind === "failed") {

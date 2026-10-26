@@ -22,6 +22,8 @@ import {
   Projects,
   Workflows,
   copyFor,
+  DEFAULT_ITERATION_FILTERS,
+  type IterationFilters,
   issueListModel,
   iterationListModel,
   overviewModel,
@@ -146,6 +148,8 @@ export function WorkflowsDestination({ state, locale, onOpen }: DestinationProps
 
 export function IterationsDestination({ state, locale, onOpen }: DestinationProps): React.ReactElement {
   const copy = copyFor(locale)
+  // The pane owns its filter state, so the control filters the rows it renders.
+  const [filters, setFilters] = React.useState<IterationFilters>(DEFAULT_ITERATION_FILTERS)
   const screenCopy = {
     ...copy.iterations,
     // The pane keeps the prototype's filter row over the iteration list.
@@ -162,8 +166,14 @@ export function IterationsDestination({ state, locale, onOpen }: DestinationProp
     <div data-ms-destination-body="iterations">
       <>
         <Iterations
-          model={iterationListModel({ data: data as IterationListDTO, projection: state.envelope.projection })}
+          model={iterationListModel({
+            data: data as IterationListDTO,
+            projection: state.envelope.projection,
+            filters,
+          })}
           copy={screenCopy}
+          filters={filters}
+          onFiltersChange={setFilters}
           {...(onOpen === undefined ? {} : { onOpen })}
         />
         {/* Same disclosure shape as the Workflows list and the Overview members:
