@@ -89,7 +89,7 @@ function Milestone(props: { milestone: RoadmapModel["milestones"][number]; copy:
   const { milestone, copy } = props;
   return (
     <section className={"milestone-block"} data-ms-milestone={milestone.milestoneId}>
-      <p className={"milestone-block-head"}>
+      <div className={"milestone-block-head"}>
         <span className={"milestone-block-name"}>
           <TruncatedText text={milestone.name} />
         </span>
@@ -102,7 +102,7 @@ function Milestone(props: { milestone: RoadmapModel["milestones"][number]; copy:
           </span>
         )}
         <span className={"detail-meta"}>{copy.roadmap.milestoneOpen(milestone.openIssues)}</span>
-      </p>
+      </div>
       {milestone.issues.length === 0 ? null : (
         <ul className={"fields"}>
           {milestone.issues.map((issue) => (

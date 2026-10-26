@@ -498,12 +498,12 @@ export function Overview(props: OverviewProps) {
           <PanelBody>
           {model.milestones.kind === "populated" ? (
             props.compact === true ? (
-              <p className="screen-meta" data-ms-milestone-summary="">
+              <div className="screen-meta" data-ms-milestone-summary="">
                 {copy.milestonesSummary(
                   model.milestones.value.length,
                   model.milestones.value.reduce((open, row) => open + row.openIssues, 0),
                 )}
-              </p>
+              </div>
             ) : (
               <div data-ms-milestones="">
                 {model.milestones.value.map((row) => (

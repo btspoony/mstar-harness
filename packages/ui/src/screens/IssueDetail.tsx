@@ -95,7 +95,7 @@ export function IssueDetail(props: IssueDetailProps) {
             <h1 className="detail-title">
               <TruncatedText text={record.value.title} />
             </h1>
-            <p className={"detail-meta"}>
+            <div className={"detail-meta"}>
               {/* Dot + literal enum + weight: never colour alone. */}
               <StatusDot
                 label={record.value.severity}
@@ -104,7 +104,7 @@ export function IssueDetail(props: IssueDetailProps) {
                 mono
               />
               <StatusDot label={record.value.disposition} tone={record.value.dispositionTone} mono />
-            </p>
+            </div>
           </header>
 
           <FieldGroup title={copy.identityHeading}>
