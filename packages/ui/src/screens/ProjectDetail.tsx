@@ -155,13 +155,6 @@ function RoadmapFeature(props: { model: RoadmapModel; copy: ProjectDetailCopy })
   const { model, copy } = props;
   return (
     <div className={"feature-body"} data-ms-feature="roadmap">
-      {model.direction === null ? null : (
-        <Collapsible summary={copy.roadmap.directionHeading}>
-          <p className={"detail-text"} data-ms-direction="">
-            {model.direction}
-          </p>
-        </Collapsible>
-      )}
       {model.goals.length === 0 ? null : (
         <section className={"panel"} data-ms-goals="">
           <h3>{copy.roadmap.goalsHeading}</h3>
@@ -209,13 +202,8 @@ function RoadmapFeature(props: { model: RoadmapModel; copy: ProjectDetailCopy })
           )}
         </section>
       )}
-      {model.markdown === null ? null : (
-        <Collapsible summary={copy.roadmap.markdownHeading}>
-          <pre data-ms-roadmap-markdown="">{model.markdown}</pre>
-        </Collapsible>
-      )}
-      {/* The prototype's last row: the direction and stored markdown on the left, the
-          document's own facts on the right. */}
+      {/* The prototype's last row: two disclosures on the left (direction, stored
+          markdown), the stored document's facts on the right. */}
       {model.storedFacts === null ? null : (
         <div className="detail-grid">
           <section className="panel" aria-labelledby="ms-project-direction">
@@ -225,12 +213,20 @@ function RoadmapFeature(props: { model: RoadmapModel; copy: ProjectDetailCopy })
               </h2>
             </div>
             <div className="panel-body">
-              {model.direction === null ? (
+              {model.direction === null ? null : (
+                <Collapsible summary={copy.roadmap.directionHeading}>
+                  <p className="prose t-12 secondary" data-ms-direction="">
+                    {model.direction}
+                  </p>
+                </Collapsible>
+              )}
+              {model.markdown === null ? null : (
+                <Collapsible summary={copy.roadmap.markdownHeading}>
+                  <pre data-ms-roadmap-markdown="">{model.markdown}</pre>
+                </Collapsible>
+              )}
+              {model.direction !== null || model.markdown !== null ? null : (
                 <p className="muted t-12">{copy.roadmap.noDirection}</p>
-              ) : (
-                <p className="prose t-12 secondary" data-ms-direction="">
-                  {model.direction}
-                </p>
               )}
             </div>
           </section>
