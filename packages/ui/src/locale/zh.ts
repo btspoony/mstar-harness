@@ -294,6 +294,7 @@ export const zh: Copy = {
 
   iterations: {
     filtersHeading: "筛选",
+    membershipNote: "归属来自目录；执行状态是叠加在它之上的一次投影。",
     filters: {
       lifecycle: "生命周期",
       search: "搜索迭代编号或标题",

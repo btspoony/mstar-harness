@@ -14,7 +14,7 @@
  */
 import { DataTable, type DataTableColumn } from "../components/DataTable.tsx";
 import { FilterBar } from "../components/FilterBar.tsx";
-import { Panel, PanelBody, PanelHead } from "../components/Panel.tsx";
+import { Panel, PanelBody, PanelFoot, PanelHead } from "../components/Panel.tsx";
 import { EmptyState, type AbsenceArm } from "../components/EmptyState.tsx";
 import { StatusDot } from "../components/StatusDot.tsx";
 import { TruncatedText } from "../components/TruncatedText.tsx";
@@ -27,6 +27,8 @@ export type IterationsCopy = {
   tableCaption: string;
   /** The filter card's own head. */
   filtersHeading: string;
+  /** The prototype's footer: where "active" and the execution column come from. */
+  membershipNote: string;
   filters: {
     lifecycle: string;
     search: string;
@@ -189,6 +191,14 @@ export function Iterations(props: IterationsProps) {
                 onRowActivate={props.onOpen === undefined ? undefined : (row) => props.onOpen?.(row.iterationId)}
               />
             </PanelBody>
+            <PanelFoot>
+              {/* The prototype's footer explains where the two facts come from, so a
+                  reader knows "active" is catalog membership and the execution column
+                  is a projection over it. */}
+              <span className="muted t-11" data-ms-iteration-note="">
+                {copy.membershipNote}
+              </span>
+            </PanelFoot>
           </Panel>
           {/* The scope statement: whether this store attributes iterations to a
               project at all. It rides beside the rows, never as a counter. */}

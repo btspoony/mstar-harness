@@ -85,6 +85,15 @@ const iteration = (over: Partial<IterationDTO> = {}): IterationDTO =>
 const iterationsCopy: IterationsCopy = {
   pageTitle: "Iterations",
   tableCaption: "Iterations",
+  filtersHeading: "Filters",
+  membershipNote: "Membership comes from the catalog; execution is a projection over it.",
+  filters: {
+    lifecycle: "Lifecycle",
+    search: "Search iteration id or title",
+    clear: "Clear filters",
+    any: "Any",
+    results: (shown: number, total: number) => `${shown} of ${total} results`,
+  },
   columns: {
     id: "Iteration",
     title: "Title",

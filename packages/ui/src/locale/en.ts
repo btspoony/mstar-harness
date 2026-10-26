@@ -315,6 +315,7 @@ export const en = {
 
   iterations: {
     filtersHeading: "Filters",
+    membershipNote: "Membership comes from the catalog; execution is a projection over it.",
     filters: {
       lifecycle: "Lifecycle",
       search: "Search iteration id or title",

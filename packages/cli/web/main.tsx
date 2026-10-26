@@ -39,8 +39,10 @@ import {
   Projects,
   WorkflowDetail,
   Workflows,
+  DEFAULT_ITERATION_FILTERS,
   parseIssueQuery,
   useCopy,
+  type IterationFilters,
   type IssueQuery,
   type Locale,
   type ProjectFeature,
@@ -422,19 +424,22 @@ function WorkflowDetailDestination(props: { id: string }) {
 /** The Iterations list at one scope: `null` store-wide, or a project's own. */
 function IterationListScreen(props: { scope: string | null; onOpen?: (id: string) => void }) {
   const [outcome, setOutcome] = useState<IterationsOutcome>({ kind: "loading" });
+  // The list owns its filter state: the read is the same, only the model's view of it
+  // changes, so a filter change re-derives the rows instead of re-fetching.
+  const [filters, setFilters] = useState<IterationFilters>(DEFAULT_ITERATION_FILTERS);
   const copy = useCopy();
   useEffect(() => {
     const controller = new AbortController();
     let current = true;
     setOutcome({ kind: "loading" });
     void readIterations(fetch, props.scope, controller.signal).then((result) => {
-      if (current) setOutcome(iterationsOutcome(result));
+      if (current) setOutcome(iterationsOutcome(result, filters));
     });
     return () => {
       current = false;
       controller.abort();
     };
-  }, [props.scope]);
+  }, [props.scope, filters]);
 
   if (outcome.kind === "loading") return null;
   if (outcome.kind === "failed") {
@@ -449,7 +454,15 @@ function IterationListScreen(props: { scope: string | null; onOpen?: (id: string
     );
   }
 
-  return <Iterations model={outcome.model} copy={iterationsCopy(copy)} onOpen={props.onOpen} />;
+  return (
+    <Iterations
+      model={outcome.model}
+      copy={iterationsCopy(copy)}
+      filters={filters}
+      onFiltersChange={setFilters}
+      {...(props.onOpen === undefined ? {} : { onOpen: props.onOpen })}
+    />
+  );
 }
 
 function IterationsDestination(props: { address: Address }) {

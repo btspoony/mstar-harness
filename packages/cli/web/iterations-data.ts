@@ -25,6 +25,7 @@ import {
   type Copy,
   type IterationDetailCopy,
   type IterationDetailModel,
+  type IterationFilters,
   type IterationListModel,
   type IterationsCopy,
   type Resolved,
@@ -135,6 +136,8 @@ export function iterationsOutcome(
     | { status: "loading" }
     | { status: "ready"; envelope: ReadEnvelope<IterationListDTO> }
     | { status: "error"; message: string },
+  /** The list's filter state; the model applies it, so a change re-derives the rows. */
+  filters?: IterationFilters,
 ): IterationsOutcome {
   switch (result.status) {
     case "loading":
@@ -142,7 +145,7 @@ export function iterationsOutcome(
     case "ready":
       return {
         kind: "ready",
-        model: iterationListModel({ data: result.envelope.data, projection: result.envelope.projection }),
+        model: iterationListModel({ data: result.envelope.data, projection: result.envelope.projection, filters }),
       };
     case "error":
       return { kind: "failed", message: result.message };
