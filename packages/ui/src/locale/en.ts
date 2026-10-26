@@ -356,6 +356,7 @@ export const en = {
     planTableHeading: "Plans",
     catalogHeading: "Catalog",
     executionHeading: "Execution",
+  compassColumns: { milestone: "Milestone", target: "Target", status: "Status" },
     fields: {
       id: "Iteration",
       title: "Title",

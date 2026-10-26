@@ -50,7 +50,12 @@ const iteration = (over: Partial<IterationDTO> = {}): IterationDTO =>
       iterationId: "iter-20261025-frontend-unification",
       summary: "one product, two hosts",
       // A milestone-id list the detail must NOT render (the roadmap feature owns it).
-      milestones: ["9f2c4a10", "3a7b1c22"],
+      // The compass's milestones are rows, not ids: the prototype prints them as a
+      // mini table (name, target, status).
+      milestones: [
+        { milestone: "Direction locked with the owner", target: "2026-10-25", status: "done" },
+        { milestone: "Prototype checkpoint accepted", target: "2026-10-27", status: "pending" },
+      ],
       startedAt: "2026-10-25T01:10:00.000Z",
       endedAt: null,
       status: "locked",
@@ -130,6 +135,7 @@ const renderList = (
   );
 
 const detailCopy: IterationDetailCopy = {
+  compassColumns: { milestone: "Milestone", target: "Target", status: "Status" },
   documentsHeading: "Documents",
   documentsCount: (n) => `${n} documents`,
   documentsEmpty: "No document is registered under this iteration.",
@@ -233,11 +239,6 @@ describe("Iterations list — NEGATIVE: the removed surfaces", () => {
     expect(html).not.toContain(">2<");
   });
 
-  test("no compass milestone-id list", () => {
-    expect(html).not.toContain("9f2c4a10");
-    expect(html).not.toContain("3a7b1c22");
-  });
-
   test("no counter from the read envelope", () => {
     for (const counter of ["storeRevision", "catalogRevision", "builtAt", "checkedAt", "2026-10-25T05:00:00.000Z"]) {
       expect(html).not.toContain(counter);
@@ -246,6 +247,16 @@ describe("Iterations list — NEGATIVE: the removed surfaces", () => {
 });
 
 describe("IterationDetail — catalog, execution, compass, gate steps, plan table", () => {
+  test("the compass milestones render as the prototype's mini table", () => {
+    // IA §8.1 kept the milestone-id list out because the roadmap feature owns milestones.
+    // The prototype's Compass panel nevertheless ends with this table, and the table is
+    // what ships; the ids themselves still do not appear.
+    expect(html).toContain("data-ms-compass-milestones");
+    expect(html).toContain("Direction locked with the owner");
+    expect(html).not.toContain("9f2c4a10");
+  });
+
+
   const html = renderDetail(iteration());
 
   test("catalog identity, execution and the dates", () => {
@@ -349,7 +360,7 @@ describe("IterationDetail — NEGATIVE: what §8.1 removed", () => {
   test("no compass milestone-id list — the roadmap feature owns milestones", () => {
     expect(html).not.toContain("9f2c4a10");
     expect(html).not.toContain("3a7b1c22");
-    expect(html).not.toContain("milestones");
+    expect(html).not.toContain("milestoneId");
   });
 
   test("no revision counter and no envelope timestamps", () => {

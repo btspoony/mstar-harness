@@ -334,6 +334,7 @@ export const zh: Copy = {
     planTableHeading: "计划",
     catalogHeading: "目录",
     executionHeading: "执行",
+  compassColumns: { milestone: "里程碑", target: "目标日期", status: "状态" },
     fields: {
       id: "迭代",
       title: "标题",

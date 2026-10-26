@@ -185,6 +185,8 @@ export type IterationDetailModel = {
   compassTone: Tone;
   /** The compass's one-line summary, or `null` when it records none. */
   summary: string | null;
+  /** The compass's own milestones — the prototype's `mini-table` in the Compass panel. */
+  compassMilestones: ReadonlyArray<{ milestone: string; target: string; status: string }>;
   steps: Array<{ step: number; id: GateStepId; position: GateStepPosition }>;
   gateStep: IterationGateStep | null;
   /** `step N of 5`, or `null` — never `0 of 5` (contract §3). */
@@ -221,6 +223,11 @@ export function iterationDetailModel(read: {
       compassStatus: iteration.compass?.status ?? null,
       compassTone: compassStatusTone(iteration.compass?.status ?? null),
       summary: iteration.compass?.summary ?? null,
+      compassMilestones: (iteration.compass?.milestones ?? []).map((milestone) => ({
+        milestone: milestone.milestone,
+        target: milestone.target ?? "—",
+        status: milestone.status ?? "—",
+      })),
       steps: gateSteps(step),
       gateStep: step,
       gatePosition: gateStepPosition(step),

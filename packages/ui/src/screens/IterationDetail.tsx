@@ -39,6 +39,8 @@ export type IterationDetailCopy = {
   planTableHeading: string;
   catalogHeading: string;
   executionHeading: string;
+  /** The Compass panel's milestone mini table. */
+  compassColumns: { milestone: string; target: string; status: string };
   /** The prototype's Documents card. */
   documentsHeading: string;
   documentsCount: (n: number) => string;
@@ -237,6 +239,28 @@ function IterationDetailBody(props: {
               )}
             </Field>
               </dl>
+              {/* The prototype's Compass panel ends with its milestones as a mini table:
+                  name, target, status. */}
+              {value.compassMilestones.length === 0 ? null : (
+                <table className="mini-table" data-ms-compass-milestones="">
+                  <thead>
+                    <tr>
+                      <th scope="col">{copy.compassColumns.milestone}</th>
+                      <th scope="col">{copy.compassColumns.target}</th>
+                      <th scope="col">{copy.compassColumns.status}</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {value.compassMilestones.map((milestone) => (
+                      <tr key={milestone.milestone}>
+                        <td>{milestone.milestone}</td>
+                        <td className="mono">{milestone.target}</td>
+                        <td className="mono">{milestone.status}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              )}
             </div>
           </section>
 
