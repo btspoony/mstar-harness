@@ -953,6 +953,26 @@ does not look for unreferenced copy keys, so it stayed green. They are gone now.
 **The general form**: deleting markup does not delete its strings, and a green drift check
 says nothing about whether a key is still read.
 
+## The iteration detail screen, seen for the first time
+
+| # | The prototype | This implementation |
+| --- | --- | --- |
+| 1 | breadcrumb `Iterations / <id>` | **closed**: the same two-part crumb the workflow detail gained |
+| 2 | `Catalog identity` states six rows (Kind, Lifecycle, Revision, Registered, Location, Updated) and the description beneath | **closed**: six rows, description as a paragraph |
+| 3 | `Execution` states Workflow, Status, Phase, Started and an `active registration` chip | **open**: one row (`Workflow`) |
+| 4 | the meta line states five facts (id · lifecycle · compass · plans · documents) | two |
+| 5 | `Compass`, `Plans`, `Documents` hold rows | empty on every iteration in this store |
+
+**Row 5 is data, and worth stating plainly**: the first pass opened a `superseded` record and
+the screen was mostly absence arms, so I re-ran it on an `active` one — and it was still
+empty. The store does not link compasses, plans or documents to most iterations. That means
+the compass mini-table, the plan table and the document inventory have **never rendered with
+data on this machine**, in either the prototype comparison or the tests' fixtures.
+
+Rows 1 and 2 are the same view-model gap the workflow detail had: the catalog row carries
+`kind`, `revision`, `registeredAt`, `updatedAt` and `description`, and the view model passed
+three of them.
+
 ## Verification coverage, stated
 
 Two hosts mount these screens: the dashboard (`packages/cli/web`) and the dsh pane
