@@ -510,6 +510,25 @@ Where the DTOs did carry the data, the §8.1 exclusion was recorded in a comment
 enforced by a negative test. Both had to change together — and the new comments say why
 the exclusion no longer describes this screen, rather than deleting the reasoning.
 
+## ProjectDetail does not follow the prototype, and that is known
+
+The prototype's project-detail screen is a large one: a two-column identity block
+(`Catalog identity` beside `Roadmap authority`), a **milestone board** where each row
+carries its lifecycle, its date, four counts and the issue ids it owns, then `Direction`
+and `Stored facts` side by side.
+
+What is rendered here is a single identity block, a goal list and a milestone list. The
+difference is not cosmetic — it is most of the screen.
+
+One attempt was made and reverted: the feature container was `<div class="chip">`, which
+is wrong (`.chip` is an 18px inline badge, so a whole section sat inside a badge). Removing
+that class made the layout *worse* — the goal rows overlapped — because the badge had been
+accidentally constraining a list that has no container of its own. That is the signature of
+a section that needs rewriting rather than patching: the wrong class was load-bearing.
+
+So this screen is recorded as **not matching the prototype**, rather than as a difference
+someone should fix with one more class swap.
+
 ## Verification coverage, stated
 
 Two hosts mount these screens: the dashboard (`packages/cli/web`) and the dsh pane
