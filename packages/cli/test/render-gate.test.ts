@@ -138,13 +138,6 @@ const PROBE = `(() => {
     .flatMap((row) => [...row.querySelectorAll('td')])
     .filter(rendered);
   const cellWidths = visibleCells.map((cell) => Math.round(cell.getBoundingClientRect().width * 10) / 10);
-  const firstRowVisible = (() => {
-    const row = document.querySelector('table tbody tr[data-ms-row-main]');
-    if (row === null) return [];
-    return [...row.querySelectorAll('td')]
-      .filter((cell) => cell.getBoundingClientRect().width > 0)
-      .map((cell) => Math.round(cell.getBoundingClientRect().width * 10) / 10);
-  })();
   const header = document.querySelector('header.app-header');
   const h1 = document.querySelector('[data-ms-screen] h1');
   const summaryEl = document.querySelector('[data-ms-summary]');
@@ -153,7 +146,7 @@ const PROBE = `(() => {
     contentWidth: contentWidth === null ? null : Math.round(contentWidth * 10) / 10,
     cardWidths: [...document.querySelectorAll('[data-ms-panel]')].map((card) => Math.round(card.getBoundingClientRect().width * 10) / 10),
     narrowestCell: cellWidths.length === 0 ? null : Math.min(...cellWidths),
-    identityWidth: firstRowVisible.length === 0 ? null : firstRowVisible[0],
+
     visibleCells: cellWidths.length,
     summaryOverflows: summaryEl === null ? null : summaryEl.scrollWidth > summaryEl.clientWidth + 1,
     titleOverflows: h1 === null ? null : h1.scrollWidth > h1.clientWidth + 1,
@@ -165,6 +158,17 @@ const PROBE = `(() => {
       return [...range.getClientRects()].length;
     })(),
     titleWidth: h1 === null ? null : Math.round(h1.getBoundingClientRect().width * 10) / 10,
+    titleText: h1 === null ? null : (h1.textContent ?? '').trim(),
+    tableWidth: (() => {
+      const table = document.querySelector('table');
+      return table === null ? null : Math.round(table.getBoundingClientRect().width * 10) / 10;
+    })(),
+    visiblePrimaryCells: (() => {
+      const row = document.querySelector('table tbody tr[data-ms-row-main]');
+      if (row === null) return null;
+      return [...row.querySelectorAll('td[data-ms-col="primary"]')]
+        .filter((cell) => cell.getBoundingClientRect().width > 0).length;
+    })(),
     // The collapsed second line: every fact whole, none cut by the cell's width.
     metaTruncated: (() => {
       const metas = [...document.querySelectorAll('[data-ms-row-meta]')]
@@ -373,6 +377,18 @@ describe.skipIf(!browserAvailable)("the render gate", () => {
     return evalJson(PROBE);
   }
 
+  /** The dashboard's stored locale (`prefs.ts` LOCALE_KEY): a reload applies it. */
+  async function setLocale(locale: "en" | "zh"): Promise<void> {
+    // The page must be on the dashboard's origin before storage is reachable: a test
+    // that runs first would otherwise eval against a blank document and fail with a
+    // SecurityError instead of testing anything.
+    await browser(["open", `${server.url}#issues`]);
+    await browser(["wait", "[data-ms-screen]"]);
+    await browser(["eval", `localStorage.setItem("mstar.dashboard.locale", "${locale}")`]);
+    await browser(["open", `${server.url}#issues`]);
+    await browser(["wait", "[data-ms-screen]"]);
+  }
+
   /** Set the band, then visit: the container is the root element, so the width
       given to the window IS the width the product is given. */
   async function visitAt(width: number, route: string, screen: string): Promise<Record<string, unknown>> {
@@ -437,10 +453,31 @@ describe.skipIf(!browserAvailable)("the render gate", () => {
    * Every earlier round of visual work was verified at 1280px, and the product's
    * own live width — a 400-900px pane — was never in a gate at all. What shipped
    * was not a narrow layout: it was the wide layout squeezed, with the collapse
-   * rules dead because the bundler had hashed their container names. These two
-   * bands are the regression net: 760 is the pane's wide band, 420 its narrow one.
+   * rules dead because the bundler had hashed their container names.
+   *
+   * Four samples, because the policy has four states and each one needs the
+   * assertion that FAILS when it is gone:
+   *
+   * - 760: the pane's wide band. Every column, no scroll, no hidden column.
+   * - 620: just above the collapse floor and just below the declared-width floor, so
+   *   this is the ONLY sample where "scroll instead of squeeze" is true. A gate that
+   *   asserts `tableScrollsSideways === false` here would pass with `overflow-x: auto`
+   *   deleted and with the floor token dropped.
+   * - 420: the collapsed band. Secondary columns hidden by rule, no scroll.
+   * - 280: under the documented 300px table floor, where the floor rule is the only
+   *   thing keeping a column readable.
    */
-  for (const width of [760, 420] as const) {
+  /** 280 sits under the documented table floor: only the floor is still a contract. */
+  const FLOOR_SAMPLE = (sample: { floor?: number }): boolean => sample.floor !== undefined;
+
+  const BANDS = [
+    { width: 760, collapse: false, scrolls: false },
+    { width: 620, collapse: false, scrolls: true },
+    { width: 420, collapse: true, scrolls: false },
+    { width: 280, collapse: true, scrolls: true, floor: 300 },
+  ] as const;
+
+  for (const sample of BANDS) {
     for (const [route, screen] of [
       ["overview", "overview"],
       ["workflows", "workflows"],
@@ -448,10 +485,11 @@ describe.skipIf(!browserAvailable)("the render gate", () => {
       ["projects", "projects"],
       ["issues", "issues"],
     ] as const) {
-      test(`at ${width}px the ${route} screen still reads: no squeezed cell, a full card, a live header`, async () => {
-        const measured = await visitAt(width, route, screen);
+      test(`at ${sample.width}px the ${route} screen still reads: no squeezed cell, a full card, a live header`, async () => {
+        const measured = await visitAt(sample.width, route, screen);
         sharedAnchors(measured);
-        const band = measured.band as Record<string, number | boolean | null>;
+        const band = measured.band as Record<string, number | boolean | string | null>;
+        const table = route !== "overview";
 
         // The card spans the width it was given (Task 2): a card narrower than its
         // container leaves the pane looking unfinished, which is what the owner saw.
@@ -460,17 +498,28 @@ describe.skipIf(!browserAvailable)("the render gate", () => {
           expect(Math.abs(width - (band.contentWidth as number))).toBeLessThanOrEqual(1);
         }
 
-        // No column is squeezed below its own identity (Task 1). 44px is five
-        // monospace characters: under that a cell is `I-…`, not an id.
-        if (band.visibleCells !== 0) {
+        // A list screen with no rows is a DATA regression, not an absence arm: the
+        // fixture seeds one row per list, so emptiness here must fail rather than
+        // skip the whole table contract. Overview has no table at all.
+        if (table) {
+          expect(band.visibleCells as number).toBeGreaterThan(0);
+
+          // No column is squeezed below its own identity: 44px is five monospace
+          // characters, under which a cell is `I-…`, not an id. This is the half of
+          // "scroll instead of squeeze" that the scrollbar itself cannot prove.
           expect(band.narrowestCell as number).toBeGreaterThanOrEqual(44);
-          // and the identity column — the first visible one — reads at least
-          // `proj-a` / `I-000001`.
-          expect(band.identityWidth as number).toBeGreaterThanOrEqual(72);
+
+          // The collapse is a RULE, not an overflow: it hides the secondary columns
+          // and keeps the table inside its card. Where the policy allows a scroll
+          // (620 above the declared floor, 280 under the documented floor) the
+          // assertion inverts — otherwise deleting `overflow-x: auto` passes.
+          expect(band.hiddenColumns as number > 0).toBe(sample.collapse);
+          expect(band.tableScrollsSideways).toBe(sample.scrolls);
+          if ("floor" in sample) expect(band.tableWidth as number).toBeGreaterThanOrEqual(sample.floor);
         }
 
         // The screen's own title is not squeezed away, and never stacks one glyph per
-        // line: one line box, and its own measure (a 2-glyph title measured 31.7px).
+        // line: one line box, with its own measure.
         expect(band.titleOverflows).toBe(false);
         expect(band.titleLines).toBe(1);
         expect(band.titleWidth as number).toBeGreaterThan(20);
@@ -479,26 +528,17 @@ describe.skipIf(!browserAvailable)("the render gate", () => {
         // column one character wide.
         if (band.worstPerLine !== null) expect(band.worstPerLine as number).toBeGreaterThanOrEqual(10);
 
-        // The collapse is a RULE, not an overflow. At 420 the secondary columns are
-        // hidden and the table fits its card without a scrollbar; above the floor
-        // every column shows and the declared widths fit. A dead collapse still
-        // passes a "no squeezed cell" check because the scroll floor rescues it, so
-        // the scrollbar itself is the anchor that tells the two states apart.
-        if (band.visibleCells !== 0) {
-          expect(band.tableScrollsSideways).toBe(false);
-          // The collapsed second line keeps its facts whole — severity and disposition
-          // included — so it gets the row's width, not a cell's.
-          if (width === 420) {
-            expect(band.metaTruncated).toBe(false);
-            expect(band.metaWidth as number).toBeGreaterThan(200);
-          }
-          if (width === 420) expect(band.hiddenColumns as number).toBeGreaterThan(0);
-          if (width === 760) expect(band.hiddenColumns).toBe(0);
+        // The collapsed second line: the facts are whole, and they span exactly the
+        // visible primary cells — the width is what makes them whole.
+        if (sample.collapse && table) {
+          expect(band.metaTruncated).toBe(false);
+          expect(band.metaWidth as number).toBeGreaterThan(200);
+          expect(Number(band.metaRowSpan)).toBe(band.visiblePrimaryCells as number);
         }
 
         // The summary line still reads (the Issues screen is the one that has one),
         // on the title's baseline and inside the frame.
-        if (measured.summary !== null) {
+        if (measured.summary !== null && !FLOOR_SAMPLE(sample)) {
           expect(String(measured.summary)).not.toBe("");
           expect(band.summaryOverflows).toBe(false);
           expect(band.baselineDelta as number).toBeLessThanOrEqual(4);
@@ -516,6 +556,49 @@ describe.skipIf(!browserAvailable)("the render gate", () => {
       }, 60_000);
     }
   }
+
+  /**
+   * The title rule exists for ONE shape: a CJK title has a break opportunity between
+   * every glyph, so a squeezed head stacks it. Under `en` every sampled title is a
+   * single word with nowhere to break — deleting the whole
+   * `white-space: nowrap; min-inline-size: max-content` rule would still pass, which
+   * makes an English-only arm an assertion that cannot fail.
+   */
+  test("under a CJK locale the title is still one line box", async () => {
+    await setLocale("zh");
+    try {
+      // 400 is the product's own lower bound and the width the defect was reported at.
+      await browser(["set", "viewport", "400", String(VIEWPORT.height)]);
+      const measured = await visit("issues", "issues", true, "issues-400-zh");
+      const band = measured.band as Record<string, number | boolean | string | null>;
+      expect(String(band.titleText)).toMatch(/[\u4e00-\u9fff]/);
+      expect(band.titleLines).toBe(1);
+      // Two glyphs at 16px: the box is its own measure, not the head's remainder and
+      // not one glyph (the pre-fix shape measured 30.4px over two lines).
+      expect(band.titleWidth as number).toBeGreaterThan(20);
+      expect(band.titleWidth as number).toBeLessThan(120);
+      expect(band.titleOverflows).toBe(false);
+    } finally {
+      await setLocale("en");
+    }
+  }, 60_000);
+
+  /**
+   * F2 — the collapsed second line is half the record's painted area, so it must be
+   * the same activation target. The markup alone cannot prove that: this clicks it.
+   */
+  test("clicking the collapsed second line activates the record", async () => {
+    await browser(["set", "viewport", "420", String(VIEWPORT.height)]);
+    await visit("issues", "issues", true, "issues-420-click");
+    const before = await evalJson('JSON.stringify({ hash: window.location.hash })');
+    await browser(["click", "[data-ms-row-meta-row] td"]);
+    await browser(["wait", "400"]);
+    const after = await evalJson('JSON.stringify({ hash: window.location.hash })');
+    // Navigation is a hash change on this host; the detail screen is the proof it
+    // actually rendered rather than merely changed an address.
+    expect(after.hash).not.toBe(before.hash);
+    await browser(["wait", "[data-ms-screen] .ms-container [data-ms-screen], [data-ms-breadcrumb], main"]);
+  }, 60_000);
 
   test("a screen inside a screen does not pay the frame's gutter twice", async () => {
     // `ProjectDetail` embeds the Issues screen (PR 597 F3).

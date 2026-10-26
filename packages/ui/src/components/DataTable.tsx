@@ -170,7 +170,16 @@ export function DataTable<T>(props: DataTableProps<T>) {
                   `critical · op…`. A spanning row gives the facts the row's width and
                   leaves the column policy (and the header) untouched. */}
               {!detail && props.meta !== undefined ? (
-                <tr className={css.metaRow} data-ms-row-meta-row="">
+                <tr
+                  className={interactive ? `${css.metaRow} ${css.metaRowInteractive}` : css.metaRow}
+                  data-ms-row-meta-row=""
+                  data-ms-row-meta-activate={interactive ? "" : undefined}
+                  // The facts ARE the record: at the width the product lives in, this row
+                  // is roughly half of the record's painted area, so a tap on it navigates
+                  // like a tap on the row above. Keyboard stays one stop per record — the
+                  // main row keeps the tab stop and the Enter/Space handler.
+                  onClick={interactive ? () => props.onRowActivate?.(row) : undefined}
+                >
                   {/* The collapse hides exactly the `secondary` columns, so the
                       spanning row is the primary count: a colspan over all columns
                       would force `table-layout: fixed` to re-open the hidden ones

@@ -342,6 +342,24 @@ row's width and leaves both the header and the column policy untouched (the span
 count: a span over the hidden columns re-opens them under `table-layout: fixed`). Its facts wrap
 rather than truncate, so a fact is never cut in half.
 
+**What that trade costs, and where it stops.** The second line is an extra `<tr>`, so a screen
+reader announces a five-record list as ten rows, and the spanning cell has no header
+association. Its bounds are deliberate and part of the contract:
+
+- **list variant only** — a detail table has no second line and keeps its own row rules;
+- **below the collapse floor only** (620px of container) — above it the facts are columns again
+  and there is no second row in the DOM tree's rendered form;
+- **one spanned cell** across exactly the visible primary columns, never a second grid;
+- **non-interactive facts**: the row carries no tab stop and no key handler, so keyboard order
+  stays one stop per record. It does carry the row's pointer handler — at the width the product
+  lives in this row is roughly half of the record's painted area, and a tap on it must navigate
+  like a tap on the row above. A mouse user and a keyboard user reach the same destination by
+  the shortest path each has.
+
+The alternative — keeping the facts in the first cell — cannot show them whole, because that
+cell is 80px. A cell-sized second line is a truncation dressed as a layout, so the extra row is
+the cheaper trade until `DataTable` grows a column-aware second line.
+
 A **screen title never stacks**. CJK breaks between every glyph, so a squeezed head set a
 two-glyph title as one glyph per line (measured: a 30.4px, 2-line box at a 400px container).
 The shared title rule states its own floor — its whole string — and caps at the frame, so a

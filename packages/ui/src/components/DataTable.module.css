@@ -132,12 +132,22 @@
 
   /* The main row keeps no closing rule of its own: the second line closes the
      record, so the hairline belongs under the facts, not between them. */
-  .table tbody tr[data-ms-row-main] td {
+  .table[data-ms-table="list"] tbody tr[data-ms-row-main] td {
     border-block-end: 0;
   }
 
   .metaRow {
     display: table-row;
+  }
+
+  /* The second line is the same record, so it is the same pointer target: hover and
+     the pointer cursor, and the tap navigates. */
+  .metaRowInteractive:hover {
+    background: var(--ms-bg-hover);
+  }
+
+  .metaRowInteractive {
+    cursor: pointer;
   }
 
   .metaCell {
@@ -147,6 +157,9 @@
 
   .rowMeta {
     display: block;
+    /* Facts stay whole: below the floor the row is narrower than the sentence, so the
+       facts wrap (they are never cut) instead of running off a nowrap line. */
+    white-space: normal;
     margin-block-start: 1px;
     font-family: var(--ms-font-mono);
     font-size: var(--ms-fs-11);

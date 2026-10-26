@@ -240,6 +240,30 @@ describe("DataTable — the collapse rule", () => {
     expect(cellTag).toContain('colspan="2"');
     const firstCell = html.slice(html.indexOf("<td"), html.indexOf("</td>"));
     expect(firstCell).not.toContain("data-ms-row-meta");
+    // Not interactive here: the caller passed no activate handler.
+    expect(html).not.toContain("data-ms-row-meta-activate");
+  });
+
+  test("the second line is the same activation target as the row", () => {
+    // At the width the product lives in this row is roughly half of the record's
+    // painted area; a tap on it must navigate like a tap on the row above. Keyboard
+    // stays one stop per record: the tab stop and the key handler are the main row's.
+    const html = render(
+      <DataTable
+        caption="Issues"
+        columns={columns}
+        rows={rows}
+        rowKey={(row) => row.id}
+        meta={(row) => row.project}
+        onRowActivate={() => {}}
+      />,
+    );
+    const metaRowStart = html.indexOf("data-ms-row-meta-row");
+    const metaTag = html.slice(html.lastIndexOf("<tr", metaRowStart), html.indexOf(">", metaRowStart));
+    expect(metaTag).toContain("data-ms-row-meta-activate");
+    expect(metaTag).not.toContain("tabindex");
+    // One tab stop per record: only the main row carries it.
+    expect(html.match(/tabindex="0"/g)?.length).toBe(rows.length);
   });
 
   test("the collapse is a container query at the declared floor, not a viewport query", () => {
