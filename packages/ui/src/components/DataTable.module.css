@@ -6,6 +6,11 @@
    flexible column's measure). Below the collapse floor it is switched off: the
    collapsed form has fewer columns and fits by design. */
 .scroller {
+  /* The card owns the width; the scroller only decides when to scroll. Without
+     `inline-size: 100%` a flex ancestor sizes this box to the table's content
+     width, which renders a full-width page with a half-width table. */
+  inline-size: 100%;
+  min-inline-size: 0;
   overflow-x: auto;
 }
 
@@ -18,7 +23,7 @@
 
 .table th {
   block-size: 26px;
-  padding: 0 var(--ms-space-3) 0 0;
+  padding: 0 var(--ms-space-2);
   border-block-end: var(--ms-hairline);
   text-align: start;
   font-size: var(--ms-fs-11);
@@ -30,7 +35,7 @@
 
 .table td {
   block-size: var(--ms-row-h);
-  padding: 0 var(--ms-space-3) 0 0;
+  padding: 0 var(--ms-space-2);
   border-block-end: var(--ms-hairline);
   font-size: var(--ms-fs-13);
   line-height: var(--ms-lh-13);
