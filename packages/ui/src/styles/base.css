@@ -443,3 +443,12 @@
 .ms-container .panel-meta > .sep {
   margin: 0 5px;
 }
+
+/* A `.trunc` inside a field's value. The class is inline by default, and `overflow:
+   hidden` does nothing to an inline span — so the value overflowed its own `dd`
+   (measured 213px of content in a 184px cell) instead of ellipsing. As a block it
+   takes the cell's width and the ellipsis applies. */
+.ms-container .field dd > .trunc {
+  display: block;
+  max-width: 100%;
+}

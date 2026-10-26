@@ -161,28 +161,22 @@ function milestoneStatusTone(status: string): Tone {
 
 /**
  * Split a milestone's issues into the chips it shows and the per-disposition folds it
- * states instead. The prototype lists a row that stays on one line: the chips it shows
- * are the ones still open, and every other disposition is counted (`+5 retired`).
- *
- * The cap is a presentation fact, not a rule from the store: with more issues than fit,
- * the row would wrap and the board's rhythm breaks.
+ * states instead. The prototype's row lists the issues that are still **open** and
+ * counts every other disposition (`+5 retired`, `+2 resolved`); the fold is a summary of
+ * settled work, never an overflow indicator. A milestone whose open set is long lists all
+ * of it — the row wraps, which is what the prototype's own CSS does.
  */
-const ASSIGNED_CHIP_CAP = 9;
-
 function assignedChips(issues: readonly { id: string; title: string; disposition: string }[]): {
   shown: typeof issues;
   folded: Array<{ disposition: string; count: number }>;
 } {
-  const open = issues.filter((issue) => issue.disposition === "open");
-  const rest = issues.filter((issue) => issue.disposition !== "open");
-  const shown = open.slice(0, ASSIGNED_CHIP_CAP);
-  const overflow = open.slice(ASSIGNED_CHIP_CAP);
   const byDisposition = new Map<string, number>();
-  for (const issue of [...overflow, ...rest]) {
+  for (const issue of issues) {
+    if (issue.disposition === "open") continue;
     byDisposition.set(issue.disposition, (byDisposition.get(issue.disposition) ?? 0) + 1);
   }
   return {
-    shown,
+    shown: issues.filter((issue) => issue.disposition === "open"),
     folded: [...byDisposition].map(([disposition, count]) => ({ disposition, count })),
   };
 }
