@@ -364,7 +364,7 @@ export const en = {
     documentsCount: (n: number) => `${n} documents`,
     documentsEmpty: "No document is registered under this iteration.",
     documentColumns: { title: "Title", lifecycle: "Lifecycle", kind: "Document kind", location: "Location", revision: "Revision" },
-    breadcrumb: { label: "Breadcrumb", current: "Iterations" },
+    breadcrumb: { label: "Breadcrumb", root: "Iterations", current: "Iteration" },
     compassHeading: "Compass",
     planTableHeading: "Plans",
     catalogHeading: "Catalog",

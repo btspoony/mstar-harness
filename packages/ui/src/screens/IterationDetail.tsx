@@ -34,7 +34,7 @@ import type { GateStepId, GateStepPosition, Tone } from "../view-model/status.ts
 
 /** Every visible string this screen needs. Task 5 supplies them. */
 export type IterationDetailCopy = {
-  breadcrumb: { label: string; current: string };
+  breadcrumb: { label: string; root: string; current: string };
   compassHeading: string;
   planTableHeading: string;
   catalogHeading: string;
@@ -340,13 +340,20 @@ export function IterationDetail(props: IterationDetailProps) {
   const { copy, model } = props;
   return (
     <article className={"screen"} data-ms-screen="iteration-detail">
-      <nav className={"breadcrumb"} aria-label={copy.breadcrumb.label}>
-        {props.onBack === undefined ? null : (
+      {/* `Iterations / <id>`, the same two-part crumb the workflow detail uses. */}
+      <div className={"breadcrumb"} aria-label={copy.breadcrumb.label}>
+        {props.onBack === undefined ? (
+          <span>{copy.breadcrumb.root}</span>
+        ) : (
           <button type="button" className={"link"} onClick={props.onBack}>
-            {copy.breadcrumb.current}
+            {copy.breadcrumb.root}
           </button>
         )}
-      </nav>
+        <span aria-hidden="true">/</span>
+        <span className={"mono"}>
+          {props.model.kind === "populated" ? props.model.value.iterationId : copy.breadcrumb.current}
+        </span>
+      </div>
 
       {model.kind === "populated" ? (
         <IterationDetailBody value={model.value} copy={copy} onOpenWorkflow={props.onOpenWorkflow} />
