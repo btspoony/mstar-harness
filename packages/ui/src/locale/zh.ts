@@ -403,7 +403,7 @@ export const zh: Copy = {
   authorityColumns: { state: "状态", revision: "版本", contentHash: "内容哈希", frontmatter: "前言字段" },
   authorityAbsent: "该项目未声明路线图权威行。",
     breadcrumb: { label: "位置导航", trail: "项目" },
-    fields: { title: "身份", id: "编号", lifecycle: "生命周期", path: "路径", description: "描述", noDescription: "—" },
+    fields: { title: "身份", id: "编号", lifecycle: "生命周期", path: "路径", description: "描述", noDescription: "—", projectKind: "类型", revision: "修订版本", registeredAt: "注册时间", catalogUpdatedAt: "更新时间" },
   storedFactsHeading: "方向",
   storedFacts: {
     factsHeading: "存储事实",

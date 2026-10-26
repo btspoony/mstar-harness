@@ -16,6 +16,7 @@ import type { ProjectListDTO, RoadmapContent, RoadmapDTO } from "@mstar-harness/
 
 import type { Resolved } from "./state.ts";
 import { resolveRead, resolveRecord } from "./state.ts";
+import { formatDate } from "./format.ts";
 import { lifecycleTone, type Tone } from "./status.ts";
 import { countText } from "./format.ts";
 
@@ -189,6 +190,9 @@ export type ProjectIdentity = {
   path: string;
   /** The catalog revision, printed in the head's meta line. */
   revision: string;
+  /** The catalog row's two dates, for the identity panel's last two rows. */
+  registeredAt: string;
+  updatedAt: string;
 };
 
 /** The identity block from the roadmap's catalog identity. */
@@ -201,6 +205,8 @@ export function projectIdentity(catalog: RoadmapDTO["catalog"]): ProjectIdentity
     lifecycleTone: lifecycleTone(catalog.lifecycle),
     path: `${catalog.rootKind}:${catalog.relativePath}`,
     revision: String(catalog.revision),
+    registeredAt: formatDate(catalog.registeredAt),
+    updatedAt: formatDate(catalog.updatedAt),
   };
 }
 

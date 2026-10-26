@@ -426,7 +426,7 @@ export const en = {
   authorityColumns: { state: "State", revision: "Revision", contentHash: "Content hash", frontmatter: "Frontmatter" },
   authorityAbsent: "This project declares no roadmap authority row.",
     breadcrumb: { label: "Breadcrumb", trail: "Projects" },
-    fields: { title: "Identity", id: "ID", lifecycle: "Lifecycle", path: "Path", description: "Description", noDescription: "—" },
+    fields: { title: "Identity", id: "ID", lifecycle: "Lifecycle", path: "Path", description: "Description", noDescription: "—", projectKind: "Kind", revision: "Revision", registeredAt: "Registered", catalogUpdatedAt: "Updated" },
   storedFactsHeading: "Direction",
   storedFacts: {
     factsHeading: "Stored facts",

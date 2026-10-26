@@ -248,6 +248,11 @@ describe("no key exists for a fact IA §8 marks not-rendered", () => {
     "iterationDetail.fields.registeredAt",
     "iterationDetail.fields.location",
     "iterationDetail.fields.catalogUpdatedAt",
+    // The project identity panel states the same six rows.
+    "projectDetail.fields.projectKind",
+    "projectDetail.fields.revision",
+    "projectDetail.fields.registeredAt",
+    "projectDetail.fields.catalogUpdatedAt",
     // The prototype's iterations table has a `Documents` column; it is a count, not
     // the inventory §8.1 excluded.
     "iterations.columns.documents",

@@ -36,7 +36,19 @@ import type { Tone } from "../view-model/status.ts";
 /** Every visible string this screen needs. Task 5 supplies them. */
 export type ProjectDetailCopy = {
   breadcrumb: { label: string; trail: string };
-  fields: { title: string; id: string; lifecycle: string; path: string; description: string; noDescription: string };
+  fields: {
+    title: string;
+    id: string;
+    lifecycle: string;
+    path: string;
+    description: string;
+    noDescription: string;
+    /** The identity panel's remaining rows, matching the prototype's six. */
+    projectKind: string;
+    revision: string;
+    registeredAt: string;
+    catalogUpdatedAt: string;
+  };
   /** The two identity panels the prototype puts side by side. */
   catalogHeading: string;
   /** The roadmap's presence, said beside the title (`roadmap present`). */
@@ -470,16 +482,29 @@ export function ProjectDetail(props: ProjectDetailProps) {
           <div className="panel-body">
             <dl className="fields">
               <div className="field">
-                <dt>{copy.fields.id}</dt>
-                <dd className="mono">{identity.projectId}</dd>
-              </div>
-              <div className="field">
                 <dt>{copy.fields.lifecycle}</dt>
                 <dd className="mono">{identity.lifecycle}</dd>
               </div>
               <div className="field">
                 <dt>{copy.fields.path}</dt>
                 <dd className="mono wrap">{identity.path}</dd>
+              </div>
+              {/* The prototype's panel has six rows; these three were the missing half. */}
+              <div className="field">
+                <dt>{copy.fields.projectKind}</dt>
+                <dd className="mono">project</dd>
+              </div>
+              <div className="field">
+                <dt>{copy.fields.revision}</dt>
+                <dd className="mono">{identity.revision}</dd>
+              </div>
+              <div className="field">
+                <dt>{copy.fields.registeredAt}</dt>
+                <dd className="mono">{identity.registeredAt}</dd>
+              </div>
+              <div className="field">
+                <dt>{copy.fields.catalogUpdatedAt}</dt>
+                <dd className="mono">{identity.updatedAt}</dd>
               </div>
             </dl>
           </div>
