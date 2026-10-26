@@ -384,6 +384,8 @@ export const en = {
       startedAt: "Started",
       endedAt: "Ended",
       workflow: "Workflow",
+      status: "Status",
+      phase: "Phase",
       noWorkflow: "None",
       noCompass: "No compass",
       noSummary: "No summary recorded",

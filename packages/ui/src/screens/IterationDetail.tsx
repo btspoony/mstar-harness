@@ -56,6 +56,9 @@ export type IterationDetailCopy = {
     registeredAt: string;
     location: string;
     catalogUpdatedAt: string;
+    /** The execution panel's workflow state. */
+    status: string;
+    phase: string;
     root: string;
     compassStatus: string;
     startedAt: string;
@@ -233,6 +236,16 @@ function IterationDetailBody(props: {
                 </button>
               )}
             </Field>
+            {value.workflowId === null ? null : (
+              <>
+                <Field label={copy.fields.status} mono>
+                  {value.workflowStatus ?? "—"}
+                </Field>
+                <Field label={copy.fields.phase} mono>
+                  {value.workflowPhase ?? "—"}
+                </Field>
+              </>
+            )}
               </dl>
             </div>
           </section>

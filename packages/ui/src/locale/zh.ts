@@ -362,6 +362,8 @@ export const zh: Copy = {
       startedAt: "开始时间",
       endedAt: "结束时间",
       workflow: "工作流",
+      status: "状态",
+      phase: "阶段",
       noWorkflow: "无",
       noCompass: "无罗盘",
       noSummary: "未记录摘要",

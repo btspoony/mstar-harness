@@ -161,6 +161,8 @@ const detailCopy: IterationDetailCopy = {
     startedAt: "Started",
     endedAt: "Ended",
     workflow: "Workflow",
+    status: "Status",
+    phase: "Phase",
     noWorkflow: "none",
     noCompass: "no compass",
     noSummary: "no summary recorded",
