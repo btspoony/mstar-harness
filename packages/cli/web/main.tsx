@@ -39,6 +39,7 @@ import {
   Projects,
   WorkflowDetail,
   Workflows,
+  parseIssueQuery,
   useCopy,
   type IssueQuery,
   type Locale,
@@ -151,6 +152,11 @@ function useOverview(enabled: boolean): OverviewOutcome {
 }
 
 /** The landing page: the shared Overview behind the one aggregated read. */
+/** The project scope the address carries, or "" for all projects. */
+function issueScope(address: Address): string {
+  return address.route.name === "issues" ? parseIssueQuery(address.query).filters.project : "";
+}
+
 function OverviewDestination(props: { query: string }) {
   const outcome = useOverview(true);
   const copy = useCopy();
@@ -725,6 +731,25 @@ function Shell(props: {
           label={copy.shell.nav.primary}
         />
         <div className="app-controls">
+          {/* The prototype puts the project scope in the header, left of the language
+              group (`design-v1.html:800-807`). It filters the issue list, the only
+              destination whose address carries a project. */}
+          <select
+            className="ctl"
+            aria-label={copy.shell.scope.label}
+            value={address.route.name === "issues" ? issueScope(address) : ""}
+            onChange={(event) => {
+              const project = event.target.value;
+              navigate({ name: "issues" }, project === "" ? "" : `project=${encodeURIComponent(project)}`, "push");
+            }}
+          >
+            <option value="">{copy.shell.scope.all}</option>
+            {projectIds.map((id) => (
+              <option key={id} value={id}>
+                {id}
+              </option>
+            ))}
+          </select>
           {/* The prototype's treatment (`design-v1.html:179-196`): a segmented
               language group and a theme button carrying a shape per scheme — not
               two native selects. Both are real buttons, so both are reachable by

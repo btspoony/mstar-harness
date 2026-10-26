@@ -66,6 +66,7 @@ export const en = {
     skipLink: "Skip to content",
     footer: "Read-only · Make changes with the CLI",
     theme: { label: "Colour scheme", light: "Light", dark: "Dark" },
+    scope: { label: "Project scope", all: "All projects" },
     language: { label: "Language", en: "English", zh: "中文" },
     store: {
       sessionOnly: "This browser blocks storage, so these choices last for this session only.",
