@@ -1417,7 +1417,51 @@ progress bar measured **0px wide**. With the rule gone the bars measure `234 / 2
 **The general form**, and the third time this file records it: a rule whose owner was deleted
 does not go away, it applies to whoever else names the class.
 
-## Verification coverage, stated
+## All 22 tone colours, compared as a table
+
+The `active` mistake was not a one-off colour choice; it was a mapping nobody had ever held
+against the prototype's own table. The fix was to stop sampling and compare the whole thing:
+parse every `.tone-<name> .dot { background: … }` rule out of both sheets and diff them.
+
+```
+tone         prototype   ours        verdict
+active       accent      accent      ok
+blocked      warning     warning     ok
+completed    purple      purple      ok
+critical     danger      danger      ok
+danger       danger      danger      ok
+done         success     success     ok
+high         warning     warning     ok
+inprogress   accent      accent      ok
+inreview     accent      accent      ok
+low          neutral     neutral      ok
+medium       neutral      neutral     ok
+neutral      neutral      neutral     ok
+nit          neutral     neutral     ok
+open         neutral      neutral     ok
+paused       warning     warning     ok
+resolved     success     success     ok
+running      accent      accent      ok
+stale        warning     warning     ok
+strong       accent      accent      ok
+terminal     purple      purple      ok
+todo         neutral     neutral     ok
+warning      warning     warning     ok
+```
+
+**22 of 22 agree.** Three names are this implementation's own (`accent`, `purple`,
+`success` — the `Tone` vocabulary) where the prototype spells the same colour `tone-running`,
+`tone-terminal`, `tone-done`; the colours match, only the words differ.
+
+**Two mappings were wrong before this table existed**:
+
+- `workflowStatusTone("running")` returned `neutral` — a live workflow's dot was the same grey
+  as a stopped one, where the prototype draws it accent.
+- `workflowStatusTone("completed")` returned `neutral` too, where the prototype's
+  `.tone-completed` is `--ms-purple`.
+
+Both are `accent` and `purple` now, and the workflow row's pinned tone moved from `neutral`
+to `accent` with them.## Verification coverage, stated
 
 Two hosts mount these screens: the dashboard (`packages/cli/web`) and the dsh pane
 (`packages/dsh/src/client/panel`). They share the components but **each owns its own

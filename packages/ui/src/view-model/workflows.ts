@@ -64,9 +64,15 @@ export type WorkflowRow = {
 /** Workflow status → tone: a paused workflow is not an error. */
 export function workflowStatusTone(status: string): Tone {
   switch (status) {
+    // The prototype's `.tone-running` is `--ms-accent`; `neutral` made a live workflow's dot
+    // the same grey as a stopped one.
+    case "running":
+      return "accent";
     case "paused":
       return "warning";
+    // The prototype's `.tone-completed` and `.tone-terminal` are both `--ms-purple`.
     case "completed":
+      return "purple";
     case "stopped":
       return "neutral";
     case "failed":

@@ -152,7 +152,7 @@ describe("Overview — the fact set of §8.2", () => {
       type: "plan",
       phase: "phase-2-execute",
       status: "running",
-      statusTone: "neutral",
+      statusTone: "accent",
       plansDone: 1,
       plansTotal: 2,
       branch: {
