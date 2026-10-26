@@ -12,8 +12,15 @@
 .root {
   display: flex;
   flex-direction: column;
+  /* The host hands this seat a pane of fixed height. `height: 100%` fills it, but
+   * anything the seat adds above the scroller (the nav's top gutter) would then
+   * paint outside the pane and over the host's tab strip unless the column is
+   * clipped. `min-height: 0` lets the child scroller shrink; `overflow: hidden`
+   * keeps every pixel inside the pane the host allotted. */
   height: 100%;
+  max-height: 100%;
   min-height: 0;
+  overflow: hidden;
 }
 
 /* The product shell's column (nav band + one scroller), shared by both seats.
