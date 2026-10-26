@@ -1143,6 +1143,23 @@ written nothing, and nothing fails.
 `.screen-meta`), and `.attribution` (now `muted t-11`). All three had been rendering as bare
 text with no rule behind them.
 
+## The fixture-render method works on one screen and not on another
+
+The check that found the invented `fact-block` was this: render a component to static markup
+with real data, concatenate the three stylesheets, open it in the browser, look. It worked
+because `IssueDetail` takes a single `read` prop whose shape the DTO already defines.
+
+`Overview` does not cooperate the same way. Its model is assembled from five `Resolved`
+members whose runtime shape (`state`/`data` vs `kind`/`value`) differs from the TypeScript
+type a caller sees, and three attempts to hand-write that shape produced three different
+"undefined is not an object" errors instead of a page. **The method did not fail; the input
+did.** Rendering a fixture for `Overview` means building a real envelope through
+`overviewFromEnvelope`, not hand-writing the model.
+
+**What that leaves unverified**: the overview's gate track has still never rendered with
+data. Its code path is `model.latestIteration.kind === "populated"` with a non-null value and
+non-empty `steps`, and every iteration in this store resolves to a null latest iteration.
+
 ## Verification coverage, stated
 
 Two hosts mount these screens: the dashboard (`packages/cli/web`) and the dsh pane
