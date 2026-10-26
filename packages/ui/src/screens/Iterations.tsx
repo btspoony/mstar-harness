@@ -78,7 +78,7 @@ export function Iterations(props: IterationsProps) {
   const filters = props.filters ?? DEFAULT_ITERATION_FILTERS;
 
   const columns: DataTableColumn<IterationRow>[] = [
-    { key: "id", header: copy.columns.id, width: "18%", render: (row) => <span className={"mono t-12"}>{row.iterationId}</span> },
+    { key: "id", header: copy.columns.id, width: "310px", render: (row) => <span className={"mono t-12"}>{row.iterationId}</span> },
     {
       key: "title",
       header: copy.columns.title,
@@ -88,14 +88,14 @@ export function Iterations(props: IterationsProps) {
     {
       key: "lifecycle",
       header: copy.columns.lifecycle,
-      width: "13%",
+      width: "110px",
       secondary: true,
       render: (row) => <span className={"mono t-12"}>{row.lifecycle ?? "—"}</span>,
     },
     {
       key: "execution",
       header: copy.columns.execution,
-      width: "14%",
+      width: "210px",
       secondary: true,
       // The prototype prints the projection's own words: `running · phase-2-execute`.
       // The compass status is a different fact and lives on the detail screen.
@@ -106,7 +106,7 @@ export function Iterations(props: IterationsProps) {
     {
       key: "plans",
       header: copy.columns.plans,
-      width: "8%",
+      width: "90px",
       secondary: true,
       align: "end",
       // The prototype's numeric columns carry `.t-num` on both cells: right-aligned,
@@ -120,7 +120,7 @@ export function Iterations(props: IterationsProps) {
       // numbers, so both wear `.t-num` on the header and the cell.
       key: "documents",
       header: copy.columns.documents,
-      width: "8%",
+      width: "110px",
       secondary: true,
       align: "end",
       cellClass: "t-num",
