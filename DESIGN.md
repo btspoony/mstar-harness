@@ -654,6 +654,29 @@ So the rule now lives where the number does:
 fact is often in the prototype's own JavaScript rather than its stylesheet — its data,
 its heights, its series lengths. Grep the `<script>` before concluding the CSS is wrong.
 
+## The identity line states one of the prototype's four facts
+
+The prototype's overview ends with `.identity-line`, a hairline-topped mono row:
+
+```
+@mstar-harness/dsh  v4.0.9  ·  {HARNESS_DIR}  ·  projection current
+```
+
+This implementation renders **`projection current` only**. That is not an oversight and not
+a style choice — the other three facts are excluded by other parts of the system:
+
+| Fact | Why it is absent |
+| --- | --- |
+| `v4.0.9` | `packages/cli/scripts/build-web.ts` deliberately embeds no version constant. This is the **second** prototype element lost to it (the first was the header's version badge). |
+| `{HARNESS_DIR}` | `overviewFromEnvelope` records the decision (D28/D30): "the host passes it through and states no version, no `{HARNESS_DIR}` and no counters of its own". |
+| `@mstar-harness/dsh` | No constant carries it; the dashboard does not know which host package built it. |
+
+So the line is the prototype's element with one of its four facts. Making it whole is not a
+span edit: it means overriding two recorded decisions and adding a build-time constant.
+
+**This entry exists so it is not lost the way round 12's header badge was.** A known,
+reasoned gap belongs in this file; a gap nobody re-reads becomes a surprise at review.
+
 ## Verification coverage, stated
 
 Two hosts mount these screens: the dashboard (`packages/cli/web`) and the dsh pane
