@@ -812,6 +812,35 @@ table — `className === "table"` — or it answers a question nobody asked. Thi
 time in this file that an unscoped selector produced a phantom difference (see the screen
 map above and `.trunc`'s contexts).
 
+## The 720px column behaviour is not the prototype's, and the cause is unresolved
+
+At 1440 both sides agree exactly on the issues table:
+
+```
+colgroup: 86px | flex | 128px | 112px | 100px | 104px | 116px
+rendered:  86     752     128     112     100     104     116
+```
+
+At 720 they diverge:
+
+| | rendered widths |
+| --- | --- |
+| the prototype | `83 · 201 · 104 · 83 · 83 · 69 · 69` — every column shrinks |
+| this product | `86 · **32** · 128 · 112 · 100 · 104 · 116` — fixed columns hold, the flex column collapses |
+
+What is **known**: both tables are `table-layout: fixed`, and both carry the identical
+`<colgroup>` (`86px`, flex, `128px`, `112px`, `100px`, `104px`, `116px`). The table widths at
+720 are 694px (prototype) and 678px (ours) — 16px apart, which cannot explain a flex column
+of 201 collapsing to 32.
+
+What is **not** known: why the same colgroup and the same layout mode produce proportional
+shrinkage on one side and rigid widths on the other. The prototype's own cells must carry a
+constraint ours do not, or ours carry one it does not; the next step is a rule-by-rule diff
+of `.table` / `.table td` between the two sheets, not another rendered-pixel comparison.
+
+**This entry is deliberately a open question, not a finding.** The numbers above are
+measured; the explanation is not.
+
 ## Verification coverage, stated
 
 Two hosts mount these screens: the dashboard (`packages/cli/web`) and the dsh pane
