@@ -154,21 +154,21 @@ export function Issues(props: IssuesProps) {
         // The prototype sets the id cell with `.t-id` (mono, 12px, secondary tone, tight
     // tracking). `mono t-12` renders the same size in the primary tone — close enough to
     // look right and wrong by one colour role.
-    { key: "id", header: copy.columns.id, width: "10%", cellClass: "t-id", render: (row) => <span>{row.id}</span> },
+    { key: "id", header: copy.columns.id, width: "86px", cellClass: "t-id", render: (row) => <span>{row.id}</span> },
     { key: "title", header: copy.columns.title, cellClass: "t-title t-strong", render: (row) => <span>{row.title}</span> },
-    { key: "project", header: copy.columns.project, width: "12%", secondary: true, cellClass: "muted", render: (row) => <span>{row.projectId}</span> },
-    { key: "kind", header: copy.columns.kind, width: "10%", secondary: true, cellClass: "secondary", render: (row) => <span>{row.kind}</span> },
+    { key: "project", header: copy.columns.project, width: "128px", secondary: true, cellClass: "muted", render: (row) => <span>{row.projectId}</span> },
+    { key: "kind", header: copy.columns.kind, width: "112px", secondary: true, cellClass: "secondary", render: (row) => <span>{row.kind}</span> },
     {
       key: "severity",
       header: copy.columns.severity,
-      width: "9%",
+      width: "100px",
       secondary: true,
       render: (row) => <StatusDot label={row.severity} tone={row.severityTone} emphasis={row.severityEmphasised} mono />,
     },
     {
       key: "disposition",
       header: copy.columns.disposition,
-      width: "9%",
+      width: "104px",
       secondary: true,
       render: (row) => <StatusDot label={row.disposition} tone={row.dispositionTone} mono />,
     },
@@ -176,7 +176,7 @@ export function Issues(props: IssuesProps) {
     {
       key: "lastActivity",
       header: copy.columns.lastActivity,
-      width: "10%",
+      width: "116px",
       secondary: true,
       align: "end",
       cellClass: "muted mono t-11",

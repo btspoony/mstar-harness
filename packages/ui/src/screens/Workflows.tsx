@@ -101,7 +101,7 @@ export function Workflows(props: WorkflowsProps) {
   const filters = props.filters ?? DEFAULT_WORKFLOW_FILTERS;
 
   const columns: DataTableColumn<WorkflowRow>[] = [
-    { key: "id", header: copy.columns.id, width: "22%", render: (row) => <span className={"mono t-12"}>{row.id}</span> },
+    { key: "id", header: copy.columns.id, width: "282px", render: (row) => <span className={"mono t-12"}>{row.id}</span> },
     {
       key: "title",
       header: copy.columns.title,
@@ -110,7 +110,7 @@ export function Workflows(props: WorkflowsProps) {
     {
       key: "status",
       header: copy.columns.status,
-      width: "18%",
+      width: "200px",
       render: (row) => (
         <span>
           <StatusDot label={row.status} tone={row.statusTone} mono />
@@ -121,7 +121,7 @@ export function Workflows(props: WorkflowsProps) {
     {
       key: "root",
       header: copy.columns.root,
-      width: "10%",
+      width: "150px",
       secondary: true,
       render: (row) =>
         row.root === null ? <span className={"muted"}>{copy.noRoot}</span> : <span className={"mono t-12"}>{row.root}</span>,
@@ -129,7 +129,7 @@ export function Workflows(props: WorkflowsProps) {
     {
       key: "updated",
       header: copy.columns.updated,
-      width: "9%",
+      width: "140px",
       secondary: true,
       align: "end",
       render: (row) => <span className={"mono t-12"}>{row.updatedAt}</span>,
@@ -137,7 +137,7 @@ export function Workflows(props: WorkflowsProps) {
     {
       key: "plans",
       header: copy.columns.plans,
-      width: "10%",
+      width: "190px",
       secondary: true,
       align: "end",
       render: (row) => <span className={"mono t-12"}>{copy.plansProgress(row.plansDone, row.plansTotal)}</span>,
@@ -146,7 +146,7 @@ export function Workflows(props: WorkflowsProps) {
       // The prototype's `Join badges`: the store's own join bookkeeping, said in words.
       key: "badges",
       header: copy.columns.badges,
-      width: "14%",
+      width: "116px",
       secondary: true,
       render: (row) =>
         row.badges.length === 0 ? (
