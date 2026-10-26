@@ -857,9 +857,19 @@ the wrong **form** for that screen.
 Why it matters even though the data is the same: the mini table states five numbers per row,
 which a 132px sparkline cannot. A screen meant for reading exact counts gets a shape instead.
 
-**Shipped**: `IssueFlowTable` renders the same `IssueFlowSeries` as `table.mini-table` with
-the prototype's five columns (`Date · Captured · Retired · Open difference · Origin`), and the
-issues screen uses it in place of the chart. The overview keeps the chart.
+**Shipped, and the first attempt was wrong**: the prototype draws the chart **and** offers
+the same numbers as a table inside a disclosure — `<summary>Dated history (table
+alternative)</summary>` around a `table.mini-table`. The first version replaced the chart
+with the table, which read as "the prototype shows a table here" from a panel-level count and
+was wrong at the element level. `IssueFlowTable` now sits inside a `Collapsible`, below the
+chart.
+
+The screen's element counts now equal the prototype's: 2 `svg` (the chart, and the magnifier
+inside `.search`), 1 of them `svg.chart-svg`, 2 `table`, 1 `details`.
+
+The lesson is the file's recurring one, in its smallest form: **a count of a thing on a
+screen does not say what the thing is**. `tables: 2` was true for both the prototype's shape
+and mine, and only ancestry (`details > table` vs a bare table) told them apart.
 
 The flexible-column floor (`min-width: 120px` on the one column without a width) was checked
 at 1440, 720 and 375, and again under the light scheme: no horizontal scroll in any of them.

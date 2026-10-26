@@ -67,6 +67,19 @@ export function FilterBar(props: FilterBarProps) {
           // field, which a `span` cannot do. The input keeps its own aria-label so the
           // accessible name does not depend on the placeholder.
           <label className="search">
+            {/* The prototype puts a magnifier inside the field; `.search` styles it. */}
+            <svg
+              width="12"
+              height="12"
+              viewBox="0 0 16 16"
+              fill="none"
+              stroke="currentColor"
+              strokeWidth="1.4"
+              aria-hidden="true"
+            >
+              <circle cx="7" cy="7" r="4.2" />
+              <path d="M10.2 10.2L14 14" />
+            </svg>
             <input
               type="search"
               value={props.search.value}

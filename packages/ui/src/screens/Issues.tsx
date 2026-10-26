@@ -22,6 +22,8 @@ import { Notice } from "../components/Notice.tsx";
 import { Panel, PanelBody, PanelFoot, PanelHead } from "../components/Panel.tsx";
 import { Pager } from "../components/Pager.tsx";
 import { IssueFlowTable, type IssueFlowTableCopy } from "../components/IssueFlowTable.tsx";
+import { IssueFlowChart } from "../components/IssueFlowChart.tsx";
+import { Collapsible } from "../components/Collapsible.tsx";
 import { StatusDot } from "../components/StatusDot.tsx";
 import { TruncatedText } from "../components/TruncatedText.tsx";
 import {
@@ -225,9 +227,19 @@ export function Issues(props: IssuesProps) {
             meta={props.trendCopy.range(props.trend.firstDate, props.trend.lastDate)}
           />
           <PanelBody>
-            {/* The prototype shows this series as a table on this screen and as a chart on
-                the overview: the issues screen is where exact counts are read. */}
-            <IssueFlowTable series={props.trend} copy={props.trendCopy.table} />
+            {/* The prototype draws the chart AND offers the same numbers as a table inside a
+                disclosure (`<summary>Dated history (table alternative)</summary>`), for a
+                reader who needs exact counts rather than a shape. Both, not either. */}
+            <div className="chart-wrap" data-ms-flow="">
+              <IssueFlowChart
+                variant="full"
+                points={props.trend.points}
+                label={props.trendCopy.chartTitle(props.trend.firstDate, props.trend.lastDate)}
+              />
+            </div>
+            <Collapsible summary={props.trendCopy.tableSummary}>
+              <IssueFlowTable series={props.trend} copy={props.trendCopy.table} />
+            </Collapsible>
           </PanelBody>
         </Panel>
       )}
