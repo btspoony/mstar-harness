@@ -127,7 +127,16 @@ export function Projects(props: ProjectsProps) {
                         },
                       })}
                 >
-                  <StatusDot label={row.lifecycle === "" ? copy.noLifecycle : row.lifecycle} tone={row.lifecycleTone} />
+                  {/* The prototype's row leads with the dot alone. Its own markup puts
+                      the lifecycle on the dot (`class="dot tone-active"`) while its sheet
+                      only styles the descendent form (`.tone-active .dot`), so that pair
+                      resolves to the neutral default there too. The word rides the
+                      aria-label, never a second visible label beside the name. */}
+                  <span
+                    className={`dot tone-${row.lifecycleTone}`}
+                    role="img"
+                    aria-label={row.lifecycle === "" ? copy.noLifecycle : row.lifecycle}
+                  />
                   <span className="rm-project-name">{row.title}</span>
                   <span className="mono t-11 muted">{row.projectId}</span>
                   <span className="rm-project-desc trunc" title={row.description ?? copy.noDescription}>
