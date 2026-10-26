@@ -162,10 +162,9 @@ function issueScope(address: Address): string {
   return address.route.name === "issues" ? parseIssueQuery(address.query).filters.project : "";
 }
 
-function OverviewDestination(props: { query: string }) {
-  const outcome = useOverview(true);
+function OverviewDestination(props: { query: string; outcome: OverviewOutcome }) {
+  const outcome = props.outcome;
   const copy = useCopy();
-  const revision = outcome.kind === "ready" ? outcome.revision : null;
 
   if (outcome.kind === "loading") return null;
 
@@ -859,7 +858,7 @@ function Shell(props: {
         ref={mainRef}
         data-ms-route={routeHash(address.route)}
       >
-        {address.route.name === "overview" ? <OverviewDestination query={address.query} /> : null}
+        {address.route.name === "overview" ? <OverviewDestination query={address.query} outcome={shellOutcome} /> : null}
         {address.route.name === "issues" ? <IssuesDestination address={address} projectIds={projectIds} /> : null}
         {address.route.name === "issue" ? <IssueDetailDestination id={address.route.id} /> : null}
         {address.route.name === "workflows" ? <WorkflowsDestination address={address} /> : null}
