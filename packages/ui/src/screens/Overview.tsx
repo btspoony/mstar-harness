@@ -302,6 +302,7 @@ function MilestoneRowView(props: { row: MilestoneRow; copy: OverviewCopy }) {
   return (
     <Row
       tall
+      rowClass="milestone-row"
       primary={<TruncatedText text={row.name} />}
       meta={
         <>

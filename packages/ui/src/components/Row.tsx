@@ -22,13 +22,15 @@ export type RowProps = {
   onActivate?: () => void;
   /** Extra height for a two-line row. */
   tall?: boolean;
+  /** An extra class the caller's own composition needs (the milestone board's row rule). */
+  rowClass?: string;
 };
 
 export function Row(props: RowProps) {
   const interactive = props.onActivate !== undefined;
   return (
     <div
-      className={props.tall === true ? "row row-tall" : "row"}
+      className={[props.rowClass, props.tall === true ? "row row-tall" : "row"].filter(Boolean).join(" ")}
       data-ms-row=""
       {...(interactive
         ? {

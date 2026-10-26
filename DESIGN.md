@@ -1165,6 +1165,25 @@ where the prototype names each step: `Start · Execute · Close · PR delivery �
 renders the number and the name, and the browser reports
 `["Start","Execute","Close","PR delivery","Merge ready"]`.
 
+## The milestone board, rendered with data for the first time
+
+The same fixture method that found the gate track's unnamed steps found a second one:
+
+```
+rows: 0        before
+rows: 1        after
+```
+
+The board's content was there — the milestone's name, status, target and `4/14` counts all
+rendered — but its row wore the generic `.row` class where the prototype has
+`.milestone-row` (`padding: 7px 0; border-bottom: 1px solid`). `.row` supplies a different
+rhythm and no per-row padding. `Row` gained a `rowClass` prop and the board passes it.
+
+**One measurement that looked like a defect and was not**: the row's computed
+`border-bottom-color` read `rgb(231, 234, 238)` — the text colour, not the hairline
+`rgb(36, 41, 48)`. `border-bottom-width` was `0px`: the row is a `:last-of-type`, which the
+prototype's own rule clears. Reading the width, not only the colour, is what settled it.
+
 ## Verification coverage, stated
 
 Two hosts mount these screens: the dashboard (`packages/cli/web`) and the dsh pane
