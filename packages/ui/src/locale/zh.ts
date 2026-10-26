@@ -231,6 +231,7 @@ export const zh: Copy = {
       root: "注册位置",
       updated: "投影更新时间",
       plans: "计划",
+    badges: "关联标记",
     },
     plansProgress: (done, total) => `${done}/${total} 个计划`,
     truncated: (shown, total) => `显示 ${shown} / ${total} 条`,

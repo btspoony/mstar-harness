@@ -239,9 +239,12 @@ describe("Workflows list — the state machine", () => {
 describe("Workflows list — NEGATIVE: the removed join bookkeeping", () => {
   const html = renderList([workflow()], 1);
 
-  test("no catalog-pin badge is rendered", () => {
+  test("the catalog-pin badges are rendered, as the prototype's Join badges column", () => {
+    // IA §8.1 kept them out as join bookkeeping. The prototype has the column and the
+    // prototype is the acceptance criterion for this interface, so the badges travel
+    // with the row; the word is always spelled out, never a colour-only chip.
     for (const badge of ["catalog-missing", "catalog-pin-missing", "catalog-pin-conflict"]) {
-      expect(html).not.toContain(badge);
+      expect(renderList([workflow({ badges: [badge] })], 1)).toContain(badge);
     }
   });
 
@@ -254,9 +257,11 @@ describe("Workflows list — NEGATIVE: the removed join bookkeeping", () => {
   test("the row model cannot carry them: the negative set is enforced by shape", () => {
     const model = workflowListModel({ data: { items: [workflow()], total: 1 } as WorkflowListDTO, projection });
     if (model.rows.kind !== "populated") throw new Error("expected rows");
-    for (const removed of ["leases", "terminalUnregistered", "terminalAdoptions", "badges", "plans"]) {
+    for (const removed of ["leases", "terminalUnregistered", "terminalAdoptions", "plans"]) {
       expect(Object.keys(model.rows.value[0] ?? {})).not.toContain(removed);
     }
+    // `badges` is carried now — the Join badges column needs it.
+    expect(Object.keys(model.rows.value[0] ?? {})).toContain("badges");
   });
 
   test("execution-unavailable survives as a reason, not as a chip", () => {

@@ -3,8 +3,11 @@
  *
  * IA §8.2: the list carries id, type, status, phase, plan `done/total`, started
  * and the branch anchors the row has; the detail carries the four anchors, the
- * dates and the plan table. Leases, adoption rows and the catalog-pin badges are
- * **not** returned (IA §8.1) — the pin badges are join bookkeeping, and a plan's
+ * dates, the plan table **and the catalog-pin badges**. The badges are returned because
+ * the prototype's workflow list has a `Join badges` column and the prototype is this
+ * interface's acceptance criterion; IA §8.1 had excluded them as join bookkeeping,
+ * which described a different goal. Leases and adoption rows stay out — no screen has
+ * a place for them. (Originally:) — a plan's
  * status already says whether it is being worked.
  *
  * The one badge that survives is `execution-unavailable`, because it is the
@@ -53,6 +56,9 @@ export type WorkflowRow = {
   /** Whether the store still counts this workflow in the active registry. The detail
    *  head's chip asserts it, so an inactive workflow must not claim it. */
   activeRegistration: boolean;
+  /** The join badges the store attached (`catalog-missing`, `catalog-pin-conflict`).
+   *  The list's `Join badges` column renders them. */
+  badges: readonly string[];
 };
 
 /** Workflow status → tone: a paused workflow is not an error. */
@@ -112,6 +118,7 @@ export function workflowRow(workflow: WorkflowDTO): WorkflowRow {
     branch: branchAnchors(workflow.branch),
     executionUnavailableReason: executionUnavailableReason(workflow.badges),
     activeRegistration: workflow.activeRegistration,
+    badges: workflow.badges,
   };
 }
 

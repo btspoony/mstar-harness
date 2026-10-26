@@ -2,12 +2,18 @@
  * `IterationDetail` — one iteration (IA §8.2).
  *
  * Renders: catalog identity, execution (the linked workflow), the compass status
- * and its summary, the **gate step (1–4 of 5)**, the plan table, the dates.
+ * and its summary, the **gate step (1–4 of 5)**, the plan table, the **document
+ * inventory** and the dates.
  *
- * Not rendered, asserted negatively: the `documents` inventory and its count, the
- * compass milestone-id list (the roadmap feature owns milestones — repeating the
- * ids here would be a second, weaker view of the same thing), and every counter
- * (`storeRevision`, `catalogRevision`, `builtAt`, `checkedAt`).
+ * The inventory is rendered because the prototype's detail screen has a Documents
+ * card and the prototype is this interface's acceptance criterion. IA §8.1 had
+ * excluded it ("documents say nothing about progress") — true, but that describes a
+ * progress view, not this one.
+ *
+ * Not rendered, asserted negatively: the compass milestone-id list (the roadmap
+ * feature owns milestones — repeating the ids here would be a second, weaker view of
+ * the same thing), and every counter (`storeRevision`, `catalogRevision`, `builtAt`,
+ * `checkedAt`).
  *
  * **The gate display is four labels plus a never-marked fifth** (compass D29).
  * Step 5 is merge, the merge happens outside the harness, and no store row records
