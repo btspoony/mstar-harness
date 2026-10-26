@@ -538,8 +538,10 @@ describe("Focus — what it shows, in the IA §3.2 order", () => {
     for (const status of ["Todo", "InProgress", "InReview", "Blocked", "Done"]) {
       expect(html).toContain(`data-ms-group="${status}"`);
     }
-    expect(html).toContain("InProgress · 1");
-    expect(html).toContain("Todo · 0");
+    // The prototype's board head carries the status and its count as two elements,
+    // not one joined string.
+    expect(html).toMatch(/<span>InProgress<\/span><span class="num">1<\/span>/);
+    expect(html).toMatch(/<span>Todo<\/span><span class="num">0<\/span>/);
   });
 
   test("the in-progress plan carries its recorded progress", () => {

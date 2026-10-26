@@ -115,49 +115,42 @@ function Binding(props: { binding: FocusBinding; copy: FocusCopy; onPick?: (id: 
 function Plan(props: { plan: FocusPlan; copy: FocusCopy }) {
   const { plan, copy } = props;
   return (
-    <div className={"milestone-block"} data-ms-plan={plan.planId}>
-      <p className={"milestone-block-head"}>
+    <div className="planboard-plan" data-ms-plan={plan.planId}>
+      {/* The prototype's plan line (`.planboard-plan`): a tone dot, the id, then the
+          recorded note or the status word at the right edge. A plan the store has not
+          given a status yet says so in words — never a colour-only dot. */}
+      <span className={`dot tone-${plan.statusTone}`} aria-hidden="true" />
+      <span className="p-id">
         <TruncatedText text={plan.planId} />
-        {/* A plan the store has not given a status yet is named as such. The
-            empty string used to satisfy StatusDot's required label while
-            rendering a colour-only dot — the exact failure the required prop
-            exists to prevent. */}
-        {plan.status === null ? (
-          <span className={"muted"}>{copy.planStatusAbsent}</span>
-        ) : (
-          <StatusDot label={plan.status} tone={plan.statusTone} mono />
-        )}
-      </p>
+      </span>
+      <span className="p-prog" data-ms-progress={plan.note === null ? "absent" : "recorded"}
+        data-ms-progress-note={plan.note === null ? undefined : ""}
+        data-ms-progress-absent={plan.note === null ? "" : undefined}>
+        {/* A plan that records nothing says so; it never renders a 0 or a step the store
+            did not give it. The prototype's own cell is just the note. */}
+        {plan.note ?? copy.progressAbsent}
+      </span>
       {plan.blockedReason === null ? null : (
-        <p className={"absence"} data-ms-blocked-reason="">
-          <span className={"muted"}>{copy.blockedLabel}</span>
-          <TruncatedText text={plan.blockedReason} block />
-        </p>
+        <span className="p-prog" data-ms-blocked-reason="">
+          {copy.blockedLabel}: <TruncatedText text={plan.blockedReason} />
+        </span>
       )}
-      {plan.note === null ? null : (
-        <p className={"chart-note"} data-ms-progress-note="">
-          <span className={"muted"}>{copy.progressLabel}</span>
-          <TruncatedText text={plan.note} block />
-        </p>
-      )}
-      {plan.note === null && plan.blockedReason === null ? (
-        <p className={"muted"} data-ms-progress-absent="">
-          {copy.progressAbsent}
-        </p>
-      ) : null}
     </div>
   );
 }
 
-/** One status group; a group with no plans is still a group (a count, not a gap). */
+/** One status column of the prototype's `.planboard`: its head carries the count. */
 function Group(props: { group: FocusGroup; copy: FocusCopy }) {
   return (
-    <section className={"panel"} data-ms-group={props.group.status}>
-      <h3 className={"panel-head"}>{props.copy.groupHeading(props.group.status, props.group.count)}</h3>
+    <div className="planboard-col" data-ms-group={props.group.status}>
+      <div className="planboard-head">
+        <span>{props.group.status}</span>
+        <span className="num">{props.group.count}</span>
+      </div>
       {props.group.plans.map((plan) => (
         <Plan key={plan.planId} plan={plan} copy={props.copy} />
       ))}
-    </section>
+    </div>
   );
 }
 
@@ -166,7 +159,11 @@ export function Focus(props: FocusProps) {
   const workflow = model.workflow;
   return (
     <article className={"screen"} data-ms-screen="focus">
-      <h1>{copy.pageTitle}</h1>
+      {/* The prototype's session-focus head: the title, then a chip that names the
+          session and the line that says what it is bound to. */}
+      <div className="screen-head">
+        <h1>{copy.pageTitle}</h1>
+      </div>
 
       {/* 1 — the binding line. Always present. */}
       <Binding binding={model.binding} copy={copy} onPick={props.onPick} />
@@ -191,9 +188,11 @@ export function Focus(props: FocusProps) {
                   .join(" → ")}
               </span>
             </p>
-            {model.groups.map((group) => (
-              <Group key={group.status} group={group} copy={copy} />
-            ))}
+            <div className="planboard" role="group" aria-label={copy.boardHeading}>
+              {model.groups.map((group) => (
+                <Group key={group.status} group={group} copy={copy} />
+              ))}
+            </div>
           </>
         ) : workflow.kind === "populated" ? (
           <EmptyState
