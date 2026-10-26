@@ -564,3 +564,33 @@
   flex: 1;
   min-width: 0;
 }
+
+/* The occurrences log's own rows: the prototype separates events with a hairline, and each
+   block carries its quote, its two fields and its citations. */
+.ms-container .occurrence {
+  border-top: 1px solid var(--ms-border-hairline);
+  padding-top: 9px;
+  margin-top: 11px;
+}
+
+.ms-container .occurrence:first-of-type {
+  border-top: 0;
+  padding-top: 0;
+  margin-top: 0;
+}
+
+.ms-container .occurrence-head {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  flex-wrap: wrap;
+}
+
+.ms-container .occurrence-head > .spacer {
+  flex: 1;
+}
+
+.ms-container .occurrence-evidence {
+  margin: 6px 0 0;
+  padding-left: 18px;
+}

@@ -1117,6 +1117,25 @@ future change can re-remove one of these panels and no suite will notice. If tha
 the guard to add is not the old NEGATIVE test (it asserted the opposite of what ships) but a
 *positive* one: a test that fails when a panel the prototype has stops rendering.
 
+## A class name I invented, and what it cost
+
+The issue detail's nine blocks were wrapped in `className="fact-block"`. That class exists
+**nowhere** in `product.css` or `base.css` — I made it up while writing the components, and
+no measurement caught it because every check was "does the panel render", not "does it look
+like the prototype's".
+
+The prototype uses `.sec`: `border-top: 1px solid var(--ms-border-hairline); padding-top:
+9px; margin-top: 11px`, with `:first-child` removing all three. Six `fact-block`s became
+`.sec` and the separators appeared.
+
+**Why this one matters more than its size**: a fixture-rendered page — the method that found
+it — is the only check that could have. The DOM assertions all passed with the invented
+class; the browser, with the real sheets applied, showed nine blocks with no separators at
+all.
+
+**The general form**: a class name that appears in no stylesheet renders as if you had
+written nothing, and nothing fails.
+
 ## Verification coverage, stated
 
 Two hosts mount these screens: the dashboard (`packages/cli/web`) and the dsh pane

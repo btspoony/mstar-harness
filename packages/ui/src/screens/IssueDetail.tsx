@@ -193,7 +193,7 @@ export function IssueDetail(props: IssueDetailProps) {
 
           {/* The prototype's `Source` panel: where this issue came from. */}
           {record.value.source === null ? null : (
-            <section className={"fact-block"} data-ms-issue-source="" aria-labelledby="ms-issue-source">
+            <section className={"sec"} data-ms-issue-source="" aria-labelledby="ms-issue-source">
               <h2 id="ms-issue-source">{copy.sourceHeading}</h2>
               <dl className={"fields"}>
                 <div className="field">
@@ -229,7 +229,7 @@ export function IssueDetail(props: IssueDetailProps) {
           {/* The prototype's `Occurrences`: one block per event, each with its own quote,
               location and citations. This is the log §8.1 removed; the prototype keeps it. */}
           {record.value.occurrences.length === 0 ? null : (
-            <section className={"fact-block"} data-ms-issue-occurrences="" aria-labelledby="ms-issue-occurrences">
+            <section className={"sec"} data-ms-issue-occurrences="" aria-labelledby="ms-issue-occurrences">
               <h2 id="ms-issue-occurrences">{copy.occurrencesHeading}</h2>
               {record.value.occurrences.map((occurrence) => (
                 <article className={"occurrence"} key={occurrence.id} data-ms-occurrence-row={occurrence.id}>
@@ -272,7 +272,7 @@ export function IssueDetail(props: IssueDetailProps) {
 
           {/* The prototype's `Disposition history`: only recorded transitions appear. */}
           {record.value.transitions.length === 0 ? null : (
-            <section className={"fact-block"} data-ms-issue-history="" aria-labelledby="ms-issue-history">
+            <section className={"sec"} data-ms-issue-history="" aria-labelledby="ms-issue-history">
               <h2 id="ms-issue-history">{copy.historyHeading}</h2>
               <table className={"mini-table"}>
                 <thead>
@@ -302,7 +302,7 @@ export function IssueDetail(props: IssueDetailProps) {
 
           {/* The prototype's `Provenance` table. */}
           {record.value.provenance.length === 0 ? null : (
-            <section className={"fact-block"} data-ms-issue-provenance="" aria-labelledby="ms-issue-provenance">
+            <section className={"sec"} data-ms-issue-provenance="" aria-labelledby="ms-issue-provenance">
               <h2 id="ms-issue-provenance">{copy.provenanceHeading}</h2>
               <table className={"mini-table"}>
                 <thead>
@@ -331,7 +331,7 @@ export function IssueDetail(props: IssueDetailProps) {
 
           {/* The prototype's `Relations` table. */}
           {record.value.relations.length === 0 ? null : (
-            <section className={"fact-block"} data-ms-issue-relations="" aria-labelledby="ms-issue-relations">
+            <section className={"sec"} data-ms-issue-relations="" aria-labelledby="ms-issue-relations">
               <h2 id="ms-issue-relations">{copy.relationsHeading}</h2>
               <table className={"mini-table"}>
                 <thead>
@@ -356,7 +356,7 @@ export function IssueDetail(props: IssueDetailProps) {
 
           {/* The prototype's `Identity keys`: the tracker identity, when the store has one. */}
           {record.value.identityKey === null && record.value.provider === null ? null : (
-            <section className={"fact-block"} aria-labelledby="ms-issue-identity-keys">
+            <section className={"sec"} aria-labelledby="ms-issue-identity-keys">
               <h2 id="ms-issue-identity-keys">{copy.identityKeysHeading}</h2>
               <dl className={"fields"}>
                 {record.value.identityKey === null ? null : (
