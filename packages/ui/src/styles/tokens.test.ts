@@ -44,6 +44,15 @@ const CONSUMED_BY_LATER_TASK: Readonly<Record<string, string>> = {
   "--ms-space-12": "Task 3 (page top rhythm)",
   "--ms-row-h-sm": "Task 3 (dense side lists)",
   "--ms-radius-md": "Task 3 (panels)",
+  // The prototype contradicts itself on this step: its token sheet labels 20/28 as
+  // "page title" (`design-v1.html:2649`), while every screen's actual heading rule is
+  // 16/24 (`:210`, `.detail-title` at `:403`). The screens are authoritative — that is
+  // what the owner compared against — so the delivered titles moved to 16 and this step
+  // now has no consumer. It stays declared because the scale is a design decision, not
+  // an implementation detail; resolving which of the two statements wins belongs to the
+  // panel round that re-audits the type scale.
+  "--ms-fs-20": "Task 3 (type scale: the prototype's token sheet and its screens disagree)",
+  "--ms-lh-20": "Task 3 (type scale: the prototype's token sheet and its screens disagree)",
 };
 
 /** Every `*.css` file under `src`, excluding the two global sheets. */
@@ -276,6 +285,33 @@ describe("the scheme is an attribute, never a media query", () => {
 });
 
 describe("forced colors: the status dot stops depending on colour", () => {
+  test("the screen shell owns the prototype's gutter and its title scale", () => {
+    // One authority for every screen: the frame the prototype puts around all of them
+    // (`.dash-main`, `design-v1.html:201`) rather than ten copies that can drift.
+    const base = read(BASE_PATH);
+    expect(base).toContain(".ms-container [data-ms-screen] {");
+    expect(base).toMatch(/\.ms-container \[data-ms-screen\] \{[^}]*max-inline-size: 1440px;/);
+    expect(base).toMatch(/\.ms-container \[data-ms-screen\] \{[^}]*margin-inline: auto;/);
+    expect(base).toMatch(/\.ms-container \[data-ms-screen\] \{[^}]*padding: 14px 20px 16px;/);
+    // `.screen-head h1` — 16px on the 24px line, weight 600.
+    expect(base).toMatch(/\.ms-container \[data-ms-screen\] h1 \{[^}]*font-size: var\(--ms-fs-16\);/);
+    expect(base).toMatch(/\.ms-container \[data-ms-screen\] h1 \{[^}]*line-height: var\(--ms-lh-16\);/);
+  });
+
+  test("no screen re-declares the gutter or the title scale", () => {
+    // The defect this pins is duplicated authority: while a module declares its own
+    // padding and 20px title, the shell's values are a suggestion rather than the rule.
+    const offenders: string[] = [];
+    for (const name of ["Issues", "Overview", "Workflows", "Iterations", "Projects", "Focus", "IssueDetail", "WorkflowDetail", "IterationDetail", "ProjectDetail"]) {
+      const css = read(join(SRC, "screens", `${name}.module.css`));
+      const page = /\.page \{([^}]*)\}/.exec(css)?.[1] ?? "";
+      const title = /\.title \{([^}]*)\}/.exec(css)?.[1] ?? "";
+      if (/\bpadding\b/.test(page)) offenders.push(`${name}.page padding`);
+      if (/font-size|line-height|font-weight|letter-spacing/.test(title)) offenders.push(`${name}.title type`);
+    }
+    expect(offenders).toEqual([]);
+  });
+
   test("base.css carries a forced-colors block that re-states the dot", () => {
     const base = read(BASE_PATH);
     expect(base).toContain("@media (forced-colors: active)");

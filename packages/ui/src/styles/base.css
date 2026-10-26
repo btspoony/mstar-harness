@@ -66,6 +66,36 @@
   font-weight: var(--ms-fw-medium);
 }
 
+/**
+ * The screen shell.
+ *
+ * The prototype wraps every screen in `.dash-main` (max-width 1440px, centred, with a
+ * 14/20/16 gutter) and heads each with an h1 at 16px/24, weight 600. Both were
+ * missing here: the screens sat flush against the surface edge with no maximum width,
+ * and their titles were a size larger than the reference — which is most of why the
+ * product read as "functional layout" rather than as the confirmed design.
+ *
+ * One authority for every screen, keyed on the `data-ms-screen` attribute each screen
+ * root already carries: a new screen inherits the frame instead of re-declaring it,
+ * and a screen that departs from it should have to say why.
+ */
+.ms-container [data-ms-screen] {
+  inline-size: 100%;
+  max-inline-size: 1440px;
+  margin-inline: auto;
+  padding: 14px 20px 16px;
+  min-inline-size: 0;
+}
+
+.ms-container [data-ms-screen] h1 {
+  margin: 0;
+  font-size: var(--ms-fs-16);
+  line-height: var(--ms-lh-16);
+  font-weight: var(--ms-fw-semibold);
+  letter-spacing: -0.01em;
+  color: var(--ms-text-primary);
+}
+
 .ms-container p {
   margin: 0;
   font-size: var(--ms-fs-13);

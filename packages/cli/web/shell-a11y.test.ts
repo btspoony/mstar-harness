@@ -38,7 +38,7 @@ describe("the page's landmark layer", () => {
   });
 
   test("the navigation landmark is labelled from the dictionary, not a literal", () => {
-    // Task 5 moved this into `shell.nav.primary`; a literal here would survive every
+    // The landmark label lives in `shell.nav.primary`; a literal here would survive every
     // screening of the Chinese dictionary because nothing paints it.
     expect(mainSource).toContain("copy.shell.nav.primary");
     expect(/label="Primary"/.test(mainSource)).toBe(false);
@@ -93,6 +93,29 @@ describe("truncation is reachable without a mouse", () => {
     expect(html).toContain(escapeAttr(long));
     expect(html).toContain("data-ms-full");
     expect(html).toContain('tabindex="0"');
+  });
+});
+
+describe("the frame's gutter has one owner", () => {
+  test("the main region adds no padding of its own", () => {
+    // The screen shell (base.css) supplies the prototype's 14/20/16 gutter; an offset
+    // here as well would double it, which is how the content ended up with no
+    // consistent left edge at all.
+    expect(/\.app-main \{[^}]*padding: 0;/.test(shellCss)).toBe(true);
+    expect(/padding: 1rem;/.test(shellCss)).toBe(false);
+  });
+
+  test("the header, footer and content share the prototype's 20px gutter", () => {
+    // One left edge for the whole shell: the prototype is `0 20px` (header),
+    // `7px 20px` (footer) and `14px 20px 16px` (main).
+    const ruleOf = (selector: string): string => {
+      const start = shellCss.indexOf(`${selector} {`);
+      expect(start).toBeGreaterThan(-1);
+      return shellCss.slice(start, shellCss.indexOf("}", start));
+    };
+    for (const selector of [".app-header", ".app-footer"]) {
+      expect(ruleOf(selector)).toContain("20px");
+    }
   });
 });
 
