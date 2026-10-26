@@ -167,10 +167,10 @@ export function Focus(props: FocusProps) {
           session and the line that says what it is bound to. */}
       <div className="screen-head">
         <h1>{copy.pageTitle}</h1>
+        {/* 1 — the binding line lives in the head: the prototype's `screen-meta`
+            names the session and what it is bound to, on the line under the title. */}
+        <Binding binding={model.binding} copy={copy} onPick={props.onPick} />
       </div>
-
-      {/* 1 — the binding line. Always present. */}
-      <Binding binding={model.binding} copy={copy} onPick={props.onPick} />
 
       {/* 2 + 3 — the bound workflow and its plan board, with each plan's
           recorded progress or blocked reason. */}
