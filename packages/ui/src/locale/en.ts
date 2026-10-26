@@ -172,6 +172,7 @@ export const en = {
   },
 
   issues: {
+    filtersHeading: "Filters",
     pageTitle: "Issues",
     tableCaption: "Issues",
     columns: {

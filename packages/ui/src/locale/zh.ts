@@ -156,6 +156,7 @@ export const zh: Copy = {
   },
 
   issues: {
+    filtersHeading: "筛选",
     pageTitle: "问题",
     tableCaption: "问题",
     columns: {
