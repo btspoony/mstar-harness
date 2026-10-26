@@ -96,6 +96,8 @@ export type RoadmapMilestone = {
  * `absent` arm and never reaches this model.
  */
 export type RoadmapModel = {
+  /** The roadmap's authority row, for the prototype's `Roadmap authority` card. */
+  authority: { state: string; revision: string; contentHash: string; frontmatter: string } | null;
   direction: string | null;
   goals: readonly RoadmapGoal[];
   milestones: readonly RoadmapMilestone[];
@@ -115,6 +117,17 @@ export type RoadmapModel = {
 export function roadmapModel(read: RoadmapDTO, content: RoadmapContent | null): RoadmapModel {
   const parents = new Set((content?.goals ?? []).map((goal) => goal.ordinal));
   return {
+    authority:
+      read.authority.state === "present"
+        ? {
+            state: read.authority.state,
+            revision: String(read.authority.revision),
+            contentHash: read.authority.contentHash,
+            // The frontmatter's own keys, which is what the prototype lists: the
+            // stored document's top-level fields, not a fixed set.
+            frontmatter: Object.keys(content?.frontmatter ?? {}).join(" · "),
+          }
+        : null,
     direction: content?.direction ?? null,
     goals: (content?.goals ?? []).map((goal) => ({
       ordinal: goal.ordinal,
