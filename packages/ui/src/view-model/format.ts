@@ -94,10 +94,11 @@ export function textOr(value: string | null | undefined, whenAbsent: string): st
  * counters are **not** returned: IA §8.1 removes them from the UI, and the
  * state plus the named reasons answer the only question a reader acts on.
  */
-export type ProjectionState =
+export type ProjectionState = { readonly builtAt: string | null; readonly checkedAt: string } & (
   | { kind: "current" }
   | { kind: "stale"; reasons: readonly string[] }
-  | { kind: "unavailable"; reasons: readonly string[] };
+  | { kind: "unavailable"; reasons: readonly string[] }
+);
 
 /**
  * Map one read projection to that state. Reasons are the sources' own messages.
@@ -109,9 +110,12 @@ export type ProjectionState =
  */
 export function projectionState(projection: ReadProjection): ProjectionState {
   const reasons = projection.diagnostics.map((diagnostic) => `${diagnostic.sourceKey}: ${diagnostic.message}`);
-  if (projection.freshness === "current") return { kind: "current" };
-  if (projection.freshness === "stale") return { kind: "stale", reasons };
-  return { kind: "unavailable", reasons };
+  // The prototype's identity line ends with when the projection was built and when it was
+  // read; both come from the read itself, so they ride the same state.
+  const times = { builtAt: projection.builtAt, checkedAt: projection.checkedAt };
+  if (projection.freshness === "current") return { kind: "current", ...times };
+  if (projection.freshness === "stale") return { kind: "stale", reasons, ...times };
+  return { kind: "unavailable", reasons, ...times };
 }
 
 

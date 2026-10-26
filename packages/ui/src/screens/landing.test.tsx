@@ -143,6 +143,9 @@ const overviewCopy: OverviewCopy = {
   pageTitle: "Overview",
   screenSubtitle: (scope: string, open: number) => `${scope} \u00b7 ${open} open issues`,
   screenScopeAll: "All projects",
+  identityBuilt: (at: string) => `built ${at}`,
+  identityBuiltUnknown: "never built",
+  identityRead: (at: string) => `read ${at}`,
   workflowsHeading: "Active workflows",
   workflowsEmpty: "Active workflows",
   workflowsTruncated: (shown: number, total: number) => `showing ${shown} of ${total}`,
@@ -468,9 +471,13 @@ describe("Overview — NEGATIVE: the surfaces D30 removed", () => {
   });
 
   test("no counter from the read envelope", () => {
-    for (const counter of ["storeRevision", "catalogRevision", "builtAt", "checkedAt", "2026-10-25T05:00:00.000Z"]) {
+    // `builtAt` / `checkedAt` are no longer counters: the prototype's identity line ends
+    // with `built … · read …`. The revisions stay out.
+    for (const counter of ["storeRevision", "catalogRevision", "generation"]) {
       expect(html).not.toContain(counter);
     }
+    expect(html).toContain("data-ms-projection-built");
+    expect(html).toContain("data-ms-projection-read");
   });
 
   test("nothing session-scoped leaked in (no binding, no picker, no enforcement)", () => {

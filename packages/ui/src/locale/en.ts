@@ -86,6 +86,9 @@ export const en = {
   },
 
   overview: {
+    identityBuilt: (at: string) => `built ${at}`,
+    identityBuiltUnknown: "never built",
+    identityRead: (at: string) => `read ${at}`,
     screenScopeAll: "All projects",
     screenSubtitle: (scope: string, open: number) => `${scope} · ${open} open issues`,
     pageTitle: "Overview",

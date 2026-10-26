@@ -49,6 +49,11 @@ export type OverviewCopy = {
   screenSubtitle: (scope: string, open: number) => string;
   /** The word this screen uses when the read covers every project. */
   screenScopeAll: string;
+  /** `built 13:56:02` — when the projection was built, or the word for "never". */
+  identityBuilt: (at: string) => string;
+  identityBuiltUnknown: string;
+  /** `read 13:58:04` — when this read happened. */
+  identityRead: (at: string) => string;
 
   workflowsHeading: string;
   /** Names the running workflows the panel does not draw, so the list is never silently
@@ -657,6 +662,22 @@ export function Overview(props: OverviewProps) {
           </>
         )}
         <span>{copy.projection[model.projection.kind]}</span>
+        {/* The prototype ends the line with when the projection was built and when this
+            read happened. Both are facts about the read, not counters. */}
+        <span className="sep" aria-hidden="true">
+          ·
+        </span>
+        <span data-ms-projection-built={model.projection.builtAt ?? undefined}>
+          {model.projection.builtAt === null
+            ? copy.identityBuiltUnknown
+            : copy.identityBuilt(model.projection.builtAt)}
+        </span>
+        <span className="sep" aria-hidden="true">
+          ·
+        </span>
+        <span data-ms-projection-read="">
+          {copy.identityRead(model.projection.checkedAt)}
+        </span>
       </div>
       {model.projection.kind === "current" ? null : (
         <Notice reason={model.projection.reasons.join(" · ")} tone="warning" />

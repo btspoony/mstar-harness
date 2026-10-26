@@ -73,6 +73,9 @@ export const zh: Copy = {
   },
 
   overview: {
+    identityBuilt: (at) => `构建于 ${at}`,
+    identityBuiltUnknown: "尚未构建",
+    identityRead: (at) => `读取于 ${at}`,
     screenScopeAll: "全部项目",
     screenSubtitle: (scope: string, open) => `${scope} · ${open} 项未关闭`,
     pageTitle: "总览",

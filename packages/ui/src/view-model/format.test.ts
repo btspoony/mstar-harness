@@ -74,8 +74,14 @@ describe("the projection state replaces the removed counters", () => {
     diagnostics: [] as Array<{ sourceKey: string; reason: string; message: string }>,
   };
 
-  test("current carries nothing else", () => {
-    expect(projectionState(base)).toEqual({ kind: "current" });
+  test("current carries the state and the read's two times", () => {
+    // Not counters: the prototype's identity line states when the projection was built and
+    // when the page was read, and both come from the read's own projection.
+    expect(projectionState(base)).toEqual({
+      kind: "current",
+      builtAt: base.builtAt,
+      checkedAt: base.checkedAt,
+    });
   });
 
   test("stale and unavailable carry their reasons verbatim", () => {
@@ -84,17 +90,21 @@ describe("the projection state replaces the removed counters", () => {
       freshness: "stale" as const,
       diagnostics: [{ sourceKey: "compass", reason: "unreadable", message: "compass could not be parsed" }],
     };
-    expect(projectionState(diagnosed)).toEqual({ kind: "stale", reasons: ["compass: compass could not be parsed"] });
+    expect(projectionState(diagnosed)).toMatchObject({
+      kind: "stale",
+      reasons: ["compass: compass could not be parsed"],
+    });
     expect(projectionState({ ...diagnosed, freshness: "unavailable" }).kind).toBe("unavailable");
   });
 
-  test("NEGATIVE: no timestamp or counter rides along (IA §8.1)", () => {
+  test("NEGATIVE: no counter rides along (IA §8.1)", () => {
+    // The prototype's identity line ends with `built … · read …`, so those two times DO
+    // ride along now. What still must not: the store and catalog revisions.
     const state = projectionState({ ...base, freshness: "stale" });
     const serialized = JSON.stringify(state);
-    expect(serialized).not.toContain("2026-10-25T05:00:00.000Z");
-    expect(serialized).not.toContain("builtAt");
-    expect(serialized).not.toContain("checkedAt");
     expect(serialized).not.toContain("generation");
+    expect(serialized).not.toContain("catalogRevision");
+    expect(serialized).not.toContain("storeRevision");
   });
 
   test("no generation means no projected rows — asserted through the resolver that owns it", () => {
