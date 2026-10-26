@@ -22,7 +22,8 @@
     "build": "rm -rf dist && bunx tsc --emitDeclarationOnly",
     "test": "bun test",
     "typecheck": "bunx tsc --noEmit",
-    "check:classes": "bun run scripts/dead-classes.ts"
+    "check:classes": "bun run scripts/dead-classes.ts",
+    "check:tones": "bun run scripts/tone-table.ts"
   },
   "devDependencies": {
     "@mstar-harness/engine": "workspace:*",

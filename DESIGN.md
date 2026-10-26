@@ -1461,7 +1461,17 @@ warning      warning     warning     ok
   `.tone-completed` is `--ms-purple`.
 
 Both are `accent` and `purple` now, and the workflow row's pinned tone moved from `neutral`
-to `accent` with them.## Verification coverage, stated
+to `accent` with them.
+
+**The comparison is now two things a future round can run**, because one run is not a habit:
+
+- `bun run --cwd packages/ui check:tones` diffs the whole table against the prototype's own
+  rules. It needs the prototype file, which is gitignored, so it exits 0 with a notice when
+  absent — a development check, not a CI gate.
+- `src/view-model/status.test.ts` pins the same table as expectations, with the prototype's
+  rule quoted beside each one. This one CI runs, and it has to be argued with to change.
+
+Today it reports `every one of the prototype's 22 tone colours matches`.## Verification coverage, stated
 
 Two hosts mount these screens: the dashboard (`packages/cli/web`) and the dsh pane
 (`packages/dsh/src/client/panel`). They share the components but **each owns its own

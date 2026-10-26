@@ -15,10 +15,12 @@ import {
   gateStepPosition,
   gateSteps,
   lifecycleTone,
+  milestoneStatusTone,
   planProgress,
   planStatusTone,
   severityTone,
 } from "./status.ts";
+import { workflowStatusTone } from "./workflows.ts";
 
 describe("plan bucketing", () => {
   test("every bucket is present in board order, including empty ones", () => {
@@ -121,5 +123,38 @@ describe("progress", () => {
     expect(planProgress(0, 0)).toBeNull();
     expect(planProgress(2, 6)).toEqual({ done: 2, total: 6 });
     expect(planProgress(null, 6)).toBeNull();
+  });
+});
+
+/**
+ * The status tones, held against the prototype's own colour table.
+ *
+ * Every expectation below was read from the approved prototype's
+ * `.tone-<name> .dot { background: … }` rules. That file is gitignored, so the table is
+ * written out here rather than parsed at run time: a change to either side now has to
+ * argue with these assertions.
+ */
+describe("Status tones — the prototype's colour table", () => {
+  test("a live workflow's dot is accent, not the grey a stopped one has", () => {
+    // `.tone-running` is `var(--ms-accent)`.
+    expect(workflowStatusTone("running")).toBe("accent");
+    expect(workflowStatusTone("stopped")).toBe("neutral");
+  });
+
+  test("a completed workflow is purple, as `.tone-completed` is", () => {
+    expect(workflowStatusTone("completed")).toBe("purple");
+  });
+
+  test("every other workflow state keeps its prototype tone", () => {
+    expect(workflowStatusTone("paused")).toBe("warning");
+    expect(workflowStatusTone("failed")).toBe("danger");
+  });
+
+  test("a milestone's four states are accent, neutral, success and purple", () => {
+    // `.tone-active` accent, `.tone-todo` neutral, `.tone-done` success.
+    expect(milestoneStatusTone("active")).toBe("accent");
+    expect(milestoneStatusTone("planned")).toBe("neutral");
+    expect(milestoneStatusTone("delivered")).toBe("success");
+    expect(milestoneStatusTone("dropped")).toBe("purple");
   });
 });
