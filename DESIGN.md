@@ -907,6 +907,29 @@ round as "not in the prototype". The prototype has it, on this screen, and the s
 settles it.
 
 **This is why the acceptance criterion is a screenshot, not a checklist.**
+## The workflow detail screen, seen side by side for the first time
+
+| # | The prototype | This implementation |
+| --- | --- | --- |
+| 1 | breadcrumb `Workflows / issue-project-move` | the word `工作流` alone |
+| 2 | meta line `plan · running · phase-2-execute · updated …` | `plan · running · 更新于 2026-10-25` — no phase |
+| 3 | the two top panels are both `.panel` with a head | `执行` is a panel; the right side is a bare `.field` block with **no border**, then `目录` |
+| 4 | `Catalog identity` states six rows (Title, Lifecycle, Revision, Registered, Location, Updated) and the description beneath | four rows; Revision, Registered, Updated and the description are absent |
+| 5 | the plan table has six columns, the last being `Pin` | five |
+| 6 | a `Leases` panel listing two leases | an absence panel: this store holds none |
+| 7 | — | an extra `分支基线` block the prototype does not have |
+
+Rows 3 and 7 are the same defect twice: the execution panel is a `.panel` while its
+neighbour is a bare `.field` grid, so the two halves of one row do not share a frame. The
+extra `分支基线` block is content the prototype does not carry at all.
+
+Row 4 is the largest single gap: the catalog panel is the identity of the record being
+looked at, and four of its six facts are missing.
+
+**None of this was visible from element counts.** The screen has four `.panel`s either way,
+and `heads: ["执行", "目录", "计划", "租约"]` matched the prototype's four names — because I
+was counting the wrong thing in the wrong order.
+
 ## Verification coverage, stated
 
 Two hosts mount these screens: the dashboard (`packages/cli/web`) and the dsh pane
