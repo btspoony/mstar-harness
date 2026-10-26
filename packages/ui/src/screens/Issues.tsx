@@ -226,21 +226,22 @@ export function Issues(props: IssuesProps) {
             title={props.trendCopy.heading}
             meta={props.trendCopy.range(props.trend.firstDate, props.trend.lastDate)}
           />
-          <PanelBody>
-            {/* The prototype draws the chart AND offers the same numbers as a table inside a
-                disclosure (`<summary>Dated history (table alternative)</summary>`), for a
-                reader who needs exact counts rather than a shape. Both, not either. */}
+          {/* No PanelBody: the prototype's trend panel is `.panel-head` + `.chart-wrap`
+              (the disclosure with the table follows both). */}
+          <>
             <div className="chart-wrap" data-ms-flow="">
               <IssueFlowChart
                 variant="full"
                 points={props.trend.points}
                 label={props.trendCopy.chartTitle(props.trend.firstDate, props.trend.lastDate)}
               />
+              {/* The disclosure lives inside `.chart-wrap`, where the prototype has it:
+                  `section.panel > div.chart-wrap > details.disc`. */}
+              <Collapsible summary={props.trendCopy.tableSummary}>
+                <IssueFlowTable series={props.trend} copy={props.trendCopy.table} />
+              </Collapsible>
             </div>
-            <Collapsible summary={props.trendCopy.tableSummary}>
-              <IssueFlowTable series={props.trend} copy={props.trendCopy.table} />
-            </Collapsible>
-          </PanelBody>
+          </>
         </Panel>
       )}
 
