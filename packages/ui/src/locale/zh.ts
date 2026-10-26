@@ -257,7 +257,7 @@ export const zh: Copy = {
     leaseColumns: { plan: "计划", kind: "租约类型", holder: "持有者", worktree: "工作树路径", expires: "到期" },
     updatedMeta: (when: string) => `更新于 ${when}`,
     activeRegistration: "活跃注册",
-    breadcrumb: { label: "位置导航", current: "工作流" },
+    breadcrumb: { label: "位置导航", root: "工作流", current: "工作流" },
     executionHeading: "执行",
     planTableHeading: "计划",
     catalogHeading: "目录",

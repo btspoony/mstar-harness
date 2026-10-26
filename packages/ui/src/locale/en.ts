@@ -278,7 +278,7 @@ export const en = {
     leaseColumns: { plan: "Plan", kind: "Lease kind", holder: "Holder", worktree: "Worktree path", expires: "Expires" },
     updatedMeta: (when: string) => `updated ${when}`,
     activeRegistration: "active registration",
-    breadcrumb: { label: "Breadcrumb", current: "Workflows" },
+    breadcrumb: { label: "Breadcrumb", root: "Workflows", current: "Workflow" },
     executionHeading: "Execution",
     planTableHeading: "Plans",
     catalogHeading: "Catalog",

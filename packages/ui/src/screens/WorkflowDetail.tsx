@@ -32,7 +32,7 @@ import type { Tone } from "../view-model/status.ts";
 /** Every visible string this screen needs. Task 5 supplies them. */
 export type WorkflowDetailCopy = {
   /** The chain's short labels (`Base`), distinct from the fields block's longer ones. */
-  breadcrumb: { label: string; current: string };
+  breadcrumb: { label: string; root: string; current: string };
   executionHeading: string;
   planTableHeading: string;
   catalogHeading: string;
@@ -138,13 +138,19 @@ export function WorkflowDetail(props: WorkflowDetailProps) {
 
   return (
     <article className={"screen"} data-ms-screen="workflow-detail">
-      <nav className={"breadcrumb"} aria-label={copy.breadcrumb.label}>
+      {/* The prototype's breadcrumb is `Workflows / <id>`: the section as a link back, the
+          record itself as mono text. A `div`, not a `nav` — it has one link and a label. */}
+      <div className={"breadcrumb"} aria-label={copy.breadcrumb.label}>
         {props.onBack === undefined ? null : (
-          <button type="button" className={"link"} onClick={props.onBack}>
-            {copy.breadcrumb.current}
-          </button>
+          <>
+            <button type="button" className={"link"} onClick={props.onBack}>
+              {copy.breadcrumb.root}
+            </button>
+            <span aria-hidden="true">/</span>
+          </>
         )}
-      </nav>
+        <span className={"mono"}>{props.model.kind === "populated" ? props.model.value.workflow.id : copy.breadcrumb.current}</span>
+      </div>
 
       {props.model.kind === "populated" ? (
         <>
