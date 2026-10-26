@@ -886,13 +886,14 @@ differences at once, several of them structural:
 
 | # | The prototype | This implementation |
 | --- | --- | --- |
-| 1 | two columns: active workflow + trend on the left, residuals + milestones on the right | active workflow and trend span the full width; residuals and milestones sit side by side below |
+| 1 | **not a difference** — measured, the grid is `898px 486px` with the iteration row full width, which is the prototype's shape. The screenshot's thumbnail made the right column look like a second row. | same |
 | 2 | a `screen-head` subtitle: `All projects · 26 open issues · 13:58:04` | title only |
 | 3 | the trend chart carries **Y-axis values** (`900`, `850`, `800`) | no Y axis |
 | 4 | milestones list with progress bars | an absence panel |
-| 5 | latest iteration shows the **five-step gate track** (`Start · Execute · Close · PR delivery · Merge ready`) | an absence panel |
+| 5 | latest iteration shows the **five-step gate track** (`Start · Execute · Close · PR delivery · Merge ready`) | an absence panel — and the track itself was deleted on purpose in an earlier round |
 | 6 | identity line ends `built 13:56:02 · read 13:58:04` | ends `最新` |
 | 7 | footer states `1224 store revision` | no revision |
+| 7a | the footer's right half: `Read-only · Make changes with the CLI` | present, in Chinese |
 | 8 | a host switcher strip above the app header | none |
 | 9 | a `v4.0.9` badge beside the wordmark | none |
 | 10 | panels ordered workflow, residuals, milestones, trend, iteration | workflow, trend, residuals, milestones, delivery |
