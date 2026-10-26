@@ -1049,7 +1049,7 @@ column is what is left when six of ten blocks are gone.
 | --- | --- | --- |
 | `Identity keys` | two rows (Identity key, Provider) | shipped, verified in the browser |
 | `Source` | five rows from the newest occurrence | shipped, verified in the browser |
-| `Relations` | table (Relation, Issue, Title) | shipped: the query joins the other end's title. **No issue in this store has a relation**, so the panel renders on fixture data only |
+| `Relations` | table (Relation, Issue, Title) | shipped and **verified on data**: the query joins the other end's title, an engine test asserts the joined value equals that issue's own title, and a UI test asserts it reaches the page. No issue in this store has a relation, so the browser shows the panel on fixture data only |
 | `Provenance` | table (Kind, Target, Source hash, Origin, Imported at) | shipped |
 | `Disposition history` | table (From, To, Reason, Actor, Recorded) plus the prototype's footer note | shipped; this store's issues record no transitions, so it renders on fixture data only |
 | `Occurrences` | one block per event, with its quote, location and citations | shipped; verified in the browser |

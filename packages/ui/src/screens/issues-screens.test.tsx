@@ -200,7 +200,7 @@ const detail = (over: Partial<IssueDetail> = {}): IssueDetail => ({
     },
   ],
   transitions: [{ id: 1, fromDisposition: null, toDisposition: 'open', actor: 'pm', occurredAt: null, recordedAt: '2026-10-23T09:14:00.000Z', reason: 'Captured from review', evidence: null, imported: false, issueRevision: 1 }],
-  relations: [{ fromIssue: 'I-000870', relation: 'related', toIssue: 'I-000840' }],
+  relations: [{ fromIssue: 'I-000870', relation: 'related', toIssue: 'I-000840', title: 'Dark theme border contrast below 3:1' }],
   provenance: [],
   projectMoves: [],
   ...over,
@@ -482,10 +482,12 @@ describe("IssueDetail — the record read: null is absent, a failed read is unav
 });
 
 describe("IssueDetail — the relations table", () => {
-  test("it names the other end of the join, not this issue", () => {
+  test("it names the other end of the join, and its title", () => {
     const html = renderDetail(detail());
     expect(html).toContain("data-ms-issue-relations");
     expect(html).toContain("I-000840");
     expect(html).toContain("related");
+    // The prototype's Title column: the other end's own title, never a dash.
+    expect(html).toContain("Dark theme border contrast below 3:1");
   });
 });

@@ -932,6 +932,10 @@ describe("issue dispositions, revisions, and relations", () => {
     const detail = await getIssue(context, dup.issueId);
     expect(detail.disposition).toBe("duplicate");
     expect(detail.relations.some((r) => r.relation === "duplicate-of" && r.toIssue === original.issueId)).toBe(true);
+    // The prototype's Relations table has a `Title` column: the other end's title, which is
+    // the row this one is not.
+    const relation = detail.relations.find((r) => r.relation === "duplicate-of");
+    expect(relation?.title).toBe(original.title);
     expect(closed.revision).toBe(dup.revision + 1);
 
     const later = await captureIssue(
