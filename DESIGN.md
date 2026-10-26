@@ -997,6 +997,25 @@ what the UI renders.
 the spec has to be edited in the same change. Otherwise the next reader implements the old
 rule and calls it correct.
 
+## The project detail screen, seen for the first time
+
+| # | The prototype | This implementation |
+| --- | --- | --- |
+| 1 | breadcrumb `Projects / engine` | present |
+| 2 | three tabs (`Roadmap 3 · Issues 14 · Iterations 2`) | present |
+| 3 | `Catalog identity` states six rows (Kind, Lifecycle, Revision, Registered, Location, Updated) | **closed**: six rows — but Kind is last where the prototype puts it first |
+| 4 | `Roadmap authority` states four rows | present |
+| 5 | the description paragraph under the head | the **code** is there; this store's `catalog.description` is `null` |
+| 6 | a `Milestone board` panel | absent: this project has zero milestones |
+| 7 | `Stored facts` states five rows | present |
+
+**Two rows I first called defects and then measured away**: the description (rendered from
+`identity.description`, which is `null` here) and the milestone board (no milestones to
+board). Both look identical to a missing feature in a screenshot, and only the data
+distinguishes them.
+
+Row 3's ordering is real and still open: the six facts are the right six, in the wrong order.
+
 ## Verification coverage, stated
 
 Two hosts mount these screens: the dashboard (`packages/cli/web`) and the dsh pane
