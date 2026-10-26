@@ -68,15 +68,19 @@ function Binding(props: { binding: FocusBinding; copy: FocusCopy; onPick?: (id: 
   switch (binding.kind) {
     case "bound":
       return (
-        <p className={"wf-summary"} data-ms-binding="bound">
-          <TruncatedText text={copy.bindingBound(binding.workflowId)} />
-        </p>
+        <div className="screen-meta" data-ms-binding="bound">
+          <span>
+            <TruncatedText text={copy.bindingBound(binding.workflowId)} />
+          </span>
+        </div>
       );
     case "terminal":
       return (
-        <p className={"wf-summary"} data-ms-binding="terminal">
-          <TruncatedText text={copy.bindingTerminal(binding.workflowId)} />
-        </p>
+        <div className="screen-meta" data-ms-binding="terminal">
+          <span>
+            <TruncatedText text={copy.bindingTerminal(binding.workflowId)} />
+          </span>
+        </div>
       );
     case "unbound":
       return (
