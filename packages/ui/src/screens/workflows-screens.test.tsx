@@ -117,6 +117,10 @@ const renderList = (
   );
 
 const detailCopy: WorkflowDetailCopy = {
+  chainBase: "Base",
+  chainSource: "Source",
+  chainIntegration: "Integration",
+  chainTarget: "Target",
   breadcrumb: { label: "Breadcrumb", current: "Workflows" },
   executionHeading: "Execution",
   planTableHeading: "Plans",
@@ -265,7 +269,7 @@ describe("WorkflowDetail — execution, anchors, catalog and the plan table", ()
     // The chain is segmented: an anchor per label, an arrow between them.
     expect((html.match(/class="branch-anchor"/g) ?? []).length).toBe(4);
     expect((html.match(/class="branch-arrow"/g) ?? []).length).toBe(3);
-    expect(html).toContain('<span class="branch-anchor"><span>Branch base</span> <b>main</b></span>');
+    expect(html).toContain('<span class="branch-anchor"><span>Base</span> <b>main</b></span>');
     for (const label of ["Branch base", "Branch source", "Branch integration", "Branch target"]) {
       expect(html).toContain(label);
     }

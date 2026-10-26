@@ -250,6 +250,10 @@ export const en = {
   },
 
   workflowDetail: {
+    chainBase: "Base",
+    chainSource: "Source",
+    chainIntegration: "Integration",
+    chainTarget: "Target",
     breadcrumb: { label: "Breadcrumb", current: "Workflows" },
     executionHeading: "Execution",
     planTableHeading: "Plans",

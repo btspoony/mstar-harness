@@ -229,6 +229,10 @@ export const zh: Copy = {
   },
 
   workflowDetail: {
+    chainBase: "基线",
+    chainSource: "来源",
+    chainIntegration: "集成",
+    chainTarget: "目标",
     breadcrumb: { label: "位置导航", current: "工作流" },
     executionHeading: "执行",
     planTableHeading: "计划",

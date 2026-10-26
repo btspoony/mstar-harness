@@ -31,6 +31,11 @@ import type { Tone } from "../view-model/status.ts";
 
 /** Every visible string this screen needs. Task 5 supplies them. */
 export type WorkflowDetailCopy = {
+  /** The chain's short labels (`Base`), distinct from the fields block's longer ones. */
+  chainBase: string;
+  chainSource: string;
+  chainIntegration: string;
+  chainTarget: string;
   breadcrumb: { label: string; current: string };
   executionHeading: string;
   planTableHeading: string;
@@ -196,10 +201,12 @@ export function WorkflowDetail(props: WorkflowDetailProps) {
               // Labels come from copy, like every other string on this screen: the
               // fields block below already uses them, and a hardcoded English label
               // would mix languages in a localized build.
-              [copy.fields.branchBase, props.model.value.workflow.branch.base] as const,
-              [copy.fields.branchSource, props.model.value.workflow.branch.source] as const,
-              [copy.fields.branchIntegration, props.model.value.workflow.branch.integration] as const,
-              [copy.fields.branchTarget, props.model.value.workflow.branch.target] as const,
+              // The chain uses the SHORT labels the prototype prints on the line
+              // (`f.base`), not the longer ones the fields block uses beside it.
+              [copy.chainBase, props.model.value.workflow.branch.base] as const,
+              [copy.chainSource, props.model.value.workflow.branch.source] as const,
+              [copy.chainIntegration, props.model.value.workflow.branch.integration] as const,
+              [copy.chainTarget, props.model.value.workflow.branch.target] as const,
             ].map(([label, value], index) => (
               <Fragment key={label}>
                 {index === 0 ? null : <span className="branch-arrow" aria-hidden="true">→</span>}
