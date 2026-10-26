@@ -65,6 +65,7 @@ export function IssueFlowChart(props: IssueFlowChartProps) {
           Inside this SVG they would stretch with it, so they are HTML siblings. */}
       <span className="chart-y-axis" aria-hidden="true">
         <span>{max}</span>
+        <span>{Math.round(max / 2)}</span>
         <span>0</span>
       </span>
     <svg

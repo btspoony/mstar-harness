@@ -547,11 +547,15 @@
 .ms-container .chart-y-axis {
   display: flex;
   flex-direction: column;
+  /* Three labels across two equal halves: the top, the midpoint, the baseline — the
+     prototype's own shape (its values differ only because its data does). */
   justify-content: space-between;
   align-items: flex-end;
+  padding: 0 2px 0 0;
   min-width: 22px;
   font-family: var(--ms-font-mono);
-  font-size: var(--ms-fs-10);
+  /* The prototype writes this one as a literal: its type ramp has no 10px step. */
+  font-size: 10px;
   color: var(--ms-text-muted);
   line-height: 1;
 }

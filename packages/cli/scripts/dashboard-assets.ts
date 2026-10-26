@@ -30,7 +30,11 @@
 // their labels in two locales), and the disclosure/direction consolidation. The first
 // draft of that change rendered the direction twice and so asked for 340 KB; the
 // duplicate is gone, and the budget is back to the growth that is actually there.
-export const JS_CEILING = 328 * 1024;
+// Raised, 328 KB to 332 KB: the flow chart states its scale beside the drawing (three
+// labels and the frame around them). That is 34 bytes of markup over the old ceiling — the
+// smallest raise this file has needed, and still worth a fresh ~4 KB of headroom rather
+// than a line that has to be edited again next round.
+export const JS_CEILING = 332 * 1024;
 // Raised, 60 KB to 100 KB: the product's component styles are now generated from the
 // approved prototype and shipped whole (values unchanged, selectors scoped, queries
 // unnamed) instead of being re-typed one screen at a time. Re-typing is exactly what
