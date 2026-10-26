@@ -1060,10 +1060,23 @@ view model, which forwarded sixteen of them and stopped.
 
 **All six are rendered.** The screen now states: 影响, 验收标准, 出现记录, 溯源, 来源, 标识键.
 
-**The layout is still one column**, and that is now the largest remaining difference: the
-prototype puts identity, source, impact, acceptance and occurrences on the left, and
-disposition history, relations, provenance and identity keys on the right. With the panels
-present, the two-column split is a layout change rather than a missing-content change.
+**The layout is still one column**, and that is now the largest remaining difference. The
+prototype's own structure is three children: `div.breadcrumb`, `div.detail-head`,
+`div.detail-grid` — and `detail-grid` holds two `detail-col`s.
+
+| Column | Blocks, in the prototype's order |
+| --- | --- |
+| left | identity (`FieldGroup`), impact, acceptance, source, occurrences |
+| right | disposition history, relations, provenance, identity keys |
+
+`.detail-grid` and `.detail-col` already exist in `product.css` (`1.15fr : 1fr`, 28px gap)
+and the other three detail screens use them.
+
+**Two attempts failed, and the reason is worth recording**: a Python rewriter that cut the
+blocks out by `</section>` lost the `{…? null : (…)}` wrappers those blocks sit in — the
+conditional opener is *above* the `<section`, and its `)}` is *below* the `</section>`. The
+second failure is the same shape. The rewrite has to move each block together with its
+conditional wrapper, or the JSX stops balancing.
 
 ## What the negative tests used to guard, and what guards it now
 
