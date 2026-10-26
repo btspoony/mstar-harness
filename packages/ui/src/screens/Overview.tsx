@@ -118,7 +118,7 @@ export type OverviewProps = {
    * only a host knows which package built it and at which version — the shared package has
    * no manifest of its own, and the prototype's line prints both.
    */
-  identity?: { packageName: string; version: string };
+  identity?: { packageName: string; version: string; harnessDir?: string };
   /**
    * The host's own height budget. When it is short, IA §3.1 fixes the drop
    * order: milestones become one summary line first, then the plan table pages.
@@ -623,6 +623,14 @@ export function Overview(props: OverviewProps) {
             <span className="sep" aria-hidden="true">
               ·
             </span>
+            {props.identity.harnessDir === undefined ? null : (
+              <>
+                <span className="id-strong">{props.identity.harnessDir}</span>
+                <span className="sep" aria-hidden="true">
+                  ·
+                </span>
+              </>
+            )}
           </>
         )}
         <span>{copy.projection[model.projection.kind]}</span>
