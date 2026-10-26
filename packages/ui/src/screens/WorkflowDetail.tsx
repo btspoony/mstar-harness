@@ -256,9 +256,6 @@ export function WorkflowDetail(props: WorkflowDetailProps) {
                 <Field label={copy.fields.lifecycle} mono>
                   {props.model.value.catalog.lifecycle}
                 </Field>
-                <Field label={copy.fields.documentKind} mono>
-                  {props.model.value.catalog.documentKind ?? "—"}
-                </Field>
                 <Field label={copy.fields.revision} mono>
                   {props.model.value.catalog.revision}
                 </Field>
@@ -268,8 +265,12 @@ export function WorkflowDetail(props: WorkflowDetailProps) {
                 <Field label={copy.fields.catalogUpdatedAt} mono>
                   {props.model.value.catalog.updatedAt}
                 </Field>
+                {/* The prototype prints the description as a paragraph under the rows, not
+                    as a labelled field inside them. */}
                 {props.model.value.catalog.description === null ? null : (
-                  <Field label={copy.fields.description}>{props.model.value.catalog.description}</Field>
+                  <p className={"prose t-12 secondary"} data-ms-catalog-description="">
+                    {props.model.value.catalog.description}
+                  </p>
                 )}
               </>
             )}
