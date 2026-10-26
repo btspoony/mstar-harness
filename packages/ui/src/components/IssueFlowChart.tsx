@@ -27,6 +27,14 @@ export type IssueFlowChartProps = {
   points: readonly IssueFlowPoint[];
   /** The accessible name: the series and its date range. */
   label: string;
+  /**
+   * The prototype draws the same series at two fixed heights: `compact` (88px, the
+   * overview's card) and `full` (132px, the issues screen's own panel). The height is
+   * fixed on purpose — a chart that scaled with its container would grow a pixel for
+   * every pixel of pane width, which is what `height: auto` did to a 1350px panel.
+   * `design-v1.html:3229` is the source: `var height = compact ? 88 : 132;`.
+   */
+  variant?: "compact" | "full";
 };
 
 /** A cumulative step path: hold each value, then rise to the next. */
@@ -53,7 +61,7 @@ export function IssueFlowChart(props: IssueFlowChartProps) {
   const baseline = VIEW_HEIGHT - PAD;
   return (
     <svg
-      className="chart-svg"
+      className={props.variant === "full" ? "chart-svg is-full" : "chart-svg"}
       viewBox={`0 0 ${VIEW_WIDTH} ${VIEW_HEIGHT}`}
       preserveAspectRatio="none"
       role="img"

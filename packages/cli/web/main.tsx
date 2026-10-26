@@ -78,6 +78,7 @@ import {
   type IssuesOutcome,
 } from "./issues-data";
 import { overviewCopy, overviewOutcome, readOverview, type OverviewOutcome } from "./overview-data";
+import type { IssueFlowSeries } from "@mstar-harness/ui";
 import {
   projectDetailCopy,
   projectOptions,
@@ -237,6 +238,25 @@ function IssueListScreen(props: {
   // is never unmounted between keystrokes.
   const outcome = useIssues(query);
   const copy = useCopy();
+  // The prototype's issues screen carries the flow trend above its table, drawn from the
+  // same series the overview renders. The chart holds the prototype's fixed `full`
+  // height (132px), so a wider pane does not stretch it.
+  const [trend, setTrend] = useState<IssueFlowSeries | null>(null);
+  useEffect(() => {
+    const controller = new AbortController();
+    let current = true;
+    void readOverview(fetch, controller.signal).then((result) => {
+      if (!current || result.status !== "ready") return;
+      const flow = overviewOutcome(result);
+      if (flow.kind === "ready" && flow.model.issueFlow.kind === "populated") {
+        setTrend(flow.model.issueFlow.value);
+      }
+    });
+    return () => {
+      current = false;
+      controller.abort();
+    };
+  }, []);
 
   if (outcome.kind === "loading") return null;
   if (outcome.kind === "failed") {
@@ -259,8 +279,22 @@ function IssueListScreen(props: {
       options={{ ...ISSUE_FILTER_OPTIONS, project: props.projectIds }}
       onQueryChange={props.onQueryChange}
       onOpen={props.onOpen}
+      {...(trend === null ? {} : { trend, trendCopy: issuesTrendCopy(copy) })}
     />
   );
+}
+
+/** The issues screen's trend panel strings, borrowed from the overview's own copy. */
+function issuesTrendCopy(copy: ReturnType<typeof useCopy>) {
+  return {
+    heading: copy.overview.trendHeading,
+    range: copy.overview.trendRange,
+    chartTitle: copy.overview.trendChartTitle,
+    captured: copy.overview.trendCaptured,
+    retired: copy.overview.trendRetired,
+    legend: copy.overview.trendLegend,
+    tableSummary: copy.overview.trendTableSummary,
+  };
 }
 
 function IssuesDestination(props: { address: Address; projectIds: readonly string[] }) {

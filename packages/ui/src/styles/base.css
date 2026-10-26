@@ -487,3 +487,18 @@
      tried and left the milestone head at the same 2px spread as the default, while the
      prototype's own head spreads 9px — so it bought nothing and explained nothing. */
 }
+
+/* The flow chart's fixed heights, from the prototype's own drawing code
+   (`design-v1.html:3229`: `var height = compact ? 88 : 132`). `height: auto` on a
+   viewBox SVG sizes by the viewBox's aspect ratio, so the chart grew with its container
+   — 339px in the overview's narrow card, 540px across the issues screen — where the
+   prototype holds one height at every width. */
+/* Specificity over product.css's `.ms-container .chart-svg { height: auto }`: the product
+   sheet is imported last, so an equal-specificity rule here loses. */
+.ms-container .chart-wrap > .chart-svg {
+  height: 88px;
+}
+
+.ms-container .chart-wrap > .chart-svg.is-full {
+  height: 132px;
+}
