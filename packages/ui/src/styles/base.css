@@ -497,3 +497,17 @@
   display: block;
   line-height: inherit;
 }
+
+/* Two cell classes the prototype sets as `.table .t-title` / `.table .t-strong`, which the
+   generated sheet did not carry (it emits `.ms-container .<class>` forms). Without them a
+   cell can only approximate the column: `mono t-12` gives the font but not the weight, and
+   a bare `TruncatedText` has no ellipsis box at all. */
+.ms-container .table .t-title {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.ms-container .table .t-strong {
+  font-weight: 500;
+}
