@@ -1195,6 +1195,22 @@ row 3: padding-top 7px, border-bottom 0px, height 32
 
 which is the prototype's `.milestone-row` with its own `:last-of-type` override.
 
+## The `+N more` line, rendered for the first time
+
+The overview shows one active workflow and counts the rest. That count had never rendered:
+this store has exactly one workflow, so the branch that prints it never ran.
+
+With two in the fixture it reads `+1 more running`, and the row above it carries
+`issue-project-move · plan · phase-2-execute` — the prototype's summary line.
+
+**Getting there took four fixture attempts**, each failing on a different missing field
+(`catalog.rootKind`, `branch.base`, then `id` where I had written `workflowId`). None of them
+was an implementation defect: the view model reads `workflow.id`, `workflow.catalog` and
+`workflow.branch`, and my invented shape had one of each wrong.
+
+**The lesson is about the fixture, not the product**: a hand-written DTO is a second
+implementation of the shape, and it is wrong until it matches.
+
 ## Verification coverage, stated
 
 Two hosts mount these screens: the dashboard (`packages/cli/web`) and the dsh pane
