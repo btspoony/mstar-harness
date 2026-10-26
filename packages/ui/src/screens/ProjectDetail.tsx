@@ -239,7 +239,15 @@ function RoadmapArm(props: { roadmap: Resolved<RoadmapModel>; copy: ProjectDetai
 
 export function ProjectDetail(props: ProjectDetailProps) {
   const { identity, copy, feature } = props;
-  const tabs: TabItem[] = PROJECT_FEATURES.map((id) => ({ id, label: copy.features[id] }));
+  // The prototype's strip carries a count per feature. Only the roadmap's is derivable
+  // here: the issues and iterations panels arrive as rendered nodes from the host, so
+  // their counts are the host's facts to pass in.
+  const milestones = props.roadmap.kind === "populated" ? props.roadmap.value.milestones.length : undefined;
+  const tabs: TabItem[] = PROJECT_FEATURES.map((id) => ({
+    id,
+    label: copy.features[id],
+    ...(id === DEFAULT_PROJECT_FEATURE && milestones !== undefined ? { count: milestones } : {}),
+  }));
 
   return (
     <article className={"screen"} data-ms-screen="project-detail">
