@@ -82,6 +82,8 @@ export type RoadmapMilestone = {
   target: string | null;
   progress: { done: number; total: number } | null;
   openIssues: number;
+  /** The four tallies the prototype's board row prints. */
+  counts: { open: number; resolved: number; retired: number; total: number };
   /** The issues assigned to this milestone: id, title, disposition. */
   issues: readonly { id: string; title: string; disposition: string }[];
 };
@@ -161,6 +163,12 @@ export function roadmapModel(read: RoadmapDTO, content: RoadmapContent | null): 
       target: milestone.target,
       progress: milestone.totalIssues === 0 ? null : { done: milestone.resolvedIssues, total: milestone.totalIssues },
       openIssues: milestone.openIssues,
+      counts: {
+        open: milestone.openIssues,
+        resolved: milestone.resolvedIssues,
+        retired: milestone.otherRetiredIssues,
+        total: milestone.totalIssues,
+      },
       issues: read.milestones.issues
         .filter((issue) => issue.milestoneId === milestone.milestoneId)
         .map((issue) => ({ id: issue.id, title: issue.title, disposition: issue.disposition })),

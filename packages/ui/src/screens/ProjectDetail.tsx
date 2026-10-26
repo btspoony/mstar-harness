@@ -75,6 +75,8 @@ export type ProjectDetailCopy = {
     goalUnchecked: string;
     milestoneProgress: (done: number, total: number) => string;
     milestoneOpen: (open: number) => string;
+    /** The four tallies of the prototype's board row. */
+    countLabels: { open: string; resolved: string; retired: string; total: string };
     noTarget: string;
     unassigned: (count: number) => string;
     /** The next step offered when the roadmap is absent (§4). */
@@ -124,13 +126,20 @@ function Milestone(props: { milestone: RoadmapModel["milestones"][number]; copy:
         </span>
         {milestone.status === null ? null : <StatusDot label={milestone.status} tone={milestoneStatusTone(milestone.status)} mono />}
         <span className={"detail-meta"}>{milestone.target ?? copy.roadmap.noTarget}</span>
-        {milestone.progress === null ? null : (
-          <span className={"milestone-counts"}>
-            <ProgressBar done={milestone.progress.done} total={milestone.progress.total} />
-            <span className={"detail-meta"}>{copy.roadmap.milestoneProgress(milestone.progress.done, milestone.progress.total)}</span>
-          </span>
-        )}
-        <span className={"detail-meta"}>{copy.roadmap.milestoneOpen(milestone.openIssues)}</span>
+        {/* The prototype prints four tallies, each a number over its label. */}
+        <span className={"milestone-block-counts"}>
+          {[
+            [milestone.counts.open, copy.roadmap.countLabels.open],
+            [milestone.counts.resolved, copy.roadmap.countLabels.resolved],
+            [milestone.counts.retired, copy.roadmap.countLabels.retired],
+            [milestone.counts.total, copy.roadmap.countLabels.total],
+          ].map(([count, label]) => (
+            <span key={String(label)}>
+              <span className="num">{count}</span>
+              <span className="milestone-count-label">{label}</span>
+            </span>
+          ))}
+        </span>
       </div>
       {milestone.issues.length === 0 ? null : (
         // The prototype's assignment row: one compact id chip per issue, toned by its

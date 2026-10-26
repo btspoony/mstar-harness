@@ -113,9 +113,17 @@ describe("enum values, ids, paths and timestamps stay literal", () => {
   ];
 
   test("no dictionary value is exactly an enum literal", () => {
+    // The milestone board's tally labels are the exception: the prototype prints
+    // `9 open  4 resolved  1 retired without resolution  14 total`, so `open` and
+    // `resolved` ARE the words a reader sees. Everywhere else a label that equals the
+    // enum is the bug this test exists for.
+    const COUNTER_LABELS = new Set([
+      "projectDetail.roadmap.countLabels.open",
+      "projectDetail.roadmap.countLabels.resolved",
+    ]);
     for (const [locale, tree] of [["en", enLeaves], ["zh", zhLeaves]] as const) {
       const offenders = Object.entries(tree)
-        .filter(([, value]) => LITERALS.includes(value.trim()))
+        .filter(([key, value]) => LITERALS.includes(value.trim()) && !COUNTER_LABELS.has(key))
         .map(([key, value]) => `${locale}.${key} = ${value}`);
       expect(offenders).toEqual([]);
     }

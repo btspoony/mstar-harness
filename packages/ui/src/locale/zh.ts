@@ -409,6 +409,7 @@ export const zh: Copy = {
       goalUnchecked: "未完成",
       milestoneProgress: (done, total) => `${done}/${total}`,
       milestoneOpen: (open) => `${open} 项未关闭`,
+    countLabels: { open: "未关闭", resolved: "已解决", retired: "未解决即退役", total: "总计" },
       noTarget: "无目标日期",
       unassigned: (count) => `${count} 个问题未归属到里程碑`,
       absentNextStep: (features) => `本项目仍可使用：${features}。`,

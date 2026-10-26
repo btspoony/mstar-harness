@@ -142,6 +142,7 @@ const detailCopy: ProjectDetailCopy = {
     goalUnchecked: "open",
     milestoneProgress: (done, total) => `${done}/${total}`,
     milestoneOpen: (open) => `${open} open`,
+    countLabels: { open: "open", resolved: "resolved", retired: "retired without resolution", total: "total" },
     noTarget: "no target",
     unassigned: (count) => `${count} unassigned`,
     absentNextStep: (features) => `Available: ${features}`,
@@ -266,13 +267,15 @@ describe("ProjectDetail — the Roadmap feature", () => {
     expect(html).not.toContain("data-ms-goal-depth");
   });
 
-  test("the milestone board carries status, target, progress, open count and its issues", () => {
+  test("the milestone board carries status, target, the four tallies and its issues", () => {
     expect(html).toContain('data-ms-milestone="9f2c4a10"');
     expect(html).toContain("Release the shared layer");
     expect(html).toContain("2026-11-07");
-    expect(html).toContain("6/10");
-    expect(html).toContain("4 open");
     expect(html).toContain("I-000870");
+    // The prototype's row states four tallies, each its own number-and-label pair.
+    for (const label of ["open", "resolved", "retired without resolution", "total"]) {
+      expect(html).toContain(label);
+    }
   });
 
   test("the unassigned count is stated once, as a count", () => {

@@ -433,6 +433,7 @@ export const en = {
       goalUnchecked: "Open",
       milestoneProgress: (done: number, total: number) => `${done}/${total}`,
       milestoneOpen: (open: number) => `${open} open`,
+    countLabels: { open: "open", resolved: "resolved", retired: "retired without resolution", total: "total" },
       noTarget: "No target",
       unassigned: (count: number) => `${count} issues are not assigned to a milestone`,
       absentNextStep: (features: string) => `This project still has: ${features}.`,
