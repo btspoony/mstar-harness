@@ -491,18 +491,20 @@ slot.
 iteration **document inventory**, and the workflow **leases**. Its reasoning was sound —
 they are join bookkeeping, and they say nothing about *progress*.
 
-They are all rendered now except leases, because the acceptance criterion for this
-interface is the **prototype**, not a progress report:
+All three are rendered now, because the acceptance criterion for this interface is the
+**prototype**, not a progress report:
 
 | Fact | Prototype | State here |
 | --- | --- | --- |
 | join badges (`catalog-missing`, `catalog-pin-conflict`) | `Join badges` column on the workflow list | **rendered** |
 | document inventory | `Documents` card on the iteration detail | **rendered** |
-| workflow leases | `Leases` card on the workflow detail | **not rendered** |
+| workflow leases | `Leases` card on the workflow detail | **rendered** |
 
-The first two needed only a contract change (the DTOs already carried the data). The third
-cannot be done from the view layer: `WorkflowDTO` has no leases field and the engine never
-populates one, so it needs an engine read, not a declaration.
+Leases turned out not to need an engine change after all — the projection already reads
+`projection_leases` and attaches them to **plans** (`plan.leases`). The prototype's card is
+keyed `Plan | Lease kind | Holder | Worktree path | Expires`, which is exactly the shape a
+per-plan collection has. The earlier claim that this needed `WorkflowDTO` to grow a field
+was wrong: the data was there, one level down.
 
 Where the DTOs did carry the data, the §8.1 exclusion was recorded in a comment and
 enforced by a negative test. Both had to change together — and the new comments say why
