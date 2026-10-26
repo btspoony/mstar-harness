@@ -1646,7 +1646,26 @@ three are not a rendering gap — the data is not read.
 (`locale/index.ts`: anything not `"zh"` is English). That is a locale setting, not a styling
 difference — the headings above are compared against the English dictionary, and the same
 screens render those strings when the switch is on `en`. Every structural claim in this file
-was checked in the dictionary the prototype uses.## Verification coverage, stated
+was checked in the dictionary the prototype uses.## The gate track, measured on both sides
+
+The track was asserted by class name; the acceptance bar asks for the pixels. Both sides, at
+the same five steps and the same theme:
+
+| Step | The prototype | This implementation |
+| --- | --- | --- |
+| 1 | `gate-step is-done` `✓` `rgb(204, 208, 215)` 400 11px | identical |
+| 2 | `gate-step is-current` `●` `rgb(47, 111, 237)` 500 11px | identical |
+| 3–5 | `gate-step` `3` `4` `5` `rgb(227, 229, 233)` 400 11px | identical |
+
+Class, glyph, top-border colour, weight and size all agree on all five — the only difference
+in the two dumps is whitespace inside `rgb()`.
+
+**One more dead field, found by scanning the models against the components**:
+`IterationDetailModel.workflowActiveRegistration` is declared, populated, and read by nothing.
+That makes seven. The scan is a name-level grep, so it can only find a field that no component
+mentions at all — a field read into a variable and then ignored would not appear.
+
+## Verification coverage, stated
 
 Two hosts mount these screens: the dashboard (`packages/cli/web`) and the dsh pane
 (`packages/dsh/src/client/panel`). They share the components but **each owns its own
