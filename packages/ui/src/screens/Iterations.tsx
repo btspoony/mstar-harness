@@ -122,7 +122,12 @@ export function Iterations(props: IterationsProps) {
 
   return (
     <article className={"screen"} data-ms-screen="iterations">
-      <h1>{copy.pageTitle}</h1>
+      {/* The prototype heads every screen with `.screen-head`; `.screen-head h1`
+          carries the 16/24/600 title rule, and a bare h1 falls back to the
+          document heading instead. */}
+      <div className="screen-head">
+        <h1>{copy.pageTitle}</h1>
+      </div>
 
       {model.rows.kind === "populated" ? (
         <>
