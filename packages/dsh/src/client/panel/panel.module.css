@@ -34,9 +34,13 @@
   container-name: pane;
 }
 
-/* The shared nav's band: content height, never a scroller. */
+/* The shared nav's band: content height, never a scroller.
+ * The prototype's pane head puts breathing room above the destinations
+ * (`design-v1.html` `.dsh-page-title { padding: 10px 20px 0 }`); without it the
+ * rows sit flush against the host's tab strip. */
 .nav {
   flex: 0 0 auto;
+  padding-block-start: var(--ms-space-3);
 }
 
 /* The product's ONLY scroller in this seat; the host owns the outer height. */
