@@ -470,6 +470,21 @@ a squeezed head set a two-glyph title as one glyph per line (measured: a 30.4px,
 - Breakpoints are inherited: a new component reuses these five constants or it is a
   review defect.
 
+## Focus is the prototype's plan board, not a stack of panels
+
+The session-focus screen follows the prototype's `session-focus-template`: a
+`.screen-head` with the title, then one panel whose body carries the bound workflow
+(`.wf-summary`, `.branch-line`) and a **`.planboard`** — four or five
+`.planboard-col` columns, each with a `.planboard-head` holding the status word and its
+count as two elements, and a `.planboard-plan` line per plan (tone dot, id, recorded
+progress at the right edge).
+
+The product adds one thing the prototype's board does not show: a plan that records
+nothing states that in words (`data-ms-progress-absent`), because a bare dot would read
+as "no information" rather than "the store has no note". The prototype's own cell is the
+note alone; the absent line is the product's answer to the same question, in the same
+slot.
+
 ## Two layout contracts that break the page when confused
 
 **A table row is a table row.** `<tr>` may not carry a class whose rule declares a
