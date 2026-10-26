@@ -170,10 +170,13 @@ export function Focus(props: FocusProps) {
 
       {/* 2 + 3 — the bound workflow and its plan board, with each plan's
           recorded progress or blocked reason. */}
-      <section className={"panel"} aria-labelledby="ms-focus-board">
-        <h2 className={"panel-title"} id="ms-focus-board">
-          {copy.boardHeading}
-        </h2>
+      <section className="panel" aria-labelledby="ms-focus-board">
+        <div className="panel-head">
+          <h2 className="panel-title" id="ms-focus-board">
+            {copy.boardHeading}
+          </h2>
+        </div>
+        <div className="panel-body">
         {workflow.kind === "populated" && workflow.value !== null ? (
           <>
             <p className={"branch-line"} data-ms-workflow="">
@@ -214,6 +217,7 @@ export function Focus(props: FocusProps) {
             detail={workflow.kind === "not-applicable" ? workflow.reason : undefined}
           />
         )}
+        </div>
       </section>
 
       {/* 4 — the session's delivery line. A standalone delivery is sayable. */}
