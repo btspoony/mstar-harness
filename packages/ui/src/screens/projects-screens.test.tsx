@@ -272,9 +272,17 @@ describe("ProjectDetail — the Roadmap feature", () => {
     expect(html).toContain("Release the shared layer");
     expect(html).toContain("2026-11-07");
     expect(html).toContain("I-000870");
-    // The prototype's row states four tallies, each its own number-and-label pair.
-    for (const label of ["open", "resolved", "retired without resolution", "total"]) {
-      expect(html).toContain(label);
+    // The prototype's row states four tallies, each its own number-and-label pair. Assert
+    // the numbers through their own hooks: labels alone would pass even if every count
+    // rendered as zero, and `retired without resolution` contains `resolved`.
+    // The fixture's milestone: 10 total, 4 open, 6 resolved, 0 otherwise retired.
+    for (const [key, value] of [
+      ["open", "4"],
+      ["resolved", "6"],
+      ["retired", "0"],
+      ["total", "10"],
+    ] as const) {
+      expect(html).toContain(`data-ms-count="${key}" data-ms-count-value="${value}"`);
     }
   });
 

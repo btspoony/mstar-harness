@@ -401,6 +401,7 @@ export const en = {
   projectDetail: {
   catalogHeading: "Catalog identity",
   roadmapState: "roadmap present",
+  revisionLabel: "Revision",
   authorityHeading: "Roadmap authority",
   authorityColumns: { state: "State", revision: "Revision", contentHash: "Content hash", frontmatter: "Frontmatter" },
   authorityAbsent: "This project declares no roadmap authority row.",

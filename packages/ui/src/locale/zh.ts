@@ -378,6 +378,7 @@ export const zh: Copy = {
   projectDetail: {
   catalogHeading: "目录身份",
   roadmapState: "路线图存在",
+  revisionLabel: "版本",
   authorityHeading: "路线图权威",
   authorityColumns: { state: "状态", revision: "版本", contentHash: "内容哈希", frontmatter: "前言字段" },
   authorityAbsent: "该项目未声明路线图权威行。",

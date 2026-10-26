@@ -233,6 +233,8 @@ describe("no key exists for a fact IA §8 marks not-rendered", () => {
     // The prototype's project detail has a `Roadmap authority` panel whose Revision
     // row is part of the answer, not the removed revision counter.
     "projectDetail.authorityColumns.revision",
+    // The head prints `Revision 12`, as the prototype does.
+    "projectDetail.revisionLabel",
   ]);
 
   test("the kept-exception list contains only keys that exist", () => {

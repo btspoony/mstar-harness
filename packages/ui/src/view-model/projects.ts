@@ -187,6 +187,8 @@ export type ProjectIdentity = {
   lifecycleTone: Tone;
   /** `{HARNESS_DIR}`-relative location, e.g. `projects/engine`. */
   path: string;
+  /** The catalog revision, printed in the head's meta line. */
+  revision: string;
 };
 
 /** The identity block from the roadmap's catalog identity. */
@@ -198,6 +200,7 @@ export function projectIdentity(catalog: RoadmapDTO["catalog"]): ProjectIdentity
     lifecycle: catalog.lifecycle,
     lifecycleTone: lifecycleTone(catalog.lifecycle),
     path: `${catalog.rootKind}:${catalog.relativePath}`,
+    revision: String(catalog.revision),
   };
 }
 

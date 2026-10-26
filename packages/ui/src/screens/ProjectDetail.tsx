@@ -41,6 +41,8 @@ export type ProjectDetailCopy = {
   catalogHeading: string;
   /** The roadmap's presence, said beside the title (`roadmap present`). */
   roadmapState: string;
+  /** The word before the catalog revision in the head's meta line. */
+  revisionLabel: string;
   authorityHeading: string;
   authorityColumns: { state: string; revision: string; contentHash: string; frontmatter: string };
   /** Said when the project declares no roadmap authority row. */
@@ -129,12 +131,12 @@ function Milestone(props: { milestone: RoadmapModel["milestones"][number]; copy:
         {/* The prototype prints four tallies, each a number over its label. */}
         <span className={"milestone-block-counts"}>
           {[
-            [milestone.counts.open, copy.roadmap.countLabels.open],
-            [milestone.counts.resolved, copy.roadmap.countLabels.resolved],
-            [milestone.counts.retired, copy.roadmap.countLabels.retired],
-            [milestone.counts.total, copy.roadmap.countLabels.total],
-          ].map(([count, label]) => (
-            <span key={String(label)}>
+            ["open", milestone.counts.open, copy.roadmap.countLabels.open],
+            ["resolved", milestone.counts.resolved, copy.roadmap.countLabels.resolved],
+            ["retired", milestone.counts.retired, copy.roadmap.countLabels.retired],
+            ["total", milestone.counts.total, copy.roadmap.countLabels.total],
+          ].map(([key, count, label]) => (
+            <span key={String(key)} data-ms-count={key} data-ms-count-value={count}>
               <span className="num">{count}</span>
               <span className="milestone-count-label">{label}</span>
             </span>
@@ -415,6 +417,10 @@ export function ProjectDetail(props: ProjectDetailProps) {
             <span className="mono">{identity.projectId}</span>
             <span aria-hidden="true">·</span>
             <span className="mono">{identity.lifecycle}</span>
+            <span aria-hidden="true">·</span>
+            <span>
+              {copy.revisionLabel} <span className="mono">{identity.revision}</span>
+            </span>
           </div>
           {identity.description === null ? null : (
             <p className="prose t-12 secondary">{identity.description}</p>

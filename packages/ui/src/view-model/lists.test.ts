@@ -262,10 +262,13 @@ describe("projects", () => {
     expect(projectRow(listItem("_default", 1, null)).openIssuesText).toBe("1 open issue");
   });
 
-  test("the identity block carries the path but no revision or dates", () => {
+  test("the identity block carries the path and the catalog revision, but no dates", () => {
     const identity = projectIdentity(catalog({ kind: "project", id: "engine", title: "Engine" }));
     expect(identity.path).toBe("plans:p.md");
-    for (const removed of ["revision", "registeredAt", "updatedAt", "sourceHash"]) {
+    // The prototype's head prints `Revision 12`, so the revision is carried now. The
+    // dates and the source hash stay out — the screen has no place for them.
+    expect(identity.revision).toBe("3");
+    for (const removed of ["registeredAt", "updatedAt", "sourceHash"]) {
       expect(Object.keys(identity)).not.toContain(removed);
     }
   });
