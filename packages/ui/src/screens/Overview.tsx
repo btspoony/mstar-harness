@@ -21,6 +21,10 @@
  * to one of the six arms, and `Absence` here only chooses the copy. A screen that
  * decided an arm itself would be a second authority.
  */
+import { Fragment } from "react";
+
+import { DataTable, type DataTableColumn } from "../components/DataTable.tsx";
+import { progressText } from "../view-model/format.ts";
 import { EmptyState, type AbsenceArm } from "../components/EmptyState.tsx";
 import { IssueFlowChart } from "../components/IssueFlowChart.tsx";
 import { Notice } from "../components/Notice.tsx";
@@ -29,7 +33,13 @@ import { ProgressBar } from "../components/ProgressBar.tsx";
 import { Row } from "../components/Row.tsx";
 import { StatusDot } from "../components/StatusDot.tsx";
 import { TruncatedText } from "../components/TruncatedText.tsx";
-import type { IssueFlowSeries, MilestoneRow, OverviewModel, OverviewWorkflowRow } from "../view-model/overview.ts";
+import type {
+  IssueFlowSeries,
+  MilestoneRow,
+  OverviewModel,
+  OverviewPlanRow,
+  OverviewWorkflowRow,
+} from "../view-model/overview.ts";
 import type { GateStepPosition, Tone } from "../view-model/status.ts";
 import css from "./Overview.module.css";
 
@@ -42,6 +52,27 @@ export type OverviewCopy = {
   workflowsTruncated: (shown: number, total: number) => string;
   /** One workflow row's plan progress. */
   plansProgress: (done: number, total: number) => string;
+  /** The plan table's five columns (`design-v1.html:859-866`). */
+  planColumns: { plan: string; title: string; status: string; progress: string; done: string };
+  /** `7 plans · running` — the count line above the table. */
+  workflowMeta: (plans: number, status: string) => string;
+  /** The plan table's accessible name, since it has no visible caption. */
+  planTableCaption: string;
+  /** A plan whose status the store does not record. */
+  planStatusAbsent: string;
+  /** The workflow header line's type label (`design-v1.html:855`). */
+  typeLabel: string;
+  /** The link into the workflow's own screen. */
+  openWorkflow: string;
+  /** The four branch anchors, as the header line labels them. */
+  branchBase: string;
+  branchSource: string;
+  branchIntegration: string;
+  branchTarget: string;
+  /** A plan whose progress note is empty. */
+  planProgressAbsent: string;
+  /** The cell's stand-in for a value the store does not carry. */
+  dash: string;
   /** The trend card's title and the range its head states. */
   trendHeading: string;
   trendRange: (from: string, to: string) => string;
@@ -87,6 +118,12 @@ export type OverviewProps = {
    * media query the product layout must not use.
    */
   compact?: boolean;
+  /**
+   * Open one workflow's own screen. Absent when the host has no such destination
+   * (the dsh seat mounts the pane without one), so the header line simply omits
+   * the link rather than rendering a dead control.
+   */
+  onOpenWorkflow?: (id: string) => void;
 };
 
 /** Render one absence arm from the arm the model already resolved. */
@@ -119,21 +156,114 @@ function Absence(props: {
   );
 }
 
-/** One active workflow: id, kind, phase, done/total, status dot. No board here. */
-function WorkflowRowView(props: { row: OverviewWorkflowRow; copy: OverviewCopy }) {
-  const row = props.row;
+/** The plan table's five columns, in the prototype's order and treatments. */
+function planColumns(copy: OverviewCopy): DataTableColumn<OverviewPlanRow>[] {
+  return [
+    {
+      key: "plan",
+      header: copy.planColumns.plan,
+      width: 176,
+      render: (plan) => <span className={css.mono}>{plan.planId}</span>,
+    },
+    {
+      key: "title",
+      header: copy.planColumns.title,
+      render: (plan) =>
+        plan.title === null ? <span className={css.muted}>{copy.dash}</span> : <TruncatedText text={plan.title} />,
+    },
+    {
+      key: "status",
+      header: copy.planColumns.status,
+      width: 132,
+      render: (plan) =>
+        plan.status === null ? (
+          <span className={css.muted}>{copy.planStatusAbsent}</span>
+        ) : (
+          <StatusDot label={plan.status} tone={plan.statusTone} mono />
+        ),
+    },
+    {
+      key: "progress",
+      header: copy.planColumns.progress,
+      width: 116,
+      render: (plan) =>
+        plan.progress === null ? (
+          // The store's note is free text, so it is shown as the fact it is — never
+          // turned into a bar, and never replaced by one.
+          <span className={plan.progressNote === null ? css.muted : css.progressNote}>
+            {plan.progressNote ?? copy.planProgressAbsent}
+          </span>
+        ) : (
+          <span className={css.planProgress}>
+            <span className={css.mono}>{progressText(plan.progress)}</span>
+            <ProgressBar done={plan.progress.done} total={plan.progress.total} />
+          </span>
+        ),
+    },
+    {
+      key: "done",
+      header: copy.planColumns.done,
+      width: 72,
+      align: "end",
+      render: (plan) => <span className={css.doneCell}>{plan.doneAt ?? copy.dash}</span>,
+    },
+  ];
+}
+
+/**
+ * One active workflow: the header line, the branch chain, and the plan table
+ * (`design-v1.html:845-925`). Several workflows stack, each with its own table.
+ */
+function WorkflowRowView(props: {
+  row: OverviewWorkflowRow;
+  copy: OverviewCopy;
+  onOpenWorkflow?: (id: string) => void;
+}) {
+  const { row, copy } = props;
+  const branch = row.branch;
+  const anchors: Array<[string, string | null]> = [
+    [copy.branchBase, branch.base],
+    [copy.branchSource, branch.source],
+    [copy.branchIntegration, branch.integration],
+    [copy.branchTarget, branch.target],
+  ];
+  const drawn = anchors.filter(([, value]) => value !== null);
   return (
-    <Row
-      primary={<TruncatedText text={row.id} />}
-      meta={
-        <>
-          <span>{row.type}</span>
-          {row.phase === null ? null : <span> · {row.phase}</span>}
-        </>
-      }
-      trailing={props.copy.plansProgress(row.plansDone, row.plansTotal)}
-      leading={<StatusDot label={row.status} tone={row.statusTone} />}
-    />
+    <section className={css.workflow} data-ms-overview-workflow="">
+      <div className={css.wfSummary}>
+        <span className={css.wfId}>{row.id}</span>
+        <span className={css.muted}>{copy.typeLabel}</span>
+        <span className={css.chip}>{row.type}</span>
+        {row.phase === null ? null : <StatusDot label={row.phase} tone="neutral" mono />}
+        {props.onOpenWorkflow === undefined ? null : (
+          <button type="button" className={css.link} onClick={() => props.onOpenWorkflow?.(row.id)}>
+            {copy.openWorkflow}
+          </button>
+        )}
+      </div>
+      <p className={css.wfMeta} data-ms-workflow-meta={row.plansTotal}>
+        {copy.workflowMeta(row.plansTotal, row.status)}
+      </p>
+      {drawn.length === 0 ? null : (
+        <p className={css.branchLine} data-ms-branch="">
+          {drawn.map(([label, value], index) => (
+            <Fragment key={label}>
+              {index === 0 ? null : <span className={css.branchArrow} aria-hidden="true">→</span>}
+              <span className={css.branchAnchor}>
+                <span className={css.muted}>{label}</span> <b>{value}</b>
+              </span>
+            </Fragment>
+          ))}
+        </p>
+      )}
+      <DataTable
+        variant="detail"
+        caption={copy.planTableCaption}
+        columns={planColumns(copy)}
+        rows={row.plans}
+        rowKey={(plan) => plan.planId}
+      />
+    </section>
   );
 }
 
@@ -251,7 +381,7 @@ export function Overview(props: OverviewProps) {
           {model.workflows.kind === "populated" ? (
             <div className={css.rows} data-ms-workflows="">
               {model.workflows.value.map((row) => (
-                <WorkflowRowView key={row.id} row={row} copy={copy} />
+                <WorkflowRowView key={row.id} row={row} copy={copy} onOpenWorkflow={props.onOpenWorkflow} />
               ))}
               {/* The member is capped by the engine, so a truncated set has to say so:
                   rows that stop at 50 look like all of them. */}

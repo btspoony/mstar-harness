@@ -165,6 +165,34 @@ const PROBE = `(() => {
       return absent === null ? 'populated' : absent.getAttribute('data-ms-absence');
     })(),
     flowPaths: document.querySelectorAll('[data-ms-flow-chart] path').length,
+    // The workflow panel's plan table: its columns, its rows, and the header facts.
+    planColumns: [...document.querySelectorAll('[data-ms-overview-workflow] table thead th')].map((th) => th.getAttribute('data-ms-col-key')),
+    planRows: document.querySelectorAll('[data-ms-overview-workflow] table tbody tr').length,
+    planRowKeys: [...document.querySelectorAll('[data-ms-overview-workflow] table tbody tr')].map((tr) => tr.getAttribute('data-ms-row-key')),
+    planRowHeights: [...document.querySelectorAll('[data-ms-overview-workflow] table tbody tr')].map((tr) => Math.round(tr.getBoundingClientRect().height * 10) / 10),
+    planTitleWidth: (() => {
+      const th = document.querySelector('[data-ms-overview-workflow] table th[data-ms-col-key="title"]');
+      return th === null ? null : Math.round(th.getBoundingClientRect().width * 10) / 10;
+    })(),
+    planTableWidth: (() => {
+      const table = document.querySelector('[data-ms-overview-workflow] table');
+      return table === null ? null : Math.round(table.getBoundingClientRect().width * 10) / 10;
+    })(),
+    planTableVisibleColumns: (() => {
+      const ths = [...document.querySelectorAll('[data-ms-overview-workflow] table thead th')];
+      return ths.filter((th) => getComputedStyle(th).display !== "none").length;
+    })(),
+    rowHeight: getComputedStyle(document.documentElement).getPropertyValue("--ms-row-h").trim(),
+    workflowMetaCount: (() => {
+      const meta = document.querySelector('[data-ms-workflow-meta]');
+      return meta === null ? null : meta.getAttribute('data-ms-workflow-meta');
+    })(),
+    workflowMeta: (() => {
+      const meta = document.querySelector('[data-ms-workflow-meta]');
+      return meta === null ? null : (meta.textContent ?? "").trim();
+    })(),
+    branchAnchors: document.querySelectorAll('[data-ms-branch] > span:not([aria-hidden])').length,
+    planProgressBars: document.querySelectorAll('[data-ms-overview-workflow] table [role="progressbar"]').length,
     flowRows: document.querySelectorAll('[data-ms-flow] details tbody tr').length,
     flowAxis: [...document.querySelectorAll('[data-ms-flow] [class*="axis"] span')].map((el) => (el.textContent ?? '').trim()),
     narrowestCell: cellWidths.length === 0 ? null : Math.min(...cellWidths),
@@ -413,7 +441,14 @@ describe.skipIf(!browserAvailable)("the render gate", () => {
           status: "running",
           started_at: RECORDED_AT,
           updated_at: RECORDED_AT,
-          plans: [],
+          // The header line's branch chain reads these four anchors.
+          branch: { base: "main", source: "render-gate-workflow", integration: "render-gate-workflow", target: "main" },
+          // Two dated plans: the Overview's plan table is one row per plan, and the
+          // gate's job is to see two rows from real store rows, not a fixture object.
+          plans: [
+            { id: "20261025-issue-project-move", file: "plans/20261025-issue-project-move.md", title: "Move issue ownership into the project domain", status: "InProgress" },
+            { id: "20261018-panel-retirement", file: "plans/20261018-panel-retirement.md", title: "Retire the event log and meta dock", status: "Done" },
+          ],
         },
       },
     );
@@ -855,6 +890,37 @@ describe.skipIf(!browserAvailable)("the render gate", () => {
     expect(bX).toBe(aX);
     for (const column of narrowColumns) expect(column).toBeCloseTo(narrowBand.contentWidth as number, 0);
   }, 120_000);
+
+  test("the workflow panel is the prototype's plan table, one row per plan", async () => {
+    await browser(["set", "viewport", "1900", "900"]);
+    const measured = await visit("overview", "overview", true, "overview-planboard");
+    const band = measured.band as Record<string, unknown>;
+    // Five columns, in the prototype's order (`design-v1.html:859-866`). A missing key
+    // means a column the owner asked for is rendered by nobody.
+    expect(band.planColumns).toEqual(["plan", "title", "status", "progress", "done"]);
+    // Two plans in the fixture, two rows on the page. The order is the read's own —
+    // `projection_plans` is ordered by `plan_id`, not by the snapshot's array — so the
+    // gate states what the store answers rather than what the fixture wrote.
+    expect(band.planRows).toBe(2);
+    expect(band.planRowKeys).toEqual(["20261018-panel-retirement", "20261025-issue-project-move"]);
+    // The header line above it states the workflow's own count, not the page's. The
+    // number is asserted on the attribute, and the status word is an enum the
+    // dictionary carries verbatim — so this anchor does not depend on which locale
+    // the page happened to load.
+    expect(band.workflowMetaCount).toBe("2");
+    expect(String(band.workflowMeta)).toContain("running");
+    // The branch chain drew its four anchors.
+    expect(band.branchAnchors).toBe(4);
+    // Every row is exactly one row tall: the table's height rule, measured.
+    const rowHeight = Number.parseFloat(String(band.rowHeight));
+    expect(rowHeight).toBeGreaterThan(0);
+    for (const height of band.planRowHeights as number[]) expect(height).toBeCloseTo(rowHeight, 0);
+    // The title column is the flexible one: it is wider than any declared cell.
+    expect(band.planTitleWidth as number).toBeGreaterThan(100);
+    // All five columns survive the 900px floor, and the table stays inside its card.
+    expect(band.planTableVisibleColumns).toBe(5);
+    expect(band.planTableWidth as number).toBeLessThanOrEqual((band.contentWidth as number) + 0.5);
+  }, 90_000);
 
   test("the trend is drawn from the store, not faked", async () => {
     await browser(["set", "viewport", "1900", "900"]);

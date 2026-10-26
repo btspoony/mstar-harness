@@ -151,7 +151,7 @@ function useOverview(enabled: boolean): OverviewOutcome {
 }
 
 /** The landing page: the shared Overview behind the one aggregated read. */
-function OverviewDestination() {
+function OverviewDestination(props: { query: string }) {
   const outcome = useOverview(true);
   const copy = useCopy();
 
@@ -171,7 +171,13 @@ function OverviewDestination() {
     );
   }
 
-  return <Overview model={outcome.model} copy={overviewCopy(copy)} />;
+  return (
+    <Overview
+      model={outcome.model}
+      copy={overviewCopy(copy)}
+      onOpenWorkflow={(id) => navigate({ name: "workflow", id }, props.query, "push")}
+    />
+  );
 }
 
 /**
@@ -751,7 +757,7 @@ function Shell(props: {
         ref={mainRef}
         data-ms-route={routeHash(address.route)}
       >
-        {address.route.name === "overview" ? <OverviewDestination /> : null}
+        {address.route.name === "overview" ? <OverviewDestination query={address.query} /> : null}
         {address.route.name === "issues" ? <IssuesDestination address={address} projectIds={projectIds} /> : null}
         {address.route.name === "issue" ? <IssueDetailDestination id={address.route.id} /> : null}
         {address.route.name === "workflows" ? <WorkflowsDestination address={address} /> : null}

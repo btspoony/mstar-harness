@@ -47,7 +47,123 @@
 .rows {
   display: flex;
   flex-direction: column;
+  gap: var(--ms-space-4);
   min-inline-size: 0;
+}
+
+/* --- one workflow: header line, branch chain, plan table ------------------ */
+/* `design-v1.html:845-925`: the summary and the branch chain sit in the panel body,
+   the table follows it edge to edge, so the cells' own gutters line up with the
+   panel's. */
+.workflow {
+  display: flex;
+  flex-direction: column;
+  min-inline-size: 0;
+}
+
+.wfSummary {
+  display: flex;
+  align-items: center;
+  gap: var(--ms-space-2);
+  flex-wrap: wrap;
+  min-inline-size: 0;
+}
+
+.wfId {
+  font-family: var(--ms-font-mono);
+  font-size: var(--ms-fs-13);
+  color: var(--ms-text-primary);
+}
+
+.chip {
+  border: var(--ms-hairline);
+  border-radius: var(--ms-radius-sm);
+  padding: 0 6px;
+  font-family: var(--ms-font-mono);
+  font-size: var(--ms-fs-11);
+  line-height: var(--ms-lh-11);
+  color: var(--ms-text-secondary);
+}
+
+.link {
+  margin-inline-start: auto;
+  border: 0;
+  padding: 0;
+  background: none;
+  color: var(--ms-accent);
+  font-size: var(--ms-fs-11);
+  line-height: var(--ms-lh-11);
+  cursor: pointer;
+}
+
+.link:hover {
+  text-decoration: underline;
+}
+
+.wfMeta {
+  margin: var(--ms-space-1) 0 0;
+  font-size: var(--ms-fs-11);
+  color: var(--ms-text-muted);
+}
+
+/* The chain reads as one line and wraps only when the pane is narrower than it. */
+.branchLine {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+  margin: var(--ms-space-1) 0 0;
+  font-family: var(--ms-font-mono);
+  font-size: var(--ms-fs-11);
+  color: var(--ms-text-secondary);
+}
+
+.branchAnchor {
+  white-space: nowrap;
+}
+
+.branchArrow {
+  color: var(--ms-text-muted);
+}
+
+.mono {
+  font-family: var(--ms-font-mono);
+  font-size: var(--ms-fs-12);
+  font-variant-numeric: tabular-nums;
+}
+
+.muted {
+  color: var(--ms-text-muted);
+}
+
+/* `3/6` and its bar, side by side (`design-v1.html:868`). The bar takes a fixed
+   measure: `.track` is `inline-size: 100%`, which inside a shrink-to-fit flex row is
+   nothing at all, so the width is declared here rather than left to the track. */
+.planProgress {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.planProgress > [role="progressbar"] {
+  inline-size: 64px;
+}
+
+/* The store's own note when it is not a fraction: it can be a sentence, so it keeps
+   one line and ellipses rather than pushing the row taller. */
+.progressNote {
+  display: block;
+  min-inline-size: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--ms-text-secondary);
+}
+
+.doneCell {
+  font-family: var(--ms-font-mono);
+  font-size: var(--ms-fs-11);
+  color: var(--ms-text-muted);
 }
 
 /* The residual tally (`design-v1.html:2424-2434`, `.res-grid`): five severity rows

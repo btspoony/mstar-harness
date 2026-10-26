@@ -25,9 +25,9 @@ import type { IssueFlow, IterationGateStep, OverviewDTO, ResidualCounts } from "
 import type { Resolved } from "./state.ts";
 import { resolveMember } from "./state.ts";
 import { SEVERITIES, gateStepPosition, gateSteps, severityTone, type GateStepId, type GateStepPosition, type Tone } from "./status.ts";
-import { projectionState, type ProjectionState } from "./format.ts";
+import { UNKNOWN_DATE, formatShortDate, projectionState, type ProjectionState } from "./format.ts";
 import type { WorkflowRow } from "./workflows.ts";
-import { workflowRow, workflowStatusTone } from "./workflows.ts";
+import { workflowPlanRow, workflowRow, workflowStatusTone, type BranchAnchors } from "./workflows.ts";
 import { iterationGateStep } from "./iterations.ts";
 
 /** How many milestones the landing view shows. IA §3.1: up to three. */
@@ -125,7 +125,30 @@ export function flowModel(flow: IssueFlow): IssueFlowSeries | null {
   };
 }
 
-/** One overview workflow row: the compact form of `WorkflowRow`. */
+/** One plan under a workflow: what the plan table's five columns read. */
+export type OverviewPlanRow = {
+  planId: string;
+  /** The plan's catalog title, or null when it has no catalog row. */
+  title: string | null;
+  status: string | null;
+  statusTone: Tone;
+  phase: string | null;
+  /**
+   * `3/6` when the store's own progress note IS a fraction, else null.
+   *
+   * The engine records the note as free text (`coordination.progress.summary`), so a
+   * fraction is the one case where a done/total pair is really there to draw. Nothing
+   * is invented from `status`: a plan with three of six steps done and no note shows
+   * the note's absence, not a bar.
+   */
+  progress: { done: number; total: number } | null;
+  /** The store's note when it is not a fraction: the fact, not a substitute. */
+  progressNote: string | null;
+  /** The done timestamp, month-day as the prototype prints it (`10-19`). */
+  doneAt: string | null;
+};
+
+/** One overview workflow: the header line, its branch chain, and its plan table. */
 export type OverviewWorkflowRow = {
   id: string;
   type: string;
@@ -134,6 +157,10 @@ export type OverviewWorkflowRow = {
   statusTone: Tone;
   plansDone: number;
   plansTotal: number;
+  /** The four anchors, each `null` when the workflow records none. */
+  branch: BranchAnchors;
+  /** Every plan the DTO carries, in the store's order. */
+  plans: readonly OverviewPlanRow[];
 };
 
 /** One milestone row. */
@@ -189,7 +216,38 @@ export type OverviewModel = {
   projection: ProjectionState;
 };
 
-/** Compact one workflow. */
+/** `3/6` from a progress note that is exactly that; `null` for prose or nonsense. */
+function planStepProgress(note: string | null): { done: number; total: number } | null {
+  const match = note === null ? null : /^(\d{1,4})\/(\d{1,4})$/.exec(note.trim());
+  if (match === null) return null;
+  const done = Number(match[1]);
+  const total = Number(match[2]);
+  return total > 0 && done <= total ? { done, total } : null;
+}
+
+/** The prototype's Done cell: month-day, with the full timestamp on the title. */
+function doneDay(value: string | null): string | null {
+  if (value === null) return null;
+  const short = formatShortDate(value);
+  return short === UNKNOWN_DATE ? null : short.slice(0, 5);
+}
+
+/** One plan row from the DTO. */
+function overviewPlanRow(plan: Parameters<typeof workflowPlanRow>[0]): OverviewPlanRow {
+  const row = workflowPlanRow(plan);
+  return {
+    planId: row.planId,
+    title: row.title,
+    status: row.status,
+    statusTone: row.statusTone,
+    phase: row.phase,
+    progress: planStepProgress(row.progress),
+    progressNote: planStepProgress(row.progress) === null ? row.progress : null,
+    doneAt: doneDay(row.doneAt),
+  };
+}
+
+/** Compact one workflow: its header facts, its branch chain, and its plans. */
 function overviewWorkflowRow(workflow: Parameters<typeof workflowRow>[0]): OverviewWorkflowRow {
   const row: WorkflowRow = workflowRow(workflow);
   return {
@@ -200,6 +258,8 @@ function overviewWorkflowRow(workflow: Parameters<typeof workflowRow>[0]): Overv
     statusTone: workflowStatusTone(row.status),
     plansDone: row.plansDone,
     plansTotal: row.plansTotal,
+    branch: row.branch,
+    plans: workflow.plans.map(overviewPlanRow),
   };
 }
 

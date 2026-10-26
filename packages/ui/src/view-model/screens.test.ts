@@ -144,6 +144,9 @@ describe("Overview — the fact set of §8.2", () => {
     expect(model.workflows.kind).toBe("populated");
     if (model.workflows.kind !== "populated") return;
     expect(model.workflows.value).toHaveLength(1);
+    // The whole row, including the header facts and the plan table's inputs: the
+    // five columns read this and nothing else, so a field the screen needs and this
+    // does not carry would be filled in by the screen — which is what this pins.
     expect(model.workflows.value[0]).toEqual({
       id: "issue-project-move",
       type: "plan",
@@ -152,7 +155,61 @@ describe("Overview — the fact set of §8.2", () => {
       statusTone: "neutral",
       plansDone: 1,
       plansTotal: 2,
+      branch: {
+        base: "main",
+        source: "issue-project-move",
+        integration: "issue-project-move",
+        target: "main",
+      },
+      plans: [
+        {
+          planId: "20261025-issue-project-move",
+          title: null,
+          status: "InProgress",
+          statusTone: "neutral",
+          phase: "implement",
+          // The note is prose, so there is no fraction to draw and no bar invented.
+          progress: null,
+          progressNote: "wiring the store read",
+          doneAt: null,
+        },
+        {
+          planId: "20261018-panel-retirement",
+          title: null,
+          status: "Done",
+          statusTone: "success",
+          phase: "close",
+          progress: null,
+          progressNote: null,
+          // The prototype prints month-day, not the timestamp: `10-19`.
+          doneAt: "10-19",
+        },
+      ],
     });
+  });
+
+  test("a plan whose note is a fraction carries done/total; prose stays prose", () => {
+    const rows = overviewModel(
+      overviewRead({
+        workflows: read<WorkflowListDTO>({
+          items: [
+            workflow({
+              plans: [
+                { ...workflow().plans[0], progress: "3/6" },
+                { ...workflow().plans[0], planId: "p-2", progress: "reviewed source" },
+                { ...workflow().plans[0], planId: "p-3", progress: "7/6" },
+              ],
+            }),
+          ],
+          total: 1,
+        }),
+      }),
+      { projection },
+    );
+    if (rows.workflows.kind !== "populated") throw new Error("expected populated");
+    const plans = rows.workflows.value[0]?.plans ?? [];
+    expect(plans.map((plan) => plan.progress)).toEqual([{ done: 3, total: 6 }, null, null]);
+    expect(plans.map((plan) => plan.progressNote)).toEqual([null, "reviewed source", "7/6"]);
   });
 
   test("five severity rows including zeros, with a reconciling total", () => {

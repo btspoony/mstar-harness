@@ -145,6 +145,18 @@ const overviewCopy: OverviewCopy = {
   workflowsEmpty: "Active workflows",
   workflowsTruncated: (shown: number, total: number) => `showing ${shown} of ${total}`,
   plansProgress: (done, total) => `${done}/${total} plans`,
+  planColumns: { plan: "Plan", title: "Title", status: "Status", progress: "Progress", done: "Completed" },
+  workflowMeta: (plans, status) => `${plans} plans \u00b7 ${status}`,
+  planTableCaption: "Plans under this workflow",
+  planStatusAbsent: "Status not recorded",
+  planProgressAbsent: "Records no progress.",
+  typeLabel: "Type",
+  openWorkflow: "Open workflow",
+  branchBase: "Base",
+  branchSource: "Source",
+  branchIntegration: "Integration",
+  branchTarget: "Target",
+  dash: "\u2014",
   trendHeading: "Issue flow trend",
   trendRange: (from, to) => `${from} → ${to}`,
   trendChartTitle: (from, to) => `Cumulative captured and retired issues, ${from} to ${to}`,
@@ -227,10 +239,65 @@ const focus = (input: {
 describe("Overview — what it shows, in the IA §3.1 order", () => {
   const html = overview();
 
-  test("all active workflows with their plan progress", () => {
+  test("the workflow's header line: id, type, phase, and its own count", () => {
     expect(html).toContain("issue-project-move");
-    expect(html).toContain("1/2 plans");
     expect(html).toContain("phase-2-execute");
+    // The count line is the workflow's own plan total and status, not the page's.
+    expect(html).toContain('data-ms-workflow-meta="2"');
+    expect(html).toContain("2 plans \u00b7 running");
+  });
+
+  test("the branch chain is drawn when the workflow records one", () => {
+    for (const anchor of ["Base", "Source", "Integration", "Target"]) expect(html).toContain(`<span>${anchor}</span>`);
+    expect(html).toContain("<b>main</b>");
+    // Exactly one arrow between each adjacent pair; the trend's head states its own
+    // range with the same glyph, so the count is taken on the chain's own arrows.
+    expect(html).toContain("data-ms-branch");
+    expect((html.match(/<span aria-hidden="true">\u2192<\/span>/g) ?? []).length).toBe(3);
+  });
+
+  test("the plan table: five columns, one row per plan, the prototype's cells", () => {
+    // `design-v1.html:859-866`: Plan | Title | Status | Progress | Done.
+    for (const key of ["plan", "title", "status", "progress", "done"]) {
+      expect(html).toContain(`data-ms-col-key="${key}"`);
+    }
+    // One row per plan the DTO carries — two in this fixture.
+    expect((html.match(/data-ms-row-key=/g) ?? []).length).toBe(2);
+    expect(html).toContain("20261025-unified-ui-shared-layer");
+    // Status is a dot and its word; a plan with no status would say so instead.
+    expect(html).toContain('data-ms-tone="success"');
+    // Progress: the note as prose, and the absent line when there is none.
+    expect(html).toContain("primitives are landing");
+    expect(html).toContain("Records no progress.");
+    // Done: month-day, the prototype's short form.
+    expect(html).toContain("<span>10-19</span>");
+  });
+
+  test("a plan whose status the store does not record says so, never an empty cell", () => {
+    // The shared absent treatment, not a blank `<td>`: a cell with nothing in it reads
+    // as a rendering failure, while a sentence says the store carries no status.
+    const plan = workflow().plans[0];
+    const absent = overview({
+      workflows: read<WorkflowListDTO>({
+        items: [workflow({ plans: [{ ...plan, status: null }] })],
+        total: 1,
+      }),
+    });
+    expect(absent).toContain("Status not recorded");
+    expect(absent).toContain('data-ms-row-key="20261025-unified-ui-shared-layer"');
+    expect(absent).not.toMatch(/<td[^>]*>\s*<\/td>/);
+  });
+
+  test("the Open workflow link appears only when the host can honour it", () => {
+    expect(html).not.toContain("Open workflow");
+    const hosted = renderToStaticMarkup(
+      <Overview
+        model={overviewModel(overviewRead(), { projection })}
+        copy={overviewCopy}
+        onOpenWorkflow={() => undefined}
+      />,
+    );
+    expect(hosted).toContain("Open workflow");
   });
 
   test("five severity rows, zeros included, with a reconciling total", () => {

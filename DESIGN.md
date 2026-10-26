@@ -414,6 +414,18 @@ a squeezed head set a two-glyph title as one glyph per line (measured: a 30.4px,
   nothing, and its narrow form is a different *presentation*, not a breakpoint of the same one.
   The ratio is a gate anchor at 1900 and 1280, and the fold is anchored at 720.
 
+- **A workflow's plans are a table, not a progress line.** The Overview's active-workflow card is
+  the prototype's summary line (id, type, phase, `Open workflow`), its branch chain, and a
+  five-column table — `Plan | Title | Status | Progress | Done` (`design-v1.html:836-932`) — with
+  one row per plan. Five columns stay five at 720px: the table scrolls inside its card rather than
+  dropping a column, because a workflow's plan list has no second line to move a fact to. Every
+  row is exactly `--ms-row-h` tall in both bands.
+  `Progress` prints the store's own note. The engine records it as free text
+  (`coordination.progress.summary`), so `3/6` is drawn as a fraction with its bar only when the
+  note *is* one; prose is shown as prose, and an empty note reads `Records no progress.` rather
+  than a bar at an invented percentage. A plan with no recorded status reads the same sentence
+  treatment as every other absent value, never a blank cell.
+
 - **The trend is the read's, and it degrades through the shared arms.** The issue-flow card draws
   two cumulative step lines from `overview.issueFlow` — captured solid, retired dashed, so
   greyscale keeps the distinction — with first/middle/last date labels, the legend's two open
