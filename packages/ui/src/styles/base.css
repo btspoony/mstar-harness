@@ -614,3 +614,62 @@
 .ms-container .ml-auto {
   margin-left: auto;
 }
+
+/*
+ * The theme and language switches. The components already name both classes
+ * (`.seg` on the language switch, `.icon-btn` on the theme toggle) and neither had a rule —
+ * `check:classes` did not notice because `.header-right .seg` made the substring "seg"
+ * present. Copied from the prototype, which defines them as a segmented control and a
+ * 26px square button.
+ */
+.ms-container .seg {
+  display: inline-flex;
+  border: 1px solid var(--ms-border-hairline);
+  border-radius: var(--ms-radius-sm);
+  overflow: hidden;
+}
+
+.ms-container .seg button {
+  appearance: none;
+  border: 0;
+  background: var(--ms-bg-surface);
+  color: var(--ms-text-secondary);
+  height: 24px;
+  padding: 0 8px;
+  cursor: pointer;
+  font-size: var(--ms-fs-11);
+  font-weight: 500;
+}
+
+.ms-container .seg button + button {
+  border-left: 1px solid var(--ms-border-hairline);
+}
+
+.ms-container .seg button[aria-pressed="true"] {
+  background: var(--ms-bg-inset);
+  color: var(--ms-text-primary);
+}
+
+.ms-container .icon-btn {
+  appearance: none;
+  width: 26px;
+  height: 26px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  border: 1px solid var(--ms-border-hairline);
+  border-radius: var(--ms-radius-sm);
+  background: var(--ms-bg-surface);
+  color: var(--ms-text-secondary);
+  cursor: pointer;
+}
+
+.ms-container .icon-btn svg {
+  display: block;
+}
+
+.ms-container .icon-btn:hover {
+  color: var(--ms-text-primary);
+  background: var(--ms-bg-hover);
+}

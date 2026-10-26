@@ -1471,7 +1471,32 @@ to `accent` with them.
 - `src/view-model/status.test.ts` pins the same table as expectations, with the prototype's
   rule quoted beside each one. This one CI runs, and it has to be argued with to change.
 
-Today it reports `every one of the prototype's 22 tone colours matches`.## Verification coverage, stated
+Today it reports `every one of the prototype's 22 tone colours matches`.## Diffing whole stylesheets: 50 selectors, and three that mattered
+
+The tone table worked because it compared the whole set instead of sampling. The same move on
+selectors — parse every rule out of the prototype's `<style>` block and out of
+`product.css`, normalise the `.ms-container` prefix, diff — gives 387 against 338, with
+**50 selectors the prototype has and this implementation does not**.
+
+Sorting them took one pass, and the largest group is not a gap at all:
+
+| Group | Selectors | Verdict |
+| --- | --- | --- |
+| the design document's own chrome | `.proto-*` (11), `.pane-stage*` (7), `.pane-tabs`, `.pane-tab*`, `.pane-wrap`, `.pane-shell`, `.pane-ctl` | not product UI — a preview frame with its own width picker |
+| global reset | `*`, `:root`, `html`, `body`, `[data-theme=*]` | in `tokens.css` and `base.css` |
+| dsh shell | `.dsh-top`, `.host-crumb`, `.dash-main` | **zero** `className` uses; the dsh pane spells its shell differently |
+| controls | `.seg`, `.seg button*`, `.icon-btn`, `.icon-btn svg`, `.icon-btn:hover` | **used by components, defined nowhere** |
+
+That last row is the find: `Segmented` and the theme toggle already name `.seg` and
+`.icon-btn`, and neither class had a single rule. Both are copied from the prototype now — a
+segmented control and a 26px square button.
+
+**`check:classes` did not catch it, and could not.** It asks whether the class appears in any
+stylesheet, and `.header-right .seg` was enough to make the string "seg" present. A class that
+is *mentioned in a compound selector nobody renders* counts as defined to that check.
+
+**One selector this implementation has and the prototype does not**: `.chart-svg.is-full`, the
+trend chart's expanded height.## Verification coverage, stated
 
 Two hosts mount these screens: the dashboard (`packages/cli/web`) and the dsh pane
 (`packages/dsh/src/client/panel`). They share the components but **each owns its own

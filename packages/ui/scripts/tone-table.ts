@@ -47,7 +47,14 @@ let prototypeSource: string;
 try {
   prototypeSource = readFileSync(PROTOTYPE, "utf8");
 } catch {
-  console.log("tone-table: prototype not found, skipping (see src/view-model/status.test.ts)");
+  // A missing prototype must not silently pass: with `STRICT_TONES=1` it fails, so a
+  // release check can insist the table was actually compared.
+  const message = "tone-table: prototype not found (see src/view-model/status.test.ts)";
+  if (process.env.STRICT_TONES === "1") {
+    console.error(message);
+    process.exit(1);
+  }
+  console.warn(message);
   process.exit(0);
 }
 
