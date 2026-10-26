@@ -127,11 +127,37 @@ function IterationDetailBody(props: {
   return (
     <>
           <header className="detail-head">
-            <h1 className="detail-title">
-              <TruncatedText text={value.iterationId} />
-            </h1>
+            <div className="detail-head-main">
+              <h1 className="detail-title">
+                <TruncatedText text={value.title ?? value.iterationId} />
+              </h1>
+              {/* The prototype's meta line: the store id, the lifecycle, the compass,
+                  and the two counts a reader scans for. */}
+              <div className="detail-meta">
+                <span className="mono">{value.iterationId}</span>
+                <span aria-hidden="true">·</span>
+                <span>{value.lifecycle ?? "—"}</span>
+                {value.compassStatus === null ? null : (
+                  <>
+                    <span aria-hidden="true">·</span>
+                    <span className={`status tone-${value.compassTone} is-strong`}>
+                      <span className="dot" aria-hidden="true" />
+                      <span className="label mono">{value.compassStatus}</span>
+                    </span>
+                  </>
+                )}
+              </div>
+            </div>
+            {value.gatePosition === null ? null : (
+              <div className="detail-actions">
+                <span className="chip" data-ms-gate-chip>
+                  {copy.gateStep(value.gatePosition.step, value.gatePosition.of)}
+                </span>
+              </div>
+            )}
           </header>
 
+          <div className="detail-top">
           <FieldGroup title={copy.catalogHeading}>
             <Field label={copy.fields.title}>{value.title ?? copy.fields.noWorkflow}</Field>
             <Field label={copy.fields.lifecycle} mono>
@@ -144,7 +170,6 @@ function IterationDetailBody(props: {
               {value.endedAt ?? "—"}
             </Field>
           </FieldGroup>
-
           <FieldGroup title={copy.executionHeading}>
             <Field label={copy.fields.workflow} mono>
               {value.workflowId === null ? (
@@ -164,6 +189,7 @@ function IterationDetailBody(props: {
               )}
             </Field>
           </FieldGroup>
+          </div>
 
           <FieldGroup title={copy.compassHeading} columns={1}>
             <Field label={copy.fields.compassStatus} mono>
