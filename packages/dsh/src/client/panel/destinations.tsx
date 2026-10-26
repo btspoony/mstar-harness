@@ -340,11 +340,11 @@ export function DetailBody({ view, id, state, locale, onBack, onOpenWorkflow, pr
 export function projectIdentityOf(
   id: string,
   data: unknown,
-): { projectId: string; title: string; description: string | null; lifecycle: string; lifecycleTone: 'neutral'; path: string } {
+): { projectId: string; title: string; description: string | null; lifecycle: string; lifecycleTone: 'neutral'; path: string; revision: string } {
   const catalog = (data as { catalog?: Parameters<typeof projectIdentity>[0] | null } | null | undefined)?.catalog
   if (catalog !== null && catalog !== undefined) return projectIdentity(catalog) as never
   // Nothing is known: no guessed path, no guessed lifecycle.
-  return { projectId: id, title: id, description: null, lifecycle: 'unknown', lifecycleTone: 'neutral', path: '' }
+  return { projectId: id, title: id, description: null, lifecycle: 'unknown', lifecycleTone: 'neutral', path: '', revision: '—' }
 }
 
 /**
