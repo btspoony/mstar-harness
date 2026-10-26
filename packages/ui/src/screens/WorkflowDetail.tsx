@@ -172,11 +172,14 @@ export function WorkflowDetail(props: WorkflowDetailProps) {
               </div>
             </div>
             <div className="detail-actions">
-              {/* The prototype's chip says the store still counts this workflow as an
-                  active registration; it is a fact about the record, not a control. */}
-              <span className="chip" data-ms-registration>
-                {copy.activeRegistration}
-              </span>
+              {/* The prototype's chip asserts the store still counts this workflow as an
+                  active registration. That is a fact about the record, so it renders only
+                  when the store says so — an unregistered workflow must not claim it. */}
+              {props.model.value.workflow.activeRegistration ? (
+                <span className="chip" data-ms-registration>
+                  {copy.activeRegistration}
+                </span>
+              ) : null}
             </div>
           </header>
 

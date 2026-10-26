@@ -50,6 +50,9 @@ export type WorkflowRow = {
   branch: BranchAnchors;
   /** The store's own reason when the execution projection could not be read. */
   executionUnavailableReason: string | null;
+  /** Whether the store still counts this workflow in the active registry. The detail
+   *  head's chip asserts it, so an inactive workflow must not claim it. */
+  activeRegistration: boolean;
 };
 
 /** Workflow status → tone: a paused workflow is not an error. */
@@ -108,6 +111,7 @@ export function workflowRow(workflow: WorkflowDTO): WorkflowRow {
     title: workflow.catalog?.title ?? null,
     branch: branchAnchors(workflow.branch),
     executionUnavailableReason: executionUnavailableReason(workflow.badges),
+    activeRegistration: workflow.activeRegistration,
   };
 }
 

@@ -275,6 +275,15 @@ describe("WorkflowDetail — execution, anchors, catalog and the plan table", ()
     }
   });
 
+  test("the registration chip states a fact, so an inactive workflow does not claim it", () => {
+    // The prototype shows `active registration` because its sample record is one. The
+    // chip is an assertion about the store, not decoration: a workflow the registry no
+    // longer counts must render without it.
+    expect(html).toContain('data-ms-registration');
+    const inactive = renderDetail({ ...workflow(), activeRegistration: false });
+    expect(inactive).not.toContain('data-ms-registration');
+  });
+
   test("the four branch anchors are rendered as a chain and as fields", () => {
     expect(html).toContain('data-ms-branch-chain=""');
     // The chain is segmented: an anchor per label, an arrow between them.
