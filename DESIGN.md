@@ -1211,6 +1211,30 @@ was an implementation defect: the view model reads `workflow.id`, `workflow.cata
 **The lesson is about the fixture, not the product**: a hand-written DTO is a second
 implementation of the shape, and it is wrong until it matches.
 
+## The first whole-screen render of the overview
+
+The fixture that finally rendered the page end to end (twelve fields before it was right)
+produced the comparison the acceptance bar actually asks for:
+
+| The prototype | This implementation |
+| --- | --- |
+| identity line with package, version, `{HARNESS_DIR}`, state, two times | same six members |
+| `Active workflow` with its plan count and status | same |
+| the workflow summary, the branch chain, the plan table | same |
+| `Open residual issues` with five severities | same |
+| `Milestones` with three rows | same |
+| `Issue flow trend` with a Y axis | same, `900 / 845 / 790` against the prototype's `900 / 850 / 800` — both span the series' own floor to ceiling |
+| `Latest iteration` with the five-step track | same, named |
+
+**One difference the screenshot found that the fields did not**: with a bucket shape I got
+wrong, the Y axis rendered `NaN · NaN · NaN` — three `NaN`s in a `<span>`, no error, no
+empty state. The DTO's real field names (`capturedCumulative`, not `captured`) fixed the
+fixture, but the page had been perfectly willing to print the arithmetic.
+
+**That is worth a guard**: `flowModel` returns `null` below two buckets, and nothing checks
+that the numbers inside a bucket are numbers. A missing field becomes `NaN`, and `NaN`
+renders.
+
 ## Verification coverage, stated
 
 Two hosts mount these screens: the dashboard (`packages/cli/web`) and the dsh pane
