@@ -510,24 +510,42 @@ Where the DTOs did carry the data, the §8.1 exclusion was recorded in a comment
 enforced by a negative test. Both had to change together — and the new comments say why
 the exclusion no longer describes this screen, rather than deleting the reasoning.
 
-## ProjectDetail does not follow the prototype, and that is known
+## ProjectDetail: the shape, and the two blocks that are deliberately absent
 
-The prototype's project-detail screen is a large one: a two-column identity block
-(`Catalog identity` beside `Roadmap authority`), a **milestone board** where each row
-carries its lifecycle, its date, four counts and the issue ids it owns, then `Direction`
-and `Stored facts` side by side.
+The screen is the prototype's, in its order:
 
-What is rendered here is a single identity block, a goal list and a milestone list. The
-difference is not cosmetic — it is most of the screen.
+```
+.detail-head        title, meta (id · lifecycle · Revision N · N open issues), the
+                    description, then the roadmap's presence and the catalog path
+.subtabs            Roadmap / Issues / Iterations, each with its count
+.detail-top         Catalog identity  |  Roadmap authority
+.panel              the milestone board, one row per milestone
+.detail-grid        Direction + stored markdown  |  Stored facts
+```
 
-One attempt was made and reverted: the feature container was `<div class="chip">`, which
-is wrong (`.chip` is an 18px inline badge, so a whole section sat inside a badge). Removing
-that class made the layout *worse* — the goal rows overlapped — because the badge had been
-accidentally constraining a list that has no container of its own. That is the signature of
-a section that needs rewriting rather than patching: the wrong class was load-bearing.
+Each milestone row carries four tallies (`N open`, `N resolved`, `N retired without
+resolution`, `N total`), each with its own `data-ms-count` hook so a test can pin the
+number rather than the label. The issues it owns render as compact id chips, toned by
+disposition, with the settled ones folded into `+N <disposition>`.
 
-So this screen is recorded as **not matching the prototype**, rather than as a difference
-someone should fix with one more class swap.
+**Two things the prototype does not have, and this screen does not either:**
+
+- **A goals block.** The stored document's goals appear once, as `Goals  1 / 3 checked`
+  inside `Stored facts`. A list of them would answer the same question twice, at greater
+  length, and the stored markdown disclosure already carries the full text.
+- **A hedge row.** Each block is the real thing or is absent; nothing renders an empty
+  frame with a note in it.
+
+**One thing this screen has that the prototype cannot**: truncation. The prototype's
+milestone name is plain text in static HTML with nothing to ellipsis. Ours must fit
+arbitrary names, so the name ellipses on its own flex-item box rather than wrapping an
+inline-block — see the baseline section above for why that choice cost nothing.
+
+**The reverted attempt worth remembering**: the feature container was `<div class="chip">`
+— an 18px inline badge wrapped around a whole section. Removing the class made the layout
+*worse*, because the badge had been accidentally constraining a list with no container of
+its own. A wrong class that is load-bearing is the signature of a section that needs
+rewriting rather than patching, which is what eventually happened.
 
 ## A baseline offset is not a defect until you measure the prototype's
 
