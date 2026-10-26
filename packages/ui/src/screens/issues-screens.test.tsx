@@ -110,6 +110,8 @@ const detailCopy: IssueDetailCopy = {
   sourceLocationLabel: "Location",
   sourceRootCauseLabel: "Root cause key",
   sourceAcceptanceLabel: "Acceptance key",
+  provenanceHeading: "Provenance",
+  provenanceColumns: { kind: "Kind", target: "Target", sourceHash: "Source hash", origin: "Origin", importedAt: "Imported at" },
   identityKeysHeading: "Identity keys",
   identityKeyLabel: "Identity key",
   providerLabel: "Provider",
@@ -438,7 +440,6 @@ describe("IssueDetail — NEGATIVE: what §8.1 removed", () => {
     for (const removed of [
       "occurrences",
       "transitions",
-      "provenance",
       "url",
       "externalId",
       // `provider` and `identityKey` are carried now: the prototype's `Identity keys`

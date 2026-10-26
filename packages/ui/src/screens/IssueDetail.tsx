@@ -61,6 +61,15 @@ export type IssueDetailCopy = {
   sourceRootCauseLabel: string;
   sourceAcceptanceLabel: string;
   /** The `Relations` table's heading and its three column labels. */
+  /** The `Provenance` table's heading and its five column labels. */
+  provenanceHeading: string;
+  provenanceColumns: {
+    kind: string;
+    target: string;
+    sourceHash: string;
+    origin: string;
+    importedAt: string;
+  };
   relationsHeading: string;
   relationsColumns: { relation: string; issue: string; title: string };
   identityKeysHeading: string;
@@ -168,6 +177,35 @@ export function IssueDetail(props: IssueDetailProps) {
             <section className={"panel"} data-ms-acceptance="">
               <h2>{copy.acceptanceHeading}</h2>
               <p className={"detail-text"}>{record.value.acceptance}</p>
+            </section>
+          )}
+
+          {/* The prototype's `Provenance` table. */}
+          {record.value.provenance.length === 0 ? null : (
+            <section className={"fact-block"} data-ms-issue-provenance="" aria-labelledby="ms-issue-provenance">
+              <h2 id="ms-issue-provenance">{copy.provenanceHeading}</h2>
+              <table className={"mini-table"}>
+                <thead>
+                  <tr>
+                    <th scope="col">{copy.provenanceColumns.kind}</th>
+                    <th scope="col">{copy.provenanceColumns.target}</th>
+                    <th scope="col">{copy.provenanceColumns.sourceHash}</th>
+                    <th scope="col">{copy.provenanceColumns.origin}</th>
+                    <th scope="col">{copy.provenanceColumns.importedAt}</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {record.value.provenance.map((row, index) => (
+                    <tr key={`${row.kind}-${row.target}-${index}`}>
+                      <td>{row.kind}</td>
+                      <td className="mono">{row.target}</td>
+                      <td className="mono">{row.sourceHash === null ? "—" : `${row.sourceHash.slice(0, 16)}…`}</td>
+                      <td>{row.origin}</td>
+                      <td className="mono">{row.importedAt ?? "—"}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
             </section>
           )}
 

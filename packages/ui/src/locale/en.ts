@@ -242,6 +242,8 @@ export const en = {
     closureNoteHeading: "Closure note",
     identityKeysHeading: "Identity keys",
     relationsHeading: "Relations",
+    provenanceHeading: "Provenance",
+    provenanceColumns: { kind: "Kind", target: "Target", sourceHash: "Source hash", origin: "Origin", importedAt: "Imported at" },
     relationsColumns: { relation: "Relation", issue: "Issue", title: "Title" },
     sourceHeading: "Source",
     sourceKindLabel: "Source kind",

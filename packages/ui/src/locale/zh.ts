@@ -222,6 +222,8 @@ export const zh: Copy = {
     closureNoteHeading: "关闭说明",
     identityKeysHeading: "标识键",
     relationsHeading: "关联",
+    provenanceHeading: "溯源",
+    provenanceColumns: { kind: "类型", target: "目标", sourceHash: "来源哈希", origin: "来源", importedAt: "导入时间" },
     relationsColumns: { relation: "关系", issue: "问题", title: "标题" },
     sourceHeading: "来源",
     sourceKindLabel: "来源类型",

@@ -1050,7 +1050,7 @@ column is what is left when six of ten blocks are gone.
 | `Identity keys` | two rows (Identity key, Provider) | shipped, verified in the browser |
 | `Source` | five rows from the newest occurrence | shipped, verified in the browser |
 | `Relations` | table (Relation, Issue, Title) | shipped |
-| `Provenance` | table | open |
+| `Provenance` | table (Kind, Target, Source hash, Origin, Imported at) | shipped |
 | `Disposition history` | table | open |
 | `Occurrences` | one block per event, with its quote and citation | open |
 

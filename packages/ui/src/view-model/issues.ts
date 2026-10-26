@@ -261,6 +261,14 @@ export type IssueDetailModel = {
   /** The prototype's `Identity keys` panel: the tracker identity, when the store has one. */
   identityKey: string | null;
   provider: string | null;
+  /** The prototype's `Provenance` table: how this record was imported. */
+  provenance: ReadonlyArray<{
+    kind: string;
+    target: string;
+    sourceHash: string | null;
+    origin: string;
+    importedAt: string | null;
+  }>;
   /** The prototype's `Relations` table: what this issue is joined to. */
   relations: ReadonlyArray<{ relation: string; issue: string; title: string | null }>;
   /** The prototype's `Source` panel: the latest occurrence's own account of itself. */
@@ -295,6 +303,13 @@ export function issueDetailModel(detail: IssueDetail): IssueDetailModel {
     closureNote: closed ? longText(detail.closureNote) : null,
     identityKey: detail.identityKey ?? null,
     provider: detail.provider ?? null,
+    provenance: detail.provenance.map((row) => ({
+      kind: row.kind,
+      target: row.target,
+      sourceHash: row.sourceHash ?? null,
+      origin: row.origin,
+      importedAt: row.importedAt === null ? null : formatDate(row.importedAt),
+    })),
     relations: detail.relations.map((relation) => ({
       relation: relation.relation,
       // The row names the other end of the join, not this issue.

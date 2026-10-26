@@ -250,7 +250,6 @@ describe("the detail fact block", () => {
     const model = issueDetailModel(detail());
     for (const removed of [
       "transitions",
-      "provenance",
       "url",
       "externalId",
       // The prototype's `Identity keys` panel states the provider and the key.
