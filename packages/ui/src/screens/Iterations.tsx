@@ -49,6 +49,8 @@ export type IterationsCopy = {
   /** `step N of 5`, or the copy for an iteration that records no compass. */
   gateStep: (step: number, of: number) => string;
   noCompass: string;
+  /** Said in the execution column when no workflow is registered. */
+  noExecution: string;
   notStarted: string;
   plansProgress: (done: number, total: number) => string;
   /** The termination of a project-scoped read that has no rows to show. */
@@ -93,12 +95,12 @@ export function Iterations(props: IterationsProps) {
     {
       key: "execution",
       header: copy.columns.execution,
-      width: "8%",
+      width: "14%",
       secondary: true,
+      // The prototype prints the projection's own words: `running · phase-2-execute`.
+      // The compass status is a different fact and lives on the detail screen.
       render: (row) => (
-        <span>
-          <StatusDot label={row.compassStatus ?? copy.noCompass} tone={row.compassTone} mono />
-        </span>
+        <span className={"mono t-11"}>{row.execution ?? copy.noExecution}</span>
       ),
     },
     {

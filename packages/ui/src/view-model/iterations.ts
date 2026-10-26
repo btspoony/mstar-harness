@@ -52,6 +52,9 @@ export type IterationRow = {
   lifecycle: string | null;
   compassStatus: string | null;
   compassTone: Tone;
+  /** The execution the projection records for this iteration: `status · phase`, the
+   *  prototype's `Projected execution` column. `null` when no workflow is registered. */
+  execution: string | null;
   /** The proven step, or `null` when the iteration records no compass. */
   gateStep: IterationGateStep | null;
   /** `step N of 5`, or `null` — never `0 of 5`. */
@@ -76,6 +79,12 @@ export function iterationRow(iteration: IterationDTO): IterationRow {
     lifecycle: iteration.catalog?.lifecycle ?? null,
     compassStatus: iteration.compass?.status ?? null,
     compassTone: compassStatusTone(iteration.compass?.status ?? null),
+    execution:
+      iteration.workflow === null
+        ? null
+        : iteration.workflow.phase === null
+          ? iteration.workflow.status
+          : `${iteration.workflow.status} · ${iteration.workflow.phase}`,
     gateStep: step,
     gatePosition: gateStepPosition(step),
     plansDone: tally.done,

@@ -321,6 +321,7 @@ export const zh: Copy = {
     },
     gateStep: (step, of) => `第 ${step} / ${of} 步`,
     noCompass: "无罗盘",
+    noExecution: "无执行",
     plansProgress: (done, total) => `${done}/${total} 个计划`,
     attribution: (arm) => (arm === "present" ? "迭代按项目归属。" : "没有任何迭代归属到项目。"),
   },

@@ -106,6 +106,7 @@ const iterationsCopy: IterationsCopy = {
     execution: "Compass",
     delivery: "Delivery",
     plans: "Plans",
+    noExecution: "No execution",
     documents: "Documents",
     started: "Started",
   },
@@ -195,13 +196,18 @@ describe("Iterations list — the facts of §8.2", () => {
     expect(html).toContain("2026-10-25 01:10");
   });
 
-  test("an iteration with no compass says so instead of claiming a step", () => {
-    // The list no longer carries a delivery column: the prototype's iterations table has
-    // six columns and the proven step is not one of them. The statement still appears on
-    // the detail screen, and the list never invents `step 0 of 5`.
-    const html = renderList([iteration({ compass: null, gateStep: null } as Partial<IterationDTO>)], 1);
-    expect(html).toContain("no compass");
-    expect(html).not.toContain("step 0 of 5");
+  test("the list never invents a step, and the detail screen still states it", () => {
+    // The list carries the prototype's six columns, and the proven step is not one of
+    // them. The requirement it used to satisfy (IA §8.2: state the proven step) is met on
+    // the detail screen — so the assertion moved there rather than being dropped, which
+    // would have turned a spec regression into a green build.
+    const list = renderList([iteration({ compass: null, gateStep: null } as Partial<IterationDTO>)], 1);
+    expect(list).not.toContain("step 0 of 5");
+    expect(list).not.toContain('data-ms-iteration-step');
+
+    const detail = renderDetail(iteration());
+    expect(detail).toContain('data-ms-gate-chip="true"');
+    expect(detail).toContain("step 2 of 5");
   });
 
   test("the attribution arm is stated beside the rows", () => {

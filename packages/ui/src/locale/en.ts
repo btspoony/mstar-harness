@@ -342,6 +342,7 @@ export const en = {
     },
     gateStep: (step: number, of: number) => `step ${step} of ${of}`,
     noCompass: "No compass",
+    noExecution: "No execution",
     plansProgress: (done: number, total: number) => `${done}/${total} plans`,
     attribution: (arm: "present" | "absent"): string =>
       arm === "present" ? "Iterations are attributed to projects." : "No iteration is attributed to any project.",
