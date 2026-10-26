@@ -34,7 +34,6 @@ export type IssueFlowChartProps = {
    * every pixel of pane width, which is what `height: auto` did to a 1350px panel.
    * `design-v1.html:3229` is the source: `var height = compact ? 88 : 132;`.
    */
-  variant?: "compact" | "full";
 };
 
 /** A cumulative step path: hold each value, then rise to the next. */
@@ -83,7 +82,7 @@ export function IssueFlowChart(props: IssueFlowChartProps) {
         <span>{min}</span>
       </span>
     <svg
-      className={props.variant === "full" ? "chart-svg is-full" : "chart-svg"}
+      className="chart-svg"
       viewBox={`0 0 ${VIEW_WIDTH} ${VIEW_HEIGHT}`}
       preserveAspectRatio="none"
       role="img"

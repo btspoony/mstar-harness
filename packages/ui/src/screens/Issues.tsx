@@ -231,7 +231,6 @@ export function Issues(props: IssuesProps) {
           <>
             <div className="chart-wrap" data-ms-flow="">
               <IssueFlowChart
-                variant="full"
                 points={props.trend.points}
                 label={props.trendCopy.chartTitle(props.trend.firstDate, props.trend.lastDate)}
               />

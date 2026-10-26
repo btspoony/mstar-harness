@@ -1508,7 +1508,37 @@ now.
 **And the diff is a check**: `bun run --cwd packages/ui check:selectors` lists every
 prototype-only selector that is neither defined nor listed in its `NOT_APPLICABLE` table,
 where each entry carries the reason it must not exist here. Today it reports that every one
-is accounted for.## Verification coverage, stated
+is accounted for.## Diffing declarations, not just selectors: 337 shared, one difference
+
+Comparing selector *names* found `.seg` and `.icon-btn` but could never find `.ctl`, because
+`.ctl` exists on both sides. Comparing the declarations of the 337 shared selectors found
+exactly one difference:
+
+```
+.chart-svg   height: prototype=auto  ours=88px
+```
+
+**The prototype lets the width decide the height.** Its `viewBox` is `0 0 872 88` and its rule
+is `height: auto`, so a wider chart is a taller one — the issues screen gets a taller trend
+than the overview for free. This implementation pinned 88px and then invented
+`.chart-svg.is-full { height: 132px }` to make the issues screen look right; `is-full` appears
+**zero times** in the prototype.
+
+Both are gone. Measured after:
+
+| Screen | Chart box | height/width |
+| --- | --- | --- |
+| overview | 844 × 88 | 0.104 |
+| issues | 1346 × 132 | 0.098 |
+
+Against the viewBox ratio 88/872 = 0.101 — the height is the ratio now, and the wider screen
+is taller without naming a variant.
+
+**`.ctl` is the one deliberate narrowing**: the prototype's rule is the bare class, this
+implementation writes `select.ctl`, because every `.ctl` here is a select and a bare class
+would box any future button that reuses the name. `check:selectors` carries that reason.
+
+## Verification coverage, stated
 
 Two hosts mount these screens: the dashboard (`packages/cli/web`) and the dsh pane
 (`packages/dsh/src/client/panel`). They share the components but **each owns its own

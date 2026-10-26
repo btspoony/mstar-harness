@@ -621,7 +621,7 @@
  * border, background and font — the prototype's 26px, 4px-radius, hairline-bordered box
  * was never drawn.
  */
-.ms-container .ctl {
+.ms-container select.ctl {
   height: 26px;
   padding: 0 6px;
   border-radius: var(--ms-radius-sm);

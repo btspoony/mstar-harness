@@ -363,9 +363,8 @@
    generator never had to survive a `height: auto` reading of this rule. Ours does:
    with `auto` the chart sized by the viewBox's 100:40 ratio, so it grew with its
    container — 339px in the overview card, 540px across the issues screen. */
-.ms-container .chart-svg { display: block; width: 100%; height: 88px; overflow: visible; }
+.ms-container .chart-svg { display: block; width: 100%; height: auto; overflow: visible; }
 
-.ms-container .chart-svg.is-full { height: 132px; }
 
 .ms-container .chart-svg .grid { stroke: var(--ms-border-hairline); stroke-width: 1; }
 

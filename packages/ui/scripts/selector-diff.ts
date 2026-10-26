@@ -29,6 +29,7 @@ const NOT_APPLICABLE: ReadonlyArray<{ match: (selector: string) => boolean; why:
   { match: (s) => s === "*" || s === "*::before" || s === "*::after", why: "global reset, in base.css without the .ms-container scope" },
   { match: (s) => s === ":root" || s === "html" || s === "body", why: "document-level reset, outside the scoped sheet" },
   { match: (s) => s.startsWith("[data-theme="), why: "the prototype's theme attribute; this product uses data-ms-theme" },
+  { match: (s) => s === ".ctl", why: "written as `select.ctl` here: every `.ctl` in this product is a select, and a bare class would also box any future button or input that reuses the name" },
   { match: (s) => s === ".dsh-top" || s === ".dsh-top-right" || s === ".dash-main" || s === ".host-chrome-note" || s.startsWith(".host-crumb"), why: "the host shell, spelled by each host package" },
 ];
 
