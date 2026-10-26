@@ -345,7 +345,7 @@ describe("Overview — what it shows, in the IA §3.1 order", () => {
       // `gateStep` (contract §3) arrives with the engine plan's branch; until then
       // the member comes from the package's contract mirror and is cast here.
       const page = overview({ latestIteration: read(iteration({ gateStep } )) });
-      const marked = page.match(/<li class="gate-step[^"]*" data-ms-step="([^"]+)" data-ms-step-position="current"/);
+      const marked = page.match(/<div role="listitem" class="gate-step[^"]*" data-ms-step="([^"]+)" data-ms-step-position="current"/);
       expect(marked).not.toBeNull();
       expect(marked?.[1]).not.toBe("merge-ready");
     }

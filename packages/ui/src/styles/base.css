@@ -595,16 +595,3 @@
   padding-left: 18px;
 }
 
-/* The prototype's gate track: a numbered step with its name beside it. `.gate-track` and
-   `.gate-step` come from the product sheet; these two rules give the number and the label
-   their own weights. */
-.ms-container .gate-step-num {
-  font-family: var(--ms-font-mono);
-  font-size: var(--ms-fs-11);
-  color: var(--ms-text-muted);
-  margin-right: 4px;
-}
-
-.ms-container .gate-step-label {
-  font-size: var(--ms-fs-12);
-}

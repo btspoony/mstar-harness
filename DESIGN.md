@@ -1161,9 +1161,28 @@ did.** Rendering a fixture for `Overview` means building a real envelope through
 rendered the gate track for the first time, and showed it printing `step 1 of 5 … step 5 of 5`
 where the prototype names each step: `Start · Execute · Close · PR delivery · Merge ready`.
 
-`copy.gateStepLabels` existed in both dictionaries and was read by nothing. The track now
-renders the number and the name, and the browser reports
-`["Start","Execute","Close","PR delivery","Merge ready"]`.
+`copy.gateStepLabels` existed in both dictionaries and was read by nothing.
+
+**And the markup was wrong in the same way `fact-block` was.** `product.css` defines
+`.gate-step .glyph`, `.gate-step .gate-label` and both state classes — `.is-done` and
+`.is-current` — and the component used none of them: it invented `.gate-step-num` and
+`.gate-step-label` and printed the step number in all three states. The prototype's glyph is
+`✓` for reached, `●` for current, the number for ahead, and the top border colour carries
+the state (`--ms-border-strong` / `--ms-accent` / `--ms-border-hairline`).
+
+Measured after the rewrite:
+
+```
+step 1  ✓  is-done     border-top rgb(54, 61, 70)
+step 2  ●  is-current  border-top rgb(122, 162, 255)  weight 500
+step 3  3  (none)      border-top rgb(36, 41, 48)
+```
+
+The labels read `["Start","Execute","Close","PR delivery","Merge ready"]`.
+
+**Plan table `Title` is not a defect**: the model reads `plan.catalog?.title`, and the real
+overview renders `Plan: dsh panel entry correction and its unavailable…`. The `—` came from
+a fixture that supplied no catalog.
 
 ## The milestone board, rendered with data for the first time
 

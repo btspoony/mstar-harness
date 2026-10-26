@@ -609,21 +609,35 @@ export function Overview(props: OverviewProps) {
                 <div className="milestone-block-id">
                   <TruncatedText text={model.latestIteration.value.iterationId} />
                 </div>
-                <ol className="gate-track" data-ms-gate-steps="">
+                <div className="gate-track" role="list" data-ms-gate-steps="">
                   {model.latestIteration.value.steps.map((step) => (
-                    <li
+                    <div
                       key={step.id}
-                      className="gate-step"
+                      role="listitem"
+                      className={
+                        step.position === "reached"
+                          ? "gate-step is-done"
+                          : step.position === "current"
+                            ? "gate-step is-current"
+                            : "gate-step"
+                      }
                       data-ms-step={step.id}
                       data-ms-step-position={step.position satisfies GateStepPosition}
+                      {...(step.position === "current" ? { "aria-current": "step" as const } : {})}
                     >
-                      {/* The prototype names each step (`Start`, `Execute`, `Close`,
-                          `PR delivery`, `Merge ready`); the number alone says nothing. */}
-                      <span className="gate-step-num" aria-hidden="true">{step.step}</span>
-                      <span className="gate-step-label">{copy.gateStepLabels[step.id]}</span>
-                    </li>
+                      {/* The prototype's own three glyphs: a tick for done, a dot for
+                          current, the step number for what is still ahead. */}
+                      <span className="glyph" aria-hidden="true">
+                        {step.position === "reached"
+                          ? "✓"
+                          : step.position === "current"
+                            ? "●"
+                            : String(step.step)}
+                      </span>
+                      <span className="gate-label">{copy.gateStepLabels[step.id]}</span>
+                    </div>
                   ))}
-                </ol>
+                </div>
                 {model.latestIteration.value.gatePosition === null ? null : (
                   // A span, as the prototype has it: `.gate-meta` is inline-flex and does
                   // not reset margin, so a `<p>` would carry the document's paragraph
