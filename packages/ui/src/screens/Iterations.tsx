@@ -115,7 +115,11 @@ export function Iterations(props: IterationsProps) {
       width: "8%",
       secondary: true,
       align: "end",
-      render: (row) => <span className={"mono t-12"}>{copy.plansProgress(row.plansDone, row.plansTotal)}</span>,
+      // The prototype's numeric columns carry `.t-num` on both cells: right-aligned,
+      // tabular figures, mono, secondary tone.
+      cellClass: "t-num",
+      headerClass: "t-num",
+      render: (row) => <span>{copy.plansProgress(row.plansDone, row.plansTotal)}</span>,
     },
     {
       key: "started",

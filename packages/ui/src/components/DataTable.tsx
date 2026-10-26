@@ -45,6 +45,8 @@ export type DataTableColumn<T> = {
    * same thing as a `mono t-12` span inside a default cell.
    */
   cellClass?: string;
+  /** The same, for the header cell: the prototype right-aligns numeric headers too. */
+  headerClass?: string;
   /**
    * A column the wide presentation carries and the pane's width does not. Below
    * 900px of container it is hidden outright — no second line restates it — because
@@ -156,6 +158,7 @@ export function DataTable<T>(props: DataTableProps<T>) {
           {props.columns.map((column) => (
             <th
               key={column.key}
+              {...(column.headerClass === undefined ? {} : { className: column.headerClass })}
               scope="col"
               data-ms-col={column.wide === true ? "wide" : column.secondary === true ? "secondary" : "primary"}
               data-ms-col-key={column.key}
