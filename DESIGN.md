@@ -1687,9 +1687,35 @@ Both pages, same six elements:
 **One measurement that read as a difference and was not**: the first table cell's
 `border-bottom` came back `0px none` here against `1px solid` there. The table in question has
 **one row** — an only row is a `:last-child`, and `.table tbody tr:last-child td` clears the
-border by design. The 50-row table measures `1px` in both.
+border by design.
 
-**What is still not compared**: any screen other than the overview, in either scheme.## Verification coverage, stated
+**That explanation was itself a claim about a rule, so it was measured instead of argued.**
+A three-row table rendered here and the prototype's seven-row table both report:
+
+```
+row 1  1px rgb(227, 229, 233)
+row 2  1px rgb(227, 229, 233)
+last   0px              ← both sides
+```
+
+The clearing is the same behaviour, measured on both sides.
+
+**Every top-level screen, both schemes, six elements each** — `h1`, `.panel`, `.panel-title`,
+`.table th`, `.table td`, the accent dot — come back identical:
+
+| | dark | light |
+| --- | --- | --- |
+| `h1` | `rgb(231, 234, 238)` | `rgb(25, 28, 32)` |
+| `.panel` | bg `rgb(20, 23, 27)`, border `rgb(36, 41, 48)` | bg `rgb(255, 255, 255)`, border `rgb(227, 229, 233)` |
+| `.panel-title` | `rgb(164, 172, 183)` | `rgb(86, 93, 103)` |
+| `.table th` | `rgb(118, 126, 138)` | `rgb(133, 140, 150)` |
+| accent dot | `rgb(122, 162, 255)` | `rgb(47, 111, 237)` |
+
+`issues` reports a different `.table td` colour than the other four because its first cell is
+the id column, which takes `.t-id`'s secondary colour — by design, and the same in both
+schemes.
+
+**What is still not compared**: the four detail screens, in either scheme.## Verification coverage, stated
 
 Two hosts mount these screens: the dashboard (`packages/cli/web`) and the dsh pane
 (`packages/dsh/src/client/panel`). They share the components but **each owns its own
