@@ -94,7 +94,11 @@ export function OverviewDestination({ state, locale }: DestinationProps): React.
   if (data === null) return <ReadState state={{ kind: 'unavailable', reason: 'no overview payload' }} copy={copy} />
   return (
     <div data-ms-destination-body="overview">
-      <Overview model={overviewModel(data as never, { projection: state.envelope.projection })} copy={screenCopy} />
+      <Overview
+        model={overviewModel(data as never, { projection: state.envelope.projection })}
+        copy={screenCopy}
+        identity={{ packageName: __MSTAR_PACKAGE__, version: __MSTAR_VERSION__ }}
+      />
     </div>
   )
 }

@@ -302,9 +302,17 @@ export const CLIENT_BUNDLE_MODE: ClientBundleMode = 'production'
  * registers). Defining the full `import.meta.env` object erases every
  * reference; the emitted code keeps a plain-object read.
  */
-export function clientBundleDefine(mode: ClientBundleMode): Record<string, string> {
+export function clientBundleDefine(
+  mode: ClientBundleMode,
+  identity: { packageName: string; version: string },
+): Record<string, string> {
   return {
     'process.env.NODE_ENV': JSON.stringify(mode),
+    // The panel's overview states which package built it and at which version, for the
+    // prototype's identity line. Passed in rather than read here: this function stays a
+    // pure function of its inputs, and the caller owns the manifest read.
+    __MSTAR_PACKAGE__: JSON.stringify(identity.packageName),
+    __MSTAR_VERSION__: JSON.stringify(identity.version),
     'import.meta.env': JSON.stringify({
       MODE: mode,
       DEV: mode !== 'production',
@@ -347,7 +355,17 @@ export async function buildClientBundle(options: {
 }
 
 /** One build with the process cwd already pinned to `PACKAGE_ROOT` (see the caller). */
+/** This package's own name and version, read from the manifest that owns them. */
+function packageIdentity(): { packageName: string; version: string } {
+  const manifest = JSON.parse(readFileSync(join(PACKAGE_ROOT, "package.json"), "utf8")) as {
+    name: string
+    version: string
+  }
+  return { packageName: manifest.name, version: manifest.version }
+}
+
 async function buildInPackageRoot(outdir: string, mode: ClientBundleMode): Promise<{ path: string; kind: string; bytes: number }> {
+  const identity = packageIdentity()
   const result = await build({
     entrypoints: [join(PACKAGE_ROOT, ENTRY)],
     outdir,
@@ -357,7 +375,7 @@ async function buildInPackageRoot(outdir: string, mode: ClientBundleMode): Promi
     // No plain `.css` loader: the only consumer was `@xyflow/react/dist/style.css`
     // (react-flow, removed — spec panel-zones §2). `*.module.css` is unaffected:
     // the css-modules plugin below wins for those paths.
-    define: clientBundleDefine(mode),
+    define: clientBundleDefine(mode, identity),
     // Closure-factory handoff (spec §6.2): `module`/`exports` are declared
     // inside the factory body because bun's cjs emission assigns module.exports
     // itself; the factory returns that surface to the loader.
