@@ -28,6 +28,8 @@ import {
   Focus,
   LocaleProvider,
   MS_CONTAINER_CLASS,
+  MS_PANE_BODY_CLASS,
+  MS_PANE_HEAD_CLASS,
   Nav,
   copyFor,
   focusModel,
@@ -219,7 +221,9 @@ export function PanelShell(props: {
   return (
     <LocaleProvider locale={props.locale}>
       <div className={css.shell} data-ms-shell="" data-ms-destination={props.destination} data-ms-theme={props.scheme ?? 'light'}>
-        <div className={css.nav}>
+        {/* The pane's head band: the prototype's surface + hairline, shared with
+            the dashboard's window header (`base.css`, `.ms-pane-head`). */}
+        <div className={`${css.nav} ${MS_PANE_HEAD_CLASS}`} data-ms-pane-head="">
           <Nav items={navItems(copy)} activeId={props.destination} onSelect={props.onSelect} label={props.navLabel} />
         </div>
         {/* The product surface, and the shared frame's anchor: the screens' gutter,
@@ -227,7 +231,7 @@ export function PanelShell(props: {
             base layer, which the dashboard supplies and this seat must too — the
             class goes on the PRODUCT scroller, not on the whole shell, so the host's
             own nav band keeps its chrome. */}
-        <div className={`${css.scroll} ${MS_CONTAINER_CLASS}`} data-mstar-scroll>
+        <div className={`${css.scroll} ${MS_CONTAINER_CLASS} ${MS_PANE_BODY_CLASS}`} data-mstar-scroll data-ms-pane-body="">
           {props.detail === null || props.detail === undefined ? null : (
             <DetailBody
               view={props.detail.view}

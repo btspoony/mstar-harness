@@ -57,7 +57,7 @@ export function Iterations(props: IterationsProps) {
   const { model, copy } = props;
 
   const columns: DataTableColumn<IterationRow>[] = [
-    { key: "id", header: copy.columns.id, render: (row) => <span className={css.mono}>{row.iterationId}</span> },
+    { key: "id", header: copy.columns.id, width: 108, render: (row) => <span className={css.mono}>{row.iterationId}</span> },
     {
       key: "title",
       header: copy.columns.title,
@@ -67,12 +67,14 @@ export function Iterations(props: IterationsProps) {
     {
       key: "lifecycle",
       header: copy.columns.lifecycle,
+      width: 92,
       secondary: true,
       render: (row) => <span className={css.mono}>{row.lifecycle ?? "—"}</span>,
     },
     {
       key: "execution",
       header: copy.columns.execution,
+      width: 96,
       secondary: true,
       render: (row) => (
         <span className={css.statusCell}>
@@ -83,6 +85,7 @@ export function Iterations(props: IterationsProps) {
     {
       key: "delivery",
       header: copy.columns.delivery,
+      width: 92,
       render: (row) => (
         <span className={css.mono} data-ms-iteration-step={row.gateStep ?? "none"}>
           {row.gatePosition === null ? copy.noCompass : copy.gateStep(row.gatePosition.step, row.gatePosition.of)}
@@ -92,6 +95,7 @@ export function Iterations(props: IterationsProps) {
     {
       key: "plans",
       header: copy.columns.plans,
+      width: 92,
       secondary: true,
       align: "end",
       render: (row) => <span className={css.mono}>{copy.plansProgress(row.plansDone, row.plansTotal)}</span>,
@@ -99,6 +103,7 @@ export function Iterations(props: IterationsProps) {
     {
       key: "started",
       header: copy.columns.started,
+      width: 104,
       secondary: true,
       align: "end",
       render: (row) => <span className={css.mono}>{row.startedAt}</span>,

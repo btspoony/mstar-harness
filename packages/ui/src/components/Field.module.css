@@ -29,7 +29,7 @@
 }
 
 /* Below the stack floor the label goes above the value instead of beside it. */
-@container pane (max-width: 479px) {
+@container (max-width: 479px) {
   .field {
     flex-direction: column;
     gap: 0;

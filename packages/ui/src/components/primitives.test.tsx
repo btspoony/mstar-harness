@@ -217,7 +217,11 @@ describe("DataTable — the collapse rule", () => {
     expect(html).toContain("engine · critical");
   });
 
-  test("the second line sits in the FIRST cell, so a collapsed row is still one record", () => {
+  test("the second line spans the primary columns in a row of its own", () => {
+    // It used to sit inside the FIRST cell, where it only ever had that cell's width:
+    // 68px of an 80px id column, which rendered `critical · op…` in the 400px pane.
+    // Its own spanning row gives the facts the row's width and leaves the header and
+    // the column policy untouched.
     const html = render(
       <DataTable
         caption="Issues"
@@ -227,18 +231,57 @@ describe("DataTable — the collapse rule", () => {
         meta={(row) => row.project}
       />,
     );
+    const metaRowStart = html.indexOf('data-ms-row-meta-row=""');
+    expect(metaRowStart).toBeGreaterThan(-1);
+    // The span is the PRIMARY count (2 here), never the column count: a span over the
+    // hidden columns re-opens them under `table-layout: fixed` and squeezes the title.
+    const cellStart = html.indexOf("<td", metaRowStart);
+    const cellTag = html.slice(cellStart, html.indexOf(">", cellStart)).toLowerCase();
+    expect(cellTag).toContain('colspan="2"');
     const firstCell = html.slice(html.indexOf("<td"), html.indexOf("</td>"));
-    expect(firstCell).toContain("data-ms-row-meta");
+    expect(firstCell).not.toContain("data-ms-row-meta");
+    // Not interactive here: the caller passed no activate handler.
+    expect(html).not.toContain("data-ms-row-meta-activate");
+  });
+
+  test("the second line is the same activation target as the row", () => {
+    // At the width the product lives in this row is roughly half of the record's
+    // painted area; a tap on it must navigate like a tap on the row above. Keyboard
+    // stays one stop per record: the tab stop and the key handler are the main row's.
+    const html = render(
+      <DataTable
+        caption="Issues"
+        columns={columns}
+        rows={rows}
+        rowKey={(row) => row.id}
+        meta={(row) => row.project}
+        onRowActivate={() => {}}
+      />,
+    );
+    const metaRowStart = html.indexOf("data-ms-row-meta-row");
+    const metaTag = html.slice(html.lastIndexOf("<tr", metaRowStart), html.indexOf(">", metaRowStart));
+    expect(metaTag).toContain("data-ms-row-meta-activate");
+    expect(metaTag).not.toContain("tabindex");
+    // One tab stop per record: only the main row carries it.
+    expect(html.match(/tabindex="0"/g)?.length).toBe(rows.length);
   });
 
   test("the collapse is a container query at the declared floor, not a viewport query", () => {
     const css = moduleCss("DataTable");
-    expect(css).toContain("@container pane (max-width: 619px)");
+    // UNNAMED: the CSS-module bundler rewrites a named query's prelude into a
+    // per-module hash (`@container pane_8f31a`), which never matches the one
+    // container declaration in `base.css` — so a named query is silently dead.
+    expect(css).toContain("@container (max-width: 619px)");
+    expect(css).not.toContain("@container pane");
     expect(css).not.toContain("@media");
     // Below the floor the secondary columns go and the meta line arrives.
     expect(css).toContain('td[data-ms-col="secondary"]');
     expect(css).toContain("display: none");
     expect(css).toMatch(/\.rowMeta\s*\{\s*display: block;/);
+    // The second line is a row that spans the primaries, and its facts wrap rather
+    // than truncate: a fact is never cut in half.
+    expect(css).toMatch(/\.metaRow\s*\{\s*display: table-row;/);
+    expect(css).toContain("overflow-wrap: anywhere");
   });
 
   test("an empty body renders the caller's absence node inside the table", () => {
@@ -561,10 +604,16 @@ describe("the component layer obeys the token rules", () => {
     }
   });
 
-  test("product layout reflow is always a container query", () => {
-    for (const name of ["DataTable", "Field", "FieldGroup", "Row", "Nav", "FilterBar", "Tabs"]) {
+  test("product layout reflow is always an UNNAMED container query", () => {
+    // A named query cannot survive the bundler (see the collapse test above), and a
+    // viewport media query would reflow by the window rather than by the pane the
+    // product is given. Neither is a style choice; both are correctness.
+    for (const name of ["DataTable", "Field", "FieldGroup", "Row", "Nav", "FilterBar", "Tabs", "Panel"]) {
       const css = moduleCss(name);
-      if (css.includes("@container")) expect(css).toContain("@container pane");
+      if (css.includes("@container")) {
+        expect(css).toContain("@container (");
+        expect(css).not.toContain("@container pane");
+      }
       expect(css).not.toContain("@media (max-width");
     }
   });

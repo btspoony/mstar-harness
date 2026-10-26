@@ -58,7 +58,10 @@ body {
   /* The prototype's frame is a single 20px gutter: header `0 20px`, footer `7px 20px`,
      main `14px 20px 16px`. One left edge for the whole shell. */
   padding: 0.75rem 20px;
-  border-bottom: 1px solid currentColor;
+  /* The surface and the closing hairline are the shared pane band
+     (`.ms-pane-head` in the package's `base.css`), the same two rules the dsh seat
+     mounts inside its pane: `design-v1.html:158-165` is both. Only the chrome
+     geometry — sticky, height, gutter — belongs to this host. */
 }
 
 .app-title {

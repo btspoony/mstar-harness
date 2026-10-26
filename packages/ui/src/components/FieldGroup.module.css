@@ -29,7 +29,7 @@
   grid-template-columns: minmax(0, 1fr);
 }
 
-@container pane (max-width: 899px) {
+@container (max-width: 899px) {
   .list {
     grid-template-columns: minmax(0, 1fr);
   }

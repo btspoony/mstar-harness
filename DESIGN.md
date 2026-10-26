@@ -282,7 +282,15 @@ nothing", and a dash with a reason means "not known".
 **Product layout responds to the width a view is given, never to the viewport.** The
 viewport describes the window chrome; a screen describes its column. Every page body and
 every host pane declares `container: pane / inline-size` (the `.ms-container` hook in
-`base.css`), and components write `@container pane (…)` against it.
+`base.css`), and components write `@container (…)` against it — **unnamed**.
+
+The name is deliberately absent from the query. A CSS-module bundler rewrites a named
+query's prelude into a per-module hash (`@container pane_8f31a`), while the single
+declaration stays in the global sheet as `pane`; nothing then matches and every narrow rule
+in the product is silently dead. That is not a hypothetical: it is why the 400–900px pane
+rendered the wide layout squeezed through two review rounds. `build-web.test.ts` asserts the
+emitted artifact contains no named container query, and the component-layer test asserts no
+module writes one.
 
 A container query condition cannot read a custom property, so the breakpoints are
 **documented constants**, stated here and written literally in `tokens.css` and in the
@@ -299,6 +307,81 @@ rules that use them. The token contract test proves the two lists agree.
 - The dashboard's product area is the 1440px case; the dsh right Sidebar is the same
   components at **720px** (its push default) and **400px** (dragged narrow). Same tree,
   different container, no second implementation.
+
+### Narrow list treatment (the prototype is silent here)
+
+The prototype defines **one** narrow-table precedent — `WorkflowDetail` hiding columns 2
+and 5 below 619px — and no narrow treatment at all for the four list screens. Silence is not
+a licence to ship the wide table squeezed, so the product chooses:
+
+**Priority columns below the floor, a declared-width table above it, and a scroll floor as
+the net.** Concretely, every list table declares a px width for all but one column; that one
+flexible column (the title) takes the rest.
+
+| Band (container) | What the list does |
+| --- | --- |
+| **≥ 900px** | All columns. Declared widths; the flexible title column gets the remainder (measured at 900: 858px table in an 860px card, no scroll). |
+| **620–899px** | All columns, same widths, and the table keeps a floor of `declared widths + 120px`. If the pane is narrower than that floor the **card body scrolls sideways** rather than squeezing any column: measured at 760 the four lists fit (floor 680–716px in a 718px table) with zero truncated cells; at 620 the Issues table scrolls, and every column stays reachable. |
+| **480–619px** | Secondary columns are hidden **by rule** (`display: none`), not by overflow, and each yielded fact reappears on the row's second line. Id, title and the screen's one status column keep their declared widths; the flexible title takes the rest (measured at 420 and 619: narrowest cell 80–112px, zero truncated cells, no sideways scroll). |
+| **≤ 299px** | The collapsed table keeps the documented 300px floor and scrolls inside its own card. The card is narrower than the summary's four facts, so the summary line overflows its own box instead of reading as one measured line; the facts are all painted, the line keeps the title's baseline, and the page itself never scrolls sideways. |
+
+Two rules make this hold, and both are the defects that shipped:
+
+1. **Widths are declared, never inferred.** `table-layout: fixed` splits an undeclared
+   column set evenly — eight columns of ~90px each gave `I-…`, `d…` and `● runningplan…`.
+2. **No positional column widths.** Collapsing with "first column 20%, second 80%" put the
+   *third* primary column at zero width, which is how a status word lost its own box.
+
+A hidden column costs no width: the `<colgroup>` is gone, so a `display: none` cell no longer
+leaves a column's share behind it.
+
+The collapsed record's second line is a **row of its own spanning the primary columns**, not a
+second line inside the first cell. Inside that cell it only ever had the cell's width — 68px of
+an 80px id column, which rendered `critical · op…` — while a spanning row gives the facts the
+row's width and leaves both the header and the column policy untouched (the span is the primary
+count: a span over the hidden columns re-opens them under `table-layout: fixed`). Its facts wrap
+rather than truncate, so a fact is never cut in half.
+
+**What that trade costs, and where it stops.** The second line is an extra `<tr>`, so a screen
+reader announces a five-record list as ten rows, and the spanning cell has no header
+association. Its bounds are deliberate and part of the contract:
+
+- **list variant only** — a detail table has no second line and keeps its own row rules;
+- **below the collapse floor only** (620px of container) — above it the facts are columns again
+  and there is no second row in the DOM tree's rendered form;
+- **one spanned cell** across exactly the visible primary columns, never a second grid;
+- **non-interactive facts**: the row carries no tab stop and no key handler, so keyboard order
+  stays one stop per record. It does carry the row's pointer handler — at the width the product
+  lives in this row is roughly half of the record's painted area, and a tap on it must navigate
+  like a tap on the row above. A mouse user and a keyboard user reach the same destination by
+  the shortest path each has.
+
+The alternative — keeping the facts in the first cell — cannot show them whole, because that
+cell is 80px. A cell-sized second line is a truncation dressed as a layout, so the extra row is
+the cheaper trade until `DataTable` grows a column-aware second line.
+
+A **screen title never stacks, and never escapes its frame.** CJK breaks between every glyph, so
+a squeezed head set a two-glyph title as one glyph per line (measured: a 30.4px, 2-line box at a
+400px container). The fix is structural, not a single declaration:
+
+- **The title owns its row below the collapse floor.** The screen head wraps
+  (`flex-wrap: wrap`) and the title takes the full row (`flex: 1 1 100%`), the same shape the
+  prototype's `.panel-head` takes at narrow widths (`design-v1.html:736`). The title is then
+  measured against the whole card rather than the summary's remainder, so a two-glyph title has
+  a row to itself and does not stack.
+- **The title's floor is zero, not its own string.** A CSS minimum beats a maximum, so a
+  `min-inline-size: max-content` floor let a long title (an issue title is a sentence) grow PAST
+  the frame — measured 852.1px in a 360px frame — instead of truncating in it. With the row
+  above keeping short titles whole, the title needs no content floor: `min-inline-size: 0` plus
+  `max-inline-size: 100%` caps the box at the frame, and `nowrap` + `text-overflow: ellipsis`
+  truncate what does not fit (a long title measured 360px of box, ellipsized, no page overflow).
+- **A title never degrades to an ellipsis-only box.** Because the box is a whole row (240px at
+  the floor, 360px at 400px, 580px at 620px), the smallest title box is still a readable
+  measure; the gate asserts a floor of 120px on it.
+
+- **Prose keeps a measure.** Overview's two-column grid folds to one column below 900px, so a
+  card at 420–619px is 360–579px wide and its sentences wrap at 12+ characters per line
+  rather than one. No further cap is applied: the card is the measure.
 - A component that cannot degrade below a floor **states the floor** rather than squeezing
   into illegibility: a truncated cell always exposes its full text (hover `title`, plus a
   focus-reachable affordance for keyboard), and a table below its floor scrolls inside its

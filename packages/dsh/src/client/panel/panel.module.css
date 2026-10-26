@@ -17,9 +17,14 @@
 }
 
 /* The product shell's column (nav band + one scroller), shared by both seats.
- * It is also the product's container: the shared screens' responsive rules key
- * off `@container pane`, so the host must declare the container here or the
- * narrow/wide reflow never fires. */
+ *
+ * Two containers, two jobs, no overlap:
+ *  - this wrapper gives the HOST band (nav, tab strip) the pane's width, so the
+ *    shared nav's own narrow rules fire against the seat, not the window;
+ *  - the product scroller below carries `.ms-container`, which is the container
+ *    the shared screens query.
+ * Both are unnamed in their queries: a CSS-module bundler hashes a named query's
+ * prelude, so a name never matches what `base.css` declared. */
 .shell {
   display: flex;
   flex-direction: column;

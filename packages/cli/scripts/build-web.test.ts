@@ -61,7 +61,9 @@ beforeAll(async () => {
   const generated = await import(`${scratchPath}?v=${Date.now()}`);
   js = generated.dashboardJs;
   css = generated.dashboardCss;
-});
+  // The generator shells out to a build; bun's 5s default hook budget is a coin flip
+  // on a loaded machine and a hook timeout reads as a failed assertion.
+}, 30_000);
 
 describe("the offline guard", () => {
   test("a remote reference is rejected", () => {
@@ -96,6 +98,26 @@ describe("the bundle", () => {
     expect(css).toContain("--ms-bg-canvas");
     expect(css).toContain("--ms-text-primary");
     expect(css).toContain("data-ms-theme");
+  });
+
+  test("every container query is unnamed, so the bundler cannot hash it away", () => {
+    // THE regression this guards: Bun's CSS-module pass rewrites `@container pane`
+    // into `@container pane_<hash>` — one hash per module — while the single
+    // container declaration lives in the global `base.css` and keeps the plain
+    // name. Nothing matched, so every narrow rule in the product was dead and the
+    // 400-900px pane rendered the wide layout squeezed. An unnamed query has no
+    // prelude to rename, and the emitted artifact is where that is provable.
+    const named = [...css.matchAll(/@container\s+([A-Za-z_][\w-]*)/g)].map((match) => match[1]);
+    expect(named).toEqual([]);
+    // The declaration is still the named one the DESIGN.md contract describes, and
+    // there is EXACTLY one: a second declaration on another element would silently
+    // re-point every unnamed query (the nearest container wins), which no width sample
+    // could distinguish from a correct layout.
+    expect(css).toMatch(/container:\s*pane\s*\/\s*inline-size/);
+    const declarations = css.match(/container:\s*pane\s*\/\s*inline-size/g) ?? [];
+    expect(declarations.length).toBe(1);
+    // And the narrow rules survive as conditions.
+    expect(css).toMatch(/@container\s*\([^)]*619px/);
   });
 
   test("boots a React root and imports no htm or preact value", () => {

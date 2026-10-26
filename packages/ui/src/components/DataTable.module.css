@@ -1,7 +1,17 @@
-/* Fixed layout with caller-declared column widths: the title column absorbs the
-   slack and no cell can push its neighbour out of the container. */
+/* Fixed layout with caller-declared column widths: the flexible (title) column
+   absorbs the slack and no cell can push its neighbour out of the container.
+
+   `--ms-table-floor` is the narrowest this table may become before the card body
+   scrolls instead (`DataTable` computes it from the declared widths plus the
+   flexible column's measure). Below the collapse floor it is switched off: the
+   collapsed form has fewer columns and fits by design. */
+.scroller {
+  overflow-x: auto;
+}
+
 .table {
   inline-size: 100%;
+  min-inline-size: var(--ms-table-floor, 0);
   border-collapse: collapse;
   table-layout: fixed;
 }
@@ -35,6 +45,14 @@
   border-block-end: 0;
 }
 
+/* No trailing gap on the last column: the container's own padding already ends
+   the row, and reclaiming this ~12px is what lets a timestamp column show its
+   whole `2026-10-24 09:06` instead of `2026-10-24 …`. */
+.table th:last-child,
+.table td:last-child {
+  padding-inline-end: 0;
+}
+
 .table th[data-ms-align="end"],
 .table td[data-ms-align="end"] {
   text-align: end;
@@ -57,7 +75,10 @@
   outline-offset: -2px;
 }
 
-/* The second line exists only in the collapsed form. */
+/* The second line exists only in the collapsed form, and it lives in its own
+   spanning row (see the markup comment): in the first cell it only ever had that
+   cell's width. */
+.metaRow,
 .rowMeta {
   display: none;
 }
@@ -70,7 +91,7 @@
 
 /* The collapse: below 620px of CONTAINER (never viewport), the secondary
    columns go and the primary cell carries the second line. */
-@container pane (max-width: 619px) {
+@container (max-width: 619px) {
   /* A detail table drops the yielded columns instead of restating them: the page
      above already carries the record, so there is no second line to grow. */
   .table[data-ms-table="detail"] td,
@@ -89,12 +110,12 @@
     display: none;
   }
 
-  .table th[data-ms-col="primary"]:first-child {
-    inline-size: 20%;
-  }
-
-  .table th[data-ms-col="primary"]:nth-child(2) {
-    inline-size: 80%;
+  /* No positional widths here: the columns keep the widths their caller declared
+     and the flexible one takes the rest, the same rule as the wide band. A
+     20%-for-the-first-and-80%-for-the-second rule is what zeroed the THIRD
+     primary column (a status word with no width at all). */
+  .table {
+    min-inline-size: 0;
   }
 
   .table td {
@@ -109,15 +130,51 @@
     text-overflow: ellipsis;
   }
 
+  /* The main row keeps no closing rule of its own: the second line closes the
+     record, so the hairline belongs under the facts, not between them. */
+  .table[data-ms-table="list"] tbody tr[data-ms-row-main] td {
+    border-block-end: 0;
+  }
+
+  .metaRow {
+    display: table-row;
+  }
+
+  /* The second line is the same record, so it is the same pointer target: hover and
+     the pointer cursor, and the tap navigates. */
+  .metaRowInteractive:hover {
+    background: var(--ms-bg-hover);
+  }
+
+  .metaRowInteractive {
+    cursor: pointer;
+  }
+
+  .metaCell {
+    padding: 0 0 var(--ms-space-2);
+    border-block-end: var(--ms-hairline);
+  }
+
   .rowMeta {
     display: block;
+    /* Facts stay whole: below the floor the row is narrower than the sentence, so the
+       facts wrap (they are never cut) instead of running off a nowrap line. */
+    white-space: normal;
     margin-block-start: 1px;
     font-family: var(--ms-font-mono);
     font-size: var(--ms-fs-11);
     line-height: var(--ms-lh-11);
     color: var(--ms-text-muted);
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
+    /* Facts stay whole: the row is the measure, so a fact may move to a second
+       line but is never cut in half. */
+    overflow-wrap: anywhere;
+  }
+}
+
+/* The documented table floor (`table-floor`, 300px): under it the collapsed form
+   scrolls inside its own card instead of squeezing. */
+@container (max-width: 299px) {
+  .table {
+    min-inline-size: 300px;
   }
 }

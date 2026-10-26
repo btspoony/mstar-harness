@@ -80,8 +80,9 @@
 /* Layout constants — documentation, not custom properties.
  *
  * A container query condition cannot read a custom property
- * (`@container pane (max-width: var(--x))` is invalid CSS), so the breakpoints
- * live here as constants and are written literally in the rules that use them.
+ * (`@container (max-width: var(--x))` is invalid CSS), so the breakpoints live
+ * here as constants and are written literally in the rules that use them. The
+ * queries are unnamed: see the container contract in `base.css`.
  * `DESIGN.md` § Container width states the same numbers; the token contract
  * test proves the two lists agree. Below the two floors a component must
  * degrade instead of shrinking:

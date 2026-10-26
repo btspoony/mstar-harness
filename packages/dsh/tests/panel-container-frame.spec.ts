@@ -29,7 +29,7 @@ import { join } from 'node:path'
 import { describe, expect, it } from 'bun:test'
 import { createElement } from 'react'
 import { renderToStaticMarkup } from 'react-dom/server'
-import { MS_CONTAINER_CLASS } from '@mstar-harness/ui'
+import { MS_CONTAINER_CLASS, MS_PANE_BODY_CLASS, MS_PANE_HEAD_CLASS } from '@mstar-harness/ui'
 import { PanelShell } from '../src/client/panel/panel-shell.tsx'
 import type { PanelSnapshot } from '../src/panel/panel-snapshot.ts'
 
@@ -88,6 +88,22 @@ describe('the dsh seat mounts the shared frame', () => {
     const scrollAt = html.indexOf('data-mstar-scroll')
     expect(navAt).toBeGreaterThan(-1)
     expect(scrollAt).toBeGreaterThan(navAt)
+  })
+})
+
+describe('the pane frame (Task 4 of the narrow-pane plan)', () => {
+  it('the nav band is the pane head band and the product body carries the closing inset', () => {
+    // The prototype's `.dsh-page-head` / `.dsh-page-body` (`design-v1.html:482-488`):
+    // a surface band closed by a hairline, and a body that ends 24px in. Both are
+    // the shared layer's hooks (`base.css`), so the next host applies the same two
+    // classes instead of restating two declarations.
+    expect(html).toContain('data-ms-pane-head=""')
+    expect(classListOf('data-ms-pane-head')).toContain(MS_PANE_HEAD_CLASS)
+    expect(html).toContain('data-ms-pane-body=""')
+    expect(classListOf('data-ms-pane-body')).toContain(MS_PANE_BODY_CLASS)
+    // The body is also the container the shared screens query, and the head band
+    // is host chrome outside it.
+    expect(classListOf('data-ms-pane-body')).toContain(MS_CONTAINER_CLASS)
   })
 })
 
