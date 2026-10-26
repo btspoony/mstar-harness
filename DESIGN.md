@@ -723,8 +723,16 @@ with `getComputedStyle` at 1440, on the same selectors, and they agree element f
 | `tbody td` | `13px` / `rgb(231, 234, 238)` / `0 10px` |
 | hairline (any `border-bottom`) | `rgb(36, 41, 48)` |
 | table row height | `32px` |
+| `.detail-title` | `16px` / `600` / `rgb(231, 234, 238)` |
+| `.detail-meta` | `11px` / `400` / `rgb(118, 126, 138)` |
+| `.field dt` | `11px` / `400` / `rgb(118, 126, 138)` |
+| `.field dd` | `12px` / `400` / `rgb(231, 234, 238)` |
+| `.chip` | `11px` / `400` / `rgb(164, 172, 183)` |
+| `.breadcrumb` | `11px` / `400` / `rgb(118, 126, 138)` |
 
-Screens checked this way: overview, issues, workflows, iterations, projects. The values are
+Screens checked this way: overview, issues, workflows, iterations, projects —
+and the first four rows again on workflow-detail, which is where the detail-level values
+(`.detail-title` through `.breadcrumb`) were read. The values are
 theme-dependent — these are the **dark** scheme's; `tokens.css` carries both, and the light
 values are the prototype's own light block.
 
