@@ -14,7 +14,6 @@
  */
 import type { ReactNode } from "react";
 
-import css from "./Panel.module.css";
 
 export type PanelProps = {
   children: ReactNode;
@@ -26,7 +25,7 @@ export type PanelProps = {
 export function Panel(props: PanelProps) {
   return (
     <section
-      className={props.className === undefined ? css.panel : `${css.panel} ${props.className}`}
+      className={props.className === undefined ? "panel" : `panel ${props.className}`}
       data-ms-panel=""
       {...(props.labelledBy === undefined ? {} : { "aria-labelledby": props.labelledBy })}
     >
@@ -45,12 +44,12 @@ export type PanelHeadProps = {
 
 export function PanelHead(props: PanelHeadProps) {
   return (
-    <div className={css.head} data-ms-panel-head="">
-      <h2 className={css.title} id={props.id} data-ms-panel-title="">
+    <div className="panel-head" data-ms-panel-head="">
+      <h2 className="panel-title" id={props.id} data-ms-panel-title="">
         {props.title}
       </h2>
       {props.meta === undefined ? null : (
-        <span className={css.meta} data-ms-panel-meta="">
+        <span className="panel-meta" data-ms-panel-meta="">
           {props.meta}
         </span>
       )}
@@ -66,7 +65,7 @@ export type PanelBodyProps = {
 
 export function PanelBody(props: PanelBodyProps) {
   return (
-    <div className={props.tight === true ? `${css.body} ${css.tight}` : css.body} data-ms-panel-body="">
+    <div className={props.tight === true ? "panel-body tight" : "panel-body"} data-ms-panel-body="">
       {props.children}
     </div>
   );
@@ -74,7 +73,7 @@ export function PanelBody(props: PanelBodyProps) {
 
 export function PanelFoot(props: { children: ReactNode }) {
   return (
-    <div className={css.foot} data-ms-panel-foot="">
+    <div className="panel-foot" data-ms-panel-foot="">
       {props.children}
     </div>
   );

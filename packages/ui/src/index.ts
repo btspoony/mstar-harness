@@ -16,6 +16,7 @@
 
 import "./styles/tokens.css";
 import "./styles/base.css";
+import "./styles/product.css";
 
 export * from "./view-model/session.ts";
 export * from "./view-model/format.ts";

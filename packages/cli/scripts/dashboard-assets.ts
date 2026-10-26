@@ -26,7 +26,12 @@
 // content the owner asked for, not a dependency; the headroom stays ~10 KB so the
 // next design fix does not need this line edited again.
 export const JS_CEILING = 320 * 1024;
-export const CSS_CEILING = 60 * 1024;
+// Raised, 60 KB to 100 KB: the product's component styles are now generated from the
+// approved prototype and shipped whole (values unchanged, selectors scoped, queries
+// unnamed) instead of being re-typed one screen at a time. Re-typing is exactly what
+// produced three rounds of "close but not the same"; the sheet is the fix, and the
+// budget follows the decision rather than blocking it.
+export const CSS_CEILING = 100 * 1024;
 
 /**
  * The define that selects React's production build. Exported so the test pins the
