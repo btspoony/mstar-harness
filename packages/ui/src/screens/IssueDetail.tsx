@@ -295,7 +295,7 @@ export function IssueDetail(props: IssueDetailProps) {
                   ))}
                 </tbody>
               </table>
-              <p className={"muted t-11"}>{copy.historyNote}</p>
+              <p className={"sec-note"}>{copy.historyNote}</p>
             </section>
           )}
 

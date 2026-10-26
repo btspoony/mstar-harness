@@ -1299,10 +1299,26 @@ items are `<code>`. Measured after the rewrite, the head reads
 own five cells in its own order.
 
 **This is the eleventh instance of one failure mode**: a class exists in the sheet, the
-component writes a parallel name beside it, and the page renders bare. The check that would
-have caught all eleven is the reverse scan, and it cannot be a hard failure today because 97
-legitimate hits sit above the real ones. The honest state: the scan is a **report**, run by
-hand, and a human still has to tell `.evidence` from `.tk-swatch`.## Verification coverage, stated
+component writes a parallel name beside it, and the page renders bare.
+
+**The 97 were then checked with evidence, not explanation.** The first pass wrote off whole
+groups — "`.app-*`, `.brand-*`, `.pane-*` are the host shells" — without grepping them. Two
+corrections came out of doing it properly:
+
+| Class | First pass said | Evidence says |
+| --- | --- | --- |
+| `.status-list`, `.history-arrow`, `.screen-actions`, `.compass-body`, `.pane-nav`, `.dsh-shell` | "host shells and dsh" | **zero `className` uses in any `.tsx`** |
+| `.history-arrow`, `.screen-actions` | "unused, then" | the **prototype** has zero HTML instances too — dead CSS in both |
+| `.sec-note` | not noticed | the prototype uses it **9 times**, this implementation **0** |
+
+`muted t-11` was doing `.sec-note`'s job on the disposition history's footer: two utility
+classes that happen to look similar, against a purpose-built rule with its own
+`margin: 4px 0 0`. It is `.sec-note` now.
+
+**The honest state of the scan**: it is a **report**, run by hand. It cannot be a hard
+failure — 97 classes hit, most legitimately — and the judgement that separates `.evidence`
+from `.tk-swatch` is still a human one, but the judgement has to cite an instance count, not
+a plausible category.## Verification coverage, stated
 
 Two hosts mount these screens: the dashboard (`packages/cli/web`) and the dsh pane
 (`packages/dsh/src/client/panel`). They share the components but **each owns its own
