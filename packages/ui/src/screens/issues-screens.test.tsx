@@ -102,6 +102,17 @@ const renderIssues = (
   );
 
 const detailCopy: IssueDetailCopy = {
+  relationsHeading: "Relations",
+  relationsColumns: { relation: "Relation", issue: "Issue", title: "Title" },
+  sourceHeading: "Source",
+  sourceKindLabel: "Source kind",
+  sourceIdentityLabel: "Source identity",
+  sourceLocationLabel: "Location",
+  sourceRootCauseLabel: "Root cause key",
+  sourceAcceptanceLabel: "Acceptance key",
+  identityKeysHeading: "Identity keys",
+  identityKeyLabel: "Identity key",
+  providerLabel: "Provider",
   breadcrumb: { label: "Breadcrumb", current: "Issues" },
   identityHeading: "Fact",
   fields: {
@@ -180,7 +191,7 @@ const detail = (over: Partial<IssueDetail> = {}): IssueDetail => ({
     },
   ],
   transitions: [],
-  relations: [],
+  relations: [{ fromIssue: 'I-000870', relation: 'related', toIssue: 'I-000840' }],
   provenance: [],
   projectMoves: [],
   ...over,
@@ -401,8 +412,10 @@ describe("IssueDetail — NEGATIVE: what §8.1 removed", () => {
     expect(html).toContain("data-ms-issue-source");
   });
 
-  test("no transition history, provenance, relations or tracker carry-over", () => {
-    for (const removed of ["transitions", "provenance", "relations", "Migration", "sourceHash", "legacy"]) {
+  test("no transition history, no provenance and no migration bookkeeping yet", () => {
+    // `relations` is rendered now (the prototype's Relations table). The three that remain
+    // are still out until their panels are built.
+    for (const removed of ["transitions", "provenance", "Migration", "sourceHash", "legacy"]) {
       expect(html.toLowerCase()).not.toContain(removed.toLowerCase());
     }
   });
@@ -426,7 +439,6 @@ describe("IssueDetail — NEGATIVE: what §8.1 removed", () => {
       "occurrences",
       "transitions",
       "provenance",
-      "relations",
       "url",
       "externalId",
       // `provider` and `identityKey` are carried now: the prototype's `Identity keys`
@@ -461,5 +473,14 @@ describe("IssueDetail — the record read: null is absent, a failed read is unav
     const html = renderDetail(detail(), null);
     expect(html).not.toContain('data-ms-absence="unavailable"');
     expect(html).toContain("I-000870");
+  });
+});
+
+describe("IssueDetail — the relations table", () => {
+  test("it names the other end of the join, not this issue", () => {
+    const html = renderDetail(detail());
+    expect(html).toContain("data-ms-issue-relations");
+    expect(html).toContain("I-000840");
+    expect(html).toContain("related");
   });
 });

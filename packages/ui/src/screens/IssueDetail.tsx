@@ -60,6 +60,9 @@ export type IssueDetailCopy = {
   sourceLocationLabel: string;
   sourceRootCauseLabel: string;
   sourceAcceptanceLabel: string;
+  /** The `Relations` table's heading and its three column labels. */
+  relationsHeading: string;
+  relationsColumns: { relation: string; issue: string; title: string };
   identityKeysHeading: string;
   identityKeyLabel: string;
   providerLabel: string;
@@ -165,6 +168,31 @@ export function IssueDetail(props: IssueDetailProps) {
             <section className={"panel"} data-ms-acceptance="">
               <h2>{copy.acceptanceHeading}</h2>
               <p className={"detail-text"}>{record.value.acceptance}</p>
+            </section>
+          )}
+
+          {/* The prototype's `Relations` table. */}
+          {record.value.relations.length === 0 ? null : (
+            <section className={"fact-block"} data-ms-issue-relations="" aria-labelledby="ms-issue-relations">
+              <h2 id="ms-issue-relations">{copy.relationsHeading}</h2>
+              <table className={"mini-table"}>
+                <thead>
+                  <tr>
+                    <th scope="col">{copy.relationsColumns.relation}</th>
+                    <th scope="col">{copy.relationsColumns.issue}</th>
+                    <th scope="col">{copy.relationsColumns.title}</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {record.value.relations.map((relation) => (
+                    <tr key={`${relation.relation}-${relation.issue}`}>
+                      <td>{relation.relation}</td>
+                      <td className="mono">{relation.issue}</td>
+                      <td>{relation.title ?? "—"}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
             </section>
           )}
 

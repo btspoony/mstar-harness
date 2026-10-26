@@ -221,6 +221,8 @@ export const zh: Copy = {
     acceptanceHeading: "验收标准",
     closureNoteHeading: "关闭说明",
     identityKeysHeading: "标识键",
+    relationsHeading: "关联",
+    relationsColumns: { relation: "关系", issue: "问题", title: "标题" },
     sourceHeading: "来源",
     sourceKindLabel: "来源类型",
     sourceIdentityLabel: "来源标识",

@@ -241,6 +241,8 @@ export const en = {
     acceptanceHeading: "Acceptance criteria",
     closureNoteHeading: "Closure note",
     identityKeysHeading: "Identity keys",
+    relationsHeading: "Relations",
+    relationsColumns: { relation: "Relation", issue: "Issue", title: "Title" },
     sourceHeading: "Source",
     sourceKindLabel: "Source kind",
     sourceIdentityLabel: "Source identity",

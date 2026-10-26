@@ -261,6 +261,8 @@ export type IssueDetailModel = {
   /** The prototype's `Identity keys` panel: the tracker identity, when the store has one. */
   identityKey: string | null;
   provider: string | null;
+  /** The prototype's `Relations` table: what this issue is joined to. */
+  relations: ReadonlyArray<{ relation: string; issue: string; title: string | null }>;
   /** The prototype's `Source` panel: the latest occurrence's own account of itself. */
   source: {
     kind: string;
@@ -293,6 +295,12 @@ export function issueDetailModel(detail: IssueDetail): IssueDetailModel {
     closureNote: closed ? longText(detail.closureNote) : null,
     identityKey: detail.identityKey ?? null,
     provider: detail.provider ?? null,
+    relations: detail.relations.map((relation) => ({
+      relation: relation.relation,
+      // The row names the other end of the join, not this issue.
+      issue: relation.fromIssue === detail.id ? relation.toIssue : relation.fromIssue,
+      title: null,
+    })),
     // The prototype's Source panel states the newest occurrence's provenance.
     source:
       detail.occurrences.length === 0
