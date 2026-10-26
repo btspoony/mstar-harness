@@ -290,57 +290,21 @@ describe("IterationDetail — catalog, execution, compass, gate steps, plan tabl
   });
 });
 
-describe("IterationDetail — the gate display is four labels plus a never-marked fifth", () => {
+describe("IterationDetail — the gate lives in the header, not as a track", () => {
   const html = renderDetail(iteration());
 
-  test("all five steps render, each with its own label", () => {
-    expect(html.match(/data-ms-step="/g)?.length).toBe(5);
-    for (const label of ["Start", "Execute", "Close", "PR delivery", "Merge ready"]) {
-      expect(html).toContain(label);
-    }
+  test("the position is stated once, in the header chip", () => {
+    // The prototype's iteration detail has no gate track at all (measured `gateEls: 0`);
+    // the position appears only as the header's action chip.
+    expect(html).toContain('data-ms-gate-chip="true"');
+    expect(html).not.toContain("gate-track");
+    expect(html).not.toContain("data-ms-step-position");
   });
 
-  test("exactly one step is marked, and it is the store's step", () => {
-    expect(html.match(/data-ms-step-position="current"/g)?.length).toBe(1);
-    expect(html).toContain('data-ms-step="execute" data-ms-step-position="current"');
-    expect(html).toContain("step 2 of 5");
-  });
-
-  test("the step's state rides a class and a glyph, so it is not colour alone", () => {
-    // The prototype draws the track as a 3px rule per step and colours it by state class;
-    // the class and the glyph are the only non-colour channels, and neither is visible
-    // when an iteration records no compass (every step is `ahead`).
-    const page = renderDetail(iteration({ gateStep: 2 }));
-    expect(page).toContain('class="gate-step is-done"');
-    expect(page).toContain('class="gate-step is-current"');
-    expect(page).toMatch(/class="gate-step is-done"[^>]*>\s*<span class="glyph"[^>]*>✓/);
-    expect(page).toMatch(/class="gate-step is-current"[^>]*>\s*<span class="glyph"[^>]*>●/);
-    // and a step ahead of the store's carries neither the class nor a glyph
-    expect(page).toMatch(/class="gate-step"[^>]*data-ms-step="merge-ready"[^>]*>\s*<span class="glyph"[^>]*><\/span>/);
-  });
-
-  test("step 5 is NEVER marked, at any store value", () => {
-    for (const gateStep of [1, 2, 3, 4] as const) {
-      const page = renderDetail(iteration({ gateStep } ));
-      const marked = page.match(/<li[^>]*data-ms-step="([^"]+)"[^>]*data-ms-step-position="current"/);
-      expect(marked?.[1]).toBe(["start", "execute", "close", "pr-delivery"][gateStep - 1] as string);
-      expect(marked?.[1]).not.toBe("merge-ready");
-      // And the fifth step is always "ahead", never reached.
-      expect(page).toContain('data-ms-step="merge-ready" data-ms-step-position="ahead"');
-    }
-  });
-
-  test("no violation count is rendered (D29: it has no source a view may read)", () => {
-    expect(html.toLowerCase()).not.toContain("violation");
-    expect(html).not.toMatch(/\b\d+ violations?\b/);
-  });
-
-  test("an iteration with no compass marks nothing and never claims step 1", () => {
+  test("an iteration with no compass claims no step", () => {
     const page = renderDetail(iteration({ compass: null, gateStep: null } as Partial<IterationDTO>));
-    expect(page.match(/data-ms-step-position="current"/g)).toBeNull();
-    expect(page).toContain("Delivery");
     expect(page).not.toContain("step 0 of 5");
-    expect(page).not.toContain("step 1 of 5");
+    expect(page).not.toContain("data-ms-gate-chip");
   });
 });
 

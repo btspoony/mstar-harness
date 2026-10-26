@@ -611,6 +611,19 @@ Measured with the correct selector, the prototype's screens are:
 | project-detail | Catalog identity, Roadmap authority, Milestone board, Stored facts |
 | workflows, iterations, issue-detail | *(none — these screens have no titled panels)* |
 
+## The iteration gate track is gone, because the prototype has none
+
+This screen used to render a five-step gate track — four labels plus a fifth that is never
+marked — on the reasoning that the delivery position needs a body. The prototype's
+iteration detail has **no gate at all**: measured `gateEls: 0`, `hasGate: false`.
+
+The position is not lost. It appears where the prototype puts it, in the header's action
+chip (`step 2 of 5`), which is also the only place the record states it.
+
+This is worth recording because keeping the track was a *choice* — the screen had the data
+and the track was already built. The acceptance criterion here is the prototype, and an
+addition nobody asked for is a divergence however defensible it looks.
+
 ## Verification coverage, stated
 
 Two hosts mount these screens: the dashboard (`packages/cli/web`) and the dsh pane
