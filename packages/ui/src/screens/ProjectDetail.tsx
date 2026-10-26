@@ -253,12 +253,9 @@ function RoadmapFeature(props: { model: RoadmapModel; copy: ProjectDetailCopy })
           markdown), the stored document's facts on the right. */}
       {model.storedFacts === null ? null : (
         <div className="detail-grid">
-          <section className="panel" aria-labelledby="ms-project-direction">
-            <div className="panel-head">
-              <h2 className="panel-title" id="ms-project-direction">
-                {copy.storedFactsHeading}
-              </h2>
-            </div>
+          {/* The prototype's left half of this row carries no title: it is two
+              disclosures, and the panel around them is a frame, not a titled card. */}
+          <section className="panel" aria-label={copy.storedFactsHeading}>
             <div className="panel-body">
               {model.direction === null ? null : (
                 <Collapsible summary={copy.roadmap.directionHeading}>
