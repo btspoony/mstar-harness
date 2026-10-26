@@ -654,7 +654,7 @@ So the rule now lives where the number does:
 fact is often in the prototype's own JavaScript rather than its stylesheet — its data,
 its heights, its series lengths. Grep the `<script>` before concluding the CSS is wrong.
 
-## The identity line states one of the prototype's four facts
+## The identity line, and the one fact that arrives at runtime
 
 The prototype's overview ends with `.identity-line`, a hairline-topped mono row:
 
@@ -662,37 +662,30 @@ The prototype's overview ends with `.identity-line`, a hairline-topped mono row:
 @mstar-harness/dsh  v4.0.9  ·  {HARNESS_DIR}  ·  projection current
 ```
 
-This implementation renders **`projection current` only**. That is not an oversight and not
-a style choice — the other three facts are excluded by other parts of the system:
+All four are stated now, and each arrives by the route its nature demands:
 
-| Fact | Why it is absent |
-| --- | --- |
-| `v4.0.9` | `packages/cli/scripts/build-web.ts` deliberately embeds no version constant. This is the **second** prototype element lost to it (the first was the header's version badge). |
-| `{HARNESS_DIR}` | `overviewFromEnvelope` records the decision (D28/D30): "the host passes it through and states no version, no `{HARNESS_DIR}` and no counters of its own". |
-| `@mstar-harness/dsh` | No constant carries it; the dashboard does not know which host package built it. |
+| Fact | How it arrives | Why that route |
+| --- | --- | --- |
+| `@mstar-harness/cli` | `build-web.ts` reads `packages/cli/package.json` | a build-time constant |
+| `v4.0.9` | the same manifest | hard-coding it would go stale on the next release |
+| the harness root | `<html data-harness-dir="…">` from `server.ts` | a **runtime** decision: it is whatever directory the server was started on |
+| `projection current` | the read envelope | it is a fact about the read |
 
-Two of the four are now stated. `build-web.ts` reads `packages/cli/package.json` and injects
-its name and version; the dsh build does the same from `packages/dsh/package.json`, threading
-the values through its `define` as parameters so `clientBundleDefine` stays a pure function.
-Each host names **itself**:
+Each host names **itself**: the dsh panel prints `@mstar-harness/dsh`, the standalone
+dashboard prints `@mstar-harness/cli`. The prototype had one bundle and could name it; this
+repository has two, and printing the other one's name would be a false statement about
+which code is running.
 
-| Host | Line reads |
-| --- | --- |
-| the prototype (a dsh panel design) | `@mstar-harness/dsh  v4.0.9` |
-| the dsh panel | `@mstar-harness/dsh  v4.0.9` — identical |
-| the standalone dashboard | `@mstar-harness/cli  v4.0.9` |
+**Two silent failures on the way here**, both worth recognising again:
 
-The third row is the one deliberate difference: the dashboard is not built by the dsh plugin,
-so printing `@mstar-harness/dsh` there would be a false statement about which code is running.
-The prototype had one bundle and could name it; this repository has two.
-
-`{HARNESS_DIR}` remains, and it is the one fact with no source: the dashboard knows its
-harness root (`packages/commands/src/families/dashboard.ts` receives `harnessDir`) but never
-passes it to the browser, and D28/D30 record the exclusion. Closing it means adding that
-pass-through, not adding a span.
-
-**This entry exists so it is not lost the way round 12's header badge was.** A known,
-reasoned gap belongs in this file; a gap nobody re-reads becomes a surprise at review.
+1. **The inline script.** The first version injected
+   `<script>window.__MSTAR_HARNESS_DIR__=…</script>`. It was in the HTML and the bundle
+   read it; the browser saw `undefined`. The server sends `script-src 'self'`, so an inline
+   assignment is blocked with no error at all. A data attribute has no such rule.
+2. **`replace` with an absent needle.** `dashboardHtml.replace("<html ", …)` returns the
+   input unchanged when the prefix is missing — a page with no directory and no error. The
+   handler now refuses with `shell-marker-missing` instead, because a silent no-op one layer
+   up is exactly how the first failure shipped.
 
 ## Where this implementation still differs from the prototype
 
@@ -701,11 +694,10 @@ reasoned gap — not undiscovered work.
 
 | # | Prototype | Here | Why | Reversible by |
 | --- | --- | --- | --- | --- |
-| 1 | `.identity-line` states `plugin · vX · {HARNESS_DIR} · projection` | states `projection` only | version is not embedded (`build-web.ts`); `{HARNESS_DIR}` is excluded by D28/D30; no constant names the host package | a build-time constant plus overriding two decisions |
-| 2 | header carries a version badge (`v4.0.9`) | no badge | same missing constant | the same constant |
-| 3 | milestone name is plain text | name ellipses on its own box | the prototype has nothing to truncate; ours must fit arbitrary names | not worth reversing — an ellipsis is the honest form of an unbounded string |
-| 4 | overview / issues trend drawn at two heights | same, **now matched** (88 / 132) | — | closed |
-| 5 | a scope chip with a removable × | same chip, no × when the host passes no callback | the prototype has a control; ours states a fact | passing `onClearScope` from a host |
+| 1 | `.identity-line` states `plugin · vX · {HARNESS_DIR} · projection` | **all four, per host** | the dsh panel and the dashboard each name their own package | closed |
+| 2 | milestone name is plain text | name ellipses on its own box | the prototype has nothing to truncate; ours must fit arbitrary names | not worth reversing — an ellipsis is the honest form of an unbounded string |
+| 3 | overview / issues trend drawn at two heights | same (88 / 132) | — | closed |
+| 4 | a scope chip with a removable × | same chip, no × when the host passes no callback | the prototype has a control; ours states a fact | passing `onClearScope` from a host |
 
 Rows 1 and 2 are the same missing fact: the build embeds no version. Fixing both means one
 change in `build-web.ts`, not two patches — and that is why they are listed rather than

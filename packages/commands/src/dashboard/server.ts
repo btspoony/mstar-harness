@@ -203,8 +203,17 @@ export async function startDashboard(options: StartDashboardOptions): Promise<Ru
         // not a build-time constant. It rides a data attribute rather than an inline
         // script because this server sends `script-src 'self'` — an inline assignment is
         // blocked silently, which is how the first attempt shipped a `undefined`.
+        //
+        // The marker is checked: a `replace` whose needle is absent returns the input
+        // unchanged, so a shell that ever lost its `<html …>` prefix would ship a page
+        // with no directory and no error — the same silent failure one layer up.
+        const marker = "<html ";
+        if (!dashboardHtml.includes(marker)) {
+          sendJson(res, 500, fail("shell-marker-missing", `the dashboard shell carries no ${JSON.stringify(marker)} prefix`), requestHead);
+          return;
+        }
         const shell = dashboardHtml.replace(
-          "<html ",
+          marker,
           `<html data-harness-dir="${escapeHtmlAttribute(options.harnessDir)}" `,
         );
         sendStatic(res, requestHead, "text/html; charset=utf-8", shell);
