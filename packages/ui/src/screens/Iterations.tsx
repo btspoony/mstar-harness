@@ -183,16 +183,16 @@ export function Iterations(props: IterationsProps) {
               resultSummary={copy.filters.results(model.filtered, model.total)}
             />
             </PanelHead>
-            <PanelBody tight={true}>
-              <DataTable
-                caption={copy.tableCaption}
-                columns={columns}
-                rows={model.rows.value}
-                rowKey={(row) => row.iterationId}
-                meta={meta}
-                onRowActivate={props.onOpen === undefined ? undefined : (row) => props.onOpen?.(row.iterationId)}
-              />
-            </PanelBody>
+            {/* No PanelBody: the prototype's panel is `.panel-head`, `.table-wrap`,
+                `.panel-foot` as three siblings. */}
+            <DataTable
+              caption={copy.tableCaption}
+              columns={columns}
+              rows={model.rows.value}
+              rowKey={(row) => row.iterationId}
+              meta={meta}
+              onRowActivate={props.onOpen === undefined ? undefined : (row) => props.onOpen?.(row.iterationId)}
+            />
             <PanelFoot>
               {/* The prototype's footer explains where the two facts come from, so a
                   reader knows "active" is catalog membership and the execution column

@@ -103,7 +103,9 @@ export function Projects(props: ProjectsProps) {
       {model.rows.kind === "populated" ? (
         <Panel labelledBy={LIST_HEAD_ID}>
           <PanelHead id={LIST_HEAD_ID} title={copy.listHeading} meta={copy.listMeta} />
-          <PanelBody tight={true}>
+          {/* An unclassed div: the prototype wraps the rows in a bare `div`, not a
+              `.panel-body`, so the rows keep their own rhythm. */}
+          <div data-ms-projects="">
             {/* The prototype lists projects as rows, not as a table: a dot, the name,
                 the store's id, the description, then the open count and the arrow. */}
             {model.rows.value.map((row) => {
@@ -147,7 +149,7 @@ export function Projects(props: ProjectsProps) {
                 </div>
               );
             })}
-          </PanelBody>
+          </div>
           <PanelFoot>
             <span className="muted t-11" data-ms-project-note="">{copy.lifecycleNote}</span>
           </PanelFoot>
