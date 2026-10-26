@@ -353,6 +353,10 @@ export const zh: Copy = {
   },
 
   projects: {
+    listHeading: "目录项目",
+    listMeta: "选择一个项目以打开它的路线图、问题与迭代",
+    lifecycleNote: "生命周期是目录的生命周期，不是执行状态。",
+    noLifecycle: "无生命周期",
     pageTitle: "项目",
     tableCaption: "项目",
     columns: { title: "标题", id: "编号", lifecycle: "生命周期", openIssues: "未关闭", description: "描述" },

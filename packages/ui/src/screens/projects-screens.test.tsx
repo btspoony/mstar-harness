@@ -187,7 +187,9 @@ describe("Projects list — the facts of §8.2", () => {
   test("_default is a real row, not a hidden one", () => {
     // It is the store's bucket for unattributed records (D12). Hiding it would
     // hide that the harness keeps one at all.
-    expect(html).toContain('data-ms-row-key="_default"');
+    // The list is the prototype's row list now, not a DataTable: the same hook rides
+    // the row element rather than a `data-ms-row-key`.
+    expect(html).toContain('data-ms-project="_default"');
   });
 
   test("NEGATIVE: no counter from the read envelope", () => {

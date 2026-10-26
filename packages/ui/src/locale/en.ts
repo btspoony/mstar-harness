@@ -376,6 +376,10 @@ export const en = {
   },
 
   projects: {
+    listHeading: "Catalog projects",
+    listMeta: "Select a project to open its roadmap, issues and iterations",
+    lifecycleNote: "Lifecycle is the catalog lifecycle, never the execution state.",
+    noLifecycle: "no lifecycle",
     pageTitle: "Projects",
     tableCaption: "Projects",
     columns: { title: "Title", id: "ID", lifecycle: "Lifecycle", openIssues: "Open", description: "Description" },

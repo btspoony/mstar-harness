@@ -11,17 +11,28 @@
  * list — a list has no feature body to degrade.
  */
 import { DataTable, type DataTableColumn } from "../components/DataTable.tsx";
-import { Panel, PanelBody } from "../components/Panel.tsx";
+import { Panel, PanelBody, PanelFoot, PanelHead } from "../components/Panel.tsx";
 import { EmptyState, type AbsenceArm } from "../components/EmptyState.tsx";
 import { StatusDot } from "../components/StatusDot.tsx";
 import { TruncatedText } from "../components/TruncatedText.tsx";
 import type { ProjectListModel, ProjectRow } from "../view-model/projects.ts";
 import type { Tone } from "../view-model/status.ts";
+import type { KeyboardEvent } from "react";
+
+/** The project list card's own head. */
+const LIST_HEAD_ID = "ms-projects-list";
 
 /** Every visible string this screen needs. Task 5 supplies them. */
 export type ProjectsCopy = {
   pageTitle: string;
   tableCaption: string;
+  /** The list card's head and its one-line instruction. */
+  listHeading: string;
+  listMeta: string;
+  /** The prototype's footer: lifecycle is catalog, not execution. */
+  lifecycleNote: string;
+  /** Said instead of a lifecycle when the catalog records none. */
+  noLifecycle: string;
   columns: { title: string; id: string; lifecycle: string; openIssues: string; description: string };
   openIssues: (count: number) => string;
   noDescription: string;
@@ -61,7 +72,7 @@ export function Projects(props: ProjectsProps) {
       width: "15%",
       secondary: true,
       align: "end",
-      render: (row) => <span className={"mono t-12"}>{copy.openIssues(row.openIssues)}</span>,
+      render: (row) => <span className={"mono t-12"}>{row.openIssuesText}</span>,
     },
     {
       key: "description",
@@ -90,17 +101,47 @@ export function Projects(props: ProjectsProps) {
       </div>
 
       {model.rows.kind === "populated" ? (
-        <Panel>
+        <Panel labelledBy={LIST_HEAD_ID}>
+          <PanelHead id={LIST_HEAD_ID} title={copy.listHeading} meta={copy.listMeta} />
           <PanelBody tight={true}>
-            <DataTable
-              caption={copy.tableCaption}
-              columns={columns}
-              rows={model.rows.value}
-              rowKey={(row) => row.projectId}
-              meta={meta}
-              onRowActivate={props.onOpen === undefined ? undefined : (row) => props.onOpen?.(row.projectId)}
-            />
+            {/* The prototype lists projects as rows, not as a table: a dot, the name,
+                the store's id, the description, then the open count and the arrow. */}
+            {model.rows.value.map((row) => {
+              const activate = props.onOpen === undefined ? undefined : () => props.onOpen?.(row.projectId);
+              return (
+                <div
+                  key={row.projectId}
+                  className="rm-project-row"
+                  data-ms-project={row.projectId}
+                  {...(activate === undefined
+                    ? {}
+                    : {
+                        role: "link",
+                        tabIndex: 0,
+                        onClick: activate,
+                        onKeyDown: (event: KeyboardEvent) => {
+                          if (event.key === "Enter" || event.key === " ") {
+                            event.preventDefault();
+                            activate();
+                          }
+                        },
+                      })}
+                >
+                  <StatusDot label={row.lifecycle === "" ? copy.noLifecycle : row.lifecycle} tone={row.lifecycleTone} />
+                  <span className="rm-project-name">{row.title}</span>
+                  <span className="mono t-11 muted">{row.projectId}</span>
+                  <span className="rm-project-desc trunc" title={row.description ?? copy.noDescription}>
+                    {row.description ?? copy.noDescription}
+                  </span>
+                  <span className="mono t-12">{copy.openIssues(row.openIssues)}</span>
+                  <span className="muted" aria-hidden="true">→</span>
+                </div>
+              );
+            })}
           </PanelBody>
+          <PanelFoot>
+            <span className="muted t-11" data-ms-project-note="">{copy.lifecycleNote}</span>
+          </PanelFoot>
         </Panel>
       ) : (
         <Panel>
