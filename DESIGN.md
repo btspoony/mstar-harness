@@ -1524,15 +1524,33 @@ than the overview for free. This implementation pinned 88px and then invented
 `.chart-svg.is-full { height: 132px }` to make the issues screen look right; `is-full` appears
 **zero times** in the prototype.
 
-Both are gone. Measured after:
+Both are gone, **and the first measurement of the result was wrong**. It read
+`844 × 88` and `1346 × 132` — suspiciously close to the two pinned heights I had just
+deleted — because the dashboard was serving a CLI bundle built *before* the CSS change. Only
+`packages/ui` had been rebuilt; the CLI's `assets.generated.ts` still carried `height: 88px`.
+
+Rebuilt properly, the real answer was worse than the old one: `844 × 338`, a 0.400 ratio.
+That is the component's own `viewBox` — `0 0 100 40` with `preserveAspectRatio="none"` — so
+`auto` gave the chart 40% of its width. The prototype's `viewBox` is `0 0 872 88`, and its
+`auto` means *that* ratio.
+
+The fix is to declare the ratio the component cannot infer:
+
+```css
+.chart-svg { height: auto; aspect-ratio: 872 / 88; }
+```
+
+Measured after, at three widths:
 
 | Screen | Chart box | height/width |
 | --- | --- | --- |
-| overview | 844 × 88 | 0.104 |
-| issues | 1346 × 132 | 0.098 |
+| overview @1440 | 844 × 85 | 0.101 |
+| issues @1440 | 1346 × 136 | 0.101 |
+| issues @720 | 626 × 63 | 0.101 |
 
-Against the viewBox ratio 88/872 = 0.101 — the height is the ratio now, and the wider screen
-is taller without naming a variant.
+Against 88/872 = 0.1009. **The lesson is the build order**: a UI-only rebuild leaves the
+CLI's generated assets stale, and every browser measurement after it is a measurement of the
+previous change.
 
 **`.ctl` is the one deliberate narrowing**: the prototype's rule is the bare class, this
 implementation writes `select.ctl`, because every `.ctl` here is a select and a bare class

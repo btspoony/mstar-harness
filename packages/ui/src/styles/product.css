@@ -363,7 +363,11 @@
    generator never had to survive a `height: auto` reading of this rule. Ours does:
    with `auto` the chart sized by the viewBox's 100:40 ratio, so it grew with its
    container — 339px in the overview card, 540px across the issues screen. */
-.ms-container .chart-svg { display: block; width: 100%; height: auto; overflow: visible; }
+/* The prototype's chart is 872 x 88 in its own coordinates, and `height: auto` gives it that
+   ratio. This component draws in a 100 x 40 grid with `preserveAspectRatio="none"`, so its
+   intrinsic ratio is 0.4 — auto alone made the overview's chart 338px tall. The ratio is
+   declared here instead, which is the same thing the prototype gets for free. */
+.ms-container .chart-svg { display: block; width: 100%; height: auto; aspect-ratio: 872 / 88; overflow: visible; }
 
 
 .ms-container .chart-svg .grid { stroke: var(--ms-border-hairline); stroke-width: 1; }

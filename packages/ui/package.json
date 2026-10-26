@@ -24,7 +24,8 @@
     "typecheck": "bunx tsc --noEmit",
     "check:classes": "bun run scripts/dead-classes.ts",
     "check:tones": "bun run scripts/tone-table.ts",
-    "check:selectors": "bun run scripts/selector-diff.ts"
+    "check:selectors": "bun run scripts/selector-diff.ts",
+    "check:declarations": "bun run scripts/declaration-diff.ts"
   },
   "devDependencies": {
     "@mstar-harness/engine": "workspace:*",
