@@ -1670,7 +1670,26 @@ mentions at all — a field read into a variable and then ignored does not appea
 again would find nothing more, and the honest state is that the remaining dead-field risk is
 of the second kind, which needs reading each screen rather than grepping.
 
-## Verification coverage, stated
+## The light theme, measured on both rendered pages
+
+The dark scheme has been measured many times; light had only been compared token to token.
+Both pages, same six elements:
+
+| Element | The prototype, light | This implementation |
+| --- | --- | --- |
+| `.screen-head h1` | `rgb(25, 28, 32)` | same |
+| `.panel` | text `rgb(25, 28, 32)`, bg `rgb(255, 255, 255)`, border `rgb(227, 229, 233)` | same |
+| `.panel-head` | `rgb(25, 28, 32)`, transparent, border `rgb(227, 229, 233)` | same |
+| `.panel-title` | `rgb(86, 93, 103)` | same |
+| `.table th` | `rgb(133, 140, 150)`, bg `rgb(255, 255, 255)`, border `rgb(227, 229, 233)` | same |
+| accent dot | `rgb(47, 111, 237)` | same |
+
+**One measurement that read as a difference and was not**: the first table cell's
+`border-bottom` came back `0px none` here against `1px solid` there. The table in question has
+**one row** — an only row is a `:last-child`, and `.table tbody tr:last-child td` clears the
+border by design. The 50-row table measures `1px` in both.
+
+**What is still not compared**: any screen other than the overview, in either scheme.## Verification coverage, stated
 
 Two hosts mount these screens: the dashboard (`packages/cli/web`) and the dsh pane
 (`packages/dsh/src/client/panel`). They share the components but **each owns its own
