@@ -1016,6 +1016,37 @@ distinguishes them.
 
 Row 3's ordering is real and still open: the six facts are the right six, in the wrong order.
 
+## The issue detail screen: six panels the spec removed and the prototype kept
+
+This is the largest single divergence found in the whole comparison, and it was invisible
+until the screen was seen side by side:
+
+| The prototype | This implementation | §8.1's verdict |
+| --- | --- | --- |
+| `Source` (kind, identity, location, root cause key, acceptance key) | absent | `IssueOccurrence` rows — not rendered |
+| `Occurrences` (one block per event, with its own quote and citation) | absent | not rendered |
+| `Disposition history` (a table: From, To, Reason, Actor, Recorded) | absent | not rendered |
+| `Relations` (Relation, Issue, Title) | absent | not rendered |
+| `Provenance` (Kind, Target, Source hash, Origin, Imported at) | absent | not rendered |
+| `Identity keys` (Identity key, Provider) | absent | `externalUrl` / `identityKey` — not rendered |
+
+Every one of the six is a row §8.1 struck out, with a reason. The prototype draws all six.
+**The implementation is not missing them by oversight — it removed them on purpose, and the
+spec still says so.**
+
+Rounds 122–123 reconciled seven §8.1 rows with the prototype. These six are the remainder,
+and unlike those seven this is not a label or a counter: it is six panels, three of them
+tables, on the screen a reader opens to understand one issue.
+
+The prototype's layout is also two columns (identity, source, impact, acceptance,
+occurrences on the left; disposition history, relations, provenance, identity keys on the
+right). This implementation is one column. That follows from the missing panels: a single
+column is what is left when six of ten blocks are gone.
+
+**Not done, and not attempted**: six panels with three tables and their copy in two locales
+is a change large enough that doing it in a round's remaining context would repeat the
+pattern this file already records twice — a partial edit, a broken build, a revert.
+
 ## Verification coverage, stated
 
 Two hosts mount these screens: the dashboard (`packages/cli/web`) and the dsh pane
