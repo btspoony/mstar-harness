@@ -114,20 +114,28 @@ const milestones = (count: number) => ({
   unassignedIssues: 3,
 });
 
+/** Three dated buckets: enough for a line, and small enough to state by hand. */
+const FLOW: OverviewDTO["issueFlow"] = {
+  state: "read",
+  data: {
+    buckets: [
+      { date: "2026-10-10", capturedCumulative: 800, retiredCumulative: 300, openDifference: 500, origin: "store" },
+      { date: "2026-10-18", capturedCumulative: 850, retiredCumulative: 320, openDifference: 530, origin: "register-history" },
+      { date: "2026-10-25", capturedCumulative: 900, retiredCumulative: 350, openDifference: 550, origin: "store" },
+    ],
+    unknownCaptureDates: 2,
+    unknownClosureDates: 0,
+    currentOpen: 552,
+    incompleteHistory: true,
+  },
+};
+
 const overviewRead = (over: Partial<OverviewDTO> = {}): OverviewDTO => ({
   workflows: read<WorkflowListDTO>({ items: [workflow()], total: 1 }),
   residuals: read({ open: 26, bySeverity: { critical: 2, high: 5, medium: 9, low: 7, nit: 3 } }),
   milestones: read(milestones(5)),
   latestIteration: read(iteration()),
-  // §8.1 removes the trend from the UI, but the DTO member is the engine's
-  // contract and stays; the fixture fills it so the type is honest.
-  issueFlow: read({
-    buckets: [],
-    unknownCaptureDates: 0,
-    unknownClosureDates: 0,
-    incompleteHistory: false,
-    currentOpen: 26,
-  }),
+  issueFlow: FLOW,
   ...over,
 });
 
@@ -137,6 +145,15 @@ const overviewCopy: OverviewCopy = {
   workflowsEmpty: "Active workflows",
   workflowsTruncated: (shown: number, total: number) => `showing ${shown} of ${total}`,
   plansProgress: (done, total) => `${done}/${total} plans`,
+  trendHeading: "Issue flow trend",
+  trendRange: (from, to) => `${from} → ${to}`,
+  trendChartTitle: (from, to) => `Cumulative captured and retired issues, ${from} to ${to}`,
+  trendCaptured: "Captured (cumulative)",
+  trendRetired: "Retired (cumulative)",
+  trendLegend: (datedOpen, recordedOpen) => `${datedOpen} dated open · ${recordedOpen} recorded open`,
+  trendGap: (datedOpen, undated) => `Dated history closes at ${datedOpen} open; ${undated} events undated.`,
+  trendTableSummary: "Dated history (table alternative)",
+  trendColumns: { date: "Date", captured: "Captured", retired: "Retired", open: "Open difference", origin: "Origin" },
   residualsHeading: "Open residuals",
   residualsTotal: (open) => `${open} open`,
   iterationHeading: "Delivery",
@@ -307,14 +324,67 @@ describe("Overview — the loading phase, and the literal severity", () => {
   });
 });
 
-describe("Overview — NEGATIVE: the surfaces D30 removed", () => {
+describe("Overview — the issue-flow trend, drawn from the read", () => {
   const html = overview();
 
-  test("no trend chart and no series caption", () => {
-    expect(html).not.toContain("data-ms-trend");
-    expect(html).not.toContain("sparkline");
-    expect(html).not.toMatch(/<svg/i);
+  test("two step lines, one solid and one dashed, labelled by their date range", () => {
+    // `design-v1.html:385-396`: captured solid in the accent, retired dashed in the
+    // muted tone. Pattern, not hue, is the first difference — that is what survives
+    // greyscale.
+    expect(html).toContain('data-ms-flow=""');
+    expect(html).toContain('data-ms-flow-chart=""');
+    expect(html).toMatch(/<svg[^>]*role="img"/);
+    expect(html).toContain("Cumulative captured and retired issues, 2026-10-10 to 2026-10-25");
+    // One step path per series, and each path has a vertex per bucket.
+    const paths = html.match(/<path[^>]*d="M[^"]*"/g) ?? [];
+    expect(paths.length).toBe(2);
+    for (const path of paths) expect((path.match(/V/g) ?? []).length).toBe(2);
   });
+
+  test("the axis carries the first, middle and last date", () => {
+    for (const date of ["2026-10-10", "2026-10-18", "2026-10-25"]) expect(html).toContain(date);
+  });
+
+  test("both cumulative totals and the dated-history gap reach the text, not only the figure", () => {
+    // The numbers the lines encode are readable without the SVG: the legend states the
+    // two open counts, and the note states what the dated history closes at.
+    expect(html).toContain("550 dated open · 552 recorded open");
+    expect(html).toContain("Dated history closes at 550 open; 2 events undated.");
+  });
+
+  test("the table alternative carries every bucket, with its origin", () => {
+    expect(html).toContain("Dated history (table alternative)");
+    expect(html).toContain("<details");
+    // One row per bucket plus the header row.
+    expect((html.match(/register-history/g) ?? []).length).toBe(1);
+    expect((html.match(/2026-10-18/g) ?? []).length).toBeGreaterThanOrEqual(2);
+  });
+
+  test("an unavailable member renders the shared arm, never an empty chart", () => {
+    const failed = overview({ issueFlow: { state: "unavailable", reason: "no such table: issue_transitions" } });
+    expect(failed).toContain('data-ms-absence="unavailable"');
+    expect(failed).toContain("no such table: issue_transitions");
+    expect(failed).not.toMatch(/<svg/i);
+    expect(failed).not.toContain("data-ms-flow-chart");
+  });
+
+  test("a flow with fewer than two buckets is the empty arm, not a one-point line", () => {
+    const thin = overview({
+      issueFlow: read({
+        buckets: [{ date: "2026-10-10", capturedCumulative: 800, retiredCumulative: 300, openDifference: 500, origin: "store" }],
+        unknownCaptureDates: 0,
+        unknownClosureDates: 0,
+        currentOpen: 500,
+        incompleteHistory: false,
+      }),
+    });
+    expect(thin).toContain('data-ms-absence="empty"');
+    expect(thin).not.toMatch(/<svg/i);
+  });
+});
+
+describe("Overview — NEGATIVE: the surfaces D30 removed", () => {
+  const html = overview();
 
   test("no identity line: no version, no harness path", () => {
     expect(html).not.toContain("4.0.9");

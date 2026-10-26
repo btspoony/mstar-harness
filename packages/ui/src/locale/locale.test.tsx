@@ -179,9 +179,6 @@ describe("no key exists for a fact IA §8 marks not-rendered", () => {
     "document",
     "revision",
     "counter",
-    "trend",
-    "flow",
-    "chart",
     "identity-line",
     "knowledge",
     "rollup",
@@ -214,7 +211,10 @@ describe("no key exists for a fact IA §8 marks not-rendered", () => {
   test("no key name in either dictionary names a removed surface", () => {
     for (const [locale, tree] of [["en", enLeaves], ["zh", zhLeaves]] as const) {
       // Compared per key SEGMENT, not per substring: `includes("flow")` matches
-      // `workflows`, which is a live screen, not a removed trend.
+      // `workflows`, which is a live screen. The issue-flow trend used to be on this
+      // list (§8.1 called a dated series a trace, not a state); the owner asked for it
+      // back, so its keys are legitimate again and only the trace-of-session families
+      // below stay removed.
       const offenders = Object.keys(tree).filter((key) =>
         key
           .toLowerCase()
@@ -229,7 +229,10 @@ describe("no key exists for a fact IA §8 marks not-rendered", () => {
     // Two phrasings the read model forbids: a checklist step the store does not
     // carry (D26), and an issue-flow series (D30).
     for (const [locale, tree] of [["en", enLeaves], ["zh", zhLeaves]] as const) {
-      const forbidden = locale === "en" ? [/first uncompleted/i, /next step/i, /trend/i, /chart/i] : [/未完成的第/, /趋势图/, /折线/];
+      // The trend is a rendered surface now, so naming it is no longer a promise the
+      // product cannot keep; the two phrasings that remain are the ones the read model
+      // still cannot answer (D26's checklist step).
+      const forbidden = locale === "en" ? [/first uncompleted/i, /next step/i] : [/未完成的第/];
       const offenders = Object.entries(tree)
         .filter(([, value]) => forbidden.some((pattern) => pattern.test(value)))
         .map(([key]) => `${locale}.${key}`);

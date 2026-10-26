@@ -234,10 +234,62 @@ describe("Overview — the fact set of §8.2", () => {
     expect(partial.milestones.kind).toBe("populated");
   });
 
-  test("NEGATIVE: no flow-series view model exists (IA §8.1)", () => {
-    expect(Object.keys(model)).not.toContain("issueFlow");
-    expect(Object.keys(model)).not.toContain("trend");
-    expect(Object.keys(model)).not.toContain("chart");
+  test("the flow series is mapped from the read, never recomputed", () => {
+    // §8.1 once excluded it; the owner asked for the trend back, and the engine's
+    // member never went away. Two dated buckets are the line's minimum.
+    const flowed = overviewModel(
+      overviewRead({
+        issueFlow: read({
+          buckets: [
+            { date: "2026-10-10", capturedCumulative: 800, retiredCumulative: 300, openDifference: 500, origin: "store" },
+            { date: "2026-10-18", capturedCumulative: 850, retiredCumulative: 320, openDifference: 530, origin: "register-history" },
+            { date: "2026-10-25", capturedCumulative: 900, retiredCumulative: 350, openDifference: 550, origin: "store" },
+          ],
+          unknownCaptureDates: 2,
+          unknownClosureDates: 0,
+          currentOpen: 552,
+          incompleteHistory: true,
+        }),
+      }),
+      { projection },
+    );
+    expect(flowed.issueFlow.kind).toBe("populated");
+    if (flowed.issueFlow.kind !== "populated") throw new Error("expected populated");
+    const series = flowed.issueFlow.value;
+    expect(series.points.length).toBe(3);
+    // First, middle and last are the axis labels the card draws.
+    expect([series.firstDate, series.middleDate, series.lastDate]).toEqual(["2026-10-10", "2026-10-18", "2026-10-25"]);
+    // The totals are the last bucket's cumulative values, not a re-sum.
+    expect(series.capturedTotal).toBe(900);
+    expect(series.retiredTotal).toBe(350);
+    expect(series.datedOpen).toBe(550);
+    expect(series.recordedOpen).toBe(552);
+    expect(series.undatedEvents).toBe(2);
+  });
+
+  test("fewer than two dated buckets is the empty arm, not a one-point line", () => {
+    const single = overviewModel(
+      overviewRead({
+        issueFlow: read({
+          buckets: [{ date: "2026-10-10", capturedCumulative: 800, retiredCumulative: 300, openDifference: 500, origin: "store" }],
+          unknownCaptureDates: 0,
+          unknownClosureDates: 0,
+          currentOpen: 500,
+          incompleteHistory: false,
+        }),
+      }),
+      { projection },
+    );
+    expect(single.issueFlow).toEqual({ kind: "empty" });
+  });
+
+  test("an unavailable flow member stays unavailable and never becomes an empty chart", () => {
+    const failed = overviewModel(
+      overviewRead({ issueFlow: { state: "unavailable", reason: "no such table: issue_transitions" } }),
+      { projection },
+    );
+    expect(failed.issueFlow).toEqual({ kind: "unavailable", reason: "no such table: issue_transitions" });
+    expect(failed.workflows.kind).toBe("populated");
   });
 
   test("NEGATIVE: no identity-line member and no counter is exposed (IA §8.1)", () => {

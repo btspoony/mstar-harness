@@ -10,15 +10,18 @@
  *  - **up to three** milestones (status, target, progress, open count);
  *  - the latest iteration (id, compass status, plan count, the five gate steps
  *    with the current one marked);
+ *  - the issue-flow series: cumulative captured and retired per dated bucket, the
+ *    dated open count beside the store's recorded open, and the undated-event count;
  *  - the projection state.
  *
- * Deliberately absent, per IA §8.1: the issue-flow trend (a dated series is a
- * trace, not a state), the identity line's version and `{HARNESS_DIR}`, and every
- * counter (`storeRevision`, `catalogRevision`, `builtAt`, `checkedAt`). The
- * aggregate DTO still carries `issueFlow` — the read model is unchanged — and
- * this module **never reads it**, so no screen can render it by accident.
+ * The flow series is mapped, not recomputed: every number comes from
+ * `overview.issueFlow` (contract §6), including the "dated history closes at N" gap.
+ *
+ * Deliberately absent, per IA §8.1: the identity line's version and
+ * `{HARNESS_DIR}`, and every counter (`storeRevision`, `catalogRevision`,
+ * `builtAt`, `checkedAt`).
  */
-import type { IterationGateStep, OverviewDTO, ResidualCounts } from "@mstar-harness/engine";
+import type { IssueFlow, IterationGateStep, OverviewDTO, ResidualCounts } from "@mstar-harness/engine";
 import type { Resolved } from "./state.ts";
 import { resolveMember } from "./state.ts";
 import { SEVERITIES, gateStepPosition, gateSteps, severityTone, type GateStepId, type GateStepPosition, type Tone } from "./status.ts";
@@ -58,6 +61,61 @@ export function residualModel(bySeverity: ResidualCounts): ResidualModel {
     emphasised: severity === "critical" || severity === "high",
   }));
   return { rows, total: rows.reduce((sum, row) => sum + row.count, 0) };
+}
+
+/** One dated bucket of the flow series, as the chart and the table read it. */
+export type IssueFlowPoint = {
+  /** UTC calendar day, `YYYY-MM-DD`. */
+  readonly date: string;
+  readonly captured: number;
+  readonly retired: number;
+  /** The cumulative open difference at this bucket. */
+  readonly open: number;
+  readonly origin: string;
+};
+
+/** The flow series the trend card draws. Every number is the read's own. */
+export type IssueFlowSeries = {
+  readonly points: readonly IssueFlowPoint[];
+  /** The three labels the axis carries: first, middle, last. */
+  readonly firstDate: string;
+  readonly middleDate: string;
+  readonly lastDate: string;
+  /** The cumulative totals the legend states — the last bucket's, not a re-sum. */
+  readonly capturedTotal: number;
+  readonly retiredTotal: number;
+  /** What the dated history closes at, beside the store's recorded open count. */
+  readonly datedOpen: number;
+  readonly recordedOpen: number;
+  /** Captures and closures with no usable stored date: counted, never placed. */
+  readonly undatedEvents: number;
+};
+
+/**
+ * Map the read's buckets. The caller guarantees at least two points (a line needs
+ * two), so the first/last/middle lookups cannot miss.
+ */
+export function flowModel(flow: IssueFlow): IssueFlowSeries {
+  const points: IssueFlowPoint[] = flow.buckets.map((bucket) => ({
+    date: bucket.date,
+    captured: bucket.capturedCumulative,
+    retired: bucket.retiredCumulative,
+    open: bucket.openDifference,
+    origin: bucket.origin,
+  }));
+  const last = points[points.length - 1] as IssueFlowPoint;
+  const middle = points[Math.floor((points.length - 1) / 2)] as IssueFlowPoint;
+  return {
+    points,
+    firstDate: points[0]?.date ?? "",
+    middleDate: middle.date,
+    lastDate: last.date,
+    capturedTotal: last.captured,
+    retiredTotal: last.retired,
+    datedOpen: last.open,
+    recordedOpen: flow.currentOpen,
+    undatedEvents: flow.unknownCaptureDates + flow.unknownClosureDates,
+  };
 }
 
 /** One overview workflow row: the compact form of `WorkflowRow`. */
@@ -116,6 +174,11 @@ export type OverviewModel = {
   milestones: Resolved<readonly MilestoneRow[]>;
   /** `null` when the project has no iteration yet — the `empty` arm. */
   latestIteration: Resolved<OverviewIteration | null>;
+  /**
+   * The dated history. `empty` when the store has fewer than two dated buckets: a
+   * one-point line is a dot pretending to be a trend, so the shared empty arm says so.
+   */
+  issueFlow: Resolved<IssueFlowSeries>;
   projection: ProjectionState;
 };
 
@@ -186,6 +249,12 @@ export function overviewModel(
 
   const latestIteration = resolveMember(read.latestIteration, { phase, whenNull: "empty" });
 
+  const issueFlow = resolveMember(read.issueFlow, {
+    phase,
+    whenNull: "empty",
+    isEmpty: (flow) => flow.buckets.length < 2,
+  });
+
   return {
     workflows:
       workflows.kind === "populated"
@@ -228,6 +297,8 @@ export function overviewModel(
                   })(),
           }
         : latestIteration,
+    issueFlow:
+      issueFlow.kind === "populated" ? { kind: "populated", value: flowModel(issueFlow.value) } : issueFlow,
     projection: projectionState(options.projection),
   };
 }

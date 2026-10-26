@@ -1,0 +1,32 @@
+/* The prototype's chart strokes and swatches (`design-v1.html:385-396`), with the
+   two series told apart by stroke pattern as well as hue: captured is solid, retired
+   is dashed. A greyscale print keeps the distinction; colour is not the only cue. */
+.chart {
+  display: block;
+  inline-size: 100%;
+  block-size: 88px;
+  overflow: visible;
+}
+
+.grid {
+  stroke: var(--ms-border-hairline);
+  stroke-width: 1;
+  vector-effect: non-scaling-stroke;
+}
+
+.captured {
+  fill: none;
+  stroke: var(--ms-accent);
+  stroke-width: 2;
+  stroke-linejoin: round;
+  vector-effect: non-scaling-stroke;
+}
+
+.retired {
+  fill: none;
+  stroke: var(--ms-text-muted);
+  stroke-width: 1.5;
+  stroke-dasharray: 4 3;
+  vector-effect: non-scaling-stroke;
+}
+
