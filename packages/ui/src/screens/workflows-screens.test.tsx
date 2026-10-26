@@ -126,6 +126,8 @@ const renderList = (
   );
 
 const detailCopy: WorkflowDetailCopy = {
+  updatedMeta: (when) => `updated ${when}`,
+  activeRegistration: "active registration",
   chainBase: "Base",
   chainSource: "Source",
   chainIntegration: "Integration",

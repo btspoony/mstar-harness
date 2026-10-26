@@ -40,6 +40,10 @@ export type WorkflowDetailCopy = {
   executionHeading: string;
   planTableHeading: string;
   catalogHeading: string;
+  /** `updated <when>` — the head's last meta fact. */
+  updatedMeta: (when: string) => string;
+  /** The chip beside the title: the store still counts this as a registration. */
+  activeRegistration: string;
   fields: {
     id: string;
     type: string;
@@ -144,9 +148,36 @@ export function WorkflowDetail(props: WorkflowDetailProps) {
       {props.model.kind === "populated" ? (
         <>
           <header className="detail-head">
-            <h1 className="detail-title">
-              <TruncatedText text={props.model.value.workflow.id} />
-            </h1>
+            <div className="detail-head-main">
+              <h1 className="detail-title mono">
+                <TruncatedText text={props.model.value.workflow.id} />
+              </h1>
+              {/* The prototype's meta line: what it is, how it is doing, which phase,
+                  and when the projection last touched it. */}
+              <div className="detail-meta">
+                <span className="mono">{props.model.value.workflow.type}</span>
+                <span aria-hidden="true">·</span>
+                <span className={`status tone-${props.model.value.workflow.statusTone} is-strong`}>
+                  <span className="dot" aria-hidden="true" />
+                  <span className="label mono">{props.model.value.workflow.status}</span>
+                </span>
+                {props.model.value.workflow.phase === null ? null : (
+                  <>
+                    <span aria-hidden="true">·</span>
+                    <span className="mono">{props.model.value.workflow.phase}</span>
+                  </>
+                )}
+                <span aria-hidden="true">·</span>
+                <span>{copy.updatedMeta(props.model.value.workflow.updatedAt)}</span>
+              </div>
+            </div>
+            <div className="detail-actions">
+              {/* The prototype's chip says the store still counts this workflow as an
+                  active registration; it is a fact about the record, not a control. */}
+              <span className="chip" data-ms-registration>
+                {copy.activeRegistration}
+              </span>
+            </div>
           </header>
 
           {/* The degradation reason, stated where it applies and nowhere else. */}
@@ -154,8 +185,7 @@ export function WorkflowDetail(props: WorkflowDetailProps) {
             <Notice reason={props.model.value.executionUnavailableReason} lead={copy.executionUnavailableLead} tone="warning" />
           )}
 
-          <div className="detail-grid">
-          <div className="detail-col">
+          <div className="detail-top">
           <FieldGroup title={copy.executionHeading}>
             <Field label={copy.fields.id} mono>
               {props.model.value.workflow.id}
@@ -179,8 +209,6 @@ export function WorkflowDetail(props: WorkflowDetailProps) {
               {props.model.value.updatedAt}
             </Field>
           </FieldGroup>
-          </div>
-          <div className="detail-col">
 
           {/* The four anchors, in delivery order, as one chain and as fields. */}
           <FieldGroup title={copy.fields.branchBase}>
@@ -239,7 +267,6 @@ export function WorkflowDetail(props: WorkflowDetailProps) {
               </>
             )}
           </FieldGroup>
-          </div>
           </div>
 
           <section className="panel" aria-labelledby="ms-workflow-plans">

@@ -261,6 +261,8 @@ export const en = {
   },
 
   workflowDetail: {
+    updatedMeta: (when: string) => `updated ${when}`,
+    activeRegistration: "active registration",
     chainBase: "Base",
     chainSource: "Source",
     chainIntegration: "Integration",

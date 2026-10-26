@@ -240,6 +240,8 @@ export const zh: Copy = {
   },
 
   workflowDetail: {
+    updatedMeta: (when: string) => `更新于 ${when}`,
+    activeRegistration: "活跃注册",
     chainBase: "基线",
     chainSource: "来源",
     chainIntegration: "集成",
