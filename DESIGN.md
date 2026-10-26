@@ -574,6 +574,43 @@ the prototype's own. A mixed-size text line is supposed to have a spread.
 The lesson is the same one the crowded-pairs table encodes: a measurement only means
 something against the prototype's measurement of the same thing.
 
+## A probe that selects the wrong element proves nothing
+
+`document.querySelector('[data-screen="project-detail"]')` matches **two** elements in the
+prototype: the nav button that switches screens, and the `<section>` holding the screen. The
+button comes first, so a probe written that way counts panels, list items and disclosures on
+a button — and gets `0` for each, every time.
+
+That mistake survived several rounds. It was caught only when `heads: []` contradicted a
+screenshot taken in an earlier round that plainly showed `Catalog identity` and
+`Roadmap authority`.
+
+The working form:
+
+```js
+[...document.querySelectorAll('[data-screen="x"]')].find((e) => e.tagName === "SECTION")
+```
+
+Two habits follow from it:
+
+- **A zero is a claim.** `0` panels is either a fact about the screen or a fact about the
+  probe, and the probe is the likelier author of a surprise. Cross-check against something
+  independent — a screenshot, a count from the source — before recording it.
+- **Prefer a selector that cannot match the wrong thing.** `tagName === "SECTION"`, or an
+  attribute only the screen carries, beats relying on document order.
+
+Measured with the correct selector, the prototype's screens are:
+
+| Screen | Panel titles |
+| --- | --- |
+| overview | Active workflow, Issue flow trend, Open residual issues, Milestones, Latest iteration |
+| issues | Issue flow trend, Filters |
+| projects | Catalog projects |
+| workflow-detail | Execution, Catalog identity, Plans, Leases |
+| iteration-detail | Catalog identity, Execution, Compass, Plans, Documents |
+| project-detail | Catalog identity, Roadmap authority, Milestone board, Stored facts |
+| workflows, iterations, issue-detail | *(none — these screens have no titled panels)* |
+
 ## Verification coverage, stated
 
 Two hosts mount these screens: the dashboard (`packages/cli/web`) and the dsh pane
