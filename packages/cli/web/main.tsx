@@ -795,7 +795,18 @@ function Shell(props: {
         {chrome.skipLink}
       </a>
       <header className={`app-header ${MS_PANE_HEAD_CLASS}`}>
-        <span className="app-title">Morning Star</span>
+        {/* The prototype's brand block: a star, the name, and the version. `app-title`
+            was the whole of it here — no mark, no version. */}
+        <div className="brand">
+          <svg width="13" height="13" viewBox="0 0 16 16" aria-hidden="true">
+            <path
+              fill="currentColor"
+              d="M8 0l1.9 6.1L16 8l-6.1 1.9L8 16 6.1 9.9 0 8l6.1-1.9z"
+            />
+          </svg>
+          <span className="brand-name">Morning Star</span>
+          <span className="brand-ver">v{__MSTAR_VERSION__}</span>
+        </div>
         <Nav
           items={chrome.navItems}
           activeId={activeId}

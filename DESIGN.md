@@ -1750,7 +1750,29 @@ is an `execution_workflows.workflow_id`, but the route takes the *catalog* id th
 screen that renders nothing.
 
 **Still not compared**: any pixel or screenshot diff. Every measurement in this file is a
-computed style on a named element, which cannot see spacing, alignment or ordering.## Verification coverage, stated
+computed style on a named element, which cannot see spacing, alignment or ordering.## The first side-by-side screenshot, and what it showed
+
+Every measurement before this one was a computed style on a named element. Putting the
+prototype's overview and this dashboard's next to each other at 1440px found something no
+element probe would: **the shell**.
+
+| | The prototype | This implementation, before |
+| --- | --- | --- |
+| brand | star svg + `.brand-name` "Morning Star" + `.brand-ver` "v4.0.9" | a single `.app-title` span — no mark, no version |
+| footer | two lines: `26 open issues · 1224 store revision`, then `Read-only · Make changes with the CLI` | one line: `48 次存储修订`, then the read-only note |
+
+The brand block is the prototype's now: the same 16×16 star path, `.brand-name`, and
+`.brand-ver` reading `v{major.minor.patch}` — measured as `Morning Star` + `v4.0.9` with an
+`svg` child.
+
+**Still different, and not fixed**: the footer's first segment. The prototype opens it with an
+open-issue count (`26 open issues`) before the store revision; this implementation states only
+the revision. That needs the shell to see the overview's residual total, which is a data path
+the shell does not have today.
+
+**The general form**: nine screens of element measurements passed while the frame around all
+nine of them was missing a mark and a version. **An element probe can only find what it is
+told to look for**; the screenshot is what finds the things nobody named.## Verification coverage, stated
 
 Two hosts mount these screens: the dashboard (`packages/cli/web`) and the dsh pane
 (`packages/dsh/src/client/panel`). They share the components but **each owns its own

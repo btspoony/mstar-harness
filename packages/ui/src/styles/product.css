@@ -57,7 +57,7 @@
   border-bottom: 1px solid var(--ms-border-hairline);
 }
 
-.ms-container .brand { display: flex; align-items: center; gap: 7px; padding-right: 14px; border-right: 1px solid var(--ms-border-hairline); flex: none; }
+.ms-container .brand { display: flex; flex: none; align-items: center; gap: 7px; padding-right: 14px; border-right: 1px solid var(--ms-border-hairline); flex: none; }
 
 .ms-container .brand svg { display: block; color: var(--ms-text-primary); }
 
