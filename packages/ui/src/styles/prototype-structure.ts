@@ -2,8 +2,7 @@
  * The prototype's per-screen panel composition, captured once so a structural comparison
  * is a diff against a fixture instead of a round of ad-hoc DOM probing.
  *
- * Every entry is what the prototype really has, read from
- * `.mstar/iterations/iter-20261025-frontend-unification/prototypes/design-v1.html`:
+ * Every entry is what the prototype really has, read from the approved prototype's own DOM:
  *
  *   [...screen.querySelectorAll(".panel")].map((panel) =>
  *     [...panel.children].map((child) => child.className.split(" ")[0] || child.tagName.toLowerCase()))
