@@ -473,7 +473,14 @@ describe.skipIf(!browserAvailable)("the render gate", () => {
    * - 280: under the documented 300px table floor, where the floor rule is the only
    *   thing keeping a column readable.
    */
-  /** 280 sits under the documented table floor: only the floor is still a contract. */
+  /**
+   * 280 sits under the documented table floor. One of the summary's two contracts is
+   * genuinely unholdable there — the card (240px) is narrower than the summary's four
+   * facts, so the line overflows its own box instead of reading as one measured line —
+   * and DESIGN.md's floor row states that as the band's behaviour, not as a test
+   * adjusted to go green. The baseline is width-independent, so it is still asserted
+   * there; every band at 400 and above keeps both.
+   */
   const FLOOR_SAMPLE = (sample: { floor?: number }): boolean => sample.floor !== undefined;
 
   const BANDS = [
@@ -546,11 +553,12 @@ describe.skipIf(!browserAvailable)("the render gate", () => {
           expect(Number(band.metaRowSpan)).toBe(band.visiblePrimaryCells as number);
         }
 
-        // The summary line still reads (the Issues screen is the one that has one),
-        // on the title's baseline and inside the frame.
-        if (measured.summary !== null && !FLOOR_SAMPLE(sample)) {
+        // The summary line still reads (the Issues screen is the one that has one) and
+        // sits on the title's baseline. Under the floor the card is narrower than the
+        // summary's facts, so only the no-overflow half is waived — see FLOOR_SAMPLE.
+        if (measured.summary !== null) {
           expect(String(measured.summary)).not.toBe("");
-          expect(band.summaryOverflows).toBe(false);
+          if (!FLOOR_SAMPLE(sample)) expect(band.summaryOverflows).toBe(false);
           expect(band.baselineDelta as number).toBeLessThanOrEqual(4);
         }
 

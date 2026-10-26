@@ -323,7 +323,7 @@ flexible column (the title) takes the rest.
 | **≥ 900px** | All columns. Declared widths; the flexible title column gets the remainder (measured at 900: 858px table in an 860px card, no scroll). |
 | **620–899px** | All columns, same widths, and the table keeps a floor of `declared widths + 120px`. If the pane is narrower than that floor the **card body scrolls sideways** rather than squeezing any column: measured at 760 the four lists fit (floor 680–716px in a 718px table) with zero truncated cells; at 620 the Issues table scrolls, and every column stays reachable. |
 | **480–619px** | Secondary columns are hidden **by rule** (`display: none`), not by overflow, and each yielded fact reappears on the row's second line. Id, title and the screen's one status column keep their declared widths; the flexible title takes the rest (measured at 420 and 619: narrowest cell 80–112px, zero truncated cells, no sideways scroll). |
-| **≤ 299px** | The collapsed table keeps the documented 300px floor and scrolls inside its own card. |
+| **≤ 299px** | The collapsed table keeps the documented 300px floor and scrolls inside its own card. The card is narrower than the summary's four facts, so the summary line overflows its own box instead of reading as one measured line; the facts are all painted, the line keeps the title's baseline, and the page itself never scrolls sideways. |
 
 Two rules make this hold, and both are the defects that shipped:
 
