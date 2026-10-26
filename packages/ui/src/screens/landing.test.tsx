@@ -176,6 +176,13 @@ const overviewCopy: OverviewCopy = {
   iterationHeading: "Delivery",
   iterationNoIteration: "Iteration",
   gateStep: (step, of) => `step ${step} of ${of}`,
+  gateStepLabels: {
+    start: "Start",
+    execute: "Execute",
+    close: "Close",
+    "pr-delivery": "PR delivery",
+    "merge-ready": "Merge ready",
+  },
   milestonesHeading: "Milestones",
   milestonesSummary: (count, open) => `${count} milestones · ${open} open`,
   milestoneProgress: (done, total) => `${done}/${total}`,

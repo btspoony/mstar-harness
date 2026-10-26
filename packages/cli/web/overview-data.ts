@@ -49,6 +49,9 @@ export const OVERVIEW_PATH = "/api/overview";
 export function overviewCopy(copy: Copy): OverviewCopy {
   return {
     ...copy.overview,
+    // The gate step names live in the iteration detail's own block; the overview's track
+    // prints the same five words.
+    gateStepLabels: copy.iterationDetail.gateStepLabels,
     workflowsEmpty: copy.overview.workflowsHeading,
     absence: {
       "not-applicable": copy.state["not-applicable"],

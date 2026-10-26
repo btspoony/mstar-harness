@@ -40,7 +40,7 @@ import type {
   OverviewPlanRow,
   OverviewWorkflowRow,
 } from "../view-model/overview.ts";
-import type { GateStepPosition, Tone } from "../view-model/status.ts";
+import type { GateStepId, GateStepPosition, Tone } from "../view-model/status.ts";
 
 /** Every visible string this screen needs. Task 5 supplies them. */
 export type OverviewCopy = {
@@ -104,6 +104,8 @@ export type OverviewCopy = {
   iterationHeading: string;
   iterationNoIteration: string;
   gateStep: (step: number, of: number) => string;
+  /** One label per gate step, as the prototype names them. */
+  gateStepLabels: Record<GateStepId, string>;
   milestonesHeading: string;
   /** The short-container summary: `n milestones · m open`. */
   milestonesSummary: (milestones: number, open: number) => string;
@@ -609,7 +611,10 @@ export function Overview(props: OverviewProps) {
                       data-ms-step={step.id}
                       data-ms-step-position={step.position satisfies GateStepPosition}
                     >
-                      {copy.gateStep(step.step, 5)}
+                      {/* The prototype names each step (`Start`, `Execute`, `Close`,
+                          `PR delivery`, `Merge ready`); the number alone says nothing. */}
+                      <span className="gate-step-num" aria-hidden="true">{step.step}</span>
+                      <span className="gate-step-label">{copy.gateStepLabels[step.id]}</span>
                     </li>
                   ))}
                 </ol>
