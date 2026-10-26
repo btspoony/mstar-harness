@@ -138,6 +138,8 @@ export function IssueDetail(props: IssueDetailProps) {
               <StatusDot label={record.value.disposition} tone={record.value.dispositionTone} mono />
             </div>
           </header>
+        <div className="detail-grid">
+          <div className="detail-col">
 
           <FieldGroup title={copy.identityHeading}>
             <Field label={copy.fields.id} mono>
@@ -230,6 +232,8 @@ export function IssueDetail(props: IssueDetailProps) {
               ))}
             </section>
           )}
+            </div>
+            <div className="detail-col">
 
           {/* The prototype's `Disposition history`: only recorded transitions appear. */}
           {record.value.transitions.length === 0 ? null : (
@@ -370,6 +374,8 @@ export function IssueDetail(props: IssueDetailProps) {
               </dl>
             </section>
           )}
+          </div>
+        </div>
 
           {/* The closure note is a closed issue's fact; an open one has none. */}
           {record.value.closureNote === null ? null : (

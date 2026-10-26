@@ -1072,11 +1072,21 @@ prototype's own structure is three children: `div.breadcrumb`, `div.detail-head`
 `.detail-grid` and `.detail-col` already exist in `product.css` (`1.15fr : 1fr`, 28px gap)
 and the other three detail screens use them.
 
-**Two attempts failed, and the reason is worth recording**: a Python rewriter that cut the
-blocks out by `</section>` lost the `{…? null : (…)}` wrappers those blocks sit in — the
-conditional opener is *above* the `<section`, and its `)}` is *below* the `</section>`. The
-second failure is the same shape. The rewrite has to move each block together with its
-conditional wrapper, or the JSX stops balancing.
+**Shipped, by inserting three markers and moving nothing.** The screen is now
+`nav.breadcrumb · header.detail-head · div.detail-grid`, and the grid's two `detail-col`s sit
+at x=20 and x=782 — the prototype's own three-child shape.
+
+**Two attempts failed before that**, and the reason is worth recording: a Python rewriter
+that cut blocks out by `</section>` lost the `{…? null : (…)}` wrappers those blocks sit in —
+the conditional opener is *above* the `<section`, and its `)}` is *below* the `</section>`.
+What worked was the opposite approach: **never move a block**, only insert
+`<div class="detail-grid"><div class="detail-col">` after `</header>`, `</div><div
+class="detail-col">` after the occurrences block's `)}`, and `</div></div>` after the identity
+keys block's `)}`. Three insertions, zero movement, and `tsc` stayed green.
+
+**One ordering difference remains**: this implementation splits after `occurrences`, so
+`source` and `identity keys` land in the right column where the prototype has `source` on the
+left. The two columns hold the same nine blocks; one of them is on the wrong side.
 
 ## What the negative tests used to guard, and what guards it now
 
