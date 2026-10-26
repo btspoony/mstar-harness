@@ -32,7 +32,6 @@ import {
 } from "../view-model/projects.ts";
 import type { Resolved } from "../view-model/state.ts";
 import type { Tone } from "../view-model/status.ts";
-import css from "./ProjectDetail.module.css";
 
 /** Every visible string this screen needs. Task 5 supplies them. */
 export type ProjectDetailCopy = {
@@ -89,28 +88,28 @@ export type ProjectDetailProps = {
 function Milestone(props: { milestone: RoadmapModel["milestones"][number]; copy: ProjectDetailCopy }) {
   const { milestone, copy } = props;
   return (
-    <section className={css.milestone} data-ms-milestone={milestone.milestoneId}>
-      <p className={css.milestoneHead}>
-        <span className={css.milestoneName}>
+    <section className={"milestone-block"} data-ms-milestone={milestone.milestoneId}>
+      <p className={"milestone-block-head"}>
+        <span className={"milestone-block-name"}>
           <TruncatedText text={milestone.name} />
         </span>
         {milestone.status === null ? null : <StatusDot label={milestone.status} tone={milestoneStatusTone(milestone.status)} mono />}
-        <span className={css.meta}>{milestone.target ?? copy.roadmap.noTarget}</span>
+        <span className={"detail-meta"}>{milestone.target ?? copy.roadmap.noTarget}</span>
         {milestone.progress === null ? null : (
-          <span className={css.milestoneProgress}>
+          <span className={"milestone-counts"}>
             <ProgressBar done={milestone.progress.done} total={milestone.progress.total} />
-            <span className={css.meta}>{copy.roadmap.milestoneProgress(milestone.progress.done, milestone.progress.total)}</span>
+            <span className={"detail-meta"}>{copy.roadmap.milestoneProgress(milestone.progress.done, milestone.progress.total)}</span>
           </span>
         )}
-        <span className={css.meta}>{copy.roadmap.milestoneOpen(milestone.openIssues)}</span>
+        <span className={"detail-meta"}>{copy.roadmap.milestoneOpen(milestone.openIssues)}</span>
       </p>
       {milestone.issues.length === 0 ? null : (
-        <ul className={css.issueList}>
+        <ul className={"fields"}>
           {milestone.issues.map((issue) => (
-            <li key={issue.id} className={css.issueRow}>
-              <span className={css.mono}>{issue.id}</span>
+            <li key={issue.id} className={"row"}>
+              <span className={"mono"}>{issue.id}</span>
               <TruncatedText text={issue.title} />
-              <span className={css.meta}>{issue.disposition}</span>
+              <span className={"detail-meta"}>{issue.disposition}</span>
             </li>
           ))}
         </ul>
@@ -130,41 +129,41 @@ function milestoneStatusTone(status: string): Tone {
 function RoadmapFeature(props: { model: RoadmapModel; copy: ProjectDetailCopy }) {
   const { model, copy } = props;
   return (
-    <div className={css.feature} data-ms-feature="roadmap">
+    <div className={"chip"} data-ms-feature="roadmap">
       {model.direction === null ? null : (
         <Collapsible summary={copy.roadmap.directionHeading}>
-          <p className={css.longText} data-ms-direction="">
+          <p className={"detail-text"} data-ms-direction="">
             {model.direction}
           </p>
         </Collapsible>
       )}
       {model.goals.length === 0 ? null : (
-        <section className={css.block} data-ms-goals="">
-          <h3 className={css.heading}>{copy.roadmap.goalsHeading}</h3>
-          <ul className={css.goals}>
+        <section className={"panel"} data-ms-goals="">
+          <h3>{copy.roadmap.goalsHeading}</h3>
+          <ul className={"fields"}>
             {model.goals.map((goal) => (
-              <li key={goal.ordinal} className={css.goal} data-ms-goal-depth={goal.depth} data-ms-goal-checked={goal.checked}>
+              <li key={goal.ordinal} className={"milestone-row"} data-ms-goal-depth={goal.depth} data-ms-goal-checked={goal.checked}>
                 {/* The check state is text plus a mark, never colour alone. */}
-                <span className={css.goalMark} aria-hidden="true">
+                <span className={"dot"} aria-hidden="true">
                   {goal.checked ? "✓" : "·"}
                 </span>
-                <span className={css.goalTitle}>{goal.title}</span>
-                <span className={css.visuallyHidden}>{goal.checked ? copy.roadmap.goalChecked : copy.roadmap.goalUnchecked}</span>
+                <span className={"milestone-name"}>{goal.title}</span>
+                <span className={"visually-hidden"}>{goal.checked ? copy.roadmap.goalChecked : copy.roadmap.goalUnchecked}</span>
               </li>
             ))}
           </ul>
         </section>
       )}
       {model.milestones.length === 0 ? null : (
-        <section className={css.block} data-ms-milestones="">
-          <h3 className={css.heading}>{copy.roadmap.milestonesHeading}</h3>
+        <section className={"panel"} data-ms-milestones="">
+          <h3>{copy.roadmap.milestonesHeading}</h3>
           {model.milestones.map((milestone) => (
             <Milestone key={milestone.milestoneId} milestone={milestone} copy={copy} />
           ))}
         </section>
       )}
       {model.unassignedIssues === 0 ? null : (
-        <p className={css.unassigned} data-ms-unassigned={model.unassignedIssues}>
+        <p className={"muted"} data-ms-unassigned={model.unassignedIssues}>
           {copy.roadmap.unassigned(model.unassignedIssues)}
         </p>
       )}
@@ -243,30 +242,30 @@ export function ProjectDetail(props: ProjectDetailProps) {
   const tabs: TabItem[] = PROJECT_FEATURES.map((id) => ({ id, label: copy.features[id] }));
 
   return (
-    <article className={css.page} data-ms-screen="project-detail">
-      <nav className={css.trail} aria-label={copy.breadcrumb.label}>
+    <article className={"screen"} data-ms-screen="project-detail">
+      <nav className={"breadcrumb"} aria-label={copy.breadcrumb.label}>
         {props.onBack === undefined ? null : (
-          <button type="button" className={css.crumb} onClick={props.onBack}>
+          <button type="button" className={"breadcrumb"} onClick={props.onBack}>
             {copy.breadcrumb.trail}
           </button>
         )}
-        <span className={css.separator} aria-hidden="true">
+        <span className={"breadcrumb-sep"} aria-hidden="true">
           /
         </span>
-        <span className={css.current} aria-current="page">
+        <span className={"breadcrumb-current"} aria-current="page">
           {identity.projectId}
         </span>
       </nav>
 
-      <header className={css.head}>
-        <h1 className={css.title}>
+      <header className={"screen-head"}>
+        <h1>
           <TruncatedText text={identity.title} />
         </h1>
-        <p className={css.subhead}>
+        <p className={"muted"}>
           <StatusDot label={identity.lifecycle} tone={identity.lifecycleTone} mono />
-          <span className={css.mono}>{identity.path}</span>
+          <span className={"mono"}>{identity.path}</span>
         </p>
-        {identity.description === null ? null : <p className={css.description}>{identity.description}</p>}
+        {identity.description === null ? null : <p className={"detail-text"}>{identity.description}</p>}
       </header>
 
       <FieldGroup title={copy.fields.title} columns={2}>
@@ -280,7 +279,7 @@ export function ProjectDetail(props: ProjectDetailProps) {
           {identity.path}
         </Field>
         <Field label={copy.fields.description}>
-          {identity.description === null ? <span className={css.muted}>{copy.fields.noDescription}</span> : identity.description}
+          {identity.description === null ? <span className={"muted"}>{copy.fields.noDescription}</span> : identity.description}
         </Field>
       </FieldGroup>
 
@@ -295,18 +294,18 @@ export function ProjectDetail(props: ProjectDetailProps) {
       {feature === DEFAULT_PROJECT_FEATURE ? (
         <RoadmapArm roadmap={props.roadmap} copy={copy} />
       ) : (
-        <div className={css.feature} data-ms-feature={feature}>
+        <div className={"chip"} data-ms-feature={feature}>
           {/* The scope chip: this list is this project's, and the scope is
               removable so the reader can say what they are looking at. */}
-          <div className={css.scopeRow}>
-            <span className={css.scopeChip} data-ms-scope-chip={identity.projectId}>
+          <div className={"chips"}>
+            <span className={"chip"} data-ms-scope-chip={identity.projectId}>
               {copy.scope.label(identity.projectId)}
               {/* No callback, no button: a control that looks removable and is not is
                   worse than a chip that simply states the scope. */}
               {props.onClearScope === undefined ? null : (
                 <button
                   type="button"
-                  className={css.scopeClear}
+                  className={"chip-x"}
                   aria-label={copy.scope.clear}
                   data-ms-scope-clear={identity.projectId}
                   onClick={props.onClearScope}

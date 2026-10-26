@@ -27,7 +27,6 @@ import { TruncatedText } from "../components/TruncatedText.tsx";
 import type { WorkflowDetailModel, WorkflowPlanRow } from "../view-model/workflows.ts";
 import type { Resolved } from "../view-model/state.ts";
 import type { Tone } from "../view-model/status.ts";
-import css from "./WorkflowDetail.module.css";
 
 /** Every visible string this screen needs. Task 5 supplies them. */
 export type WorkflowDetailCopy = {
@@ -76,25 +75,25 @@ export type WorkflowDetailProps = {
 /** The plan table's columns: identity, status · phase, recorded progress, done. */
 function planColumns(copy: WorkflowDetailCopy): DataTableColumn<WorkflowPlanRow>[] {
   return [
-    { key: "planId", header: copy.planColumns.planId, render: (plan) => <span className={css.mono}>{plan.planId}</span> },
+    { key: "planId", header: copy.planColumns.planId, render: (plan) => <span className={"mono"}>{plan.planId}</span> },
     {
       key: "title",
       header: copy.planColumns.title,
       secondary: true,
       render: (plan) =>
-        plan.title === null ? <span className={css.muted}>{copy.fields.noCatalog}</span> : <TruncatedText text={plan.title} />,
+        plan.title === null ? <span className={"muted"}>{copy.fields.noCatalog}</span> : <TruncatedText text={plan.title} />,
     },
     {
       key: "status",
       header: copy.planColumns.status,
       render: (plan) => (
-        <span className={css.statusCell}>
+        <span>
           {plan.status === null ? (
-            <span className={css.muted}>{copy.fields.notStarted}</span>
+            <span className={"muted"}>{copy.fields.notStarted}</span>
           ) : (
             <StatusDot label={plan.status} tone={plan.statusTone} mono />
           )}
-          {plan.phase === null ? null : <span className={css.phase}>{plan.phase}</span>}
+          {plan.phase === null ? null : <span className={"chip"}>{plan.phase}</span>}
         </span>
       ),
     },
@@ -104,11 +103,11 @@ function planColumns(copy: WorkflowDetailCopy): DataTableColumn<WorkflowPlanRow>
       secondary: true,
       render: (plan) =>
         plan.progress === null ? (
-          <span className={css.muted} data-ms-plan-progress-absent="">
+          <span className={"muted"} data-ms-plan-progress-absent="">
             {copy.planProgressAbsent}
           </span>
         ) : (
-          <span className={css.progress} data-ms-plan-progress="">
+          <span className={"milestone-counts"} data-ms-plan-progress="">
             <TruncatedText text={plan.progress} />
           </span>
         ),
@@ -118,7 +117,7 @@ function planColumns(copy: WorkflowDetailCopy): DataTableColumn<WorkflowPlanRow>
       header: copy.planColumns.doneAt,
       secondary: true,
       align: "end",
-      render: (plan) => <span className={css.mono}>{plan.doneAt ?? "—"}</span>,
+      render: (plan) => <span className={"mono"}>{plan.doneAt ?? "—"}</span>,
     },
   ];
 }
@@ -127,10 +126,10 @@ export function WorkflowDetail(props: WorkflowDetailProps) {
   const { copy } = props;
 
   return (
-    <article className={css.page} data-ms-screen="workflow-detail">
-      <nav className={css.trail} aria-label={copy.breadcrumb.label}>
+    <article className={"screen"} data-ms-screen="workflow-detail">
+      <nav className={"breadcrumb"} aria-label={copy.breadcrumb.label}>
         {props.onBack === undefined ? null : (
-          <button type="button" className={css.crumb} onClick={props.onBack}>
+          <button type="button" className={"breadcrumb"} onClick={props.onBack}>
             {copy.breadcrumb.current}
           </button>
         )}
@@ -138,8 +137,8 @@ export function WorkflowDetail(props: WorkflowDetailProps) {
 
       {props.model.kind === "populated" ? (
         <>
-          <header className={css.head}>
-            <h1 className={css.title}>
+          <header className={"screen-head"}>
+            <h1>
               <TruncatedText text={props.model.value.workflow.id} />
             </h1>
           </header>
@@ -189,7 +188,7 @@ export function WorkflowDetail(props: WorkflowDetailProps) {
             </Field>
           </FieldGroup>
 
-          <p className={css.chain} data-ms-branch-chain="">
+          <p className={"branch-line"} data-ms-branch-chain="">
             {[
               props.model.value.workflow.branch.base,
               props.model.value.workflow.branch.source,
@@ -219,8 +218,8 @@ export function WorkflowDetail(props: WorkflowDetailProps) {
             )}
           </FieldGroup>
 
-          <section className={css.plans} aria-labelledby="ms-workflow-plans">
-            <h2 className={css.heading} id="ms-workflow-plans">
+          <section className={"table"} aria-labelledby="ms-workflow-plans">
+            <h2 id="ms-workflow-plans">
               {copy.planTableHeading}
             </h2>
             <DataTable

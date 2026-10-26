@@ -19,7 +19,6 @@ import { StatusDot } from "../components/StatusDot.tsx";
 import { TruncatedText } from "../components/TruncatedText.tsx";
 import type { FocusGroup, FocusModel, FocusPlan, FocusBinding } from "../view-model/focus.ts";
 import type { Tone } from "../view-model/status.ts";
-import css from "./Focus.module.css";
 
 /** Every visible string this screen needs. Task 5 supplies them. */
 export type FocusCopy = {
@@ -69,24 +68,24 @@ function Binding(props: { binding: FocusBinding; copy: FocusCopy; onPick?: (id: 
   switch (binding.kind) {
     case "bound":
       return (
-        <p className={css.binding} data-ms-binding="bound">
+        <p className={"wf-summary"} data-ms-binding="bound">
           <TruncatedText text={copy.bindingBound(binding.workflowId)} />
         </p>
       );
     case "terminal":
       return (
-        <p className={css.binding} data-ms-binding="terminal">
+        <p className={"wf-summary"} data-ms-binding="terminal">
           <TruncatedText text={copy.bindingTerminal(binding.workflowId)} />
         </p>
       );
     case "unbound":
       return (
-        <div className={css.binding} data-ms-binding="unbound">
-          <p className={css.bindingText}>{copy.bindingUnbound}</p>
+        <div className={"wf-summary"} data-ms-binding="unbound">
+          <p className={"wf-id"}>{copy.bindingUnbound}</p>
           {props.onPick === undefined ? null : (
-            <div className={css.picker} role="group" aria-label={copy.pickerLabel} data-ms-picker="">
+            <div className={"chips"} role="group" aria-label={copy.pickerLabel} data-ms-picker="">
               {binding.picker.map((id) => (
-                <button key={id} type="button" className={css.pick} onClick={() => props.onPick?.(id)}>
+                <button key={id} type="button" className={"chip"} onClick={() => props.onPick?.(id)}>
                   {id}
                 </button>
               ))}
@@ -96,12 +95,12 @@ function Binding(props: { binding: FocusBinding; copy: FocusCopy; onPick?: (id: 
       );
     case "error":
       return (
-        <div className={css.binding} data-ms-binding="error">
-          <p className={css.bindingText}>{binding.message}</p>
+        <div className={"wf-summary"} data-ms-binding="error">
+          <p className={"wf-id"}>{binding.message}</p>
           {binding.candidates.length === 0 ? null : (
-            <div className={css.picker} role="group" aria-label={copy.pickerLabel} data-ms-picker="">
+            <div className={"chips"} role="group" aria-label={copy.pickerLabel} data-ms-picker="">
               {binding.candidates.map((id) => (
-                <button key={id} type="button" className={css.pick} onClick={() => props.onPick?.(id)}>
+                <button key={id} type="button" className={"chip"} onClick={() => props.onPick?.(id)}>
                   {id}
                 </button>
               ))}
@@ -116,33 +115,33 @@ function Binding(props: { binding: FocusBinding; copy: FocusCopy; onPick?: (id: 
 function Plan(props: { plan: FocusPlan; copy: FocusCopy }) {
   const { plan, copy } = props;
   return (
-    <div className={css.plan} data-ms-plan={plan.planId}>
-      <p className={css.planHead}>
+    <div className={"milestone-block"} data-ms-plan={plan.planId}>
+      <p className={"milestone-block-head"}>
         <TruncatedText text={plan.planId} />
         {/* A plan the store has not given a status yet is named as such. The
             empty string used to satisfy StatusDot's required label while
             rendering a colour-only dot — the exact failure the required prop
             exists to prevent. */}
         {plan.status === null ? (
-          <span className={css.noteAbsent}>{copy.planStatusAbsent}</span>
+          <span className={"muted"}>{copy.planStatusAbsent}</span>
         ) : (
           <StatusDot label={plan.status} tone={plan.statusTone} mono />
         )}
       </p>
       {plan.blockedReason === null ? null : (
-        <p className={css.blocked} data-ms-blocked-reason="">
-          <span className={css.lineLabel}>{copy.blockedLabel}</span>
+        <p className={"absence"} data-ms-blocked-reason="">
+          <span className={"muted"}>{copy.blockedLabel}</span>
           <TruncatedText text={plan.blockedReason} block />
         </p>
       )}
       {plan.note === null ? null : (
-        <p className={css.note} data-ms-progress-note="">
-          <span className={css.lineLabel}>{copy.progressLabel}</span>
+        <p className={"chart-note"} data-ms-progress-note="">
+          <span className={"muted"}>{copy.progressLabel}</span>
           <TruncatedText text={plan.note} block />
         </p>
       )}
       {plan.note === null && plan.blockedReason === null ? (
-        <p className={css.noteAbsent} data-ms-progress-absent="">
+        <p className={"muted"} data-ms-progress-absent="">
           {copy.progressAbsent}
         </p>
       ) : null}
@@ -153,8 +152,8 @@ function Plan(props: { plan: FocusPlan; copy: FocusCopy }) {
 /** One status group; a group with no plans is still a group (a count, not a gap). */
 function Group(props: { group: FocusGroup; copy: FocusCopy }) {
   return (
-    <section className={css.group} data-ms-group={props.group.status}>
-      <h3 className={css.groupHead}>{props.copy.groupHeading(props.group.status, props.group.count)}</h3>
+    <section className={"panel"} data-ms-group={props.group.status}>
+      <h3 className={"panel-head"}>{props.copy.groupHeading(props.group.status, props.group.count)}</h3>
       {props.group.plans.map((plan) => (
         <Plan key={plan.planId} plan={plan} copy={props.copy} />
       ))}
@@ -166,27 +165,27 @@ export function Focus(props: FocusProps) {
   const { model, copy } = props;
   const workflow = model.workflow;
   return (
-    <article className={css.page} data-ms-screen="focus">
-      <h1 className={css.title}>{copy.pageTitle}</h1>
+    <article className={"screen"} data-ms-screen="focus">
+      <h1>{copy.pageTitle}</h1>
 
       {/* 1 — the binding line. Always present. */}
       <Binding binding={model.binding} copy={copy} onPick={props.onPick} />
 
       {/* 2 + 3 — the bound workflow and its plan board, with each plan's
           recorded progress or blocked reason. */}
-      <section className={css.panel} aria-labelledby="ms-focus-board">
-        <h2 className={css.heading} id="ms-focus-board">
+      <section className={"panel"} aria-labelledby="ms-focus-board">
+        <h2 className={"panel-title"} id="ms-focus-board">
           {copy.boardHeading}
         </h2>
         {workflow.kind === "populated" && workflow.value !== null ? (
           <>
-            <p className={css.workflowLine} data-ms-workflow="">
+            <p className={"branch-line"} data-ms-workflow="">
               <TruncatedText text={workflow.value.id} />
-              <span className={css.workflowMeta}>
+              <span className={"detail-meta"}>
                 {workflow.value.type}
                 {workflow.value.phase === null ? "" : ` · ${workflow.value.phase}`}
               </span>
-              <span className={css.branch} data-ms-branch-chain="">
+              <span className={"branch-line"} data-ms-branch-chain="">
                 {[workflow.value.branch.base, workflow.value.branch.source, workflow.value.branch.integration, workflow.value.branch.target]
                   .map((anchor) => anchor ?? "—")
                   .join(" → ")}
@@ -219,11 +218,11 @@ export function Focus(props: FocusProps) {
       </section>
 
       {/* 4 — the session's delivery line. A standalone delivery is sayable. */}
-      <section className={css.panel} aria-labelledby="ms-focus-delivery">
-        <h2 className={css.heading} id="ms-focus-delivery">
+      <section className={"panel"} aria-labelledby="ms-focus-delivery">
+        <h2 className={"panel-title"} id="ms-focus-delivery">
           {copy.deliveryHeading}
         </h2>
-        <p className={css.delivery} data-ms-delivery={model.delivery.kind}>
+        <p className={"milestone-block"} data-ms-delivery={model.delivery.kind}>
           {model.delivery.kind === "no-iteration"
             ? copy.deliveryNoIteration
             : model.delivery.position === null
@@ -233,7 +232,7 @@ export function Focus(props: FocusProps) {
       </section>
 
       {/* 5 — the enforcement flag. One line, last. */}
-      <p className={css.enforcement} data-ms-enforcement={model.enforcement}>
+      <p className={"muted"} data-ms-enforcement={model.enforcement}>
         {copy.enforcementLabel(model.enforcement)}
       </p>
     </article>

@@ -27,7 +27,6 @@ import { resolveRecord } from "../view-model/state.ts";
 import type { IssueDetailModel } from "../view-model/issues.ts";
 import type { Tone } from "../view-model/status.ts";
 import type { ReadProjection } from "@mstar-harness/engine";
-import css from "./IssueDetail.module.css";
 
 /** Every visible string this screen needs. Task 5 supplies them. */
 export type IssueDetailCopy = {
@@ -81,10 +80,10 @@ export function IssueDetail(props: IssueDetailProps) {
   });
 
   return (
-    <article className={css.page} data-ms-screen="issue-detail">
-      <nav className={css.trail} aria-label={copy.breadcrumb.label}>
+    <article className={"screen"} data-ms-screen="issue-detail">
+      <nav className={"breadcrumb"} aria-label={copy.breadcrumb.label}>
         {props.onBack === undefined ? null : (
-          <button type="button" className={css.crumb} onClick={props.onBack}>
+          <button type="button" className={"breadcrumb"} onClick={props.onBack}>
             {copy.breadcrumb.current}
           </button>
         )}
@@ -92,11 +91,11 @@ export function IssueDetail(props: IssueDetailProps) {
 
       {record.kind === "populated" ? (
         <>
-          <header className={css.head}>
-            <h1 className={css.title}>
+          <header className={"screen-head"}>
+            <h1>
               <TruncatedText text={record.value.title} />
             </h1>
-            <p className={css.statusLine}>
+            <p className={"detail-meta"}>
               {/* Dot + literal enum + weight: never colour alone. */}
               <StatusDot
                 label={record.value.severity}
@@ -145,23 +144,23 @@ export function IssueDetail(props: IssueDetailProps) {
           </FieldGroup>
 
           {record.value.impact === null ? null : (
-            <section className={css.block} data-ms-impact="">
-              <h2 className={css.heading}>{copy.impactHeading}</h2>
-              <p className={css.longText}>{record.value.impact}</p>
+            <section className={"panel"} data-ms-impact="">
+              <h2>{copy.impactHeading}</h2>
+              <p className={"detail-text"}>{record.value.impact}</p>
             </section>
           )}
 
           {record.value.acceptance === null ? null : (
-            <section className={css.block} data-ms-acceptance="">
-              <h2 className={css.heading}>{copy.acceptanceHeading}</h2>
-              <p className={css.longText}>{record.value.acceptance}</p>
+            <section className={"panel"} data-ms-acceptance="">
+              <h2>{copy.acceptanceHeading}</h2>
+              <p className={"detail-text"}>{record.value.acceptance}</p>
             </section>
           )}
 
           {/* The closure note is a closed issue's fact; an open one has none. */}
           {record.value.closureNote === null ? null : (
             <Collapsible summary={copy.closureNoteHeading} defaultOpen>
-              <p className={css.longText} data-ms-closure-note="">
+              <p className={"detail-text"} data-ms-closure-note="">
                 {record.value.closureNote}
               </p>
             </Collapsible>

@@ -25,7 +25,6 @@ import { TruncatedText } from "../components/TruncatedText.tsx";
 import type { IterationDetailModel, IterationPlanRow } from "../view-model/iterations.ts";
 import type { Resolved } from "../view-model/state.ts";
 import type { GateStepId, GateStepPosition, Tone } from "../view-model/status.ts";
-import css from "./IterationDetail.module.css";
 
 /** Every visible string this screen needs. Task 5 supplies them. */
 export type IterationDetailCopy = {
@@ -69,25 +68,25 @@ export type IterationDetailProps = {
 /** The plan table's columns. */
 function planColumns(copy: IterationDetailCopy): DataTableColumn<IterationPlanRow>[] {
   return [
-    { key: "planId", header: copy.planColumns.planId, render: (plan) => <span className={css.mono}>{plan.planId}</span> },
+    { key: "planId", header: copy.planColumns.planId, render: (plan) => <span className={"mono"}>{plan.planId}</span> },
     {
       key: "title",
       header: copy.planColumns.title,
       secondary: true,
       render: (plan) =>
-        plan.title === null ? <span className={css.muted}>{copy.fields.noWorkflow}</span> : <TruncatedText text={plan.title} />,
+        plan.title === null ? <span className={"muted"}>{copy.fields.noWorkflow}</span> : <TruncatedText text={plan.title} />,
     },
     {
       key: "status",
       header: copy.planColumns.status,
       render: (plan) => (
-        <span className={css.statusCell}>
+        <span>
           {plan.status === null ? (
-            <span className={css.muted}>{copy.fields.notStarted}</span>
+            <span className={"muted"}>{copy.fields.notStarted}</span>
           ) : (
             <StatusDot label={plan.status} tone={plan.statusTone} mono />
           )}
-          {plan.phase === null ? null : <span className={css.phase}>{plan.phase}</span>}
+          {plan.phase === null ? null : <span className={"chip"}>{plan.phase}</span>}
         </span>
       ),
     },
@@ -97,11 +96,11 @@ function planColumns(copy: IterationDetailCopy): DataTableColumn<IterationPlanRo
       secondary: true,
       render: (plan) =>
         plan.progress === null ? (
-          <span className={css.muted} data-ms-plan-progress-absent="">
+          <span className={"muted"} data-ms-plan-progress-absent="">
             {copy.planProgressAbsent}
           </span>
         ) : (
-          <span className={css.progress}>
+          <span className={"milestone-counts"}>
             <TruncatedText text={plan.progress} />
           </span>
         ),
@@ -111,7 +110,7 @@ function planColumns(copy: IterationDetailCopy): DataTableColumn<IterationPlanRo
       header: copy.planColumns.doneAt,
       secondary: true,
       align: "end",
-      render: (plan) => <span className={css.mono}>{plan.doneAt ?? "—"}</span>,
+      render: (plan) => <span className={"mono"}>{plan.doneAt ?? "—"}</span>,
     },
   ];
 }
@@ -127,8 +126,8 @@ function IterationDetailBody(props: {
 
   return (
     <>
-          <header className={css.head}>
-            <h1 className={css.title}>
+          <header className={"screen-head"}>
+            <h1>
               <TruncatedText text={value.iterationId} />
             </h1>
           </header>
@@ -155,7 +154,7 @@ function IterationDetailBody(props: {
               ) : (
                 <button
                   type="button"
-                  className={css.crumb}
+                  className={"breadcrumb"}
                   onClick={() => {
                     if (value.workflowId !== null) props.onOpenWorkflow?.(value.workflowId);
                   }}
@@ -169,14 +168,14 @@ function IterationDetailBody(props: {
           <FieldGroup title={copy.compassHeading} columns={1}>
             <Field label={copy.fields.compassStatus} mono>
               {value.compassStatus === null ? (
-                <span className={css.muted}>{copy.fields.noCompass}</span>
+                <span className={"muted"}>{copy.fields.noCompass}</span>
               ) : (
                 <StatusDot label={value.compassStatus} tone={value.compassTone} mono />
               )}
             </Field>
             <Field label={copy.fields.title}>
               {value.summary === null ? (
-                <span className={css.muted}>{copy.fields.noSummary}</span>
+                <span className={"muted"}>{copy.fields.noSummary}</span>
               ) : (
                 <span data-ms-compass-summary="">{value.summary}</span>
               )}
@@ -186,29 +185,29 @@ function IterationDetailBody(props: {
           {/* The delivery position: four labels, plus a fifth that is never
               marked. The position rides on an attribute too, so the state does
               not depend on the colour. */}
-          <section className={css.gate} aria-labelledby="ms-iteration-gate">
-            <h2 className={css.heading} id="ms-iteration-gate">
+          <section className={"gate"} aria-labelledby="ms-iteration-gate">
+            <h2 id="ms-iteration-gate">
               {value.gatePosition === null
                 ? copy.gateNoCompass
                 : copy.gateStep(value.gatePosition.step, value.gatePosition.of)}
             </h2>
-            <ol className={css.steps} data-ms-gate-steps="">
+            <ol className={"gate-track"} data-ms-gate-steps="">
               {value.steps.map((step) => (
                 <li
                   key={step.id}
-                  className={css.step}
+                  className={"gate-step"}
                   data-ms-step={step.id}
                   data-ms-step-position={step.position satisfies GateStepPosition}
                 >
-                  <span className={css.stepMark} aria-hidden="true" />
-                  <span className={css.stepLabel}>{copy.gateStepLabels[step.id]}</span>
+                  <span className={"gate-step-mark"} aria-hidden="true" />
+                  <span className={"gate-step-label"}>{copy.gateStepLabels[step.id]}</span>
                 </li>
               ))}
             </ol>
           </section>
 
-          <section className={css.plans} aria-labelledby="ms-iteration-plans">
-            <h2 className={css.heading} id="ms-iteration-plans">
+          <section className={"table"} aria-labelledby="ms-iteration-plans">
+            <h2 id="ms-iteration-plans">
               {copy.planTableHeading}
             </h2>
             <DataTable
@@ -226,10 +225,10 @@ function IterationDetailBody(props: {
 export function IterationDetail(props: IterationDetailProps) {
   const { copy, model } = props;
   return (
-    <article className={css.page} data-ms-screen="iteration-detail">
-      <nav className={css.trail} aria-label={copy.breadcrumb.label}>
+    <article className={"screen"} data-ms-screen="iteration-detail">
+      <nav className={"breadcrumb"} aria-label={copy.breadcrumb.label}>
         {props.onBack === undefined ? null : (
-          <button type="button" className={css.crumb} onClick={props.onBack}>
+          <button type="button" className={"breadcrumb"} onClick={props.onBack}>
             {copy.breadcrumb.current}
           </button>
         )}

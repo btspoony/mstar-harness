@@ -46,10 +46,9 @@ export function FilterBar(props: FilterBarProps) {
   const nothingApplied = props.applied.length === 0;
   return (
     <div className="filters">
-      <div className="fields">
         {props.fields.map((field) => (
           <label key={field.key} className="filter-field">
-            <span className={css.fieldLabel}>{field.label}</span>
+            <span>{field.label}</span>
             <select
               className="ctl"
               value={field.value}
@@ -65,20 +64,20 @@ export function FilterBar(props: FilterBarProps) {
           </label>
         ))}
         {props.search === undefined ? null : (
-          <input
-            type="search"
-            className="search"
-            value={props.search.value}
-            placeholder={props.search.placeholder}
-            aria-label={props.search.placeholder}
-            onChange={(event) => props.search?.onChange(event.target.value)}
-          />
+          <span className="search">
+            <input
+              type="search"
+              value={props.search.value}
+              placeholder={props.search.placeholder}
+              aria-label={props.search.placeholder}
+              onChange={(event) => props.search?.onChange(event.target.value)}
+            />
+          </span>
         )}
         <button type="button" className="btn" disabled={nothingApplied} onClick={props.onClearAll}>
           {props.clearLabel}
         </button>
         <span className="filters-meta">{props.resultSummary}</span>
-      </div>
       {nothingApplied ? null : (
         <div className="chips" data-ms-applied-filters="">
           {props.applied.map((chip) => (
