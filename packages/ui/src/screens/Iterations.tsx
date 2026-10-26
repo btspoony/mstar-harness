@@ -42,6 +42,8 @@ export type IterationsCopy = {
     execution: string;
     delivery: string;
     plans: string;
+    /** The prototype's `Documents` column. */
+    documents: string;
     started: string;
   };
   /** `step N of 5`, or the copy for an iteration that records no compass. */
@@ -120,6 +122,18 @@ export function Iterations(props: IterationsProps) {
       cellClass: "t-num",
       headerClass: "t-num",
       render: (row) => <span>{copy.plansProgress(row.plansDone, row.plansTotal)}</span>,
+    },
+    {
+      // The prototype's list states the document count after the plan count; both are
+      // numbers, so both wear `.t-num` on the header and the cell.
+      key: "documents",
+      header: copy.columns.documents,
+      width: "8%",
+      secondary: true,
+      align: "end",
+      cellClass: "t-num",
+      headerClass: "t-num",
+      render: (row) => <span>{row.documents}</span>,
     },
     {
       key: "started",

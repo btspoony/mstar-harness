@@ -191,9 +191,11 @@ describe("iterations", () => {
 
   test("NEGATIVE: no document inventory and no compass milestone list is surfaced", () => {
     const row = iterationRow(iteration());
-    for (const removed of ["documents", "milestones", "revision", "counters"]) {
+    // `documents` is a count now (the prototype's `Documents` column); the rest stay out.
+    for (const removed of ["milestones", "revision", "counters"]) {
       expect(Object.keys(row)).not.toContain(removed);
     }
+    expect(Object.keys(row)).toContain("documents");
   });
 
   test("a project that attributes no iteration is absent, not empty", () => {

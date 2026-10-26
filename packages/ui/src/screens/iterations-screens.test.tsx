@@ -106,6 +106,7 @@ const iterationsCopy: IterationsCopy = {
     execution: "Compass",
     delivery: "Delivery",
     plans: "Plans",
+    documents: "Documents",
     started: "Started",
   },
   gateStep: (step, of) => `step ${step} of ${of}`,
@@ -231,12 +232,12 @@ describe("Iterations list — attribution decides between absent and empty", () 
 describe("Iterations list — NEGATIVE: the removed surfaces", () => {
   const html = renderList([iteration()], 1);
 
-  test("no document inventory and no document count", () => {
+  test("the list states the document count, but never the inventory itself", () => {
+    // IA §8.1 kept documents out of the list. The prototype's table has a `Documents`
+    // column, and it is a count — the inventory stays on the detail screen.
+    expect(html).toContain("Documents");
     expect(html).not.toContain("Delivery compass");
     expect(html).not.toContain("IA spec");
-    expect(html).not.toContain("doc-1");
-    expect(html).not.toMatch(/\bdocuments?\b/i);
-    expect(html).not.toContain(">2<");
   });
 
   test("no counter from the read envelope", () => {

@@ -58,6 +58,10 @@ export type IterationRow = {
   gatePosition: { step: number; of: 5 } | null;
   plansDone: number;
   plansTotal: number;
+  /** How many documents the catalog links to this iteration. The prototype's list has
+   *  this column beside `Plans`; the count comes from the same `documents` array the
+   *  detail screen's inventory renders. */
+  documents: number;
   startedAt: string;
   endedAt: string | null;
 };
@@ -76,6 +80,7 @@ export function iterationRow(iteration: IterationDTO): IterationRow {
     gatePosition: gateStepPosition(step),
     plansDone: tally.done,
     plansTotal: tally.total,
+    documents: iteration.documents.length,
     startedAt: formatDate(iteration.compass?.startedAt ?? null),
     endedAt: iteration.compass?.endedAt ?? null,
   };

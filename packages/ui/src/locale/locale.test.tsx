@@ -235,6 +235,9 @@ describe("no key exists for a fact IA §8 marks not-rendered", () => {
     "projectDetail.authorityColumns.revision",
     // The head prints `Revision 12`, as the prototype does.
     "projectDetail.revisionLabel",
+    // The prototype's iterations table has a `Documents` column; it is a count, not
+    // the inventory §8.1 excluded.
+    "iterations.columns.documents",
   ]);
 
   test("the kept-exception list contains only keys that exist", () => {

@@ -316,6 +316,7 @@ export const zh: Copy = {
       execution: "罗盘",
       delivery: "交付",
       plans: "计划",
+      documents: "文档",
       started: "开始时间",
     },
     gateStep: (step, of) => `第 ${step} / ${of} 步`,

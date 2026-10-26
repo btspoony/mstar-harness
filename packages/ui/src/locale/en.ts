@@ -337,6 +337,7 @@ export const en = {
       execution: "Compass",
       delivery: "Delivery",
       plans: "Plans",
+      documents: "Documents",
       started: "Started",
     },
     gateStep: (step: number, of: number) => `step ${step} of ${of}`,
