@@ -108,6 +108,7 @@ export const zh: Copy = {
     },
     planColumns: { plan: "计划", title: "标题", status: "状态", progress: "进度", done: "完成时间" },
     workflowMeta: (plans, status) => `${plans} 个计划 · ${status}`,
+    plansLabel: (n: number) => "个计划",
     planTableCaption: "该工作流下的计划",
     planStatusAbsent: "状态未记录",
     planProgressAbsent: "没有记录进度。",

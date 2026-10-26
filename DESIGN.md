@@ -1556,7 +1556,38 @@ previous change.
 implementation writes `select.ctl`, because every `.ctl` here is a select and a bare class
 would box any future button that reuses the name. `check:selectors` carries that reason.
 
-## Verification coverage, stated
+## The panel head's meta is structure, not a string
+
+A computed-style probe on the running dashboard found one difference on the overview: the
+prototype's `Active workflow` head reads `7 plans · running` as
+
+```html
+<span class="panel-meta">
+  <span><span class="num mono">7</span> <span>plans</span></span>
+  <span aria-hidden="true">·</span>
+  <span class="status tone-running is-strong"><span class="dot"></span><span class="label">running</span></span>
+</span>
+```
+
+and this implementation passed `copy.workflowMeta(plans, status)` — one string. A string
+carries neither the count's mono/tabular treatment nor the dot, and it was the same
+`textContent` trap this file already records twice: the text matched, so nothing looked wrong.
+
+The head takes the same three elements now. Measured:
+
+```
+text:       "1 个计划 · running"
+status:     "status tone-accent is-strong"
+font-weight: 500
+dot:        rgb(47, 111, 237)      // --ms-accent
+```
+
+`is-strong` is the prototype's own class (`font-weight: 500`), and `accent` is the tone
+`tone-running` resolves to.
+
+**The probe itself was wrong first**: it asked for `.breadcrumb`, `.detail-title` and
+`.field dt` on the *overview*, where those elements do not exist, and reported five `None`s
+that looked like five missing elements. A probe has to name the screen it belongs to.## Verification coverage, stated
 
 Two hosts mount these screens: the dashboard (`packages/cli/web`) and the dsh pane
 (`packages/dsh/src/client/panel`). They share the components but **each owns its own

@@ -151,6 +151,7 @@ const overviewCopy: OverviewCopy = {
   workflowsTruncated: (shown: number, total: number) => `showing ${shown} of ${total}`,
   plansProgress: (done, total) => `${done}/${total} plans`,
   planColumns: { plan: "Plan", title: "Title", status: "Status", progress: "Progress", done: "Completed" },
+  plansLabel: (n) => (n === 1 ? "plan" : "plans"),
   workflowMeta: (plans, status) => `${plans} plans \u00b7 ${status}`,
   planTableCaption: "Plans under this workflow",
   planStatusAbsent: "Status not recorded",
@@ -262,7 +263,13 @@ describe("Overview — what it shows, in the IA §3.1 order", () => {
     // The count line is the workflow's own plan total and status, not the page's.
     // The count and status sit in the panel head beside the title, where the prototype has
     // them (`span.panel-meta`), not as a paragraph in the body.
-    expect(html).toContain("2 plans \u00b7 running");
+    // The head is structured, as the prototype's is: the count in `.num.mono`, a
+    // separator, then a `.status` carrying its own dot and the literal enum.
+    expect(html).toContain('class="num mono">2</span>');
+    expect(html).toContain(">plans</span>");
+    expect(html).toContain("is-strong");
+    expect(html).toContain('data-ms-emphasis="true"');
+    expect(html).toContain('<span class="label">running</span>');
     expect(html).not.toContain("data-ms-workflow-meta");
   });
 

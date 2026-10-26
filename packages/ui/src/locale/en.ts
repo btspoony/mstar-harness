@@ -122,6 +122,7 @@ export const en = {
     },
     planColumns: { plan: "Plan", title: "Title", status: "Status", progress: "Progress", done: "Completed" },
     workflowMeta: (plans: number, status: string) => `${plans} plans · ${status}`,
+    plansLabel: (n: number): string => (n === 1 ? "plan" : "plans"),
     planTableCaption: "Plans under this workflow",
     planStatusAbsent: "Status not recorded",
     planProgressAbsent: "Records no progress.",

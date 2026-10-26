@@ -68,6 +68,8 @@ export type OverviewCopy = {
   planColumns: { plan: string; title: string; status: string; progress: string; done: string };
   /** `7 plans · running` — the count line above the table. */
   workflowMeta: (plans: number, status: string) => string;
+  /** The plural form of `plan`, beside the count in the panel head. */
+  plansLabel: (n: number) => string;
   /** The plan table's accessible name, since it has no visible caption. */
   planTableCaption: string;
   /** A plan whose status the store does not record. */
@@ -432,9 +434,23 @@ export function Overview(props: OverviewProps) {
               id="ms-overview-workflows"
               title={copy.workflowsHeading}
               meta={
-                model.workflows.kind === "populated" && model.workflows.value.length > 0
-                  ? copy.workflowMeta(model.workflows.value[0].plansTotal, model.workflows.value[0].status)
-                  : undefined
+                // Structured, as the prototype has it: the count in `.num.mono`, then a
+                // `.status` with its dot. One string cannot carry either the spacing or the
+                // dot.
+                model.workflows.kind === "populated" && model.workflows.value.length > 0 ? (
+                  <>
+                    <span>
+                      <span className="num mono">{model.workflows.value[0].plansTotal}</span>{" "}
+                      <span>{copy.plansLabel(model.workflows.value[0].plansTotal)}</span>
+                    </span>
+                    <span aria-hidden="true">·</span>
+                    <StatusDot
+                      label={model.workflows.value[0].status}
+                      tone={model.workflows.value[0].statusTone}
+                      emphasis
+                    />
+                  </>
+                ) : undefined
               }
             />
           <PanelBody>
