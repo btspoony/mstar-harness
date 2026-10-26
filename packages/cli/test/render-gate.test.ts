@@ -224,6 +224,12 @@ const PROBE = `(() => {
       }
       return worst;
     })(),
+    // The column sequence, visible columns only: the prototype fixes an order, and a
+    // count alone cannot see a reorder. Keys rather than labels, so the anchor does not
+    // depend on which locale the page happens to carry.
+    columnKeys: [...document.querySelectorAll('table thead th')]
+      .filter((th) => getComputedStyle(th).display !== 'none')
+      .map((th) => th.getAttribute('data-ms-col-key')),
     hiddenColumns: [...document.querySelectorAll('table thead th[data-ms-col="secondary"]')]
       .filter((th) => getComputedStyle(th).display === 'none').length,
     tableScrollsSideways: (() => {
@@ -752,6 +758,24 @@ describe.skipIf(!browserAvailable)("the render gate", () => {
       for (const width of band.cardWidths as number[]) expect(width).toBeLessThanOrEqual(contentWidth + 0.5);
     }
   }, 90_000);
+
+  test("the issues column order is the prototype's sequence", async () => {
+    // `design-v1.html:1199-1207`: ID, Title, Project, Kind, Severity, Disposition,
+    // Last activity. The gate asserts the sequence, not just the count, because a
+    // reorder keeps the count and changes what the reader scans.
+    await browser(["set", "viewport", "720", String(VIEWPORT.height)]);
+    const measured = await visit("issues", "issues", true, "pane-720-issues-order");
+    const band = measured.band as Record<string, unknown>;
+    expect(band.columnKeys).toEqual([
+      "id",
+      "title",
+      "project",
+      "kind",
+      "severity",
+      "disposition",
+      "lastActivity",
+    ]);
+  }, 60_000);
 
   test("the overview is one run of full-width sections at both pane widths", async () => {
     // The prototype's sidebar Overview is a single column of 694px panels

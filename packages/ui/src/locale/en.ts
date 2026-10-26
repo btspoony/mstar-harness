@@ -89,7 +89,7 @@ export const en = {
     workflowsTruncated: (shown: number, total: number) => `Showing ${shown} of ${total}`,
     plansProgress: (done: number, total: number) => `${done}/${total} plans`,
     residualsHeading: "Open residuals",
-    residualsTotal: (open: number) => `${open} open`,
+    residualsTotal: (open: number) => `${open} open · all projects`,
     iterationHeading: "Delivery",
     iterationNoIteration: "No iteration yet",
     gateStep: (step: number, of: number) => `step ${step} of ${of}`,

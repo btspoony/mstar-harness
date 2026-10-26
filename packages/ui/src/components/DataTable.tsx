@@ -132,6 +132,7 @@ export function DataTable<T>(props: DataTableProps<T>) {
               key={column.key}
               scope="col"
               data-ms-col={column.wide === true ? "wide" : column.secondary === true ? "secondary" : "primary"}
+              data-ms-col-key={column.key}
               data-ms-align={column.align ?? "start"}
               style={column.width === undefined ? undefined : { inlineSize: `${column.width}px` }}
             >
@@ -172,6 +173,7 @@ export function DataTable<T>(props: DataTableProps<T>) {
                   <td
                     key={column.key}
                     data-ms-col={column.wide === true ? "wide" : column.secondary === true ? "secondary" : "primary"}
+              data-ms-col-key={column.key}
                     data-ms-align={column.align ?? "start"}
                   >
                     {column.render(row)}

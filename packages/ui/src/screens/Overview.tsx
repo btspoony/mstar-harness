@@ -18,9 +18,7 @@
  * decided an arm itself would be a second authority.
  */
 import { EmptyState, type AbsenceArm } from "../components/EmptyState.tsx";
-import { Field } from "../components/Field.tsx";
 import { Notice } from "../components/Notice.tsx";
-import { FieldGroup } from "../components/FieldGroup.tsx";
 import { Panel, PanelBody, PanelHead } from "../components/Panel.tsx";
 import { ProgressBar } from "../components/ProgressBar.tsx";
 import { Row } from "../components/Row.tsx";
@@ -183,25 +181,37 @@ export function Overview(props: OverviewProps) {
 
         {/* 2 — residuals, then 3 — delivery. Never dropped. */}
         <Panel labelledBy="ms-overview-residuals">
-          <PanelHead id="ms-overview-residuals" title={copy.residualsHeading} />
+          <PanelHead
+            id="ms-overview-residuals"
+            title={copy.residualsHeading}
+            meta={
+              model.residuals.kind === "populated"
+                ? copy.residualsTotal(model.residuals.value.total)
+                : undefined
+            }
+          />
           <PanelBody>
-          {/* The row label is the literal enum: contract values stay English and
-              untranslated so they can be copied into the CLI. `data-ms-severity` is
-              the hook for anything presentational. */}
+          {/* The prototype's compact tally (`design-v1.html:2424-2434`): five severity
+              rows in a two-column grid — critical/high, medium/low, nit — severity on the
+              left with its dot, count right-aligned. The row label is the literal enum:
+              contract values stay English and untranslated so they can be copied into the
+              CLI. `data-ms-severity` is the hook for anything presentational. */}
           {model.residuals.kind === "populated" ? (
-            <FieldGroup title={copy.residualsTotal(model.residuals.value.total)} columns={1}>
+            <div className={css.residuals} data-ms-residuals="">
               {model.residuals.value.rows.map((row) => (
-                <Field key={row.severity} label={row.severity}>
-                  <span
-                    className={row.emphasised ? css.countEmphasised : css.count}
-                    data-ms-severity={row.severity}
-                    data-ms-count={row.count}
-                  >
-                    {row.count}
+                <div
+                  key={row.severity}
+                  className={css.residualRow}
+                  data-ms-severity={row.severity}
+                  data-ms-count={row.count}
+                >
+                  <span className={css.residualSeverity}>
+                    <StatusDot label={row.severity} tone={row.tone} mono />
                   </span>
-                </Field>
+                  <span className={row.emphasised ? css.countEmphasised : css.count}>{row.count}</span>
+                </div>
               ))}
-            </FieldGroup>
+            </div>
           ) : (
             <Absence
               arm={model.residuals.kind as AbsenceArm}

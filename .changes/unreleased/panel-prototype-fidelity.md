@@ -12,6 +12,16 @@ packages: cli,ui,dsh
   title the widest at 146px. The milestone column became **wide-only** (`wide: true`): hidden
   below 900px of container, never restated on the second line, because the prototype's sidebar
   shows seven columns and the eighth is what pushed the table past its card.
+- Put every list's columns in the **prototype's order** — the Issues table read
+  `ID | Title | Severity | Disposition | Kind | Project | Last activity` where the prototype reads
+  `ID | Title | Project | Kind | Severity | Disposition | Last activity`
+  (`design-v1.html:1199-1207`), and Projects led with the title where the prototype leads with
+  the id (`:1757-1762`). Widths travel with their facts. The render gate now asserts the
+  sequence, not just its length.
+- Made the residual panel the prototype's **compact two-column tally**
+  (`design-v1.html:2424-2434`): two severities per row with the count right-aligned, one column
+  below 480px, and the reconciling total in the panel's meta slot (`26 open · all projects`)
+  instead of a plain five-row list.
 - Made the Overview **one vertical run of full-width sections at every width**, in the
   prototype's sidebar order (active workflow, residuals, milestones, the latest iteration)
   instead of a two-column grid whose second card squeezed prose one glyph per line at 1900px.
@@ -27,6 +37,8 @@ packages: cli,ui,dsh
 <!-- CN -->
 
 - 每个列表表格采用**原型自己的列宽**，宽面板不再挤压：720px 下 Issues 表的最后一列被切在面板边缘，project 显示 `dsh-inte…`、kind 显示 `imp…`。列宽现在按 `design-v1.html:1196-1198`（id 86、project 128、kind 112、severity 100、disposition 104、last activity 116，按产品标识符所需取整），标题列吸收余量，弹性列下限由 120px 降为 96px。720 下实测：678px 表格落在 678px 卡片内，七列完整，标题最宽 146px。里程碑列改为**宽屏专属**（`wide: true`）：容器窄于 900px 时隐藏且不在第二行重述，因为原型侧栏显示七列，第八列正是把表格挤出卡片的原因。
+- 所有列表的列序改为**原型的顺序** —— Issues 表原先读作 `编号 | 标题 | 严重度 | 处置 | 类型 | 项目 | 最近活动`，原型为 `ID | Title | Project | Kind | Severity | Disposition | Last activity`（`design-v1.html:1199-1207`）；Projects 原先标题在前，原型 id 在前（`:1757-1762`）。宽度随事实列移动。渲染门现在断言列序本身，而不只是列数。
+- 残留项面板改为原型的**紧凑两列 tally**（`design-v1.html:2424-2434`）：每行两个严重度、计数右对齐，窄于 480px 时单列，合计总数移入面板 meta 位（`26 open · all projects`），不再是五行平铺列表。
 - Overview 在任意宽度下改为**单列满宽区块的垂直序列**，顺序取自原型侧栏（进行中的工作流、未关闭遗留、里程碑、最近迭代），替换掉在 1900px 下把第二张卡的文字挤成一字一行的两列网格。
 - 通过共享外壳给**面板顶部带加上内缩**：`.ms-pane-head` 在表面色与细线之上携带原型的 `padding-inline: 12px` 导航内缩（`design-v1.html:487`），dsh 面板的导航不再贴着面板边缘。dashboard 的窗口头部挂同一个类并保留自己的 20px 外边距，与原型窗口头部一致。宿主标签条仍是面板的顶边。
 - 渲染门新增这些偏差本应被抓住的锚点：720px 下每个列表的列数与表格无溢出、Overview 在 720 与 1900 都是满宽单列、顶部带的水平内缩。

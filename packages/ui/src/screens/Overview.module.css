@@ -27,12 +27,43 @@
   min-inline-size: 0;
 }
 
+/* The residual tally (`design-v1.html:2424-2434`, `.res-grid`): five severity rows
+   in two columns, so critical/high share a row and nit closes the block. Below the
+   stack floor the grid is one column (`.reflow-stack`, 480px). */
+.residuals {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  /* The prototype's `gap: 0 20px`; the nearest spacing token is 16px. */
+  gap: 0 var(--ms-space-4);
+  min-inline-size: 0;
+}
+
+.residualRow {
+  display: flex;
+  align-items: center;
+  gap: var(--ms-space-2);
+  min-block-size: 26px;
+  min-inline-size: 0;
+  border-block-end: var(--ms-hairline);
+}
+
+/* The label owns a fixed measure so the counts line up in both grid columns, the
+   prototype's `.res-row .sev { min-width: 88px }`. */
+.residualSeverity {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-inline-size: 88px;
+}
+
 .count {
+  margin-inline-start: auto;
   font-family: var(--ms-font-mono);
   font-variant-numeric: tabular-nums;
 }
 
 .countEmphasised {
+  margin-inline-start: auto;
   font-family: var(--ms-font-mono);
   font-variant-numeric: tabular-nums;
   font-weight: var(--ms-fw-semibold);
@@ -127,5 +158,11 @@
 @container (max-width: 899px) {
   .body {
     gap: var(--ms-space-4);
+  }
+}
+
+@container (max-width: 479px) {
+  .residuals {
+    grid-template-columns: minmax(0, 1fr);
   }
 }

@@ -321,7 +321,11 @@ and 5 below 619px — and no narrow treatment at all for the four list screens. 
 a licence to ship the wide table squeezed, so the product chooses:
 
 **Priority columns below the floor, declared widths from the prototype, and a scroll floor as
-the net.** Concretely, every list table declares a px width for all but one column; that one
+the net.** The **column order is the prototype's too** (`design-v1.html:1199-1207`): ID, Title,
+Project, Kind, Severity, Disposition, Last activity. A product-only fact sits next to the fact it
+belongs to (the milestone follows the project) and never displaces the prototype's sequence;
+`Workflows` (`:1548-1553`), `Iterations` (`:1664-1669`) and `Projects` (`:1757-1762`) follow their
+own prototype tables the same way. Concretely, every list table declares a px width for all but one column; that one
 flexible column (the title) takes the rest. The widths are the prototype's own split
 (`design-v1.html:1196-1198`: id 86, title flexible, project 128, kind 112, severity 100,
 disposition 104, last activity 116), rounded to what the product's own identifiers need — a
@@ -399,6 +403,12 @@ a squeezed head set a two-glyph title as one glyph per line (measured: a 30.4px,
   defect: at 1900px the second column's card squeezed prose that had nowhere to grow, and the
   prototype never puts two sections side by side in the pane it approves. The card is the
   measure; no further cap is applied.
+- **The residual tally is a compact two-column grid, not a list.** The five severities flow
+  two per row — critical/high, medium/low, nit — severity on the left with its tone dot and a
+  fixed 88px label measure, count right-aligned (`margin-inline-start: auto`), one hairline per
+  row; below the 480px stack floor it is one column (`design-v1.html:2424-2434`). Its heading
+  carries the reconciling total in the panel's meta slot — `26 open · all projects` — instead of
+  a title line of its own.
 - A component that cannot degrade below a floor **states the floor** rather than squeezing
   into illegibility: a truncated cell always exposes its full text (hover `title`, plus a
   focus-reachable affordance for keyboard), and a table below its floor scrolls inside its
