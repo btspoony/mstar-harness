@@ -1715,6 +1715,13 @@ The clearing is the same behaviour, measured on both sides.
 the id column, which takes `.t-id`'s secondary colour — by design, and the same in both
 schemes.
 
+**Three of the six elements do not exist on every screen, and the table above is not a claim
+that they do.** `workflows` and `iterations` have no `.panel-title` (the prototype's own two
+list screens have no panel head either — verified by reading their markup), and `projects`
+has no table. Those cells came back `-`, which means *not present*, not *equal*. What was
+compared on all five screens is `h1`, `.panel` and the accent dot; the rest was compared where
+both sides had the element.
+
 **What is still not compared**: the four detail screens, in either scheme.## Verification coverage, stated
 
 Two hosts mount these screens: the dashboard (`packages/cli/web`) and the dsh pane
