@@ -1723,8 +1723,8 @@ compared on all five screens is `h1`, `.panel` and the accent dot; the rest was 
 both sides had the element.
 
 **The four detail screens, both schemes.** Each was probed on a record that exists:
-`#issue/I-000870`, `#workflow/20261026-narrow-pane-parity`,
-`#iteration/iter-20260811-panel-fixes`, `#project/dsh-integration`.
+`#issue/I-000870`, `#workflow/w-1`,
+`#iteration/iter-1`, `#project/dsh-integration`.
 
 | | workflow | iteration | project | issue |
 | --- | --- | --- | --- | --- |
@@ -1744,9 +1744,9 @@ the `.sec` rhythm (a hairline above each, no card border), which is what rounds 
 `fact-block` into. An "absent" cell here is a structural fact about the screen, not a missing
 measurement.
 
-**First probe of this round was invalid, and it was the id**: `#workflow/2026-08-23-pr-deep-review`
+**First probe of this round was invalid, and it was the id**: `#workflow/w-0`
 is an `execution_workflows.workflow_id`, but the route takes the *catalog* id the list shows
-(`20261026-narrow-pane-parity`). Every element came back `-`, which reads exactly like a
+(`w-1`). Every element came back `-`, which reads exactly like a
 screen that renders nothing.
 
 **Still not compared**: any pixel or screenshot diff. Every measurement in this file is a
