@@ -841,6 +841,26 @@ of `.table` / `.table td` between the two sheets, not another rendered-pixel com
 **This entry is deliberately a open question, not a finding.** The numbers above are
 measured; the explanation is not.
 
+## The same series is a chart on one screen and a table on the other
+
+The prototype renders the issue-flow series **twice, in two forms**:
+
+| Screen | Panel | Form |
+| --- | --- | --- |
+| overview | `Issue flow trend` | `svg.chart-svg` — a chart |
+| issues | (above the filter panel) | `table.mini-table` — `Date · Captured · Retired · Open difference · Origin` |
+
+This implementation draws the chart on both. The trend *is* present on the issues screen —
+the panel renders, titled `问题走势` above `筛选` — so this is not a missing feature; it is
+the wrong **form** for that screen.
+
+Why it matters even though the data is the same: the mini table states five numbers per row,
+which a 132px sparkline cannot. A screen meant for reading exact counts gets a shape instead.
+
+**Next step, stated so it is not rediscovered**: build the mini table from the same
+`IssueFlowSeries` the chart consumes, and render it on the issues screen in place of the
+chart. `product.css` already carries `.mini-table` (used by the compass milestones).
+
 ## Verification coverage, stated
 
 Two hosts mount these screens: the dashboard (`packages/cli/web`) and the dsh pane
