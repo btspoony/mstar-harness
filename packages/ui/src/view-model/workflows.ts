@@ -120,6 +120,19 @@ export function workflowRow(workflow: WorkflowDTO): WorkflowRow {
  * page is the whole store, so the disclosure is computed from `total` alone and
  * the page length only ever appears as the "showing" side.
  */
+/** The filters the workflow list offers, mirroring the prototype's row. */
+export type WorkflowFilters = {
+  status: string;
+  type: string;
+  q: string;
+};
+
+export const DEFAULT_WORKFLOW_FILTERS: WorkflowFilters = { status: "", type: "", q: "" };
+
+export function isDefaultWorkflowFilters(filters: WorkflowFilters): boolean {
+  return filters.status === "" && filters.type === "" && filters.q.trim() === "";
+}
+
 export type WorkflowListModel = {
   rows: Resolved<readonly WorkflowRow[]>;
   /** The store's unpaged count — never the page length. */
@@ -128,11 +141,18 @@ export type WorkflowListModel = {
   shown: number;
   /** `total > shown`: the store holds more than this page. */
   truncated: boolean;
+  /** The status/type values the current rows carry, for the two selects. */
+  options: { status: readonly string[]; type: readonly string[] };
+  /** The rows the filters leave, before paging. */
+  filtered: number;
+  /** A status or type seen on a row the filters have hidden: the way back to it. */
+  hiddenByFilters: number;
 };
 
 export function workflowListModel(read: {
   data: WorkflowListDTO;
   projection: { generation: number | null };
+  filters?: WorkflowFilters;
 }): WorkflowListModel {
   const rows = resolveRead(
     { data: read.data.items, projection: read.projection },
@@ -140,12 +160,28 @@ export function workflowListModel(read: {
     // be trusted, and the veto must stay.
     { whenNull: "empty", isEmpty: (items) => items.length === 0, requiresProjection: true },
   );
-  const shown = rows.kind === "populated" ? rows.value.length : 0;
+  const mapped = rows.kind === "populated" ? rows.value.map(workflowRow) : [];
+  const filters = read.filters ?? DEFAULT_WORKFLOW_FILTERS;
+  const q = filters.q.trim().toLowerCase();
+  const kept = mapped.filter(
+    (row) =>
+      (filters.status === "" || row.status === filters.status) &&
+      (filters.type === "" || row.type === filters.type) &&
+      (q === "" || row.id.toLowerCase().includes(q) || (row.title ?? "").toLowerCase().includes(q)),
+  );
+  const options = {
+    status: [...new Set(mapped.map((row) => row.status))].sort(),
+    type: [...new Set(mapped.map((row) => row.type))].sort(),
+  };
+  const shown = kept.length;
   return {
-    rows: rows.kind === "populated" ? { kind: "populated", value: rows.value.map(workflowRow) } : rows,
+    rows: rows.kind === "populated" ? { kind: "populated", value: kept } : rows,
     total: read.data.total,
     shown,
     truncated: read.data.total > shown,
+    options,
+    filtered: kept.length,
+    hiddenByFilters: mapped.length - kept.length,
   };
 }
 

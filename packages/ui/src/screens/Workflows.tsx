@@ -16,9 +16,11 @@
  * would claim a truncated page is the whole store.
  */
 import { DataTable, type DataTableColumn } from "../components/DataTable.tsx";
-import { Panel, PanelBody } from "../components/Panel.tsx";
+import { Panel, PanelBody, PanelHead } from "../components/Panel.tsx";
 import { EmptyState, type AbsenceArm } from "../components/EmptyState.tsx";
+import { FilterBar, type AppliedFilter } from "../components/FilterBar.tsx";
 import { Notice } from "../components/Notice.tsx";
+import { DEFAULT_WORKFLOW_FILTERS, type WorkflowFilters } from "../view-model/workflows.ts";
 import { StatusDot } from "../components/StatusDot.tsx";
 import { TruncatedText } from "../components/TruncatedText.tsx";
 import type { WorkflowListModel, WorkflowRow } from "../view-model/workflows.ts";
@@ -37,6 +39,18 @@ export type WorkflowsCopy = {
     plans: string;
   };
   plansProgress: (done: number, total: number) => string;
+  /** The filter card's own head. */
+  filtersHeading: string;
+  filters: {
+    status: string;
+    type: string;
+    search: string;
+    clear: string;
+    any: string;
+    results: (shown: number, total: number) => string;
+  };
+  /** The prototype's footer: how many rows the registry does not carry. */
+  registryNote?: (terminal: number) => string;
   /** The disclosure when `total` exceeds the rows shown. */
   truncated: (shown: number, total: number) => string;
   noCatalogTitle: string;
@@ -53,10 +67,37 @@ export type WorkflowsProps = {
   model: WorkflowListModel;
   copy: WorkflowsCopy;
   onOpen?: (id: string) => void;
+  /** The current filter state; absent means unfiltered (a host without filters). */
+  filters?: WorkflowFilters;
+  onFiltersChange?: (filters: WorkflowFilters) => void;
 };
+
+/** The filter panel's accessible name; the head carries the id. */
+const FILTERS_HEAD_ID = "ms-workflows-filters";
+
+/** The two selects, built from the values the current rows carry. */
+function filterFields(copy: WorkflowsCopy, options: WorkflowListModel["options"], filters: WorkflowFilters) {
+  const build = (key: "status" | "type", values: readonly string[]) => ({
+    key,
+    label: copy.filters[key],
+    value: filters[key],
+    options: [{ value: "", label: copy.filters.any }, ...values.map((value) => ({ value, label: value }))],
+  });
+  return [build("status", options.status), build("type", options.type)];
+}
+
+/** The chips for whatever is narrowing the list, so clearing is one click. */
+function appliedFilters(copy: WorkflowsCopy, filters: WorkflowFilters): AppliedFilter[] {
+  const out: AppliedFilter[] = [];
+  if (filters.status !== "") out.push({ key: "status", text: `${copy.filters.status}: ${filters.status}` });
+  if (filters.type !== "") out.push({ key: "type", text: `${copy.filters.type}: ${filters.type}` });
+  if (filters.q.trim() !== "") out.push({ key: "q", text: filters.q });
+  return out;
+}
 
 export function Workflows(props: WorkflowsProps) {
   const { model, copy } = props;
+  const filters = props.filters ?? DEFAULT_WORKFLOW_FILTERS;
 
   const columns: DataTableColumn<WorkflowRow>[] = [
     { key: "id", header: copy.columns.id, width: "22%", render: (row) => <span className={"mono t-12"}>{row.id}</span> },
@@ -118,7 +159,24 @@ export function Workflows(props: WorkflowsProps) {
 
       {model.rows.kind === "populated" ? (
         <>
-          <Panel>
+          <Panel labelledBy={FILTERS_HEAD_ID}>
+            <PanelHead id={FILTERS_HEAD_ID} title={copy.filtersHeading} />
+            <FilterBar
+              fields={filterFields(copy, model.options, filters)}
+              onFieldChange={(key, value) => props.onFiltersChange?.({ ...filters, [key]: value })}
+              search={{
+                value: filters.q,
+                placeholder: copy.filters.search,
+                onChange: (value) => props.onFiltersChange?.({ ...filters, q: value }),
+              }}
+              applied={appliedFilters(copy, filters)}
+              onClearFilter={(key) =>
+                props.onFiltersChange?.({ ...filters, [key]: "" } as WorkflowFilters)
+              }
+              onClearAll={() => props.onFiltersChange?.({ ...DEFAULT_WORKFLOW_FILTERS })}
+              clearLabel={copy.filters.clear}
+              resultSummary={copy.filters.results(model.shown, model.total)}
+            />
             <PanelBody tight={true}>
               <DataTable
                 caption={copy.tableCaption}

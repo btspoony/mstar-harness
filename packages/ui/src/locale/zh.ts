@@ -213,6 +213,15 @@ export const zh: Copy = {
 
   workflows: {
     pageTitle: "工作流",
+    filtersHeading: "筛选",
+    filters: {
+      status: "状态",
+      type: "类型",
+      search: "搜索工作流编号或标题",
+      clear: "清除筛选",
+      any: "全部",
+      results: (shown: number, total: number) => shown === total ? `${shown} 条结果` : `${shown} / ${total} 条结果`,
+    },
     tableCaption: "工作流",
     columns: {
       id: "编号",

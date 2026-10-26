@@ -121,6 +121,11 @@ export function WorkflowsDestination({ state, locale, onOpen }: DestinationProps
   const copy = copyFor(locale)
   const screenCopy = {
     ...copy.workflows,
+    // The pane keeps the prototype's filter row: the table's own status and type, plus
+    // a search over the id and the catalog title.
+    filters: {
+      ...copy.workflows.filters,
+    },
     empty: { ...copy.state.empty, heading: copy.workflows.pageTitle },
     unavailable: { ...copy.state.unavailable, heading: copy.workflows.pageTitle },
     absent: { ...copy.state.absent, heading: copy.workflows.pageTitle },

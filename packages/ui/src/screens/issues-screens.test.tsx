@@ -254,11 +254,11 @@ describe("Issues — the list facts of §8.2", () => {
 describe("Issues — the prototype's card and its summary line", () => {
   const html = renderIssues([summary(), summary({ id: "I-000871", projectId: "dsh-integration" })], 2);
 
-  test("two cards: the filters, then the table — never a floating table", () => {
-    // `design-v1.html:215-224`: a card is a head, a body and a foot, and the table
-    // is the body of one (`panel-body.tight`). Here the filters and the table are
-    // two cards, so the table never sits bare on the canvas.
-    expect(html.match(/data-ms-panel=""/g)?.length).toBe(2);
+  test("one card: the filter row and the table share it", () => {
+    // `design-v1.html:1090-1130`: the filter row and the table are ONE card — the row
+    // sits under the head, the table follows in the same panel, and the foot carries
+    // the paging facts. Two cards would draw a border the prototype does not have.
+    expect(html.match(/data-ms-panel=""/g)?.length).toBe(1);
     expect(html).toContain('data-ms-panel-head=""');
     expect(html).toContain('data-ms-panel-foot=""');
     // The filter card's head names it, and that card points at the head.

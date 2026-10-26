@@ -233,6 +233,15 @@ export const en = {
 
   workflows: {
     pageTitle: "Workflows",
+    filtersHeading: "Filters",
+    filters: {
+      status: "Status",
+      type: "Type",
+      search: "Search workflow id or title",
+      clear: "Clear filters",
+      any: "Any",
+      results: (shown: number, total: number) => shown === total ? `${shown} results` : `${shown} of ${total} results`,
+    },
     tableCaption: "Workflows",
     columns: {
       id: "ID",

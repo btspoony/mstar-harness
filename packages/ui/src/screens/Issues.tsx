@@ -211,12 +211,6 @@ export function Issues(props: IssuesProps) {
           clearLabel={copy.filters.clear}
           resultSummary={copy.resultSummary(model.total)}
         />
-      </Panel>
-
-      {/* The table is the second card, not a floating table under the first: the
-          prototype's panel body with no padding of its own (`:215`, `.tight`), and
-          its foot carrying the paging facts. */}
-      <Panel>
         {model.rows.kind === "populated" ? (
           <>
             <PanelBody tight={true}>
