@@ -17,7 +17,6 @@
  * matches the wrapper too and fills the whole label instead of the 6px box.
  */
 import type { Tone } from "../view-model/status.ts";
-import css from "./StatusDot.module.css";
 
 export type StatusDotProps = {
   /** The literal enum value. Required, and rendered verbatim. */
@@ -32,12 +31,12 @@ export type StatusDotProps = {
 export function StatusDot(props: StatusDotProps) {
   return (
     <span
-      className={css.status}
+      className={`status tone-${props.tone}${props.emphasis === true ? " is-strong" : ""}`}
       data-ms-tone={props.tone}
       data-ms-emphasis={props.emphasis === true ? "true" : undefined}
     >
-      <span className={css.dot} data-ms-tone={props.tone} data-ms-dot="" aria-hidden="true" />
-      <span className={props.mono === true ? css.labelMono : css.label}>{props.label}</span>
+      <span className="dot" data-ms-tone={props.tone} data-ms-dot="" aria-hidden="true" />
+      <span className={props.mono === true ? "label mono" : "label"}>{props.label}</span>
     </span>
   );
 }

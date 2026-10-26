@@ -41,7 +41,6 @@ import type {
   OverviewWorkflowRow,
 } from "../view-model/overview.ts";
 import type { GateStepPosition, Tone } from "../view-model/status.ts";
-import css from "./Overview.module.css";
 
 /** Every visible string this screen needs. Task 5 supplies them. */
 export type OverviewCopy = {
@@ -165,18 +164,18 @@ function planColumns(copy: OverviewCopy): DataTableColumn<OverviewPlanRow>[] {
       // The prototype gives this column 35% of the table (`.planboard` grid) and the
       // title absorbs the rest, so the proportion holds at every container width.
       width: "35%",
-      render: (plan) => <span className={css.mono}>{plan.planId}</span>,
+      render: (plan) => <span className="mono">{plan.planId}</span>,
     },
     {
       key: "title",
       header: copy.planColumns.title,
       render: (plan) =>
         plan.title === null ? (
-          <span className={css.muted}>{copy.dash}</span>
+          <span className="muted">{copy.dash}</span>
         ) : (
           // The prototype sets the title in the secondary tone, not the primary one:
           // the plan id is the row's identifier, the title is its description.
-          <span className={css.secondary}>
+          <span className="muted">
             <TruncatedText text={plan.title} />
           </span>
         ),
@@ -187,7 +186,7 @@ function planColumns(copy: OverviewCopy): DataTableColumn<OverviewPlanRow>[] {
       width: 132,
       render: (plan) =>
         plan.status === null ? (
-          <span className={css.muted}>{copy.planStatusAbsent}</span>
+          <span className="muted">{copy.planStatusAbsent}</span>
         ) : (
           <StatusDot label={plan.status} tone={plan.statusTone} mono />
         ),
@@ -200,12 +199,12 @@ function planColumns(copy: OverviewCopy): DataTableColumn<OverviewPlanRow>[] {
         plan.progress === null ? (
           // The store's note is free text, so it is shown as the fact it is — never
           // turned into a bar, and never replaced by one.
-          <span className={plan.progressNote === null ? css.muted : css.progressNote}>
+          <span className={plan.progressNote === null ? "muted" : "muted t-12"}>
             {plan.progressNote ?? copy.planProgressAbsent}
           </span>
         ) : (
-          <span className={css.planProgress}>
-            <span className={css.mono}>{progressText(plan.progress)}</span>
+          <span className="milestone-counts">
+            <span className="mono">{progressText(plan.progress)}</span>
             <ProgressBar done={plan.progress.done} total={plan.progress.total} />
           </span>
         ),
@@ -215,7 +214,7 @@ function planColumns(copy: OverviewCopy): DataTableColumn<OverviewPlanRow>[] {
       header: copy.planColumns.done,
       width: 72,
       align: "end",
-      render: (plan) => <span className={css.doneCell}>{plan.doneAt ?? copy.dash}</span>,
+      render: (plan) => <span className="t-num">{plan.doneAt ?? copy.dash}</span>,
     },
   ];
 }
@@ -239,28 +238,28 @@ function WorkflowRowView(props: {
   ];
   const drawn = anchors.filter(([, value]) => value !== null);
   return (
-    <section className={css.workflow} data-ms-overview-workflow="">
-      <div className={css.wfSummary}>
-        <span className={css.wfId}>{row.id}</span>
-        <span className={css.muted}>{copy.typeLabel}</span>
-        <span className={css.chip}>{row.type}</span>
+    <section className="panel ov-workflow" data-ms-overview-workflow="">
+      <div className="wf-summary">
+        <span className="wf-id">{row.id}</span>
+        <span className="muted">{copy.typeLabel}</span>
+        <span className="chip">{row.type}</span>
         {row.phase === null ? null : <StatusDot label={row.phase} tone="neutral" mono />}
         {props.onOpenWorkflow === undefined ? null : (
-          <button type="button" className={css.link} onClick={() => props.onOpenWorkflow?.(row.id)}>
+          <button type="button" className="link" onClick={() => props.onOpenWorkflow?.(row.id)}>
             {copy.openWorkflow}
           </button>
         )}
       </div>
-      <p className={css.wfMeta} data-ms-workflow-meta={row.plansTotal}>
+      <p data-ms-workflow-meta={row.plansTotal}>
         {copy.workflowMeta(row.plansTotal, row.status)}
       </p>
       {drawn.length === 0 ? null : (
-        <p className={css.branchLine} data-ms-branch="">
+        <p className="branch-line" data-ms-branch="">
           {drawn.map(([label, value], index) => (
             <Fragment key={label}>
-              {index === 0 ? null : <span className={css.branchArrow} aria-hidden="true">→</span>}
-              <span className={css.branchAnchor}>
-                <span className={css.muted}>{label}</span> <b>{value}</b>
+              {index === 0 ? null : <span className="branch-arrow" aria-hidden="true">→</span>}
+              <span className="branch-anchor">
+                <span className="muted">{label}</span> <b>{value}</b>
               </span>
             </Fragment>
           ))}
@@ -292,7 +291,7 @@ function MilestoneRowView(props: { row: MilestoneRow; copy: OverviewCopy }) {
       }
       trailing={
         row.progress === null ? null : (
-          <span className={css.milestoneProgress}>
+          <span className="milestone-counts">
             <ProgressBar done={row.progress.done} total={row.progress.total} />
             <span>{props.copy.milestoneProgress(row.progress.done, row.progress.total)}</span>
           </span>
@@ -317,34 +316,34 @@ function TrendPanel(props: { series: IssueFlowSeries; copy: OverviewCopy }) {
         meta={copy.trendRange(series.firstDate, series.lastDate)}
       />
       <PanelBody>
-        <div className={css.trend} data-ms-flow="">
+        <div className="chart-wrap" data-ms-flow="">
           <IssueFlowChart
             points={series.points}
             label={copy.trendChartTitle(series.firstDate, series.lastDate)}
           />
-          <div className={css.axis}>
+          <div className="chart-note">
             <span>{series.firstDate}</span>
             {/* Two buckets have no distinct middle: labelling the first one twice would
                 read as a third date. */}
             {series.middleDate === null ? null : <span>{series.middleDate}</span>}
             <span>{series.lastDate}</span>
           </div>
-          <div className={css.legend}>
-            <span className={css.legendItem}>
-              <span className={css.swatch} aria-hidden="true" />
+          <div className="chart-legend">
+            <span className="chart-legend-item">
+              <span aria-hidden="true" />
               {copy.trendCaptured}
             </span>
-            <span className={css.legendItem}>
-              <span className={`${css.swatch} ${css.swatchDashed}`} aria-hidden="true" />
+            <span className="chart-legend-item">
+              <span className={`$undefined $undefined`} aria-hidden="true" />
               {copy.trendRetired}
             </span>
-            <span className={css.legendSpacer} />
-            <span className={css.legendMeta}>{copy.trendLegend(series.datedOpen, series.recordedOpen)}</span>
+            <span />
+            <span className="chart-note">{copy.trendLegend(series.datedOpen, series.recordedOpen)}</span>
           </div>
-          <p className={css.note}>{copy.trendGap(series.datedOpen, series.undatedEvents)}</p>
-          <details className={css.disclosure}>
-            <summary className={css.disclosureSummary}>{copy.trendTableSummary}</summary>
-            <table className={css.flowTable}>
+          <p className="chart-note">{copy.trendGap(series.datedOpen, series.undatedEvents)}</p>
+          <details className="chart-note">
+            <summary className="chart-note">{copy.trendTableSummary}</summary>
+            <table className="table">
               <thead>
                 <tr>
                   <th scope="col">{copy.trendColumns.date}</th>
@@ -376,20 +375,20 @@ function TrendPanel(props: { series: IssueFlowSeries; copy: OverviewCopy }) {
 export function Overview(props: OverviewProps) {
   const { model, copy } = props;
   return (
-    <article className={css.page} data-ms-screen="overview">
-      <h1 className={css.title}>{copy.pageTitle}</h1>
+    <article className="screen" data-ms-screen="overview">
+      <h1>{copy.pageTitle}</h1>
 
-      <div className={css.body}>
+      <div className="overview-grid">
         {/* The prototype's wide form is two columns (`design-v1.html:317-318`): work and
             its trend left, residuals and milestones right, the iteration across both.
             Below the 900px floor the same sections stack in that reading order. */}
-        <div className={css.column} data-ms-ov-column="">
+        <div className="ov-col" data-ms-ov-column="">
         {/* 1 — active work. Never dropped, at any height. */}
         <Panel labelledBy="ms-overview-workflows">
           <PanelHead id="ms-overview-workflows" title={copy.workflowsHeading} />
           <PanelBody>
           {model.workflows.kind === "populated" ? (
-            <div className={css.rows} data-ms-workflows="">
+            <div data-ms-workflows="">
               {/* Every workflow is rendered: truncating the list to the "active" one
                   would hide records with no other entry point. Whether the panel should
                   show only the active workflow (as the prototype's singular heading
@@ -400,7 +399,7 @@ export function Overview(props: OverviewProps) {
               {/* The member is capped by the engine, so a truncated set has to say so:
                   rows that stop at 50 look like all of them. */}
               {model.workflows.truncated ? (
-                <p className={css.truncated} data-ms-truncated={model.workflows.total}>
+                <p data-ms-truncated={model.workflows.total}>
                   {copy.workflowsTruncated(model.workflows.shown, model.workflows.total)}
                 </p>
               ) : null}
@@ -438,7 +437,7 @@ export function Overview(props: OverviewProps) {
         )}
         </div>
 
-        <div className={css.column} data-ms-ov-column="">
+        <div className="ov-col" data-ms-ov-column="">
         {/* 3 — residuals, then 4 — milestones. Never dropped. */}
         <Panel labelledBy="ms-overview-residuals">
           <PanelHead
@@ -457,18 +456,18 @@ export function Overview(props: OverviewProps) {
               contract values stay English and untranslated so they can be copied into the
               CLI. `data-ms-severity` is the hook for anything presentational. */}
           {model.residuals.kind === "populated" ? (
-            <dl className={css.residuals} data-ms-residuals="">
+            <dl className="res-grid" data-ms-residuals="">
               {model.residuals.value.rows.map((row) => (
                 <div
                   key={row.severity}
-                  className={css.residualRow}
+                  className="res-row"
                   data-ms-severity={row.severity}
                   data-ms-count={row.count}
                 >
-                  <dt className={css.residualSeverity}>
+                  <dt className="sev">
                     <StatusDot label={row.severity} tone={row.tone} mono />
                   </dt>
-                  <dd className={row.emphasised ? css.countEmphasised : css.count}>{row.count}</dd>
+                  <dd className={row.emphasised ? "num is-strong" : "num"}>{row.count}</dd>
                 </div>
               ))}
             </dl>
@@ -490,14 +489,14 @@ export function Overview(props: OverviewProps) {
           <PanelBody>
           {model.milestones.kind === "populated" ? (
             props.compact === true ? (
-              <p className={css.summary} data-ms-milestone-summary="">
+              <p className="screen-meta" data-ms-milestone-summary="">
                 {copy.milestonesSummary(
                   model.milestones.value.length,
                   model.milestones.value.reduce((open, row) => open + row.openIssues, 0),
                 )}
               </p>
             ) : (
-              <div className={css.rows} data-ms-milestones="">
+              <div data-ms-milestones="">
                 {model.milestones.value.map((row) => (
                   <MilestoneRowView key={row.milestoneId} row={row} copy={copy} />
                 ))}
@@ -517,7 +516,7 @@ export function Overview(props: OverviewProps) {
 
         </div>
 
-        <div className={css.spanning} data-ms-ov-spanning="">
+        <div className="ov-spanning" data-ms-ov-spanning="">
         <Panel labelledBy="ms-overview-iteration">
           <PanelHead id="ms-overview-iteration" title={copy.iterationHeading} />
           <PanelBody>
@@ -525,15 +524,15 @@ export function Overview(props: OverviewProps) {
             model.latestIteration.value === null ? (
               <Absence arm="empty" copy={copy} heading={copy.iterationNoIteration} />
             ) : (
-              <div className={css.iteration} data-ms-iteration="">
-                <p className={css.iterationId}>
+              <div className="milestone-block" data-ms-iteration="">
+                <p className="milestone-block-id">
                   <TruncatedText text={model.latestIteration.value.iterationId} />
                 </p>
-                <ol className={css.steps} data-ms-gate-steps="">
+                <ol className="gate-track" data-ms-gate-steps="">
                   {model.latestIteration.value.steps.map((step) => (
                     <li
                       key={step.id}
-                      className={css.step}
+                      className="gate-step"
                       data-ms-step={step.id}
                       data-ms-step-position={step.position satisfies GateStepPosition}
                     >
@@ -542,7 +541,7 @@ export function Overview(props: OverviewProps) {
                   ))}
                 </ol>
                 {model.latestIteration.value.gatePosition === null ? null : (
-                  <p className={css.gateLine}>
+                  <p className="gate-meta">
                     {copy.gateStep(
                       model.latestIteration.value.gatePosition.step,
                       model.latestIteration.value.gatePosition.of,
@@ -566,7 +565,7 @@ export function Overview(props: OverviewProps) {
       </div>
 
       {/* 6 — the one page-validity fact. Never dropped. */}
-      <p className={css.projection} data-ms-projection={model.projection.kind}>
+      <p className="muted" data-ms-projection={model.projection.kind}>
         {copy.projection[model.projection.kind]}
       </p>
       {model.projection.kind === "current" ? null : (
