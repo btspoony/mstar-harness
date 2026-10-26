@@ -17,7 +17,6 @@ import { StatusDot } from "../components/StatusDot.tsx";
 import { TruncatedText } from "../components/TruncatedText.tsx";
 import type { ProjectListModel, ProjectRow } from "../view-model/projects.ts";
 import type { Tone } from "../view-model/status.ts";
-import css from "./Projects.module.css";
 
 /** Every visible string this screen needs. Task 5 supplies them. */
 export type ProjectsCopy = {
@@ -43,7 +42,7 @@ export function Projects(props: ProjectsProps) {
   // The prototype's sequence (`design-v1.html:1752-1758`): the id first, then the
   // catalog title, then the lifecycle.
   const columns: DataTableColumn<ProjectRow>[] = [
-    { key: "id", header: copy.columns.id, width: 96, render: (row) => <span className={css.mono}>{row.projectId}</span> },
+    { key: "id", header: copy.columns.id, width: 310, render: (row) => <span className={"mono t-12"}>{row.projectId}</span> },
     {
       key: "title",
       header: copy.columns.title,
@@ -52,26 +51,26 @@ export function Projects(props: ProjectsProps) {
     {
       key: "lifecycle",
       header: copy.columns.lifecycle,
-      width: 104,
+      width: 110,
       secondary: true,
       render: (row) => <StatusDot label={row.lifecycle} tone={row.lifecycleTone} mono />,
     },
     {
       key: "openIssues",
       header: copy.columns.openIssues,
-      width: 88,
+      width: 210,
       secondary: true,
       align: "end",
-      render: (row) => <span className={css.mono}>{copy.openIssues(row.openIssues)}</span>,
+      render: (row) => <span className={"mono t-12"}>{copy.openIssues(row.openIssues)}</span>,
     },
     {
       key: "description",
       header: copy.columns.description,
-      width: 180,
+      width: 90,
       secondary: true,
       render: (row) =>
         row.description === null ? (
-          <span className={css.muted}>{copy.noDescription}</span>
+          <span className={"muted"}>{copy.noDescription}</span>
         ) : (
           <TruncatedText text={row.description} />
         ),
@@ -82,8 +81,8 @@ export function Projects(props: ProjectsProps) {
     [row.lifecycle, copy.openIssues(row.openIssues), row.description ?? copy.noDescription].join(" · ");
 
   return (
-    <article className={css.page} data-ms-screen="projects">
-      <h1 className={css.title}>{copy.pageTitle}</h1>
+    <article className={"screen"} data-ms-screen="projects">
+      <h1>{copy.pageTitle}</h1>
 
       {model.rows.kind === "populated" ? (
         <Panel>

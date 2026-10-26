@@ -19,7 +19,6 @@ import { StatusDot } from "../components/StatusDot.tsx";
 import { TruncatedText } from "../components/TruncatedText.tsx";
 import type { IterationListModel, IterationRow } from "../view-model/iterations.ts";
 import type { Tone } from "../view-model/status.ts";
-import css from "./Iterations.module.css";
 
 /** Every visible string this screen needs. Task 5 supplies them. */
 export type IterationsCopy = {
@@ -57,19 +56,19 @@ export function Iterations(props: IterationsProps) {
   const { model, copy } = props;
 
   const columns: DataTableColumn<IterationRow>[] = [
-    { key: "id", header: copy.columns.id, width: 96, render: (row) => <span className={css.mono}>{row.iterationId}</span> },
+    { key: "id", header: copy.columns.id, width: 250, render: (row) => <span className={"mono t-12"}>{row.iterationId}</span> },
     {
       key: "title",
       header: copy.columns.title,
       render: (row) =>
-        row.title === null ? <span className={css.muted}>{copy.notStarted}</span> : <TruncatedText text={row.title} />,
+        row.title === null ? <span className={"muted"}>{copy.notStarted}</span> : <TruncatedText text={row.title} />,
     },
     {
       key: "lifecycle",
       header: copy.columns.lifecycle,
-      width: 92,
+      width: 190,
       secondary: true,
-      render: (row) => <span className={css.mono}>{row.lifecycle ?? "—"}</span>,
+      render: (row) => <span className={"mono t-12"}>{row.lifecycle ?? "—"}</span>,
     },
     {
       key: "execution",
@@ -77,7 +76,7 @@ export function Iterations(props: IterationsProps) {
       width: 96,
       secondary: true,
       render: (row) => (
-        <span className={css.statusCell}>
+        <span>
           <StatusDot label={row.compassStatus ?? copy.noCompass} tone={row.compassTone} mono />
         </span>
       ),
@@ -85,9 +84,9 @@ export function Iterations(props: IterationsProps) {
     {
       key: "delivery",
       header: copy.columns.delivery,
-      width: 92,
+      width: 130,
       render: (row) => (
-        <span className={css.mono} data-ms-iteration-step={row.gateStep ?? "none"}>
+        <span className={"mono t-12"} data-ms-iteration-step={row.gateStep ?? "none"}>
           {row.gatePosition === null ? copy.noCompass : copy.gateStep(row.gatePosition.step, row.gatePosition.of)}
         </span>
       ),
@@ -98,15 +97,15 @@ export function Iterations(props: IterationsProps) {
       width: 92,
       secondary: true,
       align: "end",
-      render: (row) => <span className={css.mono}>{copy.plansProgress(row.plansDone, row.plansTotal)}</span>,
+      render: (row) => <span className={"mono t-12"}>{copy.plansProgress(row.plansDone, row.plansTotal)}</span>,
     },
     {
       key: "started",
       header: copy.columns.started,
-      width: 100,
+      width: 64,
       secondary: true,
       align: "end",
-      render: (row) => <span className={css.mono}>{row.startedAt}</span>,
+      render: (row) => <span className={"mono t-12"}>{row.startedAt}</span>,
     },
   ];
 
@@ -122,8 +121,8 @@ export function Iterations(props: IterationsProps) {
       .join(" · ");
 
   return (
-    <article className={css.page} data-ms-screen="iterations">
-      <h1 className={css.title}>{copy.pageTitle}</h1>
+    <article className={"screen"} data-ms-screen="iterations">
+      <h1>{copy.pageTitle}</h1>
 
       {model.rows.kind === "populated" ? (
         <>
@@ -141,7 +140,7 @@ export function Iterations(props: IterationsProps) {
           </Panel>
           {/* The scope statement: whether this store attributes iterations to a
               project at all. It rides beside the rows, never as a counter. */}
-          <p className={css.attribution} data-ms-attribution={model.attribution}>
+          <p className={"attribution"} data-ms-attribution={model.attribution}>
             {copy.attribution(model.attribution)}
           </p>
         </>

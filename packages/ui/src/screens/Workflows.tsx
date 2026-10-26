@@ -23,7 +23,6 @@ import { StatusDot } from "../components/StatusDot.tsx";
 import { TruncatedText } from "../components/TruncatedText.tsx";
 import type { WorkflowListModel, WorkflowRow } from "../view-model/workflows.ts";
 import type { Tone } from "../view-model/status.ts";
-import css from "./Workflows.module.css";
 
 /** Every visible string this screen needs. Task 5 supplies them. */
 export type WorkflowsCopy = {
@@ -60,7 +59,7 @@ export function Workflows(props: WorkflowsProps) {
   const { model, copy } = props;
 
   const columns: DataTableColumn<WorkflowRow>[] = [
-    { key: "id", header: copy.columns.id, width: 112, render: (row) => <span className={css.mono}>{row.id}</span> },
+    { key: "id", header: copy.columns.id, width: 282, render: (row) => <span className={"mono t-12"}>{row.id}</span> },
     {
       key: "title",
       header: copy.columns.title,
@@ -69,37 +68,37 @@ export function Workflows(props: WorkflowsProps) {
     {
       key: "status",
       header: copy.columns.status,
-      width: 120,
+      width: 200,
       render: (row) => (
-        <span className={css.statusCell}>
+        <span>
           <StatusDot label={row.status} tone={row.statusTone} mono />
-          {row.phase === null ? null : <span className={css.phase}>{row.phase}</span>}
+          {row.phase === null ? null : <span className={"phase"}>{row.phase}</span>}
         </span>
       ),
     },
     {
       key: "root",
       header: copy.columns.root,
-      width: 96,
+      width: 150,
       secondary: true,
       render: (row) =>
-        row.root === null ? <span className={css.muted}>{copy.noRoot}</span> : <span className={css.mono}>{row.root}</span>,
+        row.root === null ? <span className={"muted"}>{copy.noRoot}</span> : <span className={"mono t-12"}>{row.root}</span>,
     },
     {
       key: "updated",
       header: copy.columns.updated,
-      width: 120,
+      width: 140,
       secondary: true,
       align: "end",
-      render: (row) => <span className={css.mono}>{row.updatedAt}</span>,
+      render: (row) => <span className={"mono t-12"}>{row.updatedAt}</span>,
     },
     {
       key: "plans",
       header: copy.columns.plans,
-      width: 88,
+      width: 190,
       secondary: true,
       align: "end",
-      render: (row) => <span className={css.mono}>{copy.plansProgress(row.plansDone, row.plansTotal)}</span>,
+      render: (row) => <span className={"mono t-12"}>{copy.plansProgress(row.plansDone, row.plansTotal)}</span>,
     },
   ];
 
@@ -109,8 +108,8 @@ export function Workflows(props: WorkflowsProps) {
       .join(" · ");
 
   return (
-    <article className={css.page} data-ms-screen="workflows">
-      <h1 className={css.title}>{copy.pageTitle}</h1>
+    <article className={"screen"} data-ms-screen="workflows">
+      <h1>{copy.pageTitle}</h1>
 
       {model.rows.kind === "populated" ? (
         <>
@@ -127,7 +126,7 @@ export function Workflows(props: WorkflowsProps) {
             </PanelBody>
           </Panel>
           {model.truncated ? (
-            <p className={css.truncated} data-ms-truncated={model.total}>
+            <p data-ms-truncated={model.total}>
               {copy.truncated(model.shown, model.total)}
             </p>
           ) : null}
