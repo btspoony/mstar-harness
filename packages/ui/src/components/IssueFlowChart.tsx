@@ -38,11 +38,15 @@ export type IssueFlowChartProps = {
 };
 
 /** A cumulative step path: hold each value, then rise to the next. */
-function stepPath(values: readonly number[], max: number): string {
+function stepPath(values: readonly number[], floor: number, ceiling: number): string {
   const n = values.length;
   const plotH = VIEW_HEIGHT - PAD * 2;
+  // The prototype's plot spans the series' own floor..ceiling, not 0..max: three evenly
+  // spaced grid lines labelled 800 / 850 / 900 are a magnified band, and drawing from zero
+  // would flatten it to a nearly straight line.
+  const span = ceiling - floor === 0 ? 1 : ceiling - floor;
   const x = (index: number): number => (n <= 1 ? 0 : (index / (n - 1)) * VIEW_WIDTH);
-  const y = (value: number): number => PAD + plotH - (value / max) * plotH;
+  const y = (value: number): number => PAD + plotH - ((value - floor) / span) * plotH;
   let path = `M${x(0).toFixed(2)},${y(values[0] ?? 0).toFixed(2)}`;
   for (let index = 1; index < n; index += 1) {
     path += `H${x(index).toFixed(2)}V${y(values[index] ?? 0).toFixed(2)}`;
@@ -58,6 +62,11 @@ export function IssueFlowChart(props: IssueFlowChartProps) {
     1,
     ...points.map((point) => Math.max(point.captured, point.retired)),
   );
+  // The prototype's axis does not start at zero: its three grid lines are evenly spaced
+  // and label 800 / 850 / 900 — the series' own floor and ceiling. Drawing from 0 flattens
+  // a narrow band into a nearly straight line.
+  const min = Math.min(...points.map((point) => Math.min(point.captured, point.retired)), Infinity);
+  const floor = Number.isFinite(min) ? min : 0;
   const baseline = VIEW_HEIGHT - PAD;
   return (
     <div className="chart-frame" data-ms-chart-frame="">
@@ -65,8 +74,8 @@ export function IssueFlowChart(props: IssueFlowChartProps) {
           Inside this SVG they would stretch with it, so they are HTML siblings. */}
       <span className="chart-y-axis" aria-hidden="true">
         <span>{max}</span>
-        <span>{Math.round(max / 2)}</span>
-        <span>0</span>
+        <span>{Math.round((max + min) / 2)}</span>
+        <span>{min}</span>
       </span>
     <svg
       className={props.variant === "full" ? "chart-svg is-full" : "chart-svg"}
@@ -87,6 +96,7 @@ export function IssueFlowChart(props: IssueFlowChartProps) {
         className="line-captured"
         d={stepPath(
           points.map((point) => point.captured),
+          floor,
           max,
         )}
       />
@@ -94,6 +104,7 @@ export function IssueFlowChart(props: IssueFlowChartProps) {
         className="line-retired"
         d={stepPath(
           points.map((point) => point.retired),
+          floor,
           max,
         )}
       />
