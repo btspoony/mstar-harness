@@ -151,7 +151,10 @@ export function Issues(props: IssuesProps) {
   // follows the project it belongs to; it is wide-only, so the 720px pane renders the
   // prototype's seven columns in the prototype's order.
   const columns: DataTableColumn<IssueRow>[] = [
-    { key: "id", header: copy.columns.id, width: "10%", render: (row) => <span className={"mono t-12"}>{row.id}</span> },
+        // The prototype sets the id cell with `.t-id` (mono, 12px, secondary tone, tight
+    // tracking). `mono t-12` renders the same size in the primary tone — close enough to
+    // look right and wrong by one colour role.
+    { key: "id", header: copy.columns.id, width: "10%", cellClass: "t-id", render: (row) => <span>{row.id}</span> },
     { key: "title", header: copy.columns.title, render: (row) => <TruncatedText text={row.title} /> },
     { key: "project", header: copy.columns.project, width: "12%", secondary: true, render: (row) => <span className={"mono t-12"}>{row.projectId}</span> },
     { key: "kind", header: copy.columns.kind, width: "10%", secondary: true, render: (row) => <span className={"mono t-12"}>{row.kind}</span> },

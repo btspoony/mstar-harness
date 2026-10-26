@@ -40,6 +40,12 @@ export type DataTableColumn<T> = {
    */
   secondary?: boolean;
   /**
+   * A class for the body cell, when the prototype gives this column its own styling —
+   * the issue list's id column is `.t-id` (mono, 12px, secondary tone), which is not the
+   * same thing as a `mono t-12` span inside a default cell.
+   */
+  cellClass?: string;
+  /**
    * A column the wide presentation carries and the pane's width does not. Below
    * 900px of container it is hidden outright — no second line restates it — because
    * the prototype's sidebar shows seven columns, not eight, at this width. Only use
@@ -191,6 +197,7 @@ export function DataTable<T>(props: DataTableProps<T>) {
                 {props.columns.map((column, index) => (
                   <td
                     key={column.key}
+                    {...(column.cellClass === undefined ? {} : { className: column.cellClass })}
                     data-ms-col={column.wide === true ? "wide" : column.secondary === true ? "secondary" : "primary"}
                     data-ms-align={column.align ?? "start"}
                   >
