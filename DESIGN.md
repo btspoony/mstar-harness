@@ -528,13 +528,18 @@ resolution`, `N total`), each with its own `data-ms-count` hook so a test can pi
 number rather than the label. The issues it owns render as compact id chips, toned by
 disposition, with the settled ones folded into `+N <disposition>`.
 
-**Two things the prototype does not have, and this screen does not either:**
+**Two things the prototype does not have, and this screen does not either** — both
+measured on the prototype's own project-detail section, not inferred:
 
-- **A goals block.** The stored document's goals appear once, as `Goals  1 / 3 checked`
-  inside `Stored facts`. A list of them would answer the same question twice, at greater
-  length, and the stored markdown disclosure already carries the full text.
-- **A hedge row.** Each block is the real thing or is absent; nothing renders an empty
-  frame with a note in it.
+| Claim | Prototype evidence |
+| --- | --- |
+| no goals block | `section[data-screen="project-detail"] li` count = **0** |
+| goals stated once | `Stored facts` rows are exactly `Frontmatter status`, `Created at`, `Residuals ref`, `Goals = 1 / 3 checked`, `Sections` |
+| no empty frames | `.panel` elements with empty text = **0** |
+| two disclosures | `details` summaries = `["Direction", "Stored markdown"]` |
+
+A goals list here would answer the same question twice, at greater length; the stored
+markdown disclosure already carries the full text.
 
 **One thing this screen has that the prototype cannot**: truncation. The prototype's
 milestone name is plain text in static HTML with nothing to ellipsis. Ours must fit
