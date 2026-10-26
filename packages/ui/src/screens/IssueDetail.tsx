@@ -178,16 +178,16 @@ export function IssueDetail(props: IssueDetailProps) {
           </FieldGroup>
 
           {record.value.impact === null ? null : (
-            <section className={"panel"} data-ms-impact="">
+            <section className={"sec"} data-ms-impact="">
               <h2>{copy.impactHeading}</h2>
-              <p className={"detail-text"}>{record.value.impact}</p>
+              <p className={"prose"}>{record.value.impact}</p>
             </section>
           )}
 
           {record.value.acceptance === null ? null : (
-            <section className={"panel"} data-ms-acceptance="">
+            <section className={"sec"} data-ms-acceptance="">
               <h2>{copy.acceptanceHeading}</h2>
-              <p className={"detail-text"}>{record.value.acceptance}</p>
+              <p className={"prose"}>{record.value.acceptance}</p>
             </section>
           )}
 
@@ -241,7 +241,7 @@ export function IssueDetail(props: IssueDetailProps) {
                       {copy.occurrenceObservedAt} <span className={"mono"}>{occurrence.recordedAt}</span>
                     </span>
                   </div>
-                  <p className={"detail-text"}>{occurrence.observedBehavior}</p>
+                  <p className={"prose"}>{occurrence.observedBehavior}</p>
                   <dl className={"fields"}>
                     {occurrence.location === null ? null : (
                       <div className="field">
@@ -380,7 +380,7 @@ export function IssueDetail(props: IssueDetailProps) {
           {/* The closure note is a closed issue's fact; an open one has none. */}
           {record.value.closureNote === null ? null : (
             <Collapsible summary={copy.closureNoteHeading} defaultOpen>
-              <p className={"detail-text"} data-ms-closure-note="">
+              <p className={"prose"} data-ms-closure-note="">
                 {record.value.closureNote}
               </p>
             </Collapsible>

@@ -1136,6 +1136,13 @@ all.
 **The general form**: a class name that appears in no stylesheet renders as if you had
 written nothing, and nothing fails.
 
+**So the check is now a script**: `bun run --cwd packages/ui check:classes` scans every
+`.tsx` for `className` literals and fails on any that appears in neither `tokens.css`,
+`base.css` nor `product.css`. It found three more the moment it existed — `.detail-text`
+(four uses, now `.prose`), `.screen-sub` (the subtitle from an earlier round, now
+`.screen-meta`), and `.attribution` (now `muted t-11`). All three had been rendering as bare
+text with no rule behind them.
+
 ## Verification coverage, stated
 
 Two hosts mount these screens: the dashboard (`packages/cli/web`) and the dsh pane

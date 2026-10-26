@@ -21,7 +21,8 @@
   "scripts": {
     "build": "rm -rf dist && bunx tsc --emitDeclarationOnly",
     "test": "bun test",
-    "typecheck": "bunx tsc --noEmit"
+    "typecheck": "bunx tsc --noEmit",
+    "check:classes": "bun run scripts/dead-classes.ts"
   },
   "devDependencies": {
     "@mstar-harness/engine": "workspace:*",

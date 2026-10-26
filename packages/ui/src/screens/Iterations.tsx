@@ -204,7 +204,7 @@ export function Iterations(props: IterationsProps) {
           </Panel>
           {/* The scope statement: whether this store attributes iterations to a
               project at all. It rides beside the rows, never as a counter. */}
-          <p className={"attribution"} data-ms-attribution={model.attribution}>
+          <p className={"muted t-11"} data-ms-attribution={model.attribution}>
             {copy.attribution(model.attribution)}
           </p>
         </>

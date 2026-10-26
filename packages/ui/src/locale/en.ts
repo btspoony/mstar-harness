@@ -220,7 +220,7 @@ export const en = {
 
   issueDetail: {
     breadcrumb: { label: "Breadcrumb", current: "Issues" },
-    identityHeading: "Fact",
+    identityHeading: "Identity",
     fields: {
       id: "ID",
       project: "Project",

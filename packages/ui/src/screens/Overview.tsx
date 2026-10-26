@@ -402,7 +402,7 @@ export function Overview(props: OverviewProps) {
             issues are open. Only when the read carries that count — "0 open issues" on a
             pending or failed read would be a claim about the store, not a summary of it. */}
         {model.issueFlow.kind === "populated" ? (
-          <p className="screen-sub" data-ms-screen-sub="">
+          <p className="screen-meta" data-ms-screen-sub="">
             {copy.screenSubtitle(copy.screenScopeAll, model.issueFlow.value.recordedOpen)}
           </p>
         ) : null}
