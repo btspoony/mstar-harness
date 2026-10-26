@@ -175,7 +175,7 @@ export function DataTable<T>(props: DataTableProps<T>) {
               <tr
                 data-ms-row-main=""
                 data-ms-row-key={key}
-                className={interactive ? "row interactive" : "row"}
+                className={interactive ? "is-link" : undefined}
                 tabIndex={interactive ? 0 : undefined}
                 onClick={interactive ? () => props.onRowActivate?.(row) : undefined}
                 onKeyDown={

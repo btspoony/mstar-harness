@@ -59,7 +59,7 @@ export function Workflows(props: WorkflowsProps) {
   const { model, copy } = props;
 
   const columns: DataTableColumn<WorkflowRow>[] = [
-    { key: "id", header: copy.columns.id, width: 282, render: (row) => <span className={"mono t-12"}>{row.id}</span> },
+    { key: "id", header: copy.columns.id, width: "24%", render: (row) => <span className={"mono t-12"}>{row.id}</span> },
     {
       key: "title",
       header: copy.columns.title,
@@ -68,7 +68,7 @@ export function Workflows(props: WorkflowsProps) {
     {
       key: "status",
       header: copy.columns.status,
-      width: 200,
+      width: "17%",
       render: (row) => (
         <span>
           <StatusDot label={row.status} tone={row.statusTone} mono />
@@ -79,7 +79,7 @@ export function Workflows(props: WorkflowsProps) {
     {
       key: "root",
       header: copy.columns.root,
-      width: 150,
+      width: "13%",
       secondary: true,
       render: (row) =>
         row.root === null ? <span className={"muted"}>{copy.noRoot}</span> : <span className={"mono t-12"}>{row.root}</span>,
@@ -87,7 +87,7 @@ export function Workflows(props: WorkflowsProps) {
     {
       key: "updated",
       header: copy.columns.updated,
-      width: 140,
+      width: "12%",
       secondary: true,
       align: "end",
       render: (row) => <span className={"mono t-12"}>{row.updatedAt}</span>,
@@ -95,7 +95,7 @@ export function Workflows(props: WorkflowsProps) {
     {
       key: "plans",
       header: copy.columns.plans,
-      width: 190,
+      width: "16%",
       secondary: true,
       align: "end",
       render: (row) => <span className={"mono t-12"}>{copy.plansProgress(row.plansDone, row.plansTotal)}</span>,

@@ -329,7 +329,9 @@
 
 /* A generic row, for the surfaces the prototype draws ad hoc (`.res-row`,
    `.milestone-row`): same measure and hairline as a table row. */
-.row {
+/* A `<tr class="row">` would inherit this and turn the table into a flex box, which
+   collapses every cell to `display: block`. The generic row is for non-table lists. */
+.row:not(tr) {
   display: flex;
   align-items: center;
   gap: var(--ms-space-2);
@@ -339,8 +341,8 @@
   font-size: var(--ms-fs-12);
   line-height: var(--ms-lh-12);
 }
-.row:last-child { border-block-end: 0; }
-.row-tall { align-items: flex-start; padding-block: 6px; min-block-size: var(--ms-row-h); }
+.row:not(tr):last-child { border-block-end: 0; }
+.row-tall:not(tr) { align-items: flex-start; padding-block: 6px; min-block-size: var(--ms-row-h); }
 .row-leading { flex: none; display: inline-flex; align-items: center; }
 .row-primary { min-inline-size: 0; }
 .row-meta-inline { color: var(--ms-text-muted); }
