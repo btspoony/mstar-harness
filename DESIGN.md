@@ -1049,7 +1049,7 @@ column is what is left when six of ten blocks are gone.
 | --- | --- | --- |
 | `Identity keys` | two rows (Identity key, Provider) | shipped, verified in the browser |
 | `Source` | five rows from the newest occurrence | shipped, verified in the browser |
-| `Relations` | table (Relation, Issue, Title) | **partial**: the Title column is `—` on every row — the DTO carries `{fromIssue, relation, toIssue}` and no title, so filling it needs a second read or a DTO field |
+| `Relations` | table (Relation, Issue, Title) | shipped: the query joins the other end's title. **No issue in this store has a relation**, so the panel renders on fixture data only |
 | `Provenance` | table (Kind, Target, Source hash, Origin, Imported at) | shipped |
 | `Disposition history` | table (From, To, Reason, Actor, Recorded) plus the prototype's footer note | shipped; this store's issues record no transitions, so it renders on fixture data only |
 | `Occurrences` | one block per event, with its quote, location and citations | shipped; verified in the browser |

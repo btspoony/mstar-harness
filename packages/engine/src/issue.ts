@@ -305,6 +305,8 @@ export type IssueRelation = {
   fromIssue: string;
   relation: string;
   toIssue: string;
+  /** The other end's title — the prototype's `Title` column. `null` when it has none. */
+  title: string | null;
 };
 
 export type IssueProvenance = {

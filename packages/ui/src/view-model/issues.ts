@@ -349,7 +349,7 @@ export function issueDetailModel(detail: IssueDetail): IssueDetailModel {
       relation: relation.relation,
       // The row names the other end of the join, not this issue.
       issue: relation.fromIssue === detail.id ? relation.toIssue : relation.fromIssue,
-      title: null,
+      title: relation.title ?? null,
     })),
     // The prototype's Source panel states the newest occurrence's provenance.
     source:

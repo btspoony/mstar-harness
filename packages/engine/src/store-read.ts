@@ -892,9 +892,16 @@ function readIssueDetail(db: StoreDb, id: string): IssueDetail {
     issueRevision: row.issue_revision,
   }));
 
+  // The prototype's Relations table has a `Title` column: the title of the other end of the
+  // join, which is the issue this one is not.
   const relations = db
-    .prepare("select from_issue as fromIssue, relation, to_issue as toIssue from relations where from_issue = ? or to_issue = ?")
-    .all(id, id) as Array<{ fromIssue: string; relation: string; toIssue: string }>;
+    .prepare(
+      `select r.from_issue as fromIssue, r.relation, r.to_issue as toIssue,
+              (select i.title from issues i
+                 where i.id = case when r.from_issue = ? then r.to_issue else r.from_issue end) as title
+         from relations r where r.from_issue = ? or r.to_issue = ?`,
+    )
+    .all(id, id, id) as Array<{ fromIssue: string; relation: string; toIssue: string; title: string | null }>;
 
   const provenance = (
     db
