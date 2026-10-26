@@ -387,7 +387,11 @@ export function Overview(props: OverviewProps) {
   const { model, copy } = props;
   return (
     <article className="screen" data-ms-screen="overview">
-      <h1>{copy.pageTitle}</h1>
+      {/* The prototype heads every screen with `.screen-head`; a bare h1 falls back to
+          the document heading rule and loses the screen-head padding. */}
+      <div className="screen-head">
+        <h1>{copy.pageTitle}</h1>
+      </div>
 
       <div className="overview-grid">
         {/* The prototype's wide form is two columns (`design-v1.html:317-318`): work and
