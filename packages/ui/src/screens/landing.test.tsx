@@ -267,8 +267,27 @@ describe("Overview — what it shows, in the IA §3.1 order", () => {
     // separator, then a `.status` carrying its own dot and the literal enum.
     expect(html).toContain('class="num mono">2</span>');
     expect(html).toContain(">plans</span>");
-    expect(html).toContain("is-strong");
-    expect(html).toContain('data-ms-emphasis="true"');
+    // Scoped to this head's own meta: an unscoped `toContain("is-strong")` passes if any
+    // element anywhere in the page carries it.
+    const headStart = html.indexOf('id="ms-overview-workflows"');
+    const metaOpen = html.indexOf('<span class="panel-meta"', headStart);
+    // `panel-meta` closes where its own nesting returns to zero.
+    let depth = 0;
+    let headMeta = "";
+    for (let i = metaOpen; i < html.length; i += 1) {
+      if (html.startsWith("<span", i)) depth += 1;
+      if (html.startsWith("</span>", i)) {
+        depth -= 1;
+        if (depth === 0) {
+          headMeta = html.slice(metaOpen, i + "</span>".length);
+          break;
+        }
+      }
+    }
+    expect(headMeta).toContain('class="num mono">2</span>');
+    expect(headMeta).toContain(">plans</span>");
+    expect(headMeta).toContain("is-strong");
+    expect(headMeta).toContain('<span class="label">running</span>');
     expect(html).toContain('<span class="label">running</span>');
     expect(html).not.toContain("data-ms-workflow-meta");
   });

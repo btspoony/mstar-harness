@@ -1587,7 +1587,18 @@ dot:        rgb(47, 111, 237)      // --ms-accent
 
 **The probe itself was wrong first**: it asked for `.breadcrumb`, `.detail-title` and
 `.field dt` on the *overview*, where those elements do not exist, and reported five `None`s
-that looked like five missing elements. A probe has to name the screen it belongs to.## Verification coverage, stated
+that looked like five missing elements. A probe has to name the screen it belongs to.
+
+**And a check now guards the build order.** `bun run --cwd packages/ui check:stale` fails when
+`packages/commands/src/dashboard/assets.generated.ts` is older than any sheet in
+`packages/ui/src/styles`. That is the exact state that produced a `844 x 88` measurement of a
+`height: 38%; aspect-ratio` change — twice. It is a timestamp comparison, which answers the
+question that was missed: *was the CLI built after the sheets changed?*
+
+**A test asserted too little, and that is now fixed too.** The panel-head assertion read
+`expect(html).toContain("is-strong")` over the whole page, which passes if any element
+anywhere carries the class. It now slices this head's own `panel-meta` by balanced `<span>`
+nesting and asserts the count, the unit, `is-strong` and the label inside that slice.## Verification coverage, stated
 
 Two hosts mount these screens: the dashboard (`packages/cli/web`) and the dsh pane
 (`packages/dsh/src/client/panel`). They share the components but **each owns its own
