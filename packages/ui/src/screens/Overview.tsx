@@ -550,12 +550,15 @@ export function Overview(props: OverviewProps) {
                   ))}
                 </ol>
                 {model.latestIteration.value.gatePosition === null ? null : (
-                  <p className="gate-meta">
+                  // A span, as the prototype has it: `.gate-meta` is inline-flex and does
+                  // not reset margin, so a `<p>` would carry the document's paragraph
+                  // margin into the track.
+                  <span className="gate-meta">
                     {copy.gateStep(
                       model.latestIteration.value.gatePosition.step,
                       model.latestIteration.value.gatePosition.of,
                     )}
-                  </p>
+                  </span>
                 )}
               </div>
             )
