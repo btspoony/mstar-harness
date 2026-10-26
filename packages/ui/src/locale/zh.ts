@@ -313,7 +313,7 @@ export const zh: Copy = {
       id: "迭代",
       title: "标题",
       lifecycle: "生命周期",
-      execution: "罗盘",
+      execution: "投影执行",
       delivery: "交付",
       plans: "计划",
       documents: "文档",

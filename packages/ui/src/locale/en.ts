@@ -334,7 +334,7 @@ export const en = {
       id: "Iteration",
       title: "Title",
       lifecycle: "Lifecycle",
-      execution: "Compass",
+      execution: "Projected execution",
       delivery: "Delivery",
       plans: "Plans",
       documents: "Documents",
