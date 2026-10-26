@@ -360,10 +360,24 @@ The alternative — keeping the facts in the first cell — cannot show them who
 cell is 80px. A cell-sized second line is a truncation dressed as a layout, so the extra row is
 the cheaper trade until `DataTable` grows a column-aware second line.
 
-A **screen title never stacks**. CJK breaks between every glyph, so a squeezed head set a
-two-glyph title as one glyph per line (measured: a 30.4px, 2-line box at a 400px container).
-The shared title rule states its own floor — its whole string — and caps at the frame, so a
-head squeezes everything else first and a title too long for the row truncates with an ellipsis.
+A **screen title never stacks, and never escapes its frame.** CJK breaks between every glyph, so
+a squeezed head set a two-glyph title as one glyph per line (measured: a 30.4px, 2-line box at a
+400px container). The fix is structural, not a single declaration:
+
+- **The title owns its row below the collapse floor.** The screen head wraps
+  (`flex-wrap: wrap`) and the title takes the full row (`flex: 1 1 100%`), the same shape the
+  prototype's `.panel-head` takes at narrow widths (`design-v1.html:736`). The title is then
+  measured against the whole card rather than the summary's remainder, so a two-glyph title has
+  a row to itself and does not stack.
+- **The title's floor is zero, not its own string.** A CSS minimum beats a maximum, so a
+  `min-inline-size: max-content` floor let a long title (an issue title is a sentence) grow PAST
+  the frame — measured 852.1px in a 360px frame — instead of truncating in it. With the row
+  above keeping short titles whole, the title needs no content floor: `min-inline-size: 0` plus
+  `max-inline-size: 100%` caps the box at the frame, and `nowrap` + `text-overflow: ellipsis`
+  truncate what does not fit (a long title measured 360px of box, ellipsized, no page overflow).
+- **A title never degrades to an ellipsis-only box.** Because the box is a whole row (240px at
+  the floor, 360px at 400px, 580px at 620px), the smallest title box is still a readable
+  measure; the gate asserts a floor of 120px on it.
 
 - **Prose keeps a measure.** Overview's two-column grid folds to one column below 900px, so a
   card at 420–619px is 360–579px wide and its sentences wrap at 12+ characters per line

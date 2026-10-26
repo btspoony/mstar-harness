@@ -151,14 +151,28 @@ const PROBE = `(() => {
     summaryOverflows: summaryEl === null ? null : summaryEl.scrollWidth > summaryEl.clientWidth + 1,
     titleOverflows: h1 === null ? null : h1.scrollWidth > h1.clientWidth + 1,
     // A title is a unit: CJK breaks between every glyph, so a squeezed head stacked a
-    // two-glyph title on two lines. One line box is the whole assertion.
+    // two-glyph title on two lines. One line box is the whole assertion. The box height
+    // over the line height, not the Range rect count: a heading that wraps its text in
+    // an inline-block (the detail screens' TruncatedText) reports two rects for one line.
     titleLines: h1 === null ? null : (() => {
-      const range = document.createRange();
-      range.selectNodeContents(h1);
-      return [...range.getClientRects()].length;
+      const lineHeight = parseFloat(getComputedStyle(h1).lineHeight) || 0;
+      if (lineHeight === 0) return 1;
+      return Math.max(1, Math.round(h1.getBoundingClientRect().height / lineHeight));
     })(),
     titleWidth: h1 === null ? null : Math.round(h1.getBoundingClientRect().width * 10) / 10,
     titleText: h1 === null ? null : (h1.textContent ?? '').trim(),
+    // Whether the title was actually clipped: the heading itself, or the inline-block
+    // clip the detail screens wrap it in (the clip owns the truncation there).
+    titleTruncated: h1 === null ? null : [h1, ...h1.querySelectorAll("[data-ms-full]")]
+      .some((el) => el.scrollWidth > el.clientWidth + 1),
+    // In the collapsed band the title owns its row and the summary wraps under it, so
+    // the fact to measure is the wrap, not the baseline.
+    summaryTopOffset: (() => {
+      const summary = document.querySelector('[data-ms-summary]');
+      const title = document.querySelector('[data-ms-screen] h1');
+      if (summary === null || title === null) return null;
+      return Math.round((summary.getBoundingClientRect().top - title.getBoundingClientRect().bottom) * 10) / 10;
+    })(),
     tableWidth: (() => {
       const table = document.querySelector('table');
       return table === null ? null : Math.round(table.getBoundingClientRect().width * 10) / 10;
@@ -263,6 +277,8 @@ describe.skipIf(!browserAvailable)("the render gate", () => {
   let root = "";
   let server: RunningDashboard;
   let issueId = "";
+  /** A sentence-shaped title: the long-title arm needs one that cannot fit a 400px pane. */
+  let longTitleIssueId = "";
 
   beforeAll(async () => {
     if (!browserAvailable) console.log(SKIP_REASON);
@@ -293,6 +309,32 @@ describe.skipIf(!browserAvailable)("the render gate", () => {
       { actor: "project-manager", operationId: "render-gate-capture" },
     );
     issueId = captured.issueId;
+
+    // A second issue whose title is a full sentence. The long-title arm asserts that a
+    // heading wider than its frame truncates INSIDE it, so the fixture has to overrun
+    // 400px by a wide margin (a 47-character title still fits 360px of measure).
+    const longTitle = await captureIssue(
+      context,
+      {
+        projectId: "proj-a",
+        title: "A reader cannot tell two statuses apart without colour when the tone is painted behind the word instead of beside it",
+        severity: "medium",
+        kind: "bug",
+        impact: "The status word is the only non-colour cue",
+        acceptance: "A status is a dot plus its word, and the word is never cut",
+        sourceIdentity: "render-gate-long-title",
+        rootCauseKey: "render-gate-long-title",
+        acceptanceKey: "render-gate-long-title",
+        occurrenceKey: "render-gate-long-title",
+        sourceKind: "test",
+        location: "packages/cli/test/render-gate.test.ts",
+        observedBehavior: "the title escaped the frame instead of truncating in it",
+        evidence: ["isolated fixture"],
+        discoveredAt: RECORDED_AT,
+      },
+      { actor: "project-manager", operationId: "render-gate-capture-long-title" },
+    );
+    longTitleIssueId = longTitle.issueId;
 
     // A project so `#project/<id>/issues` renders the nested Issues screen — the
     // double-gutter case (PR 597 F3) only exists on a project feature page.
@@ -558,8 +600,15 @@ describe.skipIf(!browserAvailable)("the render gate", () => {
         // summary's facts, so only the no-overflow half is waived — see FLOOR_SAMPLE.
         if (measured.summary !== null) {
           expect(String(measured.summary)).not.toBe("");
-          if (!FLOOR_SAMPLE(sample)) expect(band.summaryOverflows).toBe(false);
-          expect(band.baselineDelta as number).toBeLessThanOrEqual(4);
+          if (sample.collapse) {
+            // The title owns its row here, so the summary wraps under it: the contract
+            // is that it sits directly below the title, not that it shares a baseline.
+            expect(band.summaryTopOffset as number).toBeGreaterThanOrEqual(-2);
+            expect(band.summaryTopOffset as number).toBeLessThan(24);
+          } else {
+            if (!FLOOR_SAMPLE(sample)) expect(band.summaryOverflows).toBe(false);
+            expect(band.baselineDelta as number).toBeLessThanOrEqual(4);
+          }
         }
 
         // The header controls stay reachable and labelled, and the page never
@@ -591,10 +640,10 @@ describe.skipIf(!browserAvailable)("the render gate", () => {
       const band = measured.band as Record<string, number | boolean | string | null>;
       expect(String(band.titleText)).toMatch(/[\u4e00-\u9fff]/);
       expect(band.titleLines).toBe(1);
-      // Two glyphs at 16px: the box is its own measure, not the head's remainder and
-      // not one glyph (the pre-fix shape measured 30.4px over two lines).
-      expect(band.titleWidth as number).toBeGreaterThan(20);
-      expect(band.titleWidth as number).toBeLessThan(120);
+      // The title owns its row at this width, so the box is the row's width — never one
+      // glyph (the pre-fix shape measured 30.4px over two lines), never ellipsis-only.
+      expect(band.titleWidth as number).toBeGreaterThanOrEqual(120);
+      expect(band.titleOverflows).toBe(false);
       expect(band.titleOverflows).toBe(false);
     } finally {
       await setLocale("en");
@@ -626,6 +675,30 @@ describe.skipIf(!browserAvailable)("the render gate", () => {
     expect(nested!.padding).toBe("0px 0px 0px 0px");
     expect(nested!.maxWidth).toBe("none");
 
+  }, 60_000);
+
+  /**
+   * A title is a sentence on the detail screens and a project name on Projects. The
+   * frame must hold it: it truncates with an ellipsis and the page never scrolls
+   * sideways. The floor of zero (not `max-content`) is what makes that true — a CSS
+   * minimum beats a maximum, so a `max-content` floor let the heading grow PAST the
+   * frame instead of truncating in it.
+   */
+  test("a long title truncates inside the frame instead of escaping it", async () => {
+    await browser(["set", "viewport", "400", String(VIEWPORT.height)]);
+    const measured = await visit(`issue/${longTitleIssueId}`, "issue-detail", false, "issue-detail-400-longtitle");
+    const band = measured.band as Record<string, number | boolean | string | null>;
+    const title = String(band.titleText);
+    expect(title.length).toBeGreaterThan(40);
+    // One line box: the sentence never wraps into a paragraph-shaped heading.
+    expect(band.titleLines).toBe(1);
+    // It DOES truncate — an un-truncated sentence at 400px would mean it escaped.
+    expect(band.titleTruncated).toBe(true);
+    // ...inside the frame, and without scrolling the page sideways.
+    expect(band.titleWidth as number).toBeLessThanOrEqual(band.contentWidth as number);
+    expect(band.pageOverflow).toBe(false);
+    // And not down to an ellipsis-only box: the row is still a readable measure.
+    expect(band.titleWidth as number).toBeGreaterThanOrEqual(120);
   }, 60_000);
 
   test("a detail screen shows its timestamps in the prototype's form", async () => {

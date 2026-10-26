@@ -105,18 +105,18 @@
   letter-spacing: -0.01em;
   color: var(--ms-text-primary);
   /* A title is a unit, not a stream of glyphs. CJK breaks between every glyph, so a
-     flex head that runs out of room stacked `问题` as `问` / `题` (measured: a 30.4px,
-     2-line box). `nowrap` makes the title's own minimum its whole string, so the
-     head squeezes everything else first; a title too long for the row truncates with
-     an ellipsis instead of stacking one character per line. */
+     head that runs out of room stacked `问题` as `问` / `题` (measured: a 30.4px, 2-line
+     box). `nowrap` removes the mid-word break; the box is then capped at the frame and
+     what does not fit truncates with an ellipsis.
+     The floor is ZERO, not `max-content`: a CSS minimum beats a maximum, so a
+     `max-content` floor let a long title (an issue title is a sentence) grow past the
+     frame instead of truncating in it. A title that needs more than its row gets the
+     row and an ellipsis; the row itself is what keeps a short title from being squeezed
+     (see the collapsed heads below, and Issues' `.head` at narrow widths). */
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
-  /* `overflow: hidden` makes a flex item's automatic minimum 0, so the box would
-     collapse again the moment a head runs out of room. The title therefore states its
-     own floor — its whole string — and caps at the frame: a long title truncates, a
-     short one never stacks. */
-  min-inline-size: max-content;
+  min-inline-size: 0;
   max-inline-size: 100%;
 }
 
