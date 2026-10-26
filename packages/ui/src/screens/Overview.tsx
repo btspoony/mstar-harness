@@ -302,28 +302,33 @@ function WorkflowRowView(props: {
 function MilestoneRowView(props: { row: MilestoneRow; copy: OverviewCopy }) {
   const row = props.row;
   return (
-    <Row
-      tall
-      rowClass="milestone-row"
-      primary={<TruncatedText text={row.name} />}
-      meta={
-        <>
-          {row.status === null ? null : <span>{row.status}</span>}
-          {row.target === null ? null : <span> · {row.target}</span>}
-        </>
-      }
-      trailing={
-        row.progress === null ? null : (
+    // The prototype's milestone is two rows: `milestone-top` (a dot, the name, the target)
+    // and `milestone-foot` (the bar and the counts). As one flex row, a 360px pane broke the
+    // target and the counts across lines.
+    <div className="milestone-row" data-ms-milestone-row="">
+      <div className="milestone-top">
+        {row.status === null ? null : (
+          <span className={`status tone-${row.statusTone}`} aria-label={row.status}>
+            <span className="dot" aria-hidden="true" />
+          </span>
+        )}
+        <span className="milestone-name">
+          <TruncatedText text={row.name} />
+        </span>
+        {row.target === null ? null : <span className="milestone-target">{row.target}</span>}
+      </div>
+      {row.progress === null ? null : (
+        <div className="milestone-foot">
+          <ProgressBar done={row.progress.retired} total={row.progress.total} />
           <span className="milestone-counts">
-            <ProgressBar done={row.progress.retired} total={row.progress.total} />
             <span className="num">
               {props.copy.milestoneProgress(row.progress.retired, row.progress.total)}
             </span>
             <span>{props.copy.milestoneOpenCount(row.openIssues)}</span>
           </span>
-        )
-      }
-    />
+        </div>
+      )}
+    </div>
   );
 }
 

@@ -1377,7 +1377,32 @@ background transparent`, and the last reports `border-bottom 0px` from its `:las
 override.
 
 **Not verified**: the real dsh pane. The rule is measured on a fixture and the dsh package
-builds green, but no screenshot of the running dsh panel with a panel inside it was taken.## Verification coverage, stated
+builds green, but no screenshot of the running dsh panel with a panel inside it was taken.## Three defects a 360px pane render found in one screen
+
+Rendering the real overview inside `.ms-pane-body` — the first time any screen was seen at
+pane width — turned up three, none of which a computed-style check would have asked for:
+
+**1. Two Tone values had no colour.** `.tone-success` and `.tone-purple` appear nowhere in
+`product.css`; only `.tone-done`, `.tone-resolved` and `.tone-terminal` cover those colours.
+Every dot carrying `Tone = "success"` or `"purple"` therefore rendered in the default neutral
+grey. Both rules now exist, and the three milestone dots measure `rgb(76, 189, 133)` for
+success and `rgb(139, 147, 159)` for neutral.
+
+**2. The milestone row was two rows in the prototype and one row here.** The prototype's
+`.milestone-top` (dot, name, target) and `.milestone-foot` (bar, counts) stack. As a single
+flex line at 360px, the target broke across lines and `5/14 · 9 open` split in two. The row is
+now the prototype's two divs.
+
+**3. A dead rule was setting the layout.** `base.css` styled `.milestone-row` as a one-line
+flex row for "the roadmap goal row" — a consumer that no longer exists; the only component
+naming the class is the overview's board, whose rule lives in the product sheet. The dead rule
+won the specificity and made `.milestone-foot` a *sibling* of `.milestone-top`, so the
+progress bar measured **0px wide**. With the rule gone the bars measure `234 / 240 / 228`.
+
+**The general form**, and the third time this file records it: a rule whose owner was deleted
+does not go away, it applies to whoever else names the class.
+
+## Verification coverage, stated
 
 Two hosts mount these screens: the dashboard (`packages/cli/web`) and the dsh pane
 (`packages/dsh/src/client/panel`). They share the components but **each owns its own

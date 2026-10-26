@@ -261,6 +261,20 @@
   padding-inline: 0;
 }
 
+/*
+ * Two of the five `Tone` values had no rule in the product sheet: `.tone-success` and
+ * `.tone-purple` were absent, so every dot carrying either rendered in the default neutral
+ * grey. The prototype spells those two states `tone-done` and `tone-terminal`; the mapping
+ * here keeps `Tone`'s own names and gives them the same two colours.
+ */
+.ms-container .tone-success .dot {
+  background: var(--ms-success);
+}
+
+.ms-container .tone-purple .dot {
+  background: var(--ms-purple);
+}
+
 /**
  * Forced colors: the status dot stops depending on colour.
  *
@@ -470,17 +484,14 @@
   margin: 0 5px;
 }
 
-/* The roadmap goal row: a flex line (dot, title, the visually-hidden state) where the
-   title is the only part that may shrink. Without the flex line the dot and the title sat
-   on separate baselines. */
-.ms-container .milestone-row {
-  display: flex;
-  align-items: baseline;
-  gap: 6px;
-  min-width: 0;
-}
-
-.ms-container .milestone-row > .milestone-name {
+/*
+ * `.milestone-row` used to be styled here as a one-line flex row for a roadmap goal row
+ * that no longer exists — no component names the class except the overview's board, whose
+ * rule lives in the product sheet and wants two stacked lines. This block made the board's
+ * `.milestone-foot` a flex sibling of `.milestone-top`, squeezing the progress bar to 0px
+ * wide at 360px. The name's own shrink rule moved to `.milestone-top > .milestone-name`.
+ */
+.ms-container .milestone-top > .milestone-name {
   min-width: 0;
   flex: 1 1 auto;
 }

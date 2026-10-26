@@ -24,7 +24,7 @@
 import type { IssueFlow, IterationGateStep, OverviewDTO, ResidualCounts } from "@mstar-harness/engine";
 import type { Resolved } from "./state.ts";
 import { resolveMember } from "./state.ts";
-import { SEVERITIES, gateStepPosition, gateSteps, severityTone, type GateStepId, type GateStepPosition, type Tone } from "./status.ts";
+import { SEVERITIES, gateStepPosition, gateSteps, severityTone, type GateStepId, type GateStepPosition, type Tone, milestoneStatusTone } from "./status.ts";
 import { UNKNOWN_DATE, formatShortDate, projectionState, type ProjectionState } from "./format.ts";
 import type { WorkflowRow } from "./workflows.ts";
 import { workflowPlanRow, workflowRow, workflowStatusTone, type BranchAnchors } from "./workflows.ts";
@@ -168,6 +168,8 @@ export type MilestoneRow = {
   milestoneId: string;
   name: string;
   status: string | null;
+  /** The status dot's tone: the prototype draws the milestone's state as a dot alone. */
+  statusTone: Tone;
   target: string | null;
   /**
    * `retired of total` — the prototype's numerator is `total - open`, which counts every
@@ -280,6 +282,7 @@ function milestoneRow(milestone: {
     milestoneId: milestone.milestoneId,
     name: milestone.name,
     status: milestone.status,
+    statusTone: milestoneStatusTone(milestone.status),
     target: milestone.target,
     progress:
       milestone.totalIssues === 0

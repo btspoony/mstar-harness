@@ -119,12 +119,19 @@ export function lifecycleTone(lifecycle: string): Tone {
 }
 
 /** Milestone status → tone: delivered is success, dropped is terminal. */
+/**
+ * The prototype's own three: `active -> active` (accent dot), `planned -> todo` (neutral
+ * dot), `delivered -> done` (success dot). The tone words are the CSS classes, not a
+ * severity judgement — `active` reads as accent there, which `neutral` would lose.
+ */
 export function milestoneStatusTone(status: string | null): Tone {
   switch (status) {
+    case "active":
+      return "success";
+    case "planned":
+      return "neutral";
     case "delivered":
       return "success";
-    case "active":
-      return "neutral";
     case "dropped":
       return "purple";
     default:
