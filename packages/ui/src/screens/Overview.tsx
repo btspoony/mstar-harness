@@ -46,6 +46,9 @@ import type { GateStepPosition, Tone } from "../view-model/status.ts";
 export type OverviewCopy = {
   pageTitle: string;
   workflowsHeading: string;
+  /** Names the running workflows the panel does not draw, so the list is never silently
+   *  shortened. The prototype's panel is one active workflow. */
+  workflowsMore?: (count: number) => string;
   workflowsEmpty: string;
   /** `showing N of M` — the workflows member is capped upstream. */
   workflowsTruncated: (shown: number, total: number) => string;
@@ -389,13 +392,19 @@ export function Overview(props: OverviewProps) {
           <PanelBody>
           {model.workflows.kind === "populated" ? (
             <div data-ms-workflows="">
-              {/* Every workflow is rendered: truncating the list to the "active" one
-                  would hide records with no other entry point. Whether the panel should
-                  show only the active workflow (as the prototype's singular heading
-                  suggests) is an open product question, not a rendering detail. */}
-              {model.workflows.value.map((row) => (
+              {/* The prototype's panel is one active workflow with its plans beneath it
+                  ("Active workflow", singular). Rendering every workflow put the same
+                  five-column header on the page once per record; the rest are named in
+                  the count line below instead of being dropped silently. */}
+              {model.workflows.value.slice(0, 1).map((row) => (
                 <WorkflowRowView key={row.id} row={row} copy={copy} onOpenWorkflow={props.onOpenWorkflow} />
               ))}
+              {model.workflows.value.length > 1 ? (
+                <p className="muted t-11" data-ms-workflows-more={model.workflows.value.length - 1}>
+                  {copy.workflowsMore?.(model.workflows.value.length - 1) ??
+                    `+${model.workflows.value.length - 1}`}
+                </p>
+              ) : null}
               {/* The member is capped by the engine, so a truncated set has to say so:
                   rows that stop at 50 look like all of them. */}
               {model.workflows.truncated ? (

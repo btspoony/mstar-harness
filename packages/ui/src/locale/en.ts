@@ -85,7 +85,8 @@ export const en = {
 
   overview: {
     pageTitle: "Overview",
-    workflowsHeading: "Active workflows",
+    workflowsHeading: "Active workflow",
+    workflowsMore: (n: number) => `+${n} more running`,
     workflowsTruncated: (shown: number, total: number) => `Showing ${shown} of ${total}`,
     plansProgress: (done: number, total: number) => `${done}/${total} plans`,
     trendHeading: "Issue flow trend",

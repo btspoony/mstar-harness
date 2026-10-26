@@ -73,6 +73,7 @@ export const zh: Copy = {
   overview: {
     pageTitle: "总览",
     workflowsHeading: "进行中的工作流",
+    workflowsMore: (n: number) => `另有 ${n} 个在运行`,
     workflowsTruncated: (shown: number, total: number) => `显示 ${shown} / ${total}`,
     plansProgress: (done, total) => `${done}/${total} 个计划`,
     trendHeading: "问题走势",
