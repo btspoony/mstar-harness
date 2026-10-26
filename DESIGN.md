@@ -671,8 +671,25 @@ a style choice — the other three facts are excluded by other parts of the syst
 | `{HARNESS_DIR}` | `overviewFromEnvelope` records the decision (D28/D30): "the host passes it through and states no version, no `{HARNESS_DIR}` and no counters of its own". |
 | `@mstar-harness/dsh` | No constant carries it; the dashboard does not know which host package built it. |
 
-So the line is the prototype's element with one of its four facts. Making it whole is not a
-span edit: it means overriding two recorded decisions and adding a build-time constant.
+Two of the four are now stated. `build-web.ts` reads `packages/cli/package.json` and injects
+its name and version; the dsh build does the same from `packages/dsh/package.json`, threading
+the values through its `define` as parameters so `clientBundleDefine` stays a pure function.
+Each host names **itself**:
+
+| Host | Line reads |
+| --- | --- |
+| the prototype (a dsh panel design) | `@mstar-harness/dsh  v4.0.9` |
+| the dsh panel | `@mstar-harness/dsh  v4.0.9` — identical |
+| the standalone dashboard | `@mstar-harness/cli  v4.0.9` |
+
+The third row is the one deliberate difference: the dashboard is not built by the dsh plugin,
+so printing `@mstar-harness/dsh` there would be a false statement about which code is running.
+The prototype had one bundle and could name it; this repository has two.
+
+`{HARNESS_DIR}` remains, and it is the one fact with no source: the dashboard knows its
+harness root (`packages/commands/src/families/dashboard.ts` receives `harnessDir`) but never
+passes it to the browser, and D28/D30 record the exclusion. Closing it means adding that
+pass-through, not adding a span.
 
 **This entry exists so it is not lost the way round 12's header badge was.** A known,
 reasoned gap belongs in this file; a gap nobody re-reads becomes a surprise at review.
