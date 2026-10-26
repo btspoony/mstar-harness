@@ -793,6 +793,25 @@ measurement of the wrong thing, not a difference.
 `[data-ms-theme="dark"]` — the same two-block shape the prototype uses, with a different
 attribute name.
 
+## Two tables, two type sizes, on purpose
+
+A styles probe that reads `thead th` inside the issues screen can report **10px or 11px**
+depending on which table it lands on, and both are correct:
+
+| Table | Header |
+| --- | --- |
+| `table.table` (the issue list) | `11px`, padding `0 10px` |
+| `table.mini-table` (the trend's table alternative, and the compass milestones) | `10px`, padding `3px 8px 3px 0` |
+
+Both come from the prototype's own sheet. The first measurement I took with
+`querySelector("thead th")` hit the mini table (its first cell is `Date`) and I read 10px as
+a theme-dependent change; the screens carry two tables and the selector was not specific.
+
+**The rule this belongs to**: on a screen with more than one table, a probe must name the
+table — `className === "table"` — or it answers a question nobody asked. This is the third
+time in this file that an unscoped selector produced a phantom difference (see the screen
+map above and `.trunc`'s contexts).
+
 ## Verification coverage, stated
 
 Two hosts mount these screens: the dashboard (`packages/cli/web`) and the dsh pane
