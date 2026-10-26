@@ -241,6 +241,10 @@ export const zh: Copy = {
   },
 
   workflowDetail: {
+    leasesHeading: "租约",
+    leasesCount: (n: number) => `${n} 个活跃 · 独占`,
+    leasesEmpty: "该工作流没有持有租约。",
+    leaseColumns: { plan: "计划", kind: "租约类型", holder: "持有者", worktree: "工作树路径", expires: "到期" },
     updatedMeta: (when: string) => `更新于 ${when}`,
     activeRegistration: "活跃注册",
     chainBase: "基线",

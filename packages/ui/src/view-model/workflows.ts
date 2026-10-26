@@ -203,6 +203,15 @@ export function workflowListModel(read: {
 }
 
 /** One plan row of a workflow detail's plan table. */
+/** One lease row of the prototype's Leases card. */
+export type WorkflowLeaseRow = {
+  planId: string;
+  kind: string;
+  holder: string;
+  worktreePath: string;
+  expiresAt: string;
+};
+
 export type WorkflowPlanRow = {
   planId: string;
   title: string | null;
@@ -234,6 +243,9 @@ export type WorkflowDetailModel = {
   /** The store's own reason when the execution projection could not be read. */
   executionUnavailableReason: string | null;
   plans: readonly WorkflowPlanRow[];
+  /** The leases the projection holds across this workflow's plans — the prototype's
+   *  Leases card. A plan's lease is what keeps its worktree checked out. */
+  leases: readonly WorkflowLeaseRow[];
 };
 
 /** One plan row. */
@@ -283,6 +295,19 @@ export function workflowDetailModel(read: {
       endedAt: workflow.endedAt,
       executionUnavailableReason: executionUnavailableReason(workflow.badges),
       plans: workflow.plans.map(workflowPlanRow),
+      // The prototype's Leases card reads across this workflow's plans: a lease belongs
+      // to a plan, and the card states which one.
+      leases: workflow.plans.flatMap((plan) =>
+        plan.leases.map((lease) => ({
+          planId: plan.planId,
+          kind: lease.kind,
+          // A lease row says "not recorded" rather than dropping the column: an
+          // empty cell reads as a rendering bug.
+          holder: lease.holder ?? "—",
+          worktreePath: lease.worktreePath ?? "—",
+          expiresAt: lease.expiresAt ?? "—",
+        })),
+      ),
     },
   };
 }

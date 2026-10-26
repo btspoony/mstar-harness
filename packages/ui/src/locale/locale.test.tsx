@@ -213,6 +213,15 @@ describe("no key exists for a fact IA §8 marks not-rendered", () => {
     "iterationDetail.documentColumns.kind",
     "iterationDetail.documentColumns.location",
     "iterationDetail.documentColumns.revision",
+    // The prototype's workflow detail HAS a Leases card, so its keys are live.
+    "workflowDetail.leasesHeading",
+    "workflowDetail.leasesCount",
+    "workflowDetail.leasesEmpty",
+    "workflowDetail.leaseColumns.plan",
+    "workflowDetail.leaseColumns.kind",
+    "workflowDetail.leaseColumns.holder",
+    "workflowDetail.leaseColumns.worktree",
+    "workflowDetail.leaseColumns.expires",
   ]);
 
   test("the kept-exception list contains only keys that exist", () => {

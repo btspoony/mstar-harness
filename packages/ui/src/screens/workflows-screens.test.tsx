@@ -126,6 +126,10 @@ const renderList = (
   );
 
 const detailCopy: WorkflowDetailCopy = {
+  leasesHeading: "Leases",
+  leasesCount: (n) => `${n} active · exclusive`,
+  leasesEmpty: "No lease is held on this workflow.",
+  leaseColumns: { plan: "Plan", kind: "Lease kind", holder: "Holder", worktree: "Worktree path", expires: "Expires" },
   updatedMeta: (when) => `updated ${when}`,
   activeRegistration: "active registration",
   chainBase: "Base",
@@ -328,11 +332,12 @@ describe("WorkflowDetail — execution, anchors, catalog and the plan table", ()
 describe("WorkflowDetail — NEGATIVE: leases, adoption audit, pin badges", () => {
   const html = renderDetail(workflow());
 
-  test("no lease kind, holder, worktree or expiry", () => {
-    expect(html).not.toContain("/tmp/wt-secret");
-    expect(html).not.toContain("worktreePath");
-    expect(html).not.toContain("2026-10-26T00:00:00.000Z");
-    expect(html).not.toContain("holder");
+  test("the Leases card is rendered, as the prototype's detail has one", () => {
+    // IA §8.1 kept leases out. The prototype's workflow detail has a Leases card and
+    // the prototype is the acceptance criterion, so the card renders — from the leases
+    // the projection attaches to each plan, which is where the store actually puts them.
+    expect(html).toContain("data-ms-leases");
+    expect(html).toContain("/tmp/wt-secret");
   });
 
   test("no terminal-adoption audit row", () => {
@@ -357,10 +362,13 @@ describe("WorkflowDetail — NEGATIVE: leases, adoption audit, pin badges", () =
   test("the detail model cannot carry them: the negative set is enforced by shape", () => {
     const model = workflowDetailModel({ data: workflow(), projection });
     if (model.kind !== "populated") throw new Error("expected the detail");
-    for (const removed of ["leases", "terminalUnregistered", "terminalAdoptions", "badges", "pin"]) {
+    for (const removed of ["terminalUnregistered", "terminalAdoptions", "pin"]) {
       expect(Object.keys(model.value)).not.toContain(removed);
     }
-    expect(Object.keys(model.value.workflow)).not.toContain("leases");
+    // `leases` sits on the detail model now (the card needs it), and `badges` on the
+    // workflow row (the list's column needs it).
+    expect(Object.keys(model.value)).toContain("leases");
+    expect(Object.keys(model.value.workflow)).toContain("badges");
   });
 });
 

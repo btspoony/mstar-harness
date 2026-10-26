@@ -262,6 +262,10 @@ export const en = {
   },
 
   workflowDetail: {
+    leasesHeading: "Leases",
+    leasesCount: (n: number) => `${n} active · exclusive`,
+    leasesEmpty: "No lease is held on this workflow.",
+    leaseColumns: { plan: "Plan", kind: "Lease kind", holder: "Holder", worktree: "Worktree path", expires: "Expires" },
     updatedMeta: (when: string) => `updated ${when}`,
     activeRegistration: "active registration",
     chainBase: "Base",
