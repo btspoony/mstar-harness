@@ -525,3 +525,12 @@
   font-size: var(--ms-fs-12);
   line-height: var(--ms-lh-12);
 }
+
+/* The flexible column's floor. Under `table-layout: fixed` the fixed columns hold their
+   pixel widths and the one column without a width takes what is left — at 720px that came
+   to 32px, which is narrower than the word in it. The prototype does not reach this state
+   because its columns shrink proportionally (an unresolved difference, recorded in
+   DESIGN.md); this floor is a defect fix, not parity work. */
+.ms-container .table > colgroup > col:not([style]) {
+  min-width: 120px;
+}

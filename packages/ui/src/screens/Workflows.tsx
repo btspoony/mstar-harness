@@ -135,18 +135,10 @@ export function Workflows(props: WorkflowsProps) {
       render: (row) => <span className={"mono t-12"}>{row.updatedAt}</span>,
     },
     {
-      key: "plans",
-      header: copy.columns.plans,
-      width: "190px",
-      secondary: true,
-      align: "end",
-      render: (row) => <span className={"mono t-12"}>{copy.plansProgress(row.plansDone, row.plansTotal)}</span>,
-    },
-    {
       // The prototype's `Join badges`: the store's own join bookkeeping, said in words.
       key: "badges",
       header: copy.columns.badges,
-      width: "116px",
+      width: "190px",
       secondary: true,
       render: (row) =>
         row.badges.length === 0 ? (
