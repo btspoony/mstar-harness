@@ -389,6 +389,8 @@ export const zh: Copy = {
       directionHeading: "方向",
       goalsHeading: "目标",
       milestonesHeading: "里程碑",
+    milestonesUnit: "个里程碑",
+    unassignedUnit: "个未归属问题",
       markdownHeading: "已存储的文档",
       noDirection: "路线图没有记录方向。",
       goalChecked: "已完成",

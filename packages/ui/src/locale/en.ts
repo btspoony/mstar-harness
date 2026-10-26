@@ -413,6 +413,8 @@ export const en = {
       directionHeading: "Direction",
       goalsHeading: "Goals",
       milestonesHeading: "Milestones",
+    milestonesUnit: "milestones",
+    unassignedUnit: "unassigned issues",
       markdownHeading: "Stored document",
       noDirection: "The roadmap records no direction.",
       goalChecked: "Checked",

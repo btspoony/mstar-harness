@@ -52,6 +52,9 @@ export type ProjectDetailCopy = {
     directionHeading: string;
     goalsHeading: string;
     milestonesHeading: string;
+    /** The board head's two nouns, which the prototype prints after each count. */
+    milestonesUnit: string;
+    unassignedUnit: string;
     markdownHeading: string;
     noDirection: string;
     goalChecked: string;
@@ -164,16 +167,31 @@ function RoadmapFeature(props: { model: RoadmapModel; copy: ProjectDetailCopy })
       )}
       {model.milestones.length === 0 ? null : (
         <section className={"panel"} data-ms-milestones="">
-          <h3>{copy.roadmap.milestonesHeading}</h3>
+          <div className="panel-head">
+            <h2 className={"panel-title"}>{copy.roadmap.milestonesHeading}</h2>
+            <span className="panel-meta">
+              <span className="num mono">{model.milestones.length}</span>{" "}
+              {copy.roadmap.milestonesUnit}
+              {model.unassignedIssues === 0 ? null : (
+                <>
+                  <span aria-hidden="true">·</span>
+                  <span className="num mono">{model.unassignedIssues}</span>{" "}
+                  {copy.roadmap.unassignedUnit}
+                </>
+              )}
+            </span>
+          </div>
           {model.milestones.map((milestone) => (
             <Milestone key={milestone.milestoneId} milestone={milestone} copy={copy} />
           ))}
+          {model.unassignedIssues === 0 ? null : (
+            <div className={"panel-foot"}>
+              <span data-ms-unassigned={model.unassignedIssues}>
+                {copy.roadmap.unassigned(model.unassignedIssues)}
+              </span>
+            </div>
+          )}
         </section>
-      )}
-      {model.unassignedIssues === 0 ? null : (
-        <p className={"muted"} data-ms-unassigned={model.unassignedIssues}>
-          {copy.roadmap.unassigned(model.unassignedIssues)}
-        </p>
       )}
       {model.markdown === null ? null : (
         <Collapsible summary={copy.roadmap.markdownHeading}>
