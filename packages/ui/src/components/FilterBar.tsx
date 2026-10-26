@@ -10,7 +10,6 @@
  */
 import type { ReactNode } from "react";
 
-import css from "./FilterBar.module.css";
 
 export type FilterOption = { value: string; label: string };
 

@@ -8,7 +8,6 @@
 import type { ReactNode } from "react";
 
 import type { Tone } from "../view-model/status.ts";
-import css from "./Badge.module.css";
 
 export type BadgeProps = {
   children: ReactNode;

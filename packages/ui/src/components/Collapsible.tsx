@@ -8,7 +8,6 @@
  */
 import type { ReactNode } from "react";
 
-import css from "./Collapsible.module.css";
 
 export type CollapsibleProps = {
   /** Localized summary text. */

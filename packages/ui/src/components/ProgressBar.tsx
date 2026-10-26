@@ -9,7 +9,6 @@
  * carry the same numbers for a screen reader, and the caller renders the
  * `3/6` label beside it (the product never shows a bar alone).
  */
-import css from "./ProgressBar.module.css";
 
 export type ProgressBarProps = {
   done: number;

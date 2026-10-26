@@ -7,7 +7,6 @@
  */
 import type { ReactNode } from "react";
 
-import css from "./Field.module.css";
 
 export type FieldProps = {
   /** Localized field label (Task 5 owns the string). */
@@ -21,7 +20,7 @@ export function Field(props: FieldProps) {
   return (
     <div className="field">
       <dt className="field-label">{props.label}</dt>
-      <dd className={props.mono === true ? css.valueMono : css.value}>{props.children}</dd>
+      <dd className={props.mono === true ? "field-value mono" : "field-value"}>{props.children}</dd>
     </div>
   );
 }

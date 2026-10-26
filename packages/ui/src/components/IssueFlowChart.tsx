@@ -16,7 +16,6 @@
  * where they are stated.
  */
 import type { IssueFlowPoint } from "../view-model/overview.ts";
-import css from "./IssueFlowChart.module.css";
 
 /** The plot box: wide, short, and deliberately not to scale with the pixels. */
 const VIEW_WIDTH = 100;
@@ -54,7 +53,7 @@ export function IssueFlowChart(props: IssueFlowChartProps) {
   const baseline = VIEW_HEIGHT - PAD;
   return (
     <svg
-      className={css.chart}
+      className="chart-svg"
       viewBox={`0 0 ${VIEW_WIDTH} ${VIEW_HEIGHT}`}
       preserveAspectRatio="none"
       role="img"
@@ -62,17 +61,17 @@ export function IssueFlowChart(props: IssueFlowChartProps) {
       data-ms-flow-chart=""
     >
       <title>{props.label}</title>
-      <line className={css.grid} x1={0} x2={VIEW_WIDTH} y1={PAD} y2={PAD} />
-      <line className={css.grid} x1={0} x2={VIEW_WIDTH} y1={baseline} y2={baseline} />
+      <line className="chart-grid" x1={0} x2={VIEW_WIDTH} y1={PAD} y2={PAD} />
+      <line className="chart-grid" x1={0} x2={VIEW_WIDTH} y1={baseline} y2={baseline} />
       <path
-        className={css.captured}
+        className="chart-captured"
         d={stepPath(
           points.map((point) => point.captured),
           max,
         )}
       />
       <path
-        className={css.retired}
+        className="chart-retired"
         d={stepPath(
           points.map((point) => point.retired),
           max,

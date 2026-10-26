@@ -7,7 +7,6 @@
  */
 import type { ReactNode } from "react";
 
-import css from "./FieldGroup.module.css";
 
 export type FieldGroupProps = {
   /** Localized group title. */

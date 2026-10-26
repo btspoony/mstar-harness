@@ -8,7 +8,6 @@
  */
 import type { ReactNode } from "react";
 
-import css from "./Notice.module.css";
 
 export type NoticeProps = {
   /** The reason, verbatim from the store or the transport. */

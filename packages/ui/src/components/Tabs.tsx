@@ -5,7 +5,6 @@
  * only switches the sections of the record the reader already opened. The panel
  * is the caller's; this component owns the strip and the selected state.
  */
-import css from "./Tabs.module.css";
 
 export type TabItem = {
   /** Stable feature id; the caller maps it to its panel. */

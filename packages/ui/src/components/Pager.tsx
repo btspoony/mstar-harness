@@ -6,7 +6,6 @@
  * exists only above offset 0, `next` only when the page is full. The label says
  * the range *and* the total, so a filtered list cannot look like the whole store.
  */
-import css from "./Pager.module.css";
 
 export type PagerProps = {
   total: number;

@@ -8,7 +8,6 @@
  */
 import type { ReactNode } from "react";
 
-import css from "./Row.module.css";
 
 export type RowProps = {
   /** The dot or glyph that leads the row (usually a `StatusDot`'s dot). */
@@ -29,7 +28,7 @@ export function Row(props: RowProps) {
   const interactive = props.onActivate !== undefined;
   return (
     <div
-      className={props.tall === true ? css.rowTall : css.row}
+      className={props.tall === true ? "row row-tall" : "row"}
       data-ms-row=""
       {...(interactive
         ? {
@@ -44,10 +43,10 @@ export function Row(props: RowProps) {
           }
         : {})}
     >
-      {props.leading === undefined ? null : <span className={css.leading}>{props.leading}</span>}
-      <span className={css.primary}>{props.primary}</span>
-      {props.meta === undefined ? null : <span className={css.meta}>{props.meta}</span>}
-      {props.trailing === undefined ? null : <span className={css.trailing}>{props.trailing}</span>}
+      {props.leading === undefined ? null : <span className="row-leading">{props.leading}</span>}
+      <span className="row-primary">{props.primary}</span>
+      {props.meta === undefined ? null : <span className="row-meta-inline">{props.meta}</span>}
+      {props.trailing === undefined ? null : <span className="row-trailing">{props.trailing}</span>}
     </div>
   );
 }

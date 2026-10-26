@@ -5,7 +5,6 @@
  * information, not an alarm. The region is always mounted and its content swaps,
  * which is what makes the announcement reliable.
  */
-import css from "./LiveRegion.module.css";
 
 export type LiveRegionProps = {
   /** The sentence to announce. Empty string clears the region. */
@@ -14,7 +13,7 @@ export type LiveRegionProps = {
 
 export function LiveRegion(props: LiveRegionProps) {
   return (
-    <p className={css.region} role="status" aria-live="polite" aria-atomic="true">
+    <p className="visually-hidden" role="status" aria-live="polite" aria-atomic="true">
       {props.message}
     </p>
   );

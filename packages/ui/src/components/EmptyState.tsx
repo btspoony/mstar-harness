@@ -20,7 +20,6 @@
  */
 import type { ReactNode } from "react";
 
-import css from "./EmptyState.module.css";
 
 /** The four absence arms. `populated` and `loading` are not absences. */
 export type AbsenceArm = "not-applicable" | "absent" | "empty" | "unavailable";

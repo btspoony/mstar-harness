@@ -7,7 +7,6 @@
  */
 import type { ReactNode } from "react";
 
-import css from "./Breadcrumb.module.css";
 
 export type Crumb = {
   /** Stable id for React keys; the caller's route id. */
