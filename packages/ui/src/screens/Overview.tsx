@@ -1,30 +1,35 @@
 /**
  * `Overview` — the product's landing page (IA §2, §3.1).
  *
- * It answers three questions in the first viewport, in this order: **is work
- * running** (every active workflow with its plan progress), **is anything broken
- * and how bad** (five severity rows, zeros included, with a reconciling total),
- * and **where is delivery** (the latest iteration's five gate steps with the one
- * the store proves marked). Milestones follow, and the projection state closes
- * the page — the only survivor of the identity line D30 removed.
+ * Wide (≥ 900px of container) it is the prototype's two columns — `minmax(0, 1.85fr)
+ * minmax(0, 1fr)`, `design-v1.html:317-318`: work and its trend on the left, residuals
+ * and milestones on the right, the latest iteration across both. Narrow it is the
+ * sidebar's single run, still in that reading order. One set of sections, two forms.
  *
- * Not here, by construction and by test: the issue-flow trend, the version,
- * `{HARNESS_DIR}`, any revision counter, and any history. The aggregate read
- * still carries `issueFlow`; `overviewModel` never reads it and this component
- * has no prop that could render it.
+ * The trend is drawn from `model.issueFlow`, which maps `overview.issueFlow` without
+ * recomputing anything. An unavailable member renders the shared unavailable arm —
+ * never an empty chart — and a store with fewer than two dated buckets is `empty`,
+ * because a one-point line is a dot pretending to be a trend. The numbers the figure
+ * encodes are text beside it: the legend's two open counts, the gap note, and the
+ * dated-history table. The series' cumulative totals are NOT printed — the prototype's
+ * legend does not state them, and its last table row already does.
+ *
+ * Not here, by construction and by test: the version, `{HARNESS_DIR}`, and any
+ * revision counter.
  *
  * Every absence goes through `state.ts` — the model already resolved each member
  * to one of the six arms, and `Absence` here only chooses the copy. A screen that
  * decided an arm itself would be a second authority.
  */
 import { EmptyState, type AbsenceArm } from "../components/EmptyState.tsx";
+import { IssueFlowChart } from "../components/IssueFlowChart.tsx";
 import { Notice } from "../components/Notice.tsx";
 import { Panel, PanelBody, PanelHead } from "../components/Panel.tsx";
 import { ProgressBar } from "../components/ProgressBar.tsx";
 import { Row } from "../components/Row.tsx";
 import { StatusDot } from "../components/StatusDot.tsx";
 import { TruncatedText } from "../components/TruncatedText.tsx";
-import type { OverviewModel, MilestoneRow, OverviewWorkflowRow } from "../view-model/overview.ts";
+import type { IssueFlowSeries, MilestoneRow, OverviewModel, OverviewWorkflowRow } from "../view-model/overview.ts";
 import type { GateStepPosition, Tone } from "../view-model/status.ts";
 import css from "./Overview.module.css";
 
@@ -37,6 +42,20 @@ export type OverviewCopy = {
   workflowsTruncated: (shown: number, total: number) => string;
   /** One workflow row's plan progress. */
   plansProgress: (done: number, total: number) => string;
+  /** The trend card's title and the range its head states. */
+  trendHeading: string;
+  trendRange: (from: string, to: string) => string;
+  /** The figure's accessible name: the two series and the range. */
+  trendChartTitle: (from: string, to: string) => string;
+  trendCaptured: string;
+  trendRetired: string;
+  /** `24 dated open · 26 recorded open` — the two counts, side by side. */
+  trendLegend: (datedOpen: number, recordedOpen: number) => string;
+  /** The one-line reason the two counts differ. */
+  trendGap: (datedOpen: number, undated: number) => string;
+  /** The disclosure that carries the same numbers as a table. */
+  trendTableSummary: string;
+  trendColumns: { date: string; captured: string; retired: string; open: string; origin: string };
   residualsHeading: string;
   residualsTotal: (open: number) => string;
   iterationHeading: string;
@@ -143,6 +162,77 @@ function MilestoneRowView(props: { row: MilestoneRow; copy: OverviewCopy }) {
   );
 }
 
+/**
+ * The trend card: two cumulative lines, the axis labels, the legend with both
+ * totals, the gap note, and the table that carries the same numbers for a reader
+ * who cannot use the figure (`design-v1.html:929-945`).
+ */
+function TrendPanel(props: { series: IssueFlowSeries; copy: OverviewCopy }) {
+  const { series, copy } = props;
+  return (
+    <Panel labelledBy="ms-overview-trend">
+      <PanelHead
+        id="ms-overview-trend"
+        title={copy.trendHeading}
+        meta={copy.trendRange(series.firstDate, series.lastDate)}
+      />
+      <PanelBody>
+        <div className={css.trend} data-ms-flow="">
+          <IssueFlowChart
+            points={series.points}
+            label={copy.trendChartTitle(series.firstDate, series.lastDate)}
+          />
+          <div className={css.axis}>
+            <span>{series.firstDate}</span>
+            {/* Two buckets have no distinct middle: labelling the first one twice would
+                read as a third date. */}
+            {series.middleDate === null ? null : <span>{series.middleDate}</span>}
+            <span>{series.lastDate}</span>
+          </div>
+          <div className={css.legend}>
+            <span className={css.legendItem}>
+              <span className={css.swatch} aria-hidden="true" />
+              {copy.trendCaptured}
+            </span>
+            <span className={css.legendItem}>
+              <span className={`${css.swatch} ${css.swatchDashed}`} aria-hidden="true" />
+              {copy.trendRetired}
+            </span>
+            <span className={css.legendSpacer} />
+            <span className={css.legendMeta}>{copy.trendLegend(series.datedOpen, series.recordedOpen)}</span>
+          </div>
+          <p className={css.note}>{copy.trendGap(series.datedOpen, series.undatedEvents)}</p>
+          <details className={css.disclosure}>
+            <summary className={css.disclosureSummary}>{copy.trendTableSummary}</summary>
+            <table className={css.flowTable}>
+              <thead>
+                <tr>
+                  <th scope="col">{copy.trendColumns.date}</th>
+                  <th scope="col">{copy.trendColumns.captured}</th>
+                  <th scope="col">{copy.trendColumns.retired}</th>
+                  <th scope="col">{copy.trendColumns.open}</th>
+                  <th scope="col">{copy.trendColumns.origin}</th>
+                </tr>
+              </thead>
+              <tbody>
+                {series.points.map((point) => (
+                  <tr key={point.date}>
+                    <td>{point.date}</td>
+                    <td>{point.captured}</td>
+                    <td>{point.retired}</td>
+                    <td>{point.open}</td>
+                    <td>{point.origin}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </details>
+        </div>
+      </PanelBody>
+    </Panel>
+  );
+}
+
 export function Overview(props: OverviewProps) {
   const { model, copy } = props;
   return (
@@ -150,6 +240,10 @@ export function Overview(props: OverviewProps) {
       <h1 className={css.title}>{copy.pageTitle}</h1>
 
       <div className={css.body}>
+        {/* The prototype's wide form is two columns (`design-v1.html:317-318`): work and
+            its trend left, residuals and milestones right, the iteration across both.
+            Below the 900px floor the same sections stack in that reading order. */}
+        <div className={css.column} data-ms-ov-column="">
         {/* 1 — active work. Never dropped, at any height. */}
         <Panel labelledBy="ms-overview-workflows">
           <PanelHead id="ms-overview-workflows" title={copy.workflowsHeading} />
@@ -179,7 +273,29 @@ export function Overview(props: OverviewProps) {
           </PanelBody>
         </Panel>
 
-        {/* 2 — residuals, then 3 — delivery. Never dropped. */}
+        {/* 2 — the dated history of that work. */}
+        {model.issueFlow.kind === "populated" ? (
+          <TrendPanel series={model.issueFlow.value} copy={copy} />
+        ) : (
+          <Panel labelledBy="ms-overview-trend">
+            <PanelHead id="ms-overview-trend" title={copy.trendHeading} />
+            <PanelBody>
+              <div data-ms-flow="">
+              <Absence
+                arm={model.issueFlow.kind as AbsenceArm}
+                copy={copy}
+                heading={copy.trendHeading}
+                reason={model.issueFlow.kind === "unavailable" ? model.issueFlow.reason : undefined}
+                detail={model.issueFlow.kind === "not-applicable" ? model.issueFlow.reason : undefined}
+              />
+              </div>
+            </PanelBody>
+          </Panel>
+        )}
+        </div>
+
+        <div className={css.column} data-ms-ov-column="">
+        {/* 3 — residuals, then 4 — milestones. Never dropped. */}
         <Panel labelledBy="ms-overview-residuals">
           <PanelHead
             id="ms-overview-residuals"
@@ -255,6 +371,9 @@ export function Overview(props: OverviewProps) {
           </PanelBody>
         </Panel>
 
+        </div>
+
+        <div className={css.spanning} data-ms-ov-spanning="">
         <Panel labelledBy="ms-overview-iteration">
           <PanelHead id="ms-overview-iteration" title={copy.iterationHeading} />
           <PanelBody>
@@ -299,9 +418,10 @@ export function Overview(props: OverviewProps) {
           )}
           </PanelBody>
         </Panel>
+        </div>
       </div>
 
-      {/* 5 — the one page-validity fact. Never dropped. */}
+      {/* 6 — the one page-validity fact. Never dropped. */}
       <p className={css.projection} data-ms-projection={model.projection.kind}>
         {copy.projection[model.projection.kind]}
       </p>

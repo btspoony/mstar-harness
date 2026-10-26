@@ -88,6 +88,25 @@ export const en = {
     workflowsHeading: "Active workflows",
     workflowsTruncated: (shown: number, total: number) => `Showing ${shown} of ${total}`,
     plansProgress: (done: number, total: number) => `${done}/${total} plans`,
+    trendHeading: "Issue flow trend",
+    trendRange: (from: string, to: string) => `${from} → ${to}`,
+    trendChartTitle: (from: string, to: string) => `Cumulative captured and retired issues, ${from} to ${to}`,
+    trendCaptured: "Captured (cumulative)",
+    trendRetired: "Retired (cumulative)",
+    trendLegend: (datedOpen: number, recordedOpen: number) =>
+      `${datedOpen} dated open · ${recordedOpen} recorded open`,
+    trendGap: (datedOpen: number, undated: number) =>
+      undated === 0
+        ? `Dated history closes at ${datedOpen} open.`
+        : `Dated history closes at ${datedOpen} open; ${undated} events carry no recorded date.`,
+    trendTableSummary: "Dated history (table alternative)",
+    trendColumns: {
+      date: "Date",
+      captured: "Captured (cumulative)",
+      retired: "Retired (cumulative)",
+      open: "Open difference",
+      origin: "Origin",
+    },
     residualsHeading: "Open residuals",
     residualsTotal: (open: number) => `${open} open · all projects`,
     iterationHeading: "Delivery",

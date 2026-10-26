@@ -148,6 +148,25 @@ const PROBE = `(() => {
   const band = {
     contentWidth: contentWidth === null ? null : Math.round(contentWidth * 10) / 10,
     cardWidths: [...document.querySelectorAll('[data-ms-panel]')].map((card) => Math.round(card.getBoundingClientRect().width * 10) / 10),
+    // The overview's grid: one cell per column plus the spanning iteration cell.
+    ovColumns: [...document.querySelectorAll('[data-ms-ov-column]')].map((col) => Math.round(col.getBoundingClientRect().width * 10) / 10),
+    ovColumnsX: [...document.querySelectorAll('[data-ms-ov-column]')].map((col) => Math.round(col.getBoundingClientRect().left * 10) / 10),
+    ovSpanningW: (() => {
+      const span = document.querySelector('[data-ms-ov-spanning]');
+      return span === null ? null : Math.round(span.getBoundingClientRect().width * 10) / 10;
+    })(),
+    // The trend: present, how it is drawn, and which arm rendered.
+    // Scoped to the trend card: the page's other members render their own arms, and an
+    // unscoped lookup would report whichever absence came first in the DOM.
+    flowArm: (() => {
+      const flow = document.querySelector('[data-ms-flow]');
+      if (flow === null) return null;
+      const absent = flow.querySelector('[data-ms-absence]');
+      return absent === null ? 'populated' : absent.getAttribute('data-ms-absence');
+    })(),
+    flowPaths: document.querySelectorAll('[data-ms-flow-chart] path').length,
+    flowRows: document.querySelectorAll('[data-ms-flow] details tbody tr').length,
+    flowAxis: [...document.querySelectorAll('[data-ms-flow] [class*="axis"] span')].map((el) => (el.textContent ?? '').trim()),
     narrowestCell: cellWidths.length === 0 ? null : Math.min(...cellWidths),
 
     visibleCells: rowCells.length,
@@ -398,6 +417,11 @@ describe.skipIf(!browserAvailable)("the render gate", () => {
         },
       },
     );
+    // Two dated buckets, so the trend has a line: the issues were captured in the same
+    // minute, which is one UTC day. Back-date the first one by fixture, not by waiting.
+    const dated = await openStore(context, "write");
+    dated.db.exec("update issues set registered_at = '2026-10-10T08:00:00.000Z' where id = (select min(id) from issues)");
+    dated.close();
     // Drain the WAL side files so the server's read-only open cannot refuse.
     (await openStore(context, "read")).close();
 
@@ -427,8 +451,14 @@ describe.skipIf(!browserAvailable)("the render gate", () => {
    * the card is what makes the capture deterministic — and a screen that stopped
    * rendering a card fails here rather than in a human's eyes.
    */
-  async function visit(route: string, screen: string, card = true, capture = route): Promise<Record<string, unknown>> {
-    await browser(["open", `${server.url}#${route}`]);
+  async function visit(
+    route: string,
+    screen: string,
+    card = true,
+    capture = route,
+    baseUrl = server.url,
+  ): Promise<Record<string, unknown>> {
+    await browser(["open", `${baseUrl}#${route}`]);
     await browser(["wait", `[data-ms-screen="${screen}"]`]);
     // The detail screens are hairline sections (`design-v1.html:1377`), not cards,
     // so only a list screen is waited on for one.
@@ -478,8 +508,8 @@ describe.skipIf(!browserAvailable)("the render gate", () => {
   test("overview is a column of cards", async () => {
     const screen = await visit("overview", "overview");
     sharedAnchors(screen);
-    // Four panels: active work, residuals, the iteration, the milestones.
-    expect(screen.cards).toBe(4);
+    // Five panels: active work, the flow trend, residuals, the milestones, the iteration.
+    expect(screen.cards).toBe(5);
   }, 60_000);
 
   for (const route of ["workflows", "iterations", "projects"] as const) {
@@ -791,19 +821,117 @@ describe.skipIf(!browserAvailable)("the render gate", () => {
     ]);
   }, 60_000);
 
-  test("the overview is one run of full-width sections at both pane widths", async () => {
-    // The prototype's sidebar Overview is a single column of 694px panels
-    // (`design-v1.html` sidebar focus view); a second column at a wide width only
-    // squeezes prose that has nowhere to grow.
-    for (const width of [720, 1900]) {
+  test("the overview is the prototype's two columns at 1.85 : 1, and one column at 720", async () => {
+    // `design-v1.html:317-318`: `grid-template-columns: minmax(0, 1.85fr) minmax(0, 1fr)`.
+    // The ratio is the design decision; measuring it is the only way to see a fold.
+    const RATIO = 1.85;
+    for (const width of [1900, 1280]) {
       await browser(["set", "viewport", String(width), "900"]);
       const measured = await visit("overview", "overview", true, `overview-${width}`);
-      const band = measured.band as Record<string, number | boolean | null>;
-      const cards = band.cardWidths as number[];
-      expect(cards.length).toBeGreaterThan(1);
-      for (const card of cards) expect(card).toBeCloseTo(band.contentWidth as number, 0);
+      const band = measured.band as Record<string, number | number[] | null>;
+      const columns = band.ovColumns as number[];
+      expect(columns.length).toBe(2);
+      const [left, right] = columns as [number, number];
+      expect(left / right).toBeCloseTo(RATIO, 1);
+      // Side by side, not stacked: different left edges on the same row band, and the
+      // pair together spans the content width.
+      const [leftX, rightX] = band.ovColumnsX as [number, number];
+      expect(rightX).toBeGreaterThan(leftX);
+      // A gap sits between them, so the pair is narrower than the content width.
+      const contentWidth = band.contentWidth as number;
+      expect(left + right).toBeLessThan(contentWidth);
+      expect(left + right).toBeGreaterThan(contentWidth * 0.95);
+      // The iteration is a full-width row beneath both.
+      expect(band.ovSpanningW as number).toBeCloseTo(band.contentWidth as number, 0);
     }
-  }, 90_000);
+    // The sidebar's narrow form: one column, nothing beside it.
+    await browser(["set", "viewport", "720", "900"]);
+    const narrow = await visit("overview", "overview", true, "overview-720");
+    const narrowBand = narrow.band as Record<string, number | number[] | null>;
+    const narrowColumns = narrowBand.ovColumns as number[];
+    expect(narrowColumns.length).toBe(2);
+    // Two cells, one stacked under the other: same left edge, full width each.
+    const [aX, bX] = narrowBand.ovColumnsX as [number, number];
+    expect(bX).toBe(aX);
+    for (const column of narrowColumns) expect(column).toBeCloseTo(narrowBand.contentWidth as number, 0);
+  }, 120_000);
+
+  test("the trend is drawn from the store, not faked", async () => {
+    await browser(["set", "viewport", "1900", "900"]);
+    const measured = await visit("overview", "overview", true, "overview-trend");
+    const band = measured.band as Record<string, number | string | string[] | null>;
+    expect(band.flowArm).toBe("populated");
+    // Two step lines, one per series.
+    expect(band.flowPaths).toBe(2);
+    // The table alternative carries one row per dated bucket, so the series has a length
+    // a reader can count without the figure.
+    expect(band.flowRows as number).toBeGreaterThanOrEqual(2);
+    // The axis labels the prototype draws: first, middle, last — and DISTINCT. The
+    // format check alone passed on `first, first, last`, which is what a two-bucket
+    // store produced before the middle label learned to step aside.
+    const axis = band.flowAxis as string[];
+    expect(axis.length).toBeGreaterThanOrEqual(2);
+    expect(new Set(axis).size).toBe(axis.length);
+    for (const label of axis) expect(label).toMatch(/^\d{4}-\d{2}-\d{2}$/);
+  }, 60_000);
+
+  test("an unavailable flow member renders the unavailable arm, never an empty chart", async () => {
+    // The store's own failure path, not a flag: `readIssueFlow`'s closure read joins
+    // `issue_transitions`, so a store without that table answers `unavailable`. The
+    // point of the anchor is that the trend degrades through the shared arm — a fake
+    // zero-line would look like a healthy trend that reports nothing.
+    const dir = mkdtempSync(join(tmpdir(), "mstar-render-gate-flow-"));
+    mkdirSync(join(dir, ".mstar"), { recursive: true });
+    const context = { harnessDir: join(dir, ".mstar") };
+    (await initializeStore(context)).close();
+    await captureIssue(
+      context,
+      {
+        projectId: "proj-a",
+        title: "A flow member that cannot be read",
+        severity: "high",
+        kind: "bug",
+        impact: "The trend has no buckets to draw",
+        acceptance: "The unavailable arm is drawn instead",
+        sourceIdentity: "render-gate-flow",
+        rootCauseKey: "render-gate-flow",
+        acceptanceKey: "render-gate-flow",
+        occurrenceKey: "render-gate-flow",
+        sourceKind: "test",
+        location: "packages/cli/test/render-gate.test.ts",
+        observedBehavior: "an empty chart was drawn",
+        evidence: ["isolated fixture"],
+        discoveredAt: RECORDED_AT,
+      },
+      { actor: "project-manager", operationId: "render-gate-flow-capture" },
+    );
+    const handle = await openStore(context, "write");
+    // `readIssueFlow`'s closure read filters `issue_transitions.to_disposition`; without
+    // the column that statement fails, which is the store's own failure path — not a
+    // synthetic flag, and not a dropped table (dropping one trips foreign keys).
+    handle.db.exec("alter table issue_transitions drop column to_disposition");
+    handle.close();
+    // Two dated buckets, so the trend has a line: the issues were captured in the same
+    // minute, which is one UTC day. Back-date the first one by fixture, not by waiting.
+    const dated = await openStore(context, "write");
+    dated.db.exec("update issues set registered_at = '2026-10-10T08:00:00.000Z' where id = (select min(id) from issues)");
+    dated.close();
+    // Drain the WAL side files so the server's read-only open cannot refuse.
+    (await openStore(context, "read")).close();
+
+    const broken = await startDashboard({ harnessDir: context.harnessDir, port: 0 });
+    try {
+      await browser(["set", "viewport", "1900", "900"]);
+      const measured = await visit("overview", "overview", true, "overview-flow-unavailable", broken.url);
+      const band = measured.band as Record<string, number | string | null>;
+      expect(band.flowArm).toBe("unavailable");
+      expect(band.flowPaths).toBe(0);
+      expect(band.flowRows).toBe(0);
+    } finally {
+      broken.close();
+      rmSync(dir, { recursive: true, force: true });
+    }
+  }, 120_000);
 
   test("the pane head is inset from the pane's edges", async () => {
     // The prototype's head band is `padding: 0 12px` around the nav (`design-v1.html:487`),

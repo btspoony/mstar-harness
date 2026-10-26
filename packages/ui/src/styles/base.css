@@ -42,7 +42,7 @@
   text-rendering: optimizeLegibility;
 }
 
-.ms-container h1, .ms-container h2, .ms-container h3, .ms-container .ms-container h4 {
+.ms-container h1, .ms-container h2, .ms-container h3, .ms-container h4 {
   margin: 0;
   font-weight: var(--ms-fw-semibold);
 }

@@ -298,7 +298,7 @@ rules that use them. The token contract test proves the two lists agree.
 
 | Constant | Value | What changes below it |
 | --- | --- | --- |
-| `reflow-2col` | **900px** | Two-column detail compositions fold to one column; the overview is already one vertical run at every width, and the wide-only list columns (the milestone) appear above it |
+| `reflow-2col` | **900px** | Two-column detail compositions fold to one column; the overview's `1.85fr : 1fr` grid folds into the sidebar's single run, and the wide-only list columns (the milestone) appear above it |
 | `reflow-table` | **620px** | Table columns collapse into a two-line row: primary cell on line 1, secondary facts as inline meta on line 2. Filters wrap to full-width fields |
 | `reflow-stack` | **480px** | Chrome stacks, navigation wraps, panel heads stack |
 | `table-floor` | **300px** | Below this a table scrolls inside its own labelled container, never the page |
@@ -404,12 +404,23 @@ a squeezed head set a two-glyph title as one glyph per line (measured: a 30.4px,
   the floor, 360px at 400px, 580px at 620px), the smallest title box is still a readable
   measure; the gate asserts a floor of 120px on it.
 
-- **Prose keeps a measure.** Overview is **one vertical run of full-width sections at every
-  width**, in the prototype's sidebar order — active workflow, residuals, milestones, the latest
-  iteration — each card 694px inside the prototype's 720px container. Two columns were the
-  defect: at 1900px the second column's card squeezed prose that had nowhere to grow, and the
-  prototype never puts two sections side by side in the pane it approves. The card is the
-  measure; no further cap is applied.
+- **The Overview has two forms, and the wide one is two columns.** Above 900px of container it
+  is the prototype's grid, `minmax(0, 1.85fr) minmax(0, 1fr)` (`design-v1.html:317-318`, measured
+  898/486 at a 1400px content width): active workflow then the issue-flow trend on the left,
+  residuals then milestones on the right, the latest iteration across both. Below the floor it is
+  the sidebar's single run in the same reading order, where each card is full width (694px in the
+  prototype's 720px shell; 680px in the product's, after its own 20px gutters).
+  Reading the sidebar presentation alone is how this became one column: the prototype folds
+  nothing, and its narrow form is a different *presentation*, not a breakpoint of the same one.
+  The ratio is a gate anchor at 1900 and 1280, and the fold is anchored at 720.
+
+- **The trend is the read's, and it degrades through the shared arms.** The issue-flow card draws
+  two cumulative step lines from `overview.issueFlow` — captured solid, retired dashed, so
+  greyscale keeps the distinction — with first/middle/last date labels, the legend's two open
+  counts, the dated-history gap note, and the same buckets as a `Dated history` table inside a
+  disclosure. Nothing is recomputed in the view layer. Fewer than two dated buckets is the empty
+  arm; a failed read is the unavailable arm with the store's reason. An empty chart is never
+  drawn for either.
 - **The residual tally is a compact two-column grid, not a list.** The five severities flow
   two per row — critical/high, medium/low, nit — severity on the left with its tone dot and a
   fixed 88px label measure, count right-aligned (`margin-inline-start: auto`), one hairline per

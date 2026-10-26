@@ -40,6 +40,7 @@ describe("P1: a capped overview member discloses its truncation", () => {
       residuals: { state: "read", data: { open: 0, bySeverity: { critical: 0, high: 0, medium: 0, low: 0, nit: 0 } } },
       milestones: { state: "read", data: { projectId: "p", milestones: [], issues: [], unassignedIssues: 0 } },
       latestIteration: { state: "read", data: null },
+      issueFlow: { state: "read", data: { buckets: [], unknownCaptureDates: 0, unknownClosureDates: 0, currentOpen: 0, incompleteHistory: false } },
     } as unknown as OverviewDTO;
     const model = overviewModel(data, { projection });
     if (model.workflows.kind !== "populated") throw new Error("expected populated, got " + JSON.stringify(model.workflows).slice(0, 200));

@@ -75,6 +75,24 @@ export const zh: Copy = {
     workflowsHeading: "进行中的工作流",
     workflowsTruncated: (shown: number, total: number) => `显示 ${shown} / ${total}`,
     plansProgress: (done, total) => `${done}/${total} 个计划`,
+    trendHeading: "问题走势",
+    trendRange: (from, to) => `${from} → ${to}`,
+    trendChartTitle: (from, to) => `捕获与退役累计走势，${from} 至 ${to}`,
+    trendCaptured: "捕获（累计）",
+    trendRetired: "退役（累计）",
+    trendLegend: (datedOpen, recordedOpen) => `${datedOpen} 有日期未关闭 · ${recordedOpen} 记录未关闭`,
+    trendGap: (datedOpen, undated) =>
+      undated === 0
+        ? `有日期历史收在 ${datedOpen} 项未关闭。`
+        : `有日期历史收在 ${datedOpen} 项未关闭；${undated} 个事件没有记录日期。`,
+    trendTableSummary: "有日期历史（表格替代）",
+    trendColumns: {
+      date: "日期",
+      captured: "捕获（累计）",
+      retired: "退役（累计）",
+      open: "未解决差额",
+      origin: "来源",
+    },
     residualsHeading: "未关闭的遗留项",
     residualsTotal: (open) => `${open} 项未关闭 · 全部项目`,
     iterationHeading: "交付",
