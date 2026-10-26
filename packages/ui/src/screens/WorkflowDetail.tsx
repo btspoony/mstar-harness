@@ -154,6 +154,8 @@ export function WorkflowDetail(props: WorkflowDetailProps) {
             <Notice reason={props.model.value.executionUnavailableReason} lead={copy.executionUnavailableLead} tone="warning" />
           )}
 
+          <div className="detail-grid">
+          <div className="detail-col">
           <FieldGroup title={copy.executionHeading}>
             <Field label={copy.fields.id} mono>
               {props.model.value.workflow.id}
@@ -177,6 +179,8 @@ export function WorkflowDetail(props: WorkflowDetailProps) {
               {props.model.value.updatedAt}
             </Field>
           </FieldGroup>
+          </div>
+          <div className="detail-col">
 
           {/* The four anchors, in delivery order, as one chain and as fields. */}
           <FieldGroup title={copy.fields.branchBase}>
@@ -235,6 +239,8 @@ export function WorkflowDetail(props: WorkflowDetailProps) {
               </>
             )}
           </FieldGroup>
+          </div>
+          </div>
 
           <section className="panel" aria-labelledby="ms-workflow-plans">
             <div className="panel-head">
