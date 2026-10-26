@@ -194,7 +194,14 @@ export function WorkflowDetail(props: WorkflowDetailProps) {
           )}
 
           <div className="detail-top">
-          <FieldGroup title={copy.executionHeading}>
+          <section className="panel" aria-labelledby="ms-workflow-execution">
+            <div className="panel-head">
+              <h2 className="panel-title" id="ms-workflow-execution">
+                {copy.executionHeading}
+              </h2>
+            </div>
+            <div className="panel-body">
+              <dl className="fields">
             <Field label={copy.fields.id} mono>
               {props.model.value.workflow.id}
             </Field>
@@ -216,7 +223,9 @@ export function WorkflowDetail(props: WorkflowDetailProps) {
             <Field label={copy.fields.updatedAt} mono>
               {props.model.value.updatedAt}
             </Field>
-          </FieldGroup>
+              </dl>
+            </div>
+          </section>
 
           {/* The four anchors, in delivery order, as one chain and as fields. */}
           <FieldGroup title={copy.fields.branchBase}>
@@ -257,7 +266,14 @@ export function WorkflowDetail(props: WorkflowDetailProps) {
             ))}
           </div>
 
-          <FieldGroup title={copy.catalogHeading}>
+          <section className="panel" aria-labelledby="ms-workflow-catalog">
+            <div className="panel-head">
+              <h2 className="panel-title" id="ms-workflow-catalog">
+                {copy.catalogHeading}
+              </h2>
+            </div>
+            <div className="panel-body">
+              <dl className="fields">
             {props.model.value.catalog === null ? (
               <Field label={copy.fields.title}>{copy.fields.noCatalog}</Field>
             ) : (
@@ -274,9 +290,26 @@ export function WorkflowDetail(props: WorkflowDetailProps) {
                 </Field>
               </>
             )}
-          </FieldGroup>
+              </dl>
+            </div>
+          </section>
           </div>
 
+
+          <section className="panel" aria-labelledby="ms-workflow-plans">
+            <div className="panel-head">
+              <h2 className="panel-title" id="ms-workflow-plans">
+                {copy.planTableHeading}
+              </h2>
+            </div>
+            <DataTable
+              variant="detail"
+              caption={copy.planTableHeading}
+              columns={planColumns(copy)}
+              rows={props.model.value.plans}
+              rowKey={(plan) => plan.planId}
+            />
+          </section>
           {/* The prototype's Leases card: one row per lease the projection holds. */}
           <section className="panel" aria-labelledby="ms-workflow-leases">
             <div className="panel-head">
@@ -324,21 +357,6 @@ export function WorkflowDetail(props: WorkflowDetailProps) {
                 </table>
               )}
             </div>
-          </section>
-
-          <section className="panel" aria-labelledby="ms-workflow-plans">
-            <div className="panel-head">
-              <h2 className="panel-title" id="ms-workflow-plans">
-                {copy.planTableHeading}
-              </h2>
-            </div>
-            <DataTable
-              variant="detail"
-              caption={copy.planTableHeading}
-              columns={planColumns(copy)}
-              rows={props.model.value.plans}
-              rowKey={(plan) => plan.planId}
-            />
           </section>
         </>
       ) : props.model.kind === "loading" ? null : props.model.kind === "absent" ? (
