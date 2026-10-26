@@ -1156,9 +1156,14 @@ type a caller sees, and three attempts to hand-write that shape produced three d
 did.** Rendering a fixture for `Overview` means building a real envelope through
 `overviewFromEnvelope`, not hand-writing the model.
 
-**What that leaves unverified**: the overview's gate track has still never rendered with
-data. Its code path is `model.latestIteration.kind === "populated"` with a non-null value and
-non-empty `steps`, and every iteration in this store resolves to a null latest iteration.
+**The path is now verified, and it found a defect.** Building the DTO the way
+`overview-data.test.ts` does — `{state: "read", data}` per member, not the `Resolved` shape —
+rendered the gate track for the first time, and showed it printing `step 1 of 5 … step 5 of 5`
+where the prototype names each step: `Start · Execute · Close · PR delivery · Merge ready`.
+
+`copy.gateStepLabels` existed in both dictionaries and was read by nothing. The track now
+renders the number and the name, and the browser reports
+`["Start","Execute","Close","PR delivery","Merge ready"]`.
 
 ## Verification coverage, stated
 

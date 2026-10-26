@@ -81,6 +81,9 @@ export function OverviewDestination({ state, locale }: DestinationProps): React.
   const copy = copyFor(locale)
   const screenCopy = {
     ...copy.overview,
+    // The gate step names live in the iteration detail's block; the overview's track prints
+    // the same five words.
+    gateStepLabels: copy.iterationDetail.gateStepLabels,
     workflowsEmpty: copy.overview.workflowsHeading,
     absence: {
       'not-applicable': copy.state['not-applicable'],
