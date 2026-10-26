@@ -91,8 +91,8 @@ export function IssueDetail(props: IssueDetailProps) {
 
       {record.kind === "populated" ? (
         <>
-          <header className={"screen-head"}>
-            <h1>
+          <header className="detail-head">
+            <h1 className="detail-title">
               <TruncatedText text={record.value.title} />
             </h1>
             <p className={"detail-meta"}>

@@ -137,8 +137,8 @@ export function WorkflowDetail(props: WorkflowDetailProps) {
 
       {props.model.kind === "populated" ? (
         <>
-          <header className={"screen-head"}>
-            <h1>
+          <header className="detail-head">
+            <h1 className="detail-title">
               <TruncatedText text={props.model.value.workflow.id} />
             </h1>
           </header>

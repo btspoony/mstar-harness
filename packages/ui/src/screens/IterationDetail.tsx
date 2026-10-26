@@ -126,8 +126,8 @@ function IterationDetailBody(props: {
 
   return (
     <>
-          <header className={"screen-head"}>
-            <h1>
+          <header className="detail-head">
+            <h1 className="detail-title">
               <TruncatedText text={value.iterationId} />
             </h1>
           </header>

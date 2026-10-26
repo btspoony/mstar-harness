@@ -257,8 +257,8 @@ export function ProjectDetail(props: ProjectDetailProps) {
         </span>
       </nav>
 
-      <header className={"screen-head"}>
-        <h1>
+      <header className="detail-head">
+        <h1 className="detail-title">
           <TruncatedText text={identity.title} />
         </h1>
         <p className={"muted"}>
