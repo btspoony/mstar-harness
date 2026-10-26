@@ -33,7 +33,6 @@ import {
   type IssueRow,
 } from "../view-model/issues.ts";
 import type { Tone } from "../view-model/status.ts";
-import css from "./Issues.module.css";
 
 /** The filter panel's accessible name; the head carries the id. */
 const FILTERS_HEAD_ID = "ms-issues-filters";
@@ -126,21 +125,21 @@ export function Issues(props: IssuesProps) {
   // follows the project it belongs to; it is wide-only, so the 720px pane renders the
   // prototype's seven columns in the prototype's order.
   const columns: DataTableColumn<IssueRow>[] = [
-    { key: "id", header: copy.columns.id, width: 80, render: (row) => <span className={css.mono}>{row.id}</span> },
+    { key: "id", header: copy.columns.id, width: 86, render: (row) => <span className={"mono t-12"}>{row.id}</span> },
     { key: "title", header: copy.columns.title, render: (row) => <TruncatedText text={row.title} /> },
-    { key: "project", header: copy.columns.project, width: 112, secondary: true, render: (row) => <span className={css.mono}>{row.projectId}</span> },
-    { key: "kind", header: copy.columns.kind, width: 92, secondary: true, render: (row) => <span className={css.mono}>{row.kind}</span> },
+    { key: "project", header: copy.columns.project, width: 128, secondary: true, render: (row) => <span className={"mono t-12"}>{row.projectId}</span> },
+    { key: "kind", header: copy.columns.kind, width: 112, secondary: true, render: (row) => <span className={"mono t-12"}>{row.kind}</span> },
     {
       key: "severity",
       header: copy.columns.severity,
-      width: 84,
+      width: 100,
       secondary: true,
       render: (row) => <StatusDot label={row.severity} tone={row.severityTone} emphasis={row.severityEmphasised} mono />,
     },
     {
       key: "disposition",
       header: copy.columns.disposition,
-      width: 76,
+      width: 104,
       secondary: true,
       render: (row) => <StatusDot label={row.disposition} tone={row.dispositionTone} mono />,
     },
@@ -150,15 +149,15 @@ export function Issues(props: IssuesProps) {
       width: 80,
       secondary: true,
       wide: true,
-      render: (row) => (row.milestoneId === null ? null : <span className={css.mono}>{row.milestoneId}</span>),
+      render: (row) => (row.milestoneId === null ? null : <span className={"mono t-12"}>{row.milestoneId}</span>),
     },
     {
       key: "lastActivity",
       header: copy.columns.lastActivity,
-      width: 88,
+      width: 116,
       secondary: true,
       align: "end",
-      render: (row) => <span className={css.mono}>{row.lastActivity}</span>,
+      render: (row) => <span className={"mono t-12"}>{row.lastActivity}</span>,
     },
   ];
 
@@ -173,19 +172,19 @@ export function Issues(props: IssuesProps) {
   const family = listEmptyFamily(filtered);
 
   return (
-    <article className={css.page} data-ms-screen="issues">
-      <div className={css.head}>
-        <h1 className={css.title}>{copy.pageTitle}</h1>
+    <article className={"screen"} data-ms-screen="issues">
+      <div className={"screen-head"}>
+        <h1>{copy.pageTitle}</h1>
         {/* The prototype's screen meta: the count, its scope, and the ordering
             the read applies (`design-v1.html:1094-1101`). The count lives here
             AND in the filter row, so neither is the only place it appears. */}
-        <div className={css.meta} data-ms-summary="">
-          <span className={css.count} data-ms-count={model.total}>
+        <div className={"screen-meta"} data-ms-summary="">
+          <span className={"t-num"} data-ms-count={model.total}>
             {model.total}
           </span>
           <span data-ms-scope="">{copy.scope(filters.disposition, model.projectCount)}</span>
           <span aria-hidden="true">·</span>
-          <span className={css.order} data-ms-order="">
+          <span data-ms-order="">
             {copy.order}
           </span>
         </div>
@@ -277,7 +276,7 @@ export function Issues(props: IssuesProps) {
 
       {/* The family is exported so the dictionary pass can bind the two empties
           to different keys instead of flattening them into one. */}
-      <span className={css.visuallyHidden} data-ms-empty-family={family.family} />
+      <span className={"visually-hidden"} data-ms-empty-family={family.family} />
     </article>
   );
 }

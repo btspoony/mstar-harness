@@ -26,7 +26,6 @@
 import { Fragment } from "react";
 import type { CSSProperties, ReactNode } from "react";
 
-import css from "./DataTable.module.css";
 
 export type DataTableColumn<T> = {
   /** Stable key, used for the column hook and the React key. */
@@ -124,13 +123,21 @@ export function DataTable<T>(props: DataTableProps<T>) {
   return (
     /* The scroller: the table keeps its floor and the card body scrolls, so no
        column becomes unreachable when the pane is narrower than the floor. */
-    <div className={css.scroller} data-ms-table-scroller="">
+    <div className="table-wrap" data-ms-table-scroller="">
     <table
-      className={css.table}
+      className="table"
       aria-label={props.caption}
       data-ms-table={detail ? "detail" : "list"}
       style={floor === 0 ? undefined : ({ "--ms-table-floor": `${floor}px` } as CSSProperties)}
     >
+      <colgroup>
+        {props.columns.map((column) => (
+          <col
+            key={column.key}
+            style={column.width === undefined ? undefined : { width: typeof column.width === "number" ? `${column.width}px` : column.width }}
+          />
+        ))}
+      </colgroup>
       <thead>
         <tr>
           {props.columns.map((column) => (
@@ -140,7 +147,6 @@ export function DataTable<T>(props: DataTableProps<T>) {
               data-ms-col={column.wide === true ? "wide" : column.secondary === true ? "secondary" : "primary"}
               data-ms-col-key={column.key}
               data-ms-align={column.align ?? "start"}
-              style={column.width === undefined ? undefined : { inlineSize: typeof column.width === "number" ? `${column.width}px` : column.width }}
             >
               {column.header}
             </th>
@@ -150,7 +156,7 @@ export function DataTable<T>(props: DataTableProps<T>) {
       <tbody>
         {props.rows.length === 0 && props.emptyBody !== undefined ? (
           <tr>
-            <td className={css.emptyCell} colSpan={props.columns.length}>
+            <td className="muted" colSpan={props.columns.length}>
               {props.emptyBody}
             </td>
           </tr>
@@ -162,7 +168,7 @@ export function DataTable<T>(props: DataTableProps<T>) {
               <tr
                 data-ms-row-main=""
                 data-ms-row-key={key}
-                className={interactive ? css.rowInteractive : css.row}
+                className={interactive ? "row interactive" : "row"}
                 tabIndex={interactive ? 0 : undefined}
                 onClick={interactive ? () => props.onRowActivate?.(row) : undefined}
                 onKeyDown={
@@ -175,43 +181,21 @@ export function DataTable<T>(props: DataTableProps<T>) {
                     : undefined
                 }
               >
-                {props.columns.map((column) => (
+                {props.columns.map((column, index) => (
                   <td
                     key={column.key}
                     data-ms-col={column.wide === true ? "wide" : column.secondary === true ? "secondary" : "primary"}
                     data-ms-align={column.align ?? "start"}
                   >
                     {column.render(row)}
+                    {index === 0 && !detail && props.meta !== undefined ? (
+                      <span className="row-meta" data-ms-row-meta="">
+                        {props.meta(row)}
+                      </span>
+                    ) : null}
                   </td>
                 ))}
               </tr>
-              {/* The collapsed row's second line is a row of its own, spanning every
-                  column. In the first cell it only ever had that cell's width — 68px
-                  of an 80px id column, which truncated `critical · open` to
-                  `critical · op…`. A spanning row gives the facts the row's width and
-                  leaves the column policy (and the header) untouched. */}
-              {!detail && props.meta !== undefined ? (
-                <tr
-                  className={interactive ? `${css.metaRow} ${css.metaRowInteractive}` : css.metaRow}
-                  data-ms-row-meta-row=""
-                  data-ms-row-meta-activate={interactive ? "" : undefined}
-                  // The facts ARE the record: at the width the product lives in, this row
-                  // is roughly half of the record's painted area, so a tap on it navigates
-                  // like a tap on the row above. Keyboard stays one stop per record — the
-                  // main row keeps the tab stop and the Enter/Space handler.
-                  onClick={interactive ? () => props.onRowActivate?.(row) : undefined}
-                >
-                  {/* The collapse hides exactly the `secondary` columns, so the
-                      spanning row is the primary count: a colspan over all columns
-                      would force `table-layout: fixed` to re-open the hidden ones
-                      and squeeze the title to 29px. */}
-                  <td className={css.metaCell} colSpan={primaryCount}>
-                    <span className={css.rowMeta} data-ms-row-meta="">
-                      {props.meta(row)}
-                    </span>
-                  </td>
-                </tr>
-              ) : null}
               </Fragment>
             );
           })
