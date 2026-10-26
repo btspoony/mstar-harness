@@ -223,6 +223,7 @@ export const zh: Copy = {
       results: (shown: number, total: number) => shown === total ? `${shown} 条结果` : `${shown} / ${total} 条结果`,
     },
     tableCaption: "工作流",
+    registryNote: (terminal: number) => `${terminal} 个终态工作流不在活跃注册表中`,
     columns: {
       id: "工作流",
       title: "目录标题",

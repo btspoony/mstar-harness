@@ -147,6 +147,10 @@ export type WorkflowListModel = {
   filtered: number;
   /** A status or type seen on a row the filters have hidden: the way back to it. */
   hiddenByFilters: number;
+  /** Terminal workflows the active registry does not carry — the prototype's footer. */
+  terminalUnregistered: number;
+  /** Terminal workflows adopted into the registry. */
+  terminalAdopted: number;
 };
 
 export function workflowListModel(read: {
@@ -182,6 +186,8 @@ export function workflowListModel(read: {
     options,
     filtered: kept.length,
     hiddenByFilters: mapped.length - kept.length,
+    terminalUnregistered: read.data.terminalUnregistered?.length ?? 0,
+    terminalAdopted: read.data.terminalAdoptions?.length ?? 0,
   };
 }
 

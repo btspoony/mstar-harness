@@ -16,7 +16,7 @@
  * would claim a truncated page is the whole store.
  */
 import { DataTable, type DataTableColumn } from "../components/DataTable.tsx";
-import { Panel, PanelBody, PanelHead } from "../components/Panel.tsx";
+import { Panel, PanelBody, PanelFoot, PanelHead } from "../components/Panel.tsx";
 import { EmptyState, type AbsenceArm } from "../components/EmptyState.tsx";
 import { FilterBar, type AppliedFilter } from "../components/FilterBar.tsx";
 import { Notice } from "../components/Notice.tsx";
@@ -187,6 +187,16 @@ export function Workflows(props: WorkflowsProps) {
                 onRowActivate={props.onOpen === undefined ? undefined : (row) => props.onOpen?.(row.id)}
               />
             </PanelBody>
+            {model.terminalUnregistered === 0 ? null : (
+              // The prototype's footer states what the registry does not carry, so a
+              // reader knows the four rows are not the whole store.
+              <PanelFoot>
+                <span className="muted t-11" data-ms-terminal-unregistered={model.terminalUnregistered}>
+                  {copy.registryNote?.(model.terminalUnregistered) ??
+                    `${model.terminalUnregistered} terminal workflows not in the active registry`}
+                </span>
+              </PanelFoot>
+            )}
           </Panel>
           {model.truncated ? (
             <p data-ms-truncated={model.total}>

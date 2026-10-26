@@ -243,6 +243,7 @@ export const en = {
       results: (shown: number, total: number) => shown === total ? `${shown} results` : `${shown} of ${total} results`,
     },
     tableCaption: "Workflows",
+    registryNote: (terminal: number) => `${terminal} terminal workflow${terminal === 1 ? "" : "s"} not in the active registry`,
     columns: {
       id: "Workflow",
       title: "Catalog title",
