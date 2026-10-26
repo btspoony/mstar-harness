@@ -624,6 +624,36 @@ This is worth recording because keeping the track was a *choice* — the screen 
 and the track was already built. The acceptance criterion here is the prototype, and an
 addition nobody asked for is a divergence however defensible it looks.
 
+## The prototype's numbers can live in its JavaScript
+
+The flow chart's height looked like a rendering bug for four rounds. Measured: 339px in
+the overview's card, 540px across the issues screen — the same component, the same class,
+two answers. Those two numbers are both *correct* for `height: auto` on a
+`viewBox="0 0 100 40"` SVG: the height is 40% of the width, and the two containers differ.
+
+The prototype has one height at every width, and the reason is not in its CSS:
+
+```js
+// design-v1.html:3229
+var compact = el.dataset.flowChart === "compact";
+var height = compact ? 88 : 132;
+```
+
+Two fixed heights, written by the script that draws the chart. Reading the rendered DOM
+could not find them, because the DOM only ever shows the result — `height="88"` on an svg
+that had already been sized.
+
+So the rule now lives where the number does:
+
+```css
+.ms-container .chart-svg { height: 88px; }
+.ms-container .chart-svg.is-full { height: 132px; }
+```
+
+**What to take from it**: when a prototype measurement cannot be reproduced, the missing
+fact is often in the prototype's own JavaScript rather than its stylesheet — its data,
+its heights, its series lengths. Grep the `<script>` before concluding the CSS is wrong.
+
 ## Verification coverage, stated
 
 Two hosts mount these screens: the dashboard (`packages/cli/web`) and the dsh pane
