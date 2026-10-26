@@ -283,7 +283,7 @@ export function ProjectDetail(props: ProjectDetailProps) {
     <article className={"screen"} data-ms-screen="project-detail">
       <nav className={"breadcrumb"} aria-label={copy.breadcrumb.label}>
         {props.onBack === undefined ? null : (
-          <button type="button" className={"breadcrumb"} onClick={props.onBack}>
+          <button type="button" className={"link"} onClick={props.onBack}>
             {copy.breadcrumb.trail}
           </button>
         )}

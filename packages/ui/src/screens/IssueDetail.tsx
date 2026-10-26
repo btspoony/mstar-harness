@@ -83,7 +83,7 @@ export function IssueDetail(props: IssueDetailProps) {
     <article className={"screen"} data-ms-screen="issue-detail">
       <nav className={"breadcrumb"} aria-label={copy.breadcrumb.label}>
         {props.onBack === undefined ? null : (
-          <button type="button" className={"breadcrumb"} onClick={props.onBack}>
+          <button type="button" className={"link"} onClick={props.onBack}>
             {copy.breadcrumb.current}
           </button>
         )}

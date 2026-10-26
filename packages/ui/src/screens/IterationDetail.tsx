@@ -325,7 +325,7 @@ export function IterationDetail(props: IterationDetailProps) {
     <article className={"screen"} data-ms-screen="iteration-detail">
       <nav className={"breadcrumb"} aria-label={copy.breadcrumb.label}>
         {props.onBack === undefined ? null : (
-          <button type="button" className={"breadcrumb"} onClick={props.onBack}>
+          <button type="button" className={"link"} onClick={props.onBack}>
             {copy.breadcrumb.current}
           </button>
         )}
