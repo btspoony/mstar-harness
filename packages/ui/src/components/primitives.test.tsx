@@ -217,7 +217,11 @@ describe("DataTable — the collapse rule", () => {
     expect(html).toContain("engine · critical");
   });
 
-  test("the second line sits in the FIRST cell, so a collapsed row is still one record", () => {
+  test("the second line spans the primary columns in a row of its own", () => {
+    // It used to sit inside the FIRST cell, where it only ever had that cell's width:
+    // 68px of an 80px id column, which rendered `critical · op…` in the 400px pane.
+    // Its own spanning row gives the facts the row's width and leaves the header and
+    // the column policy untouched.
     const html = render(
       <DataTable
         caption="Issues"
@@ -227,8 +231,15 @@ describe("DataTable — the collapse rule", () => {
         meta={(row) => row.project}
       />,
     );
+    const metaRowStart = html.indexOf('data-ms-row-meta-row=""');
+    expect(metaRowStart).toBeGreaterThan(-1);
+    // The span is the PRIMARY count (2 here), never the column count: a span over the
+    // hidden columns re-opens them under `table-layout: fixed` and squeezes the title.
+    const cellStart = html.indexOf("<td", metaRowStart);
+    const cellTag = html.slice(cellStart, html.indexOf(">", cellStart)).toLowerCase();
+    expect(cellTag).toContain('colspan="2"');
     const firstCell = html.slice(html.indexOf("<td"), html.indexOf("</td>"));
-    expect(firstCell).toContain("data-ms-row-meta");
+    expect(firstCell).not.toContain("data-ms-row-meta");
   });
 
   test("the collapse is a container query at the declared floor, not a viewport query", () => {
@@ -243,6 +254,10 @@ describe("DataTable — the collapse rule", () => {
     expect(css).toContain('td[data-ms-col="secondary"]');
     expect(css).toContain("display: none");
     expect(css).toMatch(/\.rowMeta\s*\{\s*display: block;/);
+    // The second line is a row that spans the primaries, and its facts wrap rather
+    // than truncate: a fact is never cut in half.
+    expect(css).toMatch(/\.metaRow\s*\{\s*display: table-row;/);
+    expect(css).toContain("overflow-wrap: anywhere");
   });
 
   test("an empty body renders the caller's absence node inside the table", () => {

@@ -105,7 +105,9 @@ const PROBE = `(() => {
   const seg = document.querySelectorAll('.app-seg');
   const icon = document.querySelectorAll('.app-icon-btn');
   const box = (el) => (el === null ? null : el.getBoundingClientRect().width);
-  const cells = [...document.querySelectorAll('tbody tr td:last-child')]
+  // The collapsed second line is one spanning cell, so it is also its row's last
+  // child: it restates facts and is not a date column.
+  const cells = [...document.querySelectorAll('tbody tr[data-ms-row-main] td:last-child')]
     .map((cell) => cell.textContent.trim()).filter((text) => text !== '');
   const timestamps = [...document.querySelectorAll('dd')]
     .map((cell) => cell.textContent.trim()).filter((text) => /\\d{4}-\\d{2}-\\d{2}/.test(text));
@@ -131,15 +133,16 @@ const PROBE = `(() => {
   const screenPad = screenEl === null ? null : getComputedStyle(screenEl);
   const contentWidth = screenBox === null || screenPad === null ? null : screenBox.width
     - parseFloat(screenPad.paddingLeft) - parseFloat(screenPad.paddingRight);
-  const visibleCells = [...document.querySelectorAll('table tbody tr')]
+  const rendered = (el) => el.getBoundingClientRect().width > 0;
+  const visibleCells = [...document.querySelectorAll('table tbody tr[data-ms-row-main]')]
     .flatMap((row) => [...row.querySelectorAll('td')])
-    .filter((cell) => getComputedStyle(cell).display !== 'none');
+    .filter(rendered);
   const cellWidths = visibleCells.map((cell) => Math.round(cell.getBoundingClientRect().width * 10) / 10);
   const firstRowVisible = (() => {
-    const row = document.querySelector('table tbody tr');
+    const row = document.querySelector('table tbody tr[data-ms-row-main]');
     if (row === null) return [];
     return [...row.querySelectorAll('td')]
-      .filter((cell) => getComputedStyle(cell).display !== 'none')
+      .filter((cell) => cell.getBoundingClientRect().width > 0)
       .map((cell) => Math.round(cell.getBoundingClientRect().width * 10) / 10);
   })();
   const header = document.querySelector('header.app-header');
@@ -154,6 +157,31 @@ const PROBE = `(() => {
     visibleCells: cellWidths.length,
     summaryOverflows: summaryEl === null ? null : summaryEl.scrollWidth > summaryEl.clientWidth + 1,
     titleOverflows: h1 === null ? null : h1.scrollWidth > h1.clientWidth + 1,
+    // A title is a unit: CJK breaks between every glyph, so a squeezed head stacked a
+    // two-glyph title on two lines. One line box is the whole assertion.
+    titleLines: h1 === null ? null : (() => {
+      const range = document.createRange();
+      range.selectNodeContents(h1);
+      return [...range.getClientRects()].length;
+    })(),
+    titleWidth: h1 === null ? null : Math.round(h1.getBoundingClientRect().width * 10) / 10,
+    // The collapsed second line: every fact whole, none cut by the cell's width.
+    metaTruncated: (() => {
+      const metas = [...document.querySelectorAll('[data-ms-row-meta]')]
+        .filter((el) => el.getBoundingClientRect().width > 0);
+      if (metas.length === 0) return null;
+      return metas.some((el) => el.scrollWidth > el.clientWidth + 1);
+    })(),
+    metaWidth: (() => {
+      const metas = [...document.querySelectorAll('[data-ms-row-meta]')]
+        .filter((el) => el.getBoundingClientRect().width > 0);
+      if (metas.length === 0) return null;
+      return Math.round(Math.min(...metas.map((el) => el.getBoundingClientRect().width)) * 10) / 10;
+    })(),
+    metaRowSpan: (() => {
+      const cell = document.querySelector('[data-ms-row-meta-row] td');
+      return cell === null ? null : cell.getAttribute('colspan');
+    })(),
     // Prose inside a card, measured on its own line boxes: the reported failure was
     // a sentence wrapping one character per line, and characters-per-line is the
     // only measurement that sees it.
@@ -441,8 +469,11 @@ describe.skipIf(!browserAvailable)("the render gate", () => {
           expect(band.identityWidth as number).toBeGreaterThanOrEqual(72);
         }
 
-        // The screen's own title is not squeezed away.
+        // The screen's own title is not squeezed away, and never stacks one glyph per
+        // line: one line box, and its own measure (a 2-glyph title measured 31.7px).
         expect(band.titleOverflows).toBe(false);
+        expect(band.titleLines).toBe(1);
+        expect(band.titleWidth as number).toBeGreaterThan(20);
 
         // Prose in a card stays prose (Task 3): the folded card is a measure, not a
         // column one character wide.
@@ -455,6 +486,12 @@ describe.skipIf(!browserAvailable)("the render gate", () => {
         // the scrollbar itself is the anchor that tells the two states apart.
         if (band.visibleCells !== 0) {
           expect(band.tableScrollsSideways).toBe(false);
+          // The collapsed second line keeps its facts whole — severity and disposition
+          // included — so it gets the row's width, not a cell's.
+          if (width === 420) {
+            expect(band.metaTruncated).toBe(false);
+            expect(band.metaWidth as number).toBeGreaterThan(200);
+          }
           if (width === 420) expect(band.hiddenColumns as number).toBeGreaterThan(0);
           if (width === 760) expect(band.hiddenColumns).toBe(0);
         }

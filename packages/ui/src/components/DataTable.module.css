@@ -75,7 +75,10 @@
   outline-offset: -2px;
 }
 
-/* The second line exists only in the collapsed form. */
+/* The second line exists only in the collapsed form, and it lives in its own
+   spanning row (see the markup comment): in the first cell it only ever had that
+   cell's width. */
+.metaRow,
 .rowMeta {
   display: none;
 }
@@ -127,6 +130,21 @@
     text-overflow: ellipsis;
   }
 
+  /* The main row keeps no closing rule of its own: the second line closes the
+     record, so the hairline belongs under the facts, not between them. */
+  .table tbody tr[data-ms-row-main] td {
+    border-block-end: 0;
+  }
+
+  .metaRow {
+    display: table-row;
+  }
+
+  .metaCell {
+    padding: 0 0 var(--ms-space-2);
+    border-block-end: var(--ms-hairline);
+  }
+
   .rowMeta {
     display: block;
     margin-block-start: 1px;
@@ -134,9 +152,9 @@
     font-size: var(--ms-fs-11);
     line-height: var(--ms-lh-11);
     color: var(--ms-text-muted);
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
+    /* Facts stay whole: the row is the measure, so a fact may move to a second
+       line but is never cut in half. */
+    overflow-wrap: anywhere;
   }
 }
 

@@ -23,6 +23,7 @@
  * reported. Declared widths plus one flexible column is the same answer in both
  * bands and needs no per-screen positional rule.
  */
+import { Fragment } from "react";
 import type { CSSProperties, ReactNode } from "react";
 
 import css from "./DataTable.module.css";
@@ -91,6 +92,10 @@ const FLEXIBLE_FLOOR = 120;
 export function DataTable<T>(props: DataTableProps<T>) {
   const interactive = props.onRowActivate !== undefined;
   const detail = props.variant === "detail";
+  // The collapse hides exactly the `secondary` columns, so the second line's span is
+  // the primary count — not the column count, which would re-open the hidden columns
+  // in `table-layout: fixed` and squeeze the title.
+  const primaryCount = props.columns.filter((column) => column.secondary !== true).length;
   // The floor is the declared widths plus the flexible column's measure. It is a
   // custom property, not `min-inline-size`, because the collapsed band below the
   // floor has to switch it off and an inline style cannot be overridden.
@@ -132,8 +137,9 @@ export function DataTable<T>(props: DataTableProps<T>) {
           props.rows.map((row) => {
             const key = props.rowKey(row);
             return (
+              <Fragment key={key}>
               <tr
-                key={key}
+                data-ms-row-main=""
                 data-ms-row-key={key}
                 className={interactive ? css.rowInteractive : css.row}
                 tabIndex={interactive ? 0 : undefined}
@@ -148,21 +154,35 @@ export function DataTable<T>(props: DataTableProps<T>) {
                     : undefined
                 }
               >
-                {props.columns.map((column, index) => (
+                {props.columns.map((column) => (
                   <td
                     key={column.key}
                     data-ms-col={column.secondary === true ? "secondary" : "primary"}
                     data-ms-align={column.align ?? "start"}
                   >
                     {column.render(row)}
-                    {!detail && index === 0 && props.meta !== undefined ? (
-                      <span className={css.rowMeta} data-ms-row-meta="">
-                        {props.meta(row)}
-                      </span>
-                    ) : null}
                   </td>
                 ))}
               </tr>
+              {/* The collapsed row's second line is a row of its own, spanning every
+                  column. In the first cell it only ever had that cell's width — 68px
+                  of an 80px id column, which truncated `critical · open` to
+                  `critical · op…`. A spanning row gives the facts the row's width and
+                  leaves the column policy (and the header) untouched. */}
+              {!detail && props.meta !== undefined ? (
+                <tr className={css.metaRow} data-ms-row-meta-row="">
+                  {/* The collapse hides exactly the `secondary` columns, so the
+                      spanning row is the primary count: a colspan over all columns
+                      would force `table-layout: fixed` to re-open the hidden ones
+                      and squeeze the title to 29px. */}
+                  <td className={css.metaCell} colSpan={primaryCount}>
+                    <span className={css.rowMeta} data-ms-row-meta="">
+                      {props.meta(row)}
+                    </span>
+                  </td>
+                </tr>
+              ) : null}
+              </Fragment>
             );
           })
         )}

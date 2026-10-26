@@ -104,6 +104,20 @@
   font-weight: var(--ms-fw-semibold);
   letter-spacing: -0.01em;
   color: var(--ms-text-primary);
+  /* A title is a unit, not a stream of glyphs. CJK breaks between every glyph, so a
+     flex head that runs out of room stacked `问题` as `问` / `题` (measured: a 30.4px,
+     2-line box). `nowrap` makes the title's own minimum its whole string, so the
+     head squeezes everything else first; a title too long for the row truncates with
+     an ellipsis instead of stacking one character per line. */
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  /* `overflow: hidden` makes a flex item's automatic minimum 0, so the box would
+     collapse again the moment a head runs out of room. The title therefore states its
+     own floor — its whole string — and caps at the frame: a long title truncates, a
+     short one never stacks. */
+  min-inline-size: max-content;
+  max-inline-size: 100%;
 }
 
 .ms-container p {

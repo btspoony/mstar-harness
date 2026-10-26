@@ -335,6 +335,18 @@ Two rules make this hold, and both are the defects that shipped:
 A hidden column costs no width: the `<colgroup>` is gone, so a `display: none` cell no longer
 leaves a column's share behind it.
 
+The collapsed record's second line is a **row of its own spanning the primary columns**, not a
+second line inside the first cell. Inside that cell it only ever had the cell's width — 68px of
+an 80px id column, which rendered `critical · op…` — while a spanning row gives the facts the
+row's width and leaves both the header and the column policy untouched (the span is the primary
+count: a span over the hidden columns re-opens them under `table-layout: fixed`). Its facts wrap
+rather than truncate, so a fact is never cut in half.
+
+A **screen title never stacks**. CJK breaks between every glyph, so a squeezed head set a
+two-glyph title as one glyph per line (measured: a 30.4px, 2-line box at a 400px container).
+The shared title rule states its own floor — its whole string — and caps at the frame, so a
+head squeezes everything else first and a title too long for the row truncates with an ellipsis.
+
 - **Prose keeps a measure.** Overview's two-column grid folds to one column below 900px, so a
   card at 420–619px is 360–579px wide and its sentences wrap at 12+ characters per line
   rather than one. No further cap is applied: the card is the measure.
