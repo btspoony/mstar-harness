@@ -140,6 +140,14 @@ export const zh: Copy = {
       search: "搜索",
       clear: "清除筛选",
     },
+    filtersHeading: "筛选",
+    // 摘要行陈述当前选中的处置状态：`未解决` 只对默认视图成立。
+    scope: (disposition, projects) => {
+      const word = disposition === "" ? "全部" : disposition;
+      if (projects === null) return word;
+      return projects === 1 ? `${word}，跨 1 个项目` : `${word}，跨 ${projects} 个项目`;
+    },
+    order: "严重度降序 · 最近活动降序 · ID 升序",
     resultSummary: (total) => `${total} 条结果`,
     range: (from, to, total) => `第 ${from}–${to} 条，共 ${total} 条`,
   },

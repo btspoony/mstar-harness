@@ -3,16 +3,45 @@
   flex-direction: column;
   gap: var(--ms-space-2);
   min-inline-size: 0;
-  padding: var(--ms-space-4) 0 var(--ms-space-6);
+}
+
+/* The prototype's `.screen-head` + `.screen-meta` (`design-v1.html:207-212`):
+   the title and its facts share one baseline row, and the facts ellipsize
+   rather than wrap. */
+.head {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  margin-block-end: 10px;
+  min-inline-size: 0;
+}
+
+.meta {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  min-inline-size: 0;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  color: var(--ms-text-muted);
+  font-size: var(--ms-fs-12);
+}
+
+.count {
+  font-family: var(--ms-font-mono);
+  font-variant-numeric: tabular-nums;
+  font-weight: var(--ms-fw-semibold);
+  color: var(--ms-text-secondary);
+}
+
+.order {
+  font-family: var(--ms-font-mono);
+  font-size: var(--ms-fs-11);
 }
 
 .title {
   margin: 0;
-  font-size: var(--ms-fs-20);
-  line-height: var(--ms-lh-20);
-  font-weight: var(--ms-fw-semibold);
-  letter-spacing: -0.01em;
-  color: var(--ms-text-primary);
 }
 
 .mono {

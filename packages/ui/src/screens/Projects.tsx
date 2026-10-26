@@ -11,6 +11,7 @@
  * list — a list has no feature body to degrade.
  */
 import { DataTable, type DataTableColumn } from "../components/DataTable.tsx";
+import { Panel, PanelBody } from "../components/Panel.tsx";
 import { EmptyState, type AbsenceArm } from "../components/EmptyState.tsx";
 import { StatusDot } from "../components/StatusDot.tsx";
 import { TruncatedText } from "../components/TruncatedText.tsx";
@@ -80,39 +81,49 @@ export function Projects(props: ProjectsProps) {
       <h1 className={css.title}>{copy.pageTitle}</h1>
 
       {model.rows.kind === "populated" ? (
-        <DataTable
-          caption={copy.tableCaption}
-          columns={columns}
-          rows={model.rows.value}
-          rowKey={(row) => row.projectId}
-          meta={meta}
-          onRowActivate={props.onOpen === undefined ? undefined : (row) => props.onOpen?.(row.projectId)}
-        />
-      ) : model.rows.kind === "unavailable" ? (
-        <EmptyState
-          arm="unavailable"
-          labelWord={copy.unavailable.labelWord}
-          heading={copy.unavailable.heading}
-          body={copy.unavailable.body}
-          reason={model.rows.reason}
-        />
-      ) : model.rows.kind === "not-applicable" ? (
-        <EmptyState
-          arm="not-applicable"
-          labelWord={copy.absent.labelWord}
-          heading={copy.absent.heading}
-          body={copy.absent.body}
-          detail={model.rows.reason}
-        />
+        <Panel>
+          <PanelBody tight={true}>
+            <DataTable
+              caption={copy.tableCaption}
+              columns={columns}
+              rows={model.rows.value}
+              rowKey={(row) => row.projectId}
+              meta={meta}
+              onRowActivate={props.onOpen === undefined ? undefined : (row) => props.onOpen?.(row.projectId)}
+            />
+          </PanelBody>
+        </Panel>
       ) : (
-        <EmptyState
-          arm={model.rows.kind as AbsenceArm}
-          labelWord={copy.empty.labelWord}
-          heading={copy.empty.heading}
-          body={copy.empty.body}
-          hint={model.rows.kind === "empty" ? copy.empty.hint : undefined}
-          pointer={model.rows.kind === "absent" ? copy.absent.pointer : undefined}
-        />
+        <Panel>
+          <PanelBody>
+            {model.rows.kind === "unavailable" ? (
+              <EmptyState
+                arm="unavailable"
+                labelWord={copy.unavailable.labelWord}
+                heading={copy.unavailable.heading}
+                body={copy.unavailable.body}
+                reason={model.rows.reason}
+              />
+            ) : model.rows.kind === "not-applicable" ? (
+              <EmptyState
+                arm="not-applicable"
+                labelWord={copy.absent.labelWord}
+                heading={copy.absent.heading}
+                body={copy.absent.body}
+                detail={model.rows.reason}
+              />
+            ) : (
+              <EmptyState
+                arm={model.rows.kind as AbsenceArm}
+                labelWord={copy.empty.labelWord}
+                heading={copy.empty.heading}
+                body={copy.empty.body}
+                hint={model.rows.kind === "empty" ? copy.empty.hint : undefined}
+                pointer={model.rows.kind === "absent" ? copy.absent.pointer : undefined}
+              />
+            )}
+          </PanelBody>
+        </Panel>
       )}
     </article>
   );

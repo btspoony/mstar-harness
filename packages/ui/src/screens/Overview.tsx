@@ -21,6 +21,7 @@ import { EmptyState, type AbsenceArm } from "../components/EmptyState.tsx";
 import { Field } from "../components/Field.tsx";
 import { Notice } from "../components/Notice.tsx";
 import { FieldGroup } from "../components/FieldGroup.tsx";
+import { Panel, PanelBody, PanelHead } from "../components/Panel.tsx";
 import { ProgressBar } from "../components/ProgressBar.tsx";
 import { Row } from "../components/Row.tsx";
 import { StatusDot } from "../components/StatusDot.tsx";
@@ -152,10 +153,9 @@ export function Overview(props: OverviewProps) {
 
       <div className={css.body}>
         {/* 1 — active work. Never dropped, at any height. */}
-        <section className={css.panel} aria-labelledby="ms-overview-workflows">
-          <h2 className={css.heading} id="ms-overview-workflows">
-            {copy.workflowsHeading}
-          </h2>
+        <Panel labelledBy="ms-overview-workflows">
+          <PanelHead id="ms-overview-workflows" title={copy.workflowsHeading} />
+          <PanelBody>
           {model.workflows.kind === "populated" ? (
             <div className={css.rows} data-ms-workflows="">
               {model.workflows.value.map((row) => (
@@ -178,13 +178,13 @@ export function Overview(props: OverviewProps) {
               detail={model.workflows.kind === "not-applicable" ? model.workflows.reason : undefined}
             />
           )}
-        </section>
+          </PanelBody>
+        </Panel>
 
         {/* 2 — residuals, then 3 — delivery. Never dropped. */}
-        <section className={css.panel} aria-labelledby="ms-overview-residuals">
-          <h2 className={css.heading} id="ms-overview-residuals">
-            {copy.residualsHeading}
-          </h2>
+        <Panel labelledBy="ms-overview-residuals">
+          <PanelHead id="ms-overview-residuals" title={copy.residualsHeading} />
+          <PanelBody>
           {/* The row label is the literal enum: contract values stay English and
               untranslated so they can be copied into the CLI. `data-ms-severity` is
               the hook for anything presentational. */}
@@ -211,12 +211,12 @@ export function Overview(props: OverviewProps) {
               detail={model.residuals.kind === "not-applicable" ? model.residuals.reason : undefined}
             />
           )}
-        </section>
+          </PanelBody>
+        </Panel>
 
-        <section className={css.panel} aria-labelledby="ms-overview-iteration">
-          <h2 className={css.heading} id="ms-overview-iteration">
-            {copy.iterationHeading}
-          </h2>
+        <Panel labelledBy="ms-overview-iteration">
+          <PanelHead id="ms-overview-iteration" title={copy.iterationHeading} />
+          <PanelBody>
           {model.latestIteration.kind === "populated" ? (
             model.latestIteration.value === null ? (
               <Absence arm="empty" copy={copy} heading={copy.iterationNoIteration} />
@@ -256,14 +256,14 @@ export function Overview(props: OverviewProps) {
               detail={model.latestIteration.kind === "not-applicable" ? model.latestIteration.reason : undefined}
             />
           )}
-        </section>
+          </PanelBody>
+        </Panel>
       </div>
 
       {/* 4 — milestones. Below the fold, and the first thing to shorten. */}
-      <section className={css.panel} aria-labelledby="ms-overview-milestones">
-        <h2 className={css.heading} id="ms-overview-milestones">
-          {copy.milestonesHeading}
-        </h2>
+      <Panel labelledBy="ms-overview-milestones">
+        <PanelHead id="ms-overview-milestones" title={copy.milestonesHeading} />
+        <PanelBody>
         {model.milestones.kind === "populated" ? (
           props.compact === true ? (
             <p className={css.summary} data-ms-milestone-summary="">
@@ -288,7 +288,8 @@ export function Overview(props: OverviewProps) {
             detail={model.milestones.kind === "not-applicable" ? model.milestones.reason : undefined}
           />
         )}
-      </section>
+        </PanelBody>
+      </Panel>
 
       {/* 5 — the one page-validity fact. Never dropped. */}
       <p className={css.projection} data-ms-projection={model.projection.kind}>

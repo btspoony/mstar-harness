@@ -1,6 +1,8 @@
 /* The dot is 6px and never the only signal: the label beside it carries the
    meaning, and `data-ms-tone` gives every surface a hook for the forced-colors
-   shape rules in base.css. */
+   shape rules in base.css — which is why BOTH the wrapper and the dot carry it.
+   Every rule that PAINTS therefore has to be qualified with `.dot`: a bare
+   `[data-ms-tone="…"]` matches the wrapper too and fills the whole label. */
 .status {
   display: inline-flex;
   align-items: center;
@@ -19,23 +21,23 @@
   background: var(--ms-neutral);
 }
 
-[data-ms-tone="danger"] {
+.dot[data-ms-tone="danger"] {
   background: var(--ms-danger);
 }
 
-[data-ms-tone="warning"] {
+.dot[data-ms-tone="warning"] {
   background: var(--ms-warning);
 }
 
-[data-ms-tone="success"] {
+.dot[data-ms-tone="success"] {
   background: var(--ms-success);
 }
 
-[data-ms-tone="neutral"] {
+.dot[data-ms-tone="neutral"] {
   background: var(--ms-neutral);
 }
 
-[data-ms-tone="purple"] {
+.dot[data-ms-tone="purple"] {
   background: var(--ms-purple);
 }
 

@@ -16,6 +16,7 @@
  * would claim a truncated page is the whole store.
  */
 import { DataTable, type DataTableColumn } from "../components/DataTable.tsx";
+import { Panel, PanelBody } from "../components/Panel.tsx";
 import { EmptyState, type AbsenceArm } from "../components/EmptyState.tsx";
 import { Notice } from "../components/Notice.tsx";
 import { StatusDot } from "../components/StatusDot.tsx";
@@ -109,14 +110,18 @@ export function Workflows(props: WorkflowsProps) {
 
       {model.rows.kind === "populated" ? (
         <>
-          <DataTable
-            caption={copy.tableCaption}
-            columns={columns}
-            rows={model.rows.value}
-            rowKey={(row) => row.id}
-            meta={meta}
-            onRowActivate={props.onOpen === undefined ? undefined : (row) => props.onOpen?.(row.id)}
-          />
+          <Panel>
+            <PanelBody tight={true}>
+              <DataTable
+                caption={copy.tableCaption}
+                columns={columns}
+                rows={model.rows.value}
+                rowKey={(row) => row.id}
+                meta={meta}
+                onRowActivate={props.onOpen === undefined ? undefined : (row) => props.onOpen?.(row.id)}
+              />
+            </PanelBody>
+          </Panel>
           {model.truncated ? (
             <p className={css.truncated} data-ms-truncated={model.total}>
               {copy.truncated(model.shown, model.total)}
@@ -131,31 +136,37 @@ export function Workflows(props: WorkflowsProps) {
               : [<Notice key={row.id} reason={row.executionUnavailableReason} lead={row.id} />],
           )}
         </>
-      ) : model.rows.kind === "unavailable" ? (
-        <EmptyState
-          arm="unavailable"
-          labelWord={copy.unavailable.labelWord}
-          heading={copy.unavailable.heading}
-          body={copy.unavailable.body}
-          reason={model.rows.reason}
-        />
-      ) : model.rows.kind === "not-applicable" ? (
-        <EmptyState
-          arm="not-applicable"
-          labelWord={copy.absent.labelWord}
-          heading={copy.absent.heading}
-          body={copy.absent.body}
-          detail={model.rows.reason}
-        />
       ) : (
-        <EmptyState
-          arm={model.rows.kind as AbsenceArm}
-          labelWord={copy.empty.labelWord}
-          heading={copy.empty.heading}
-          body={copy.empty.body}
-          hint={model.rows.kind === "empty" ? copy.empty.hint : undefined}
-          pointer={model.rows.kind === "absent" ? copy.absent.pointer : undefined}
-        />
+        <Panel>
+          <PanelBody>
+            {model.rows.kind === "unavailable" ? (
+              <EmptyState
+                arm="unavailable"
+                labelWord={copy.unavailable.labelWord}
+                heading={copy.unavailable.heading}
+                body={copy.unavailable.body}
+                reason={model.rows.reason}
+              />
+            ) : model.rows.kind === "not-applicable" ? (
+              <EmptyState
+                arm="not-applicable"
+                labelWord={copy.absent.labelWord}
+                heading={copy.absent.heading}
+                body={copy.absent.body}
+                detail={model.rows.reason}
+              />
+            ) : (
+              <EmptyState
+                arm={model.rows.kind as AbsenceArm}
+                labelWord={copy.empty.labelWord}
+                heading={copy.empty.heading}
+                body={copy.empty.body}
+                hint={model.rows.kind === "empty" ? copy.empty.hint : undefined}
+                pointer={model.rows.kind === "absent" ? copy.absent.pointer : undefined}
+              />
+            )}
+          </PanelBody>
+        </Panel>
       )}
     </article>
   );

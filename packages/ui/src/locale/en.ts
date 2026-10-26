@@ -155,6 +155,17 @@ export const en = {
       search: "Search",
       clear: "Clear filters",
     },
+    filtersHeading: "Filters",
+    // The prototype's screen meta (`design-v1.html:1098`), stating the disposition
+    // the filters actually select — `open` is only true for the default view. A
+    // partial page cannot count the projects it never saw, so the span drops
+    // rather than guessing.
+    scope: (disposition: string, projects: number | null) => {
+      const word = disposition === "" ? "all" : disposition;
+      if (projects === null) return word;
+      return projects === 1 ? `${word} across 1 project` : `${word} across ${projects} projects`;
+    },
+    order: "severity desc, last activity desc, id asc",
     resultSummary: (total: number) => `${total} results`,
     range: (from: number, to: number, total: number) => `${from}–${to} of ${total}`,
   },

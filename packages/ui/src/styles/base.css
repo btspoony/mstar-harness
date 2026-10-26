@@ -66,6 +66,46 @@
   font-weight: var(--ms-fw-medium);
 }
 
+/**
+ * The screen shell.
+ *
+ * The prototype wraps every screen in `.dash-main` (max-width 1440px, centred, with a
+ * 14/20/16 gutter) and heads each with an h1 at 16px/24, weight 600. Both were
+ * missing here: the screens sat flush against the surface edge with no maximum width,
+ * and their titles were a size larger than the reference — which is most of why the
+ * product read as "functional layout" rather than as the confirmed design.
+ *
+ * One authority for every screen, keyed on the `data-ms-screen` attribute each screen
+ * root already carries: a new screen inherits the frame instead of re-declaring it,
+ * and a screen that departs from it should have to say why.
+ */
+.ms-container [data-ms-screen] {
+  inline-size: 100%;
+  max-inline-size: 1440px;
+  margin-inline: auto;
+  padding: 14px 20px 16px;
+  min-inline-size: 0;
+}
+
+/* A screen embedded in another screen — `ProjectDetail`'s Issues and Iterations
+   tabs — must not pay the page gutter twice. The frame belongs to the product
+   surface; a nested screen is content inside one, so it keeps its own layout but
+   gives up the outer inset, the max width and the centring. */
+.ms-container [data-ms-screen] [data-ms-screen] {
+  max-inline-size: none;
+  margin-inline: 0;
+  padding: 0;
+}
+
+.ms-container [data-ms-screen] h1 {
+  margin: 0;
+  font-size: var(--ms-fs-16);
+  line-height: var(--ms-lh-16);
+  font-weight: var(--ms-fw-semibold);
+  letter-spacing: -0.01em;
+  color: var(--ms-text-primary);
+}
+
 .ms-container p {
   margin: 0;
   font-size: var(--ms-fs-13);
@@ -154,24 +194,30 @@
  * high-contrast and a colour-blind reader.
  *
  * The default dot box (size, radius, colour) is `StatusDot`'s; this block only
- * takes over when colour is unavailable, which is why it targets the contract
- * attribute rather than the component class.
+ * takes over when colour is unavailable, which is why it targets a contract
+ * attribute rather than the component class — a CSS-module class is hashed and a
+ * plain sheet cannot name it.
+ *
+ * It targets `[data-ms-dot]`, the DOT's own attribute, and never `[data-ms-tone]`:
+ * the wrapper carries the tone as well, so a bare tone selector would give the whole
+ * label a solid fill, a dot-shaped border and (for `purple`) a 45° rotation — the
+ * shape channel would erase the text channel it exists to support.
  */
 @media (forced-colors: active) {
-  [data-ms-tone] {
+  [data-ms-dot] {
     background: CanvasText;
     border: 1px solid CanvasText;
     border-radius: var(--ms-radius-full);
   }
 
-  [data-ms-tone="danger"] {
+  [data-ms-dot][data-ms-tone="danger"] {
     background: CanvasText;
     border-color: CanvasText;
     border-radius: var(--ms-radius-full);
     transform: none;
   }
 
-  [data-ms-tone="warning"] {
+  [data-ms-dot][data-ms-tone="warning"] {
     background: Canvas;
     border-color: CanvasText;
     border-width: 2px;
@@ -179,21 +225,21 @@
     transform: none;
   }
 
-  [data-ms-tone="success"] {
+  [data-ms-dot][data-ms-tone="success"] {
     background: CanvasText;
     border-color: CanvasText;
     border-radius: 0;
     transform: none;
   }
 
-  [data-ms-tone="neutral"] {
+  [data-ms-dot][data-ms-tone="neutral"] {
     background: Canvas;
     border-color: CanvasText;
     border-radius: 0;
     transform: none;
   }
 
-  [data-ms-tone="purple"] {
+  [data-ms-dot][data-ms-tone="purple"] {
     background: CanvasText;
     border-color: CanvasText;
     border-radius: 0;

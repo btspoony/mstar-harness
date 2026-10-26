@@ -8,6 +8,7 @@ import {
   NOT_KNOWN,
   UNKNOWN_DATE,
   countText,
+  formatShortDate,
   formatDate,
   longText,
   progressText,
@@ -16,9 +17,15 @@ import {
 } from "./format.ts";
 
 describe("dates are shown as stored", () => {
-  test("a stored timestamp is returned verbatim, precision intact", () => {
-    expect(formatDate("2026-10-25T13:58:04.000Z")).toBe("2026-10-25T13:58:04.000Z");
+  test("one timestamp form for every line that shows a timestamp", () => {
+    // `design-v1.html:1444` prints a detail timestamp as `2026-10-23 09:14`: the
+    // stored instant with the prototype's separator and precision, never the raw
+    // ISO lexeme. The cell drops the year and the seconds (`formatShortDate`).
+    expect(formatDate("2026-10-25T13:58:04.000Z")).toBe("2026-10-25 13:58");
+    expect(formatDate("2026-10-25 13:58")).toBe("2026-10-25 13:58");
     expect(formatDate("2026-10-25")).toBe("2026-10-25");
+    // A value that is not a timestamp is not re-shaped into one.
+    expect(formatDate("yesterday")).toBe("yesterday");
   });
 
   test("an absent date says so instead of borrowing the read time", () => {
@@ -94,5 +101,22 @@ describe("the projection state replaces the removed counters", () => {
     // `projectionUnavailable` was deleted: it duplicated the resolver's failure
     // arm and had no production caller. The rule is asserted in state.test.ts.
     expect(projectionState({ ...base, generation: null, freshness: "unavailable" }).kind).toBe("unavailable");
+  });
+});
+
+describe("formatShortDate — the list cell's own form", () => {
+  test("a timestamp loses its year and keeps month, day and time", () => {
+    // `design-v1.html:1215`: the prototype's list cells print `10-25 13:58`.
+    expect(formatShortDate("2026-10-24T09:06:22.000Z")).toBe("10-24 09:06");
+    expect(formatShortDate("2026-10-25 13:58")).toBe("10-25 13:58");
+  });
+
+  test("a date with no time keeps the two-part form", () => {
+    expect(formatShortDate("2026-10-25")).toBe("10-25");
+  });
+
+  test("an absent or non-date value keeps the honest copy, never NaN", () => {
+    expect(formatShortDate(null)).toBe(UNKNOWN_DATE);
+    expect(formatShortDate("yesterday")).toBe("yesterday");
   });
 });

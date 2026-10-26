@@ -3,7 +3,8 @@
  *
  * Pure string work: no DOM, no clock, no locale lookup. The honesty rules that
  * matter survive from the dashboard's `web/format.ts` — a stored timestamp is
- * shown verbatim, and an absent one says so instead of borrowing the read time.
+ * never re-derived from the clock, and an absent one says so instead of borrowing
+ * the read time.
  * The parts D30 removed (migration provenance, evidence JSON, external-link
  * validation) are deliberately **not** carried over: nothing renders them.
  */
@@ -20,13 +21,39 @@ export const NOT_KNOWN = "Not known";
 export const NOT_DECLARED = "Not declared";
 
 /**
- * A stored timestamp, verbatim. Precision is never re-formatted — a date stays a
- * date and a timestamp keeps its time — and an absent value says `UNKNOWN_DATE`
- * rather than the import/read time, because those are different facts.
+ * A stored timestamp in the prototype's own display form (`design-v1.html:1444`):
+ * `2026-10-23 09:14`.
+ *
+ * One formatter for every timestamp, because a timestamp on a detail line is the
+ * same fact as a timestamp in a cell — the cell only drops the year and the
+ * seconds (`formatShortDate`). What is re-formatted is the SEPARATOR and the
+ * precision the prototype draws; the instant, the zone and the digits are the
+ * stored ones. A value that is not a timestamp keeps itself (`Date unknown` when
+ * absent), so nothing here invents or shifts a date.
  */
 export function formatDate(value: string | null | undefined): string {
   const lexeme = typeof value === "string" ? value.trim() : "";
-  return lexeme === "" ? UNKNOWN_DATE : lexeme;
+  if (lexeme === "") return UNKNOWN_DATE;
+  const match = /^(\d{4})-(\d{2})-(\d{2})[T ](\d{2}):(\d{2})/.exec(lexeme);
+  if (match === null) return lexeme;
+  const [, year, month, day, hour, minute] = match;
+  return `${year}-${month}-${day} ${hour}:${minute}`;
+}
+
+/**
+ * The short form a list cell shows (`design-v1.html:1215`): `10-25 13:58`.
+ *
+ * The prototype's table cells print month-day and the time, not the year and not
+ * an ISO string. A date with no time part keeps just the month-day, and a value
+ * that is not a timestamp falls back to `formatDate` so a non-date value still
+ * reads as itself rather than as `NaN`.
+ */
+export function formatShortDate(value: string | null | undefined): string {
+  const full = formatDate(value);
+  const match = /^\d{4}-(\d{2})-(\d{2})(?:[T ](\d{2}):(\d{2}))?/.exec(full);
+  if (match === null) return full;
+  const [, month, day, hour, minute] = match;
+  return hour === undefined ? `${month}-${day}` : `${month}-${day} ${hour}:${minute}`;
 }
 
 /**

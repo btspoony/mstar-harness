@@ -27,6 +27,7 @@ import {
   Notice,
   Focus,
   LocaleProvider,
+  MS_CONTAINER_CLASS,
   Nav,
   copyFor,
   focusModel,
@@ -221,7 +222,12 @@ export function PanelShell(props: {
         <div className={css.nav}>
           <Nav items={navItems(copy)} activeId={props.destination} onSelect={props.onSelect} label={props.navLabel} />
         </div>
-        <div className={css.scroll} data-mstar-scroll>
+        {/* The product surface, and the shared frame's anchor: the screens' gutter,
+            max width and title scale are keyed on `.ms-container` in the shared
+            base layer, which the dashboard supplies and this seat must too — the
+            class goes on the PRODUCT scroller, not on the whole shell, so the host's
+            own nav band keeps its chrome. */}
+        <div className={`${css.scroll} ${MS_CONTAINER_CLASS}`} data-mstar-scroll>
           {props.detail === null || props.detail === undefined ? null : (
             <DetailBody
               view={props.detail.view}

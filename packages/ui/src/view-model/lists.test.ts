@@ -126,7 +126,7 @@ describe("workflows", () => {
     expect(row.phase).toBe("phase-2-execute");
     expect(row.plansDone).toBe(1);
     expect(row.plansTotal).toBe(2);
-    expect(row.startedAt).toBe("2026-10-25T01:00:00.000Z");
+    expect(row.startedAt).toBe("2026-10-25 01:00");
   });
 
   test("NEGATIVE: leases, adoption rows and pin badges are not surfaced", () => {

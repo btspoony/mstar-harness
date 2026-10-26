@@ -38,7 +38,7 @@ describe("the page's landmark layer", () => {
   });
 
   test("the navigation landmark is labelled from the dictionary, not a literal", () => {
-    // Task 5 moved this into `shell.nav.primary`; a literal here would survive every
+    // The landmark label lives in `shell.nav.primary`; a literal here would survive every
     // screening of the Chinese dictionary because nothing paints it.
     expect(mainSource).toContain("copy.shell.nav.primary");
     expect(/label="Primary"/.test(mainSource)).toBe(false);
@@ -96,6 +96,60 @@ describe("truncation is reachable without a mouse", () => {
   });
 });
 
+describe("the header controls are the prototype's, not form widgets", () => {
+  test("no native select is left in the shell", () => {
+    // `design-v1.html:179-196` has a segmented group and an icon button; a native
+    // `<select>` renders as the platform's widget and was the deviation the owner
+    // saw. The filter bar's selects belong to the shared layer and are untouched.
+    expect(mainSource).not.toContain("<select");
+    expect(mainSource).not.toContain("<option");
+  });
+
+  test("both controls are buttons, labelled, and labelled from the dictionary", () => {
+    // A real `<button>` is what makes them keyboard-operable for free.
+    expect(mainSource.match(/className="app-seg"/g)?.length).toBe(1);
+    expect(mainSource.match(/className="app-icon-btn"/g)?.length).toBe(1);
+    expect(mainSource).toContain('role="group"');
+    expect(mainSource).toContain("copy.shell.language.label");
+    expect(mainSource).toContain("copy.shell.theme.label");
+  });
+
+  test("neither control is hidden at a narrow width", () => {
+    // The prototype hides its language group below 860px (`design-v1.html:743`).
+    // That is a viewport rule for a prototype whose header could not wrap; this
+    // shell wraps, so hiding them here would delete a choice instead of shrinking
+    // it. No rule may select either control to `display: none` outside the icon
+    // pair (whose whole job is to show one shape at a time).
+    const hides = shellCss
+      .split("\n")
+      .filter((line) => /app-(seg|icon-btn)[^{]*\{[^}]*display:\s*none/.test(line));
+    expect(hides).toEqual([]);
+  });
+});
+
+describe("the frame's gutter has one owner", () => {
+  test("the main region adds no padding of its own", () => {
+    // The screen shell (base.css) supplies the prototype's 14/20/16 gutter; an offset
+    // here as well would double it, which is how the content ended up with no
+    // consistent left edge at all.
+    expect(/\.app-main \{[^}]*padding: 0;/.test(shellCss)).toBe(true);
+    expect(/padding: 1rem;/.test(shellCss)).toBe(false);
+  });
+
+  test("the header, footer and content share the prototype's 20px gutter", () => {
+    // One left edge for the whole shell: the prototype is `0 20px` (header),
+    // `7px 20px` (footer) and `14px 20px 16px` (main).
+    const ruleOf = (selector: string): string => {
+      const start = shellCss.indexOf(`${selector} {`);
+      expect(start).toBeGreaterThan(-1);
+      return shellCss.slice(start, shellCss.indexOf("}", start));
+    };
+    for (const selector of [".app-header", ".app-footer"]) {
+      expect(ruleOf(selector)).toContain("20px");
+    }
+  });
+});
+
 describe("status survives colour removal", () => {
   test("the shell stylesheet introduces no colour of its own", () => {
     // Every product colour comes from a token, and a tone is never the only channel:
@@ -114,10 +168,14 @@ describe("status survives colour removal", () => {
   });
 
   test("the shell's only stateful marks are text and shape, not hue", () => {
-    // The two controls are native `<select>`s with a visible label, so their value is
-    // always text; nothing in the shell encodes a state as a colour swatch.
-    expect(mainSource).toContain("<select");
-    expect(mainSource).toContain("app-switch-label");
+    // Neither control is a colour swatch: the language group's choice is
+    // `aria-pressed` plus its own text, and the scheme button's is `aria-pressed`
+    // plus a different icon SHAPE (a sun and a moon, both `aria-hidden`). The
+    // accessible name of both comes from the dictionary.
+    expect(mainSource).toContain("aria-pressed");
+    expect(mainSource).toContain("aria-label={props.label}");
+    expect(mainSource).toContain("app-icon-sun");
+    expect(mainSource).toContain("app-icon-moon");
     // The shared sheet owns the `forced-colors` block; this one must not add a second.
     expect(/#?@media[^{]*forced-colors/.test(shellCss)).toBe(false);
   });

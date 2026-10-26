@@ -5,16 +5,10 @@
   flex-direction: column;
   gap: var(--ms-space-4);
   min-inline-size: 0;
-  padding: var(--ms-space-4) 0 var(--ms-space-6);
 }
 
 .title {
   margin: 0;
-  font-size: var(--ms-fs-20);
-  line-height: var(--ms-lh-20);
-  font-weight: var(--ms-fw-semibold);
-  letter-spacing: -0.01em;
-  color: var(--ms-text-primary);
 }
 
 .body {
@@ -22,21 +16,6 @@
   grid-template-columns: minmax(0, 1.35fr) minmax(0, 1fr);
   gap: var(--ms-space-6);
   align-items: start;
-}
-
-.panel {
-  display: flex;
-  flex-direction: column;
-  gap: var(--ms-space-1);
-  min-inline-size: 0;
-}
-
-.heading {
-  margin: 0;
-  font-size: var(--ms-fs-12);
-  line-height: var(--ms-lh-12);
-  font-weight: var(--ms-fw-medium);
-  color: var(--ms-text-secondary);
 }
 
 .rows {

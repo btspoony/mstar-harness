@@ -71,6 +71,12 @@ const issuesCopy: IssuesCopy = {
     clear: "Clear filters",
   },
   anyOption: "Any",
+  filtersHeading: "Filters",
+  scope: (disposition, projects) => {
+    const word = disposition === "" ? "all" : disposition;
+    return projects === null ? word : `${word} across ${projects} projects`;
+  },
+  order: "severity desc, last activity desc, id asc",
   resultSummary: (total) => `${total} results`,
   pager: { previous: "Previous", next: "Next", range: (from, to, total) => `${from}–${to} of ${total}` },
   filteredEmpty: { labelWord: "empty", heading: "No matches", body: "nothing matched", hint: "clear the filters" },
@@ -204,7 +210,10 @@ describe("Issues — the list facts of §8.2", () => {
     for (const expected of ["I-000870", "The dashboard and the panel disagree", "critical", "open", "bug", "engine", "9f2c4a10"]) {
       expect(html).toContain(expected);
     }
-    expect(html).toContain("2026-10-24T10:00:00.000Z");
+    // The cell shows the prototype's short form (`design-v1.html:1215`), never a
+    // truncated ISO string: the column keeps its width and the value fits.
+    expect(html).toContain("10-24 10:00");
+    expect(html).not.toContain("2026-10-24T10:00:00.000Z");
   });
 
   test("the pager states the range and both bounds", () => {
@@ -239,6 +248,64 @@ describe("Issues — the list facts of §8.2", () => {
     expect(html).not.toContain("storeRevision");
     expect(html).not.toContain("1224");
     expect(html).not.toContain("catalogRevision");
+  });
+});
+
+describe("Issues — the prototype's card and its summary line", () => {
+  const html = renderIssues([summary(), summary({ id: "I-000871", projectId: "dsh-integration" })], 2);
+
+  test("two cards: the filters, then the table — never a floating table", () => {
+    // `design-v1.html:215-224`: a card is a head, a body and a foot, and the table
+    // is the body of one (`panel-body.tight`). Here the filters and the table are
+    // two cards, so the table never sits bare on the canvas.
+    expect(html.match(/data-ms-panel=""/g)?.length).toBe(2);
+    expect(html).toContain('data-ms-panel-head=""');
+    expect(html).toContain('data-ms-panel-foot=""');
+    // The filter card's head names it, and that card points at the head.
+    expect(html).toContain('aria-labelledby="ms-issues-filters"');
+    expect(html).toContain('id="ms-issues-filters"');
+  });
+
+  test("the table is inside a card, in a body with no padding of its own", () => {
+    // The anchor that keeps the table a panel body rather than a sibling of the
+    // filter card: the table's nearest card ancestor exists, and the body that
+    // holds it is the tight one.
+    const tableAt = html.indexOf("<table");
+    expect(tableAt).toBeGreaterThan(-1);
+    const before = html.slice(0, tableAt);
+    const lastPanel = before.lastIndexOf('data-ms-panel=""');
+    const lastPanelClose = before.lastIndexOf("</section>");
+    expect(lastPanel).toBeGreaterThan(-1);
+    expect(lastPanelClose).toBeLessThan(lastPanel);
+    expect(before.slice(lastPanel)).toContain('data-ms-panel-body=""');
+  });
+
+  test("the summary line states the count, the scope and the ordering", () => {
+    expect(html).toContain('data-ms-summary=""');
+    expect(html).toContain("2");
+    expect(html).toContain("open across 2 projects");
+    expect(html).toContain("severity desc, last activity desc, id asc");
+  });
+
+  test("the summary names the disposition the filters select, not always `open`", () => {
+    // Default view: the store's open issues.
+    expect(html).toContain("open across 2 projects");
+    // Filtering to a closed disposition must not tell the reader they are looking
+    // at open issues — the same mistake in the opposite direction.
+    const resolved = renderIssues([summary()], 1, query({ disposition: "resolved" }));
+    expect(resolved).toContain("resolved across 1 project");
+    expect(resolved).not.toContain("open across");
+    // "Any" is every disposition, so it says so rather than picking one.
+    const any = renderIssues([summary()], 1, query({ disposition: "" }));
+    expect(any).toContain("all across 1 project");
+    expect(any).not.toContain("open across");
+  });
+
+  test("a partial page drops the project span instead of inventing one", () => {
+    // The page holds one of 120 rows: it cannot count the projects it never saw.
+    const partial = renderIssues([summary()], 120);
+    expect(partial).toContain("open");
+    expect(partial).not.toContain("open across");
   });
 });
 
@@ -287,7 +354,7 @@ describe("IssueDetail — the whole page, and nothing more", () => {
     for (const expected of ["I-000870", "engine", "9f2c4a10", "bug", "critical", "open", "frontend-dev"]) {
       expect(html).toContain(expected);
     }
-    expect(html).toContain("2026-10-01T09:00:00.000Z");
+    expect(html).toContain("2026-10-01 09:00");
   });
 
   test("the occurrence count survives as ONE integer", () => {
@@ -312,7 +379,7 @@ describe("IssueDetail — the whole page, and nothing more", () => {
     );
     expect(closed).toContain('data-ms-closure-note=""');
     expect(closed).toContain("fixed by one tone table");
-    expect(closed).toContain("2026-10-05T00:00:00.000Z");
+    expect(closed).toContain("2026-10-05 00:00");
   });
 
   test("an absent long-text field renders no empty block", () => {

@@ -268,7 +268,7 @@ describe("the detail fact block", () => {
     const model = issueDetailModel(detail());
     expect(model.impact).toBe("Impact text");
     expect(model.acceptance).toBe("Acceptance text");
-    expect(model.registeredAt).toBe("2026-10-01T09:00:00.000Z");
+    expect(model.registeredAt).toBe("2026-10-01 09:00");
     expect(model.closedAt).toBeNull();
   });
 
@@ -278,7 +278,7 @@ describe("the detail fact block", () => {
       detail({ disposition: "resolved", closedAt: "2026-10-05T00:00:00.000Z", closureNote: "fixed" }),
     );
     expect(closed.closureNote).toBe("fixed");
-    expect(closed.closedAt).toBe("2026-10-05T00:00:00.000Z");
+    expect(closed.closedAt).toBe("2026-10-05 00:00");
   });
 
   test("an absent long-text field is null, not an empty string", () => {
