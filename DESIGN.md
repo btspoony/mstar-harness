@@ -241,13 +241,26 @@ Dark order: neutral < danger < purple < success < warning, gaps **3.9 / 4.0 / 3.
 The order differs between themes on purpose — each theme is tuned against its own ground —
 so the **gap** is the invariant, never the order.
 
-**Three adjacent pairs sit below the floor, and they sit below it in the prototype.**
-`danger|purple` (1.01 L*), `purple|success` (2.19) and `success|warning` (0.66) are the
-prototype's own values; the colours are kept as-is because the prototype is the design
-source, and the deviation is recorded by name in `tokens.test.ts`. What still holds: no
-new pair may drift under the floor, and a recorded pair may not get worse than the value
-recorded here. The reader's channel in these three cases is hue — purple is the only
-violet in the set — not lightness.
+**A recorded exception, per scheme — this is a rule change, not a test detail.**
+
+The tone values are the prototype's, verbatim. Under those values some adjacent pairs sit
+below the 3 L* floor of Rule 1, and the floor is therefore **not** met for those pairs:
+
+| Scheme | Pair | Measured gap |
+| --- | --- | --- |
+| light | `danger` ↔ `purple` | 2.76 L* |
+| light | `success` ↔ `warning` | 0.66 L* |
+| dark | `danger` ↔ `purple` | 1.01 L* |
+| dark | `purple` ↔ `success` | 2.19 L* |
+| dark | `success` ↔ `warning` | 2.64 L* |
+
+The trade is deliberate: the prototype is the acceptance criterion for this interface, so
+its colours win where the two disagree. What Rule 1 still guarantees: a pair that is *not*
+on this list may never drift under the floor, a listed pair may not get worse than the
+value above, and a listed pair that stops being crowded fails the test as a stale record.
+The reader's channel for the listed pairs is **hue** — `purple` is the only violet in the
+set, and the status word is always spelled out beside the dot — never lightness alone.
+Anyone changing a tone value has to update this table in the same change.
 
 ### Rule 2 — forced colors
 

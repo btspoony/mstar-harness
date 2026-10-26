@@ -243,22 +243,37 @@ describe("DESIGN.md Rule 1 — tone luminance separation", () => {
       // the 3 L* floor the rule asks for, and they sat below it in the prototype too —
       // so the colours stay and the deviation is recorded here by name. A new pair
       // drifting under the floor still fails: that is the guard's job.
+      // The tone values are the prototype's, verbatim, so three adjacent pairs fall
+      // under the 3 L* floor in one scheme or the other. This is a DESIGN RULE CHANGE,
+      // not a test detail: the floor is kept for every other pair, and the pairs that
+      // the prototype itself puts under it are recorded per scheme with the value they
+      // actually have. A pair is never allowed to get worse than its record.
       // Keyed by the two tone names in a fixed order: which one ranks darker depends on
       // the scheme, so the pair is what matters, not the direction.
-      const KNOWN_CROWDED: Record<string, number> = {
-        "danger|purple": 1.01,
-        "purple|success": 2.19,
-        "success|warning": 0.66,
+      const KNOWN_CROWDED: Record<string, Record<string, number>> = {
+        light: {
+          "danger|purple": 2.76,
+          "success|warning": 0.66,
+        },
+        dark: {
+          "danger|purple": 1.01,
+          "purple|success": 2.19,
+          "success|warning": 2.64,
+        },
       };
-      const key = (pair: string) => pair.split("→").sort().join("|");
+      const key = (pair: string) => pair.split("\u2192").sort().join("|");
+      const known = KNOWN_CROWDED[scheme] ?? {};
       const crowded = gaps.filter((g) => g.gap < MIN_TONE_GAP);
       for (const c of crowded) {
-        const known = KNOWN_CROWDED[key(c.pair)];
-        expect({ pair: key(c.pair), known: known !== undefined }).toEqual({ pair: key(c.pair), known: true });
-        // and it may not get worse than the prototype's own value
-        expect(c.gap).toBeGreaterThanOrEqual((known ?? 0) - 0.2);
+        const recorded = known[key(c.pair)];
+        expect({ pair: key(c.pair), recorded: recorded !== undefined }).toEqual({
+          pair: key(c.pair),
+          recorded: true,
+        });
+        expect(c.gap).toBeGreaterThanOrEqual((recorded ?? 0) - 0.05);
       }
-      expect(gaps).toHaveLength(4);
+      // and a recorded pair that stops being crowded means the record is stale
+      expect(crowded.length).toBe(Object.keys(known).length);
     });
 
     test(`${scheme}: the five tones are all distinct in lightness or hue`, () => {
