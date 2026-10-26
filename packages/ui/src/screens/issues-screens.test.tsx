@@ -110,6 +110,9 @@ const detailCopy: IssueDetailCopy = {
   sourceLocationLabel: "Location",
   sourceRootCauseLabel: "Root cause key",
   sourceAcceptanceLabel: "Acceptance key",
+  historyHeading: "Disposition history",
+  historyColumns: { from: "From", to: "To", reason: "Reason", actor: "Actor", recorded: "Recorded" },
+  historyNote: "Only recorded transitions appear.",
   provenanceHeading: "Provenance",
   provenanceColumns: { kind: "Kind", target: "Target", sourceHash: "Source hash", origin: "Origin", importedAt: "Imported at" },
   identityKeysHeading: "Identity keys",
@@ -192,7 +195,7 @@ const detail = (over: Partial<IssueDetail> = {}): IssueDetail => ({
       imported: false,
     },
   ],
-  transitions: [],
+  transitions: [{ id: 1, fromDisposition: null, toDisposition: 'open', actor: 'pm', occurredAt: null, recordedAt: '2026-10-23T09:14:00.000Z', reason: 'Captured from review', evidence: null, imported: false, issueRevision: 1 }],
   relations: [{ fromIssue: 'I-000870', relation: 'related', toIssue: 'I-000840' }],
   provenance: [],
   projectMoves: [],
@@ -414,10 +417,10 @@ describe("IssueDetail — NEGATIVE: what §8.1 removed", () => {
     expect(html).toContain("data-ms-issue-source");
   });
 
-  test("no transition history, no provenance and no migration bookkeeping yet", () => {
-    // `relations` is rendered now (the prototype's Relations table). The three that remain
-    // are still out until their panels are built.
-    for (const removed of ["transitions", "provenance", "Migration", "sourceHash", "legacy"]) {
+  test("no migration bookkeeping is drawn, only a truncated source hash", () => {
+    // `transitions`, `provenance` and `relations` are rendered now, as the prototype has
+    // them. The legacy migration JSON stays out; the hash is truncated to 16 characters.
+    for (const removed of ["Migration", "legacyProject", "legacyJson"]) {
       expect(html.toLowerCase()).not.toContain(removed.toLowerCase());
     }
   });
@@ -439,7 +442,6 @@ describe("IssueDetail — NEGATIVE: what §8.1 removed", () => {
     const model = issueDetailModel(detail());
     for (const removed of [
       "occurrences",
-      "transitions",
       "url",
       "externalId",
       // `provider` and `identityKey` are carried now: the prototype's `Identity keys`

@@ -249,7 +249,6 @@ describe("the detail fact block", () => {
   test("no history, provenance, relations, tracker carry-over or revision is exposed", () => {
     const model = issueDetailModel(detail());
     for (const removed of [
-      "transitions",
       "url",
       "externalId",
       // The prototype's `Identity keys` panel states the provider and the key.

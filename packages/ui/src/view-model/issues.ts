@@ -261,6 +261,14 @@ export type IssueDetailModel = {
   /** The prototype's `Identity keys` panel: the tracker identity, when the store has one. */
   identityKey: string | null;
   provider: string | null;
+  /** The prototype's `Disposition history` table: every recorded transition. */
+  transitions: ReadonlyArray<{
+    from: string | null;
+    to: string;
+    reason: string | null;
+    actor: string | null;
+    recordedAt: string;
+  }>;
   /** The prototype's `Provenance` table: how this record was imported. */
   provenance: ReadonlyArray<{
     kind: string;
@@ -303,6 +311,14 @@ export function issueDetailModel(detail: IssueDetail): IssueDetailModel {
     closureNote: closed ? longText(detail.closureNote) : null,
     identityKey: detail.identityKey ?? null,
     provider: detail.provider ?? null,
+    transitions: detail.transitions.map((row) => ({
+      // The prototype prints `—` for the first transition, which has no `from`.
+      from: row.fromDisposition ?? null,
+      to: row.toDisposition,
+      reason: longText(row.reason),
+      actor: row.actor ?? null,
+      recordedAt: formatDate(row.recordedAt),
+    })),
     provenance: detail.provenance.map((row) => ({
       kind: row.kind,
       target: row.target,

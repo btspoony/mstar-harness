@@ -255,6 +255,13 @@ describe("no key exists for a fact IA §8 marks not-rendered", () => {
     "projectDetail.fields.catalogUpdatedAt",
     // The issue detail states the tracker carry-over, the source of its newest
     // occurrence, and its relations — panels §8.1 removed and the prototype keeps.
+    "issueDetail.historyHeading",
+    "issueDetail.historyColumns.from",
+    "issueDetail.historyColumns.to",
+    "issueDetail.historyColumns.reason",
+    "issueDetail.historyColumns.actor",
+    "issueDetail.historyColumns.recorded",
+    "issueDetail.historyNote",
     "issueDetail.provenanceHeading",
     "issueDetail.provenanceColumns.kind",
     "issueDetail.provenanceColumns.target",

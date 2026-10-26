@@ -62,6 +62,10 @@ export type IssueDetailCopy = {
   sourceAcceptanceLabel: string;
   /** The `Relations` table's heading and its three column labels. */
   /** The `Provenance` table's heading and its five column labels. */
+  /** The `Disposition history` table's heading, its five labels and its footer note. */
+  historyHeading: string;
+  historyColumns: { from: string; to: string; reason: string; actor: string; recorded: string };
+  historyNote: string;
   provenanceHeading: string;
   provenanceColumns: {
     kind: string;
@@ -177,6 +181,36 @@ export function IssueDetail(props: IssueDetailProps) {
             <section className={"panel"} data-ms-acceptance="">
               <h2>{copy.acceptanceHeading}</h2>
               <p className={"detail-text"}>{record.value.acceptance}</p>
+            </section>
+          )}
+
+          {/* The prototype's `Disposition history`: only recorded transitions appear. */}
+          {record.value.transitions.length === 0 ? null : (
+            <section className={"fact-block"} data-ms-issue-history="" aria-labelledby="ms-issue-history">
+              <h2 id="ms-issue-history">{copy.historyHeading}</h2>
+              <table className={"mini-table"}>
+                <thead>
+                  <tr>
+                    <th scope="col">{copy.historyColumns.from}</th>
+                    <th scope="col">{copy.historyColumns.to}</th>
+                    <th scope="col">{copy.historyColumns.reason}</th>
+                    <th scope="col">{copy.historyColumns.actor}</th>
+                    <th scope="col">{copy.historyColumns.recorded}</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {record.value.transitions.map((row, index) => (
+                    <tr key={`${row.to}-${row.recordedAt}-${index}`}>
+                      <td className="mono">{row.from ?? "—"}</td>
+                      <td className="mono">{row.to}</td>
+                      <td>{row.reason ?? "—"}</td>
+                      <td className="mono">{row.actor ?? "—"}</td>
+                      <td className="mono">{row.recordedAt}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+              <p className={"muted t-11"}>{copy.historyNote}</p>
             </section>
           )}
 
