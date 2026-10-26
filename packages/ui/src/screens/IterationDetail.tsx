@@ -169,7 +169,12 @@ function IterationDetailBody(props: {
           </header>
 
           <div className="detail-top">
-          <FieldGroup title={copy.catalogHeading}>
+          <section className="panel" aria-labelledby="ms-iteration-catalog">
+            <div className="panel-head">
+              <h2 className="panel-title" id="ms-iteration-catalog">{copy.catalogHeading}</h2>
+            </div>
+            <div className="panel-body">
+              <dl className="fields">
             <Field label={copy.fields.title}>{value.title ?? copy.fields.noWorkflow}</Field>
             <Field label={copy.fields.lifecycle} mono>
               {value.lifecycle ?? "—"}
@@ -180,8 +185,15 @@ function IterationDetailBody(props: {
             <Field label={copy.fields.endedAt} mono>
               {value.endedAt ?? "—"}
             </Field>
-          </FieldGroup>
-          <FieldGroup title={copy.executionHeading}>
+              </dl>
+            </div>
+          </section>
+          <section className="panel" aria-labelledby="ms-iteration-execution">
+            <div className="panel-head">
+              <h2 className="panel-title" id="ms-iteration-execution">{copy.executionHeading}</h2>
+            </div>
+            <div className="panel-body">
+              <dl className="fields">
             <Field label={copy.fields.workflow} mono>
               {value.workflowId === null ? (
                 copy.fields.noWorkflow
@@ -199,10 +211,17 @@ function IterationDetailBody(props: {
                 </button>
               )}
             </Field>
-          </FieldGroup>
+              </dl>
+            </div>
+          </section>
           </div>
 
-          <FieldGroup title={copy.compassHeading} columns={1}>
+          <section className="panel" aria-labelledby="ms-iteration-compass">
+            <div className="panel-head">
+              <h2 className="panel-title" id="ms-iteration-compass">{copy.compassHeading}</h2>
+            </div>
+            <div className="panel-body">
+              <dl className="fields">
             <Field label={copy.fields.compassStatus} mono>
               {value.compassStatus === null ? (
                 <span className={"muted"}>{copy.fields.noCompass}</span>
@@ -217,7 +236,9 @@ function IterationDetailBody(props: {
                 <span data-ms-compass-summary="">{value.summary}</span>
               )}
             </Field>
-          </FieldGroup>
+              </dl>
+            </div>
+          </section>
 
           {/* The delivery position: four labels, plus a fifth that is never
               marked. The position rides on an attribute too, so the state does
