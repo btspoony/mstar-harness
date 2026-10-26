@@ -344,7 +344,7 @@ export function projectIdentityOf(
   const catalog = (data as { catalog?: Parameters<typeof projectIdentity>[0] | null } | null | undefined)?.catalog
   if (catalog !== null && catalog !== undefined) return projectIdentity(catalog) as never
   // Nothing is known: no guessed path, no guessed lifecycle.
-  return { projectId: id, title: id, description: null, lifecycle: 'unknown', lifecycleTone: 'neutral', path: '', revision: '—' }
+  return { projectId: id, title: id, description: null, lifecycle: 'unknown', lifecycleTone: 'neutral', path: '', revision: '' }
 }
 
 /**

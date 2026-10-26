@@ -43,6 +43,8 @@ export type ProjectDetailCopy = {
   roadmapState: string;
   /** The word before the catalog revision in the head's meta line. */
   revisionLabel: string;
+  /** The noun after the project's open-issue count. */
+  openIssuesUnit: string;
   authorityHeading: string;
   authorityColumns: { state: string; revision: string; contentHash: string; frontmatter: string };
   /** Said when the project declares no roadmap authority row. */
@@ -382,6 +384,14 @@ export function ProjectDetail(props: ProjectDetailProps) {
   const { identity, copy, feature } = props;
   /** The roadmap's authority row, or `null` when the record declares none. */
   const authority = props.roadmap.kind === "populated" ? props.roadmap.value.authority : null;
+  // The head's `N open issues` is the project's whole board: the issues on its milestones
+  // plus the ones on none. `null` when the board is not readable at all — a zero there
+  // would claim the project has none.
+  const openIssues =
+    props.roadmap.kind === "populated"
+      ? props.roadmap.value.milestones.reduce((sum, m) => sum + m.counts.open, 0) +
+        props.roadmap.value.unassignedIssues
+      : null;
   // The prototype's strip carries a count per feature. Only the roadmap's is derivable
   // here: the issues and iterations panels arrive as rendered nodes from the host, so
   // their counts are the host's facts to pass in.
@@ -417,10 +427,24 @@ export function ProjectDetail(props: ProjectDetailProps) {
             <span className="mono">{identity.projectId}</span>
             <span aria-hidden="true">·</span>
             <span className="mono">{identity.lifecycle}</span>
-            <span aria-hidden="true">·</span>
-            <span>
-              {copy.revisionLabel} <span className="mono">{identity.revision}</span>
-            </span>
+            {/* No revision is a fact to omit, not a dash to print: `Revision —` claims
+                the store recorded one and it was empty. */}
+            {identity.revision === "" ? null : (
+              <>
+                <span aria-hidden="true">·</span>
+                <span>
+                  {copy.revisionLabel} <span className="mono">{identity.revision}</span>
+                </span>
+              </>
+            )}
+            {openIssues === null ? null : (
+              <>
+                <span aria-hidden="true">·</span>
+                <span>
+                  <span className="num">{openIssues}</span> {copy.openIssuesUnit}
+                </span>
+              </>
+            )}
           </div>
           {identity.description === null ? null : (
             <p className="prose t-12 secondary">{identity.description}</p>
