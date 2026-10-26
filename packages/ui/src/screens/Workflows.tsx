@@ -109,7 +109,7 @@ export function Workflows(props: WorkflowsProps) {
     {
       key: "status",
       header: copy.columns.status,
-      width: "13%",
+      width: "18%",
       render: (row) => (
         <span>
           <StatusDot label={row.status} tone={row.statusTone} mono />
