@@ -129,15 +129,19 @@ function Milestone(props: { milestone: RoadmapModel["milestones"][number]; copy:
         <span className={"detail-meta"}>{copy.roadmap.milestoneOpen(milestone.openIssues)}</span>
       </div>
       {milestone.issues.length === 0 ? null : (
-        <ul className="goal-list">
+        // The prototype's assignment row: one compact id chip per issue, toned by its
+        // disposition. The title stays on the issue's own screen — this row answers
+        // "which issues", not "what are they".
+        <div className="assigned">
           {milestone.issues.map((issue) => (
-            <li key={issue.id} className={"row"}>
-              <span className={"mono"}>{issue.id}</span>
-              <TruncatedText text={issue.title} />
-              <span className={"detail-meta"}>{issue.disposition}</span>
-            </li>
+            <span key={issue.id} className={`status tone-${dispositionTone(issue.disposition)}`}>
+              <span className="dot" aria-hidden="true" />
+              <span className="assigned-id" title={issue.title}>
+                {issue.id}
+              </span>
+            </span>
           ))}
-        </ul>
+        </div>
       )}
     </section>
   );
@@ -148,6 +152,16 @@ function milestoneStatusTone(status: string): Tone {
   if (status === "delivered") return "success";
   if (status === "dropped") return "purple";
   return "neutral";
+}
+
+/**
+ * An issue's disposition → the dot tone the prototype's assignment row uses. The tone
+ * names come from the prototype's own CSS (`.tone-open`, `.tone-resolved`), so the class
+ * is the disposition word itself when the sheet knows it. `Tone` has no `open`/`resolved`
+ * members, which is why this returns a bare string the row interpolates.
+ */
+function dispositionTone(disposition: string): string {
+  return disposition === "resolved" || disposition === "open" ? disposition : "neutral";
 }
 
 /** The Roadmap feature body: direction (collapsed), goals, board, markdown. */
