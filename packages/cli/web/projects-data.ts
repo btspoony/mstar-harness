@@ -160,6 +160,9 @@ function identityFor(projectId: string): ProjectIdentity {
     title: projectId,
     description: null,
     lifecycle: "unknown",
+    // An unknown record states no revision; the head omits the segment rather than
+    // printing `Revision —`, which would claim the store recorded an empty one.
+    revision: "",
     lifecycleTone: "neutral",
     path: projectId,
   };
