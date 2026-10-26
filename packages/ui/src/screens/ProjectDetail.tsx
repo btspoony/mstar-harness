@@ -481,18 +481,15 @@ export function ProjectDetail(props: ProjectDetailProps) {
           </div>
           <div className="panel-body">
             <dl className="fields">
-              <div className="field">
-                <dt>{copy.fields.lifecycle}</dt>
-                <dd className="mono">{identity.lifecycle}</dd>
-              </div>
-              <div className="field">
-                <dt>{copy.fields.path}</dt>
-                <dd className="mono wrap">{identity.path}</dd>
-              </div>
-              {/* The prototype's panel has six rows; these three were the missing half. */}
+              {/* The prototype's order: Kind, Lifecycle, Revision, Registered, Location,
+                  Updated. */}
               <div className="field">
                 <dt>{copy.fields.projectKind}</dt>
                 <dd className="mono">project</dd>
+              </div>
+              <div className="field">
+                <dt>{copy.fields.lifecycle}</dt>
+                <dd className="mono">{identity.lifecycle}</dd>
               </div>
               <div className="field">
                 <dt>{copy.fields.revision}</dt>
@@ -501,6 +498,10 @@ export function ProjectDetail(props: ProjectDetailProps) {
               <div className="field">
                 <dt>{copy.fields.registeredAt}</dt>
                 <dd className="mono">{identity.registeredAt}</dd>
+              </div>
+              <div className="field">
+                <dt>{copy.fields.path}</dt>
+                <dd className="mono wrap">{identity.path}</dd>
               </div>
               <div className="field">
                 <dt>{copy.fields.catalogUpdatedAt}</dt>
