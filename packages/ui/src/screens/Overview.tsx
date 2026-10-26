@@ -350,8 +350,10 @@ function TrendPanel(props: { series: IssueFlowSeries; copy: OverviewCopy }) {
             <span className="chart-note">{copy.trendLegend(series.datedOpen, series.recordedOpen)}</span>
           </div>
           <p className="chart-note">{copy.trendGap(series.datedOpen, series.undatedEvents)}</p>
-          <details className="chart-note">
-            <summary className="chart-note">{copy.trendTableSummary}</summary>
+          {/* A disclosure, not a chart label: `.chart-note` is the flex row above, and
+              reusing it here made this table's summary and body flex items. */}
+          <details className="disc">
+            <summary>{copy.trendTableSummary}</summary>
             <table className="table">
               <thead>
                 <tr>
