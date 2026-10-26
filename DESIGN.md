@@ -449,6 +449,29 @@ a squeezed head set a two-glyph title as one glyph per line (measured: a 30.4px,
 - Breakpoints are inherited: a new component reuses these five constants or it is a
   review defect.
 
+## Two layout contracts that break the page when confused
+
+**A table row is a table row.** `<tr>` may not carry a class whose rule declares a
+display mode: `.row { display: flex }` applied to `<tr class="row">` turns the row into a
+flex container, every cell collapses to `display: block` at its own minimum width, and the
+whole table renders as a column of two-character stubs. That is not a width problem and no
+column measurement reveals it — the cells were `20px` wide while the declared shares were
+`12% / 18% / 15%`. The prototype's interactive row class is `.is-link`, which sets only
+`cursor` and the focus ring. The generic `.row` therefore carries `:not(tr)` and the table
+never opts into it.
+
+**A proportional column set leaves the flexible column its share.** Each list declares its
+fixed columns as a percentage of the table and exactly one column with no width, which
+takes what remains. The percentages must therefore add up to **less than 100%** — the
+screens currently reserve 16–21% for the title. A set that sums to 100% gives the
+flexible column zero and every title renders as `d…`, which is exactly the failure this
+paragraph exists to prevent: the columns were all "declared correctly" and the layout was
+still unreadable.
+
+Both are container-driven, so both are verified at **720** and **1440**, not at one width:
+the narrow band must show fewer columns (the wide-only one is hidden by rule) with every
+remaining column readable, and the wide band must show the full set.
+
 ## Where the component styles come from
 
 The product's component styles are **the approved prototype's own stylesheet**, generated
