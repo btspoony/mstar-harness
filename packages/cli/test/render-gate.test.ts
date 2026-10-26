@@ -176,6 +176,14 @@ const PROBE = `(() => {
       if (summary === null || title === null) return null;
       return Math.round((summary.getBoundingClientRect().top - title.getBoundingClientRect().bottom) * 10) / 10;
     })(),
+    // The floor the caller published for this table: below it the card body scrolls
+    // instead of squeezing. It is a number the layout can be reasoned about with.
+    tableFloorPx: (() => {
+      const table = document.querySelector('table');
+      if (table === null) return null;
+      const value = getComputedStyle(table).getPropertyValue('--ms-table-floor').trim();
+      return value === '' ? null : parseFloat(value);
+    })(),
     tableWidth: (() => {
       const table = document.querySelector('table');
       return table === null ? null : Math.round(table.getBoundingClientRect().width * 10) / 10;
@@ -753,6 +761,12 @@ describe.skipIf(!browserAvailable)("the render gate", () => {
       // `overflow-x: auto` at every width as the safety net, so its computed value is
       // not the anchor here.
       expect(band.tableScrollsSideways).toBe(false);
+      // The dsh seat scrolls with `overflow-y: auto`, so on a classic-scrollbar
+      // platform the vertical bar takes ~15px of the 720px pane and the card holds
+      // 663px, not the 678px this macOS gate measures. The floor has to sit under
+      // THAT number, or the iterations card scrolls at the width the owner approved
+      // while this gate stays green on overlay scrollbars.
+      if (route === "iterations") expect(band.tableFloorPx as number).toBeLessThanOrEqual(656);
       const contentWidth = band.contentWidth as number;
       expect(band.tableWidth as number).toBeLessThanOrEqual(contentWidth + 0.5);
       for (const width of band.cardWidths as number[]) expect(width).toBeLessThanOrEqual(contentWidth + 0.5);
@@ -797,7 +811,10 @@ describe.skipIf(!browserAvailable)("the render gate", () => {
     // A flush edge is the defect: zero inset means the nav touches the pane's sides.
     const measured = await visit("issues", "issues", true, "pane-head-inset");
     const band = measured.band as Record<string, number | boolean | null>;
-    expect(band.headerPadInline as number).toBeGreaterThanOrEqual(12);
+    // The exact dashboard gutter, not a range: the shared band supplies 12px and the
+    // window header overrides it. A range would pass at both numbers and would not see
+    // the override lose its specificity (or the sheets swap order).
+    expect(band.headerPadInline).toBe(20);
     expect(band.headerHairline).not.toBe("0px");
   }, 60_000);
 

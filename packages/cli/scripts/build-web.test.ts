@@ -120,6 +120,17 @@ describe("the bundle", () => {
     expect(css).toMatch(/@container\s*\([^)]*619px/);
   });
 
+  test("the dashboard header's gutter is a compound selector, not load order", () => {
+    // `.app-header` and `.ms-pane-head` have equal specificity, so whichever sheet the
+    // bundler emits last would decide the gutter. The compound selector carries the
+    // header's own value at 0,2,0, which no reorder can beat. The emitted artifact is
+    // where that is provable: a build that dropped the compound rule would leave the
+    // dashboard at the band's 12px with nothing red but the browser gate.
+    // The minifier expands `padding-inline` into its two longhands, so the assertion is
+    // the selector plus its value, not the shorthand spelling.
+    expect(css).toMatch(/\.app-header\.ms-pane-head\s*\{[^}]*20px/);
+  });
+
   test("boots a React root and imports no htm or preact value", () => {
     // A root that never calls createRoot is not an entry.
     expect(js).toContain("createRoot");

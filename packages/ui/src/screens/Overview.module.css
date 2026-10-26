@@ -32,6 +32,7 @@
    stack floor the grid is one column (`.reflow-stack`, 480px). */
 .residuals {
   display: grid;
+  margin: 0;
   grid-template-columns: repeat(2, minmax(0, 1fr));
   /* The prototype's `gap: 0 20px`; the nearest spacing token is 16px. */
   gap: 0 var(--ms-space-4);
@@ -40,6 +41,7 @@
 
 .residualRow {
   display: flex;
+  margin: 0;
   align-items: center;
   gap: var(--ms-space-2);
   min-block-size: 26px;

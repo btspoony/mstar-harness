@@ -197,7 +197,7 @@ export function Overview(props: OverviewProps) {
               contract values stay English and untranslated so they can be copied into the
               CLI. `data-ms-severity` is the hook for anything presentational. */}
           {model.residuals.kind === "populated" ? (
-            <div className={css.residuals} data-ms-residuals="">
+            <dl className={css.residuals} data-ms-residuals="">
               {model.residuals.value.rows.map((row) => (
                 <div
                   key={row.severity}
@@ -205,13 +205,13 @@ export function Overview(props: OverviewProps) {
                   data-ms-severity={row.severity}
                   data-ms-count={row.count}
                 >
-                  <span className={css.residualSeverity}>
+                  <dt className={css.residualSeverity}>
                     <StatusDot label={row.severity} tone={row.tone} mono />
-                  </span>
-                  <span className={row.emphasised ? css.countEmphasised : css.count}>{row.count}</span>
+                  </dt>
+                  <dd className={row.emphasised ? css.countEmphasised : css.count}>{row.count}</dd>
                 </div>
               ))}
-            </div>
+            </dl>
           ) : (
             <Absence
               arm={model.residuals.kind as AbsenceArm}

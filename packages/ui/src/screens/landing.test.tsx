@@ -299,6 +299,10 @@ describe("Overview — the loading phase, and the literal severity", () => {
     const html = overview();
     expect(html).toContain('data-ms-severity="critical"');
     expect(html).toContain("<span>critical</span>");
+    // A definition list still groups each severity with its count: `dl` permits a
+    // `div` wrapper, so the two-column grid and the grouping coexist.
+    expect(html).toContain("<dt>");
+    expect(html).toContain("<dd>");
     expect(html).not.toContain("<span>Critical</span>");
   });
 });

@@ -92,10 +92,16 @@ export type DataTableProps<T> = {
 
 /**
  * The narrowest the table may become before it scrolls instead of squeezing.
- * Declared columns plus this much for the flexible one: ~15 characters at 13px,
+ * Declared columns plus this much for the flexible one: ~13 characters at 13px,
  * which is a title's first words rather than its first letter.
+ *
+ * 88 rather than 96 for one measured reason: the dsh seat scrolls with
+ * `overflow-y: auto`, so on a classic-scrollbar platform the vertical bar takes ~15px
+ * of the 720px pane and the iterations card holds 663px, not 678px. Its declared set
+ * is 568px, so a 96px floor is 664 — one pixel past the cliff, and the card would
+ * scroll sideways at exactly the width the owner approved.
  */
-const FLEXIBLE_FLOOR = 96;
+const FLEXIBLE_FLOOR = 88;
 
 export function DataTable<T>(props: DataTableProps<T>) {
   const interactive = props.onRowActivate !== undefined;
@@ -173,7 +179,6 @@ export function DataTable<T>(props: DataTableProps<T>) {
                   <td
                     key={column.key}
                     data-ms-col={column.wide === true ? "wide" : column.secondary === true ? "secondary" : "primary"}
-              data-ms-col-key={column.key}
                     data-ms-align={column.align ?? "start"}
                   >
                     {column.render(row)}
