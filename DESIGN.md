@@ -485,6 +485,29 @@ as "no information" rather than "the store has no note". The prototype's own cel
 note alone; the absent line is the product's answer to the same question, in the same
 slot.
 
+## What IA §8.1 excluded, and why the prototype wins
+
+`IA §8.1` listed three things the views must not return: the catalog-pin **badges**, the
+iteration **document inventory**, and the workflow **leases**. Its reasoning was sound —
+they are join bookkeeping, and they say nothing about *progress*.
+
+They are all rendered now except leases, because the acceptance criterion for this
+interface is the **prototype**, not a progress report:
+
+| Fact | Prototype | State here |
+| --- | --- | --- |
+| join badges (`catalog-missing`, `catalog-pin-conflict`) | `Join badges` column on the workflow list | **rendered** |
+| document inventory | `Documents` card on the iteration detail | **rendered** |
+| workflow leases | `Leases` card on the workflow detail | **not rendered** |
+
+The first two needed only a contract change (the DTOs already carried the data). The third
+cannot be done from the view layer: `WorkflowDTO` has no leases field and the engine never
+populates one, so it needs an engine read, not a declaration.
+
+Where the DTOs did carry the data, the §8.1 exclusion was recorded in a comment and
+enforced by a negative test. Both had to change together — and the new comments say why
+the exclusion no longer describes this screen, rather than deleting the reasoning.
+
 ## Verification coverage, stated
 
 Two hosts mount these screens: the dashboard (`packages/cli/web`) and the dsh pane
