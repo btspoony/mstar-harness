@@ -264,6 +264,8 @@ export type IssueDetailModel = {
   /** The prototype's `Occurrences`: one block per recorded event, newest last. */
   occurrences: ReadonlyArray<{
     id: number;
+    /** The occurrence's own key, which the prototype prints first in the head row. */
+    occurrenceKey: string;
     sourceKind: string;
     sourceIdentity: string;
     observedBehavior: string;
@@ -323,6 +325,7 @@ export function issueDetailModel(detail: IssueDetail): IssueDetailModel {
     provider: detail.provider ?? null,
     occurrences: detail.occurrences.map((row) => ({
       id: row.id,
+      occurrenceKey: row.occurrenceKey,
       sourceKind: row.sourceKind,
       sourceIdentity: row.sourceIdentity,
       observedBehavior: row.observedBehavior,

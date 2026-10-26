@@ -232,17 +232,16 @@ export function IssueDetail(props: IssueDetailProps) {
             <section className={"sec"} data-ms-issue-occurrences="" aria-labelledby="ms-issue-occurrences">
               <h2 id="ms-issue-occurrences">{copy.occurrencesHeading}</h2>
               {record.value.occurrences.map((occurrence) => (
-                <article className={"occurrence"} key={occurrence.id} data-ms-occurrence-row={occurrence.id}>
-                  <div className={"occurrence-head"}>
-                    <span className={"mono"}>{occurrence.sourceIdentity}</span>
+                <div className={"occ"} key={occurrence.id} data-ms-occurrence-row={occurrence.id}>
+                  <div className={"occ-head"}>
+                    <span className={"occ-key"}>{occurrence.occurrenceKey}</span>
                     <span className={"chip"}>{occurrence.sourceKind}</span>
-                    <span className={"spacer"} />
-                    <span className={"muted t-11"}>
-                      {copy.occurrenceObservedAt} <span className={"mono"}>{occurrence.recordedAt}</span>
-                    </span>
+                    <span className={"mono t-11 muted"}>{occurrence.sourceIdentity}</span>
+                    <span className={"t-11 muted ml-auto"}>{copy.occurrenceObservedAt}</span>
+                    <span className={"mono t-11 secondary"}>{occurrence.recordedAt}</span>
                   </div>
-                  <p className={"prose"}>{occurrence.observedBehavior}</p>
-                  <dl className={"fields"}>
+                  <p className={"occ-behavior"}>{occurrence.observedBehavior}</p>
+                  <dl className={"fields one"}>
                     {occurrence.location === null ? null : (
                       <div className="field">
                         <dt>{copy.occurrenceLocation}</dt>
@@ -255,15 +254,15 @@ export function IssueDetail(props: IssueDetailProps) {
                     </div>
                   </dl>
                   {occurrence.evidence.length === 0 ? null : (
-                    <ul className={"occurrence-evidence"}>
+                    <ul className={"evidence"}>
                       {occurrence.evidence.map((citation) => (
-                        <li className={"mono t-11"} key={citation}>
-                          {citation}
+                        <li key={citation}>
+                          <code>{citation}</code>
                         </li>
                       ))}
                     </ul>
                   )}
-                </article>
+                </div>
               ))}
             </section>
           )}

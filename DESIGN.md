@@ -1273,7 +1273,36 @@ Both parts are rendered now, and the browser reads
 `ProgressBar` had the same denominator bug through `done`: its `aria-valuenow` is the retired
 count now, so the bar and the text agree.
 
-## Verification coverage, stated
+## Reverse-scanning the stylesheet: 97 classes defined and never named
+
+`check:classes` catches a class that no sheet defines. The inverse had no check, so this was
+the next step: enumerate every class `product.css` defines and diff it against every
+`className` a component writes. **97 classes** come back.
+
+Most of the 97 are legitimate, and sorting them out is the point:
+
+| Group | Why it is legitimate |
+| --- | --- |
+| `.tone-*`, `.w-400/500/600` | built by template literal (`className={`dot tone-${tone}`}`) |
+| `.tk-*`, `.swatch-*`, `.t-13/14/16/20`, `.seg`, `.rule-list`, `.status-sample` | the prototype's `tokens` screen, which sits in its `proto-group` "System" switcher — a design-document surface, not a product screen |
+| `.app-header`, `.brand-*`, `.dsh-page*`, `.pane-*` | the host shells and the dsh panel previews |
+
+What remained was the real find: **`.occ`, `.occ-head`, `.occ-key`, `.occ-behavior`,
+`.evidence`, `.fields.one`** — all defined, none used, because the occurrence block I wrote
+invented `.occurrence`, `.occurrence-head` and `.occurrence-evidence` beside them.
+
+**The prototype's occurrence block is four elements, not one article**: a `.occ` wrapper, a
+`.occ-head` whose first child is the **occurrence key** (which this implementation did not
+render at all), an `.occ-behavior` paragraph, a `.fields.one`, and an `.evidence` list whose
+items are `<code>`. Measured after the rewrite, the head reads
+`dashboard-issue-row-pill · review · qc3 · Observed at · 2026-10-23 09:14` — the prototype's
+own five cells in its own order.
+
+**This is the eleventh instance of one failure mode**: a class exists in the sheet, the
+component writes a parallel name beside it, and the page renders bare. The check that would
+have caught all eleven is the reverse scan, and it cannot be a hard failure today because 97
+legitimate hits sit above the real ones. The honest state: the scan is a **report**, run by
+hand, and a human still has to tell `.evidence` from `.tk-swatch`.## Verification coverage, stated
 
 Two hosts mount these screens: the dashboard (`packages/cli/web`) and the dsh pane
 (`packages/dsh/src/client/panel`). They share the components but **each owns its own
