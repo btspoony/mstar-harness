@@ -193,10 +193,13 @@ export function WorkflowDetail(props: WorkflowDetailProps) {
               joined string gives the line a single item and no arrows to style. */}
           <div className={"branch-line"} data-ms-branch-chain="">
             {[
-              ["Base", props.model.value.workflow.branch.base] as const,
-              ["Source", props.model.value.workflow.branch.source] as const,
-              ["Integration", props.model.value.workflow.branch.integration] as const,
-              ["Target", props.model.value.workflow.branch.target] as const,
+              // Labels come from copy, like every other string on this screen: the
+              // fields block below already uses them, and a hardcoded English label
+              // would mix languages in a localized build.
+              [copy.fields.branchBase, props.model.value.workflow.branch.base] as const,
+              [copy.fields.branchSource, props.model.value.workflow.branch.source] as const,
+              [copy.fields.branchIntegration, props.model.value.workflow.branch.integration] as const,
+              [copy.fields.branchTarget, props.model.value.workflow.branch.target] as const,
             ].map(([label, value], index) => (
               <Fragment key={label}>
                 {index === 0 ? null : <span className="branch-arrow" aria-hidden="true">→</span>}

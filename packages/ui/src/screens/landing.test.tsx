@@ -192,6 +192,10 @@ const overview = (over: Partial<OverviewDTO> = {}, compact?: boolean): string =>
 
 const focusCopy: FocusCopy = {
   pageTitle: "Focus",
+  branchBase: "Base",
+  branchSource: "Source",
+  branchIntegration: "Integration",
+  branchTarget: "Target",
   bindingBound: (id) => `bound to ${id}`,
   bindingTerminal: (id) => `${id} is terminal`,
   bindingUnbound: "no workflow is bound",

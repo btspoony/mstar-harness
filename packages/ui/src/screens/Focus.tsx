@@ -24,6 +24,11 @@ import type { Tone } from "../view-model/status.ts";
 /** Every visible string this screen needs. Task 5 supplies them. */
 export type FocusCopy = {
   pageTitle: string;
+  /** The four branch anchors' labels, shared with the workflow screens. */
+  branchBase: string;
+  branchSource: string;
+  branchIntegration: string;
+  branchTarget: string;
   /** The binding header: `bound to this session`. */
   bindingBound: (workflowId: string) => string;
   bindingTerminal: (workflowId: string) => string;
@@ -197,10 +202,10 @@ export function Focus(props: FocusProps) {
                 label; a single joined string gives the line one item and no arrows. */}
             <div className="branch-line" data-ms-branch-chain="">
               {[
-                ["Base", workflow.value.branch.base] as const,
-                ["Source", workflow.value.branch.source] as const,
-                ["Integration", workflow.value.branch.integration] as const,
-                ["Target", workflow.value.branch.target] as const,
+                [copy.branchBase, workflow.value.branch.base] as const,
+                [copy.branchSource, workflow.value.branch.source] as const,
+                [copy.branchIntegration, workflow.value.branch.integration] as const,
+                [copy.branchTarget, workflow.value.branch.target] as const,
               ].map(([label, value], index) => (
                 <Fragment key={label}>
                   {index === 0 ? null : <span className="branch-arrow" aria-hidden="true">→</span>}

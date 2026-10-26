@@ -131,6 +131,10 @@ export const zh: Copy = {
 
   focus: {
     pageTitle: "当前会话",
+    branchBase: "基线",
+    branchSource: "来源",
+    branchIntegration: "集成",
+    branchTarget: "目标",
     bindingBound: (workflowId) => `已绑定到 ${workflowId}`,
     bindingTerminal: (workflowId) => `${workflowId} 已终止`,
     bindingUnbound: "本会话尚未绑定任何工作流。",

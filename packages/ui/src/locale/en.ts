@@ -145,6 +145,10 @@ export const en = {
 
   focus: {
     pageTitle: "Focus",
+    branchBase: "Base",
+    branchSource: "Source",
+    branchIntegration: "Integration",
+    branchTarget: "Target",
     bindingBound: (workflowId: string) => `Bound to ${workflowId}`,
     bindingTerminal: (workflowId: string) => `${workflowId} is terminal`,
     bindingUnbound: "No workflow is bound to this session.",
