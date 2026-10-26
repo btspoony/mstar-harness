@@ -140,6 +140,7 @@ export const en = {
     milestonesHeading: "Milestones",
     milestonesSummary: (milestones: number, open: number) => `${milestones} milestones · ${open} open`,
     milestoneProgress: (done: number, total: number) => `${done}/${total}`,
+    milestoneOpenCount: (open: number) => ` · ${open} open`,
     milestoneOpen: (open: number) => `${open} open`,
     projection: {
       current: "current",
@@ -473,6 +474,7 @@ export const en = {
       goalChecked: "Checked",
       goalUnchecked: "Open",
       milestoneProgress: (done: number, total: number) => `${done}/${total}`,
+    milestoneOpenCount: (open: number) => ` · ${open} open`,
       milestoneOpen: (open: number) => `${open} open`,
     countLabels: { open: "open", resolved: "resolved", retired: "retired without resolution", total: "total" },
       noTarget: "No target",

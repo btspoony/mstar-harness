@@ -241,7 +241,7 @@ describe("Overview — the fact set of §8.2", () => {
       name: "Milestone 0",
       status: "active",
       target: "2026-11-07",
-      progress: { done: 6, total: 10 },
+      progress: { retired: 6, total: 10 },
       openIssues: 4,
     });
   });

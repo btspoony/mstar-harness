@@ -126,6 +126,7 @@ export const zh: Copy = {
     milestonesHeading: "里程碑",
     milestonesSummary: (milestones, open) => `${milestones} 个里程碑 · ${open} 项未关闭`,
     milestoneProgress: (done, total) => `${done}/${total}`,
+    milestoneOpenCount: (open: number) => ` · ${open} 未关闭`,
     milestoneOpen: (open) => `${open} 项未关闭`,
     projection: {
       current: "最新",
@@ -449,6 +450,7 @@ export const zh: Copy = {
       goalChecked: "已完成",
       goalUnchecked: "未完成",
       milestoneProgress: (done, total) => `${done}/${total}`,
+    milestoneOpenCount: (open: number) => ` · ${open} 未关闭`,
       milestoneOpen: (open) => `${open} 项未关闭`,
     countLabels: { open: "未关闭", resolved: "已解决", retired: "未解决即退役", total: "总计" },
       noTarget: "无目标日期",

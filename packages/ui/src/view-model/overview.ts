@@ -169,8 +169,11 @@ export type MilestoneRow = {
   name: string;
   status: string | null;
   target: string | null;
-  /** `done` of `total`, where done is the resolved count. */
-  progress: { done: number; total: number } | null;
+  /**
+   * `retired of total` — the prototype's numerator is `total - open`, which counts every
+   * retired issue (resolved and otherwise), not only the resolved ones.
+   */
+  progress: { retired: number; total: number } | null;
   openIssues: number;
 };
 
@@ -278,7 +281,10 @@ function milestoneRow(milestone: {
     name: milestone.name,
     status: milestone.status,
     target: milestone.target,
-    progress: milestone.totalIssues === 0 ? null : { done: milestone.resolvedIssues, total: milestone.totalIssues },
+    progress:
+      milestone.totalIssues === 0
+        ? null
+        : { retired: milestone.totalIssues - milestone.openIssues, total: milestone.totalIssues },
     openIssues: milestone.openIssues,
   };
 }

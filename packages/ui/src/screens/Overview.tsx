@@ -110,6 +110,8 @@ export type OverviewCopy = {
   /** The short-container summary: `n milestones · m open`. */
   milestonesSummary: (milestones: number, open: number) => string;
   milestoneProgress: (done: number, total: number) => string;
+  /** The ` · 9 open` tail of the same trailing cell. */
+  milestoneOpenCount: (open: number) => string;
   milestoneOpen: (open: number) => string;
   projection: { current: string; stale: string; unavailable: string };
   /** The four absence arms' own words and copy families (IA §5). */
@@ -313,8 +315,11 @@ function MilestoneRowView(props: { row: MilestoneRow; copy: OverviewCopy }) {
       trailing={
         row.progress === null ? null : (
           <span className="milestone-counts">
-            <ProgressBar done={row.progress.done} total={row.progress.total} />
-            <span>{props.copy.milestoneProgress(row.progress.done, row.progress.total)}</span>
+            <ProgressBar done={row.progress.retired} total={row.progress.total} />
+            <span className="num">
+              {props.copy.milestoneProgress(row.progress.retired, row.progress.total)}
+            </span>
+            <span>{props.copy.milestoneOpenCount(row.openIssues)}</span>
           </span>
         )
       }

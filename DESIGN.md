@@ -1235,6 +1235,25 @@ fixture, but the page had been perfectly willing to print the arithmetic.
 that the numbers inside a bucket are numbers. A missing field becomes `NaN`, and `NaN`
 renders.
 
+## The milestone counts cell, and the numerator that was wrong
+
+The prototype's trailing cell reads `5/14 · 9 open`. This implementation rendered `4/14`:
+
+| | The prototype | This implementation, before |
+| --- | --- | --- |
+| numerator | `total - open` = 14 − 9 = **5** | `resolvedIssues` = **4** |
+| denominator | `total` | `total` |
+| tail | ` · 9 open` | **absent** |
+
+The two numerators differ exactly by the issues that were retired without being resolved, so
+the old cell understated progress on every milestone whose retired count is not zero.
+
+Both parts are rendered now, and the browser reads
+`["5/14 · 9 open", "2/6 · 4 open", "13/13 · 0 open"]` — the prototype's own three strings.
+
+`ProgressBar` had the same denominator bug through `done`: its `aria-valuenow` is the retired
+count now, so the bar and the text agree.
+
 ## Verification coverage, stated
 
 Two hosts mount these screens: the dashboard (`packages/cli/web`) and the dsh pane

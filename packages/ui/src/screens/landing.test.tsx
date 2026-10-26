@@ -186,6 +186,7 @@ const overviewCopy: OverviewCopy = {
   milestonesHeading: "Milestones",
   milestonesSummary: (count, open) => `${count} milestones · ${open} open`,
   milestoneProgress: (done, total) => `${done}/${total}`,
+  milestoneOpenCount: (open) => ` · ${open} open`,
   milestoneOpen: (open) => `${open} open`,
   projection: { current: "current", stale: "stale", unavailable: "unavailable" },
   absence: {
