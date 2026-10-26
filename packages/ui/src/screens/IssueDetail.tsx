@@ -53,6 +53,13 @@ export type IssueDetailCopy = {
   acceptanceHeading: string;
   closureNoteHeading: string;
   /** The `Identity keys` panel's heading and its two row labels. */
+  /** The `Source` panel's heading and its five row labels. */
+  sourceHeading: string;
+  sourceKindLabel: string;
+  sourceIdentityLabel: string;
+  sourceLocationLabel: string;
+  sourceRootCauseLabel: string;
+  sourceAcceptanceLabel: string;
   identityKeysHeading: string;
   identityKeyLabel: string;
   providerLabel: string;
@@ -158,6 +165,41 @@ export function IssueDetail(props: IssueDetailProps) {
             <section className={"panel"} data-ms-acceptance="">
               <h2>{copy.acceptanceHeading}</h2>
               <p className={"detail-text"}>{record.value.acceptance}</p>
+            </section>
+          )}
+
+          {/* The prototype's `Source` panel: where this issue came from. */}
+          {record.value.source === null ? null : (
+            <section className={"fact-block"} data-ms-issue-source="" aria-labelledby="ms-issue-source">
+              <h2 id="ms-issue-source">{copy.sourceHeading}</h2>
+              <dl className={"fields"}>
+                <div className="field">
+                  <dt>{copy.sourceKindLabel}</dt>
+                  <dd className="mono">{record.value.source.kind}</dd>
+                </div>
+                <div className="field">
+                  <dt>{copy.sourceIdentityLabel}</dt>
+                  <dd className="mono">{record.value.source.identity}</dd>
+                </div>
+                {record.value.source.location === null ? null : (
+                  <div className="field">
+                    <dt>{copy.sourceLocationLabel}</dt>
+                    <dd className="mono wrap">{record.value.source.location}</dd>
+                  </div>
+                )}
+                {record.value.source.rootCauseKey === null ? null : (
+                  <div className="field">
+                    <dt>{copy.sourceRootCauseLabel}</dt>
+                    <dd className="mono">{record.value.source.rootCauseKey}</dd>
+                  </div>
+                )}
+                {record.value.source.acceptanceKey === null ? null : (
+                  <div className="field">
+                    <dt>{copy.sourceAcceptanceLabel}</dt>
+                    <dd className="mono">{record.value.source.acceptanceKey}</dd>
+                  </div>
+                )}
+              </dl>
             </section>
           )}
 

@@ -34,7 +34,11 @@
 // labels and the frame around them). That is 34 bytes of markup over the old ceiling — the
 // smallest raise this file has needed, and still worth a fresh ~4 KB of headroom rather
 // than a line that has to be edited again next round.
-export const JS_CEILING = 332 * 1024;
+// Raised, 332 KB to 340 KB: the issue detail gained its `Source` and `Identity keys`
+// panels — two of the six §8.1 removed and the prototype keeps. The remaining four are
+// larger still (two tables and an event log), so this raise is sized for them rather than
+// for what is here now.
+export const JS_CEILING = 340 * 1024;
 // Raised, 60 KB to 100 KB: the product's component styles are now generated from the
 // approved prototype and shipped whole (values unchanged, selectors scoped, queries
 // unnamed) instead of being re-typed one screen at a time. Re-typing is exactly what

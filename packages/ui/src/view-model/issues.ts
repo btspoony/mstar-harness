@@ -261,6 +261,14 @@ export type IssueDetailModel = {
   /** The prototype's `Identity keys` panel: the tracker identity, when the store has one. */
   identityKey: string | null;
   provider: string | null;
+  /** The prototype's `Source` panel: the latest occurrence's own account of itself. */
+  source: {
+    kind: string;
+    identity: string;
+    location: string | null;
+    rootCauseKey: string | null;
+    acceptanceKey: string | null;
+  } | null;
 };
 
 export function issueDetailModel(detail: IssueDetail): IssueDetailModel {
@@ -285,6 +293,17 @@ export function issueDetailModel(detail: IssueDetail): IssueDetailModel {
     closureNote: closed ? longText(detail.closureNote) : null,
     identityKey: detail.identityKey ?? null,
     provider: detail.provider ?? null,
+    // The prototype's Source panel states the newest occurrence's provenance.
+    source:
+      detail.occurrences.length === 0
+        ? null
+        : {
+            kind: detail.occurrences[0]!.sourceKind,
+            identity: detail.occurrences[0]!.sourceIdentity,
+            location: detail.occurrences[0]!.location ?? null,
+            rootCauseKey: detail.occurrences[0]!.rootCauseKey ?? null,
+            acceptanceKey: detail.occurrences[0]!.acceptanceKey ?? null,
+          },
   };
 }
 

@@ -392,14 +392,13 @@ describe("IssueDetail — the whole page, and nothing more", () => {
 describe("IssueDetail — NEGATIVE: what §8.1 removed", () => {
   const html = renderDetail(detail());
 
-  test("no occurrence rows — the log is gone, only the count stays", () => {
-    // The fixture carries two occurrences with ids, sources, evidence and dates.
+  test("the source panel states the newest occurrence, but never the log", () => {
+    // The prototype has a `Source` panel (the latest occurrence's provenance) and an
+    // `Occurrences` panel (one block per event). Only the first is rendered so far; the
+    // event log itself stays out.
     expect(html).not.toContain("data-ms-occurrence-row");
     expect(html).not.toContain('data-ms-occurrence="');
-    expect(html).not.toContain("k1");
-    expect(html).not.toContain("qc1");
-    expect(html).not.toContain("2026-10-02T09:00:00.000Z");
-    expect(html).not.toContain("review");
+    expect(html).toContain("data-ms-issue-source");
   });
 
   test("no transition history, provenance, relations or tracker carry-over", () => {

@@ -1043,9 +1043,23 @@ occurrences on the left; disposition history, relations, provenance, identity ke
 right). This implementation is one column. That follows from the missing panels: a single
 column is what is left when six of ten blocks are gone.
 
-**Not done, and not attempted**: six panels with three tables and their copy in two locales
-is a change large enough that doing it in a round's remaining context would repeat the
-pattern this file already records twice — a partial edit, a broken build, a revert.
+**In progress.** Two of the six are rendered now:
+
+| Panel | Shape | State |
+| --- | --- | --- |
+| `Identity keys` | two rows (Identity key, Provider) | shipped, verified in the browser |
+| `Source` | five rows from the newest occurrence | shipped, verified in the browser |
+| `Relations` | table | open |
+| `Provenance` | table | open |
+| `Disposition history` | table | open |
+| `Occurrences` | one block per event, with its quote and citation | open |
+
+The data was never missing: `store-read.ts` returns `occurrences`, `transitions`,
+`relations`, `provenance`, `provider` and `identityKey` on the issue detail. The gap was the
+view model, which forwarded sixteen of them and stopped.
+
+**The layout is still one column.** The prototype is two. That follows from the four panels
+still absent — a single column is what four-of-ten removed looks like.
 
 ## Verification coverage, stated
 
