@@ -140,31 +140,37 @@ export function Iterations(props: IterationsProps) {
             {copy.attribution(model.attribution)}
           </p>
         </>
-      ) : model.rows.kind === "unavailable" ? (
-        <EmptyState
-          arm="unavailable"
-          labelWord={copy.unavailable.labelWord}
-          heading={copy.unavailable.heading}
-          body={copy.unavailable.body}
-          reason={model.rows.reason}
-        />
-      ) : model.rows.kind === "not-applicable" ? (
-        <EmptyState
-          arm="not-applicable"
-          labelWord={copy.absent.labelWord}
-          heading={copy.absent.heading}
-          body={copy.absent.body}
-          detail={model.rows.reason}
-        />
       ) : (
-        <EmptyState
-          arm={model.rows.kind as AbsenceArm}
-          labelWord={model.rows.kind === "absent" ? copy.absent.labelWord : copy.empty.labelWord}
-          heading={model.rows.kind === "absent" ? copy.absent.heading : copy.empty.heading}
-          body={model.rows.kind === "absent" ? copy.absent.body : copy.empty.body}
-          pointer={model.rows.kind === "absent" ? copy.absent.pointer : undefined}
-          hint={model.rows.kind === "empty" ? copy.empty.hint : undefined}
-        />
+        <Panel>
+          <PanelBody>
+            {model.rows.kind === "unavailable" ? (
+              <EmptyState
+                arm="unavailable"
+                labelWord={copy.unavailable.labelWord}
+                heading={copy.unavailable.heading}
+                body={copy.unavailable.body}
+                reason={model.rows.reason}
+              />
+            ) : model.rows.kind === "not-applicable" ? (
+              <EmptyState
+                arm="not-applicable"
+                labelWord={copy.absent.labelWord}
+                heading={copy.absent.heading}
+                body={copy.absent.body}
+                detail={model.rows.reason}
+              />
+            ) : (
+              <EmptyState
+                arm={model.rows.kind as AbsenceArm}
+                labelWord={model.rows.kind === "absent" ? copy.absent.labelWord : copy.empty.labelWord}
+                heading={model.rows.kind === "absent" ? copy.absent.heading : copy.empty.heading}
+                body={model.rows.kind === "absent" ? copy.absent.body : copy.empty.body}
+                pointer={model.rows.kind === "absent" ? copy.absent.pointer : undefined}
+                hint={model.rows.kind === "empty" ? copy.empty.hint : undefined}
+              />
+            )}
+          </PanelBody>
+        </Panel>
       )}
     </article>
   );

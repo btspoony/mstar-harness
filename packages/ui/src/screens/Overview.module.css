@@ -18,21 +18,6 @@
   align-items: start;
 }
 
-.panel {
-  display: flex;
-  flex-direction: column;
-  gap: var(--ms-space-1);
-  min-inline-size: 0;
-}
-
-.heading {
-  margin: 0;
-  font-size: var(--ms-fs-12);
-  line-height: var(--ms-lh-12);
-  font-weight: var(--ms-fw-medium);
-  color: var(--ms-text-secondary);
-}
-
 .rows {
   display: flex;
   flex-direction: column;

@@ -172,7 +172,7 @@ describe("Iterations list — the facts of §8.2", () => {
     }
     expect(html).toContain("step 2 of 5");
     expect(html).toContain("1/2 plans");
-    expect(html).toContain("2026-10-25T01:10:00.000Z");
+    expect(html).toContain("2026-10-25 01:10");
   });
 
   test("an iteration with no compass says so instead of claiming a step", () => {
@@ -236,7 +236,7 @@ describe("IterationDetail — catalog, execution, compass, gate steps, plan tabl
   const html = renderDetail(iteration());
 
   test("catalog identity, execution and the dates", () => {
-    for (const expected of ["Frontend unification", "active", "issue-project-move", "2026-10-25T01:10:00.000Z"]) {
+    for (const expected of ["Frontend unification", "active", "issue-project-move", "2026-10-25 01:10"]) {
       expect(html).toContain(expected);
     }
   });

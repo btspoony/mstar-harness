@@ -17,9 +17,15 @@ import {
 } from "./format.ts";
 
 describe("dates are shown as stored", () => {
-  test("a stored timestamp is returned verbatim, precision intact", () => {
-    expect(formatDate("2026-10-25T13:58:04.000Z")).toBe("2026-10-25T13:58:04.000Z");
+  test("one timestamp form for every line that shows a timestamp", () => {
+    // `design-v1.html:1444` prints a detail timestamp as `2026-10-23 09:14`: the
+    // stored instant with the prototype's separator and precision, never the raw
+    // ISO lexeme. The cell drops the year and the seconds (`formatShortDate`).
+    expect(formatDate("2026-10-25T13:58:04.000Z")).toBe("2026-10-25 13:58");
+    expect(formatDate("2026-10-25 13:58")).toBe("2026-10-25 13:58");
     expect(formatDate("2026-10-25")).toBe("2026-10-25");
+    // A value that is not a timestamp is not re-shaped into one.
+    expect(formatDate("yesterday")).toBe("yesterday");
   });
 
   test("an absent date says so instead of borrowing the read time", () => {

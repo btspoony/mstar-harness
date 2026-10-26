@@ -251,19 +251,30 @@ describe("Issues — the list facts of §8.2", () => {
 describe("Issues — the prototype's card and its summary line", () => {
   const html = renderIssues([summary(), summary({ id: "I-000871", projectId: "dsh-integration" })], 2);
 
-  test("the filters and the table sit in one card, with the prototype's anchors", () => {
-    // `design-v1.html:215-224`: one `.panel`, a head, a tight body for the table,
-    // a foot for the paging facts. Before this, the table and the filter row were
-    // bare children of the screen.
-    expect(html).toContain('data-ms-panel=""');
+  test("two cards: the filters, then the table — never a floating table", () => {
+    // `design-v1.html:215-224`: a card is a head, a body and a foot, and the table
+    // is the body of one (`panel-body.tight`). Here the filters and the table are
+    // two cards, so the table never sits bare on the canvas.
+    expect(html.match(/data-ms-panel=""/g)?.length).toBe(2);
     expect(html).toContain('data-ms-panel-head=""');
-    expect(html).toContain('data-ms-panel-body=""');
     expect(html).toContain('data-ms-panel-foot=""');
-    // One card, not one per block: the filter row lives inside it.
-    expect(html.match(/data-ms-panel=""/g)?.length).toBe(1);
-    // The filter panel's head names it, and the card points at that head.
+    // The filter card's head names it, and that card points at the head.
     expect(html).toContain('aria-labelledby="ms-issues-filters"');
     expect(html).toContain('id="ms-issues-filters"');
+  });
+
+  test("the table is inside a card, in a body with no padding of its own", () => {
+    // The anchor that keeps the table a panel body rather than a sibling of the
+    // filter card: the table's nearest card ancestor exists, and the body that
+    // holds it is the tight one.
+    const tableAt = html.indexOf("<table");
+    expect(tableAt).toBeGreaterThan(-1);
+    const before = html.slice(0, tableAt);
+    const lastPanel = before.lastIndexOf('data-ms-panel=""');
+    const lastPanelClose = before.lastIndexOf("</section>");
+    expect(lastPanel).toBeGreaterThan(-1);
+    expect(lastPanelClose).toBeLessThan(lastPanel);
+    expect(before.slice(lastPanel)).toContain('data-ms-panel-body=""');
   });
 
   test("the summary line states the count, the scope and the ordering", () => {
@@ -326,7 +337,7 @@ describe("IssueDetail — the whole page, and nothing more", () => {
     for (const expected of ["I-000870", "engine", "9f2c4a10", "bug", "critical", "open", "frontend-dev"]) {
       expect(html).toContain(expected);
     }
-    expect(html).toContain("2026-10-01T09:00:00.000Z");
+    expect(html).toContain("2026-10-01 09:00");
   });
 
   test("the occurrence count survives as ONE integer", () => {
@@ -351,7 +362,7 @@ describe("IssueDetail — the whole page, and nothing more", () => {
     );
     expect(closed).toContain('data-ms-closure-note=""');
     expect(closed).toContain("fixed by one tone table");
-    expect(closed).toContain("2026-10-05T00:00:00.000Z");
+    expect(closed).toContain("2026-10-05 00:00");
   });
 
   test("an absent long-text field renders no empty block", () => {

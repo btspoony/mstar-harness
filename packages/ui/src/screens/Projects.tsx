@@ -93,31 +93,37 @@ export function Projects(props: ProjectsProps) {
             />
           </PanelBody>
         </Panel>
-      ) : model.rows.kind === "unavailable" ? (
-        <EmptyState
-          arm="unavailable"
-          labelWord={copy.unavailable.labelWord}
-          heading={copy.unavailable.heading}
-          body={copy.unavailable.body}
-          reason={model.rows.reason}
-        />
-      ) : model.rows.kind === "not-applicable" ? (
-        <EmptyState
-          arm="not-applicable"
-          labelWord={copy.absent.labelWord}
-          heading={copy.absent.heading}
-          body={copy.absent.body}
-          detail={model.rows.reason}
-        />
       ) : (
-        <EmptyState
-          arm={model.rows.kind as AbsenceArm}
-          labelWord={copy.empty.labelWord}
-          heading={copy.empty.heading}
-          body={copy.empty.body}
-          hint={model.rows.kind === "empty" ? copy.empty.hint : undefined}
-          pointer={model.rows.kind === "absent" ? copy.absent.pointer : undefined}
-        />
+        <Panel>
+          <PanelBody>
+            {model.rows.kind === "unavailable" ? (
+              <EmptyState
+                arm="unavailable"
+                labelWord={copy.unavailable.labelWord}
+                heading={copy.unavailable.heading}
+                body={copy.unavailable.body}
+                reason={model.rows.reason}
+              />
+            ) : model.rows.kind === "not-applicable" ? (
+              <EmptyState
+                arm="not-applicable"
+                labelWord={copy.absent.labelWord}
+                heading={copy.absent.heading}
+                body={copy.absent.body}
+                detail={model.rows.reason}
+              />
+            ) : (
+              <EmptyState
+                arm={model.rows.kind as AbsenceArm}
+                labelWord={copy.empty.labelWord}
+                heading={copy.empty.heading}
+                body={copy.empty.body}
+                hint={model.rows.kind === "empty" ? copy.empty.hint : undefined}
+                pointer={model.rows.kind === "absent" ? copy.absent.pointer : undefined}
+              />
+            )}
+          </PanelBody>
+        </Panel>
       )}
     </article>
   );

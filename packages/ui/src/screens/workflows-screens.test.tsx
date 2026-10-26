@@ -168,7 +168,7 @@ describe("Workflows list — the facts of §8.2", () => {
     expect(html).toContain("running");
     expect(html).toContain("phase-2-execute");
     expect(html).toContain("plans:20261025-unified-ui-shared-layer.md");
-    expect(html).toContain("2026-10-25T05:00:00.000Z");
+    expect(html).toContain("2026-10-25 05:00");
     expect(html).toContain("1/2 plans");
   });
 
@@ -255,7 +255,7 @@ describe("WorkflowDetail — execution, anchors, catalog and the plan table", ()
   const html = renderDetail(workflow());
 
   test("the execution facts and all three dates", () => {
-    for (const expected of ["plan", "running", "phase-2-execute", "2026-10-25T01:00:00.000Z", "2026-10-25T05:00:00.000Z"]) {
+    for (const expected of ["plan", "running", "phase-2-execute", "2026-10-25 01:00", "2026-10-25 05:00"]) {
       expect(html).toContain(expected);
     }
   });
