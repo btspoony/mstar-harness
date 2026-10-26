@@ -878,6 +878,34 @@ which is still unexplained.
 
 
 
+## What a screenshot shows that ninety rounds of numbers did not
+
+Every earlier verification in this file compared one element at a time — computed styles,
+child lists, column widths. The first side-by-side screenshot of the overview found ten
+differences at once, several of them structural:
+
+| # | The prototype | This implementation |
+| --- | --- | --- |
+| 1 | two columns: active workflow + trend on the left, residuals + milestones on the right | active workflow and trend span the full width; residuals and milestones sit side by side below |
+| 2 | a `screen-head` subtitle: `All projects · 26 open issues · 13:58:04` | title only |
+| 3 | the trend chart carries **Y-axis values** (`900`, `850`, `800`) | no Y axis |
+| 4 | milestones list with progress bars | an absence panel |
+| 5 | latest iteration shows the **five-step gate track** (`Start · Execute · Close · PR delivery · Merge ready`) | an absence panel |
+| 6 | identity line ends `built 13:56:02 · read 13:58:04` | ends `最新` |
+| 7 | footer states `1224 store revision` | no revision |
+| 8 | a host switcher strip above the app header | none |
+| 9 | a `v4.0.9` badge beside the wordmark | none |
+| 10 | panels ordered workflow, residuals, milestones, trend, iteration | workflow, trend, residuals, milestones, delivery |
+
+Rows 4 and 5 read as absences here rather than as missing features: the projection resolved
+no project, so the panels say so. Under real data they would render — but the two-column
+layout, the subtitle, the Y axis, the gate track and the revision are **not** data-dependent.
+
+The gate track is the sharpest case: it was built, then deliberately deleted in an earlier
+round as "not in the prototype". The prototype has it, on this screen, and the screenshot
+settles it.
+
+**This is why the acceptance criterion is a screenshot, not a checklist.**
 ## Verification coverage, stated
 
 Two hosts mount these screens: the dashboard (`packages/cli/web`) and the dsh pane

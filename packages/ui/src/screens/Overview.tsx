@@ -280,13 +280,6 @@ function WorkflowRowView(props: {
           ))}
         </div>
       )}
-      <DataTable
-        variant="detail"
-        caption={copy.planTableCaption}
-        columns={planColumns(copy)}
-        rows={row.plans}
-        rowKey={(plan) => plan.planId}
-      />
     </>
   );
 }
@@ -330,61 +323,59 @@ function TrendPanel(props: { series: IssueFlowSeries; copy: OverviewCopy }) {
         title={copy.trendHeading}
         meta={copy.trendRange(series.firstDate, series.lastDate)}
       />
-      <PanelBody>
-        <div className="chart-wrap" data-ms-flow="">
-          <IssueFlowChart
-            points={series.points}
-            label={copy.trendChartTitle(series.firstDate, series.lastDate)}
-          />
-          <div className="chart-note">
-            <span>{series.firstDate}</span>
-            {/* Two buckets have no distinct middle: labelling the first one twice would
-                read as a third date. */}
-            {series.middleDate === null ? null : <span>{series.middleDate}</span>}
-            <span>{series.lastDate}</span>
-          </div>
-          <div className="chart-legend">
-            <span className="legend-item">
-              <span className="legend-swatch" aria-hidden="true" />
-              {copy.trendCaptured}
-            </span>
-            <span className="legend-item">
-              <span className="legend-swatch dashed" aria-hidden="true" />
-              {copy.trendRetired}
-            </span>
-            <span className="legend-spacer" />
-            <span className="chart-note">{copy.trendLegend(series.datedOpen, series.recordedOpen)}</span>
-          </div>
-          <p className="chart-note">{copy.trendGap(series.datedOpen, series.undatedEvents)}</p>
-          {/* A disclosure, not a chart label: `.chart-note` is the flex row above, and
-              reusing it here made this table's summary and body flex items. */}
-          <details className="disc">
-            <summary>{copy.trendTableSummary}</summary>
-            <table className="table">
-              <thead>
-                <tr>
-                  <th scope="col">{copy.trendColumns.date}</th>
-                  <th scope="col">{copy.trendColumns.captured}</th>
-                  <th scope="col">{copy.trendColumns.retired}</th>
-                  <th scope="col">{copy.trendColumns.open}</th>
-                  <th scope="col">{copy.trendColumns.origin}</th>
-                </tr>
-              </thead>
-              <tbody>
-                {series.points.map((point) => (
-                  <tr key={point.date}>
-                    <td>{point.date}</td>
-                    <td>{point.captured}</td>
-                    <td>{point.retired}</td>
-                    <td>{point.open}</td>
-                    <td>{point.origin}</td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </details>
+      <div className="chart-wrap" data-ms-flow="">
+        <IssueFlowChart
+          points={series.points}
+          label={copy.trendChartTitle(series.firstDate, series.lastDate)}
+        />
+        <div className="chart-note">
+          <span>{series.firstDate}</span>
+          {/* Two buckets have no distinct middle: labelling the first one twice would
+              read as a third date. */}
+          {series.middleDate === null ? null : <span>{series.middleDate}</span>}
+          <span>{series.lastDate}</span>
         </div>
-      </PanelBody>
+        <div className="chart-legend">
+          <span className="legend-item">
+            <span className="legend-swatch" aria-hidden="true" />
+            {copy.trendCaptured}
+          </span>
+          <span className="legend-item">
+            <span className="legend-swatch dashed" aria-hidden="true" />
+            {copy.trendRetired}
+          </span>
+          <span className="legend-spacer" />
+          <span className="chart-note">{copy.trendLegend(series.datedOpen, series.recordedOpen)}</span>
+        </div>
+        <p className="chart-note">{copy.trendGap(series.datedOpen, series.undatedEvents)}</p>
+        {/* A disclosure, not a chart label: `.chart-note` is the flex row above, and
+            reusing it here made this table's summary and body flex items. */}
+        <details className="disc">
+          <summary>{copy.trendTableSummary}</summary>
+          <table className="table">
+            <thead>
+              <tr>
+                <th scope="col">{copy.trendColumns.date}</th>
+                <th scope="col">{copy.trendColumns.captured}</th>
+                <th scope="col">{copy.trendColumns.retired}</th>
+                <th scope="col">{copy.trendColumns.open}</th>
+                <th scope="col">{copy.trendColumns.origin}</th>
+              </tr>
+            </thead>
+            <tbody>
+              {series.points.map((point) => (
+                <tr key={point.date}>
+                  <td>{point.date}</td>
+                  <td>{point.captured}</td>
+                  <td>{point.retired}</td>
+                  <td>{point.open}</td>
+                  <td>{point.origin}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </details>
+      </div>
     </Panel>
   );
 }
@@ -451,6 +442,17 @@ export function Overview(props: OverviewProps) {
             />
           )}
           </PanelBody>
+          {/* The prototype's plan table is the PANEL's third child, after the body
+              (`panel-head|panel-body|table`), not part of the body's rhythm. */}
+          {model.workflows.kind === "populated" && model.workflows.value.length > 0 ? (
+            <DataTable
+              variant="detail"
+              caption={copy.planTableCaption}
+              columns={planColumns(copy)}
+              rows={model.workflows.value[0].plans}
+              rowKey={(plan) => plan.planId}
+            />
+          ) : null}
         </Panel>
 
         {/* 2 — the dated history of that work. */}
