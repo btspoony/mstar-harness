@@ -1084,9 +1084,20 @@ What worked was the opposite approach: **never move a block**, only insert
 class="detail-col">` after the occurrences block's `)}`, and `</div></div>` after the identity
 keys block's `)}`. Three insertions, zero movement, and `tsc` stayed green.
 
-**One ordering difference remains**: this implementation splits after `occurrences`, so
-`source` and `identity keys` land in the right column where the prototype has `source` on the
-left. The two columns hold the same nine blocks; one of them is on the wrong side.
+**`source` moved to the left column**, so the split is now the prototype's: identity,
+source, impact, acceptance, occurrences on the left; history, relations, provenance, identity
+keys on the right.
+
+**The two-column split and its collapse both match**, measured at three widths:
+
+| Viewport | The prototype | This implementation |
+| --- | --- | --- |
+| 1440 | `733.859px 638.125px` | `733.859px 638.125px` — identical |
+| 720 | `696px` (one column) | `680px` (one column) |
+| 375 | `351px` (one column) | `335px` (one column) |
+
+The 16px difference at the narrow widths is the page's own padding, not the grid. No
+horizontal scroll at any of the three.
 
 ## What the negative tests used to guard, and what guards it now
 
