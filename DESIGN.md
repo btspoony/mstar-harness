@@ -1184,6 +1184,17 @@ rhythm and no per-row padding. `Row` gained a `rowClass` prop and the board pass
 `rgb(36, 41, 48)`. `border-bottom-width` was `0px`: the row is a `:last-of-type`, which the
 prototype's own rule clears. Reading the width, not only the colour, is what settled it.
 
+**That single row was itself the defect in the fixture.** One row is always the last, so it
+never exercises the between-rows rhythm. With three, the measurement is:
+
+```
+row 1: padding-top 7px, border-bottom 1px, height 36
+row 2: padding-top 7px, border-bottom 1px, height 36
+row 3: padding-top 7px, border-bottom 0px, height 32
+```
+
+which is the prototype's `.milestone-row` with its own `:last-of-type` override.
+
 ## Verification coverage, stated
 
 Two hosts mount these screens: the dashboard (`packages/cli/web`) and the dsh pane

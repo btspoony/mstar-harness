@@ -347,12 +347,12 @@ export function DetailBody({ view, id, state, locale, onBack, onOpenWorkflow, pr
 export function projectIdentityOf(
   id: string,
   data: unknown,
-): { projectId: string; title: string; description: string | null; lifecycle: string; lifecycleTone: 'neutral'; path: string; revision: string; registeredAt: string; updatedAt: string } {
+): { projectId: string; title: string; description: string | null; lifecycle: string; lifecycleTone: 'neutral'; path: string; revision: string; registeredAt: string | null; updatedAt: string | null } {
   const catalog = (data as { catalog?: Parameters<typeof projectIdentity>[0] | null } | null | undefined)?.catalog
   if (catalog !== null && catalog !== undefined) return projectIdentity(catalog) as never
   // Nothing is known: no guessed path, no guessed lifecycle.
   // No catalog row: the dates are empty rather than invented, and the panel shows `—`.
-  return { projectId: id, title: id, description: null, lifecycle: 'unknown', lifecycleTone: 'neutral', path: '', revision: '', registeredAt: '', updatedAt: '' }
+  return { projectId: id, title: id, description: null, lifecycle: 'unknown', lifecycleTone: 'neutral', path: '', revision: '', registeredAt: null, updatedAt: null }
 }
 
 /**

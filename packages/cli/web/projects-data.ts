@@ -163,10 +163,9 @@ function identityFor(projectId: string): ProjectIdentity {
     // An unknown record states no revision; the head omits the segment rather than
     // printing `Revision —`, which would claim the store recorded an empty one.
     revision: "",
-    // The same reasoning for the two dates: an unknown record states none, and the panel
-    // prints `—` rather than claiming a value.
-    registeredAt: "",
-    updatedAt: "",
+    // The same reasoning for the two dates: an unknown record states none.
+    registeredAt: null,
+    updatedAt: null,
     lifecycleTone: "neutral",
     path: projectId,
   };

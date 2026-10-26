@@ -190,9 +190,12 @@ export type ProjectIdentity = {
   path: string;
   /** The catalog revision, printed in the head's meta line. */
   revision: string;
-  /** The catalog row's two dates, for the identity panel's last two rows. */
-  registeredAt: string;
-  updatedAt: string;
+  /**
+   * The catalog row's two dates, for the identity panel's last two rows. `null` when the
+   * record is unknown: an empty string would assert a blank date on every consumer.
+   */
+  registeredAt: string | null;
+  updatedAt: string | null;
 };
 
 /** The identity block from the roadmap's catalog identity. */
