@@ -330,14 +330,14 @@ function TrendPanel(props: { series: IssueFlowSeries; copy: OverviewCopy }) {
           </div>
           <div className="chart-legend">
             <span className="legend-item">
-              <span aria-hidden="true" />
+              <span className="legend-swatch" aria-hidden="true" />
               {copy.trendCaptured}
             </span>
             <span className="legend-item">
-              <span className={`$undefined $undefined`} aria-hidden="true" />
+              <span className="legend-swatch dashed" aria-hidden="true" />
               {copy.trendRetired}
             </span>
-            <span />
+            <span className="legend-spacer" />
             <span className="chart-note">{copy.trendLegend(series.datedOpen, series.recordedOpen)}</span>
           </div>
           <p className="chart-note">{copy.trendGap(series.datedOpen, series.undatedEvents)}</p>

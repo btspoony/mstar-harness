@@ -378,3 +378,22 @@
 .absence-reason,
 .absence-hint,
 .absence-pointer { margin: 0; }
+
+/* The prototype draws its chart in a pixel viewBox; the product's chart is a 100×40
+   viewBox stretched to the card (`preserveAspectRatio="none"`), which scales a 2px
+   stroke into a slab. `non-scaling-stroke` keeps the prototype's line weight at every
+   card width. Not a style departure: the same 2px/1.5px stroke the prototype declares. */
+.chart-svg .line-captured,
+.chart-svg .line-retired,
+.chart-svg .grid {
+  vector-effect: non-scaling-stroke;
+}
+
+/* The prototype puts its date labels inside the SVG as text; the product renders them
+   as spans, so they need the row the SVG gave them for free. */
+.chart-note {
+  display: flex;
+  align-items: baseline;
+  gap: var(--ms-space-3);
+  flex-wrap: wrap;
+}
