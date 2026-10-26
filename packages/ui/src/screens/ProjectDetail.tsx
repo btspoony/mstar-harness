@@ -130,15 +130,20 @@ function Milestone(props: { milestone: RoadmapModel["milestones"][number]; copy:
       </div>
       {milestone.issues.length === 0 ? null : (
         // The prototype's assignment row: one compact id chip per issue, toned by its
-        // disposition. The title stays on the issue's own screen — this row answers
-        // "which issues", not "what are they".
+        // disposition, and the rest folded into `+N <disposition>`. The title stays on
+        // the issue's own screen — this row answers "which issues", not "what are they".
         <div className="assigned">
-          {milestone.issues.map((issue) => (
+          {assignedChips(milestone.issues).shown.map((issue) => (
             <span key={issue.id} className={`status tone-${dispositionTone(issue.disposition)}`}>
               <span className="dot" aria-hidden="true" />
               <span className="assigned-id" title={issue.title}>
                 {issue.id}
               </span>
+            </span>
+          ))}
+          {assignedChips(milestone.issues).folded.map((fold) => (
+            <span key={fold.disposition} className="assigned-id muted" data-ms-folded={fold.disposition}>
+              +{fold.count} {fold.disposition}
             </span>
           ))}
         </div>
@@ -152,6 +157,34 @@ function milestoneStatusTone(status: string): Tone {
   if (status === "delivered") return "success";
   if (status === "dropped") return "purple";
   return "neutral";
+}
+
+/**
+ * Split a milestone's issues into the chips it shows and the per-disposition folds it
+ * states instead. The prototype lists a row that stays on one line: the chips it shows
+ * are the ones still open, and every other disposition is counted (`+5 retired`).
+ *
+ * The cap is a presentation fact, not a rule from the store: with more issues than fit,
+ * the row would wrap and the board's rhythm breaks.
+ */
+const ASSIGNED_CHIP_CAP = 9;
+
+function assignedChips(issues: readonly { id: string; title: string; disposition: string }[]): {
+  shown: typeof issues;
+  folded: Array<{ disposition: string; count: number }>;
+} {
+  const open = issues.filter((issue) => issue.disposition === "open");
+  const rest = issues.filter((issue) => issue.disposition !== "open");
+  const shown = open.slice(0, ASSIGNED_CHIP_CAP);
+  const overflow = open.slice(ASSIGNED_CHIP_CAP);
+  const byDisposition = new Map<string, number>();
+  for (const issue of [...overflow, ...rest]) {
+    byDisposition.set(issue.disposition, (byDisposition.get(issue.disposition) ?? 0) + 1);
+  }
+  return {
+    shown,
+    folded: [...byDisposition].map(([disposition, count]) => ({ disposition, count })),
+  };
 }
 
 /**
