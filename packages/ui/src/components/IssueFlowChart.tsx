@@ -60,6 +60,13 @@ export function IssueFlowChart(props: IssueFlowChartProps) {
   );
   const baseline = VIEW_HEIGHT - PAD;
   return (
+    <div className="chart-frame" data-ms-chart-frame="">
+      {/* The prototype prints the plot's top and baseline as text beside the drawing.
+          Inside this SVG they would stretch with it, so they are HTML siblings. */}
+      <span className="chart-y-axis" aria-hidden="true">
+        <span>{max}</span>
+        <span>0</span>
+      </span>
     <svg
       className={props.variant === "full" ? "chart-svg is-full" : "chart-svg"}
       viewBox={`0 0 ${VIEW_WIDTH} ${VIEW_HEIGHT}`}
@@ -71,6 +78,10 @@ export function IssueFlowChart(props: IssueFlowChartProps) {
       <title>{props.label}</title>
       <line className="grid" x1={0} x2={VIEW_WIDTH} y1={PAD} y2={PAD} />
       <line className="grid" x1={0} x2={VIEW_WIDTH} y1={baseline} y2={baseline} />
+      {/* The prototype labels the axis in its own `<text class="axis-text">`; this SVG
+          stretches (`preserveAspectRatio="none"`), so the labels live outside it — see
+          `.chart-y-axis` in the stylesheet. The two numbers are the top of the plot and
+          the baseline. */}
       <path
         className="line-captured"
         d={stepPath(
@@ -86,5 +97,6 @@ export function IssueFlowChart(props: IssueFlowChartProps) {
         )}
       />
     </svg>
+    </div>
   );
 }

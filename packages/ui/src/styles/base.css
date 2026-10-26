@@ -534,3 +534,29 @@
 .ms-container .table > colgroup > col:not([style]) {
   min-width: 120px;
 }
+
+/* The prototype labels the issue-flow axis with the plot's top value and its baseline.
+   The drawing is an SVG with `preserveAspectRatio="none"`, so a `<text>` inside it would
+   be stretched with the paths; the labels are HTML beside it instead. */
+.ms-container .chart-frame {
+  display: flex;
+  align-items: stretch;
+  gap: 6px;
+}
+
+.ms-container .chart-y-axis {
+  display: flex;
+  flex-direction: column;
+  justify-content: space-between;
+  align-items: flex-end;
+  min-width: 22px;
+  font-family: var(--ms-font-mono);
+  font-size: var(--ms-fs-10);
+  color: var(--ms-text-muted);
+  line-height: 1;
+}
+
+.ms-container .chart-frame > .chart-svg {
+  flex: 1;
+  min-width: 0;
+}
