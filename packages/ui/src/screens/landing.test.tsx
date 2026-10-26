@@ -293,11 +293,17 @@ describe("Overview — the loading phase, and the literal severity", () => {
   });
 
   test("a severity row's label is the literal enum, never a translation", () => {
-    // F: `copy.severityLabels` is presentational hook only; the contract value is
-    // what renders, so it stays copyable into the CLI.
+    // `copy.severityLabels` is presentational hook only; the contract value is what
+    // renders, so it stays copyable into the CLI. The label rides the status dot now
+    // (the prototype's tally: dot + literal word, count right-aligned).
     const html = overview();
-    expect(html).toContain("<dt>critical</dt>");
-    expect(html).not.toContain("<dt>Critical</dt>");
+    expect(html).toContain('data-ms-severity="critical"');
+    expect(html).toContain("<span>critical</span>");
+    // A definition list still groups each severity with its count: `dl` permits a
+    // `div` wrapper, so the two-column grid and the grouping coexist.
+    expect(html).toContain("<dt>");
+    expect(html).toContain("<dd>");
+    expect(html).not.toContain("<span>Critical</span>");
   });
 });
 

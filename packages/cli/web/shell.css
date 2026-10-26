@@ -50,13 +50,23 @@ body {
   min-height: 100vh;
 }
 
+/* The header carries the shared band class too, so the override is written as the
+   compound selector: 0,2,0 beats `.ms-pane-head`'s 0,1,0 regardless of which sheet
+   the bundler emits last. Equal specificity would leave the gutter to load order. */
+.app-header.ms-pane-head {
+  padding-inline: 20px;
+}
+
 .app-header {
   display: flex;
   flex-wrap: wrap;
   align-items: center;
   gap: 0.75rem 1.5rem;
   /* The prototype's frame is a single 20px gutter: header `0 20px`, footer `7px 20px`,
-     main `14px 20px 16px`. One left edge for the whole shell. */
+     main `14px 20px 16px`. One left edge for the whole shell. The inline value here is
+     the same gutter the compound rule above sets at higher specificity; it stays as the
+     value for a header that somehow mounts without the band class, and never as the
+     mechanism — the prototype's window header is `0 20px` while its pane nav is `0 12px`. */
   padding: 0.75rem 20px;
   /* The surface and the closing hairline are the shared pane band
      (`.ms-pane-head` in the package's `base.css`), the same two rules the dsh seat

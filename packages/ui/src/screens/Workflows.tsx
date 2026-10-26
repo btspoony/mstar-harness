@@ -69,7 +69,7 @@ export function Workflows(props: WorkflowsProps) {
     {
       key: "status",
       header: copy.columns.status,
-      width: 132,
+      width: 120,
       render: (row) => (
         <span className={css.statusCell}>
           <StatusDot label={row.status} tone={row.statusTone} mono />
@@ -88,7 +88,7 @@ export function Workflows(props: WorkflowsProps) {
     {
       key: "updated",
       header: copy.columns.updated,
-      width: 132,
+      width: 120,
       secondary: true,
       align: "end",
       render: (row) => <span className={css.mono}>{row.updatedAt}</span>,

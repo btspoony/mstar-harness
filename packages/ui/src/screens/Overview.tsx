@@ -18,9 +18,7 @@
  * decided an arm itself would be a second authority.
  */
 import { EmptyState, type AbsenceArm } from "../components/EmptyState.tsx";
-import { Field } from "../components/Field.tsx";
 import { Notice } from "../components/Notice.tsx";
-import { FieldGroup } from "../components/FieldGroup.tsx";
 import { Panel, PanelBody, PanelHead } from "../components/Panel.tsx";
 import { ProgressBar } from "../components/ProgressBar.tsx";
 import { Row } from "../components/Row.tsx";
@@ -183,25 +181,37 @@ export function Overview(props: OverviewProps) {
 
         {/* 2 — residuals, then 3 — delivery. Never dropped. */}
         <Panel labelledBy="ms-overview-residuals">
-          <PanelHead id="ms-overview-residuals" title={copy.residualsHeading} />
+          <PanelHead
+            id="ms-overview-residuals"
+            title={copy.residualsHeading}
+            meta={
+              model.residuals.kind === "populated"
+                ? copy.residualsTotal(model.residuals.value.total)
+                : undefined
+            }
+          />
           <PanelBody>
-          {/* The row label is the literal enum: contract values stay English and
-              untranslated so they can be copied into the CLI. `data-ms-severity` is
-              the hook for anything presentational. */}
+          {/* The prototype's compact tally (`design-v1.html:2424-2434`): five severity
+              rows in a two-column grid — critical/high, medium/low, nit — severity on the
+              left with its dot, count right-aligned. The row label is the literal enum:
+              contract values stay English and untranslated so they can be copied into the
+              CLI. `data-ms-severity` is the hook for anything presentational. */}
           {model.residuals.kind === "populated" ? (
-            <FieldGroup title={copy.residualsTotal(model.residuals.value.total)} columns={1}>
+            <dl className={css.residuals} data-ms-residuals="">
               {model.residuals.value.rows.map((row) => (
-                <Field key={row.severity} label={row.severity}>
-                  <span
-                    className={row.emphasised ? css.countEmphasised : css.count}
-                    data-ms-severity={row.severity}
-                    data-ms-count={row.count}
-                  >
-                    {row.count}
-                  </span>
-                </Field>
+                <div
+                  key={row.severity}
+                  className={css.residualRow}
+                  data-ms-severity={row.severity}
+                  data-ms-count={row.count}
+                >
+                  <dt className={css.residualSeverity}>
+                    <StatusDot label={row.severity} tone={row.tone} mono />
+                  </dt>
+                  <dd className={row.emphasised ? css.countEmphasised : css.count}>{row.count}</dd>
+                </div>
               ))}
-            </FieldGroup>
+            </dl>
           ) : (
             <Absence
               arm={model.residuals.kind as AbsenceArm}
@@ -209,6 +219,37 @@ export function Overview(props: OverviewProps) {
               heading={copy.residualsHeading}
               reason={model.residuals.kind === "unavailable" ? model.residuals.reason : undefined}
               detail={model.residuals.kind === "not-applicable" ? model.residuals.reason : undefined}
+            />
+          )}
+          </PanelBody>
+        </Panel>
+
+        {/* 3 — milestones, before the iteration: the prototype's sidebar order. */}
+        <Panel labelledBy="ms-overview-milestones">
+          <PanelHead id="ms-overview-milestones" title={copy.milestonesHeading} />
+          <PanelBody>
+          {model.milestones.kind === "populated" ? (
+            props.compact === true ? (
+              <p className={css.summary} data-ms-milestone-summary="">
+                {copy.milestonesSummary(
+                  model.milestones.value.length,
+                  model.milestones.value.reduce((open, row) => open + row.openIssues, 0),
+                )}
+              </p>
+            ) : (
+              <div className={css.rows} data-ms-milestones="">
+                {model.milestones.value.map((row) => (
+                  <MilestoneRowView key={row.milestoneId} row={row} copy={copy} />
+                ))}
+              </div>
+            )
+          ) : (
+            <Absence
+              arm={model.milestones.kind as AbsenceArm}
+              copy={copy}
+              heading={copy.milestonesHeading}
+              reason={model.milestones.kind === "unavailable" ? model.milestones.reason : undefined}
+              detail={model.milestones.kind === "not-applicable" ? model.milestones.reason : undefined}
             />
           )}
           </PanelBody>
@@ -259,37 +300,6 @@ export function Overview(props: OverviewProps) {
           </PanelBody>
         </Panel>
       </div>
-
-      {/* 4 — milestones. Below the fold, and the first thing to shorten. */}
-      <Panel labelledBy="ms-overview-milestones">
-        <PanelHead id="ms-overview-milestones" title={copy.milestonesHeading} />
-        <PanelBody>
-        {model.milestones.kind === "populated" ? (
-          props.compact === true ? (
-            <p className={css.summary} data-ms-milestone-summary="">
-              {copy.milestonesSummary(
-                model.milestones.value.length,
-                model.milestones.value.reduce((open, row) => open + row.openIssues, 0),
-              )}
-            </p>
-          ) : (
-            <div className={css.rows} data-ms-milestones="">
-              {model.milestones.value.map((row) => (
-                <MilestoneRowView key={row.milestoneId} row={row} copy={copy} />
-              ))}
-            </div>
-          )
-        ) : (
-          <Absence
-            arm={model.milestones.kind as AbsenceArm}
-            copy={copy}
-            heading={copy.milestonesHeading}
-            reason={model.milestones.kind === "unavailable" ? model.milestones.reason : undefined}
-            detail={model.milestones.kind === "not-applicable" ? model.milestones.reason : undefined}
-          />
-        )}
-        </PanelBody>
-      </Panel>
 
       {/* 5 — the one page-validity fact. Never dropped. */}
       <p className={css.projection} data-ms-projection={model.projection.kind}>

@@ -76,7 +76,7 @@ export const zh: Copy = {
     workflowsTruncated: (shown: number, total: number) => `显示 ${shown} / ${total}`,
     plansProgress: (done, total) => `${done}/${total} 个计划`,
     residualsHeading: "未关闭的遗留项",
-    residualsTotal: (open) => `共 ${open} 项未关闭`,
+    residualsTotal: (open) => `${open} 项未关闭 · 全部项目`,
     iterationHeading: "交付",
     iterationNoIteration: "还没有迭代",
     gateStep: (step, of) => `第 ${step} / ${of} 步`,

@@ -40,13 +40,15 @@ export type ProjectsProps = {
 export function Projects(props: ProjectsProps) {
   const { model, copy } = props;
 
+  // The prototype's sequence (`design-v1.html:1752-1758`): the id first, then the
+  // catalog title, then the lifecycle.
   const columns: DataTableColumn<ProjectRow>[] = [
+    { key: "id", header: copy.columns.id, width: 96, render: (row) => <span className={css.mono}>{row.projectId}</span> },
     {
       key: "title",
       header: copy.columns.title,
       render: (row) => <TruncatedText text={row.title} />,
     },
-    { key: "id", header: copy.columns.id, width: 96, render: (row) => <span className={css.mono}>{row.projectId}</span> },
     {
       key: "lifecycle",
       header: copy.columns.lifecycle,
@@ -65,7 +67,7 @@ export function Projects(props: ProjectsProps) {
     {
       key: "description",
       header: copy.columns.description,
-      width: 240,
+      width: 180,
       secondary: true,
       render: (row) =>
         row.description === null ? (

@@ -91,6 +91,16 @@
 
 /* The collapse: below 620px of CONTAINER (never viewport), the secondary
    columns go and the primary cell carries the second line. */
+/* Below the pane's wide band the wide-only columns are gone: the prototype's sidebar
+   shows seven columns at 720px, and the eighth is what pushed the table past its card.
+   No second line restates them — the record's own screen carries the fact. */
+@container (max-width: 899px) {
+  .table th[data-ms-col="wide"],
+  .table td[data-ms-col="wide"] {
+    display: none;
+  }
+}
+
 @container (max-width: 619px) {
   /* A detail table drops the yielded columns instead of restating them: the page
      above already carries the record, so there is no second line to grow. */

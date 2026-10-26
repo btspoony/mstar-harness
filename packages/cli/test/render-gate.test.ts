@@ -138,6 +138,9 @@ const PROBE = `(() => {
     .flatMap((row) => [...row.querySelectorAll('td')])
     .filter(rendered);
   const cellWidths = visibleCells.map((cell) => Math.round(cell.getBoundingClientRect().width * 10) / 10);
+  // One row's visible cells: the column count, not the column count times the rows.
+  const firstRow = document.querySelector('table tbody tr[data-ms-row-main]');
+  const rowCells = firstRow === null ? [] : [...firstRow.querySelectorAll('td')].filter(rendered);
   const header = document.querySelector('header.app-header');
   const h1 = document.querySelector('[data-ms-screen] h1');
   const summaryEl = document.querySelector('[data-ms-summary]');
@@ -147,7 +150,7 @@ const PROBE = `(() => {
     cardWidths: [...document.querySelectorAll('[data-ms-panel]')].map((card) => Math.round(card.getBoundingClientRect().width * 10) / 10),
     narrowestCell: cellWidths.length === 0 ? null : Math.min(...cellWidths),
 
-    visibleCells: cellWidths.length,
+    visibleCells: rowCells.length,
     summaryOverflows: summaryEl === null ? null : summaryEl.scrollWidth > summaryEl.clientWidth + 1,
     titleOverflows: h1 === null ? null : h1.scrollWidth > h1.clientWidth + 1,
     // A title is a unit: CJK breaks between every glyph, so a squeezed head stacked a
@@ -172,6 +175,14 @@ const PROBE = `(() => {
       const title = document.querySelector('[data-ms-screen] h1');
       if (summary === null || title === null) return null;
       return Math.round((summary.getBoundingClientRect().top - title.getBoundingClientRect().bottom) * 10) / 10;
+    })(),
+    // The floor the caller published for this table: below it the card body scrolls
+    // instead of squeezing. It is a number the layout can be reasoned about with.
+    tableFloorPx: (() => {
+      const table = document.querySelector('table');
+      if (table === null) return null;
+      const value = getComputedStyle(table).getPropertyValue('--ms-table-floor').trim();
+      return value === '' ? null : parseFloat(value);
     })(),
     tableWidth: (() => {
       const table = document.querySelector('table');
@@ -221,7 +232,13 @@ const PROBE = `(() => {
       }
       return worst;
     })(),
-    hiddenColumns: [...document.querySelectorAll('table thead th')]
+    // The column sequence, visible columns only: the prototype fixes an order, and a
+    // count alone cannot see a reorder. Keys rather than labels, so the anchor does not
+    // depend on which locale the page happens to carry.
+    columnKeys: [...document.querySelectorAll('table thead th')]
+      .filter((th) => getComputedStyle(th).display !== 'none')
+      .map((th) => th.getAttribute('data-ms-col-key')),
+    hiddenColumns: [...document.querySelectorAll('table thead th[data-ms-col="secondary"]')]
       .filter((th) => getComputedStyle(th).display === 'none').length,
     tableScrollsSideways: (() => {
       const scroller = document.querySelector('[data-ms-table-scroller]');
@@ -237,6 +254,10 @@ const PROBE = `(() => {
     summaryLeft: summaryEl === null ? null : Math.round(summaryEl.getBoundingClientRect().left * 10) / 10,
     baselineDelta: h1 === null || summaryEl === null ? null : Math.abs(centreY(h1) - centreY(summaryEl)),
     headerHeight: header === null ? null : Math.round(header.getBoundingClientRect().height * 10) / 10,
+    // The header's own gutter. The pane's nav gets 12px from the shared band; the
+    // dashboard's window header is the prototype's 0-20px band and owns that number,
+    // so a regression to a flush edge is visible here.
+    headerPadInline: header === null ? null : parseFloat(getComputedStyle(header).paddingInlineStart),
     headerHairline: header === null ? null : getComputedStyle(header).borderBottomWidth,
     controlsInside: (() => {
       const controls = [...document.querySelectorAll('.app-seg, .app-icon-btn')];
@@ -527,7 +548,12 @@ describe.skipIf(!browserAvailable)("the render gate", () => {
 
   const BANDS = [
     { width: 760, collapse: false, scrolls: false },
-    { width: 620, collapse: false, scrolls: true },
+    // 620 is above the collapse floor and below the declared-width floor. Whether a
+    // given list overflows there is a function of its own declared widths (the issues
+    // table still does; the projects table no longer needs to), so the band does not
+    // pin one answer — the "scroll instead of squeeze" contract is asserted on the
+    // issues table directly, where the floor is genuinely short.
+    { width: 620, collapse: false },
     { width: 420, collapse: true, scrolls: false },
     { width: 280, collapse: true, scrolls: true, floor: 300 },
   ] as const;
@@ -569,7 +595,7 @@ describe.skipIf(!browserAvailable)("the render gate", () => {
           // (620 above the declared floor, 280 under the documented floor) the
           // assertion inverts — otherwise deleting `overflow-x: auto` passes.
           expect(band.hiddenColumns as number > 0).toBe(sample.collapse);
-          expect(band.tableScrollsSideways).toBe(sample.scrolls);
+          if ("scrolls" in sample) expect(band.tableScrollsSideways).toBe(sample.scrolls);
           // Scroll INSTEAD of squeeze means both halves: the table is wider than the
           // card where the policy permits it, and the box it sits in can actually
           // scroll (a `scrollWidth` check alone passes with `overflow-x` deleted).
@@ -699,6 +725,97 @@ describe.skipIf(!browserAvailable)("the render gate", () => {
     expect(band.pageOverflow).toBe(false);
     // And not down to an ellipsis-only box: the row is still a readable measure.
     expect(band.titleWidth as number).toBeGreaterThanOrEqual(120);
+  }, 60_000);
+
+  test("at 620px the issues table scrolls inside its card instead of squeezing", async () => {
+    // Above the collapse floor and below the declared-width floor: the table is wider
+    // than its card AND the box scrolls, which is "scroll instead of squeeze" in both
+    // halves. Deleting `overflow-x: auto` or dropping the floor fails here.
+    await browser(["set", "viewport", "620", String(VIEWPORT.height)]);
+    const measured = await visit("issues", "issues", true, "pane-620-issues");
+    const band = measured.band as Record<string, number | boolean | string | null>;
+    expect(band.tableScrollsSideways).toBe(true);
+    expect(band.scrollerOverflowX).toBe("auto");
+  }, 60_000);
+
+  test("every list keeps the prototype's columns inside its card at 720px", async () => {
+    // The pane the owner approves is 720px wide (`design-v1.html` sidebar stages).
+    // At that width the prototype shows every column of every list, with the title
+    // absorbing the slack — no clip, no card that scrolls its own table.
+    await browser(["set", "viewport", "720", String(VIEWPORT.height)]);
+    const lists = [
+      ["issues", "issues", 7],
+      ["workflows", "workflows", 6],
+      ["iterations", "iterations", 7],
+      ["projects", "projects", 5],
+    ] as const;
+    for (const [route, screen, columns] of lists) {
+      const measured = await visit(route, screen, true, `pane-720-${route}`);
+      const band = measured.band as Record<string, number | boolean | null>;
+      // Every column the prototype shows is rendered: the eighth (milestone) is a
+      // wide-only column and must be the only thing missing.
+      expect(band.visibleCells).toBe(columns);
+      // A table wider than its card is the defect this anchor exists for: the last
+      // column was cut at the pane edge and the card looked like it had no frame.
+      // `tableScrollsSideways` is the overflow test; the scroller keeps
+      // `overflow-x: auto` at every width as the safety net, so its computed value is
+      // not the anchor here.
+      expect(band.tableScrollsSideways).toBe(false);
+      // The dsh seat scrolls with `overflow-y: auto`, so on a classic-scrollbar
+      // platform the vertical bar takes ~15px of the 720px pane and the card holds
+      // 663px, not the 678px this macOS gate measures. The floor has to sit under
+      // THAT number, or the iterations card scrolls at the width the owner approved
+      // while this gate stays green on overlay scrollbars.
+      if (route === "iterations") expect(band.tableFloorPx as number).toBeLessThanOrEqual(656);
+      const contentWidth = band.contentWidth as number;
+      expect(band.tableWidth as number).toBeLessThanOrEqual(contentWidth + 0.5);
+      for (const width of band.cardWidths as number[]) expect(width).toBeLessThanOrEqual(contentWidth + 0.5);
+    }
+  }, 90_000);
+
+  test("the issues column order is the prototype's sequence", async () => {
+    // `design-v1.html:1199-1207`: ID, Title, Project, Kind, Severity, Disposition,
+    // Last activity. The gate asserts the sequence, not just the count, because a
+    // reorder keeps the count and changes what the reader scans.
+    await browser(["set", "viewport", "720", String(VIEWPORT.height)]);
+    const measured = await visit("issues", "issues", true, "pane-720-issues-order");
+    const band = measured.band as Record<string, unknown>;
+    expect(band.columnKeys).toEqual([
+      "id",
+      "title",
+      "project",
+      "kind",
+      "severity",
+      "disposition",
+      "lastActivity",
+    ]);
+  }, 60_000);
+
+  test("the overview is one run of full-width sections at both pane widths", async () => {
+    // The prototype's sidebar Overview is a single column of 694px panels
+    // (`design-v1.html` sidebar focus view); a second column at a wide width only
+    // squeezes prose that has nowhere to grow.
+    for (const width of [720, 1900]) {
+      await browser(["set", "viewport", String(width), "900"]);
+      const measured = await visit("overview", "overview", true, `overview-${width}`);
+      const band = measured.band as Record<string, number | boolean | null>;
+      const cards = band.cardWidths as number[];
+      expect(cards.length).toBeGreaterThan(1);
+      for (const card of cards) expect(card).toBeCloseTo(band.contentWidth as number, 0);
+    }
+  }, 90_000);
+
+  test("the pane head is inset from the pane's edges", async () => {
+    // The prototype's head band is `padding: 0 12px` around the nav (`design-v1.html:487`),
+    // and the dashboard's window header keeps its own 20px gutter on that band.
+    // A flush edge is the defect: zero inset means the nav touches the pane's sides.
+    const measured = await visit("issues", "issues", true, "pane-head-inset");
+    const band = measured.band as Record<string, number | boolean | null>;
+    // The exact dashboard gutter, not a range: the shared band supplies 12px and the
+    // window header overrides it. A range would pass at both numbers and would not see
+    // the override lose its specificity (or the sheets swap order).
+    expect(band.headerPadInline).toBe(20);
+    expect(band.headerHairline).not.toBe("0px");
   }, 60_000);
 
   test("a detail screen shows its timestamps in the prototype's form", async () => {

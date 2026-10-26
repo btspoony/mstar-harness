@@ -121,36 +121,41 @@ export function Issues(props: IssuesProps) {
     text: `${copy.filters[entry.field === "q" ? "search" : entry.field]}: ${entry.value}`,
   }));
 
+  // The prototype's sequence (`design-v1.html:1199-1207`): ID, Title, Project, Kind,
+  // Severity, Disposition, Last activity. The milestone is a product-only fact and
+  // follows the project it belongs to; it is wide-only, so the 720px pane renders the
+  // prototype's seven columns in the prototype's order.
   const columns: DataTableColumn<IssueRow>[] = [
     { key: "id", header: copy.columns.id, width: 80, render: (row) => <span className={css.mono}>{row.id}</span> },
     { key: "title", header: copy.columns.title, render: (row) => <TruncatedText text={row.title} /> },
+    { key: "project", header: copy.columns.project, width: 112, secondary: true, render: (row) => <span className={css.mono}>{row.projectId}</span> },
+    { key: "kind", header: copy.columns.kind, width: 92, secondary: true, render: (row) => <span className={css.mono}>{row.kind}</span> },
     {
       key: "severity",
       header: copy.columns.severity,
-      width: 76,
+      width: 84,
       secondary: true,
       render: (row) => <StatusDot label={row.severity} tone={row.severityTone} emphasis={row.severityEmphasised} mono />,
     },
     {
       key: "disposition",
       header: copy.columns.disposition,
-      width: 100,
+      width: 76,
       secondary: true,
       render: (row) => <StatusDot label={row.disposition} tone={row.dispositionTone} mono />,
     },
-    { key: "kind", header: copy.columns.kind, width: 48, secondary: true, render: (row) => <span className={css.mono}>{row.kind}</span> },
-    { key: "project", header: copy.columns.project, width: 84, secondary: true, render: (row) => <span className={css.mono}>{row.projectId}</span> },
     {
       key: "milestone",
       header: copy.columns.milestone,
       width: 80,
       secondary: true,
+      wide: true,
       render: (row) => (row.milestoneId === null ? null : <span className={css.mono}>{row.milestoneId}</span>),
     },
     {
       key: "lastActivity",
       header: copy.columns.lastActivity,
-      width: 96,
+      width: 88,
       secondary: true,
       align: "end",
       render: (row) => <span className={css.mono}>{row.lastActivity}</span>,
@@ -159,7 +164,7 @@ export function Issues(props: IssuesProps) {
 
   /** The second line of a collapsed row: the facts the hidden columns carried. */
   const meta = (row: IssueRow) =>
-    [row.severity, row.disposition, row.kind, row.projectId, row.milestoneId, row.lastActivity]
+    [row.projectId, row.kind, row.severity, row.disposition, row.milestoneId, row.lastActivity]
       .filter((part): part is string => part !== null && part !== "")
       .join(" · ");
 

@@ -298,7 +298,7 @@ rules that use them. The token contract test proves the two lists agree.
 
 | Constant | Value | What changes below it |
 | --- | --- | --- |
-| `reflow-2col` | **900px** | Two-column detail and overview compositions fold to one column |
+| `reflow-2col` | **900px** | Two-column detail compositions fold to one column; the overview is already one vertical run at every width, and the wide-only list columns (the milestone) appear above it |
 | `reflow-table` | **620px** | Table columns collapse into a two-line row: primary cell on line 1, secondary facts as inline meta on line 2. Filters wrap to full-width fields |
 | `reflow-stack` | **480px** | Chrome stacks, navigation wraps, panel heads stack |
 | `table-floor` | **300px** | Below this a table scrolls inside its own labelled container, never the page |
@@ -307,6 +307,12 @@ rules that use them. The token contract test proves the two lists agree.
 - The dashboard's product area is the 1440px case; the dsh right Sidebar is the same
   components at **720px** (its push default) and **400px** (dragged narrow). Same tree,
   different container, no second implementation.
+- **The pane's head band is inset, and shared.** `.ms-pane-head` is the surface + closing
+  hairline (`design-v1.html:482`) plus the prototype's nav inset `padding-inline: 12px`
+  (`design-v1.html:487`). The dsh pane inherits both. The dashboard's window header mounts the
+  same class and overrides the padding with its own 20px gutter — the prototype's window header
+  is `0 20px` while its pane nav is `0 12px`, so neither host invents its edge. The host's own
+  tab strip stays the pane's top edge; the band starts below it.
 
 ### Narrow list treatment (the prototype is silent here)
 
@@ -314,14 +320,28 @@ The prototype defines **one** narrow-table precedent — `WorkflowDetail` hiding
 and 5 below 619px — and no narrow treatment at all for the four list screens. Silence is not
 a licence to ship the wide table squeezed, so the product chooses:
 
-**Priority columns below the floor, a declared-width table above it, and a scroll floor as
-the net.** Concretely, every list table declares a px width for all but one column; that one
-flexible column (the title) takes the rest.
+**Priority columns below the floor, declared widths from the prototype, and a scroll floor as
+the net.** The **column order is the prototype's too** (`design-v1.html:1199-1207`): ID, Title,
+Project, Kind, Severity, Disposition, Last activity. A product-only fact sits next to the fact it
+belongs to (the milestone follows the project) and never displaces the prototype's sequence;
+`Workflows` (`:1548-1553`), `Iterations` (`:1664-1669`) and `Projects` (`:1757-1762`) follow their
+own prototype tables the same way. Concretely, every list table declares a px width for all but one column; that one
+flexible column (the title) takes the rest. The widths are the prototype's own split
+(`design-v1.html:1196-1198`: id 86, title flexible, project 128, kind 112, severity 100,
+disposition 104, last activity 116), rounded to what the product's own identifiers need — a
+project id like `dsh-integrator` needs 112px, an `improvement` kind 92px.
 
 | Band (container) | What the list does |
 | --- | --- |
-| **≥ 900px** | All columns. Declared widths; the flexible title column gets the remainder (measured at 900: 858px table in an 860px card, no scroll). |
-| **620–899px** | All columns, same widths, and the table keeps a floor of `declared widths + 120px`. If the pane is narrower than that floor the **card body scrolls sideways** rather than squeezing any column: measured at 760 the four lists fit (floor 680–716px in a 718px table) with zero truncated cells; at 620 the Issues table scrolls, and every column stays reachable. |
+| **≥ 900px** | All columns, including the wide-only milestone column. Declared widths; the flexible title column gets the remainder (measured at 1900: 786px of title in an 1398px table, no scroll). |
+| **620–899px** | The prototype's seven columns — the *wide-only* milestone column is hidden by rule (`@container (max-width: 899px)`), and the table keeps a floor of `declared widths + 88px` for the flexible column. The prototype's sidebar at 720px shows seven columns and no milestone (`design-v1.html:2551`), and the eighth column is exactly what pushed the table past its card. Measured at 720: table 678px in a 678px card, every column whole, title 146px — the widest column on the Issues list. Where a list's own declared widths still exceed the floor, the **card body scrolls sideways** rather than squeezing: at 620 the Issues table scrolls, and every column stays reachable.
+  The floor is `declared + 88`, not `+ 96`, because the **dsh seat scrolls with `overflow-y: auto`**:
+  on a classic-scrollbar platform the vertical bar takes ~15px of a 720px pane, so a card holds
+  663px, not the 678px a macOS gate measures. The iterations set is 568px, so 96 would put its
+  floor at 664px — one pixel past the cliff, and that card would scroll at the approved width on
+  platforms nobody here runs. At 88 the floor is 656px, seven pixels under the classic-scrollbar
+  card; the 720px rendering is unchanged, because the table is `inline-size: 100%` and the floor
+  only decides when scrolling begins. |
 | **480–619px** | Secondary columns are hidden **by rule** (`display: none`), not by overflow, and each yielded fact reappears on the row's second line. Id, title and the screen's one status column keep their declared widths; the flexible title takes the rest (measured at 420 and 619: narrowest cell 80–112px, zero truncated cells, no sideways scroll). |
 | **≤ 299px** | The collapsed table keeps the documented 300px floor and scrolls inside its own card. The card is narrower than the summary's four facts, so the summary line overflows its own box instead of reading as one measured line; the facts are all painted, the line keeps the title's baseline, and the page itself never scrolls sideways. |
 
@@ -331,6 +351,11 @@ Two rules make this hold, and both are the defects that shipped:
    column set evenly — eight columns of ~90px each gave `I-…`, `d…` and `● runningplan…`.
 2. **No positional column widths.** Collapsing with "first column 20%, second 80%" put the
    *third* primary column at zero width, which is how a status word lost its own box.
+3. **A wide-only column is not a hidden fact.** `wide: true` on a `DataTableColumn` hides the
+   column below 900px of container and restates nothing on the second line, so it is only for a
+   fact the record's own screen also carries — an issue's milestone is on the issue. The
+   milestone is the only wide-only column, and it is what keeps the 720px table seven columns
+   instead of eight.
 
 A hidden column costs no width: the `<colgroup>` is gone, so a `display: none` cell no longer
 leaves a column's share behind it.
@@ -379,9 +404,18 @@ a squeezed head set a two-glyph title as one glyph per line (measured: a 30.4px,
   the floor, 360px at 400px, 580px at 620px), the smallest title box is still a readable
   measure; the gate asserts a floor of 120px on it.
 
-- **Prose keeps a measure.** Overview's two-column grid folds to one column below 900px, so a
-  card at 420–619px is 360–579px wide and its sentences wrap at 12+ characters per line
-  rather than one. No further cap is applied: the card is the measure.
+- **Prose keeps a measure.** Overview is **one vertical run of full-width sections at every
+  width**, in the prototype's sidebar order — active workflow, residuals, milestones, the latest
+  iteration — each card 694px inside the prototype's 720px container. Two columns were the
+  defect: at 1900px the second column's card squeezed prose that had nowhere to grow, and the
+  prototype never puts two sections side by side in the pane it approves. The card is the
+  measure; no further cap is applied.
+- **The residual tally is a compact two-column grid, not a list.** The five severities flow
+  two per row — critical/high, medium/low, nit — severity on the left with its tone dot and a
+  fixed 88px label measure, count right-aligned (`margin-inline-start: auto`), one hairline per
+  row; below the 480px stack floor it is one column (`design-v1.html:2424-2434`). Its heading
+  carries the reconciling total in the panel's meta slot — `26 open · all projects` — instead of
+  a title line of its own.
 - A component that cannot degrade below a floor **states the floor** rather than squeezing
   into illegibility: a truncated cell always exposes its full text (hover `title`, plus a
   focus-reachable affordance for keyboard), and a table below its floor scrolls inside its

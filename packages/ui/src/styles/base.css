@@ -214,7 +214,16 @@
  * The body inset is additive on purpose: the screen frame already ends with 16px,
  * and the prototype's pane body ends with 24.
  */
+/**
+ * The pane's head band, shared by both seats.
+ *
+ * The prototype puts the nav row at `padding: 0 12px` inside a head that carries the
+ * surface and a closing hairline (`design-v1.html:482-487`). The pane (the dsh seat)
+ * inherits that inset; the dashboard's window header is the prototype's `0 20px` band
+ * and overrides this padding in its own `.app-header` rule.
+ */
 .ms-pane-head {
+  padding-inline: 12px;
   background: var(--ms-bg-surface);
   border-block-end: var(--ms-hairline);
 }
