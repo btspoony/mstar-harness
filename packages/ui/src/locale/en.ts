@@ -85,6 +85,8 @@ export const en = {
   },
 
   overview: {
+    screenScopeAll: "All projects",
+    screenSubtitle: (scope: string, open: number) => `${scope} · ${open} open issues`,
     pageTitle: "Overview",
     workflowsHeading: "Active workflow",
     workflowsMore: (n: number) => `+${n} more running`,

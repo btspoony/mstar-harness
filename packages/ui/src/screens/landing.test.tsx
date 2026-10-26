@@ -141,6 +141,8 @@ const overviewRead = (over: Partial<OverviewDTO> = {}): OverviewDTO => ({
 
 const overviewCopy: OverviewCopy = {
   pageTitle: "Overview",
+  screenSubtitle: (scope: string, open: number) => `${scope} \u00b7 ${open} open issues`,
+  screenScopeAll: "All projects",
   workflowsHeading: "Active workflows",
   workflowsEmpty: "Active workflows",
   workflowsTruncated: (shown: number, total: number) => `showing ${shown} of ${total}`,

@@ -45,6 +45,11 @@ import type { GateStepPosition, Tone } from "../view-model/status.ts";
 /** Every visible string this screen needs. Task 5 supplies them. */
 export type OverviewCopy = {
   pageTitle: string;
+  /** The line under the title: which projects, how many are open. */
+  screenSubtitle: (scope: string, open: number) => string;
+  /** The word this screen uses when the read covers every project. */
+  screenScopeAll: string;
+
   workflowsHeading: string;
   /** Names the running workflows the panel does not draw, so the list is never silently
    *  shortened. The prototype's panel is one active workflow. */
@@ -388,6 +393,14 @@ export function Overview(props: OverviewProps) {
           the document heading rule and loses the screen-head padding. */}
       <div className="screen-head">
         <h1>{copy.pageTitle}</h1>
+        {/* The prototype states the read's scope under the title: which projects, how many
+            issues are open, and when the read happened. */}
+        <p className="screen-sub" data-ms-screen-sub="">
+          {copy.screenSubtitle(
+            copy.screenScopeAll,
+            model.issueFlow.kind === "populated" ? model.issueFlow.value.recordedOpen : 0,
+          )}
+        </p>
       </div>
 
       <div className="overview-grid">

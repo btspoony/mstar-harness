@@ -72,6 +72,8 @@ export const zh: Copy = {
   },
 
   overview: {
+    screenScopeAll: "全部项目",
+    screenSubtitle: (scope: string, open) => `${scope} · ${open} 项未关闭`,
     pageTitle: "总览",
     workflowsHeading: "进行中的工作流",
     workflowsMore: (n: number) => `另有 ${n} 个在运行`,
