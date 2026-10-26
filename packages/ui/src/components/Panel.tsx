@@ -37,22 +37,35 @@ export function Panel(props: PanelProps) {
 export type PanelHeadProps = {
   /** The head's own id, so `Panel` can point at it. */
   id?: string;
-  title: string;
+  /**
+   * The heading. Optional because the prototype's two list screens carry a head with
+   * no title at all — just the filter row — and a head is the row, not the heading in it.
+   */
+  title?: string;
   /** Trailing facts: a count, a range, a state. */
   meta?: ReactNode;
+  /**
+   * The head's own content, for a head that is a row rather than a heading — the two list
+   * screens put their filter row here, exactly where the prototype has `.panel-head >
+   * .filters`.
+   */
+  children?: ReactNode;
 };
 
 export function PanelHead(props: PanelHeadProps) {
   return (
     <div className="panel-head" data-ms-panel-head="">
-      <h2 className="panel-title" id={props.id} data-ms-panel-title="">
-        {props.title}
-      </h2>
+      {props.title === undefined ? null : (
+        <h2 className="panel-title" id={props.id} data-ms-panel-title="">
+          {props.title}
+        </h2>
+      )}
       {props.meta === undefined ? null : (
         <span className="panel-meta" data-ms-panel-meta="">
           {props.meta}
         </span>
       )}
+      {props.children}
     </div>
   );
 }

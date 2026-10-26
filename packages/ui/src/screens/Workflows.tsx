@@ -42,7 +42,6 @@ export type WorkflowsCopy = {
   };
   plansProgress: (done: number, total: number) => string;
   /** The filter card's own head. */
-  filtersHeading: string;
   filters: {
     status: string;
     type: string;
@@ -183,7 +182,7 @@ export function Workflows(props: WorkflowsProps) {
       {model.rows.kind === "populated" ? (
         <>
           <Panel labelledBy={FILTERS_HEAD_ID}>
-            <PanelHead id={FILTERS_HEAD_ID} title={copy.filtersHeading} />
+            <PanelHead id={FILTERS_HEAD_ID}>
             <FilterBar
               fields={filterFields(copy, model.options, filters)}
               onFieldChange={(key, value) => props.onFiltersChange?.({ ...filters, [key]: value })}
@@ -200,6 +199,7 @@ export function Workflows(props: WorkflowsProps) {
               clearLabel={copy.filters.clear}
               resultSummary={copy.filters.results(model.shown, model.total)}
             />
+            </PanelHead>
             <PanelBody tight={true}>
               <DataTable
                 caption={copy.tableCaption}

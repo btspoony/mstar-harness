@@ -26,7 +26,6 @@ export type IterationsCopy = {
   pageTitle: string;
   tableCaption: string;
   /** The filter card's own head. */
-  filtersHeading: string;
   /** The prototype's footer: where "active" and the execution column come from. */
   membershipNote: string;
   filters: {
@@ -151,7 +150,7 @@ export function Iterations(props: IterationsProps) {
       {model.rows.kind === "populated" ? (
         <>
           <Panel labelledBy={FILTERS_HEAD_ID}>
-            <PanelHead id={FILTERS_HEAD_ID} title={copy.filtersHeading} />
+            <PanelHead id={FILTERS_HEAD_ID}>
             <FilterBar
               fields={[
                 {
@@ -181,6 +180,7 @@ export function Iterations(props: IterationsProps) {
               clearLabel={copy.filters.clear}
               resultSummary={copy.filters.results(model.filtered, model.total)}
             />
+            </PanelHead>
             <PanelBody tight={true}>
               <DataTable
                 caption={copy.tableCaption}

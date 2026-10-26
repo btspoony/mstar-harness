@@ -192,7 +192,6 @@ export const en = {
       search: "Search",
       clear: "Clear filters",
     },
-    filtersHeading: "Filters",
     // The prototype's screen meta (`design-v1.html:1098`), stating the disposition
     // the filters actually select — `open` is only true for the default view. A
     // partial page cannot count the projects it never saw, so the span drops
@@ -233,7 +232,6 @@ export const en = {
 
   workflows: {
     pageTitle: "Workflows",
-    filtersHeading: "Filters",
     filters: {
       status: "Status",
       type: "Type",
@@ -321,7 +319,6 @@ export const en = {
   },
 
   iterations: {
-    filtersHeading: "Filters",
     membershipNote: "Membership comes from the catalog; execution is a projection over it.",
     filters: {
       lifecycle: "Lifecycle",

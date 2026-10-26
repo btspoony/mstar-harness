@@ -176,7 +176,6 @@ export const zh: Copy = {
       search: "搜索",
       clear: "清除筛选",
     },
-    filtersHeading: "筛选",
     // 摘要行陈述当前选中的处置状态：`未解决` 只对默认视图成立。
     scope: (disposition, projects) => {
       const word = disposition === "" ? "全部" : disposition;
@@ -213,7 +212,6 @@ export const zh: Copy = {
 
   workflows: {
     pageTitle: "工作流",
-    filtersHeading: "筛选",
     filters: {
       status: "状态",
       type: "类型",
@@ -300,7 +298,6 @@ export const zh: Copy = {
   },
 
   iterations: {
-    filtersHeading: "筛选",
     membershipNote: "归属来自目录；执行状态是叠加在它之上的一次投影。",
     filters: {
       lifecycle: "生命周期",
