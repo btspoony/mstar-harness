@@ -106,11 +106,11 @@ const iterationsCopy: IterationsCopy = {
     execution: "Compass",
     delivery: "Delivery",
     plans: "Plans",
-    noExecution: "No execution",
     documents: "Documents",
     started: "Started",
   },
   gateStep: (step, of) => `step ${step} of ${of}`,
+  noExecution: "No execution",
   noCompass: "no compass",
   notStarted: "not started",
   plansProgress: (done, total) => `${done}/${total} plans`,
@@ -194,6 +194,20 @@ describe("Iterations list — the facts of §8.2", () => {
     expect(html).toContain("step 2 of 5");
     expect(html).toContain("1/2 plans");
     expect(html).toContain("2026-10-25 01:10");
+  });
+
+  test("the execution column states the projection's own words", () => {
+    // The fixture registers a workflow as `running` / `phase-2-execute`, so the cell must
+    // read exactly that. Asserting the joined string (not just "running") is what catches
+    // a wrong separator or a dropped phase — both would otherwise pass silently.
+    const html = renderList([iteration()], 1);
+    expect(html).toContain("running · phase-2-execute");
+  });
+
+  test("an iteration with no workflow says so, in its own words", () => {
+    const html = renderList([iteration({ workflow: null } as Partial<IterationDTO>)], 1);
+    expect(html).toContain("No execution");
+    expect(html).not.toContain("No compass");
   });
 
   test("the list never invents a step, and the detail screen still states it", () => {
