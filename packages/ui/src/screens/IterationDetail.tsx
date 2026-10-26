@@ -50,6 +50,12 @@ export type IterationDetailCopy = {
     id: string;
     title: string;
     lifecycle: string;
+    /** The catalog panel's six row labels, matching the prototype's. */
+    kind: string;
+    revision: string;
+    registeredAt: string;
+    location: string;
+    catalogUpdatedAt: string;
     root: string;
     compassStatus: string;
     startedAt: string;
@@ -177,16 +183,30 @@ function IterationDetailBody(props: {
             </div>
             <div className="panel-body">
               <dl className="fields">
-            <Field label={copy.fields.title}>{value.title ?? copy.fields.noWorkflow}</Field>
+            {/* The prototype's six rows, in its order, then the description beneath them. */}
+            <Field label={copy.fields.kind} mono>
+              {value.catalogKind ?? "—"}
+            </Field>
             <Field label={copy.fields.lifecycle} mono>
               {value.lifecycle ?? "—"}
             </Field>
-            <Field label={copy.fields.startedAt} mono>
-              {value.startedAt}
+            <Field label={copy.fields.revision} mono>
+              {value.revision ?? "—"}
             </Field>
-            <Field label={copy.fields.endedAt} mono>
-              {value.endedAt ?? "—"}
+            <Field label={copy.fields.registeredAt} mono>
+              {value.registeredAt ?? "—"}
             </Field>
+            <Field label={copy.fields.location} mono>
+              {value.location ?? "—"}
+            </Field>
+            <Field label={copy.fields.catalogUpdatedAt} mono>
+              {value.catalogUpdatedAt ?? "—"}
+            </Field>
+            {value.description === null ? null : (
+              <p className={"prose t-12 secondary"} data-ms-catalog-description="">
+                {value.description}
+              </p>
+            )}
               </dl>
             </div>
           </section>

@@ -142,7 +142,7 @@ const detailCopy: IterationDetailCopy = {
   documentsCount: (n) => `${n} documents`,
   documentsEmpty: "No document is registered under this iteration.",
   documentColumns: { title: "Title", lifecycle: "Lifecycle", kind: "Document kind", location: "Location", revision: "Revision" },
-  breadcrumb: { label: "Breadcrumb", current: "Iterations" },
+  breadcrumb: { label: "Breadcrumb", root: "Iterations", current: "Iteration" },
   compassHeading: "Compass",
   planTableHeading: "Plans",
   catalogHeading: "Catalog",
@@ -151,6 +151,11 @@ const detailCopy: IterationDetailCopy = {
     id: "Iteration",
     title: "Title",
     lifecycle: "Lifecycle",
+    kind: "Kind",
+    revision: "Revision",
+    registeredAt: "Registered",
+    location: "Location",
+    catalogUpdatedAt: "Updated",
     root: "Root",
     compassStatus: "Compass status",
     startedAt: "Started",
@@ -283,7 +288,8 @@ describe("IterationDetail — catalog, execution, compass, gate steps, plan tabl
   const html = renderDetail(iteration());
 
   test("catalog identity, execution and the dates", () => {
-    for (const expected of ["Frontend unification", "active", "issue-project-move", "2026-10-25 01:10"]) {
+    // The catalog panel states the prototype's six rows; the compass dates moved there.
+    for (const expected of ["Frontend unification", "active", "issue-project-move", "iteration"]) {
       expect(html).toContain(expected);
     }
   });
@@ -359,11 +365,13 @@ describe("IterationDetail — NEGATIVE: what §8.1 removed", () => {
   test("the detail model cannot carry them: the negative set is enforced by shape", () => {
     const model = iterationDetailModel({ data: iteration(), projection });
     if (model.kind !== "populated") throw new Error("expected the detail");
-    // `documents` is carried now; the rest stays out.
-    for (const removed of ["milestones", "revision", "storeRevision", "catalogRevision", "counters"]) {
+    // `documents` and the catalog's own `revision` are carried now (the prototype lists
+    // both); the store's counters still stay out.
+    for (const removed of ["milestones", "storeRevision", "catalogRevision", "counters"]) {
       expect(Object.keys(model.value)).not.toContain(removed);
     }
     expect(Object.keys(model.value)).toContain("documents");
+    expect(Object.keys(model.value)).toContain("revision");
   });
 });
 

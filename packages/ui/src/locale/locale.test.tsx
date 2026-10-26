@@ -241,6 +241,13 @@ describe("no key exists for a fact IA §8 marks not-rendered", () => {
     "workflowDetail.fields.registeredAt",
     "workflowDetail.fields.catalogUpdatedAt",
     "workflowDetail.fields.description",
+    // Same rows on the iteration screen: the prototype lists the catalog's own
+    // revision and dates there too.
+    "iterationDetail.fields.kind",
+    "iterationDetail.fields.revision",
+    "iterationDetail.fields.registeredAt",
+    "iterationDetail.fields.location",
+    "iterationDetail.fields.catalogUpdatedAt",
     // The prototype's iterations table has a `Documents` column; it is a count, not
     // the inventory §8.1 excluded.
     "iterations.columns.documents",

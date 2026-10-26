@@ -193,6 +193,13 @@ export type IterationDetailModel = {
   iterationId: string;
   /** The catalog's document inventory, for the prototype's Documents card. */
   documents: readonly IterationDocumentRow[];
+  /** The catalog row's own identity: kind, revision, its two dates and location. */
+  catalogKind: string | null;
+  revision: number | null;
+  registeredAt: string | null;
+  catalogUpdatedAt: string | null;
+  location: string | null;
+  description: string | null;
   title: string | null;
   lifecycle: string | null;
   compassStatus: string | null;
@@ -234,6 +241,14 @@ export function iterationDetailModel(read: {
       iterationId: iteration.iterationId,
       title: iteration.catalog?.title ?? null,
       lifecycle: iteration.catalog?.lifecycle ?? null,
+      catalogKind: iteration.catalog?.kind ?? null,
+      revision: iteration.catalog?.revision ?? null,
+      registeredAt: iteration.catalog ? formatDate(iteration.catalog.registeredAt) : null,
+      catalogUpdatedAt: iteration.catalog ? formatDate(iteration.catalog.updatedAt) : null,
+      location: iteration.catalog
+        ? `${iteration.catalog.rootKind}:${iteration.catalog.relativePath}`
+        : null,
+      description: iteration.catalog?.description ?? null,
       compassStatus: iteration.compass?.status ?? null,
       compassTone: compassStatusTone(iteration.compass?.status ?? null),
       summary: iteration.compass?.summary ?? null,
