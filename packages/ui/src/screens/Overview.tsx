@@ -24,7 +24,7 @@
 import { Fragment, type KeyboardEvent } from "react";
 
 import { DataTable, type DataTableColumn } from "../components/DataTable.tsx";
-import { progressText } from "../view-model/format.ts";
+import { formatClock, progressText } from "../view-model/format.ts";
 import { EmptyState, type AbsenceArm } from "../components/EmptyState.tsx";
 import { IssueFlowChart } from "../components/IssueFlowChart.tsx";
 import { Notice } from "../components/Notice.tsx";
@@ -670,13 +670,13 @@ export function Overview(props: OverviewProps) {
         <span data-ms-projection-built={model.projection.builtAt ?? undefined}>
           {model.projection.builtAt === null
             ? copy.identityBuiltUnknown
-            : copy.identityBuilt(model.projection.builtAt)}
+            : copy.identityBuilt(formatClock(model.projection.builtAt))}
         </span>
         <span className="sep" aria-hidden="true">
           ·
         </span>
         <span data-ms-projection-read="">
-          {copy.identityRead(model.projection.checkedAt)}
+          {copy.identityRead(formatClock(model.projection.checkedAt))}
         </span>
       </div>
       {model.projection.kind === "current" ? null : (

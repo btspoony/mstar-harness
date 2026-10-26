@@ -8,6 +8,7 @@ import {
   NOT_KNOWN,
   UNKNOWN_DATE,
   countText,
+  formatClock,
   formatShortDate,
   formatDate,
   longText,
@@ -128,5 +129,21 @@ describe("formatShortDate — the list cell's own form", () => {
   test("an absent or non-date value keeps the honest copy, never NaN", () => {
     expect(formatShortDate(null)).toBe(UNKNOWN_DATE);
     expect(formatShortDate("yesterday")).toBe("yesterday");
+  });
+});
+
+describe("formatClock — the identity line's bare time", () => {
+  test("an ISO timestamp becomes 13:56:02", () => {
+    expect(formatClock("2026-10-25T13:56:02.000Z")).toBe("13:56:02");
+    expect(formatClock("2026-10-25 13:56:02")).toBe("13:56:02");
+  });
+
+  test("a value without seconds says :00 rather than NaN", () => {
+    expect(formatClock("2026-10-25T13:56")).toBe("13:56:00");
+  });
+
+  test("a non-timestamp reads as itself", () => {
+    expect(formatClock("unknown")).toBe("unknown");
+    expect(formatClock(null)).toBe(UNKNOWN_DATE);
   });
 });

@@ -48,6 +48,23 @@ export function formatDate(value: string | null | undefined): string {
  * that is not a timestamp falls back to `formatDate` so a non-date value still
  * reads as itself rather than as `NaN`.
  */
+/**
+ * The clock time alone, `13:56:02` — what the prototype's identity line prints for when the
+ * projection was built and when the page was read. Its own line shows a bare time, not an
+ * ISO string and not a date: the reader already knows which day they are looking at.
+ *
+ * A value with no time part falls back to itself, so a non-timestamp reads as what it is
+ * rather than as `NaN:NaN:NaN`.
+ */
+export function formatClock(value: string | null | undefined): string {
+  const lexeme = typeof value === "string" ? value.trim() : "";
+  if (lexeme === "") return UNKNOWN_DATE;
+  const match = /^\d{4}-\d{2}-\d{2}[T ](\d{2}):(\d{2})(?::(\d{2}))?/.exec(lexeme);
+  if (match === null) return lexeme;
+  const [, hour, minute, second] = match;
+  return `${hour}:${minute}:${second ?? "00"}`;
+}
+
 export function formatShortDate(value: string | null | undefined): string {
   const full = formatDate(value);
   const match = /^\d{4}-(\d{2})-(\d{2})(?:[T ](\d{2}):(\d{2}))?/.exec(full);
