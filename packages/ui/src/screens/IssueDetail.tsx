@@ -177,21 +177,8 @@ export function IssueDetail(props: IssueDetailProps) {
             </Field>
           </FieldGroup>
 
-          {record.value.impact === null ? null : (
-            <section className={"sec"} data-ms-impact="">
-              <h2>{copy.impactHeading}</h2>
-              <p className={"prose"}>{record.value.impact}</p>
-            </section>
-          )}
-
-          {record.value.acceptance === null ? null : (
-            <section className={"sec"} data-ms-acceptance="">
-              <h2>{copy.acceptanceHeading}</h2>
-              <p className={"prose"}>{record.value.acceptance}</p>
-            </section>
-          )}
-
-          {/* The prototype's `Source` panel: where this issue came from. */}
+          {/* The prototype's `Source` panel: where this issue came from. It sits before the
+              two prose blocks, as the prototype's left column has it. */}
           {record.value.source === null ? null : (
             <section className={"sec"} data-ms-issue-source="" aria-labelledby="ms-issue-source">
               <h2 id="ms-issue-source">{copy.sourceHeading}</h2>
@@ -225,6 +212,21 @@ export function IssueDetail(props: IssueDetailProps) {
               </dl>
             </section>
           )}
+
+          {record.value.impact === null ? null : (
+            <section className={"sec"} data-ms-impact="">
+              <h2>{copy.impactHeading}</h2>
+              <p className={"prose"}>{record.value.impact}</p>
+            </section>
+          )}
+
+          {record.value.acceptance === null ? null : (
+            <section className={"sec"} data-ms-acceptance="">
+              <h2>{copy.acceptanceHeading}</h2>
+              <p className={"prose"}>{record.value.acceptance}</p>
+            </section>
+          )}
+
 
           {/* The prototype's `Occurrences`: one block per event, each with its own quote,
               location and citations. This is the log §8.1 removed; the prototype keeps it. */}

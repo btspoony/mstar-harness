@@ -1924,10 +1924,19 @@ and `Relations`, and both are implemented — this record has no transitions and
 | fact block heading | `<h2 class="sec-title">` | `<h3>` — same styling, different element |
 | left column order | Identity, **Source**, Impact, Acceptance, Occurrences | Identity, Impact, Acceptance, **Source**, Occurrences |
 
-The heading level is fixed (`FieldGroup` renders `h2` now, which is what a screen reader
-announces). **The order is not**: `Source` sits after the two prose blocks here and before
-them there. That is a block move inside a JSX conditional tree, and the script that tried it
-hit its own assertion rather than half-moving the file.
+Both are fixed now. `FieldGroup` renders `h2`, and the left column measures
+
+```
+["identity", "source", "impact", "acceptance", "occurrences"]
+```
+
+which is the prototype's order.
+
+**The move took two attempts and one mistake worth recording.** The scripted version hit its
+own assertion and left the file untouched — the safe outcome. The `edit` version inserted the
+block before `impact` and **forgot to delete the original**, so the file briefly carried two
+`Source` panels; `grep -c data-ms-issue-source` reported `2` and the duplicate came out. A
+copy-then-delete edit has to prove both halves.
 
 **Reading the seven against the nine is a trap worth naming**: two absent headings look
 exactly like two missing panels, and only opening the record proves otherwise. That is the
