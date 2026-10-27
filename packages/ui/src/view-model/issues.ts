@@ -358,16 +358,18 @@ export function issueDetailModel(detail: IssueDetail): IssueDetailModel {
       issue: relation.fromIssue === detail.id ? relation.toIssue : relation.fromIssue,
       title: relation.title ?? null,
     })),
-    // The prototype's Source panel states the newest occurrence's provenance.
+    // The prototype's Source panel states the NEWEST occurrence's provenance. Both reads
+    // return occurrences in ascending id, so this took `[0]` — the oldest — and kept
+    // showing the first source after later occurrences were recorded.
     source:
       (detail.occurrences ?? []).length === 0
         ? null
         : {
-            kind: detail.occurrences[0]!.sourceKind,
-            identity: detail.occurrences[0]!.sourceIdentity,
-            location: detail.occurrences[0]!.location ?? null,
-            rootCauseKey: detail.occurrences[0]!.rootCauseKey ?? null,
-            acceptanceKey: detail.occurrences[0]!.acceptanceKey ?? null,
+            kind: detail.occurrences[detail.occurrences.length - 1]!.sourceKind,
+            identity: detail.occurrences[detail.occurrences.length - 1]!.sourceIdentity,
+            location: detail.occurrences[detail.occurrences.length - 1]!.location ?? null,
+            rootCauseKey: detail.occurrences[detail.occurrences.length - 1]!.rootCauseKey ?? null,
+            acceptanceKey: detail.occurrences[detail.occurrences.length - 1]!.acceptanceKey ?? null,
           },
   };
 }

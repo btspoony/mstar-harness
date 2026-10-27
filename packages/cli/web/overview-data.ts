@@ -87,7 +87,10 @@ export function overviewOutcome(
       return {
         kind: "ready",
         model: overviewFromEnvelope(result.envelope),
-        revision: result.envelope.projection.generation,
+        // The footer states the STORE revision. `projection.generation` is a different
+        // field in the same envelope and drifts from it, so the footer disagreed with
+        // every other screen's revision.
+        revision: result.envelope.storeRevision,
       };
     case "error":
       return { kind: "failed", message: result.message };
