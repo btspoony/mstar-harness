@@ -144,9 +144,9 @@ const PROBE = `(() => {
   const header = document.querySelector('header.app-header');
   const h1 = document.querySelector('[data-ms-screen] h1');
   const summaryEl = document.querySelector('[data-ms-summary]');
-  // The overview's plan table is the workflow panel's own child, not part of
-  // `.wf-summary` (the prototype has three siblings: summary, branch line, table). Scope by
-  // the panel's accessible name, which is the stable marker across that move.
+  // The overview's plan table is the workflow panel's own child, not part of the
+  // workflow summary line (the prototype has three siblings: summary, branch line, table).
+  // Scoped by the panel's accessible name, the stable marker across that move.
   const ovWorkflow = document.querySelector('[aria-labelledby="ms-overview-workflows"]');
   const ovWorkflowMeta = ovWorkflow === null ? null : ovWorkflow.querySelector('[data-ms-panel-meta]');
   const centreY = (el) => (el === null ? null : el.getBoundingClientRect().top + el.getBoundingClientRect().height / 2);
