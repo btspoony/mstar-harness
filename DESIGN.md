@@ -2505,10 +2505,11 @@ on an unleased workflow. The structural work of the last twenty rounds is visibl
 
 **Three differences, each checked and each deliberate:**
 
-- **A breadcrumb the prototype does not have.** The prototype is a static document with a
-  switcher; this is an application a reader navigates. The `<nav aria-label>` is the only
-  visible path back that is also announced to a screen reader — Escape does the same thing and
-  is not discoverable. Kept.
+- **The breadcrumb was NOT a difference — I said it was, and the prototype has four.** The
+  workflow detail's crumb was already the prototype's own shape (`<div>`, a link back, `/`,
+  the record in mono). The **issue** detail's was incomplete: it rendered the section link and
+  stopped, so the reader lost which record the page was about. Measured after the fix:
+  `Issues / I-000870`, which is `design-v1.html:1355`'s own crumb.
 - **No description paragraph under Catalog identity.** The prototype's record has one; the one
   measured here has `description: null`, and the screen renders its absent line. Data.
 - **`1 plan` against `7 plans`.** Data.

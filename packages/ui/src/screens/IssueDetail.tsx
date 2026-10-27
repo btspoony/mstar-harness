@@ -115,12 +115,19 @@ export function IssueDetail(props: IssueDetailProps) {
 
   return (
     <article className={"screen"} data-ms-screen="issue-detail">
+      {/* The prototype's crumb is `Issues / <id>` (`design-v1.html:1355`): the section as a
+          link back, the record itself as mono text. This rendered only the link, so the
+          reader lost which record the page was about. */}
       <nav className={"breadcrumb"} aria-label={copy.breadcrumb.label}>
-        {props.onBack === undefined ? null : (
+        {props.onBack === undefined ? (
+          <span>{copy.breadcrumb.current}</span>
+        ) : (
           <button type="button" className={"link"} onClick={props.onBack}>
             {copy.breadcrumb.current}
           </button>
         )}
+        <span aria-hidden="true">/</span>
+        <span className={"mono"}>{record.kind === "populated" ? record.value.id : copy.breadcrumb.current}</span>
       </nav>
 
       {record.kind === "populated" ? (
