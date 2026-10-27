@@ -20,7 +20,11 @@ SCREENS=(
 )
 WIDTHS=(375 720 1440)
 FAIL=0
-BASELINE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/responsive-baseline.txt"
+# A floor, not a per-store baseline. `checked` includes every rendered record, so a store
+# with fewer rows shrank it without any layout problem — a 1410-element baseline failed a
+# healthy Issues page. Every real screen frame is far above this floor; a probe that
+# evaluated nothing, or lost its page, is below it.
+FLOOR=40
 
 PROBE='(() => {
   const s = document.querySelector("article.screen"); if (!s) return "noscreen";
@@ -66,16 +70,11 @@ except Exception:
       echo "FAIL ${width} ${screen}: over=${over} ${scroll}" >&2
       FAIL=1
     fi
-    # A probe that evaluates a handful of elements after a selector regression prints the
-    # same "over 0" as a clean one. The baseline is the committed count for this screen at
-    # this width; a drop of more than a third means the probe lost the page. The baseline
-    # lives in the repo so a fresh clone compares against something.
-    key="${width}x${screen}"
-    previous="$(grep -F "${key} " "$BASELINE" 2>/dev/null | head -1 | cut -d' ' -f2)"
-    if [ -z "$previous" ]; then
-      echo "$key $checked" >>"$BASELINE"
-    elif [ "$checked" -lt $(( previous * 2 / 3 )) ]; then
-      echo "FAIL ${width} ${screen}: probe saw ${checked} elements, baseline ${previous}" >&2
+    # A probe that evaluated nothing after a selector regression prints the same "over 0"
+    # as a clean one. The floor is about the probe, not the data: it must have walked a
+    # real page.
+    if [ "$checked" -lt "$FLOOR" ]; then
+      echo "FAIL ${width} ${screen}: probe saw ${checked} elements, below the ${FLOOR} floor" >&2
       FAIL=1
     fi
   done

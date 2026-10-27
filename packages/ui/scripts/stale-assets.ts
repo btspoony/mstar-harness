@@ -1,13 +1,17 @@
 /**
- * Fails when the generated dashboard assets are older than the styles they are built from.
+ * Fails when the generated dashboard assets are older than the sources they are built from.
  *
  * Why this exists: a round rebuilt only `packages/ui`, started the dashboard, measured the
  * chart, and reported `844 x 88` — the value that had just been deleted. The CLI's
  * `assets.generated.ts` still carried the old CSS, so every browser measurement after it was
  * a measurement of the previous change. It happened twice.
  *
+ * The check covers the shared UI's whole source tree, not only its sheets: a screen, a
+ * component, a view-model or a locale string is compiled into the same bundle, and a change
+ * to one leaves the generated assets just as stale as a CSS edit.
+ *
  * This is a timestamp comparison, not a content hash: it answers "was the CLI built after the
- * sheets changed", which is the question that was missed.
+ * sources changed", which is the question that was missed.
  *
  * Run: `bun run --cwd packages/ui check:stale`
  */
@@ -16,7 +20,17 @@ import { join } from "node:path";
 
 const root = join(import.meta.dir, "..", "..", "..");
 const generated = join(root, "packages", "commands", "src", "dashboard", "assets.generated.ts");
-const stylesDir = join(root, "packages", "ui", "src", "styles");
+const uiSrc = join(root, "packages", "ui", "src");
+
+/** Every file under `target` older than `cutoff`, as repository-relative paths. */
+function newerThan(target: string, cutoff: number, out: string[]): void {
+  const info = statSync(target);
+  if (info.isDirectory()) {
+    for (const entry of readdirSync(target)) newerThan(join(target, entry), cutoff, out);
+    return;
+  }
+  if (info.mtimeMs > cutoff) out.push(target.slice(root.length + 1));
+}
 
 let generatedAt: number;
 try {
@@ -26,16 +40,16 @@ try {
   process.exit(0);
 }
 
-const stale = readdirSync(stylesDir)
-  .filter((name) => name.endsWith(".css"))
-  .map((name) => ({ name, at: statSync(join(stylesDir, name)).mtimeMs }))
-  .filter((sheet) => sheet.at > generatedAt);
+const stale: string[] = [];
+try {
+  newerThan(uiSrc, generatedAt, stale);
+} catch {
+  // a checkout without the shared source tree has nothing to compare
+}
 
 if (stale.length > 0) {
-  console.error(
-    stale.map((sheet) => `  ${sheet.name} is newer than assets.generated.ts`).join("\n"),
-  );
-  console.error("\nthe dashboard bundle predates its styles: run `bun run --cwd packages/cli build`");
+  console.error(stale.map((path) => `  ${path} is newer than assets.generated.ts`).join("\n"));
+  console.error("\nthe dashboard bundle predates its sources: run `bun run --cwd packages/cli build`");
   process.exit(1);
 }
 
@@ -48,22 +62,14 @@ const cliDist = join(root, "packages", "cli", "dist", "mstar-harness.js");
 try {
   const distAt = statSync(cliDist).mtimeMs;
   const sources = [
-    join(root, "packages", "commands", "src", "dashboard", "assets.generated.ts"),
+    generated,
     join(root, "packages", "cli", "src"),
     join(root, "packages", "cli", "web"),
   ];
   const newer: string[] = [];
-  const walk = (target: string): void => {
-    const info = statSync(target);
-    if (info.isDirectory()) {
-      for (const entry of readdirSync(target)) walk(join(target, entry));
-      return;
-    }
-    if (info.mtimeMs > distAt) newer.push(target.slice(root.length + 1));
-  };
   for (const source of sources) {
     try {
-      walk(source);
+      newerThan(source, distAt, newer);
     } catch {
       // a source directory that does not exist in this checkout
     }

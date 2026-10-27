@@ -19,12 +19,16 @@ set -uo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../../.." && pwd)"
 cd "$ROOT"
 BACKUP="$(mktemp -d)"
-trap 'rm -rf "$BACKUP"; for f in packages/ui/src/styles/product.css packages/ui/src/styles/base.css packages/ui/scripts/selector-diff.ts; do [ -f "$BACKUP/$(basename "$f")" ] && cp "$BACKUP/$(basename "$f")" "$f"; done' EXIT
+MUTATED="packages/ui/src/styles/product.css packages/ui/src/styles/base.css packages/ui/scripts/selector-diff.ts packages/cli/web/main.tsx"
+# Restore BEFORE dropping the backup: a trap that deletes the copy first leaves the
+# mutation in place when the restore then fails. `cp -p` also puts the touched file's
+# timestamp back, or `check:stale` keeps failing after a clean run.
+trap 'for f in $MUTATED; do [ -f "$BACKUP/$(basename "$f")" ] && cp -p "$BACKUP/$(basename "$f")" "$f"; done; rm -rf "$BACKUP"' EXIT
 
-save() { cp "$1" "$BACKUP/$(basename "$1")"; }
+save() { cp -p "$1" "$BACKUP/$(basename "$1")"; }
 restore_all() {
-  for f in packages/ui/src/styles/product.css packages/ui/src/styles/base.css packages/ui/scripts/selector-diff.ts; do
-    [ -f "$BACKUP/$(basename "$f")" ] && cp "$BACKUP/$(basename "$f")" "$f"
+  for f in $MUTATED; do
+    [ -f "$BACKUP/$(basename "$f")" ] && cp -p "$BACKUP/$(basename "$f")" "$f"
   done
 }
 
@@ -43,6 +47,7 @@ expect_fail() {
 save packages/ui/src/styles/product.css
 save packages/ui/src/styles/base.css
 save packages/ui/scripts/selector-diff.ts
+save packages/cli/web/main.tsx
 
 # --- 1. a class name the sheets do not define. Every occurrence, in every sheet, because a
 #        prefix-only rename still contains the original as a substring.
