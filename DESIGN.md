@@ -2656,11 +2656,14 @@ Column count, hide rule and breakpoint all match. **The one remaining difference
 narrow row carries a second line where the prototype's carries nothing** — `root` and `updated`
 move there instead of vanishing.
 
-**Confirmed, not fixed, and for a stated reason**: the line is `secondary`'s default behaviour,
-not something this change introduced, and removing it means deliberately hiding two facts the
-table currently keeps. Every other difference in this file was resolved in the prototype's
-favour because the prototype *had* the surface; here it has nothing to copy. Recorded so the next
-reader finds a decision instead of an omission.
+**Fixed.** A `@container (max-width: 619px)` rule hides `.row-meta` at the prototype's own
+breakpoint. Measured after: at 375 the row is two cells and no meta line; at 800 and 1440 the
+row is six cells, and no meta line exists there in the first place — `DataTable` only renders one
+when columns yield.
+
+The reasoning that made me keep it one round earlier was wrong in a way worth naming: I argued
+"the prototype has nothing to copy here", but it does — it copies **nothing**, and matching that
+is the criterion. **"Better for a reader" is not a criterion this objective admits.**
 
 ## Verification coverage, stated
 
