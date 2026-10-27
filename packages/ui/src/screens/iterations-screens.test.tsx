@@ -238,6 +238,20 @@ describe("Iterations list — the facts of §8.2", () => {
     expect(renderList([iteration()], 1, "present")).toContain('data-ms-attribution="present"');
     expect(renderList([iteration()], 1, "absent")).toContain('data-ms-attribution="absent"');
   });
+
+  test("the Catalog head states an active registration, and says nothing when it is not", () => {
+    // Both branches: the chip is the only thing this head ever adds, so a test that only
+    // renders the `true` case would pass against an always-on chip.
+    const active = renderDetail(iteration());
+    expect(active).toContain(">active registration<");
+
+    const inactive = renderDetail(
+      iteration({
+        workflow: { id: "issue-project-move", status: "running", phase: null, activeRegistration: false },
+      }),
+    );
+    expect(inactive).not.toContain(">active registration<");
+  });
 });
 
 describe("Iterations list — attribution decides between absent and empty", () => {

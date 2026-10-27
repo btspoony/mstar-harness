@@ -1895,7 +1895,22 @@ It is back, and read, because the prototype's Catalog head states it — which i
 shape of that earlier deletion: "nothing reads it" was true, and "nothing should" was not.
 
 **Also caught here**: the EN check that closed the previous round's loop read
-`Catalog identity` / `Pin` / `rev 1`, so both dictionaries were verified, not only `zh`.## Verification coverage, stated
+`Catalog identity` / `Pin` / `rev 1`, so both dictionaries were verified, not only `zh`.## The project detail, side by side
+
+Four panels on both sides, same words and order: `Catalog identity · Roadmap authority ·
+Milestone board · Stored facts`, with the same `3 milestones · 3 unassigned issues` meta
+shape (counts differ with the data).
+
+**One difference, and it is not fixed**: the prototype's three feature tabs each carry a
+count — `Roadmap 3`, `Issues 14`, `Iterations 2`. Only the roadmap tab does here; the others
+read `Issues`, `Iterations`. The counts are not a styling gap — `issues` and `iterations` reach
+this screen as `React.ReactNode`, so the numbers would have to come from the host, which is a
+props change rather than a render change.
+
+**The Catalog chip's `true` branch is now tested.** Every check before this one — including
+the browser — had only ever rendered the `false` case, so a chip that was always on would have
+passed. `iterations-screens.test.tsx` now asserts `>active registration<` appears for a
+registration the store counts and does not appear for one it does not.## Verification coverage, stated
 
 Two hosts mount these screens: the dashboard (`packages/cli/web`) and the dsh pane
 (`packages/dsh/src/client/panel`). They share the components but **each owns its own
