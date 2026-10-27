@@ -2067,7 +2067,31 @@ was missing on three screens.
 
 **Both branches are tested** for the one segment that can be absent: `storeRevision` renders
 `projected from store rev <n>` when the host states it and is omitted — not guessed — when it
-does not.## Verification coverage, stated
+does not.## Screen chrome: what the panel sweeps could not see
+
+Every check in this file until now started from `.panel`. The heads, breadcrumbs and meta
+lines live outside panels, and three of them were missing whole segments. Reading the nine
+screens' chrome as text found them:
+
+| Screen | The prototype | Before |
+| --- | --- | --- |
+| Workflows | 4 workflows · 2 active registrations · projected from store rev 1224 | `Workflows` |
+| Iterations | 4 iterations · 1 active · catalog membership, independent of execution | `Iterations` |
+| Projects | 4 projects · 26 open issues · a project owns its roadmap, issues and iterations | `Projects` |
+| Issue detail | I-000870 · mstar-harness · critical · bug · open · Revision 4 | `high` `open` — **two segments of six** |
+
+The issue detail's meta now reads `I-000870 · dsh-integration · high · bug · open`. Its sixth
+segment, the catalog revision, is still missing: the model carries no revision for an issue.
+
+**One more reading that was not a defect**: the iteration detail's `<h1>` renders
+`iter-20260811-panel-fixes Delivery Compass`, which looks like a title and something else
+concatenated. It is one string — a title in this store's own data. Checking the store was one
+command and settled it.
+
+**And the ceiling bit again.** The build failed on `352268B` against `352256B` — twelve bytes
+over — so the first measurement of the new meta line was of the *previous* bundle and read
+`highopen`. Fourth time. The budget is now 348 KB with a comment saying that it is the
+tightest thing in the build and that it has silently reverted measurement work four times.## Verification coverage, stated
 
 Two hosts mount these screens: the dashboard (`packages/cli/web`) and the dsh pane
 (`packages/dsh/src/client/panel`). They share the components but **each owns its own

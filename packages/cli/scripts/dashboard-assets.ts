@@ -38,13 +38,17 @@
 // panels — two of the six §8.1 removed and the prototype keeps. The remaining four are
 // larger still (two tables and an event log), so this raise is sized for them rather than
 // for what is here now.
-// 344 KB: the footer gained the open-issue count the prototype leads with, which needs the
-// shell to reach the overview's residual total.
-// 344 KB. Raised from 340 by the footer's open-issue count, which needs the shell to reach
-// the overview's residual total. Measured: the previous bundle was 348231B against 348160B —
-// **71 bytes over**, so this is not slack for new growth. The next thing to shrink is the
-// locale table, which ships both dictionaries in full.
-export const JS_CEILING = 344 * 1024;
+// 348 KB: the four screen heads and the issue detail's meta line, all of which the prototype
+// carries and this implementation was missing.
+// The previous raise, kept as the measurement it was: 340 → 344 because the footer gained the
+// open-issue count. That bundle came in **71 bytes over** 340 KB, so the raise was what the
+// footer actually cost, not slack.
+//
+// **This budget is now the tightest thing in the build and it has silently reverted three
+// rounds of measurement work**: an over-ceiling bundle leaves `dist/` stale, and the dashboard
+// then serves the previous build. `check:stale` catches that now; before it did, three
+// separate rounds measured the change before the one they had just made.
+export const JS_CEILING = 348 * 1024;
 // Raised, 60 KB to 100 KB: the product's component styles are now generated from the
 // approved prototype and shipped whole (values unchanged, selectors scoped, queries
 // unnamed) instead of being re-typed one screen at a time. Re-typing is exactly what

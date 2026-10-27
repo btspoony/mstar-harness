@@ -128,13 +128,22 @@ export function IssueDetail(props: IssueDetailProps) {
               <TruncatedText text={record.value.title} />
             </h1>
             <div className={"detail-meta"}>
-              {/* Dot + literal enum + weight: never colour alone. */}
+              {/* The prototype's six segments: the store id, the project that owns it, the
+                  severity, the kind, the disposition, then the catalog revision. Dot +
+                  literal enum + weight: never colour alone. */}
+              <span className={"mono"}>{record.value.id}</span>
+              <span aria-hidden="true">·</span>
+              <span className={"mono"}>{record.value.projectId}</span>
+              <span aria-hidden="true">·</span>
               <StatusDot
                 label={record.value.severity}
                 tone={record.value.severityTone}
                 emphasis={record.value.severityEmphasised}
                 mono
               />
+              <span aria-hidden="true">·</span>
+              <span className={"mono"}>{record.value.kind}</span>
+              <span aria-hidden="true">·</span>
               <StatusDot label={record.value.disposition} tone={record.value.dispositionTone} mono />
             </div>
           </header>

@@ -54,7 +54,9 @@ export type ProjectsProps = {
 
 export function Projects(props: ProjectsProps) {
   const { model, copy } = props;
-  // Across the rows on this page, which is what the head is describing.
+  // Every project the store holds: `ProjectListDTO` is unpaged, so summing the rows is
+  // summing the store. shortcut: a page-limited project list would make this understate
+  // the head, upgrade to a DTO-level aggregate if one is added.
   const openIssues =
     model.rows.kind === "populated" ? model.rows.value.reduce((sum, row) => sum + row.openIssues, 0) : 0;
 
