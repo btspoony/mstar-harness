@@ -229,6 +229,7 @@ export const en = {
   issueDetail: {
     breadcrumb: { label: "Breadcrumb", current: "Issues" },
     identityHeading: "Identity",
+    revisionLabel: "Revision",
     fields: {
       id: "ID",
       project: "Project",

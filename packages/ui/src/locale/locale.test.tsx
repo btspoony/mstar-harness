@@ -279,6 +279,9 @@ describe("no key exists for a fact IA §8 marks not-rendered", () => {
     "workflowDetail.planColumns.pin",
     // The Catalog identity head carries the same pin state as a chip and the revision
     // beside it.
+    // The issue detail's meta line ends with the issue row's own revision, which the
+    // prototype's does too.
+    "issueDetail.revisionLabel",
     "workflowDetail.pinChip",
     "workflowDetail.revisionMeta",
     "issueDetail.relationsHeading",

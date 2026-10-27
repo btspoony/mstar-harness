@@ -206,6 +206,7 @@ export const zh: Copy = {
   issueDetail: {
     breadcrumb: { label: "位置导航", current: "问题" },
     identityHeading: "身份",
+    revisionLabel: "修订版本",
     fields: {
       id: "编号",
       project: "项目",

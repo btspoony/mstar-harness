@@ -2144,9 +2144,15 @@ segment — against the prototype's own reads.
 | Project detail | `engine` · `active` · `Revision 12` · `14 open issues` | `_default · active · Revision 1` — the fourth segment exists in the code and this record's value is `null` |
 | Issue detail | `I-000870` · `mstar-harness` · `critical` · `bug` · `open` · `Revision 4` | `I-000870` · `dsh-integration` · `high` · `bug` · `open` — **five of six** |
 
-**The two real gaps are one field each**: the issue detail's `Revision 4` and the iteration
-detail's `compass active · 3 plans · 5 documents`. Both need a value the model does not carry
-for those screens — not a rendering change.
+**One of the two gaps is fixed**: the issue detail's meta now reads
+`I-000870 · dsh-integration · high · bug · open · Revision 1` — six segments, as the
+prototype's six. The value was already on `IssueDetailDTO`; the view model had an old note
+saying revisions were not carried, and a test enforced that note rather than the prototype.
+Both are gone, and `revisionLabel` is a locale key.
+
+**The other is not**: the iteration detail's `compass active · 3 plans · 5 documents`. The
+`plans` and `documents` counts exist on `IterationDetailModel`; the banner that would state
+them does not, and that is a rendering change plus one new field, not a data gap.
 
 **The project detail's fourth segment is not a gap**: the code renders it whenever the record
 has an open-issue count, and `_default` has none. The prototype's screenshot happens to be a

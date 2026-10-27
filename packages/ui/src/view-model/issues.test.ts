@@ -246,13 +246,13 @@ describe("the detail fact block", () => {
     expect(model.occurrences).toHaveLength(2);
   });
 
-  test("no revision or external URL is exposed", () => {
+  test("no external URL or churn timestamps are exposed", () => {
     const model = issueDetailModel(detail());
     for (const removed of [
       "url",
       "externalId",
-      // The prototype's `Identity keys` panel states the provider and the key.
-      "revision",
+      // The prototype's `Identity keys` panel states the provider and the key, and its meta
+      // line ends with the issue row's revision.
       "createdAt",
       "updatedAt",
     ]) {

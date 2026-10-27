@@ -33,6 +33,8 @@ export type IssueDetailCopy = {
   /** The trail back to the list. */
   breadcrumb: { label: string; current: string };
   identityHeading: string;
+  /** The meta line's final segment: `Revision 4`. */
+  revisionLabel: string;
   fields: {
     id: string;
     project: string;
@@ -145,6 +147,10 @@ export function IssueDetail(props: IssueDetailProps) {
               <span className={"mono"}>{record.value.kind}</span>
               <span aria-hidden="true">·</span>
               <StatusDot label={record.value.disposition} tone={record.value.dispositionTone} mono />
+              <span aria-hidden="true">·</span>
+              <span>
+                {copy.revisionLabel} <span className={"mono"}>{record.value.revision}</span>
+              </span>
             </div>
           </header>
         <div className="detail-grid">

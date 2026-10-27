@@ -260,6 +260,8 @@ export type IssueDetailModel = {
   closureNote: string | null;
   /** The prototype's `Identity keys` panel: the tracker identity, when the store has one. */
   identityKey: string | null;
+  /** The issue row's own revision — the prototype's meta line ends with it. */
+  revision: number;
   provider: string | null;
   /** The prototype's `Occurrences`: one block per recorded event, newest last. */
   occurrences: ReadonlyArray<{
@@ -322,6 +324,7 @@ export function issueDetailModel(detail: IssueDetail): IssueDetailModel {
     acceptance: longText(detail.acceptance),
     closureNote: closed ? longText(detail.closureNote) : null,
     identityKey: detail.identityKey ?? null,
+    revision: detail.revision,
     provider: detail.provider ?? null,
     occurrences: detail.occurrences.map((row) => ({
       id: row.id,

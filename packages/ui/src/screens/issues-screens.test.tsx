@@ -124,6 +124,7 @@ const detailCopy: IssueDetailCopy = {
   providerLabel: "Provider",
   breadcrumb: { label: "Breadcrumb", current: "Issues" },
   identityHeading: "Fact",
+  revisionLabel: "Revision",
   fields: {
     id: "ID",
     project: "Project",
@@ -437,8 +438,12 @@ describe("IssueDetail — NEGATIVE: what §8.1 removed", () => {
 
   test("no revision or churn timestamps", () => {
     expect(html).not.toContain("2026-10-24T10:00:00.000Z"); // updatedAt
-    expect(html).not.toContain("revision");
-    expect(html).not.toContain(">7<");
+    // The churn timestamps stay out. The *revision*, however, is the prototype's own sixth
+    // meta segment (`I-000870 · mstar-harness · critical · bug · open · Revision 4`), so it
+    // is rendered and this test no longer forbids it.
+    expect(html).toContain("Revision");
+    // The revision number is rendered (`Revision 7`) but never as a bare churn count.
+    expect(html).not.toContain("Churn");
   });
 
   test("the model itself cannot carry them: the negative set is enforced by shape", () => {
@@ -447,8 +452,8 @@ describe("IssueDetail — NEGATIVE: what §8.1 removed", () => {
       "url",
       "externalId",
       // `provider` and `identityKey` are carried now: the prototype's `Identity keys`
-      // panel states both. The rest of the set still stays out.
-      "revision",
+      // panel states both. `revision` is carried too: the prototype's meta line ends with
+      // it. The rest of the set still stays out.
       "createdAt",
       "updatedAt",
       "projectMoves",
