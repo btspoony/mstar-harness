@@ -293,6 +293,18 @@ describe("DataTable — the collapse rule", () => {
     expect(stylesheet("base")).toMatch(/\.ms-pane-head\s*\{[^}]*padding-inline: 12px;/);
   });
 
+  test("the navigation is styled by the band both hosts mount it in, narrow rules included", () => {
+    // The dsh pane mounts the shared nav in its head band, above `.ms-container`; a
+    // container-scoped rule never reaches it. The band is therefore the nav's whole
+    // authority: the row, the buttons, the active underline and the narrow behaviour.
+    const base = stylesheet("base");
+    expect(base).toMatch(/\.ms-pane-head \.app-nav\s*\{[^}]*display: flex;/);
+    expect(base).toMatch(/\.ms-pane-head \.nav-btn\s*\{[^}]*height: var\(--ms-header-h\);/);
+    expect(base).toMatch(/\.ms-pane-head \.nav-btn\[aria-current="page"\]\s*\{[^}]*box-shadow: inset 0 -2px 0 0 var\(--ms-accent\);/);
+    expect(base).toMatch(/@container \(max-width: 479px\) \{\s*\.ms-pane-head \.app-nav \{[^}]*flex-wrap: wrap;/);
+    expect(base).toMatch(/\.ms-pane-head \.nav-btn \{[^}]*height: 28px;/);
+  });
+
   test("an empty body renders the caller's absence node inside the table", () => {
     const html = render(
       <DataTable
