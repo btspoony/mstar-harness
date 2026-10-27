@@ -106,8 +106,10 @@ const PROBE = `(() => {
   // language group as present at 760px where the prototype hides it. Counting painted
   // boxes is what the assertions below mean by the header pair.
   const painted = (el) => el.getBoundingClientRect().width > 0;
-  const seg = [...document.querySelectorAll('.app-seg')].filter(painted);
-  const icon = [...document.querySelectorAll('.app-icon-btn')].filter(painted);
+  const segNodes = [...document.querySelectorAll('.app-seg')];
+  const iconNodes = [...document.querySelectorAll('.app-icon-btn')];
+  const seg = segNodes.filter(painted);
+  const icon = iconNodes.filter(painted);
   const box = (el) => (el === null ? null : el.getBoundingClientRect().width);
   // The collapsed second line is one spanning cell, so it is also its row's last
   // child: it restates facts and is not a date column.
@@ -331,6 +333,11 @@ const PROBE = `(() => {
     tableInCard: table !== null && table.closest('[data-ms-panel]') !== null,
     paintedTones,
     languageButtons: seg.length,
+    // The control must be MOUNTED at every width; only its painted-ness follows the
+    // breakpoint. Without this, a filter that drops unrendered boxes would turn a control
+    // that stopped mounting altogether into a passing run.
+    languageNodes: segNodes.length,
+    themeNodes: iconNodes.length,
     themeButtons: icon.length,
     languageWidth: box(seg[0] ?? null),
     themeWidth: box(icon[0] ?? null),
@@ -547,9 +554,12 @@ describe.skipIf(!browserAvailable)("the render gate", () => {
     // zero width is the defect this pins, not a narrow viewport.
     expect(screen.themeButtons).toBe(1);
     expect(screen.themeWidth).toBeGreaterThan(0);
-    // Below 860 the prototype hides the group, so it is absent and has no box; above it,
-    // present with a real one. Either way the two must agree — a control that is painted
-    // with zero width is the defect, and so is one that is reported but never drawn.
+    // The group is MOUNTED at every width — that is the invariant, and the reason this is
+    // counted separately from the painted boxes. Below 860 the prototype hides it, so it is
+    // mounted but unpainted; above it, mounted and painted with a real box. A control that
+    // stops mounting, or one painted at zero width, both fail here.
+    expect(screen.languageNodes).toBe(1);
+    expect(screen.themeNodes).toBe(1);
     expect([0, 1]).toContain(screen.languageButtons);
     if (screen.languageButtons === 1) expect(screen.languageWidth).toBeGreaterThan(0);
     else expect(screen.languageWidth).toBeNull();
