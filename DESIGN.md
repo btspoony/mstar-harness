@@ -2345,19 +2345,25 @@ none, every check was mutation-tested: introduce a real defect, confirm the chec
 | `check:tones` | a `.tone-danger .dot` colour changed | **yes** — `2 tone colour(s) disagree` |
 | `check:declarations` | a breakpoint's `flex-wrap` flipped | **yes** — names the `@container` and the property |
 | `check:classes` | `.res-grid` renamed everywhere | **yes, but it took four attempts to inject** |
-| `check:selectors` | — | not yet mutated |
+| `check:selectors` | an allowlist entry removed | **yes** — `10 prototype selector(s) are neither defined nor explained` |
 
 **`check:classes` was hiding a real blind spot**, and the failed mutations are what found it:
 `sheets.includes(".res-grid")` is also true when the only rule carrying that spelling is
 `.res-gridZZ` — a substring, not a class. Renaming a class to one that merely starts with the
 old name passed. It matches on a word boundary now.
 
-**The failed injections were my error four times over** — I renamed one of three occurrences,
-then all three in one file while a fourth sat in `base.css`, then checked `$?` after an `echo`.
-Each time the check was right and the experiment was wrong. That is worth stating plainly:
+**The failed injections were my error five times over** — I renamed one of three occurrences,
+then all three in one file while a fourth sat in `base.css`, then read `$?` after an `echo`,
+then read it after a pipe (`| tail` reports *tail's* status), then added a prototype selector to
+our sheet and expected a check that looks for the opposite direction to complain. Each time the
+check was right and the experiment was wrong. That is worth stating plainly:
 **a check that will not fail is a finding, and so is a check that will not be made to fail.**
 The difference is whether the injection actually landed — and the only way to know is to look
-at what the check read.## Verification coverage, stated
+at what the check read.
+
+**Exit codes are read directly now** (`OUT=$(…); CODE=$?`, never `… | tail; echo $?`), because
+a pipe reports the last process's status and `tail` succeeds no matter what failed upstream.
+Two of the five bad injections were that mistake alone.## Verification coverage, stated
 
 Two hosts mount these screens: the dashboard (`packages/cli/web`) and the dsh pane
 (`packages/dsh/src/client/panel`). They share the components but **each owns its own
