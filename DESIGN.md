@@ -1902,10 +1902,22 @@ Milestone board · Stored facts`, with the same `3 milestones · 3 unassigned is
 shape (counts differ with the data).
 
 **One difference, and it is not fixed**: the prototype's three feature tabs each carry a
-count — `Roadmap 3`, `Issues 14`, `Iterations 2`. Only the roadmap tab does here; the others
-read `Issues`, `Iterations`. The counts are not a styling gap — `issues` and `iterations` reach
-this screen as `React.ReactNode`, so the numbers would have to come from the host, which is a
-props change rather than a render change.
+count — `Roadmap 3`, `Issues 14`, `Iterations 2`. Only the roadmap tab does here.
+
+**The obvious fix does not work, and measuring that is the useful part.** The screen now
+takes `issuesCount` / `iterationsCount`, and both hosts wire them to a callback each list
+fires when its read settles. The counts still do not appear, because **the lists only render
+inside their own tab** — on the Roadmap tab nothing mounts `IssueListScreen`, so no read
+happens and no total is ever reported. A tab count has to be known *before* the reader opens
+that tab.
+
+So the remaining options are the ones this file already rejected once: let the host read the
+two lists a second time (two reads of the same query, free to disagree), or lift the two reads
+into the host so the tab and the list share one. The second is right and is a real change to
+how this screen gets its data, not a prop.
+
+**The props and both call sites stay**: they are inert today and correct the moment the reads
+are lifted, which is cheaper than re-deriving what the wiring has to look like.
 
 **The Catalog chip's `true` branch is now tested.** Every check before this one — including
 the browser — had only ever rendered the `false` case, so a chip that was always on would have

@@ -237,6 +237,8 @@ function IssueListScreen(props: {
   scope: string | null;
   onQueryChange: (query: IssueQuery) => void;
   onOpen?: (id: string) => void;
+  /** The read's own total, so a caller can state it without reading twice. */
+  onTotalChange?: (total: number) => void;
 }) {
   const query = props.scope === null ? props.query : { ...props.query, filters: { ...props.query.filters, project: props.scope } };
   // The previous rows stay painted while the next read is in flight, so the search box
@@ -262,6 +264,14 @@ function IssueListScreen(props: {
       controller.abort();
     };
   }, []);
+
+  // A caller states this read's total (the project detail's tab count) without reading
+  // again. Only a settled read reports: a loading or failed read says nothing, so the
+  // caller keeps whatever it last knew.
+  useEffect(() => {
+    if (outcome.kind !== "ready") return;
+    props.onTotalChange?.(outcome.model.total);
+  }, [outcome, props.onTotalChange]);
 
   if (outcome.kind === "loading") return null;
   if (outcome.kind === "failed") {
@@ -476,7 +486,12 @@ function WorkflowDetailDestination(props: { id: string }) {
 
 /** The Iterations list, behind its own read. */
 /** The Iterations list at one scope: `null` store-wide, or a project's own. */
-function IterationListScreen(props: { scope: string | null; onOpen?: (id: string) => void }) {
+function IterationListScreen(props: {
+  scope: string | null;
+  onOpen?: (id: string) => void;
+  /** The read's own total, so a caller can state it without reading twice. */
+  onTotalChange?: (total: number) => void;
+}) {
   // The read is kept raw, so the model can be rebuilt from the data in hand. A filter
   // change must NOT re-fetch: it only re-derives the rows, which is what the screen
   // promises by keeping the filter state here.
@@ -499,6 +514,13 @@ function IterationListScreen(props: { scope: string | null; onOpen?: (id: string
   // The model is derived at render time, so a filter change re-derives the rows from
   // the envelope already in hand instead of issuing a second read.
   const outcome = iterationsOutcome(raw ?? { status: "loading" }, filters);
+
+  // Only a settled read reports: a loading or failed one says nothing, so the caller keeps
+  // the last total it knew rather than blanking a tab mid-request.
+  useEffect(() => {
+    if (outcome.kind !== "ready") return;
+    props.onTotalChange?.(outcome.model.total);
+  }, [outcome, props.onTotalChange]);
 
   if (outcome.kind === "loading") return null;
   if (outcome.kind === "failed") {
@@ -640,6 +662,10 @@ function ProjectDetailDestination(props: { address: Address; feature: ProjectFea
   const projectId = props.address.route.name === "project" ? props.address.route.id : "";
   const [outcome, setOutcome] = useState<RoadmapOutcome>({ kind: "loading" });
   const [identity, setIdentity] = useState<{ title: string; description: string | null } | null>(null);
+  // The tabs' counts for the two scoped lists. Each child reports its own settled total;
+  // this keeps the last one it knew, so a loading read never blanks a tab.
+  const [issuesCount, setIssuesCount] = useState<number | undefined>(undefined);
+  const [iterationsCount, setIterationsCount] = useState<number | undefined>(undefined);
   const copy = useCopy();
 
   useEffect(() => {
@@ -691,6 +717,7 @@ function ProjectDetailDestination(props: { address: Address; feature: ProjectFea
             // `replace`: a filter change must not become a Back step per keystroke.
             navigate(target.route, target.query, "replace");
           }}
+          onTotalChange={setIssuesCount}
           onOpen={(id) => {
             // The project is the only trace of the page this record was opened from:
             // without it the breadcrumb and Escape landed on the store-wide list.
@@ -703,9 +730,12 @@ function ProjectDetailDestination(props: { address: Address; feature: ProjectFea
       iterations={
         <IterationListScreen
           scope={projectId}
+          onTotalChange={setIterationsCount}
           onOpen={(id) => navigate({ name: "iteration", id }, props.address.query, "push")}
         />
       }
+      {...(issuesCount === undefined ? {} : { issuesCount })}
+      {...(iterationsCount === undefined ? {} : { iterationsCount })}
       copy={projectDetailCopy(copy)}
       onBack={() => {
         // The breadcrumb and Escape are one move from two places: a hardcoded
