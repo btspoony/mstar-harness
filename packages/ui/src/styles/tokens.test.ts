@@ -340,7 +340,7 @@ describe("the layout container exists, unnamed", () => {
 describe("forced colors: the status dot stops depending on colour", () => {
   test("the screen shell owns the prototype's gutter and its title scale", () => {
     // One authority for every screen: the frame the prototype puts around all of them
-    // (`.dash-main`, `design-v1.html:201`) rather than ten copies that can drift.
+    // (`.dash-main`, `prototype.html:201`) rather than ten copies that can drift.
     const base = read(BASE_PATH);
     expect(base).toContain(".ms-container [data-ms-screen] {");
     // Derived from the prototype, not typed here. The literal this replaced said `24px`

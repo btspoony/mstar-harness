@@ -115,7 +115,7 @@ export function IssueDetail(props: IssueDetailProps) {
 
   return (
     <article className={"screen"} data-ms-screen="issue-detail">
-      {/* The prototype's crumb is `Issues / <id>` (`design-v1.html:1355`): the section as a
+      {/* The prototype's crumb is `Issues / <id>` (`prototype.html:1355`): the section as a
           link back, the record itself as mono text. This rendered only the link, so the
           reader lost which record the page was about. */}
       <nav className={"breadcrumb"} aria-label={copy.breadcrumb.label}>

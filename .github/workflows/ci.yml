@@ -995,8 +995,8 @@ jobs:
       - name: Test judgment
         run: bun run --cwd packages/judgment test
 
-  # The one job that skips `engine:build`: every `@mstar-harness/engine` import under
-  # `packages/ui` is `import type` (`src/purity.test.ts` enforces it), so the package's
+  # The one test job that skips `engine:build`: every `@mstar-harness/engine` import under
+  # `packages/ui` is `import type` (asserted by `src/purity.test.ts`), so the package's
   # suite and checks run against the workspace package without its dist.
   test-ui:
     runs-on: ubuntu-latest

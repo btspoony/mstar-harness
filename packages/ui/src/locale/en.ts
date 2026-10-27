@@ -212,7 +212,7 @@ export const en = {
       search: "Search",
       clear: "Clear filters",
     },
-    // The prototype's screen meta (`design-v1.html:1098`), stating the disposition
+    // The prototype's screen meta (`prototype.html:1098`), stating the disposition
     // the filters actually select — `open` is only true for the default view. A
     // partial page cannot count the projects it never saw, so the span drops
     // rather than guessing.

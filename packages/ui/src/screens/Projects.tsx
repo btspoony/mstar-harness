@@ -60,7 +60,7 @@ export function Projects(props: ProjectsProps) {
   const openIssues =
     model.rows.kind === "populated" ? model.rows.value.reduce((sum, row) => sum + row.openIssues, 0) : 0;
 
-  // The prototype's sequence (`design-v1.html:1752-1758`): the id first, then the
+  // The prototype's sequence (`prototype.html:1752-1758`): the id first, then the
   // catalog title, then the lifecycle.
   const columns: DataTableColumn<ProjectRow>[] = [
     { key: "id", header: copy.columns.id, width: "310px", render: (row) => <span className={"mono t-12"}>{row.projectId}</span> },
