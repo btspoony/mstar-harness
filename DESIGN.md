@@ -2585,7 +2585,33 @@ That is the third statement in this file that a measurement has corrected after 
 breadcrumb prototype that "had none" (it had four), the title that "was squeezed" (it rendered
 `总览`), and now this.
 
-## Verification coverage, stated
+## One real difference, found last, not yet fixed
+
+The narrow column sets, measured against the prototype's own `data-narrow-cols` and against this
+build at 375:
+
+| Screen | The prototype | This build | |
+| --- | --- | --- | --- |
+| issues | `2` | 2 | same |
+| iterations | `2` | 2 | same |
+| workflows | **`2`** | **3** | **different** |
+| projects | no table | no table | same |
+
+The prototype keeps two columns and hides the rest (`[data-narrow-cols="2"] … :nth-child(n+3)`).
+This build keeps three: `primaryCount` is `6 − 3 secondary = 3`, and `status · phase` is a
+primary column, so it survives.
+
+**The two implementations mean different things by "narrow", and that is why this is not a
+one-line fix.** The prototype *hides* the columns it drops. `DataTable`'s `secondary` columns
+*yield* — in `list` mode their fact reappears in the row's `meta` line, and only in `detail`
+mode are they dropped outright. Making `status` secondary would move it to a second line rather
+than remove it: **different from the prototype, and arguably better for a reader.**
+
+So this is the one place where the two are not the same, and the choice is not mine to make
+silently. Recorded rather than guessed: either `status` becomes `secondary` (matching the
+prototype's column count, changing where its value appears), or the difference stands.
+
+**Everything else measured the same at three containers.**## Verification coverage, stated
 
 Two hosts mount these screens: the dashboard (`packages/cli/web`) and the dsh pane
 (`packages/dsh/src/client/panel`). They share the components but **each owns its own
