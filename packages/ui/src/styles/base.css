@@ -40,6 +40,11 @@
   font-weight: var(--ms-fw-regular);
   -webkit-font-smoothing: antialiased;
   text-rendering: optimizeLegibility;
+  /* The reflow rules in `product.css` are `@container (…)`, and a container query does
+     nothing without a container. Without these two lines every one of them is dead CSS:
+     the narrow layouts never apply, and the page simply overflows. */
+  container-type: inline-size;
+  container-name: pane;
 }
 
 .ms-container h1, .ms-container h2, .ms-container h3, .ms-container h4 {

@@ -2188,7 +2188,32 @@ segment — exported as text in one pass and compared, rather than screen by scr
 **What it found that is real and remains**: the workflow detail's `Pin rev 3` chip is on the
 Catalog head — measured working on the one record that pins something — and the Leases table
 renders only for a workflow that holds leases. Both are already implemented; this store has
-one pining record and no leased workflow.## Verification coverage, stated
+one pining record and no leased workflow.## The container query was dead CSS
+
+`product.css` carries narrow-width rules — the split collapsing under 900, the chrome stacking
+under 480 — and every one of them is an `@container` query. **A container query does nothing
+without a container**, and `.ms-container` declared no `container-type`. So on the dashboard,
+every one of those rules had never run.
+
+The dsh pane had `container-type: inline-size; container-name: pane` on its own wrapper, so
+the same rules worked there and not in the dashboard — the two hosts render the same
+components and were reflowing differently.
+
+**How it surfaced**: a zh-locale overflow sweep at 375 found one element
+(`.screen-meta > span`, the projects head's closing sentence) 31px outside its parent. The
+truncation rule for exactly that element already existed in `product.css`, under
+`@container (max-width: 479px)`. It was dead.
+
+Two lines in `base.css` fixed it, and the whole narrow behaviour came with it.
+
+**The probe was wrong twice before the CSS was.** The first version flagged elements inside
+`overflow: hidden` parents as overflowing — a clipping parent is not a broken layout. The
+second excluded only `overflow-x: auto`. With the fix in, all nine screens measure zero at
+375, 720 and 1440 in Chinese, and zero again in English.
+
+**This is the only defect in this file that a text diff could not have found**: the markup was
+right, the stylesheet was right, and the missing declaration was in a third place that neither
+comparison reads.## Verification coverage, stated
 
 Two hosts mount these screens: the dashboard (`packages/cli/web`) and the dsh pane
 (`packages/dsh/src/client/panel`). They share the components but **each owns its own
