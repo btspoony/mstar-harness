@@ -2211,6 +2211,17 @@ bundler and can never match a global declaration) and `min-inline-size: 0`.
 **The comment had promised a test for both halves and no test existed.** `tokens.test.ts`
 keeps them now: the declaration present, the name absent, the min-inline present.
 
+**And `getComputedStyle` lied about it, twice.** With the fix built, it still reported
+`container-name: pane` — a value that exists nowhere in the repository, nowhere in the built
+assets, and (finally verified) nowhere in the **served** CSS, which is fetched with the
+dashboard's own token and contains `container-type` once and `container-name` never. Enumerating
+`document.styleSheets` came back empty too, so the source of that value was never found;
+reloading the page did not clear it and a cache-busting query string broke the hash router.
+
+**So the selector-level truth came from `curl`, not from the browser**: the served stylesheet
+is the one that was just built. Any measurement taken after that point is of current CSS,
+whatever `getComputedStyle` says about a property the served sheet does not set.
+
 **The probe was wrong twice before the CSS was.** The first version flagged elements inside
 `overflow: hidden` parents as overflowing — a clipping parent is not a broken layout. The
 second excluded only `overflow-x: auto`. With the fix in, all nine screens measure zero at
