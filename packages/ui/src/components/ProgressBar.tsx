@@ -30,7 +30,10 @@ export function ProgressBar(props: ProgressBarProps) {
   const complete = percent === 100 && props.total > 0;
   return (
     <span
-      className="bar"
+      // The prototype paints the completed bar through this class, not the tone attribute
+      // (`design-v1.html:291`: `.bar.is-done > i`); the module that carried the attribute's
+      // own success rule was deleted, so a complete bar otherwise stayed accent-coloured.
+      className={complete ? "bar is-done" : "bar"}
       role="progressbar"
       aria-valuenow={props.done}
       aria-valuemin={0}

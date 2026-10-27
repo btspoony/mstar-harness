@@ -515,6 +515,14 @@ describe("ProgressBar — a measured fraction, never a series", () => {
   test("the bar's width is the clamped percentage", () => {
     expect(render(<ProgressBar done={3} total={6} />)).toContain("inline-size:50%");
   });
+
+  test("a complete bar carries the prototype's completed tone", () => {
+    // `design-v1.html:291`: the completed fill is `.bar.is-done > i`; the attribute-only
+    // success rule died with the component module, so the class is the painting contract.
+    expect(render(<ProgressBar done={4} total={4} />)).toContain('class="bar is-done"');
+    expect(render(<ProgressBar done={3} total={6} />)).toContain('class="bar"');
+    expect(stylesheet("product")).toContain(".bar.is-done > i");
+  });
 });
 
 describe("the remaining primitives keep their contract", () => {
