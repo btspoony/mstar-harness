@@ -345,7 +345,7 @@ describe("forced colors: the status dot stops depending on colour", () => {
     expect(base).toContain(".ms-container [data-ms-screen] {");
     // Derived from the prototype, not typed here. The literal this replaced said `24px`
     // while the prototype says `16px`, so the test guarded the wrong number and the dsh
-    // pane drifted from the dashboard — see `scripts/prototype-snapshot.ts`.
+    // pane drifted from the dashboard — see `design-system/snapshot.ts`.
     const frame = JSON.parse(read(PROTOTYPE_SNAPSHOT_PATH)) as { screenPadding: string; screenMaxWidth: string };
     expect(base).toMatch(new RegExp(`\\.ms-container \\[data-ms-screen\\] \\{[^}]*max-inline-size: ${frame.screenMaxWidth};`));
     expect(base).toMatch(/\.ms-container \[data-ms-screen\] \{[^}]*margin-inline: auto;/);
