@@ -163,7 +163,9 @@ describe("outcome 1 — a healthy read renders the page", () => {
     // The page states a total and five rows; a page whose total disagreed with its
     // own rows would be reporting two answers from one read.
     expect(model.residuals.value.total).toBe(sum);
-    expect(html).toContain("26 open");
+    // The panel's meta is the prototype's grouping descriptor, not a count: every number it
+    // could repeat is inside the panel's own five rows.
+    expect(html).toContain("by severity");
   });
 });
 
@@ -226,6 +228,21 @@ describe("outcome 3 — a whole-read failure mounts no page", () => {
     expect(result.status).toBe("error");
     if (result.status !== "error") return;
     expect(result.message).toContain("could not reach its local server");
+  });
+
+  test("a project scopes the request; without one the path is unscoped", async () => {
+    // The overview's milestone panel is one project's, so the shell names the first project
+    // it holds. A store with none passes `undefined`, and the request must then carry no
+    // `project` at all — the read answers `not-applicable` rather than guessing a scope.
+    const seen: string[] = [];
+    const recording = (async (input: RequestInfo | URL) => {
+      seen.push(String(input));
+      return new Response(JSON.stringify({ error: { code: "x", message: "x" } }), { status: 409 });
+    }) as unknown as typeof fetch;
+    await readOverview(recording, undefined, "engine");
+    await readOverview(recording);
+    expect(seen[0]).toContain("project=engine");
+    expect(seen[1]).not.toContain("project=");
   });
 
   test("a refused read carries the server's own message", async () => {
