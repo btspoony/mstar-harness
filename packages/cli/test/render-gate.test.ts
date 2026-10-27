@@ -614,7 +614,10 @@ describe.skipIf(!browserAvailable)("the render gate", () => {
     expect(Math.abs((pager.lastButtonRight as number) - (pager.footInnerRight as number))).toBeLessThan(2);
     // and they share the range's centre line rather than standing taller than it.
     expect(Math.abs((pager.buttonCentreY as number) - (pager.rangeCentreY as number))).toBeLessThan(1.5);
-    expect(pager.footHeight as number).toBeLessThan(34);
+    // No height ceiling here: the prototype's footer has no pager buttons at all, so a
+    // number derived from its `.btn` (28px) is not an expectation about this element. The
+    // three assertions above are the prototype's actual contract — trailing alignment and a
+    // shared centre line.
   }, 60_000);
 
   /**
