@@ -453,6 +453,9 @@ function WorkflowsDestination(props: { address: Address }) {
   return (
     <Workflows
       model={outcome.model}
+      // The head's closing segment reads the envelope's own revision, which the model does
+      // not carry: it is a fact about the read, not about a workflow.
+      {...(raw !== null && raw.status === "ready" ? { storeRevision: raw.envelope.storeRevision } : {})}
       filters={filters}
       onFiltersChange={setFilters}
       copy={workflowsCopy(copy)}

@@ -29,6 +29,12 @@ import type { Tone } from "../view-model/status.ts";
 /** Every visible string this screen needs. Task 5 supplies them. */
 export type WorkflowsCopy = {
   pageTitle: string;
+  /** The head's own count: `4 workflows`. */
+  totalMeta: (n: number) => string;
+  /** And how many the store still counts as a registration. */
+  activeRegistrationsMeta: (n: number) => string;
+  /** The head's closing segment: `projected from store rev 1224`. */
+  projectedFrom: (revision: number) => string;
   tableCaption: string;
   columns: {
     id: string;
@@ -71,6 +77,12 @@ export type WorkflowsProps = {
   /** The current filter state; absent means unfiltered (a host without filters). */
   filters?: WorkflowFilters;
   onFiltersChange?: (filters: WorkflowFilters) => void;
+  /**
+   * The store revision this page was projected from — the prototype's head ends with it.
+   * Absent when the host cannot state it, and then the segment is left out rather than
+   * guessed.
+   */
+  storeRevision?: number;
 };
 
 /** The filter panel's accessible name; the head carries the id. */
@@ -99,6 +111,11 @@ function appliedFilters(copy: WorkflowsCopy, filters: WorkflowFilters): AppliedF
 export function Workflows(props: WorkflowsProps) {
   const { model, copy } = props;
   const filters = props.filters ?? DEFAULT_WORKFLOW_FILTERS;
+  // `null` when the rows could not be read: a count of an unread list is not a fact.
+  const activeRegistrations =
+    model.rows.kind === "populated"
+      ? model.rows.value.filter((row) => row.activeRegistration).length
+      : null;
 
   const columns: DataTableColumn<WorkflowRow>[] = [
     { key: "id", header: copy.columns.id, width: "282px", render: (row) => <span className={"mono t-12"}>{row.id}</span> },
@@ -169,6 +186,23 @@ export function Workflows(props: WorkflowsProps) {
           document heading instead. */}
       <div className="screen-head">
         <h1>{copy.pageTitle}</h1>
+        {/* The prototype's head states the store's count, not the page's, then how many of
+            these rows the store still counts as a registration. */}
+        <div className="screen-meta">
+          <span data-ms-count="">{copy.totalMeta(model.total)}</span>
+          {activeRegistrations === null ? null : (
+            <>
+              <span aria-hidden="true">·</span>
+              <span data-ms-active-registrations="">{copy.activeRegistrationsMeta(activeRegistrations)}</span>
+            </>
+          )}
+          {props.storeRevision === undefined ? null : (
+            <>
+              <span aria-hidden="true">·</span>
+              <span data-ms-projected-from="">{copy.projectedFrom(props.storeRevision)}</span>
+            </>
+          )}
+        </div>
       </div>
 
       {model.rows.kind === "populated" ? (

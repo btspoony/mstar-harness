@@ -247,6 +247,9 @@ export const zh: Copy = {
 
   workflows: {
     pageTitle: "工作流",
+    totalMeta: (n: number): string => `${n} 个工作流`,
+    activeRegistrationsMeta: (n: number): string => `${n} 个活跃注册`,
+    projectedFrom: (revision: number): string => `投影自存储修订 ${revision}`,
     filters: {
       status: "状态",
       type: "类型",

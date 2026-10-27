@@ -2025,7 +2025,26 @@ same y — which is why both first panels measure 92.
 
 **What this cannot see**: horizontal alignment, gaps between siblings, and whether an element
 draws the right border. Those were measured separately (the four-width overflow sweep, the
-declaration diff), and nobody has yet compared the two pages as pixels.## Verification coverage, stated
+declaration diff), and nobody has yet compared the two pages as pixels.## The workflows list, side by side
+
+Six columns on both sides, same words and order — `Workflow · Catalog title · Status · phase ·
+Root register · Projected updated · Join badges`.
+
+**The head was missing its whole meta line.** The prototype's reads
+
+```
+4 workflows · 2 active registrations · projected from store rev 1224
+```
+
+and this implementation printed only `Workflows`. All three segments are there now, measured
+as `5 workflows · 5 active registrations · projected from store rev 4905`. Two of them come
+from the list model (`total`, and a count of `activeRegistration` rows); the third does not —
+`storeRevision` belongs to the read envelope, not to any workflow, so the host passes it in
+and the segment is left out when the host cannot state it.
+
+**This was found by reading the two heads as text**, which is what the panel-and-position
+comparisons could not do: the head is inside `.screen-head`, not a `.panel`, so every earlier
+sweep walked past it.## Verification coverage, stated
 
 Two hosts mount these screens: the dashboard (`packages/cli/web`) and the dsh pane
 (`packages/dsh/src/client/panel`). They share the components but **each owns its own

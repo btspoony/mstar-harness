@@ -92,6 +92,9 @@ const workflow = (over: Partial<WorkflowDTO> = {}): WorkflowDTO => ({
 
 const workflowsCopy: WorkflowsCopy = {
   pageTitle: "Workflows",
+  totalMeta: (n) => `${n} ${n === 1 ? "workflow" : "workflows"}`,
+  activeRegistrationsMeta: (n) => `${n} active ${n === 1 ? "registration" : "registrations"}`,
+  projectedFrom: (revision) => `projected from store rev ${revision}`,
   tableCaption: "Workflows",
   columns: { id: "ID", title: "Title", status: "Status", root: "Root", updated: "Updated", plans: "Plans" },
   plansProgress: (done, total) => `${done}/${total} plans`,

@@ -267,6 +267,10 @@ export const en = {
 
   workflows: {
     pageTitle: "Workflows",
+    totalMeta: (n: number): string => `${n} ${n === 1 ? "workflow" : "workflows"}`,
+    activeRegistrationsMeta: (n: number): string =>
+      `${n} active ${n === 1 ? "registration" : "registrations"}`,
+    projectedFrom: (revision: number): string => `projected from store rev ${revision}`,
     filters: {
       status: "Status",
       type: "Type",
