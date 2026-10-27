@@ -1910,7 +1910,28 @@ props change rather than a render change.
 **The Catalog chip's `true` branch is now tested.** Every check before this one — including
 the browser — had only ever rendered the `false` case, so a chip that was always on would have
 passed. `iterations-screens.test.tsx` now asserts `>active registration<` appears for a
-registration the store counts and does not appear for one it does not.## Verification coverage, stated
+registration the store counts and does not appear for one it does not.## The issue detail, side by side
+
+Nine fact blocks in the prototype: `Identity · Source · Impact · Acceptance · Occurrences` in
+the left column, `Disposition history · Relations · Provenance · Identity keys` in the right.
+This screen renders **seven headings**: the two that do not appear are `Disposition history`
+and `Relations`, and both are implemented — this record has no transitions and no relations.
+
+**Two findings survived checking:**
+
+| | The prototype | This implementation |
+| --- | --- | --- |
+| fact block heading | `<h2 class="sec-title">` | `<h3>` — same styling, different element |
+| left column order | Identity, **Source**, Impact, Acceptance, Occurrences | Identity, Impact, Acceptance, **Source**, Occurrences |
+
+The heading level is fixed (`FieldGroup` renders `h2` now, which is what a screen reader
+announces). **The order is not**: `Source` sits after the two prose blocks here and before
+them there. That is a block move inside a JSX conditional tree, and the script that tried it
+hit its own assertion rather than half-moving the file.
+
+**Reading the seven against the nine is a trap worth naming**: two absent headings look
+exactly like two missing panels, and only opening the record proves otherwise. That is the
+fifth time this file records the same misreading.## Verification coverage, stated
 
 Two hosts mount these screens: the dashboard (`packages/cli/web`) and the dsh pane
 (`packages/dsh/src/client/panel`). They share the components but **each owns its own

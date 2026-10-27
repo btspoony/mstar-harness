@@ -121,6 +121,13 @@ export type ProjectDetailProps = {
    */
   issues: React.ReactNode;
   iterations: React.ReactNode;
+  /**
+   * How many rows each scoped list holds, for the tabs' own counts. The elements above
+   * cannot answer this — a rendered node has no length — so the host states it, and an
+   * absent count renders no number rather than a wrong one.
+   */
+  issuesCount?: number;
+  iterationsCount?: number;
   copy: ProjectDetailCopy;
   onBack?: () => void;
   /** Leaving the project's scope — the chip's own affordance. Omitted, there is no chip button. */
@@ -405,10 +412,17 @@ export function ProjectDetail(props: ProjectDetailProps) {
   // here: the issues and iterations panels arrive as rendered nodes from the host, so
   // their counts are the host's facts to pass in.
   const milestones = props.roadmap.kind === "populated" ? props.roadmap.value.milestones.length : undefined;
+  // The prototype's three tabs each carry their own count. The roadmap's comes from the read
+  // here; the other two are the scoped lists' lengths, which only the host knows.
+  const counts: Record<ProjectFeature, number | undefined> = {
+    roadmap: milestones,
+    issues: props.issuesCount,
+    iterations: props.iterationsCount,
+  };
   const tabs: TabItem[] = PROJECT_FEATURES.map((id) => ({
     id,
     label: copy.features[id],
-    ...(id === DEFAULT_PROJECT_FEATURE && milestones !== undefined ? { count: milestones } : {}),
+    ...(counts[id] === undefined ? {} : { count: counts[id] }),
   }));
 
   return (

@@ -22,7 +22,9 @@ export function FieldGroup(props: FieldGroupProps) {
     // deliberately NOT `.fields` — that class is a two-column grid, and putting it on the
     // section made the title take the first column and pushed every field into the second.
     <section className="sec">
-      <h3 className="sec-title">{props.title}</h3>
+      {/* `h2`, as the prototype's own fact blocks are. The heading level is invisible with
+          `.sec-title`'s styling, but it is what a screen reader announces. */}
+      <h2 className="sec-title">{props.title}</h2>
       <dl className="fields" data-ms-columns={props.columns ?? 2}>
         {props.children}
       </dl>
