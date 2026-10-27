@@ -520,7 +520,7 @@ describe("the remaining primitives keep their contract", () => {
       </FieldGroup>,
     );
     expect(html).toContain("<dl");
-    expect(html).toContain('data-ms-columns="1"');
+    expect(html).toContain('class="fields one"');
     expect(html).toContain("Identity");
   });
 

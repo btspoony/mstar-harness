@@ -25,7 +25,7 @@ export function FieldGroup(props: FieldGroupProps) {
       {/* `h2`, as the prototype's own fact blocks are. The heading level is invisible with
           `.sec-title`'s styling, but it is what a screen reader announces. */}
       <h2 className="sec-title">{props.title}</h2>
-      <dl className="fields" data-ms-columns={props.columns ?? 2}>
+      <dl className={props.columns === 1 ? "fields one" : "fields"}>
         {props.children}
       </dl>
     </section>

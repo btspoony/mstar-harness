@@ -26,7 +26,7 @@ export type TruncatedTextProps = {
 export function TruncatedText(props: TruncatedTextProps) {
   return (
     <span
-      className={props.block === true ? "trunc" : "trunc"}
+      className={props.block === true ? "trunc trunc-block" : "trunc"}
       data-ms-full={props.text}
       title={props.text}
       tabIndex={0}

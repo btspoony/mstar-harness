@@ -53,8 +53,14 @@ export type PanelHeadProps = {
 };
 
 export function PanelHead(props: PanelHeadProps) {
+  // The head is the labelled element when it has no title: the prototype's list
+  // screens carry a bare filter row, and `aria-labelledby` still needs a node.
   return (
-    <div className="panel-head" data-ms-panel-head="">
+    <div
+      className="panel-head"
+      data-ms-panel-head=""
+      {...(props.title === undefined && props.id !== undefined ? { id: props.id } : {})}
+    >
       {props.title === undefined ? null : (
         <h2 className="panel-title" id={props.id} data-ms-panel-title="">
           {props.title}

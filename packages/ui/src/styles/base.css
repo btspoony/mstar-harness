@@ -233,6 +233,38 @@
   border-block-end: var(--ms-hairline);
 }
 
+/* The navigation is product UI that one host seats outside the product surface: the dsh
+   pane mounts it in its own head band, deliberately above `.ms-container`. The product
+   sheet scopes `.app-nav`/`.nav-btn` to the container, so without this the destinations
+   render as unstyled buttons. The values are the prototype's own (`design-v1.html:169-176`),
+   stated for whichever host owns the band rather than copied into the host's module. */
+.ms-pane-head .app-nav {
+  display: flex;
+  gap: 0;
+  flex: none;
+}
+
+.ms-pane-head .nav-btn {
+  appearance: none;
+  border: 0;
+  background: none;
+  color: var(--ms-text-secondary);
+  height: var(--ms-header-h);
+  padding: 0 11px;
+  cursor: pointer;
+  font-size: var(--ms-fs-13);
+  font-weight: 500;
+}
+
+.ms-pane-head .nav-btn:hover {
+  color: var(--ms-text-primary);
+}
+
+.ms-pane-head .nav-btn[aria-current="page"] {
+  color: var(--ms-text-primary);
+  box-shadow: inset 0 -2px 0 0 var(--ms-accent);
+}
+
 .ms-pane-body {
   padding-block-end: var(--ms-space-2);
 }
@@ -531,11 +563,54 @@
    rather than at each call site. */
 .ms-container .trunc {
   display: inline-block;
+  position: relative;
   max-width: 100%;
   /* No `vertical-align`: an inline-block's default baseline is its last line's text
      baseline, which is what keeps it level when it sits beside plain text. `bottom` was
      tried and left the milestone head at the same 2px spread as the default, while the
      prototype's own head spreads 9px — so it bought nothing and explained nothing. */
+}
+
+/* The block variant: for a cell whose whole content truncates, `inline-block` would
+   leave the ellipsis box at the text's width. */
+.ms-container .trunc-block {
+  display: block;
+  inline-size: 100%;
+}
+
+/* The keyboard path to the full value. The prototype clips with `.trunc` and offers a
+   `title` for hover only; a keyboard reader never sees a `title`, so the same recorded
+   string is surfaced as an overlay on focus. `data-ms-full` is the component's contract. */
+.ms-container .trunc[data-ms-full]:focus-visible::after {
+  content: attr(data-ms-full);
+  position: absolute;
+  inset-inline-start: 0;
+  inset-block-start: 100%;
+  z-index: 1;
+  margin-block-start: 2px;
+  padding: var(--ms-space-1) var(--ms-space-2);
+  max-inline-size: min(48ch, 80vw);
+  border: var(--ms-hairline);
+  border-radius: var(--ms-radius-sm);
+  background: var(--ms-bg-surface);
+  color: var(--ms-text-primary);
+  font-family: var(--ms-font-sans);
+  font-size: var(--ms-fs-12);
+  line-height: var(--ms-lh-12);
+  font-weight: var(--ms-fw-regular);
+  white-space: normal;
+  overflow-wrap: anywhere;
+  box-shadow: 0 4px 12px color-mix(in srgb, var(--ms-text-primary) 12%, transparent);
+}
+
+/* The plan line's right-hand fact. The prototype's `.p-prog` is `flex: none` because its
+   content is a short fraction; ours is the plan's free-text progress note (or a blocked
+   reason), so it must be able to shrink or it squeezes the plan id out of the column.
+   It absorbs the remaining width and clips with the shared reveal. */
+.ms-container .planboard-plan .p-prog {
+  flex: 1 1 auto;
+  min-width: 0;
+  text-align: right;
 }
 
 
