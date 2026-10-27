@@ -2524,7 +2524,14 @@ which is the point its own comment makes — the store's integer is the one deri
 helper only formats it.
 
 **There are no skipped tests left in the tree**, which is worth stating because a skip reads
-like a decision and is usually a deferral.## Verification coverage, stated
+like a decision and is usually a deferral.## Round accounting, corrected
+
+Two recent reports said "round 230, 21 left". The goal's own counter says **225 started of
+256**, so **31 remain**. The drift came from counting my own narration instead of reading the
+counter, which is the same mistake as measuring the page instead of the build. The counter is
+the authority; `get_goal` is one call.
+
+## Verification coverage, stated
 
 Two hosts mount these screens: the dashboard (`packages/cli/web`) and the dsh pane
 (`packages/dsh/src/client/panel`). They share the components but **each owns its own
