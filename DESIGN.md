@@ -1997,7 +1997,35 @@ than pushing the page.
 **This is a coarse instrument and it is worth saying so**: it catches an element that leaves
 its parent, not one that is merely crowded, misaligned or in the wrong order. The finer
 checks in this file — the split's collapse point, the milestone row's two lines, the chart's
-ratio — were each measured by hand because this sweep cannot see them.## Verification coverage, stated
+ratio — were each measured by hand because this sweep cannot see them.## Panel positions, measured rather than overlaid
+
+An overlay of the two light-mode overviews was tried first and was not usable: the prototype
+carries a 36px `.proto-bar` above its own header, and hiding it reflows everything while
+removing it does not. Two screenshots half-blended show a difference and cannot say which one
+caused it.
+
+Measured instead — every `.panel`'s top edge, both sides, light mode, 1440:
+
+| Panel | The prototype | This implementation |
+| --- | --- | --- |
+| Active workflow | 92 | **92** |
+| Open residual issues | 92 | **92** |
+| Milestones | 315 | **314** |
+| Issue flow trend | 458 | 281 |
+| Latest iteration | 657 | 535 |
+
+The two that agree are the ones whose content is the same height. The two that differ are the
+ones below the plan table — the prototype's holds **seven** plans, this store's holds **one**,
+and every panel beneath inherits that difference. That is data, not layout.
+
+**One 14px reading that was a measurement artefact**: `.screen`'s own top edge differs by 14
+between the two (44 against 58), because the prototype puts that 14px of gutter on `<main>`
+and this implementation puts it on `[data-ms-screen]` as padding. The *content* starts at the
+same y — which is why both first panels measure 92.
+
+**What this cannot see**: horizontal alignment, gaps between siblings, and whether an element
+draws the right border. Those were measured separately (the four-width overflow sweep, the
+declaration diff), and nobody has yet compared the two pages as pixels.## Verification coverage, stated
 
 Two hosts mount these screens: the dashboard (`packages/cli/web`) and the dsh pane
 (`packages/dsh/src/client/panel`). They share the components but **each owns its own
