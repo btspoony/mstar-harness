@@ -453,10 +453,21 @@
   display: flex;
   align-items: center;
   gap: var(--ms-space-2);
-  padding: 6px 12px;
-  border-block-start: var(--ms-hairline);
   font-size: var(--ms-fs-11);
   color: var(--ms-text-muted);
+}
+
+/* The pager sits INSIDE `.panel-foot`, which already carries the prototype's single
+   `6px 12px` and its hairline (`design-v1.html:1345-1349` — one footer row, the controls
+   pushed right by `margin-left: auto`). Both rules carried their own padding and border,
+   so a paged list drew a double gutter and two hairlines. */
+.panel-foot > .pager {
+  padding: 0;
+  border-block-start: 0;
+}
+
+.panel-foot > .pager > :last-child {
+  margin-inline-start: auto;
 }
 
 /* Not in the prototype: a screen-reader-only label needs no visual form there. */
