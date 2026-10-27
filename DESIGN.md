@@ -2188,7 +2188,26 @@ segment — exported as text in one pass and compared, rather than screen by scr
 **What it found that is real and remains**: the workflow detail's `Pin rev 3` chip is on the
 Catalog head — measured working on the one record that pins something — and the Leases table
 renders only for a workflow that holds leases. Both are already implemented; this store has
-one pining record and no leased workflow.## The container query was NOT dead CSS — and I said it was
+one pining record and no leased workflow.
+
+## The narrow gutter, which is where the 375px overflow actually came from
+
+The prototype's `@media (max-width: 860px)` block carries three rules. Two were ported —
+`.app-header`'s padding, and hiding the version, the segmented control and the project select.
+**The third was not**: `.dash-main { padding: 12px }`, which in this implementation is the
+screen frame's own padding.
+
+So below 860 every screen here was **16px narrower than the prototype's** — 335 against 351 at
+375 — and that is why the head's meta line truncated a segment earlier. Measured after the fix:
+`headW: 351`, identical to the prototype, and the overflow sweep is zero at 375 and 1440 on all
+nine screens.
+
+**Both sides still truncate that line, and that is correct**: the prototype's `scrollWidth` is
+448 against a 351 container, this implementation's 366 against 351. The prototype's sentence is
+longer in English, so it loses more. What matters is that the container is the same width and
+the same rule clips it.
+
+## The container query was NOT dead CSS — and I said it was
 
 **The correction first.** `.ms-container` has carried `container: pane / inline-size;` since
 the stylesheet was written. `container-type` was never missing, every `@container` rule has
