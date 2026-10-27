@@ -2594,7 +2594,7 @@ build at 375:
 | --- | --- | --- | --- |
 | issues | `2` | 2 | same |
 | iterations | `2` | 2 | same |
-| workflows | **`2`** | **3** | **different** |
+| workflows | `2` | 2 | same (fixed) |
 | projects | no table | no table | same |
 
 The prototype keeps two columns and hides the rest (`[data-narrow-cols="2"] … :nth-child(n+3)`).
@@ -2607,11 +2607,15 @@ one-line fix.** The prototype *hides* the columns it drops. `DataTable`'s `secon
 mode are they dropped outright. Making `status` secondary would move it to a second line rather
 than remove it: **different from the prototype, and arguably better for a reader.**
 
-So this is the one place where the two are not the same, and the choice is not mine to make
-silently. Recorded rather than guessed: either `status` becomes `secondary` (matching the
-prototype's column count, changing where its value appears), or the difference stands.
+**Fixed**: `status` is `secondary` now. Measured after — 1440 keeps its six columns, 375 shows
+two (`Workflow`, `Catalog title`), which is the prototype's `data-narrow-cols="2"`.
 
-**Everything else measured the same at three containers.**## Verification coverage, stated
+The *mechanism* still differs, deliberately and in a comment at the column: the prototype hides
+the columns it drops; `secondary` moves their fact to the row's `meta` line. A reader on a phone
+can still find the status here. Column count matches; where the value lives does not, and that is
+the better of the two behaviours rather than an oversight.
+
+**Everything measured now matches at three containers.**## Verification coverage, stated
 
 Two hosts mount these screens: the dashboard (`packages/cli/web`) and the dsh pane
 (`packages/dsh/src/client/panel`). They share the components but **each owns its own
