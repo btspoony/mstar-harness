@@ -2641,7 +2641,28 @@ was right here and `wide` was not.
 loses the status.** That is the acceptance criterion, and it is worth stating plainly rather
 than reporting "fixed" over a behaviour that differed.
 
-**Everything measured now matches at three containers.**## Verification coverage, stated
+**Everything measured now matches at three containers.**## The last difference, compared row against row
+
+The workflows first row at 375, read from both renderers the same way:
+
+| | The prototype | This build |
+| --- | --- | --- |
+| Cells in the row | 6 | 6 |
+| Cells visible | **2** (`Workflow`, `Catalog title`) | **2** (same) |
+| `status · phase` | gone | gone |
+| A second line under the row | **none** | `plans:… · 2026-10-…` |
+
+Column count, hide rule and breakpoint all match. **The one remaining difference is that our
+narrow row carries a second line where the prototype's carries nothing** — `root` and `updated`
+move there instead of vanishing.
+
+**Confirmed, not fixed, and for a stated reason**: the line is `secondary`'s default behaviour,
+not something this change introduced, and removing it means deliberately hiding two facts the
+table currently keeps. Every other difference in this file was resolved in the prototype's
+favour because the prototype *had* the surface; here it has nothing to copy. Recorded so the next
+reader finds a decision instead of an omission.
+
+## Verification coverage, stated
 
 Two hosts mount these screens: the dashboard (`packages/cli/web`) and the dsh pane
 (`packages/dsh/src/client/panel`). They share the components but **each owns its own
