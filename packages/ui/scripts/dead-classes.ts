@@ -26,7 +26,12 @@ for (const file of files) {
   const src = readFileSync(file, "utf8");
   for (const m of src.matchAll(/className=\{?"([^"{}]+)"/g)) {
     for (const cls of m[1].split(/\s+/).filter(Boolean)) {
-      if (!sheets.includes(`.${cls}`)) dead.set(cls, file.replace(dir + "/", ""));
+      // A word boundary, not a substring. `.res-grid` is present in `.res-gridZZ` as a
+      // prefix, so `includes` said a class was defined when the only rule carrying that
+      // spelling was a different one — the same blind spot that let a renamed class pass.
+      if (!new RegExp(`\\.${cls.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}(?![\\w-])`).test(sheets)) {
+        dead.set(cls, file.replace(dir + "/", ""));
+      }
     }
   }
 }

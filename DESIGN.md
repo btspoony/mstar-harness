@@ -2335,7 +2335,29 @@ was arithmetic over keys that had been stamped with a prefix they never earned.
 — after `check:stale` (stylesheets only, not the compiled bundle), `check:classes` (a class
 present as a substring in a selector it never renders for), and the overflow sweep (a probe
 that returned nothing). The pattern is the same each time: **a check that reports a pass tells
-you nothing about how much it checked**, unless it says so.## Verification coverage, stated
+you nothing about how much it checked**, unless it says so.## Can each check be made to fail? Three of four, and one could not
+
+After the declaration diff was caught claiming `193 inside a breakpoint block` while comparing
+none, every check was mutation-tested: introduce a real defect, confirm the check names it.
+
+| Check | Injected | Named it? |
+| --- | --- | --- |
+| `check:tones` | a `.tone-danger .dot` colour changed | **yes** — `2 tone colour(s) disagree` |
+| `check:declarations` | a breakpoint's `flex-wrap` flipped | **yes** — names the `@container` and the property |
+| `check:classes` | `.res-grid` renamed everywhere | **yes, but it took four attempts to inject** |
+| `check:selectors` | — | not yet mutated |
+
+**`check:classes` was hiding a real blind spot**, and the failed mutations are what found it:
+`sheets.includes(".res-grid")` is also true when the only rule carrying that spelling is
+`.res-gridZZ` — a substring, not a class. Renaming a class to one that merely starts with the
+old name passed. It matches on a word boundary now.
+
+**The failed injections were my error four times over** — I renamed one of three occurrences,
+then all three in one file while a fourth sat in `base.css`, then checked `$?` after an `echo`.
+Each time the check was right and the experiment was wrong. That is worth stating plainly:
+**a check that will not fail is a finding, and so is a check that will not be made to fail.**
+The difference is whether the injection actually landed — and the only way to know is to look
+at what the check read.## Verification coverage, stated
 
 Two hosts mount these screens: the dashboard (`packages/cli/web`) and the dsh pane
 (`packages/dsh/src/client/panel`). They share the components but **each owns its own
