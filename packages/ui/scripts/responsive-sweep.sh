@@ -31,7 +31,7 @@ PROBE='(() => {
     const er = e.getBoundingClientRect(), pr = p.getBoundingClientRect();
     return er.width > 0 && er.right > pr.right + 1;
   }).map((e) => e.tagName.toLowerCase() + "." + String(e.className).split(" ")[0]);
-  return JSON.stringify({ over: bad.length, sample: bad.slice(0, 3), scroll: document.documentElement.scrollWidth > document.documentElement.clientWidth + 1 });
+  return JSON.stringify({ checked: s.querySelectorAll("*").length, over: bad.length, sample: bad.slice(0, 3), scroll: document.documentElement.scrollWidth > document.documentElement.clientWidth + 1 });
 })()'
 
 for width in "${WIDTHS[@]}"; do
@@ -44,6 +44,10 @@ for width in "${WIDTHS[@]}"; do
 import json, sys
 try:
     payload = json.loads(json.loads(sys.stdin.read()))
+    # `checked` is the proof the probe looked: a sweep that evaluated nothing prints the
+    # same "over 0" as a clean one, and this project has already mistaken one for the other.
+    if payload.get("checked", 0) < 20:
+        sys.exit(2)
     print(payload["over"], "scroll" if payload["scroll"] else "noscroll")
 except Exception:
     sys.exit(1)
