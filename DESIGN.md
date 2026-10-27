@@ -2113,14 +2113,26 @@ the panel's own head, four lines under the `<!-- residual issues by severity -->
 949. The `2424-2434` range this file cites elsewhere is the severity **tally inside** that
 panel, which is a different element.
 
-**Two differences that are deliberate, and neither is fixed:**
+**Two differences that are deliberate — and both are now fixed instead:**
 
-- The residuals panel's meta **is fixed**: it read `134 open · all projects` and now reads
-  `by severity`, which is what the prototype states. The count was redundant — every number
-  it repeated is already inside the panel, five severity rows with their own totals.
+- The residuals panel's meta read `134 open · all projects`; it now reads **`by severity`**,
+  which is what the prototype states at `design-v1.html:953`
+  (`<span class="panel-meta" data-t="ov.bySeverity">by severity</span>`, four lines under the
+  `<!-- residual issues by severity -->` comment at 949). The count was redundant — every
+  number it repeated is already inside the panel, five severity rows with their own totals.
+  The `2424-2434` range this file cites elsewhere is the severity **tally inside** that panel,
+  which is a different element.
+- The overview head's third segment is a clock — `All projects · 134 open issues · 14:30:35`
+  against the prototype's `All projects · 26 open issues · 13:58:04`. **I first recorded this
+  one as impossible and was wrong**: the read's clock does reach the screen, as
+  `model.projection.checkedAt`, which the identity line at the bottom already prints as
+  `read 14:30:35`. The head simply was not reading it. It is the read's own clock, not the
+  paint time, so the value is stable and means what the prototype's means.
 
 **One difference that is data**: `1 plan · running` against `7 plans · running` is this store's
-plan count, not a label.## Verification coverage, stated
+plan count, not a label.
+
+## Verification coverage, stated
 
 Two hosts mount these screens: the dashboard (`packages/cli/web`) and the dsh pane
 (`packages/dsh/src/client/panel`). They share the components but **each owns its own
