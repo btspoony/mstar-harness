@@ -9,18 +9,16 @@
  * `KEPT_DIFFERENT` is the entire judgement: each entry is a declaration that is deliberately
  * not the prototype's, with the reason. Anything else fails.
  *
- * Needs the prototype file (gitignored). `STRICT_DECLARATIONS=1` makes a missing prototype
- * fail.
+ * The baseline is the tracked `design-system/prototype.html`. An unreadable baseline fails the
+ * check: a comparator that could not read the prototype has not compared anything.
  *
  * Run: `bun run --cwd packages/ui check:declarations`
  */
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
+import { loadPrototype } from "./prototype-baseline.ts";
 
-const PROTOTYPE = join(
-  import.meta.dir, "..", "..", "..",
-  ".mstar", "iterations", "iter-20261025-frontend-unification", "prototypes", "design-v1.html",
-);
+const PROTOTYPE = join(import.meta.dir, "..", "design-system", "prototype.html");
 
 /** Declarations that are deliberately not the prototype's, keyed as `selector|property`. */
 const KEPT_DIFFERENT: Readonly<Record<string, string>> = {
@@ -102,15 +100,10 @@ function rules(source: string, prefix: readonly string[] = []): Map<string, Map<
 
 let html: string;
 try {
-  html = readFileSync(PROTOTYPE, "utf8");
-} catch {
-  const message = "declaration-diff: prototype not found (see src/styles/product.css)";
-  if (process.env.STRICT_DECLARATIONS === "1") {
-    console.error(message);
-    process.exit(1);
-  }
-  console.warn(message);
-  process.exit(0);
+  html = loadPrototype(PROTOTYPE);
+} catch (error) {
+  console.error(`declaration-diff: ${(error as Error).message}`);
+  process.exit(1);
 }
 
 const stylesDir = join(import.meta.dir, "..", "src", "styles");

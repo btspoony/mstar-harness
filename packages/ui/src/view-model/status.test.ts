@@ -129,10 +129,10 @@ describe("progress", () => {
 /**
  * The status tones, held against the prototype's own colour table.
  *
- * Every expectation below was read from the approved prototype's
- * `.tone-<name> .dot { background: … }` rules. That file is gitignored, so the table is
- * written out here rather than parsed at run time: a change to either side now has to
- * argue with these assertions.
+ * Every expectation below was read from the tracked
+ * `design-system/prototype.html`'s `.tone-<name> .dot { background: … }` rules. The table is
+ * written out here rather than parsed at run time on purpose: a change to either side has to
+ * argue with these assertions, while `check:tones` holds the same diff against the prototype.
  */
 describe("Status tones — the prototype's colour table", () => {
   test("a live workflow's dot is accent, not the grey a stopped one has", () => {

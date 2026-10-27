@@ -150,7 +150,7 @@ export function Issues(props: IssuesProps) {
     text: `${copy.filters[entry.field === "q" ? "search" : entry.field]}: ${entry.value}`,
   }));
 
-  // The prototype's sequence (`design-v1.html:1199-1207`): ID, Title, Project, Kind,
+  // The prototype's sequence (`prototype.html:1199-1207`): ID, Title, Project, Kind,
   // Severity, Disposition, Last activity. The milestone is a product-only fact and
   // follows the project it belongs to; it is wide-only, so the 720px pane renders the
   // prototype's seven columns in the prototype's order.

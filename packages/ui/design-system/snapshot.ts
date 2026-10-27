@@ -1,37 +1,23 @@
 /**
  * Derive a committed snapshot of the prototype's authoritative scalars.
  *
- * The prototype lives under `.mstar/`, which this repository gitignores, so **CI cannot read
- * it**. That is why every check that compares against it (`check:declarations`,
- * `check:selectors`, `check:tones`) warns and exits 0 in CI: it has nothing to compare with.
- *
- * The consequence showed up as a real defect: `tokens.test.ts` pinned `padding: 14px 20px
- * 24px` while the prototype says `14px 20px 16px`, so the test guarded the wrong number and
- * the dsh pane drifted from the dashboard. **A literal in a test is a decision someone made,
- * not a fact about the prototype** — unless something re-derives it.
- *
- * This script is that something. It writes `src/styles/prototype.snapshot.json`, which IS
- * committed, so CI compares against the prototype's values without needing the prototype.
- *
- *   bun run scripts/prototype-snapshot.ts           # rewrite the snapshot
- *   bun run scripts/prototype-snapshot.ts --check   # fail if it has drifted
- *
- * Run `--check` before pushing whenever the prototype changes; a stale snapshot is worse than
- * none, because it looks authoritative.
+ * `snapshot.json` is what lets CI compare against the prototype's values: `check:snapshot`
+ * re-derives them from the tracked prototype and fails when the fixture has drifted.
  */
 import { readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
+import { loadPrototype } from "../scripts/prototype-baseline.ts";
 
 /**
  * The prototype is a TRACKED file, beside this script.
  *
- * It used to live under `.mstar/`, which this repository gitignores — so CI could not read it,
- * and every check that compares against the prototype silently degraded to "warn and exit 0".
- * Keeping a copy here is what makes the prototype an actual test baseline instead of a local
- * convenience. The copy is redacted: real iteration ids are replaced with `iter-N` and harness
- * paths with `{HARNESS_DIR}`, per this repository's rule against tracked files naming them.
+ * Being tracked is what makes the prototype an actual test baseline rather than a local
+ * convenience: every comparator (`check:snapshot`, `check:declarations`, `check:selectors`,
+ * `check:tones`) reads it, and fails when it cannot. The copy is redacted: real iteration ids
+ * are replaced with `iter-N` and harness paths with `{HARNESS_DIR}`, per this repository's rule
+ * against tracked files naming them.
  *
- * **When the design changes, change this file first**, then run this script, then bring
+ * **When the design changes, change this file first**, then run `snapshot:write`, then bring
  * `DESIGN.md` in line. See `packages/ui/design-system/README.md`.
  */
 const PROTOTYPE = join(import.meta.dir, "prototype.html");
@@ -89,15 +75,10 @@ function extract(source: string): Snapshot {
 
 let source: string;
 try {
-  source = readFileSync(PROTOTYPE, "utf8");
-} catch {
-  const message = "prototype-snapshot: prototype not found (it lives under the gitignored `.mstar/`)";
-  if (process.env.STRICT_SNAPSHOT === "1") {
-    console.error(message);
-    process.exit(1);
-  }
-  console.warn(message);
-  process.exit(0);
+  source = loadPrototype(PROTOTYPE);
+} catch (error) {
+  console.error(`prototype-snapshot: ${(error as Error).message}`);
+  process.exit(1);
 }
 
 const derived = extract(source);
@@ -108,14 +89,14 @@ if (process.argv.includes("--check")) {
   try {
     committed = readFileSync(SNAPSHOT, "utf8");
   } catch {
-    console.error("prototype-snapshot: no committed snapshot — run `bun run scripts/prototype-snapshot.ts`");
+    console.error("prototype-snapshot: no committed snapshot — run `bun run --cwd packages/ui snapshot:write`");
     process.exit(1);
   }
   if (committed !== rendered) {
     console.error("prototype-snapshot: the committed snapshot disagrees with the prototype:\n");
     console.error("  committed:", committed.replace(/\s+/g, " ").slice(0, 200));
     console.error("  prototype:", rendered.replace(/\s+/g, " ").slice(0, 200));
-    console.error("\nrun `bun run scripts/prototype-snapshot.ts` and commit the result");
+    console.error("\nrun `bun run --cwd packages/ui snapshot:write` and commit the result");
     process.exit(1);
   }
   console.log(`prototype snapshot is current — ${derived.containerBreakpoints.length} breakpoints, screen padding ${derived.screenPadding}`);

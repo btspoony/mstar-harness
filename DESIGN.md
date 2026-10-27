@@ -340,8 +340,8 @@ rules that use them. The token contract test proves the two lists agree.
   components at **720px** (its push default) and **400px** (dragged narrow). Same tree,
   different container, no second implementation.
 - **The pane's head band is inset, and shared.** `.ms-pane-head` is the surface + closing
-  hairline (`design-v1.html:482`) plus the prototype's nav inset `padding-inline: 12px`
-  (`design-v1.html:487`). The dsh pane inherits both. The dashboard's window header mounts the
+  hairline (`prototype.html:482`) plus the prototype's nav inset `padding-inline: 12px`
+  (`prototype.html:487`). The dsh pane inherits both. The dashboard's window header mounts the
   same class and overrides the padding with its own 20px gutter — the prototype's window header
   is `0 20px` while its pane nav is `0 12px`, so neither host invents its edge. The host's own
   tab strip stays the pane's top edge; the band starts below it.
@@ -353,13 +353,13 @@ and 5 below 619px — and no narrow treatment at all for the four list screens. 
 a licence to ship the wide table squeezed, so the product chooses:
 
 **Priority columns below the floor, declared widths from the prototype, and a scroll floor as
-the net.** The **column order is the prototype's too** (`design-v1.html:1199-1207`): ID, Title,
+the net.** The **column order is the prototype's too** (`prototype.html:1199-1207`): ID, Title,
 Project, Kind, Severity, Disposition, Last activity. A product-only fact sits next to the fact it
 belongs to (the milestone follows the project) and never displaces the prototype's sequence;
 `Workflows` (`:1548-1553`), `Iterations` (`:1664-1669`) and `Projects` (`:1757-1762`) follow their
 own prototype tables the same way. Concretely, every list table declares a px width for all but one column; that one
 flexible column (the title) takes the rest, and the widths are **the prototype's own values
-copied verbatim** (`design-v1.html:1196-1198`): id 86, title flexible, project 128, kind 112,
+copied verbatim** (`prototype.html:1196-1198`): id 86, title flexible, project 128, kind 112,
 severity 100, disposition 104, last activity 116. Workflows is 282/flex/200/150/140/190
 (`:1542`), Iterations 250/flex/190/96/130/64 (`:1659`), Projects 310/flex/110/210/90
 (`:1752`). They are declared on a `<colgroup>`, which is the element `table-layout: fixed`
@@ -369,7 +369,7 @@ agrees, and a cell that drills two levels deep does not.
 | Band (container) | What the list does |
 | --- | --- |
 | **≥ 900px** | All columns, including the wide-only milestone column. Declared widths; the flexible title column gets the remainder (measured at 1900: 786px of title in an 1398px table, no scroll). |
-| **620–899px** | The prototype's seven columns — the *wide-only* milestone column is hidden by rule (`@container (max-width: 899px)`), and the table keeps a floor of `declared widths + 88px` for the flexible column. Below `reflow-table` the collapse is the prototype's own mechanism: the table carries `data-narrow-cols="2"` (or `3`), and `@container` hides `:nth-child(n+3)` on both the header and the body, while the facts the hidden columns carried move into `.row-meta` **inside the record's first cell**. That is one record in one `<tr>`, not a spanning second row — the prototype never adds one, and neither does the product. The prototype's sidebar at 720px shows seven columns and no milestone (`design-v1.html:2551`), and the eighth column is exactly what pushed the table past its card. Measured at 720: table 678px in a 678px card, every column whole, title 146px — the widest column on the Issues list. Where a list's own declared widths still exceed the floor, the **card body scrolls sideways** rather than squeezing: at 620 the Issues table scrolls, and every column stays reachable.
+| **620–899px** | The prototype's seven columns — the *wide-only* milestone column is hidden by rule (`@container (max-width: 899px)`), and the table keeps a floor of `declared widths + 88px` for the flexible column. Below `reflow-table` the collapse is the prototype's own mechanism: the table carries `data-narrow-cols="2"` (or `3`), and `@container` hides `:nth-child(n+3)` on both the header and the body, while the facts the hidden columns carried move into `.row-meta` **inside the record's first cell**. That is one record in one `<tr>`, not a spanning second row — the prototype never adds one, and neither does the product. The prototype's sidebar at 720px shows seven columns and no milestone (`prototype.html:2551`), and the eighth column is exactly what pushed the table past its card. Measured at 720: table 678px in a 678px card, every column whole, title 146px — the widest column on the Issues list. Where a list's own declared widths still exceed the floor, the **card body scrolls sideways** rather than squeezing: at 620 the Issues table scrolls, and every column stays reachable.
   The floor is `declared + 88`, not `+ 96`, because the **dsh seat scrolls with `overflow-y: auto`**:
   on a classic-scrollbar platform the vertical bar takes ~15px of a 720px pane, so a card holds
   663px, not the 678px a macOS gate measures. The iterations set is 568px, so 96 would put its
@@ -426,7 +426,7 @@ a squeezed head set a two-glyph title as one glyph per line (measured: a 30.4px,
 
 - **The title owns its row below the collapse floor.** The screen head wraps
   (`flex-wrap: wrap`) and the title takes the full row (`flex: 1 1 100%`), the same shape the
-  prototype's `.panel-head` takes at narrow widths (`design-v1.html:736`). The title is then
+  prototype's `.panel-head` takes at narrow widths (`prototype.html:733`). The title is then
   measured against the whole card rather than the summary's remainder, so a two-glyph title has
   a row to itself and does not stack.
 - **The title's floor is zero, not its own string.** A CSS minimum beats a maximum, so a
@@ -440,7 +440,7 @@ a squeezed head set a two-glyph title as one glyph per line (measured: a 30.4px,
   measure; the gate asserts a floor of 120px on it.
 
 - **The Overview has two forms, and the wide one is two columns.** Above 900px of container it
-  is the prototype's grid, `minmax(0, 1.85fr) minmax(0, 1fr)` (`design-v1.html:317-318`, measured
+  is the prototype's grid, `minmax(0, 1.85fr) minmax(0, 1fr)` (`prototype.html:317-318`, measured
   898/486 at a 1400px content width): active workflow then the issue-flow trend on the left,
   residuals then milestones on the right, the latest iteration across both. Below the floor it is
   the sidebar's single run in the same reading order, where each card is full width (694px in the
@@ -451,7 +451,7 @@ a squeezed head set a two-glyph title as one glyph per line (measured: a 30.4px,
 
 - **A workflow's plans are a table, not a progress line.** The Overview's active-workflow card is
   the prototype's summary line (id, type, phase, `Open workflow`), its branch chain, and a
-  five-column table — `Plan | Title | Status | Progress | Done` (`design-v1.html:836-932`) — with
+  five-column table — `Plan | Title | Status | Progress | Done` (`prototype.html:836-932`) — with
   one row per plan. Five columns stay five at 720px: the table scrolls inside its card rather than
   dropping a column, because a workflow's plan list has no second line to move a fact to. Every
   row is exactly `--ms-row-h` tall in both bands.
@@ -471,7 +471,7 @@ a squeezed head set a two-glyph title as one glyph per line (measured: a 30.4px,
 - **The residual tally is a compact two-column grid, not a list.** The five severities flow
   two per row — critical/high, medium/low, nit — severity on the left with its tone dot and a
   fixed 88px label measure, count right-aligned (`margin-inline-start: auto`), one hairline per
-  row; below the 480px stack floor it is one column (`design-v1.html:2424-2434`). Its heading
+  row; below the 480px stack floor it is one column (`prototype.html:2424-2434`). Its heading
   carries the reconciling total in the panel's meta slot — `26 open · all projects` — instead of
   a title line of its own.
 - A component that cannot degrade below a floor **states the floor** rather than squeezing
@@ -645,7 +645,7 @@ two answers. Those two numbers are both *correct* for `height: auto` on a
 The prototype has one height at every width, and the reason is not in its CSS:
 
 ```js
-// design-v1.html:3229
+// prototype.html:3229
 var compact = el.dataset.flowChart === "compact";
 var height = compact ? 88 : 132;
 ```
@@ -761,7 +761,7 @@ JSON.stringify(["h1:.screen-head h1", "pt:.panel-title", "pm:.panel-meta", "th:t
   .map((p) => { const [k, sel] = p.split(":"); return k + "=" + pick(root, sel); }))
 ```
 
-Run that against the prototype (`file://…/design-v1.html`, click the screen's nav button
+Run that against the prototype (`file://…/prototype.html`, click the screen's nav button
 first) and against the dashboard, and diff the two strings. A `null` on both sides is a
 match: workflows and iterations have no titled panels, and projects has no table.
 
@@ -769,14 +769,17 @@ match: workflows and iterations have no titled panels, and projects has no table
 
 The gutter every screen sits inside — `padding: 14px 20px 16px` on
 `.ms-container [data-ms-screen]`, from the prototype's `.dash-main` — is no longer a literal in
-a test. `packages/ui/scripts/prototype-snapshot.ts` reads the prototype and writes
-`packages/ui/src/styles/prototype.snapshot.json`, and `tokens.test.ts` asserts the stylesheet
+a test. `packages/ui/design-system/snapshot.ts` reads `packages/ui/design-system/prototype.html`
+and writes `packages/ui/design-system/snapshot.json`, and `tokens.test.ts` asserts the stylesheet
 against that file.
 
-**Why a snapshot and not a direct read**: the prototype lives under `.mstar/`, which this
-repository gitignores, so **CI cannot see it** — which is exactly why `check:declarations`,
-`check:selectors` and `check:tones` warn and exit 0 in CI: they have nothing to compare with. The
-snapshot is committed, so CI compares against the prototype's values without the prototype.
+**Why a derived fixture**: one deriver owns the reading — `snapshot.ts` extracts the numbers and
+`check:snapshot` fails when the committed file has drifted — so `tokens.test.ts` asserts against
+the fixture instead of carrying a second HTML parser that could disagree with it. The prototype is
+a tracked file beside the script, and every comparator reads it directly: `check:snapshot`,
+`check:declarations`, `check:selectors` and `check:tones` each exit 1 when it is unreadable,
+naming the path they wanted. They run in CI (the `test-ui` job), so none of them can pass without
+a baseline.
 
 **What it caught the first time it ran**: `base.css` said `padding: 14px 20px 24px` and
 `tokens.test.ts` asserted that same `24px`, while the prototype says `16px`. The test was
@@ -794,7 +797,7 @@ literal was.
 
 `.pager` and `.panel-foot` both carried `padding: 6px 12px` and their own top hairline, and the
 pager renders **inside** the foot — so every paged list drew a double gutter and two lines. The
-prototype has one footer row (`design-v1.html:1345-1349`) with the controls pushed right by
+prototype has one footer row (`prototype.html:1345-1349`) with the controls pushed right by
 `margin-left: auto`.
 
 ```css
@@ -1523,9 +1526,9 @@ to `accent` with them.
 
 **The comparison is now two things a future round can run**, because one run is not a habit:
 
-- `bun run --cwd packages/ui check:tones` diffs the whole table against the prototype's own
-  rules. It needs the prototype file, which is gitignored, so it exits 0 with a notice when
-  absent — a development check, not a CI gate.
+- `bun run --cwd packages/ui check:tones` diffs the whole table against the tracked
+  `design-system/prototype.html`. When it cannot read that file it exits 1 naming the path;
+  the `test-ui` CI job runs it.
 - `src/view-model/status.test.ts` pins the same table as expectations, with the prototype's
   rule quoted beside each one. This one CI runs, and it has to be argued with to change.
 
@@ -2166,7 +2169,7 @@ that rule exists to stop a translated enum leaking into the UI. It has a narrow 
 with the prototype's own heading as the reason.
 
 **Citations, since one of these was argued from a test rather than the source**:
-`design-v1.html:953` is `<span class="panel-meta" data-t="ov.bySeverity">by severity</span>` —
+`prototype.html:953` is `<span class="panel-meta" data-t="ov.bySeverity">by severity</span>` —
 the panel's own head, four lines under the `<!-- residual issues by severity -->` comment at
 949. The `2424-2434` range this file cites elsewhere is the severity **tally inside** that
 panel, which is a different element.
@@ -2174,7 +2177,7 @@ panel, which is a different element.
 **Two differences that are deliberate — and both are now fixed instead:**
 
 - The residuals panel's meta read `134 open · all projects`; it now reads **`by severity`**,
-  which is what the prototype states at `design-v1.html:953`
+  which is what the prototype states at `prototype.html:953`
   (`<span class="panel-meta" data-t="ov.bySeverity">by severity</span>`, four lines under the
   `<!-- residual issues by severity -->` comment at 949). The count was redundant — every
   number it repeated is already inside the panel, five severity rows with their own totals.
@@ -2443,7 +2446,7 @@ does not read. **It is a measurement, not a gate**: wiring it in would fail on t
 cannot see, and a check that cries wolf is worse than one that says less.## The narrow header: three items, not four
 
 The prototype hides its scope select, its language group and the read-only note below 860 and
-keeps the theme button (`design-v1.html:742-745`). This implementation kept all of them, with a
+keeps the theme button (`prototype.html:742-745`). This implementation kept all of them, with a
 comment arguing the opposite:
 
 > They wrap instead of disappearing at a narrow width, because a control a reader cannot reach
@@ -2527,7 +2530,7 @@ been red long enough that I stopped reading them. All six asserted that a §8.1-
 
 | Assertion | The prototype |
 | --- | --- |
-| no lease / pin badge on the workflow detail | `Leases` and `Pin rev 3` (`design-v1.html`) |
+| no lease / pin badge on the workflow detail | `Leases` and `Pin rev 3` (`prototype.html`) |
 | no document inventory, no revision on an iteration | its plan table has a `Documents` column; its detail a Documents panel |
 | no occurrence row or history on an issue | `Occurrences` and `Disposition history` |
 | no native `<select>` in the shell | `<select class="ctl" aria-label="Project scope">` at `:800` |
@@ -2561,7 +2564,7 @@ on an unleased workflow. The structural work of the last twenty rounds is visibl
   workflow detail's crumb was already the prototype's own shape (`<div>`, a link back, `/`,
   the record in mono). The **issue** detail's was incomplete: it rendered the section link and
   stopped, so the reader lost which record the page was about. Measured after the fix:
-  `Issues / I-000870`, which is `design-v1.html:1355`'s own crumb.
+  `Issues / I-000870`, which is `prototype.html:1355`'s own crumb.
 
 **All four crumbs now carry the record's id.** Checked one by one: workflow-detail, iteration-detail
 and project-detail were already complete (`<div>` or `<nav>`, a link back, `/`, the record); only

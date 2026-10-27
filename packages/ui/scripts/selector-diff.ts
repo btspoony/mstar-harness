@@ -9,17 +9,16 @@
  * prototype surface the product must not have, and the reason is written beside it. Anything
  * not listed is a difference worth looking at, so the script exits 1 on it.
  *
- * Needs the prototype file (gitignored). `STRICT_SELECTORS=1` makes a missing prototype fail.
+ * The baseline is the tracked `design-system/prototype.html`. An unreadable baseline fails the
+ * check: a comparator that could not read the prototype has not compared anything.
  *
  * Run: `bun run --cwd packages/ui check:selectors`
  */
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
+import { loadPrototype } from "./prototype-baseline.ts";
 
-const PROTOTYPE = join(
-  import.meta.dir, "..", "..", "..",
-  ".mstar", "iterations", "iter-20261025-frontend-unification", "prototypes", "design-v1.html",
-);
+const PROTOTYPE = join(import.meta.dir, "..", "design-system", "prototype.html");
 
 /** Prototype-only selectors that are correct to omit, with the reason. */
 const NOT_APPLICABLE: ReadonlyArray<{ match: (selector: string) => boolean; why: string }> = [
@@ -50,15 +49,10 @@ function selectors(source: string): Set<string> {
 
 let html: string;
 try {
-  html = readFileSync(PROTOTYPE, "utf8");
-} catch {
-  const message = "selector-diff: prototype not found (see src/styles/product.css)";
-  if (process.env.STRICT_SELECTORS === "1") {
-    console.error(message);
-    process.exit(1);
-  }
-  console.warn(message);
-  process.exit(0);
+  html = loadPrototype(PROTOTYPE);
+} catch (error) {
+  console.error(`selector-diff: ${(error as Error).message}`);
+  process.exit(1);
 }
 
 const prototypeCss = [...html.matchAll(/<style[^>]*>([\s\S]*?)<\/style>/g)].map((m) => m[1]).join("\n");

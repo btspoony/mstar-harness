@@ -25,7 +25,7 @@
     "check:classes": "bun run scripts/dead-classes.ts",
     "check:tones": "bun run scripts/tone-table.ts",
     "check:selectors": "bun run scripts/selector-diff.ts",
-    "check:snapshot": "STRICT_SNAPSHOT=1 bun run design-system/snapshot.ts --check",
+    "check:snapshot": "bun run design-system/snapshot.ts --check",
     "snapshot:write": "bun run design-system/snapshot.ts",
     "check:declarations": "bun run scripts/declaration-diff.ts",
     "check:stale": "bun run scripts/stale-assets.ts",

@@ -995,6 +995,56 @@ jobs:
       - name: Test judgment
         run: bun run --cwd packages/judgment test
 
+  # The one test job that skips `engine:build`: in `packages/ui/src`'s non-test files, the
+  # scan face of `src/purity.test.ts`, every `@mstar-harness/engine` import is `import type`,
+  # so the package's suite and checks run against the workspace package without its dist.
+  test-ui:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
+        with:
+          bun-version: 1.4.0
+
+      - name: Setup Node
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: "24.18"
+
+      - name: Cache bun install cache
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ~/.bun/install/cache
+          key: ${{ runner.os }}-bun-install-${{ hashFiles('bun.lock', 'bun.lockb') }}
+          restore-keys: |
+            ${{ runner.os }}-bun-install-
+
+      - name: Install dependencies
+        run: bun install
+
+      - name: Test packages/ui
+        run: bun run --cwd packages/ui test
+
+      # One step per design-system check: the comparator that fails is named in
+      # the CI log, and each reads the tracked design-system/prototype.html and
+      # fails when it cannot.
+      - name: Check the design snapshot
+        run: bun run --cwd packages/ui check:snapshot
+
+      - name: Check shared declarations
+        run: bun run --cwd packages/ui check:declarations
+
+      - name: Check prototype selectors
+        run: bun run --cwd packages/ui check:selectors
+
+      - name: Check tone colours
+        run: bun run --cwd packages/ui check:tones
+
   lint-scripts-hooks:
     runs-on: ubuntu-latest
     steps:
