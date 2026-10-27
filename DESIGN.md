@@ -1912,8 +1912,21 @@ reported. A tab count has to be known *before* the reader opens that tab.
 So the reads moved up instead. `useIssues` takes an `enabled` flag and the iterations read
 became a `useIterationsRaw` hook beside it; `ProjectDetailDestination` calls both, derives the
 counts, and hands the same outcomes down to the lists — one fetch per list, two consumers.
-Measured: `["路线图1","问题19","迭代0"]`, the prototype's `Roadmap 3 / Issues 14 / Iterations 2`
-shape with this store's numbers.
+Measured on two projects, because one zero is not evidence:
+
+```
+dsh-integration   ["路线图1", "问题19", "迭代0"]
+_default          ["路线图",   "问题102", "迭代2"]
+```
+
+`dsh-integration` really has no linked iteration — `catalog_links` holds **2** `belongs-to`
+iteration→project links in the whole store, and none of them point at it. `_default` carries
+both, and its tab reads `Iterations 2`, which is the prototype's own number.
+
+**The count is the project's size, not the list's filter result.** The prototype's tab reads
+`Iterations 2` whatever the table below is filtered to, so the host derives it with the
+default filters while the list keeps its own live ones — deliberately different inputs, and
+the comment in the code says which is which.
 
 **A first attempt at this lift was reverted.** It edited four files in one pass, put the
 `outcome` prop on the wrong component, and never reached a green typecheck; the revert cost

@@ -681,10 +681,17 @@ function ProjectDetailDestination(props: { address: Address; feature: ProjectFea
    * opened, and handed to the list so both read the same envelope.
    */
   const scopedIterations = useIterationsRaw(projectId === "" ? null : projectId, projectId !== "");
+  // Derived once, and narrowed by `kind` rather than cast: the second `iterationsOutcome`
+  // call this used to make was the same computation twice, and the casts hid what it
+  // returned.
+  //
+  // The count is the project's *size*, not the list's current filter result: the prototype's
+  // tab reads `Iterations 2` whatever the list below is filtered to. That is why the default
+  // filters are stated here rather than the screen's live ones.
+  const iterationsModel =
+    scopedIterations === null ? null : iterationsOutcome(scopedIterations, DEFAULT_ITERATION_FILTERS);
   const iterationsCount =
-    scopedIterations === null ? undefined : (iterationsOutcome(scopedIterations, DEFAULT_ITERATION_FILTERS) as { kind: string; model?: { total: number } }).kind === "ready"
-      ? (iterationsOutcome(scopedIterations, DEFAULT_ITERATION_FILTERS) as { model: { total: number } }).model.total
-      : undefined;
+    iterationsModel !== null && iterationsModel.kind === "ready" ? iterationsModel.model.total : undefined;
   const copy = useCopy();
 
   useEffect(() => {
