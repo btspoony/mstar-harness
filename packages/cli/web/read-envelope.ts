@@ -35,6 +35,12 @@ export const UNREACHABLE =
 /** A list view's payload: rows in a page window, plus the store's unpaged count. */
 type ListPayload = { items: unknown[]; total: number };
 
+/** One settled list read, or `mixed`: the store moved while its pages were read. */
+type ListRead<T> =
+  | { status: "ready"; envelope: ReadEnvelope<T> }
+  | { status: "error"; message: string }
+  | { status: "mixed" };
+
 /**
  * Read every page of a list view.
  *
@@ -42,12 +48,43 @@ type ListPayload = { items: unknown[]; total: number };
  * count in the browser — reading one page would present that page as the list and hide
  * every match past it. Pages are merged into the first envelope, so the projection and
  * the store's `total` stay those of the same read.
+ *
+ * Offsets only mean something inside one store state: a registration or capture between
+ * two pages shifts every later window, so the concatenation would silently drop and
+ * repeat rows while still claiming the first page's counts. A page from another
+ * revision restarts the read once; a store that moved twice is refused rather than
+ * presented as one list.
  */
 export async function readAllListPages<T extends ListPayload>(
   fetchImpl: typeof fetch,
   path: (offset: number) => string,
   signal?: AbortSignal,
 ): Promise<{ status: "ready"; envelope: ReadEnvelope<T> } | { status: "error"; message: string }> {
+  const first = await readAllListPagesOnce<T>(fetchImpl, path, signal);
+  if (first.status !== "mixed") return first;
+  const second = await readAllListPagesOnce<T>(fetchImpl, path, signal);
+  if (second.status !== "mixed") return second;
+  return {
+    status: "error",
+    message: "The store changed while its list was being read, so the pages are not one snapshot. Reload to read the list again.",
+  };
+}
+
+/** The version members that make two pages the same store state. */
+function sameStoreState(a: ReadEnvelope<unknown>, b: ReadEnvelope<unknown>): boolean {
+  return (
+    a.storeRevision === b.storeRevision &&
+    a.catalogRevision === b.catalogRevision &&
+    a.projection.generation === b.projection.generation
+  );
+}
+
+/** One pass over the pages; `mixed` means the caller should start again. */
+async function readAllListPagesOnce<T extends ListPayload>(
+  fetchImpl: typeof fetch,
+  path: (offset: number) => string,
+  signal?: AbortSignal,
+): Promise<ListRead<T>> {
   try {
     const rows: unknown[] = [];
     let first: ReadEnvelope<ListPayload> | null = null;
@@ -68,6 +105,7 @@ export async function readAllListPages<T extends ListPayload>(
         return { status: "error", message: "The list answered without its rows." };
       }
       if (first === null) first = envelope;
+      else if (!sameStoreState(first, envelope)) return { status: "mixed" };
       rows.push(...page.items);
       total = page.total;
       // A short (or empty) page is the end even when `total` disagrees; a page's offset
