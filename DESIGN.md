@@ -2566,6 +2566,25 @@ the comparison would never fire where it matters most.
 **The direction is the point.** A probe that sees more than before is a page that grew; a probe
 that sees a third less has lost the page, and "over 0" then means the sweep measured a blank.
 
+## "Narrow" is not a width
+
+The workflows table, measured at three containers on the same build:
+
+| Container | Visible columns |
+| --- | --- |
+| 1440 | 6 — `Workflow · Catalog title · Status · phase · Root register · Projected updated · Join badges` |
+| **720** | **6 — unchanged** |
+| 375 | 3 — `Workflow · Catalog title · Status · phase` |
+
+I had written, the round before, that `Join badges` "does not exist on narrow screens". It does at
+720. The rule is the prototype's own (`[data-narrow-cols="3"] … :nth-child(n+3)`), the collapse
+point is a container width, and **a claim about narrow screens without the width is a claim no
+measurement can contradict** — which is why it survived a round.
+
+That is the third statement in this file that a measurement has corrected after I wrote it: the
+breadcrumb prototype that "had none" (it had four), the title that "was squeezed" (it rendered
+`总览`), and now this.
+
 ## Verification coverage, stated
 
 Two hosts mount these screens: the dashboard (`packages/cli/web`) and the dsh pane
