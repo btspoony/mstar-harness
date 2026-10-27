@@ -78,7 +78,8 @@ export const zh: Copy = {
     identityBuiltUnknown: "尚未构建",
     identityRead: (at) => `读取于 ${at}`,
     screenScopeAll: "全部项目",
-    screenSubtitle: (scope: string, open) => `${scope} · ${open} 项未关闭`,
+    screenSubtitle: (scope: string, open: number, clock: string | null) =>
+      `${scope} · ${open} 项未关闭${clock === null ? "" : ` · ${clock}`}`,
     pageTitle: "总览",
     workflowsHeading: "进行中的工作流",
     workflowsMore: (n: number) => `另有 ${n} 个在运行`,

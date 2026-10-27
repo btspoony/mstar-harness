@@ -2107,6 +2107,12 @@ heading, panel title, column header, button and chip on both sides, as text, in 
 that rule exists to stop a translated enum leaking into the UI. It has a narrow exception now,
 with the prototype's own heading as the reason.
 
+**Citations, since one of these was argued from a test rather than the source**:
+`design-v1.html:953` is `<span class="panel-meta" data-t="ov.bySeverity">by severity</span>` —
+the panel's own head, four lines under the `<!-- residual issues by severity -->` comment at
+949. The `2424-2434` range this file cites elsewhere is the severity **tally inside** that
+panel, which is a different element.
+
 **Two differences that are deliberate, and neither is fixed:**
 
 - The residuals panel's meta **is fixed**: it read `134 open · all projects` and now reads

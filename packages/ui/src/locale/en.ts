@@ -91,7 +91,8 @@ export const en = {
     identityBuiltUnknown: "never built",
     identityRead: (at: string) => `read ${at}`,
     screenScopeAll: "All projects",
-    screenSubtitle: (scope: string, open: number) => `${scope} · ${open} open issues`,
+    screenSubtitle: (scope: string, open: number, clock: string | null) =>
+      `${scope} · ${open} open issues${clock === null ? "" : ` · ${clock}`}`,
     pageTitle: "Overview",
     workflowsHeading: "Active workflow",
     workflowsMore: (n: number) => `+${n} more running`,

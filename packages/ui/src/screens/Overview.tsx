@@ -46,7 +46,9 @@ import type { GateStepId, GateStepPosition, Tone } from "../view-model/status.ts
 export type OverviewCopy = {
   pageTitle: string;
   /** The line under the title: which projects, how many are open. */
-  screenSubtitle: (scope: string, open: number) => string;
+  /** `All projects · 134 open issues · 14:35:02` — the clock is the read's, and is
+   *  omitted when the read did not carry one. */
+  screenSubtitle: (scope: string, open: number, clock: string | null) => string;
   /** The word this screen uses when the read covers every project. */
   screenScopeAll: string;
   /** `built 13:56:02` — when the projection was built, or the word for "never". */
@@ -419,7 +421,13 @@ export function Overview(props: OverviewProps) {
             pending or failed read would be a claim about the store, not a summary of it. */}
         {model.issueFlow.kind === "populated" ? (
           <p className="screen-meta" data-ms-screen-sub="">
-            {copy.screenSubtitle(copy.screenScopeAll, model.issueFlow.value.recordedOpen)}
+            {copy.screenSubtitle(
+              copy.screenScopeAll,
+              model.issueFlow.value.recordedOpen,
+              // The prototype's head ends with the read's own clock. `checkedAt` is that
+              // fact: when this read happened, not when the page was painted.
+              model.projection.checkedAt === "" ? null : formatClock(model.projection.checkedAt),
+            )}
           </p>
         ) : null}
       </div>
