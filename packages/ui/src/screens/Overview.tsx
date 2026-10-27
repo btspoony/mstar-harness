@@ -646,7 +646,7 @@ export function Overview(props: OverviewProps) {
               <Absence arm="empty" copy={copy} heading={copy.iterationNoIteration} />
             ) : (
               <div className="milestone-block" data-ms-iteration="">
-                <div className="milestone-block-id">
+                <div className="ov-iter-id">
                   <TruncatedText text={model.latestIteration.value.iterationId} />
                 </div>
                 <div className="gate-track" role="list" data-ms-gate-steps="">

@@ -139,7 +139,7 @@ function Plan(props: { plan: FocusPlan; copy: FocusCopy }) {
           say that the store never recorded one. The word is what keeps a colour (or a
           missing colour) from being the only channel. */}
       {plan.status === null ? (
-        <span className="p-status muted" data-ms-plan-status-absent="">
+        <span className="t-11 muted" data-ms-plan-status-absent="">
           {copy.planStatusAbsent}
         </span>
       ) : null}

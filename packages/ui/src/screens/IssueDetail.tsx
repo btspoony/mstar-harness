@@ -367,7 +367,7 @@ export function IssueDetail(props: IssueDetailProps) {
                 <tbody>
                   {record.value.relations.map((relation) => (
                     <tr key={`${relation.relation}-${relation.issue}`}>
-                      <td>{relation.relation}</td>
+                      <td className="mono">{relation.relation}</td>
                       <td className="mono">{relation.issue}</td>
                       <td>{relation.title ?? "—"}</td>
                     </tr>

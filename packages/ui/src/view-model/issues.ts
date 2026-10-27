@@ -301,6 +301,14 @@ export type IssueDetailModel = {
   } | null;
 };
 
+/** What a relation means from the receiving side (`blocks` → `blocked-by`). */
+const REVERSED_ISSUE_RELATION: Record<string, string> = {
+  related: "related",
+  blocks: "blocked-by",
+  "duplicate-of": "duplicated-by",
+  "superseded-by": "supersedes",
+};
+
 export function issueDetailModel(detail: IssueDetail): IssueDetailModel {
   const closed = detail.disposition !== "open";
   return {
@@ -352,12 +360,18 @@ export function issueDetailModel(detail: IssueDetail): IssueDetailModel {
       origin: row.origin,
       importedAt: row.importedAt === null ? null : formatDate(row.importedAt),
     })),
-    relations: (detail.relations ?? []).map((relation) => ({
-      relation: relation.relation,
-      // The row names the other end of the join, not this issue.
-      issue: relation.fromIssue === detail.id ? relation.toIssue : relation.fromIssue,
-      title: relation.title ?? null,
-    })),
+    relations: (detail.relations ?? []).map((relation) => {
+      // An incoming join means the other issue points at this one, so the stored word
+      // describes the wrong direction: a `duplicate-of` row on the original says its
+      // duplicate is a duplicate of it.
+      const incoming = relation.fromIssue !== detail.id;
+      return {
+        relation: incoming ? (REVERSED_ISSUE_RELATION[relation.relation] ?? relation.relation) : relation.relation,
+        // The row names the other end of the join, not this issue.
+        issue: incoming ? relation.fromIssue : relation.toIssue,
+        title: relation.title ?? null,
+      };
+    }),
     // The prototype's Source panel states the NEWEST occurrence's provenance. Both reads
     // return occurrences in ascending id, so this took `[0]` — the oldest — and kept
     // showing the first source after later occurrences were recorded.

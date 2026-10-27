@@ -258,6 +258,8 @@
 
 .ms-container .ov-iteration { grid-column: 1 / -1; }
 
+.ms-container .ov-iter-id { font-family: var(--ms-font-mono); font-size: var(--ms-fs-13); font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+
 .ms-container .wf-summary { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; min-width: 0; }
 
 .ms-container .wf-summary .wf-id { font-family: var(--ms-font-mono); font-size: var(--ms-fs-13); font-weight: 600; letter-spacing: -0.01em; }

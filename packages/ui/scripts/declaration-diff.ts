@@ -24,7 +24,11 @@ const PROTOTYPE = join(
 
 /** Declarations that are deliberately not the prototype's, keyed as `selector|property`. */
 const KEPT_DIFFERENT: Readonly<Record<string, string>> = {
-  // e.g. ".ctl|border": "written as select.ctl here; see check:selectors",
+  // The prototype's `.p-prog` holds a short `done/total` fraction, so `flex: none` is right
+  // there. This product puts the plan's free-text progress note (or its blocked reason) in
+  // that seat, and a note that cannot shrink pushes the plan id out of the column; `base.css`
+  // lets it absorb the remaining width and clip with the shared reveal.
+  ".planboard-plan .p-prog|flex": "free-text progress must shrink; the prototype's seat holds a fraction",
 };
 
 /** selector → declaration map, with the `.ms-container` scope stripped. */
