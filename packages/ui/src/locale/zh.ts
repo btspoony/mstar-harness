@@ -380,6 +380,8 @@ export const zh: Copy = {
     compassStarted: (at: string) => `开始于 ${at}`,
     planTableHeading: "计划",
     plansCount: (n: number): string => `${n} 个计划`,
+    plansMeta: (n: number): string => `${n} 个计划`,
+    documentsMeta: (n: number): string => `${n} 个文档`,
     catalogHeading: "目录身份",
     activeRegistration: "活跃注册",
     executionHeading: "执行",

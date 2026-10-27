@@ -42,6 +42,9 @@ export type IterationDetailCopy = {
   planTableHeading: string;
   /** The Plans head's own count: `3 plans`. */
   plansCount: (n: number) => string;
+  /** The head meta's last two segments: how much this iteration carries. */
+  plansMeta: (n: number) => string;
+  documentsMeta: (n: number) => string;
   catalogHeading: string;
   /** The Catalog head's chip: the store still counts this as a registration. */
   activeRegistration: string;
@@ -175,6 +178,11 @@ function IterationDetailBody(props: {
                     </span>
                   </>
                 )}
+                {/* The prototype's last two segments: how much this iteration carries. */}
+                <span aria-hidden="true">·</span>
+                <span data-ms-meta-plans="">{copy.plansMeta(value.plans.length)}</span>
+                <span aria-hidden="true">·</span>
+                <span data-ms-meta-documents="">{copy.documentsMeta(value.documents.length)}</span>
               </div>
             </div>
             {value.gatePosition === null ? null : (

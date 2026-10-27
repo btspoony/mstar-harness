@@ -981,12 +981,18 @@ that prototype. Rounds 105–121 added them back — footer revision, identity-l
 `built`/`read`, the catalog's own `Revision` row on both detail screens — without the spec
 saying so, which left the spec and the implementation describing different products.
 
-`specs/information-architecture.md` §8.1 now records the override in place, on **seven**
+`specs/information-architecture.md` §8.1 now records the override in place, on **eight**
 rows: the identity times and catalog revision, the plan leases, the catalog-pin badges, the
-document inventory, the compass milestones, the issue-flow trend, and the version plus
-`{HARNESS_DIR}`. Each is struck through with the prototype's own evidence named; the two
-members the prototype does **not** carry (`catalogRevision`, `sourceHash`) are stated as
-still out.
+document inventory, the compass milestones, the issue-flow trend, the **issue row's own
+revision**, and the version plus `{HARNESS_DIR}`. Each is struck through with the prototype's
+own evidence named; the two members the prototype does **not** carry (`catalogRevision`,
+`sourceHash`) are stated as still out.
+
+**The issue revision was the last one, and it had been enforced backwards.** The view model
+said revisions were not carried, and two tests asserted that absence — so the code, the tests
+and §8.1 all agreed with each other and all three disagreed with the prototype's meta line
+(`I-000870 · … · open · Revision 4`). A negative test is not evidence that a fact should stay
+out; it is evidence that someone once decided so.
 
 That spec lives under `.mstar/`, which this repository gitignores — it is a local planning
 artifact, not a tracked document. **A reader of this repository cannot see it.** So the

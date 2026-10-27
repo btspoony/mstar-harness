@@ -282,6 +282,9 @@ describe("no key exists for a fact IA §8 marks not-rendered", () => {
     // The issue detail's meta line ends with the issue row's own revision, which the
     // prototype's does too.
     "issueDetail.revisionLabel",
+    // The iteration detail's head states how much the iteration carries.
+    "iterationDetail.plansMeta",
+    "iterationDetail.documentsMeta",
     "workflowDetail.pinChip",
     "workflowDetail.revisionMeta",
     "issueDetail.relationsHeading",

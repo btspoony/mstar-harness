@@ -150,6 +150,8 @@ const detailCopy: IterationDetailCopy = {
   compassStarted: (at) => `started ${at}`,
   planTableHeading: "Plans",
   plansCount: (n) => `${n} ${n === 1 ? "plan" : "plans"}`,
+  plansMeta: (n) => `${n} ${n === 1 ? "plan" : "plans"}`,
+  documentsMeta: (n) => `${n} ${n === 1 ? "document" : "documents"}`,
   catalogHeading: "Catalog identity",
   activeRegistration: "active registration",
   executionHeading: "Execution",

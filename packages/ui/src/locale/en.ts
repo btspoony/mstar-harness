@@ -407,6 +407,8 @@ export const en = {
     compassStarted: (at: string) => `started ${at}`,
     planTableHeading: "Plans",
     plansCount: (n: number): string => `${n} ${n === 1 ? "plan" : "plans"}`,
+    plansMeta: (n: number): string => `${n} ${n === 1 ? "plan" : "plans"}`,
+    documentsMeta: (n: number): string => `${n} ${n === 1 ? "document" : "documents"}`,
     catalogHeading: "Catalog identity",
     activeRegistration: "active registration",
     executionHeading: "Execution",
