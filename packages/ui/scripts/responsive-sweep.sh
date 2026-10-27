@@ -20,6 +20,7 @@ SCREENS=(
 )
 WIDTHS=(375 720 1440)
 FAIL=0
+BASELINE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/responsive-baseline.txt"
 
 PROBE='(() => {
   const s = document.querySelector("article.screen"); if (!s) return "noscreen";
@@ -63,6 +64,18 @@ except Exception:
     read -r over scroll checked <<<"$value"
     if [ "$over" != "0" ] || [ "$scroll" != "noscroll" ]; then
       echo "FAIL ${width} ${screen}: over=${over} ${scroll}" >&2
+      FAIL=1
+    fi
+    # A probe that evaluates a handful of elements after a selector regression prints the
+    # same "over 0" as a clean one. The baseline is the committed count for this screen at
+    # this width; a drop of more than a third means the probe lost the page. The baseline
+    # lives in the repo so a fresh clone compares against something.
+    key="${width}x${screen}"
+    previous="$(grep -F "${key} " "$BASELINE" 2>/dev/null | head -1 | cut -d' ' -f2)"
+    if [ -z "$previous" ]; then
+      echo "$key $checked" >>"$BASELINE"
+    elif [ "$checked" -lt $(( previous * 2 / 3 )) ]; then
+      echo "FAIL ${width} ${screen}: probe saw ${checked} elements, baseline ${previous}" >&2
       FAIL=1
     fi
   done
