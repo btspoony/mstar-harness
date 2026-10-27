@@ -52,6 +52,7 @@ Edit canonical sources, not generated `harness-skills/` or `harness-agents/` cop
 - Keep `README.md` and `README_CN.md` short and executable: Install → Use (without/with iteration) → Workflow → Roles/skills. Prefer commands, tables, and links; put detailed installation and host explanations in `INSTALL.md`, `docs/`, or the owning skill.
 - When changing paired docs, make the same minimal semantic update in each language, including the dsh README triplet. Update existing pairing hashes with `git hash-object` where recorded; do not retranslate whole documents for a small change.
 - Update docs only where behavior or onboarding changes affect them. Verify changed commands, configuration examples, and links against their source.
+- **`DESIGN.md` is a summary of `packages/ui/design-system/`, not a second source.** The prototype (`design-system/prototype.html`) is the design; `design-system/snapshot.json` is the machine-readable fixture derived from it; `DESIGN.md` states in prose what they establish. They must be kept in step, in that order: change the prototype, run `bun run --cwd packages/ui snapshot:write`, then bring `DESIGN.md` in line. `check:snapshot` fails when the fixture lags the prototype; nothing fails when `DESIGN.md` lags both, so that direction is a review obligation rather than a gate. When a `DESIGN.md` claim and the prototype disagree, the prototype wins — unless the prototype is silent, in which case the decision and its reason belong in `DESIGN.md`.
 
 ## Verification and delivery
 

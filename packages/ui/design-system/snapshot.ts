@@ -22,18 +22,20 @@
 import { readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 
-const PROTOTYPE = join(
-  import.meta.dir,
-  "..",
-  "..",
-  "..",
-  ".mstar",
-  "iterations",
-  "iter-20261025-frontend-unification",
-  "prototypes",
-  "design-v1.html",
-);
-const SNAPSHOT = join(import.meta.dir, "..", "src", "styles", "prototype.snapshot.json");
+/**
+ * The prototype is a TRACKED file, beside this script.
+ *
+ * It used to live under `.mstar/`, which this repository gitignores — so CI could not read it,
+ * and every check that compares against the prototype silently degraded to "warn and exit 0".
+ * Keeping a copy here is what makes the prototype an actual test baseline instead of a local
+ * convenience. The copy is redacted: real iteration ids are replaced with `iter-N` and harness
+ * paths with `{HARNESS_DIR}`, per this repository's rule against tracked files naming them.
+ *
+ * **When the design changes, change this file first**, then run this script, then bring
+ * `DESIGN.md` in line. See `packages/ui/design-system/README.md`.
+ */
+const PROTOTYPE = join(import.meta.dir, "prototype.html");
+const SNAPSHOT = join(import.meta.dir, "snapshot.json");
 
 /** The values a screen's frame is built from, and the widths it reflows at. */
 type Snapshot = {

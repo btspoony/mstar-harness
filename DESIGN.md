@@ -85,6 +85,17 @@ rounded:
 
 # Morning Star Unified Design System
 
+> **This file summarizes `packages/ui/design-system/`; it is not a second source.**
+> The prototype (`design-system/prototype.html`) is the design. The fixture
+> (`design-system/snapshot.json`) is the machine-readable part of it, derived by
+> `design-system/snapshot.ts`. This document states in prose what those two establish, and the
+> decisions taken where the prototype is silent.
+>
+> Keep them in step, in this order: **change the prototype → run
+> `bun run --cwd packages/ui snapshot:write` → bring this file in line.**
+> `check:snapshot` fails when the fixture lags the prototype. **Nothing fails when this file
+> lags both** — that direction is a review obligation, and the reason this note exists.
+
 One product, one implementation, two hosts. This document is the **single token
 authority** for both the standalone dashboard (`mstar dashboard`) and the DeepSeek
 Harness panel. `packages/ui/src/styles/tokens.css` is its only CSS implementation and

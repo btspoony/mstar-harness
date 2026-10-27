@@ -30,8 +30,8 @@ const SRC = join(PKG_ROOT, "src");
 const STYLES = join(SRC, "styles");
 const TOKENS_PATH = join(STYLES, "tokens.css");
 const BASE_PATH = join(STYLES, "base.css");
-/** The prototype's own screen-frame values, derived by `scripts/prototype-snapshot.ts`. */
-const PROTOTYPE_SNAPSHOT_PATH = join(import.meta.dir, "prototype.snapshot.json");
+/** The prototype's own screen-frame values, derived by `design-system/snapshot.ts`. */
+const PROTOTYPE_SNAPSHOT_PATH = join(import.meta.dir, "..", "..", "design-system", "snapshot.json");
 const PRODUCT_PATH = join(STYLES, "product.css");
 const DESIGN_PATH = join(PKG_ROOT, "..", "..", "DESIGN.md");
 
