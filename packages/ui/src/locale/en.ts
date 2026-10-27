@@ -328,7 +328,7 @@ export const en = {
       notStarted: "Not started",
       noCatalog: "No catalog row",
     },
-    planColumns: { planId: "Plan", title: "Title", status: "Status", progress: "Progress", doneAt: "Completed" },
+    planColumns: { planId: "Plan", title: "Title", status: "Status", pin: "Pin", progress: "Progress", doneAt: "Completed" },
     planProgressAbsent: "Records no progress.",
     executionUnavailableLead: "Execution unavailable",
     absence: {
@@ -506,6 +506,7 @@ type Widen<T> = T extends string
   : T extends (...args: infer A) => infer R
     ? (...args: A) => R
     : { readonly [K in keyof T]: Widen<T[K]> };
+
 
 /** The copy tree every locale must provide. `zh.ts` is typed against it. */
 export type Copy = Widen<typeof en>;

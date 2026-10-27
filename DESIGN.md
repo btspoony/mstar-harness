@@ -1830,8 +1830,26 @@ order, with the two-column split above and the full-width table and card below. 
 its count were all implemented; the screenshot showed a workflow with zero leases. That is the
 same "data absence read as an implementation gap" this file names twice already.
 
-**The real gaps are three**: the meta line's `phase`, the Catalog `Pin`/`rev` chip, and the
-plans table's `Pin` column and merged `Status · phase` cell.
+**Two of those "gaps" were also readings, and one was real.**
+
+`phase` in the meta line **was implemented** (`WorkflowDetail.tsx` renders it between the
+status and the update time); the record in the screenshot has `phase: null`, so nothing
+printed. The `Status · phase` merged cell **was implemented** too — the status column already
+carries a `.chip` for the phase.
+
+**The `Pin` column was real and is now shipped.** `catalogPinRevision` has been on the DTO
+since the read was written and no plan row carried it. The table reads six columns in the
+prototype's order now:
+
+```
+Plan · Title · Status · Progress · Done at · Pin
+```
+
+measured as `["计划","标题","状态","进展","完成时间","固定版本"]`, with `.t-num` on the last
+cell — the prototype right-aligns it.
+
+**Still open**: the Catalog identity panel's `Pin` / `rev 3` chip and its description
+paragraph.
 
 **A second, quieter lesson**: this round also fixed `check:stale`'s own silent pass — a
 checkout with no `dist/mstar-harness.js` exited 0 with a log line, which is the exact state the

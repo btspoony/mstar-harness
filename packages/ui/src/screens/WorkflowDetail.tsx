@@ -69,7 +69,15 @@ export type WorkflowDetailCopy = {
     notStarted: string;
     noCatalog: string;
   };
-  planColumns: { planId: string; title: string; status: string; progress: string; doneAt: string };
+  planColumns: {
+    planId: string;
+    title: string;
+    status: string;
+    progress: string;
+    doneAt: string;
+    /** The prototype's seventh column: the catalog revision a plan is pinned to. */
+    pin: string;
+  };
   /** The plan records no progress note — its own absent line. */
   planProgressAbsent: string;
   executionUnavailableLead: string;
@@ -134,6 +142,19 @@ function planColumns(copy: WorkflowDetailCopy): DataTableColumn<WorkflowPlanRow>
       secondary: true,
       align: "end",
       render: (plan) => <span className={"mono"}>{plan.doneAt ?? "—"}</span>,
+    },
+    {
+      key: "pin",
+      header: copy.planColumns.pin,
+      // The prototype right-aligns this one (`.t-num`), and shows `—` for a plan that
+      // pins nothing.
+      cellClass: "t-num",
+      headerClass: "t-num",
+      render: (plan) => (
+        <span data-ms-plan-pin={plan.pin ?? ""}>
+          {plan.pin === null ? <span className={"muted"}>—</span> : plan.pin}
+        </span>
+      ),
     },
   ];
 }

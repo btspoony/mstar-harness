@@ -166,9 +166,13 @@ describe("workflows", () => {
     expect(model.value.plans).toHaveLength(2);
     expect(model.value.plans[0]).toMatchObject({ planId: "p1", title: "Plan one", status: "Done" });
     expect(model.value.plans[1]).toMatchObject({ planId: "p2", title: null, status: "InProgress", progress: "wiring" });
-    for (const removed of ["leases", "pin", "badges"]) {
+    // `pin` is carried now: the prototype's plan table has a Pin column, read from the
+    // DTO's `catalogPinRevision`. Leases stay on the workflow, not on a plan row, and the
+    // join badges stay out.
+    for (const removed of ["leases", "badges"]) {
       expect(Object.keys(model.value.plans[0] ?? {})).not.toContain(removed);
     }
+    expect(model.value.plans[0] ?? {}).toHaveProperty("pin");
   });
 
   test("a null record is absent, and a failed read is unavailable", () => {

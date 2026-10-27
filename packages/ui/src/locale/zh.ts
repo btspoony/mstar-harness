@@ -307,7 +307,7 @@ export const zh: Copy = {
       notStarted: "未开始",
       noCatalog: "无目录记录",
     },
-    planColumns: { planId: "计划", title: "标题", status: "状态", progress: "进展", doneAt: "完成时间" },
+    planColumns: { planId: "计划", title: "标题", status: "状态", pin: "固定版本", progress: "进展", doneAt: "完成时间" },
     planProgressAbsent: "没有记录进展。",
     executionUnavailableLead: "执行信息不可读",
     absence: {
@@ -465,4 +465,4 @@ export const zh: Copy = {
       clear: "清除项目范围",
     },
   },
-};
+  };

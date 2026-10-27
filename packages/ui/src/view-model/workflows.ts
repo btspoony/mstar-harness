@@ -227,6 +227,12 @@ export type WorkflowPlanRow = {
   progress: string | null;
   phase: string | null;
   doneAt: string | null;
+  /**
+   * The prototype's `Pin` column: the catalog revision this plan is pinned to, or `null`
+   * when it is not pinned. It has been on the DTO since the read was written and no row
+   * carried it.
+   */
+  pin: string | null;
 };
 
 /** The catalog identity of a workflow, when it has one. */
@@ -270,6 +276,7 @@ export function workflowPlanRow(plan: WorkflowPlanDTO): WorkflowPlanRow {
     progress: plan.progress,
     phase: plan.phase,
     doneAt: plan.doneAt,
+    pin: plan.catalogPinRevision === null ? null : String(plan.catalogPinRevision),
   };
 }
 
