@@ -113,9 +113,20 @@ describe("enum values, ids, paths and timestamps stay literal", () => {
   ];
 
   test("no dictionary value is exactly an enum literal", () => {
+    // The milestone board's tally labels are the exception: the prototype prints
+    // `9 open  4 resolved  1 retired without resolution  14 total`, so `open` and
+    // `resolved` ARE the words a reader sees. Everywhere else a label that equals the
+    // enum is the bug this test exists for.
+    const COUNTER_LABELS = new Set([
+      "projectDetail.roadmap.countLabels.open",
+      "projectDetail.roadmap.countLabels.resolved",
+      // The prototype's overview plan table heads its completion column with the status
+      // word itself: `Done`, not `Completed`.
+      "overview.planColumns.done",
+    ]);
     for (const [locale, tree] of [["en", enLeaves], ["zh", zhLeaves]] as const) {
       const offenders = Object.entries(tree)
-        .filter(([, value]) => LITERALS.includes(value.trim()))
+        .filter(([key, value]) => LITERALS.includes(value.trim()) && !COUNTER_LABELS.has(key))
         .map(([key, value]) => `${locale}.${key} = ${value}`);
       expect(offenders).toEqual([]);
     }
@@ -201,6 +212,97 @@ describe("no key exists for a fact IA §8 marks not-rendered", () => {
     // §8.2 lists the catalog identity on the workflow detail; `documentKind` is
     // one of its fields, not a document inventory.
     "workflowDetail.fields.documentKind",
+    // The prototype's iteration detail HAS a Documents card, and the prototype is the
+    // acceptance criterion for this interface. §8.1 kept the inventory out because it
+    // says nothing about progress — true, but that is a different goal. The card is
+    // rendered, so its keys are legitimate.
+    "iterationDetail.documentsHeading",
+    "iterationDetail.documentsCount",
+    "iterationDetail.documentsEmpty",
+    "iterationDetail.documentColumns.title",
+    "iterationDetail.documentColumns.lifecycle",
+    "iterationDetail.documentColumns.kind",
+    "iterationDetail.documentColumns.location",
+    "iterationDetail.documentColumns.revision",
+    // The prototype's workflow detail HAS a Leases card, so its keys are live.
+    "workflowDetail.leasesHeading",
+    "workflowDetail.leasesCount",
+    "workflowDetail.leasesEmpty",
+    "workflowDetail.leaseColumns.plan",
+    "workflowDetail.leaseColumns.kind",
+    "workflowDetail.leaseColumns.holder",
+    "workflowDetail.leaseColumns.worktree",
+    "workflowDetail.leaseColumns.expires",
+    // The prototype's project detail has a `Roadmap authority` panel whose Revision
+    // row is part of the answer, not the removed revision counter.
+    "projectDetail.authorityColumns.revision",
+    // The head prints `Revision 12`, as the prototype does.
+    "projectDetail.revisionLabel",
+    // The prototype's workflow detail lists the catalog's own revision and its two
+    // dates; the IA note that removed "revision" meant the store counter, not this row.
+    "workflowDetail.fields.revision",
+    "workflowDetail.fields.registeredAt",
+    "workflowDetail.fields.catalogUpdatedAt",
+    "workflowDetail.fields.description",
+    // Same rows on the iteration screen: the prototype lists the catalog's own
+    // revision and dates there too.
+    "iterationDetail.fields.kind",
+    "iterationDetail.fields.revision",
+    "iterationDetail.fields.registeredAt",
+    "iterationDetail.fields.location",
+    "iterationDetail.fields.catalogUpdatedAt",
+    // The project identity panel states the same six rows.
+    "projectDetail.fields.projectKind",
+    "projectDetail.fields.revision",
+    "projectDetail.fields.registeredAt",
+    "projectDetail.fields.catalogUpdatedAt",
+    // The issue detail states the tracker carry-over, the source of its newest
+    // occurrence, and its relations — panels §8.1 removed and the prototype keeps.
+    "issueDetail.occurrencesHeading",
+    "issueDetail.occurrenceObservedAt",
+    "issueDetail.occurrenceLocation",
+    "issueDetail.occurrenceRecorded",
+    "issueDetail.historyHeading",
+    "issueDetail.historyColumns.from",
+    "issueDetail.historyColumns.to",
+    "issueDetail.historyColumns.reason",
+    "issueDetail.historyColumns.actor",
+    "issueDetail.historyColumns.recorded",
+    "issueDetail.historyNote",
+    "issueDetail.provenanceHeading",
+    "issueDetail.provenanceColumns.kind",
+    "issueDetail.provenanceColumns.target",
+    "issueDetail.provenanceColumns.sourceHash",
+    "issueDetail.provenanceColumns.origin",
+    "issueDetail.provenanceColumns.importedAt",
+    // The prototype's plan table has a `Pin` column: the catalog revision a plan pins to.
+    "workflowDetail.planColumns.pin",
+    // The Catalog identity head carries the same pin state as a chip and the revision
+    // beside it.
+    // The issue detail's meta line ends with the issue row's own revision, which the
+    // prototype's does too.
+    "issueDetail.revisionLabel",
+    // The iteration detail's head states how much the iteration carries.
+    "iterationDetail.plansMeta",
+    "iterationDetail.documentsMeta",
+    "workflowDetail.pinChip",
+    "workflowDetail.revisionMeta",
+    "issueDetail.relationsHeading",
+    "issueDetail.relationsColumns.relation",
+    "issueDetail.relationsColumns.issue",
+    "issueDetail.relationsColumns.title",
+    "issueDetail.sourceHeading",
+    "issueDetail.sourceKindLabel",
+    "issueDetail.sourceIdentityLabel",
+    "issueDetail.sourceLocationLabel",
+    "issueDetail.sourceRootCauseLabel",
+    "issueDetail.sourceAcceptanceLabel",
+    "issueDetail.identityKeysHeading",
+    "issueDetail.identityKeyLabel",
+    "issueDetail.providerLabel",
+    // The prototype's iterations table has a `Documents` column; it is a count, not
+    // the inventory §8.1 excluded.
+    "iterations.columns.documents",
   ]);
 
   test("the kept-exception list contains only keys that exist", () => {

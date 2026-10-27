@@ -93,7 +93,13 @@ function remember(server: RunningDashboard): RunningDashboard {
   return server;
 }
 
+/** The shell minus the one attribute the server injects: the browser entry's harness root. */
+function withoutHarnessDirectory(body: string): string {
+  return body.replace(/<html data-harness-dir="[^"]*" /, "<html ");
+}
+
 function raw(
+
   input: string,
   options: { method?: string; headers?: Record<string, string>; authenticated?: boolean } = {},
 ): Promise<{ status: number; headers: http.IncomingHttpHeaders; body: string }> {
@@ -133,7 +139,12 @@ describe("static shell and inlined assets", () => {
   test("GET / serves the D1 shell with the exact CSP and no CORS header", async () => {
     const res = await raw(server.url);
     expect(res.status).toBe(200);
-    expect(res.body).toBe(dashboardHtml);
+    // The shell is the generated document plus the one attribute the server injects: the
+    // harness root the browser entry reads off `<html>`. Everything else must be untouched,
+    // which is what this asserts by putting the attribute back before comparing.
+    const withDirectory = res.body.replace(/<html data-harness-dir="[^"]*" /, "<html ");
+    expect(withDirectory).toBe(dashboardHtml);
+    expect(res.body).toMatch(/<html data-harness-dir="[^"]+" /);
     expect(res.headers["set-cookie"]?.[0]).toContain("HttpOnly");
     expect(res.headers["content-security-policy"]).toBe(CSP);
     expect(res.headers["x-content-type-options"]).toBe("nosniff");
@@ -505,7 +516,7 @@ describe("boundary and lifecycle", () => {
       expect(new URL(server.url).searchParams.get("project")).toBe("proj-a");
       const shell = await raw(server.url);
       expect(shell.status).toBe(200);
-      expect(shell.body).toBe(dashboardHtml);
+      expect(withoutHarnessDirectory(shell.body)).toBe(dashboardHtml);
       const res = await raw(new URL("/api/issues?project=proj-a", server.url).href);
       expect(res.status).toBe(200);
       expect((JSON.parse(res.body) as { data: { total: number } }).data.total).toBe(1);
@@ -614,7 +625,7 @@ describe("inlined-artifact serving (built CLI, no source asset directory)", () =
       try {
         const shell = await raw(url);
         expect(shell.status).toBe(200);
-        expect(shell.body).toBe(generated.dashboardHtml);
+        expect(withoutHarnessDirectory(shell.body)).toBe(generated.dashboardHtml);
         const js = await raw(new URL("/assets/app.js", url).href);
         expect(js.status).toBe(200);
         expect(js.body).toBe(generated.dashboardJs);

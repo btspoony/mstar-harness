@@ -10,5 +10,5 @@
     "types": ["bun-types", "react"],
     "noEmit": true
   },
-  "include": ["**/*.ts", "**/*.tsx", "../src/client/css-modules.d.ts"]
+  "include": ["**/*.ts", "**/*.tsx", "../src/client/css-modules.d.ts", "../src/client/globals.d.ts"]
 }

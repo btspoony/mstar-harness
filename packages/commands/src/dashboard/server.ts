@@ -96,6 +96,11 @@ function sendStatic(
  * Uses the P6 read boundary so every store refusal class (missing, staged,
  * schema/runtime) refuses before the server starts. Unknown project refuses.
  */
+/** Enough escaping for a quoted attribute: the value is a filesystem path. */
+function escapeHtmlAttribute(value: string): string {
+  return value.replace(/&/g, "&amp;").replace(/"/g, "&quot;").replace(/</g, "&lt;");
+}
+
 async function assertProjectExists(harnessDir: string, projectId: string): Promise<void> {
   const envelope = await readDashboardView({
     context: { harnessDir },
@@ -192,7 +197,27 @@ export async function startDashboard(options: StartDashboardOptions): Promise<Ru
         sendJson(res, 405, fail("method-not-allowed", "only GET and HEAD are accepted for static resources"), requestHead);
         return;
       }
-      if (pathname === "/") sendStatic(res, requestHead, "text/html; charset=utf-8", dashboardHtml);
+      if (pathname === "/") {
+        // The prototype's identity line states the harness directory beside the package.
+        // It is the one fact the bundle cannot carry: the directory is a runtime decision,
+        // not a build-time constant. It rides a data attribute rather than an inline
+        // script because this server sends `script-src 'self'` — an inline assignment is
+        // blocked silently, which is how the first attempt shipped a `undefined`.
+        //
+        // The marker is checked: a `replace` whose needle is absent returns the input
+        // unchanged, so a shell that ever lost its `<html …>` prefix would ship a page
+        // with no directory and no error — the same silent failure one layer up.
+        const marker = "<html ";
+        if (!dashboardHtml.includes(marker)) {
+          sendJson(res, 500, fail("shell-marker-missing", `the dashboard shell carries no ${JSON.stringify(marker)} prefix`), requestHead);
+          return;
+        }
+        const shell = dashboardHtml.replace(
+          marker,
+          `<html data-harness-dir="${escapeHtmlAttribute(options.harnessDir)}" `,
+        );
+        sendStatic(res, requestHead, "text/html; charset=utf-8", shell);
+      }
       else if (pathname === "/assets/app.js") sendStatic(res, requestHead, "text/javascript; charset=utf-8", dashboardJs);
       else sendStatic(res, requestHead, "text/css; charset=utf-8", dashboardCss);
       return;

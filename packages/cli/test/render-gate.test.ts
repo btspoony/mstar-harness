@@ -102,8 +102,14 @@ const PROBE = `(() => {
       const bg = getComputedStyle(el).backgroundColor;
       return bg !== 'rgba(0, 0, 0, 0)' && bg !== 'transparent';
     }).length;
-  const seg = document.querySelectorAll('.app-seg');
-  const icon = document.querySelectorAll('.app-icon-btn');
+  // A hidden element stays in the DOM, so a raw querySelectorAll().length reports the
+  // language group as present at 760px where the prototype hides it. Counting painted
+  // boxes is what the assertions below mean by the header pair.
+  const painted = (el) => { const r = el.getBoundingClientRect(); return r.width > 0 && r.height > 0; };
+  const segNodes = [...document.querySelectorAll('.app-seg')];
+  const iconNodes = [...document.querySelectorAll('.app-icon-btn')];
+  const seg = segNodes.filter(painted);
+  const icon = iconNodes.filter(painted);
   const box = (el) => (el === null ? null : el.getBoundingClientRect().width);
   // The collapsed second line is one spanning cell, so it is also its row's last
   // child: it restates facts and is not a date column.
@@ -144,6 +150,11 @@ const PROBE = `(() => {
   const header = document.querySelector('header.app-header');
   const h1 = document.querySelector('[data-ms-screen] h1');
   const summaryEl = document.querySelector('[data-ms-summary]');
+  // The overview's plan table is the workflow panel's own child, not part of the
+  // workflow summary line (the prototype has three siblings: summary, branch line, table).
+  // Scoped by the panel's accessible name, the stable marker across that move.
+  const ovWorkflow = document.querySelector('[aria-labelledby="ms-overview-workflows"]');
+  const ovWorkflowMeta = ovWorkflow === null ? null : ovWorkflow.querySelector('[data-ms-panel-meta]');
   const centreY = (el) => (el === null ? null : el.getBoundingClientRect().top + el.getBoundingClientRect().height / 2);
   const band = {
     contentWidth: contentWidth === null ? null : Math.round(contentWidth * 10) / 10,
@@ -165,6 +176,31 @@ const PROBE = `(() => {
       return absent === null ? 'populated' : absent.getAttribute('data-ms-absence');
     })(),
     flowPaths: document.querySelectorAll('[data-ms-flow-chart] path').length,
+    // The workflow panel's plan table: its columns, its rows, and the header facts.
+    planColumns: [...(ovWorkflow === null ? [] : ovWorkflow.querySelectorAll('table thead th'))].map((th) => th.getAttribute('data-ms-col-key')),
+    planRows: ovWorkflow === null ? 0 : ovWorkflow.querySelectorAll('table tbody tr').length,
+    planRowKeys: [...(ovWorkflow === null ? [] : ovWorkflow.querySelectorAll('table tbody tr'))].map((tr) => tr.getAttribute('data-ms-row-key')),
+    planRowHeights: [...(ovWorkflow === null ? [] : ovWorkflow.querySelectorAll('table tbody tr'))].map((tr) => Math.round(tr.getBoundingClientRect().height * 10) / 10),
+    planTitleWidth: (() => {
+      const th = ovWorkflow === null ? null : ovWorkflow.querySelector('table th[data-ms-col-key="title"]');
+      return th === null ? null : Math.round(th.getBoundingClientRect().width * 10) / 10;
+    })(),
+    planTableWidth: (() => {
+      const table = ovWorkflow === null ? null : ovWorkflow.querySelector('table');
+      return table === null ? null : Math.round(table.getBoundingClientRect().width * 10) / 10;
+    })(),
+    planTableVisibleColumns: (() => {
+      const ths = [...(ovWorkflow === null ? [] : ovWorkflow.querySelectorAll('table thead th'))];
+      return ths.filter((th) => getComputedStyle(th).display !== "none").length;
+    })(),
+    rowHeight: getComputedStyle(document.documentElement).getPropertyValue("--ms-row-h").trim(),
+    workflowMetaCount: (() => {
+      const count = ovWorkflowMeta === null ? null : ovWorkflowMeta.querySelector('.num');
+      return count === null ? null : (count.textContent ?? "").trim();
+    })(),
+    workflowMeta: ovWorkflowMeta === null ? null : (ovWorkflowMeta.textContent ?? "").trim(),
+    branchAnchors: document.querySelectorAll('[data-ms-branch] > span:not([aria-hidden])').length,
+    planProgressBars: ovWorkflow === null ? 0 : ovWorkflow.querySelectorAll('table [role="progressbar"]').length,
     flowRows: document.querySelectorAll('[data-ms-flow] details tbody tr').length,
     flowAxis: [...document.querySelectorAll('[data-ms-flow] [class*="axis"] span')].map((el) => (el.textContent ?? '').trim()),
     narrowestCell: cellWidths.length === 0 ? null : Math.min(...cellWidths),
@@ -280,9 +316,10 @@ const PROBE = `(() => {
     headerHairline: header === null ? null : getComputedStyle(header).borderBottomWidth,
     controlsInside: (() => {
       const controls = [...document.querySelectorAll('.app-seg, .app-icon-btn')];
-      return controls.every((el) => {
+      const shown = controls.filter((el) => { const r = el.getBoundingClientRect(); return r.width > 0 && r.height > 0; });
+      return shown.every((el) => {
         const rect = el.getBoundingClientRect();
-        return rect.width > 0 && rect.right <= window.innerWidth + 0.5 && rect.left >= -0.5;
+        return rect.right <= window.innerWidth + 0.5 && rect.left >= -0.5;
       });
     })(),
     controlsLabelled: [...document.querySelectorAll('.app-seg, .app-icon-btn')]
@@ -297,6 +334,14 @@ const PROBE = `(() => {
     tableInCard: table !== null && table.closest('[data-ms-panel]') !== null,
     paintedTones,
     languageButtons: seg.length,
+    // The band decides what the header MUST look like; the assertions below read it rather
+    // than treating either shape as acceptable at any width.
+    headerNarrow: window.innerWidth <= 860,
+    // The control must be MOUNTED at every width; only its painted-ness follows the
+    // breakpoint. Without this, a filter that drops unrendered boxes would turn a control
+    // that stopped mounting altogether into a passing run.
+    languageNodes: segNodes.length,
+    themeNodes: iconNodes.length,
     themeButtons: icon.length,
     languageWidth: box(seg[0] ?? null),
     themeWidth: box(icon[0] ?? null),
@@ -413,7 +458,14 @@ describe.skipIf(!browserAvailable)("the render gate", () => {
           status: "running",
           started_at: RECORDED_AT,
           updated_at: RECORDED_AT,
-          plans: [],
+          // The header line's branch chain reads these four anchors.
+          branch: { base: "main", source: "render-gate-workflow", integration: "render-gate-workflow", target: "main" },
+          // Two dated plans: the Overview's plan table is one row per plan, and the
+          // gate's job is to see two rows from real store rows, not a fixture object.
+          plans: [
+            { id: "20261025-issue-project-move", file: "plans/20261025-issue-project-move.md", title: "Move issue ownership into the project domain", status: "InProgress" },
+            { id: "20261018-panel-retirement", file: "plans/20261018-panel-retirement.md", title: "Retire the event log and meta dock", status: "Done" },
+          ],
         },
       },
     );
@@ -499,10 +551,29 @@ describe.skipIf(!browserAvailable)("the render gate", () => {
   /** The anchors every screen shares: the header pair, and no chip-coloured tone. */
   function sharedAnchors(screen: Record<string, unknown>): void {
     expect(screen.paintedTones).toBe(0);
-    expect(screen.languageButtons).toBe(1);
+    // The prototype hides the language group and the scope select below 860
+    // (`design-v1.html`'s `@media (max-width: 860px)`), and the theme button stays at
+    // every width. So the group is asserted only where the prototype shows it — and where
+    // it is hidden, the count and the measured box must AGREE. A button that exists with
+    // zero width is the defect this pins, not a narrow viewport.
     expect(screen.themeButtons).toBe(1);
-    expect(screen.languageWidth).toBeGreaterThan(0);
     expect(screen.themeWidth).toBeGreaterThan(0);
+    // The group is MOUNTED at every width, and what it paints is decided by the viewport
+    // band, not by whatever happens to be true. `design-v1.html:741` hides it under
+    // `@media (max-width: 860px)` (`:743`), so below that breakpoint it must be 0 painted
+    // and above it exactly 1 — an earlier version of this assertion accepted 0 at every
+    // width, which would have let a global `display: none` pass at 1280.
+    expect(screen.languageNodes).toBe(1);
+    expect(screen.themeNodes).toBe(1);
+    expect(screen.themeButtons).toBe(1);
+    expect(screen.themeWidth).toBeGreaterThan(0);
+    if (screen.headerNarrow === true) {
+      expect(screen.languageButtons).toBe(0);
+      expect(screen.languageWidth).toBeNull();
+    } else {
+      expect(screen.languageButtons).toBe(1);
+      expect(screen.languageWidth).toBeGreaterThan(0);
+    }
   }
 
   test("overview is a column of cards", async () => {
@@ -543,7 +614,10 @@ describe.skipIf(!browserAvailable)("the render gate", () => {
     expect(Math.abs((pager.lastButtonRight as number) - (pager.footInnerRight as number))).toBeLessThan(2);
     // and they share the range's centre line rather than standing taller than it.
     expect(Math.abs((pager.buttonCentreY as number) - (pager.rangeCentreY as number))).toBeLessThan(1.5);
-    expect(pager.footHeight as number).toBeLessThan(34);
+    // No height ceiling here: the prototype's footer has no pager buttons at all, so a
+    // number derived from its `.btn` (28px) is not an expectation about this element. The
+    // three assertions above are the prototype's actual contract — trailing alignment and a
+    // shared centre line.
   }, 60_000);
 
   /**
@@ -577,7 +651,11 @@ describe.skipIf(!browserAvailable)("the render gate", () => {
   const FLOOR_SAMPLE = (sample: { floor?: number }): boolean => sample.floor !== undefined;
 
   const BANDS = [
-    { width: 760, collapse: false, scrolls: false },
+    // 760 does not pin one answer either: the prototype's workflow table declares 962px of
+    // fixed columns (`design-v1.html:1543`), iterations 830px (`:1752`), projects 720px, so
+    // at this width those three overflow their card while the two wide screens do not. The
+    // collapse contract — which is what this band is for — is asserted with `collapse: false`.
+    { width: 760, collapse: false },
     // 620 is above the collapse floor and below the declared-width floor. Whether a
     // given list overflows there is a function of its own declared widths (the issues
     // table still does; the projects table no longer needs to), so the band does not
@@ -855,6 +933,37 @@ describe.skipIf(!browserAvailable)("the render gate", () => {
     expect(bX).toBe(aX);
     for (const column of narrowColumns) expect(column).toBeCloseTo(narrowBand.contentWidth as number, 0);
   }, 120_000);
+
+  test("the workflow panel is the prototype's plan table, one row per plan", async () => {
+    await browser(["set", "viewport", "1900", "900"]);
+    const measured = await visit("overview", "overview", true, "overview-planboard");
+    const band = measured.band as Record<string, unknown>;
+    // Five columns, in the prototype's order (`design-v1.html:859-866`). A missing key
+    // means a column the owner asked for is rendered by nobody.
+    expect(band.planColumns).toEqual(["plan", "title", "status", "progress", "done"]);
+    // Two plans in the fixture, two rows on the page. The order is the read's own —
+    // `projection_plans` is ordered by `plan_id`, not by the snapshot's array — so the
+    // gate states what the store answers rather than what the fixture wrote.
+    expect(band.planRows).toBe(2);
+    expect(band.planRowKeys).toEqual(["20261018-panel-retirement", "20261025-issue-project-move"]);
+    // The header line above it states the workflow's own count, not the page's. The
+    // number is asserted on the attribute, and the status word is an enum the
+    // dictionary carries verbatim — so this anchor does not depend on which locale
+    // the page happened to load.
+    expect(band.workflowMetaCount).toBe("2");
+    expect(String(band.workflowMeta)).toContain("running");
+    // The branch chain drew its four anchors.
+    expect(band.branchAnchors).toBe(4);
+    // Every row is exactly one row tall: the table's height rule, measured.
+    const rowHeight = Number.parseFloat(String(band.rowHeight));
+    expect(rowHeight).toBeGreaterThan(0);
+    for (const height of band.planRowHeights as number[]) expect(height).toBeCloseTo(rowHeight, 0);
+    // The title column is the flexible one: it is wider than any declared cell.
+    expect(band.planTitleWidth as number).toBeGreaterThan(100);
+    // All five columns survive the 900px floor, and the table stays inside its card.
+    expect(band.planTableVisibleColumns).toBe(5);
+    expect(band.planTableWidth as number).toBeLessThanOrEqual((band.contentWidth as number) + 0.5);
+  }, 90_000);
 
   test("the trend is drawn from the store, not faked", async () => {
     await browser(["set", "viewport", "1900", "900"]);

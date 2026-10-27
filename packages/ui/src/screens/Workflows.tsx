@@ -16,18 +16,25 @@
  * would claim a truncated page is the whole store.
  */
 import { DataTable, type DataTableColumn } from "../components/DataTable.tsx";
-import { Panel, PanelBody } from "../components/Panel.tsx";
+import { Panel, PanelBody, PanelFoot, PanelHead } from "../components/Panel.tsx";
 import { EmptyState, type AbsenceArm } from "../components/EmptyState.tsx";
+import { FilterBar, type AppliedFilter } from "../components/FilterBar.tsx";
 import { Notice } from "../components/Notice.tsx";
+import { DEFAULT_WORKFLOW_FILTERS, type WorkflowFilters } from "../view-model/workflows.ts";
 import { StatusDot } from "../components/StatusDot.tsx";
 import { TruncatedText } from "../components/TruncatedText.tsx";
 import type { WorkflowListModel, WorkflowRow } from "../view-model/workflows.ts";
 import type { Tone } from "../view-model/status.ts";
-import css from "./Workflows.module.css";
 
 /** Every visible string this screen needs. Task 5 supplies them. */
 export type WorkflowsCopy = {
   pageTitle: string;
+  /** The head's own count: `4 workflows`. */
+  totalMeta: (n: number) => string;
+  /** And how many the store still counts as a registration. */
+  activeRegistrationsMeta: (n: number) => string;
+  /** The head's closing segment: `projected from store rev 1224`. */
+  projectedFrom: (revision: number) => string;
   tableCaption: string;
   columns: {
     id: string;
@@ -36,8 +43,21 @@ export type WorkflowsCopy = {
     root: string;
     updated: string;
     plans: string;
+    /** The prototype's `Join badges` column. */
+    badges: string;
   };
   plansProgress: (done: number, total: number) => string;
+  /** The filter card's own head. */
+  filters: {
+    status: string;
+    type: string;
+    search: string;
+    clear: string;
+    any: string;
+    results: (shown: number, total: number) => string;
+  };
+  /** The prototype's footer: how many rows the registry does not carry. */
+  registryNote?: (terminal: number) => string;
   /** The disclosure when `total` exceeds the rows shown. */
   truncated: (shown: number, total: number) => string;
   noCatalogTitle: string;
@@ -54,13 +74,48 @@ export type WorkflowsProps = {
   model: WorkflowListModel;
   copy: WorkflowsCopy;
   onOpen?: (id: string) => void;
+  /** The current filter state; absent means unfiltered (a host without filters). */
+  filters?: WorkflowFilters;
+  onFiltersChange?: (filters: WorkflowFilters) => void;
+  /**
+   * The store revision this page was projected from — the prototype's head ends with it.
+   * Absent when the host cannot state it, and then the segment is left out rather than
+   * guessed.
+   */
+  storeRevision?: number;
 };
+
+/** The filter panel's accessible name; the head carries the id. */
+const FILTERS_HEAD_ID = "ms-workflows-filters";
+
+/** The two selects, built from the values the current rows carry. */
+function filterFields(copy: WorkflowsCopy, options: WorkflowListModel["options"], filters: WorkflowFilters) {
+  const build = (key: "status" | "type", values: readonly string[]) => ({
+    key,
+    label: copy.filters[key],
+    value: filters[key],
+    options: [{ value: "", label: copy.filters.any }, ...values.map((value) => ({ value, label: value }))],
+  });
+  return [build("status", options.status), build("type", options.type)];
+}
+
+/** The chips for whatever is narrowing the list, so clearing is one click. */
+function appliedFilters(copy: WorkflowsCopy, filters: WorkflowFilters): AppliedFilter[] {
+  const out: AppliedFilter[] = [];
+  if (filters.status !== "") out.push({ key: "status", text: `${copy.filters.status}: ${filters.status}` });
+  if (filters.type !== "") out.push({ key: "type", text: `${copy.filters.type}: ${filters.type}` });
+  if (filters.q.trim() !== "") out.push({ key: "q", text: filters.q });
+  return out;
+}
 
 export function Workflows(props: WorkflowsProps) {
   const { model, copy } = props;
+  const filters = props.filters ?? DEFAULT_WORKFLOW_FILTERS;
+  // `null` when the rows could not be read: a count of an unread list is not a fact.
+  const activeRegistrations = model.rows.kind === "populated" ? model.active : null;
 
   const columns: DataTableColumn<WorkflowRow>[] = [
-    { key: "id", header: copy.columns.id, width: 112, render: (row) => <span className={css.mono}>{row.id}</span> },
+    { key: "id", header: copy.columns.id, width: "282px", render: (row) => <span className={"mono t-12"}>{row.id}</span> },
     {
       key: "title",
       header: copy.columns.title,
@@ -69,37 +124,56 @@ export function Workflows(props: WorkflowsProps) {
     {
       key: "status",
       header: copy.columns.status,
-      width: 120,
+      width: "200px",
+      // The prototype's narrow set is two columns (`data-narrow-cols="2"`, hiding from
+      // `nth-child(3)` under `@container (max-width: 619px)`). `secondary` is that
+      // contract: it drops out of `primaryCount`, so the table declares `2`, and the
+      // `nth-child(n+3)` rule hides it at exactly the prototype's breakpoint. `wide` was
+      // wrong — its rule fires at 899px, and the prototype still shows six columns at 800.
+      secondary: true,
       render: (row) => (
-        <span className={css.statusCell}>
+        <span>
           <StatusDot label={row.status} tone={row.statusTone} mono />
-          {row.phase === null ? null : <span className={css.phase}>{row.phase}</span>}
+          {row.phase === null ? null : <span className={"chip"}>{row.phase}</span>}
         </span>
       ),
     },
     {
       key: "root",
       header: copy.columns.root,
-      width: 96,
+      width: "150px",
       secondary: true,
       render: (row) =>
-        row.root === null ? <span className={css.muted}>{copy.noRoot}</span> : <span className={css.mono}>{row.root}</span>,
+        row.root === null ? <span className={"muted"}>{copy.noRoot}</span> : <span className={"mono t-12"}>{row.root}</span>,
     },
     {
       key: "updated",
       header: copy.columns.updated,
-      width: 120,
+      width: "140px",
       secondary: true,
       align: "end",
-      render: (row) => <span className={css.mono}>{row.updatedAt}</span>,
+      render: (row) => <span className={"mono t-12"}>{row.updatedAt}</span>,
     },
     {
-      key: "plans",
-      header: copy.columns.plans,
-      width: 88,
+      // The prototype's `Join badges`: the store's own join bookkeeping, said in words.
+      key: "badges",
+      header: copy.columns.badges,
+      width: "190px",
       secondary: true,
-      align: "end",
-      render: (row) => <span className={css.mono}>{copy.plansProgress(row.plansDone, row.plansTotal)}</span>,
+      render: (row) =>
+        row.badges.length === 0 ? (
+          <span className={"muted"}>—</span>
+        ) : (
+          <span className={"chips"}>
+            {row.badges.map((badge) => (
+              // The prototype's two tones: a conflict is the store disagreeing with
+              // itself, a missing pin is an absence. The word is always present.
+              <span key={badge} className={badge.includes("conflict") ? "badge conflict" : "badge missing"}>
+                {badge}
+              </span>
+            ))}
+          </span>
+        ),
     },
   ];
 
@@ -109,25 +183,75 @@ export function Workflows(props: WorkflowsProps) {
       .join(" · ");
 
   return (
-    <article className={css.page} data-ms-screen="workflows">
-      <h1 className={css.title}>{copy.pageTitle}</h1>
+    <article className={"screen"} data-ms-screen="workflows">
+      {/* The prototype heads every screen with `.screen-head`; `.screen-head h1`
+          carries the 16/24/600 title rule, and a bare h1 falls back to the
+          document heading instead. */}
+      <div className="screen-head">
+        <h1>{copy.pageTitle}</h1>
+        {/* The prototype's head states the store's count, not the page's, then how many of
+            these rows the store still counts as a registration. */}
+        <div className="screen-meta">
+          <span data-ms-count="">{copy.totalMeta(model.total)}</span>
+          {activeRegistrations === null ? null : (
+            <>
+              <span aria-hidden="true">·</span>
+              <span data-ms-active-registrations="">{copy.activeRegistrationsMeta(activeRegistrations)}</span>
+            </>
+          )}
+          {props.storeRevision === undefined ? null : (
+            <>
+              <span aria-hidden="true">·</span>
+              <span data-ms-projected-from="">{copy.projectedFrom(props.storeRevision)}</span>
+            </>
+          )}
+        </div>
+      </div>
 
       {model.rows.kind === "populated" ? (
         <>
-          <Panel>
-            <PanelBody tight={true}>
-              <DataTable
-                caption={copy.tableCaption}
-                columns={columns}
-                rows={model.rows.value}
-                rowKey={(row) => row.id}
-                meta={meta}
-                onRowActivate={props.onOpen === undefined ? undefined : (row) => props.onOpen?.(row.id)}
-              />
-            </PanelBody>
+          <Panel labelledBy={FILTERS_HEAD_ID}>
+            <PanelHead id={FILTERS_HEAD_ID}>
+            <FilterBar
+              fields={filterFields(copy, model.options, filters)}
+              onFieldChange={(key, value) => props.onFiltersChange?.({ ...filters, [key]: value })}
+              search={{
+                value: filters.q,
+                placeholder: copy.filters.search,
+                onChange: (value) => props.onFiltersChange?.({ ...filters, q: value }),
+              }}
+              applied={appliedFilters(copy, filters)}
+              onClearFilter={(key) =>
+                props.onFiltersChange?.({ ...filters, [key]: "" } as WorkflowFilters)
+              }
+              onClearAll={() => props.onFiltersChange?.({ ...DEFAULT_WORKFLOW_FILTERS })}
+              clearLabel={copy.filters.clear}
+              resultSummary={copy.filters.results(model.shown, model.total)}
+            />
+            </PanelHead>
+            {/* No PanelBody around the table: the prototype's `.table-wrap` is a direct
+                child of `.panel`, so the table draws its own full-bleed surface. */}
+            <DataTable
+              caption={copy.tableCaption}
+              columns={columns}
+              rows={model.rows.value}
+              rowKey={(row) => row.id}
+              meta={meta}
+              onRowActivate={props.onOpen === undefined ? undefined : (row) => props.onOpen?.(row.id)}
+            />
+            {model.terminalUnregistered === 0 ? null : (
+              // The prototype's footer states what the registry does not carry, so a
+              // reader knows the four rows are not the whole store.
+              <PanelFoot>
+                <span className="muted t-11" data-ms-terminal-unregistered={model.terminalUnregistered}>
+                  {copy.registryNote?.(model.terminalUnregistered) ??
+                    `${model.terminalUnregistered} terminal workflows not in the active registry`}
+                </span>
+              </PanelFoot>
+            )}
           </Panel>
           {model.truncated ? (
-            <p className={css.truncated} data-ms-truncated={model.total}>
+            <p data-ms-truncated={model.total}>
               {copy.truncated(model.shown, model.total)}
             </p>
           ) : null}

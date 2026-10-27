@@ -326,6 +326,11 @@ export type ResidualCounts = { critical: number; high: number; medium: number; l
  * and latest iteration, and the dated issue flow.
  */
 export type OverviewDTO = {
+  /**
+   * The project these members resolve for, or `null` when none does. The prototype's
+   * Milestones head states it (`engine`); the milestones below are that project's.
+   */
+  projectId: string | null;
   /** Active-registered workflows with their plans. */
   workflows: OverviewMember<WorkflowListDTO>;
   /** Open residuals by severity plus the reconciling total (the sum of the five). */
@@ -747,6 +752,11 @@ function readIssuePage(db: StoreDb, filter: IssueFilter): IssuePage {
   const { where, params } = bindIssueFilter(filter);
   const storeRevision = readMeta(db).storeRevision;
   const totalRow = db.prepare(`select count(*) as n from issues ${where}`).get(...params) as { n: number };
+  // The prototype's head reads `26 open across 4 projects`: the span of the result set, not
+  // of the page. One extra aggregate, so a paged read can still state it.
+  const spanRow = db
+    .prepare(`select count(distinct project_id) as n from issues ${where}`)
+    .get(...params) as { n: number };
   const milestoneExpr = issuesMilestoneColumn(db) ? "issues.milestone_id as milestoneId" : "null as milestoneId";
   const rows = db
     .prepare(
@@ -781,6 +791,7 @@ function readIssuePage(db: StoreDb, filter: IssueFilter): IssuePage {
       milestoneId: row.milestoneId,
     })),
     total: totalRow.n,
+    projectCount: spanRow.n,
     storeRevision,
   };
 }
@@ -892,9 +903,16 @@ function readIssueDetail(db: StoreDb, id: string): IssueDetail {
     issueRevision: row.issue_revision,
   }));
 
+  // The prototype's Relations table has a `Title` column: the title of the other end of the
+  // join, which is the issue this one is not.
   const relations = db
-    .prepare("select from_issue as fromIssue, relation, to_issue as toIssue from relations where from_issue = ? or to_issue = ?")
-    .all(id, id) as Array<{ fromIssue: string; relation: string; toIssue: string }>;
+    .prepare(
+      `select r.from_issue as fromIssue, r.relation, r.to_issue as toIssue,
+              (select i.title from issues i
+                 where i.id = case when r.from_issue = ? then r.to_issue else r.from_issue end) as title
+         from relations r where r.from_issue = ? or r.to_issue = ?`,
+    )
+    .all(id, id, id) as Array<{ fromIssue: string; relation: string; toIssue: string; title: string | null }>;
 
   const provenance = (
     db
@@ -1679,6 +1697,7 @@ function readOverview(db: StoreDb, filters: DashboardFilters): OverviewDTO {
     projectionFailure === null ? member(read) : { state: "unavailable", reason: projectionFailure };
 
   return {
+    projectId,
     workflows: projected(() => activeWorkflows(readWorkflowList(db, { limit: 50 }))),
     residuals: member(() => readResidualCounts(db)),
     milestones:

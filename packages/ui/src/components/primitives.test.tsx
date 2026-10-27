@@ -30,6 +30,10 @@ import { StatusDot } from "./StatusDot.tsx";
 import { Tabs } from "./Tabs.tsx";
 import { TruncatedText } from "./TruncatedText.tsx";
 
+// The product's component styles are the prototype's own sheet, generated into
+// `styles/product.css`; there are no per-component modules left to read.
+const componentSheet = (): string =>
+  readFileSync(join(import.meta.dir, "..", "styles", "product.css"), "utf8");
 const moduleCss = (name: string): string => readFileSync(join(import.meta.dir, `${name}.module.css`), "utf8");
 const stylesheet = (name: string): string => readFileSync(join(import.meta.dir, "..", "styles", `${name}.css`), "utf8");
 
@@ -145,7 +149,7 @@ describe("StatusDot — the label is the signal, colour is secondary", () => {
     // The defect this pins: the tone rules were bare attribute selectors, and the
     // wrapper carries the same attribute, so every rule matched both elements and
     // filled the whole label instead of the 6px dot beside it.
-    const rules = paintRules(moduleCss("StatusDot"));
+    const rules = paintRules(componentSheet());
     const { wrapper, dot } = statusElements(render(<StatusDot label="high" tone="danger" emphasis />));
 
     const paintingWrapper = rules.filter((rule) => matches(wrapper, rule) && /background/.test(rule.paint));
@@ -171,7 +175,7 @@ describe("StatusDot — the label is the signal, colour is secondary", () => {
   });
 
   test("every tone's fill is on the dot, not on the wrapper", () => {
-    const rules = paintRules(moduleCss("StatusDot"));
+    const rules = paintRules(componentSheet());
     for (const tone of ["danger", "warning", "success", "neutral", "purple"] as const) {
       const { wrapper, dot } = statusElements(render(<StatusDot label={tone} tone={tone} />));
       expect(rules.filter((rule) => matches(wrapper, rule) && /background/.test(rule.paint))).toEqual([]);
@@ -217,11 +221,11 @@ describe("DataTable — the collapse rule", () => {
     expect(html).toContain("engine · critical");
   });
 
-  test("the second line spans the primary columns in a row of its own", () => {
-    // It used to sit inside the FIRST cell, where it only ever had that cell's width:
-    // 68px of an 80px id column, which rendered `critical · op…` in the 400px pane.
-    // Its own spanning row gives the facts the row's width and leaves the header and
-    // the column policy untouched.
+  test("the second line lives in the record's first cell, as the prototype draws it", () => {
+    // The prototype keeps the collapsed facts in `.row-meta` inside the record's own
+    // cell; it never adds a spanning second row. A row of its own announced every
+    // record twice to a screen reader, which is why the implementation follows the
+    // prototype's markup instead.
     const html = render(
       <DataTable
         caption="Issues"
@@ -231,23 +235,16 @@ describe("DataTable — the collapse rule", () => {
         meta={(row) => row.project}
       />,
     );
-    const metaRowStart = html.indexOf('data-ms-row-meta-row=""');
-    expect(metaRowStart).toBeGreaterThan(-1);
-    // The span is the PRIMARY count (2 here), never the column count: a span over the
-    // hidden columns re-opens them under `table-layout: fixed` and squeezes the title.
-    const cellStart = html.indexOf("<td", metaRowStart);
-    const cellTag = html.slice(cellStart, html.indexOf(">", cellStart)).toLowerCase();
-    expect(cellTag).toContain('colspan="2"');
-    const firstCell = html.slice(html.indexOf("<td"), html.indexOf("</td>"));
-    expect(firstCell).not.toContain("data-ms-row-meta");
-    // Not interactive here: the caller passed no activate handler.
-    expect(html).not.toContain("data-ms-row-meta-activate");
+    expect(html).toContain('class="row-meta"');
+    // One <tr> per record: no spanning companion row.
+    expect(html.match(/<tr/g)?.length).toBe(rows.length + 1); // + the header row
+    expect(html).not.toContain("data-ms-row-meta-row");
+    expect(html).not.toContain("colspan");
   });
 
-  test("the second line is the same activation target as the row", () => {
-    // At the width the product lives in this row is roughly half of the record's
-    // painted area; a tap on it must navigate like a tap on the row above. Keyboard
-    // stays one stop per record: the tab stop and the key handler are the main row's.
+  test("activation stays one target and one tab stop per record", () => {
+    // The facts are painted inside the record's own cell, so a tap anywhere on the row
+    // navigates. Keyboard keeps exactly one stop per record.
     const html = render(
       <DataTable
         caption="Issues"
@@ -258,46 +255,54 @@ describe("DataTable — the collapse rule", () => {
         onRowActivate={() => {}}
       />,
     );
-    const metaRowStart = html.indexOf("data-ms-row-meta-row");
-    const metaTag = html.slice(html.lastIndexOf("<tr", metaRowStart), html.indexOf(">", metaRowStart));
-    expect(metaTag).toContain("data-ms-row-meta-activate");
-    expect(metaTag).not.toContain("tabindex");
-    // One tab stop per record: only the main row carries it.
     expect(html.match(/tabindex="0"/g)?.length).toBe(rows.length);
+    expect(html).not.toContain("data-ms-row-meta-activate");
   });
 
   test("the collapse is a container query at the declared floor, not a viewport query", () => {
-    const css = moduleCss("DataTable");
-    // UNNAMED: the CSS-module bundler rewrites a named query's prelude into a
-    // per-module hash (`@container pane_8f31a`), which never matches the one
-    // container declaration in `base.css` — so a named query is silently dead.
-    expect(css).toContain("@container (max-width: 619px)");
+    const css = componentSheet();
+    // UNNAMED: a bundler rewrites a named query's prelude into a per-module hash,
+    // which never matches the one container declaration — a named query is dead.
     expect(css).not.toContain("@container pane");
-    expect(css).not.toContain("@media");
-    // Below the floor the secondary columns go and the meta line arrives.
-    expect(css).toContain('td[data-ms-col="secondary"]');
-    expect(css).toContain("display: none");
-    expect(css).toMatch(/\.rowMeta\s*\{\s*display: block;/);
-    // The second line is a row that spans the primaries, and its facts wrap rather
-    // than truncate: a fact is never cut in half.
-    expect(css).toMatch(/\.metaRow\s*\{\s*display: table-row;/);
-    expect(css).toContain("overflow-wrap: anywhere");
+    expect(css).toContain("@container (max-width: 619px)");
+    // The prototype's mechanism: `data-narrow-cols` hides the columns past the second,
+    // and the collapsed facts arrive in `.row-meta`.
+    expect(css).toContain("[data-narrow-cols");
+    // and the table must emit it, or the positional rule has nothing to match
+    const html = render(
+      <DataTable caption="Issues" columns={columns} rows={rows} rowKey={(row) => row.id} meta={(row) => row.project} />,
+    );
+    expect(html).toContain('data-narrow-cols="2"');
+    expect(html).toContain('class="row-meta"');
+    expect(css).toContain("nth-child(n+3)");
+    expect(css).toContain(".row-meta");
   });
 
-  test("the wide-only columns are hidden below the pane's wide band, not restated", () => {
-    const css = moduleCss("DataTable");
-    // The prototype's sidebar shows seven columns at 720px; the eighth is what pushed
-    // the table past its card. Below 900px it is hidden outright — no second line
-    // restates it, so it may only carry a fact the record's own screen also carries.
-    expect(css).toContain("@container (max-width: 899px)");
-    expect(css).toMatch(/td\[data-ms-col="wide"\]\s*\{\s*display: none;/);
+  test("the narrow mechanism is the prototype's, not a per-column attribute", () => {
+    // The prototype hides columns by position (`data-narrow-cols` + `:nth-child`), on
+    // both the header and the body, so a header can never disagree with its cells.
+    const css = componentSheet();
+    expect(css).toContain("[data-narrow-cols");
+    expect(css).toContain(":nth-child(n+3)");
+    expect(css).toContain(".row-meta");
   });
-
   test("the pane's head band carries the prototype's nav inset", () => {
     // `design-v1.html:487`: `.dsh-page-head .app-nav { padding: 0 12px }` on a surface
     // band with a closing hairline. Both seats mount this class, so the dsh pane's nav
     // is inset from the pane's edges instead of touching them.
     expect(stylesheet("base")).toMatch(/\.ms-pane-head\s*\{[^}]*padding-inline: 12px;/);
+  });
+
+  test("the navigation is styled by the band both hosts mount it in, narrow rules included", () => {
+    // The dsh pane mounts the shared nav in its head band, above `.ms-container`; a
+    // container-scoped rule never reaches it. The band is therefore the nav's whole
+    // authority: the row, the buttons, the active underline and the narrow behaviour.
+    const base = stylesheet("base");
+    expect(base).toMatch(/\.ms-pane-head \.app-nav\s*\{[^}]*display: flex;/);
+    expect(base).toMatch(/\.ms-pane-head \.nav-btn\s*\{[^}]*height: var\(--ms-header-h\);/);
+    expect(base).toMatch(/\.ms-pane-head \.nav-btn\[aria-current="page"\]\s*\{[^}]*box-shadow: inset 0 -2px 0 0 var\(--ms-accent\);/);
+    expect(base).toMatch(/@container \(max-width: 479px\) \{\s*\.ms-pane-head \.app-nav \{[^}]*flex-wrap: wrap;/);
+    expect(base).toMatch(/\.ms-pane-head \.nav-btn \{[^}]*height: 28px;/);
   });
 
   test("an empty body renders the caller's absence node inside the table", () => {
@@ -412,14 +417,15 @@ describe("TruncatedText — the one truncation affordance (D24)", () => {
     expect(html).toContain('title="a very long stored value that clips"');
   });
 
-  test("the keyboard overlay is CSS sourced from attr(data-ms-full)", () => {
-    const css = moduleCss("TruncatedText");
-    expect(css).toContain(":focus-visible::after");
-    expect(css).toContain("content: attr(data-ms-full)");
+  test("truncation is the prototype's one class", () => {
+    // The prototype truncates with `.trunc`; there is no second mechanism to keep in
+    // sync, and the full value stays available as the element's title.
+    const css = componentSheet();
+    expect(css).toMatch(/\.trunc\s*\{[^}]*text-overflow: ellipsis;/);
+    const html = render(<TruncatedText text="a very long stored value that clips" />);
+    expect(html).toContain('class="trunc"');
+    expect(html).toContain('title="a very long stored value that clips"');
   });
-});
-
-describe("Notice — a reason in place, never a page", () => {
   test("the read's own reason is carried verbatim", () => {
     const html = render(<Notice reason="no such table: projection_workflows" lead="Could not read workflows" />);
     expect(html).toContain("no such table: projection_workflows");
@@ -509,6 +515,14 @@ describe("ProgressBar — a measured fraction, never a series", () => {
   test("the bar's width is the clamped percentage", () => {
     expect(render(<ProgressBar done={3} total={6} />)).toContain("inline-size:50%");
   });
+
+  test("a complete bar carries the prototype's completed tone", () => {
+    // `design-v1.html:291`: the completed fill is `.bar.is-done > i`; the attribute-only
+    // success rule died with the component module, so the class is the painting contract.
+    expect(render(<ProgressBar done={4} total={4} />)).toContain('class="bar is-done"');
+    expect(render(<ProgressBar done={3} total={6} />)).toContain('class="bar"');
+    expect(stylesheet("product")).toContain(".bar.is-done > i");
+  });
 });
 
 describe("the remaining primitives keep their contract", () => {
@@ -526,7 +540,7 @@ describe("the remaining primitives keep their contract", () => {
       </FieldGroup>,
     );
     expect(html).toContain("<dl");
-    expect(html).toContain('data-ms-columns="1"');
+    expect(html).toContain('class="fields one"');
     expect(html).toContain("Identity");
   });
 
@@ -607,8 +621,8 @@ describe("the remaining primitives keep their contract", () => {
 describe("the component layer obeys the token rules", () => {
   test("no component sheet hard-codes a colour", () => {
     const offenders: string[] = [];
-    for (const name of ["StatusDot", "Badge", "ProgressBar", "TruncatedText", "Notice", "EmptyState", "LiveRegion", "Pager", "DataTable", "Field", "FieldGroup", "Row", "Collapsible", "Nav", "Breadcrumb", "Tabs", "FilterBar"]) {
-      const css = moduleCss(name);
+    for (const css of [componentSheet()]) {
+      const name = "product.css";
       if (/#[0-9a-f]{3,8}\b/i.test(css)) offenders.push(`${name}.module.css`);
     }
     expect(offenders).toEqual([]);
@@ -616,21 +630,20 @@ describe("the component layer obeys the token rules", () => {
 
   test("no component sheet selects a scheme from the viewport", () => {
     for (const name of ["StatusDot", "DataTable", "Nav", "FilterBar"]) {
-      expect(moduleCss(name)).not.toContain("prefers-color-scheme");
+      expect(componentSheet()).not.toContain("prefers-color-scheme");
     }
   });
 
   test("product layout reflow is always an UNNAMED container query", () => {
-    // A named query cannot survive the bundler (see the collapse test above), and a
-    // viewport media query would reflow by the window rather than by the pane the
-    // product is given. Neither is a style choice; both are correctness.
-    for (const name of ["DataTable", "Field", "FieldGroup", "Row", "Nav", "FilterBar", "Tabs", "Panel"]) {
-      const css = moduleCss(name);
-      if (css.includes("@container")) {
-        expect(css).toContain("@container (");
-        expect(css).not.toContain("@container pane");
-      }
-      expect(css).not.toContain("@media (max-width");
+    // A named query cannot survive the bundler, and a viewport media query would
+    // reflow by the window rather than by the pane the product is given. The product
+    // now ships one generated sheet, so the rule is checked on it once.
+    const css = componentSheet();
+    expect(css).not.toContain("@container pane");
+    expect(css).toContain("@container (max-width: 619px)");
+    // Media queries may exist for the host's window chrome only; the product's
+    // reflow is the container's.
+    for (const block of css.match(/@media[^{]+\{/g) ?? []) {
+      expect(block).not.toContain("max-width: 6");
     }
-  });
-});
+  });});

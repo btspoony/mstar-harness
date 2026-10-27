@@ -27,13 +27,14 @@ import { resolveRecord } from "../view-model/state.ts";
 import type { IssueDetailModel } from "../view-model/issues.ts";
 import type { Tone } from "../view-model/status.ts";
 import type { ReadProjection } from "@mstar-harness/engine";
-import css from "./IssueDetail.module.css";
 
 /** Every visible string this screen needs. Task 5 supplies them. */
 export type IssueDetailCopy = {
   /** The trail back to the list. */
   breadcrumb: { label: string; current: string };
   identityHeading: string;
+  /** The meta line's final segment: `Revision 4`. */
+  revisionLabel: string;
   fields: {
     id: string;
     project: string;
@@ -53,6 +54,38 @@ export type IssueDetailCopy = {
   impactHeading: string;
   acceptanceHeading: string;
   closureNoteHeading: string;
+  /** The `Identity keys` panel's heading and its two row labels. */
+  /** The `Source` panel's heading and its five row labels. */
+  sourceHeading: string;
+  sourceKindLabel: string;
+  sourceIdentityLabel: string;
+  sourceLocationLabel: string;
+  sourceRootCauseLabel: string;
+  sourceAcceptanceLabel: string;
+  /** The `Relations` table's heading and its three column labels. */
+  /** The `Provenance` table's heading and its five column labels. */
+  /** The `Disposition history` table's heading, its five labels and its footer note. */
+  /** The `Occurrences` panel's heading and its three row labels. */
+  occurrencesHeading: string;
+  occurrenceObservedAt: string;
+  occurrenceLocation: string;
+  occurrenceRecorded: string;
+  historyHeading: string;
+  historyColumns: { from: string; to: string; reason: string; actor: string; recorded: string };
+  historyNote: string;
+  provenanceHeading: string;
+  provenanceColumns: {
+    kind: string;
+    target: string;
+    sourceHash: string;
+    origin: string;
+    importedAt: string;
+  };
+  relationsHeading: string;
+  relationsColumns: { relation: string; issue: string; title: string };
+  identityKeysHeading: string;
+  identityKeyLabel: string;
+  providerLabel: string;
   absence: {
     unavailable: { labelWord: string; heading: string; body: string };
     absent: { labelWord: string; heading: string; body: string; pointer: string };
@@ -81,32 +114,54 @@ export function IssueDetail(props: IssueDetailProps) {
   });
 
   return (
-    <article className={css.page} data-ms-screen="issue-detail">
-      <nav className={css.trail} aria-label={copy.breadcrumb.label}>
-        {props.onBack === undefined ? null : (
-          <button type="button" className={css.crumb} onClick={props.onBack}>
+    <article className={"screen"} data-ms-screen="issue-detail">
+      {/* The prototype's crumb is `Issues / <id>` (`design-v1.html:1355`): the section as a
+          link back, the record itself as mono text. This rendered only the link, so the
+          reader lost which record the page was about. */}
+      <nav className={"breadcrumb"} aria-label={copy.breadcrumb.label}>
+        {props.onBack === undefined ? (
+          <span>{copy.breadcrumb.current}</span>
+        ) : (
+          <button type="button" className={"link"} onClick={props.onBack}>
             {copy.breadcrumb.current}
           </button>
         )}
+        <span aria-hidden="true">/</span>
+        <span className={"mono"}>{record.kind === "populated" ? record.value.id : copy.breadcrumb.current}</span>
       </nav>
 
       {record.kind === "populated" ? (
         <>
-          <header className={css.head}>
-            <h1 className={css.title}>
+          <header className="detail-head">
+            <h1 className="detail-title">
               <TruncatedText text={record.value.title} />
             </h1>
-            <p className={css.statusLine}>
-              {/* Dot + literal enum + weight: never colour alone. */}
+            <div className={"detail-meta"}>
+              {/* The prototype's six segments: the store id, the project that owns it, the
+                  severity, the kind, the disposition, then the catalog revision. Dot +
+                  literal enum + weight: never colour alone. */}
+              <span className={"mono"}>{record.value.id}</span>
+              <span aria-hidden="true">·</span>
+              <span className={"mono"}>{record.value.projectId}</span>
+              <span aria-hidden="true">·</span>
               <StatusDot
                 label={record.value.severity}
                 tone={record.value.severityTone}
                 emphasis={record.value.severityEmphasised}
                 mono
               />
+              <span aria-hidden="true">·</span>
+              <span className={"mono"}>{record.value.kind}</span>
+              <span aria-hidden="true">·</span>
               <StatusDot label={record.value.disposition} tone={record.value.dispositionTone} mono />
-            </p>
+              <span aria-hidden="true">·</span>
+              <span>
+                {copy.revisionLabel} <span className={"mono"}>{record.value.revision}</span>
+              </span>
+            </div>
           </header>
+        <div className="detail-grid">
+          <div className="detail-col">
 
           <FieldGroup title={copy.identityHeading}>
             <Field label={copy.fields.id} mono>
@@ -144,24 +199,211 @@ export function IssueDetail(props: IssueDetailProps) {
             </Field>
           </FieldGroup>
 
+          {/* The prototype's `Source` panel: where this issue came from. It sits before the
+              two prose blocks, as the prototype's left column has it. */}
+          {record.value.source === null ? null : (
+            <section className={"sec"} data-ms-issue-source="" aria-labelledby="ms-issue-source">
+              <h2 id="ms-issue-source">{copy.sourceHeading}</h2>
+              <dl className={"fields"}>
+                <div className="field">
+                  <dt>{copy.sourceKindLabel}</dt>
+                  <dd className="mono">{record.value.source.kind}</dd>
+                </div>
+                <div className="field">
+                  <dt>{copy.sourceIdentityLabel}</dt>
+                  <dd className="mono">{record.value.source.identity}</dd>
+                </div>
+                {record.value.source.location === null ? null : (
+                  <div className="field">
+                    <dt>{copy.sourceLocationLabel}</dt>
+                    <dd className="mono wrap">{record.value.source.location}</dd>
+                  </div>
+                )}
+                {record.value.source.rootCauseKey === null ? null : (
+                  <div className="field">
+                    <dt>{copy.sourceRootCauseLabel}</dt>
+                    <dd className="mono">{record.value.source.rootCauseKey}</dd>
+                  </div>
+                )}
+                {record.value.source.acceptanceKey === null ? null : (
+                  <div className="field">
+                    <dt>{copy.sourceAcceptanceLabel}</dt>
+                    <dd className="mono">{record.value.source.acceptanceKey}</dd>
+                  </div>
+                )}
+              </dl>
+            </section>
+          )}
+
           {record.value.impact === null ? null : (
-            <section className={css.block} data-ms-impact="">
-              <h2 className={css.heading}>{copy.impactHeading}</h2>
-              <p className={css.longText}>{record.value.impact}</p>
+            <section className={"sec"} data-ms-impact="">
+              <h2>{copy.impactHeading}</h2>
+              <p className={"prose"}>{record.value.impact}</p>
             </section>
           )}
 
           {record.value.acceptance === null ? null : (
-            <section className={css.block} data-ms-acceptance="">
-              <h2 className={css.heading}>{copy.acceptanceHeading}</h2>
-              <p className={css.longText}>{record.value.acceptance}</p>
+            <section className={"sec"} data-ms-acceptance="">
+              <h2>{copy.acceptanceHeading}</h2>
+              <p className={"prose"}>{record.value.acceptance}</p>
             </section>
           )}
+
+
+          {/* The prototype's `Occurrences`: one block per event, each with its own quote,
+              location and citations. This is the log §8.1 removed; the prototype keeps it. */}
+          {record.value.occurrences.length === 0 ? null : (
+            <section className={"sec"} data-ms-issue-occurrences="" aria-labelledby="ms-issue-occurrences">
+              <h2 id="ms-issue-occurrences">{copy.occurrencesHeading}</h2>
+              {record.value.occurrences.map((occurrence) => (
+                <div className={"occ"} key={occurrence.id} data-ms-occurrence-row={occurrence.id}>
+                  <div className={"occ-head"}>
+                    <span className={"occ-key"}>{occurrence.occurrenceKey}</span>
+                    <span className={"chip"}>{occurrence.sourceKind}</span>
+                    <span className={"mono t-11 muted"}>{occurrence.sourceIdentity}</span>
+                    <span className={"t-11 muted ml-auto"}>{copy.occurrenceObservedAt}</span>
+                    <span className={"mono t-11 secondary"}>{occurrence.recordedAt}</span>
+                  </div>
+                  <p className={"occ-behavior"}>{occurrence.observedBehavior}</p>
+                  <dl className={"fields one"}>
+                    {occurrence.location === null ? null : (
+                      <div className="field">
+                        <dt>{copy.occurrenceLocation}</dt>
+                        <dd className="mono wrap">{occurrence.location}</dd>
+                      </div>
+                    )}
+                    <div className="field">
+                      <dt>{copy.occurrenceRecorded}</dt>
+                      <dd className="mono">{occurrence.recordedAt}</dd>
+                    </div>
+                  </dl>
+                  {occurrence.evidence.length === 0 ? null : (
+                    <ul className={"evidence"}>
+                      {occurrence.evidence.map((citation) => (
+                        <li key={citation}>
+                          <code>{citation}</code>
+                        </li>
+                      ))}
+                    </ul>
+                  )}
+                </div>
+              ))}
+            </section>
+          )}
+            </div>
+            <div className="detail-col">
+
+          {/* The prototype's `Disposition history`: only recorded transitions appear. */}
+          {record.value.transitions.length === 0 ? null : (
+            <section className={"sec"} data-ms-issue-history="" aria-labelledby="ms-issue-history">
+              <h2 id="ms-issue-history">{copy.historyHeading}</h2>
+              <table className={"mini-table"}>
+                <thead>
+                  <tr>
+                    <th scope="col">{copy.historyColumns.from}</th>
+                    <th scope="col">{copy.historyColumns.to}</th>
+                    <th scope="col">{copy.historyColumns.reason}</th>
+                    <th scope="col">{copy.historyColumns.actor}</th>
+                    <th scope="col">{copy.historyColumns.recorded}</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {record.value.transitions.map((row, index) => (
+                    <tr key={`${row.to}-${row.recordedAt}-${index}`}>
+                      <td className="mono">{row.from ?? "—"}</td>
+                      <td className="mono">{row.to}</td>
+                      <td>{row.reason ?? "—"}</td>
+                      <td className="mono">{row.actor ?? "—"}</td>
+                      <td className="mono">{row.recordedAt}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+              <p className={"sec-note"}>{copy.historyNote}</p>
+            </section>
+          )}
+
+          {/* The prototype's `Provenance` table. */}
+          {record.value.provenance.length === 0 ? null : (
+            <section className={"sec"} data-ms-issue-provenance="" aria-labelledby="ms-issue-provenance">
+              <h2 id="ms-issue-provenance">{copy.provenanceHeading}</h2>
+              <table className={"mini-table"}>
+                <thead>
+                  <tr>
+                    <th scope="col">{copy.provenanceColumns.kind}</th>
+                    <th scope="col">{copy.provenanceColumns.target}</th>
+                    <th scope="col">{copy.provenanceColumns.sourceHash}</th>
+                    <th scope="col">{copy.provenanceColumns.origin}</th>
+                    <th scope="col">{copy.provenanceColumns.importedAt}</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {record.value.provenance.map((row, index) => (
+                    <tr key={`${row.kind}-${row.target}-${index}`}>
+                      <td>{row.kind}</td>
+                      <td className="mono">{row.target}</td>
+                      <td className="mono">{row.sourceHash === null ? "—" : `${row.sourceHash.slice(0, 16)}…`}</td>
+                      <td>{row.origin}</td>
+                      <td className="mono">{row.importedAt ?? "—"}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </section>
+          )}
+
+          {/* The prototype's `Relations` table. */}
+          {record.value.relations.length === 0 ? null : (
+            <section className={"sec"} data-ms-issue-relations="" aria-labelledby="ms-issue-relations">
+              <h2 id="ms-issue-relations">{copy.relationsHeading}</h2>
+              <table className={"mini-table"}>
+                <thead>
+                  <tr>
+                    <th scope="col">{copy.relationsColumns.relation}</th>
+                    <th scope="col">{copy.relationsColumns.issue}</th>
+                    <th scope="col">{copy.relationsColumns.title}</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {record.value.relations.map((relation) => (
+                    <tr key={`${relation.relation}-${relation.issue}`}>
+                      <td className="mono">{relation.relation}</td>
+                      <td className="mono">{relation.issue}</td>
+                      <td>{relation.title ?? "—"}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </section>
+          )}
+
+          {/* The prototype's `Identity keys`: the tracker identity, when the store has one. */}
+          {record.value.identityKey === null && record.value.provider === null ? null : (
+            <section className={"sec"} aria-labelledby="ms-issue-identity-keys">
+              <h2 id="ms-issue-identity-keys">{copy.identityKeysHeading}</h2>
+              <dl className={"fields"}>
+                {record.value.identityKey === null ? null : (
+                  <div className="field">
+                    <dt>{copy.identityKeyLabel}</dt>
+                    <dd className="mono">{record.value.identityKey}</dd>
+                  </div>
+                )}
+                {record.value.provider === null ? null : (
+                  <div className="field">
+                    <dt>{copy.providerLabel}</dt>
+                    <dd className="mono">{record.value.provider}</dd>
+                  </div>
+                )}
+              </dl>
+            </section>
+          )}
+          </div>
+        </div>
 
           {/* The closure note is a closed issue's fact; an open one has none. */}
           {record.value.closureNote === null ? null : (
             <Collapsible summary={copy.closureNoteHeading} defaultOpen>
-              <p className={css.longText} data-ms-closure-note="">
+              <p className={"prose"} data-ms-closure-note="">
                 {record.value.closureNote}
               </p>
             </Collapsible>

@@ -11,18 +11,33 @@
  * list — a list has no feature body to degrade.
  */
 import { DataTable, type DataTableColumn } from "../components/DataTable.tsx";
-import { Panel, PanelBody } from "../components/Panel.tsx";
+import { Panel, PanelBody, PanelFoot, PanelHead } from "../components/Panel.tsx";
 import { EmptyState, type AbsenceArm } from "../components/EmptyState.tsx";
 import { StatusDot } from "../components/StatusDot.tsx";
 import { TruncatedText } from "../components/TruncatedText.tsx";
 import type { ProjectListModel, ProjectRow } from "../view-model/projects.ts";
 import type { Tone } from "../view-model/status.ts";
-import css from "./Projects.module.css";
+import type { KeyboardEvent } from "react";
+
+/** The project list card's own head. */
+const LIST_HEAD_ID = "ms-projects-list";
 
 /** Every visible string this screen needs. Task 5 supplies them. */
 export type ProjectsCopy = {
   pageTitle: string;
+  /** The head's three segments: the store's count, the open issues across these projects,
+   *  and what a project owns. */
+  totalMeta: (n: number) => string;
+  openIssuesMeta: (n: number) => string;
+  headNote: string;
   tableCaption: string;
+  /** The list card's head and its one-line instruction. */
+  listHeading: string;
+  listMeta: string;
+  /** The prototype's footer: lifecycle is catalog, not execution. */
+  lifecycleNote: string;
+  /** Said instead of a lifecycle when the catalog records none. */
+  noLifecycle: string;
   columns: { title: string; id: string; lifecycle: string; openIssues: string; description: string };
   openIssues: (count: number) => string;
   noDescription: string;
@@ -39,11 +54,16 @@ export type ProjectsProps = {
 
 export function Projects(props: ProjectsProps) {
   const { model, copy } = props;
+  // Every project the store holds: `ProjectListDTO` is unpaged, so summing the rows is
+  // summing the store. shortcut: a page-limited project list would make this understate
+  // the head, upgrade to a DTO-level aggregate if one is added.
+  const openIssues =
+    model.rows.kind === "populated" ? model.rows.value.reduce((sum, row) => sum + row.openIssues, 0) : 0;
 
   // The prototype's sequence (`design-v1.html:1752-1758`): the id first, then the
   // catalog title, then the lifecycle.
   const columns: DataTableColumn<ProjectRow>[] = [
-    { key: "id", header: copy.columns.id, width: 96, render: (row) => <span className={css.mono}>{row.projectId}</span> },
+    { key: "id", header: copy.columns.id, width: "310px", render: (row) => <span className={"mono t-12"}>{row.projectId}</span> },
     {
       key: "title",
       header: copy.columns.title,
@@ -52,26 +72,26 @@ export function Projects(props: ProjectsProps) {
     {
       key: "lifecycle",
       header: copy.columns.lifecycle,
-      width: 104,
+      width: "110px",
       secondary: true,
       render: (row) => <StatusDot label={row.lifecycle} tone={row.lifecycleTone} mono />,
     },
     {
       key: "openIssues",
       header: copy.columns.openIssues,
-      width: 88,
+      width: "210px",
       secondary: true,
       align: "end",
-      render: (row) => <span className={css.mono}>{copy.openIssues(row.openIssues)}</span>,
+      render: (row) => <span className={"mono t-12"}>{row.openIssuesText}</span>,
     },
     {
       key: "description",
       header: copy.columns.description,
-      width: 180,
+      width: "90px",
       secondary: true,
       render: (row) =>
         row.description === null ? (
-          <span className={css.muted}>{copy.noDescription}</span>
+          <span className={"muted"}>{copy.noDescription}</span>
         ) : (
           <TruncatedText text={row.description} />
         ),
@@ -82,21 +102,76 @@ export function Projects(props: ProjectsProps) {
     [row.lifecycle, copy.openIssues(row.openIssues), row.description ?? copy.noDescription].join(" · ");
 
   return (
-    <article className={css.page} data-ms-screen="projects">
-      <h1 className={css.title}>{copy.pageTitle}</h1>
+    <article className={"screen"} data-ms-screen="projects">
+      {/* The prototype heads every screen with `.screen-head`; `.screen-head h1`
+          carries the 16/24/600 title rule, and a bare h1 falls back to the
+          document heading instead. */}
+      <div className="screen-head">
+        <h1>{copy.pageTitle}</h1>
+        {/* The prototype's head: the store's count, the open issues across these projects,
+            then what a project owns. */}
+        <div className="screen-meta">
+          <span data-ms-count="">{copy.totalMeta(model.total)}</span>
+          <span aria-hidden="true">·</span>
+          <span data-ms-open-issues="">{copy.openIssuesMeta(openIssues)}</span>
+          <span aria-hidden="true">·</span>
+          <span>{copy.headNote}</span>
+        </div>
+      </div>
 
       {model.rows.kind === "populated" ? (
-        <Panel>
-          <PanelBody tight={true}>
-            <DataTable
-              caption={copy.tableCaption}
-              columns={columns}
-              rows={model.rows.value}
-              rowKey={(row) => row.projectId}
-              meta={meta}
-              onRowActivate={props.onOpen === undefined ? undefined : (row) => props.onOpen?.(row.projectId)}
-            />
-          </PanelBody>
+        <Panel labelledBy={LIST_HEAD_ID}>
+          <PanelHead id={LIST_HEAD_ID} title={copy.listHeading} meta={copy.listMeta} />
+          {/* An unclassed div: the prototype wraps the rows in a bare `div`, not a
+              `.panel-body`, so the rows keep their own rhythm. */}
+          <div data-ms-projects="">
+            {/* The prototype lists projects as rows, not as a table: a dot, the name,
+                the store's id, the description, then the open count and the arrow. */}
+            {model.rows.value.map((row) => {
+              const activate = props.onOpen === undefined ? undefined : () => props.onOpen?.(row.projectId);
+              return (
+                <div
+                  key={row.projectId}
+                  className="rm-project-row"
+                  data-ms-project={row.projectId}
+                  {...(activate === undefined
+                    ? {}
+                    : {
+                        role: "link",
+                        tabIndex: 0,
+                        onClick: activate,
+                        onKeyDown: (event: KeyboardEvent) => {
+                          if (event.key === "Enter" || event.key === " ") {
+                            event.preventDefault();
+                            activate();
+                          }
+                        },
+                      })}
+                >
+                  {/* The prototype's row leads with the dot alone. Its own markup puts
+                      the lifecycle on the dot (`class="dot tone-active"`) while its sheet
+                      only styles the descendent form (`.tone-active .dot`), so that pair
+                      resolves to the neutral default there too. The word rides the
+                      aria-label, never a second visible label beside the name. */}
+                  <span
+                    className={`dot tone-${row.lifecycleTone}`}
+                    role="img"
+                    aria-label={row.lifecycle === "" ? copy.noLifecycle : row.lifecycle}
+                  />
+                  <span className="rm-project-name">{row.title}</span>
+                  <span className="mono t-11 muted">{row.projectId}</span>
+                  <span className="rm-project-desc trunc" title={row.description ?? copy.noDescription}>
+                    {row.description ?? copy.noDescription}
+                  </span>
+                  <span className="mono t-12">{copy.openIssues(row.openIssues)}</span>
+                  <span className="muted" aria-hidden="true">→</span>
+                </div>
+              );
+            })}
+          </div>
+          <PanelFoot>
+            <span className="muted t-11" data-ms-project-note="">{copy.lifecycleNote}</span>
+          </PanelFoot>
         </Panel>
       ) : (
         <Panel>

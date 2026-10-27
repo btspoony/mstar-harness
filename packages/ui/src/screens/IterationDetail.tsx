@@ -2,12 +2,18 @@
  * `IterationDetail` — one iteration (IA §8.2).
  *
  * Renders: catalog identity, execution (the linked workflow), the compass status
- * and its summary, the **gate step (1–4 of 5)**, the plan table, the dates.
+ * and its summary, the **gate step (1–4 of 5)**, the plan table, the **document
+ * inventory** and the dates.
  *
- * Not rendered, asserted negatively: the `documents` inventory and its count, the
- * compass milestone-id list (the roadmap feature owns milestones — repeating the
- * ids here would be a second, weaker view of the same thing), and every counter
- * (`storeRevision`, `catalogRevision`, `builtAt`, `checkedAt`).
+ * The inventory is rendered because the prototype's detail screen has a Documents
+ * card and the prototype is this interface's acceptance criterion. IA §8.1 had
+ * excluded it ("documents say nothing about progress") — true, but that describes a
+ * progress view, not this one.
+ *
+ * Not rendered, asserted negatively: the compass milestone-id list (the roadmap
+ * feature owns milestones — repeating the ids here would be a second, weaker view of
+ * the same thing), and every counter (`storeRevision`, `catalogRevision`, `builtAt`,
+ * `checkedAt`).
  *
  * **The gate display is four labels plus a never-marked fifth** (compass D29).
  * Step 5 is merge, the merge happens outside the harness, and no store row records
@@ -21,23 +27,48 @@ import { EmptyState } from "../components/EmptyState.tsx";
 import { Field } from "../components/Field.tsx";
 import { FieldGroup } from "../components/FieldGroup.tsx";
 import { StatusDot } from "../components/StatusDot.tsx";
+import { UNKNOWN_DATE } from "../view-model/format.ts";
 import { TruncatedText } from "../components/TruncatedText.tsx";
 import type { IterationDetailModel, IterationPlanRow } from "../view-model/iterations.ts";
 import type { Resolved } from "../view-model/state.ts";
 import type { GateStepId, GateStepPosition, Tone } from "../view-model/status.ts";
-import css from "./IterationDetail.module.css";
 
 /** Every visible string this screen needs. Task 5 supplies them. */
 export type IterationDetailCopy = {
-  breadcrumb: { label: string; current: string };
+  breadcrumb: { label: string; root: string; current: string };
   compassHeading: string;
+  /** The head's meta line: `started <time>`, beside the compass status. */
+  compassStarted: (at: string) => string;
   planTableHeading: string;
+  /** The Plans head's own count: `3 plans`. */
+  plansCount: (n: number) => string;
+  /** The head meta's last two segments: how much this iteration carries. */
+  plansMeta: (n: number) => string;
+  documentsMeta: (n: number) => string;
   catalogHeading: string;
+  /** The Catalog head's chip: the store still counts this as a registration. */
+  activeRegistration: string;
   executionHeading: string;
+  /** The Compass panel's milestone mini table. */
+  compassColumns: { milestone: string; target: string; status: string };
+  /** The prototype's Documents card. */
+  documentsHeading: string;
+  documentsCount: (n: number) => string;
+  documentsEmpty: string;
+  documentColumns: { title: string; lifecycle: string; kind: string; location: string; revision: string };
   fields: {
     id: string;
     title: string;
     lifecycle: string;
+    /** The catalog panel's six row labels, matching the prototype's. */
+    kind: string;
+    revision: string;
+    registeredAt: string;
+    location: string;
+    catalogUpdatedAt: string;
+    /** The execution panel's workflow state. */
+    status: string;
+    phase: string;
     root: string;
     compassStatus: string;
     startedAt: string;
@@ -69,25 +100,25 @@ export type IterationDetailProps = {
 /** The plan table's columns. */
 function planColumns(copy: IterationDetailCopy): DataTableColumn<IterationPlanRow>[] {
   return [
-    { key: "planId", header: copy.planColumns.planId, render: (plan) => <span className={css.mono}>{plan.planId}</span> },
+    { key: "planId", header: copy.planColumns.planId, render: (plan) => <span className={"mono"}>{plan.planId}</span> },
     {
       key: "title",
       header: copy.planColumns.title,
       secondary: true,
       render: (plan) =>
-        plan.title === null ? <span className={css.muted}>{copy.fields.noWorkflow}</span> : <TruncatedText text={plan.title} />,
+        plan.title === null ? <span className={"muted"}>{copy.fields.noWorkflow}</span> : <TruncatedText text={plan.title} />,
     },
     {
       key: "status",
       header: copy.planColumns.status,
       render: (plan) => (
-        <span className={css.statusCell}>
+        <span>
           {plan.status === null ? (
-            <span className={css.muted}>{copy.fields.notStarted}</span>
+            <span className={"muted"}>{copy.fields.notStarted}</span>
           ) : (
             <StatusDot label={plan.status} tone={plan.statusTone} mono />
           )}
-          {plan.phase === null ? null : <span className={css.phase}>{plan.phase}</span>}
+          {plan.phase === null ? null : <span className={"chip"}>{plan.phase}</span>}
         </span>
       ),
     },
@@ -97,11 +128,11 @@ function planColumns(copy: IterationDetailCopy): DataTableColumn<IterationPlanRo
       secondary: true,
       render: (plan) =>
         plan.progress === null ? (
-          <span className={css.muted} data-ms-plan-progress-absent="">
+          <span className={"muted"} data-ms-plan-progress-absent="">
             {copy.planProgressAbsent}
           </span>
         ) : (
-          <span className={css.progress}>
+          <span className={"milestone-counts"}>
             <TruncatedText text={plan.progress} />
           </span>
         ),
@@ -111,7 +142,7 @@ function planColumns(copy: IterationDetailCopy): DataTableColumn<IterationPlanRo
       header: copy.planColumns.doneAt,
       secondary: true,
       align: "end",
-      render: (plan) => <span className={css.mono}>{plan.doneAt ?? "—"}</span>,
+      render: (plan) => <span className={"mono"}>{plan.doneAt ?? "—"}</span>,
     },
   ];
 }
@@ -127,26 +158,89 @@ function IterationDetailBody(props: {
 
   return (
     <>
-          <header className={css.head}>
-            <h1 className={css.title}>
-              <TruncatedText text={value.iterationId} />
-            </h1>
+          <header className="detail-head">
+            <div className="detail-head-main">
+              <h1 className="detail-title">
+                <TruncatedText text={value.title ?? value.iterationId} />
+              </h1>
+              {/* The prototype's meta line: the store id, the lifecycle, the compass,
+                  and the two counts a reader scans for. */}
+              <div className="detail-meta">
+                <span className="mono">{value.iterationId}</span>
+                <span aria-hidden="true">·</span>
+                <span>{value.lifecycle ?? "—"}</span>
+                {value.compassStatus === null ? null : (
+                  <>
+                    <span aria-hidden="true">·</span>
+                    <span className={`status tone-${value.compassTone} is-strong`}>
+                      <span className="dot" aria-hidden="true" />
+                      <span className="label mono">{value.compassStatus}</span>
+                    </span>
+                  </>
+                )}
+                {/* The prototype's last two segments: how much this iteration carries. */}
+                <span aria-hidden="true">·</span>
+                <span data-ms-meta-plans="">{copy.plansMeta(value.plans.length)}</span>
+                <span aria-hidden="true">·</span>
+                <span data-ms-meta-documents="">{copy.documentsMeta(value.documents.length)}</span>
+              </div>
+            </div>
+            {value.gatePosition === null ? null : (
+              <div className="detail-actions">
+                <span className="chip" data-ms-gate-chip>
+                  {copy.gateStep(value.gatePosition.step, value.gatePosition.of)}
+                </span>
+              </div>
+            )}
           </header>
 
-          <FieldGroup title={copy.catalogHeading}>
-            <Field label={copy.fields.title}>{value.title ?? copy.fields.noWorkflow}</Field>
+          <div className="detail-top">
+          <section className="panel" aria-labelledby="ms-iteration-catalog">
+            <div className="panel-head">
+              <h2 className="panel-title" id="ms-iteration-catalog">{copy.catalogHeading}</h2>
+              {/* The prototype's head states that the store still counts this as a
+                  registration — the same fact the workflow detail shows. */}
+              {value.activeRegistration ? (
+                <span className="panel-meta">
+                  <span className="chip">{copy.activeRegistration}</span>
+                </span>
+              ) : null}
+            </div>
+            <div className="panel-body">
+              <dl className="fields">
+            {/* The prototype's six rows, in its order, then the description beneath them. */}
+            <Field label={copy.fields.kind} mono>
+              {value.catalogKind ?? "—"}
+            </Field>
             <Field label={copy.fields.lifecycle} mono>
               {value.lifecycle ?? "—"}
             </Field>
-            <Field label={copy.fields.startedAt} mono>
-              {value.startedAt}
+            <Field label={copy.fields.revision} mono>
+              {value.revision ?? "—"}
             </Field>
-            <Field label={copy.fields.endedAt} mono>
-              {value.endedAt ?? "—"}
+            <Field label={copy.fields.registeredAt} mono>
+              {value.registeredAt ?? "—"}
             </Field>
-          </FieldGroup>
-
-          <FieldGroup title={copy.executionHeading}>
+            <Field label={copy.fields.location} mono>
+              {value.location ?? "—"}
+            </Field>
+            <Field label={copy.fields.catalogUpdatedAt} mono>
+              {value.catalogUpdatedAt ?? "—"}
+            </Field>
+            {value.description === null ? null : (
+              <p className={"prose t-12 secondary"} data-ms-catalog-description="">
+                {value.description}
+              </p>
+            )}
+              </dl>
+            </div>
+          </section>
+          <section className="panel" aria-labelledby="ms-iteration-execution">
+            <div className="panel-head">
+              <h2 className="panel-title" id="ms-iteration-execution">{copy.executionHeading}</h2>
+            </div>
+            <div className="panel-body">
+              <dl className="fields">
             <Field label={copy.fields.workflow} mono>
               {value.workflowId === null ? (
                 copy.fields.noWorkflow
@@ -155,7 +249,7 @@ function IterationDetailBody(props: {
               ) : (
                 <button
                   type="button"
-                  className={css.crumb}
+                  className={"breadcrumb"}
                   onClick={() => {
                     if (value.workflowId !== null) props.onOpenWorkflow?.(value.workflowId);
                   }}
@@ -164,53 +258,83 @@ function IterationDetailBody(props: {
                 </button>
               )}
             </Field>
-          </FieldGroup>
+            {value.workflowId === null ? null : (
+              <>
+                <Field label={copy.fields.status} mono>
+                  {value.workflowStatus ?? "—"}
+                </Field>
+                <Field label={copy.fields.phase} mono>
+                  {value.workflowPhase ?? "—"}
+                </Field>
+              </>
+            )}
+              </dl>
+            </div>
+          </section>
+          </div>
 
-          <FieldGroup title={copy.compassHeading} columns={1}>
-            <Field label={copy.fields.compassStatus} mono>
-              {value.compassStatus === null ? (
-                <span className={css.muted}>{copy.fields.noCompass}</span>
-              ) : (
-                <StatusDot label={value.compassStatus} tone={value.compassTone} mono />
-              )}
-            </Field>
-            <Field label={copy.fields.title}>
+          <section className="panel" aria-labelledby="ms-iteration-compass">
+            <div className="panel-head">
+              <h2 className="panel-title" id="ms-iteration-compass">{copy.compassHeading}</h2>
+              {/* The prototype puts the status and the start time in the head, not the body. */}
+              <span className="panel-meta">
+                {value.compassStatus === null ? (
+                  <span className={"muted"}>{copy.fields.noCompass}</span>
+                ) : (
+                  <StatusDot label={value.compassStatus} tone={value.compassTone} mono />
+                )}
+                {/* `Date unknown` beside `no compass` reads as a contradiction: when the
+                    compass records no start time there is nothing to say, not an unknown one. */}
+                {value.startedAt === null || value.startedAt === UNKNOWN_DATE ? null : (
+                  <>
+                    <span aria-hidden="true">·</span>
+                    <span className={"mono"}>{copy.compassStarted(value.startedAt)}</span>
+                  </>
+                )}
+              </span>
+            </div>
+            <div className="panel-body compass-body">
               {value.summary === null ? (
-                <span className={css.muted}>{copy.fields.noSummary}</span>
+                <p className={"prose muted"}>{copy.fields.noSummary}</p>
               ) : (
-                <span data-ms-compass-summary="">{value.summary}</span>
+                <p className={"prose"} data-ms-compass-summary="">
+                  {value.summary}
+                </p>
               )}
-            </Field>
-          </FieldGroup>
-
-          {/* The delivery position: four labels, plus a fifth that is never
-              marked. The position rides on an attribute too, so the state does
-              not depend on the colour. */}
-          <section className={css.gate} aria-labelledby="ms-iteration-gate">
-            <h2 className={css.heading} id="ms-iteration-gate">
-              {value.gatePosition === null
-                ? copy.gateNoCompass
-                : copy.gateStep(value.gatePosition.step, value.gatePosition.of)}
-            </h2>
-            <ol className={css.steps} data-ms-gate-steps="">
-              {value.steps.map((step) => (
-                <li
-                  key={step.id}
-                  className={css.step}
-                  data-ms-step={step.id}
-                  data-ms-step-position={step.position satisfies GateStepPosition}
-                >
-                  <span className={css.stepMark} aria-hidden="true" />
-                  <span className={css.stepLabel}>{copy.gateStepLabels[step.id]}</span>
-                </li>
-              ))}
-            </ol>
+              {/* The prototype's Compass panel ends with its milestones as a mini table:
+                  name, target, status. */}
+              {value.compassMilestones.length === 0 ? null : (
+                <table className="mini-table" data-ms-compass-milestones="">
+                  <thead>
+                    <tr>
+                      <th scope="col">{copy.compassColumns.milestone}</th>
+                      <th scope="col">{copy.compassColumns.target}</th>
+                      <th scope="col">{copy.compassColumns.status}</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {value.compassMilestones.map((milestone) => (
+                      <tr key={milestone.milestone}>
+                        <td>{milestone.milestone}</td>
+                        <td className="mono">{milestone.target}</td>
+                        <td className="mono">{milestone.status}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              )}
+            </div>
           </section>
 
-          <section className={css.plans} aria-labelledby="ms-iteration-plans">
-            <h2 className={css.heading} id="ms-iteration-plans">
-              {copy.planTableHeading}
-            </h2>
+
+          <section className="panel" aria-labelledby="ms-iteration-plans">
+            <div className="panel-head">
+              <h2 className="panel-title" id="ms-iteration-plans">
+                {copy.planTableHeading}
+              </h2>
+              {/* The prototype's head counts the plans in this iteration. */}
+              <span className="panel-meta">{copy.plansCount(value.plans.length)}</span>
+            </div>
             <DataTable
               variant="detail"
               caption={copy.planTableHeading}
@@ -219,6 +343,64 @@ function IterationDetailBody(props: {
               rowKey={(plan) => plan.planId}
             />
           </section>
+
+          {/* The prototype's Documents card: the catalog inventory under this
+              iteration. It is a fact list, not a progress view — which is why the
+              model carries it only now that the screen has a place for it. */}
+          <section className="panel" aria-labelledby="ms-iteration-documents">
+            <div className="panel-head">
+              <h2 className="panel-title" id="ms-iteration-documents">
+                {copy.documentsHeading}
+              </h2>
+              <span className="panel-meta">
+                {copy.documentsCount(value.documents.length)}
+              </span>
+            </div>
+            <div className="panel-body tight">
+              {value.documents.length === 0 ? (
+                <p className="muted t-12">{copy.documentsEmpty}</p>
+              ) : (
+                /* The prototype's document table: fixed pixel widths and a scroller, so a
+                   narrow pane scrolls instead of squeezing the location
+                   (`design-v1.html:1904-1909`). */
+                <div className="table-wrap">
+                  <table className="table" data-ms-documents="" data-narrow-cols="2">
+                    <colgroup>
+                      <col />
+                      <col style={{ width: "110px" }} />
+                      <col style={{ width: "140px" }} />
+                      <col style={{ width: "520px" }} />
+                      <col style={{ width: "80px" }} />
+                    </colgroup>
+                  <thead>
+                    <tr>
+                      <th scope="col">{copy.documentColumns.title}</th>
+                      <th scope="col">{copy.documentColumns.lifecycle}</th>
+                      <th scope="col">{copy.documentColumns.kind}</th>
+                      <th scope="col">{copy.documentColumns.location}</th>
+                      <th scope="col">{copy.documentColumns.revision}</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {value.documents.map((doc) => (
+                      <tr key={doc.location}>
+                        <td className="t-title">{doc.title}</td>
+                        <td className="mono">{doc.lifecycle}</td>
+                        <td className="mono t-12">{doc.documentKind}</td>
+                        <td className="mono t-11 secondary t-title">
+                          <TruncatedText text={doc.location} />
+                        </td>
+                        <td className="mono t-12" data-ms-align="end">
+                          {doc.revision}
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+                </div>
+              )}
+            </div>
+          </section>
         </>
   );
 }
@@ -226,14 +408,21 @@ function IterationDetailBody(props: {
 export function IterationDetail(props: IterationDetailProps) {
   const { copy, model } = props;
   return (
-    <article className={css.page} data-ms-screen="iteration-detail">
-      <nav className={css.trail} aria-label={copy.breadcrumb.label}>
-        {props.onBack === undefined ? null : (
-          <button type="button" className={css.crumb} onClick={props.onBack}>
-            {copy.breadcrumb.current}
+    <article className={"screen"} data-ms-screen="iteration-detail">
+      {/* `Iterations / <id>`, the same two-part crumb the workflow detail uses. */}
+      <div className={"breadcrumb"} aria-label={copy.breadcrumb.label}>
+        {props.onBack === undefined ? (
+          <span>{copy.breadcrumb.root}</span>
+        ) : (
+          <button type="button" className={"link"} onClick={props.onBack}>
+            {copy.breadcrumb.root}
           </button>
         )}
-      </nav>
+        <span aria-hidden="true">/</span>
+        <span className={"mono"}>
+          {props.model.kind === "populated" ? props.model.value.iterationId : copy.breadcrumb.current}
+        </span>
+      </div>
 
       {model.kind === "populated" ? (
         <IterationDetailBody value={model.value} copy={copy} onOpenWorkflow={props.onOpenWorkflow} />

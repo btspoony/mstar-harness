@@ -141,10 +141,28 @@ const overviewRead = (over: Partial<OverviewDTO> = {}): OverviewDTO => ({
 
 const overviewCopy: OverviewCopy = {
   pageTitle: "Overview",
+  screenSubtitle: (scope: string, open: number) => `${scope} \u00b7 ${open} open issues`,
+  screenScopeAll: "All projects",
+  identityBuilt: (at: string) => `built ${at}`,
+  identityBuiltUnknown: "never built",
+  identityRead: (at: string) => `read ${at}`,
   workflowsHeading: "Active workflows",
   workflowsEmpty: "Active workflows",
   workflowsTruncated: (shown: number, total: number) => `showing ${shown} of ${total}`,
   plansProgress: (done, total) => `${done}/${total} plans`,
+  planColumns: { plan: "Plan", title: "Title", status: "Status", progress: "Progress", done: "Completed" },
+  plansLabel: (n) => (n === 1 ? "plan" : "plans"),
+  workflowMeta: (plans, status) => `${plans} plans \u00b7 ${status}`,
+  planTableCaption: "Plans under this workflow",
+  planStatusAbsent: "Status not recorded",
+  planProgressAbsent: "Records no progress.",
+  typeLabel: "Type",
+  openWorkflow: "Open workflow",
+  branchBase: "Base",
+  branchSource: "Source",
+  branchIntegration: "Integration",
+  branchTarget: "Target",
+  dash: "\u2014",
   trendHeading: "Issue flow trend",
   trendRange: (from, to) => `${from} → ${to}`,
   trendChartTitle: (from, to) => `Cumulative captured and retired issues, ${from} to ${to}`,
@@ -155,13 +173,21 @@ const overviewCopy: OverviewCopy = {
   trendTableSummary: "Dated history (table alternative)",
   trendColumns: { date: "Date", captured: "Captured", retired: "Retired", open: "Open difference", origin: "Origin" },
   residualsHeading: "Open residuals",
-  residualsTotal: (open) => `${open} open`,
+  residualsTotal: () => "by severity",
   iterationHeading: "Delivery",
   iterationNoIteration: "Iteration",
   gateStep: (step, of) => `step ${step} of ${of}`,
+  gateStepLabels: {
+    start: "Start",
+    execute: "Execute",
+    close: "Close",
+    "pr-delivery": "PR delivery",
+    "merge-ready": "Merge ready",
+  },
   milestonesHeading: "Milestones",
   milestonesSummary: (count, open) => `${count} milestones · ${open} open`,
   milestoneProgress: (done, total) => `${done}/${total}`,
+  milestoneOpenCount: (open) => ` · ${open} open`,
   milestoneOpen: (open) => `${open} open`,
   projection: { current: "current", stale: "stale", unavailable: "unavailable" },
   absence: {
@@ -180,6 +206,10 @@ const overview = (over: Partial<OverviewDTO> = {}, compact?: boolean): string =>
 
 const focusCopy: FocusCopy = {
   pageTitle: "Focus",
+  branchBase: "Base",
+  branchSource: "Source",
+  branchIntegration: "Integration",
+  branchTarget: "Target",
   bindingBound: (id) => `bound to ${id}`,
   bindingTerminal: (id) => `${id} is terminal`,
   bindingUnbound: "no workflow is bound",
@@ -191,7 +221,14 @@ const focusCopy: FocusCopy = {
   progressLabel: "Next",
   blockedLabel: "Blocked",
   progressAbsent: "records no progress",
-  deliveryHeading: "Delivery",
+  deliveryHeading: "Latest iteration",
+  gateStepLabels: {
+    start: "Start",
+    execute: "Execute",
+    close: "Close",
+    "pr-delivery": "PR delivery",
+    "merge-ready": "Merge ready",
+  },
   deliveryLine: (id, step, of) => `${id} · step ${step} of ${of}`,
   deliveryNoIteration: "No iteration",
   deliveryUnknownStep: "Iteration · no delivery step recorded",
@@ -227,17 +264,101 @@ const focus = (input: {
 describe("Overview — what it shows, in the IA §3.1 order", () => {
   const html = overview();
 
-  test("all active workflows with their plan progress", () => {
+  test("the workflow's header line: id, type, phase, and its own count", () => {
     expect(html).toContain("issue-project-move");
-    expect(html).toContain("1/2 plans");
     expect(html).toContain("phase-2-execute");
+    // The count line is the workflow's own plan total and status, not the page's.
+    // The count and status sit in the panel head beside the title, where the prototype has
+    // them (`span.panel-meta`), not as a paragraph in the body.
+    // The head is structured, as the prototype's is: the count in `.num.mono`, a
+    // separator, then a `.status` carrying its own dot and the literal enum.
+    expect(html).toContain('class="num mono">2</span>');
+    expect(html).toContain(">plans</span>");
+    // Scoped to this head's own meta: an unscoped `toContain("is-strong")` passes if any
+    // element anywhere in the page carries it.
+    const headStart = html.indexOf('id="ms-overview-workflows"');
+    const metaOpen = html.indexOf('<span class="panel-meta"', headStart);
+    // `panel-meta` closes where its own nesting returns to zero.
+    let depth = 0;
+    let headMeta = "";
+    for (let i = metaOpen; i < html.length; i += 1) {
+      if (html.startsWith("<span", i)) depth += 1;
+      if (html.startsWith("</span>", i)) {
+        depth -= 1;
+        if (depth === 0) {
+          headMeta = html.slice(metaOpen, i + "</span>".length);
+          break;
+        }
+      }
+    }
+    expect(headMeta).toContain('class="num mono">2</span>');
+    expect(headMeta).toContain(">plans</span>");
+    expect(headMeta).toContain("is-strong");
+    expect(headMeta).toContain('<span class="label">running</span>');
+    expect(html).toContain('<span class="label">running</span>');
+    expect(html).not.toContain("data-ms-workflow-meta");
   });
 
-  test("five severity rows, zeros included, with a reconciling total", () => {
+  test("the branch chain is drawn when the workflow records one", () => {
+    for (const anchor of ["Base", "Source", "Integration", "Target"]) expect(html).toContain(`<span>${anchor}</span>`);
+    expect(html).toContain("<b>main</b>");
+    // Exactly one arrow between each adjacent pair; the trend's head states its own
+    // range with the same glyph, so the count is taken on the chain's own arrows.
+    expect(html).toContain("data-ms-branch");
+    expect((html.match(/class="branch-arrow" aria-hidden="true">\u2192</g) ?? []).length).toBe(3);
+  });
+
+  test("the plan table: five columns, one row per plan, the prototype's cells", () => {
+    // `design-v1.html:859-866`: Plan | Title | Status | Progress | Done.
+    for (const key of ["plan", "title", "status", "progress", "done"]) {
+      expect(html).toContain(`data-ms-col-key="${key}"`);
+    }
+    // One row per plan the DTO carries — two in this fixture.
+    expect((html.match(/data-ms-row-key=/g) ?? []).length).toBe(2);
+    expect(html).toContain("20261025-unified-ui-shared-layer");
+    // Status is a dot and its word; a plan with no status would say so instead.
+    expect(html).toContain('data-ms-tone="success"');
+    // Progress: the note as prose, and the absent line when there is none.
+    expect(html).toContain("primitives are landing");
+    expect(html).toContain("Records no progress.");
+    // Done: month-day, the prototype's short form.
+    expect(html).toContain('<span class="t-num">10-19</span>');
+  });
+
+  test("a plan whose status the store does not record says so, never an empty cell", () => {
+    // The shared absent treatment, not a blank `<td>`: a cell with nothing in it reads
+    // as a rendering failure, while a sentence says the store carries no status.
+    const plan = workflow().plans[0];
+    const absent = overview({
+      workflows: read<WorkflowListDTO>({
+        items: [workflow({ plans: [{ ...plan, status: null }] })],
+        total: 1,
+      }),
+    });
+    expect(absent).toContain("Status not recorded");
+    expect(absent).toContain('data-ms-row-key="20261025-unified-ui-shared-layer"');
+    expect(absent).not.toMatch(/<td[^>]*>\s*<\/td>/);
+  });
+
+  test("the Open workflow link appears only when the host can honour it", () => {
+    expect(html).not.toContain("Open workflow");
+    const hosted = renderToStaticMarkup(
+      <Overview
+        model={overviewModel(overviewRead(), { projection })}
+        copy={overviewCopy}
+        onOpenWorkflow={() => undefined}
+      />,
+    );
+    expect(hosted).toContain("Open workflow");
+  });
+
+  test("five severity rows, zeros included, with the prototype's grouping meta", () => {
     for (const severity of ["critical", "high", "medium", "low", "nit"]) {
       expect(html).toContain(`data-ms-severity="${severity}"`);
     }
-    expect(html).toContain("26 open");
+    // The panel's own meta is a grouping descriptor, not a count: every number it could
+    // repeat is already inside the panel.
+    expect(html).toContain("by severity");
   });
 
   test("a severity the read reports as zero is still rendered as 0, never dropped", () => {
@@ -259,7 +380,7 @@ describe("Overview — what it shows, in the IA §3.1 order", () => {
       // `gateStep` (contract §3) arrives with the engine plan's branch; until then
       // the member comes from the package's contract mirror and is cast here.
       const page = overview({ latestIteration: read(iteration({ gateStep } )) });
-      const marked = page.match(/<li data-ms-step="([^"]+)" data-ms-step-position="current"/);
+      const marked = page.match(/<div role="listitem" class="gate-step[^"]*" data-ms-step="([^"]+)" data-ms-step-position="current"/);
       expect(marked).not.toBeNull();
       expect(marked?.[1]).not.toBe("merge-ready");
     }
@@ -315,11 +436,11 @@ describe("Overview — the loading phase, and the literal severity", () => {
     // (the prototype's tally: dot + literal word, count right-aligned).
     const html = overview();
     expect(html).toContain('data-ms-severity="critical"');
-    expect(html).toContain("<span>critical</span>");
+    expect(html).toContain('<span class="label mono">critical</span>');
     // A definition list still groups each severity with its count: `dl` permits a
     // `div` wrapper, so the two-column grid and the grouping coexist.
-    expect(html).toContain("<dt>");
-    expect(html).toContain("<dd>");
+    expect(html).toContain('<dt class="sev">');
+    expect(html).toContain('<dd class="num is-strong">');
     expect(html).not.toContain("<span>Critical</span>");
   });
 });
@@ -393,9 +514,13 @@ describe("Overview — NEGATIVE: the surfaces D30 removed", () => {
   });
 
   test("no counter from the read envelope", () => {
-    for (const counter of ["storeRevision", "catalogRevision", "builtAt", "checkedAt", "2026-10-25T05:00:00.000Z"]) {
+    // `builtAt` / `checkedAt` are no longer counters: the prototype's identity line ends
+    // with `built … · read …`. The revisions stay out.
+    for (const counter of ["storeRevision", "catalogRevision", "generation"]) {
       expect(html).not.toContain(counter);
     }
+    expect(html).toContain("data-ms-projection-built");
+    expect(html).toContain("data-ms-projection-read");
   });
 
   test("nothing session-scoped leaked in (no binding, no picker, no enforcement)", () => {
@@ -464,15 +589,21 @@ describe("Focus — what it shows, in the IA §3.2 order", () => {
   test("the bound workflow's identity and branch chain", () => {
     expect(html).toContain('data-ms-workflow=""');
     expect(html).toContain('data-ms-branch-chain=""');
-    expect(html).toContain("main → issue-project-move");
+    // The chain is the prototype's segmented line: an anchor per label plus an arrow
+    // between them, not one joined string.
+    expect(html).toContain('<span class="branch-anchor"><span>Base</span> <b>main</b></span>');
+    expect(html).toContain('<span class="branch-anchor"><span>Source</span> <b>issue-project-move</b></span>');
+    expect((html.match(/class="branch-arrow"/g) ?? []).length).toBe(3);
   });
 
   test("the plan board is grouped by status, five groups, counts included", () => {
     for (const status of ["Todo", "InProgress", "InReview", "Blocked", "Done"]) {
       expect(html).toContain(`data-ms-group="${status}"`);
     }
-    expect(html).toContain("InProgress · 1");
-    expect(html).toContain("Todo · 0");
+    // The prototype's board head carries the status and its count as two elements,
+    // not one joined string.
+    expect(html).toMatch(/<span>InProgress<\/span><span class="num">1<\/span>/);
+    expect(html).toMatch(/<span>Todo<\/span><span class="num">0<\/span>/);
   });
 
   test("the in-progress plan carries its recorded progress", () => {
@@ -549,7 +680,7 @@ describe("Focus — what it shows, in the IA §3.2 order", () => {
   });
 });
 
-describe("Focus — the loading phase", () => {
+describe("Focus — the loading chip", () => {
   test("a pending read renders no absence arm, and does not crash", () => {
     // The same defect Overview had: `copy.absence["loading"]` is undefined, so
     // the board threw on first paint instead of showing the binding line.
@@ -641,5 +772,16 @@ describe("Focus — the four absence arms and the binding states", () => {
     expect(errored).toContain('data-ms-binding="error"');
     expect(errored).toContain("2 active lifecycles are registered");
     expect(errored).toContain('data-ms-picker=""');
+  });
+});
+
+describe("Focus — the prototype's four panel titles", () => {
+  test("the session's fourth panel is Latest iteration, not Delivery", () => {
+    // The prototype's `session-focus-template` declares four: Active workflow, Open
+    // residual issues, Milestones, Latest iteration. This screen used to title the fourth
+    // `Delivery`, a word the prototype does not use anywhere on that screen.
+    const html = focus({});
+    expect(html).toContain("Latest iteration");
+    expect(html).not.toContain(">Delivery<");
   });
 });

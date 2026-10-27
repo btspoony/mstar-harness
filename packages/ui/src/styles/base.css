@@ -40,6 +40,7 @@
   font-weight: var(--ms-fw-regular);
   -webkit-font-smoothing: antialiased;
   text-rendering: optimizeLegibility;
+  /* The container itself is declared once, below, as the `container` shorthand. */
 }
 
 .ms-container h1, .ms-container h2, .ms-container h3, .ms-container h4 {
@@ -53,9 +54,12 @@
   letter-spacing: -0.01em;
 }
 
+/* A level-2 heading in this product is only ever a panel title, and the prototype
+   sets it at 12/16 (`.panel-title`). This block used 14/20 and, being more specific
+   than the panel's own class, silently overrode every card heading. */
 .ms-container h2 {
-  font-size: var(--ms-fs-14);
-  line-height: var(--ms-lh-14);
+  font-size: var(--ms-fs-12);
+  line-height: var(--ms-lh-12);
   font-weight: var(--ms-fw-medium);
 }
 
@@ -185,11 +189,12 @@
 /**
  * The layout container. Product layout reflows by the width a view is GIVEN,
  * so every page body and every host pane declares this container and the
- * components write `@container (…)` against it — UNNAMED, on purpose: a
- * CSS-module bundler rewrites a named query's prelude into a per-module hashed
- * name (`@container pane_8f31a`), which can never match the one declaration in
- * this global sheet, so a named query is silently dead. One container, unnamed
- * queries; `tokens.test.ts` keeps both halves true. A viewport media query is
+ * components write `@container (…)` against it — the QUERIES are unnamed on
+ * purpose: a CSS-module bundler rewrites a named query's prelude into a
+ * per-module hashed name (`@container pane_8f31a`), which can never match the
+ * one declaration in this global sheet, so a named query is silently dead. The
+ * one declaration may carry a name (`.ms-container` uses the `container`
+ * shorthand); the queries stay anonymous. `tokens.test.ts` keeps both halves true. A viewport media query is
  * allowed only for window chrome (DESIGN.md § Container width).
  *
  * `min-inline-size: 0` is the other half of the contract: a container that can
@@ -228,8 +233,105 @@
   border-block-end: var(--ms-hairline);
 }
 
+/* The navigation's whole style authority is its host BAND, not the product surface: the dsh
+   pane mounts the shared nav in this head band, deliberately above `.ms-container`, so a
+   container-scoped rule would leave the destinations unstyled there. Every value below is
+   the prototype's own (`design-v1.html:169-176`), including the narrow behaviour the
+   deleted `Nav.module.css` used to own (`design-v1.html:727`): without it a narrow pane
+   overflowed or stacked nothing. */
+.ms-pane-head .app-nav {
+  display: flex;
+  align-items: center;
+  gap: 0;
+  min-inline-size: 0;
+  overflow-x: auto;
+  scrollbar-width: none;
+  flex: none;
+}
+
+.ms-pane-head .nav-btn {
+  appearance: none;
+  border: 0;
+  background: none;
+  color: var(--ms-text-secondary);
+  height: var(--ms-header-h);
+  padding: 0 11px;
+  cursor: pointer;
+  font-size: var(--ms-fs-13);
+  font-weight: 500;
+}
+
+.ms-pane-head .nav-btn:hover {
+  color: var(--ms-text-primary);
+}
+
+.ms-pane-head .nav-btn[aria-current="page"] {
+  color: var(--ms-text-primary);
+  box-shadow: inset 0 -2px 0 0 var(--ms-accent);
+}
+
+/* A pane narrow enough that five destinations no longer fit: the prototype wraps the row
+   and drops the buttons to the compact height rather than hiding destinations. */
+@container (max-width: 479px) {
+  .ms-pane-head .app-nav {
+    flex-wrap: wrap;
+    row-gap: 0;
+  }
+
+  .ms-pane-head .nav-btn {
+    height: 28px;
+    padding: 0 var(--ms-space-2);
+    font-size: var(--ms-fs-12);
+  }
+}
+
 .ms-pane-body {
   padding-block-end: var(--ms-space-2);
+}
+
+/*
+ * A panel inside the pane is not a card. The prototype's pane stacks borderless sections
+ * separated by one hairline each, with the head and body flush to the pane's own padding —
+ * a 1px card border inside a 280px column would double every edge.
+ */
+.ms-container.ms-pane-body .panel {
+  background: transparent;
+  border: 0;
+  border-radius: 0;
+  border-block-end: var(--ms-hairline);
+}
+
+.ms-container.ms-pane-body .panel:last-child {
+  border-block-end: 0;
+}
+
+.ms-container.ms-pane-body .panel-head {
+  padding-inline: 0;
+  background: transparent;
+}
+
+.ms-container.ms-pane-body .panel-body,
+.ms-container.ms-pane-body .panel-foot {
+  padding-inline: 0;
+}
+
+/*
+ * Two of the five `Tone` values had no rule in the product sheet: `.tone-success` and
+ * `.tone-purple` were absent, so every dot carrying either rendered in the default neutral
+ * grey. The prototype spells those two states `tone-done` and `tone-terminal`; the mapping
+ * here keeps `Tone`'s own names and gives them the same two colours.
+ */
+.ms-container .tone-success .dot {
+  background: var(--ms-success);
+}
+
+.ms-container .tone-purple .dot {
+  background: var(--ms-purple);
+}
+
+/* The prototype's `tone-active`: an accent dot, not a success one. */
+.ms-container .tone-accent .dot {
+  background: var(--ms-accent);
 }
 
 /**
@@ -305,4 +407,400 @@
     transition-duration: 0.01ms !important;
     scroll-behavior: auto !important;
   }
+}
+
+/* --- shells the prototype expresses with different markup ------------------ */
+
+/* The prototype writes an empty state as a sentence (`.sec-note`); the product keeps
+   a structured block so a screen can say why it is empty. These rules give that block
+   the prototype's voice: the same small muted type, no invented chrome. */
+.absence {
+  display: flex;
+  flex-direction: column;
+  gap: var(--ms-space-1);
+  padding: var(--ms-space-2) 0;
+  font-size: var(--ms-fs-11);
+  color: var(--ms-text-muted);
+}
+.absence p { margin: 0; }
+.absence-word { font-family: var(--ms-font-mono); }
+.absence-heading { color: var(--ms-text-secondary); }
+
+/* A generic row, for the surfaces the prototype draws ad hoc (`.res-row`,
+   `.milestone-row`): same measure and hairline as a table row. */
+/* A `<tr class="row">` would inherit this and turn the table into a flex box, which
+   collapses every cell to `display: block`. The generic row is for non-table lists. */
+.row:not(tr) {
+  display: flex;
+  align-items: center;
+  gap: var(--ms-space-2);
+  inline-size: 100%;
+  min-block-size: var(--ms-row-h-sm);
+  border-block-end: var(--ms-hairline);
+  font-size: var(--ms-fs-12);
+  line-height: var(--ms-lh-12);
+}
+.row:not(tr):last-child { border-block-end: 0; }
+.row-tall:not(tr) { align-items: flex-start; padding-block: 6px; min-block-size: var(--ms-row-h); }
+.row-leading { flex: none; display: inline-flex; align-items: center; }
+.row-primary { min-inline-size: 0; }
+.row-meta-inline { color: var(--ms-text-muted); }
+.row-trailing { margin-inline-start: auto; font-family: var(--ms-font-mono); color: var(--ms-text-secondary); }
+
+/* The prototype has no pager (its lists fit a column); the product paginates, so it
+   borrows the `.panel-foot` treatment. */
+.pager {
+  display: flex;
+  align-items: center;
+  gap: var(--ms-space-2);
+  font-size: var(--ms-fs-11);
+  color: var(--ms-text-muted);
+}
+
+/* The pager sits INSIDE `.panel-foot`, which already carries the prototype's single
+   `6px 12px` and its hairline (`design-v1.html:1345-1349` — one footer row, the controls
+   pushed right by `margin-left: auto`). Both rules carried their own padding and border,
+   so a paged list drew a double gutter and two hairlines. */
+.panel-foot > .pager {
+  padding: 0;
+  border-block-start: 0;
+}
+
+.panel-foot > .pager > :last-child {
+  margin-inline-start: auto;
+}
+
+/* Not in the prototype: a screen-reader-only label needs no visual form there. */
+.visually-hidden {
+  position: absolute;
+  inline-size: 1px;
+  block-size: 1px;
+  margin: -1px;
+  padding: 0;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  white-space: nowrap;
+  border: 0;
+}
+
+/* The rest of the empty-state block: no separate chrome, just the muted voice. */
+.absence-head { display: flex; align-items: baseline; gap: var(--ms-space-1); }
+.absence-body,
+.absence-detail,
+.absence-reason,
+.absence-hint,
+.absence-pointer { margin: 0; }
+
+/* The prototype draws its chart in a pixel viewBox; the product's chart is a 100×40
+   viewBox stretched to the card (`preserveAspectRatio="none"`), which scales a 2px
+   stroke into a slab. `non-scaling-stroke` keeps the prototype's line weight at every
+   card width. Not a style departure: the same 2px/1.5px stroke the prototype declares. */
+.chart-svg .line-captured,
+.chart-svg .line-retired,
+.chart-svg .grid {
+  vector-effect: non-scaling-stroke;
+}
+
+/* The prototype puts its date labels inside the SVG as text; the product renders them
+   as spans, so they need the row the SVG gave them for free. */
+.chart-note {
+  display: flex;
+  align-items: baseline;
+  gap: var(--ms-space-3);
+  flex-wrap: wrap;
+}
+
+/* The wide-only column contract. The prototype's sidebar shows seven columns at 720px
+   and the eighth (a milestone on the issue list) is what pushed the table past its
+   card, so below the wide band the column is hidden outright — no second line restates
+   it, because the record's own screen carries the fact. */
+@container (max-width: 899px) {
+  .ms-container .table th[data-ms-col="wide"],
+  .ms-container .table td[data-ms-col="wide"] {
+    display: none;
+  }
+}
+
+/* The narrow row's second line, in the prototype's own three parts: `product.css` hides
+   `.row-meta` by default, and at this breakpoint the prototype turns it back ON and clips it
+   to one line (`design-v1.html`: `display: block` beside
+   `white-space: nowrap; overflow: hidden; text-overflow: ellipsis`).
+   This rule previously said the opposite — it hid the line below 619px — which removed the
+   facts the `secondary` columns yield at exactly the width they need restating. */
+@container (max-width: 619px) {
+  .ms-container .table .row-meta {
+    display: block;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+}
+
+/* The residual tally lives in the overview's right column, which is ~460px at every
+   supported width (the grid is `minmax(0,1.85fr) minmax(0,1fr)` of a 1440 cap). The
+   prototype's one-column layout comes from a container query measured against that
+   column; ours measures against `.ms-container`, so the query never fires and the tally
+   stayed two-up. One column is what the column can actually hold. */
+.ms-container .res-grid.res-grid {
+  grid-template-columns: minmax(0, 1fr);
+}
+
+/* The project detail's feature body. It used to wear `.chip` — an 18px inline badge —
+   which flattened a whole section and only worked by accident, because the badge's
+   inline-flex also kept the goal rows from overlapping. A block container does the same
+   job without pretending a section is a label. */
+.ms-container .feature-body {
+  display: block;
+  min-width: 0;
+}
+
+/* Panel meta facts read as one line of counts: a small gap around the separator, so
+   `3 milestones · 3 unassigned issues` does not run together. */
+.ms-container .panel-meta > .sep {
+  margin: 0 5px;
+}
+
+/*
+ * `.milestone-row` used to be styled here as a one-line flex row for a roadmap goal row
+ * that no longer exists — no component names the class except the overview's board, whose
+ * rule lives in the product sheet and wants two stacked lines. This block made the board's
+ * `.milestone-foot` a flex sibling of `.milestone-top`, squeezing the progress bar to 0px
+ * wide at 360px. The name's own shrink rule moved to `.milestone-top > .milestone-name`.
+ */
+.ms-container .milestone-top > .milestone-name {
+  min-width: 0;
+  flex: 1 1 auto;
+}
+
+/* The board block's name. `.milestone-block-head` is a wrapping flex line, so a name
+   wider than the row has to be allowed to shrink — its inner `.trunc` is a span and the
+   span's ellipsis only works once the flex item it sits in can go below its content
+   width. At 375px the name measured 618px before this. */
+.ms-container .milestone-block-name {
+  min-width: 0;
+  max-width: 100%;
+  /* The name ellipses on the flex item itself, so no inline-block sits in the line and
+     the baseline stays the text baseline. */
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* `.trunc` is `TruncatedText`'s own span, and the prototype's rule assumes a block-ish
+   box: `overflow: hidden` + `text-overflow: ellipsis` do nothing to an inline element,
+   and neither does a parent's `min-width: 0`. That assumption surfaced three times —
+   a field value at 213px inside a 180px cell, a goal title 1700px wide at a 720px
+   viewport, and a milestone name 585px wide at 375px — so the box is fixed here once
+   rather than at each call site. */
+.ms-container .trunc {
+  display: inline-block;
+  position: relative;
+  max-width: 100%;
+  /* No `vertical-align`: an inline-block's default baseline is its last line's text
+     baseline, which is what keeps it level when it sits beside plain text. `bottom` was
+     tried and left the milestone head at the same 2px spread as the default, while the
+     prototype's own head spreads 9px — so it bought nothing and explained nothing. */
+}
+
+/* The block variant: for a cell whose whole content truncates, `inline-block` would
+   leave the ellipsis box at the text's width. */
+.ms-container .trunc-block {
+  display: block;
+  inline-size: 100%;
+}
+
+/* The keyboard path to the full value. The prototype clips with `.trunc` and offers a
+   `title` for hover only; a keyboard reader never sees a `title`, so the same recorded
+   string is surfaced as an overlay on focus. `data-ms-full` is the component's contract. */
+.ms-container .trunc[data-ms-full]:focus-visible::after {
+  content: attr(data-ms-full);
+  position: absolute;
+  inset-inline-start: 0;
+  inset-block-start: 100%;
+  z-index: 1;
+  margin-block-start: 2px;
+  padding: var(--ms-space-1) var(--ms-space-2);
+  max-inline-size: min(48ch, 80vw);
+  border: var(--ms-hairline);
+  border-radius: var(--ms-radius-sm);
+  background: var(--ms-bg-surface);
+  color: var(--ms-text-primary);
+  font-family: var(--ms-font-sans);
+  font-size: var(--ms-fs-12);
+  line-height: var(--ms-lh-12);
+  font-weight: var(--ms-fw-regular);
+  white-space: normal;
+  overflow-wrap: anywhere;
+  box-shadow: 0 4px 12px color-mix(in srgb, var(--ms-text-primary) 12%, transparent);
+}
+
+/* The plan line's right-hand fact. The prototype's `.p-prog` is `flex: none` because its
+   content is a short fraction; ours is the plan's free-text progress note (or a blocked
+   reason), so it must be able to shrink or it squeezes the plan id out of the column.
+   It absorbs the remaining width and clips with the shared reveal. */
+.ms-container .planboard-plan .p-prog {
+  flex: 1 1 auto;
+  min-width: 0;
+  text-align: right;
+}
+
+
+/* A `.trunc` inside a heading. The class is `inline-block` (that is what makes its
+   ellipsis work at all), and an inline-block sits in the line box with its own height and
+   baseline offset: `.detail-title` is 16px/24px, yet measured 31px tall wherever the title
+   wrapped a `TruncatedText`. As a block the label keeps the heading's own line box. */
+.ms-container .detail-title > .trunc {
+  display: block;
+  line-height: inherit;
+}
+
+/* Two cell classes the prototype sets as `.table .t-title` / `.table .t-strong`, which the
+   generated sheet did not carry (it emits `.ms-container .<class>` forms). Without them a
+   cell can only approximate the column: `mono t-12` gives the font but not the weight, and
+   a bare `TruncatedText` has no ellipsis box at all. */
+.ms-container .table .t-title {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.ms-container .table .t-strong {
+  font-weight: 500;
+}
+
+/* A type-scale class ON a table cell. `.table td` sets `font-size: 13px` at
+   (0,2,1) specificity, so `.t-11` at (0,2,0) loses and the cell renders 13px. The
+   prototype never hits this because its cell rules are not scoped the same way; ours are,
+   so the scale classes that a cell can carry need the extra class to win. */
+.ms-container .table .t-11 {
+  font-size: var(--ms-fs-11);
+  line-height: var(--ms-lh-11);
+}
+
+.ms-container .table .t-12 {
+  font-size: var(--ms-fs-12);
+  line-height: var(--ms-lh-12);
+}
+
+/* The flexible column's floor. Under `table-layout: fixed` the fixed columns hold their
+   pixel widths and the one column without a width takes what is left — at 720px that came
+   to 32px, which is narrower than the word in it. The prototype does not reach this state
+   because its columns shrink proportionally (an unresolved difference, recorded in
+   DESIGN.md); this floor is a defect fix, not parity work. */
+.ms-container .table > colgroup > col:not([style]) {
+  min-width: 120px;
+}
+
+/* The prototype labels the issue-flow axis with the plot's top value and its baseline.
+   The drawing is an SVG with `preserveAspectRatio="none"`, so a `<text>` inside it would
+   be stretched with the paths; the labels are HTML beside it instead. */
+.ms-container .chart-frame {
+  display: flex;
+  align-items: stretch;
+  gap: 6px;
+}
+
+.ms-container .chart-y-axis {
+  display: flex;
+  flex-direction: column;
+  /* Three labels across two equal halves: the top, the midpoint, the baseline — the
+     prototype's own shape (its values differ only because its data does). */
+  justify-content: space-between;
+  align-items: flex-end;
+  padding: 0 2px 0 0;
+  min-width: 22px;
+  font-family: var(--ms-font-mono);
+  /* The prototype writes this one as a literal: its type ramp has no 10px step. */
+  font-size: 10px;
+  color: var(--ms-text-muted);
+  line-height: 1;
+}
+
+.ms-container .chart-frame > .chart-svg {
+  flex: 1;
+  min-width: 0;
+}
+
+
+
+/* The occurrence head's last pair: the label pushes to the right and the time follows it,
+   as the prototype's inline `margin-left: auto` did. */
+.ms-container .ml-auto {
+  margin-left: auto;
+}
+
+/*
+ * The select control's own box. Only the behaviour (`cursor`, `max-width`) and the filter
+ * field's overrides existed, so every `select.ctl` rendered with the browser's default
+ * border, background and font — the prototype's 26px, 4px-radius, hairline-bordered box
+ * was never drawn.
+ */
+.ms-container select.ctl {
+  height: 26px;
+  padding: 0 6px;
+  border-radius: var(--ms-radius-sm);
+  border: 1px solid var(--ms-border-hairline);
+  background: var(--ms-bg-surface);
+  color: var(--ms-text-primary);
+  font-family: var(--ms-font-sans);
+  font-size: var(--ms-fs-12);
+}
+
+/*
+ * The theme and language switches. The components already name both classes
+ * (`.seg` on the language switch, `.icon-btn` on the theme toggle) and neither had a rule —
+ * `check:classes` did not notice because `.header-right .seg` made the substring "seg"
+ * present. Copied from the prototype, which defines them as a segmented control and a
+ * 26px square button.
+ */
+.ms-container .seg {
+  display: inline-flex;
+  border: 1px solid var(--ms-border-hairline);
+  border-radius: var(--ms-radius-sm);
+  overflow: hidden;
+}
+
+.ms-container .seg button {
+  appearance: none;
+  border: 0;
+  background: var(--ms-bg-surface);
+  color: var(--ms-text-secondary);
+  height: 24px;
+  padding: 0 8px;
+  cursor: pointer;
+  font-size: var(--ms-fs-11);
+  font-weight: 500;
+}
+
+.ms-container .seg button + button {
+  border-left: 1px solid var(--ms-border-hairline);
+}
+
+.ms-container .seg button[aria-pressed="true"] {
+  background: var(--ms-bg-inset);
+  color: var(--ms-text-primary);
+}
+
+.ms-container .icon-btn {
+  appearance: none;
+  width: 26px;
+  height: 26px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  border: 1px solid var(--ms-border-hairline);
+  border-radius: var(--ms-radius-sm);
+  background: var(--ms-bg-surface);
+  color: var(--ms-text-secondary);
+  cursor: pointer;
+}
+
+.ms-container .icon-btn svg {
+  display: block;
+}
+
+.ms-container .icon-btn:hover {
+  color: var(--ms-text-primary);
+  background: var(--ms-bg-hover);
 }

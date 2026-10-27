@@ -3,10 +3,14 @@
  *
  * IA §8.2: the list carries id, compass status, gate step, plan `done/total` and
  * the dates; the detail carries the compass summary, the five gate steps with the
- * current one marked, the dates, the linked workflow and the plan table. The
- * document inventory, the compass milestone-id list and every counter are **not**
- * returned (IA §8.1): documents say nothing about progress, and the roadmap
- * feature already owns milestones.
+ * current one marked, the dates, the linked workflow, the plan table **and the
+ * document inventory**.
+ *
+ * The inventory is returned because the prototype's detail screen has a Documents
+ * card, and the prototype is this interface's acceptance criterion. IA §8.1 had
+ * excluded it ("documents say nothing about progress"); that reasoning stands, but it
+ * describes a different goal — a progress view — not this one. The compass
+ * milestone-id list and the counters stay out: the Screen has no place for them.
  *
  * `attribution` (contract §4) is what tells a project feature whether its silence
  * is a fact (`absent`) or a gap (`present` + no rows) — the list model carries
@@ -48,13 +52,24 @@ export type IterationRow = {
   lifecycle: string | null;
   compassStatus: string | null;
   compassTone: Tone;
+  /** The execution the projection records for this iteration: `status · phase`, the
+   *  prototype's `Projected execution` column. `null` when no workflow is registered. */
+  execution: string | null;
   /** The proven step, or `null` when the iteration records no compass. */
   gateStep: IterationGateStep | null;
   /** `step N of 5`, or `null` — never `0 of 5`. */
   gatePosition: { step: number; of: 5 } | null;
   plansDone: number;
   plansTotal: number;
-  startedAt: string;
+  /** How many documents the catalog links to this iteration. The prototype's list has
+   *  this column beside `Plans`; the count comes from the same `documents` array the
+   *  detail screen's inventory renders. */
+  documents: number;
+  /**
+   * `null` when the iteration has no compass: a record that never started states no start
+   * time, and `UNKNOWN_DATE` here would print "Date unknown" beside "no compass".
+   */
+  startedAt: string | null;
   endedAt: string | null;
 };
 
@@ -68,11 +83,19 @@ export function iterationRow(iteration: IterationDTO): IterationRow {
     lifecycle: iteration.catalog?.lifecycle ?? null,
     compassStatus: iteration.compass?.status ?? null,
     compassTone: compassStatusTone(iteration.compass?.status ?? null),
+    execution:
+      iteration.workflow === null
+        ? null
+        : iteration.workflow.phase === null
+          ? iteration.workflow.status
+          : `${iteration.workflow.status} · ${iteration.workflow.phase}`,
     gateStep: step,
     gatePosition: gateStepPosition(step),
     plansDone: tally.done,
     plansTotal: tally.total,
-    startedAt: formatDate(iteration.compass?.startedAt ?? null),
+    documents: iteration.documents.length,
+    startedAt:
+      iteration.compass?.startedAt == null ? null : formatDate(iteration.compass.startedAt),
     endedAt: iteration.compass?.endedAt ?? null,
   };
 }
@@ -84,16 +107,32 @@ export function iterationRow(iteration: IterationDTO): IterationRow {
  * only loses its execution overlay — so this resolves the rows and reports the
  * attribution separately instead of promoting the whole list to `unavailable`.
  */
+/** The filters the iteration list offers, mirroring the prototype's row. */
+export type IterationFilters = { lifecycle: string; q: string };
+
+export const DEFAULT_ITERATION_FILTERS: IterationFilters = { lifecycle: "", q: "" };
+
 export type IterationListModel = {
   rows: Resolved<readonly IterationRow[]>;
   total: number;
   /** Whether this store attributes any iteration to a project (contract §4). */
   attribution: IterationListDTO["attribution"];
+  /** The lifecycle values the current rows carry, for the select. */
+  lifecycles: readonly string[];
+  /** How many rows the filters leave. */
+  filtered: number;
+  /**
+   * Active registrations in the store's rows, before the filters narrow them: the head's
+   * count states the store, not the current filter result. "Active" is the catalog's own
+   * lifecycle, not the execution state.
+   */
+  active: number;
 };
 
 export function iterationListModel(read: {
   data: IterationListDTO;
   projection: { generation: number | null };
+  filters?: IterationFilters;
 }): IterationListModel {
   const attribution: IterationListDTO["attribution"] = read.data.attribution;
   // Zero rows mean different things depending on attribution (contract §4): a
@@ -108,9 +147,24 @@ export function iterationListModel(read: {
     // Iteration rows and their compass come from the execution projection.
     requiresProjection: true,
   });
+  const mapped = resolved.kind === "populated" ? resolved.value.items.map(iterationRow) : [];
+  const filters = read.filters ?? DEFAULT_ITERATION_FILTERS;
+  const q = filters.q.trim().toLowerCase();
+  const kept = mapped.filter(
+    (row) =>
+      (filters.lifecycle === "" || row.lifecycle === filters.lifecycle) &&
+      (q === "" || row.iterationId.toLowerCase().includes(q) || (row.title ?? "").toLowerCase().includes(q)),
+  );
   const rows: Resolved<readonly IterationRow[]> =
-    resolved.kind === "populated" ? { kind: "populated", value: resolved.value.items.map(iterationRow) } : resolved;
-  return { rows, total: read.data.total, attribution };
+    resolved.kind === "populated" ? { kind: "populated", value: kept } : resolved;
+  return {
+    rows,
+    total: read.data.total,
+    attribution,
+    lifecycles: [...new Set(mapped.map((row) => row.lifecycle).filter((v): v is string => v !== null))].sort(),
+    filtered: kept.length,
+    active: mapped.filter((row) => row.lifecycle === "active").length,
+  };
 }
 
 /** One plan row of an iteration detail's plan table. */
@@ -138,14 +192,34 @@ export function iterationPlanRow(plan: IterationPlanDTO): IterationPlanRow {
 }
 
 /** The detail model. */
+/** One row of the prototype's Documents card. */
+export type IterationDocumentRow = {
+  title: string;
+  lifecycle: string;
+  documentKind: string;
+  location: string;
+  revision: string;
+};
+
 export type IterationDetailModel = {
   iterationId: string;
+  /** The catalog's document inventory, for the prototype's Documents card. */
+  documents: readonly IterationDocumentRow[];
+  /** The catalog row's own identity: kind, revision, its two dates and location. */
+  catalogKind: string | null;
+  revision: number | null;
+  registeredAt: string | null;
+  catalogUpdatedAt: string | null;
+  location: string | null;
+  description: string | null;
   title: string | null;
   lifecycle: string | null;
   compassStatus: string | null;
   compassTone: Tone;
   /** The compass's one-line summary, or `null` when it records none. */
   summary: string | null;
+  /** The compass's own milestones — the prototype's `mini-table` in the Compass panel. */
+  compassMilestones: ReadonlyArray<{ milestone: string; target: string; status: string }>;
   steps: Array<{ step: number; id: GateStepId; position: GateStepPosition }>;
   gateStep: IterationGateStep | null;
   /** `step N of 5`, or `null` — never `0 of 5` (contract §3). */
@@ -154,6 +228,16 @@ export type IterationDetailModel = {
   endedAt: string | null;
   /** The linked workflow's id, or `null` when the iteration has no execution row. */
   workflowId: string | null;
+  /** The registered workflow's own state, for the prototype's four execution rows. */
+  workflowStatus: string | null;
+  workflowPhase: string | null;
+  /**
+   * Whether the store still counts this as a registration — the Catalog head's chip.
+   *
+   * This field existed once and was deleted as unread; it is read now, because the
+   * prototype's Catalog head states it.
+   */
+  activeRegistration: boolean;
   plans: readonly IterationPlanRow[];
 };
 
@@ -179,16 +263,39 @@ export function iterationDetailModel(read: {
       iterationId: iteration.iterationId,
       title: iteration.catalog?.title ?? null,
       lifecycle: iteration.catalog?.lifecycle ?? null,
+      catalogKind: iteration.catalog?.kind ?? null,
+      revision: iteration.catalog?.revision ?? null,
+      registeredAt: iteration.catalog ? formatDate(iteration.catalog.registeredAt) : null,
+      catalogUpdatedAt: iteration.catalog ? formatDate(iteration.catalog.updatedAt) : null,
+      location: iteration.catalog
+        ? `${iteration.catalog.rootKind}:${iteration.catalog.relativePath}`
+        : null,
+      description: iteration.catalog?.description ?? null,
       compassStatus: iteration.compass?.status ?? null,
       compassTone: compassStatusTone(iteration.compass?.status ?? null),
       summary: iteration.compass?.summary ?? null,
+      compassMilestones: (iteration.compass?.milestones ?? []).map((milestone) => ({
+        milestone: milestone.milestone,
+        target: milestone.target ?? "—",
+        status: milestone.status ?? "—",
+      })),
       steps: gateSteps(step),
       gateStep: step,
       gatePosition: gateStepPosition(step),
       startedAt: formatDate(iteration.compass?.startedAt ?? null),
       endedAt: iteration.compass?.endedAt ?? null,
       workflowId: iteration.workflow?.id ?? null,
+      workflowStatus: iteration.workflow?.status ?? null,
+      workflowPhase: iteration.workflow?.phase ?? null,
+      activeRegistration: iteration.workflow?.activeRegistration ?? false,
       plans: iteration.plans.map(iterationPlanRow),
+      documents: iteration.documents.map((doc) => ({
+        title: doc.title ?? doc.relativePath,
+        lifecycle: doc.lifecycle ?? "—",
+        documentKind: doc.documentKind ?? "—",
+        location: `${doc.rootKind}:${doc.relativePath}`,
+        revision: String(doc.revision),
+      })),
     },
   };
 }

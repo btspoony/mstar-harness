@@ -270,6 +270,8 @@ export type IssueSummary = {
 export type IssuePage = {
   items: IssueSummary[];
   total: number;
+  /** How many projects the whole result set spans — the page's own span is not it. */
+  projectCount: number;
   storeRevision: number;
 };
 
@@ -305,6 +307,8 @@ export type IssueRelation = {
   fromIssue: string;
   relation: string;
   toIssue: string;
+  /** The other end's title — the prototype's `Title` column. `null` when it has none. */
+  title: string | null;
 };
 
 export type IssueProvenance = {
@@ -1135,6 +1139,9 @@ export async function listIssues(context: StoreContext, filter: IssueFilter): Pr
     const hasMilestones = handle.schemaVersion >= 7;
     const storeRevision = readMeta(db).revision;
     const totalRow = db.prepare(`select count(*) as n from issues ${where}`).get(...params) as { n: number };
+    const spanRow = db
+      .prepare(`select count(distinct project_id) as n from issues ${where}`)
+      .get(...params) as { n: number };
     const order = `order by case issues.severity
         when 'critical' then 5 when 'high' then 4 when 'medium' then 3 when 'low' then 2 when 'nit' then 1 else 0 end desc,
       case when (${LAST_ACTIVITY_SQL}) is null then 1 else 0 end asc,
@@ -1173,6 +1180,7 @@ export async function listIssues(context: StoreContext, filter: IssueFilter): Pr
         milestoneId: row.milestoneId ?? null,
       })),
       total: totalRow.n,
+      projectCount: spanRow.n,
       storeRevision,
     };
   } finally {
@@ -1286,11 +1294,17 @@ export async function getIssue(context: StoreContext, id: string): Promise<Issue
       issueRevision: row.issue_revision,
     }));
 
+    // The other end's title — the prototype's `Title` column. Without this join the column
+    // was null on every read through this path, which the store-read copy had and this one
+    // did not.
     const relations = db
       .prepare(
-        "select from_issue as fromIssue, relation, to_issue as toIssue from relations where from_issue = ? or to_issue = ?",
+        `select r.from_issue as fromIssue, r.relation, r.to_issue as toIssue,
+                (select i.title from issues i
+                   where i.id = case when r.from_issue = ? then r.to_issue else r.from_issue end) as title
+           from relations r where r.from_issue = ? or r.to_issue = ?`,
       )
-      .all(id, id) as IssueRelation[];
+      .all(id, id, id) as IssueRelation[];
 
     const provenance = (
       db

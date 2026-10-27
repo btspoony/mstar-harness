@@ -83,12 +83,10 @@ describe('transformCssModule — the exact css-modules transform the build runs'
   })
 
   it('transform-layer assertions pass on the shipped module.css files (plan Scope item 2)', () => {
-    // The host seat's own sheet plus one shared-layer module: both kinds now
-    // enter the same bundle, so both must survive the transform's escaping.
-    for (const file of [
-      join(PKG_DIR, 'src/client/panel/panel.module.css'),
-      join(PKG_DIR, '..', 'ui', 'src', 'screens', 'Focus.module.css'),
-    ]) {
+    // The host seat's own sheet is the only module.css left: the shared layer moved its
+    // per-component modules into one global `product.css`, so `screens/Focus.module.css`
+    // and its siblings no longer exist and this read failed on a missing file.
+    for (const file of [join(PKG_DIR, 'src/client/panel/panel.module.css')]) {
       const { classMap, css } = transformCssModule(readFileSync(file, 'utf8'))
 
       expect(() => assertCssModuleTransform(classMap, css, file)).not.toThrow()
@@ -261,14 +259,22 @@ describe('buildClientBundle — the artifact is a pure function of DECLARED inpu
   it('defaults to the declared production mode and takes the mode as an explicit input', async () => {
     const { CLIENT_BUNDLE_MODE, clientBundleDefine } = await import('../scripts/build-client-bundle.ts')
     expect(CLIENT_BUNDLE_MODE).toBe('production')
-    expect(clientBundleDefine('production')).toEqual({
+    // `identity` is a required input, not read from the manifest here: the overview states
+    // which package built it, and keeping the read in the caller is what makes this a pure
+    // function of its declared inputs.
+    const identity = { packageName: 'pkg-fixture', version: '1.2.3' }
+    expect(clientBundleDefine('production', identity)).toEqual({
       'process.env.NODE_ENV': '"production"',
       'import.meta.env': '{"MODE":"production","DEV":false,"PROD":true}',
+      __MSTAR_PACKAGE__: '"pkg-fixture"',
+      __MSTAR_VERSION__: '"1.2.3"',
     })
     // A different mode is an explicit request, not an inherited environment.
-    expect(clientBundleDefine('development')).toEqual({
+    expect(clientBundleDefine('development', identity)).toEqual({
       'process.env.NODE_ENV': '"development"',
       'import.meta.env': '{"MODE":"development","DEV":true,"PROD":false}',
+      __MSTAR_PACKAGE__: '"pkg-fixture"',
+      __MSTAR_VERSION__: '"1.2.3"',
     })
   })
 })

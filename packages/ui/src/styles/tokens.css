@@ -64,17 +64,17 @@
   --ms-bg-hover: #f5f6f7;
   --ms-bg-selected: #edf3fe;
   --ms-border-hairline: #e3e5e9;
-  --ms-border-strong: #8b8f96;
+  --ms-border-strong: #ccd0d7;
   --ms-text-primary: #191c20;
   --ms-text-secondary: #565d67;
   --ms-text-muted: #6d727b;
-  --ms-accent: #2d6be5;
+  --ms-accent: #2f6fed;
   --ms-accent-soft: #eaf0fd;
-  --ms-success: #197f4f;
+  --ms-success: #17784a;
   --ms-warning: #96590a;
-  --ms-danger: #b7271f;
-  --ms-neutral: #747b8a;
-  --ms-purple: #693da2;
+  --ms-danger: #b3261e;
+  --ms-neutral: #6b7280;
+  --ms-purple: #6c3fa6;
 }
 
 /* Layout constants — documentation, not custom properties.
@@ -111,15 +111,15 @@
   --ms-bg-hover: #1c2127;
   --ms-bg-selected: #182338;
   --ms-border-hairline: #242930;
-  --ms-border-strong: #5a6573;
+  --ms-border-strong: #363d46;
   --ms-text-primary: #e7eaee;
   --ms-text-secondary: #a4acb7;
   --ms-text-muted: #7c8491;
   --ms-accent: #7aa2ff;
   --ms-accent-soft: #1a2740;
-  --ms-success: #4ec289;
-  --ms-warning: #e8ae61;
-  --ms-danger: #e47a72;
-  --ms-neutral: #878f9a;
+  --ms-success: #4cbd85;
+  --ms-warning: #dda65c;
+  --ms-danger: #f08078;
+  --ms-neutral: #8b939f;
   --ms-purple: #bb91e8;
 }

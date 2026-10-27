@@ -24,6 +24,11 @@ import { createElement } from 'react'
 import { renderToStaticMarkup } from 'react-dom/server'
 import type { LocaleRuntime } from '@deepseek-ai/dsh-client-locale/client'
 import { en as uiEn, zh as uiZh } from '@mstar-harness/ui'
+
+// `destinations.tsx` reads these two build-time defines for the Overview's footer identity.
+// `bun test` does not run the bundler that replaces them, so a suite that renders the
+// overview throws `ReferenceError` without this line.
+Object.assign(globalThis, { __MSTAR_PACKAGE__: 'mstar-harness-dsh', __MSTAR_VERSION__: '0.0.0-test' })
 import { clientExports } from './client-bundles.ts'
 import { bindUseSessions, gatewayOk, SESSION, settleRender, stubGateway, visibleTabKit } from './gateway-stub.ts'
 import { en, NS, zh } from '../src/client/panel/locale.ts'

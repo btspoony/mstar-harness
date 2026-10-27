@@ -21,6 +21,9 @@ import { LiveRegion } from "../components/LiveRegion.tsx";
 import { Notice } from "../components/Notice.tsx";
 import { Panel, PanelBody, PanelFoot, PanelHead } from "../components/Panel.tsx";
 import { Pager } from "../components/Pager.tsx";
+import { IssueFlowTable, type IssueFlowTableCopy } from "../components/IssueFlowTable.tsx";
+import { IssueFlowChart } from "../components/IssueFlowChart.tsx";
+import { Collapsible } from "../components/Collapsible.tsx";
 import { StatusDot } from "../components/StatusDot.tsx";
 import { TruncatedText } from "../components/TruncatedText.tsx";
 import {
@@ -33,7 +36,7 @@ import {
   type IssueRow,
 } from "../view-model/issues.ts";
 import type { Tone } from "../view-model/status.ts";
-import css from "./Issues.module.css";
+import type { IssueFlowSeries } from "../view-model/overview.ts";
 
 /** The filter panel's accessible name; the head carries the id. */
 const FILTERS_HEAD_ID = "ms-issues-filters";
@@ -95,6 +98,31 @@ export type IssuesProps = {
   onQueryChange: (query: IssueQuery) => void;
   /** Open one issue; the caller owns routing. */
   onOpen?: (id: string) => void;
+  /**
+   * The issue-flow series the prototype draws above the table. Optional because the
+   * series is a separate read: a host without it renders the table alone, and the panel
+   * simply is not there — never an empty frame.
+   */
+  trend?: IssueFlowSeries;
+  /** The trend panel's strings; required only when `trend` is present. */
+  trendCopy?: IssuesTrendCopy;
+};
+
+/** The strings the issues screen's trend panel needs. */
+export type IssuesTrendCopy = {
+  heading: string;
+  /** `first - last` of the series, for the panel head. */
+  range: (first: string, last: string) => string;
+  /** The accessible name of the figure. */
+  chartTitle: (first: string, last: string) => string;
+  captured: string;
+  retired: string;
+  /** `N dated, M recorded` — the two totals the legend states. */
+  legend: (dated: number, recorded: number) => string;
+  /** The disclosure summary for the same numbers as a table. */
+  tableSummary: string;
+  /** The table's own column labels (the prototype's `mini-table`). */
+  table: IssueFlowTableCopy;
 };
 
 /** The filter fields, in the order the bar shows them. */
@@ -105,9 +133,10 @@ function filterFields(copy: IssuesCopy, options: IssuesProps["options"], filters
     value: filters[key],
     options: [{ value: "", label: copy.anyOption }, ...values.map((value) => ({ value, label: value }))],
   });
+  // The prototype's order on the row: Project | Disposition | Kind | Severity.
   return [
-    build("disposition", options.disposition),
     build("project", options.project),
+    build("disposition", options.disposition),
     build("kind", options.kind),
     build("severity", options.severity),
   ];
@@ -126,39 +155,36 @@ export function Issues(props: IssuesProps) {
   // follows the project it belongs to; it is wide-only, so the 720px pane renders the
   // prototype's seven columns in the prototype's order.
   const columns: DataTableColumn<IssueRow>[] = [
-    { key: "id", header: copy.columns.id, width: 80, render: (row) => <span className={css.mono}>{row.id}</span> },
-    { key: "title", header: copy.columns.title, render: (row) => <TruncatedText text={row.title} /> },
-    { key: "project", header: copy.columns.project, width: 112, secondary: true, render: (row) => <span className={css.mono}>{row.projectId}</span> },
-    { key: "kind", header: copy.columns.kind, width: 92, secondary: true, render: (row) => <span className={css.mono}>{row.kind}</span> },
+        // The prototype sets the id cell with `.t-id` (mono, 12px, secondary tone, tight
+    // tracking). `mono t-12` renders the same size in the primary tone — close enough to
+    // look right and wrong by one colour role.
+    { key: "id", header: copy.columns.id, width: "86px", cellClass: "t-id", render: (row) => <span>{row.id}</span> },
+    { key: "title", header: copy.columns.title, cellClass: "t-title t-strong", render: (row) => <TruncatedText text={row.title} /> },
+    { key: "project", header: copy.columns.project, width: "128px", secondary: true, cellClass: "muted", render: (row) => <span>{row.projectId}</span> },
+    { key: "kind", header: copy.columns.kind, width: "112px", secondary: true, cellClass: "secondary", render: (row) => <span>{row.kind}</span> },
     {
       key: "severity",
       header: copy.columns.severity,
-      width: 84,
+      width: "100px",
       secondary: true,
       render: (row) => <StatusDot label={row.severity} tone={row.severityTone} emphasis={row.severityEmphasised} mono />,
     },
     {
       key: "disposition",
       header: copy.columns.disposition,
-      width: 76,
+      width: "104px",
       secondary: true,
       render: (row) => <StatusDot label={row.disposition} tone={row.dispositionTone} mono />,
     },
-    {
-      key: "milestone",
-      header: copy.columns.milestone,
-      width: 80,
-      secondary: true,
-      wide: true,
-      render: (row) => (row.milestoneId === null ? null : <span className={css.mono}>{row.milestoneId}</span>),
-    },
+
     {
       key: "lastActivity",
       header: copy.columns.lastActivity,
-      width: 88,
+      width: "116px",
       secondary: true,
       align: "end",
-      render: (row) => <span className={css.mono}>{row.lastActivity}</span>,
+      cellClass: "muted mono t-11",
+      render: (row) => <span>{row.lastActivity}</span>,
     },
   ];
 
@@ -173,23 +199,50 @@ export function Issues(props: IssuesProps) {
   const family = listEmptyFamily(filtered);
 
   return (
-    <article className={css.page} data-ms-screen="issues">
-      <div className={css.head}>
-        <h1 className={css.title}>{copy.pageTitle}</h1>
+    <article className={"screen"} data-ms-screen="issues">
+      <div className={"screen-head"}>
+        <h1>{copy.pageTitle}</h1>
         {/* The prototype's screen meta: the count, its scope, and the ordering
             the read applies (`design-v1.html:1094-1101`). The count lives here
             AND in the filter row, so neither is the only place it appears. */}
-        <div className={css.meta} data-ms-summary="">
-          <span className={css.count} data-ms-count={model.total}>
+        <div className={"screen-meta"} data-ms-summary="">
+          <span className={"t-num"} data-ms-count={model.total}>
             {model.total}
           </span>
           <span data-ms-scope="">{copy.scope(filters.disposition, model.projectCount)}</span>
           <span aria-hidden="true">·</span>
-          <span className={css.order} data-ms-order="">
+          <span data-ms-order="">
             {copy.order}
           </span>
         </div>
       </div>
+
+      {/* The prototype puts the flow trend above the table. It renders only when the
+          host supplies the series: a panel with an empty figure would be a frame. */}
+      {props.trend === undefined || props.trendCopy === undefined ? null : (
+        <Panel labelledBy="ms-issues-trend">
+          <PanelHead
+            id="ms-issues-trend"
+            title={props.trendCopy.heading}
+            meta={props.trendCopy.range(props.trend.firstDate, props.trend.lastDate)}
+          />
+          {/* No PanelBody: the prototype's trend panel is `.panel-head` + `.chart-wrap`
+              (the disclosure with the table follows both). */}
+          <>
+            <div className="chart-wrap" data-ms-flow="">
+              <IssueFlowChart
+                points={props.trend.points}
+                label={props.trendCopy.chartTitle(props.trend.firstDate, props.trend.lastDate)}
+              />
+              {/* The disclosure lives inside `.chart-wrap`, where the prototype has it:
+                  `section.panel > div.chart-wrap > details.disc`. */}
+              <Collapsible summary={props.trendCopy.tableSummary}>
+                <IssueFlowTable series={props.trend} copy={props.trendCopy.table} />
+              </Collapsible>
+            </div>
+          </>
+        </Panel>
+      )}
 
       <Panel labelledBy={FILTERS_HEAD_ID}>
         <PanelHead id={FILTERS_HEAD_ID} title={copy.filtersHeading} />
@@ -218,12 +271,6 @@ export function Issues(props: IssuesProps) {
           clearLabel={copy.filters.clear}
           resultSummary={copy.resultSummary(model.total)}
         />
-      </Panel>
-
-      {/* The table is the second card, not a floating table under the first: the
-          prototype's panel body with no padding of its own (`:215`, `.tight`), and
-          its foot carrying the paging facts. */}
-      <Panel>
         {model.rows.kind === "populated" ? (
           <>
             <PanelBody tight={true}>
@@ -277,7 +324,7 @@ export function Issues(props: IssuesProps) {
 
       {/* The family is exported so the dictionary pass can bind the two empties
           to different keys instead of flattening them into one. */}
-      <span className={css.visuallyHidden} data-ms-empty-family={family.family} />
+      <span className={"visually-hidden"} data-ms-empty-family={family.family} />
     </article>
   );
 }

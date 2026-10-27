@@ -13,18 +13,33 @@
  * `iterationListModel`; the screen only chooses the copy.
  */
 import { DataTable, type DataTableColumn } from "../components/DataTable.tsx";
-import { Panel, PanelBody } from "../components/Panel.tsx";
+import { FilterBar } from "../components/FilterBar.tsx";
+import { Panel, PanelBody, PanelFoot, PanelHead } from "../components/Panel.tsx";
 import { EmptyState, type AbsenceArm } from "../components/EmptyState.tsx";
 import { StatusDot } from "../components/StatusDot.tsx";
 import { TruncatedText } from "../components/TruncatedText.tsx";
-import type { IterationListModel, IterationRow } from "../view-model/iterations.ts";
+import { DEFAULT_ITERATION_FILTERS, type IterationFilters, type IterationListModel, type IterationRow } from "../view-model/iterations.ts";
 import type { Tone } from "../view-model/status.ts";
-import css from "./Iterations.module.css";
 
 /** Every visible string this screen needs. Task 5 supplies them. */
 export type IterationsCopy = {
   pageTitle: string;
+  /** The head's three segments: the store's count, how many are active, and what an
+   *  iteration is here. */
+  totalMeta: (n: number) => string;
+  activeMeta: (n: number) => string;
+  headNote: string;
   tableCaption: string;
+  /** The filter card's own head. */
+  /** The prototype's footer: where "active" and the execution column come from. */
+  membershipNote: string;
+  filters: {
+    lifecycle: string;
+    search: string;
+    clear: string;
+    any: string;
+    results: (shown: number, total: number) => string;
+  };
   columns: {
     id: string;
     title: string;
@@ -32,11 +47,15 @@ export type IterationsCopy = {
     execution: string;
     delivery: string;
     plans: string;
+    /** The prototype's `Documents` column. */
+    documents: string;
     started: string;
   };
   /** `step N of 5`, or the copy for an iteration that records no compass. */
   gateStep: (step: number, of: number) => string;
   noCompass: string;
+  /** Said in the execution column when no workflow is registered. */
+  noExecution: string;
   notStarted: string;
   plansProgress: (done: number, total: number) => string;
   /** The termination of a project-scoped read that has no rows to show. */
@@ -51,62 +70,71 @@ export type IterationsProps = {
   model: IterationListModel;
   copy: IterationsCopy;
   onOpen?: (iterationId: string) => void;
+  /** The current filter state; absent means unfiltered (a host without filters). */
+  filters?: IterationFilters;
+  onFiltersChange?: (filters: IterationFilters) => void;
 };
+
+/** The filter panel's accessible name; the head carries the id. */
+const FILTERS_HEAD_ID = "ms-iterations-filters";
 
 export function Iterations(props: IterationsProps) {
   const { model, copy } = props;
+  // "Active" is the catalog's own lifecycle, not the execution state: an iteration whose
+  // workflow stopped running is still an active registration. The model counts the
+  // store's rows, not the current filter result.
+  const activeCount = model.active;
+  const filters = props.filters ?? DEFAULT_ITERATION_FILTERS;
 
   const columns: DataTableColumn<IterationRow>[] = [
-    { key: "id", header: copy.columns.id, width: 96, render: (row) => <span className={css.mono}>{row.iterationId}</span> },
+    { key: "id", header: copy.columns.id, width: "310px", render: (row) => <span className={"mono t-12"}>{row.iterationId}</span> },
     {
       key: "title",
       header: copy.columns.title,
       render: (row) =>
-        row.title === null ? <span className={css.muted}>{copy.notStarted}</span> : <TruncatedText text={row.title} />,
+        row.title === null ? <span className={"muted"}>{copy.notStarted}</span> : <TruncatedText text={row.title} />,
     },
     {
       key: "lifecycle",
       header: copy.columns.lifecycle,
-      width: 92,
+      width: "110px",
       secondary: true,
-      render: (row) => <span className={css.mono}>{row.lifecycle ?? "—"}</span>,
+      render: (row) => <span className={"mono t-12"}>{row.lifecycle ?? "—"}</span>,
     },
     {
       key: "execution",
       header: copy.columns.execution,
-      width: 96,
+      width: "210px",
       secondary: true,
+      // The prototype prints the projection's own words: `running · phase-2-execute`.
+      // The compass status is a different fact and lives on the detail screen.
       render: (row) => (
-        <span className={css.statusCell}>
-          <StatusDot label={row.compassStatus ?? copy.noCompass} tone={row.compassTone} mono />
-        </span>
-      ),
-    },
-    {
-      key: "delivery",
-      header: copy.columns.delivery,
-      width: 92,
-      render: (row) => (
-        <span className={css.mono} data-ms-iteration-step={row.gateStep ?? "none"}>
-          {row.gatePosition === null ? copy.noCompass : copy.gateStep(row.gatePosition.step, row.gatePosition.of)}
-        </span>
+        <span className={"mono t-11"}>{row.execution ?? copy.noExecution}</span>
       ),
     },
     {
       key: "plans",
       header: copy.columns.plans,
-      width: 92,
+      width: "90px",
       secondary: true,
       align: "end",
-      render: (row) => <span className={css.mono}>{copy.plansProgress(row.plansDone, row.plansTotal)}</span>,
+      // The prototype's numeric columns carry `.t-num` on both cells: right-aligned,
+      // tabular figures, mono, secondary tone.
+      cellClass: "t-num",
+      headerClass: "t-num",
+      render: (row) => <span>{copy.plansProgress(row.plansDone, row.plansTotal)}</span>,
     },
     {
-      key: "started",
-      header: copy.columns.started,
-      width: 100,
+      // The prototype's list states the document count after the plan count; both are
+      // numbers, so both wear `.t-num` on the header and the cell.
+      key: "documents",
+      header: copy.columns.documents,
+      width: "110px",
       secondary: true,
       align: "end",
-      render: (row) => <span className={css.mono}>{row.startedAt}</span>,
+      cellClass: "t-num",
+      headerClass: "t-num",
+      render: (row) => <span>{row.documents}</span>,
     },
   ];
 
@@ -122,26 +150,79 @@ export function Iterations(props: IterationsProps) {
       .join(" · ");
 
   return (
-    <article className={css.page} data-ms-screen="iterations">
-      <h1 className={css.title}>{copy.pageTitle}</h1>
+    <article className={"screen"} data-ms-screen="iterations">
+      {/* The prototype heads every screen with `.screen-head`; `.screen-head h1`
+          carries the 16/24/600 title rule, and a bare h1 falls back to the
+          document heading instead. */}
+      <div className="screen-head">
+        <h1>{copy.pageTitle}</h1>
+        {/* The prototype's head: the store's count, how many are active, then what
+            "iteration" means here — catalog membership, not execution state. */}
+        <div className="screen-meta">
+          <span data-ms-count="">{copy.totalMeta(model.total)}</span>
+          <span aria-hidden="true">·</span>
+          <span data-ms-active="">{copy.activeMeta(activeCount)}</span>
+          <span aria-hidden="true">·</span>
+          <span>{copy.headNote}</span>
+        </div>
+      </div>
 
       {model.rows.kind === "populated" ? (
         <>
-          <Panel>
-            <PanelBody tight={true}>
-              <DataTable
-                caption={copy.tableCaption}
-                columns={columns}
-                rows={model.rows.value}
-                rowKey={(row) => row.iterationId}
-                meta={meta}
-                onRowActivate={props.onOpen === undefined ? undefined : (row) => props.onOpen?.(row.iterationId)}
-              />
-            </PanelBody>
+          <Panel labelledBy={FILTERS_HEAD_ID}>
+            <PanelHead id={FILTERS_HEAD_ID}>
+            <FilterBar
+              fields={[
+                {
+                  key: "lifecycle",
+                  label: copy.filters.lifecycle,
+                  value: filters.lifecycle,
+                  options: [
+                    { value: "", label: copy.filters.any },
+                    ...model.lifecycles.map((value) => ({ value, label: value })),
+                  ],
+                },
+              ]}
+              onFieldChange={(key, value) => props.onFiltersChange?.({ ...filters, [key]: value })}
+              search={{
+                value: filters.q,
+                placeholder: copy.filters.search,
+                onChange: (value) => props.onFiltersChange?.({ ...filters, q: value }),
+              }}
+              applied={[
+                ...(filters.lifecycle === ""
+                  ? []
+                  : [{ key: "lifecycle", text: `${copy.filters.lifecycle}: ${filters.lifecycle}` }]),
+                ...(filters.q.trim() === "" ? [] : [{ key: "q", text: filters.q }]),
+              ]}
+              onClearFilter={(key) => props.onFiltersChange?.({ ...filters, [key]: "" } as IterationFilters)}
+              onClearAll={() => props.onFiltersChange?.({ ...DEFAULT_ITERATION_FILTERS })}
+              clearLabel={copy.filters.clear}
+              resultSummary={copy.filters.results(model.filtered, model.total)}
+            />
+            </PanelHead>
+            {/* No PanelBody: the prototype's panel is `.panel-head`, `.table-wrap`,
+                `.panel-foot` as three siblings. */}
+            <DataTable
+              caption={copy.tableCaption}
+              columns={columns}
+              rows={model.rows.value}
+              rowKey={(row) => row.iterationId}
+              meta={meta}
+              onRowActivate={props.onOpen === undefined ? undefined : (row) => props.onOpen?.(row.iterationId)}
+            />
+            <PanelFoot>
+              {/* The prototype's footer explains where the two facts come from, so a
+                  reader knows "active" is catalog membership and the execution column
+                  is a projection over it. */}
+              <span className="muted t-11" data-ms-iteration-note="">
+                {copy.membershipNote}
+              </span>
+            </PanelFoot>
           </Panel>
           {/* The scope statement: whether this store attributes iterations to a
               project at all. It rides beside the rows, never as a counter. */}
-          <p className={css.attribution} data-ms-attribution={model.attribution}>
+          <p className={"muted t-11"} data-ms-attribution={model.attribution}>
             {copy.attribution(model.attribution)}
           </p>
         </>

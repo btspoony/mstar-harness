@@ -7,7 +7,6 @@
  */
 import type { ReactNode } from "react";
 
-import css from "./FieldGroup.module.css";
 
 export type FieldGroupProps = {
   /** Localized group title. */
@@ -19,9 +18,14 @@ export type FieldGroupProps = {
 
 export function FieldGroup(props: FieldGroupProps) {
   return (
-    <section className={css.group}>
-      <h3 className={css.title}>{props.title}</h3>
-      <dl className={css.list} data-ms-columns={props.columns ?? 2}>
+    // `.sec` is the prototype's fact block: a hairline, a title, then the fields. It is
+    // deliberately NOT `.fields` — that class is a two-column grid, and putting it on the
+    // section made the title take the first column and pushed every field into the second.
+    <section className="sec">
+      {/* `h2`, as the prototype's own fact blocks are. The heading level is invisible with
+          `.sec-title`'s styling, but it is what a screen reader announces. */}
+      <h2 className="sec-title">{props.title}</h2>
+      <dl className={props.columns === 1 ? "fields one" : "fields"}>
         {props.children}
       </dl>
     </section>

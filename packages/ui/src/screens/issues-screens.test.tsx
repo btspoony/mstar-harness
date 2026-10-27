@@ -102,8 +102,29 @@ const renderIssues = (
   );
 
 const detailCopy: IssueDetailCopy = {
+  relationsHeading: "Relations",
+  relationsColumns: { relation: "Relation", issue: "Issue", title: "Title" },
+  sourceHeading: "Source",
+  sourceKindLabel: "Source kind",
+  sourceIdentityLabel: "Source identity",
+  sourceLocationLabel: "Location",
+  sourceRootCauseLabel: "Root cause key",
+  sourceAcceptanceLabel: "Acceptance key",
+  occurrencesHeading: "Occurrences",
+  occurrenceObservedAt: "Observed at",
+  occurrenceLocation: "Location",
+  occurrenceRecorded: "Recorded",
+  historyHeading: "Disposition history",
+  historyColumns: { from: "From", to: "To", reason: "Reason", actor: "Actor", recorded: "Recorded" },
+  historyNote: "Only recorded transitions appear.",
+  provenanceHeading: "Provenance",
+  provenanceColumns: { kind: "Kind", target: "Target", sourceHash: "Source hash", origin: "Origin", importedAt: "Imported at" },
+  identityKeysHeading: "Identity keys",
+  identityKeyLabel: "Identity key",
+  providerLabel: "Provider",
   breadcrumb: { label: "Breadcrumb", current: "Issues" },
   identityHeading: "Fact",
+  revisionLabel: "Revision",
   fields: {
     id: "ID",
     project: "Project",
@@ -179,8 +200,8 @@ const detail = (over: Partial<IssueDetail> = {}): IssueDetail => ({
       imported: false,
     },
   ],
-  transitions: [],
-  relations: [],
+  transitions: [{ id: 1, fromDisposition: null, toDisposition: 'open', actor: 'pm', occurredAt: null, recordedAt: '2026-10-23T09:14:00.000Z', reason: 'Captured from review', evidence: null, imported: false, issueRevision: 1 }],
+  relations: [{ fromIssue: 'I-000870', relation: 'related', toIssue: 'I-000840', title: 'Dark theme border contrast below 3:1' }],
   provenance: [],
   projectMoves: [],
   ...over,
@@ -254,11 +275,11 @@ describe("Issues — the list facts of §8.2", () => {
 describe("Issues — the prototype's card and its summary line", () => {
   const html = renderIssues([summary(), summary({ id: "I-000871", projectId: "dsh-integration" })], 2);
 
-  test("two cards: the filters, then the table — never a floating table", () => {
-    // `design-v1.html:215-224`: a card is a head, a body and a foot, and the table
-    // is the body of one (`panel-body.tight`). Here the filters and the table are
-    // two cards, so the table never sits bare on the canvas.
-    expect(html.match(/data-ms-panel=""/g)?.length).toBe(2);
+  test("one card: the filter row and the table share it", () => {
+    // `design-v1.html:1090-1130`: the filter row and the table are ONE card — the row
+    // sits under the head, the table follows in the same panel, and the foot carries
+    // the paging facts. Two cards would draw a border the prototype does not have.
+    expect(html.match(/data-ms-panel=""/g)?.length).toBe(1);
     expect(html).toContain('data-ms-panel-head=""');
     expect(html).toContain('data-ms-panel-foot=""');
     // The filter card's head names it, and that card points at the head.
@@ -392,48 +413,47 @@ describe("IssueDetail — the whole page, and nothing more", () => {
 describe("IssueDetail — NEGATIVE: what §8.1 removed", () => {
   const html = renderDetail(detail());
 
-  test("no occurrence rows — the log is gone, only the count stays", () => {
-    // The fixture carries two occurrences with ids, sources, evidence and dates.
-    expect(html).not.toContain("data-ms-occurrence-row");
-    expect(html).not.toContain('data-ms-occurrence="');
-    expect(html).not.toContain("k1");
-    expect(html).not.toContain("qc1");
-    expect(html).not.toContain("2026-10-02T09:00:00.000Z");
-    expect(html).not.toContain("review");
+  test("the source panel and the occurrence log both render now", () => {
+    // The prototype has a `Source` panel (the latest occurrence's provenance) and an
+    // `Occurrences` panel (one block per event). Only the first is rendered so far; the
+    // event log itself stays out.
+    expect(html).toContain("data-ms-issue-source");
+    expect(html).toContain("data-ms-issue-occurrences");
   });
 
-  test("no transition history, provenance, relations or tracker carry-over", () => {
-    for (const removed of ["transitions", "provenance", "relations", "Migration", "sourceHash", "legacy"]) {
+  test("no migration bookkeeping is drawn, only a truncated source hash", () => {
+    // `transitions`, `provenance` and `relations` are rendered now, as the prototype has
+    // them. The legacy migration JSON stays out; the hash is truncated to 16 characters.
+    for (const removed of ["Migration", "legacyProject", "legacyJson"]) {
       expect(html.toLowerCase()).not.toContain(removed.toLowerCase());
     }
   });
 
-  test("no external link, tracker id, provider or identity key", () => {
+  test("the tracker identity is stated, but never as a link", () => {
+    // The prototype has an `Identity keys` panel with the key and the provider. §8.1's
+    // "not rendered" is superseded for those two; a hyperlink is still not drawn.
     expect(html).not.toContain("https://tracker.example/42");
-    expect(html).not.toContain("tracker.example");
-    expect(html).not.toContain("identityKey");
-    expect(html).not.toContain("a|b");
     expect(html).not.toContain(">42<");
   });
 
   test("no revision or churn timestamps", () => {
     expect(html).not.toContain("2026-10-24T10:00:00.000Z"); // updatedAt
-    expect(html).not.toContain("revision");
-    expect(html).not.toContain(">7<");
+    // The churn timestamps stay out. The *revision*, however, is the prototype's own sixth
+    // meta segment (`I-000870 · mstar-harness · critical · bug · open · Revision 4`), so it
+    // is rendered and this test no longer forbids it.
+    expect(html).toContain("Revision");
+    // The revision number is rendered (`Revision 7`) but never as a bare churn count.
+    expect(html).not.toContain("Churn");
   });
 
   test("the model itself cannot carry them: the negative set is enforced by shape", () => {
     const model = issueDetailModel(detail());
     for (const removed of [
-      "occurrences",
-      "transitions",
-      "provenance",
-      "relations",
       "url",
       "externalId",
-      "provider",
-      "identityKey",
-      "revision",
+      // `provider` and `identityKey` are carried now: the prototype's `Identity keys`
+      // panel states both. `revision` is carried too: the prototype's meta line ends with
+      // it. The rest of the set still stays out.
       "createdAt",
       "updatedAt",
       "projectMoves",
@@ -463,5 +483,16 @@ describe("IssueDetail — the record read: null is absent, a failed read is unav
     const html = renderDetail(detail(), null);
     expect(html).not.toContain('data-ms-absence="unavailable"');
     expect(html).toContain("I-000870");
+  });
+});
+
+describe("IssueDetail — the relations table", () => {
+  test("it names the other end of the join, and its title", () => {
+    const html = renderDetail(detail());
+    expect(html).toContain("data-ms-issue-relations");
+    expect(html).toContain("I-000840");
+    expect(html).toContain("related");
+    // The prototype's Title column: the other end's own title, never a dash.
+    expect(html).toContain("Dark theme border contrast below 3:1");
   });
 });

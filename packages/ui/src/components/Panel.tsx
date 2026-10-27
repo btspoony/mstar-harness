@@ -14,7 +14,6 @@
  */
 import type { ReactNode } from "react";
 
-import css from "./Panel.module.css";
 
 export type PanelProps = {
   children: ReactNode;
@@ -26,7 +25,7 @@ export type PanelProps = {
 export function Panel(props: PanelProps) {
   return (
     <section
-      className={props.className === undefined ? css.panel : `${css.panel} ${props.className}`}
+      className={props.className === undefined ? "panel" : `panel ${props.className}`}
       data-ms-panel=""
       {...(props.labelledBy === undefined ? {} : { "aria-labelledby": props.labelledBy })}
     >
@@ -38,22 +37,41 @@ export function Panel(props: PanelProps) {
 export type PanelHeadProps = {
   /** The head's own id, so `Panel` can point at it. */
   id?: string;
-  title: string;
+  /**
+   * The heading. Optional because the prototype's two list screens carry a head with
+   * no title at all — just the filter row — and a head is the row, not the heading in it.
+   */
+  title?: string;
   /** Trailing facts: a count, a range, a state. */
   meta?: ReactNode;
+  /**
+   * The head's own content, for a head that is a row rather than a heading — the two list
+   * screens put their filter row here, exactly where the prototype has `.panel-head >
+   * .filters`.
+   */
+  children?: ReactNode;
 };
 
 export function PanelHead(props: PanelHeadProps) {
+  // The head is the labelled element when it has no title: the prototype's list
+  // screens carry a bare filter row, and `aria-labelledby` still needs a node.
   return (
-    <div className={css.head} data-ms-panel-head="">
-      <h2 className={css.title} id={props.id} data-ms-panel-title="">
-        {props.title}
-      </h2>
+    <div
+      className="panel-head"
+      data-ms-panel-head=""
+      {...(props.title === undefined && props.id !== undefined ? { id: props.id } : {})}
+    >
+      {props.title === undefined ? null : (
+        <h2 className="panel-title" id={props.id} data-ms-panel-title="">
+          {props.title}
+        </h2>
+      )}
       {props.meta === undefined ? null : (
-        <span className={css.meta} data-ms-panel-meta="">
+        <span className="panel-meta" data-ms-panel-meta="">
           {props.meta}
         </span>
       )}
+      {props.children}
     </div>
   );
 }
@@ -66,7 +84,7 @@ export type PanelBodyProps = {
 
 export function PanelBody(props: PanelBodyProps) {
   return (
-    <div className={props.tight === true ? `${css.body} ${css.tight}` : css.body} data-ms-panel-body="">
+    <div className={props.tight === true ? "panel-body tight" : "panel-body"} data-ms-panel-body="">
       {props.children}
     </div>
   );
@@ -74,7 +92,7 @@ export function PanelBody(props: PanelBodyProps) {
 
 export function PanelFoot(props: { children: ReactNode }) {
   return (
-    <div className={css.foot} data-ms-panel-foot="">
+    <div className="panel-foot" data-ms-panel-foot="">
       {props.children}
     </div>
   );

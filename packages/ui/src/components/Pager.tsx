@@ -6,7 +6,6 @@
  * exists only above offset 0, `next` only when the page is full. The label says
  * the range *and* the total, so a filtered list cannot look like the whole store.
  */
-import css from "./Pager.module.css";
 
 export type PagerProps = {
   total: number;
@@ -44,13 +43,13 @@ export function Pager(props: PagerProps) {
   const previous = hasPrevious(props.offset);
   const next = hasNext(props.offset, props.pageSize, props.total);
   return (
-    <div className={css.pager}>
-      <span className={css.range} data-ms-page-range="">
+    <div className="pager">
+      <span className="muted t-12" data-ms-page-range="">
         {props.rangeLabel(from, to, props.total)}
       </span>
       <button
         type="button"
-        className={css.button}
+        className="btn"
         disabled={!previous}
         onClick={() => props.onOffsetChange(Math.max(0, props.offset - props.pageSize))}
       >
@@ -58,7 +57,7 @@ export function Pager(props: PagerProps) {
       </button>
       <button
         type="button"
-        className={css.button}
+        className="btn"
         disabled={!next}
         onClick={() => props.onOffsetChange(props.offset + props.pageSize)}
       >

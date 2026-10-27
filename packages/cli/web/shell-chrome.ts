@@ -26,6 +26,10 @@ export type ShellChrome = {
   navItems: readonly { id: NavDestination; label: string }[];
   skipLink: string;
   footer: string;
+  /** `1224 store revision` — the projection generation the read was served at. */
+  storeRevision: (generation: number) => string;
+  /** The footer's leading open-issue count. */
+  openIssueCount: (n: number) => string;
 };
 
 /** Every string the shell itself shows, read from one dictionary. */
@@ -34,6 +38,8 @@ export function shellChrome(copy: Copy): ShellChrome {
     navItems: NAV_DESTINATIONS.map((id) => ({ id, label: copy.shell.nav[id] })),
     skipLink: copy.shell.skipLink,
     footer: copy.shell.footer,
+    storeRevision: copy.shell.storeRevision,
+    openIssueCount: copy.shell.openIssueCount,
   };
 }
 

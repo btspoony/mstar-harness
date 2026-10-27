@@ -8,7 +8,6 @@
 import type { ReactNode } from "react";
 
 import type { Tone } from "../view-model/status.ts";
-import css from "./Badge.module.css";
 
 export type BadgeProps = {
   children: ReactNode;
@@ -18,7 +17,7 @@ export type BadgeProps = {
 
 export function Badge(props: BadgeProps) {
   return (
-    <span className={css.badge} data-ms-badge-tone={props.tone ?? "neutral"}>
+    <span className="badge" data-ms-badge-tone={props.tone ?? "neutral"}>
       {props.children}
     </span>
   );

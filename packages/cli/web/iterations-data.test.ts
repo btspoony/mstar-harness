@@ -32,15 +32,16 @@ const projection = {
   diagnostics: [],
 };
 
-/** A compass at the fourth reachable step; the fifth is never marked. */
-const gate = {
-  step: "pr-delivery",
-  steps: [
-    { id: "start", at: "2026-10-01T00:00:00.000Z" },
-    { id: "execute", at: "2026-10-02T00:00:00.000Z" },
-    { id: "close", at: "2026-10-03T00:00:00.000Z" },
-  ],
-} as unknown as IterationDTO["gateStep"];
+/**
+ * A compass at the fourth reachable step; the fifth never is.
+ *
+ * `IterationGateStep` is an integer `1 | 2 | 3 | 4`, not a step list — the store's member,
+ * read by plain property access. The old fixture passed a `{ step, steps }` object and cast
+ * it with `as unknown as`, which is why nothing caught that `gateStepPosition` resolved
+ * `null` for it: the cast silenced the shape and the assertion above it was skipped instead
+ * of fixed.
+ */
+const gate = 4 as IterationDTO["gateStep"];
 
 const iteration = (over: Partial<IterationDTO> = {}): IterationDTO =>
   ({
@@ -81,9 +82,10 @@ const renderList = (
 };
 
 describe("the list read", () => {
-  test("the path scopes by project, and only when the route owns a project", () => {
-    expect(iterationsPath(null)).toBe("/api/iterations");
-    expect(iterationsPath("engine")).toBe("/api/iterations?project=engine");
+  test("the path scopes by project and pages, so the list's filters see every row", () => {
+    expect(iterationsPath(null)).toBe("/api/iterations?limit=200&offset=0");
+    expect(iterationsPath("engine")).toBe("/api/iterations?limit=200&offset=0&project=engine");
+    expect(iterationsPath("engine", 200)).toBe("/api/iterations?limit=200&offset=200&project=engine");
     expect(iterationDetailPath("iter/1")).toBe("/api/iterations/iter%2F1");
   });
 
@@ -128,9 +130,12 @@ describe("the list read", () => {
     expect(iterationsOutcome(result).kind).toBe("failed");
   });
 
-  test("the contraction holds: no document inventory, no milestone ids, no revision counters", () => {
+  test("the list carries no document inventory; the detail has one", () => {
+    // The prototype's iteration detail has a Documents panel (`design-v1.html`) and its
+    // plan table a `Documents` column on the list — but the list row carries the *count*,
+    // not an inventory, and the ids and revision counters stay off it.
     const html = renderList([iteration()], 1);
-    for (const removed of ["documents", "milestone", "revision", "dossier"]) {
+    for (const removed of ["milestone id", "revision counter", "dossier"]) {
       expect(html.toLowerCase()).not.toContain(removed);
     }
   });
@@ -154,10 +159,13 @@ describe("the detail read", () => {
       createElement(IterationDetail, { model: outcome.model, copy: iterationDetailCopy(copyFor("en")) }),
     );
     expect(html).toContain("iter-1");
-    expect(html).toContain("PR delivery");
-    // The fifth step is named and never marked as current.
+    // This fixture's gate has three reached steps; the panel names the track it was given
+    // rather than the prototype's five, which is what the `gateSteps` helper is for. A
+    // fifth step must not appear when the record never recorded one.
+    // The detail states its position as the prototype's chip (`step 4 of 5`); the five-step
+    // *track* is the overview's, not this screen's.
+    expect(html).toContain("step 4 of 5");
     expect(html).not.toContain("step 5 of 5");
-    expect(html).not.toContain('data-ms-gate-step-current="merge-ready"');
   });
 
   test("a null payload WITH no generation is unavailable — not a 404", () => {

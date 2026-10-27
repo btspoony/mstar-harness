@@ -48,6 +48,23 @@ export function formatDate(value: string | null | undefined): string {
  * that is not a timestamp falls back to `formatDate` so a non-date value still
  * reads as itself rather than as `NaN`.
  */
+/**
+ * The clock time alone, `13:56:02` — what the prototype's identity line prints for when the
+ * projection was built and when the page was read. Its own line shows a bare time, not an
+ * ISO string and not a date: the reader already knows which day they are looking at.
+ *
+ * A value with no time part falls back to itself, so a non-timestamp reads as what it is
+ * rather than as `NaN:NaN:NaN`.
+ */
+export function formatClock(value: string | null | undefined): string {
+  const lexeme = typeof value === "string" ? value.trim() : "";
+  if (lexeme === "") return UNKNOWN_DATE;
+  const match = /^\d{4}-\d{2}-\d{2}[T ](\d{2}):(\d{2})(?::(\d{2}))?/.exec(lexeme);
+  if (match === null) return lexeme;
+  const [, hour, minute, second] = match;
+  return `${hour}:${minute}:${second ?? "00"}`;
+}
+
 export function formatShortDate(value: string | null | undefined): string {
   const full = formatDate(value);
   const match = /^\d{4}-(\d{2})-(\d{2})(?:[T ](\d{2}):(\d{2}))?/.exec(full);
@@ -94,10 +111,11 @@ export function textOr(value: string | null | undefined, whenAbsent: string): st
  * counters are **not** returned: IA §8.1 removes them from the UI, and the
  * state plus the named reasons answer the only question a reader acts on.
  */
-export type ProjectionState =
+export type ProjectionState = { readonly builtAt: string | null; readonly checkedAt: string } & (
   | { kind: "current" }
   | { kind: "stale"; reasons: readonly string[] }
-  | { kind: "unavailable"; reasons: readonly string[] };
+  | { kind: "unavailable"; reasons: readonly string[] }
+);
 
 /**
  * Map one read projection to that state. Reasons are the sources' own messages.
@@ -109,9 +127,12 @@ export type ProjectionState =
  */
 export function projectionState(projection: ReadProjection): ProjectionState {
   const reasons = projection.diagnostics.map((diagnostic) => `${diagnostic.sourceKey}: ${diagnostic.message}`);
-  if (projection.freshness === "current") return { kind: "current" };
-  if (projection.freshness === "stale") return { kind: "stale", reasons };
-  return { kind: "unavailable", reasons };
+  // The prototype's identity line ends with when the projection was built and when it was
+  // read; both come from the read itself, so they ride the same state.
+  const times = { builtAt: projection.builtAt, checkedAt: projection.checkedAt };
+  if (projection.freshness === "current") return { kind: "current", ...times };
+  if (projection.freshness === "stale") return { kind: "stale", reasons, ...times };
+  return { kind: "unavailable", reasons, ...times };
 }
 
 

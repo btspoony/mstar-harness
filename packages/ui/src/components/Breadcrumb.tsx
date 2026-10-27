@@ -7,7 +7,6 @@
  */
 import type { ReactNode } from "react";
 
-import css from "./Breadcrumb.module.css";
 
 export type Crumb = {
   /** Stable id for React keys; the caller's route id. */
@@ -27,18 +26,18 @@ export type BreadcrumbProps = {
 
 export function Breadcrumb(props: BreadcrumbProps) {
   return (
-    <nav className={css.trail} aria-label={props.label}>
+    <nav className="breadcrumb" aria-label={props.label}>
       {props.trail.map((crumb) => (
-        <span key={crumb.id} className={css.item}>
-          <button type="button" className={css.link} onClick={() => props.onSelect(crumb.id)}>
+        <span key={crumb.id} >
+          <button type="button" className="link" onClick={() => props.onSelect(crumb.id)}>
             {crumb.label}
           </button>
-          <span className={css.separator} aria-hidden="true">
+          <span  aria-hidden="true">
             /
           </span>
         </span>
       ))}
-      <span className={css.current} aria-current="page">
+      <span  aria-current="page">
         {props.current}
       </span>
     </nav>

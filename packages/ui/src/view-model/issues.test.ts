@@ -240,23 +240,19 @@ describe("the detail fact block", () => {
     ...over,
   });
 
-  test("the occurrence LOG collapses to one integer count", () => {
+  test("the occurrence log is carried whole, beside its count", () => {
     const model = issueDetailModel(detail());
     expect(model.occurrenceCount).toBe(2);
-    expect(Object.keys(model)).not.toContain("occurrences");
+    expect(model.occurrences).toHaveLength(2);
   });
 
-  test("no history, provenance, relations, tracker carry-over or revision is exposed", () => {
+  test("no external URL or churn timestamps are exposed", () => {
     const model = issueDetailModel(detail());
     for (const removed of [
-      "transitions",
-      "provenance",
-      "relations",
       "url",
       "externalId",
-      "provider",
-      "identityKey",
-      "revision",
+      // The prototype's `Identity keys` panel states the provider and the key, and its meta
+      // line ends with the issue row's revision.
       "createdAt",
       "updatedAt",
     ]) {

@@ -1,0 +1,12 @@
+{
+  "screenPadding": "14px 20px 16px",
+  "screenMaxWidth": "1440px",
+  "headerPadding": "0 20px",
+  "narrowScreenPadding": "12px",
+  "containerBreakpoints": [
+    "max-width: 479px",
+    "max-width: 619px",
+    "max-width: 899px",
+    "min-width: 1100px"
+  ]
+}

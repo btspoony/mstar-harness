@@ -21,6 +21,10 @@
  * to one of the six arms, and `Absence` here only chooses the copy. A screen that
  * decided an arm itself would be a second authority.
  */
+import { Fragment, type KeyboardEvent } from "react";
+
+import { DataTable, type DataTableColumn } from "../components/DataTable.tsx";
+import { formatClock, progressText } from "../view-model/format.ts";
 import { EmptyState, type AbsenceArm } from "../components/EmptyState.tsx";
 import { IssueFlowChart } from "../components/IssueFlowChart.tsx";
 import { Notice } from "../components/Notice.tsx";
@@ -29,19 +33,62 @@ import { ProgressBar } from "../components/ProgressBar.tsx";
 import { Row } from "../components/Row.tsx";
 import { StatusDot } from "../components/StatusDot.tsx";
 import { TruncatedText } from "../components/TruncatedText.tsx";
-import type { IssueFlowSeries, MilestoneRow, OverviewModel, OverviewWorkflowRow } from "../view-model/overview.ts";
-import type { GateStepPosition, Tone } from "../view-model/status.ts";
-import css from "./Overview.module.css";
+import type {
+  IssueFlowSeries,
+  MilestoneRow,
+  OverviewModel,
+  OverviewPlanRow,
+  OverviewWorkflowRow,
+} from "../view-model/overview.ts";
+import type { GateStepId, GateStepPosition, Tone } from "../view-model/status.ts";
 
 /** Every visible string this screen needs. Task 5 supplies them. */
 export type OverviewCopy = {
   pageTitle: string;
+  /** The line under the title: which projects, how many are open. */
+  /** `All projects · 134 open issues · 14:35:02` — the clock is the read's, and is
+   *  omitted when the read did not carry one. */
+  screenSubtitle: (scope: string, open: number, clock: string | null) => string;
+  /** The word this screen uses when the read covers every project. */
+  screenScopeAll: string;
+  /** `built 13:56:02` — when the projection was built, or the word for "never". */
+  identityBuilt: (at: string) => string;
+  identityBuiltUnknown: string;
+  /** `read 13:58:04` — when this read happened. */
+  identityRead: (at: string) => string;
+
   workflowsHeading: string;
+  /** Names the running workflows the panel does not draw, so the list is never silently
+   *  shortened. The prototype's panel is one active workflow. */
+  workflowsMore?: (count: number) => string;
   workflowsEmpty: string;
   /** `showing N of M` — the workflows member is capped upstream. */
   workflowsTruncated: (shown: number, total: number) => string;
   /** One workflow row's plan progress. */
   plansProgress: (done: number, total: number) => string;
+  /** The plan table's five columns (`design-v1.html:859-866`). */
+  planColumns: { plan: string; title: string; status: string; progress: string; done: string };
+  /** `7 plans · running` — the count line above the table. */
+  workflowMeta: (plans: number, status: string) => string;
+  /** The plural form of `plan`, beside the count in the panel head. */
+  plansLabel: (n: number) => string;
+  /** The plan table's accessible name, since it has no visible caption. */
+  planTableCaption: string;
+  /** A plan whose status the store does not record. */
+  planStatusAbsent: string;
+  /** The workflow header line's type label (`design-v1.html:855`). */
+  typeLabel: string;
+  /** The link into the workflow's own screen. */
+  openWorkflow: string;
+  /** The four branch anchors, as the header line labels them. */
+  branchBase: string;
+  branchSource: string;
+  branchIntegration: string;
+  branchTarget: string;
+  /** A plan whose progress note is empty. */
+  planProgressAbsent: string;
+  /** The cell's stand-in for a value the store does not carry. */
+  dash: string;
   /** The trend card's title and the range its head states. */
   trendHeading: string;
   trendRange: (from: string, to: string) => string;
@@ -57,14 +104,19 @@ export type OverviewCopy = {
   trendTableSummary: string;
   trendColumns: { date: string; captured: string; retired: string; open: string; origin: string };
   residualsHeading: string;
-  residualsTotal: (open: number) => string;
+  /** The residuals panel's meta: a grouping descriptor, as the prototype's is. */
+  residualsTotal: () => string;
   iterationHeading: string;
   iterationNoIteration: string;
   gateStep: (step: number, of: number) => string;
+  /** One label per gate step, as the prototype names them. */
+  gateStepLabels: Record<GateStepId, string>;
   milestonesHeading: string;
   /** The short-container summary: `n milestones · m open`. */
   milestonesSummary: (milestones: number, open: number) => string;
   milestoneProgress: (done: number, total: number) => string;
+  /** The ` · 9 open` tail of the same trailing cell. */
+  milestoneOpenCount: (open: number) => string;
   milestoneOpen: (open: number) => string;
   projection: { current: string; stale: string; unavailable: string };
   /** The four absence arms' own words and copy families (IA §5). */
@@ -81,12 +133,30 @@ export type OverviewProps = {
   model: OverviewModel;
   copy: OverviewCopy;
   /**
+   * The product's identity, for the tail's `.identity-line`. The host supplies it because
+   * only a host knows which package built it and at which version — the shared package has
+   * no manifest of its own, and the prototype's line prints both.
+   */
+  identity?: { packageName: string; version: string; harnessDir?: string };
+  /**
    * The host's own height budget. When it is short, IA §3.1 fixes the drop
    * order: milestones become one summary line first, then the plan table pages.
    * Height is host knowledge, so it arrives as a prop rather than as a viewport
    * media query the product layout must not use.
    */
   compact?: boolean;
+  /**
+   * Open one workflow's own screen. Absent when the host has no such destination
+   * (the dsh seat mounts the pane without one), so the header line simply omits
+   * the link rather than rendering a dead control.
+   */
+  onOpenWorkflow?: (id: string) => void;
+  /**
+   * Open the issue list filtered to one severity. The prototype's residual rows are
+   * links to exactly that (`design-v1.html:1109-1111`); without it they read as dead
+   * text. Absent when the host has no issues destination.
+   */
+  onOpenIssues?: (severity: string) => void;
 };
 
 /** Render one absence arm from the arm the model already resolved. */
@@ -119,21 +189,126 @@ function Absence(props: {
   );
 }
 
-/** One active workflow: id, kind, phase, done/total, status dot. No board here. */
-function WorkflowRowView(props: { row: OverviewWorkflowRow; copy: OverviewCopy }) {
-  const row = props.row;
+/** The plan table's five columns, in the prototype's order and treatments. */
+function planColumns(copy: OverviewCopy): DataTableColumn<OverviewPlanRow>[] {
+  return [
+    {
+      key: "plan",
+      header: copy.planColumns.plan,
+      // The prototype gives this column 35% of the table (`.planboard` grid) and the
+      // title absorbs the rest, so the proportion holds at every container width.
+      width: "35%",
+      render: (plan) => (
+        <span className="mono">
+          <TruncatedText text={plan.planId} />
+        </span>
+      ),
+    },
+    {
+      key: "title",
+      header: copy.planColumns.title,
+      render: (plan) =>
+        plan.title === null ? (
+          <span className="muted">{copy.dash}</span>
+        ) : (
+          // The prototype sets the title in the secondary tone, not the primary one:
+          // the plan id is the row's identifier, the title is its description.
+          <span className="muted">
+            <TruncatedText text={plan.title} />
+          </span>
+        ),
+    },
+    {
+      key: "status",
+      header: copy.planColumns.status,
+      width: 132,
+      render: (plan) =>
+        plan.status === null ? (
+          <span className="muted">{copy.planStatusAbsent}</span>
+        ) : (
+          <StatusDot label={plan.status} tone={plan.statusTone} mono />
+        ),
+    },
+    {
+      key: "progress",
+      header: copy.planColumns.progress,
+      width: 116,
+      render: (plan) =>
+        plan.progress === null ? (
+          // The store's note is free text, so it is shown as the fact it is — never
+          // turned into a bar, and never replaced by one. The column is 116px, so the
+          // note truncates with the shared reveal rather than being cut silently.
+          plan.progressNote === null ? (
+            <span className="muted">{copy.planProgressAbsent}</span>
+          ) : (
+            <span className="muted t-12">
+              <TruncatedText text={plan.progressNote} />
+            </span>
+          )
+        ) : (
+          <span className="milestone-counts">
+            <span className="mono">{progressText(plan.progress)}</span>
+            <ProgressBar done={plan.progress.done} total={plan.progress.total} />
+          </span>
+        ),
+    },
+    {
+      key: "done",
+      header: copy.planColumns.done,
+      width: 72,
+      align: "end",
+      render: (plan) => <span className="t-num">{plan.doneAt ?? copy.dash}</span>,
+    },
+  ];
+}
+
+/**
+ * One active workflow: the header line, the branch chain, and the plan table
+ * (`design-v1.html:845-925`). Several workflows stack, each with its own table.
+ */
+function WorkflowRowView(props: {
+  row: OverviewWorkflowRow;
+  copy: OverviewCopy;
+  onOpenWorkflow?: (id: string) => void;
+}) {
+  const { row, copy } = props;
+  const branch = row.branch;
+  const anchors: Array<[string, string | null]> = [
+    [copy.branchBase, branch.base],
+    [copy.branchSource, branch.source],
+    [copy.branchIntegration, branch.integration],
+    [copy.branchTarget, branch.target],
+  ];
+  const drawn = anchors.filter(([, value]) => value !== null);
+  // The prototype's panel body holds `.wf-summary` and `.branch-line` as siblings; the plan
+  // table follows them. An earlier version wrapped all three inside `.wf-summary`, which
+  // made one row where the prototype has three.
   return (
-    <Row
-      primary={<TruncatedText text={row.id} />}
-      meta={
-        <>
-          <span>{row.type}</span>
-          {row.phase === null ? null : <span> · {row.phase}</span>}
-        </>
-      }
-      trailing={props.copy.plansProgress(row.plansDone, row.plansTotal)}
-      leading={<StatusDot label={row.status} tone={row.statusTone} />}
-    />
+    <>
+      <div className="wf-summary" data-ms-overview-workflow="">
+        <span className="wf-id">{row.id}</span>
+        <span className="muted">{copy.typeLabel}</span>
+        <span className="chip">{row.type}</span>
+        {row.phase === null ? null : <StatusDot label={row.phase} tone="neutral" mono />}
+        {props.onOpenWorkflow === undefined ? null : (
+          <button type="button" className="link" onClick={() => props.onOpenWorkflow?.(row.id)}>
+            {copy.openWorkflow}
+          </button>
+        )}
+      </div>
+      {drawn.length === 0 ? null : (
+        <div className="branch-line" data-ms-branch="">
+          {drawn.map(([label, value], index) => (
+            <Fragment key={label}>
+              {index === 0 ? null : <span className="branch-arrow" aria-hidden="true">→</span>}
+              <span className="branch-anchor">
+                <span>{label}</span> <b>{value}</b>
+              </span>
+            </Fragment>
+          ))}
+        </div>
+      )}
+    </>
   );
 }
 
@@ -141,24 +316,33 @@ function WorkflowRowView(props: { row: OverviewWorkflowRow; copy: OverviewCopy }
 function MilestoneRowView(props: { row: MilestoneRow; copy: OverviewCopy }) {
   const row = props.row;
   return (
-    <Row
-      tall
-      primary={<TruncatedText text={row.name} />}
-      meta={
-        <>
-          {row.status === null ? null : <span>{row.status}</span>}
-          {row.target === null ? null : <span> · {row.target}</span>}
-        </>
-      }
-      trailing={
-        row.progress === null ? null : (
-          <span className={css.milestoneProgress}>
-            <ProgressBar done={row.progress.done} total={row.progress.total} />
-            <span>{props.copy.milestoneProgress(row.progress.done, row.progress.total)}</span>
+    // The prototype's milestone is two rows: `milestone-top` (a dot, the name, the target)
+    // and `milestone-foot` (the bar and the counts). As one flex row, a 360px pane broke the
+    // target and the counts across lines.
+    <div className="milestone-row" data-ms-milestone-row="">
+      <div className="milestone-top">
+        {row.status === null ? null : (
+          <span className={`status tone-${row.statusTone}`} aria-label={row.status}>
+            <span className="dot" aria-hidden="true" />
           </span>
-        )
-      }
-    />
+        )}
+        <span className="milestone-name">
+          <TruncatedText text={row.name} />
+        </span>
+        {row.target === null ? null : <span className="milestone-target">{row.target}</span>}
+      </div>
+      {row.progress === null ? null : (
+        <div className="milestone-foot">
+          <ProgressBar done={row.progress.retired} total={row.progress.total} />
+          <span className="milestone-counts">
+            <span className="num">
+              {props.copy.milestoneProgress(row.progress.retired, row.progress.total)}
+            </span>
+            <span>{props.copy.milestoneOpenCount(row.openIssues)}</span>
+          </span>
+        </div>
+      )}
+    </div>
   );
 }
 
@@ -176,59 +360,59 @@ function TrendPanel(props: { series: IssueFlowSeries; copy: OverviewCopy }) {
         title={copy.trendHeading}
         meta={copy.trendRange(series.firstDate, series.lastDate)}
       />
-      <PanelBody>
-        <div className={css.trend} data-ms-flow="">
-          <IssueFlowChart
-            points={series.points}
-            label={copy.trendChartTitle(series.firstDate, series.lastDate)}
-          />
-          <div className={css.axis}>
-            <span>{series.firstDate}</span>
-            {/* Two buckets have no distinct middle: labelling the first one twice would
-                read as a third date. */}
-            {series.middleDate === null ? null : <span>{series.middleDate}</span>}
-            <span>{series.lastDate}</span>
-          </div>
-          <div className={css.legend}>
-            <span className={css.legendItem}>
-              <span className={css.swatch} aria-hidden="true" />
-              {copy.trendCaptured}
-            </span>
-            <span className={css.legendItem}>
-              <span className={`${css.swatch} ${css.swatchDashed}`} aria-hidden="true" />
-              {copy.trendRetired}
-            </span>
-            <span className={css.legendSpacer} />
-            <span className={css.legendMeta}>{copy.trendLegend(series.datedOpen, series.recordedOpen)}</span>
-          </div>
-          <p className={css.note}>{copy.trendGap(series.datedOpen, series.undatedEvents)}</p>
-          <details className={css.disclosure}>
-            <summary className={css.disclosureSummary}>{copy.trendTableSummary}</summary>
-            <table className={css.flowTable}>
-              <thead>
-                <tr>
-                  <th scope="col">{copy.trendColumns.date}</th>
-                  <th scope="col">{copy.trendColumns.captured}</th>
-                  <th scope="col">{copy.trendColumns.retired}</th>
-                  <th scope="col">{copy.trendColumns.open}</th>
-                  <th scope="col">{copy.trendColumns.origin}</th>
-                </tr>
-              </thead>
-              <tbody>
-                {series.points.map((point) => (
-                  <tr key={point.date}>
-                    <td>{point.date}</td>
-                    <td>{point.captured}</td>
-                    <td>{point.retired}</td>
-                    <td>{point.open}</td>
-                    <td>{point.origin}</td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </details>
+      <div className="chart-wrap" data-ms-flow="">
+        <IssueFlowChart
+          points={series.points}
+          label={copy.trendChartTitle(series.firstDate, series.lastDate)}
+        />
+        <div className="chart-note">
+          <span>{series.firstDate}</span>
+          {/* Two buckets have no distinct middle: labelling the first one twice would
+              read as a third date. */}
+          {series.middleDate === null ? null : <span>{series.middleDate}</span>}
+          <span>{series.lastDate}</span>
         </div>
-      </PanelBody>
+        <div className="chart-legend">
+          <span className="legend-item">
+            <span className="legend-swatch" aria-hidden="true" />
+            {copy.trendCaptured}
+          </span>
+          <span className="legend-item">
+            <span className="legend-swatch dashed" aria-hidden="true" />
+            {copy.trendRetired}
+          </span>
+          <span className="legend-spacer" />
+          <span className="chart-note">{copy.trendLegend(series.datedOpen, series.recordedOpen)}</span>
+        </div>
+        <p className="chart-note">{copy.trendGap(series.datedOpen, series.undatedEvents)}</p>
+        {/* A disclosure, not a chart label: `.chart-note` is the flex row above, and
+            reusing it here made this table's summary and body flex items. */}
+        <details className="disc">
+          <summary>{copy.trendTableSummary}</summary>
+          <table className="table">
+            <thead>
+              <tr>
+                <th scope="col">{copy.trendColumns.date}</th>
+                <th scope="col">{copy.trendColumns.captured}</th>
+                <th scope="col">{copy.trendColumns.retired}</th>
+                <th scope="col">{copy.trendColumns.open}</th>
+                <th scope="col">{copy.trendColumns.origin}</th>
+              </tr>
+            </thead>
+            <tbody>
+              {series.points.map((point) => (
+                <tr key={point.date}>
+                  <td>{point.date}</td>
+                  <td>{point.captured}</td>
+                  <td>{point.retired}</td>
+                  <td>{point.open}</td>
+                  <td>{point.origin}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </details>
+      </div>
     </Panel>
   );
 }
@@ -236,31 +420,83 @@ function TrendPanel(props: { series: IssueFlowSeries; copy: OverviewCopy }) {
 export function Overview(props: OverviewProps) {
   const { model, copy } = props;
   return (
-    <article className={css.page} data-ms-screen="overview">
-      <h1 className={css.title}>{copy.pageTitle}</h1>
+    <article className="screen" data-ms-screen="overview">
+      {/* The prototype heads every screen with `.screen-head`; a bare h1 falls back to
+          the document heading rule and loses the screen-head padding. */}
+      <div className="screen-head">
+        <h1>{copy.pageTitle}</h1>
+        {/* The prototype states the read's scope under the title: which projects, how many
+            issues are open. Only when the read carries that count — "0 open issues" on a
+            pending or failed read would be a claim about the store, not a summary of it. */}
+        {model.issueFlow.kind === "populated" ? (
+          <p className="screen-meta" data-ms-screen-sub="">
+            {copy.screenSubtitle(
+              copy.screenScopeAll,
+              model.issueFlow.value.recordedOpen,
+              // The prototype's head ends with the read's own clock. `checkedAt` is that
+              // fact: when this read happened, not when the page was painted.
+              model.projection.checkedAt === "" ? null : formatClock(model.projection.checkedAt),
+            )}
+          </p>
+        ) : null}
+      </div>
 
-      <div className={css.body}>
+      <div className="overview-grid">
         {/* The prototype's wide form is two columns (`design-v1.html:317-318`): work and
             its trend left, residuals and milestones right, the iteration across both.
             Below the 900px floor the same sections stack in that reading order. */}
-        <div className={css.column} data-ms-ov-column="">
+        <div className="ov-col" data-ms-ov-column="">
         {/* 1 — active work. Never dropped, at any height. */}
         <Panel labelledBy="ms-overview-workflows">
-          <PanelHead id="ms-overview-workflows" title={copy.workflowsHeading} />
+                      <PanelHead
+              id="ms-overview-workflows"
+              title={copy.workflowsHeading}
+              meta={
+                // Structured, as the prototype has it: the count in `.num.mono`, then a
+                // `.status` with its dot. One string cannot carry either the spacing or the
+                // dot.
+                model.workflows.kind === "populated" && model.workflows.value.length > 0 ? (
+                  <>
+                    <span>
+                      <span className="num mono">{model.workflows.value[0].plansTotal}</span>{" "}
+                      <span>{copy.plansLabel(model.workflows.value[0].plansTotal)}</span>
+                    </span>
+                    <span aria-hidden="true">·</span>
+                    <StatusDot
+                      label={model.workflows.value[0].status}
+                      tone={model.workflows.value[0].statusTone}
+                      emphasis
+                    />
+                  </>
+                ) : undefined
+              }
+            />
           <PanelBody>
           {model.workflows.kind === "populated" ? (
-            <div className={css.rows} data-ms-workflows="">
-              {model.workflows.value.map((row) => (
-                <WorkflowRowView key={row.id} row={row} copy={copy} />
+            <>
+              {/* The prototype's panel is one active workflow with its plans beneath it
+                  ("Active workflow", singular). Rendering every workflow put the same
+                  five-column header on the page once per record; the rest are named in
+                  the count line below instead of being dropped silently. */}
+              {model.workflows.value.slice(0, 1).map((row) => (
+                <WorkflowRowView key={row.id} row={row} copy={copy} onOpenWorkflow={props.onOpenWorkflow} />
               ))}
+              {model.workflows.value.length > 1 ? (
+                // A span: `t-11` sets only type, so a `<p>` would add the document's
+                // paragraph margin under the last workflow.
+                <span className="muted t-11" data-ms-workflows-more={model.workflows.value.length - 1}>
+                  {copy.workflowsMore?.(model.workflows.value.length - 1) ??
+                    `+${model.workflows.value.length - 1}`}
+                </span>
+              ) : null}
               {/* The member is capped by the engine, so a truncated set has to say so:
                   rows that stop at 50 look like all of them. */}
               {model.workflows.truncated ? (
-                <p className={css.truncated} data-ms-truncated={model.workflows.total}>
+                <p data-ms-truncated={model.workflows.total}>
                   {copy.workflowsTruncated(model.workflows.shown, model.workflows.total)}
                 </p>
               ) : null}
-            </div>
+            </>
           ) : (
             <Absence
               arm={model.workflows.kind as AbsenceArm}
@@ -271,6 +507,17 @@ export function Overview(props: OverviewProps) {
             />
           )}
           </PanelBody>
+          {/* The prototype's plan table is the PANEL's third child, after the body
+              (`panel-head|panel-body|table`), not part of the body's rhythm. */}
+          {model.workflows.kind === "populated" && model.workflows.value.length > 0 ? (
+            <DataTable
+              variant="detail"
+              caption={copy.planTableCaption}
+              columns={planColumns(copy)}
+              rows={model.workflows.value[0].plans}
+              rowKey={(plan) => plan.planId}
+            />
+          ) : null}
         </Panel>
 
         {/* 2 — the dated history of that work. */}
@@ -294,17 +541,13 @@ export function Overview(props: OverviewProps) {
         )}
         </div>
 
-        <div className={css.column} data-ms-ov-column="">
+        <div className="ov-col" data-ms-ov-column="">
         {/* 3 — residuals, then 4 — milestones. Never dropped. */}
         <Panel labelledBy="ms-overview-residuals">
           <PanelHead
             id="ms-overview-residuals"
             title={copy.residualsHeading}
-            meta={
-              model.residuals.kind === "populated"
-                ? copy.residualsTotal(model.residuals.value.total)
-                : undefined
-            }
+            meta={model.residuals.kind === "populated" ? copy.residualsTotal() : undefined}
           />
           <PanelBody>
           {/* The prototype's compact tally (`design-v1.html:2424-2434`): five severity
@@ -313,18 +556,34 @@ export function Overview(props: OverviewProps) {
               contract values stay English and untranslated so they can be copied into the
               CLI. `data-ms-severity` is the hook for anything presentational. */}
           {model.residuals.kind === "populated" ? (
-            <dl className={css.residuals} data-ms-residuals="">
+            <dl className="res-grid" data-ms-residuals="">
               {model.residuals.value.rows.map((row) => (
                 <div
                   key={row.severity}
-                  className={css.residualRow}
+                  className="res-row"
                   data-ms-severity={row.severity}
                   data-ms-count={row.count}
+                  // The prototype makes this row a link to the severity-filtered issue
+                  // list. A `dl` may only hold `dt`/`dd`/`div`, so the click target is the
+                  // wrapper with a link role rather than an `<a>`.
+                  {...(props.onOpenIssues === undefined
+                    ? {}
+                    : {
+                        role: "link",
+                        tabIndex: 0,
+                        onClick: () => props.onOpenIssues?.(row.severity),
+                        onKeyDown: (event: KeyboardEvent) => {
+                          if (event.key === "Enter" || event.key === " ") {
+                            event.preventDefault();
+                            props.onOpenIssues?.(row.severity);
+                          }
+                        },
+                      })}
                 >
-                  <dt className={css.residualSeverity}>
+                  <dt className="sev">
                     <StatusDot label={row.severity} tone={row.tone} mono />
                   </dt>
-                  <dd className={row.emphasised ? css.countEmphasised : css.count}>{row.count}</dd>
+                  <dd className={row.emphasised ? "num is-strong" : "num"}>{row.count}</dd>
                 </div>
               ))}
             </dl>
@@ -342,18 +601,23 @@ export function Overview(props: OverviewProps) {
 
         {/* 3 — milestones, before the iteration: the prototype's sidebar order. */}
         <Panel labelledBy="ms-overview-milestones">
-          <PanelHead id="ms-overview-milestones" title={copy.milestonesHeading} />
+          {/* The prototype's head states which project these milestones are. */}
+          <PanelHead
+            id="ms-overview-milestones"
+            title={copy.milestonesHeading}
+            meta={model.milestoneProject === null ? undefined : model.milestoneProject}
+          />
           <PanelBody>
           {model.milestones.kind === "populated" ? (
             props.compact === true ? (
-              <p className={css.summary} data-ms-milestone-summary="">
+              <div className="screen-meta" data-ms-milestone-summary="">
                 {copy.milestonesSummary(
                   model.milestones.value.length,
                   model.milestones.value.reduce((open, row) => open + row.openIssues, 0),
                 )}
-              </p>
+              </div>
             ) : (
-              <div className={css.rows} data-ms-milestones="">
+              <div data-ms-milestones="">
                 {model.milestones.value.map((row) => (
                   <MilestoneRowView key={row.milestoneId} row={row} copy={copy} />
                 ))}
@@ -373,7 +637,7 @@ export function Overview(props: OverviewProps) {
 
         </div>
 
-        <div className={css.spanning} data-ms-ov-spanning="">
+        <div className="ov-iteration" data-ms-ov-spanning="">
         <Panel labelledBy="ms-overview-iteration">
           <PanelHead id="ms-overview-iteration" title={copy.iterationHeading} />
           <PanelBody>
@@ -381,29 +645,49 @@ export function Overview(props: OverviewProps) {
             model.latestIteration.value === null ? (
               <Absence arm="empty" copy={copy} heading={copy.iterationNoIteration} />
             ) : (
-              <div className={css.iteration} data-ms-iteration="">
-                <p className={css.iterationId}>
+              <div className="milestone-block" data-ms-iteration="">
+                <div className="ov-iter-id">
                   <TruncatedText text={model.latestIteration.value.iterationId} />
-                </p>
-                <ol className={css.steps} data-ms-gate-steps="">
+                </div>
+                <div className="gate-track" role="list" data-ms-gate-steps="">
                   {model.latestIteration.value.steps.map((step) => (
-                    <li
+                    <div
                       key={step.id}
-                      className={css.step}
+                      role="listitem"
+                      className={
+                        step.position === "reached"
+                          ? "gate-step is-done"
+                          : step.position === "current"
+                            ? "gate-step is-current"
+                            : "gate-step"
+                      }
                       data-ms-step={step.id}
                       data-ms-step-position={step.position satisfies GateStepPosition}
+                      {...(step.position === "current" ? { "aria-current": "step" as const } : {})}
                     >
-                      {copy.gateStep(step.step, 5)}
-                    </li>
+                      {/* The prototype's own three glyphs: a tick for done, a dot for
+                          current, the step number for what is still ahead. */}
+                      <span className="glyph" aria-hidden="true">
+                        {step.position === "reached"
+                          ? "✓"
+                          : step.position === "current"
+                            ? "●"
+                            : String(step.step)}
+                      </span>
+                      <span className="gate-label">{copy.gateStepLabels[step.id]}</span>
+                    </div>
                   ))}
-                </ol>
+                </div>
                 {model.latestIteration.value.gatePosition === null ? null : (
-                  <p className={css.gateLine}>
+                  // A span, as the prototype has it: `.gate-meta` is inline-flex and does
+                  // not reset margin, so a `<p>` would carry the document's paragraph
+                  // margin into the track.
+                  <span className="gate-meta">
                     {copy.gateStep(
                       model.latestIteration.value.gatePosition.step,
                       model.latestIteration.value.gatePosition.of,
                     )}
-                  </p>
+                  </span>
                 )}
               </div>
             )
@@ -421,10 +705,45 @@ export function Overview(props: OverviewProps) {
         </div>
       </div>
 
-      {/* 6 — the one page-validity fact. Never dropped. */}
-      <p className={css.projection} data-ms-projection={model.projection.kind}>
-        {copy.projection[model.projection.kind]}
-      </p>
+      {/* 6 — the one page-validity fact. Never dropped, and stated in the prototype's
+          own line: `.identity-line` is a hairline-topped mono row, not a muted sentence
+          under the grid. */}
+      <div className="identity-line" data-ms-projection={model.projection.kind}>
+        {props.identity === undefined ? null : (
+          <>
+            <span>{props.identity.packageName}</span>
+            <b className="id-strong">v{props.identity.version}</b>
+            <span className="sep" aria-hidden="true">
+              ·
+            </span>
+            {props.identity.harnessDir === undefined ? null : (
+              <>
+                <span className="id-strong">{props.identity.harnessDir}</span>
+                <span className="sep" aria-hidden="true">
+                  ·
+                </span>
+              </>
+            )}
+          </>
+        )}
+        <span>{copy.projection[model.projection.kind]}</span>
+        {/* The prototype ends the line with when the projection was built and when this
+            read happened. Both are facts about the read, not counters. */}
+        <span className="sep" aria-hidden="true">
+          ·
+        </span>
+        <span data-ms-projection-built={model.projection.builtAt ?? undefined}>
+          {model.projection.builtAt === null
+            ? copy.identityBuiltUnknown
+            : copy.identityBuilt(formatClock(model.projection.builtAt))}
+        </span>
+        <span className="sep" aria-hidden="true">
+          ·
+        </span>
+        <span data-ms-projection-read="">
+          {copy.identityRead(formatClock(model.projection.checkedAt))}
+        </span>
+      </div>
       {model.projection.kind === "current" ? null : (
         <Notice reason={model.projection.reasons.join(" · ")} tone="warning" />
       )}

@@ -5,10 +5,12 @@
  * announced without a line of JavaScript, and the product does not need a
  * richer animation than the platform gives it. The summary carries the whole
  * affordance; the body is the caller's node.
+ *
+ * The class is `.disc` — the prototype's own name for this disclosure. It used to
+ * wear `.chart-note`, which is the trend chart's label row and carries `display: flex`;
+ * borrowing it made every disclosure's body a flex row.
  */
 import type { ReactNode } from "react";
-
-import css from "./Collapsible.module.css";
 
 export type CollapsibleProps = {
   /** Localized summary text. */
@@ -20,9 +22,9 @@ export type CollapsibleProps = {
 
 export function Collapsible(props: CollapsibleProps) {
   return (
-    <details className={css.details} open={props.defaultOpen}>
-      <summary className={css.summary}>{props.summary}</summary>
-      <div className={css.body}>{props.children}</div>
+    <details className="disc" open={props.defaultOpen}>
+      <summary>{props.summary}</summary>
+      <div>{props.children}</div>
     </details>
   );
 }

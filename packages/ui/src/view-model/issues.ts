@@ -211,7 +211,13 @@ export function issueListModel(
   return {
     rows: mapped,
     total,
-    projectCount: complete ? new Set(read.data.items.map((item) => item.projectId)).size : null,
+    projectCount:
+      // A project filter pins the result set to that one project. Otherwise the read states
+      // the span itself: deriving it from the page's own rows understated it whenever the
+      // list was paged, and the head fell back to `134 open` with no `across N projects`.
+      query.filters.project !== ""
+        ? 1
+        : (read.data.projectCount ?? (complete ? new Set(read.data.items.map((item) => item.projectId)).size : null)),
     offset,
     pageSize: PAGE_SIZE,
     page: Math.floor(offset / PAGE_SIZE) + 1,
@@ -250,6 +256,57 @@ export type IssueDetailModel = {
   acceptance: string | null;
   /** Present only when the issue is closed and the store recorded a note. */
   closureNote: string | null;
+  /** The prototype's `Identity keys` panel: the tracker identity, when the store has one. */
+  identityKey: string | null;
+  /** The issue row's own revision — the prototype's meta line ends with it. */
+  revision: number;
+  provider: string | null;
+  /** The prototype's `Occurrences`: one block per recorded event, newest last. */
+  occurrences: ReadonlyArray<{
+    id: number;
+    /** The occurrence's own key, which the prototype prints first in the head row. */
+    occurrenceKey: string;
+    sourceKind: string;
+    sourceIdentity: string;
+    observedBehavior: string;
+    location: string | null;
+    recordedAt: string;
+    evidence: readonly string[];
+  }>;
+  /** The prototype's `Disposition history` table: every recorded transition. */
+  transitions: ReadonlyArray<{
+    from: string | null;
+    to: string;
+    reason: string | null;
+    actor: string | null;
+    recordedAt: string;
+  }>;
+  /** The prototype's `Provenance` table: how this record was imported. */
+  provenance: ReadonlyArray<{
+    kind: string;
+    target: string;
+    sourceHash: string | null;
+    origin: string;
+    importedAt: string | null;
+  }>;
+  /** The prototype's `Relations` table: what this issue is joined to. */
+  relations: ReadonlyArray<{ relation: string; issue: string; title: string | null }>;
+  /** The prototype's `Source` panel: the latest occurrence's own account of itself. */
+  source: {
+    kind: string;
+    identity: string;
+    location: string | null;
+    rootCauseKey: string | null;
+    acceptanceKey: string | null;
+  } | null;
+};
+
+/** What a relation means from the receiving side (`blocks` → `blocked-by`). */
+const REVERSED_ISSUE_RELATION: Record<string, string> = {
+  related: "related",
+  blocks: "blocked-by",
+  "duplicate-of": "duplicated-by",
+  "superseded-by": "supersedes",
 };
 
 export function issueDetailModel(detail: IssueDetail): IssueDetailModel {
@@ -266,12 +323,68 @@ export function issueDetailModel(detail: IssueDetail): IssueDetailModel {
     disposition: detail.disposition,
     dispositionTone: dispositionTone(detail.disposition),
     owner: detail.owner,
-    occurrenceCount: detail.occurrences.length,
+    occurrenceCount: (detail.occurrences ?? []).length,
     registeredAt: formatDate(detail.registeredAt),
     closedAt: closed ? formatDate(detail.closedAt) : null,
     impact: longText(detail.impact),
     acceptance: longText(detail.acceptance),
     closureNote: closed ? longText(detail.closureNote) : null,
+    identityKey: detail.identityKey ?? null,
+    revision: detail.revision,
+    provider: detail.provider ?? null,
+    occurrences: (detail.occurrences ?? []).map((row) => ({
+      id: row.id,
+      occurrenceKey: row.occurrenceKey,
+      sourceKind: row.sourceKind,
+      sourceIdentity: row.sourceIdentity,
+      observedBehavior: row.observedBehavior,
+      location: row.location ?? null,
+      recordedAt: formatDate(row.recordedAt),
+      evidence: row.evidence,
+    })),
+    // The DTO declares this required, but the projection is the source and a record that
+    // predates transitions has none: the detail screen threw `detail.transitions.map` on
+    // such a record rather than rendering an empty history.
+    transitions: (detail.transitions ?? []).map((row) => ({
+      // The prototype prints `—` for the first transition, which has no `from`.
+      from: row.fromDisposition ?? null,
+      to: row.toDisposition,
+      reason: longText(row.reason),
+      actor: row.actor ?? null,
+      recordedAt: formatDate(row.recordedAt),
+    })),
+    provenance: (detail.provenance ?? []).map((row) => ({
+      kind: row.kind,
+      target: row.target,
+      sourceHash: row.sourceHash ?? null,
+      origin: row.origin,
+      importedAt: row.importedAt === null ? null : formatDate(row.importedAt),
+    })),
+    relations: (detail.relations ?? []).map((relation) => {
+      // An incoming join means the other issue points at this one, so the stored word
+      // describes the wrong direction: a `duplicate-of` row on the original says its
+      // duplicate is a duplicate of it.
+      const incoming = relation.fromIssue !== detail.id;
+      return {
+        relation: incoming ? (REVERSED_ISSUE_RELATION[relation.relation] ?? relation.relation) : relation.relation,
+        // The row names the other end of the join, not this issue.
+        issue: incoming ? relation.fromIssue : relation.toIssue,
+        title: relation.title ?? null,
+      };
+    }),
+    // The prototype's Source panel states the NEWEST occurrence's provenance. Both reads
+    // return occurrences in ascending id, so this took `[0]` — the oldest — and kept
+    // showing the first source after later occurrences were recorded.
+    source:
+      (detail.occurrences ?? []).length === 0
+        ? null
+        : {
+            kind: detail.occurrences[detail.occurrences.length - 1]!.sourceKind,
+            identity: detail.occurrences[detail.occurrences.length - 1]!.sourceIdentity,
+            location: detail.occurrences[detail.occurrences.length - 1]!.location ?? null,
+            rootCauseKey: detail.occurrences[detail.occurrences.length - 1]!.rootCauseKey ?? null,
+            acceptanceKey: detail.occurrences[detail.occurrences.length - 1]!.acceptanceKey ?? null,
+          },
   };
 }
 

@@ -32,7 +32,7 @@ import {
 /** What the host knows about the page's read. */
 export type OverviewOutcome =
   | { kind: "loading" }
-  | { kind: "ready"; model: OverviewModel }
+  | { kind: "ready"; model: OverviewModel; revision: number | null }
   | { kind: "failed"; message: string };
 
 /** The path the aggregated read answers on. One read, not five. */
@@ -49,6 +49,9 @@ export const OVERVIEW_PATH = "/api/overview";
 export function overviewCopy(copy: Copy): OverviewCopy {
   return {
     ...copy.overview,
+    // The gate step names live in the iteration detail's own block; the overview's track
+    // prints the same five words.
+    gateStepLabels: copy.iterationDetail.gateStepLabels,
     workflowsEmpty: copy.overview.workflowsHeading,
     absence: {
       "not-applicable": copy.state["not-applicable"],
@@ -81,7 +84,14 @@ export function overviewOutcome(
     case "loading":
       return { kind: "loading" };
     case "ready":
-      return { kind: "ready", model: overviewFromEnvelope(result.envelope) };
+      return {
+        kind: "ready",
+        model: overviewFromEnvelope(result.envelope),
+        // The footer states the STORE revision. `projection.generation` is a different
+        // field in the same envelope and drifts from it, so the footer disagreed with
+        // every other screen's revision.
+        revision: result.envelope.storeRevision,
+      };
     case "error":
       return { kind: "failed", message: result.message };
   }
@@ -96,12 +106,19 @@ export function overviewOutcome(
 export async function readOverview(
   fetchImpl: typeof fetch,
   signal?: AbortSignal,
+  /**
+   * The project whose milestones and latest iteration the overview shows. The prototype
+   * states `All projects` in its head and still names one project on the Milestones
+   * panel (`engine`), because milestones are a project's, not the store's.
+   */
+  projectId?: string,
 ): Promise<
   | { status: "ready"; envelope: ReadEnvelope<OverviewDTO> }
   | { status: "error"; message: string }
 > {
   try {
-    const response = await fetchImpl(OVERVIEW_PATH, {
+    const path = projectId === undefined ? OVERVIEW_PATH : `${OVERVIEW_PATH}?project=${encodeURIComponent(projectId)}`;
+    const response = await fetchImpl(path, {
       headers: { accept: "application/json" },
       ...(signal === undefined ? {} : { signal }),
     });

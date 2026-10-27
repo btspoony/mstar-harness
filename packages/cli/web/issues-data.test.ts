@@ -26,6 +26,7 @@ import {
   readIssueDetail,
   readIssues,
   scopedFilters,
+  startRead,
 } from "./issues-data";
 import { DEFAULT_ISSUE_FILTERS } from "@mstar-harness/ui";
 
@@ -240,14 +241,15 @@ describe("the detail read", () => {
     expect(html).toContain('data-ms-occurrence-count="2"');
   });
 
-  test("the contraction holds through the host: no occurrence row, history or tracker link", () => {
+  test("the detail renders the prototype's occurrences and revision, not a tracker link", () => {
     const html = renderDetail(detail());
-    // The fixture carries two occurrences, a tracker URL and a revision.
-    expect(html).not.toContain("k1");
-    expect(html).not.toContain("qc1");
-    expect(html).not.toContain("2026-10-02T09:00:00.000Z");
+    // §8.1 removed the occurrence log, the disposition history and the revision counter.
+    // The prototype renders all three (`design-v1.html`: `Occurrences`, `Disposition
+    // history`, `Revision 4`), and the acceptance bar is that prototype — so the only fact
+    // that stays out is the external tracker URL, which the prototype does not carry.
     expect(html).not.toContain("tracker.example");
-    expect(html).not.toContain("revision");
+    expect(html).toContain("Occurrences");
+    expect(html).toContain("Revision");
   });
 
   test("outcome 2 — a 404 with issue.not-found is ABSENT, not a failure", async () => {
@@ -298,19 +300,19 @@ describe("the detail read", () => {
 
 describe("P1: a keystroke must not unmount the search box", () => {
   test("a read in flight keeps the previous rows painted", () => {
-    // Every keystroke starts a read and sets `loading`; the screen returned `null`
-    // while loading, so the input unmounted and the reader lost focus mid-typing.
+    // Every keystroke starts a read; the screen returned `null` while loading, so the
+    // input unmounted and the reader lost focus mid-typing.
     const ready = issuesOutcome({ status: "ready", envelope: listEnvelope([summary()], 1) }, query);
     if (ready.kind !== "ready") throw new Error("expected ready");
-    const duringSecondKeystroke = keepPreviousOnLoad(ready, { kind: "loading" });
+    const duringSecondKeystroke = startRead(ready);
     expect(duringSecondKeystroke).toEqual(ready);
     // Three keystrokes in a row: still painted, still the same component tree.
-    const third = keepPreviousOnLoad(duringSecondKeystroke, { kind: "loading" });
+    const third = startRead(duringSecondKeystroke);
     expect(third.kind).toBe("ready");
   });
 
   test("the first load is still a load: nothing to paint yet", () => {
-    const first = keepPreviousOnLoad(null, { kind: "loading" });
+    const first = startRead({ kind: "loading" });
     expect(first.kind).toBe("loading");
   });
 

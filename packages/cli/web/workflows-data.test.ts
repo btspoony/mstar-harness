@@ -102,9 +102,13 @@ describe("the list read", () => {
     expect(workflowsOutcome(result).kind).toBe("failed");
   });
 
-  test("the contraction holds: no lease, no adoption audit, no pin badge", () => {
+  test("the list carries no lease or adoption audit; the pin column is the prototype's", () => {
+    // §8.1 removed leases, adoption audits and pin badges from the list. The prototype keeps
+    // a `Pin` column on the workflow detail's plan table (`design-v1.html`), not here — so on
+    // THIS screen the only surviving exclusion is the lease and the audit, and the pin column
+    // must still be absent because the list has no such column.
     const html = renderList([row()], 1);
-    for (const removed of ["lease", "adoption", "pin", "badge"]) {
+    for (const removed of ["lease", "adoption", "pin badge"]) {
       expect(html.toLowerCase()).not.toContain(removed);
     }
   });
@@ -124,10 +128,10 @@ describe("the detail read", () => {
     );
     expect(html).toContain("issue-project-move");
     expect(html).toContain("phase-2-execute");
-    // The contraction holds through the host: no lease, adoption audit or pin badge.
-    for (const removed of ["lease", "adoption", "pin badge", "pinned"]) {
-      expect(html.toLowerCase()).not.toContain(removed);
-    }
+    // The detail HAS a Leases panel — the prototype's own (`design-v1.html`), which §8.1
+    // had excluded and the acceptance bar puts back. What stays out is an adoption audit.
+    expect(html).toContain("ms-workflow-leases");
+    expect(html.toLowerCase()).not.toContain("adoption");
   });
 
   test("a null payload WITH no generation is unavailable — not a 404", () => {

@@ -8,7 +8,6 @@
  */
 import type { ReactNode } from "react";
 
-import css from "./Notice.module.css";
 
 export type NoticeProps = {
   /** The reason, verbatim from the store or the transport. */
@@ -21,11 +20,11 @@ export type NoticeProps = {
 
 export function Notice(props: NoticeProps) {
   return (
-    <p className={css.notice} data-ms-notice-tone={props.tone ?? "warning"} role="status">
-      <span className={css.mark} aria-hidden="true" />
-      <span className={css.body}>
-        {props.lead === undefined ? null : <span className={css.lead}>{props.lead}</span>}
-        <span className={css.reason} data-ms-reason="">
+    <p className="absence" data-ms-notice-tone={props.tone ?? "warning"} role="status">
+      <span className="absence-word" aria-hidden="true" />
+      <span className="absence-body">
+        {props.lead === undefined ? null : <span className="absence-head">{props.lead}</span>}
+        <span className="absence-reason" data-ms-reason="">
           {props.reason}
         </span>
         {props.children}

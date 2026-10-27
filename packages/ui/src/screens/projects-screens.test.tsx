@@ -99,6 +99,9 @@ const roadmap = (over: Partial<RoadmapDTO> = {}): RoadmapDTO => ({
 
 const projectsCopy: ProjectsCopy = {
   pageTitle: "Projects",
+  totalMeta: (n) => `${n} ${n === 1 ? "project" : "projects"}`,
+  openIssuesMeta: (n) => `${n} open ${n === 1 ? "issue" : "issues"}`,
+  headNote: "a project owns its roadmap, issues and iterations",
   tableCaption: "Projects",
   columns: { title: "Title", id: "ID", lifecycle: "Lifecycle", openIssues: "Open", description: "Description" },
   openIssues: (count) => `${count} open`,
@@ -117,6 +120,17 @@ const renderList = (items: ProjectListDTO["items"], total = items.length, genera
   );
 
 const detailCopy: ProjectDetailCopy = {
+  storedFactsHeading: "Direction",
+  storedFacts: {
+    factsHeading: "Stored facts",
+    columns: { frontmatterStatus: "Frontmatter status", createdAt: "Created at", residualsRef: "Residuals ref", goals: "Goals", sections: "Sections" },
+    note: "Direction is rendered as text; goals are read-only, never checkboxes in the UI.",
+  },
+  catalogHeading: "Catalog identity",
+  roadmapState: "roadmap present",
+  authorityHeading: "Roadmap authority",
+  authorityColumns: { state: "State", revision: "Revision", contentHash: "Content hash", frontmatter: "Frontmatter" },
+  authorityAbsent: "This project declares no roadmap authority row.",
   breadcrumb: { label: "Breadcrumb", trail: "Projects" },
   fields: { title: "Identity", id: "ID", lifecycle: "Lifecycle", path: "Path", description: "Description", noDescription: "—" },
   tabLabel: "Features",
@@ -131,6 +145,7 @@ const detailCopy: ProjectDetailCopy = {
     goalUnchecked: "open",
     milestoneProgress: (done, total) => `${done}/${total}`,
     milestoneOpen: (open) => `${open} open`,
+    countLabels: { open: "open", resolved: "resolved", retired: "retired without resolution", total: "total" },
     noTarget: "no target",
     unassigned: (count) => `${count} unassigned`,
     absentNextStep: (features) => `Available: ${features}`,
@@ -187,7 +202,9 @@ describe("Projects list — the facts of §8.2", () => {
   test("_default is a real row, not a hidden one", () => {
     // It is the store's bucket for unattributed records (D12). Hiding it would
     // hide that the harness keeps one at all.
-    expect(html).toContain('data-ms-row-key="_default"');
+    // The list is the prototype's row list now, not a DataTable: the same hook rides
+    // the row element rather than a `data-ms-row-key`.
+    expect(html).toContain('data-ms-project="_default"');
   });
 
   test("NEGATIVE: no counter from the read envelope", () => {
@@ -230,36 +247,46 @@ describe("ProjectDetail — the fixed feature set", () => {
     expect(html).toContain('aria-current="page"');
   });
 
-  test("NEGATIVE: no envelope counter, catalog revision or source hash", () => {
-    for (const removed of ["storeRevision", "catalogRevision", "builtAt", "checkedAt", "sha256:abcd1234", "2026-10-23T09:42:00.000Z"]) {
+  test("the envelope counters stay out; the roadmap's own hash is shown", () => {
+    // The counters belong to the read envelope, not the record. The content hash is
+    // different: the prototype's `Roadmap authority` panel prints it, so it renders.
+    for (const removed of ["storeRevision", "catalogRevision", "builtAt", "checkedAt"]) {
       expect(html).not.toContain(removed);
     }
+    expect(html).toContain("sha256:abcd1234");
   });
 });
 
 describe("ProjectDetail — the Roadmap feature", () => {
   const html = renderDetail({});
 
-  test("direction is collapsed, goals carry their check state", () => {
+  test("the direction is a disclosure and the goals are one count, not a list", () => {
+    // The prototype reports goals only as `Goals  1 / 3 checked` inside Stored facts.
+    // A list here would answer the same question twice, at greater length.
     expect(html).toContain("<details");
     expect(html).toContain("One product, two hosts.");
-    expect(html).toContain('data-ms-goal-checked="true"');
-    expect(html).toContain('data-ms-goal-checked="false"');
-    expect(html).toContain("One design system");
+    expect(html).toContain("1 / 3");
+    expect(html).not.toContain("data-ms-goal-checked");
+    expect(html).not.toContain("data-ms-goal-depth");
   });
 
-  test("a sub-goal is indented by depth, not nested", () => {
-    expect(html).toContain('data-ms-goal-depth="1"');
-    expect(html).toContain('data-ms-goal-depth="0"');
-  });
-
-  test("the milestone board carries status, target, progress, open count and its issues", () => {
+  test("the milestone board carries status, target, the four tallies and its issues", () => {
     expect(html).toContain('data-ms-milestone="9f2c4a10"');
     expect(html).toContain("Release the shared layer");
     expect(html).toContain("2026-11-07");
-    expect(html).toContain("6/10");
-    expect(html).toContain("4 open");
     expect(html).toContain("I-000870");
+    // The prototype's row states four tallies, each its own number-and-label pair. Assert
+    // the numbers through their own hooks: labels alone would pass even if every count
+    // rendered as zero, and `retired without resolution` contains `resolved`.
+    // The fixture's milestone: 10 total, 4 open, 6 resolved, 0 otherwise retired.
+    for (const [key, value] of [
+      ["open", "4"],
+      ["resolved", "6"],
+      ["retired", "0"],
+      ["total", "10"],
+    ] as const) {
+      expect(html).toContain(`data-ms-count="${key}" data-ms-count-value="${value}"`);
+    }
   });
 
   test("the unassigned count is stated once, as a count", () => {

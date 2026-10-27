@@ -92,9 +92,21 @@ const workflow = (over: Partial<WorkflowDTO> = {}): WorkflowDTO => ({
 
 const workflowsCopy: WorkflowsCopy = {
   pageTitle: "Workflows",
+  totalMeta: (n) => `${n} ${n === 1 ? "workflow" : "workflows"}`,
+  activeRegistrationsMeta: (n) => `${n} active ${n === 1 ? "registration" : "registrations"}`,
+  projectedFrom: (revision) => `projected from store rev ${revision}`,
   tableCaption: "Workflows",
   columns: { id: "ID", title: "Title", status: "Status", root: "Root", updated: "Updated", plans: "Plans" },
   plansProgress: (done, total) => `${done}/${total} plans`,
+  filtersHeading: "Filters",
+  filters: {
+    status: "Status",
+    type: "Type",
+    search: "Search workflow id or title",
+    clear: "Clear filters",
+    any: "Any",
+    results: (shown, total) => `${shown} of ${total} results`,
+  },
   truncated: (shown, total) => `showing ${shown} of ${total}`,
   noCatalogTitle: "no catalog row",
   noRoot: "—",
@@ -108,19 +120,33 @@ const renderList = (
   items: WorkflowDTO[],
   total: number,
   generation: number | null = 7,
+  storeRevision?: number,
 ): string =>
   renderToStaticMarkup(
     <Workflows
       model={workflowListModel({ data: { items, total } as WorkflowListDTO, projection: { ...projection, generation } })}
       copy={workflowsCopy}
+      {...(storeRevision === undefined ? {} : { storeRevision })}
     />,
   );
 
 const detailCopy: WorkflowDetailCopy = {
+  leasesHeading: "Leases",
+  leasesCount: (n) => `${n} active · exclusive`,
+  leasesEmpty: "No lease is held on this workflow.",
+  leaseColumns: { plan: "Plan", kind: "Lease kind", holder: "Holder", worktree: "Worktree path", expires: "Expires" },
+  updatedMeta: (when) => `updated ${when}`,
+  activeRegistration: "active registration",
+  chainBase: "Base",
+  chainSource: "Source",
+  chainIntegration: "Integration",
+  chainTarget: "Target",
   breadcrumb: { label: "Breadcrumb", current: "Workflows" },
   executionHeading: "Execution",
   planTableHeading: "Plans",
-  catalogHeading: "Catalog",
+  catalogHeading: "Catalog identity",
+  pinChip: "Pin",
+  revisionMeta: (revision) => `rev ${revision}`,
   fields: {
     id: "ID",
     type: "Type",
@@ -195,6 +221,25 @@ describe("Workflows list — the truncation disclosure comes from `total`", () =
     expect(html).not.toContain("showing");
   });
 
+  test("the head states the store's count, the active registrations, and the revision", () => {
+    // All three segments the prototype's head carries. The counts come from the model and
+    // the rows; the revision comes from the read envelope.
+    const html = renderList([workflow(), workflow({ id: "w2", activeRegistration: true })], 9, 7, 1224);
+    expect(html).toContain('data-ms-count=""');
+    expect(html).toContain("9 workflows");
+    expect(html).toContain('data-ms-active-registrations=""');
+    expect(html).toMatch(/\d+ active registrations/);
+    expect(html).toContain("projected from store rev 1224");
+  });
+
+  test("the revision segment is omitted, not guessed, when the host cannot state it", () => {
+    const html = renderList([workflow()], 1);
+    expect(html).not.toContain("projected from");
+    expect(html).not.toContain("data-ms-projected-from");
+    // The other two segments are unaffected: a missing revision is not a missing count.
+    expect(html).toContain('data-ms-count=""');
+  });
+
   test("more rows than total is not called truncation", () => {
     // Defensive: the disclosure compares numbers, it does not count rows.
     const model = workflowListModel({
@@ -224,9 +269,12 @@ describe("Workflows list — the state machine", () => {
 describe("Workflows list — NEGATIVE: the removed join bookkeeping", () => {
   const html = renderList([workflow()], 1);
 
-  test("no catalog-pin badge is rendered", () => {
+  test("the catalog-pin badges are rendered, as the prototype's Join badges column", () => {
+    // IA §8.1 kept them out as join bookkeeping. The prototype has the column and the
+    // prototype is the acceptance criterion for this interface, so the badges travel
+    // with the row; the word is always spelled out, never a colour-only chip.
     for (const badge of ["catalog-missing", "catalog-pin-missing", "catalog-pin-conflict"]) {
-      expect(html).not.toContain(badge);
+      expect(renderList([workflow({ badges: [badge] })], 1)).toContain(badge);
     }
   });
 
@@ -239,9 +287,11 @@ describe("Workflows list — NEGATIVE: the removed join bookkeeping", () => {
   test("the row model cannot carry them: the negative set is enforced by shape", () => {
     const model = workflowListModel({ data: { items: [workflow()], total: 1 } as WorkflowListDTO, projection });
     if (model.rows.kind !== "populated") throw new Error("expected rows");
-    for (const removed of ["leases", "terminalUnregistered", "terminalAdoptions", "badges", "plans"]) {
+    for (const removed of ["leases", "terminalUnregistered", "terminalAdoptions", "plans"]) {
       expect(Object.keys(model.rows.value[0] ?? {})).not.toContain(removed);
     }
+    // `badges` is carried now — the Join badges column needs it.
+    expect(Object.keys(model.rows.value[0] ?? {})).toContain("badges");
   });
 
   test("execution-unavailable survives as a reason, not as a chip", () => {
@@ -260,12 +310,20 @@ describe("WorkflowDetail — execution, anchors, catalog and the plan table", ()
     }
   });
 
-  test("the four branch anchors are rendered as a chain and as fields", () => {
-    expect(html).toContain('data-ms-branch-chain=""');
-    expect(html).toContain("main → issue-project-move → issue-project-move → main");
-    for (const label of ["Branch base", "Branch source", "Branch integration", "Branch target"]) {
-      expect(html).toContain(label);
-    }
+  test("the registration chip states a fact, so an inactive workflow does not claim it", () => {
+    // The prototype shows `active registration` because its sample record is one. The
+    // chip is an assertion about the store, not decoration: a workflow the registry no
+    // longer counts must render without it.
+    expect(html).toContain('data-ms-registration');
+    const inactive = renderDetail({ ...workflow(), activeRegistration: false });
+    expect(inactive).not.toContain('data-ms-registration');
+  });
+
+  test("the detail screen carries no branch chain (the prototype's does not)", () => {
+    // The overview's active-workflow row DOES show `Base → Source → Integration → Target`.
+    // The detail screen does not: it states the same four facts once, in the catalog and
+    // execution panels, and repeating them as a chain added a frame the prototype lacks.
+    expect(html).not.toContain("data-ms-branch-chain");
   });
 
   test("the catalog identity is one cell with the root-register fact", () => {
@@ -296,11 +354,12 @@ describe("WorkflowDetail — execution, anchors, catalog and the plan table", ()
 describe("WorkflowDetail — NEGATIVE: leases, adoption audit, pin badges", () => {
   const html = renderDetail(workflow());
 
-  test("no lease kind, holder, worktree or expiry", () => {
-    expect(html).not.toContain("/tmp/wt-secret");
-    expect(html).not.toContain("worktreePath");
-    expect(html).not.toContain("2026-10-26T00:00:00.000Z");
-    expect(html).not.toContain("holder");
+  test("the Leases card is rendered, as the prototype's detail has one", () => {
+    // IA §8.1 kept leases out. The prototype's workflow detail has a Leases card and
+    // the prototype is the acceptance criterion, so the card renders — from the leases
+    // the projection attaches to each plan, which is where the store actually puts them.
+    expect(html).toContain("data-ms-leases");
+    expect(html).toContain("/tmp/wt-secret");
   });
 
   test("no terminal-adoption audit row", () => {
@@ -325,10 +384,13 @@ describe("WorkflowDetail — NEGATIVE: leases, adoption audit, pin badges", () =
   test("the detail model cannot carry them: the negative set is enforced by shape", () => {
     const model = workflowDetailModel({ data: workflow(), projection });
     if (model.kind !== "populated") throw new Error("expected the detail");
-    for (const removed of ["leases", "terminalUnregistered", "terminalAdoptions", "badges", "pin"]) {
+    for (const removed of ["terminalUnregistered", "terminalAdoptions", "pin"]) {
       expect(Object.keys(model.value)).not.toContain(removed);
     }
-    expect(Object.keys(model.value.workflow)).not.toContain("leases");
+    // `leases` sits on the detail model now (the card needs it), and `badges` on the
+    // workflow row (the list's column needs it).
+    expect(Object.keys(model.value)).toContain("leases");
+    expect(Object.keys(model.value.workflow)).toContain("badges");
   });
 });
 

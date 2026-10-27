@@ -16,6 +16,7 @@ import type { ProjectListDTO, RoadmapContent, RoadmapDTO } from "@mstar-harness/
 
 import type { Resolved } from "./state.ts";
 import { resolveRead, resolveRecord } from "./state.ts";
+import { formatDate } from "./format.ts";
 import { lifecycleTone, type Tone } from "./status.ts";
 import { countText } from "./format.ts";
 
@@ -82,6 +83,8 @@ export type RoadmapMilestone = {
   target: string | null;
   progress: { done: number; total: number } | null;
   openIssues: number;
+  /** The four tallies the prototype's board row prints. */
+  counts: { open: number; resolved: number; retired: number; total: number };
   /** The issues assigned to this milestone: id, title, disposition. */
   issues: readonly { id: string; title: string; disposition: string }[];
 };
@@ -96,6 +99,17 @@ export type RoadmapMilestone = {
  * `absent` arm and never reaches this model.
  */
 export type RoadmapModel = {
+  /** The roadmap's authority row, for the prototype's `Roadmap authority` card. */
+  authority: { state: string; revision: string; contentHash: string; frontmatter: string } | null;
+  /** The prototype's `Stored facts` panel: what the stored document itself records.
+   *  Every field comes from the parsed frontmatter, so no extra read is needed. */
+  storedFacts: {
+    frontmatterStatus: string;
+    createdAt: string;
+    residualsRef: string;
+    goals: string;
+    sections: string;
+  } | null;
   direction: string | null;
   goals: readonly RoadmapGoal[];
   milestones: readonly RoadmapMilestone[];
@@ -115,6 +129,27 @@ export type RoadmapModel = {
 export function roadmapModel(read: RoadmapDTO, content: RoadmapContent | null): RoadmapModel {
   const parents = new Set((content?.goals ?? []).map((goal) => goal.ordinal));
   return {
+    authority:
+      read.authority.state === "present"
+        ? {
+            state: read.authority.state,
+            revision: String(read.authority.revision),
+            contentHash: read.authority.contentHash,
+            // The frontmatter's own keys, which is what the prototype lists: the
+            // stored document's top-level fields, not a fixed set.
+            frontmatter: Object.keys(content?.frontmatter ?? {}).join(" · "),
+          }
+        : null,
+    storedFacts:
+      content === null
+        ? null
+        : {
+            frontmatterStatus: content.frontmatter.status,
+            createdAt: content.frontmatter.created_at,
+            residualsRef: content.frontmatter.residuals_ref ?? "—",
+            goals: `${content.goals.filter((goal) => goal.checked).length} / ${content.goals.length}`,
+            sections: String(content.sections.length),
+          },
     direction: content?.direction ?? null,
     goals: (content?.goals ?? []).map((goal) => ({
       ordinal: goal.ordinal,
@@ -129,6 +164,12 @@ export function roadmapModel(read: RoadmapDTO, content: RoadmapContent | null): 
       target: milestone.target,
       progress: milestone.totalIssues === 0 ? null : { done: milestone.resolvedIssues, total: milestone.totalIssues },
       openIssues: milestone.openIssues,
+      counts: {
+        open: milestone.openIssues,
+        resolved: milestone.resolvedIssues,
+        retired: milestone.otherRetiredIssues,
+        total: milestone.totalIssues,
+      },
       issues: read.milestones.issues
         .filter((issue) => issue.milestoneId === milestone.milestoneId)
         .map((issue) => ({ id: issue.id, title: issue.title, disposition: issue.disposition })),
@@ -147,6 +188,14 @@ export type ProjectIdentity = {
   lifecycleTone: Tone;
   /** `{HARNESS_DIR}`-relative location, e.g. `projects/engine`. */
   path: string;
+  /** The catalog revision, printed in the head's meta line. */
+  revision: string;
+  /**
+   * The catalog row's two dates, for the identity panel's last two rows. `null` when the
+   * record is unknown: an empty string would assert a blank date on every consumer.
+   */
+  registeredAt: string | null;
+  updatedAt: string | null;
 };
 
 /** The identity block from the roadmap's catalog identity. */
@@ -158,6 +207,9 @@ export function projectIdentity(catalog: RoadmapDTO["catalog"]): ProjectIdentity
     lifecycle: catalog.lifecycle,
     lifecycleTone: lifecycleTone(catalog.lifecycle),
     path: `${catalog.rootKind}:${catalog.relativePath}`,
+    revision: String(catalog.revision),
+    registeredAt: formatDate(catalog.registeredAt),
+    updatedAt: formatDate(catalog.updatedAt),
   };
 }
 

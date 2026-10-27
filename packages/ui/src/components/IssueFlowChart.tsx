@@ -16,7 +16,6 @@
  * where they are stated.
  */
 import type { IssueFlowPoint } from "../view-model/overview.ts";
-import css from "./IssueFlowChart.module.css";
 
 /** The plot box: wide, short, and deliberately not to scale with the pixels. */
 const VIEW_WIDTH = 100;
@@ -28,14 +27,25 @@ export type IssueFlowChartProps = {
   points: readonly IssueFlowPoint[];
   /** The accessible name: the series and its date range. */
   label: string;
+  /**
+   * The prototype draws the same series at two fixed heights: `compact` (88px, the
+   * overview's card) and `full` (132px, the issues screen's own panel). The height is
+   * fixed on purpose — a chart that scaled with its container would grow a pixel for
+   * every pixel of pane width, which is what `height: auto` did to a 1350px panel.
+   * `design-v1.html:3229` is the source: `var height = compact ? 88 : 132;`.
+   */
 };
 
 /** A cumulative step path: hold each value, then rise to the next. */
-function stepPath(values: readonly number[], max: number): string {
+function stepPath(values: readonly number[], floor: number, ceiling: number): string {
   const n = values.length;
   const plotH = VIEW_HEIGHT - PAD * 2;
+  // The prototype's plot spans the series' own floor..ceiling, not 0..max: three evenly
+  // spaced grid lines labelled 800 / 850 / 900 are a magnified band, and drawing from zero
+  // would flatten it to a nearly straight line.
+  const span = ceiling - floor === 0 ? 1 : ceiling - floor;
   const x = (index: number): number => (n <= 1 ? 0 : (index / (n - 1)) * VIEW_WIDTH);
-  const y = (value: number): number => PAD + plotH - (value / max) * plotH;
+  const y = (value: number): number => PAD + plotH - ((value - floor) / span) * plotH;
   let path = `M${x(0).toFixed(2)},${y(values[0] ?? 0).toFixed(2)}`;
   for (let index = 1; index < n; index += 1) {
     path += `H${x(index).toFixed(2)}V${y(values[index] ?? 0).toFixed(2)}`;
@@ -51,10 +61,28 @@ export function IssueFlowChart(props: IssueFlowChartProps) {
     1,
     ...points.map((point) => Math.max(point.captured, point.retired)),
   );
+  // The prototype's axis does not start at zero: its three grid lines are evenly spaced
+  // and label 800 / 850 / 900 — the series' own floor and ceiling. Drawing from 0 flattens
+  // a narrow band into a nearly straight line.
+  // An empty series has no floor: `Math.min()` of nothing is `Infinity`, and a span of
+  // `ceiling - Infinity` would be `-Infinity` inside every path coordinate.
+  const min =
+    points.length === 0
+      ? 0
+      : Math.min(...points.map((point) => Math.min(point.captured, point.retired)));
+  const floor = Number.isFinite(min) ? min : 0;
   const baseline = VIEW_HEIGHT - PAD;
   return (
+    <div className="chart-frame" data-ms-chart-frame="">
+      {/* The prototype prints the plot's top and baseline as text beside the drawing.
+          Inside this SVG they would stretch with it, so they are HTML siblings. */}
+      <span className="chart-y-axis" aria-hidden="true">
+        <span>{max}</span>
+        <span>{Math.round((max + min) / 2)}</span>
+        <span>{min}</span>
+      </span>
     <svg
-      className={css.chart}
+      className="chart-svg"
       viewBox={`0 0 ${VIEW_WIDTH} ${VIEW_HEIGHT}`}
       preserveAspectRatio="none"
       role="img"
@@ -62,22 +90,29 @@ export function IssueFlowChart(props: IssueFlowChartProps) {
       data-ms-flow-chart=""
     >
       <title>{props.label}</title>
-      <line className={css.grid} x1={0} x2={VIEW_WIDTH} y1={PAD} y2={PAD} />
-      <line className={css.grid} x1={0} x2={VIEW_WIDTH} y1={baseline} y2={baseline} />
+      <line className="grid" x1={0} x2={VIEW_WIDTH} y1={PAD} y2={PAD} />
+      <line className="grid" x1={0} x2={VIEW_WIDTH} y1={baseline} y2={baseline} />
+      {/* The prototype labels the axis in its own `<text class="axis-text">`; this SVG
+          stretches (`preserveAspectRatio="none"`), so the labels live outside it — see
+          `.chart-y-axis` in the stylesheet. The two numbers are the top of the plot and
+          the baseline. */}
       <path
-        className={css.captured}
+        className="line-captured"
         d={stepPath(
           points.map((point) => point.captured),
+          floor,
           max,
         )}
       />
       <path
-        className={css.retired}
+        className="line-retired"
         d={stepPath(
           points.map((point) => point.retired),
+          floor,
           max,
         )}
       />
     </svg>
+    </div>
   );
 }

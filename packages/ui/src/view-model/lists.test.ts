@@ -131,9 +131,11 @@ describe("workflows", () => {
 
   test("NEGATIVE: leases, adoption rows and pin badges are not surfaced", () => {
     const row = workflowRow(workflow());
-    for (const removed of ["leases", "terminalUnregistered", "terminalAdoptions", "badges", "plans"]) {
+    for (const removed of ["leases", "terminalUnregistered", "terminalAdoptions", "plans"]) {
       expect(Object.keys(row)).not.toContain(removed);
     }
+    // The prototype's `Join badges` column renders these, so the row carries them.
+    expect(Object.keys(row)).toContain("badges");
     // The one surviving badge is the reason a state is unavailable, not a chip.
     expect(row.executionUnavailableReason).toBeNull();
     expect(workflowRow(workflow({ badges: ["execution-unavailable"] })).executionUnavailableReason).not.toBeNull();
@@ -164,9 +166,13 @@ describe("workflows", () => {
     expect(model.value.plans).toHaveLength(2);
     expect(model.value.plans[0]).toMatchObject({ planId: "p1", title: "Plan one", status: "Done" });
     expect(model.value.plans[1]).toMatchObject({ planId: "p2", title: null, status: "InProgress", progress: "wiring" });
-    for (const removed of ["leases", "pin", "badges"]) {
+    // `pin` is carried now: the prototype's plan table has a Pin column, read from the
+    // DTO's `catalogPinRevision`. Leases stay on the workflow, not on a plan row, and the
+    // join badges stay out.
+    for (const removed of ["leases", "badges"]) {
       expect(Object.keys(model.value.plans[0] ?? {})).not.toContain(removed);
     }
+    expect(model.value.plans[0] ?? {}).toHaveProperty("pin");
   });
 
   test("a null record is absent, and a failed read is unavailable", () => {
@@ -189,9 +195,11 @@ describe("iterations", () => {
 
   test("NEGATIVE: no document inventory and no compass milestone list is surfaced", () => {
     const row = iterationRow(iteration());
-    for (const removed of ["documents", "milestones", "revision", "counters"]) {
+    // `documents` is a count now (the prototype's `Documents` column); the rest stay out.
+    for (const removed of ["milestones", "revision", "counters"]) {
       expect(Object.keys(row)).not.toContain(removed);
     }
+    expect(Object.keys(row)).toContain("documents");
   });
 
   test("a project that attributes no iteration is absent, not empty", () => {
@@ -260,12 +268,15 @@ describe("projects", () => {
     expect(projectRow(listItem("_default", 1, null)).openIssuesText).toBe("1 open issue");
   });
 
-  test("the identity block carries the path but no revision or dates", () => {
+  test("the identity block carries the path, the revision and the catalog's two dates", () => {
     const identity = projectIdentity(catalog({ kind: "project", id: "engine", title: "Engine" }));
     expect(identity.path).toBe("plans:p.md");
-    for (const removed of ["revision", "registeredAt", "updatedAt", "sourceHash"]) {
-      expect(Object.keys(identity)).not.toContain(removed);
-    }
+    // The prototype's identity panel prints Revision, Registered and Updated, so all three
+    // are carried. The source hash stays out — the screen has no place for it.
+    expect(identity.revision).toBe("3");
+    expect(Object.keys(identity)).toContain("registeredAt");
+    expect(Object.keys(identity)).toContain("updatedAt");
+    expect(Object.keys(identity)).not.toContain("sourceHash");
   });
 
   test("the list resolves empty vs unavailable distinctly", () => {

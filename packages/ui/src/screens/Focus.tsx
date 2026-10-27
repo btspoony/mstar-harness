@@ -14,16 +14,21 @@
  * Every absence goes through `state.ts`: the model resolved each member, and this
  * component only chooses the copy for the arm it was handed.
  */
+import { Fragment } from "react";
 import { EmptyState, type AbsenceArm } from "../components/EmptyState.tsx";
 import { StatusDot } from "../components/StatusDot.tsx";
 import { TruncatedText } from "../components/TruncatedText.tsx";
 import type { FocusGroup, FocusModel, FocusPlan, FocusBinding } from "../view-model/focus.ts";
-import type { Tone } from "../view-model/status.ts";
-import css from "./Focus.module.css";
+import type { GateStepId, Tone } from "../view-model/status.ts";
 
 /** Every visible string this screen needs. Task 5 supplies them. */
 export type FocusCopy = {
   pageTitle: string;
+  /** The four branch anchors' labels, shared with the workflow screens. */
+  branchBase: string;
+  branchSource: string;
+  branchIntegration: string;
+  branchTarget: string;
   /** The binding header: `bound to this session`. */
   bindingBound: (workflowId: string) => string;
   bindingTerminal: (workflowId: string) => string;
@@ -43,6 +48,8 @@ export type FocusCopy = {
   /** The store has not recorded a status for this plan. */
   planStatusAbsent: string;
   deliveryHeading: string;
+  /** The fourth panel's step names, shared with the overview's track. */
+  gateStepLabels: Record<GateStepId, string>;
   deliveryLine: (iterationId: string, step: number, of: number) => string;
   deliveryNoIteration: string;
   /** The iteration records no compass, so no step is proven — never `step 0 of 5`. */
@@ -69,24 +76,28 @@ function Binding(props: { binding: FocusBinding; copy: FocusCopy; onPick?: (id: 
   switch (binding.kind) {
     case "bound":
       return (
-        <p className={css.binding} data-ms-binding="bound">
-          <TruncatedText text={copy.bindingBound(binding.workflowId)} />
-        </p>
+        <div className="screen-meta" data-ms-binding="bound">
+          <span>
+            <TruncatedText text={copy.bindingBound(binding.workflowId)} />
+          </span>
+        </div>
       );
     case "terminal":
       return (
-        <p className={css.binding} data-ms-binding="terminal">
-          <TruncatedText text={copy.bindingTerminal(binding.workflowId)} />
-        </p>
+        <div className="screen-meta" data-ms-binding="terminal">
+          <span>
+            <TruncatedText text={copy.bindingTerminal(binding.workflowId)} />
+          </span>
+        </div>
       );
     case "unbound":
       return (
-        <div className={css.binding} data-ms-binding="unbound">
-          <p className={css.bindingText}>{copy.bindingUnbound}</p>
+        <div className={"wf-summary"} data-ms-binding="unbound">
+          <p className={"wf-id"}>{copy.bindingUnbound}</p>
           {props.onPick === undefined ? null : (
-            <div className={css.picker} role="group" aria-label={copy.pickerLabel} data-ms-picker="">
+            <div className={"chips"} role="group" aria-label={copy.pickerLabel} data-ms-picker="">
               {binding.picker.map((id) => (
-                <button key={id} type="button" className={css.pick} onClick={() => props.onPick?.(id)}>
+                <button key={id} type="button" className={"chip"} onClick={() => props.onPick?.(id)}>
                   {id}
                 </button>
               ))}
@@ -96,12 +107,12 @@ function Binding(props: { binding: FocusBinding; copy: FocusCopy; onPick?: (id: 
       );
     case "error":
       return (
-        <div className={css.binding} data-ms-binding="error">
-          <p className={css.bindingText}>{binding.message}</p>
+        <div className={"wf-summary"} data-ms-binding="error">
+          <p className={"wf-id"}>{binding.message}</p>
           {binding.candidates.length === 0 ? null : (
-            <div className={css.picker} role="group" aria-label={copy.pickerLabel} data-ms-picker="">
+            <div className={"chips"} role="group" aria-label={copy.pickerLabel} data-ms-picker="">
               {binding.candidates.map((id) => (
-                <button key={id} type="button" className={css.pick} onClick={() => props.onPick?.(id)}>
+                <button key={id} type="button" className={"chip"} onClick={() => props.onPick?.(id)}>
                   {id}
                 </button>
               ))}
@@ -116,49 +127,55 @@ function Binding(props: { binding: FocusBinding; copy: FocusCopy; onPick?: (id: 
 function Plan(props: { plan: FocusPlan; copy: FocusCopy }) {
   const { plan, copy } = props;
   return (
-    <div className={css.plan} data-ms-plan={plan.planId}>
-      <p className={css.planHead}>
+    <div className="planboard-plan" data-ms-plan={plan.planId}>
+      {/* The prototype's plan line (`.planboard-plan`): a tone dot, the id, then the
+          recorded note or the status word at the right edge. A plan the store has not
+          given a status yet says so in words — never a colour-only dot. */}
+      <span className={`dot tone-${plan.statusTone}`} aria-hidden="true" />
+      <span className="p-id">
         <TruncatedText text={plan.planId} />
-        {/* A plan the store has not given a status yet is named as such. The
-            empty string used to satisfy StatusDot's required label while
-            rendering a colour-only dot — the exact failure the required prop
-            exists to prevent. */}
-        {plan.status === null ? (
-          <span className={css.noteAbsent}>{copy.planStatusAbsent}</span>
-        ) : (
-          <StatusDot label={plan.status} tone={plan.statusTone} mono />
-        )}
-      </p>
-      {plan.blockedReason === null ? null : (
-        <p className={css.blocked} data-ms-blocked-reason="">
-          <span className={css.lineLabel}>{copy.blockedLabel}</span>
-          <TruncatedText text={plan.blockedReason} block />
-        </p>
-      )}
-      {plan.note === null ? null : (
-        <p className={css.note} data-ms-progress-note="">
-          <span className={css.lineLabel}>{copy.progressLabel}</span>
-          <TruncatedText text={plan.note} block />
-        </p>
-      )}
-      {plan.note === null && plan.blockedReason === null ? (
-        <p className={css.noteAbsent} data-ms-progress-absent="">
-          {copy.progressAbsent}
-        </p>
+      </span>
+      {/* `bucketPlans` files an unrecorded status under Todo, so the group heading cannot
+          say that the store never recorded one. The word is what keeps a colour (or a
+          missing colour) from being the only channel. */}
+      {plan.status === null ? (
+        <span className="t-11 muted" data-ms-plan-status-absent="">
+          {copy.planStatusAbsent}
+        </span>
       ) : null}
+      {plan.note === null ? (
+        plan.blockedReason === null ? (
+          <span className="p-prog" data-ms-progress="absent" data-ms-progress-absent="">
+            {copy.progressAbsent}
+          </span>
+        ) : null
+      ) : (
+        <span className="p-prog" data-ms-progress="recorded" data-ms-progress-note="">
+          <TruncatedText text={plan.note} />
+        </span>
+      )}
+      {plan.blockedReason === null ? null : (
+        <span className="p-prog" data-ms-blocked-reason="">
+          {copy.blockedLabel}:{" "}
+          <TruncatedText text={plan.blockedReason} />
+        </span>
+      )}
     </div>
   );
 }
 
-/** One status group; a group with no plans is still a group (a count, not a gap). */
+/** One status column of the prototype's `.planboard`: its head carries the count. */
 function Group(props: { group: FocusGroup; copy: FocusCopy }) {
   return (
-    <section className={css.group} data-ms-group={props.group.status}>
-      <h3 className={css.groupHead}>{props.copy.groupHeading(props.group.status, props.group.count)}</h3>
+    <div className="planboard-col" data-ms-group={props.group.status}>
+      <div className="planboard-head">
+        <span>{props.group.status}</span>
+        <span className="num">{props.group.count}</span>
+      </div>
       {props.group.plans.map((plan) => (
         <Plan key={plan.planId} plan={plan} copy={props.copy} />
       ))}
-    </section>
+    </div>
   );
 }
 
@@ -166,35 +183,58 @@ export function Focus(props: FocusProps) {
   const { model, copy } = props;
   const workflow = model.workflow;
   return (
-    <article className={css.page} data-ms-screen="focus">
-      <h1 className={css.title}>{copy.pageTitle}</h1>
-
-      {/* 1 — the binding line. Always present. */}
-      <Binding binding={model.binding} copy={copy} onPick={props.onPick} />
+    <article className={"screen"} data-ms-screen="focus">
+      {/* The prototype's session-focus head: the title, then a chip that names the
+          session and the line that says what it is bound to. */}
+      <div className="screen-head">
+        <h1>{copy.pageTitle}</h1>
+        {/* 1 — the binding line lives in the head: the prototype's `screen-meta`
+            names the session and what it is bound to, on the line under the title. */}
+        <Binding binding={model.binding} copy={copy} onPick={props.onPick} />
+      </div>
 
       {/* 2 + 3 — the bound workflow and its plan board, with each plan's
           recorded progress or blocked reason. */}
-      <section className={css.panel} aria-labelledby="ms-focus-board">
-        <h2 className={css.heading} id="ms-focus-board">
-          {copy.boardHeading}
-        </h2>
+      <section className="panel" aria-labelledby="ms-focus-board">
+        <div className="panel-head">
+          <h2 className="panel-title" id="ms-focus-board">
+            {copy.boardHeading}
+          </h2>
+        </div>
+        <div className="panel-body">
         {workflow.kind === "populated" && workflow.value !== null ? (
           <>
-            <p className={css.workflowLine} data-ms-workflow="">
-              <TruncatedText text={workflow.value.id} />
-              <span className={css.workflowMeta}>
-                {workflow.value.type}
-                {workflow.value.phase === null ? "" : ` · ${workflow.value.phase}`}
+            <div className="wf-summary" data-ms-workflow="">
+              <span className="wf-id">
+                <TruncatedText text={workflow.value.id} />
               </span>
-              <span className={css.branch} data-ms-branch-chain="">
-                {[workflow.value.branch.base, workflow.value.branch.source, workflow.value.branch.integration, workflow.value.branch.target]
-                  .map((anchor) => anchor ?? "—")
-                  .join(" → ")}
-              </span>
-            </p>
-            {model.groups.map((group) => (
-              <Group key={group.status} group={group} copy={copy} />
-            ))}
+              <span className="muted">{workflow.value.type}</span>
+              {workflow.value.phase === null ? null : (
+                <StatusDot label={workflow.value.phase} tone="neutral" mono />
+              )}
+            </div>
+            {/* The prototype draws the chain as one `.branch-line` holding an anchor per
+                label; a single joined string gives the line one item and no arrows. */}
+            <div className="branch-line" data-ms-branch-chain="">
+              {[
+                [copy.branchBase, workflow.value.branch.base] as const,
+                [copy.branchSource, workflow.value.branch.source] as const,
+                [copy.branchIntegration, workflow.value.branch.integration] as const,
+                [copy.branchTarget, workflow.value.branch.target] as const,
+              ].map(([label, value], index) => (
+                <Fragment key={label}>
+                  {index === 0 ? null : <span className="branch-arrow" aria-hidden="true">→</span>}
+                  <span className="branch-anchor">
+                    <span>{label}</span> <b>{value ?? "—"}</b>
+                  </span>
+                </Fragment>
+              ))}
+            </div>
+            <div className="planboard" role="group" aria-label={copy.boardHeading}>
+              {model.groups.map((group) => (
+                <Group key={group.status} group={group} copy={copy} />
+              ))}
+            </div>
           </>
         ) : workflow.kind === "populated" ? (
           <EmptyState
@@ -216,24 +256,57 @@ export function Focus(props: FocusProps) {
             detail={workflow.kind === "not-applicable" ? workflow.reason : undefined}
           />
         )}
+        </div>
       </section>
 
       {/* 4 — the session's delivery line. A standalone delivery is sayable. */}
-      <section className={css.panel} aria-labelledby="ms-focus-delivery">
-        <h2 className={css.heading} id="ms-focus-delivery">
+      <section className={"panel"} aria-labelledby="ms-focus-delivery">
+        <h2 className={"panel-title"} id="ms-focus-delivery">
           {copy.deliveryHeading}
         </h2>
-        <p className={css.delivery} data-ms-delivery={model.delivery.kind}>
-          {model.delivery.kind === "no-iteration"
-            ? copy.deliveryNoIteration
-            : model.delivery.position === null
-              ? copy.deliveryUnknownStep
-              : copy.deliveryLine(model.delivery.iterationId, model.delivery.position.step, model.delivery.position.of)}
-        </p>
+        {model.delivery.kind === "no-iteration" ? (
+          <p className={"milestone-block"} data-ms-delivery={model.delivery.kind}>
+            {copy.deliveryNoIteration}
+          </p>
+        ) : (
+          <div className={"milestone-block"} data-ms-delivery={model.delivery.kind}>
+            <p className={"milestone-block-name"}>{model.delivery.iterationId}</p>
+            {/* The five-step track, as the prototype's fourth panel carries it. The model
+                has held `steps` since this screen was written and nothing rendered it. */}
+            <div className="gate-track" role="list" data-ms-focus-steps="">
+              {model.delivery.steps.map((step) => (
+                <div
+                  key={step.id}
+                  role="listitem"
+                  className={
+                    step.position === "reached"
+                      ? "gate-step is-done"
+                      : step.position === "current"
+                        ? "gate-step is-current"
+                        : "gate-step"
+                  }
+                  data-ms-step={step.id}
+                  data-ms-step-position={step.position}
+                  {...(step.position === "current" ? { "aria-current": "step" as const } : {})}
+                >
+                  <span className="glyph" aria-hidden="true">
+                    {step.position === "reached" ? "✓" : step.position === "current" ? "●" : String(step.step)}
+                  </span>
+                  <span className="gate-label">{copy.gateStepLabels[step.id]}</span>
+                </div>
+              ))}
+            </div>
+            <span className={"gate-meta"} data-ms-position={model.delivery.position === null ? "unknown" : "known"}>
+              {model.delivery.position === null
+                ? copy.deliveryUnknownStep
+                : copy.deliveryLine(model.delivery.iterationId, model.delivery.position.step, model.delivery.position.of)}
+            </span>
+          </div>
+        )}
       </section>
 
       {/* 5 — the enforcement flag. One line, last. */}
-      <p className={css.enforcement} data-ms-enforcement={model.enforcement}>
+      <p className={"muted"} data-ms-enforcement={model.enforcement}>
         {copy.enforcementLabel(model.enforcement)}
       </p>
     </article>

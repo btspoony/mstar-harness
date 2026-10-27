@@ -50,7 +50,12 @@ const iteration = (over: Partial<IterationDTO> = {}): IterationDTO =>
       iterationId: "iter-20261025-frontend-unification",
       summary: "one product, two hosts",
       // A milestone-id list the detail must NOT render (the roadmap feature owns it).
-      milestones: ["9f2c4a10", "3a7b1c22"],
+      // The compass's milestones are rows, not ids: the prototype prints them as a
+      // mini table (name, target, status).
+      milestones: [
+        { milestone: "Direction locked with the owner", target: "2026-10-25", status: "done" },
+        { milestone: "Prototype checkpoint accepted", target: "2026-10-27", status: "pending" },
+      ],
       startedAt: "2026-10-25T01:10:00.000Z",
       endedAt: null,
       status: "locked",
@@ -84,17 +89,31 @@ const iteration = (over: Partial<IterationDTO> = {}): IterationDTO =>
 
 const iterationsCopy: IterationsCopy = {
   pageTitle: "Iterations",
+  totalMeta: (n) => `${n} ${n === 1 ? "iteration" : "iterations"}`,
+  activeMeta: (n) => `${n} active`,
+  headNote: "catalog membership, independent of execution",
   tableCaption: "Iterations",
+  filtersHeading: "Filters",
+  membershipNote: "Membership comes from the catalog; execution is a projection over it.",
+  filters: {
+    lifecycle: "Lifecycle",
+    search: "Search iteration id or title",
+    clear: "Clear filters",
+    any: "Any",
+    results: (shown: number, total: number) => `${shown} of ${total} results`,
+  },
   columns: {
     id: "Iteration",
     title: "Title",
     lifecycle: "Lifecycle",
-    execution: "Compass",
+    execution: "Projected execution",
     delivery: "Delivery",
     plans: "Plans",
+    documents: "Documents",
     started: "Started",
   },
   gateStep: (step, of) => `step ${step} of ${of}`,
+  noExecution: "No execution",
   noCompass: "no compass",
   notStarted: "not started",
   plansProgress: (done, total) => `${done}/${total} plans`,
@@ -121,20 +140,37 @@ const renderList = (
   );
 
 const detailCopy: IterationDetailCopy = {
-  breadcrumb: { label: "Breadcrumb", current: "Iterations" },
+  compassColumns: { milestone: "Milestone", target: "Target", status: "Status" },
+  documentsHeading: "Documents",
+  documentsCount: (n) => `${n} documents`,
+  documentsEmpty: "No document is registered under this iteration.",
+  documentColumns: { title: "Title", lifecycle: "Lifecycle", kind: "Document kind", location: "Location", revision: "Revision" },
+  breadcrumb: { label: "Breadcrumb", root: "Iterations", current: "Iteration" },
   compassHeading: "Compass",
+  compassStarted: (at) => `started ${at}`,
   planTableHeading: "Plans",
-  catalogHeading: "Catalog",
+  plansCount: (n) => `${n} ${n === 1 ? "plan" : "plans"}`,
+  plansMeta: (n) => `${n} ${n === 1 ? "plan" : "plans"}`,
+  documentsMeta: (n) => `${n} ${n === 1 ? "document" : "documents"}`,
+  catalogHeading: "Catalog identity",
+  activeRegistration: "active registration",
   executionHeading: "Execution",
   fields: {
     id: "Iteration",
     title: "Title",
     lifecycle: "Lifecycle",
+    kind: "Kind",
+    revision: "Revision",
+    registeredAt: "Registered",
+    location: "Location",
+    catalogUpdatedAt: "Updated",
     root: "Root",
     compassStatus: "Compass status",
     startedAt: "Started",
     endedAt: "Ended",
     workflow: "Workflow",
+    status: "Status",
+    phase: "Phase",
     noWorkflow: "none",
     noCompass: "no compass",
     noSummary: "no summary recorded",
@@ -175,16 +211,51 @@ describe("Iterations list — the facts of §8.2", () => {
     expect(html).toContain("2026-10-25 01:10");
   });
 
-  test("an iteration with no compass says so instead of claiming a step", () => {
-    const html = renderList([iteration({ compass: null, gateStep: null } as Partial<IterationDTO>)], 1);
-    expect(html).toContain("no compass");
-    expect(html).toContain('data-ms-iteration-step="none"');
-    expect(html).not.toContain("step 0 of 5");
+  test("the execution column states the projection's own words", () => {
+    // The fixture registers a workflow as `running` / `phase-2-execute`, so the cell must
+    // read exactly that. Asserting the joined string (not just "running") is what catches
+    // a wrong separator or a dropped phase — both would otherwise pass silently.
+    const html = renderList([iteration()], 1);
+    expect(html).toContain("running · phase-2-execute");
+  });
+
+  test("an iteration with no workflow says so, in its own words", () => {
+    const html = renderList([iteration({ workflow: null } as Partial<IterationDTO>)], 1);
+    expect(html).toContain("No execution");
+    expect(html).not.toContain("No compass");
+  });
+
+  test("the list never invents a step, and the detail screen still states it", () => {
+    // The list carries the prototype's six columns, and the proven step is not one of
+    // them. The requirement it used to satisfy (IA §8.2: state the proven step) is met on
+    // the detail screen — so the assertion moved there rather than being dropped, which
+    // would have turned a spec regression into a green build.
+    const list = renderList([iteration({ compass: null, gateStep: null } as Partial<IterationDTO>)], 1);
+    expect(list).not.toContain("step 0 of 5");
+    expect(list).not.toContain('data-ms-iteration-step');
+
+    const detail = renderDetail(iteration());
+    expect(detail).toContain('data-ms-gate-chip="true"');
+    expect(detail).toContain("step 2 of 5");
   });
 
   test("the attribution arm is stated beside the rows", () => {
     expect(renderList([iteration()], 1, "present")).toContain('data-ms-attribution="present"');
     expect(renderList([iteration()], 1, "absent")).toContain('data-ms-attribution="absent"');
+  });
+
+  test("the Catalog head states an active registration, and says nothing when it is not", () => {
+    // Both branches: the chip is the only thing this head ever adds, so a test that only
+    // renders the `true` case would pass against an always-on chip.
+    const active = renderDetail(iteration());
+    expect(active).toContain(">active registration<");
+
+    const inactive = renderDetail(
+      iteration({
+        workflow: { id: "issue-project-move", status: "running", phase: null, activeRegistration: false },
+      }),
+    );
+    expect(inactive).not.toContain(">active registration<");
   });
 });
 
@@ -212,17 +283,12 @@ describe("Iterations list — attribution decides between absent and empty", () 
 describe("Iterations list — NEGATIVE: the removed surfaces", () => {
   const html = renderList([iteration()], 1);
 
-  test("no document inventory and no document count", () => {
+  test("the list states the document count, but never the inventory itself", () => {
+    // IA §8.1 kept documents out of the list. The prototype's table has a `Documents`
+    // column, and it is a count — the inventory stays on the detail screen.
+    expect(html).toContain("Documents");
     expect(html).not.toContain("Delivery compass");
     expect(html).not.toContain("IA spec");
-    expect(html).not.toContain("doc-1");
-    expect(html).not.toMatch(/\bdocuments?\b/i);
-    expect(html).not.toContain(">2<");
-  });
-
-  test("no compass milestone-id list", () => {
-    expect(html).not.toContain("9f2c4a10");
-    expect(html).not.toContain("3a7b1c22");
   });
 
   test("no counter from the read envelope", () => {
@@ -233,12 +299,36 @@ describe("Iterations list — NEGATIVE: the removed surfaces", () => {
 });
 
 describe("IterationDetail — catalog, execution, compass, gate steps, plan table", () => {
+  test("the compass milestones render as the prototype's mini table", () => {
+    // IA §8.1 kept the milestone-id list out because the roadmap feature owns milestones.
+    // The prototype's Compass panel nevertheless ends with this table, and the table is
+    // what ships; the ids themselves still do not appear.
+    expect(html).toContain("data-ms-compass-milestones");
+    expect(html).toContain("Direction locked with the owner");
+    expect(html).not.toContain("9f2c4a10");
+  });
+
+
   const html = renderDetail(iteration());
 
   test("catalog identity, execution and the dates", () => {
-    for (const expected of ["Frontend unification", "active", "issue-project-move", "2026-10-25 01:10"]) {
+    // The catalog panel states the prototype's six rows; the compass dates moved there.
+    for (const expected of ["Frontend unification", "active", "issue-project-move", "iteration"]) {
       expect(html).toContain(expected);
     }
+  });
+
+  test("the execution panel states the workflow's status and phase", () => {
+    // The fixture registers a workflow as `running` / `phase-2-execute`. No iteration in the
+    // development store does, so this is the only place these two rows are exercised.
+    expect(html).toContain("running");
+    expect(html).toContain("phase-2-execute");
+  });
+
+  test("an iteration with no workflow says so, and states no phase", () => {
+    const bare = renderDetail(iteration({ workflow: null } as Partial<IterationDTO>));
+    expect(bare).toContain("none");
+    expect(bare).not.toContain("phase-2-execute");
   });
 
   test("the compass status and its summary", () => {
@@ -266,61 +356,41 @@ describe("IterationDetail — catalog, execution, compass, gate steps, plan tabl
   });
 });
 
-describe("IterationDetail — the gate display is four labels plus a never-marked fifth", () => {
+describe("IterationDetail — the gate lives in the header, not as a track", () => {
   const html = renderDetail(iteration());
 
-  test("all five steps render, each with its own label", () => {
-    expect(html.match(/data-ms-step="/g)?.length).toBe(5);
-    for (const label of ["Start", "Execute", "Close", "PR delivery", "Merge ready"]) {
-      expect(html).toContain(label);
-    }
+  test("the position is stated once, in the header chip", () => {
+    // The prototype's iteration detail has no gate track at all (measured `gateEls: 0`);
+    // the position appears only as the header's action chip.
+    expect(html).toContain('data-ms-gate-chip="true"');
+    expect(html).not.toContain("gate-track");
+    expect(html).not.toContain("data-ms-step-position");
   });
 
-  test("exactly one step is marked, and it is the store's step", () => {
-    expect(html.match(/data-ms-step-position="current"/g)?.length).toBe(1);
-    expect(html).toContain('data-ms-step="execute" data-ms-step-position="current"');
-    expect(html).toContain("step 2 of 5");
-  });
-
-  test("step 5 is NEVER marked, at any store value", () => {
-    for (const gateStep of [1, 2, 3, 4] as const) {
-      const page = renderDetail(iteration({ gateStep } ));
-      const marked = page.match(/<li[^>]*data-ms-step="([^"]+)"[^>]*data-ms-step-position="current"/);
-      expect(marked?.[1]).toBe(["start", "execute", "close", "pr-delivery"][gateStep - 1] as string);
-      expect(marked?.[1]).not.toBe("merge-ready");
-      // And the fifth step is always "ahead", never reached.
-      expect(page).toContain('data-ms-step="merge-ready" data-ms-step-position="ahead"');
-    }
-  });
-
-  test("no violation count is rendered (D29: it has no source a view may read)", () => {
-    expect(html.toLowerCase()).not.toContain("violation");
-    expect(html).not.toMatch(/\b\d+ violations?\b/);
-  });
-
-  test("an iteration with no compass marks nothing and never claims step 1", () => {
+  test("an iteration with no compass claims no step", () => {
     const page = renderDetail(iteration({ compass: null, gateStep: null } as Partial<IterationDTO>));
-    expect(page.match(/data-ms-step-position="current"/g)).toBeNull();
-    expect(page).toContain("Delivery");
     expect(page).not.toContain("step 0 of 5");
-    expect(page).not.toContain("step 1 of 5");
+    expect(page).not.toContain("data-ms-gate-chip");
   });
 });
 
 describe("IterationDetail — NEGATIVE: what §8.1 removed", () => {
   const html = renderDetail(iteration());
 
-  test("no document inventory, no document count", () => {
-    expect(html).not.toContain("Delivery compass");
-    expect(html).not.toContain("IA spec");
-    expect(html).not.toContain("doc-1");
-    expect(html).not.toMatch(/\bdocuments?\b/i);
+  test("the document inventory is rendered, as the prototype's Documents card", () => {
+    // IA §8.1 kept it out ("documents say nothing about progress"). The prototype's
+    // detail screen has a Documents card and the prototype is the acceptance criterion,
+    // so the inventory is returned and shown. The counters and the milestone-id list
+    // stay out — the screen has no place for them.
+    expect(html).toContain("data-ms-documents");
+    expect(html).toContain("Delivery compass");
+    expect(html).toMatch(/\bdocuments?\b/i);
   });
 
   test("no compass milestone-id list — the roadmap feature owns milestones", () => {
     expect(html).not.toContain("9f2c4a10");
     expect(html).not.toContain("3a7b1c22");
-    expect(html).not.toContain("milestones");
+    expect(html).not.toContain("milestoneId");
   });
 
   test("no revision counter and no envelope timestamps", () => {
@@ -332,9 +402,13 @@ describe("IterationDetail — NEGATIVE: what §8.1 removed", () => {
   test("the detail model cannot carry them: the negative set is enforced by shape", () => {
     const model = iterationDetailModel({ data: iteration(), projection });
     if (model.kind !== "populated") throw new Error("expected the detail");
-    for (const removed of ["documents", "milestones", "revision", "storeRevision", "catalogRevision", "counters"]) {
+    // `documents` and the catalog's own `revision` are carried now (the prototype lists
+    // both); the store's counters still stay out.
+    for (const removed of ["milestones", "storeRevision", "catalogRevision", "counters"]) {
       expect(Object.keys(model.value)).not.toContain(removed);
     }
+    expect(Object.keys(model.value)).toContain("documents");
+    expect(Object.keys(model.value)).toContain("revision");
   });
 });
 

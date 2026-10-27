@@ -97,12 +97,14 @@ describe("truncation is reachable without a mouse", () => {
 });
 
 describe("the header controls are the prototype's, not form widgets", () => {
-  test("no native select is left in the shell", () => {
-    // `design-v1.html:179-196` has a segmented group and an icon button; a native
-    // `<select>` renders as the platform's widget and was the deviation the owner
-    // saw. The filter bar's selects belong to the shared layer and are untouched.
-    expect(mainSource).not.toContain("<select");
-    expect(mainSource).not.toContain("<option");
+  test("the shell carries exactly one native select, the prototype's project scope", () => {
+    // `design-v1.html:179-196` has a segmented group and an icon button *beside* a native
+    // project-scope select (`:800`, `<select class="ctl" aria-label="Project scope">`). This
+    // test used to forbid every `<select>` in the shell, which forbade the prototype's own
+    // control — the deviation the owner saw was the two native *selects standing in for*
+    // the segmented group and the icon button, not the scope select.
+    expect(mainSource.match(/<select/g)?.length).toBe(1);
+    expect(mainSource).toContain('aria-label={copy.shell.scope.label}');
   });
 
   test("both controls are buttons, labelled, and labelled from the dictionary", () => {

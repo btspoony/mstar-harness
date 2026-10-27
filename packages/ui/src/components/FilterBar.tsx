@@ -10,7 +10,6 @@
  */
 import type { ReactNode } from "react";
 
-import css from "./FilterBar.module.css";
 
 export type FilterOption = { value: string; label: string };
 
@@ -45,13 +44,12 @@ export type FilterBarProps = {
 export function FilterBar(props: FilterBarProps) {
   const nothingApplied = props.applied.length === 0;
   return (
-    <div className={css.wrap}>
-      <div className={css.fields}>
+    <div className="filters">
         {props.fields.map((field) => (
-          <label key={field.key} className={css.field}>
-            <span className={css.fieldLabel}>{field.label}</span>
+          <label key={field.key} className="filter-field">
+            <span>{field.label}</span>
             <select
-              className={css.select}
+              className="ctl"
               value={field.value}
               data-ms-filter={field.key}
               onChange={(event) => props.onFieldChange(field.key, event.target.value)}
@@ -65,28 +63,44 @@ export function FilterBar(props: FilterBarProps) {
           </label>
         ))}
         {props.search === undefined ? null : (
-          <input
-            type="search"
-            className={css.search}
-            value={props.search.value}
-            placeholder={props.search.placeholder}
-            aria-label={props.search.placeholder}
-            onChange={(event) => props.search?.onChange(event.target.value)}
-          />
+          // A `label`, as the prototype has it: clicking the magnifier's row focuses the
+          // field, which a `span` cannot do. The input keeps its own aria-label so the
+          // accessible name does not depend on the placeholder.
+          <label className="search">
+            {/* The prototype puts a magnifier inside the field; `.search` styles it. */}
+            <svg
+              width="12"
+              height="12"
+              viewBox="0 0 16 16"
+              fill="none"
+              stroke="currentColor"
+              strokeWidth="1.4"
+              aria-hidden="true"
+            >
+              <circle cx="7" cy="7" r="4.2" />
+              <path d="M10.2 10.2L14 14" />
+            </svg>
+            <input
+              type="search"
+              value={props.search.value}
+              placeholder={props.search.placeholder}
+              aria-label={props.search.placeholder}
+              onChange={(event) => props.search?.onChange(event.target.value)}
+            />
+          </label>
         )}
-        <button type="button" className={css.clear} disabled={nothingApplied} onClick={props.onClearAll}>
+        <button type="button" className="btn" disabled={nothingApplied} onClick={props.onClearAll}>
           {props.clearLabel}
         </button>
-        <span className={css.summary}>{props.resultSummary}</span>
-      </div>
+        <span className="filters-meta">{props.resultSummary}</span>
       {nothingApplied ? null : (
-        <div className={css.chips} data-ms-applied-filters="">
+        <div className="chips" data-ms-applied-filters="">
           {props.applied.map((chip) => (
-            <span key={chip.key} className={css.chip}>
+            <span key={chip.key} className="chip">
               {chip.text}
               <button
                 type="button"
-                className={css.chipClear}
+                className="chip-x"
                 aria-label={chip.text}
                 onClick={() => props.onClearFilter(chip.key)}
               >

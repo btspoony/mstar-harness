@@ -144,15 +144,72 @@ describe("Overview — the fact set of §8.2", () => {
     expect(model.workflows.kind).toBe("populated");
     if (model.workflows.kind !== "populated") return;
     expect(model.workflows.value).toHaveLength(1);
+    // The whole row, including the header facts and the plan table's inputs: the
+    // five columns read this and nothing else, so a field the screen needs and this
+    // does not carry would be filled in by the screen — which is what this pins.
     expect(model.workflows.value[0]).toEqual({
       id: "issue-project-move",
       type: "plan",
       phase: "phase-2-execute",
       status: "running",
-      statusTone: "neutral",
+      statusTone: "accent",
       plansDone: 1,
       plansTotal: 2,
+      branch: {
+        base: "main",
+        source: "issue-project-move",
+        integration: "issue-project-move",
+        target: "main",
+      },
+      plans: [
+        {
+          planId: "20261025-issue-project-move",
+          title: null,
+          status: "InProgress",
+          statusTone: "neutral",
+          phase: "implement",
+          // The note is prose, so there is no fraction to draw and no bar invented.
+          progress: null,
+          progressNote: "wiring the store read",
+          doneAt: null,
+        },
+        {
+          planId: "20261018-panel-retirement",
+          title: null,
+          status: "Done",
+          statusTone: "success",
+          phase: "close",
+          progress: null,
+          progressNote: null,
+          // The prototype prints month-day, not the timestamp: `10-19`.
+          doneAt: "10-19",
+        },
+      ],
     });
+  });
+
+  test("a plan whose note is a fraction carries done/total; prose stays prose", () => {
+    const rows = overviewModel(
+      overviewRead({
+        workflows: read<WorkflowListDTO>({
+          items: [
+            workflow({
+              plans: [
+                { ...workflow().plans[0], progress: "3/6" },
+                { ...workflow().plans[0], planId: "p-2", progress: "reviewed source" },
+                { ...workflow().plans[0], planId: "p-3", progress: "7/6" },
+              ],
+            }),
+          ],
+          total: 1,
+        }),
+      }),
+      { projection },
+    );
+    if (rows.workflows.kind !== "populated") throw new Error("expected populated");
+    const plans = rows.workflows.value[0]?.plans ?? [];
+    expect(plans.map((plan) => plan.progress)).toEqual([{ done: 3, total: 6 }, null, null]);
+    expect(plans.map((plan) => plan.progressNote)).toEqual([null, "reviewed source", "7/6"]);
   });
 
   test("five severity rows including zeros, with a reconciling total", () => {
@@ -183,8 +240,9 @@ describe("Overview — the fact set of §8.2", () => {
       milestoneId: "m-0",
       name: "Milestone 0",
       status: "active",
+      statusTone: "accent",
       target: "2026-11-07",
-      progress: { done: 6, total: 10 },
+      progress: { retired: 6, total: 10 },
       openIssues: 4,
     });
   });
@@ -354,8 +412,11 @@ describe("Overview — the fact set of §8.2", () => {
     }
   });
 
-  test("the projection state carries the state and the reasons, no timestamps", () => {
-    expect(model.projection).toEqual({ kind: "current" });
+  test("the projection state carries the state, the reasons, and the read's two times", () => {
+    // D30 removed every counter; the built/read times are not counters, they answer
+    // "how fresh is this page", which is what the prototype's identity line states.
+    expect(model.projection.kind).toBe("current");
+    expect(model.projection.checkedAt).toBe(projection.checkedAt);
     const stale = overviewModel(overviewRead(), {
       projection: {
         ...projection,
@@ -363,7 +424,11 @@ describe("Overview — the fact set of §8.2", () => {
         diagnostics: [{ sourceKey: "compass", reason: "unreadable", message: "compass could not be parsed" }],
       },
     });
-    expect(stale.projection).toEqual({ kind: "stale", reasons: ["compass: compass could not be parsed"] });
+    expect(stale.projection.kind).toBe("stale");
+    expect(stale.projection.builtAt).toBe(projection.builtAt);
+    expect("reasons" in stale.projection ? stale.projection.reasons : []).toEqual([
+      "compass: compass could not be parsed",
+    ]);
   });
 
   test("a roadmap that exists with no milestones is empty, not absent", () => {

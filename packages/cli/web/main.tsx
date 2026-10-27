@@ -39,7 +39,12 @@ import {
   Projects,
   WorkflowDetail,
   Workflows,
+  DEFAULT_ITERATION_FILTERS,
+  DEFAULT_WORKFLOW_FILTERS,
+  parseIssueQuery,
   useCopy,
+  type IterationFilters,
+  type WorkflowFilters,
   type IssueQuery,
   type Locale,
   type ProjectFeature,
@@ -69,10 +74,12 @@ import {
   issuesPath,
   readIssueDetail,
   readIssues,
+  startRead,
   type IssueDetailOutcome,
   type IssuesOutcome,
 } from "./issues-data";
 import { overviewCopy, overviewOutcome, readOverview, type OverviewOutcome } from "./overview-data";
+import type { IssueFlowSeries } from "@mstar-harness/ui";
 import {
   projectDetailCopy,
   projectOptions,
@@ -131,14 +138,14 @@ function navigate(route: Route, query: string, mode: "push" | "replace"): void {
  * unwraps a member or decides an absence — it fetches, hands the envelope over and
  * keeps the three outcomes apart.
  */
-function useOverview(enabled: boolean): OverviewOutcome {
+function useOverview(enabled: boolean, projectId?: string, reloadKey?: string): OverviewOutcome {
   const [outcome, setOutcome] = useState<OverviewOutcome>({ kind: "loading" });
   useEffect(() => {
     if (!enabled) return;
     const controller = new AbortController();
     let current = true;
     setOutcome({ kind: "loading" });
-    void readOverview(fetch, controller.signal).then((result) => {
+    void readOverview(fetch, controller.signal, projectId).then((result) => {
       if (!current) return;
       setOutcome(overviewOutcome(result));
     });
@@ -146,13 +153,18 @@ function useOverview(enabled: boolean): OverviewOutcome {
       current = false;
       controller.abort();
     };
-  }, [enabled]);
+  }, [enabled, projectId, reloadKey]);
   return outcome;
 }
 
 /** The landing page: the shared Overview behind the one aggregated read. */
-function OverviewDestination() {
-  const outcome = useOverview(true);
+/** The project scope the address carries, or "" for all projects. */
+function issueScope(address: Address): string {
+  return address.route.name === "issues" ? parseIssueQuery(address.query).filters.project : "";
+}
+
+function OverviewDestination(props: { query: string; outcome: OverviewOutcome }) {
+  const outcome = props.outcome;
   const copy = useCopy();
 
   if (outcome.kind === "loading") return null;
@@ -171,7 +183,24 @@ function OverviewDestination() {
     );
   }
 
-  return <Overview model={outcome.model} copy={overviewCopy(copy)} />;
+  return (
+    <Overview
+      model={outcome.model}
+      copy={overviewCopy(copy)}
+      identity={{
+        packageName: __MSTAR_PACKAGE__,
+        version: __MSTAR_VERSION__,
+        ...(document.documentElement.dataset.harnessDir === undefined ? {} : { harnessDir: document.documentElement.dataset.harnessDir }),
+      }}
+      onOpenWorkflow={(id) => navigate({ name: "workflow", id }, props.query, "push")}
+      onOpenIssues={(severity) => {
+        // The residual row names a severity; the destination has to carry it, or the
+        // link lands on the unfiltered list it was counted from.
+        const filtered: IssueQuery = { ...DEFAULT_ISSUES, filters: { ...DEFAULT_ISSUES.filters, severity } };
+        navigate({ name: "issues" }, issueQueryString(filtered), "push");
+      }}
+    />
+  );
 }
 
 /**
@@ -181,13 +210,41 @@ function OverviewDestination() {
  * destination turns it into history — `replace` for a filter change, so Back steps
  * through destinations rather than keystrokes.
  */
-function useIssues(query: IssueQuery): IssuesOutcome {
+/**
+ * The iterations envelope at one scope, kept raw so a filter change re-derives the rows
+ * instead of re-fetching. Lifted out of the screen so a caller can state the total before
+ * the screen mounts.
+ */
+function useIterationsRaw(scope: string | null, enabled = true): Parameters<typeof iterationsOutcome>[0] | null {
+  const [raw, setRaw] = useState<Parameters<typeof iterationsOutcome>[0] | null>(null);
+  useEffect(() => {
+    if (!enabled) return;
+    const controller = new AbortController();
+    let current = true;
+    setRaw(null);
+    void readIterations(fetch, scope, controller.signal).then((result) => {
+      if (current) setRaw(result);
+    });
+    return () => {
+      current = false;
+      controller.abort();
+    };
+  }, [scope, enabled]);
+  return raw;
+}
+
+function useIssues(query: IssueQuery, enabled = true): IssuesOutcome {
   const [outcome, setOutcome] = useState<IssuesOutcome>({ kind: "loading" });
   const key = `${query.filters.disposition}|${query.filters.project}|${query.filters.kind}|${query.filters.severity}|${query.filters.q}|${query.offset}`;
   useEffect(() => {
+    // A caller that already made this read passes its outcome in, and the hook then issues
+    // nothing: a second identical request is free to disagree with the first.
+    if (!enabled) return;
     const controller = new AbortController();
     let current = true;
-    setOutcome({ kind: "loading" });
+    // Starting the next read keeps the painted rows: setting `loading` here unmounted
+    // the list's search box between keystrokes, so focus died after every character.
+    setOutcome(startRead);
     void readIssues(fetch, query, controller.signal).then((result) => {
       if (current) setOutcome((previous) => keepPreviousOnLoad(previous, issuesOutcome(result, query)));
     });
@@ -197,7 +254,7 @@ function useIssues(query: IssueQuery): IssuesOutcome {
     };
     // The key is the request's identity: a new object with the same values must not
     // refetch on every render.
-  }, [key]);
+  }, [key, enabled]);
   return outcome;
 }
 
@@ -214,13 +271,39 @@ function IssueListScreen(props: {
   scope: string | null;
   onQueryChange: (query: IssueQuery) => void;
   onOpen?: (id: string) => void;
+  /**
+   * A read the caller already made. Supplying it keeps one read for two consumers — the
+   * list's table and the caller's tab count — instead of two reads that can disagree.
+   */
+  outcome?: IssuesOutcome;
 }) {
   const query = props.scope === null ? props.query : { ...props.query, filters: { ...props.query.filters, project: props.scope } };
   // The previous rows stay painted while the next read is in flight, so the search box
   // is never unmounted between keystrokes.
-  const outcome = useIssues(query);
+  const ownOutcome = useIssues(query, props.outcome === undefined);
+  const outcome = props.outcome ?? ownOutcome;
   const copy = useCopy();
-
+  // The prototype's issues screen carries the flow trend above its table, drawn from the
+  // same series the overview renders. The chart holds the prototype's fixed `full`
+  // height (132px), so a wider pane does not stretch it.
+  const [trend, setTrend] = useState<IssueFlowSeries | null>(null);
+  useEffect(() => {
+    const controller = new AbortController();
+    let current = true;
+    // The trend is the same series the overview draws; a project's tab must read the
+    // project's flow, not every project's.
+    void readOverview(fetch, controller.signal, props.scope ?? undefined).then((result) => {
+      if (!current || result.status !== "ready") return;
+      const flow = overviewOutcome(result);
+      if (flow.kind === "ready" && flow.model.issueFlow.kind === "populated") {
+        setTrend(flow.model.issueFlow.value);
+      }
+    });
+    return () => {
+      current = false;
+      controller.abort();
+    };
+  }, [props.scope]);
   if (outcome.kind === "loading") return null;
   if (outcome.kind === "failed") {
     return (
@@ -242,8 +325,31 @@ function IssueListScreen(props: {
       options={{ ...ISSUE_FILTER_OPTIONS, project: props.projectIds }}
       onQueryChange={props.onQueryChange}
       onOpen={props.onOpen}
+      {...(trend === null ? {} : { trend, trendCopy: issuesTrendCopy(copy) })}
     />
   );
+}
+
+/** The issues screen's trend panel strings, borrowed from the overview's own copy. */
+function issuesTrendCopy(copy: ReturnType<typeof useCopy>) {
+  return {
+    heading: copy.overview.trendHeading,
+    range: copy.overview.trendRange,
+    chartTitle: copy.overview.trendChartTitle,
+    captured: copy.overview.trendCaptured,
+    retired: copy.overview.trendRetired,
+    legend: copy.overview.trendLegend,
+    tableSummary: copy.overview.trendTableSummary,
+    table: {
+      columns: {
+        date: copy.overview.flowDate,
+        captured: copy.overview.flowCaptured,
+        retired: copy.overview.flowRetired,
+        open: copy.overview.flowOpen,
+        origin: copy.overview.flowOrigin,
+      },
+    },
+  };
 }
 
 function IssuesDestination(props: { address: Address; projectIds: readonly string[] }) {
@@ -325,13 +431,14 @@ function IssueDetailDestination(props: { id: string }) {
 
 /** The Workflows list, behind its own read. */
 function WorkflowsDestination(props: { address: Address }) {
-  const [outcome, setOutcome] = useState<WorkflowsOutcome>({ kind: "loading" });
+  const [raw, setRaw] = useState<Parameters<typeof workflowsOutcome>[0] | null>(null);
+  const [filters, setFilters] = useState<WorkflowFilters>(DEFAULT_WORKFLOW_FILTERS);
   const copy = useCopy();
   useEffect(() => {
     const controller = new AbortController();
     let current = true;
     void readWorkflows(fetch, controller.signal).then((result) => {
-      if (current) setOutcome(workflowsOutcome(result));
+      if (current) setRaw(result);
     });
     return () => {
       current = false;
@@ -339,6 +446,7 @@ function WorkflowsDestination(props: { address: Address }) {
     };
   }, []);
 
+  const outcome = workflowsOutcome(raw ?? { status: "loading" }, filters);
   if (outcome.kind === "loading") return null;
   if (outcome.kind === "failed") {
     return (
@@ -355,6 +463,11 @@ function WorkflowsDestination(props: { address: Address }) {
   return (
     <Workflows
       model={outcome.model}
+      // The head's closing segment reads the envelope's own revision, which the model does
+      // not carry: it is a fact about the read, not about a workflow.
+      {...(raw !== null && raw.status === "ready" ? { storeRevision: raw.envelope.storeRevision } : {})}
+      filters={filters}
+      onFiltersChange={setFilters}
       copy={workflowsCopy(copy)}
       onOpen={(id) => {
         navigate({ name: "workflow", id }, props.address.query, "push");
@@ -407,21 +520,23 @@ function WorkflowDetailDestination(props: { id: string }) {
 
 /** The Iterations list, behind its own read. */
 /** The Iterations list at one scope: `null` store-wide, or a project's own. */
-function IterationListScreen(props: { scope: string | null; onOpen?: (id: string) => void }) {
-  const [outcome, setOutcome] = useState<IterationsOutcome>({ kind: "loading" });
+function IterationListScreen(props: {
+  scope: string | null;
+  onOpen?: (id: string) => void;
+  /** A read the caller already made, so the tab count and the list share one fetch. */
+  raw?: Parameters<typeof iterationsOutcome>[0] | null;
+}) {
+  // The read is kept raw, so the model can be rebuilt from the data in hand. A filter
+  // change must NOT re-fetch: it only re-derives the rows, which is what the screen
+  // promises by keeping the filter state here.
+  const ownRaw = useIterationsRaw(props.scope, props.raw === undefined);
+  const raw = props.raw === undefined ? ownRaw : props.raw;
+  const [filters, setFilters] = useState<IterationFilters>(DEFAULT_ITERATION_FILTERS);
   const copy = useCopy();
-  useEffect(() => {
-    const controller = new AbortController();
-    let current = true;
-    setOutcome({ kind: "loading" });
-    void readIterations(fetch, props.scope, controller.signal).then((result) => {
-      if (current) setOutcome(iterationsOutcome(result));
-    });
-    return () => {
-      current = false;
-      controller.abort();
-    };
-  }, [props.scope]);
+
+  // The model is derived at render time, so a filter change re-derives the rows from
+  // the envelope already in hand instead of issuing a second read.
+  const outcome = iterationsOutcome(raw ?? { status: "loading" }, filters);
 
   if (outcome.kind === "loading") return null;
   if (outcome.kind === "failed") {
@@ -436,7 +551,15 @@ function IterationListScreen(props: { scope: string | null; onOpen?: (id: string
     );
   }
 
-  return <Iterations model={outcome.model} copy={iterationsCopy(copy)} onOpen={props.onOpen} />;
+  return (
+    <Iterations
+      model={outcome.model}
+      copy={iterationsCopy(copy)}
+      filters={filters}
+      onFiltersChange={setFilters}
+      {...(props.onOpen === undefined ? {} : { onOpen: props.onOpen })}
+    />
+  );
 }
 
 function IterationsDestination(props: { address: Address }) {
@@ -555,6 +678,41 @@ function ProjectDetailDestination(props: { address: Address; feature: ProjectFea
   const projectId = props.address.route.name === "project" ? props.address.route.id : "";
   const [outcome, setOutcome] = useState<RoadmapOutcome>({ kind: "loading" });
   const [identity, setIdentity] = useState<{ title: string; description: string | null } | null>(null);
+  /**
+   * The list's read follows the address bar: a filter change navigates, the route
+   * re-derives this query, and the rows read from it. A read frozen to the defaults
+   * left every control inert while still painting its own value.
+   */
+  const query: IssueQuery = routeFilters(props.address);
+  const scopedIssues: IssuesOutcome = useIssues(
+    { ...query, filters: { ...query.filters, project: projectId } },
+    projectId !== "",
+  );
+  /**
+   * The project's size for the tab and head: the default `open` read over the whole
+   * project, independent of the list's current filters.
+   */
+  const countIssues = useIssues(
+    { ...DEFAULT_ISSUES, filters: { ...DEFAULT_ISSUES.filters, project: projectId } },
+    projectId !== "",
+  );
+  const issuesCount = countIssues.kind === "ready" ? countIssues.model.total : undefined;
+  /**
+   * The same for iterations: read here so the tab can state its count before that tab is
+   * opened, and handed to the list so both read the same envelope.
+   */
+  const scopedIterations = useIterationsRaw(projectId === "" ? null : projectId, projectId !== "");
+  // Derived once, and narrowed by `kind` rather than cast: the second `iterationsOutcome`
+  // call this used to make was the same computation twice, and the casts hid what it
+  // returned.
+  //
+  // The count is the project's *size*, not the list's current filter result: the prototype's
+  // tab reads `Iterations 2` whatever the list below is filtered to. That is why the default
+  // filters are stated here rather than the screen's live ones.
+  const iterationsModel =
+    scopedIterations === null ? null : iterationsOutcome(scopedIterations, DEFAULT_ITERATION_FILTERS);
+  const iterationsCount =
+    iterationsModel !== null && iterationsModel.kind === "ready" ? iterationsModel.model.total : undefined;
   const copy = useCopy();
 
   useEffect(() => {
@@ -596,9 +754,9 @@ function ProjectDetailDestination(props: { address: Address; feature: ProjectFea
       roadmap={outcome.roadmap}
       issues={
         <IssueListScreen
-          // The route carries the feature's own filter state; the page supplies only
-          // the scope. A frozen query with an empty callback made every control inert.
-          query={props.address.query === "" ? DEFAULT_ISSUES : routeFilters({ route: props.address.route, query: props.address.query })}
+          // The route carries the feature's own filter state; the table reads it, not
+          // the default query those controls started from.
+          query={query}
           projectIds={props.projectIds}
           scope={projectId}
           onQueryChange={(next) => {
@@ -606,6 +764,7 @@ function ProjectDetailDestination(props: { address: Address; feature: ProjectFea
             // `replace`: a filter change must not become a Back step per keystroke.
             navigate(target.route, target.query, "replace");
           }}
+          outcome={scopedIssues}
           onOpen={(id) => {
             // The project is the only trace of the page this record was opened from:
             // without it the breadcrumb and Escape landed on the store-wide list.
@@ -618,9 +777,12 @@ function ProjectDetailDestination(props: { address: Address; feature: ProjectFea
       iterations={
         <IterationListScreen
           scope={projectId}
+          raw={scopedIterations}
           onOpen={(id) => navigate({ name: "iteration", id }, props.address.query, "push")}
         />
       }
+      {...(issuesCount === undefined ? {} : { issuesCount })}
+      {...(iterationsCount === undefined ? {} : { iterationsCount })}
       copy={projectDetailCopy(copy)}
       onBack={() => {
         // The breadcrumb and Escape are one move from two places: a hardcoded
@@ -658,6 +820,31 @@ function Shell(props: {
   const copy = useCopy();
   const projects = useProjects();
   const projectIds = projects.kind === "ready" ? projectOptions(projects.model) : [];
+  // Two reads with two scopes. The page head says `All projects` and its issue flow and
+  // residuals cover the store, while the milestone and latest-iteration panels are one
+  // project's (the prototype names that project on the panel). One scoped read for both
+  // made the flow and the footer count only the first project.
+  // The landing page's read is refreshed whenever the destination becomes active: a
+  // session-long first read left the page stale after a store change and a round trip.
+  const overviewReloadKey = address.route.name;
+  const storeOutcome = useOverview(true, undefined, overviewReloadKey);
+  const projectOutcome = useOverview(projectIds[0] !== undefined, projectIds[0], overviewReloadKey);
+  const pageOutcome: OverviewOutcome =
+    storeOutcome.kind === "ready" && projectOutcome.kind === "ready"
+      ? {
+          ...storeOutcome,
+          model: {
+            ...storeOutcome.model,
+            milestones: projectOutcome.model.milestones,
+            milestoneProject: projectOutcome.model.milestoneProject,
+            latestIteration: projectOutcome.model.latestIteration,
+          },
+        }
+      : storeOutcome;
+  const revision = storeOutcome.kind === "ready" ? storeOutcome.revision : null;
+  // The prototype's footer opens with the open-issue count, then the store revision.
+  const residuals = storeOutcome.kind === "ready" ? storeOutcome.model.residuals : null;
+  const openIssues = residuals !== null && residuals.kind === "populated" ? residuals.value.total : null;
 
   useEffect(() => {
     const onHashChange = (): void => {
@@ -707,7 +894,18 @@ function Shell(props: {
         {chrome.skipLink}
       </a>
       <header className={`app-header ${MS_PANE_HEAD_CLASS}`}>
-        <span className="app-title">Morning Star</span>
+        {/* The prototype's brand block: a star, the name, and the version. `app-title`
+            was the whole of it here — no mark, no version. */}
+        <div className="brand">
+          <svg width="13" height="13" viewBox="0 0 16 16" aria-hidden="true">
+            <path
+              fill="currentColor"
+              d="M8 0l1.9 6.1L16 8l-6.1 1.9L8 16 6.1 9.9 0 8l6.1-1.9z"
+            />
+          </svg>
+          <span className="brand-name">Morning Star</span>
+          <span className="brand-ver">v{__MSTAR_VERSION__}</span>
+        </div>
         <Nav
           items={chrome.navItems}
           activeId={activeId}
@@ -718,6 +916,25 @@ function Shell(props: {
           label={copy.shell.nav.primary}
         />
         <div className="app-controls">
+          {/* The prototype puts the project scope in the header, left of the language
+              group (`design-v1.html:800-807`). It filters the issue list, the only
+              destination whose address carries a project. */}
+          <select
+            className="ctl"
+            aria-label={copy.shell.scope.label}
+            value={address.route.name === "issues" ? issueScope(address) : ""}
+            onChange={(event) => {
+              const project = event.target.value;
+              navigate({ name: "issues" }, project === "" ? "" : `project=${encodeURIComponent(project)}`, "push");
+            }}
+          >
+            <option value="">{copy.shell.scope.all}</option>
+            {projectIds.map((id) => (
+              <option key={id} value={id}>
+                {id}
+              </option>
+            ))}
+          </select>
           {/* The prototype's treatment (`design-v1.html:179-196`): a segmented
               language group and a theme button carrying a shape per scheme — not
               two native selects. Both are real buttons, so both are reachable by
@@ -751,7 +968,7 @@ function Shell(props: {
         ref={mainRef}
         data-ms-route={routeHash(address.route)}
       >
-        {address.route.name === "overview" ? <OverviewDestination /> : null}
+        {address.route.name === "overview" ? <OverviewDestination query={address.query} outcome={pageOutcome} /> : null}
         {address.route.name === "issues" ? <IssuesDestination address={address} projectIds={projectIds} /> : null}
         {address.route.name === "issue" ? <IssueDetailDestination id={address.route.id} /> : null}
         {address.route.name === "workflows" ? <WorkflowsDestination address={address} /> : null}
@@ -769,7 +986,17 @@ function Shell(props: {
           />
         ) : null}
       </main>
-      <footer className="app-footer">{chrome.footer}</footer>
+      <footer className="app-footer">
+        {/* Two segments, as the prototype has them: the count and the revision on the
+            left, the read-only note on the right. */}
+        <span>
+          {openIssues === null ? null : `${chrome.openIssueCount(openIssues)} · `}
+          <span data-ms-store-revision={revision === null ? undefined : revision}>
+            {revision === null ? null : chrome.storeRevision(revision)}
+          </span>
+        </span>
+        <span>{chrome.footer}</span>
+      </footer>
     </div>
   );
 }

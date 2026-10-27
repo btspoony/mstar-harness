@@ -15,7 +15,6 @@
  * (plan Technical decisions §2). It is applied only where a cell truncates by an
  * explicit max-inline-size or line clamp — not to text that happens to be short.
  */
-import css from "./TruncatedText.module.css";
 
 export type TruncatedTextProps = {
   /** The whole value. Rendered as content, as `data-ms-full`, and as `title`. */
@@ -27,7 +26,7 @@ export type TruncatedTextProps = {
 export function TruncatedText(props: TruncatedTextProps) {
   return (
     <span
-      className={props.block === true ? css.truncatedBlock : css.truncated}
+      className={props.block === true ? "trunc trunc-block" : "trunc"}
       data-ms-full={props.text}
       title={props.text}
       tabIndex={0}
