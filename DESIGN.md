@@ -2497,7 +2497,28 @@ Fixed: the fixture is `4`, the assertion is `step 4 of 5`, and the test is un-sk
 `packages/cli/web` is **153 pass, 0 fail, 0 skipped**.
 
 **A cast is where a shape stops being checked.** That one hid a stale fixture for as long as
-the test was red, and the red row was read as noise.## Verification coverage, stated
+the test was red, and the red row was read as noise.## Three things the workflow detail screenshot confirmed
+
+Rendered at 1440 / dark / en, beside the prototype's own: the four panels, the `Pin rev 1`
+chip on the Catalog head, the `Pin` column at the table's right edge, and `0 active · exclusive`
+on an unleased workflow. The structural work of the last twenty rounds is visible in one frame.
+
+**Three differences, each checked and each deliberate:**
+
+- **A breadcrumb the prototype does not have.** The prototype is a static document with a
+  switcher; this is an application a reader navigates. The `<nav aria-label>` is the only
+  visible path back that is also announced to a screen reader — Escape does the same thing and
+  is not discoverable. Kept.
+- **No description paragraph under Catalog identity.** The prototype's record has one; the one
+  measured here has `description: null`, and the screen renders its absent line. Data.
+- **`1 plan` against `7 plans`.** Data.
+
+`gateStepPosition` survives its test fix: it is still called by `focus.ts` and `overview.ts`,
+which is the point its own comment makes — the store's integer is the one derivation, and this
+helper only formats it.
+
+**There are no skipped tests left in the tree**, which is worth stating because a skip reads
+like a decision and is usually a deferral.## Verification coverage, stated
 
 Two hosts mount these screens: the dashboard (`packages/cli/web`) and the dsh pane
 (`packages/dsh/src/client/panel`). They share the components but **each owns its own
