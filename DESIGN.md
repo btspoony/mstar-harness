@@ -2610,10 +2610,15 @@ than remove it: **different from the prototype, and arguably better for a reader
 **Fixed**: `status` is `secondary` now. Measured after — 1440 keeps its six columns, 375 shows
 two (`Workflow`, `Catalog title`), which is the prototype's `data-narrow-cols="2"`.
 
-The *mechanism* still differs, deliberately and in a comment at the column: the prototype hides
-the columns it drops; `secondary` moves their fact to the row's `meta` line. A reader on a phone
-can still find the status here. Column count matches; where the value lives does not, and that is
-the better of the two behaviours rather than an oversight.
+**The mechanism matches too.** The first fix marked the column `secondary`, which *moves* a
+fact to the row's `meta` line rather than hiding it — the prototype's narrow rows have no second
+line at all, so that was a deviation dressed as a fix. `wide` is the right contract: hidden
+outright below the floor, no second line restating it. The column's own comment says which and
+why.
+
+**So this screen now behaves as the prototype's does, including where a reader on a phone
+loses the status.** That is the acceptance criterion, and it is worth stating plainly rather
+than reporting "fixed" over a behaviour that differed.
 
 **Everything measured now matches at three containers.**## Verification coverage, stated
 

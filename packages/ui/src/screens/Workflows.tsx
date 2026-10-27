@@ -128,11 +128,11 @@ export function Workflows(props: WorkflowsProps) {
       key: "status",
       header: copy.columns.status,
       width: "200px",
-      // The prototype's narrow set is two columns (`data-narrow-cols="2"`), so this one
-      // yields below the floor like `root`/`updated`/`badges` do. It does not disappear:
-      // `secondary` columns move their fact to the row's `meta` line in list mode, which is
-      // where a reader still finds the status — the prototype simply hides it.
-      secondary: true,
+      // The prototype's narrow set is two columns (`data-narrow-cols="2"`) and it HIDES the
+      // rest, which is `wide`, not `secondary`: a `secondary` column moves its fact to the
+      // row's `meta` line, and the prototype's narrow rows carry no second line at all. The
+      // status is then only on the workflow's own screen — the prototype's trade, copied.
+      wide: true,
       render: (row) => (
         <span>
           <StatusDot label={row.status} tone={row.statusTone} mono />
