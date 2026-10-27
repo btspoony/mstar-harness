@@ -121,6 +121,12 @@ export type IterationListModel = {
   lifecycles: readonly string[];
   /** How many rows the filters leave. */
   filtered: number;
+  /**
+   * Active registrations in the store's rows, before the filters narrow them: the head's
+   * count states the store, not the current filter result. "Active" is the catalog's own
+   * lifecycle, not the execution state.
+   */
+  active: number;
 };
 
 export function iterationListModel(read: {
@@ -157,6 +163,7 @@ export function iterationListModel(read: {
     attribution,
     lifecycles: [...new Set(mapped.map((row) => row.lifecycle).filter((v): v is string => v !== null))].sort(),
     filtered: kept.length,
+    active: mapped.filter((row) => row.lifecycle === "active").length,
   };
 }
 

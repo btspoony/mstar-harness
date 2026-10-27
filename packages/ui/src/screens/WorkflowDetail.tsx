@@ -149,6 +149,9 @@ function planColumns(copy: WorkflowDetailCopy): DataTableColumn<WorkflowPlanRow>
     {
       key: "pin",
       header: copy.planColumns.pin,
+      // The prototype's narrow plan table keeps the first two columns (Plan, Title) and
+      // yields Pin with the other facts; leaving it unmarked kept a third column.
+      secondary: true,
       // The prototype right-aligns this one (`.t-num`), and shows `—` for a plan that
       // pins nothing.
       cellClass: "t-num",
@@ -342,39 +345,44 @@ export function WorkflowDetail(props: WorkflowDetailProps) {
               {props.model.value.leases.length === 0 ? (
                 <p className="muted t-12">{copy.leasesEmpty}</p>
               ) : (
-                <table className="table" data-ms-leases="">
-                  <colgroup>
-                    <col />
-                    <col style={{ width: "16%" }} />
-                    <col style={{ width: "16%" }} />
-                    <col style={{ width: "34%" }} />
-                    <col style={{ width: "14%" }} />
-                  </colgroup>
-                  <thead>
-                    <tr>
-                      <th scope="col">{copy.leaseColumns.plan}</th>
-                      <th scope="col">{copy.leaseColumns.kind}</th>
-                      <th scope="col">{copy.leaseColumns.holder}</th>
-                      <th scope="col">{copy.leaseColumns.worktree}</th>
-                      <th scope="col">{copy.leaseColumns.expires}</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {props.model.value.leases.map((lease) => (
-                      <tr key={`${lease.planId}:${lease.kind}`}>
-                        <td className="mono t-12">{lease.planId}</td>
-                        <td>
-                          <span className="chip">{lease.kind}</span>
-                        </td>
-                        <td>{lease.holder}</td>
-                        <td className="mono t-12">
-                          <TruncatedText text={lease.worktreePath} />
-                        </td>
-                        <td className="mono t-12">{lease.expiresAt}</td>
+                /* The prototype's lease table: fixed pixel widths and a scroller, so a
+                   narrow pane scrolls instead of squeezing the expiry into 14% of the
+                   card (`design-v1.html:1699-1706`). */
+                <div className="table-wrap">
+                  <table className="table" data-ms-leases="" data-narrow-cols="2">
+                    <colgroup>
+                      <col style={{ width: "250px" }} />
+                      <col style={{ width: "150px" }} />
+                      <col style={{ width: "150px" }} />
+                      <col />
+                      <col style={{ width: "180px" }} />
+                    </colgroup>
+                    <thead>
+                      <tr>
+                        <th scope="col">{copy.leaseColumns.plan}</th>
+                        <th scope="col">{copy.leaseColumns.kind}</th>
+                        <th scope="col">{copy.leaseColumns.holder}</th>
+                        <th scope="col">{copy.leaseColumns.worktree}</th>
+                        <th scope="col">{copy.leaseColumns.expires}</th>
                       </tr>
-                    ))}
-                  </tbody>
-                </table>
+                    </thead>
+                    <tbody>
+                      {props.model.value.leases.map((lease) => (
+                        <tr key={`${lease.planId}:${lease.kind}`}>
+                          <td className="mono t-12">{lease.planId}</td>
+                          <td>
+                            <span className="chip">{lease.kind}</span>
+                          </td>
+                          <td>{lease.holder}</td>
+                          <td className="mono t-12">
+                            <TruncatedText text={lease.worktreePath} />
+                          </td>
+                          <td className="mono t-12">{lease.expiresAt}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
               )}
             </div>
           </section>

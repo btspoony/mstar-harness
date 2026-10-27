@@ -159,7 +159,7 @@ export function Issues(props: IssuesProps) {
     // tracking). `mono t-12` renders the same size in the primary tone — close enough to
     // look right and wrong by one colour role.
     { key: "id", header: copy.columns.id, width: "86px", cellClass: "t-id", render: (row) => <span>{row.id}</span> },
-    { key: "title", header: copy.columns.title, cellClass: "t-title t-strong", render: (row) => <span>{row.title}</span> },
+    { key: "title", header: copy.columns.title, cellClass: "t-title t-strong", render: (row) => <TruncatedText text={row.title} /> },
     { key: "project", header: copy.columns.project, width: "128px", secondary: true, cellClass: "muted", render: (row) => <span>{row.projectId}</span> },
     { key: "kind", header: copy.columns.kind, width: "112px", secondary: true, cellClass: "secondary", render: (row) => <span>{row.kind}</span> },
     {

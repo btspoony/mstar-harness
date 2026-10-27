@@ -112,10 +112,7 @@ export function Workflows(props: WorkflowsProps) {
   const { model, copy } = props;
   const filters = props.filters ?? DEFAULT_WORKFLOW_FILTERS;
   // `null` when the rows could not be read: a count of an unread list is not a fact.
-  const activeRegistrations =
-    model.rows.kind === "populated"
-      ? model.rows.value.filter((row) => row.activeRegistration).length
-      : null;
+  const activeRegistrations = model.rows.kind === "populated" ? model.active : null;
 
   const columns: DataTableColumn<WorkflowRow>[] = [
     { key: "id", header: copy.columns.id, width: "282px", render: (row) => <span className={"mono t-12"}>{row.id}</span> },

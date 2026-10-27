@@ -360,14 +360,18 @@ function IterationDetailBody(props: {
               {value.documents.length === 0 ? (
                 <p className="muted t-12">{copy.documentsEmpty}</p>
               ) : (
-                <table className="table" data-ms-documents="">
-                  <colgroup>
-                    <col />
-                    <col style={{ width: "14%" }} />
-                    <col style={{ width: "16%" }} />
-                    <col style={{ width: "34%" }} />
-                    <col style={{ width: "10%" }} />
-                  </colgroup>
+                /* The prototype's document table: fixed pixel widths and a scroller, so a
+                   narrow pane scrolls instead of squeezing the location
+                   (`design-v1.html:1904-1909`). */
+                <div className="table-wrap">
+                  <table className="table" data-ms-documents="" data-narrow-cols="2">
+                    <colgroup>
+                      <col />
+                      <col style={{ width: "110px" }} />
+                      <col style={{ width: "140px" }} />
+                      <col style={{ width: "520px" }} />
+                      <col style={{ width: "80px" }} />
+                    </colgroup>
                   <thead>
                     <tr>
                       <th scope="col">{copy.documentColumns.title}</th>
@@ -380,10 +384,10 @@ function IterationDetailBody(props: {
                   <tbody>
                     {value.documents.map((doc) => (
                       <tr key={doc.location}>
-                        <td>{doc.title}</td>
-                        <td>{doc.lifecycle}</td>
+                        <td className="t-title">{doc.title}</td>
+                        <td className="mono">{doc.lifecycle}</td>
                         <td className="mono t-12">{doc.documentKind}</td>
-                        <td className="mono t-12">
+                        <td className="mono t-11 secondary t-title">
                           <TruncatedText text={doc.location} />
                         </td>
                         <td className="mono t-12" data-ms-align="end">
@@ -393,6 +397,7 @@ function IterationDetailBody(props: {
                     ))}
                   </tbody>
                 </table>
+                </div>
               )}
             </div>
           </section>

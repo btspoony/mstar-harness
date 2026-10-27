@@ -135,16 +135,29 @@ function Plan(props: { plan: FocusPlan; copy: FocusCopy }) {
       <span className="p-id">
         <TruncatedText text={plan.planId} />
       </span>
-      <span className="p-prog" data-ms-progress={plan.note === null ? "absent" : "recorded"}
-        data-ms-progress-note={plan.note === null ? undefined : ""}
-        data-ms-progress-absent={plan.note === null ? "" : undefined}>
-        {/* A plan that records nothing says so; it never renders a 0 or a step the store
-            did not give it. The prototype's own cell is just the note. */}
-        {plan.note ?? copy.progressAbsent}
-      </span>
+      {/* `bucketPlans` files an unrecorded status under Todo, so the group heading cannot
+          say that the store never recorded one. The word is what keeps a colour (or a
+          missing colour) from being the only channel. */}
+      {plan.status === null ? (
+        <span className="p-status muted" data-ms-plan-status-absent="">
+          {copy.planStatusAbsent}
+        </span>
+      ) : null}
+      {plan.note === null ? (
+        plan.blockedReason === null ? (
+          <span className="p-prog" data-ms-progress="absent" data-ms-progress-absent="">
+            {copy.progressAbsent}
+          </span>
+        ) : null
+      ) : (
+        <span className="p-prog" data-ms-progress="recorded" data-ms-progress-note="">
+          <TruncatedText text={plan.note} />
+        </span>
+      )}
       {plan.blockedReason === null ? null : (
         <span className="p-prog" data-ms-blocked-reason="">
-          {copy.blockedLabel}: <TruncatedText text={plan.blockedReason} />
+          {copy.blockedLabel}:{" "}
+          <TruncatedText text={plan.blockedReason} />
         </span>
       )}
     </div>

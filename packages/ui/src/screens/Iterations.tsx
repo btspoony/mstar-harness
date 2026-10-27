@@ -81,11 +81,9 @@ const FILTERS_HEAD_ID = "ms-iterations-filters";
 export function Iterations(props: IterationsProps) {
   const { model, copy } = props;
   // "Active" is the catalog's own lifecycle, not the execution state: an iteration whose
-  // workflow stopped running is still an active registration.
-  const activeCount =
-    model.rows.kind === "populated"
-      ? model.rows.value.filter((row) => row.lifecycle === "active").length
-      : 0;
+  // workflow stopped running is still an active registration. The model counts the
+  // store's rows, not the current filter result.
+  const activeCount = model.active;
   const filters = props.filters ?? DEFAULT_ITERATION_FILTERS;
 
   const columns: DataTableColumn<IterationRow>[] = [

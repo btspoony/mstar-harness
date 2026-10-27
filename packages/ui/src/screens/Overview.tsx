@@ -198,7 +198,11 @@ function planColumns(copy: OverviewCopy): DataTableColumn<OverviewPlanRow>[] {
       // The prototype gives this column 35% of the table (`.planboard` grid) and the
       // title absorbs the rest, so the proportion holds at every container width.
       width: "35%",
-      render: (plan) => <span className="mono">{plan.planId}</span>,
+      render: (plan) => (
+        <span className="mono">
+          <TruncatedText text={plan.planId} />
+        </span>
+      ),
     },
     {
       key: "title",
@@ -232,10 +236,15 @@ function planColumns(copy: OverviewCopy): DataTableColumn<OverviewPlanRow>[] {
       render: (plan) =>
         plan.progress === null ? (
           // The store's note is free text, so it is shown as the fact it is — never
-          // turned into a bar, and never replaced by one.
-          <span className={plan.progressNote === null ? "muted" : "muted t-12"}>
-            {plan.progressNote ?? copy.planProgressAbsent}
-          </span>
+          // turned into a bar, and never replaced by one. The column is 116px, so the
+          // note truncates with the shared reveal rather than being cut silently.
+          plan.progressNote === null ? (
+            <span className="muted">{copy.planProgressAbsent}</span>
+          ) : (
+            <span className="muted t-12">
+              <TruncatedText text={plan.progressNote} />
+            </span>
+          )
         ) : (
           <span className="milestone-counts">
             <span className="mono">{progressText(plan.progress)}</span>

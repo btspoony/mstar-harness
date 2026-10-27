@@ -156,6 +156,11 @@ export type WorkflowListModel = {
   total: number;
   /** How many rows this page actually carries. */
   shown: number;
+  /**
+   * Active registrations in the store's rows, before the filters narrow them: the head's
+   * count states the store, not the current filter result.
+   */
+  active: number;
   /** `total > shown`: the store holds more than this page. */
   truncated: boolean;
   /** The status/type values the current rows carry, for the two selects. */
@@ -199,6 +204,7 @@ export function workflowListModel(read: {
     rows: rows.kind === "populated" ? { kind: "populated", value: kept } : rows,
     total: read.data.total,
     shown,
+    active: mapped.filter((row) => row.activeRegistration).length,
     truncated: read.data.total > shown,
     options,
     filtered: kept.length,

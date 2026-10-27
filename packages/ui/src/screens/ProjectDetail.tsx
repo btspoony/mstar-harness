@@ -238,7 +238,7 @@ function RoadmapFeature(props: { model: RoadmapModel; copy: ProjectDetailCopy })
   const { model, copy } = props;
   return (
     <div className={"feature-body"} data-ms-feature="roadmap">
-      {model.milestones.length === 0 ? null : (
+      {model.milestones.length === 0 && model.unassignedIssues === 0 ? null : (
         <section className={"panel"} data-ms-milestones="">
           <div className="panel-head">
             <h2 className={"panel-title"}>{copy.roadmap.milestonesHeading}</h2>
@@ -400,14 +400,11 @@ export function ProjectDetail(props: ProjectDetailProps) {
   const { identity, copy, feature } = props;
   /** The roadmap's authority row, or `null` when the record declares none. */
   const authority = props.roadmap.kind === "populated" ? props.roadmap.value.authority : null;
-  // The head's `N open issues` is the project's whole board: the issues on its milestones
-  // plus the ones on none. `null` when the board is not readable at all — a zero there
-  // would claim the project has none.
-  const openIssues =
-    props.roadmap.kind === "populated"
-      ? props.roadmap.value.milestones.reduce((sum, m) => sum + m.counts.open, 0) +
-        props.roadmap.value.unassignedIssues
-      : null;
+  // The head's `N open issues` is the project's open-issue total, which the scoped Issues
+  // read already answers under its default `open` disposition. The roadmap's milestone
+  // tallies cannot answer it: `unassignedIssues` counts every unassigned issue, retired
+  // ones included (`MilestoneRead` documents the row that way).
+  const openIssues = props.issuesCount ?? null;
   // The prototype's strip carries a count per feature. Only the roadmap's is derivable
   // here: the issues and iterations panels arrive as rendered nodes from the host, so
   // their counts are the host's facts to pass in.
@@ -475,11 +472,15 @@ export function ProjectDetail(props: ProjectDetailProps) {
         </div>
         <div className="detail-actions">
           {/* The prototype states the roadmap's presence as a dot + word, then the
-              catalog location beside it. */}
-          <span className={`status tone-${identity.lifecycleTone}`}>
-            <span className="dot" aria-hidden="true" />
-            <span className="label mono">{copy.roadmapState}</span>
-          </span>
+              catalog location beside it. The word is only sayable when the read
+              produced a roadmap; a loading, absent or unreadable one gets no chip
+              rather than a false "present". */}
+          {props.roadmap.kind === "populated" ? (
+            <span className={`status tone-${identity.lifecycleTone}`}>
+              <span className="dot" aria-hidden="true" />
+              <span className="label mono">{copy.roadmapState}</span>
+            </span>
+          ) : null}
           <span className="mono t-11 muted">{identity.path}</span>
         </div>
       </header>
@@ -531,31 +532,38 @@ export function ProjectDetail(props: ProjectDetailProps) {
             </h2>
           </div>
           <div className="panel-body">
-            {authority === null ? (
-              <p className="muted t-12">{copy.authorityAbsent}</p>
-            ) : (
-              <dl className="fields">
-                <div className="field">
-                  <dt>{copy.authorityColumns.state}</dt>
-                  <dd className="mono">{authority.state}</dd>
-                </div>
-                <div className="field">
-                  <dt>{copy.authorityColumns.revision}</dt>
-                  <dd className="mono">{authority.revision}</dd>
-                </div>
-                <div className="field">
-                  <dt>{copy.authorityColumns.contentHash}</dt>
-                  <dd className="mono trunc" title={authority.contentHash}>
-                    <TruncatedText text={authority.contentHash} />
-                  </dd>
-                </div>
-                <div className="field">
-                  <dt>{copy.authorityColumns.frontmatter}</dt>
-                  <dd className="mono trunc">
-                    <TruncatedText text={authority.frontmatter} />
-                  </dd>
-                </div>
-              </dl>
+            {props.roadmap.kind === "populated" ? (
+              authority === null ? (
+                <p className="muted t-12">{copy.authorityAbsent}</p>
+              ) : (
+                <dl className="fields">
+                  <div className="field">
+                    <dt>{copy.authorityColumns.state}</dt>
+                    <dd className="mono">{authority.state}</dd>
+                  </div>
+                  <div className="field">
+                    <dt>{copy.authorityColumns.revision}</dt>
+                    <dd className="mono">{authority.revision}</dd>
+                  </div>
+                  <div className="field">
+                    <dt>{copy.authorityColumns.contentHash}</dt>
+                    <dd className="mono trunc" title={authority.contentHash}>
+                      <TruncatedText text={authority.contentHash} />
+                    </dd>
+                  </div>
+                  <div className="field">
+                    <dt>{copy.authorityColumns.frontmatter}</dt>
+                    <dd className="mono trunc">
+                      <TruncatedText text={authority.frontmatter} />
+                    </dd>
+                  </div>
+                </dl>
+              )
+            ) : props.roadmap.kind === "loading" ? null : (
+              // The card must not claim the project declares no authority row when the
+              // roadmap read itself is what failed (or the concept is undeclared): say
+              // the read's own state instead.
+              <p className="muted t-12">{copy.absence[props.roadmap.kind].body}</p>
             )}
           </div>
         </section>
