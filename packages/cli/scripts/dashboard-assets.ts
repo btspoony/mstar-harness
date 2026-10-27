@@ -40,6 +40,10 @@
 // for what is here now.
 // 344 KB: the footer gained the open-issue count the prototype leads with, which needs the
 // shell to reach the overview's residual total.
+// 344 KB. Raised from 340 by the footer's open-issue count, which needs the shell to reach
+// the overview's residual total. Measured: the previous bundle was 348231B against 348160B —
+// **71 bytes over**, so this is not slack for new growth. The next thing to shrink is the
+// locale table, which ships both dictionaries in full.
 export const JS_CEILING = 344 * 1024;
 // Raised, 60 KB to 100 KB: the product's component styles are now generated from the
 // approved prototype and shipped whole (values unchanged, selectors scoped, queries

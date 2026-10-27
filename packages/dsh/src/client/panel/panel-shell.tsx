@@ -90,6 +90,9 @@ export function navItems(copy: Copy): Array<{ id: string; label: string }> {
 function focusCopy(copy: Copy): FocusCopy {
   return {
     ...copy.focus,
+    // The gate step names live in the iteration detail's block; the focus track prints the
+    // same five words.
+    gateStepLabels: copy.iterationDetail.gateStepLabels,
     absence: {
       'not-applicable': copy.state['not-applicable'],
       absent: copy.state.absent,

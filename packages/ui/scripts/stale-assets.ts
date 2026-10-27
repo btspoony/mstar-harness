@@ -38,4 +38,44 @@ if (stale.length > 0) {
   console.error("\nthe dashboard bundle predates its styles: run `bun run --cwd packages/cli build`");
   process.exit(1);
 }
-console.log("the generated dashboard assets are newer than every stylesheet");
+
+// A second hop: the CLI compiles `assets.generated.ts` into `dist/mstar-harness.js`, and a
+// build that *failed* (an over-ceiling bundle, a type error) leaves that file older than the
+// generated assets. The dashboard then serves the previous bundle and every browser
+// measurement is of the previous change — the same failure this file's first hop was written
+// for, one step further along.
+const cliDist = join(root, "packages", "cli", "dist", "mstar-harness.js");
+try {
+  const distAt = statSync(cliDist).mtimeMs;
+  const sources = [
+    join(root, "packages", "commands", "src", "dashboard", "assets.generated.ts"),
+    join(root, "packages", "cli", "src"),
+    join(root, "packages", "cli", "web"),
+  ];
+  const newer: string[] = [];
+  const walk = (target: string): void => {
+    const info = statSync(target);
+    if (info.isDirectory()) {
+      for (const entry of readdirSync(target)) walk(join(target, entry));
+      return;
+    }
+    if (info.mtimeMs > distAt) newer.push(target.slice(root.length + 1));
+  };
+  for (const source of sources) {
+    try {
+      walk(source);
+    } catch {
+      // a source directory that does not exist in this checkout
+    }
+  }
+  if (newer.length > 0) {
+    console.error(newer.slice(0, 5).map((path) => `  ${path} is newer than dist/mstar-harness.js`).join("\n"));
+    console.error("\nthe CLI bundle predates its sources: run `bun run --cwd packages/cli build`");
+    process.exit(1);
+  }
+} catch {
+  console.log("stale-assets: no CLI bundle, nothing to compare");
+  process.exit(0);
+}
+
+console.log("the generated dashboard assets and the CLI bundle are newer than their sources");

@@ -1802,8 +1802,17 @@ which is the prototype's two segments in its order.
 **And this took three builds to see, for the same reason twice before in this file**: the
 first attempt rendered nothing, because `bun run --cwd packages/cli build` had exited 1 — the
 dashboard JS was 161 bytes over its ceiling — and the page served the *previous* bundle. Every
-measurement until the ceiling was raised measured the old footer. `check:stale` compares
-stylesheets, not the compiled bundle, so it did not catch this one.## Verification coverage, stated
+measurement until the ceiling was raised measured the old footer.
+
+**`check:stale` now covers that hop.** It already compared stylesheets against
+`assets.generated.ts`; it also compares `assets.generated.ts`, `packages/cli/src` and
+`packages/cli/web` against `packages/cli/dist/mstar-harness.js`. A build that failed leaves the
+bundle older than its sources, and the check says which file and which command.
+
+**The ceiling itself is now a measurement, not a ratchet.** 340 KB was tried and the bundle
+came out 71 bytes over — so the raise to 344 is what the footer actually costs, and the
+comment says so. The next thing to shrink is the locale table, which ships both dictionaries
+in full.## Verification coverage, stated
 
 Two hosts mount these screens: the dashboard (`packages/cli/web`) and the dsh pane
 (`packages/dsh/src/client/panel`). They share the components but **each owns its own
