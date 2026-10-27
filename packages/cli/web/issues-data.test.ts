@@ -26,6 +26,7 @@ import {
   readIssueDetail,
   readIssues,
   scopedFilters,
+  startRead,
 } from "./issues-data";
 import { DEFAULT_ISSUE_FILTERS } from "@mstar-harness/ui";
 
@@ -299,19 +300,19 @@ describe("the detail read", () => {
 
 describe("P1: a keystroke must not unmount the search box", () => {
   test("a read in flight keeps the previous rows painted", () => {
-    // Every keystroke starts a read and sets `loading`; the screen returned `null`
-    // while loading, so the input unmounted and the reader lost focus mid-typing.
+    // Every keystroke starts a read; the screen returned `null` while loading, so the
+    // input unmounted and the reader lost focus mid-typing.
     const ready = issuesOutcome({ status: "ready", envelope: listEnvelope([summary()], 1) }, query);
     if (ready.kind !== "ready") throw new Error("expected ready");
-    const duringSecondKeystroke = keepPreviousOnLoad(ready, { kind: "loading" });
+    const duringSecondKeystroke = startRead(ready);
     expect(duringSecondKeystroke).toEqual(ready);
     // Three keystrokes in a row: still painted, still the same component tree.
-    const third = keepPreviousOnLoad(duringSecondKeystroke, { kind: "loading" });
+    const third = startRead(duringSecondKeystroke);
     expect(third.kind).toBe("ready");
   });
 
   test("the first load is still a load: nothing to paint yet", () => {
-    const first = keepPreviousOnLoad(null, { kind: "loading" });
+    const first = startRead({ kind: "loading" });
     expect(first.kind).toBe("loading");
   });
 

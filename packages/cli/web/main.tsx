@@ -74,6 +74,7 @@ import {
   issuesPath,
   readIssueDetail,
   readIssues,
+  startRead,
   type IssueDetailOutcome,
   type IssuesOutcome,
 } from "./issues-data";
@@ -241,7 +242,9 @@ function useIssues(query: IssueQuery, enabled = true): IssuesOutcome {
     if (!enabled) return;
     const controller = new AbortController();
     let current = true;
-    setOutcome({ kind: "loading" });
+    // Starting the next read keeps the painted rows: setting `loading` here unmounted
+    // the list's search box between keystrokes, so focus died after every character.
+    setOutcome(startRead);
     void readIssues(fetch, query, controller.signal).then((result) => {
       if (current) setOutcome((previous) => keepPreviousOnLoad(previous, issuesOutcome(result, query)));
     });

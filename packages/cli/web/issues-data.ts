@@ -183,6 +183,18 @@ export function keepPreviousOnLoad(previous: IssuesOutcome | null, next: IssuesO
   return next;
 }
 
+/**
+ * The state a *starting* read paints.
+ *
+ * The hook used to set `loading` directly at request start, which unmounted the list's
+ * own search box on every keystroke — `keepPreviousOnLoad` only ran once the response
+ * arrived, too late to keep focus. This is the same rule, applied at the moment that
+ * mattered.
+ */
+export function startRead(previous: IssuesOutcome): IssuesOutcome {
+  return keepPreviousOnLoad(previous, { kind: "loading" });
+}
+
 /** The detail outcome for a settled read. */
 export function issueDetailOutcome(
   result:
