@@ -105,7 +105,7 @@ const PROBE = `(() => {
   // A hidden element stays in the DOM, so a raw querySelectorAll().length reports the
   // language group as present at 760px where the prototype hides it. Counting painted
   // boxes is what the assertions below mean by the header pair.
-  const painted = (el) => el.getBoundingClientRect().width > 0;
+  const painted = (el) => { const r = el.getBoundingClientRect(); return r.width > 0 && r.height > 0; };
   const segNodes = [...document.querySelectorAll('.app-seg')];
   const iconNodes = [...document.querySelectorAll('.app-icon-btn')];
   const seg = segNodes.filter(painted);
@@ -316,9 +316,10 @@ const PROBE = `(() => {
     headerHairline: header === null ? null : getComputedStyle(header).borderBottomWidth,
     controlsInside: (() => {
       const controls = [...document.querySelectorAll('.app-seg, .app-icon-btn')];
-      return controls.every((el) => {
+      const shown = controls.filter((el) => { const r = el.getBoundingClientRect(); return r.width > 0 && r.height > 0; });
+      return shown.every((el) => {
         const rect = el.getBoundingClientRect();
-        return rect.width > 0 && rect.right <= window.innerWidth + 0.5 && rect.left >= -0.5;
+        return rect.right <= window.innerWidth + 0.5 && rect.left >= -0.5;
       });
     })(),
     controlsLabelled: [...document.querySelectorAll('.app-seg, .app-icon-btn')]
