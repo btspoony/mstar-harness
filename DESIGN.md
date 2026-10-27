@@ -2132,7 +2132,25 @@ panel, which is a different element.
 **One difference that is data**: `1 plan · running` against `7 plans · running` is this store's
 plan count, not a label.
 
-## Verification coverage, stated
+## The four detail screens' chrome, compared
+
+The same text sweep over the detail screens — every heading, panel title, chip and meta
+segment — against the prototype's own reads.
+
+| Screen | The prototype's meta line | This implementation |
+| --- | --- | --- |
+| Workflow detail | `issue-project-move` · `plan · running · phase-2-execute · updated 2026-10-25 13:58` | same shape (phase absent when the row has none) |
+| Iteration detail | `iter-…` · `active` · `compass active` · `3 plans` · `5 documents` | `completed · started 2026-08-11` — **two of five segments** |
+| Project detail | `engine` · `active` · `Revision 12` · `14 open issues` | `_default · active · Revision 1` — the fourth segment exists in the code and this record's value is `null` |
+| Issue detail | `I-000870` · `mstar-harness` · `critical` · `bug` · `open` · `Revision 4` | `I-000870` · `dsh-integration` · `high` · `bug` · `open` — **five of six** |
+
+**The two real gaps are one field each**: the issue detail's `Revision 4` and the iteration
+detail's `compass active · 3 plans · 5 documents`. Both need a value the model does not carry
+for those screens — not a rendering change.
+
+**The project detail's fourth segment is not a gap**: the code renders it whenever the record
+has an open-issue count, and `_default` has none. The prototype's screenshot happens to be a
+project that does.## Verification coverage, stated
 
 Two hosts mount these screens: the dashboard (`packages/cli/web`) and the dsh pane
 (`packages/dsh/src/client/panel`). They share the components but **each owns its own
