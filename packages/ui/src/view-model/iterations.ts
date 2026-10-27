@@ -224,6 +224,13 @@ export type IterationDetailModel = {
   /** The registered workflow's own state, for the prototype's four execution rows. */
   workflowStatus: string | null;
   workflowPhase: string | null;
+  /**
+   * Whether the store still counts this as a registration — the Catalog head's chip.
+   *
+   * This field existed once and was deleted as unread; it is read now, because the
+   * prototype's Catalog head states it.
+   */
+  activeRegistration: boolean;
   plans: readonly IterationPlanRow[];
 };
 
@@ -273,6 +280,7 @@ export function iterationDetailModel(read: {
       workflowId: iteration.workflow?.id ?? null,
       workflowStatus: iteration.workflow?.status ?? null,
       workflowPhase: iteration.workflow?.phase ?? null,
+      activeRegistration: iteration.workflow?.activeRegistration ?? false,
       plans: iteration.plans.map(iterationPlanRow),
       documents: iteration.documents.map((doc) => ({
         title: doc.title ?? doc.relativePath,

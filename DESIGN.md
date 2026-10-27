@@ -1871,7 +1871,31 @@ chip. `projection_plans` holds **1 pinned plan out of 5**.
 **A second, quieter lesson**: this round also fixed `check:stale`'s own silent pass — a
 checkout with no `dist/mstar-harness.js` exited 0 with a log line, which is the exact state the
 check exists to catch. It warns now, and fails under `STRICT_STALE=1`. `verify:visual` is one
-command that runs it before any browser measurement.## Verification coverage, stated
+command that runs it before any browser measurement.## The iteration detail, side by side
+
+Five panels on both sides, in the same order: `Catalog identity · Execution · Compass · Plans ·
+Documents`, with the first two in a two-column row above the rest.
+
+**Two differences found and fixed:**
+
+- the first panel's heading read `Catalog`; the prototype says **`Catalog identity`** — the
+  same word it uses on the workflow detail, and the same mistake
+- the heads were missing two meta segments: the Catalog chip (`active registration`) and the
+  Plans count (`3 plans`)
+
+Measured after: `["目录身份","执行","罗盘","计划","文档"]` with metas
+`["completed · started …", "0 plans", "4 documents"]`.
+
+**The Catalog chip renders only when the store still counts the registration**, and this
+record's value is `false`, so three metas show where the prototype's screenshot has four. The
+condition is right; the data is absent.
+
+**That field was deleted two rounds ago as unread** (`IterationDetailModel.workflowActiveRegistration`).
+It is back, and read, because the prototype's Catalog head states it — which is the honest
+shape of that earlier deletion: "nothing reads it" was true, and "nothing should" was not.
+
+**Also caught here**: the EN check that closed the previous round's loop read
+`Catalog identity` / `Pin` / `rev 1`, so both dictionaries were verified, not only `zh`.## Verification coverage, stated
 
 Two hosts mount these screens: the dashboard (`packages/cli/web`) and the dsh pane
 (`packages/dsh/src/client/panel`). They share the components but **each owns its own

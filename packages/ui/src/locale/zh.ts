@@ -371,7 +371,9 @@ export const zh: Copy = {
     compassHeading: "罗盘",
     compassStarted: (at: string) => `开始于 ${at}`,
     planTableHeading: "计划",
-    catalogHeading: "目录",
+    plansCount: (n: number): string => `${n} 个计划`,
+    catalogHeading: "目录身份",
+    activeRegistration: "活跃注册",
     executionHeading: "执行",
   compassColumns: { milestone: "里程碑", target: "目标日期", status: "状态" },
     fields: {

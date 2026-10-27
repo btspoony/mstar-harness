@@ -40,7 +40,11 @@ export type IterationDetailCopy = {
   /** The head's meta line: `started <time>`, beside the compass status. */
   compassStarted: (at: string) => string;
   planTableHeading: string;
+  /** The Plans head's own count: `3 plans`. */
+  plansCount: (n: number) => string;
   catalogHeading: string;
+  /** The Catalog head's chip: the store still counts this as a registration. */
+  activeRegistration: string;
   executionHeading: string;
   /** The Compass panel's milestone mini table. */
   compassColumns: { milestone: string; target: string; status: string };
@@ -186,6 +190,13 @@ function IterationDetailBody(props: {
           <section className="panel" aria-labelledby="ms-iteration-catalog">
             <div className="panel-head">
               <h2 className="panel-title" id="ms-iteration-catalog">{copy.catalogHeading}</h2>
+              {/* The prototype's head states that the store still counts this as a
+                  registration — the same fact the workflow detail shows. */}
+              {value.activeRegistration ? (
+                <span className="panel-meta">
+                  <span className="chip">{copy.activeRegistration}</span>
+                </span>
+              ) : null}
             </div>
             <div className="panel-body">
               <dl className="fields">
@@ -313,6 +324,8 @@ function IterationDetailBody(props: {
               <h2 className="panel-title" id="ms-iteration-plans">
                 {copy.planTableHeading}
               </h2>
+              {/* The prototype's head counts the plans in this iteration. */}
+              <span className="panel-meta">{copy.plansCount(value.plans.length)}</span>
             </div>
             <DataTable
               variant="detail"

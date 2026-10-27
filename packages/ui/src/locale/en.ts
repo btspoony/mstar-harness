@@ -393,7 +393,9 @@ export const en = {
     compassHeading: "Compass",
     compassStarted: (at: string) => `started ${at}`,
     planTableHeading: "Plans",
-    catalogHeading: "Catalog",
+    plansCount: (n: number): string => `${n} ${n === 1 ? "plan" : "plans"}`,
+    catalogHeading: "Catalog identity",
+    activeRegistration: "active registration",
     executionHeading: "Execution",
   compassColumns: { milestone: "Milestone", target: "Target", status: "Status" },
     fields: {
