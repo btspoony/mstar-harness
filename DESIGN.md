@@ -2361,6 +2361,16 @@ check was right and the experiment was wrong. That is worth stating plainly:
 The difference is whether the injection actually landed — and the only way to know is to look
 at what the check read.
 
+**The suite is a script** — `check:mutation`, four injection cases, each restored from a trap
+so a mid-run failure cannot leave a mutated file behind. It passes when every check reports its
+own defect.
+
+**And `check:selectors` only guards one direction.** It flags a prototype surface this product
+lacks; it says nothing about the 70 selectors this sheet carries that the prototype does not
+(`.absence-*`, the chart frame, the dsh pane body, and the rules added to fix real defects).
+Those are legitimate, so the count is **reported** rather than failed — but the asymmetry is now
+visible in the output instead of being an assumption.
+
 **Exit codes are read directly now** (`OUT=$(…); CODE=$?`, never `… | tail; echo $?`), because
 a pipe reports the last process's status and `tail` succeeds no matter what failed upstream.
 Two of the five bad injections were that mistake alone.## Verification coverage, stated

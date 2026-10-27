@@ -67,7 +67,8 @@ const ours = new Set([
   ...selectors(readFileSync(join(stylesDir, "product.css"), "utf8")),
   ...selectors(readFileSync(join(stylesDir, "base.css"), "utf8")),
 ]);
-const unexplained = [...selectors(prototypeCss)]
+const prototypeKeys = new Set(selectors(prototypeCss));
+const unexplained = [...prototypeKeys]
   .filter((selector) => !ours.has(selector))
   .filter((selector) => !NOT_APPLICABLE.some((rule) => rule.match(selector)))
   .sort();
@@ -77,4 +78,13 @@ if (unexplained.length > 0) {
   console.error(`\n${unexplained.length} prototype selector(s) are neither defined nor explained.`);
   process.exit(1);
 }
-console.log("every prototype-only selector is one this product should not have");
+// The other direction, reported and not failed. This sheet legitimately carries surfaces the
+// prototype has no rule for — the absence arms, the chart frame, the dsh pane body — so a
+// surplus is not by itself a defect. Stating the count keeps the asymmetry visible: this check
+// guards "the prototype has something we lack", and nothing guards the reverse.
+const surplus = [...ours].filter((selector) => !prototypeKeys.has(selector)).length;
+console.log(
+  `every prototype-only selector is one this product should not have — ` +
+    `${unexplained.length === 0 ? "0" : String(unexplained.length)} unexplained, ` +
+    `${surplus} selector(s) this sheet carries that the prototype does not`,
+);

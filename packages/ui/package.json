@@ -28,7 +28,8 @@
     "check:declarations": "bun run scripts/declaration-diff.ts",
     "check:stale": "bun run scripts/stale-assets.ts",
     "verify:visual": "bun run scripts/stale-assets.ts",
-    "check:responsive": "bash scripts/responsive-sweep.sh"
+    "check:responsive": "bash scripts/responsive-sweep.sh",
+    "check:mutation": "bash scripts/mutation-check.sh"
   },
   "devDependencies": {
     "@mstar-harness/engine": "workspace:*",
