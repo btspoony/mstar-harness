@@ -2268,7 +2268,29 @@ second excluded only `overflow-x: auto`. With the fix in, all nine screens measu
 
 **This is the only defect in this file that a text diff could not have found**: the markup was
 right, the stylesheet was right, and the missing declaration was in a third place that neither
-comparison reads.## Verification coverage, stated
+comparison reads.## The sweep is a script now, and it fails
+
+The overflow sweep has been run by hand a dozen times in this file, twice with a bug in the
+probe and **once with a probe that returned nothing at all** — an eval that failed printed
+empty `over:` fields, the run looked like three clean lines, and only a second run with
+different formatting showed it had measured nothing.
+
+`packages/ui/scripts/responsive-sweep.sh` is that sweep, nine screens by three widths, and it
+exits non-zero unless **every** screen answers with parseable JSON carrying `over: 0` and no
+sideways scroll. A silent probe is a failure, not a pass. Run it as
+`check:responsive <base-url>`.
+
+**The verification rules this file has earned, collected:**
+
+- a measurement is only as good as the build (`check:stale`, now covering the compiled bundle)
+- a class name is not a stylesheet (`check:classes` found `fact-block`)
+- a text comparison against `textContent` proves nothing about spacing (`gap` renders as no
+  whitespace; three separate "defects" were this)
+- a probe that returns nothing is not a probe that found nothing (this section)
+- a grep for one spelling is not a search: `container-type` was in the tree the whole time,
+  inside a `container:` shorthand
+- parity is not exhausted by the checks you have written; every round of looking found
+  something the last round's method could not see## Verification coverage, stated
 
 Two hosts mount these screens: the dashboard (`packages/cli/web`) and the dsh pane
 (`packages/dsh/src/client/panel`). They share the components but **each owns its own
