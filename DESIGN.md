@@ -2531,6 +2531,17 @@ Two recent reports said "round 230, 21 left". The goal's own counter says **225 
 counter, which is the same mistake as measuring the page instead of the build. The counter is
 the authority; `get_goal` is one call.
 
+## The project detail frame
+
+Rendered at 1440 / dark / en: the crumb `Projects / _default`, the head, the two panels
+(`Catalog identity`, `Roadmap authority`), and the three feature tabs **with their counts**
+(`Roadmap`, `Issues 102`, `Iterations 2`) — the prototype's own arrangement, including the tab
+counts added forty rounds after the tabs themselves.
+
+The Roadmap body is its `not declared` arm because `_default` has no roadmap file. The prototype
+screenshot is a project that has one. Data, not layout — the same distinction that has now been
+the answer to four separate "missing panel" reports.
+
 ## Verification coverage, stated
 
 Two hosts mount these screens: the dashboard (`packages/cli/web`) and the dsh pane
