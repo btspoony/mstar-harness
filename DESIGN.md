@@ -2310,9 +2310,26 @@ every shared declaration matches the prototype — 313 shared selectors,
 Before the fix the same sentence printed with **0 inside a breakpoint block**. Both sheets
 have eleven at-rules; none of them had ever been compared.
 
-**It is a block scan now**, with the at-rule stack carried as context, and the prototype's
-named prelude (`@container pane (…)`) normalised to the anonymous form this sheet uses. With
-193 declarations in blocks newly under comparison, all 193 match.
+**It is a block scan now**, with the at-rule context carried down by recursion and the
+prototype's named prelude (`@container pane (…)`) normalised to the anonymous form this sheet
+uses.
+
+**And the first block scan was still wrong**, in a way its own coverage line could not show.
+It pushed the at-rule onto a stack and then advanced past the block, so the declarations inside
+were never visited — while the keys it printed carried the `@container …` prefix and the
+coverage line said `193 of them inside a breakpoint block`. Those 193 keys existed; their
+values were the top-level rule's.
+
+**What caught it**: introducing a deliberate error. Changing the 479 block's `flex-wrap` to
+`wrap` produced a clean run. A check you cannot make fail is not a check. Fixed, the same
+error is named exactly:
+
+```
+@container (max-width: 479px) .screen-meta { flex-wrap: nowrap }   ours: wrap
+```
+
+Real coverage: **391 shared selectors, 70 inside a breakpoint block**, all matching. The `193`
+was arithmetic over keys that had been stamped with a prefix they never earned.
 
 **This is the fourth check in this file whose coverage was smaller than its verdict suggested**
 — after `check:stale` (stylesheets only, not the compiled bundle), `check:classes` (a class

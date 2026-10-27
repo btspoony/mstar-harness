@@ -28,7 +28,7 @@ const KEPT_DIFFERENT: Readonly<Record<string, string>> = {
 };
 
 /** selector → declaration map, with the `.ms-container` scope stripped. */
-function rules(source: string): Map<string, Map<string, string>> {
+function rules(source: string, prefix: readonly string[] = []): Map<string, Map<string, string>> {
   const out = new Map<string, Map<string, string>>();
   const clean = source.replace(/\/\*[\s\S]*?\*\//g, "");
 
@@ -37,7 +37,7 @@ function rules(source: string): Map<string, Map<string, string>> {
   // first `{` is consumed by the inner rule and the prelude is dropped. Every breakpoint
   // block on both sides was therefore compared as if it were top-level CSS: the inner
   // `.screen-meta` overwrote the wide-layout one and nine at-rules per side were invisible.
-  const stacks: string[] = [];
+  const stacks: string[] = [...prefix];
   let cursor = 0;
   while (cursor < clean.length) {
     const open = clean.indexOf("{", cursor);
@@ -56,17 +56,22 @@ function rules(source: string): Map<string, Map<string, string>> {
     cursor = depth === 0 ? index : clean.length;
 
     if (head.startsWith("@")) {
-      // The prototype names its container (`@container pane (…)`); this sheet's are
-      // anonymous. The name does not change which queries match, so it is normalised away.
-      stacks.push(head.replace(/^@container\s+pane\s+/, "@container "));
+      // Recurse into the block with the at-rule as context. Advancing `cursor` past it and
+      // continuing — which is what this did first — silently skipped every declaration
+      // inside every breakpoint, while the key prefix made the coverage line claim
+      // otherwise.
+      const inner = rules(
+        body,
+        [...stacks, head.replace(/^@container\s+pane\s+/, "@container ")],
+      );
+      for (const [selector, declarations] of inner) {
+        const existing = out.get(selector) ?? new Map<string, string>();
+        for (const [property, value] of declarations) existing.set(property, value);
+        out.set(selector, existing);
+      }
       continue;
     }
-    if (body.includes("{")) {
-      // Nested rules: re-scan the body from inside the current context.
-      const nested = rulesOf(body, stacks, out);
-      if (nested !== index) continue;
-      continue;
-    }
+    if (body.includes("{")) continue; // an at-rule or a nested block, never a declaration
     if (head === "from" || head === "to" || head.includes("%")) continue;
 
     const declarations = new Map<string, string>();
@@ -87,22 +92,6 @@ function rules(source: string): Map<string, Map<string, string>> {
       for (const [property, value] of declarations) existing.set(property, value);
       out.set(selector, existing);
     }
-  }
-  return out;
-}
-
-/** Scan one level, keeping the at-rule context; returns the map it filled. */
-function rulesOf(
-  source: string,
-  stacks: string[],
-  out: Map<string, Map<string, string>>,
-): Map<string, Map<string, string>> {
-  const scratch = rules(source);
-  for (const [selector, declarations] of scratch) {
-    const key = stacks.length > 0 ? `${stacks.join(" ")} ${selector}` : selector;
-    const existing = out.get(key) ?? new Map<string, string>();
-    for (const [property, value] of declarations) existing.set(property, value);
-    out.set(key, existing);
   }
   return out;
 }
