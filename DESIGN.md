@@ -2510,6 +2510,11 @@ on an unleased workflow. The structural work of the last twenty rounds is visibl
   the record in mono). The **issue** detail's was incomplete: it rendered the section link and
   stopped, so the reader lost which record the page was about. Measured after the fix:
   `Issues / I-000870`, which is `design-v1.html:1355`'s own crumb.
+
+**All four crumbs now carry the record's id.** Checked one by one: workflow-detail, iteration-detail
+and project-detail were already complete (`<div>` or `<nav>`, a link back, `/`, the record); only
+issue-detail stopped after the link. A difference found on one screen is a question to ask of the
+other three, not a conclusion about them.
 - **No description paragraph under Catalog identity.** The prototype's record has one; the one
   measured here has `description: null`, and the screen renders its absent line. Data.
 - **`1 plan` against `7 plans`.** Data.
