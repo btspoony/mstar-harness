@@ -120,11 +120,13 @@ const renderList = (
   items: WorkflowDTO[],
   total: number,
   generation: number | null = 7,
+  storeRevision?: number,
 ): string =>
   renderToStaticMarkup(
     <Workflows
       model={workflowListModel({ data: { items, total } as WorkflowListDTO, projection: { ...projection, generation } })}
       copy={workflowsCopy}
+      {...(storeRevision === undefined ? {} : { storeRevision })}
     />,
   );
 
@@ -217,6 +219,25 @@ describe("Workflows list — the truncation disclosure comes from `total`", () =
     const html = renderList([workflow()], 1);
     expect(html).not.toContain("data-ms-truncated");
     expect(html).not.toContain("showing");
+  });
+
+  test("the head states the store's count, the active registrations, and the revision", () => {
+    // All three segments the prototype's head carries. The counts come from the model and
+    // the rows; the revision comes from the read envelope.
+    const html = renderList([workflow(), workflow({ id: "w2", activeRegistration: true })], 9, 7, 1224);
+    expect(html).toContain('data-ms-count=""');
+    expect(html).toContain("9 workflows");
+    expect(html).toContain('data-ms-active-registrations=""');
+    expect(html).toMatch(/\d+ active registrations/);
+    expect(html).toContain("projected from store rev 1224");
+  });
+
+  test("the revision segment is omitted, not guessed, when the host cannot state it", () => {
+    const html = renderList([workflow()], 1);
+    expect(html).not.toContain("projected from");
+    expect(html).not.toContain("data-ms-projected-from");
+    // The other two segments are unaffected: a missing revision is not a missing count.
+    expect(html).toContain('data-ms-count=""');
   });
 
   test("more rows than total is not called truncation", () => {

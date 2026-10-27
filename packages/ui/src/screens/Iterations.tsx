@@ -24,6 +24,11 @@ import type { Tone } from "../view-model/status.ts";
 /** Every visible string this screen needs. Task 5 supplies them. */
 export type IterationsCopy = {
   pageTitle: string;
+  /** The head's three segments: the store's count, how many are active, and what an
+   *  iteration is here. */
+  totalMeta: (n: number) => string;
+  activeMeta: (n: number) => string;
+  headNote: string;
   tableCaption: string;
   /** The filter card's own head. */
   /** The prototype's footer: where "active" and the execution column come from. */
@@ -75,6 +80,12 @@ const FILTERS_HEAD_ID = "ms-iterations-filters";
 
 export function Iterations(props: IterationsProps) {
   const { model, copy } = props;
+  // "Active" is the catalog's own lifecycle, not the execution state: an iteration whose
+  // workflow stopped running is still an active registration.
+  const activeCount =
+    model.rows.kind === "populated"
+      ? model.rows.value.filter((row) => row.lifecycle === "active").length
+      : 0;
   const filters = props.filters ?? DEFAULT_ITERATION_FILTERS;
 
   const columns: DataTableColumn<IterationRow>[] = [
@@ -147,6 +158,15 @@ export function Iterations(props: IterationsProps) {
           document heading instead. */}
       <div className="screen-head">
         <h1>{copy.pageTitle}</h1>
+        {/* The prototype's head: the store's count, how many are active, then what
+            "iteration" means here — catalog membership, not execution state. */}
+        <div className="screen-meta">
+          <span data-ms-count="">{copy.totalMeta(model.total)}</span>
+          <span aria-hidden="true">·</span>
+          <span data-ms-active="">{copy.activeMeta(activeCount)}</span>
+          <span aria-hidden="true">·</span>
+          <span>{copy.headNote}</span>
+        </div>
       </div>
 
       {model.rows.kind === "populated" ? (

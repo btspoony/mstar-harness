@@ -89,6 +89,9 @@ const iteration = (over: Partial<IterationDTO> = {}): IterationDTO =>
 
 const iterationsCopy: IterationsCopy = {
   pageTitle: "Iterations",
+  totalMeta: (n) => `${n} ${n === 1 ? "iteration" : "iterations"}`,
+  activeMeta: (n) => `${n} active`,
+  headNote: "catalog membership, independent of execution",
   tableCaption: "Iterations",
   filtersHeading: "Filters",
   membershipNote: "Membership comes from the catalog; execution is a projection over it.",

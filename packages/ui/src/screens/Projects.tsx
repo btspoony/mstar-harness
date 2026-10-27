@@ -25,6 +25,11 @@ const LIST_HEAD_ID = "ms-projects-list";
 /** Every visible string this screen needs. Task 5 supplies them. */
 export type ProjectsCopy = {
   pageTitle: string;
+  /** The head's three segments: the store's count, the open issues across these projects,
+   *  and what a project owns. */
+  totalMeta: (n: number) => string;
+  openIssuesMeta: (n: number) => string;
+  headNote: string;
   tableCaption: string;
   /** The list card's head and its one-line instruction. */
   listHeading: string;
@@ -49,6 +54,9 @@ export type ProjectsProps = {
 
 export function Projects(props: ProjectsProps) {
   const { model, copy } = props;
+  // Across the rows on this page, which is what the head is describing.
+  const openIssues =
+    model.rows.kind === "populated" ? model.rows.value.reduce((sum, row) => sum + row.openIssues, 0) : 0;
 
   // The prototype's sequence (`design-v1.html:1752-1758`): the id first, then the
   // catalog title, then the lifecycle.
@@ -98,6 +106,15 @@ export function Projects(props: ProjectsProps) {
           document heading instead. */}
       <div className="screen-head">
         <h1>{copy.pageTitle}</h1>
+        {/* The prototype's head: the store's count, the open issues across these projects,
+            then what a project owns. */}
+        <div className="screen-meta">
+          <span data-ms-count="">{copy.totalMeta(model.total)}</span>
+          <span aria-hidden="true">·</span>
+          <span data-ms-open-issues="">{copy.openIssuesMeta(openIssues)}</span>
+          <span aria-hidden="true">·</span>
+          <span>{copy.headNote}</span>
+        </div>
       </div>
 
       {model.rows.kind === "populated" ? (

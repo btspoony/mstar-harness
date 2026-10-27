@@ -99,6 +99,9 @@ const roadmap = (over: Partial<RoadmapDTO> = {}): RoadmapDTO => ({
 
 const projectsCopy: ProjectsCopy = {
   pageTitle: "Projects",
+  totalMeta: (n) => `${n} ${n === 1 ? "project" : "projects"}`,
+  openIssuesMeta: (n) => `${n} open ${n === 1 ? "issue" : "issues"}`,
+  headNote: "a project owns its roadmap, issues and iterations",
   tableCaption: "Projects",
   columns: { title: "Title", id: "ID", lifecycle: "Lifecycle", openIssues: "Open", description: "Description" },
   openIssues: (count) => `${count} open`,

@@ -2044,7 +2044,30 @@ and the segment is left out when the host cannot state it.
 
 **This was found by reading the two heads as text**, which is what the panel-and-position
 comparisons could not do: the head is inside `.screen-head`, not a `.panel`, so every earlier
-sweep walked past it.## Verification coverage, stated
+sweep walked past it.
+
+**The same defect was in the other two lists**, and only because the first one was found:
+
+| Screen | The prototype | Now |
+| --- | --- | --- |
+| Workflows | 4 workflows · 2 active registrations · projected from store rev 1224 | 5 workflows · 5 active registrations · projected from store rev 4905 |
+| Iterations | 4 iterations · 1 active · catalog membership, independent of execution | 60 iterations · 49 active · catalog membership, independent of execution |
+| Projects | 4 projects · 26 open issues · a project owns its roadmap, issues and iterations | 4 projects · 133 open issues · a project owns its roadmap, issues and iterations |
+
+Each head's third segment is a **fixed sentence** stating what the noun means here — not a
+count, and not a string the screens can derive. The first two are counts, and their sources
+differ: workflows reads `total` and counts `activeRegistration` rows; iterations reads `total`
+and counts `lifecycle === "active"` (the catalog's lifecycle, not the execution state — an
+iteration whose workflow stopped is still an active registration); projects reads `total` and
+sums `openIssues`.
+
+**Three screens, one class of defect, found once by reading text.** The panel sweeps, the
+coordinate comparison and the four-width overflow check all passed while an entire meta line
+was missing on three screens.
+
+**Both branches are tested** for the one segment that can be absent: `storeRevision` renders
+`projected from store rev <n>` when the host states it and is omitted — not guessed — when it
+does not.## Verification coverage, stated
 
 Two hosts mount these screens: the dashboard (`packages/cli/web`) and the dsh pane
 (`packages/dsh/src/client/panel`). They share the components but **each owns its own
