@@ -35,10 +35,31 @@ for (const file of files) {
     }
   }
 }
+// The other direction, and the one that hid `.goal-list` for months: a rule whose class no
+// component ever names. This script's name promised it and only the first direction was
+// implemented — "dead classes" read as "classes with no stylesheet", which is the opposite
+// failure. Both are dead in their own way; a rule nothing selects is dead CSS.
+const defined = new Set<string>();
+for (const match of sheets.matchAll(/\.([A-Za-z][\w-]*)/g)) defined.add(match[1]);
+const namedInComponents = new Set<string>();
+for (const file of files) {
+  const src = readFileSync(file, "utf8");
+  for (const match of src.matchAll(/className=(?:"([^"]*)"|\{`([^`]*)`\}|\{"([^"]*)"\})/g)) {
+    for (const group of match.slice(1)) {
+      if (group === undefined) continue;
+      for (const token of group.split(/[\s$`{}()+?:|&]+/)) if (token !== "") namedInComponents.add(token);
+    }
+  }
+}
+// Classes a test asserts on, or a host passes through a constant, are not dead. The check
+// stays advisory for them: it prints what it cannot see named rather than failing.
+const UNUSED_OK = new Set(["row", "ms-pane-body", "ms-pane-head", "ms-container", "app-icon-sun", "app-icon-moon"]);
+const unused = [...defined].filter((cls) => !namedInComponents.has(cls) && !UNUSED_OK.has(cls)).sort();
 const rows = [...dead].sort();
 if (rows.length > 0) {
   console.error(rows.map(([c, f]) => `.${c}  (${f})`).join("\n"));
   console.error(`\n${rows.length} class name(s) appear in no stylesheet.`);
   process.exit(1);
 }
+if (process.env.SHOW_UNUSED === "1") console.log(`${unused.length} defined but unnamed: ${unused.slice(0, 20).join(" ")}`);
 console.log("no class is missing from the sheets");

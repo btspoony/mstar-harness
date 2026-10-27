@@ -2373,7 +2373,22 @@ visible in the output instead of being an assumption.
 
 **Exit codes are read directly now** (`OUT=$(…); CODE=$?`, never `… | tail; echo $?`), because
 a pipe reports the last process's status and `tail` succeeds no matter what failed upstream.
-Two of the five bad injections were that mistake alone.## Verification coverage, stated
+Two of the five bad injections were that mistake alone.## One dead rule, and the asymmetry that hid it
+
+The 69 selectors this sheet carries that the prototype does not were audited by usage. Four are
+live (`.ms-pane-body` and `.ms-pane-head` are exported constants the dsh pane names,
+`.row-tall` and `.row:not(tr)` are the row primitive's two forms) and **one was dead**:
+`.goal-list`, a rule for a roadmap list that no longer exists, carrying a comment about a bug
+it once fixed.
+
+**`check:classes` could not see it, and its name is why.** It fails when a component names a
+class the sheets never define — "dead classes" read as *classes with no stylesheet*, which is
+the opposite of *a rule nothing selects*. Both are dead in their own way; only one was checked.
+
+The script measures the other direction now behind `SHOW_UNUSED=1`, and reports 118 — all but a
+handful false, because the hosts in `packages/cli/web` and `packages/dsh` name classes this scan
+does not read. **It is a measurement, not a gate**: wiring it in would fail on the hosts it
+cannot see, and a check that cries wolf is worse than one that says less.## Verification coverage, stated
 
 Two hosts mount these screens: the dashboard (`packages/cli/web`) and the dsh pane
 (`packages/dsh/src/client/panel`). They share the components but **each owns its own

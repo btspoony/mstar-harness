@@ -476,15 +476,6 @@
   min-width: 0;
 }
 
-/* The project detail's goal list. It wore `.fields` — the two-column grid for <dt>/<dd>
-   pairs — so every <li> became a grid cell and the rows drew on top of each other. */
-.ms-container .goal-list {
-  list-style: none;
-  margin: 0;
-  padding: 0;
-  display: block;
-}
-
 /* Panel meta facts read as one line of counts: a small gap around the separator, so
    `3 milestones · 3 unassigned issues` does not run together. */
 .ms-container .panel-meta > .sep {
