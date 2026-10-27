@@ -2290,7 +2290,35 @@ sideways scroll. A silent probe is a failure, not a pass. Run it as
 - a grep for one spelling is not a search: `container-type` was in the tree the whole time,
   inside a `container:` shorthand
 - parity is not exhausted by the checks you have written; every round of looking found
-  something the last round's method could not see## Verification coverage, stated
+  something the last round's method could not see## The declaration diff could not see a breakpoint
+
+`check:declarations` compared declarations between the two sheets with a regex —
+`([^{}@]+)\{([^{}]*)\}`, "a selector, a brace, declarations, a brace". That form **cannot
+see an at-rule prelude**: `@container (max-width: 479px) { .x { … } }` has two opening braces,
+so the inner rule matches and the prelude is dropped. Every declaration inside every
+breakpoint block was being compared as though it sat at top level, where it overwrote the
+same selector's wide-layout declarations.
+
+**The tell was that the script's own verdict did not say how much it had looked at.** It does
+now:
+
+```
+every shared declaration matches the prototype — 313 shared selectors,
+193 of them inside a breakpoint block
+```
+
+Before the fix the same sentence printed with **0 inside a breakpoint block**. Both sheets
+have eleven at-rules; none of them had ever been compared.
+
+**It is a block scan now**, with the at-rule stack carried as context, and the prototype's
+named prelude (`@container pane (…)`) normalised to the anonymous form this sheet uses. With
+193 declarations in blocks newly under comparison, all 193 match.
+
+**This is the fourth check in this file whose coverage was smaller than its verdict suggested**
+— after `check:stale` (stylesheets only, not the compiled bundle), `check:classes` (a class
+present as a substring in a selector it never renders for), and the overflow sweep (a probe
+that returned nothing). The pattern is the same each time: **a check that reports a pass tells
+you nothing about how much it checked**, unless it says so.## Verification coverage, stated
 
 Two hosts mount these screens: the dashboard (`packages/cli/web`) and the dsh pane
 (`packages/dsh/src/client/panel`). They share the components but **each owns its own
