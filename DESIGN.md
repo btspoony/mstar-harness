@@ -754,7 +754,47 @@ Run that against the prototype (`file://…/design-v1.html`, click the screen's 
 first) and against the dashboard, and diff the two strings. A `null` on both sides is a
 match: workflows and iterations have no titled panels, and projects has no table.
 
-## `.trunc` has three contexts, and each one exists for a reason
+## The screen frame's numbers are derived, not typed
+
+The gutter every screen sits inside — `padding: 14px 20px 16px` on
+`.ms-container [data-ms-screen]`, from the prototype's `.dash-main` — is no longer a literal in
+a test. `packages/ui/scripts/prototype-snapshot.ts` reads the prototype and writes
+`packages/ui/src/styles/prototype.snapshot.json`, and `tokens.test.ts` asserts the stylesheet
+against that file.
+
+**Why a snapshot and not a direct read**: the prototype lives under `.mstar/`, which this
+repository gitignores, so **CI cannot see it** — which is exactly why `check:declarations`,
+`check:selectors` and `check:tones` warn and exit 0 in CI: they have nothing to compare with. The
+snapshot is committed, so CI compares against the prototype's values without the prototype.
+
+**What it caught the first time it ran**: `base.css` said `padding: 14px 20px 24px` and
+`tokens.test.ts` asserted that same `24px`, while the prototype says `16px`. The test was
+guarding the wrong number — the dsh pane drifted from the dashboard for however long that held.
+**A literal in a test is a decision someone made, not a fact about the prototype**, unless
+something re-derives it. `bun run --cwd packages/ui check:snapshot` is that something.
+
+**What it does not cover**: the nine screens' structure — panel headings, column headings, each
+table's `data-narrow-cols`. Extracting those from the HTML was attempted and abandoned: the
+section boundary logic produced 0 panels for `workflows` and `iterations` and 16 for
+`project-detail`. A fixture that is wrong is worse than none, for the same reason the `24px`
+literal was.
+
+## A footer is one row, not a box inside a box
+
+`.pager` and `.panel-foot` both carried `padding: 6px 12px` and their own top hairline, and the
+pager renders **inside** the foot — so every paged list drew a double gutter and two lines. The
+prototype has one footer row (`design-v1.html:1345-1349`) with the controls pushed right by
+`margin-left: auto`.
+
+```css
+.panel-foot > .pager { padding: 0; border-block-start: 0; }
+.panel-foot > .pager > :last-child { margin-inline-start: auto; }
+```
+
+The pattern is worth naming because it recurred: **a component that is always a child inherits
+nothing automatically** — the inner rule was written as though the pager stood alone.
+
+## `.trunc` has five contexts, and each one exists for a reason
 
 `TruncatedText` renders one span, and the rules around it are not one rule applied three
 times — each context was added after a specific measurement:
@@ -765,12 +805,13 @@ times — each context was added after a specific measurement:
 | inside a `<dd>` | *(covered by the default)* | it overflowed its cell at 213px in a 180px box |
 | inside `.detail-title` | `display: block; line-height: inherit` | as an inline-block it sat in the line box with its own height and baseline, so a 16px/24px heading measured **31px** |
 | inside `.milestone-block-name` | *(no longer truncates — the name ellipses on its own flex item)* | the inline-block cost 2px against sibling type sizes |
+| `.trunc-block` (`TruncatedText block`) | `display: block; inline-size: 100%` | in a table cell whose whole content truncates, `inline-block` left the ellipsis box at the text's width instead of the cell's |
 
 The pattern behind all four rows: **an inline-block is a box, and boxes carry height and
 baseline into whatever line they join**. Every one of these came from measuring a specific
 element, not from reading the rule.
 
-If `.trunc` gains a fifth context, measure that element's height and baseline against the
+If `.trunc` gains a sixth context, measure that element's height and baseline against the
 prototype's before trusting it.
 
 ## The light scheme is identical, and the way to check it is not the browser
@@ -2648,10 +2689,25 @@ Column count, hide rule and breakpoint all match. **The one remaining difference
 narrow row carries a second line where the prototype's carries nothing** — `root` and `updated`
 move there instead of vanishing.
 
-**Fixed.** A `@container (max-width: 619px)` rule hides `.row-meta` at the prototype's own
-breakpoint. Measured after: at 375 the row is two cells and no meta line; at 800 and 1440 the
-row is six cells, and no meta line exists there in the first place — `DataTable` only renders one
-when columns yield.
+**This paragraph was wrong twice, and both corrections are the record.** It first claimed a
+`@container (max-width: 619px)` rule *hides* `.row-meta`. The prototype does the **opposite**, in
+two rules at the same breakpoint:
+
+```css
+.row-meta { display: none; }                                  /* wide: nothing below the row */
+@container (max-width: 619px) {
+  .row-meta { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .row-meta { display: block; }                               /* narrow: shown, clipped */
+}
+```
+
+So the line is hidden above 619 and shown (clipped to one line) below it. `product.css` carries
+the `display: none`; `base.css` carries the other two. Measured after the correction:
+`getComputedStyle` is `none` at 1440 and `block` at 600.
+
+**The clipping is the prototype's, not a defect.** At 375 the issue list's first cell is 86px, so
+the second line truncates hard — that is what `nowrap + ellipsis` does in the original, and the
+review bot's suggestion to give it a spanning row would be a different design, not this one.
 
 The reasoning that made me keep it one round earlier was wrong in a way worth naming: I argued
 "the prototype has nothing to copy here", but it does — it copies **nothing**, and matching that
