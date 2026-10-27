@@ -1932,6 +1932,18 @@ Both are fixed now. `FieldGroup` renders `h2`, and the left column measures
 
 which is the prototype's order.
 
+**And the order holds at every width**, measured at four viewports:
+
+| Viewport | Columns | Left-column order | Horizontal scroll |
+| --- | --- | --- | --- |
+| 1440 | 2 | identity, source, impact | none |
+| 900 | 2 | identity, source, impact | none |
+| 720 | 1 | identity, source, impact | none |
+| 375 | 1 | identity, source, impact | none |
+
+The split's collapse point is what the prototype's own `@container (width<=899px)` gives —
+two columns down to 900, one below.
+
 **The move took two attempts and one mistake worth recording.** The scripted version hit its
 own assertion and left the file untouched — the safe outcome. The `edit` version inserted the
 block before `impact` and **forgot to delete the original**, so the file briefly carried two
