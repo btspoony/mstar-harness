@@ -315,6 +315,22 @@ describe("the scheme is an attribute, never a media query", () => {
   });
 });
 
+describe("the layout container exists, unnamed", () => {
+  test(".ms-container declares an unnamed inline container", () => {
+    // `product.css` expresses every reflow as `@container (…)`. A container query with no
+    // container is dead CSS: nothing errors, the narrow layouts simply never apply. This
+    // happened — the dashboard served the wide layout at 375px until the declaration was
+    // added, while the dsh pane (which declared its own) reflowed correctly.
+    const base = read(BASE_PATH);
+    expect(base).toMatch(/\.ms-container \{[^}]*container-type: inline-size;/);
+    // Unnamed on purpose: a CSS-module bundler rewrites a named prelude to a hashed name,
+    // which can never match a declaration in this global sheet.
+    expect(base).not.toMatch(/\.ms-container \{[^}]*container-name:/);
+    // The other half of the contract: a container that can gain a scrollbar is the page.
+    expect(base).toMatch(/\.ms-container \{[^}]*min-inline-size: 0;/);
+  });
+});
+
 describe("forced colors: the status dot stops depending on colour", () => {
   test("the screen shell owns the prototype's gutter and its title scale", () => {
     // One authority for every screen: the frame the prototype puts around all of them

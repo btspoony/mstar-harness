@@ -2204,7 +2204,12 @@ components and were reflowing differently.
 truncation rule for exactly that element already existed in `product.css`, under
 `@container (max-width: 479px)`. It was dead.
 
-Two lines in `base.css` fixed it, and the whole narrow behaviour came with it.
+Two lines in `base.css` fixed it, and the whole narrow behaviour came with it:
+`container-type: inline-size` (unnamed — a named prelude gets hashed by the CSS-module
+bundler and can never match a global declaration) and `min-inline-size: 0`.
+
+**The comment had promised a test for both halves and no test existed.** `tokens.test.ts`
+keeps them now: the declaration present, the name absent, the min-inline present.
 
 **The probe was wrong twice before the CSS was.** The first version flagged elements inside
 `overflow: hidden` parents as overflowing — a clipping parent is not a broken layout. The
