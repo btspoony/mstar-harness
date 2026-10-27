@@ -458,14 +458,18 @@
   }
 }
 
-/* The narrow rows carry no second line. The prototype's `data-narrow-cols="2"` rows drop
-   `root` and `updated` outright — there is no meta line under a row in any of its narrow
-   tables — so at the same breakpoint this one must not appear either. `secondary` columns
-   still leave `primaryCount`, which is what makes the table declare `2`; they simply have
-   nowhere to reappear. */
+/* The narrow row's second line, in the prototype's own three parts: `product.css` hides
+   `.row-meta` by default, and at this breakpoint the prototype turns it back ON and clips it
+   to one line (`design-v1.html`: `display: block` beside
+   `white-space: nowrap; overflow: hidden; text-overflow: ellipsis`).
+   This rule previously said the opposite — it hid the line below 619px — which removed the
+   facts the `secondary` columns yield at exactly the width they need restating. */
 @container (max-width: 619px) {
   .ms-container .table .row-meta {
-    display: none;
+    display: block;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
   }
 }
 
