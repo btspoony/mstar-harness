@@ -592,7 +592,16 @@ export function Overview(props: OverviewProps) {
 
         {/* 3 — milestones, before the iteration: the prototype's sidebar order. */}
         <Panel labelledBy="ms-overview-milestones">
-          <PanelHead id="ms-overview-milestones" title={copy.milestonesHeading} />
+          {/* The prototype's head states which project these milestones are. */}
+          <PanelHead
+            id="ms-overview-milestones"
+            title={copy.milestonesHeading}
+            meta={
+              model.milestones.kind === "populated" && model.milestoneProject !== null
+                ? model.milestoneProject
+                : undefined
+            }
+          />
           <PanelBody>
           {model.milestones.kind === "populated" ? (
             props.compact === true ? (

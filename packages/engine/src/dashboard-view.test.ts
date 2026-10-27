@@ -172,8 +172,9 @@ describe("overview read-model contract", () => {
     expect(() => queryDashboard("not-a-view" as DashboardView)).toThrow(/unknown dashboard view "not-a-view"/);
   });
 
-  test("the aggregated DTO is the five wrapped members the type contract fixes", () => {
+  test("the aggregated DTO is the wrapped members the type contract fixes", () => {
     const overview = {
+      projectId: "proj-a",
       workflows: { state: "read", data: { items: [], total: 0 } },
       residuals: { state: "read", data: { open: 0, bySeverity: { critical: 0, high: 0, medium: 0, low: 0, nit: 0 } } },
       milestones: { state: "not-applicable", reason: "no project resolves for this read" },
@@ -182,7 +183,16 @@ describe("overview read-model contract", () => {
     } satisfies OverviewDTO;
     // The type contract only: the arms are named here, and the live reads below
     // are what pin the behaviour each member answers with.
-    expect(Object.keys(overview)).toEqual(["workflows", "residuals", "milestones", "latestIteration", "issueFlow"]);
+    // Six, not five: the prototype's milestones head states the project they belong to,
+    // so the DTO carries it beside the five members.
+    expect(Object.keys(overview)).toEqual([
+      "projectId",
+      "workflows",
+      "residuals",
+      "milestones",
+      "latestIteration",
+      "issueFlow",
+    ]);
     expect(overview.milestones.state).toBe("not-applicable");
     const declared: DashboardViewData["overview"] = overview;
     expect(declared.issueFlow).toEqual({ state: "unavailable", reason: "the store answered with an error" });

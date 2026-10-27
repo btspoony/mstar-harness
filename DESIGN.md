@@ -2431,7 +2431,30 @@ both readers, and `IssuePage.projectCount` in the DTO. Measured: `134 open acros
 
 **The lesson is the same one the panel sweeps taught, in a different place**: a fact derived
 from the rows on hand is only true when the rows on hand are all of them, and nothing in the
-type says which case you are in.## Verification coverage, stated
+type says which case you are in.## Two real defects found by fixing a test
+
+The engine suite had two failures after the overview DTO gained `projectId`. Neither was
+caused by that change, and both were real:
+
+**1. The relations query never selected a title.** `issue.ts` read relations with
+
+```sql
+select from_issue as fromIssue, relation, to_issue as toIssue from relations where …
+```
+
+and asserted the result as `IssueRelation[]` — a type that declares `title: string | null`.
+The cast made the compiler quiet; the value was `undefined` on every row, so the prototype's
+`Relations` table had an empty `Title` column whenever the CLI read path answered. The
+dashboard's own reader in `store-read.ts` had the correlated subquery all along. Both do now.
+
+**2. A test asserted the aggregate was five members.** The prototype's Milestones head states
+the project the milestones belong to (`engine`), so the DTO carries `projectId` beside the
+five. That is a sixth key, and the contract test now says six.
+
+**Why this is worth writing down**: the failing test was the only thing that surfaced either
+defect, and it surfaced them *while I was changing something else*. A suite that is green for
+long enough stops being read; the two red rows here were doing their job and nobody had asked
+them to.## Verification coverage, stated
 
 Two hosts mount these screens: the dashboard (`packages/cli/web`) and the dsh pane
 (`packages/dsh/src/client/panel`). They share the components but **each owns its own

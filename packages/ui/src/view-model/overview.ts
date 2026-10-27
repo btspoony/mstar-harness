@@ -211,6 +211,9 @@ export type OverviewModel = {
   workflows: OverviewWorkflows | Exclude<Resolved<readonly OverviewWorkflowRow[]>, { kind: "populated" }>;
   residuals: Resolved<ResidualModel>;
   milestones: Resolved<readonly MilestoneRow[]>;
+  /** The project those milestones belong to — the panel head states it, as the prototype's
+   *  does (`engine`). `null` when the read resolved no project. */
+  milestoneProject: string | null;
   /** `null` when the project has no iteration yet — the `empty` arm. */
   latestIteration: Resolved<OverviewIteration | null>;
   /**
@@ -333,6 +336,7 @@ export function overviewModel(
   const flowSeries = issueFlow.kind === "populated" ? flowModel(issueFlow.value) : null;
 
   return {
+    milestoneProject: read.projectId ?? null,
     workflows:
       workflows.kind === "populated"
         ? {

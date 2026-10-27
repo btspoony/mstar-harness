@@ -326,6 +326,11 @@ export type ResidualCounts = { critical: number; high: number; medium: number; l
  * and latest iteration, and the dated issue flow.
  */
 export type OverviewDTO = {
+  /**
+   * The project these members resolve for, or `null` when none does. The prototype's
+   * Milestones head states it (`engine`); the milestones below are that project's.
+   */
+  projectId: string | null;
   /** Active-registered workflows with their plans. */
   workflows: OverviewMember<WorkflowListDTO>;
   /** Open residuals by severity plus the reconciling total (the sum of the five). */
@@ -1692,6 +1697,7 @@ function readOverview(db: StoreDb, filters: DashboardFilters): OverviewDTO {
     projectionFailure === null ? member(read) : { state: "unavailable", reason: projectionFailure };
 
   return {
+    projectId,
     workflows: projected(() => activeWorkflows(readWorkflowList(db, { limit: 50 }))),
     residuals: member(() => readResidualCounts(db)),
     milestones:

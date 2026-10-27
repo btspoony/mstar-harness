@@ -1294,11 +1294,17 @@ export async function getIssue(context: StoreContext, id: string): Promise<Issue
       issueRevision: row.issue_revision,
     }));
 
+    // The other end's title — the prototype's `Title` column. Without this join the column
+    // was null on every read through this path, which the store-read copy had and this one
+    // did not.
     const relations = db
       .prepare(
-        "select from_issue as fromIssue, relation, to_issue as toIssue from relations where from_issue = ? or to_issue = ?",
+        `select r.from_issue as fromIssue, r.relation, r.to_issue as toIssue,
+                (select i.title from issues i
+                   where i.id = case when r.from_issue = ? then r.to_issue else r.from_issue end) as title
+           from relations r where r.from_issue = ? or r.to_issue = ?`,
       )
-      .all(id, id) as IssueRelation[];
+      .all(id, id, id) as IssueRelation[];
 
     const provenance = (
       db
