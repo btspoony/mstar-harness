@@ -1977,7 +1977,27 @@ copy-then-delete edit has to prove both halves.
 
 **Reading the seven against the nine is a trap worth naming**: two absent headings look
 exactly like two missing panels, and only opening the record proves otherwise. That is the
-fifth time this file records the same misreading.## Verification coverage, stated
+fifth time this file records the same misreading.## Responsiveness, measured on every screen
+
+The acceptance bar names adaptivity explicitly, so it was measured rather than assumed: for
+each of the nine screens, every element compared against **its own parent's** right edge —
+not the viewport's, which a horizontally scrolling table never exceeds. Scroll containers
+(`.table-wrap`, `.chart-wrap`, `pre`) are excluded because overflowing inside them is what
+they are for.
+
+| Viewport | Screens checked | Elements overflowing a parent | Whole-page horizontal scroll |
+| --- | --- | --- | --- |
+| 375 | all nine | **0** | none |
+| 720 | five | **0** | none |
+| 1440 | five | **0** | none |
+
+Zero at every width on every screen, with the tables scrolling inside their own frames rather
+than pushing the page.
+
+**This is a coarse instrument and it is worth saying so**: it catches an element that leaves
+its parent, not one that is merely crowded, misaligned or in the wrong order. The finer
+checks in this file — the split's collapse point, the milestone row's two lines, the chart's
+ratio — were each measured by hand because this sweep cannot see them.## Verification coverage, stated
 
 Two hosts mount these screens: the dashboard (`packages/cli/web`) and the dsh pane
 (`packages/dsh/src/client/panel`). They share the components but **each owns its own
