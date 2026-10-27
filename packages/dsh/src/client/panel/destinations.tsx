@@ -23,7 +23,9 @@ import {
   Workflows,
   copyFor,
   DEFAULT_ITERATION_FILTERS,
+  DEFAULT_WORKFLOW_FILTERS,
   type IterationFilters,
+  type WorkflowFilters,
   issueListModel,
   iterationListModel,
   overviewModel,
@@ -128,6 +130,9 @@ export function IssuesDestination({ state, locale, query, onQueryChange, onOpen 
 
 export function WorkflowsDestination({ state, locale, onOpen }: DestinationProps): React.ReactElement {
   const copy = copyFor(locale)
+  // The pane owns its filter state, as the iterations destination does: without it the
+  // screen painted controls that no model consumed.
+  const [filters, setFilters] = React.useState<WorkflowFilters>(DEFAULT_WORKFLOW_FILTERS)
   const screenCopy = {
     ...copy.workflows,
     // The pane keeps the prototype's filter row: the table's own status and type, plus
@@ -145,8 +150,10 @@ export function WorkflowsDestination({ state, locale, onOpen }: DestinationProps
   return (
     <div data-ms-destination-body="workflows">
       <Workflows
-        model={workflowListModel({ data: data as WorkflowListDTO, projection: state.envelope.projection })}
+        model={workflowListModel({ data: data as WorkflowListDTO, projection: state.envelope.projection, filters })}
         copy={screenCopy}
+        filters={filters}
+        onFiltersChange={setFilters}
         {...(onOpen === undefined ? {} : { onOpen })}
       />
     </div>
@@ -400,6 +407,12 @@ export function ProjectDetailDestination(props: {
   }
   const iterationsState = props.iterations ?? ({ kind: 'waiting' } as const)
   const issuesState = props.issues ?? ({ kind: 'waiting' } as const)
+  // One model for the tab and the head's open-issue count: they are the same read, and
+  // its default `open` total is the count the head means.
+  const issuesModel =
+    issuesState.kind === 'ok' && issuesState.envelope.data !== null
+      ? issueListModel({ data: issuesState.envelope.data as IssuePage, projection: issuesState.envelope.projection }, parseIssueQuery(''))
+      : null
   return (
     <ProjectDetail
       identity={projectIdentityOf(props.id, data)}
@@ -407,10 +420,10 @@ export function ProjectDetailDestination(props: {
       onFeatureChange={(next: ProjectFeature) => setFeature(next)}
       roadmap={roadmap as never}
       issues={
-        issuesState.kind === 'ok' && issuesState.envelope.data !== null
+        issuesModel !== null
           ? (
             <Issues
-              model={issueListModel({ data: issuesState.envelope.data as IssuePage, projection: issuesState.envelope.projection }, parseIssueQuery(''))}
+              model={issuesModel}
               query={parseIssueQuery('')}
               copy={issuesCopyForProject}
               options={ISSUE_OPTIONS}
@@ -459,6 +472,7 @@ export function ProjectDetailDestination(props: {
           'not-applicable': { ...copy.state['not-applicable'], heading: copy.projectDetail.features.roadmap },
         },
       }}
+      {...(issuesModel === null ? {} : { issuesCount: issuesModel.total })}
       onBack={props.onBack}
     />
   )
