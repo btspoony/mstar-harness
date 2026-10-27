@@ -42,16 +42,16 @@ opening a finding; extend it when a new phantom class is found.
 
 | Phantom | Looks like | Why it is not a defect | How to confirm |
 |---------|-----------|------------------------|----------------|
-| **Row-meta default** | the implementation shows a metadata cell the baseline does not | the baseline is silent, so the runtime default renders; nothing was designed away | grep the baseline for the unit — absent means default, not divergence |
+| **Row-meta default** | the implementation shows a metadata cell the baseline does not | a documented default permits the cell, but the comparison omitted that default | confirm the documented default applies to this unit; absence alone is not approval — without that evidence, record a decision |
 | **Localized heading** | copy, casing, or line breaking differs from the baseline | the baseline is in one language, the implementation in another; the unit and its placement are identical | compare the unit's role and position, not its text |
 | **Breadcrumb depth** | a navigation element is present in one side only | the baseline was captured at one route depth, so an ancestor trail exists on one side | check the baseline's captured route before treating it as a missing component |
 
 The shared lesson: **every phantom in this catalogue was opened from a render — a thumbnail, a
 preview, an exported image — not from the tracked source, and was settled by checking the source.**
-For the first entry that check is a `grep`; for the localized-heading entry it is reading the unit's
-role and position, because the text legitimately differs; for the breadcrumb entry it is the route
-the baseline was captured at, not a search. A finding opened from a render is a hypothesis until the
-tracked source settles it.
+For the first entry that check is a `grep` of the source for a documented default; for the
+localized-heading entry it is reading the unit's role and position, because the text legitimately
+differs; for the breadcrumb entry it is the route the baseline was captured at, not a search. A
+finding opened from a render is a hypothesis until the tracked source settles it.
 
 ## What a phantom is not
 

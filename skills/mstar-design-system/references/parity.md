@@ -37,9 +37,11 @@ placed in a wide dashboard keeps its viewport-level width while its own box has 
 A probe that renders the page wide therefore never reaches the component-scoped breakpoint, reports
 zero differences, and reads as a pass.
 
-The check is what is scoped wrong, not the implementation. Either measure at the container's own
-width, or declare component-level reflow outside the coverage. The same trap exists in reverse for
-`@container` rules probed only on narrow viewports.
+First establish whether the baseline requires reflow at the viewport's width or the container's
+width. If the implementation queries the wrong width, fix the implementation. If the probe varies the
+wrong width, fix the probe. Measure component-level reflow at the container's own width, or name it as
+unmeasured in the coverage statement. The same trap exists in reverse for `@container` rules probed
+only on narrow viewports.
 
 ## Counts, including on failure
 
