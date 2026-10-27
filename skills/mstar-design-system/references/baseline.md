@@ -60,7 +60,7 @@ Committing the baseline is link one of three. All three close before a check cou
 | # | Link | Fails when |
 |---|------|------------|
 | 1 | **Committed** — the baseline and the derived fixture are tracked | an untracked source or fixture — the tracked-vs-ignored test is `mstar-design-md` § Prototype vs document |
-| 2 | **Every comparator points at it, and strict mode is the default** | a comparator still reads another path, or its default run does not fail — same rule, same place |
+| 2 | **Every comparator points at it, and strict mode is the default** | a comparator still reads another path, or its default run does not fail — the degradation half is `mstar-design-md` § Prototype vs document; that every comparator points at this baseline is this chain's own link |
 | 3 | **CI calls it** | no workflow job runs the command — the check exists and is never invoked |
 
 The most expensive state is not "missing"; it is **green but idle**. A comparator that prints

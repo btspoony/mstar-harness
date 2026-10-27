@@ -5,7 +5,7 @@ description: Use when an implementation must be walked into alignment with an ex
 
 ## Load Order
 
-**Before the first Read of this skill: Read `mstar-harness-core` (SKILL.md)** — lifecycle, authorization, and conflict authority. The design contract, when the baseline *is* a written contract, is owned by `mstar-design-md`; this skill assumes an authoritative baseline exists and never restates that contract's rules.
+**Before the first Read of this skill: Read `mstar-harness-core` (SKILL.md)** — lifecycle, authorization, and conflict authority. The design contract, when the baseline *is* a written contract, is owned by `mstar-design-md`; this skill assumes an authoritative baseline exists and defers that contract's authority and sync direction to it; this skill does not restate those.
 
 | Also Read | When |
 |-----------|------|
@@ -31,7 +31,7 @@ In scope: an authority already exists and an implementation has to be converged 
 2. **Machine** — derive what can be derived instead of typing it: fixture, snapshot, extraction. Record the regeneration command *and* its check mode in the same place.
 3. **Parity** — compare per layer: structure, appearance, behaviour. Every finding carries the count it was measured on; a probe that matched nothing says so instead of reporting zero defects.
 4. **Triage** — classify every difference as defect, decision, or phantom. A decision is written into the contract record with its reason, never silently into the implementation.
-5. **Close** — change the implementation, or amend the baseline when triage recorded a decision. The fixture is regenerated, never hand-edited.
+5. **Close** — change the implementation, or amend the baseline when triage recorded a decision.
 6. **Evidence** — return what `## Evidence` below describes; a verdict without its counts is not one.
 
 ## Decision Rules
