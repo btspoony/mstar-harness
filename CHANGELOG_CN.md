@@ -6,6 +6,60 @@
 
 ## [Unreleased]
 
+## [4.1.0] - 2026-10-27
+
+### Harness
+
+- 将三组依赖升级合并为一次维护性改动：开发依赖组（`@oh-my-pi/pi-coding-agent` 18.12.6、`bun-types` 1.4.4、`@tanstack/react-virtual` 3.14.22、`dsh-llm-fallbacks` 0.6.8、`immer` 11.2.9）、OpenCode V2 SDK 组（`@opencode/plugin` / `@opencode/schema` 2.1.3 与 `effect` 4.0.1），以及 **react 19**（`packages/cli`、`packages/dsh`、`packages/ui` 中的 `react` / `react-dom` 19.3.1 与 `@types/react` / `@types/react-dom` 19.3.0）。
+- 对齐 `packages/cli/package.json` 的 `mstar.dshLlmFallbacks` 与实际安装的 `dsh-llm-fallbacks` 版本，使 CLI 安装 spec 与固定重装落到同一发布版本。
+- 移除测试套件对依赖版本的钉死：fallbacks 探针改为断言所消费的 `llm-fallbacks` **服务表面**（成员存在性与形态），而不是已安装包版本——后者在每次常规升级时都会变红，却无法证明 mstar 实际调用的成员仍然存在。钉版本与实装的漂移仍由 `dshFallbacksVersion()` 与 install/doctor 漂移行覆盖。
+- **问题详情页现在渲染原型有、而 §8.1 曾移除的六个面板**：`标识键`、`来源`、`出现记录`、`处置历史`、`关联`、`溯源`。数据从未缺失——`store-read.ts` 早已返回 `occurrences`、`transitions`、`relations`、`provenance`、`provider` 与 `identityKey`，是视图模型只转发了十六个字段就停住了。该页现在是原型的两栏（`detail-grid`，`1.15fr : 1fr`，1440 px 下实测一致，720 与 375 下折叠为单栏），九个区块改用原型自己的 `.sec` 节奏，而不是一个在任何样式表里都不存在的类名。
+- **关联读取会 join 出另一端的标题**，因此 `标题` 列是该 issue 自己的标题，而不再是永久破折号；未知项目以 `null` 表示日期，而不是一个读起来像「记录了一个空白日期」的空串。
+- **四个样式表里不存在的类名已移除**：`fact-block`（问题详情的九个区块，因此丢掉了全部分隔线）、`detail-text`（四处段落）、`screen-sub`（概览副标题）与 `attribution`（迭代列表的说明）。新增 `bun run --cwd packages/ui check:classes`，扫描每个组件里不在 `tokens.css`、`base.css`、`product.css` 中的 `className` 字面量并使其失败。
+- **gate track 现在写出五个步骤名**（`Start · Execute · Close · PR delivery · Merge ready`）——`copy.gateStepLabels` 在两份字典里都存在却无人读取，因此轨道只打印 `step 1 of 5 … step 5 of 5`；**里程碑计数单元格改为 `已退休/总数 · N 未关闭`**（`5/14 · 9 open`），原先渲染的是 `已解决/总数` 且没有尾部，使每个存在「退役未解决」issue 的里程碑进度被低估。
+- 新增 **`mstar issue move`**：在 issue revision 与 store revision 双重 CAS（`--expect` 与 `--expect-store`）下把 issue 改挂到另一个已登记项目，重算 project-scoped identity key（目标项目已持有该 identity 时拒绝、点名冲突 issue，并给出“退役被移动 issue”的路径），并清除 milestone 关联（含已 delivered / dropped 的；`milestone assign` 是 assignment 的唯一写入面，异项目 milestone 不能保留），被清除的 id 记为收据上的 `clearedMilestoneId`（同项目 no-op 为 `null`）。每次真实移动还以 actor 与 reason 记入新的追加式 `issue_project_moves` 账本（migration 13），可通过 `issue show` / `issue export` 的 `projectMoves` 读取。
+- `milestone.project-mismatch` 拒绝现在写明原因（issue 与 milestone 必须同项目）及两条修复路径：issue 错了用 `mstar issue move`，milestone 错了改用目标项目的 milestone。目标项目未登记时点名 `mstar catalog register` 作为修复入口。
+- 同步更新 `mstar-project-governance` 与 `mstar-use-cli`。
+- 修复**产品中所有容器查询失效**的问题。CSS Module 打包会把具名查询的前导改写成按模块哈希的名字（`@container pane_8f31a`），而唯一的 `container: pane / inline-size` 声明仍以原名留在全局样式表里，于是没有任何规则命中，400–900px 面板实际渲染的是被压扁的宽布局。组件与屏幕里的查询现在一律**不具名**（`@container (max-width: 619px)`），折叠、两栏折叠与 chrome 堆叠全部恢复。`build-web.test.ts` 断言产物中不存在具名容器查询，组件层套件断言没有模块写出具名查询。
+- 为**列表表格声明列宽**。`table-layout: fixed` 会把未声明的列均分，八列各约 90px 于是渲染成 `I-…`、`d…` 与 `● runningplan…`；折叠规则里的 20%/80% 位置宽度还会让存在第三个主列的屏幕把该列压成零宽。现在每个列表为除标题外的列声明 px 宽度，标题列占剩余空间；`DataTable` 计算 *已声明宽度 + 120px* 的下限，卡片主体在自身内部横向滚动而不是把某列压到看不清身份，折叠态按规则隐藏次要列并把事实放到行的第二行。`<colgroup>` 已移除，被隐藏的列不再留下宽度。400px 容器实测：最窄单元格 80–112px，截断单元格为 0，页面无横向溢出。
+- 在共享层新增**面板框架**（`MS_PANE_HEAD_CLASS`、`MS_PANE_BODY_CLASS`）：原型中以发丝线收口的表面带，以及主体底部的内边距。dsh 侧席在面板内同时挂载两者（标签条仍是面板的顶边），dashboard 的窗口头部就是同一个带 —— 它原来的 `currentColor` 边框改为共享发丝线。`DESIGN.md` 记录了窄带决策：原型没有定义窄列列表，因此产品选择在 619px 以下使用优先列、其上使用声明列宽，并以滚动下限作为兜底。
+- 屏幕标题在折叠带**独占一行**，超长时在框内截断。与摘要同排时，两字中文标题会被压成一字一行；随后用 `max-content` 下限又让长标题撑出画框（实测 360px 框内 852px）。现在标题行可换行、标题占满整行，下限为零，放不下的部分以省略号收尾。
+- 折叠行的第二行现在是该记录的**同一个激活目标**：它带上主行的指针处理器、悬停与光标，而 tab 停靠点与键盘处理器仍只在主行，键盘顺序依旧一条记录一站。`DESIGN.md` 记录了多出的 `<tr>` 的代价（读屏把每条记录读成两行）与边界（仅列表变体、仅 620px 以下、单个跨列格、事实本身非交互）。
+- 把**渲染门**扩展到此前从未被测的宽度：五个目的地各测 760px 与 420px，断言没有单元格被压到不可读、卡片填满容器、标题不被截断、正文每行至少 10 个字符、头部控件可达且有可访问名称、页面无横向溢出，以及区分「真折叠」与「溢出」的关键锚点 —— 表格卡片内部不得横向滚动。同时播种一条 catalog iteration，使 Iterations 屏有真实表格可压。
+- 每个列表表格采用**原型自己的列宽**，宽面板不再挤压：720px 下 Issues 表的最后一列被切在面板边缘，project 显示 `dsh-inte…`、kind 显示 `imp…`。列宽现在按 `design-v1.html:1196-1198`（id 86、project 128、kind 112、severity 100、disposition 104、last activity 116，按产品标识符所需取整），标题列吸收余量，弹性列下限由 120px 降为 96px。720 下实测：678px 表格落在 678px 卡片内，七列完整，标题最宽 146px。里程碑列改为**宽屏专属**（`wide: true`）：容器窄于 900px 时隐藏且不在第二行重述，因为原型侧栏显示七列，第八列正是把表格挤出卡片的原因。
+- 所有列表的列序改为**原型的顺序** —— Issues 表原先读作 `编号 | 标题 | 严重度 | 处置 | 类型 | 项目 | 最近活动`，原型为 `ID | Title | Project | Kind | Severity | Disposition | Last activity`（`design-v1.html:1199-1207`）；Projects 原先标题在前，原型 id 在前（`:1757-1762`）。宽度随事实列移动。渲染门现在断言列序本身，而不只是列数。
+- 残留项面板改为原型的**紧凑两列 tally**（`design-v1.html:2424-2434`）：每行两个严重度、计数右对齐，窄于 480px 时单列，合计总数移入面板 meta 位（`26 open · all projects`），不再是五行平铺列表。
+- Overview 在任意宽度下改为**单列满宽区块的垂直序列**，顺序取自原型侧栏（进行中的工作流、未关闭遗留、里程碑、最近迭代），替换掉在 1900px 下把第二张卡的文字挤成一字一行的两列网格。
+- 通过共享外壳给**面板顶部带加上内缩**：`.ms-pane-head` 在表面色与细线之上携带原型的 `padding-inline: 12px` 导航内缩（`design-v1.html:487`），dsh 面板的导航不再贴着面板边缘。dashboard 的窗口头部挂同一个类并保留自己的 20px 外边距，与原型窗口头部一致。宿主标签条仍是面板的顶边。
+- 渲染门新增这些偏差本应被抓住的锚点：720px 下每个列表的列数与表格无溢出、Overview 在 720 与 1900 都是满宽单列、顶部带的水平内缩。
+- 在 `@mstar-harness/ui` 中新增**卡片原语**（`Panel`、`PanelHead`、`PanelBody`、`PanelFoot`），并把每个列表屏放进卡片：dashboard 的 Issues 屏现在是筛选卡片**加**表格卡片，Overview、Workflows、Iterations、Projects 也从裸 section 变成卡片。表面、发丝边框、`--ms-radius-md` 以及头部/主体/底栏的内边距都取自原型自身的规则，而不是各屏各写一套。屏幕外围的框架（最大宽度、内边距、标题字号）位于共享基础层，**两个**挂载这些屏幕的宿主现在都提供它的锚点：dashboard 在根元素上，dsh 面板在产品滚动区上 —— 此前 dsh 侧席没有该锚点，屏幕因此完全没有框架。
+- 在表格上方新增**摘要行**：结果数、**当前选中的处置状态**及其项目范围、排序合成一句；列表单元格改用同一个格式化器 `formatShortDate` 输出短日期（`10-24 09:06`）。只有在整页持有完整结果集时才声明项目跨度 —— 部分结果页不能统计它从未见到的项目。
+- 用原型的分段式**语言组**与**主题图标按钮**替换外壳里的两个原生 `<select>`：都是真正的按钮，文案来自词典，用 `aria-pressed` 表达状态，并靠两种图标形状而非色块区分，因此在强制颜色模式下仍然可用。窄宽度下换行而不是消失。
+- 统一时间戳形式：同一个格式化器（`formatDate`）在所有出现时间戳的地方输出 `2026-10-23 09:14`，详情行同样如此；列表单元格则省略年份与秒。
+- 新增**渲染门**（`packages/cli/test/render-gate.test.ts`）：在临时端口启动 dashboard，用真实浏览器以固定视口走完五个目的地与一个详情屏，把 PNG 写入 `.tmp/render-gate/`，并断言卡片、摘要行、状态只用色点表达、头部控件成对存在以及日期形式。当 `PATH` 上没有浏览器时（`Bun.which("agent-browser")`）干净跳过，因此没有任何 CI 作业依赖浏览器。
+- **`mstar status validate` 改为返回当前状态而非历史。** 顶层两个 terminal 镜像已删除（与 `data.authority` 逐字节重复），关闭的 lifecycle 仅以身份行 `{ id, status, revision }` 发布在 `data.authority.terminalUnregistered[]` / `data.authority.terminalAdoptions[]`。root token（`data.token`）、workflow token（`data.workflows[].token`）与 plan token（`data.authority.workflows[].planTokens[<planId>]`）保持不变。参考控制根输出由 172,762 B 降至 20,604 B，且随 terminal 数量而非记录历史增长。
+- **`mstar catalog list` 不再逐行泄露文件系统信息。** `absolutePath` 与 `sourceHash` 已从分页结果中移除（参考控制根 50 行：41,429 B → 32,213 B）；`catalog show`、`catalog export` 与 dashboard 仍返回完整条目。
+- **terminal 的 CAS 期望改为自行推导。** `mstar session recover --expect` 与 `workflow reopen`、`workflow adopt-terminal` 一致改为可选：省略时在受保护事务内推导目标 header 的当前 token，Phase-6 held-lease 释放不再需要已发布的 token。`workflow.reopen` 契约文本与 `PHASE6_DANGLING_LEASE` 修复指引同步改为身份行 + 推导路径。
+- 更新 `mstar-use-cli` 参考文档（`status-and-registers.md`、`plan-and-workflow.md`）的 token 位置与推导规则。
+- 新增共享 UI 包 **`@mstar-harness/ui`**（private，以源码消费、只产出声明）及其**统一设计系统**：`DESIGN.md` 成为独立 dashboard 与 dsh 面板唯一的令牌权威 —— 一套 `--ms-*` 名称，`:root` 为浅色值、`[data-ms-theme="dark"]` 为深色值，只在 `packages/ui/src/styles/tokens.css` 实现一次，并在 `base.css` 提供元素层。
+- 新增两条由设计系统强制、而非依赖约定的可访问性规则：**状态色亮度分离**（五个状态色的 L\* 分别落在固定且互不重叠的亮度带内，实测最小间隔 3 L\*，因此在灰度下仍可区分），以及**状态点在强制颜色模式下的行为**（`@media (forced-colors: active)` 下每种状态改用不同形状，状态永不只靠颜色）。所有文字、边框与状态角色的实测对比度都记录在 `DESIGN.md`。
+- 新增 `packages/ui/src/styles/tokens.test.ts` 作为令牌契约：浅/深色角色对等、每个声明令牌要么被消费要么被后续任务认领、令牌文件之外不得出现裸颜色字面量、配色由属性而非 `prefers-color-scheme` 选择、强制颜色块存在、`DESIGN.md` 与 `tokens.css` 名称集合一致。退役 `packages/dsh/DESIGN.md` 与 `packages/dsh/DESIGN.dark.md`，避免出现第二套竞争令牌；并在 `scripts/release-surfaces.ts` 注册新包。
+
+### Changed
+
+- Overview 恢复**问题走势**：两条累计阶梯线由 `overview.issueFlow` 绘制（捕获实线、退役虚线，灰度下仍可区分），含首/中/末日期轴、带「有日期未关闭 / 记录未关闭」两个计数的图例、有日期差距说明，以及同一批 bucket 的 `有日期历史` 表格（折叠展示）。读模型从未改变，缺的只是视图。有日期 bucket 少于两个时走共享 empty 臂，读取失败时走 unavailable 臂并带上 store 的原因，绝不画空图。
+- Overview 在 900px 以上改为**两列** `minmax(0, 1.85fr) minmax(0, 1fr)`：工作与其走势在左，遗留项与里程碑在右，最近迭代横跨两列；窄于阈值时按同一阅读顺序回到侧栏单列。此前的单列形态来自原型的窄屏呈现。
+- 恢复原型的**计划表**：工作流摘要行（id、类型、阶段、`打开工作流`）、分支链，以及五列
+  `计划 | 标题 | 状态 | 进度 | 完成`，每个计划一行，上方是该工作流自己的计数。`进度` 显示 store
+  记录的原样文本：文本本身是分数时才画 `3/6` 与进度条，散文照原样显示，空文本显示「没有记录进度。」，
+  不编造百分比。这些字段 DTO 本来就有，是行模型把它们丢掉了。
+- 渲染门新增：1900 与 1280 的列比例、720 的折行、走势的两条线与文本替代、flow 成员不可用时的
+  unavailable 臂，以及计划表的五个列键、两行数据、行高对照 `--ms-row-h`、分支链。
+
+### 版本对齐
+
+- 提升 monorepo 根、`@mstar-harness/opencode`、`@mstar-harness/opencode-v2`、`@mstar-harness/cli`、`@mstar-harness/engine`、`@mstar-harness/dsh`、Cursor/Codex/Kimi/ZCode/omp/Claude 插件清单、便携式 Agent Plugins 清单及两份 marketplace 清单：**→ 4.1.0**。
+
 ## [4.0.9] - 2026-10-24
 
 ### Harness

@@ -6,6 +6,25 @@ The monorepo root [CHANGELOG.md](../../CHANGELOG.md) summarizes cross-surface re
 
 ## [Unreleased]
 
+## [4.1.0] - 2026-10-27
+
+### Changed
+
+- **One aggregated dashboard read answers "what is the state right now".** The engine gains an `overview` view (`/api/overview` on the dashboard transport): one store transaction returns the active workflows with their plans, open residuals by severity with a reconciling total, the resolved project's milestone grouping and latest iteration, and the dated issue flow. Every member is a three-state `OverviewMember` (`read` / `not-applicable` / `unavailable`), so a member the read could not produce carries the store's own reason — never an empty collection and never a `0`. The route accepts only the `project` query field.
+- **The two iteration reads disclose facts the store already held.** `IterationDTO.gateStep` marks the furthest iteration lifecycle step the store proves (Start / Execute / Close / PR delivery; `null` when the iteration records no compass) — Merge ready is never marked because no store row records a merge — and `IterationListDTO.attribution` says whether any iteration is attributed to a project, so an empty project feature can be told apart from a feature with no source at all.
+- The **issue detail screen now renders the six panels the prototype has and §8.1 had removed**: `Identity keys`, `Source`, `Occurrences`, `Disposition history`, `Relations` and `Provenance`. The data was never missing — `store-read.ts` already returned `occurrences`, `transitions`, `relations`, `provenance`, `provider` and `identityKey`; the view model forwarded sixteen fields and stopped. The screen is now the prototype's two columns (`detail-grid` at `1.15fr : 1fr`, measured identical at 1440 px and collapsing to one column at 720 and 375), and its nine blocks carry the prototype's `.sec` rhythm rather than a class name that appeared in no stylesheet.
+- The **relation read joins the other end's title**, so the `Title` column is the joined issue's own title instead of a permanent dash, and an unknown project states `null` dates instead of empty strings that read as recorded blanks.
+- **Four class names that no stylesheet defined are gone**: `fact-block` (the issue detail's nine blocks, which had therefore lost every separator), `detail-text` (four paragraphs), `screen-sub` (the overview subtitle) and `attribution` (the iteration list's note). A new `bun run --cwd packages/ui check:classes` scans every component for a `className` literal absent from `tokens.css`, `base.css` and `product.css` and fails on one.
+- The **gate track names its five steps** (`Start · Execute · Close · PR delivery · Merge ready`) — `copy.gateStepLabels` existed in both dictionaries and was read by nothing, so the track printed `step 1 of 5 … step 5 of 5` — and the **milestone counts cell reads `retired of total · N open`** (`5/14 · 9 open`), where it had rendered `resolved of total` with no tail, understating progress on every milestone with retired-but-unresolved issues.
+- **`mstar status validate` answers with current state, not history.** The two top-level terminal mirrors are gone (they duplicated `data.authority` byte for byte), and a closed lifecycle is published as an identity row `{ id, status, revision }` in `data.authority.terminalUnregistered[]` / `data.authority.terminalAdoptions[]`. The root token (`data.token`), workflow tokens (`data.workflows[].token`) and plan tokens (`data.authority.workflows[].planTokens[<planId>]`) are unchanged. On the reference control root the output fell from 172,762 B to 20,604 B and now grows with the terminal count instead of the recorded history.
+- **`mstar catalog list` stops disclosing the filesystem per row.** `absolutePath` and `sourceHash` are projected out of a page (50 rows: 41,429 B → 32,213 B on the reference control root); `catalog show`, `catalog export` and the dashboard keep the full entity.
+- **A terminal CAS expectation is derived, never published.** `mstar session recover --expect` is optional like `workflow reopen` and `workflow adopt-terminal`: an omitted expectation resolves the addressed header's current token inside the guarded transaction, so the Phase-6 held-lease release no longer needs a published token. The `workflow.reopen` contract text and the `PHASE6_DANGLING_LEASE` recovery name the identity row and the derived path.
+- Updated the `mstar-use-cli` references (`status-and-registers.md`, `plan-and-workflow.md`) to the new token locations and the derived expectation.
+
+- Version alignment with harness **4.1.0**.
+
+See root [CHANGELOG.md](../../CHANGELOG.md) **4.1.0**.
+
 ## [4.0.9] - 2026-10-24
 
 ### Harness

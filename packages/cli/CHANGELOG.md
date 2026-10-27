@@ -6,6 +6,122 @@ The monorepo root [CHANGELOG.md](../../CHANGELOG.md) summarizes cross-surface re
 
 ## [Unreleased]
 
+## [4.1.0] - 2026-10-27
+
+### Harness
+
+- Rewrote the standalone `mstar dashboard` on the shared layer: the browser entry is React consuming `@mstar-harness/ui`, Preact and `htm` are gone with their last importer, and the build takes its CSS from the bundle's single asset output instead of a hand-maintained stylesheet. The generated artifact stays byte-deterministic **from the repo root and from `packages/cli`** (the generator now anchors to the package instead of inheriting the caller's working directory), and `NODE_ENV` is defined so React ships at 137 KB rather than 332 KB.
+- All five destinations and their detail views now mount shared screens: Overview reads the new aggregated `/api/overview` in one snapshot, the four lists keep their state machines and the address-bar round-trip, and **Projects** carries the roadmap as a feature of a project alongside that project's Issues and Iterations. `#roadmap` is removed rather than aliased, and `mstar dashboard --project <id>` now seeds the first address, so a scoped launch opens that project's Issues list instead of the whole store. Back and Escape both leave a record detail with the reader's filters intact and do nothing on a list, so Escape in a search box never navigates away and discards what was typed; on a project detail both step out to that project's Roadmap.
+- The list read reports only what it has: previous rows stay painted while the next page is in flight, so typing in a filter never unmounts the search box (a failed read still replaces them); a projection generation is required only by the views whose rows the projection builds, so a fresh store or a failed first projection renders the store's own rows instead of `unavailable`; a workflow page that the store holds more of says "showing N of M" rather than looking complete; and the **Any** disposition clears the filter instead of rewriting itself to open.
+- Language and theme switches persist their choice, fall back on unreadable storage, and `<html lang>` follows the resolved locale. The chosen colour scheme paints the page canvas and the inherited text colour as well as the component surface, so a dark selection does not leave a light page behind dark components. The skip link moves focus to the main landmark instead of navigating, and the shell's chrome strings resolve through the dictionary rather than being derived from route ids.
+- Deleted `packages/cli/web/views/` and the two files that only referenced each other; a green suite that exercised an unpublished file is gone with them.
+- The **issue detail screen now renders the six panels the prototype has and §8.1 had removed**: `Identity keys`, `Source`, `Occurrences`, `Disposition history`, `Relations` and `Provenance`. The data was never missing — `store-read.ts` already returned `occurrences`, `transitions`, `relations`, `provenance`, `provider` and `identityKey`; the view model forwarded sixteen fields and stopped. The screen is now the prototype's two columns (`detail-grid` at `1.15fr : 1fr`, measured identical at 1440 px and collapsing to one column at 720 and 375), and its nine blocks carry the prototype's `.sec` rhythm rather than a class name that appeared in no stylesheet.
+- The **relation read joins the other end's title**, so the `Title` column is the joined issue's own title instead of a permanent dash, and an unknown project states `null` dates instead of empty strings that read as recorded blanks.
+- **Four class names that no stylesheet defined are gone**: `fact-block` (the issue detail's nine blocks, which had therefore lost every separator), `detail-text` (four paragraphs), `screen-sub` (the overview subtitle) and `attribution` (the iteration list's note). A new `bun run --cwd packages/ui check:classes` scans every component for a `className` literal absent from `tokens.css`, `base.css` and `product.css` and fails on one.
+- The **gate track names its five steps** (`Start · Execute · Close · PR delivery · Merge ready`) — `copy.gateStepLabels` existed in both dictionaries and was read by nothing, so the track printed `step 1 of 5 … step 5 of 5` — and the **milestone counts cell reads `retired of total · N open`** (`5/14 · 9 open`), where it had rendered `resolved of total` with no tail, understating progress on every milestone with retired-but-unresolved issues.
+- Fixed **every container query in the product being dead**. The CSS-module pass
+  rewrites a named query's prelude into a per-module hash
+  (`@container pane_8f31a`), while the single `container: pane / inline-size`
+  declaration stays in the global sheet under the plain name, so nothing matched and
+  the 400–900px pane rendered the wide layout squeezed. Component and screen queries
+  are now **unnamed** (`@container (max-width: 619px)`); the collapse, the
+  two-column fold and the chrome stacking all work again. `build-web.test.ts` asserts
+  the emitted artifact carries no named container query, and the component-layer suite
+  asserts no module writes one.
+- Gave the **list tables declared column widths**. `table-layout: fixed` split an
+  undeclared column set evenly, so eight columns of ~90px each rendered `I-…`, `d…`
+  and `● runningplan…`; and the collapse rule's positional 20%/80% widths zeroed the
+  *third* primary column on screens that have one. Each list now declares a px width
+  for every column but the title (which takes the remainder), `DataTable` computes a
+  floor of *declared + 120px*, the card body scrolls inside itself rather than
+  squeezing a column below its identity, and the collapsed form hides secondary
+  columns by rule with their facts on the row's second line. The `<colgroup>` is gone
+  so a hidden column leaves no width behind it. Measured at a 400px container: narrowest
+  cell 80–112px, zero truncated cells, no page overflow.
+- Added the **pane frame** to the shared layer (`MS_PANE_HEAD_CLASS`,
+  `MS_PANE_BODY_CLASS`): the prototype's surface band closed by a hairline, and the
+  body's closing inset. The dsh seat mounts both inside its pane (the tab strip stays
+  the pane's top edge), and the dashboard's window header is the same band — its
+  `currentColor` border is now the shared hairline. `DESIGN.md` records the narrow-band
+  decision: the prototype defines no narrow list, so the product chooses priority
+  columns below 619px, declared widths above it, and a scroll floor as the net.
+- Made a screen title **own its row below the collapse floor** and truncate inside the frame.
+  A title squeezed beside the summary stacked a two-glyph CJK title one glyph per line, and a
+  `max-content` floor then let a long title escape its pane instead (measured 852px in a 360px
+  frame). The head now wraps and the title takes the full row; its floor is zero and an ellipsis
+  marks what does not fit.
+- Made the collapsed second line the **same activation target** as its record: it now carries
+  the row's pointer handler, hover and cursor, while the tab stop and the key handler stay on
+  the main row, so keyboard order is still one stop per record. `DESIGN.md` records what the
+  extra `<tr>` costs (a screen reader hears two rows per record) and where it stops (list
+  variant, below 620px, one spanned cell, facts non-interactive).
+- Extended the **render gate** to the bands that were never tested: 760px and 420px
+  for all five destinations, asserting no squeezed cell, a card that fills its
+  container, a title that is not truncated, prose that wraps at 10+ characters per
+  line, reachable and labelled header controls, no page overflow, and — the anchor that
+  separates a real collapse from an overflow — no sideways scroll inside the table's
+  card. One catalog iteration is seeded so the Iterations screen has a table to squeeze.
+- Gave every list table the **prototype's own column widths** and made the wide pane stop
+  squeezing: the Issues table at 720px cut its last column at the pane edge and rendered
+  `dsh-inte…` and `imp…`. The widths now follow `design-v1.html:1196-1198` (id 86, project 128,
+  kind 112, severity 100, disposition 104, last activity 116, rounded to what the product's
+  identifiers need), the title absorbs the remainder, and the floor for the flexible column is
+  96px instead of 120px. Measured at 720: table 678px in a 678px card, seven whole columns, the
+  title the widest at 146px. The milestone column became **wide-only** (`wide: true`): hidden
+  below 900px of container, never restated on the second line, because the prototype's sidebar
+  shows seven columns and the eighth is what pushed the table past its card.
+- Put every list's columns in the **prototype's order** — the Issues table read
+  `ID | Title | Severity | Disposition | Kind | Project | Last activity` where the prototype reads
+  `ID | Title | Project | Kind | Severity | Disposition | Last activity`
+  (`design-v1.html:1199-1207`), and Projects led with the title where the prototype leads with
+  the id (`:1757-1762`). Widths travel with their facts. The render gate now asserts the
+  sequence, not just its length.
+- Made the residual panel the prototype's **compact two-column tally**
+  (`design-v1.html:2424-2434`): two severities per row with the count right-aligned, one column
+  below 480px, and the reconciling total in the panel's meta slot (`26 open · all projects`)
+  instead of a plain five-row list.
+- Made the Overview **one vertical run of full-width sections at every width**, in the
+  prototype's sidebar order (active workflow, residuals, milestones, the latest iteration)
+  instead of a two-column grid whose second card squeezed prose one glyph per line at 1900px.
+- Inset the **pane's head band** through the shared shell: `.ms-pane-head` carries the
+  prototype's `padding-inline: 12px` nav inset (`design-v1.html:487`) on its surface + hairline,
+  so the dsh pane's nav no longer touches the pane's edges. The dashboard's window header mounts
+  the same class and keeps its own 20px gutter, which is what the prototype's window header
+  uses. The host's tab strip stays the pane's top edge.
+- Extended the render gate with the anchors those deviations would have caught: every list's
+  column count and the absence of table overflow at 720px, the Overview as one full-width run at
+  720 and 1900, and the head band's horizontal inset.
+- Added the **card primitive** to `@mstar-harness/ui` (`Panel`, `PanelHead`, `PanelBody`, `PanelFoot`) and put every list screen inside it: the dashboard's Issues screen is now the filter card **and** the table card, and Overview, Workflows, Iterations and Projects are cards instead of bare sections. The surface, the hairline border, `--ms-radius-md` and the head/body/foot insets come from the prototype's own rules rather than from each screen. The frame around the screens (max width, gutter, title scale) lives in the shared base layer, and **both** hosts that mount these screens now anchor it: the dashboard on its root and the dsh panel on its product scroller — the dsh seat had none, so its screens rendered unframed.
+- Added the **summary line** above the table — result count, the **selected** disposition with its project scope, and the ordering, in one sentence — and the short list-cell date (`10-24 09:06`) from one formatter, `formatShortDate`. The project span is stated only when the page holds the whole result set: a partial page cannot count projects it never saw.
+- Replaced the shell's two native `<select>`s with the prototype's **segmented language group** and **theme icon button**: real buttons, labelled from the dictionary, `aria-pressed` for state, and two icon shapes instead of a colour swatch, so the choice survives forced colours. Both wrap at narrow widths instead of disappearing.
+- Unified the timestamp form: one formatter (`formatDate`) prints `2026-10-23 09:14` everywhere a timestamp appears — detail lines included — while list cells drop the year and the seconds.
+- Added the **render gate** (`packages/cli/test/render-gate.test.ts`): it starts the dashboard on an ephemeral port, drives a real browser over the five destinations and a detail screen at a fixed viewport, writes the PNGs under `.tmp/render-gate/`, and asserts the cards, the summary line, the dot-only tone rule, the header control pair and the date form. It skips cleanly when no browser is on `PATH` (`Bun.which("agent-browser")`), so no CI job depends on one.
+- Restored the **issue-flow trend** to the Overview: two cumulative step lines drawn from
+  `overview.issueFlow` (captured solid, retired dashed, so greyscale keeps them apart), the
+  first/middle/last date axis, a legend carrying the dated and recorded open counts, the
+  dated-history gap note, and the same buckets as a `Dated history` table in a disclosure. The
+  read model never changed — only the view was missing. Fewer than two dated buckets renders the
+  shared empty arm and a failed read renders the unavailable arm with the store's reason, so an
+  empty chart is never drawn.
+- Made the Overview **two columns above 900px**, `minmax(0, 1.85fr) minmax(0, 1fr)` as the
+  prototype has it: work and its trend left, residuals and milestones right, the latest iteration
+  across both. Below the floor it is the sidebar's single run in the same order. The previous
+  single-column form was read from the prototype's narrow presentation.
+- Restored the prototype's **plan table** under the active workflow: the summary line (id, type,
+  phase, `Open workflow`), the branch chain, and five columns — `Plan | Title | Status | Progress |
+  Done` — one row per plan, with the workflow's own count above them. `Progress` prints the
+  store's note: a note that *is* a fraction is drawn as `3/6` with its bar, prose stays prose, and
+  an empty note reads `Records no progress.` — no percentage is invented. The DTO already carried
+  every field; the row model had been discarding them.
+- Extended the render gate: the column ratio at 1900 and 1280, the fold at 720, the trend's two
+  series and its text alternative, an unavailable flow member rendering the unavailable arm, and
+  the plan table's five column keys, its two rows, its row height against `--ms-row-h`, and the
+  branch chain.
+
+- Version alignment with harness **4.1.0**.
+
+See root [CHANGELOG.md](../../CHANGELOG.md) **4.1.0**.
+
 ## [4.0.9] - 2026-10-24
 
 ### Changed

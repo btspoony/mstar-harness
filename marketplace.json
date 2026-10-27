@@ -8,7 +8,7 @@
   "plugins": [
     {
       "name": "morning-star-harness",
-      "version": "4.0.9",
+      "version": "4.1.0",
       "source": { "source": "github", "repo": "btspoony/mstar-harness", "ref": "main" },
       "displayName": "Morning Star Harness",
       "displayName_i18n": { "zh-CN": "晨星工作流" },
