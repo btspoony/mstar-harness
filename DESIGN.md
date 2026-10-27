@@ -2084,7 +2084,7 @@ The issue detail's meta now reads `I-000870 · dsh-integration · high · bug ·
 segment, the catalog revision, is still missing: the model carries no revision for an issue.
 
 **One more reading that was not a defect**: the iteration detail's `<h1>` renders
-`iter-20260811-panel-fixes Delivery Compass`, which looks like a title and something else
+`iter-1 Delivery Compass`, which looks like a title and something else
 concatenated. It is one string — a title in this store's own data. Checking the store was one
 command and settled it.
 
