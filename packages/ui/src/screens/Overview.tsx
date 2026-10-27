@@ -102,7 +102,8 @@ export type OverviewCopy = {
   trendTableSummary: string;
   trendColumns: { date: string; captured: string; retired: string; open: string; origin: string };
   residualsHeading: string;
-  residualsTotal: (open: number) => string;
+  /** The residuals panel's meta: a grouping descriptor, as the prototype's is. */
+  residualsTotal: () => string;
   iterationHeading: string;
   iterationNoIteration: string;
   gateStep: (step: number, of: number) => string;
@@ -529,11 +530,7 @@ export function Overview(props: OverviewProps) {
           <PanelHead
             id="ms-overview-residuals"
             title={copy.residualsHeading}
-            meta={
-              model.residuals.kind === "populated"
-                ? copy.residualsTotal(model.residuals.value.total)
-                : undefined
-            }
+            meta={model.residuals.kind === "populated" ? copy.residualsTotal() : undefined}
           />
           <PanelBody>
           {/* The prototype's compact tally (`design-v1.html:2424-2434`): five severity

@@ -2109,11 +2109,9 @@ with the prototype's own heading as the reason.
 
 **Two differences that are deliberate, and neither is fixed:**
 
-- The residuals panel's meta reads `134 open · all projects` here and `by severity` there.
-  The prototype's version says how the panel is grouped; this implementation's says what it
-  covers. Both are true; the prototype's is the one to copy if parity wins over information.
-- The overview head's third segment is a read timestamp (`… · 13:58:04`). **No read timestamp
-  reaches this screen** — the model carries none — so it is absent rather than invented.
+- The residuals panel's meta **is fixed**: it read `134 open · all projects` and now reads
+  `by severity`, which is what the prototype states. The count was redundant — every number
+  it repeated is already inside the panel, five severity rows with their own totals.
 
 **One difference that is data**: `1 plan · running` against `7 plans · running` is this store's
 plan count, not a label.## Verification coverage, stated

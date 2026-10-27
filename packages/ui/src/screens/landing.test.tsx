@@ -173,7 +173,7 @@ const overviewCopy: OverviewCopy = {
   trendTableSummary: "Dated history (table alternative)",
   trendColumns: { date: "Date", captured: "Captured", retired: "Retired", open: "Open difference", origin: "Origin" },
   residualsHeading: "Open residuals",
-  residualsTotal: (open) => `${open} open`,
+  residualsTotal: () => "by severity",
   iterationHeading: "Delivery",
   iterationNoIteration: "Iteration",
   gateStep: (step, of) => `step ${step} of ${of}`,
@@ -352,11 +352,13 @@ describe("Overview — what it shows, in the IA §3.1 order", () => {
     expect(hosted).toContain("Open workflow");
   });
 
-  test("five severity rows, zeros included, with a reconciling total", () => {
+  test("five severity rows, zeros included, with the prototype's grouping meta", () => {
     for (const severity of ["critical", "high", "medium", "low", "nit"]) {
       expect(html).toContain(`data-ms-severity="${severity}"`);
     }
-    expect(html).toContain("26 open");
+    // The panel's own meta is a grouping descriptor, not a count: every number it could
+    // repeat is already inside the panel.
+    expect(html).toContain("by severity");
   });
 
   test("a severity the read reports as zero is still rendered as 0, never dropped", () => {

@@ -135,7 +135,11 @@ export const en = {
     branchTarget: "Target",
     dash: "—",
     residualsHeading: "Open residual issues",
-    residualsTotal: (open: number) => `${open} open · all projects`,
+    /**
+     * The prototype's panel meta is a grouping descriptor, not a count: the tally inside the
+     * panel already states every number it would repeat.
+     */
+    residualsTotal: () => "by severity",
     iterationHeading: "Latest iteration",
     iterationNoIteration: "No iteration yet",
     gateStep: (step: number, of: number) => `step ${step} of ${of}`,
