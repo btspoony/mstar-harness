@@ -426,7 +426,7 @@ a squeezed head set a two-glyph title as one glyph per line (measured: a 30.4px,
 
 - **The title owns its row below the collapse floor.** The screen head wraps
   (`flex-wrap: wrap`) and the title takes the full row (`flex: 1 1 100%`), the same shape the
-  prototype's `.panel-head` takes at narrow widths (`prototype.html:736`). The title is then
+  prototype's `.panel-head` takes at narrow widths (`prototype.html:733`). The title is then
   measured against the whole card rather than the summary's remainder, so a two-glyph title has
   a row to itself and does not stack.
 - **The title's floor is zero, not its own string.** A CSS minimum beats a maximum, so a
