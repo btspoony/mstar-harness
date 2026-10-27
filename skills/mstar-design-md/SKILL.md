@@ -13,6 +13,7 @@ description: DESIGN.md 设计系统规范：创建/审计/维护 design tokens�
 | `mstar-conventions` | `{HARNESS_DIR}` / `{SPECS_DIR}` 路径解析 |
 | `mstar-roles` | `@architect` / `@product-manager` / `@frontend-dev` / `@qc-specialist` / `@qa-engineer` 角色职责边界 |
 | `mstar-coding-behavior` | 实现角色消费 DESIGN.md 前的通用编码约束 |
+| `mstar-design-system` | 一个实现需要收敛到既有 baseline（原型 / 设计导出 / 既有产品标记 / 书面契约）时：baseline 定位与机器化、三层 parity、defect/decision/phantom 分诊、coverage 证据 |
 
 ## Scope (DESIGN.md lifecycle)
 
@@ -33,6 +34,17 @@ description: DESIGN.md 设计系统规范：创建/审计/维护 design tokens�
 - **Primary**: project root `DESIGN.md` (human + agent visible, aligns with `AGENTS.md`)
 - **Dark theme**: project root `DESIGN.dark.md` (same token names, different values)
 - `DESIGN.md` is a **project-level design contract**, not a harness internal artifact. It lives beside `README.md` and `AGENTS.md`.
+
+## Prototype vs document
+
+When the repository also ships a prototype, this document is a **summary of that prototype, not a second source**:
+
+- **Authority.** The prototype is the design; `DESIGN.md` states in prose what it establishes. On conflict the prototype wins — unless the prototype is silent, in which case the decision and its reason belong in `DESIGN.md`. An unrecorded silence becomes a guess in the next implementation.
+- **One-directional sync.** `baseline → fixture → document`. Change the prototype, rerun the generator that derives the machine-readable fixture, then bring `DESIGN.md` in line. Hand-editing the fixture, or iterating in `DESIGN.md` and back-filling the prototype, is the reverse direction and a defect regardless of which side turns out to be right.
+- **The fixture must be a tracked file derived from a tracked source.** A deriver or comparator that reads a gitignored working path at runtime has no baseline: on a clean checkout it fails, and in the degraded mode it warns and exits `0`, which reads as a pass forever.
+- **A lagging document fails nothing.** A fixture that lags the prototype fails its check; nothing fails when `DESIGN.md` lags both. That direction is a **review obligation**: the reviewer compares the document against the fixture, because no gate will.
+
+Converging an implementation onto that baseline — baseline kinds, parity layers, defect / decision / phantom triage — → skill `mstar-design-system`.
 
 ## Role lifecycle
 
