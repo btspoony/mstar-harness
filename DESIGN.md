@@ -2630,6 +2630,13 @@ two (`Workflow`, `Catalog title`), which is the prototype's `data-narrow-cols="2
 **Two "fixed" claims came from checking two widths.** The middle of the range is where these
 mechanisms differ, and it is the part a 1440/375 pair cannot see.
 
+**And a column count is not the row.** At 375 the row was read cell by cell: two visible cells
+(`id`, `title`) and a `meta` line carrying `plans:… · 2026-10-…` — the `root` and `updated`
+facts, which is what `secondary` promises. **The status is not in that line and not in a cell**,
+so it is gone at this width exactly as the prototype's is. A `secondary` column only reappears
+in `meta` when the table gives it a meta renderer; this one has none, which is why `secondary`
+was right here and `wide` was not.
+
 **So this screen now behaves as the prototype's does, including where a reader on a phone
 loses the status.** That is the acceptance criterion, and it is worth stating plainly rather
 than reporting "fixed" over a behaviour that differed.
