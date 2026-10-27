@@ -30,6 +30,8 @@ const SRC = join(PKG_ROOT, "src");
 const STYLES = join(SRC, "styles");
 const TOKENS_PATH = join(STYLES, "tokens.css");
 const BASE_PATH = join(STYLES, "base.css");
+/** The prototype's own screen-frame values, derived by `scripts/prototype-snapshot.ts`. */
+const PROTOTYPE_SNAPSHOT_PATH = join(import.meta.dir, "prototype.snapshot.json");
 const PRODUCT_PATH = join(STYLES, "product.css");
 const DESIGN_PATH = join(PKG_ROOT, "..", "..", "DESIGN.md");
 
@@ -341,9 +343,13 @@ describe("forced colors: the status dot stops depending on colour", () => {
     // (`.dash-main`, `design-v1.html:201`) rather than ten copies that can drift.
     const base = read(BASE_PATH);
     expect(base).toContain(".ms-container [data-ms-screen] {");
-    expect(base).toMatch(/\.ms-container \[data-ms-screen\] \{[^}]*max-inline-size: 1440px;/);
+    // Derived from the prototype, not typed here. The literal this replaced said `24px`
+    // while the prototype says `16px`, so the test guarded the wrong number and the dsh
+    // pane drifted from the dashboard — see `scripts/prototype-snapshot.ts`.
+    const frame = JSON.parse(read(PROTOTYPE_SNAPSHOT_PATH)) as { screenPadding: string; screenMaxWidth: string };
+    expect(base).toMatch(new RegExp(`\\.ms-container \\[data-ms-screen\\] \\{[^}]*max-inline-size: ${frame.screenMaxWidth};`));
     expect(base).toMatch(/\.ms-container \[data-ms-screen\] \{[^}]*margin-inline: auto;/);
-    expect(base).toMatch(/\.ms-container \[data-ms-screen\] \{[^}]*padding: 14px 20px 24px;/);
+    expect(base).toMatch(new RegExp(`\\.ms-container \\[data-ms-screen\\] \\{[^}]*padding: ${frame.screenPadding};`));
     // `.screen-head h1` — 16px on the 24px line, weight 600.
     expect(base).toMatch(/\.ms-container \[data-ms-screen\] h1 \{[^}]*font-size: var\(--ms-fs-16\);/);
     expect(base).toMatch(/\.ms-container \[data-ms-screen\] h1 \{[^}]*line-height: var\(--ms-lh-16\);/);

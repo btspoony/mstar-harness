@@ -83,12 +83,10 @@ describe('transformCssModule — the exact css-modules transform the build runs'
   })
 
   it('transform-layer assertions pass on the shipped module.css files (plan Scope item 2)', () => {
-    // The host seat's own sheet plus one shared-layer module: both kinds now
-    // enter the same bundle, so both must survive the transform's escaping.
-    for (const file of [
-      join(PKG_DIR, 'src/client/panel/panel.module.css'),
-      join(PKG_DIR, '..', 'ui', 'src', 'screens', 'Focus.module.css'),
-    ]) {
+    // The host seat's own sheet is the only module.css left: the shared layer moved its
+    // per-component modules into one global `product.css`, so `screens/Focus.module.css`
+    // and its siblings no longer exist and this read failed on a missing file.
+    for (const file of [join(PKG_DIR, 'src/client/panel/panel.module.css')]) {
       const { classMap, css } = transformCssModule(readFileSync(file, 'utf8'))
 
       expect(() => assertCssModuleTransform(classMap, css, file)).not.toThrow()

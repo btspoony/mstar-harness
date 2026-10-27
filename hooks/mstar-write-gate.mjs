@@ -17990,6 +17990,7 @@ function readIssuePage(db, filter) {
   const { where, params } = bindIssueFilter(filter);
   const storeRevision = readMeta2(db).storeRevision;
   const totalRow = db.prepare(`select count(*) as n from issues ${where}`).get(...params);
+  const spanRow = db.prepare(`select count(distinct project_id) as n from issues ${where}`).get(...params);
   const milestoneExpr = issuesMilestoneColumn(db) ? "issues.milestone_id as milestoneId" : "null as milestoneId";
   const rows = db.prepare(`select issues.id, issues.project_id as projectId, issues.title, issues.kind, issues.severity, issues.disposition,
               issues.registered_at as registeredAt, issues.revision, ${milestoneExpr},
@@ -18009,6 +18010,7 @@ function readIssuePage(db, filter) {
       milestoneId: row.milestoneId
     })),
     total: totalRow.n,
+    projectCount: spanRow.n,
     storeRevision
   };
 }
@@ -18052,7 +18054,10 @@ function readIssueDetail(db, id) {
     imported: row.imported === 1,
     issueRevision: row.issue_revision
   }));
-  const relations = db.prepare("select from_issue as fromIssue, relation, to_issue as toIssue from relations where from_issue = ? or to_issue = ?").all(id, id);
+  const relations = db.prepare(`select r.from_issue as fromIssue, r.relation, r.to_issue as toIssue,
+              (select i.title from issues i
+                 where i.id = case when r.from_issue = ? then r.to_issue else r.from_issue end) as title
+         from relations r where r.from_issue = ? or r.to_issue = ?`).all(id, id, id);
   const provenance = db.prepare("select id, kind, target, source_hash, origin, legacy_project, legacy_bucket, legacy_entry_id, legacy_json, imported_at from provenance where issue_id = ? order by id asc").all(id).map((row) => ({
     id: row.id,
     kind: row.kind,
@@ -18533,6 +18538,7 @@ function readOverview(db, filters) {
   const projectionFailure = projectionFailureReason(db);
   const projected = (read) => projectionFailure === null ? member(read) : { state: "unavailable", reason: projectionFailure };
   return {
+    projectId,
     workflows: projected(() => activeWorkflows(readWorkflowList(db, { limit: 50 }))),
     residuals: member(() => readResidualCounts(db)),
     milestones: projectId === null ? { state: "not-applicable", reason: "no project resolves for this read" } : member(() => readMilestonesOn(db, projectId)),
