@@ -139,7 +139,9 @@ const detailCopy: WorkflowDetailCopy = {
   breadcrumb: { label: "Breadcrumb", current: "Workflows" },
   executionHeading: "Execution",
   planTableHeading: "Plans",
-  catalogHeading: "Catalog",
+  catalogHeading: "Catalog identity",
+  pinChip: "Pin",
+  revisionMeta: (revision) => `rev ${revision}`,
   fields: {
     id: "ID",
     type: "Type",

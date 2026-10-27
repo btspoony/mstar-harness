@@ -36,6 +36,9 @@ export type WorkflowDetailCopy = {
   executionHeading: string;
   planTableHeading: string;
   catalogHeading: string;
+  /** The head's pin chip and the catalog revision beside it. */
+  pinChip: string;
+  revisionMeta: (revision: number) => string;
   /** `updated <when>` — the head's last meta fact. */
   updatedMeta: (when: string) => string;
   /** The chip beside the title: the store still counts this as a registration. */
@@ -263,6 +266,18 @@ export function WorkflowDetail(props: WorkflowDetailProps) {
               <h2 className="panel-title" id="ms-workflow-catalog">
                 {copy.catalogHeading}
               </h2>
+              {/* The prototype's head carries the pin state and the catalog revision:
+                  `.chip` "Pin" then a mono `rev 3`. Shown only when a plan is pinned. */}
+              {props.model.value.plans.some((plan) => plan.pin !== null) ? (
+                <span className="panel-meta">
+                  <span className="chip">{copy.pinChip}</span>
+                  {props.model.value.catalog === null ? null : (
+                    <span className="mono" data-ms-catalog-revision="">
+                      {copy.revisionMeta(props.model.value.catalog.revision)}
+                    </span>
+                  )}
+                </span>
+              ) : null}
             </div>
             <div className="panel-body">
               <dl className="fields">

@@ -274,6 +274,10 @@ describe("no key exists for a fact IA §8 marks not-rendered", () => {
     "issueDetail.provenanceColumns.importedAt",
     // The prototype's plan table has a `Pin` column: the catalog revision a plan pins to.
     "workflowDetail.planColumns.pin",
+    // The Catalog identity head carries the same pin state as a chip and the revision
+    // beside it.
+    "workflowDetail.pinChip",
+    "workflowDetail.revisionMeta",
     "issueDetail.relationsHeading",
     "issueDetail.relationsColumns.relation",
     "issueDetail.relationsColumns.issue",

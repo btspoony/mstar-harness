@@ -283,7 +283,9 @@ export const zh: Copy = {
     breadcrumb: { label: "位置导航", root: "工作流", current: "工作流" },
     executionHeading: "执行",
     planTableHeading: "计划",
-    catalogHeading: "目录",
+    catalogHeading: "目录身份",
+    pinChip: "固定",
+    revisionMeta: (revision: number): string => `修订 ${revision}`,
     fields: {
       id: "编号",
       type: "类型",

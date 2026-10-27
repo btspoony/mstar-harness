@@ -304,7 +304,9 @@ export const en = {
     breadcrumb: { label: "Breadcrumb", root: "Workflows", current: "Workflow" },
     executionHeading: "Execution",
     planTableHeading: "Plans",
-    catalogHeading: "Catalog",
+    catalogHeading: "Catalog identity",
+    pinChip: "Pin",
+    revisionMeta: (revision: number): string => `rev ${revision}`,
     fields: {
       id: "ID",
       type: "Type",

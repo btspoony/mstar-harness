@@ -1848,8 +1848,25 @@ Plan · Title · Status · Progress · Done at · Pin
 measured as `["计划","标题","状态","进展","完成时间","固定版本"]`, with `.t-num` on the last
 cell — the prototype right-aligns it.
 
-**Still open**: the Catalog identity panel's `Pin` / `rev 3` chip and its description
-paragraph.
+**The Catalog identity head is shipped too**, and it was two changes: the heading read
+`Catalog` where the prototype says **`Catalog identity`**, and the head carried no pin state.
+Both are there now — `.chip` "Pin" beside a mono `rev <n>`, shown only when some plan is
+actually pinned.
+
+Measured on the one workflow in this store that has a pinned plan:
+
+```
+heading: "目录身份"
+meta:    "固定 · 修订 1"
+Pin列:   ["1"]
+```
+
+**That measurement needed a different record to exist at all.** The first workflow tried has
+no pinned plan, so the chip correctly rendered nothing — which reads exactly like a missing
+chip. `projection_plans` holds **1 pinned plan out of 5**.
+
+**Still open**: the Catalog identity panel's description paragraph (that record's
+`description` is null in this store, so it renders its absent line).
 
 **A second, quieter lesson**: this round also fixed `check:stale`'s own silent pass — a
 checkout with no `dist/mstar-harness.js` exited 0 with a log line, which is the exact state the
