@@ -1812,7 +1812,31 @@ bundle older than its sources, and the check says which file and which command.
 **The ceiling itself is now a measurement, not a ratchet.** 340 KB was tried and the bundle
 came out 71 bytes over — so the raise to 344 is what the footer actually costs, and the
 comment says so. The next thing to shrink is the locale table, which ships both dictionaries
-in full.## Verification coverage, stated
+in full.## The workflow detail, side by side
+
+Four panels on both sides — `Execution`, `Catalog identity`, `Plans`, `Leases` — in that
+order, with the two-column split above and the full-width table and card below. What differs:
+
+| | The prototype | This implementation |
+| --- | --- | --- |
+| breadcrumb | none | `Workflows / <id>` |
+| meta line | `plan · running · phase-2-execute · updated …` | `plan · running · updated …` — **no phase** |
+| Execution rows | Type, Status, Phase, Started, Ended, Updated | the same six plus **an `id` row** the prototype puts in the title instead |
+| Catalog identity | six rows, plus a `Pin` / `rev 3` chip and the description paragraph | six rows, no pin |
+| Plans table | **seven** columns — the sixth is `Status · phase`, the seventh is `Pin` | five columns |
+| Leases | a table, `2 active · exclusive` | **the table exists**; this record holds no leases, so it renders its empty line |
+
+**The `Leases` difference was a reading error on my part.** The table, its five columns and
+its count were all implemented; the screenshot showed a workflow with zero leases. That is the
+same "data absence read as an implementation gap" this file names twice already.
+
+**The real gaps are three**: the meta line's `phase`, the Catalog `Pin`/`rev` chip, and the
+plans table's `Pin` column and merged `Status · phase` cell.
+
+**A second, quieter lesson**: this round also fixed `check:stale`'s own silent pass — a
+checkout with no `dist/mstar-harness.js` exited 0 with a log line, which is the exact state the
+check exists to catch. It warns now, and fails under `STRICT_STALE=1`. `verify:visual` is one
+command that runs it before any browser measurement.## Verification coverage, stated
 
 Two hosts mount these screens: the dashboard (`packages/cli/web`) and the dsh pane
 (`packages/dsh/src/client/panel`). They share the components but **each owns its own

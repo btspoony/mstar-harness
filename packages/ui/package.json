@@ -26,7 +26,8 @@
     "check:tones": "bun run scripts/tone-table.ts",
     "check:selectors": "bun run scripts/selector-diff.ts",
     "check:declarations": "bun run scripts/declaration-diff.ts",
-    "check:stale": "bun run scripts/stale-assets.ts"
+    "check:stale": "bun run scripts/stale-assets.ts",
+    "verify:visual": "bun run scripts/stale-assets.ts && echo 'safe to measure: rebuild the dashboard and open it'"
   },
   "devDependencies": {
     "@mstar-harness/engine": "workspace:*",

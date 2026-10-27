@@ -74,7 +74,14 @@ try {
     process.exit(1);
   }
 } catch {
-  console.log("stale-assets: no CLI bundle, nothing to compare");
+  // A checkout that never built the CLI is exactly the state this check exists for: there is
+  // no bundle to compare against, and any measurement would be of whatever `dist` holds.
+  const message = "stale-assets: no packages/cli/dist/mstar-harness.js — run `bun run --cwd packages/cli build`";
+  if (process.env.STRICT_STALE === "1") {
+    console.error(message);
+    process.exit(1);
+  }
+  console.warn(message);
   process.exit(0);
 }
 
