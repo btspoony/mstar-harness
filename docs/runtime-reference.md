@@ -65,6 +65,7 @@ Topic skills, grouped by what they own:
 | `mstar-review-qc` | QC seat orchestration, residual handling |
 | `mstar-coding-behavior` | Implementation discipline, diagnosis, review practice |
 | `mstar-design-md` | DESIGN.md design tokens and the UI plan gate |
+| `mstar-design-system` | Baseline-driven parity: baseline kinds, machine fixtures, layer parity, difference triage |
 | `mstar-compound` / `mstar-compound-refresh` | Knowledge crystallisation and maintenance |
 | `mstar-strategy` | `STRATEGY.md` direction |
 | `mstar-skill-authoring` | Skill authoring gate |

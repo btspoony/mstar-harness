@@ -104,6 +104,7 @@ PM 在 Assignment 写 **`Task category`**（主类 + 可选 `secondary`）：
 | `mstar-artifacts` | 主 plan、review bundle / durable summaries、store.db root register/plan 行与 issue severity/lifecycle、notes.jsonl ledger、knowledge；root/snapshot 文件仅迁移源/历史，project register 仅迁移历史 |
 | `mstar-project-governance` | 项目 roadmap 的 store 内容权威（Direction 正文 + 结构化 milestone）与读写/导入/导出规则（legacy `roadmap.md` 仅 transport/history）；issue capture、迁移 register、`_default` 项目归属 |
 | `mstar-design-md` | DESIGN.md 设计系统规范 —— 创建/审计/维护 design tokens，三级检查清单，light/dark 双主题 |
+| `mstar-design-system` | 收敛既有 baseline 的方法 —— baseline 定位与机器化、结构/外观/行为三层 parity、defect/decision/phantom 分诊、coverage 证据（契约本体仍属 `mstar-design-md`） |
 | `mstar-review-qc` | PM：QC tri 编排、residual 留档、四层边界；leaf 执行 → `mstar-roles/references/qc-specialist/` |
 | `mstar-coding-behavior` | Requirement-first simplicity, surgical diagnosis/review, agent-facing interfaces, and scoped evidence |
 | `mstar-compound` | 知识结晶 —— 已解决问题→结构化知识文档，双轨（Bug/Knowledge），「是否值得结晶」自检清单，重叠检测，可发现性检查，CONCEPTS.md 协同 |
