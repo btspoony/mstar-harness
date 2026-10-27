@@ -28,6 +28,8 @@ export type ShellChrome = {
   footer: string;
   /** `1224 store revision` — the projection generation the read was served at. */
   storeRevision: (generation: number) => string;
+  /** The footer's leading open-issue count. */
+  openIssueCount: (n: number) => string;
 };
 
 /** Every string the shell itself shows, read from one dictionary. */
@@ -37,6 +39,7 @@ export function shellChrome(copy: Copy): ShellChrome {
     skipLink: copy.shell.skipLink,
     footer: copy.shell.footer,
     storeRevision: copy.shell.storeRevision,
+    openIssueCount: copy.shell.openIssueCount,
   };
 }
 

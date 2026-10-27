@@ -38,7 +38,9 @@
 // panels — two of the six §8.1 removed and the prototype keeps. The remaining four are
 // larger still (two tables and an event log), so this raise is sized for them rather than
 // for what is here now.
-export const JS_CEILING = 340 * 1024;
+// 344 KB: the footer gained the open-issue count the prototype leads with, which needs the
+// shell to reach the overview's residual total.
+export const JS_CEILING = 344 * 1024;
 // Raised, 60 KB to 100 KB: the product's component styles are now generated from the
 // approved prototype and shipped whole (values unchanged, selectors scoped, queries
 // unnamed) instead of being re-typed one screen at a time. Re-typing is exactly what

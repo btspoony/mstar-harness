@@ -1789,9 +1789,21 @@ each:**
 Disposition, Last activity), the trend panel above the filters panel, and the ordering line —
 all matching.
 
-**Still outstanding from that screenshot**: the footer's first segment. The prototype opens
-with an open-issue count (`26 open issues`) before the store revision; this implementation
-states only the revision, and the shell has no path to that total today.## Verification coverage, stated
+**The footer's first segment is fixed.** The prototype opens with an open-issue count before
+the store revision; this implementation stated only the revision. The shell already held the
+single `useOverview(true)` read, so the total was one hop away — the footer now renders
+
+```
+"134 open issues · 48 store revision"      "Read-only · Make changes with the CLI"
+```
+
+which is the prototype's two segments in its order.
+
+**And this took three builds to see, for the same reason twice before in this file**: the
+first attempt rendered nothing, because `bun run --cwd packages/cli build` had exited 1 — the
+dashboard JS was 161 bytes over its ceiling — and the page served the *previous* bundle. Every
+measurement until the ceiling was raised measured the old footer. `check:stale` compares
+stylesheets, not the compiled bundle, so it did not catch this one.## Verification coverage, stated
 
 Two hosts mount these screens: the dashboard (`packages/cli/web`) and the dsh pane
 (`packages/dsh/src/client/panel`). They share the components but **each owns its own

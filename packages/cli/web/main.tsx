@@ -745,6 +745,9 @@ function Shell(props: {
   // The footer states the store revision the read was served at, as the prototype does.
   const shellOutcome = useOverview(true);
   const revision = shellOutcome.kind === "ready" ? shellOutcome.revision : null;
+  // The prototype's footer opens with the open-issue count, then the store revision.
+  const residuals = shellOutcome.kind === "ready" ? shellOutcome.model.residuals : null;
+  const openIssues = residuals !== null && residuals.kind === "populated" ? residuals.value.total : null;
   const projectIds = projects.kind === "ready" ? projectOptions(projects.model) : [];
 
   useEffect(() => {
@@ -888,8 +891,13 @@ function Shell(props: {
         ) : null}
       </main>
       <footer className="app-footer">
-        <span data-ms-store-revision={revision === null ? undefined : revision}>
-          {revision === null ? null : chrome.storeRevision(revision)}
+        {/* Two segments, as the prototype has them: the count and the revision on the
+            left, the read-only note on the right. */}
+        <span>
+          {openIssues === null ? null : `${chrome.openIssueCount(openIssues)} · `}
+          <span data-ms-store-revision={revision === null ? undefined : revision}>
+            {revision === null ? null : chrome.storeRevision(revision)}
+          </span>
         </span>
         <span>{chrome.footer}</span>
       </footer>

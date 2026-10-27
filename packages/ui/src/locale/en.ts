@@ -65,6 +65,7 @@ export const en = {
     },
     skipLink: "Skip to content",
     footer: "Read-only · Make changes with the CLI",
+    openIssueCount: (n: number): string => `${n} open ${n === 1 ? "issue" : "issues"}`,
     storeRevision: (n: number) => `${n} store revision`,
     theme: { label: "Colour scheme", light: "Light", dark: "Dark" },
     scope: { label: "Project scope", all: "All projects" },
