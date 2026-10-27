@@ -192,7 +192,12 @@ function OverviewDestination(props: { query: string; outcome: OverviewOutcome })
         ...(document.documentElement.dataset.harnessDir === undefined ? {} : { harnessDir: document.documentElement.dataset.harnessDir }),
       }}
       onOpenWorkflow={(id) => navigate({ name: "workflow", id }, props.query, "push")}
-      onOpenIssues={() => navigate({ name: "issues" }, props.query, "push")}
+      onOpenIssues={(severity) => {
+        // The residual row names a severity; the destination has to carry it, or the
+        // link lands on the unfiltered list it was counted from.
+        const filtered: IssueQuery = { ...DEFAULT_ISSUES, filters: { ...DEFAULT_ISSUES.filters, severity } };
+        navigate({ name: "issues" }, issueQueryString(filtered), "push");
+      }}
     />
   );
 }
@@ -282,7 +287,9 @@ function IssueListScreen(props: {
   useEffect(() => {
     const controller = new AbortController();
     let current = true;
-    void readOverview(fetch, controller.signal).then((result) => {
+    // The trend is the same series the overview draws; a project's tab must read the
+    // project's flow, not every project's.
+    void readOverview(fetch, controller.signal, props.scope ?? undefined).then((result) => {
       if (!current || result.status !== "ready") return;
       const flow = overviewOutcome(result);
       if (flow.kind === "ready" && flow.model.issueFlow.kind === "populated") {
@@ -293,7 +300,7 @@ function IssueListScreen(props: {
       current = false;
       controller.abort();
     };
-  }, []);
+  }, [props.scope]);
   if (outcome.kind === "loading") return null;
   if (outcome.kind === "failed") {
     return (
@@ -669,16 +676,24 @@ function ProjectDetailDestination(props: { address: Address; feature: ProjectFea
   const [outcome, setOutcome] = useState<RoadmapOutcome>({ kind: "loading" });
   const [identity, setIdentity] = useState<{ title: string; description: string | null } | null>(null);
   /**
-   * The project's issue read, made here rather than inside the tab. A tab count has to be
-   * known *before* the reader opens that tab, and the list only mounts inside it — so the
-   * read has to live above both. The list gets this same outcome, so the count and the
-   * table can never disagree.
+   * The list's read follows the address bar: a filter change navigates, the route
+   * re-derives this query, and the rows read from it. A read frozen to the defaults
+   * left every control inert while still painting its own value.
    */
+  const query: IssueQuery = routeFilters(props.address);
   const scopedIssues: IssuesOutcome = useIssues(
+    { ...query, filters: { ...query.filters, project: projectId } },
+    projectId !== "",
+  );
+  /**
+   * The project's size for the tab and head: the default `open` read over the whole
+   * project, independent of the list's current filters.
+   */
+  const countIssues = useIssues(
     { ...DEFAULT_ISSUES, filters: { ...DEFAULT_ISSUES.filters, project: projectId } },
     projectId !== "",
   );
-  const issuesCount = scopedIssues.kind === "ready" ? scopedIssues.model.total : undefined;
+  const issuesCount = countIssues.kind === "ready" ? countIssues.model.total : undefined;
   /**
    * The same for iterations: read here so the tab can state its count before that tab is
    * opened, and handed to the list so both read the same envelope.
@@ -736,9 +751,9 @@ function ProjectDetailDestination(props: { address: Address; feature: ProjectFea
       roadmap={outcome.roadmap}
       issues={
         <IssueListScreen
-          // The route carries the feature's own filter state; the page supplies only
-          // the scope. A frozen query with an empty callback made every control inert.
-          query={props.address.query === "" ? DEFAULT_ISSUES : routeFilters({ route: props.address.route, query: props.address.query })}
+          // The route carries the feature's own filter state; the table reads it, not
+          // the default query those controls started from.
+          query={query}
           projectIds={props.projectIds}
           scope={projectId}
           onQueryChange={(next) => {
@@ -802,13 +817,27 @@ function Shell(props: {
   const copy = useCopy();
   const projects = useProjects();
   const projectIds = projects.kind === "ready" ? projectOptions(projects.model) : [];
-  // The footer states the store revision the read was served at, as the prototype does; the
-  // overview's milestone and iteration panels are one project's, so this read names the first
-  // the store holds — the prototype's `All projects` head with `engine` on those panels.
-  const shellOutcome = useOverview(true, projectIds[0]);
-  const revision = shellOutcome.kind === "ready" ? shellOutcome.revision : null;
+  // Two reads with two scopes. The page head says `All projects` and its issue flow and
+  // residuals cover the store, while the milestone and latest-iteration panels are one
+  // project's (the prototype names that project on the panel). One scoped read for both
+  // made the flow and the footer count only the first project.
+  const storeOutcome = useOverview(true);
+  const projectOutcome = useOverview(projectIds[0] !== undefined, projectIds[0]);
+  const pageOutcome: OverviewOutcome =
+    storeOutcome.kind === "ready" && projectOutcome.kind === "ready"
+      ? {
+          ...storeOutcome,
+          model: {
+            ...storeOutcome.model,
+            milestones: projectOutcome.model.milestones,
+            milestoneProject: projectOutcome.model.milestoneProject,
+            latestIteration: projectOutcome.model.latestIteration,
+          },
+        }
+      : storeOutcome;
+  const revision = storeOutcome.kind === "ready" ? storeOutcome.revision : null;
   // The prototype's footer opens with the open-issue count, then the store revision.
-  const residuals = shellOutcome.kind === "ready" ? shellOutcome.model.residuals : null;
+  const residuals = storeOutcome.kind === "ready" ? storeOutcome.model.residuals : null;
   const openIssues = residuals !== null && residuals.kind === "populated" ? residuals.value.total : null;
 
   useEffect(() => {
@@ -933,7 +962,7 @@ function Shell(props: {
         ref={mainRef}
         data-ms-route={routeHash(address.route)}
       >
-        {address.route.name === "overview" ? <OverviewDestination query={address.query} outcome={shellOutcome} /> : null}
+        {address.route.name === "overview" ? <OverviewDestination query={address.query} outcome={pageOutcome} /> : null}
         {address.route.name === "issues" ? <IssuesDestination address={address} projectIds={projectIds} /> : null}
         {address.route.name === "issue" ? <IssueDetailDestination id={address.route.id} /> : null}
         {address.route.name === "workflows" ? <WorkflowsDestination address={address} /> : null}

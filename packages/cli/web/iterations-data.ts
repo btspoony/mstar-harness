@@ -18,7 +18,7 @@
  */
 import type { IterationDTO, IterationListDTO, ReadEnvelope } from "@mstar-harness/engine";
 
-import { UNREACHABLE, asEnvelope, refusalMessage } from "./read-envelope";
+import { UNREACHABLE, asEnvelope, readAllListPages, refusalMessage } from "./read-envelope";
 import {
   iterationDetailModel,
   iterationListModel,
@@ -34,8 +34,10 @@ import {
 import { ABSENT_PROJECTION } from "./absent-projection";
 
 /** Where the pair answers. `project` scopes the list; the host supplies it. */
-export function iterationsPath(projectId: string | null): string {
-  return projectId === null ? "/api/iterations" : `/api/iterations?project=${encodeURIComponent(projectId)}`;
+export function iterationsPath(projectId: string | null, offset = 0): string {
+  const params = new URLSearchParams({ limit: "200", offset: String(offset) });
+  if (projectId !== null) params.set("project", projectId);
+  return `/api/iterations?${params.toString()}`;
 }
 
 export function iterationDetailPath(id: string): string {
@@ -85,21 +87,11 @@ export async function readIterations(
 ): Promise<
   { status: "ready"; envelope: ReadEnvelope<IterationListDTO> } | { status: "error"; message: string }
 > {
-  try {
-    const response = await fetchImpl(iterationsPath(projectId), {
-      headers: { accept: "application/json" },
-      ...(signal === undefined ? {} : { signal }),
-    });
-    const body: unknown = await response.json().catch(() => null);
-    if (!response.ok) return { status: "error", message: refusalMessage(body, response.status) };
-    const envelope = asEnvelope<IterationListDTO>(body);
-    if (envelope === null) {
-      return { status: "error", message: "The iteration list answered with something that is not a read envelope." };
-    }
-    return { status: "ready", envelope };
-  } catch {
-    return { status: "error", message: UNREACHABLE };
-  }
+  return readAllListPages<IterationListDTO>(
+    fetchImpl,
+    (offset) => iterationsPath(projectId, offset),
+    signal,
+  );
 }
 
 /** One record read. A `null` payload stays inside its envelope for the model to judge. */

@@ -17,7 +17,7 @@
  */
 import type { ReadEnvelope, WorkflowDTO, WorkflowListDTO } from "@mstar-harness/engine";
 
-import { UNREACHABLE, asEnvelope, refusalMessage } from "./read-envelope";
+import { UNREACHABLE, asEnvelope, readAllListPages, refusalMessage } from "./read-envelope";
 
 import { ABSENT_PROJECTION } from "./absent-projection";
 import {
@@ -68,24 +68,16 @@ export type WorkflowDetailOutcome =
   | { kind: "ready"; model: Resolved<WorkflowDetailModel> }
   | { kind: "failed"; message: string };
 
-/** One list read. */
+/** One list read: every page, so the screen's local search sees the whole list. */
 export async function readWorkflows(
   fetchImpl: typeof fetch,
   signal?: AbortSignal,
 ): Promise<{ status: "ready"; envelope: ReadEnvelope<WorkflowListDTO> } | { status: "error"; message: string }> {
-  try {
-    const response = await fetchImpl(WORKFLOWS_PATH, {
-      headers: { accept: "application/json" },
-      ...(signal === undefined ? {} : { signal }),
-    });
-    const body: unknown = await response.json().catch(() => null);
-    if (!response.ok) return { status: "error", message: refusalMessage(body, response.status) };
-    const envelope = asEnvelope<WorkflowListDTO>(body);
-    if (envelope === null) return { status: "error", message: "The workflow list answered with something that is not a read envelope." };
-    return { status: "ready", envelope };
-  } catch {
-    return { status: "error", message: UNREACHABLE };
-  }
+  return readAllListPages<WorkflowListDTO>(
+    fetchImpl,
+    (offset) => `${WORKFLOWS_PATH}?limit=200&offset=${offset}`,
+    signal,
+  );
 }
 
 /**

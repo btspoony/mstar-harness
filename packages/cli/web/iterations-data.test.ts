@@ -82,9 +82,10 @@ const renderList = (
 };
 
 describe("the list read", () => {
-  test("the path scopes by project, and only when the route owns a project", () => {
-    expect(iterationsPath(null)).toBe("/api/iterations");
-    expect(iterationsPath("engine")).toBe("/api/iterations?project=engine");
+  test("the path scopes by project and pages, so the list's filters see every row", () => {
+    expect(iterationsPath(null)).toBe("/api/iterations?limit=200&offset=0");
+    expect(iterationsPath("engine")).toBe("/api/iterations?limit=200&offset=0&project=engine");
+    expect(iterationsPath("engine", 200)).toBe("/api/iterations?limit=200&offset=200&project=engine");
     expect(iterationDetailPath("iter/1")).toBe("/api/iterations/iter%2F1");
   });
 

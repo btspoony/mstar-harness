@@ -144,6 +144,11 @@ const PROBE = `(() => {
   const header = document.querySelector('header.app-header');
   const h1 = document.querySelector('[data-ms-screen] h1');
   const summaryEl = document.querySelector('[data-ms-summary]');
+  // The overview's plan table is the workflow panel's own child, not part of
+  // `.wf-summary` (the prototype has three siblings: summary, branch line, table). Scope by
+  // the panel's accessible name, which is the stable marker across that move.
+  const ovWorkflow = document.querySelector('[aria-labelledby="ms-overview-workflows"]');
+  const ovWorkflowMeta = ovWorkflow === null ? null : ovWorkflow.querySelector('[data-ms-panel-meta]');
   const centreY = (el) => (el === null ? null : el.getBoundingClientRect().top + el.getBoundingClientRect().height / 2);
   const band = {
     contentWidth: contentWidth === null ? null : Math.round(contentWidth * 10) / 10,
@@ -166,33 +171,30 @@ const PROBE = `(() => {
     })(),
     flowPaths: document.querySelectorAll('[data-ms-flow-chart] path').length,
     // The workflow panel's plan table: its columns, its rows, and the header facts.
-    planColumns: [...document.querySelectorAll('[data-ms-overview-workflow] table thead th')].map((th) => th.getAttribute('data-ms-col-key')),
-    planRows: document.querySelectorAll('[data-ms-overview-workflow] table tbody tr').length,
-    planRowKeys: [...document.querySelectorAll('[data-ms-overview-workflow] table tbody tr')].map((tr) => tr.getAttribute('data-ms-row-key')),
-    planRowHeights: [...document.querySelectorAll('[data-ms-overview-workflow] table tbody tr')].map((tr) => Math.round(tr.getBoundingClientRect().height * 10) / 10),
+    planColumns: [...(ovWorkflow === null ? [] : ovWorkflow.querySelectorAll('table thead th'))].map((th) => th.getAttribute('data-ms-col-key')),
+    planRows: ovWorkflow === null ? 0 : ovWorkflow.querySelectorAll('table tbody tr').length,
+    planRowKeys: [...(ovWorkflow === null ? [] : ovWorkflow.querySelectorAll('table tbody tr'))].map((tr) => tr.getAttribute('data-ms-row-key')),
+    planRowHeights: [...(ovWorkflow === null ? [] : ovWorkflow.querySelectorAll('table tbody tr'))].map((tr) => Math.round(tr.getBoundingClientRect().height * 10) / 10),
     planTitleWidth: (() => {
-      const th = document.querySelector('[data-ms-overview-workflow] table th[data-ms-col-key="title"]');
+      const th = ovWorkflow === null ? null : ovWorkflow.querySelector('table th[data-ms-col-key="title"]');
       return th === null ? null : Math.round(th.getBoundingClientRect().width * 10) / 10;
     })(),
     planTableWidth: (() => {
-      const table = document.querySelector('[data-ms-overview-workflow] table');
+      const table = ovWorkflow === null ? null : ovWorkflow.querySelector('table');
       return table === null ? null : Math.round(table.getBoundingClientRect().width * 10) / 10;
     })(),
     planTableVisibleColumns: (() => {
-      const ths = [...document.querySelectorAll('[data-ms-overview-workflow] table thead th')];
+      const ths = [...(ovWorkflow === null ? [] : ovWorkflow.querySelectorAll('table thead th'))];
       return ths.filter((th) => getComputedStyle(th).display !== "none").length;
     })(),
     rowHeight: getComputedStyle(document.documentElement).getPropertyValue("--ms-row-h").trim(),
     workflowMetaCount: (() => {
-      const meta = document.querySelector('[data-ms-workflow-meta]');
-      return meta === null ? null : meta.getAttribute('data-ms-workflow-meta');
+      const count = ovWorkflowMeta === null ? null : ovWorkflowMeta.querySelector('.num');
+      return count === null ? null : (count.textContent ?? "").trim();
     })(),
-    workflowMeta: (() => {
-      const meta = document.querySelector('[data-ms-workflow-meta]');
-      return meta === null ? null : (meta.textContent ?? "").trim();
-    })(),
+    workflowMeta: ovWorkflowMeta === null ? null : (ovWorkflowMeta.textContent ?? "").trim(),
     branchAnchors: document.querySelectorAll('[data-ms-branch] > span:not([aria-hidden])').length,
-    planProgressBars: document.querySelectorAll('[data-ms-overview-workflow] table [role="progressbar"]').length,
+    planProgressBars: ovWorkflow === null ? 0 : ovWorkflow.querySelectorAll('table [role="progressbar"]').length,
     flowRows: document.querySelectorAll('[data-ms-flow] details tbody tr').length,
     flowAxis: [...document.querySelectorAll('[data-ms-flow] [class*="axis"] span')].map((el) => (el.textContent ?? '').trim()),
     narrowestCell: cellWidths.length === 0 ? null : Math.min(...cellWidths),
