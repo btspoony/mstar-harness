@@ -22,7 +22,7 @@ In scope: an authority already exists and an implementation has to be converged 
 |--------------|------------------|
 | Designing a system where no baseline exists | not this skill — decide the contract first |
 | `DESIGN.md` sections, token naming, completeness levels, light/dark rules | `mstar-design-md` |
-| Prototype-vs-document authority and its one-directional sync | `mstar-design-md` (this skill applies the rule, never restates it) |
+| Prototype-vs-document authority and its one-directional sync | `mstar-design-md` § Prototype vs document — read it there; this skill only applies it |
 | The comparators, CI jobs, and generators of a specific repository | that repository's own checks |
 
 ## Workflow
@@ -31,14 +31,14 @@ In scope: an authority already exists and an implementation has to be converged 
 2. **Machine** — derive what can be derived instead of typing it: fixture, snapshot, extraction. Record the regeneration command *and* its check mode in the same place.
 3. **Parity** — compare per layer: structure, appearance, behaviour. Every finding carries the count it was measured on; a probe that matched nothing says so instead of reporting zero defects.
 4. **Triage** — classify every difference as defect, decision, or phantom. A decision is written into the contract document with its reason, never silently into the implementation.
-5. **Close** — change the implementation or amend the baseline. Never hand-edit the generated fixture, never sync `document → baseline`; rerun the generator and bring the prose in line afterwards.
-6. **Evidence** — report the classified list, the coverage statement (compared vs skipped), and the strict-mode run.
+5. **Close** — change the implementation, or amend the baseline when triage recorded a decision. The fixture is regenerated, never hand-edited.
+6. **Evidence** — return what `## Evidence` below describes; a verdict without its counts is not one.
 
 ## Decision Rules
 
 1. **A baseline that is not in the repository is not a baseline.** Tracked, redacted, and read by the comparators. A baseline in a chat transcript, a screenshot, or a gitignored working directory cannot be converged onto — convert it into a tracked file first, or state that the round has no baseline.
 2. **A baseline that no CI job reads is also not a baseline.** Committing closes one of three links: committed → every comparator points at it and strict mode is the default → a CI job actually calls it. Never declare a check live before all three close; a fixture only a human runs is documentation.
-3. **Generated artifacts are never hand-edited.** Edit the source, rerun the generator, then bring the prose in line — one direction only: `baseline → fixture → document`.
+3. **Generated artifacts are never hand-edited.** Edit the source, rerun the generator, then bring the prose in line. Which artifact wins and which direction the sync runs is `mstar-design-md`'s rule — this skill applies it, it does not restate it.
 4. **Do not invent the baseline.** No rounding a source value, no adding a component the source does not define, no drawing an asset it does not ship, no inference from an unreadable source. Silence in the baseline is a decision, recorded with its reason.
 5. **A check that cannot say what it covered did not pass.** Empty probe ≠ zero overflow. Every verdict names the count it compared — **including the failure path**: "baseline missing" must also state how much was owed, or it reads as a pass at exit 0.
 

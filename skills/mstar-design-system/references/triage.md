@@ -46,10 +46,11 @@ opening a finding; extend it when a new phantom class is found.
 | **Localized heading** | copy, casing, or line breaking differs from the baseline | the baseline is in one language, the implementation in another; the unit and its placement are identical | compare the unit's role and position, not its text |
 | **Breadcrumb depth** | a navigation element is present in one side only | the baseline was captured at one route depth, so an ancestor trail exists on one side | check the baseline's captured route before treating it as a missing component |
 
-The shared lesson: **every phantom in this catalogue came from reading a thumbnail, not the source,
-and was overturned by one `grep`.** A finding opened from a render — screenshot, preview, exported
-image — is a hypothesis until the tracked source confirms it. Cheap check first: search the baseline
-for the unit, then search the implementation for the value.
+The shared lesson: **every phantom in this catalogue was opened from a render — a thumbnail, a
+preview, an exported image — not from the tracked source, and was settled by checking the source.**
+For the first and third entry that check is a `grep`; for the localized-heading entry it is reading
+the unit's role and position, because the text legitimately differs. A finding opened from a render
+is a hypothesis until the tracked source settles it.
 
 ## What a phantom is not
 
