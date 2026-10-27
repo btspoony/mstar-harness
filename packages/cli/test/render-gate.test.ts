@@ -647,7 +647,11 @@ describe.skipIf(!browserAvailable)("the render gate", () => {
   const FLOOR_SAMPLE = (sample: { floor?: number }): boolean => sample.floor !== undefined;
 
   const BANDS = [
-    { width: 760, collapse: false, scrolls: false },
+    // 760 does not pin one answer either: the prototype's workflow table declares 962px of
+    // fixed columns (`design-v1.html:1543`), iterations 830px (`:1752`), projects 720px, so
+    // at this width those three overflow their card while the two wide screens do not. The
+    // collapse contract — which is what this band is for — is asserted with `collapse: false`.
+    { width: 760, collapse: false },
     // 620 is above the collapse floor and below the declared-width floor. Whether a
     // given list overflows there is a function of its own declared widths (the issues
     // table still does; the projects table no longer needs to), so the band does not
