@@ -2610,11 +2610,25 @@ than remove it: **different from the prototype, and arguably better for a reader
 **Fixed**: `status` is `secondary` now. Measured after — 1440 keeps its six columns, 375 shows
 two (`Workflow`, `Catalog title`), which is the prototype's `data-narrow-cols="2"`.
 
-**The mechanism matches too.** The first fix marked the column `secondary`, which *moves* a
-fact to the row's `meta` line rather than hiding it — the prototype's narrow rows have no second
-line at all, so that was a deviation dressed as a fix. `wide` is the right contract: hidden
-outright below the floor, no second line restating it. The column's own comment says which and
-why.
+**It took three attempts, and the first two were wrong in opposite directions.**
+
+1. `secondary` — I judged it wrong because `secondary` "moves the fact to a second line".
+   Measured at 800 it was right; I had verified only 1440 and 375.
+2. `wide` — its rule fires at **899px**, so 800 lost the column while the prototype still
+   showed six. Verified at 1440 and 375 only, again.
+3. `secondary`, again — with all six widths measured:
+
+| Width | 1440 | 1000 | 900 | 800 | 720 | 375 |
+| --- | --- | --- | --- | --- | --- | --- |
+| The prototype | 6 | — | — | 6 | — | 2 |
+| This build | 6 | 6 | 6 | 6 | 6 | 2 |
+
+`secondary` drops the column out of `primaryCount`, so the table declares
+`data-narrow-cols="2"` and the prototype's own `nth-child(n+3)` rule hides it at
+`@container (max-width: 619px)` — the breakpoint I never read until the third attempt.
+
+**Two "fixed" claims came from checking two widths.** The middle of the range is where these
+mechanisms differ, and it is the part a 1440/375 pair cannot see.
 
 **So this screen now behaves as the prototype's does, including where a reader on a phone
 loses the status.** That is the acceptance criterion, and it is worth stating plainly rather

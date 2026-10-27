@@ -128,11 +128,12 @@ export function Workflows(props: WorkflowsProps) {
       key: "status",
       header: copy.columns.status,
       width: "200px",
-      // The prototype's narrow set is two columns (`data-narrow-cols="2"`) and it HIDES the
-      // rest, which is `wide`, not `secondary`: a `secondary` column moves its fact to the
-      // row's `meta` line, and the prototype's narrow rows carry no second line at all. The
-      // status is then only on the workflow's own screen — the prototype's trade, copied.
-      wide: true,
+      // The prototype's narrow set is two columns (`data-narrow-cols="2"`, hiding from
+      // `nth-child(3)` under `@container (max-width: 619px)`). `secondary` is that
+      // contract: it drops out of `primaryCount`, so the table declares `2`, and the
+      // `nth-child(n+3)` rule hides it at exactly the prototype's breakpoint. `wide` was
+      // wrong — its rule fires at 899px, and the prototype still shows six columns at 800.
+      secondary: true,
       render: (row) => (
         <span>
           <StatusDot label={row.status} tone={row.statusTone} mono />
