@@ -314,7 +314,7 @@ export const zh: Copy = {
       notStarted: "未开始",
       noCatalog: "无目录记录",
     },
-    planColumns: { planId: "计划", title: "标题", status: "状态", pin: "固定版本", progress: "进展", doneAt: "完成时间" },
+    planColumns: { planId: "计划", title: "标题", status: "状态", pin: "固定版本", progress: "进展", doneAt: "完成于" },
     planProgressAbsent: "没有记录进展。",
     executionUnavailableLead: "执行信息不可读",
     absence: {
@@ -355,7 +355,7 @@ export const zh: Copy = {
     tableCaption: "迭代",
     columns: {
       id: "迭代",
-      title: "标题",
+      title: "目录标题",
       lifecycle: "生命周期",
       execution: "投影执行",
       delivery: "交付",
@@ -416,7 +416,7 @@ export const zh: Copy = {
       "merge-ready": "可合并",
     },
     gateNoCompass: "交付",
-    planColumns: { planId: "计划", title: "标题", status: "状态", progress: "进展", doneAt: "完成时间" },
+    planColumns: { planId: "计划", title: "标题", status: "状态", progress: "进展", doneAt: "完成于" },
     planProgressAbsent: "没有记录进展。",
   },
 

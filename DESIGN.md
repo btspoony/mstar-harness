@@ -2162,7 +2162,33 @@ them does not, and that is a rendering change plus one new field, not a data gap
 
 **The project detail's fourth segment is not a gap**: the code renders it whenever the record
 has an open-issue count, and `_default` has none. The prototype's screenshot happens to be a
-project that does.## Verification coverage, stated
+project that does.## The exhaustive label diff, and what it left
+
+Nine screens, both sides, every heading, panel title, column header, button, chip and meta
+segment — exported as text in one pass and compared, rather than screen by screen.
+
+**Fixed from it:**
+
+- `iterations`' first column reads `Catalog title`, not `Title` — and the whole header row is
+  now `Iteration · Catalog title · Lifecycle · Projected execution · Plans · Documents`,
+  matching the prototype column for column
+- the plan tables' last dated column reads `Done at`, not `Completed`
+
+**What the diff still reports, and why none of it is a styling gap:**
+
+| Reported | Why it is not a gap |
+| --- | --- |
+| `26 open…` against `134open…`, `4 workflows` against `5 workflows`, dates, ids, titles | the two sides render different data |
+| `plan·running` against `plan · running` | `.detail-meta` has `gap: 6px`; `textContent` has no separator. Measured, not assumed |
+| `Date / Captured (cumulative) / …` only on this side | these are the chart's `aria` table headers inside `<details>`; the prototype's chart carries no table |
+| `Previous / Next` only on this side | the prototype's list is a fixture of 26 rows; this store pages |
+| `engine` / `Open project` / `active` / `Open iteration` only there | the prototype's overview links to a project and an iteration; those are per-row data here |
+| `phase-1-direction`, `Pin rev 3`, `2 active · exclusive` | one record's fields, absent on the other record |
+
+**What it found that is real and remains**: the workflow detail's `Pin rev 3` chip is on the
+Catalog head — measured working on the one record that pins something — and the Leases table
+renders only for a workflow that holds leases. Both are already implemented; this store has
+one pining record and no leased workflow.## Verification coverage, stated
 
 Two hosts mount these screens: the dashboard (`packages/cli/web`) and the dsh pane
 (`packages/dsh/src/client/panel`). They share the components but **each owns its own

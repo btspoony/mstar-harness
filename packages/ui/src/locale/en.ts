@@ -340,7 +340,7 @@ export const en = {
       notStarted: "Not started",
       noCatalog: "No catalog row",
     },
-    planColumns: { planId: "Plan", title: "Title", status: "Status", pin: "Pin", progress: "Progress", doneAt: "Completed" },
+    planColumns: { planId: "Plan", title: "Title", status: "Status", pin: "Pin", progress: "Progress", doneAt: "Done at" },
     planProgressAbsent: "Records no progress.",
     executionUnavailableLead: "Execution unavailable",
     absence: {
@@ -381,7 +381,7 @@ export const en = {
     tableCaption: "Iterations",
     columns: {
       id: "Iteration",
-      title: "Title",
+      title: "Catalog title",
       lifecycle: "Lifecycle",
       execution: "Projected execution",
       delivery: "Delivery",
@@ -444,7 +444,7 @@ export const en = {
       "merge-ready": "Merge ready",
     },
     gateNoCompass: "Delivery",
-    planColumns: { planId: "Plan", title: "Title", status: "Status", progress: "Progress", doneAt: "Completed" },
+    planColumns: { planId: "Plan", title: "Title", status: "Status", progress: "Progress", doneAt: "Done at" },
     planProgressAbsent: "Records no progress.",
   },
 
