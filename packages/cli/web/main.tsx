@@ -137,14 +137,14 @@ function navigate(route: Route, query: string, mode: "push" | "replace"): void {
  * unwraps a member or decides an absence — it fetches, hands the envelope over and
  * keeps the three outcomes apart.
  */
-function useOverview(enabled: boolean): OverviewOutcome {
+function useOverview(enabled: boolean, projectId?: string): OverviewOutcome {
   const [outcome, setOutcome] = useState<OverviewOutcome>({ kind: "loading" });
   useEffect(() => {
     if (!enabled) return;
     const controller = new AbortController();
     let current = true;
     setOutcome({ kind: "loading" });
-    void readOverview(fetch, controller.signal).then((result) => {
+    void readOverview(fetch, controller.signal, projectId).then((result) => {
       if (!current) return;
       setOutcome(overviewOutcome(result));
     });
@@ -152,7 +152,7 @@ function useOverview(enabled: boolean): OverviewOutcome {
       current = false;
       controller.abort();
     };
-  }, [enabled]);
+  }, [enabled, projectId]);
   return outcome;
 }
 
@@ -801,13 +801,15 @@ function Shell(props: {
   );
   const copy = useCopy();
   const projects = useProjects();
-  // The footer states the store revision the read was served at, as the prototype does.
-  const shellOutcome = useOverview(true);
+  const projectIds = projects.kind === "ready" ? projectOptions(projects.model) : [];
+  // The footer states the store revision the read was served at, as the prototype does; the
+  // overview's milestone and iteration panels are one project's, so this read names the first
+  // the store holds — the prototype's `All projects` head with `engine` on those panels.
+  const shellOutcome = useOverview(true, projectIds[0]);
   const revision = shellOutcome.kind === "ready" ? shellOutcome.revision : null;
   // The prototype's footer opens with the open-issue count, then the store revision.
   const residuals = shellOutcome.kind === "ready" ? shellOutcome.model.residuals : null;
   const openIssues = residuals !== null && residuals.kind === "populated" ? residuals.value.total : null;
-  const projectIds = projects.kind === "ready" ? projectOptions(projects.model) : [];
 
   useEffect(() => {
     const onHashChange = (): void => {

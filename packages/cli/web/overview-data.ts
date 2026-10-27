@@ -103,12 +103,19 @@ export function overviewOutcome(
 export async function readOverview(
   fetchImpl: typeof fetch,
   signal?: AbortSignal,
+  /**
+   * The project whose milestones and latest iteration the overview shows. The prototype
+   * states `All projects` in its head and still names one project on the Milestones
+   * panel (`engine`), because milestones are a project's, not the store's.
+   */
+  projectId?: string,
 ): Promise<
   | { status: "ready"; envelope: ReadEnvelope<OverviewDTO> }
   | { status: "error"; message: string }
 > {
   try {
-    const response = await fetchImpl(OVERVIEW_PATH, {
+    const path = projectId === undefined ? OVERVIEW_PATH : `${OVERVIEW_PATH}?project=${encodeURIComponent(projectId)}`;
+    const response = await fetchImpl(path, {
       headers: { accept: "application/json" },
       ...(signal === undefined ? {} : { signal }),
     });

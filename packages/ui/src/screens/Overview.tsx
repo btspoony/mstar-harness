@@ -596,11 +596,7 @@ export function Overview(props: OverviewProps) {
           <PanelHead
             id="ms-overview-milestones"
             title={copy.milestonesHeading}
-            meta={
-              model.milestones.kind === "populated" && model.milestoneProject !== null
-                ? model.milestoneProject
-                : undefined
-            }
+            meta={model.milestoneProject === null ? undefined : model.milestoneProject}
           />
           <PanelBody>
           {model.milestones.kind === "populated" ? (

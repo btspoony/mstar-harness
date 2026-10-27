@@ -2451,6 +2451,19 @@ dashboard's own reader in `store-read.ts` had the correlated subquery all along.
 the project the milestones belong to (`engine`), so the DTO carries `projectId` beside the
 five. That is a sixth key, and the contract test now says six.
 
+**And the milestones panel had never rendered its project.** The prototype's overview says
+`All projects` in its head and `engine` on the Milestones panel — milestones are a project's,
+not the store's, so the read names one. This implementation asked for none, the member came
+back `not-applicable`, and the panel showed its absent arm on every load.
+
+The shell now passes the first project the store holds, the read is scoped to it, and the head
+states it: measured `["Milestones", "engine"]`, the prototype's own word.
+
+**Two things this took**: the query parameter is `project`, not `projectId` (the first attempt
+used the wrong name and the API ignored it), and the head states the project whether or not the
+member resolved — a panel with an absent arm still belongs to a project, and the prototype's
+head says which.
+
 **Why this is worth writing down**: the failing test was the only thing that surfaced either
 defect, and it surfaced them *while I was changing something else*. A suite that is green for
 long enough stops being read; the two red rows here were doing their job and nobody had asked
