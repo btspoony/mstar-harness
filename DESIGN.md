@@ -773,12 +773,13 @@ a test. `packages/ui/design-system/snapshot.ts` reads `packages/ui/design-system
 and writes `packages/ui/design-system/snapshot.json`, and `tokens.test.ts` asserts the stylesheet
 against that file.
 
-**Why a derived fixture**: the fixture is committed, so the assertion does not depend on a
-prototype it cannot read — `snapshot.ts` re-derives the values and `check:snapshot` fails when
-the committed file has drifted. The prototype is a tracked file beside the script, and every
-comparator reads it directly: `check:snapshot`, `check:declarations`, `check:selectors` and
-`check:tones` each exit 1 when it is unreadable, naming the path they wanted. They run in CI
-(the `test-ui` job), so none of them can pass without a baseline.
+**Why a derived fixture**: one deriver owns the reading — `snapshot.ts` extracts the numbers and
+`check:snapshot` fails when the committed file has drifted — so `tokens.test.ts` asserts against
+the fixture instead of carrying a second HTML parser that could disagree with it. The prototype is
+a tracked file beside the script, and every comparator reads it directly: `check:snapshot`,
+`check:declarations`, `check:selectors` and `check:tones` each exit 1 when it is unreadable,
+naming the path they wanted. They run in CI (the `test-ui` job), so none of them can pass without
+a baseline.
 
 **What it caught the first time it ran**: `base.css` said `padding: 14px 20px 24px` and
 `tokens.test.ts` asserted that same `24px`, while the prototype says `16px`. The test was
@@ -1525,9 +1526,9 @@ to `accent` with them.
 
 **The comparison is now two things a future round can run**, because one run is not a habit:
 
-- `bun run --cwd packages/ui check:tones` diffs the whole table against the prototype's own
-  rules. It needs the prototype file, which is gitignored, so it exits 0 with a notice when
-  absent — a development check, not a CI gate.
+- `bun run --cwd packages/ui check:tones` diffs the whole table against the tracked
+  `design-system/prototype.html`. When it cannot read that file it exits 1 naming the path;
+  the `test-ui` CI job runs it.
 - `src/view-model/status.test.ts` pins the same table as expectations, with the prototype's
   rule quoted beside each one. This one CI runs, and it has to be argued with to change.
 
