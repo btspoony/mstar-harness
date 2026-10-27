@@ -120,6 +120,9 @@ describe("enum values, ids, paths and timestamps stay literal", () => {
     const COUNTER_LABELS = new Set([
       "projectDetail.roadmap.countLabels.open",
       "projectDetail.roadmap.countLabels.resolved",
+      // The prototype's overview plan table heads its completion column with the status
+      // word itself: `Done`, not `Completed`.
+      "overview.planColumns.done",
     ]);
     for (const [locale, tree] of [["en", enLeaves], ["zh", zhLeaves]] as const) {
       const offenders = Object.entries(tree)

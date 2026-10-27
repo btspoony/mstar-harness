@@ -2091,7 +2091,32 @@ command and settled it.
 **And the ceiling bit again.** The build failed on `352268B` against `352256B` — twelve bytes
 over — so the first measurement of the new meta line was of the *previous* bundle and read
 `highopen`. Fourth time. The budget is now 348 KB with a comment saying that it is the
-tightest thing in the build and that it has silently reverted measurement work four times.## Verification coverage, stated
+tightest thing in the build and that it has silently reverted measurement work four times.## Labels, compared as text
+
+The chrome sweep found missing *segments*. This sweep compared the labels themselves: every
+heading, panel title, column header, button and chip on both sides, as text, in `en`.
+
+**Two labels were wrong and are fixed:**
+
+| | The prototype | Before |
+| --- | --- | --- |
+| the overview plan table's completion column | `Done` | `Completed` |
+| the residuals panel's title | `Open residual issues` | `Open residuals` |
+
+`Done` is also a status enum value, which this codebase's locale test forbids as a label —
+that rule exists to stop a translated enum leaking into the UI. It has a narrow exception now,
+with the prototype's own heading as the reason.
+
+**Two differences that are deliberate, and neither is fixed:**
+
+- The residuals panel's meta reads `134 open · all projects` here and `by severity` there.
+  The prototype's version says how the panel is grouped; this implementation's says what it
+  covers. Both are true; the prototype's is the one to copy if parity wins over information.
+- The overview head's third segment is a read timestamp (`… · 13:58:04`). **No read timestamp
+  reaches this screen** — the model carries none — so it is absent rather than invented.
+
+**One difference that is data**: `1 plan · running` against `7 plans · running` is this store's
+plan count, not a label.## Verification coverage, stated
 
 Two hosts mount these screens: the dashboard (`packages/cli/web`) and the dsh pane
 (`packages/dsh/src/client/panel`). They share the components but **each owns its own

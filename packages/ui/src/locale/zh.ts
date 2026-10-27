@@ -107,7 +107,7 @@ export const zh: Copy = {
       open: "未解决差额",
       origin: "来源",
     },
-    planColumns: { plan: "计划", title: "标题", status: "状态", progress: "进度", done: "完成时间" },
+    planColumns: { plan: "计划", title: "标题", status: "状态", progress: "进度", done: "完成" },
     workflowMeta: (plans, status) => `${plans} 个计划 · ${status}`,
     plansLabel: (n: number) => "个计划",
     planTableCaption: "该工作流下的计划",
