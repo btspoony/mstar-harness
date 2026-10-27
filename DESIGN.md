@@ -2405,10 +2405,19 @@ Below 860 the header now carries what the prototype's does: the brand, the nav, 
 button. The language choice stays reachable in the wide layout and through the stored
 preference.
 
-**One thing that was not a defect**: the title measured 32px wide and looked squeezed to half
-of `Overview`. It was rendering `总览` — two characters, 32px, its real width. The screenshot
-that started the chase was in English. **A measurement is of the thing you measured**; the same
-selector in another locale is a different number and a different question.## Verification coverage, stated
+**One thing that was not a defect, and the fix for it was reverted**: the title measured 32px
+wide and looked squeezed to half of `Overview`. It was rendering `总览` — two characters, 32px,
+its real width. The screenshot that started the chase was in English.
+
+The `flex: none; white-space: nowrap` added to `.screen-head h1` for that phantom bug is gone
+too, and this is the part worth keeping: **it shipped before anyone noticed the bug did not
+exist**. Reverted, the rule is character-for-character the prototype's again, and `Overview`
+measures 70px at 375 with 281px of room to spare — no squeeze, no overflow. A change made for a
+defect that is not there is not harmless: `nowrap` on a long title would have overflowed the row
+the prototype's own flex item shrinks in.
+
+**A measurement is of the thing you measured**; the same selector in another locale is a
+different number and a different question.## Verification coverage, stated
 
 Two hosts mount these screens: the dashboard (`packages/cli/web`) and the dsh pane
 (`packages/dsh/src/client/panel`). They share the components but **each owns its own
