@@ -769,14 +769,16 @@ match: workflows and iterations have no titled panels, and projects has no table
 
 The gutter every screen sits inside — `padding: 14px 20px 16px` on
 `.ms-container [data-ms-screen]`, from the prototype's `.dash-main` — is no longer a literal in
-a test. `packages/ui/scripts/prototype-snapshot.ts` reads the prototype and writes
-`packages/ui/src/styles/prototype.snapshot.json`, and `tokens.test.ts` asserts the stylesheet
+a test. `packages/ui/design-system/snapshot.ts` reads `packages/ui/design-system/prototype.html`
+and writes `packages/ui/design-system/snapshot.json`, and `tokens.test.ts` asserts the stylesheet
 against that file.
 
-**Why a snapshot and not a direct read**: the prototype lives under `.mstar/`, which this
-repository gitignores, so **CI cannot see it** — which is exactly why `check:declarations`,
-`check:selectors` and `check:tones` warn and exit 0 in CI: they have nothing to compare with. The
-snapshot is committed, so CI compares against the prototype's values without the prototype.
+**Why a derived fixture**: the fixture is committed, so the assertion does not depend on a
+prototype it cannot read — `snapshot.ts` re-derives the values and `check:snapshot` fails when
+the committed file has drifted. The prototype is a tracked file beside the script, and every
+comparator reads it directly: `check:snapshot`, `check:declarations`, `check:selectors` and
+`check:tones` each exit 1 when it is unreadable, naming the path they wanted. They run in CI
+(the `test-ui` job), so none of them can pass without a baseline.
 
 **What it caught the first time it ran**: `base.css` said `padding: 14px 20px 24px` and
 `tokens.test.ts` asserted that same `24px`, while the prototype says `16px`. The test was

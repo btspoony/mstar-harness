@@ -14,10 +14,13 @@ repository root is the summary of it.
 
 ## Why the prototype is a tracked file
 
-It used to live under the harness directory, which this repository gitignores. CI could not read
-it, so `check:declarations`, `check:selectors` and `check:tones` could only warn and exit 0 —
-**they looked green and compared nothing**. Copying the prototype here is what makes it a
-baseline instead of a local convenience.
+It used to live outside the repository, so CI could not read it and the comparators could not
+fail: they warned and exited 0, **looking green while comparing nothing**.
+
+Being tracked is what makes it a baseline. All four checks read it —
+`check:snapshot`, `check:declarations`, `check:selectors`, `check:tones` — and all four exit 1
+when the file cannot be read, naming the path they wanted. CI runs every one of them in the
+`test-ui` job, so a comparator cannot pass without its baseline again.
 
 The copy is redacted: real iteration ids become `iter-N`, harness paths become `{HARNESS_DIR}`.
 The CSS is untouched — `check:snapshot` confirms the derived values did not move.
