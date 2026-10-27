@@ -2542,6 +2542,30 @@ The Roadmap body is its `not declared` arm because `_default` has no roadmap fil
 screenshot is a project that has one. Data, not layout — the same distinction that has now been
 the answer to four separate "missing panel" reports.
 
+## The sweep now remembers how much it looked at
+
+`check:responsive` prints, on every clean run, how many elements it evaluated per screen per
+width — and compares that against a **committed** baseline (27 entries,
+`scripts/responsive-baseline.txt`). A run that sees fewer than two thirds of the baseline fails:
+
+```
+FAIL 375 overview: probe saw 282 elements, baseline 2820
+```
+
+**Committed, not temporary**: a temp file makes every clean clone's first run a "first run", so
+the comparison would never fire where it matters most.
+
+**It took three corrections, all mine, all caught by running it:**
+
+1. the `BACKUP` line I matched against in the previous round **did not exist** — I wrote the
+   pattern from memory;
+2. `printf '%s %s\n'` reached the shell as a literal `\n`, because my own escaping doubled it;
+3. my first attempt to prove it could fail **poisoned the baseline downward** (5 against a real
+   282) and the run correctly passed — the check only fears a probe that looks at *less*.
+
+**The direction is the point.** A probe that sees more than before is a page that grew; a probe
+that sees a third less has lost the page, and "over 0" then means the sweep measured a blank.
+
 ## Verification coverage, stated
 
 Two hosts mount these screens: the dashboard (`packages/cli/web`) and the dsh pane
