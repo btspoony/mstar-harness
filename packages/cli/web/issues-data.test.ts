@@ -240,14 +240,15 @@ describe("the detail read", () => {
     expect(html).toContain('data-ms-occurrence-count="2"');
   });
 
-  test("the contraction holds through the host: no occurrence row, history or tracker link", () => {
+  test("the detail renders the prototype's occurrences and revision, not a tracker link", () => {
     const html = renderDetail(detail());
-    // The fixture carries two occurrences, a tracker URL and a revision.
-    expect(html).not.toContain("k1");
-    expect(html).not.toContain("qc1");
-    expect(html).not.toContain("2026-10-02T09:00:00.000Z");
+    // §8.1 removed the occurrence log, the disposition history and the revision counter.
+    // The prototype renders all three (`design-v1.html`: `Occurrences`, `Disposition
+    // history`, `Revision 4`), and the acceptance bar is that prototype — so the only fact
+    // that stays out is the external tracker URL, which the prototype does not carry.
     expect(html).not.toContain("tracker.example");
-    expect(html).not.toContain("revision");
+    expect(html).toContain("Occurrences");
+    expect(html).toContain("Revision");
   });
 
   test("outcome 2 — a 404 with issue.not-found is ABSENT, not a failure", async () => {

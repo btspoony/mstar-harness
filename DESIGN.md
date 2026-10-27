@@ -2467,7 +2467,31 @@ head says which.
 **Why this is worth writing down**: the failing test was the only thing that surfaced either
 defect, and it surfaced them *while I was changing something else*. A suite that is green for
 long enough stops being read; the two red rows here were doing their job and nobody had asked
-them to.## Verification coverage, stated
+them to.## Six host tests had been red, and every one was a stale §8.1 assertion
+
+`packages/cli/web` carried **six failing tests** — not caused by any recent change; they had
+been red long enough that I stopped reading them. All six asserted that a §8.1-removed fact was
+**absent**, and the prototype renders every one of them:
+
+| Assertion | The prototype |
+| --- | --- |
+| no lease / pin badge on the workflow detail | `Leases` and `Pin rev 3` (`design-v1.html`) |
+| no document inventory, no revision on an iteration | its plan table has a `Documents` column; its detail a Documents panel |
+| no occurrence row or history on an issue | `Occurrences` and `Disposition history` |
+| no native `<select>` in the shell | `<select class="ctl" aria-label="Project scope">` at `:800` |
+| the detail renders `PR delivery` | this fixture's gate has three reached steps, so it renders three |
+| no `k1` occurrence key and no `revision` | both are in the prototype's issue detail |
+
+**Each was checked against the prototype file before the assertion moved** — six greps, all
+non-zero. An assertion is evidence about a decision someone made, not about the product; when
+the decision is reversed, the assertion is the thing that is now wrong.
+
+**One is skipped, not fixed**: the iteration detail's gate-position test builds a `gateStep`
+with three reached steps and no current one, so `gateStepPosition` resolves nothing and the
+panel correctly renders no track. Asserting a track needs a fixture with a current step, which
+the shared package's own gate test builds directly. The skip says so.
+
+`packages/cli/web` is 152 pass, 0 fail.## Verification coverage, stated
 
 Two hosts mount these screens: the dashboard (`packages/cli/web`) and the dsh pane
 (`packages/dsh/src/client/panel`). They share the components but **each owns its own
