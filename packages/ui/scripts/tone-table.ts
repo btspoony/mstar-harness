@@ -13,6 +13,7 @@
  */
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
+import { loadPrototype } from "./prototype-baseline.ts";
 
 const PROTOTYPE = join(import.meta.dir, "..", "design-system", "prototype.html");
 
@@ -34,9 +35,9 @@ const strip = (value: string | undefined) => (value ?? "").replace("var(--ms-", 
 
 let prototypeSource: string;
 try {
-  prototypeSource = readFileSync(PROTOTYPE, "utf8");
-} catch {
-  console.error(`tone-table: ${PROTOTYPE} is unreadable — the tracked prototype is the baseline`);
+  prototypeSource = loadPrototype(PROTOTYPE);
+} catch (error) {
+  console.error(`tone-table: ${(error as Error).message}`);
   process.exit(1);
 }
 

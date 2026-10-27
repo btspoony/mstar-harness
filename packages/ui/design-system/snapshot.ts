@@ -6,6 +6,7 @@
  */
 import { readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
+import { loadPrototype } from "../scripts/prototype-baseline.ts";
 
 /**
  * The prototype is a TRACKED file, beside this script.
@@ -74,9 +75,9 @@ function extract(source: string): Snapshot {
 
 let source: string;
 try {
-  source = readFileSync(PROTOTYPE, "utf8");
-} catch {
-  console.error(`prototype-snapshot: ${PROTOTYPE} is unreadable — the tracked prototype is the baseline`);
+  source = loadPrototype(PROTOTYPE);
+} catch (error) {
+  console.error(`prototype-snapshot: ${(error as Error).message}`);
   process.exit(1);
 }
 

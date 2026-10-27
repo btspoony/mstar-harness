@@ -16,6 +16,7 @@
  */
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
+import { loadPrototype } from "./prototype-baseline.ts";
 
 const PROTOTYPE = join(import.meta.dir, "..", "design-system", "prototype.html");
 
@@ -48,9 +49,9 @@ function selectors(source: string): Set<string> {
 
 let html: string;
 try {
-  html = readFileSync(PROTOTYPE, "utf8");
-} catch {
-  console.error(`selector-diff: ${PROTOTYPE} is unreadable — the tracked prototype is the baseline`);
+  html = loadPrototype(PROTOTYPE);
+} catch (error) {
+  console.error(`selector-diff: ${(error as Error).message}`);
   process.exit(1);
 }
 

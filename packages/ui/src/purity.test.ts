@@ -21,6 +21,14 @@ import { join } from "node:path";
 
 const PACKAGE_ROOT = join(import.meta.dir, "..", "..");
 
+/**
+ * A source with its type-only engine imports removed, so any remaining mention of the
+ * specifier is a value import. Both import forms must go: one line, or the `import type {`
+ * … `} from "@mstar-harness/engine"` block that `view-model/iterations.ts` uses.
+ */
+const withoutTypeOnlyEngineImports = (source: string): string =>
+  source.replace(/^import type\s*\{[^}]*\}\s*from\s*"@mstar-harness\/engine";?[^\S\n]*\n/gm, "");
+
 describe("the public surface is browser-safe", () => {
   test("it bundles for a browser target with no Node builtin and no host SDK", async () => {
     const result = await Bun.build({
@@ -43,21 +51,27 @@ describe("the public surface is browser-safe", () => {
   test("every engine import in the package is type-only", () => {
     // A value import would survive bundling and drag the engine in. Reading the
     // sources is the honest check: the bundle test above would pass for a
-    // tree-shaken value import that no screen happens to call yet.
+    // tree-shaken value import that no screen happens to call yet. Type-only imports
+    // are stripped first, in either form, so a multi-line value import — which the
+    // previous line-by-line scan could not see — is an offender too.
     const files = [...new Bun.Glob("**/*.{ts,tsx}").scanSync({ cwd: import.meta.dir })].filter(
       (file) => !file.endsWith(".test.ts") && !file.endsWith(".test.tsx"),
     );
     const offenders: string[] = [];
     for (const file of files) {
       const source = readFileSync(join(import.meta.dir, file), "utf8");
-      for (const line of source.split("\n")) {
-        if (!line.includes("@mstar-harness/engine")) continue;
-        if (line.trimStart().startsWith("import type ")) continue;
-        if (line.trimStart().startsWith("} from \"@mstar-harness/engine\"") || line.includes("import type {")) continue;
-        offenders.push(`${file}: ${line.trim()}`);
-      }
+      if (withoutTypeOnlyEngineImports(source).includes("@mstar-harness/engine")) offenders.push(file);
     }
     expect(offenders).toEqual([]);
+  });
+
+  test("the guard sees a value import written over several lines", () => {
+    // The blind spot this pins: a multi-line value import mentions the specifier only on
+    // its last line, which the old scan skipped as a bare `} from "…"` line.
+    const value = 'import {\n  engineValue,\n} from "@mstar-harness/engine";\n';
+    expect(withoutTypeOnlyEngineImports(value)).toContain("@mstar-harness/engine");
+    const typeOnly = 'import type {\n  EngineType,\n} from "@mstar-harness/engine";\n';
+    expect(withoutTypeOnlyEngineImports(typeOnly)).not.toContain("@mstar-harness/engine");
   });
 
   test("the entry point exposes the consumer surface and nothing host-specific", async () => {
