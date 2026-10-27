@@ -315,7 +315,7 @@ export function issueDetailModel(detail: IssueDetail): IssueDetailModel {
     disposition: detail.disposition,
     dispositionTone: dispositionTone(detail.disposition),
     owner: detail.owner,
-    occurrenceCount: detail.occurrences.length,
+    occurrenceCount: (detail.occurrences ?? []).length,
     registeredAt: formatDate(detail.registeredAt),
     closedAt: closed ? formatDate(detail.closedAt) : null,
     impact: longText(detail.impact),
@@ -324,7 +324,7 @@ export function issueDetailModel(detail: IssueDetail): IssueDetailModel {
     identityKey: detail.identityKey ?? null,
     revision: detail.revision,
     provider: detail.provider ?? null,
-    occurrences: detail.occurrences.map((row) => ({
+    occurrences: (detail.occurrences ?? []).map((row) => ({
       id: row.id,
       occurrenceKey: row.occurrenceKey,
       sourceKind: row.sourceKind,
@@ -334,7 +334,10 @@ export function issueDetailModel(detail: IssueDetail): IssueDetailModel {
       recordedAt: formatDate(row.recordedAt),
       evidence: row.evidence,
     })),
-    transitions: detail.transitions.map((row) => ({
+    // The DTO declares this required, but the projection is the source and a record that
+    // predates transitions has none: the detail screen threw `detail.transitions.map` on
+    // such a record rather than rendering an empty history.
+    transitions: (detail.transitions ?? []).map((row) => ({
       // The prototype prints `—` for the first transition, which has no `from`.
       from: row.fromDisposition ?? null,
       to: row.toDisposition,
@@ -342,14 +345,14 @@ export function issueDetailModel(detail: IssueDetail): IssueDetailModel {
       actor: row.actor ?? null,
       recordedAt: formatDate(row.recordedAt),
     })),
-    provenance: detail.provenance.map((row) => ({
+    provenance: (detail.provenance ?? []).map((row) => ({
       kind: row.kind,
       target: row.target,
       sourceHash: row.sourceHash ?? null,
       origin: row.origin,
       importedAt: row.importedAt === null ? null : formatDate(row.importedAt),
     })),
-    relations: detail.relations.map((relation) => ({
+    relations: (detail.relations ?? []).map((relation) => ({
       relation: relation.relation,
       // The row names the other end of the join, not this issue.
       issue: relation.fromIssue === detail.id ? relation.toIssue : relation.fromIssue,
@@ -357,7 +360,7 @@ export function issueDetailModel(detail: IssueDetail): IssueDetailModel {
     })),
     // The prototype's Source panel states the newest occurrence's provenance.
     source:
-      detail.occurrences.length === 0
+      (detail.occurrences ?? []).length === 0
         ? null
         : {
             kind: detail.occurrences[0]!.sourceKind,
