@@ -333,6 +333,9 @@ const PROBE = `(() => {
     tableInCard: table !== null && table.closest('[data-ms-panel]') !== null,
     paintedTones,
     languageButtons: seg.length,
+    // The band decides what the header MUST look like; the assertions below read it rather
+    // than treating either shape as acceptable at any width.
+    headerNarrow: window.innerWidth <= 860,
     // The control must be MOUNTED at every width; only its painted-ness follows the
     // breakpoint. Without this, a filter that drops unrendered boxes would turn a control
     // that stopped mounting altogether into a passing run.
@@ -554,15 +557,22 @@ describe.skipIf(!browserAvailable)("the render gate", () => {
     // zero width is the defect this pins, not a narrow viewport.
     expect(screen.themeButtons).toBe(1);
     expect(screen.themeWidth).toBeGreaterThan(0);
-    // The group is MOUNTED at every width — that is the invariant, and the reason this is
-    // counted separately from the painted boxes. Below 860 the prototype hides it, so it is
-    // mounted but unpainted; above it, mounted and painted with a real box. A control that
-    // stops mounting, or one painted at zero width, both fail here.
+    // The group is MOUNTED at every width, and what it paints is decided by the viewport
+    // band, not by whatever happens to be true. `design-v1.html:741` hides it under
+    // `@media (max-width: 860px)` (`:743`), so below that breakpoint it must be 0 painted
+    // and above it exactly 1 — an earlier version of this assertion accepted 0 at every
+    // width, which would have let a global `display: none` pass at 1280.
     expect(screen.languageNodes).toBe(1);
     expect(screen.themeNodes).toBe(1);
-    expect([0, 1]).toContain(screen.languageButtons);
-    if (screen.languageButtons === 1) expect(screen.languageWidth).toBeGreaterThan(0);
-    else expect(screen.languageWidth).toBeNull();
+    expect(screen.themeButtons).toBe(1);
+    expect(screen.themeWidth).toBeGreaterThan(0);
+    if (screen.headerNarrow === true) {
+      expect(screen.languageButtons).toBe(0);
+      expect(screen.languageWidth).toBeNull();
+    } else {
+      expect(screen.languageButtons).toBe(1);
+      expect(screen.languageWidth).toBeGreaterThan(0);
+    }
   }
 
   test("overview is a column of cards", async () => {
