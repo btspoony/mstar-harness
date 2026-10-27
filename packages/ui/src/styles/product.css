@@ -859,4 +859,9 @@
 
 .ms-container .brand-ver, .ms-container .header-right .seg, .ms-container .header-right select.ctl { display: none; }
 
+/* The prototype's `.dash-main` gutter, which our screen frame owns: 12px on every side
+   below 860, not the 14/20/24 the wide layout uses. Without it every narrow screen is
+  16px tighter than the prototype's and its meta line truncates earlier. */
+.ms-container [data-ms-screen] { padding: 12px; }
+
 }
