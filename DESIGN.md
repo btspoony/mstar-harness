@@ -1904,20 +1904,20 @@ shape (counts differ with the data).
 **One difference, and it is not fixed**: the prototype's three feature tabs each carry a
 count — `Roadmap 3`, `Issues 14`, `Iterations 2`. Only the roadmap tab does here.
 
-**The obvious fix does not work, and measuring that is the useful part.** The screen now
-takes `issuesCount` / `iterationsCount`, and both hosts wire them to a callback each list
-fires when its read settles. The counts still do not appear, because **the lists only render
-inside their own tab** — on the Roadmap tab nothing mounts `IssueListScreen`, so no read
-happens and no total is ever reported. A tab count has to be known *before* the reader opens
-that tab.
+**Fixed — and the first attempt at it is worth recording.** A callback from each list (report
+its total when the read settles) rendered nothing, because **the lists only mount inside their
+own tab**: on Roadmap nothing mounts `IssueListScreen`, so no read happens and no total is ever
+reported. A tab count has to be known *before* the reader opens that tab.
 
-So the remaining options are the ones this file already rejected once: let the host read the
-two lists a second time (two reads of the same query, free to disagree), or lift the two reads
-into the host so the tab and the list share one. The second is right and is a real change to
-how this screen gets its data, not a prop.
+So the reads moved up instead. `useIssues` takes an `enabled` flag and the iterations read
+became a `useIterationsRaw` hook beside it; `ProjectDetailDestination` calls both, derives the
+counts, and hands the same outcomes down to the lists — one fetch per list, two consumers.
+Measured: `["路线图1","问题19","迭代0"]`, the prototype's `Roadmap 3 / Issues 14 / Iterations 2`
+shape with this store's numbers.
 
-**The props and both call sites stay**: they are inert today and correct the moment the reads
-are lifted, which is cheaper than re-deriving what the wiring has to look like.
+**A first attempt at this lift was reverted.** It edited four files in one pass, put the
+`outcome` prop on the wrong component, and never reached a green typecheck; the revert cost
+one round. The version that worked did it one edit at a time with `tsc` after each.
 
 **The Catalog chip's `true` branch is now tested.** Every check before this one — including
 the browser — had only ever rendered the `false` case, so a chip that was always on would have

@@ -204,10 +204,36 @@ function OverviewDestination(props: { query: string; outcome: OverviewOutcome })
  * destination turns it into history — `replace` for a filter change, so Back steps
  * through destinations rather than keystrokes.
  */
-function useIssues(query: IssueQuery): IssuesOutcome {
+/**
+ * The iterations envelope at one scope, kept raw so a filter change re-derives the rows
+ * instead of re-fetching. Lifted out of the screen so a caller can state the total before
+ * the screen mounts.
+ */
+function useIterationsRaw(scope: string | null, enabled = true): Parameters<typeof iterationsOutcome>[0] | null {
+  const [raw, setRaw] = useState<Parameters<typeof iterationsOutcome>[0] | null>(null);
+  useEffect(() => {
+    if (!enabled) return;
+    const controller = new AbortController();
+    let current = true;
+    setRaw(null);
+    void readIterations(fetch, scope, controller.signal).then((result) => {
+      if (current) setRaw(result);
+    });
+    return () => {
+      current = false;
+      controller.abort();
+    };
+  }, [scope, enabled]);
+  return raw;
+}
+
+function useIssues(query: IssueQuery, enabled = true): IssuesOutcome {
   const [outcome, setOutcome] = useState<IssuesOutcome>({ kind: "loading" });
   const key = `${query.filters.disposition}|${query.filters.project}|${query.filters.kind}|${query.filters.severity}|${query.filters.q}|${query.offset}`;
   useEffect(() => {
+    // A caller that already made this read passes its outcome in, and the hook then issues
+    // nothing: a second identical request is free to disagree with the first.
+    if (!enabled) return;
     const controller = new AbortController();
     let current = true;
     setOutcome({ kind: "loading" });
@@ -220,7 +246,7 @@ function useIssues(query: IssueQuery): IssuesOutcome {
     };
     // The key is the request's identity: a new object with the same values must not
     // refetch on every render.
-  }, [key]);
+  }, [key, enabled]);
   return outcome;
 }
 
@@ -237,13 +263,17 @@ function IssueListScreen(props: {
   scope: string | null;
   onQueryChange: (query: IssueQuery) => void;
   onOpen?: (id: string) => void;
-  /** The read's own total, so a caller can state it without reading twice. */
-  onTotalChange?: (total: number) => void;
+  /**
+   * A read the caller already made. Supplying it keeps one read for two consumers — the
+   * list's table and the caller's tab count — instead of two reads that can disagree.
+   */
+  outcome?: IssuesOutcome;
 }) {
   const query = props.scope === null ? props.query : { ...props.query, filters: { ...props.query.filters, project: props.scope } };
   // The previous rows stay painted while the next read is in flight, so the search box
   // is never unmounted between keystrokes.
-  const outcome = useIssues(query);
+  const ownOutcome = useIssues(query, props.outcome === undefined);
+  const outcome = props.outcome ?? ownOutcome;
   const copy = useCopy();
   // The prototype's issues screen carries the flow trend above its table, drawn from the
   // same series the overview renders. The chart holds the prototype's fixed `full`
@@ -264,15 +294,6 @@ function IssueListScreen(props: {
       controller.abort();
     };
   }, []);
-
-  // A caller states this read's total (the project detail's tab count) without reading
-  // again. Only a settled read reports: a loading or failed read says nothing, so the
-  // caller keeps whatever it last knew.
-  useEffect(() => {
-    if (outcome.kind !== "ready") return;
-    props.onTotalChange?.(outcome.model.total);
-  }, [outcome, props.onTotalChange]);
-
   if (outcome.kind === "loading") return null;
   if (outcome.kind === "failed") {
     return (
@@ -489,38 +510,20 @@ function WorkflowDetailDestination(props: { id: string }) {
 function IterationListScreen(props: {
   scope: string | null;
   onOpen?: (id: string) => void;
-  /** The read's own total, so a caller can state it without reading twice. */
-  onTotalChange?: (total: number) => void;
+  /** A read the caller already made, so the tab count and the list share one fetch. */
+  raw?: Parameters<typeof iterationsOutcome>[0] | null;
 }) {
   // The read is kept raw, so the model can be rebuilt from the data in hand. A filter
   // change must NOT re-fetch: it only re-derives the rows, which is what the screen
   // promises by keeping the filter state here.
-  const [raw, setRaw] = useState<Parameters<typeof iterationsOutcome>[0] | null>(null);
+  const ownRaw = useIterationsRaw(props.scope, props.raw === undefined);
+  const raw = props.raw === undefined ? ownRaw : props.raw;
   const [filters, setFilters] = useState<IterationFilters>(DEFAULT_ITERATION_FILTERS);
   const copy = useCopy();
-  useEffect(() => {
-    const controller = new AbortController();
-    let current = true;
-    setRaw(null);
-    void readIterations(fetch, props.scope, controller.signal).then((result) => {
-      if (current) setRaw(result);
-    });
-    return () => {
-      current = false;
-      controller.abort();
-    };
-  }, [props.scope]);
 
   // The model is derived at render time, so a filter change re-derives the rows from
   // the envelope already in hand instead of issuing a second read.
   const outcome = iterationsOutcome(raw ?? { status: "loading" }, filters);
-
-  // Only a settled read reports: a loading or failed one says nothing, so the caller keeps
-  // the last total it knew rather than blanking a tab mid-request.
-  useEffect(() => {
-    if (outcome.kind !== "ready") return;
-    props.onTotalChange?.(outcome.model.total);
-  }, [outcome, props.onTotalChange]);
 
   if (outcome.kind === "loading") return null;
   if (outcome.kind === "failed") {
@@ -662,10 +665,26 @@ function ProjectDetailDestination(props: { address: Address; feature: ProjectFea
   const projectId = props.address.route.name === "project" ? props.address.route.id : "";
   const [outcome, setOutcome] = useState<RoadmapOutcome>({ kind: "loading" });
   const [identity, setIdentity] = useState<{ title: string; description: string | null } | null>(null);
-  // The tabs' counts for the two scoped lists. Each child reports its own settled total;
-  // this keeps the last one it knew, so a loading read never blanks a tab.
-  const [issuesCount, setIssuesCount] = useState<number | undefined>(undefined);
-  const [iterationsCount, setIterationsCount] = useState<number | undefined>(undefined);
+  /**
+   * The project's issue read, made here rather than inside the tab. A tab count has to be
+   * known *before* the reader opens that tab, and the list only mounts inside it — so the
+   * read has to live above both. The list gets this same outcome, so the count and the
+   * table can never disagree.
+   */
+  const scopedIssues: IssuesOutcome = useIssues(
+    { ...DEFAULT_ISSUES, filters: { ...DEFAULT_ISSUES.filters, project: projectId } },
+    projectId !== "",
+  );
+  const issuesCount = scopedIssues.kind === "ready" ? scopedIssues.model.total : undefined;
+  /**
+   * The same for iterations: read here so the tab can state its count before that tab is
+   * opened, and handed to the list so both read the same envelope.
+   */
+  const scopedIterations = useIterationsRaw(projectId === "" ? null : projectId, projectId !== "");
+  const iterationsCount =
+    scopedIterations === null ? undefined : (iterationsOutcome(scopedIterations, DEFAULT_ITERATION_FILTERS) as { kind: string; model?: { total: number } }).kind === "ready"
+      ? (iterationsOutcome(scopedIterations, DEFAULT_ITERATION_FILTERS) as { model: { total: number } }).model.total
+      : undefined;
   const copy = useCopy();
 
   useEffect(() => {
@@ -717,7 +736,7 @@ function ProjectDetailDestination(props: { address: Address; feature: ProjectFea
             // `replace`: a filter change must not become a Back step per keystroke.
             navigate(target.route, target.query, "replace");
           }}
-          onTotalChange={setIssuesCount}
+          outcome={scopedIssues}
           onOpen={(id) => {
             // The project is the only trace of the page this record was opened from:
             // without it the breadcrumb and Escape landed on the store-wide list.
@@ -730,7 +749,7 @@ function ProjectDetailDestination(props: { address: Address; feature: ProjectFea
       iterations={
         <IterationListScreen
           scope={projectId}
-          onTotalChange={setIterationsCount}
+          raw={scopedIterations}
           onOpen={(id) => navigate({ name: "iteration", id }, props.address.query, "push")}
         />
       }
