@@ -270,6 +270,8 @@ export type IssueSummary = {
 export type IssuePage = {
   items: IssueSummary[];
   total: number;
+  /** How many projects the whole result set spans — the page's own span is not it. */
+  projectCount: number;
   storeRevision: number;
 };
 
@@ -1137,6 +1139,9 @@ export async function listIssues(context: StoreContext, filter: IssueFilter): Pr
     const hasMilestones = handle.schemaVersion >= 7;
     const storeRevision = readMeta(db).revision;
     const totalRow = db.prepare(`select count(*) as n from issues ${where}`).get(...params) as { n: number };
+    const spanRow = db
+      .prepare(`select count(distinct project_id) as n from issues ${where}`)
+      .get(...params) as { n: number };
     const order = `order by case issues.severity
         when 'critical' then 5 when 'high' then 4 when 'medium' then 3 when 'low' then 2 when 'nit' then 1 else 0 end desc,
       case when (${LAST_ACTIVITY_SQL}) is null then 1 else 0 end asc,
@@ -1175,6 +1180,7 @@ export async function listIssues(context: StoreContext, filter: IssueFilter): Pr
         milestoneId: row.milestoneId ?? null,
       })),
       total: totalRow.n,
+      projectCount: spanRow.n,
       storeRevision,
     };
   } finally {

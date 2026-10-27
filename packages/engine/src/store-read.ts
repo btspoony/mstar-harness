@@ -747,6 +747,11 @@ function readIssuePage(db: StoreDb, filter: IssueFilter): IssuePage {
   const { where, params } = bindIssueFilter(filter);
   const storeRevision = readMeta(db).storeRevision;
   const totalRow = db.prepare(`select count(*) as n from issues ${where}`).get(...params) as { n: number };
+  // The prototype's head reads `26 open across 4 projects`: the span of the result set, not
+  // of the page. One extra aggregate, so a paged read can still state it.
+  const spanRow = db
+    .prepare(`select count(distinct project_id) as n from issues ${where}`)
+    .get(...params) as { n: number };
   const milestoneExpr = issuesMilestoneColumn(db) ? "issues.milestone_id as milestoneId" : "null as milestoneId";
   const rows = db
     .prepare(
@@ -781,6 +786,7 @@ function readIssuePage(db: StoreDb, filter: IssueFilter): IssuePage {
       milestoneId: row.milestoneId,
     })),
     total: totalRow.n,
+    projectCount: spanRow.n,
     storeRevision,
   };
 }

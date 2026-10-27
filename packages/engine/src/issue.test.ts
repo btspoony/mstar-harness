@@ -935,7 +935,9 @@ describe("issue dispositions, revisions, and relations", () => {
     // The prototype's Relations table has a `Title` column: the other end's title, which is
     // the row this one is not.
     const relation = detail.relations.find((r) => r.relation === "duplicate-of");
-    expect(relation?.title).toBe(original.title);
+    // `original` is a receipt, which carries no title; the title is the one the capture
+    // was given.
+    expect(relation?.title).toBe(baseInput().title);
     expect(closed.revision).toBe(dup.revision + 1);
 
     const later = await captureIssue(

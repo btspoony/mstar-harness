@@ -2417,7 +2417,21 @@ defect that is not there is not harmless: `nowrap` on a long title would have ov
 the prototype's own flex item shrinks in.
 
 **A measurement is of the thing you measured**; the same selector in another locale is a
-different number and a different question.## Verification coverage, stated
+different number and a different question.## The issues head could not state its span
+
+The prototype reads `26 open across 4 projects · severity desc, …`. This implementation read
+`134 open · severity desc, …` — the span was simply absent.
+
+**It was derived from the page, and the page is not the result set.** `projectCount` was
+`new Set(items.map(projectId)).size` when the read happened to be complete and `null`
+otherwise, so a paged list — which is every real list — printed no `across N projects` at all.
+
+The read states it now: one `count(distinct project_id)` beside the existing `count(*)`, in
+both readers, and `IssuePage.projectCount` in the DTO. Measured: `134 open across 5 projects`.
+
+**The lesson is the same one the panel sweeps taught, in a different place**: a fact derived
+from the rows on hand is only true when the rows on hand are all of them, and nothing in the
+type says which case you are in.## Verification coverage, stated
 
 Two hosts mount these screens: the dashboard (`packages/cli/web`) and the dsh pane
 (`packages/dsh/src/client/panel`). They share the components but **each owns its own

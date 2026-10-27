@@ -212,14 +212,12 @@ export function issueListModel(
     rows: mapped,
     total,
     projectCount:
-      // A project filter pins the result set to that one project: that is a fact about
-      // the query, not a count of what this page happened to see. Without a filter the
-      // span is only knowable from a complete read.
+      // A project filter pins the result set to that one project. Otherwise the read states
+      // the span itself: deriving it from the page's own rows understated it whenever the
+      // list was paged, and the head fell back to `134 open` with no `across N projects`.
       query.filters.project !== ""
         ? 1
-        : complete
-          ? new Set(read.data.items.map((item) => item.projectId)).size
-          : null,
+        : (read.data.projectCount ?? (complete ? new Set(read.data.items.map((item) => item.projectId)).size : null)),
     offset,
     pageSize: PAGE_SIZE,
     page: Math.floor(offset / PAGE_SIZE) + 1,
