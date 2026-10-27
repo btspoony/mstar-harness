@@ -40,11 +40,7 @@
   font-weight: var(--ms-fw-regular);
   -webkit-font-smoothing: antialiased;
   text-rendering: optimizeLegibility;
-  /* The layout container (see the note below): unnamed on purpose, and with the
-     `min-inline-size: 0` the contract requires. Without these the `@container` queries in
-     `product.css` are dead CSS — the narrow layouts never apply and the page overflows. */
-  container-type: inline-size;
-  min-inline-size: 0;
+  /* The container itself is declared once, below, as the `container` shorthand. */
 }
 
 .ms-container h1, .ms-container h2, .ms-container h3, .ms-container h4 {
@@ -193,11 +189,12 @@
 /**
  * The layout container. Product layout reflows by the width a view is GIVEN,
  * so every page body and every host pane declares this container and the
- * components write `@container (…)` against it — UNNAMED, on purpose: a
- * CSS-module bundler rewrites a named query's prelude into a per-module hashed
- * name (`@container pane_8f31a`), which can never match the one declaration in
- * this global sheet, so a named query is silently dead. One container, unnamed
- * queries; `tokens.test.ts` keeps both halves true. A viewport media query is
+ * components write `@container (…)` against it — the QUERIES are unnamed on
+ * purpose: a CSS-module bundler rewrites a named query's prelude into a
+ * per-module hashed name (`@container pane_8f31a`), which can never match the
+ * one declaration in this global sheet, so a named query is silently dead. The
+ * one declaration may carry a name (`.ms-container` uses the `container`
+ * shorthand); the queries stay anonymous. `tokens.test.ts` keeps both halves true. A viewport media query is
  * allowed only for window chrome (DESIGN.md § Container width).
  *
  * `min-inline-size: 0` is the other half of the contract: a container that can

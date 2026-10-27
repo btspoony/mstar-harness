@@ -2188,7 +2188,27 @@ segment — exported as text in one pass and compared, rather than screen by scr
 **What it found that is real and remains**: the workflow detail's `Pin rev 3` chip is on the
 Catalog head — measured working on the one record that pins something — and the Leases table
 renders only for a workflow that holds leases. Both are already implemented; this store has
-one pining record and no leased workflow.## The container query was dead CSS
+one pining record and no leased workflow.## The container query was NOT dead CSS — and I said it was
+
+**The correction first.** `.ms-container` has carried `container: pane / inline-size;` since
+the stylesheet was written. `container-type` was never missing, every `@container` rule has
+always applied, and the one narrow-layout defect found at 375 is a real layout overflow, not a
+stylesheet that never ran.
+
+**Why I got it wrong**: I grepped for `container-type` and `container-name` as separate
+properties and found neither, because the rule uses the `container` **shorthand**. Two greps
+that both missed is not two pieces of evidence; it is one wrong method applied twice.
+
+**What the mistake cost**: a duplicate declaration added to `.ms-container`, a comment
+rewritten to contradict the code, and a test asserting the container was unnamed while the
+source names it. All three are reverted or corrected.
+
+**What survived**: the fact that a container query with no container is silent dead CSS is
+still worth a test — it is just not this file's bug. `tokens.test.ts` now asserts the shorthand
+exists and that the *queries* stay unnamed (a CSS-module bundler hashes a named prelude, which
+can never match a global declaration).
+
+## The container query was dead CSS
 
 `product.css` carries narrow-width rules — the split collapsing under 900, the chrome stacking
 under 480 — and every one of them is an `@container` query. **A container query does nothing

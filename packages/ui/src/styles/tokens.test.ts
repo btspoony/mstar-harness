@@ -30,6 +30,7 @@ const SRC = join(PKG_ROOT, "src");
 const STYLES = join(SRC, "styles");
 const TOKENS_PATH = join(STYLES, "tokens.css");
 const BASE_PATH = join(STYLES, "base.css");
+const PRODUCT_PATH = join(STYLES, "product.css");
 const DESIGN_PATH = join(PKG_ROOT, "..", "..", "DESIGN.md");
 
 /**
@@ -322,12 +323,15 @@ describe("the layout container exists, unnamed", () => {
     // happened — the dashboard served the wide layout at 375px until the declaration was
     // added, while the dsh pane (which declared its own) reflowed correctly.
     const base = read(BASE_PATH);
-    expect(base).toMatch(/\.ms-container \{[^}]*container-type: inline-size;/);
-    // Unnamed on purpose: a CSS-module bundler rewrites a named prelude to a hashed name,
-    // which can never match a declaration in this global sheet.
-    expect(base).not.toMatch(/\.ms-container \{[^}]*container-name:/);
+    // One declaration. The indirection that matters is that it exists at all: a container
+    // query with no container is dead CSS, and nothing errors.
+    expect(base).toMatch(/\.ms-container \{[^}]*container:\s*pane\s*\/\s*inline-size;/);
     // The other half of the contract: a container that can gain a scrollbar is the page.
     expect(base).toMatch(/\.ms-container \{[^}]*min-inline-size: 0;/);
+    // The QUERIES stay unnamed: a CSS-module bundler rewrites a named prelude to a hashed
+    // name that can never match this global declaration.
+    const product = read(PRODUCT_PATH);
+    expect(product).not.toMatch(/@container\s+pane/);
   });
 });
 
