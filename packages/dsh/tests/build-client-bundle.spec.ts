@@ -259,14 +259,22 @@ describe('buildClientBundle — the artifact is a pure function of DECLARED inpu
   it('defaults to the declared production mode and takes the mode as an explicit input', async () => {
     const { CLIENT_BUNDLE_MODE, clientBundleDefine } = await import('../scripts/build-client-bundle.ts')
     expect(CLIENT_BUNDLE_MODE).toBe('production')
-    expect(clientBundleDefine('production')).toEqual({
+    // `identity` is a required input, not read from the manifest here: the overview states
+    // which package built it, and keeping the read in the caller is what makes this a pure
+    // function of its declared inputs.
+    const identity = { packageName: 'pkg-fixture', version: '1.2.3' }
+    expect(clientBundleDefine('production', identity)).toEqual({
       'process.env.NODE_ENV': '"production"',
       'import.meta.env': '{"MODE":"production","DEV":false,"PROD":true}',
+      __MSTAR_PACKAGE__: '"pkg-fixture"',
+      __MSTAR_VERSION__: '"1.2.3"',
     })
     // A different mode is an explicit request, not an inherited environment.
-    expect(clientBundleDefine('development')).toEqual({
+    expect(clientBundleDefine('development', identity)).toEqual({
       'process.env.NODE_ENV': '"development"',
       'import.meta.env': '{"MODE":"development","DEV":true,"PROD":false}',
+      __MSTAR_PACKAGE__: '"pkg-fixture"',
+      __MSTAR_VERSION__: '"1.2.3"',
     })
   })
 })
