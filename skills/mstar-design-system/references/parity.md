@@ -54,5 +54,5 @@ parity plus unmeasured behaviour, and the coverage statement says exactly that.
 
 Fixtures are derived from the baseline, never typed. A structural table captured once by hand — panel
 composition, breakpoint list, class inventory — has no deriver and no consumer, so it stops matching
-the moment the source changes and nothing fails. Derive it, or delete it; see skill
-`mstar-design-system` → `references/baseline.md` for the derivation rules and the three-link chain.
+the moment the source changes and nothing fails. Derive it, or delete it; see `references/baseline.md`
+for the derivation rules and the three-link chain.

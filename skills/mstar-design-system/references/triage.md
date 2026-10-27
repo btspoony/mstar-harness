@@ -9,14 +9,14 @@ inflate.
 | Class | Meaning | Test | Action |
 |-------|---------|------|--------|
 | **Defect** | the baseline states a value or a unit, and the implementation disagrees | the baseline is explicit, readable, and covers this unit | change the implementation |
-| **Decision** | the baseline is silent, or states something the product no longer wants | the baseline does not settle it, or settling it needs product intent | record the choice and its reason in the contract document; then align the implementation to that record |
+| **Decision** | the baseline is silent, or states something the product no longer wants | the baseline does not settle it, or settling it needs product intent | record the choice and its reason where the design contract lives — the contract document, or the baseline's own README when the baseline is not a written contract; then align the implementation to that record |
 | **Phantom** | the difference exists only in the comparison method | reading the tracked source instead of the render removes the difference | change nothing; fix the probe or the comparison scope |
 
 The order of tests matters. Ask "is it in the baseline at all?" before "does it match?" — a
 difference against a value the baseline never states is not a defect, and treating it as one adds
 code that the next round will have to remove.
 
-A **decision** is the only class that writes to the contract document. It needs a reason because the
+A **decision** is the only class that writes to that record. It needs a reason because the
 next reader cannot distinguish a deliberate choice from an oversight, and the next round will treat
 an unexplained silence as licence to guess.
 
@@ -48,9 +48,10 @@ opening a finding; extend it when a new phantom class is found.
 
 The shared lesson: **every phantom in this catalogue was opened from a render — a thumbnail, a
 preview, an exported image — not from the tracked source, and was settled by checking the source.**
-For the first and third entry that check is a `grep`; for the localized-heading entry it is reading
-the unit's role and position, because the text legitimately differs. A finding opened from a render
-is a hypothesis until the tracked source settles it.
+For the first entry that check is a `grep`; for the localized-heading entry it is reading the unit's
+role and position, because the text legitimately differs; for the breadcrumb entry it is the route
+the baseline was captured at, not a search. A finding opened from a render is a hypothesis until the
+tracked source settles it.
 
 ## What a phantom is not
 
