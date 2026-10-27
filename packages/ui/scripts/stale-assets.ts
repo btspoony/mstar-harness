@@ -6,9 +6,10 @@
  * `assets.generated.ts` still carried the old CSS, so every browser measurement after it was
  * a measurement of the previous change. It happened twice.
  *
- * The check covers the shared UI's whole source tree, not only its sheets: a screen, a
+ * The check covers the shared UI's source tree, not only its sheets: a screen, a
  * component, a view-model or a locale string is compiled into the same bundle, and a change
- * to one leaves the generated assets just as stale as a CSS edit.
+ * to one leaves the generated assets just as stale as a CSS edit. Colocated tests share that
+ * tree but not the bundle, so they are not inputs (`bundle-inputs.ts`).
  *
  * This is a timestamp comparison, not a content hash: it answers "was the CLI built after the
  * sources changed", which is the question that was missed.
@@ -17,6 +18,8 @@
  */
 import { readdirSync, statSync } from "node:fs";
 import { join } from "node:path";
+
+import { isBundleInput } from "./bundle-inputs";
 
 const root = join(import.meta.dir, "..", "..", "..");
 const generated = join(root, "packages", "commands", "src", "dashboard", "assets.generated.ts");
@@ -29,7 +32,7 @@ function newerThan(target: string, cutoff: number, out: string[]): void {
     for (const entry of readdirSync(target)) newerThan(join(target, entry), cutoff, out);
     return;
   }
-  if (info.mtimeMs > cutoff) out.push(target.slice(root.length + 1));
+  if (info.mtimeMs > cutoff && isBundleInput(target)) out.push(target.slice(root.length + 1));
 }
 
 let generatedAt: number;
