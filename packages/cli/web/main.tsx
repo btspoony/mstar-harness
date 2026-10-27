@@ -137,7 +137,7 @@ function navigate(route: Route, query: string, mode: "push" | "replace"): void {
  * unwraps a member or decides an absence — it fetches, hands the envelope over and
  * keeps the three outcomes apart.
  */
-function useOverview(enabled: boolean, projectId?: string): OverviewOutcome {
+function useOverview(enabled: boolean, projectId?: string, reloadKey?: string): OverviewOutcome {
   const [outcome, setOutcome] = useState<OverviewOutcome>({ kind: "loading" });
   useEffect(() => {
     if (!enabled) return;
@@ -152,7 +152,7 @@ function useOverview(enabled: boolean, projectId?: string): OverviewOutcome {
       current = false;
       controller.abort();
     };
-  }, [enabled, projectId]);
+  }, [enabled, projectId, reloadKey]);
   return outcome;
 }
 
@@ -821,8 +821,11 @@ function Shell(props: {
   // residuals cover the store, while the milestone and latest-iteration panels are one
   // project's (the prototype names that project on the panel). One scoped read for both
   // made the flow and the footer count only the first project.
-  const storeOutcome = useOverview(true);
-  const projectOutcome = useOverview(projectIds[0] !== undefined, projectIds[0]);
+  // The landing page's read is refreshed whenever the destination becomes active: a
+  // session-long first read left the page stale after a store change and a round trip.
+  const overviewReloadKey = address.route.name;
+  const storeOutcome = useOverview(true, undefined, overviewReloadKey);
+  const projectOutcome = useOverview(projectIds[0] !== undefined, projectIds[0], overviewReloadKey);
   const pageOutcome: OverviewOutcome =
     storeOutcome.kind === "ready" && projectOutcome.kind === "ready"
       ? {
