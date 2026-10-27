@@ -2388,7 +2388,27 @@ the opposite of *a rule nothing selects*. Both are dead in their own way; only o
 The script measures the other direction now behind `SHOW_UNUSED=1`, and reports 118 — all but a
 handful false, because the hosts in `packages/cli/web` and `packages/dsh` name classes this scan
 does not read. **It is a measurement, not a gate**: wiring it in would fail on the hosts it
-cannot see, and a check that cries wolf is worse than one that says less.## Verification coverage, stated
+cannot see, and a check that cries wolf is worse than one that says less.## The narrow header: three items, not four
+
+The prototype hides its scope select, its language group and the read-only note below 860 and
+keeps the theme button (`design-v1.html:742-745`). This implementation kept all of them, with a
+comment arguing the opposite:
+
+> They wrap instead of disappearing at a narrow width, because a control a reader cannot reach
+> is not a smaller control but a missing one.
+
+That is a good argument and it is not this bar. At 375 the extra items pushed the screen title
+under the header band — the controls sat *on top of* the heading, which is what the screenshot
+showed and what no text diff could.
+
+Below 860 the header now carries what the prototype's does: the brand, the nav, the theme
+button. The language choice stays reachable in the wide layout and through the stored
+preference.
+
+**One thing that was not a defect**: the title measured 32px wide and looked squeezed to half
+of `Overview`. It was rendering `总览` — two characters, 32px, its real width. The screenshot
+that started the chase was in English. **A measurement is of the thing you measured**; the same
+selector in another locale is a different number and a different question.## Verification coverage, stated
 
 Two hosts mount these screens: the dashboard (`packages/cli/web`) and the dsh pane
 (`packages/dsh/src/client/panel`). They share the components but **each owns its own

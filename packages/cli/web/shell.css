@@ -166,3 +166,18 @@ body {
   border-top: 1px solid currentColor;
   font-size: 0.8125rem;
 }
+
+/* The prototype hides its scope select and its language group below 860 and keeps the
+   theme button (`design-v1.html:742-745`). This file used to keep both, on the argument
+   that a control a reader cannot reach is a missing one — true, and not this bar: the
+   prototype's narrow header is three items, and a fourth pushes the screen title under
+   the header. The language choice stays reachable through the wide layout and the
+   stored preference; the theme button stays here, because it is the one control the
+   prototype keeps. */
+@media (max-width: 860px) {
+  .app-seg,
+  .app-controls > select.ctl,
+  .app-controls-note {
+    display: none;
+  }
+}
