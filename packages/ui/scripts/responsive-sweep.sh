@@ -46,9 +46,13 @@ try:
     payload = json.loads(json.loads(sys.stdin.read()))
     # `checked` is the proof the probe looked: a sweep that evaluated nothing prints the
     # same "over 0" as a clean one, and this project has already mistaken one for the other.
-    if payload.get("checked", 0) < 20:
+    # Only a probe that evaluated NOTHING is a failure. A fixed floor was wrong in both
+    # directions: `projects` legitimately has 43 elements, and a screen that grows past any
+    # floor would pass a no-op. The count is printed on success instead, so every green line
+    # says how much it looked at.
+    if payload.get("checked", 0) == 0:
         sys.exit(2)
-    print(payload["over"], "scroll" if payload["scroll"] else "noscroll")
+    print(payload["over"], "scroll" if payload["scroll"] else "noscroll", payload.get("checked", 0))
 except Exception:
     sys.exit(1)
 ')" || {
@@ -56,7 +60,7 @@ except Exception:
       FAIL=1
       continue
     }
-    read -r over scroll <<<"$value"
+    read -r over scroll checked <<<"$value"
     if [ "$over" != "0" ] || [ "$scroll" != "noscroll" ]; then
       echo "FAIL ${width} ${screen}: over=${over} ${scroll}" >&2
       FAIL=1
