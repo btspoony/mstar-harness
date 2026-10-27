@@ -32,15 +32,16 @@ const projection = {
   diagnostics: [],
 };
 
-/** A compass at the fourth reachable step; the fifth is never marked. */
-const gate = {
-  step: "pr-delivery",
-  steps: [
-    { id: "start", at: "2026-10-01T00:00:00.000Z" },
-    { id: "execute", at: "2026-10-02T00:00:00.000Z" },
-    { id: "close", at: "2026-10-03T00:00:00.000Z" },
-  ],
-} as unknown as IterationDTO["gateStep"];
+/**
+ * A compass at the fourth reachable step; the fifth never is.
+ *
+ * `IterationGateStep` is an integer `1 | 2 | 3 | 4`, not a step list — the store's member,
+ * read by plain property access. The old fixture passed a `{ step, steps }` object and cast
+ * it with `as unknown as`, which is why nothing caught that `gateStepPosition` resolved
+ * `null` for it: the cast silenced the shape and the assertion above it was skipped instead
+ * of fixed.
+ */
+const gate = 4 as IterationDTO["gateStep"];
 
 const iteration = (over: Partial<IterationDTO> = {}): IterationDTO =>
   ({
@@ -145,11 +146,7 @@ describe("the list read", () => {
 });
 
 describe("the detail read", () => {
-  // short: skip — this fixture's `gateStep` carries three reached steps and no `current`,
-  // so `gateStepPosition` resolves no position and the panel correctly renders no track.
-  // Asserting a track here needs a fixture with a current step; that is the gate track's
-  // own test in `packages/ui`, which builds one directly.
-  test.skip("outcome 1 — a readable iteration renders its gate position", () => {
+  test("outcome 1 — a readable iteration renders its gate position", () => {
     const outcome = iterationDetailOutcome({
       status: "ready",
       envelope: { data: iteration(), storeRevision: 1, catalogRevision: 1, projection },
@@ -164,8 +161,9 @@ describe("the detail read", () => {
     // This fixture's gate has three reached steps; the panel names the track it was given
     // rather than the prototype's five, which is what the `gateSteps` helper is for. A
     // fifth step must not appear when the record never recorded one.
-    expect(html).toContain("data-ms-gate-steps");
-    expect(html).not.toContain("PR delivery");
+    // The detail states its position as the prototype's chip (`step 4 of 5`); the five-step
+    // *track* is the overview's, not this screen's.
+    expect(html).toContain("step 4 of 5");
     expect(html).not.toContain("step 5 of 5");
   });
 

@@ -2486,12 +2486,18 @@ been red long enough that I stopped reading them. All six asserted that a §8.1-
 non-zero. An assertion is evidence about a decision someone made, not about the product; when
 the decision is reversed, the assertion is the thing that is now wrong.
 
-**One is skipped, not fixed**: the iteration detail's gate-position test builds a `gateStep`
-with three reached steps and no current one, so `gateStepPosition` resolves nothing and the
-panel correctly renders no track. Asserting a track needs a fixture with a current step, which
-the shared package's own gate test builds directly. The skip says so.
+**One was skipped for a round, then fixed properly.** The iteration detail's gate-position
+test passed a `{ step, steps: [...] }` object cast with `as unknown as IterationDTO["gateStep"]`.
+The store's member is an integer `1 | 2 | 3 | 4`. The cast silenced the shape, so
+`gateStepPosition` resolved `null` for a fixture that looked like a compass and the panel
+rendered nothing — and the assertion had been written against `data-ms-gate-steps`, which is
+the **overview's** track, not this screen's chip.
 
-`packages/cli/web` is 152 pass, 0 fail.## Verification coverage, stated
+Fixed: the fixture is `4`, the assertion is `step 4 of 5`, and the test is un-skipped.
+`packages/cli/web` is **153 pass, 0 fail, 0 skipped**.
+
+**A cast is where a shape stops being checked.** That one hid a stale fixture for as long as
+the test was red, and the red row was read as noise.## Verification coverage, stated
 
 Two hosts mount these screens: the dashboard (`packages/cli/web`) and the dsh pane
 (`packages/dsh/src/client/panel`). They share the components but **each owns its own
