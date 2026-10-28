@@ -21,7 +21,7 @@ description: "QC orchestration: SDD mandatory plan QC tri-review (`qc1`…`qc3` 
 ## 分派时机（与 plan / batch 对齐）
 
 - **`Execution mode: sdd`**：全部 task + L2 task reviewers 完成后 → **强制 tri-review**（`QC mode: full tri-review`，**N=3**）。Assignment 须含 **branch review-package** 路径与 `{SDD_DIR}/review/qcN.md` report paths。PM 汇总 `{SDD_DIR}/review/qc-consolidated.md` 并回写主 plan durable summary。
-- **`Execution mode: inline`**：单席 `qc-specialist` → `{SDD_DIR}/review/qc.md`（**N=1**），或按 hotfix 路由跳过。
+- **`Execution mode: inline`**：单席 `qc-specialist`（**N=1**），或按 hotfix 路由跳过。席位自己把报告写入 `{SDD_DIR}/review/qc.md`；该文件路径由 Assignment 的 **`QC report path`** 字段具名指定（`N/A` 仅限显式 conversation-only review），不得让 coordinator 转录会话内容代写。
 - **After `Request Changes` (default)**：**Targeted re-review** — PM dispatches only seats that **raised** blocking findings; each updates **the same** `{SDD_DIR}/review/qcN.md` (`## Revalidation`, update verdict). **Do not** spawn `qcN-rev2.md` for targeted re-review. Naming → **`mstar-artifacts/references/plan-files-and-reports.md`** § QC 三审触发时机.
 - **Three-seat re-review**：only when all three seats have affected findings. `QC re-review: full tri-review` denotes seat count, never broader scope; each seat still checks its findings and fix delta. New wave basenames may distinguish reports, but do not reopen unchanged review coverage.
 
