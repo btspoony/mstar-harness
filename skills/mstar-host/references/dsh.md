@@ -795,8 +795,14 @@ No-argument iteration-drive resumes the primary coordinator's workflow; nonempty
 
 - **`Execution mode: sdd`**: **N=3** seats — one per QC seat (`qc-specialist`,
   `qc-specialist-2`, `qc-specialist-3`), each body **Act as** the respective QC
-  role + QC skill load. Read-only fan-out of N≥3 on dsh uses the native
-  **`workflow`** tool (the `mstar-qc-tri` script — § Read-only fan-out via the
+  role + QC skill load. Channel follows the **`QC report path`** field: a
+  plan-backed QC seat must itself write its report file, so it routes through a
+  **writable** channel (Agent Teams roster seat; `subagent` when the Team layer
+  is not mounted) — `workflow` children are read-only and only carry the
+  plan-QC tri when the Assignment explicitly declares conversation-only review
+  (`QC report path: N/A`), in which case the caller persists
+  `{SDD_DIR}/review/qcN.md` from the returned envelopes (`mstar-qc-tri` script —
+  § Read-only fan-out via the
   `workflow` tool): one run, three concurrent children, one conversation
   `workflow-run` node. When the tool is not mounted (the `ptc` preset hides it),
   fall back to the `subagent` path below. **The `subagent` path emits all three

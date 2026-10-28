@@ -49,10 +49,11 @@ return everything in the result payload.
 
 ## 1. `mstar-qc-tri` — plan QC tri-review
 
-Three independent read-only QC seats over one review range; each returns a verdict envelope. The
-returned envelopes are the seat reports' content source: the caller persists
-`{SDD_DIR}/review/qc1.md` … `qc3.md` from them (a seat may also write its own file best-effort when
-its sandbox permits). Three seats are within the child pool (`maxActiveSubagents`, default 8) by
+Three independent read-only QC seats over one review range; each returns a verdict envelope. This
+script is legal only when the Assignment declares **conversation-only review** (`QC report path:
+N/A`): the caller persists `{SDD_DIR}/review/qc1.md` … `qc3.md` from the returned envelopes. A
+plan-backed QC seat that must write its own report routes through a writable channel instead
+(`dsh.md` § QC default). Three seats are within the child pool (`maxActiveSubagents`, default 8) by
 construction — no chunking needed.
 
 **`meta`**
