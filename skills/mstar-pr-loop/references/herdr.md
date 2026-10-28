@@ -51,7 +51,7 @@ Use the host detected by `mstar-host`; never guess a kind.
 - **Probe fails:** name the failed environment-probe leg; continue through the ordinary path without issuing channel commands.
 - **No mapped kind:** report "this host has no external review-seat channel"; continue through the ordinary path, never substitute a kind.
 - **Agent start fails or reports not-ready:** read the pane, repair its state using the loaded skill's guidance, then retry start once in an available shell. If a not-ready agent already occupies the pane, inspect it and wait for idle rather than starting over it; an approval/question UI takes the next decision boundary below. If startup still fails, report the actual cause and required pane-state repair before retrying this entry.
-- **Agent exits or pane is lost mid-round:** read the last archived report. Continue from it if settled; otherwise open a fresh channel session under the same layout/cwd rules and re-dispatch the same round. Loss, unlike a wait timeout, requires a replacement session.
+- **Agent exits or pane is lost mid-round:** read the last archived report and compare its recorded `head:` with this round's resolved head. Continue from it only when they match; after a head change the report describes an older commit, so open a fresh channel session under the same layout/cwd rules and re-dispatch the same round. A rewritten history never resumes from a prior report. Loss, unlike a wait timeout, requires a replacement session.
 - **Approval or question dialog:** read the UI and stop for the user's decision; state the actual permission/product question and ask the user to decide it before resuming the channel. Never answer it as a review verdict or treat channel `blocked` as report `blocked`.
 
 ## Cleanup
