@@ -264,9 +264,17 @@ function engineRefusal(error: unknown, facts: Record<string, unknown> = {}): Coo
   return { ...outcome, text: `${outcome.text} ${INCOMPATIBLE_LOADED_ENGINE_RECOVERY}` };
 }
 
-/** The §3.1 host identity of one coordinator call: provenance, scope, native id. */
-function coordinatorIdentityOf(sessionId: string, workflowId: string): ExecutionIdentity {
-  return { source: "host", sessionId, workflowId, role: "coordinator" };
+/**
+ * The §3.1 host identity of one coordinator call: provenance, scope, native id.
+ *
+ * The host's own leaf fact (`facts.leaf`, a task/subagent session) is ATTESTED
+ * on the tuple, so the engine's `coordination.leaf-seat` receiver enforces it
+ * here too. The adapter's host-facts gate (`coordinatorHostFacts`, code
+ * `leaf-session`) refuses a leaf before this point, so on this path the engine
+ * refusal is defense-in-depth — the leaf rule stays in one place.
+ */
+export function coordinatorIdentityOf(sessionId: string, workflowId: string, leaf: boolean): ExecutionIdentity {
+  return { source: "host", sessionId, workflowId, role: "coordinator", ...(leaf ? { leafSeat: true as const } : {}) };
 }
 
 
@@ -528,7 +536,7 @@ async function bindActiveCoordinator(
   harnessRoot: string,
   authority: CoordinatorAuthorityDeps,
 ): Promise<CoordinatorIdentityOutcome> {
-  const identity = coordinatorIdentityOf(facts.sessionId, workflowId);
+  const identity = coordinatorIdentityOf(facts.sessionId, workflowId, facts.leaf);
   try {
     validateExecutionIdentity(identity, { workflowId, role: "coordinator" });
   } catch (error) {
@@ -696,7 +704,7 @@ async function recoverActiveCoordinator(
   // engine's own `validateActivationAttestation` projects the declared shape.
 
 
-  const identity = coordinatorIdentityOf(facts.sessionId, workflowId);
+  const identity = coordinatorIdentityOf(facts.sessionId, workflowId, facts.leaf);
   try {
     validateExecutionIdentity(identity, { workflowId, role: "coordinator" });
   } catch (error) {

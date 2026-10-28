@@ -21,6 +21,7 @@ import {
   COORDINATOR_TOOL_NAME,
   bindCoordinatorIdentity,
   classifyCoordinatorShellCall,
+  coordinatorIdentityOf,
   recoverCoordinatorIdentity,
   showCoordinatorRecovery,
   type CoordinatorIdentityFacts,
@@ -189,6 +190,18 @@ describe("prerequisite identity — coordinator identity adapter input", () => {
       expect({ code: result.code, ok: result.ok }).toEqual({ code: entry.code, ok: false });
       expect(engine.calls.bind).toHaveLength(0);
     }
+  });
+
+  test("the derived identity attests the host leaf fact: leaf → leafSeat, non-leaf → key absent", () => {
+    // The same tuple the ACTIVE bind and recovery hand the engine.
+    expect(coordinatorIdentityOf("native-session-a", "wf-a", true)).toEqual({
+      source: "host",
+      sessionId: "native-session-a",
+      workflowId: "wf-a",
+      role: "coordinator",
+      leafSeat: true,
+    });
+    expect(Object.hasOwn(coordinatorIdentityOf("native-session-a", "wf-a", false), "leafSeat")).toBe(false);
   });
 
   test("a lawful call binds the derived identity — never a caller value — through the engine", async () => {
