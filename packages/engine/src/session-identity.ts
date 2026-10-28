@@ -137,9 +137,12 @@ export function validateExecutionIdentity(
     throw new CoordinationError("coordination.identity-missing", "Invalid execution identity: provide the identity tuple. Inspect coordinator identity with mstar status validate.");
   }
   const value = identity as unknown as Record<string, unknown>;
+  // The tuple's only legal leaf attestation is `true`: any other present value
+  // stays a refused key (`coordination.forbidden-field`), so a `leafSeat: false`
+  // is never silently ignored.
   assertExactKeys(
     value,
-    ["source", "sessionId", "workflowId", "role", ...(value.leafSeat === undefined ? [] : ["leafSeat"])],
+    ["source", "sessionId", "workflowId", "role", ...(value.leafSeat === true ? ["leafSeat"] : [])],
     "execution identity",
   );
   // The leaf refusal is FIRST and fail-closed: a leaf-attested identity never
@@ -154,13 +157,6 @@ export function validateExecutionIdentity(
         "otherwise satisfy the call. Recovery: the non-leaf coordinating session must acquire its own identity and perform " +
         "the registration; this seat continues with its permitted actions (issue.*, plan.prepare, plan.progress and the reads).",
       { leaf_seat: true },
-    );
-  }
-  if (value.leafSeat !== undefined) {
-    throw new CoordinationError(
-      "coordination.identity-mismatch",
-      "the execution identity leafSeat attestation, when present, is exactly `true`",
-      { leafSeat: value.leafSeat },
     );
   }
 

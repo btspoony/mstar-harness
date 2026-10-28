@@ -50,8 +50,11 @@ describe("the leaf-seat attestation guard", () => {
     expect(refusal?.message).toContain("a leaf seat cannot mint or mutate a workflow coordinator registration");
   });
 
-  test("a non-true leafSeat value refuses as identity-mismatch; the plain tuple is untouched", () => {
-    expect(refusalOf({ ...(base as ExecutionIdentity), leafSeat: "subagent" as unknown as true }).code).toBe("coordination.identity-mismatch");
+  test("a non-true leafSeat value is refused, never ignored; the plain tuple is untouched", () => {
+    // `true` is the only legal attestation: `false`/other values stay refused by
+    // the exact-key contract instead of passing as "not attested".
+    expect(refusalOf({ ...base, leafSeat: false as unknown as true }).code).toBe("coordination.forbidden-field");
+    expect(refusalOf({ ...base, leafSeat: "subagent" as unknown as true }).code).toBe("coordination.forbidden-field");
     expect(() => validateExecutionIdentity(base, { workflowId: base.workflowId, role: "coordinator" })).not.toThrow();
   });
 });
