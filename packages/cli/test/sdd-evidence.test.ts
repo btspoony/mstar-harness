@@ -1899,7 +1899,14 @@ describe("collectEvidenceInputs — bounded collection", () => {
       });
       expect(snapshot.entries).toHaveLength(3); // root dir + two children
       expect(snapshot.entries[0]!.path).toBe("e");
-      expect(snapshot.entries.map((entry) => entry.path)).not.toContain("e/f2.txt");
+      // readdir order is unspecified (ext4 returns hashed order, APFS creation
+      // order), so the budget property is asserted by count, not by a path: two
+      // children enumerated, fewer than the fixture's ten files — the walk
+      // stopped instead of reading the directory to its end.
+      const children = snapshot.entries.slice(1);
+      expect(children).toHaveLength(2);
+      expect(children.every((entry) => entry.path.startsWith("e/"))).toBe(true);
+      expect(children.length).toBeLessThan(readdirSync(b.e).length);
       expect(snapshot.unknowns.join("\n")).toContain("input.limit.entries");
       expect(snapshot.stable).toBe(true);
       expect(snapshot.digest).toBe(evidenceInputDigest(snapshot));
