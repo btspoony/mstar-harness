@@ -12,7 +12,8 @@ description: "Opt-in skill loaded when the user explicitly asks for a review →
 3. `mstar-iteration` → `references/phase-4-5-pr-delivery.md` §5.0 / §5.1a — iteration fix-worktree discipline and push cadence; §5.0 applies only to iteration Phase 5.
 4. `mstar-branch-worktree` — checkout authorization and the three-domain write table.
 5. `mstar-dispatch-gates` — Assignment fields, writable dispatch and leaf boundaries.
-6. Optional external review-seat channel — read the channel reference listed under References only when this session can load a terminal-agent skill whose probe passes and the host has a matching agent kind; the default path above stays complete without it.
+
+Optional external review-seat channel (not part of the required reading order) — the channel reference under References applies only when this session can load a terminal-agent skill whose probe passes and the host has a matching agent kind; the default path above stays complete without it.
 
 The project-manager orchestrates; implementers fix; review seats remain read-only. Loading the review variant does not authorize its seats to implement fixes.
 
