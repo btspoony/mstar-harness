@@ -37,7 +37,8 @@ defect that was renamed.
 
 ## Phantom catalogue
 
-Each entry below is a real difference that looked like a defect and was not. Check this list before
+Each entry below is a real difference that looked like a defect and, once the source settled it,
+was not. Check this list before
 opening a finding; extend it when a new phantom class is found.
 
 | Phantom | Looks like | Why it is not a defect | How to confirm |
@@ -48,7 +49,8 @@ opening a finding; extend it when a new phantom class is found.
 
 The shared lesson: **every phantom in this catalogue was opened from a render — a thumbnail, a
 preview, an exported image — not from the tracked source, and was settled by checking the source.**
-For the first entry that check is a `grep` of the source for a documented default; for the
+For the first entry that check is a `grep` of the implementation's source or component
+documentation for the documented default the baseline omits; for the
 localized-heading entry it is reading the unit's role and position, because the text legitimately
 differs; for the breadcrumb entry it is the route the baseline was captured at, not a search. A
 finding opened from a render is a hypothesis until the tracked source settles it.
