@@ -28,8 +28,26 @@ describe("the leaf-seat attestation guard", () => {
   test("a leaf-attested identity never converts into a trusted caller context", () => {
     // The adapter seam (executionContextFor) validates through the same rule, so
     // the refusal fires before any caller exists — no coordinator bind, register,
-    // recover or adopt can run under the attested leaf.
-    expect(() => executionContextFor({ harnessDir: "/tmp/unused-harness" }, { ...base, leafSeat: true })).toThrow();
+    // recover or adopt can run under the attested leaf. The tuple is the DSH
+    // ADAPTER'S shape (`native-commands.ts`): `source: "host"`, the carrying
+    // session id, and the leaf fact spread from the shared session-header
+    // predicate — never a hand-built object.
+    const header: { origin?: string; delegationDepth?: number } = { origin: "subagent" };
+    const attested: ExecutionIdentity = {
+      source: "host",
+      sessionId: "session-1",
+      workflowId: "wf-1",
+      role: "coordinator",
+      ...(header.origin === "subagent" || (header.delegationDepth ?? 0) > 0 ? { leafSeat: true as const } : {}),
+    };
+    let refusal: CoordinationError | undefined;
+    try {
+      executionContextFor({ harnessDir: "/tmp/unused-harness" }, attested);
+    } catch (error) {
+      refusal = error as CoordinationError;
+    }
+    expect(refusal?.code).toBe("coordination.leaf-seat");
+    expect(refusal?.message).toContain("a leaf seat cannot mint or mutate a workflow coordinator registration");
   });
 
   test("a non-true leafSeat value refuses as identity-mismatch; the plain tuple is untouched", () => {

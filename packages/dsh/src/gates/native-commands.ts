@@ -51,10 +51,10 @@
  * Leaf guard: the coordinator-seat-capable tools (`mstar_plan_bind`,
  * `mstar_execution_clear`) refuse a known leaf seat FAIL-CLOSED before any
  * admission or store read — the named guard the removed execution-session
- * command enforced. The engine mirrors this behind the shared leaf predicate:
- * an adapter that attests `leafSeat: true` on its §3.1 identity is refused
- * `coordination.leaf-seat` by `validateExecutionIdentity`, so a leaf-attested
- * identity can never mint or mutate a coordinator registration either.
+ * command enforced. The same session-header predicate also ATTESTED the fact on
+ * the §3.1 identity this file hands the engine (`leafSeat`), so the engine's
+ * `validateExecutionIdentity` refuses `coordination.leaf-seat` behind it: the
+ * engine holds no second leaf rule, only the adapter-attested fact.
  */
 import { existsSync, readFileSync } from 'node:fs'
 import { resolve } from 'node:path'
@@ -698,8 +698,14 @@ async function adoptNativeExecutionBinding(
   try {
     // The engine resume succeeds BEFORE the slot write: a copied store id, a
     // stale epoch or a scope mismatch refuses here and NOTHING is adopted.
+    // The leaf fact rides the SAME identity this adapter hands the engine: the
+    // shared session-header predicate decides it, so the engine receiver
+    // (`coordination.leaf-seat`) enforces the same rule instead of holding a
+    // second one. The pre-admission check above refuses a leaf first; this line
+    // is what keeps the engine refusal wired to a real transport.
+    const leafSeat = isLeafSeatHeader(sessionHeaderOf(exec)) ? { leafSeat: true as const } : {}
     const resumed = await resumeExecutionSession(
-      executionContextFor({ harnessDir }, { source: 'host', sessionId, workflowId: ref.workflowId, role: 'coordinator' }),
+      executionContextFor({ harnessDir }, { source: 'host', sessionId, workflowId: ref.workflowId, role: 'coordinator', ...leafSeat }),
       ref,
     )
     if (resumed.data.sessionId !== sessionId || resumed.data.workflowId !== ref.workflowId) {
