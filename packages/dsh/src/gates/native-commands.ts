@@ -51,8 +51,10 @@
  * Leaf guard: the coordinator-seat-capable tools (`mstar_plan_bind`,
  * `mstar_execution_clear`) refuse a known leaf seat FAIL-CLOSED before any
  * admission or store read — the named guard the removed execution-session
- * command enforced, restored on this surface (the engine has no leaf concept,
- * so this dsh-side check is the sole enforcement).
+ * command enforced. The engine mirrors this behind the shared leaf predicate:
+ * an adapter that attests `leafSeat: true` on its §3.1 identity is refused
+ * `coordination.leaf-seat` by `validateExecutionIdentity`, so a leaf-attested
+ * identity can never mint or mutate a coordinator registration either.
  */
 import { existsSync, readFileSync } from 'node:fs'
 import { resolve } from 'node:path'
