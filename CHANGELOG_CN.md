@@ -6,6 +6,33 @@
 
 ## [Unreleased]
 
+## [4.1.1] - 2026-10-28
+
+### Harness
+
+- 在 CI 中守护内联 dashboard 资源：重新生成 `packages/commands/src/dashboard/assets.generated.ts` 若产生差异，`build` 任务会在 `typecheck` 之后立即失败（issue #532）。
+- 打通设计系统校验链:`packages/ui` 的 `check:snapshot`、`check:declarations`、`check:selectors`、`check:tones` 改为读取**仓库内被跟踪**的 `packages/ui/design-system/prototype.html`,不再依赖仓库外的本地原型;基线不可读时各自以 `exit 1` 结束并点明该路径。比对脚本不可能再在"什么都没比"的情况下报绿。
+- 从这四个设计系统校验中移除 `STRICT_SNAPSHOT` / `STRICT_DECLARATIONS` / `STRICT_SELECTORS` / `STRICT_TONES` 这些可选开关:基线不可读即失败,没有退出口。
+- 新增 `test-ui` CI 作业(`.github/workflows/ci.yml`),把 `packages/ui` 的测试套件与四个校验各自作为具名步骤运行,失败的比对项在日志中可直接定位。
+- 删除无人引用的 `packages/ui/src/styles/prototype-structure.ts`(`PROTOTYPE_PANELS`、`PROTOTYPE_DISCLOSURE_ANCESTRY`、`PROTOTYPE_FLOW_TABLE_ANCESTRY`):无导入方、无使用方。
+- `packages/ui/design-system/README.md` 与 `DESIGN.md` 同步描述当前链路,删除 `.mstar` 时代的过时说法。
+- 新增 **`mstar-design-system`** 方法 skill（SKILL.md + `references/baseline.md`、`parity.md`、`triage.md`）：把既有实现收敛到可追踪 baseline —— baseline 种类与「已提交 → 默认 strict → CI 调用」三段链、结构/外观/行为三层 parity 及逐层计数、defect / decision / phantom 分诊。
+- **`mstar-design-md`** 新增「原型 vs 文档」权威章节（单向 `baseline → fixture → document` 同步、fixture 必须可追踪、文档滞后属 review 义务），并加入 `mstar-design-system` load-order 行。
+- 在 **`mstar-harness-core`** 专题索引、**`mstar-roles`** 的 dev / QC / QA preset 及 `docs/runtime-reference.md` 中登记新 skill。
+- 澄清 `mstar-design-system` triage 措辞：Row-meta 确认步骤现指明 grep 的对象是实现的源码或组件文档中基线缺失的 documented default，而非含混的 "the source"；且由于 Row-meta 行已是条件分支，phantom 目录引言不再夸大为 "and was not"。
+Bump `@deepseek-ai/dsh-*` peers to `^0.2.1-rc.4` (corridor rc.3 → rc.4; ACP/MCP stdout hygiene + UI tooltip fixes; no plugin source changes).
+- 为 `mstar-pr-loop` 新增**可选的外部审查席位通道**，仅在可加载 `herdr` skill、其环境探针通过且检测到的宿主有对应 agent kind 时启用；任一条件不满足，原有会话内路径保持不变。
+- 每轮通过 `/amazing-pr-review` 在相邻 pane 的独立宿主会话中运行审查，跨轮复用该会话，循环会话仅协调修复。
+- 新增 `mstar-pr-loop` → `references/herdr.md` 说明通道流程与恢复，并在 `mstar-audit` → `references/pr-review.md` 增加一句归属规则，将合成、发布、捕获和归档留在审查会话。
+- 在 `mstar-host` § Host hooks 增加受控的 **authorized optional-capability reference** 例外，使该通道的 adapter 可保留在 `mstar-pr-loop/references/herdr.md`，条件是：已加载的外部 skill 是命令与生命周期的唯一权威且差异时以其为准、adapter 专有词仅留在所属文件、默认路径保持完整且每个门禁条件失败都有明确回退。
+- QC 席位 Assignment 现在无论 `Execution mode` 如何都必须给出**具体报告路径**（`QC report path`）：由席位自己写入报告文件（如 `{SDD_DIR}/review/qc.md`）；仅当 Assignment 显式声明 conversation-only review 且无 plan row 时才允许 `N/A`。
+- 更新 `mstar-roles/references/project-manager/dispatch-and-assignment.md`（Assignment 字段契约）与 `mstar-review-qc/SKILL.md`（inline 模式行），避免 coordinator 转录席位报告为 `qc-round*.md` 证据文件。
+- 按 `QC report path` 字段路由 dsh QC 通道（`mstar-host/references/dsh.md` § QC default、`dsh-workflow-scripts.md` § `mstar-qc-tri`）：需自写报告的 plan-backed QC 席位走可写通道；只读 `workflow` fan-out 仅在 Assignment 显式声明 conversation-only review 时承载 tri，由调用方持久化返回的 envelope。
+
+### 版本对齐
+
+- 提升 monorepo 根、`@mstar-harness/opencode`、`@mstar-harness/opencode-v2`、`@mstar-harness/cli`、`@mstar-harness/engine`、`@mstar-harness/dsh`、Cursor/Codex/Kimi/ZCode/omp/Claude 插件清单、便携式 Agent Plugins 清单及两份 marketplace 清单：**→ 4.1.1**。
+
 ## [4.1.0] - 2026-10-27
 
 ### Harness

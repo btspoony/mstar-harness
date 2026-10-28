@@ -6,6 +6,16 @@ The monorepo root [CHANGELOG.md](../../CHANGELOG.md) summarizes cross-surface re
 
 ## [Unreleased]
 
+## [4.1.1] - 2026-10-28
+
+### Harness
+
+- **Engine leaf-seat admission guard (#548):** a trusted adapter can now attest `leafSeat: true` on its §3.1 execution identity; `validateExecutionIdentity` then refuses with the stable `coordination.leaf-seat` code before any coordinator registration, bind, recovery or adoption runs — even when the ambient identity would satisfy the call. The refusal names the leaf condition (session header origin "subagent" or `delegationDepth > 0`) and the recovery: the non-leaf coordinating session performs the registration itself. The dsh transport attests the leaf fact on the identity it hands the engine, from the shared `isLeafSeatHeader` session-header predicate, and the omp coordinator-identity adapter attests its host `leaf` fact on the tuple it hands the engine; both adapters refuse a leaf pre-admission first, so on those paths the engine refusal is defense-in-depth. A CLI process launched by a leaf under the parent's ambient identity carries no leaf signal yet — closing that needs a new signal channel and stays open.
+
+- Version alignment with harness **4.1.1**.
+
+See root [CHANGELOG.md](../../CHANGELOG.md) **4.1.1**.
+
 ## [4.1.0] - 2026-10-27
 
 ### Changed
