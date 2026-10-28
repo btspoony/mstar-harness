@@ -6,6 +6,16 @@ The monorepo root [CHANGELOG.md](../../CHANGELOG.md) summarizes cross-surface re
 
 ## [Unreleased]
 
+## [4.1.1] - 2026-10-28
+
+### Changed
+
+Bump `@deepseek-ai/dsh-*` peers to `^0.2.1-rc.4` (corridor rc.3 → rc.4; ACP/MCP stdout hygiene + UI tooltip fixes; no plugin source changes).
+
+- Version alignment with harness **4.1.1**.
+
+See root [CHANGELOG.md](../../CHANGELOG.md) **4.1.1**.
+
 ## [4.1.0] - 2026-10-27
 
 ### Harness

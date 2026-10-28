@@ -8,6 +8,33 @@ Package-specific histories: [`packages/cli/CHANGELOG.md`](packages/cli/CHANGELOG
 
 ## [Unreleased]
 
+## [4.1.1] - 2026-10-28
+
+### Harness
+
+- Guard the inlined dashboard assets in CI: a rebuild of `packages/commands/src/dashboard/assets.generated.ts` that is not a no-op now fails the `build` job right after `typecheck` (issue #532).
+- Closed the design-system check chain: `check:snapshot`, `check:declarations`, `check:selectors` and `check:tones` in `packages/ui` now read the **tracked** `packages/ui/design-system/prototype.html` instead of a local prototype outside the repository, and each exits 1 naming that path when the baseline is unreadable. A comparator can no longer report green while comparing nothing.
+- Removed the opt-in `STRICT_SNAPSHOT` / `STRICT_DECLARATIONS` / `STRICT_SELECTORS` / `STRICT_TONES` escape hatches from the four design-system checks: an unreadable baseline fails them, with no flag to opt out.
+- Added a `test-ui` CI job (`.github/workflows/ci.yml`) that runs `packages/ui`'s test suite and the four checks as separate named steps, so a failing comparator is identified in the log.
+- Deleted the unread `packages/ui/src/styles/prototype-structure.ts` fixture (`PROTOTYPE_PANELS`, `PROTOTYPE_DISCLOSURE_ANCESTRY`, `PROTOTYPE_FLOW_TABLE_ANCESTRY`): no importer, no consumer.
+- `packages/ui/design-system/README.md` and `DESIGN.md` now describe the current chain; the stale `.mstar`-era rationale is gone.
+- Added the **`mstar-design-system`** method skill (SKILL.md + `references/baseline.md`, `parity.md`, `triage.md`): converging an existing implementation onto a tracked baseline — baseline kinds and the committed → strict-by-default → CI chain, structure/appearance/behaviour parity with per-layer counts, and defect / decision / phantom triage.
+- Updated **`mstar-design-md`** with the prototype-vs-document authority section (one-directional `baseline → fixture → document` sync, tracked fixture, lagging-document review obligation) and a `mstar-design-system` load-order row.
+- Registered the new skill in the **`mstar-harness-core`** topic index, the **`mstar-roles`** dev / QC / QA presets, and `docs/runtime-reference.md`.
+- Clarified `mstar-design-system` triage wording: the Row-meta confirmation check now names the side being grepped — the implementation's source or component documentation for the documented default the baseline omits — instead of the ambiguous "the source"; the phantom-catalogue preamble no longer overstates "and was not" now that the Row-meta row is a conditional branch.
+Bump `@deepseek-ai/dsh-*` peers to `^0.2.1-rc.4` (corridor rc.3 → rc.4; ACP/MCP stdout hygiene + UI tooltip fixes; no plugin source changes).
+- Added an **optional external review-seat channel** for `mstar-pr-loop`, gated on a loadable `herdr` skill, its passing environment probe and a detected host-to-agent-kind mapping. If any leg fails, the ordinary in-session path stays unchanged.
+- Run each review round through `/amazing-pr-review` in an independent host session in a sibling pane, reusing that session across rounds while the loop session only coordinates fixes.
+- Added `mstar-pr-loop` → `references/herdr.md` for channel procedure and recovery, plus one ownership sentence in `mstar-audit` → `references/pr-review.md` keeping synthesis, posting, capture and archive with the review session.
+- Added a controlled **authorized optional-capability reference** exception to `mstar-host` § Host hooks so this channel's adapter can remain in `mstar-pr-loop/references/herdr.md`, provided the loaded external skill is the sole command/lifecycle authority and wins on differences, adapter tokens stay in their owner file, and the default path stays complete with a plain fallback for every failed gate leg.
+- QC seat Assignments now require a **concrete report path** (`QC report path`) regardless of `Execution mode`: the seat itself writes its report file (e.g. `{SDD_DIR}/review/qc.md`); `N/A` is legal only when the Assignment explicitly declares conversation-only review with no plan row.
+- Updated `mstar-roles/references/project-manager/dispatch-and-assignment.md` (Assignment field contract) and `mstar-review-qc/SKILL.md` (inline mode line) so coordinators no longer transcribe seat reports into `qc-round*.md` evidence files.
+- Routed the dsh QC channels by the field (`mstar-host/references/dsh.md` § QC default, `dsh-workflow-scripts.md` § `mstar-qc-tri`): plan-backed QC seats that must write their report use a writable channel; the read-only `workflow` fan-out carries the tri only when the Assignment declares conversation-only review, with the caller persisting the returned envelopes.
+
+### Version alignment
+
+- Bump monorepo root, `@mstar-harness/opencode`, `@mstar-harness/opencode-v2`, `@mstar-harness/cli`, `@mstar-harness/engine`, `@mstar-harness/dsh`, Cursor/Codex/Kimi/ZCode/omp/Claude plugin manifests, the portable Agent Plugins manifest, and both marketplace manifests: **→ 4.1.1**.
+
 ## [4.1.0] - 2026-10-27
 
 ### Harness
