@@ -93,6 +93,7 @@ The **`**You are a leaf executor. You MUST NOT:**`** section (previously just pr
 **Skill presets**: `standard` | <explicit skill list> | none — activates the `Execute as` role's preset from its `Skill Preset (PM-Activated)` section; default `standard` for implementation / QC / QA rounds unless the route is trivial
 **QC mode**: full tri-review | single | N/A — **default `full tri-review` when `Execution mode: sdd`**; `single` only for `inline` / override
 **Review package path**: <branch-review diff file> | N/A
+**QC report path**: <concrete report file the seat itself writes, e.g. `{SDD_DIR}/review/qc.md`, for ALL QC seats regardless of `Execution mode`> | N/A only when the Assignment explicitly declares conversation-only review with no plan row — a seat must never return its report in conversation for later coordinator transcription.
 **Who runs this turn (executor lock)**: only `Execute as` role for this message
 **Primary**: <route type>
 **Task category**: `visual` | `deep` | `quick` | `logic` | `ops` | `docs`
