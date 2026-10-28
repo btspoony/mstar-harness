@@ -2,13 +2,13 @@ name: Plugin Security Scan
 
 # Reviewed posture: KEEP AND DISCLOSE (issue #547).
 #
-# Two `DANGEROUS_DYNAMIC_EXECUTION` (high) findings come from
+# The `DANGEROUS_DYNAMIC_EXECUTION` (high) findings come from
 # scripts/dsh-workflow-script-bounds.test.ts, which compiles and runs this
 # repository's own documented mstar-audit-fanout template with `node:vm` so the
 # subagent-pool bound is pinned behaviourally instead of by host core count. The
-# rule is a static match on the string-to-code mechanism itself, so it says
-# nothing about reachability or about shipped code: that file is test-only and
-# never published.
+# rule matches the dynamic code-execution call site itself, so it says nothing
+# about reachability or about shipped code: that file is test-only and is not
+# shipped in the npm packages.
 #
 # No suppression or scoping is added on purpose — the red advisory stays
 # disclosed rather than hidden, and it is not a verdict on shipped code either
