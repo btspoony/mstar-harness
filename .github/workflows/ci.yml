@@ -190,6 +190,13 @@ jobs:
       - name: ZCode hooks bundle freshness
         run: bun run engine:build && bun run hooks:build && git diff --exit-code -- hooks/
 
+      # The "Typecheck" step above already regenerates the inlined dashboard
+      # assets (`--cwd packages/cli typecheck:src` runs scripts/build-web.ts on
+      # the tracked module); this diff fails CI when a rebuild is not a no-op,
+      # so a stale assets.generated.ts cannot ship silently (issue #532).
+      - name: Dashboard assets freshness
+        run: git diff --exit-code -- packages/commands/src/dashboard/assets.generated.ts
+
 
       # `bun run --cwd packages/cli check` loads packages/cli/src/index.ts,
       # whose static graph reaches the commands package's
