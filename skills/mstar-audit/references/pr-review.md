@@ -16,6 +16,8 @@ Deep PR review is a **three-stage pipeline**: collect → domain review → synt
 
 > **Engine check (when available):** run `mstar-harness persist write review --key <pr-or-review-id> --file <review.json>` (or `import { synthesizeReview, validateMstarReviewV1 } from "@mstar-harness/engine"` in a host hook) to fold the accepted findings into the `mstar.review/v1` envelope and persist it — `synthesizeReview` derives verdict/tally from `computePrTally` (pure, no I/O), and `kind: review` runs `validateMstarReviewV1` before put, refusing invalid envelopes (exit 1, nothing written). On `fail` -> do not proceed; fix and re-run. Skill text below remains authoritative when the runtime is absent.
 
+When the loop dispatches this round to an external review-seat channel, that channel's session is the round's main agent for every rule in this reference — synthesis, posting, capture, archive and § Seat supervision stay with it; the dispatching loop session does not supervise that session's seats.
+
 ### Optional finite A05 shadow step (Stage 3 only)
 
 This is an **opt-in, documented synthesis step**, not an automatic `mstar pr-review` engine callback. The main agent remains the Stage 3 owner. First preserve the entire ordinary review: collect every assigned domain, open and vet the cited code, dedupe by actual underlying cause, record every considered/rejected candidate, check linked-issue AC, capture confirmed findings, and derive the unchanged tally/verdict. Freeze the original inventory, seat outputs, consumed original work and final report before any optional answer can be exposed. The original seats and required work run regardless of whether the shadow lane is off, unavailable, late, cancelled or wrong; never rerun them to manufacture a clean baseline.
