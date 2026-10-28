@@ -96,6 +96,8 @@ Carrier locations — the four markers in the shared corpus (all four live under
 
 **Shared-text boundary:** new/modified skills outside mstar-host and canonical commands use capability wording, not host names/tools/fields/native settings/extension filenames. Concrete adapters remain exclusively in this skill's per-host references.
 
+**Exception — an authorized optional-capability reference.** A reference may carry the concrete adapter (host names, command surface, error codes) of an optional capability when the feature is defined by that external capability itself, provided it: (a) names the loaded external skill as the sole authority for the command surface and lifecycle, and defers to it on any difference; (b) keeps the adapter in its own owner file rather than spreading those tokens into any other shared text; and (c) leaves the default path complete without the capability, with a plain fallback for every failed gate leg. This exception narrows nothing else in this section.
+
 **Enforcement surface.** The check applies to **the files a change touches**, never to the whole corpus: shared text that already violates the rule and is not part of the current change is **out of scope of the rule's enforcement** and is cleared in batches under the `host-seam-corpus-cleanup` goal of the store-authoritative `_default` project roadmap (read rule → `mstar-project-governance`; legacy `{PROJECT_DIR}/_default/roadmap.md` is transport/history only). Until that cleanup completes, a whole-tree grep over shared text is **not** a valid assertion for this rule — judge a change on the shared-layer text it adds or edits.
 
 ## Resolve loaded skill root
