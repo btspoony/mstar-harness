@@ -13570,7 +13570,10 @@ function validateExecutionIdentity(identity, scope, options = {}) {
     throw new CoordinationError("coordination.identity-missing", "Invalid execution identity: provide the identity tuple. Inspect coordinator identity with mstar status validate.");
   }
   const value = identity;
-  assertExactKeys(value, ["source", "sessionId", "workflowId", "role"], "execution identity");
+  assertExactKeys(value, ["source", "sessionId", "workflowId", "role", ...value.leafSeat === true ? ["leafSeat"] : []], "execution identity");
+  if (value.leafSeat === true) {
+    throw new CoordinationError("coordination.leaf-seat", 'the execution identity attests a leaf/delegated seat (session header origin "subagent" or a delegationDepth > 0); ' + "a leaf seat cannot mint or mutate a workflow coordinator registration, even under an ambient identity that would " + "otherwise satisfy the call. Recovery: the non-leaf coordinating session must acquire its own identity and perform " + "the registration; this seat continues with its permitted actions (issue.*, plan.prepare, plan.progress and the reads).", { leaf_seat: true });
+  }
   if (!isSource(value.source)) {
     const missing = value.source === undefined || value.source === null;
     throw new CoordinationError(missing ? "coordination.identity-missing" : "coordination.identity-mismatch", missing ? "the execution identity carries no provenance source — an adapter states `host` or `local`, and it is never inferred" : `the execution identity source ${JSON.stringify(value.source)} is not \`host\` or \`local\``, { source: value.source });

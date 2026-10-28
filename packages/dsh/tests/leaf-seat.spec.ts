@@ -18,8 +18,9 @@ import {
   getCommandDefinitions,
   isCoordinatorSeatCommand,
 } from '@mstar-harness/commands'
+import { executionContextFor } from '@mstar-harness/engine'
 import { coordinatorSeatCommandFor } from '../src/gates/coordinator-seat.ts'
-import { leafSeatCoordinatorRefusal } from '../src/gates/leaf-seat.ts'
+import { coordinatorIdentityFor, isLeafSeatHeader, leafSeatCoordinatorRefusal } from '../src/gates/leaf-seat.ts'
 
 const SRC = join(import.meta.dir, '..', 'src')
 const SEAT_SYMBOLS = ['coordinatorSeatCommandFor', 'isCoordinatorSeatCommand'] as const
@@ -122,5 +123,52 @@ describe('the folded tool name resolves to its family whatever the server name i
     ]) {
       expect([name, refusalOf(name, action)]).toEqual([name, undefined])
     }
+  })
+})
+
+/**
+ * The engine-side mirror: the shared dsh predicate decides WHEN an adapter must
+ * attest `leafSeat: true` on its §3.1 identity, and the engine then refuses the
+ * identity itself (`coordination.leaf-seat`) — a leaf cannot reach a coordinator
+ * registration even where the ambient identity would satisfy the call.
+ */
+describe('the engine refuses a leaf-attested identity behind the shared predicate', () => {
+  // The SAME builder the production transport calls (`native-commands.ts`
+  // adoption path): no hand-built identity in the test.
+  const identityOf = (header: unknown) => coordinatorIdentityFor(header, 'session-leaf', 'wf-leaf')
+
+  test('a leaf header attests and the engine conversion refuses coordination.leaf-seat', () => {
+    const header = { origin: 'subagent' }
+    expect(isLeafSeatHeader(header)).toBe(true)
+    expect(() => executionContextFor({ harnessDir: '/tmp/unused-harness' }, identityOf(header))).toThrow(
+      'a leaf seat cannot mint or mutate a workflow coordinator registration',
+    )
+  })
+
+  test('a non-leaf header attests nothing and converts as before', () => {
+    const header = { origin: 'team-lead' }
+    expect(isLeafSeatHeader(header)).toBe(false)
+    expect(() => executionContextFor({ harnessDir: '/tmp/unused-harness' }, identityOf(header))).not.toThrow()
+  })
+})
+
+/**
+ * The attestation itself, asserted on the exported production helper: a leaf
+ * header yields `leafSeat: true`, a non-leaf header (and both predicate shapes —
+ * a numeric delegationDepth as well as the subagent origin) omits the key, so
+ * deleting the attestation from `coordinatorIdentityFor` fails here.
+ */
+describe('coordinatorIdentityFor attests the leaf fact from the shared predicate', () => {
+  test('a leaf header yields leafSeat: true', () => {
+    expect(coordinatorIdentityFor({ origin: 'subagent' }, 's1', 'wf-1')).toEqual({
+      source: 'host', sessionId: 's1', workflowId: 'wf-1', role: 'coordinator', leafSeat: true,
+    })
+    expect(coordinatorIdentityFor({ delegationDepth: 2 }, 's1', 'wf-1').leafSeat).toBe(true)
+  })
+
+  test('a non-leaf header omits the key entirely', () => {
+    const identity = coordinatorIdentityFor({ origin: 'team-lead' }, 's1', 'wf-1')
+    expect(Object.hasOwn(identity, 'leafSeat')).toBe(false)
+    expect(coordinatorIdentityFor(undefined, 's1', 'wf-1')).not.toHaveProperty('leafSeat')
   })
 })

@@ -80,6 +80,15 @@ export type ExecutionIdentity = Readonly<{
   sessionId: string;
   workflowId: string;
   role: "coordinator";
+  /**
+   * The trusted adapter's attested leaf fact: the calling session header
+   * carries origin "subagent" or a numeric delegationDepth > 0 (the shared
+   * dsh leaf predicate, ADR `dsh-native-identity-channels`). A leaf seat can
+   * never mint or mutate a coordinator registration, so a validated identity
+   * refuses; the engine does not derive this itself — it trusts the adapter
+   * the same way it trusts the rest of the §3.1 tuple.
+   */
+  leafSeat?: true;
 }>;
 
 /** Per-call relaxations of the acquired-identity rule; default is strict. */
@@ -128,7 +137,28 @@ export function validateExecutionIdentity(
     throw new CoordinationError("coordination.identity-missing", "Invalid execution identity: provide the identity tuple. Inspect coordinator identity with mstar status validate.");
   }
   const value = identity as unknown as Record<string, unknown>;
-  assertExactKeys(value, ["source", "sessionId", "workflowId", "role"], "execution identity");
+  // The tuple's only legal leaf attestation is `true`: any other present value
+  // stays a refused key (`coordination.forbidden-field`), so a `leafSeat: false`
+  // is never silently ignored.
+  assertExactKeys(
+    value,
+    ["source", "sessionId", "workflowId", "role", ...(value.leafSeat === true ? ["leafSeat"] : [])],
+    "execution identity",
+  );
+  // The leaf refusal is FIRST and fail-closed: a leaf-attested identity never
+  // reaches any coordinator registration path, whatever the remaining tuple
+  // says. The recovery names the supported route — the non-leaf coordinating
+  // session performs the registration itself.
+  if (value.leafSeat === true) {
+    throw new CoordinationError(
+      "coordination.leaf-seat",
+      "the execution identity attests a leaf/delegated seat (session header origin \"subagent\" or a delegationDepth > 0); " +
+        "a leaf seat cannot mint or mutate a workflow coordinator registration, even under an ambient identity that would " +
+        "otherwise satisfy the call. Recovery: the non-leaf coordinating session must acquire its own identity and perform " +
+        "the registration; this seat continues with its permitted actions (issue.*, plan.prepare, plan.progress and the reads).",
+      { leaf_seat: true },
+    );
+  }
 
   if (!isSource(value.source)) {
     // An absent provenance is identity-missing; a present but unknown value is

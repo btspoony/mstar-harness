@@ -50,6 +50,9 @@ export const COORDINATION_ERROR_CODES = [
   // (an addressing error).
   "coordination.identity-missing",
   "coordination.identity-mismatch",
+  // The leaf-seat admission refusal (#548): a leaf-attested §3.1 identity can
+  // never mint or mutate a coordinator registration.
+  "coordination.leaf-seat",
   "coordination.version-conflict",
   "coordination.invalid-transition",
   "coordination.prepare-status",

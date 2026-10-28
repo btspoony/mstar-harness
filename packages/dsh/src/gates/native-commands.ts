@@ -51,8 +51,10 @@
  * Leaf guard: the coordinator-seat-capable tools (`mstar_plan_bind`,
  * `mstar_execution_clear`) refuse a known leaf seat FAIL-CLOSED before any
  * admission or store read — the named guard the removed execution-session
- * command enforced, restored on this surface (the engine has no leaf concept,
- * so this dsh-side check is the sole enforcement).
+ * command enforced. The same session-header predicate also ATTESTED the fact on
+ * the §3.1 identity this file hands the engine (`leafSeat`), so the engine's
+ * `validateExecutionIdentity` refuses `coordination.leaf-seat` behind it: the
+ * engine holds no second leaf rule, only the adapter-attested fact.
  */
 import { existsSync, readFileSync } from 'node:fs'
 import { resolve } from 'node:path'
@@ -79,7 +81,7 @@ import type {
 } from '@mstar-harness/commands'
 import { iterationViolationView, sessionCwdOf } from './_shared.ts'
 import { validateAuditDoc } from './seams.ts'
-import { isLeafSeatHeader } from './leaf-seat.ts'
+import { coordinatorIdentityFor, isLeafSeatHeader } from './leaf-seat.ts'
 import { adoptExecutionBinding, refusalOf } from './workflow-selection.ts'
 import { clearExecutionSessionBinding } from './execution-session.ts'
 import { clearExecutionBindingRoot, executionBindingRootOf, recordExecutionBindingRoot } from './execution-binding-roots.ts'
@@ -696,8 +698,11 @@ async function adoptNativeExecutionBinding(
   try {
     // The engine resume succeeds BEFORE the slot write: a copied store id, a
     // stale epoch or a scope mismatch refuses here and NOTHING is adopted.
+    // The identity is built by the shared leaf module, which ATTESTS the leaf
+    // fact from the same predicate the pre-admission check above reads — the
+    // engine's `coordination.leaf-seat` receiver stays defense-in-depth.
     const resumed = await resumeExecutionSession(
-      executionContextFor({ harnessDir }, { source: 'host', sessionId, workflowId: ref.workflowId, role: 'coordinator' }),
+      executionContextFor({ harnessDir }, coordinatorIdentityFor(sessionHeaderOf(exec), sessionId, ref.workflowId)),
       ref,
     )
     if (resumed.data.sessionId !== sessionId || resumed.data.workflowId !== ref.workflowId) {
