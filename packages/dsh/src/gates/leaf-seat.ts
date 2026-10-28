@@ -20,12 +20,35 @@
  *   leaf naming a bound coordinator session there.
  */
 import type { PreToolDecision, ToolExecution } from '@deepseek-ai/dsh-tools'
+import type { ExecutionIdentity } from '@mstar-harness/engine'
 import { coordinatorSeatCommandFor, coordinatorSeatToolNames } from './coordinator-seat.ts'
 
 export function isLeafSeatHeader(header: unknown): boolean {
   if (typeof header !== 'object' || header === null) return false
   const view = header as { origin?: unknown; delegationDepth?: unknown }
   return view.origin === 'subagent' || (typeof view.delegationDepth === 'number' && view.delegationDepth > 0)
+}
+
+/**
+ * The §3.1 identity tuple the dsh transport hands the engine for one carrying
+ * session: the leaf fact is ATTESTED here from the SAME shared predicate, so
+ * the engine's `coordination.leaf-seat` receiver stays wired to a real
+ * transport. Defense-in-depth only: the surfaces using it refuse a leaf
+ * pre-admission first, so the engine refusal fires when another route skips
+ * that check — never instead of it.
+ */
+export function coordinatorIdentityFor(
+  header: unknown,
+  sessionId: string,
+  workflowId: string,
+): ExecutionIdentity {
+  return {
+    source: 'host',
+    sessionId,
+    workflowId,
+    role: 'coordinator',
+    ...(isLeafSeatHeader(header) ? { leafSeat: true as const } : {}),
+  }
 }
 
 /** The named cause every refusal carries (the seam's refusal vocabulary). */

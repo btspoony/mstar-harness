@@ -81,7 +81,7 @@ import type {
 } from '@mstar-harness/commands'
 import { iterationViolationView, sessionCwdOf } from './_shared.ts'
 import { validateAuditDoc } from './seams.ts'
-import { isLeafSeatHeader } from './leaf-seat.ts'
+import { coordinatorIdentityFor, isLeafSeatHeader } from './leaf-seat.ts'
 import { adoptExecutionBinding, refusalOf } from './workflow-selection.ts'
 import { clearExecutionSessionBinding } from './execution-session.ts'
 import { clearExecutionBindingRoot, executionBindingRootOf, recordExecutionBindingRoot } from './execution-binding-roots.ts'
@@ -698,14 +698,11 @@ async function adoptNativeExecutionBinding(
   try {
     // The engine resume succeeds BEFORE the slot write: a copied store id, a
     // stale epoch or a scope mismatch refuses here and NOTHING is adopted.
-    // The leaf fact rides the SAME identity this adapter hands the engine: the
-    // shared session-header predicate decides it, so the engine receiver
-    // (`coordination.leaf-seat`) enforces the same rule instead of holding a
-    // second one. The pre-admission check above refuses a leaf first; this line
-    // is what keeps the engine refusal wired to a real transport.
-    const leafSeat = isLeafSeatHeader(sessionHeaderOf(exec)) ? { leafSeat: true as const } : {}
+    // The identity is built by the shared leaf module, which ATTESTS the leaf
+    // fact from the same predicate the pre-admission check above reads — the
+    // engine's `coordination.leaf-seat` receiver stays defense-in-depth.
     const resumed = await resumeExecutionSession(
-      executionContextFor({ harnessDir }, { source: 'host', sessionId, workflowId: ref.workflowId, role: 'coordinator', ...leafSeat }),
+      executionContextFor({ harnessDir }, coordinatorIdentityFor(sessionHeaderOf(exec), sessionId, ref.workflowId)),
       ref,
     )
     if (resumed.data.sessionId !== sessionId || resumed.data.workflowId !== ref.workflowId) {
