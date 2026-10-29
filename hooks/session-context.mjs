@@ -13167,7 +13167,8 @@ function readOperationReplay(tx, input) {
   const recorded = readCommittedOperation(tx.db, tx.epoch, input.operationId);
   if (recorded === null)
     return null;
-  if (recorded.requestHash !== input.requestHash && recorded.requestHash !== input.legacyRequestHash) {
+  const legacyHashes = input.legacyRequestHash === undefined || input.legacyRequestHash === null ? [] : Array.isArray(input.legacyRequestHash) ? input.legacyRequestHash : [input.legacyRequestHash];
+  if (recorded.requestHash !== input.requestHash && !legacyHashes.includes(recorded.requestHash)) {
     const problem = {
       component: "operation",
       path: "operationId",
@@ -29165,16 +29166,32 @@ function legacyRegistrationRequestHash(caller, request) {
 function derivedOperationId(intent) {
   return `op-${createHash18("sha256").update(stableJson(intent), "utf8").digest("hex").slice(0, 24)}`;
 }
-function legacyDerivedOperationId(actor, identity) {
-  let legacy;
+function legacyDerivedOperationIds(actor, identity) {
+  let legacy = null;
   try {
     legacy = normalizeIterationPlanPaths(identity);
   } catch {
-    return null;
+    legacy = null;
   }
-  if (legacy.workflow === identity.workflow)
+  const candidates = [];
+  const priorIdentityDelta = priorReleaseDelta(identity.workflow);
+  if (priorIdentityDelta !== null)
+    candidates.push({ workflow: identity.workflow, delta: priorIdentityDelta });
+  if (legacy !== null && legacy.workflow !== identity.workflow) {
+    candidates.push({ workflow: legacy.workflow, delta: catalogDeltaFor(legacy.workflow) });
+    const priorLegacyDelta = priorReleaseDelta(legacy.workflow);
+    if (priorLegacyDelta !== null)
+      candidates.push({ workflow: legacy.workflow, delta: priorLegacyDelta });
+  }
+  return [...new Set(candidates.map((candidate) => derivedOperationId({ actor, ...candidate })))];
+}
+function priorReleaseDelta(workflow) {
+  if (workflow.kind !== "iteration")
     return null;
-  return derivedOperationId({ actor, workflow: legacy.workflow, delta: catalogDeltaFor(legacy.workflow) });
+  return {
+    entities: [{ kind: "iteration", id: workflow.workflowId, title: workflow.workflowId, rootKind: "iterations", relativePath: workflow.workflowId }],
+    binding: { catalogKind: "iteration", catalogId: workflow.workflowId }
+  };
 }
 async function commitExecutionRegistration(context, request) {
   const identity = canonicalRegistrationIdentity(request);
@@ -29317,24 +29334,36 @@ async function registerShippedCatalogExecution(context, input) {
   const identity = canonicalRegistrationIdentity(request);
   const requestHash4 = registrationRequestHash(context.caller, identity);
   const legacyRequestHash = legacyRegistrationRequestHash(context.caller, identity);
-  const legacyOperationId = input.operationId === undefined ? legacyDerivedOperationId(input.actor, identity) : null;
+  const priorDelta = priorReleaseDelta(input.workflow);
+  let normalizedForm = null;
+  try {
+    normalizedForm = normalizeIterationPlanPaths(identity);
+  } catch {
+    normalizedForm = null;
+  }
+  const replayHashes = [
+    legacyRequestHash,
+    priorDelta === null ? null : registrationRequestHash(context.caller, { ...identity, delta: priorDelta }),
+    normalizedForm !== null && priorDelta !== null ? registrationRequestHash(context.caller, { ...normalizedForm, delta: priorDelta }) : null
+  ].filter((entry, index2, all2) => entry !== null && !all2.slice(0, index2).includes(entry));
+  const legacyOperationIds = input.operationId === undefined ? legacyDerivedOperationIds(input.actor, identity) : [];
   const resolved = await withExecutionTransaction(context, (tx) => {
     const expected = executionRootTokenOf(tx);
     const replayed = readOperationReplay(tx, {
       operationId: identity.operationId,
       requestHash: requestHash4,
-      legacyRequestHash,
+      legacyRequestHash: replayHashes,
       workflowId: identity.workflow.workflowId,
       planId: null,
       token: { kind: "root", key: [] }
     });
     if (replayed !== null)
       return { replayed: replayed.data };
-    if (legacyOperationId !== null) {
+    for (const legacyOperationId of legacyOperationIds) {
       const legacyReplayed = readOperationReplay(tx, {
         operationId: legacyOperationId,
         requestHash: requestHash4,
-        legacyRequestHash,
+        legacyRequestHash: replayHashes,
         workflowId: identity.workflow.workflowId,
         planId: null,
         token: { kind: "root", key: [] }
