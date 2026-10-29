@@ -13630,7 +13630,8 @@ function readOperationReplay(tx, input) {
   const recorded = readCommittedOperation(tx.db, tx.epoch, input.operationId);
   if (recorded === null)
     return null;
-  if (recorded.requestHash !== input.requestHash && recorded.requestHash !== input.legacyRequestHash) {
+  const legacyHashes = input.legacyRequestHash === undefined || input.legacyRequestHash === null ? [] : Array.isArray(input.legacyRequestHash) ? input.legacyRequestHash : [input.legacyRequestHash];
+  if (recorded.requestHash !== input.requestHash && !legacyHashes.includes(recorded.requestHash)) {
     const problem = {
       component: "operation",
       path: "operationId",
