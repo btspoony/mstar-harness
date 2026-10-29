@@ -6,6 +6,21 @@ The monorepo root [CHANGELOG.md](../../CHANGELOG.md) summarizes cross-surface re
 
 ## [Unreleased]
 
+## [4.1.2] - 2026-10-29
+
+### Changed
+
+- Iteration dashboard reads now tell the execution truth: `IterationDTO` carries `executionLifecycle` (`active` / `completed` / `stopped` / `failed` / `none`), derived from the iteration workflow instead of the catalog row, and `projects` lists every linked project.
+- Iteration plan membership is the union of the compass frontmatter `plans:` ids and the catalog `plan belongs-to iteration` links, de-duplicated and sorted; a declared plan missing from the catalog stays visible with its `catalog-missing` badge. No link-backfill migration ships — the read union is the membership record, and `mstar catalog reconcile` is unchanged.
+- The projection now also covers terminal **iteration** workflows, so finished iterations answer their execution state instead of "no execution"; terminal plan workflows do not widen the projection and the workflows list keeps its active-registration membership. A projection format bump rebuilds the published generation on the next read (store schema gains migration 14, `compass-plan-membership`).
+- `mstar iteration register --project` is repeatable: each occurrence publishes one `iteration belongs-to project` catalog link (the project must already be registered — the catalog refuses dangling relations), and the first value stays the snapshot's project record. Later add/remove uses the existing `mstar catalog link` family. Iteration registration now also registers its plan rows as catalog plan entities, because the membership links may not dangle.
+- New engine writer `removeMilestone` removes an empty milestone and refuses `milestone.not-empty` (naming the reassignment recovery) while issues remain. No new CLI verb family.
+- **Ledger resolve→append attribution drift closed (#550):** `appendDshWorkflowEvent` now re-reads the addressed session's coordinator seat inside its own write transaction: appending is authorized only while the source session still holds the ACTIVE coordinator seat of the addressed workflow at the selected epoch. `selectedGeneration` (storeId + epoch) alone could not see an epoch-preserving seat move — `recoverExecutionCoordinator` and a terminal adoption revoke the prior holder without advancing the epoch — so a resolved target could misattribute one in-window event. The refusal names the drift and its recovery (the ledger resolver re-runs on the next event); the refused row stays eligible, and a workflow with no coordinator rows at all (a pure host-state ledger) is appended to without the check. Scope boundary that stays open: a `selectedWorkflowId` move in dsh's own selection file while both seats remain active in the store is not engine-visible and can still misattribute the one in-window event; exposure ends at the next event, which re-resolves. Regression drives the mutation through the supported recovery producer and observes the named refusal, never a silent misattribution.
+
+- Version alignment with harness **4.1.2**.
+
+See root [CHANGELOG.md](../../CHANGELOG.md) **4.1.2**.
+
 ## [4.1.1] - 2026-10-28
 
 ### Harness
