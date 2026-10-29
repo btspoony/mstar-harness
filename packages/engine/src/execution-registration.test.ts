@@ -230,11 +230,18 @@ function iterationRequest(fixture: Fixture, iterationId: string, operationId: st
         compassRef: "delivery-compass.md",
         branch: { base: "main", integration: `iteration/${iterationId}`, target: "main" },
         rows: [row],
-        project: "_default",
       },
     },
     delta: {
-      entities: [{ kind: "iteration", id: iterationId, title: iterationId, rootKind: "iterations", relativePath: iterationId }],
+      entities: [
+        { kind: "iteration", id: iterationId, title: iterationId, rootKind: "iterations", relativePath: iterationId },
+        // C2: the reviewed delta carries the iteration's plan rows as catalog
+        // plan entities with one `plan belongs-to iteration` link each — the
+        // same derivation the shipped producer composes, so the two seams stay
+        // one semantic request.
+        { kind: "plan", id: row.id, title: row.title, rootKind: "plans", relativePath: `${row.id}.md` },
+      ],
+      links: [{ from: { kind: "plan", id: row.id }, relation: "belongs-to", to: { kind: "iteration", id: iterationId } }],
       binding: { catalogKind: "iteration", catalogId: iterationId },
     },
   };
@@ -561,8 +568,7 @@ describe("execution-registration", () => {
             compassRef: "delivery-compass.md",
             branch: { base: "main", integration: `iteration/${iterationId}`, target: "main" },
             rows: [row],
-            project: "_default",
-          },
+                      },
         },
         delta: {
           entities: [{ kind: "iteration", id: iterationId, title: iterationId, rootKind: "iterations", relativePath: iterationId }],
@@ -605,6 +611,61 @@ describe("execution-registration", () => {
     expect(noJsonRegistrationFiles(fixture.workspace)).toBe(true);
   });
 
+  test("a shipped iteration registration with repeated projects writes one belongs-to link per project (C4)", async () => {
+    const fixture = await activeFixture("iteration-projects");
+    const iterationId = "iter-20260921-projects";
+    const row = { id: `${iterationId}-plan`, title: "Iteration row", file: `plans/${iterationId}-plan.md` };
+    writePlanDocument(fixture.context.harnessDir, row.id, row.title);
+    writeReviewedCompass(fixture.context.harnessDir, iterationId);
+    for (const projectId of ["proj-a", "proj-b"]) {
+      await registerCatalogEntity(
+        fixture.context,
+        { kind: "project", id: projectId, title: projectId, rootKind: "projects", relativePath: projectId },
+        { actor: "project-manager", operationId: `register-${projectId}` },
+      );
+    }
+    const context: ExecutionContext = { ...fixture.context, caller: { ...fixture.caller, workflowId: iterationId } };
+    await registerShippedCatalogExecution(context, {
+      actor: "project-manager",
+      workflow: {
+        kind: "iteration",
+        workflowId: iterationId,
+        options: {
+          harnessDir: fixture.context.harnessDir,
+          compassRef: "delivery-compass.md",
+          branch: { base: "main", integration: `iteration/${iterationId}`, target: "main" },
+          rows: [row],
+          projects: ["proj-a", "proj-b"],
+        },
+      },
+      operationId: "op-iteration-projects",
+      expected: fixture.rootToken,
+    });
+    // One link per project, plus the plan row's membership link.
+    const handle = await openStore(fixture.context, "read");
+    let links: string[];
+    try {
+      links = (handle.db
+        .prepare("select from_kind, from_id, to_kind, to_id from catalog_links order by from_kind, from_id, to_id")
+        .all() as Array<{ from_kind: string; from_id: string; to_kind: string; to_id: string }>)
+        .map((link) => `${link.from_kind}:${link.from_id}->${link.to_kind}:${link.to_id}`);
+    } finally {
+      handle.close();
+    }
+    expect(links).toEqual([
+      `iteration:${iterationId}->project:proj-a`,
+      `iteration:${iterationId}->project:proj-b`,
+      `plan:${row.id}->iteration:${iterationId}`,
+    ]);
+    // The snapshot's single-project record keeps the first value.
+    const header = await one<{ state_json: string }>(
+      fixture.context,
+      "select state_json from execution_workflows where workflow_id = ?",
+      iterationId,
+    );
+    expect(JSON.parse(String(header?.state_json))).toMatchObject({ project: "proj-a" });
+  });
+
   test("execution-registration-publishes-nothing-when-the-named-compass-is-not-this-iterations", async () => {
     const fixture = await activeFixture("iteration-compass-document");
     const iterationId = "iter-20260921-compass-document";
@@ -636,8 +697,7 @@ describe("execution-registration", () => {
                 compassRef,
                 branch: { base: "main", integration: `iteration/${iterationId}`, target: "main" },
                 rows: [row],
-                project: "_default",
-              },
+                              },
             },
             delta: {
               entities: [{ kind: "iteration", id: iterationId, title: iterationId, rootKind: "iterations", relativePath: iterationId }],
@@ -762,8 +822,7 @@ describe("execution-registration", () => {
             compassRef: aliasPath,
             branch: { base: "main", integration: `iteration/${iterationId}`, target: "main" },
             rows: [row],
-            project: "_default",
-          },
+                      },
         },
         delta: {
           entities: [{ kind: "iteration", id: iterationId, title: iterationId, rootKind: "iterations", relativePath: iterationId }],
@@ -816,11 +875,17 @@ describe("execution-registration", () => {
           compassRef: aliasRef,
           branch: { base: "main", integration: `iteration/${iterationId}`, target: "main" },
           rows: [row],
-          project: "_default",
         },
       },
+      // The reviewed delta is the shipped producer's own derivation (C2): plan
+      // entities plus the membership links, so the commit and producer seams
+      // spell one semantic request.
       delta: {
-        entities: [{ kind: "iteration", id: iterationId, title: iterationId, rootKind: "iterations", relativePath: iterationId }],
+        entities: [
+          { kind: "iteration", id: iterationId, title: iterationId, rootKind: "iterations", relativePath: iterationId },
+          { kind: "plan", id: row.id, title: row.title, rootKind: "plans", relativePath: `${row.id}.md` },
+        ],
+        links: [{ from: { kind: "plan", id: row.id }, relation: "belongs-to", to: { kind: "iteration", id: iterationId } }],
         binding: { catalogKind: "iteration", catalogId: iterationId },
       },
     };
@@ -1031,8 +1096,7 @@ describe("execution-registration", () => {
                 compassRef: attempt.compassRef,
                 branch: { base: "main", integration: `iteration/${attempt.id}`, target: "main" },
                 rows: [row],
-                project: "_default",
-              },
+                              },
             },
             delta: {
               entities: [{ kind: "iteration", id: attempt.id, title: attempt.id, rootKind: "iterations", relativePath: attempt.id }],
@@ -1292,8 +1356,7 @@ describe("execution-registration \u2014 recovery-first registration", () => {
             compassRef: "delivery-compass.md",
             branch: { base: "main", integration: `iteration/${iterationId}`, target: "main" },
             rows: [row],
-            project: "_default",
-          },
+                      },
         },
         delta: {
           entities: [{ kind: "iteration", id: iterationId, title: iterationId, rootKind: "iterations", relativePath: iterationId }],

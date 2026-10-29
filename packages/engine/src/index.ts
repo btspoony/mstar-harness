@@ -871,6 +871,7 @@ export type {
   IssueFlow,
   IssueFlowBucket,
   IterationDTO,
+  IterationExecutionLifecycle,
   IterationGateStep,
   IterationListDTO,
   IterationPlanDTO,
@@ -1025,6 +1026,7 @@ export {
   MilestoneError,
   addMilestone,
   updateMilestone,
+  removeMilestone,
   readMilestonesOn,
   queryMilestones,
 } from "./milestone-store.js";
