@@ -27,7 +27,7 @@ import {
 import type { Resolved } from "../view-model/state.ts";
 import type { RoadmapModel } from "../view-model/projects.ts";
 import { Projects, type ProjectsCopy } from "./Projects.tsx";
-import { ProjectDetail as ProjectDetailScreen, type ProjectDetailCopy } from "./ProjectDetail.tsx";
+import { ProjectDetail as ProjectDetailScreen, type ProjectDetailCopy, type ProjectDetailProps } from "./ProjectDetail.tsx";
 
 const projection = {
   generation: 7,
@@ -135,6 +135,18 @@ const detailCopy: ProjectDetailCopy = {
     countLabels: { open: "open", resolved: "resolved", retired: "retired without resolution", total: "total" },
     noTarget: "no target",
     unassigned: (count) => `${count} unassigned`,
+    writes: {
+      create: "Create",
+      nameLabel: "Milestone name",
+      targetLabel: "Target",
+      statusLabel: "Status",
+      edit: "Edit",
+      save: "Save",
+      cancel: "Cancel",
+      assign: "Assign issues",
+      unassign: "Unassign",
+      refusalLead: "The store refused the change:",
+    },
     timelineUnassigned: "unassigned",
     timelineUnassignedIssues: (count) => `${count} issues`,
     absentNextStep: (features) => `Available: ${features}`,
@@ -153,6 +165,8 @@ const renderDetail = (
     roadmap?: Resolved<RoadmapModel>;
     feature?: "roadmap" | "issues" | "iterations";
     identity?: ReturnType<typeof projectIdentity>;
+    writes?: ProjectDetailProps["writes"];
+    assignableIssues?: ProjectDetailProps["assignableIssues"];
   },
   onClearScope?: () => void,
 ): string =>
@@ -165,6 +179,8 @@ const renderDetail = (
       issues={<div data-ms-scoped-list="issues" />}
       iterations={<div data-ms-scoped-list="iterations" />}
       copy={detailCopy}
+      {...(input.writes === undefined ? {} : { writes: input.writes })}
+      {...(input.assignableIssues === undefined ? {} : { assignableIssues: input.assignableIssues })}
       onBack={() => {}}
       onClearScope={onClearScope}
     />,
@@ -527,5 +543,48 @@ describe("ProjectDetail — the scoped features carry a removable scope chip", (
     // screen from owning the scope.
     const html = renderDetail({ feature: "issues" }, () => {});
     expect(html).toContain('aria-label="Clear the project scope"');
+  });
+});
+
+describe("ProjectDetail — the milestone write controls (plan Task 4, minus remove)", () => {
+  const writes = (over: Partial<NonNullable<ProjectDetailProps["writes"]>> = {}): NonNullable<ProjectDetailProps["writes"]> => ({
+    busy: false,
+    refusal: null,
+    create: () => {},
+    update: () => {},
+    assign: () => {},
+    ...over,
+  });
+
+  test("the create form, edit controls, assign picker and unassign buttons render", () => {
+    const html = renderDetail({
+      writes: writes(),
+      assignableIssues: [{ id: "I-000900", title: "Loose end", severity: "low", revision: 3 }],
+    });
+    expect(html).toContain('data-ms-milestone-create=""');
+    expect(html).toContain('data-ms-milestone-edit=""');
+    expect(html).toContain('data-ms-milestone-assign=""');
+    expect(html).toContain('data-ms-assign-issue="I-000900"');
+    expect(html).toContain('data-ms-unassign-issue="I-000870"');
+  });
+
+  test("no write surface, no controls: the read-only page stays read-only", () => {
+    const html = renderDetail({});
+    expect(html).not.toContain('data-ms-milestone-create=""');
+    expect(html).not.toContain("data-ms-unassign-issue");
+  });
+
+  test("a refusal is surfaced verbatim and a busy write disables the controls", () => {
+    const refused = renderDetail({ writes: writes({ refusal: "[milestone.revision-conflict] Store revision changed since it was observed." }) });
+    expect(refused).toContain('data-ms-write-refusal=""');
+    expect(refused).toContain("[milestone.revision-conflict] Store revision changed since it was observed.");
+    const busy = renderDetail({ writes: writes({ busy: true }) });
+    expect((busy.match(/disabled=""/g) ?? []).length).toBeGreaterThan(2);
+  });
+
+  test("NEGATIVE: there is no remove control — the engine verb has not landed", () => {
+    const html = renderDetail({ writes: writes() });
+    expect(html).not.toContain("data-ms-milestone-remove");
+    expect(html).not.toContain("Remove");
   });
 });

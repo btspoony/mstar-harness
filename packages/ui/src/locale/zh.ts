@@ -446,6 +446,18 @@ export const zh: Copy = {
       unassigned: (count) => `${count} 个问题未归属到里程碑`,
       timelineUnassigned: "未归属",
       timelineUnassignedIssues: (count: number) => `${count} 个问题`,
+      writes: {
+        create: "创建",
+        nameLabel: "里程碑名称",
+        targetLabel: "目标日期",
+        statusLabel: "状态",
+        edit: "编辑",
+        save: "保存",
+        cancel: "取消",
+        assign: "分配问题",
+        unassign: "取消分配",
+        refusalLead: "存储拒绝了此次变更：",
+      },
       absentNextStep: (features) => `本项目仍可使用：${features}。`,
     },
     scope: {

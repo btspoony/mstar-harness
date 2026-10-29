@@ -475,6 +475,18 @@ export const en = {
       unassigned: (count: number) => `${count} issues are not assigned to a milestone`,
       timelineUnassigned: "unassigned",
       timelineUnassignedIssues: (count: number) => `${count} ${count === 1 ? "issue" : "issues"}`,
+      writes: {
+        create: "Create",
+        nameLabel: "Milestone name",
+        targetLabel: "Target",
+        statusLabel: "Status",
+        edit: "Edit",
+        save: "Save",
+        cancel: "Cancel",
+        assign: "Assign issues",
+        unassign: "Unassign",
+        refusalLead: "The store refused the change:",
+      },
       absentNextStep: (features: string) => `This project still has: ${features}.`,
     },
     scope: {

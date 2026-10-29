@@ -15,6 +15,7 @@
  * Not rendered anywhere here: `storeRevision`, `catalogRevision`, `builtAt`,
  * `checkedAt`, the catalog `revision`, `sourceHash`.
  */
+import { useState } from "react";
 import { EmptyState, type AbsenceArm } from "../components/EmptyState.tsx";
 import { ProgressBar } from "../components/ProgressBar.tsx";
 import { StatusDot } from "../components/StatusDot.tsx";
@@ -29,6 +30,31 @@ import {
 } from "../view-model/projects.ts";
 import type { Resolved } from "../view-model/state.ts";
 import type { Tone } from "../view-model/status.ts";
+
+/** The closed status set the engine accepts for a milestone patch. */
+const MILESTONE_STATUSES = ["planned", "active", "delivered", "dropped"] as const;
+
+/** One open, unassigned issue the assign picker can offer. */
+export type AssignableIssue = { id: string; title: string; severity: string; revision: number };
+
+/**
+ * The milestone write surface, declared structurally so this screen stays
+ * transport-agnostic (plan 20261029-dashboard-alignment Task 4). Every action
+ * is one engine verb; the surface owns the busy/refusal state and the read
+ * reload — the screen owns only its control state. There is no remove action
+ * yet: the engine's `removeMilestone` verb is landing on the engine track, so
+ * the remove control ships after that merge.
+ */
+export type MilestoneWriteSurface = {
+  /** True while one write is in flight; every control is disabled. */
+  busy: boolean;
+  /** The store's own refusal message, verbatim, or `null`. */
+  refusal: string | null;
+  create: (input: { name: string; target: string | null; ordinal: number }) => void;
+  update: (milestoneId: string, patch: { name?: string; target?: string | null; status?: string }) => void;
+  /** `milestoneId: null` is the unassign. */
+  assign: (issueId: string, issueRevision: number, milestoneId: string | null) => void;
+};
 
 /** Every visible string this screen needs. Task 5 supplies them. */
 export type ProjectDetailCopy = {
@@ -56,6 +82,19 @@ export type ProjectDetailCopy = {
     /** The trailing timeline node's name for issues with no milestone. */
     timelineUnassigned: string;
     timelineUnassignedIssues: (count: number) => string;
+    /** The milestone write controls (plan Task 4). */
+    writes: {
+      create: string;
+      nameLabel: string;
+      targetLabel: string;
+      statusLabel: string;
+      edit: string;
+      save: string;
+      cancel: string;
+      assign: string;
+      unassign: string;
+      refusalLead: string;
+    };
     /** The next step offered when the roadmap is absent (§4). */
     absentNextStep: (features: string) => string;
   };
@@ -90,14 +129,114 @@ export type ProjectDetailProps = {
   issuesCount?: number;
   iterationsCount?: number;
   copy: ProjectDetailCopy;
+  /** The milestone write channel, when the host can write (plan Task 4). */
+  writes?: MilestoneWriteSurface;
+  /** The project's open, unassigned issues, as the assign picker's options. */
+  assignableIssues?: readonly AssignableIssue[];
   onBack?: () => void;
   /** Leaving the project's scope — the chip's own affordance. Omitted, there is no chip button. */
   onClearScope?: () => void;
 };
 
+/** The milestone board's inline write controls for one milestone (plan Task 4). */
+function MilestoneActions(props: {
+  milestone: RoadmapModel["milestones"][number];
+  writes: MilestoneWriteSurface;
+  assignable: readonly AssignableIssue[];
+  copy: ProjectDetailCopy;
+}) {
+  const { milestone, writes, assignable, copy } = props;
+  const [editing, setEditing] = useState(false);
+  const [name, setName] = useState(milestone.name);
+  const [target, setTarget] = useState(milestone.target ?? "");
+  const [status, setStatus] = useState(milestone.status ?? "planned");
+  if (!editing) {
+    return (
+      <span className={"ms-actions"}>
+        <button type="button" className={"link"} disabled={writes.busy} data-ms-milestone-edit="" onClick={() => setEditing(true)}>
+          {copy.roadmap.writes.edit}
+        </button>
+        {assignable.length === 0 ? null : (
+          <details data-ms-milestone-assign="">
+            <summary>
+              <button type="button" className={"link"} disabled={writes.busy} tabIndex={-1}>
+                {copy.roadmap.writes.assign}
+              </button>
+            </summary>
+            {assignable.map((issue) => (
+              <button
+                key={issue.id}
+                type="button"
+                className={"chip"}
+                disabled={writes.busy}
+                title={issue.title}
+                data-ms-assign-issue={issue.id}
+                onClick={() => writes.assign(issue.id, issue.revision, milestone.milestoneId)}
+              >
+                {issue.id}
+                <span className="muted"> · {issue.severity}</span>
+              </button>
+            ))}
+          </details>
+        )}
+      </span>
+    );
+  }
+  return (
+    <form
+      className={"ms-edit"}
+      data-ms-milestone-edit-form={milestone.milestoneId}
+      onSubmit={(event) => {
+        event.preventDefault();
+        writes.update(
+          milestone.milestoneId,
+          {
+            ...(name.trim() === milestone.name ? {} : { name: name.trim() }),
+            ...(target === (milestone.target ?? "") ? {} : { target: target === "" ? null : target }),
+            ...(status === milestone.status ? {} : { status }),
+          },
+        );
+        setEditing(false);
+      }}
+    >
+      <label>
+        {copy.roadmap.writes.nameLabel}
+        <input value={name} disabled={writes.busy} onChange={(event) => setName(event.target.value)} />
+      </label>
+      <label>
+        {copy.roadmap.writes.targetLabel}
+        <input type="date" value={target} disabled={writes.busy} onChange={(event) => setTarget(event.target.value)} />
+      </label>
+      <label>
+        {copy.roadmap.writes.statusLabel}
+        <select value={status} disabled={writes.busy} onChange={(event) => setStatus(event.target.value)}>
+          {MILESTONE_STATUSES.map((option) => (
+            <option key={option} value={option}>
+              {option}
+            </option>
+          ))}
+        </select>
+      </label>
+      <button type="submit" className={"link"} disabled={writes.busy}>
+        {copy.roadmap.writes.save}
+      </button>
+      <button type="button" className={"link"} disabled={writes.busy} onClick={() => setEditing(false)}>
+        {copy.roadmap.writes.cancel}
+      </button>
+    </form>
+  );
+}
+
 /** One milestone of the roadmap board: status, target, progress, open, issues. */
-function Milestone(props: { milestone: RoadmapModel["milestones"][number]; copy: ProjectDetailCopy }) {
+function Milestone(props: {
+  milestone: RoadmapModel["milestones"][number];
+  copy: ProjectDetailCopy;
+  writes?: MilestoneWriteSurface;
+  assignable?: readonly AssignableIssue[];
+}) {
   const { milestone, copy } = props;
+  const writes = props.writes;
+  const unassign = writes === undefined ? undefined : (issueId: string, issueRevision: number) => writes.assign(issueId, issueRevision, null);
   return (
     <section className={"milestone-block"} data-ms-milestone={milestone.milestoneId}>
       <div className={"milestone-block-head"}>
@@ -130,14 +269,37 @@ function Milestone(props: { milestone: RoadmapModel["milestones"][number]; copy:
         // disposition, and the rest folded into `+N <disposition>`. The title stays on
         // the issue's own screen — this row answers "which issues", not "what are they".
         <div className="assigned">
-          {assignedChips(milestone.issues).shown.map((issue) => (
-            <span key={issue.id} className={`status tone-${dispositionTone(issue.disposition)}`}>
-              <span className="dot" aria-hidden="true" />
-              <span className="assigned-id" title={issue.title}>
-                {issue.id}
-              </span>
-            </span>
-          ))}
+          {assignedChips(milestone.issues).shown.map((issue) => {
+            const chip = (
+              <>
+                <span className="dot" aria-hidden="true" />
+                <span className="assigned-id" title={issue.title}>
+                  {issue.id}
+                </span>
+              </>
+            );
+            if (writes === undefined || unassign === undefined) {
+              return (
+                <span key={issue.id} className={`status tone-${dispositionTone(issue.disposition)}`}>
+                  {chip}
+                </span>
+              );
+            }
+            return (
+              <button
+                key={issue.id}
+                type="button"
+                className={`status tone-${dispositionTone(issue.disposition)}`}
+                disabled={writes.busy}
+                aria-label={`${copy.roadmap.writes.unassign} ${issue.id}`}
+                data-ms-unassign-issue={issue.id}
+                onClick={() => unassign(issue.id, issue.revision)}
+              >
+                {chip}
+                <span aria-hidden="true"> ×</span>
+              </button>
+            );
+          })}
           {assignedChips(milestone.issues).folded.map((fold) => (
             <span key={fold.disposition} className="assigned-id muted" data-ms-folded={fold.disposition}>
               +{fold.count} {fold.disposition}
@@ -145,7 +307,42 @@ function Milestone(props: { milestone: RoadmapModel["milestones"][number]; copy:
           ))}
         </div>
       )}
+      {writes === undefined || props.assignable === undefined ? null : (
+        <MilestoneActions milestone={milestone} writes={writes} assignable={props.assignable} copy={copy} />
+      )}
     </section>
+  );
+}
+
+/** The board's create form: name + optional target; the ordinal is the list length. */
+function MilestoneCreateForm(props: { writes: MilestoneWriteSurface; nextOrdinal: number; copy: ProjectDetailCopy }) {
+  const { writes, copy } = props;
+  const [name, setName] = useState("");
+  const [target, setTarget] = useState("");
+  return (
+    <form
+      className={"ms-create"}
+      data-ms-milestone-create=""
+      onSubmit={(event) => {
+        event.preventDefault();
+        if (name.trim() === "") return;
+        writes.create({ name: name.trim(), target: target === "" ? null : target, ordinal: props.nextOrdinal });
+        setName("");
+        setTarget("");
+      }}
+    >
+      <label>
+        {copy.roadmap.writes.nameLabel}
+        <input value={name} disabled={writes.busy} onChange={(event) => setName(event.target.value)} />
+      </label>
+      <label>
+        {copy.roadmap.writes.targetLabel}
+        <input type="date" value={target} disabled={writes.busy} onChange={(event) => setTarget(event.target.value)} />
+      </label>
+      <button type="submit" className={"link"} disabled={writes.busy || name.trim() === ""}>
+        {copy.roadmap.writes.create}
+      </button>
+    </form>
   );
 }
 
@@ -163,8 +360,8 @@ function milestoneStatusTone(status: string): Tone {
  * settled work, never an overflow indicator. A milestone whose open set is long lists all
  * of it — the row wraps, which is what the prototype's own CSS does.
  */
-function assignedChips(issues: readonly { id: string; title: string; disposition: string }[]): {
-  shown: typeof issues;
+function assignedChips(issues: readonly { id: string; title: string; disposition: string; revision: number }[]): {
+  shown: readonly { id: string; title: string; disposition: string; revision: number }[];
   folded: Array<{ disposition: string; count: number }>;
 } {
   const byDisposition = new Map<string, number>();
@@ -241,10 +438,27 @@ function MilestoneTimeline(props: { model: RoadmapModel; copy: ProjectDetailCopy
  * gone (plan Task 3): the direction moved to the page header, and the rest were
  * removed with the user's decision.
  */
-function RoadmapFeature(props: { model: RoadmapModel; copy: ProjectDetailCopy }) {
+function RoadmapFeature(props: {
+  model: RoadmapModel;
+  copy: ProjectDetailCopy;
+  writes?: MilestoneWriteSurface;
+  assignable?: readonly AssignableIssue[];
+}) {
   const { model, copy } = props;
   return (
     <div className={"feature-body"} data-ms-feature="roadmap">
+      {props.writes === undefined ? null : (
+        <>
+          {/* The store's own refusal, verbatim, until the next write or reload
+              replaces it (contract C1: the client rewords nothing). */}
+          {props.writes.refusal === null ? null : (
+            <p className="muted t-12" role="alert" data-ms-write-refusal="">
+              {copy.roadmap.writes.refusalLead} {props.writes.refusal}
+            </p>
+          )}
+          <MilestoneCreateForm writes={props.writes} nextOrdinal={model.milestones.length} copy={copy} />
+        </>
+      )}
       {model.milestones.length === 0 && model.unassignedIssues === 0 ? null : (
         <section className={"panel"} data-ms-milestones="">
           <div className="panel-head">
@@ -265,7 +479,13 @@ function RoadmapFeature(props: { model: RoadmapModel; copy: ProjectDetailCopy })
           </div>
           <MilestoneTimeline model={model} copy={copy} />
           {model.milestones.map((milestone) => (
-            <Milestone key={milestone.milestoneId} milestone={milestone} copy={copy} />
+            <Milestone
+              key={milestone.milestoneId}
+              milestone={milestone}
+              copy={copy}
+              {...(props.writes === undefined ? {} : { writes: props.writes })}
+              {...(props.assignable === undefined ? {} : { assignable: props.assignable })}
+            />
           ))}
           {model.unassignedIssues === 0 ? null : (
             <div className={"panel-foot"}>
@@ -289,11 +509,23 @@ function RoadmapFeature(props: { model: RoadmapModel; copy: ProjectDetailCopy })
  * the continuation. `empty` is a different fact: the roadmap exists, its milestone
  * set is empty. The two never share a string.
  */
-function RoadmapArm(props: { roadmap: Resolved<RoadmapModel>; copy: ProjectDetailCopy }) {
+function RoadmapArm(props: {
+  roadmap: Resolved<RoadmapModel>;
+  copy: ProjectDetailCopy;
+  writes?: MilestoneWriteSurface;
+  assignable?: readonly AssignableIssue[];
+}) {
   const { roadmap, copy } = props;
   switch (roadmap.kind) {
     case "populated":
-      return <RoadmapFeature model={roadmap.value} copy={copy} />;
+      return (
+        <RoadmapFeature
+          model={roadmap.value}
+          copy={copy}
+          {...(props.writes === undefined ? {} : { writes: props.writes })}
+          {...(props.assignable === undefined ? {} : { assignable: props.assignable })}
+        />
+      );
     case "absent":
       return (
         <EmptyState
@@ -447,7 +679,12 @@ export function ProjectDetail(props: ProjectDetailProps) {
       />
 
       {feature === DEFAULT_PROJECT_FEATURE ? (
-        <RoadmapArm roadmap={props.roadmap} copy={copy} />
+        <RoadmapArm
+          roadmap={props.roadmap}
+          copy={copy}
+          {...(props.writes === undefined ? {} : { writes: props.writes })}
+          {...(props.assignableIssues === undefined ? {} : { assignable: props.assignableIssues })}
+        />
       ) : (
         <div className={"feature-body"} data-ms-feature={feature}>
           {/* The scope chip: this list is this project's, and the scope is
