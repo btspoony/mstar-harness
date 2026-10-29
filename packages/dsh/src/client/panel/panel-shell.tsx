@@ -99,6 +99,11 @@ function focusCopy(copy: Copy): FocusCopy {
     // The two project panels reuse the Overview screen's strings: one fact, one copy.
     residualsHeading: copy.overview.residualsHeading,
     residualsTotal: copy.overview.residualsTotal,
+    // The Focus-only scope labels live beside those strings; the adapter must carry
+    // them or the typed copy contract is unsatisfied (a required mapping, not a
+    // product decision).
+    residualsScope: copy.overview.residualsScope,
+    milestoneProjectUnattributed: copy.overview.milestoneProjectUnattributed,
     milestonesHeading: copy.overview.milestonesHeading,
     milestoneProgress: copy.overview.milestoneProgress,
     milestoneOpenCount: copy.overview.milestoneOpenCount,
