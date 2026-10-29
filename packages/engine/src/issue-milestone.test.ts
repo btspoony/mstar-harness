@@ -6,7 +6,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { withStoreRead, queryDashboard } from "./store-read.js";
 import { assignIssueMilestone, closeIssue, getIssue, IssueError, listIssues, captureIssue } from "./issue.js";
-import { addMilestone, removeMilestone, updateMilestone } from "./milestone-store.js";
+import { addMilestone, removeMilestone, readMilestonesOn as readMilestonesOnDb, updateMilestone } from "./milestone-store.js";
 import { initializeStore, upgradeStore, MIGRATIONS, migrationChecksum, SCHEMA_VERSION_TABLE_SQL, storeDbPath, type StoreContext, type StoreDb } from "./store-db.js";
 import { bindExecutionSession, createExecutionWorkflow, readExecutionState, type ExecutionContext } from "./execution-store.js";
 import { encodeExecutionSessionRef } from "./execution-session.js";
@@ -217,5 +217,34 @@ describe("removeMilestone", () => {
     await expect(
       removeMilestone(context, projectId, held.milestoneId, { operationId: "remove-held", expectedStoreRevision: revision() }),
     ).rejects.toMatchObject({ code: "milestone.not-empty" });
+
+    // A milestone carrying only RETIRED issues is still not empty: the refusal
+    // counts every row and says so instead of reporting "open issues".
+    const assigned = await getIssue(context, "milestone-assignment-issue");
+    await closeIssue(
+      context,
+      "milestone-assignment-issue",
+      "resolved",
+      { reason: "settled for the removal fixture", references: ["issue-milestone.test.ts"], alignmentRef: "PM acceptance" },
+      { actor: "project-manager", operationId: "remove-held-close", expectedRevision: assigned.revision },
+    );
+    const retiredRefusal = await removeMilestone(context, projectId, held.milestoneId, {
+      operationId: "remove-held-retired",
+      expectedStoreRevision: revision(),
+    }).catch((error: unknown) => error);
+    expect(retiredRefusal).toMatchObject({ code: "milestone.not-empty" });
+    expect((retiredRefusal as Error).message).toContain("settled");
+    expect((retiredRefusal as Error).message).toContain("mstar milestone assign");
+  });
+
+  test("a stale expectedStoreRevision removal is refused and removes nothing", async () => {
+    const milestone = await addMilestone(context, { projectId, name: "Stale guard", target: null, ordinal: 92 }, { operationId: "remove-stale-add", expectedStoreRevision: revision() });
+    const current = revision();
+    await expect(
+      removeMilestone(context, projectId, milestone.milestoneId, { operationId: "remove-stale", expectedStoreRevision: current - 1 }),
+    ).rejects.toMatchObject({ code: "milestone.revision-conflict" });
+    // Nothing moved: the milestone and the store revision survive the refusal.
+    expect(readMilestonesOnDb(db, projectId).milestones.some((entry) => entry.milestoneId === milestone.milestoneId)).toBe(true);
+    expect(revision()).toBe(current);
   });
 });

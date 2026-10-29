@@ -96,10 +96,21 @@ export function removeMilestone(context: StoreContext, projectId: string, milest
     const prior = db.prepare("select request_hash, result_json from store_operations where operation_id=?").get(mutation.operationId) as { request_hash: string; result_json: string } | undefined;
     if (prior) { if (prior.request_hash !== hash) fail("store.operation-conflict", "operationId was reused for a different request."); return JSON.parse(prior.result_json) as MilestoneReceipt; }
     project(db, projectId);
+    // The same CAS every milestone writer takes (mutate): a removal judged
+    // against a store revision that has moved is refused, never landed on a
+    // newer snapshot than the one the operator reviewed.
+    const store = db.prepare("select revision from store_meta where id=1").get() as { revision: number };
+    if (store.revision !== mutation.expectedStoreRevision) fail("milestone.revision-conflict", "Store revision changed since it was observed.");
     const row = db.prepare("select milestone_id, project_id, revision from project_milestones where milestone_id=? and project_id=?").get(milestoneId, projectId) as { milestone_id: string; project_id: string; revision: number } | undefined;
     if (!row) fail("milestone.not-found", `Milestone ${milestoneId} does not exist in project ${projectId}.`);
-    const held = db.prepare("select count(*) as n from issues where project_id=? and milestone_id=?").get(projectId, milestoneId) as { n: number };
-    if (held.n > 0) fail("milestone.not-empty", `Milestone ${milestoneId} still holds ${held.n} issue(s); reassign or clear them first (mstar issue move / milestone assign), then retry the removal.`);
+    // Every issue row counts, settled ones included: the FK membership is the
+    // fact. The message names the retired rows so a milestone carrying only
+    // resolved/waived issues is not reported as "open issues".
+    const held = db.prepare("select count(*) as total, sum(case when disposition='open' then 1 else 0 end) as open from issues where project_id=? and milestone_id=?").get(projectId, milestoneId) as { total: number; open: number | null };
+    if (held.total > 0) {
+      const open = held.open ?? 0;
+      fail("milestone.not-empty", `Milestone ${milestoneId} still holds ${held.total} issue(s): ${open} open, ${held.total - open} settled (resolved/waived/duplicate/superseded) — settled rows count too, so a milestone carrying only retired issues cannot be removed either. Reassign them to another milestone or clear their assignment with \`mstar milestone assign --project ${projectId} --issue <issue-id> --clear --reason <text> --expect-issue <revision> --expect-store ${store.revision} --operation <id> --actor <role>\`, then retry the removal.`);
+    }
     const now = new Date().toISOString();
     db.prepare("delete from project_milestones where milestone_id=? and project_id=?").run(milestoneId, projectId);
     db.prepare("update store_meta set revision=revision+1 where id=1").run();
