@@ -442,6 +442,10 @@ function decodeCliOptions(definition: CommandDefinition, input: Record<string, u
         decoded[option.key] = [value];
         continue;
       }
+      // A scalar-or-list union (workflow.register shares iteration.register's
+      // repeatable --project schema but records ONE id) admits one bare id:
+      // keep the string verbatim, never fabricate a one-element list.
+      if (hasType(schema, "string")) continue;
       decoded[option.key] = value.split(",").map((entry) => entry.trim()).filter(Boolean);
       continue;
     }
