@@ -186,6 +186,36 @@ export function appendDshWorkflowEvent(
 ): { kind: "accepted" } | { kind: "replayed" } | { kind: "refused"; reason: string } {
   try {
     return withDshWriteTransaction(context, (tx) => {
+      // The resolve→append seam (#550): `selectedGeneration` pins storeId+epoch,
+      // but the SEAT itself can move inside one generation —
+      // `recoverExecutionCoordinator` and a terminal adoption revoke the prior
+      // holder without advancing the epoch — so the generation guard alone
+      // cannot see that drift. Re-read the seat in THIS transaction: appending
+      // is authorized only while the source session still holds the ACTIVE
+      // coordinator row of the addressed workflow at the selected epoch. The
+      // refusal IS the recovery: the ledger resolver re-runs per event, so the
+      // next event re-resolves the current authority and is attributed there.
+      if (input.selectedGeneration !== undefined) {
+        // Seat-bearing lifecycles only: a workflow with NO coordinator rows at
+        // all (a pure host-state ledger in this store) never had a seat to
+        // drift, so it is appended to without the check below.
+        const rows = tx.db.prepare(
+          "select session_id, state, epoch from execution_sessions where workflow_id = ? and role = 'coordinator'",
+        ).all(input.workflowId) as Array<{ session_id: string; state: string; epoch: number }>;
+        const mine = rows.find(
+          (row) => row.session_id === input.source.sessionId && row.state === "active" && row.epoch === input.selectedGeneration!.epoch,
+        );
+        if (rows.length > 0 && mine === undefined) {
+          return {
+            kind: "refused" as const,
+            reason:
+              `ledger attribution drift refused: the store generation still matches the selected one, but session ` +
+              `"${input.source.sessionId}" no longer holds the ACTIVE coordinator seat of workflow ${input.workflowId} at ` +
+              `epoch ${input.selectedGeneration.epoch}: the seat was revoked or replaced after the target was resolved. ` +
+              `Nothing was appended; the ledger resolver re-runs on the next event and attributes it against the current authority.`,
+          };
+        }
+      }
       const prior = tx.db.prepare(
         "select digest from dsh_accepted_identities where workflow_id = ? and event_id = ?",
       ).get(input.workflowId, input.eventId) as { digest?: string } | undefined;

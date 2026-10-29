@@ -23570,6 +23570,16 @@ function appendDshLedgerRow(context, workflowId, lineJson, eventId, selectedGene
 function appendDshWorkflowEvent(context, input) {
   try {
     return withDshWriteTransaction(context, (tx) => {
+      if (input.selectedGeneration !== undefined) {
+        const rows = tx.db.prepare("select session_id, state, epoch from execution_sessions where workflow_id = ? and role = 'coordinator'").all(input.workflowId);
+        const mine = rows.find((row) => row.session_id === input.source.sessionId && row.state === "active" && row.epoch === input.selectedGeneration.epoch);
+        if (rows.length > 0 && mine === undefined) {
+          return {
+            kind: "refused",
+            reason: `ledger attribution drift refused: the store generation still matches the selected one, but session "${input.source.sessionId}" no longer holds the ACTIVE coordinator seat of workflow ${input.workflowId} at epoch ${input.selectedGeneration.epoch}: the seat was revoked or replaced after the target was resolved. Nothing was appended; the ledger resolver re-runs on the next event and attributes it against the current authority.`
+          };
+        }
+      }
       const prior = tx.db.prepare("select digest from dsh_accepted_identities where workflow_id = ? and event_id = ?").get(input.workflowId, input.eventId);
       if (prior) {
         if (prior.digest !== input.digest) {
