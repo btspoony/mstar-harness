@@ -278,6 +278,8 @@ const ITERATIONS: IterationListDTO = {
       documents: [],
       gateStep: 4,
       badges: [],
+      executionLifecycle: 'completed',
+      projects: [],
     },
     {
       iterationId: 'iter-bound',
@@ -290,6 +292,8 @@ const ITERATIONS: IterationListDTO = {
       documents: [],
       gateStep: 2,
       badges: [],
+      executionLifecycle: 'active',
+      projects: [],
     },
   ],
   total: 2,
