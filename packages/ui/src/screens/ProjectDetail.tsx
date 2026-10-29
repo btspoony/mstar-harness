@@ -15,10 +15,7 @@
  * Not rendered anywhere here: `storeRevision`, `catalogRevision`, `builtAt`,
  * `checkedAt`, the catalog `revision`, `sourceHash`.
  */
-import { Collapsible } from "../components/Collapsible.tsx";
 import { EmptyState, type AbsenceArm } from "../components/EmptyState.tsx";
-import { Field } from "../components/Field.tsx";
-import { FieldGroup } from "../components/FieldGroup.tsx";
 import { ProgressBar } from "../components/ProgressBar.tsx";
 import { StatusDot } from "../components/StatusDot.tsx";
 import { Tabs, type TabItem } from "../components/Tabs.tsx";
@@ -36,65 +33,29 @@ import type { Tone } from "../view-model/status.ts";
 /** Every visible string this screen needs. Task 5 supplies them. */
 export type ProjectDetailCopy = {
   breadcrumb: { label: string; trail: string };
-  fields: {
-    title: string;
-    id: string;
-    lifecycle: string;
-    path: string;
-    description: string;
-    noDescription: string;
-    /** The identity panel's remaining rows, matching the prototype's six. */
-    projectKind: string;
-    revision: string;
-    registeredAt: string;
-    catalogUpdatedAt: string;
-  };
-  /** The two identity panels the prototype puts side by side. */
-  catalogHeading: string;
-  /** The roadmap's presence, said beside the title (`roadmap present`). */
-  roadmapState: string;
   /** The word before the catalog revision in the head's meta line. */
   revisionLabel: string;
   /** The noun after the project's open-issue count. */
   openIssuesUnit: string;
-  authorityHeading: string;
-  authorityColumns: { state: string; revision: string; contentHash: string; frontmatter: string };
-  /** Said when the project declares no roadmap authority row. */
-  authorityAbsent: string;
-  /** The left panel of the prototype's last row. */
-  storedFactsHeading: string;
-  /** The right panel: the stored document's own facts. */
-  storedFacts: {
-    factsHeading: string;
-    columns: {
-      frontmatterStatus: string;
-      createdAt: string;
-      residualsRef: string;
-      goals: string;
-      sections: string;
-    };
-    note: string;
-  };
+  /** The roadmap's presence, said beside the title (`roadmap present`). */
+  roadmapState: string;
   tabLabel: string;
   /** The three fixed features, in order. `PROJECT_FEATURES` is the id list. */
   features: Record<ProjectFeature, string>;
   roadmap: {
-    directionHeading: string;
-    goalsHeading: string;
     milestonesHeading: string;
     /** The board head's two nouns, which the prototype prints after each count. */
     milestonesUnit: string;
     unassignedUnit: string;
-    markdownHeading: string;
-    noDirection: string;
-    goalChecked: string;
-    goalUnchecked: string;
     milestoneProgress: (done: number, total: number) => string;
     milestoneOpen: (open: number) => string;
     /** The four tallies of the prototype's board row. */
     countLabels: { open: string; resolved: string; retired: string; total: string };
     noTarget: string;
     unassigned: (count: number) => string;
+    /** The trailing timeline node's name for issues with no milestone. */
+    timelineUnassigned: string;
+    timelineUnassignedIssues: (count: number) => string;
     /** The next step offered when the roadmap is absent (§4). */
     absentNextStep: (features: string) => string;
   };
@@ -228,11 +189,57 @@ function dispositionTone(disposition: string): string {
 }
 
 /**
- * The Roadmap feature body: the board, then the direction and stored-facts row.
+ * The Roadmap feature's timeline: one node per milestone, ordered by target with
+ * missing targets last, and one trailing node for the unassigned issues (plan
+ * 20261029-dashboard-alignment Task 3). Every number is the read's own: the
+ * retired-over-total pair and the open count.
+ */
+function MilestoneTimeline(props: { model: RoadmapModel; copy: ProjectDetailCopy }) {
+  const { model, copy } = props;
+  const ordered = [...model.milestones].sort(
+    (a, b) => (a.target ?? "9999-12-31").localeCompare(b.target ?? "9999-12-31"),
+  );
+  return (
+    <div className="timeline" data-ms-milestone-timeline="" role="list">
+      {ordered.map((milestone) => (
+        <div
+          key={milestone.milestoneId}
+          role="listitem"
+          className={
+            milestone.status === "delivered"
+              ? "tl-node done"
+              : milestone.status === "active"
+                ? "tl-node run"
+                : "tl-node"
+          }
+          data-ms-timeline-node={milestone.milestoneId}
+        >
+          <div className="tl-name">{milestone.name}</div>
+          <div className="tl-date">
+            {milestone.target ?? copy.roadmap.noTarget}
+            {milestone.status === null ? "" : ` · ${milestone.status}`}
+          </div>
+          <div className="tl-counts" data-ms-timeline-counts="">
+            {milestone.counts.total - milestone.counts.open}/{milestone.counts.total} ·{" "}
+            {copy.roadmap.milestoneOpen(milestone.counts.open)}
+          </div>
+        </div>
+      ))}
+      <div className="tl-node" role="listitem" data-ms-timeline-node="unassigned">
+        <div className="tl-name muted">{copy.roadmap.timelineUnassigned}</div>
+        <div className="tl-date">{copy.roadmap.noTarget}</div>
+        <div className="tl-counts">{copy.roadmap.timelineUnassignedIssues(model.unassignedIssues)}</div>
+      </div>
+    </div>
+  );
+}
+
+/**
+ * The Roadmap feature body: the milestone timeline, then the board.
  *
- * The goals are **not** a block here. The prototype reports them as one count inside
- * `Stored facts` (`1 / 3 checked`) and nothing else — a list would be a second, longer
- * answer to the same question, and the stored markdown below already carries it.
+ * The document blocks (direction disclosure, stored markdown, stored facts) are
+ * gone (plan Task 3): the direction moved to the page header, and the rest were
+ * removed with the user's decision.
  */
 function RoadmapFeature(props: { model: RoadmapModel; copy: ProjectDetailCopy }) {
   const { model, copy } = props;
@@ -256,6 +263,7 @@ function RoadmapFeature(props: { model: RoadmapModel; copy: ProjectDetailCopy })
               )}
             </span>
           </div>
+          <MilestoneTimeline model={model} copy={copy} />
           {model.milestones.map((milestone) => (
             <Milestone key={milestone.milestoneId} milestone={milestone} copy={copy} />
           ))}
@@ -267,69 +275,6 @@ function RoadmapFeature(props: { model: RoadmapModel; copy: ProjectDetailCopy })
             </div>
           )}
         </section>
-      )}
-      {/* The prototype's last row: two disclosures on the left (direction, stored
-          markdown), the stored document's facts on the right. */}
-      {model.storedFacts === null ? null : (
-        <div className="detail-grid">
-          {/* The prototype's left half of this row carries no title: it is two
-              disclosures, and the panel around them is a frame, not a titled card. */}
-          <section className="panel" aria-label={copy.storedFactsHeading}>
-            <div className="panel-body">
-              {model.direction === null ? null : (
-                <Collapsible summary={copy.roadmap.directionHeading}>
-                  <p className="prose t-12 secondary" data-ms-direction="">
-                    {model.direction}
-                  </p>
-                </Collapsible>
-              )}
-              {model.markdown === null ? null : (
-                <Collapsible summary={copy.roadmap.markdownHeading}>
-                  <pre data-ms-roadmap-markdown="">{model.markdown}</pre>
-                </Collapsible>
-              )}
-              {model.direction !== null || model.markdown !== null ? null : (
-                <p className="muted t-12">{copy.roadmap.noDirection}</p>
-              )}
-            </div>
-          </section>
-          <section className="panel" aria-labelledby="ms-project-stored">
-            <div className="panel-head">
-              <h2 className="panel-title" id="ms-project-stored">
-                {copy.storedFacts.factsHeading}
-              </h2>
-            </div>
-            <div className="panel-body">
-              <dl className="fields">
-                <div className="field">
-                  <dt>{copy.storedFacts.columns.frontmatterStatus}</dt>
-                  <dd className="mono">{model.storedFacts.frontmatterStatus}</dd>
-                </div>
-                <div className="field">
-                  <dt>{copy.storedFacts.columns.createdAt}</dt>
-                  <dd className="mono">{model.storedFacts.createdAt}</dd>
-                </div>
-                <div className="field">
-                  <dt>{copy.storedFacts.columns.residualsRef}</dt>
-                  <dd className="mono trunc">
-                    <TruncatedText text={model.storedFacts.residualsRef} />
-                  </dd>
-                </div>
-                <div className="field">
-                  <dt>{copy.storedFacts.columns.goals}</dt>
-                  <dd className="mono">{model.storedFacts.goals}</dd>
-                </div>
-                <div className="field">
-                  <dt>{copy.storedFacts.columns.sections}</dt>
-                  <dd className="mono">{model.storedFacts.sections}</dd>
-                </div>
-              </dl>
-            </div>
-            <div className="panel-foot">
-              <span className="muted">{copy.storedFacts.note}</span>
-            </div>
-          </section>
-        </div>
       )}
     </div>
   );
@@ -398,8 +343,12 @@ function RoadmapArm(props: { roadmap: Resolved<RoadmapModel>; copy: ProjectDetai
 
 export function ProjectDetail(props: ProjectDetailProps) {
   const { identity, copy, feature } = props;
-  /** The roadmap's authority row, or `null` when the record declares none. */
-  const authority = props.roadmap.kind === "populated" ? props.roadmap.value.authority : null;
+  // The header direction (plan Task 3): the roadmap's declared direction, falling
+  // back to the catalog description. Both absent renders nothing, not a dash.
+  const direction =
+    props.roadmap.kind === "populated"
+      ? (props.roadmap.value.direction ?? identity.description)
+      : null;
   // The head's `N open issues` is the project's open-issue total, which the scoped Issues
   // read already answers under its default `open` disposition. The roadmap's milestone
   // tallies cannot answer it: `unassignedIssues` counts every unassigned issue, retired
@@ -443,6 +392,12 @@ export function ProjectDetail(props: ProjectDetailProps) {
           <h1 className="detail-title">
             <TruncatedText text={identity.title} />
           </h1>
+          {/* Direction above the identity meta line, as the confirmed baseline has it. */}
+          {direction === null ? null : (
+            <p className="prose t-12 secondary" data-ms-direction="">
+              {direction}
+            </p>
+          )}
           <div className="detail-meta">
             <span className="mono">{identity.projectId}</span>
             <span aria-hidden="true">·</span>
@@ -466,9 +421,6 @@ export function ProjectDetail(props: ProjectDetailProps) {
               </>
             )}
           </div>
-          {identity.description === null ? null : (
-            <p className="prose t-12 secondary">{identity.description}</p>
-          )}
         </div>
         <div className="detail-actions">
           {/* The prototype states the roadmap's presence as a dot + word, then the
@@ -485,89 +437,6 @@ export function ProjectDetail(props: ProjectDetailProps) {
         </div>
       </header>
 
-      {/* The prototype puts the catalog identity and the roadmap's authority side by
-          side: what the record is, and what backs its roadmap. */}
-      <div className="detail-top">
-        <section className="panel" aria-labelledby="ms-project-catalog">
-          <div className="panel-head">
-            <h2 className="panel-title" id="ms-project-catalog">
-              {copy.catalogHeading}
-            </h2>
-          </div>
-          <div className="panel-body">
-            <dl className="fields">
-              {/* The prototype's order: Kind, Lifecycle, Revision, Registered, Location,
-                  Updated. */}
-              <div className="field">
-                <dt>{copy.fields.projectKind}</dt>
-                <dd className="mono">project</dd>
-              </div>
-              <div className="field">
-                <dt>{copy.fields.lifecycle}</dt>
-                <dd className="mono">{identity.lifecycle}</dd>
-              </div>
-              <div className="field">
-                <dt>{copy.fields.revision}</dt>
-                <dd className="mono">{identity.revision}</dd>
-              </div>
-              <div className="field">
-                <dt>{copy.fields.registeredAt}</dt>
-                <dd className="mono">{identity.registeredAt}</dd>
-              </div>
-              <div className="field">
-                <dt>{copy.fields.path}</dt>
-                <dd className="mono wrap">{identity.path}</dd>
-              </div>
-              <div className="field">
-                <dt>{copy.fields.catalogUpdatedAt}</dt>
-                <dd className="mono">{identity.updatedAt}</dd>
-              </div>
-            </dl>
-          </div>
-        </section>
-        <section className="panel" aria-labelledby="ms-project-authority">
-          <div className="panel-head">
-            <h2 className="panel-title" id="ms-project-authority">
-              {copy.authorityHeading}
-            </h2>
-          </div>
-          <div className="panel-body">
-            {props.roadmap.kind === "populated" ? (
-              authority === null ? (
-                <p className="muted t-12">{copy.authorityAbsent}</p>
-              ) : (
-                <dl className="fields">
-                  <div className="field">
-                    <dt>{copy.authorityColumns.state}</dt>
-                    <dd className="mono">{authority.state}</dd>
-                  </div>
-                  <div className="field">
-                    <dt>{copy.authorityColumns.revision}</dt>
-                    <dd className="mono">{authority.revision}</dd>
-                  </div>
-                  <div className="field">
-                    <dt>{copy.authorityColumns.contentHash}</dt>
-                    <dd className="mono trunc" title={authority.contentHash}>
-                      <TruncatedText text={authority.contentHash} />
-                    </dd>
-                  </div>
-                  <div className="field">
-                    <dt>{copy.authorityColumns.frontmatter}</dt>
-                    <dd className="mono trunc">
-                      <TruncatedText text={authority.frontmatter} />
-                    </dd>
-                  </div>
-                </dl>
-              )
-            ) : props.roadmap.kind === "loading" ? null : (
-              // The card must not claim the project declares no authority row when the
-              // roadmap read itself is what failed (or the concept is undeclared): say
-              // the read's own state instead.
-              <p className="muted t-12">{copy.absence[props.roadmap.kind].body}</p>
-            )}
-          </div>
-        </section>
-      </div>
 
       {/* The fixed three-feature set. `Roadmap` is always the default. */}
       <Tabs

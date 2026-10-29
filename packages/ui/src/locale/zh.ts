@@ -429,45 +429,23 @@ export const zh: Copy = {
   },
 
   projectDetail: {
-  catalogHeading: "目录身份",
   roadmapState: "路线图存在",
   revisionLabel: "版本",
   openIssuesUnit: "项未关闭",
-  authorityHeading: "路线图权威",
-  authorityColumns: { state: "状态", revision: "版本", contentHash: "内容哈希", frontmatter: "前言字段" },
-  authorityAbsent: "该项目未声明路线图权威行。",
     breadcrumb: { label: "位置导航", trail: "项目" },
-    fields: { title: "身份", id: "编号", lifecycle: "生命周期", path: "路径", description: "描述", noDescription: "—", projectKind: "类型", revision: "修订版本", registeredAt: "注册时间", catalogUpdatedAt: "更新时间" },
-  storedFactsHeading: "方向",
-  storedFacts: {
-    factsHeading: "存储事实",
-    columns: {
-      frontmatterStatus: "前言状态",
-      createdAt: "创建于",
-      residualsRef: "残留引用",
-      goals: "目标",
-      sections: "章节",
-    },
-    note: "方向以文本呈现；目标是只读的，UI 中从不显示为复选框。",
-  },
     tabLabel: "项目功能",
     features: { roadmap: "路线图", issues: "问题", iterations: "迭代" },
     roadmap: {
-      directionHeading: "方向",
-      goalsHeading: "目标",
       milestonesHeading: "里程碑板",
     milestonesUnit: "个里程碑",
     unassignedUnit: "个未归属问题",
-      markdownHeading: "已存储的文档",
-      noDirection: "路线图没有记录方向。",
-      goalChecked: "已完成",
-      goalUnchecked: "未完成",
       milestoneProgress: (done, total) => `${done}/${total}`,
-    milestoneOpenCount: (open: number) => ` · ${open} 未关闭`,
       milestoneOpen: (open) => `${open} 项未关闭`,
     countLabels: { open: "未关闭", resolved: "已解决", retired: "未解决即退役", total: "总计" },
       noTarget: "无目标日期",
       unassigned: (count) => `${count} 个问题未归属到里程碑`,
+      timelineUnassigned: "未归属",
+      timelineUnassignedIssues: (count: number) => `${count} 个问题`,
       absentNextStep: (features) => `本项目仍可使用：${features}。`,
     },
     scope: {
@@ -475,4 +453,4 @@ export const zh: Copy = {
       clear: "清除项目范围",
     },
   },
-  };
+}
