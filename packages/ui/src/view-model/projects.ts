@@ -98,7 +98,7 @@ export type RoadmapMilestone = {
  * `content: null` and still carries them). A project with neither is the
  * `absent` arm and never reaches this model. The document blocks (catalog
  * identity, roadmap authority, stored markdown, stored facts) were removed from
- * the page by plan 20261029-dashboard-alignment Task 3, so the model no longer
+ * the page by the dashboard alignment change, Task 3, so the model no longer
  * carries them.
  */
 export type RoadmapModel = {

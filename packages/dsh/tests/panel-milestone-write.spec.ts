@@ -1,5 +1,5 @@
 /**
- * The milestone write channel (plan 20261029-dashboard-alignment Task 4,
+ * The milestone write channel (the dashboard alignment change, Task 4,
  * contract C1): the four write invocations — add, update, assign/unassign and
  * remove — ride the panel's own typert service, call the engine verbs with the
  * observed store revision, and answer `{ ok, receipt }` or the engine's own

@@ -18,7 +18,7 @@
  *
  * The three project-scoped panels (open residuals, milestones, the latest
  * iteration) ride ONE optional `overview` read (plan
- * 20261029-dashboard-alignment Task 1, contract C3); the session facts above do
+ * the dashboard alignment change, contract C3); the session facts above do
  * not depend on it.
  *
  * The progress line is the plan's recorded note — never "the first uncompleted
@@ -92,7 +92,7 @@ export type FocusModel = {
   /** The harness enforcement flag — the only digest fact Focus renders. */
   enforcement: string;
   /**
-   * The three project-scoped panels (plan 20261029-dashboard-alignment Task 1),
+   * The three project-scoped panels (the dashboard alignment change, Task 1),
    * all sourced from ONE `overview` dashboard-view read. `undefined` when the
    * host supplies no overview read — the panels render nothing rather than an
    * arm no transport answered.

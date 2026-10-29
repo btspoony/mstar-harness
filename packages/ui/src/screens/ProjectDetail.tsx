@@ -46,7 +46,7 @@ export const ASSIGNABLE_ISSUE_LIMIT = 50;
 
 /**
  * The milestone write surface, declared structurally so this screen stays
- * transport-agnostic (plan 20261029-dashboard-alignment Task 4). Every action
+ * transport-agnostic (the dashboard alignment change, Task 4). Every action
  * is one engine verb — add, update, assign/unassign and remove — and the
  * surface owns the busy/refusal state and the read reload; the screen owns
  * only its control state. Removal is always offered: a milestone that still
@@ -435,7 +435,7 @@ function dispositionTone(disposition: string): string {
 /**
  * The Roadmap feature's timeline: one node per milestone, ordered by target with
  * missing targets last, and one trailing node for the unassigned issues (plan
- * 20261029-dashboard-alignment Task 3). Every number is the read's own: the
+ * the dashboard alignment change, Task 3). Every number is the read's own: the
  * retired-over-total pair and the open count.
  */
 function MilestoneTimeline(props: { model: RoadmapModel; copy: ProjectDetailCopy }) {

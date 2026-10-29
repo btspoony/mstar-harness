@@ -62,7 +62,7 @@ export const MSTAR_DASHBOARD_VIEW_METHOD = 'dashboardView'
 export const DASHBOARD_VIEW_ENDPOINT = `${MSTAR_PANEL_SNAPSHOT_NAMESPACE}/${MSTAR_DASHBOARD_VIEW_METHOD}`
 
 /**
- * Wire methods of the milestone write channel (plan 20261029-dashboard-alignment
+ * Wire methods of the milestone write channel (the dashboard alignment change
  * Task 4, contract C1): one endpoint per engine verb, riding the SAME typert
  * service and namespace as the reads. `milestoneAssign` covers unassign — the
  * engine's `assignIssueMilestone` takes `milestoneId: null` — and
