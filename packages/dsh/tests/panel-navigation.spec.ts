@@ -403,7 +403,7 @@ describe('detail routes — a record read, not a landmark', () => {
     const markup = renderDetail({
       view: 'iteration-detail',
       id: 'iter-1',
-      ...envelope({ iterationId: 'iter-1', catalog: null, compass: null, workflow: null, plans: [], documents: [], gateStep: 2, badges: [] }),
+      ...envelope({ iterationId: 'iter-1', catalog: null, compass: null, workflow: null, executionLifecycle: 'active', projects: [], plans: [], documents: [], gateStep: 2, badges: [] }),
     })
     expect(markup).toContain('data-ms-screen="iteration-detail"')
   })

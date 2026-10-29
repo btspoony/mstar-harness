@@ -192,6 +192,7 @@ export const zh: Copy = {
       return projects === 1 ? `${word}，跨 1 个项目` : `${word}，跨 ${projects} 个项目`;
     },
     order: "严重度降序 · 最近活动降序 · ID 升序",
+    trendTableSummary: "有日期历史（表格替代）",
     resultSummary: (total) => `${total} 条结果`,
     range: (from, to, total) => `第 ${from}–${to} 条，共 ${total} 条`,
   },

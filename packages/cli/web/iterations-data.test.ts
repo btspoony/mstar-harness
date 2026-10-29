@@ -49,6 +49,10 @@ const iteration = (over: Partial<IterationDTO> = {}): IterationDTO =>
     catalog: null,
     compass: null,
     workflow: null,
+    // The engine DTO's own members (dashboard plan): the execution lifecycle and
+    // the catalog projects the iteration belongs to.
+    executionLifecycle: "active",
+    projects: ["engine"],
     plans: [],
     documents: [],
     badges: [],
