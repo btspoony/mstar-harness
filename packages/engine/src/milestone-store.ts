@@ -12,7 +12,7 @@ export type MilestoneAssignment = { projectId: string; milestoneId: string | nul
 export type MilestoneIssueDTO = { id: string; title: string; acceptance: string; disposition: "open" | "resolved" | "waived" | "duplicate" | "superseded"; revision: number };
 export type MilestoneRead = { projectId: string; milestones: ProjectMilestoneDTO[]; issues: Array<MilestoneIssueDTO & { milestoneId: string }>; unassignedIssues: number };
 
-type MilestoneErrorCode = "milestone.schema-outdated" | "store.not-active" | "milestone.project-not-found" | "milestone.not-found" | "milestone.project-mismatch" | "milestone.invalid-input" | "milestone.revision-conflict" | "milestone.operation-conflict" | "store.operation-conflict" | "milestone.invalid-transition" | "milestone.open-issues" | "milestone.empty";
+type MilestoneErrorCode = "milestone.schema-outdated" | "store.not-active" | "milestone.project-not-found" | "milestone.not-found" | "milestone.project-mismatch" | "milestone.invalid-input" | "milestone.revision-conflict" | "milestone.operation-conflict" | "store.operation-conflict" | "milestone.invalid-transition" | "milestone.open-issues" | "milestone.empty" | "milestone.not-empty";
 export class MilestoneError extends Error { readonly code: MilestoneErrorCode; constructor(code: MilestoneErrorCode, message: string) { super(`[${code}] ${message}`); this.name = "MilestoneError"; this.code = code; } }
 const fail = (code: MilestoneErrorCode, message: string): never => { throw new MilestoneError(code, message); };
 function guard(db: StoreDb): void {
@@ -86,6 +86,28 @@ export function addMilestone(context: StoreContext, input: MilestoneAdd, mutatio
 export function updateMilestone(context: StoreContext, projectId: string, milestoneId: string, patch: MilestonePatch, mutation: MilestoneMutation): Promise<MilestoneReceipt> {
   if (!patch || !Object.keys(patch).length || Object.keys(patch).some(key => !["name","target","ordinal","status"].includes(key))) return Promise.reject(new MilestoneError("milestone.invalid-input", "A non-empty milestone patch is required."));
   return write(context, db => mutate(db,projectId,milestoneId,patch,mutation,false));
+}
+/** Remove an empty milestone (idempotent via the shared operation ledger; refuses `milestone.not-empty` while issues remain). */
+export function removeMilestone(context: StoreContext, projectId: string, milestoneId: string, mutation: MilestoneMutation): Promise<MilestoneReceipt> {
+  return write(context, db => {
+    guard(db);
+    if (!mutation || typeof mutation.operationId !== "string" || !mutation.operationId.trim() || !Number.isSafeInteger(mutation.expectedStoreRevision) || mutation.expectedStoreRevision < 0) fail("milestone.invalid-input", "A non-empty operationId and non-negative expected store revision are required.");
+    const hash = requestHash({ domain: "milestone", action: "remove", projectId, milestoneId, patch: null, expectedStoreRevision: mutation.expectedStoreRevision });
+    const prior = db.prepare("select request_hash, result_json from store_operations where operation_id=?").get(mutation.operationId) as { request_hash: string; result_json: string } | undefined;
+    if (prior) { if (prior.request_hash !== hash) fail("store.operation-conflict", "operationId was reused for a different request."); return JSON.parse(prior.result_json) as MilestoneReceipt; }
+    project(db, projectId);
+    const row = db.prepare("select milestone_id, project_id, revision from project_milestones where milestone_id=? and project_id=?").get(milestoneId, projectId) as { milestone_id: string; project_id: string; revision: number } | undefined;
+    if (!row) fail("milestone.not-found", `Milestone ${milestoneId} does not exist in project ${projectId}.`);
+    const held = db.prepare("select count(*) as n from issues where project_id=? and milestone_id=?").get(projectId, milestoneId) as { n: number };
+    if (held.n > 0) fail("milestone.not-empty", `Milestone ${milestoneId} still holds ${held.n} issue(s); reassign or clear them first (mstar issue move / milestone assign), then retry the removal.`);
+    const now = new Date().toISOString();
+    db.prepare("delete from project_milestones where milestone_id=? and project_id=?").run(milestoneId, projectId);
+    db.prepare("update store_meta set revision=revision+1 where id=1").run();
+    const current = db.prepare("select revision from store_meta where id=1").get() as { revision: number };
+    const receipt: MilestoneReceipt = { projectId, milestoneId, revision: (row as { revision: number }).revision, storeRevision: current.revision, changed: true };
+    db.prepare("insert into store_operations(operation_id,request_hash,result_json,committed_at) values(?,?,?,?)").run(mutation.operationId,hash,JSON.stringify(receipt),now);
+    return receipt;
+  });
 }
 export function readMilestonesOn(db: StoreDb, projectId: string, milestoneId?: string): MilestoneRead {
   guard(db); project(db,projectId);

@@ -252,6 +252,8 @@ export type IterationDTO = {
   workflow: { id: string; status: string; phase: string | null; activeRegistration: boolean } | null;
   /** Execution lifecycle from the workflow (C1): `"none"` when there is no workflow row. */
   executionLifecycle: IterationExecutionLifecycle;
+  /** Catalog project ids the iteration is linked `belongs-to`, sorted (C4). */
+  projects: string[];
   plans: IterationPlanDTO[];
   documents: CatalogIdentityDTO[];
   /**
@@ -1540,6 +1542,7 @@ function composeIteration(
   planIds: readonly string[],
   documentIds: readonly string[],
   identities: Map<string, CatalogIdentityDTO>,
+  projects: readonly string[],
 ): IterationDTO {
   const badges: DashboardBadge[] = [];
   if (catalog === null) badges.push("catalog-missing");
@@ -1615,6 +1618,7 @@ function composeIteration(
         : workflowRow.active_registration === 1
           ? "active"
           : (workflowRow.status as Exclude<IterationExecutionLifecycle, "active" | "none">),
+    projects: [...projects],
     plans,
     documents: documentIds.flatMap((documentId) => {
       const document = identities.get(identityToken("document", documentId));
@@ -1687,6 +1691,9 @@ function readIterationList(db: StoreDb, filters: DashboardFilters): IterationLis
         planIds.get(row.id) ?? [],
         documentIds.get(row.id) ?? [],
         identities,
+        // The list filter already matches ANY linked project (C4): the same
+        // belongs-to membership is disclosed per row, sorted.
+        [...(membership.get(identityToken("iteration", row.id)) ?? [])].sort(),
       ),
     ),
     total: catalogRows.length,
@@ -1709,7 +1716,8 @@ function readIterationDetail(db: StoreDb, filters: DashboardFilters): IterationD
   ]);
   const catalog = identities.get(identityToken("iteration", iterationId)) ?? null;
   if (catalog === null && compassRow === undefined) return null;
-  return composeIteration(iterationId, catalog, generated, planIds, documentIds, identities);
+  const projects = [...(projectMembership(db).get(identityToken("iteration", iterationId)) ?? [])].sort();
+  return composeIteration(iterationId, catalog, generated, planIds, documentIds, identities, projects);
 }
 
 // ---------------------------------------------------------------------------

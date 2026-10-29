@@ -1026,6 +1026,7 @@ export {
   MilestoneError,
   addMilestone,
   updateMilestone,
+  removeMilestone,
   readMilestonesOn,
   queryMilestones,
 } from "./milestone-store.js";

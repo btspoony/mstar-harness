@@ -571,6 +571,28 @@ describe("overview read model", () => {
     }
     await register("iter-none");
 
+    // C4: one iteration, two projects — both disclosed sorted, and the list
+    // filter matches either of them.
+    for (const projectId of ["proj-b", "proj-a"]) {
+      await registerCatalogEntity(
+        context,
+        { kind: "project", id: projectId, title: projectId, rootKind: "projects", relativePath: projectId },
+        operation(`register-${projectId}`),
+      );
+      await linkCatalogEntities(
+        context,
+        { from: { kind: "iteration", id: "iter-active" }, relation: "belongs-to", to: { kind: "project", id: projectId } },
+        operation(`link-iter-active-${projectId}`),
+      );
+    }
+    for (const project of ["proj-a", "proj-b"]) {
+      const scoped = await readDashboardView({ context, view: "iterations", params: { project } });
+      expect(((scoped.data as IterationListDTO).items).map((item) => item.iterationId)).toEqual(["iter-active"]);
+    }
+    const allIterations = await readDashboardView({ context, view: "iterations" });
+    const active = ((allIterations.data as IterationListDTO).items).find((item) => item.iterationId === "iter-active");
+    expect(active?.projects).toEqual(["proj-a", "proj-b"]);
+
     const listed = await readDashboardView({ context, view: "iterations" });
     const lifecycle = Object.fromEntries(
       ((listed.data as IterationListDTO).items).map((item) => [item.iterationId, item.executionLifecycle]),

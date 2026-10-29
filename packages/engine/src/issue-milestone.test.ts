@@ -6,7 +6,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { withStoreRead, queryDashboard } from "./store-read.js";
 import { assignIssueMilestone, closeIssue, getIssue, IssueError, listIssues, captureIssue } from "./issue.js";
-import { addMilestone, updateMilestone } from "./milestone-store.js";
+import { addMilestone, removeMilestone, updateMilestone } from "./milestone-store.js";
 import { initializeStore, upgradeStore, MIGRATIONS, migrationChecksum, SCHEMA_VERSION_TABLE_SQL, storeDbPath, type StoreContext, type StoreDb } from "./store-db.js";
 import { bindExecutionSession, createExecutionWorkflow, readExecutionState, type ExecutionContext } from "./execution-store.js";
 import { encodeExecutionSessionRef } from "./execution-session.js";
@@ -193,4 +193,29 @@ test("schema-4 stores list issues while provenance detail requires explicit upgr
     await withStoreRead(oldContext, queryDashboard("issue-detail", { id: "old-issue" })),
   ).toMatchObject({ data: { id: "old-issue", milestoneId: null } });
   rmSync(oldHarness, { recursive: true, force: true });
+});
+
+describe("removeMilestone", () => {
+  test("removes an empty milestone and refuses a milestone that still holds issues", async () => {
+    const empty = await addMilestone(context, { projectId, name: "Removable", target: null, ordinal: 90 }, { operationId: "remove-empty-add", expectedStoreRevision: revision() });
+    // The replay identity covers the caller's revision expectation, so the
+    // retry re-presents the revision its first attempt was judged against.
+    const removalRevision = revision();
+    const receipt = await removeMilestone(context, projectId, empty.milestoneId, { operationId: "remove-empty", expectedStoreRevision: removalRevision });
+    expect(receipt).toMatchObject({ projectId, milestoneId: empty.milestoneId, changed: true });
+    // Idempotent replay through the shared operation ledger.
+    expect(await removeMilestone(context, projectId, empty.milestoneId, { operationId: "remove-empty", expectedStoreRevision: removalRevision })).toEqual(receipt);
+
+    const held = await addMilestone(context, { projectId, name: "Holding", target: null, ordinal: 91 }, { operationId: "remove-held-add", expectedStoreRevision: revision() });
+    await assignIssueMilestone(
+      context,
+      "milestone-assignment-issue",
+      { projectId, milestoneId: held.milestoneId, reason: "fixture" },
+      mutation("remove-held-assign", issueRevision("milestone-assignment-issue")),
+    );
+    // The one hard stop, with its recovery named: reassign or clear first.
+    await expect(
+      removeMilestone(context, projectId, held.milestoneId, { operationId: "remove-held", expectedStoreRevision: revision() }),
+    ).rejects.toMatchObject({ code: "milestone.not-empty" });
+  });
 });
