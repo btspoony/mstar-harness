@@ -172,6 +172,8 @@ const overviewCopy: OverviewCopy = {
   trendGap: (datedOpen, undated) => `Dated history closes at ${datedOpen} open; ${undated} events undated.`,
   residualsHeading: "Open residuals",
   residualsTotal: () => "by severity",
+  residualsScope: "all projects",
+  milestoneProjectUnattributed: "unattributed",
   iterationHeading: "Delivery",
   iterationNoIteration: "Iteration",
   gateStep: (step, of) => `step ${step} of ${of}`,
@@ -211,6 +213,8 @@ const focusCopy: FocusCopy = {
   bindingBound: (id) => `bound to ${id}`,
   bindingTerminal: (id) => `${id} is terminal`,
   bindingUnbound: "no workflow is bound",
+  bindingIdle: "no workflow is running in this session",
+  idleHint: "start a plan or iteration and its plan board appears here",
   pickerLabel: "Pick a workflow",
   boardHeading: "Plans",
   boardEmpty: "Plans",
@@ -234,6 +238,8 @@ const focusCopy: FocusCopy = {
   enforcementLabel: (flag) => `enforcement ${flag}`,
   residualsHeading: "Open residual issues",
   residualsTotal: () => "by severity",
+  residualsScope: "all projects",
+  milestoneProjectUnattributed: "unattributed",
   milestonesHeading: "Milestones",
   milestoneProgress: (done, total) => `${done}/${total}`,
   milestoneOpenCount: (open) => ` · ${open} open`,
@@ -741,10 +747,13 @@ describe("Focus — NEGATIVE: the surfaces D30 removed", () => {
 });
 
 describe("Focus — the four absence arms and the binding states", () => {
-  test("unbound renders the picker arm, not a fabricated board", () => {
+  test("unbound renders the compact arm and one hint line, not a fabricated board", () => {
     const page = focus({ selection: null, workflow: { state: "not-applicable", reason: "no active workflow" } });
     expect(page).toContain('data-ms-binding="unbound"');
-    expect(page).toContain('data-ms-absence="not-applicable"');
+    // The panel body is ONE muted hint: no planboard, and none of the absence prose.
+    expect(page).toContain('data-ms-workflow-idle=""');
+    expect(page).toContain("start a plan or iteration and its plan board appears here");
+    expect(page).not.toContain('data-ms-absence=');
     expect(page).not.toContain('data-ms-group="InProgress"');
   });
 
@@ -804,8 +813,9 @@ describe("Focus — the three project panels from one overview read (plan Task 1
     });
     expect(page).toContain('data-ms-focus-residuals=""');
     expect(page).toContain('data-ms-severity="critical"');
-    // The panel head states the grouping descriptor, as the Overview panel's does.
-    expect(page).toContain("by severity");
+    // The panel head states its SCOPE, so a store-wide count is not read as a
+    // project's (the milestones panel beside it is project-scoped).
+    expect(page).toContain("all projects");
     expect(page).toContain("Milestone 0");
     expect(page).toContain('data-ms-iteration-compass=""');
     expect(page).toContain("0 plans");
@@ -846,5 +856,91 @@ describe("Focus — the three project panels from one overview read (plan Task 1
     const page = focus({});
     expect(page).not.toContain('data-ms-focus-residuals=""');
     expect(page).not.toContain("Milestone 0");
+  });
+});
+
+describe("Focus — a session with no active lifecycle is a calm idle state (plan 20261030)", () => {
+  const gateSentence =
+    "workflow.selection.no-active: no active lifecycle is registered for this session";
+  const idle = (over: Parameters<typeof focus>[0] = {}) =>
+    focus({
+      selection: {
+        kind: "error",
+        code: "workflow.selection.no-active",
+        message: gateSentence,
+        activeWorkflowIds: [],
+      },
+      workflow: { state: "not-applicable", reason: "no active workflow" },
+      ...over,
+    });
+
+  test("renders one compact idle line, and the gate's sentence never appears", () => {
+    const page = idle();
+    expect(page).toContain('data-ms-binding="idle"');
+    expect(page).toContain("no workflow is running in this session");
+    // The gate's internal refusal is a host fact, not a product sentence.
+    expect(page).not.toContain("no active lifecycle is registered");
+    expect(page).not.toContain(gateSentence);
+  });
+
+  test("the workflow panel shows one hint line: no planboard, no absence stack", () => {
+    const page = idle();
+    expect(page).toContain('data-ms-workflow-idle=""');
+    expect(page).toContain("start a plan or iteration and its plan board appears here");
+    expect(page).not.toContain("planboard");
+    expect(page).not.toContain('data-ms-absence=');
+    // The panel head survives: the section is still named.
+    expect(page).toContain("Plans");
+    expect(page).not.toContain(".wf-id");
+  });
+
+  test("the idle state keeps the session facts and the project panels", () => {
+    const page = idle({ overview: { state: "read", data: overviewRead() } });
+    expect(page).toContain('data-ms-enforcement="soft"');
+    expect(page).toContain('data-ms-focus-residuals=""');
+    expect(page).toContain('data-ms-focus-milestones=""');
+  });
+
+  test("a DIFFERENT gate error keeps its message, compact, with its candidates", () => {
+    const page = focus({
+      selection: {
+        kind: "error",
+        code: "workflow.selection.multi-active",
+        message: "2 active lifecycles are registered; choose one to bind this session",
+        activeWorkflowIds: ["wf-a", "wf-b"],
+      },
+    });
+    expect(page).toContain('data-ms-binding="error"');
+    // One secondary line, truncated with the full text on the title — never `.wf-id`.
+    expect(page).toContain('data-ms-binding-message=""');
+    expect(page).toContain('title="2 active lifecycles are registered; choose one to bind this session"');
+    expect(page).toContain('data-ms-picker=""');
+    expect(page).toContain("wf-a");
+    // The error arm is not the idle state and renders no hint.
+    expect(page).not.toContain('data-ms-binding="idle"');
+    expect(page).not.toContain('data-ms-workflow-idle=""');
+  });
+});
+
+describe("Focus — the panels state their scope (plan 20261030 Task 2)", () => {
+  test("residual counts say they are store-wide", () => {
+    const page = focus({ overview: { state: "read", data: overviewRead() } });
+    expect(page).toContain('data-ms-residuals-scope=""');
+    expect(page).toContain("all projects");
+  });
+
+  test("milestones keep their project id, and `_default` reads as unattributed", () => {
+    // The panel head states the project the milestones belong to; the fixture's read
+    // carries none by default, so name it the way the engine does.
+    const named = focus({ overview: { state: "read", data: overviewRead({ projectId: "engine" }) } });
+    expect(named).toContain('data-ms-milestone-scope=""');
+    expect(named).toContain("engine");
+    expect(named).not.toContain("unattributed");
+
+    const bucket = focus({
+      overview: { state: "read", data: overviewRead({ projectId: "_default" }) },
+    });
+    expect(bucket).toContain("unattributed");
+    expect(bucket).toContain("_default");
   });
 });
