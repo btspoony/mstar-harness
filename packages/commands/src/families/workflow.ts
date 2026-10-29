@@ -16,7 +16,7 @@ import { redactSecrets } from "@mstar-harness/engine/src/audit";
 import { activationAttestationDocumentConstraints, activationAttestationDocumentSchema } from "../activation-attestation.js";
 import { commandEnvelopeSchema } from "../envelope.js";
 import { refusalEnvelope } from "../envelope.js";
-import { IDENTITY_SUPPLIES, SESSION_REF_SUPPLIES, TOKEN_SUPPLIES } from "../identity-supplies.js";
+import { IDENTITY_SUPPLIES, SESSION_REF_SUPPLIES, TOKEN_SUPPLIES, withLeafSeat } from "../identity-supplies.js";
 import type { CommandDefinition, CommandEnvelope, InvocationContext } from "../types.js";
 
 const command = <I, O>(definition: CommandDefinition<I, O>): CommandDefinition<I, O> => definition;
@@ -473,12 +473,15 @@ export function getWorkflowCommandDefinitions(): readonly CommandDefinition[] {
         // both are supplied.
         const branchWork = input.branchWork ?? input.branchSource;
         const workflow: CatalogExecutionWorkflow = { kind: "plan", workflowId: input.workflow!, options: { harnessDir, plan: { id: input.planId!, title: input.planTitle!, file: input.planFile! }, deliveryKind: input.deliveryKind as never, ...(input.project === undefined ? {} : { project: input.project }), ...(input.branchBase === undefined ? {} : { branchBase: input.branchBase }), ...(branchWork === undefined ? {} : { branchWork }), ...(input.branchTarget === undefined ? {} : { branchTarget: input.branchTarget }), ...(input.completionPolicy === undefined ? {} : { completionPolicy: input.completionPolicy }), ...(input.startedAt === undefined ? {} : { startedAt: input.startedAt }) } };
-        const identity: ExecutionIdentity = context.executionIdentity ?? {
-          source: context.host === undefined ? "local" : "host",
-          sessionId: context.sessionId ?? "",
-          workflowId: input.workflow!,
-          role: "coordinator",
-        };
+        const identity = withLeafSeat(
+          (context.executionIdentity ?? {
+            source: context.host === undefined ? "local" : "host",
+            sessionId: context.sessionId ?? "",
+            workflowId: input.workflow!,
+            role: "coordinator",
+          }) satisfies ExecutionIdentity,
+          context,
+        );
         const result = await registerShippedCatalogExecution(
           executionContextFor({ harnessDir }, identity, { allowUnsetSessionId: true }),
           {
@@ -519,7 +522,7 @@ export function getWorkflowCommandDefinitions(): readonly CommandDefinition[] {
         if (acquired !== undefined && (acquired.workflowId !== input.workflow || acquired.role !== "coordinator")) {
           return refusalEnvelope({ command: "workflow.evidence", status: "usage", code: "command.invalid-input", exitCode: 2, message: "acquired identity must address the selected workflow's coordinator seat" });
         }
-        const identity: ExecutionIdentity = acquired ?? { source: context.host === undefined ? "local" : "host", sessionId: context.sessionId, workflowId: input.workflow, role: "coordinator" };
+        const identity = withLeafSeat((acquired ?? { source: context.host === undefined ? "local" : "host", sessionId: context.sessionId, workflowId: input.workflow, role: "coordinator" }), context);
         return ok("workflow.evidence", await mutateExecutionWorkflow(executionContextFor({ harnessDir: root }, identity), {
           workflowId: input.workflow,
           ...(ref === undefined ? {} : { session: ref }),
@@ -569,7 +572,7 @@ export function getWorkflowCommandDefinitions(): readonly CommandDefinition[] {
         }
         const root = resolveProcessHarnessDir(context.cwd, input.harness);
         if (root === null) return refusalEnvelope({ command: id, status: "usage", code: "command.invalid-input", exitCode: 2, message: "no control harness resolved; supply an absolute harness" });
-        const identity: ExecutionIdentity = acquired ?? { source: context.host === undefined ? "local" : "host", sessionId: context.sessionId, workflowId: input.workflow, role: "coordinator" };
+        const identity = withLeafSeat((acquired ?? { source: context.host === undefined ? "local" : "host", sessionId: context.sessionId, workflowId: input.workflow, role: "coordinator" }), context);
         const operation: WorkflowExecutionOperation = {
           kind: "delivery-anchors",
           branch: {
@@ -636,7 +639,7 @@ export function getWorkflowCommandDefinitions(): readonly CommandDefinition[] {
           }
           const root = resolveProcessHarnessDir(context.cwd, input.harness);
           if (root === null) return refusalEnvelope({ command: id, status: "usage", code: "command.invalid-input", exitCode: 2, message: "no control harness resolved; supply an absolute harness" });
-          const identity: ExecutionIdentity = acquired ?? { source: context.host === undefined ? "local" : "host", sessionId: context.sessionId, workflowId: input.workflow, role: "coordinator" };
+          const identity = withLeafSeat((acquired ?? { source: context.host === undefined ? "local" : "host", sessionId: context.sessionId, workflowId: input.workflow, role: "coordinator" }), context);
           const operation: WorkflowExecutionOperation = { kind: "compass-ref", compassPath: input.compass!, reason: input.reason! };
           return ok(id, await mutateExecutionWorkflow(executionContextFor({ harnessDir: root }, identity), {
             workflowId: input.workflow,
@@ -683,7 +686,7 @@ export function getWorkflowCommandDefinitions(): readonly CommandDefinition[] {
             : readOperatorAttestation(absolute(input.attestation, "attestation"), id, "ActivationAttestation");
           const harnessDir = resolveProcessHarnessDir(context.cwd, input.harness);
           if (harnessDir === null) return refusalEnvelope({ command: id, status: "usage", code: "command.invalid-input", exitCode: 2, message: "no control harness resolved; supply an absolute harness" });
-          const identity = acquired ?? { source: context.host === undefined ? "local" : "host", sessionId: context.sessionId, workflowId, role: "coordinator" as const };
+          const identity = withLeafSeat((acquired ?? { source: context.host === undefined ? "local" : "host", sessionId: context.sessionId, workflowId, role: "coordinator" as const }), context);
           return ok(id, await adoptTerminalWorkflow(executionContextFor({ harnessDir }, identity), {
             workflowId,
             ...(input.expect === undefined ? {} : { expectedRevision: Number(input.expect) }),
@@ -730,7 +733,7 @@ export function getWorkflowCommandDefinitions(): readonly CommandDefinition[] {
           // guarded transaction, which keeps the replay fingerprint stable after
           // a committed reopen. A derived out-of-transaction token would enter
           // that fingerprint and turn an identical retry into a conflict.
-          const identity = acquired ?? { source: context.host === undefined ? "local" : "host", sessionId: context.sessionId, workflowId, role: "coordinator" as const };
+          const identity = withLeafSeat((acquired ?? { source: context.host === undefined ? "local" : "host", sessionId: context.sessionId, workflowId, role: "coordinator" as const }), context);
           return ok(id, await reopenExecutionWorkflow(executionContextFor({ harnessDir }, identity), {
             workflowId,
             reason: input.reason,
@@ -777,7 +780,7 @@ export function getWorkflowCommandDefinitions(): readonly CommandDefinition[] {
                 readFileSync(absolute(input.file, "file"), "utf8"),
               ) }
               : { kind: "integration-worktree", path: absolute(input.path, "path") };
-        const identity: ExecutionIdentity = acquired ?? { source: context.host === undefined ? "local" : "host", sessionId: context.sessionId, workflowId, role: "coordinator" };
+        const identity = withLeafSeat((acquired ?? { source: context.host === undefined ? "local" : "host", sessionId: context.sessionId, workflowId, role: "coordinator" }), context);
         setArtifactStore(createFsStore(root));
         return ok(id, await mutateExecutionWorkflow(executionContextFor({ harnessDir: root }, identity), {
           workflowId,
@@ -819,12 +822,15 @@ export function getWorkflowCommandDefinitions(): readonly CommandDefinition[] {
       // are accepted, while a genuinely escaping pointer is still refused for a
       // new registration (I-000868, PR #578).
       const workflow: CatalogExecutionWorkflow = { kind: "iteration", workflowId: input.workflow, options: { harnessDir, compassRef: input.compassRef, branch: { base: input.branchBase, integration: input.branchIntegration, target: input.branchTargetIteration }, rows: rows as never[], ...(input.project === undefined ? {} : { project: input.project }), ...(input.startedAt === undefined ? {} : { startedAt: input.startedAt }) } };
-      const identity: ExecutionIdentity = context.executionIdentity ?? {
-        source: context.host === undefined ? "local" : "host",
-        sessionId: context.sessionId ?? "",
-        workflowId: input.workflow,
-        role: "coordinator",
-      };
+      const identity = withLeafSeat(
+        (context.executionIdentity ?? {
+          source: context.host === undefined ? "local" : "host",
+          sessionId: context.sessionId ?? "",
+          workflowId: input.workflow,
+          role: "coordinator",
+        }) satisfies ExecutionIdentity,
+        context,
+      );
       return ok("iteration.register", await registerShippedCatalogExecution(
         executionContextFor({ harnessDir }, identity, { allowUnsetSessionId: true }),
         {

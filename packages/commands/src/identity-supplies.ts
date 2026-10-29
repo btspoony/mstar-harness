@@ -1,3 +1,5 @@
+import type { ExecutionIdentity } from "@mstar-harness/engine";
+
 /**
  * The one supply-naming sentence every identity-missing refusal states: how a
  * caller puts a session identity on the call, per transport. Refusal texts
@@ -35,3 +37,17 @@ export const TOKEN_SUPPLIES = {
  */
 export const SESSION_REF_SUPPLIES =
   "the active session reference returned by the `plan bind --execution` receipt: wire format exec-session-v1:<base64url JSON carrying storeId, epoch, workflowId, role, sessionId>";
+
+/**
+ * Stamp the shell-transport leaf fact (#548) onto a coordinator REGISTRATION
+ * tuple a family built (bind, recover, register, adopt, close, reopen and the
+ * seat-addressing reads). Deliberately NOT every §3.1 tuple: a leaf-permitted
+ * action — `workflow-note.append` (`execution-ledgers.ts`) — is left unstamped,
+ * because stamping it would make the engine refuse a write the leaf may run.
+ * The fact is fail-closed only: a stamped identity makes the engine's
+ * `coordination.leaf-seat` refusal fire on coordinator registration and changes
+ * nothing else, so a forged marker can only self-restrict a caller.
+ */
+export function withLeafSeat<T extends ExecutionIdentity>(identity: T, context: { readonly leafSeat?: true }): T {
+  return context.leafSeat === true ? { ...identity, leafSeat: true } : identity;
+}

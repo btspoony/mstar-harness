@@ -63,6 +63,14 @@ const SLOW_SPEC = "@slow";
 const RECORD_VERSION = 1;
 /** Host session id passed to plan/assignment binds through the child shell. */
 const SESSION_ID_ENV = "MSTAR_HOST_SESSION_ID";
+/**
+ * The shell-transport leaf marker (#548): exported on a leaf/subagent (task)
+ * session's bash calls so the mstar CLI attests `leafSeat` and the engine's
+ * `coordination.leaf-seat` refusal fires on coordinator registration verbs.
+ * Fail-closed only; the same session_init-entry predicate the coordinator gates
+ * read decides it — one rule, no second leaf derivation.
+ */
+const LEAF_SEAT_ENV = "MSTAR_LEAF_SEAT";
 /** Single-quote a value for a POSIX shell — the one quoting that never expands. */
 const shellSingleQuote = (value: string): string => `'${value.replaceAll("'", `'\\''`)}'`;
 
@@ -1353,12 +1361,21 @@ export default function modelHandoff(pi: ExtensionAPI): void {
     if (refusal !== undefined || !(SHELL_TOOL_NAMES as readonly string[]).includes(event.toolName)) return refusal;
 
     const sessionId = sessionIdOf(ctx);
-    if (sessionId === "") return undefined;
     const input: Record<string, unknown> = isPlainObject(event.input) ? event.input : {};
     if (typeof input.command !== "string") return undefined;
-    if (input.command.includes(`export ${SESSION_ID_ENV}=`)) return undefined;
-
-    const prefix = `export ${SESSION_ID_ENV}=${shellSingleQuote(sessionId)}; `;
+    // The leaf fact is the same session_init-entry predicate the coordinator
+    // gates read: a task/subagent session exports the marker so the CLI (and
+    // the engine behind it) sees the leaf even when this hook's other prefix
+    // does not apply. No "already exported" guard is applied to it: the fact is
+    // fail-closed, and a bare substring match would let any command text
+    // suppress the marker (a duplicate prefix is harmless).
+    const leaf = ctx.sessionManager.getEntries().some((entry) => entry.type === "session_init");
+    let prefix = "";
+    if (sessionId !== "" && !input.command.includes(`export ${SESSION_ID_ENV}=`)) {
+      prefix += `export ${SESSION_ID_ENV}=${shellSingleQuote(sessionId)}; `;
+    }
+    if (leaf) prefix += `export ${LEAF_SEAT_ENV}=1; `;
+    if (prefix === "") return undefined;
     return { input: { ...input, command: prefix + input.command } };
   });
 }

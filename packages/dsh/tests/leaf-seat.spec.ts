@@ -20,7 +20,7 @@ import {
 } from '@mstar-harness/commands'
 import { executionContextFor } from '@mstar-harness/engine'
 import { coordinatorSeatCommandFor } from '../src/gates/coordinator-seat.ts'
-import { coordinatorIdentityFor, isLeafSeatHeader, leafSeatCoordinatorRefusal } from '../src/gates/leaf-seat.ts'
+import { coordinatorIdentityFor, isLeafSeatHeader, leafSeatCoordinatorRefusal, leafSeatShellEnvOf, LEAF_SEAT_SHELL_ENV_DESCRIPTION, LEAF_SEAT_SHELL_ENV_KEY, registerLeafSeatShellEnv } from '../src/gates/leaf-seat.ts'
 
 const SRC = join(import.meta.dir, '..', 'src')
 const SEAT_SYMBOLS = ['coordinatorSeatCommandFor', 'isCoordinatorSeatCommand'] as const
@@ -170,5 +170,90 @@ describe('coordinatorIdentityFor attests the leaf fact from the shared predicate
     const identity = coordinatorIdentityFor({ origin: 'team-lead' }, 's1', 'wf-1')
     expect(Object.hasOwn(identity, 'leafSeat')).toBe(false)
     expect(coordinatorIdentityFor(undefined, 's1', 'wf-1')).not.toHaveProperty('leafSeat')
+  })
+})
+
+/**
+ * The shell-signal contributor (#548): the ONE predicate decides whether the
+ * bash tool's managed environment exports `DSH_MSTAR_LEAF_SEAT=1`, which the
+ * CLI reads to attest `leafSeat` on the §3.1 identity it hands the engine.
+ */
+describe('the leaf-seat shell-env contributor', () => {
+  const resolveFor = (header: unknown) => leafSeatShellEnvOf({ agent: { session: { header } } })
+
+  test('a leaf header (either shape) exports the marker', () => {
+    expect(resolveFor({ origin: 'subagent' })).toEqual({ [LEAF_SEAT_SHELL_ENV_KEY]: '1' })
+    expect(resolveFor({ delegationDepth: 2 })).toEqual({ [LEAF_SEAT_SHELL_ENV_KEY]: '1' })
+  })
+
+  test('a non-leaf or absent header exports nothing', () => {
+    expect(resolveFor({ origin: 'team-lead' })).toEqual({})
+    expect(leafSeatShellEnvOf({})).toEqual({})
+    expect(leafSeatShellEnvOf({ agent: undefined })).toEqual({})
+  })
+})
+
+/**
+ * The deferred registration is the wiring `index.ts` performs: deleting it (or
+ * registering a contributor that stops delegating to the predicate) must fail
+ * here. A fake ctx carries the `inject` + `shellEnv.register` spies, so the test
+ * asserts the contract the host service sees, not the plugin's internals.
+ */
+describe('the deferred shell-env registration', () => {
+  function registeredContributor() {
+    const registrations: Array<{
+      name: string
+      variables: Record<string, { description: string }>
+      resolve(execution: { agent?: unknown }): Record<string, string>
+    }> = []
+    const injected: string[][] = []
+    const ctx = {
+      inject(names: string[], callback: (child: unknown) => void) {
+        injected.push(names)
+        callback({ shellEnv: { register: (contributor: (typeof registrations)[number]) => registrations.push(contributor) } })
+      },
+    }
+    registerLeafSeatShellEnv(ctx)
+    return { injected, registrations }
+  }
+
+  test('injects shellEnv and registers exactly one contributor declaring the marker key', () => {
+    const { injected, registrations } = registeredContributor()
+    expect(injected).toEqual([['shellEnv']])
+    expect(registrations).toHaveLength(1)
+    const contributor = registrations[0]!
+    expect(contributor.name).toBe('mstar-leaf-seat')
+    expect(Object.keys(contributor.variables)).toEqual([LEAF_SEAT_SHELL_ENV_KEY])
+    expect(contributor.variables[LEAF_SEAT_SHELL_ENV_KEY]!.description).toBe(LEAF_SEAT_SHELL_ENV_DESCRIPTION)
+  })
+
+  test('its resolve delegates to the shared predicate', () => {
+    const contributor = registeredContributor().registrations[0]!
+    expect(contributor.resolve({ agent: { session: { header: { origin: 'subagent' } } } })).toEqual({ [LEAF_SEAT_SHELL_ENV_KEY]: '1' })
+    expect(contributor.resolve({ agent: { session: { header: { delegationDepth: 1 } } } })).toEqual({ [LEAF_SEAT_SHELL_ENV_KEY]: '1' })
+    expect(contributor.resolve({ agent: { session: { header: { origin: 'team-lead' } } } })).toEqual({})
+  })
+})
+
+/**
+ * The wiring pin: `index.ts` must actually call the registration helper inside
+ * the deferred `ctx.inject(['shellEnv'], ...)` shape — the same source-scan
+ * style the `SEAT_SYMBOLS` checks above use, because the dsh test env cannot
+ * load the plugin graph.
+ */
+describe('the index.ts wiring calls the deferred registration', () => {
+  const indexSource = readFileSync(join(import.meta.dir, '..', 'src', 'index.ts'), 'utf8')
+
+  test('index.ts imports registerLeafSeatShellEnv and calls it', () => {
+    expect(indexSource).toContain("from './gates/leaf-seat.ts'")
+    expect(indexSource).toMatch(/import \{[^}]*registerLeafSeatShellEnv[^}]*\} from '\.\/gates\/leaf-seat\.ts'/)
+    expect(indexSource).toContain('registerLeafSeatShellEnv(ctx)')
+  })
+
+  test('the call site is the shellEnv deferred injection, not a static import', () => {
+    expect(indexSource).not.toMatch(/ctx\.inject\(\['shellEnv'\]/)
+    // The helper owns the inject; index.ts only forwards ctx.
+    const helperSource = readFileSync(join(import.meta.dir, '..', 'src', 'gates', 'leaf-seat.ts'), 'utf8')
+    expect(helperSource).toContain("ctx.inject(['shellEnv']")
   })
 })
