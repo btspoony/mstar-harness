@@ -269,6 +269,7 @@ const focus = (input: {
         iteration: "iteration" in input ? input.iteration ?? null : { iterationId: "iter-1", gateStep: 2 },
         ...(input.overview === undefined ? {} : { overview: input.overview }),
         ...(input.overviewPhase === undefined ? {} : { overviewPhase: input.overviewPhase }),
+        ...(input.phase === undefined ? {} : { phase: input.phase }),
       })}
       copy={focusCopy}
     />,
@@ -893,6 +894,18 @@ describe("Focus — a session with no active lifecycle is a calm idle state (pla
     // The panel head survives: the section is still named.
     expect(page).toContain("Plans");
     expect(page).not.toContain('class="wf-id"');
+  });
+
+  test("a PENDING read claims no state: no hint, no planboard, no absence arm", () => {
+    // `loading` is a transport phase, not a subject state (`view-model/focus.ts`
+    // threads it through `resolveSubjectMember`) — the panel renders nothing
+    // rather than hinting or borrowing an absence arm.
+    const page = idle({ phase: "loading" });
+    expect(page).toContain('data-ms-binding="idle"');
+    expect(page).not.toContain('data-ms-workflow-idle=""');
+    expect(page).not.toContain("start a plan or iteration and its plan board appears here");
+    expect(page).not.toContain('data-ms-plan=');
+    expect(page).not.toContain('data-ms-absence=');
   });
 
   test("a FAILED workflow read renders its own arm even while the session is idle", () => {
