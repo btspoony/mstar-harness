@@ -49,7 +49,7 @@ import type { SkillLintAdvisory } from './gates/skill-lint.ts'
 import { seamWriteIntentListener } from './gates/seams.ts'
 import type { SeamId, SeamLintAdvisory } from './gates/seams.ts'
 import { registerNativeCommandTools } from './gates/native-commands.ts'
-import { leafSeatToolListener } from './gates/leaf-seat.ts'
+import { leafSeatShellEnvOf, leafSeatToolListener, LEAF_SEAT_SHELL_ENV_DESCRIPTION, LEAF_SEAT_SHELL_ENV_KEY } from './gates/leaf-seat.ts'
 import { DshHostAdapter } from './gates/adapter.ts'
 import type { DshHostAdapterOptions } from './gates/adapter.ts'
 import { resolveExecutionLedgerTarget } from './gates/workflow-selection.ts'
@@ -972,6 +972,30 @@ export function apply(ctx: Context, config: Config): void {
   // shared command). Every other command is an action of the shared MCP
   // connection.
   registerNativeCommandTools(ctx, resolver)
+
+  // Leaf-seat shell signal (#548): export `DSH_MSTAR_LEAF_SEAT=1` on shell-tool
+  // executions whose calling session header says leaf, so a leaf-launched CLI
+  // process attests the fact and the engine's `coordination.leaf-seat` refusal
+  // fires on coordinator registration verbs. Deferred injection keeps a
+  // composition without the shell-env plugin loading (the same pattern the
+  // commands/jobs/llm-fallbacks rows use); the ONE leaf predicate lives in
+  // `gates/leaf-seat.ts`.
+  ctx.inject(['shellEnv'], (shellEnvCtx) => {
+    const registry = (shellEnvCtx as unknown as {
+      shellEnv: {
+        register(contributor: {
+          name: string
+          variables: Record<string, { description: string }>
+          resolve(execution: { agent?: unknown }): Record<string, string>
+        }): unknown
+      }
+    }).shellEnv
+    registry.register({
+      name: 'mstar-leaf-seat',
+      variables: { [LEAF_SEAT_SHELL_ENV_KEY]: { description: LEAF_SEAT_SHELL_ENV_DESCRIPTION } },
+      resolve: (execution) => leafSeatShellEnvOf(execution),
+    })
+  })
 
   // Durable adopted control root : install the seam that lets a cross-root
   // `mstar_plan_bind` adoption survive a host restart. The host's

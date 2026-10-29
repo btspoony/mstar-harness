@@ -121,6 +121,7 @@
     "@deepseek-ai/dsh-session-query": "^0.2.1-rc.4",
     "@deepseek-ai/dsh-session-title": "^0.2.1-rc.4",
     "@deepseek-ai/dsh-settings": "^0.2.1-rc.4",
+    "@deepseek-ai/dsh-shell-env": "^0.2.1-rc.4",
     "@deepseek-ai/dsh-skill": "^0.2.1-rc.4",
     "@deepseek-ai/dsh-skill-filesystem": "^0.2.1-rc.4",
     "@deepseek-ai/dsh-storage": "^0.2.1-rc.4",

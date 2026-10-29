@@ -18,8 +18,17 @@ test("issue payload help uses registry field requiredness", () => {
 const originalSessionId = process.env.MSTAR_HOST_SESSION_ID;
 const originalMinted = process.env.MSTAR_EXECUTION_IDENTITY;
 const originalDsh = process.env.DSH_SESSION_ID;
+const originalLeafDsh = process.env.DSH_MSTAR_LEAF_SEAT;
+const originalLeafMstar = process.env.MSTAR_LEAF_SEAT;
 
 afterEach(() => {
+  for (const [original, key] of [
+    [originalLeafDsh, "DSH_MSTAR_LEAF_SEAT"],
+    [originalLeafMstar, "MSTAR_LEAF_SEAT"],
+  ] as const) {
+    if (original === undefined) delete process.env[key];
+    else process.env[key] = original;
+  }
   if (originalSessionId === undefined) delete process.env.MSTAR_HOST_SESSION_ID;
   else process.env.MSTAR_HOST_SESSION_ID = originalSessionId;
   if (originalMinted === undefined) delete process.env.MSTAR_EXECUTION_IDENTITY;
@@ -40,6 +49,31 @@ test("CLI session identity accepts an explicit override without parsing a malfor
     sessionId: "flag-session",
     sessionIdSource: "flag",
   });
+});
+
+test("the shell leaf marker attests leafSeat on every identity channel, and only the exact value 1 counts", () => {
+  delete process.env.MSTAR_EXECUTION_IDENTITY;
+  delete process.env.DSH_SESSION_ID;
+  process.env.MSTAR_HOST_SESSION_ID = "env-session";
+  process.env.DSH_MSTAR_LEAF_SEAT = "1";
+  expect(resolveCliSessionIdentity(undefined)).toEqual({
+    sessionId: "env-session",
+    sessionIdSource: "env",
+    leafSeat: true,
+  });
+  process.env.DSH_MSTAR_LEAF_SEAT = "true";
+  expect(resolveCliSessionIdentity(undefined)).toEqual({ sessionId: "env-session", sessionIdSource: "env", leafSeat: undefined });
+  delete process.env.DSH_MSTAR_LEAF_SEAT;
+  process.env.MSTAR_LEAF_SEAT = "1";
+  expect(resolveCliSessionIdentity(undefined)).toMatchObject({ leafSeat: true });
+  const identity = mintedIdentity();
+  process.env.MSTAR_EXECUTION_IDENTITY = serializeExecutionValue(identity);
+  const resolved = resolveCliSessionIdentity(undefined);
+  expect(resolved).toMatchObject({ sessionId: identity.sessionId, sessionIdSource: "env", executionIdentity: identity, leafSeat: true });
+  delete process.env.MSTAR_LEAF_SEAT;
+  expect(resolveCliSessionIdentity(undefined)).not.toHaveProperty("leafSeat");
+  delete process.env.MSTAR_EXECUTION_IDENTITY;
+  expect(resolveCliSessionIdentity("flag-session")).not.toHaveProperty("leafSeat");
 });
 
 test("CLI session identity consumes the launcher-minted identity ahead of the ambient host value", () => {

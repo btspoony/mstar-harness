@@ -51,6 +51,27 @@ export function coordinatorIdentityFor(
   }
 }
 
+/**
+ * The managed shell-env fact (#548): the ONE leaf predicate decides whether the
+ * bash tool's per-execution environment exports `DSH_MSTAR_LEAF_SEAT=1`. The
+ * CLI reads that marker and attests `leafSeat: true` on the §3.1 identity it
+ * hands the engine, so a leaf-launched CLI process hits the engine's
+ * `coordination.leaf-seat` refusal on coordinator registration verbs. The fact
+ * is fail-closed only — it can restrict, never grant — and an env channel's
+ * inherent limit stands: a leaf that strips the marker from its own environment
+ * is not distinguishable.
+ */
+export const LEAF_SEAT_SHELL_ENV_KEY = 'DSH_MSTAR_LEAF_SEAT'
+
+/** The managed environment for one shell-tool execution: the marker for a leaf, nothing otherwise. */
+export function leafSeatShellEnvOf(execution: { agent?: unknown }): Partial<Record<typeof LEAF_SEAT_SHELL_ENV_KEY, string>> {
+  return isLeafSeatHeader(sessionHeaderOf(execution.agent)) ? { [LEAF_SEAT_SHELL_ENV_KEY]: '1' } : {}
+}
+
+/** The model-visible description the shell-env contributor declares for the marker. */
+export const LEAF_SEAT_SHELL_ENV_DESCRIPTION =
+  'Set to 1 when the calling session is a leaf/subagent seat; the mstar CLI attests it so the engine refuses workflow coordinator registration from this seat.'
+
 /** The named cause every refusal carries (the seam's refusal vocabulary). */
 export const LEAF_SEAT_COORDINATOR_CAUSE = 'leaf-seat.coordinator-action'
 

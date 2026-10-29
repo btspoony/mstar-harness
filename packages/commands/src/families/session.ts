@@ -16,6 +16,7 @@ import {
 } from "@mstar-harness/engine";
 import { redactSecrets } from "@mstar-harness/engine/src/audit";
 import { refusalEnvelope, type RefusalDiagnostic } from "../envelope.js";
+import { withLeafSeat } from "../identity-supplies.js";
 import { commandEnvelopeSchema } from "../envelope.js";
 import { decodeInputDiagnostics } from "../input-diagnostics.js";
 import { engineErrorFacts } from "./family-refusal.js";
@@ -366,10 +367,13 @@ export function getSessionCommandDefinitions(): readonly CommandDefinition[] {
         // The verified binding is the whole launch fact: the child receives the
         // identity the store already holds, and this route writes no session row,
         // lease or minted substitute.
-        const identity: ExecutionIdentity = {
-          source: context.host === undefined ? "local" : "host",
-          sessionId: claimedId, workflowId: workflow, role: "coordinator",
-        };
+        const identity = withLeafSeat(
+          {
+            source: context.host === undefined ? "local" : "host",
+            sessionId: claimedId, workflowId: workflow, role: "coordinator",
+          } satisfies ExecutionIdentity,
+          context,
+        );
         const binding = { verified: true as const, coordinator };
         const env: Record<string, string> = { ...process.env as Record<string, string>, MSTAR_EXECUTION_IDENTITY: serializeExecutionValue(identity) };
         delete env.MSTAR_HOST_SESSION_ID;
@@ -443,7 +447,7 @@ export function getSessionCommandDefinitions(): readonly CommandDefinition[] {
           const { workflow, priorSessionId, reason, attestationPath, expect, operation, sessionId, harness } = resolved.inputs;
           const root = resolveProcessHarnessDir(context.cwd, harness);
           if (root === null) return refusalEnvelope({ command: "session.recover", status: "usage", code: "command.invalid-input", exitCode: 2, message: "no control harness resolved; supply an absolute harness" });
-          const identity: ExecutionIdentity = { source: context.host === undefined ? "local" : "host", sessionId, workflowId: workflow, role: "coordinator" };
+          const identity = withLeafSeat({ source: context.host === undefined ? "local" : "host", sessionId, workflowId: workflow, role: "coordinator" } satisfies ExecutionIdentity, context);
           const parsedAttestation = readAttestationDocument(attestationPath);
           const contextForCaller = executionContextFor({ harnessDir: root }, identity);
           const receipt = await recoverExecutionCoordinator(contextForCaller, {

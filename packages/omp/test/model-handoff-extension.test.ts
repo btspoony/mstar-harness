@@ -955,6 +955,61 @@ describe("host session identity injection", () => {
     expect(harness.records()).toHaveLength(0);
     expect(harness.notices()).toHaveLength(0);
   }, 30_000);
+  test("a leaf (task) session exports the leaf marker; a coordinator session and an already-exporting command do not", async () => {
+    const repo = buildControlRepo();
+
+    // A task/subagent session: session_init in its own ledger — the same fact
+    // the coordinator gates read. Its bash calls carry the leaf marker so the
+    // CLI attests `leafSeat` and the engine refuses coordinator registration.
+    const taskSession = newSession(repo.main);
+    taskSession.appendSessionInit({ systemPrompt: "task", task: "scout", tools: ["bash"], agent: "scout" });
+    const leafHarness = await createHarness({
+      cwd: repo.main,
+      sessionDir: scratchDir("unused-"),
+      sessionManager: taskSession,
+    });
+    const leafRevision = await leafHarness.emitToolCall({
+      type: "tool_call",
+      toolCallId: "call-leaf",
+      toolName: "bash",
+      input: { command: "mstar plan prepare --workflow wf-1" },
+    });
+    if (!isPlainFixtureRecord(leafRevision) || !isPlainFixtureRecord(leafRevision.input)) {
+      throw new Error("expected a revised bash input");
+    }
+    expect(leafRevision.input.command).toContain("export MSTAR_LEAF_SEAT=1; ");
+    expect((leafRevision.input.command as string).match(/export MSTAR_LEAF_SEAT=/g)).toHaveLength(1);
+
+    // A command that already exports the marker is left alone about the marker.
+    const preExported = await leafHarness.emitToolCall({
+      type: "tool_call",
+      toolCallId: "call-leaf-pre",
+      toolName: "bash",
+      input: { command: "export MSTAR_LEAF_SEAT=1; mstar plan prepare --workflow wf-1" },
+    });
+    if (!isPlainFixtureRecord(preExported) || !isPlainFixtureRecord(preExported.input)) {
+      throw new Error("expected a revised bash input");
+    }
+    expect((preExported.input.command as string).match(/export MSTAR_LEAF_SEAT=/g)).toHaveLength(1);
+
+    // A coordinator session (no session_init entry) exports no marker.
+    const coordinatorHarness = await createHarness({
+      cwd: repo.main,
+      sessionDir: scratchDir("unused-"),
+      sessionManager: newSession(repo.main),
+    });
+    const plain = await coordinatorHarness.emitToolCall({
+      type: "tool_call",
+      toolCallId: "call-coordinator",
+      toolName: "bash",
+      input: { command: "mstar plan prepare --workflow wf-1" },
+    });
+    if (!isPlainFixtureRecord(plain) || !isPlainFixtureRecord(plain.input)) {
+      throw new Error("expected a revised bash input");
+    }
+    expect(plain.input.command).not.toContain("MSTAR_LEAF_SEAT");
+  }, 30_000);
+
   test("functions.bash revisions inject the host id once across re-fires", async () => {
     const repo = buildControlRepo();
     const harness = await createHarness({

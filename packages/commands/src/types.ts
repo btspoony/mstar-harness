@@ -129,6 +129,15 @@ export interface InvocationContext {
    * environment routes, whose identity carries no scope transport.
    */
   readonly executionIdentity?: ExecutionIdentity;
+  /**
+   * The shell-transport leaf fact (#548): the trusted shell tool exported
+   * `DSH_MSTAR_LEAF_SEAT=1` / `MSTAR_LEAF_SEAT=1` because the calling session
+   * header says leaf (`origin: "subagent"` or `delegationDepth > 0`). It is a
+   * fail-closed fact only — it can only cause a `coordination.leaf-seat`
+   * refusal, never grant anything — and an env channel's inherent limit stands:
+   * a leaf that strips the marker from its own environment is not distinguishable.
+   */
+  readonly leafSeat?: true;
   readonly versions: SurfaceVersions;
   readonly signal: AbortSignal;
   readonly effects: CommandEffects;

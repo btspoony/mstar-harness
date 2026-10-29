@@ -20,7 +20,7 @@ import {
 } from '@mstar-harness/commands'
 import { executionContextFor } from '@mstar-harness/engine'
 import { coordinatorSeatCommandFor } from '../src/gates/coordinator-seat.ts'
-import { coordinatorIdentityFor, isLeafSeatHeader, leafSeatCoordinatorRefusal } from '../src/gates/leaf-seat.ts'
+import { coordinatorIdentityFor, isLeafSeatHeader, leafSeatCoordinatorRefusal, leafSeatShellEnvOf, LEAF_SEAT_SHELL_ENV_KEY } from '../src/gates/leaf-seat.ts'
 
 const SRC = join(import.meta.dir, '..', 'src')
 const SEAT_SYMBOLS = ['coordinatorSeatCommandFor', 'isCoordinatorSeatCommand'] as const
@@ -170,5 +170,25 @@ describe('coordinatorIdentityFor attests the leaf fact from the shared predicate
     const identity = coordinatorIdentityFor({ origin: 'team-lead' }, 's1', 'wf-1')
     expect(Object.hasOwn(identity, 'leafSeat')).toBe(false)
     expect(coordinatorIdentityFor(undefined, 's1', 'wf-1')).not.toHaveProperty('leafSeat')
+  })
+})
+
+/**
+ * The shell-signal contributor (#548): the ONE predicate decides whether the
+ * bash tool's managed environment exports `DSH_MSTAR_LEAF_SEAT=1`, which the
+ * CLI reads to attest `leafSeat` on the §3.1 identity it hands the engine.
+ */
+describe('the leaf-seat shell-env contributor', () => {
+  const resolveFor = (header: unknown) => leafSeatShellEnvOf({ agent: { session: { header } } })
+
+  test('a leaf header (either shape) exports the marker', () => {
+    expect(resolveFor({ origin: 'subagent' })).toEqual({ [LEAF_SEAT_SHELL_ENV_KEY]: '1' })
+    expect(resolveFor({ delegationDepth: 2 })).toEqual({ [LEAF_SEAT_SHELL_ENV_KEY]: '1' })
+  })
+
+  test('a non-leaf or absent header exports nothing', () => {
+    expect(resolveFor({ origin: 'team-lead' })).toEqual({})
+    expect(leafSeatShellEnvOf({})).toEqual({})
+    expect(leafSeatShellEnvOf({ agent: undefined })).toEqual({})
   })
 })

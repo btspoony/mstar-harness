@@ -19,7 +19,7 @@ import path from "node:path";
 import { z } from "zod";
 import { refusalEnvelope } from "../envelope.js";
 import { commandEnvelopeSchema } from "../envelope.js";
-import { IDENTITY_SUPPLIES, SESSION_REF_SUPPLIES, TOKEN_SUPPLIES } from "../identity-supplies.js";
+import { IDENTITY_SUPPLIES, SESSION_REF_SUPPLIES, TOKEN_SUPPLIES, withLeafSeat } from "../identity-supplies.js";
 import { payloadSchema } from "../payload-field-schema.js";
 import type { CommandDefinition, CommandEnvelope, InvocationContext } from "../types.js";
 
@@ -259,12 +259,15 @@ async function execute(id: string, input: PlanInput, context: InvocationContext)
         const root = resolveProcessHarnessDir(cwd, input.harness);
         if (root === null) return refusalEnvelope({ command: id, status: "usage", code: "command.invalid-input", exitCode: 2, message: "no control harness resolved; supply an absolute harness" });
         setArtifactStore(createFsStore(root));
-        const identity: ExecutionIdentity = {
-          source: context.host === undefined ? "local" : "host",
-          sessionId: context.sessionId,
-          workflowId: ref.workflowId,
-          role: "coordinator",
-        };
+        const identity = withLeafSeat(
+          {
+            source: context.host === undefined ? "local" : "host",
+            sessionId: context.sessionId,
+            workflowId: ref.workflowId,
+            role: "coordinator",
+          } satisfies ExecutionIdentity,
+          context,
+        );
         return ok(id, await resumeExecutionSession(executionContextFor({ harnessDir: root }, identity), ref));
       }
       if (input.execution === true) {
@@ -286,12 +289,15 @@ async function execute(id: string, input: PlanInput, context: InvocationContext)
         const root = resolveProcessHarnessDir(cwd, input.harness);
         if (root === null) return refusalEnvelope({ command: id, status: "usage", code: "command.invalid-input", exitCode: 2, message: "no control harness resolved; supply an absolute harness" });
         setArtifactStore(createFsStore(root));
-        const identity: ExecutionIdentity = acquired ?? {
-          source: context.host === undefined ? "local" : "host",
-          sessionId: context.sessionId,
-          workflowId: input.workflow,
-          role: "coordinator",
-        };
+        const identity = withLeafSeat(
+          (acquired ?? {
+            source: context.host === undefined ? "local" : "host",
+            sessionId: context.sessionId,
+            workflowId: input.workflow,
+            role: "coordinator",
+          }) satisfies ExecutionIdentity,
+          context,
+        );
         const beforeBind = input.expect === undefined
           ? await readExecutionAuthority({ harnessDir: root }, { workflowId: input.workflow })
           : undefined;
@@ -326,12 +332,15 @@ async function execute(id: string, input: PlanInput, context: InvocationContext)
       if (input.workflow !== undefined && ref !== undefined && input.workflow !== ref.workflowId) {
         return refusalEnvelope({ command: id, status: "usage", code: "command.invalid-input", exitCode: 2, message: "workflow selector does not match the supplied session reference" });
       }
-      const identity: ExecutionIdentity = {
-        source: context.host === undefined ? "local" : "host",
-        sessionId: context.sessionId,
-        workflowId,
-        role: "coordinator",
-      };
+      const identity = withLeafSeat(
+        {
+          source: context.host === undefined ? "local" : "host",
+          sessionId: context.sessionId,
+          workflowId,
+          role: "coordinator",
+        } satisfies ExecutionIdentity,
+        context,
+      );
       const contextForCaller = executionContextFor({ harnessDir: root }, identity);
       const result = ref === undefined
         ? await readExecutionPlan(contextForCaller, input.plan)
@@ -373,12 +382,15 @@ async function execute(id: string, input: PlanInput, context: InvocationContext)
     if (acquired !== undefined && (workflowId !== acquired.workflowId || acquired.role !== "coordinator")) {
       return refusalEnvelope({ command: id, status: "usage", code: "command.invalid-input", exitCode: 2, message: "selected workflow does not match the acquired coordinator identity" });
     }
-    const identity: ExecutionIdentity = {
-      source: acquired?.source ?? (context.host === undefined ? "local" : "host"),
-      sessionId: context.sessionId,
-      workflowId,
-      role: "coordinator",
-    };
+    const identity = withLeafSeat(
+      {
+        source: acquired?.source ?? (context.host === undefined ? "local" : "host"),
+        sessionId: context.sessionId,
+        workflowId,
+        role: "coordinator",
+      } satisfies ExecutionIdentity,
+      context,
+    );
     const receipt = await mutateExecutionPlan(executionContextFor({ harnessDir: root }, identity), {
       operationId,
       ...(ref === undefined ? {} : { session: ref }),

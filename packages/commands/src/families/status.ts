@@ -10,11 +10,12 @@ import {
   resolveCurrentAuthority,
   resolveProcessHarnessDir,
   type ExecutionToken,
+  type ExecutionIdentity,
 } from "@mstar-harness/engine";
 import { z } from "zod";
 import { commandEnvelopeSchema } from "../envelope.js";
 import { refusalEnvelope } from "../envelope.js";
-import { SESSION_REF_SUPPLIES, TOKEN_SUPPLIES } from "../identity-supplies.js";
+import { SESSION_REF_SUPPLIES, TOKEN_SUPPLIES, withLeafSeat } from "../identity-supplies.js";
 import { engineErrorFacts } from "./family-refusal.js";
 import type { CommandDefinition, CommandEnvelope, InvocationContext } from "../types.js";
 
@@ -261,7 +262,10 @@ export function getStatusCommandDefinitions(): readonly CommandDefinition[] {
           }
           const executionContext = executionContextFor(
             { harnessDir },
-            acquired ?? { source: context.host === undefined ? "local" : "host", sessionId: context.sessionId, workflowId: workflow, role: "coordinator" },
+            withLeafSeat(
+              (acquired ?? { source: context.host === undefined ? "local" : "host", sessionId: context.sessionId, workflowId: workflow, role: "coordinator" }) satisfies ExecutionIdentity,
+              context,
+            ),
           );
           const ref = parsed.data.sessionRef === undefined ? undefined : decodeExecutionSessionRef(parsed.data.sessionRef);
           if (ref !== undefined && (ref.workflowId !== workflow || ref.role !== "coordinator")) {
