@@ -151,27 +151,30 @@ describe('milestone write descriptors', () => {
   })
 })
 
-describe('the C1 operation-id policy — one id per logical write, reused by a retry', () => {
+describe('the C1 retry policy — one id AND request per logical write', () => {
   const deterministic = () => {
     let next = 0
     return () => `op-${++next}`
   }
+  const request = (expectedStoreRevision: number) => ({ expectedStoreRevision })
 
-  it('reuses the id for the same write and mints a fresh one for a different write', () => {
-    const ids = writeOperationIds(deterministic())
-    const first = ids.for('add:Milestone:null:0')
-    // An ambiguous retry (the deadline abort) retries the SAME logical write.
-    expect(ids.for('add:Milestone:null:0')).toBe(first)
-    expect(ids.for('add:Other:null:1')).not.toBe(first)
+  it('reuses the id and the ORIGINAL request for the same write, mints both for a different one', () => {
+    const ids = writeOperationIds<{ expectedStoreRevision: number }>(deterministic())
+    const first = ids.for('add:Milestone:null:0', request(7))
+    // An ambiguous retry of the SAME logical write: same id, and — the part the
+    // engine hashes — the same expectedStoreRevision.
+    expect(ids.for('add:Milestone:null:0', request(9))).toEqual(first)
+    expect(ids.for('add:Milestone:null:0', request(9)).request.expectedStoreRevision).toBe(7)
+    expect(ids.for('add:Other:null:1', request(7)).operationId).not.toBe(first.operationId)
   })
 
   it('a terminal answer settles the write, so the next attempt is a new intent', () => {
-    const ids = writeOperationIds(deterministic())
-    const first = ids.for('remove:m-1')
+    const ids = writeOperationIds<{ expectedStoreRevision: number }>(deterministic())
+    const first = ids.for('remove:m-1', request(7))
     ids.settled()
     // A refusal the store made (not a transport failure) ends the logical write:
     // retrying it later must be a new request, not a replay of a judged one.
-    expect(ids.for('remove:m-1')).not.toBe(first)
+    expect(ids.for('remove:m-1', request(9))).not.toEqual(first)
   })
 })
 
@@ -194,15 +197,16 @@ describe('the write CHANNEL retries a transport-ambiguous write with the SAME op
     })
     const client = new MstarPanelSnapshotClient(gateway.connection)
     let minted = 0
-    const ids = writeOperationIds(() => `op-logical-${++minted}`)
+    const ids = writeOperationIds<{ expectedStoreRevision: number }>(() => `op-logical-${++minted}`)
     const refusals: Array<string | null> = []
+    const reloads: number[] = []
     const channel = createMilestoneWrites({
       client,
       sessionId: 's-1',
       cwd: '/proj',
       projectId: '_default',
       expectedStoreRevision: 7,
-      reload: () => {},
+      reload: () => reloads.push(reloads.length + 1),
       onState: (state) => refusals.push(state.refusal),
       ids,
     })
@@ -217,10 +221,18 @@ describe('the write CHANNEL retries a transport-ambiguous write with the SAME op
     expect(adds).toHaveLength(2)
     const firstId = (adds[0]!.payload as { args: { mutation: { operationId: string } } }).args.mutation.operationId
     const retryId = (adds[1]!.payload as { args: { mutation: { operationId: string } } }).args.mutation.operationId
-    // THE contract: the ambiguous retry carries the SAME operationId, so the
-    // engine replays its recorded receipt instead of creating twice.
+    // THE contract: the ambiguous retry carries the SAME operationId AND the same
+    // expectedStoreRevision, so the engine replays its recorded receipt (a new
+    // revision would hash differently and answer store.operation-conflict).
     expect(firstId).toBe('op-logical-1')
     expect(retryId).toBe(firstId)
+    const revisions = adds.map(
+      (call) => (call.payload as { args: { mutation: { expectedStoreRevision: number } } }).args.mutation.expectedStoreRevision,
+    )
+    expect(revisions).toEqual([7, 7])
+    // And the ambiguous failure did NOT reload the read: refreshing the revision is
+    // what would make the retry a different request (Greptile 4).
+    expect(reloads).toHaveLength(1)
     // The transport failure surfaced as the refusal, and the successful retry cleared it.
     const stated = refusals.filter((value): value is string => value !== null)
     expect(stated).toHaveLength(1)

@@ -177,6 +177,25 @@ export function overviewMemberOf(state: MstarDashboardViewState): {
 }
 
 /**
+ * The project scope the Focus overview read must carry (Greptile 3): the engine's
+ * `readOverview` answers `not-applicable` for milestones and latestIteration with
+ * no `project` filter, so the panel resolves one from the catalog project list —
+ * the same source the Projects destination renders. `_default` wins when it is
+ * registered (it is the store's bucket for unattributed records), else the single
+ * project, else the first row. `null` = no project to scope by, and the read stays
+ * unscoped rather than inventing an id.
+ */
+export function focusOverviewProject(data: unknown): string | null {
+  const items = (data as { items?: ReadonlyArray<{ project?: { id?: unknown } }> } | null | undefined)?.items
+  if (!Array.isArray(items) || items.length === 0) return null
+  const ids = items
+    .map((item) => item?.project?.id)
+    .filter((id): id is string => typeof id === 'string' && id !== '')
+  if (ids.includes('_default')) return '_default'
+  return ids[0] ?? null
+}
+
+/**
  * The delivery line as the per-view `iterations` read proves it.
  *
  * `undefined` = no answer (the digest's iteration member is the only evidence);
@@ -499,25 +518,33 @@ export type MilestoneWriteChannel = {
 }
 
 /**
- * The C1 operation-id policy. One id per LOGICAL write, reused by a retry until
- * the store answers terminally: a success (the receipt replays) or a non-transport
- * refusal (the store judged the request, so a retry is a new intent). A transport
- * failure — the deadline abort above all — is AMBIGUOUS: the engine may have
- * committed after the client gave up, so the retry must carry the same id and let
- * the store replay its recorded receipt instead of writing twice.
+ * The C1 retry policy. One id — and the WHOLE request it was minted for — per
+ * LOGICAL write, retained until the store answers terminally: a success (the
+ * receipt replays) or a non-transport refusal (the store judged the request, so a
+ * retry is a new intent). A transport failure, the deadline abort above all, is
+ * AMBIGUOUS: the engine may have committed after the client gave up.
+ *
+ * Retaining the request and not just the id is the load-bearing part: the engine
+ * hashes `expectedStoreRevision` into the operation's request hash, so a retry
+ * carrying a NEWLY observed revision answers `store.operation-conflict` instead of
+ * replaying — a create would then be duplicated with a new id and ordinal. The
+ * ambiguous write therefore keeps its original revision, and the caller does not
+ * reload the read while the outcome is unknown.
  */
-export function writeOperationIds(makeId: () => string = () => crypto.randomUUID()): {
-  /** The id this logical write must carry (kept across an ambiguous retry). */
-  for(signature: string): string
-  /** The store answered terminally: the next write of any kind starts a fresh id. */
+export function writeOperationIds<T>(
+  makeId: () => string = () => crypto.randomUUID(),
+): {
+  /** The id + request this logical write must carry (kept across an ambiguous retry). */
+  for(signature: string, request: T): { operationId: string; request: T }
+  /** The store answered terminally: the next write of any kind starts a fresh intent. */
   settled(): void
 } {
-  let pending: { signature: string; operationId: string } | null = null
+  let pending: { signature: string; operationId: string; request: T } | null = null
   return {
-    for(signature) {
-      if (pending !== null && pending.signature === signature) return pending.operationId
-      pending = { signature, operationId: makeId() }
-      return pending.operationId
+    for(signature, request) {
+      if (pending !== null && pending.signature === signature) return { operationId: pending.operationId, request: pending.request }
+      pending = { signature, operationId: makeId(), request }
+      return { operationId: pending.operationId, request }
     },
     settled() {
       pending = null
@@ -542,27 +569,37 @@ export function createMilestoneWrites(seats: {
   /** The channel's busy/refusal mirror — React state in the seat, recorded in a spec. */
   onState: (state: { busy: boolean; refusal: string | null }) => void
   /** The id policy; the seat owns one instance for its lifetime. */
-  ids: ReturnType<typeof writeOperationIds>
+  ids: ReturnType<typeof writeOperationIds<{ expectedStoreRevision: number }>>
 }): MilestoneWriteChannel {
   const { client, sessionId, cwd, projectId, expectedStoreRevision: revision, reload, onState, ids } = seats
   // The factory's own mirror of the busy/refusal state; the hook overrides both
   // members with its React state, but a direct caller (a spec) reads these.
   let busy = false
   let refusal: string | null = null
-  const run = (signature: string, call: (operationId: string) => Promise<MilestoneWriteResult>): void => {
+  const run = (
+    signature: string,
+    request: { expectedStoreRevision: number },
+    call: (operationId: string, expectedStoreRevision: number) => Promise<MilestoneWriteResult>,
+  ): void => {
     if (busy) return
     void (async () => {
       busy = true
       refusal = null
       onState({ busy: true, refusal: null })
-      const result = await call(ids.for(signature))
+      // The retained request wins: an ambiguous retry must hash the SAME revision
+      // the engine may already have committed, or it answers store.operation-conflict.
+      const retained = ids.for(signature, request)
+      const result = await call(retained.operationId, retained.request.expectedStoreRevision)
+      const ambiguous = !result.ok && result.code === 'transport-error'
       // A terminal answer ends the logical write; an ambiguous transport failure
-      // keeps the id so the retry replays the engine's receipt (contract C1).
-      if (result.ok || result.code !== 'transport-error') ids.settled()
+      // keeps the id AND the request so the retry replays the engine's receipt.
+      if (!ambiguous) ids.settled()
       busy = false
       refusal = result.ok ? null : result.message
       onState({ busy, refusal })
-      reload()
+      // Reloading on an ambiguous answer would refresh the read's revision and turn
+      // the retry into a DIFFERENT request — exactly the duplicate write C1 forbids.
+      if (!ambiguous) reload()
     })()
   }
   return {
@@ -573,48 +610,60 @@ export function createMilestoneWrites(seats: {
       return refusal
     },
     create(input: { name: string; target: string | null; ordinal: number }): void {
-      run(`add:${input.name}:${input.target ?? ''}:${input.ordinal}`, (operationId) =>
-        client.milestoneAdd({
-          sessionId,
-          cwd,
-          projectId,
-          input: { name: input.name, target: input.target, ordinal: input.ordinal },
-          mutation: { operationId, expectedStoreRevision: revision },
-        }),
+      run(
+        `add:${input.name}:${input.target ?? ''}:${input.ordinal}`,
+        { expectedStoreRevision: revision },
+        (operationId, expectedStoreRevision) =>
+          client.milestoneAdd({
+            sessionId,
+            cwd,
+            projectId,
+            input: { name: input.name, target: input.target, ordinal: input.ordinal },
+            mutation: { operationId, expectedStoreRevision },
+          }),
       )
     },
     update(milestoneId: string, patch: { name?: string; target?: string | null; status?: string }): void {
-      run(`update:${milestoneId}:${JSON.stringify(patch)}`, (operationId) =>
-        client.milestoneUpdate({
-          sessionId,
-          cwd,
-          projectId,
-          milestoneId,
-          patch,
-          mutation: { operationId, expectedStoreRevision: revision },
-        }),
+      run(
+        `update:${milestoneId}:${JSON.stringify(patch)}`,
+        { expectedStoreRevision: revision },
+        (operationId, expectedStoreRevision) =>
+          client.milestoneUpdate({
+            sessionId,
+            cwd,
+            projectId,
+            milestoneId,
+            patch,
+            mutation: { operationId, expectedStoreRevision },
+          }),
       )
     },
     remove(milestoneId: string): void {
-      run(`remove:${milestoneId}`, (operationId) =>
-        client.milestoneRemove({
-          sessionId,
-          cwd,
-          projectId,
-          milestoneId,
-          mutation: { operationId, expectedStoreRevision: revision },
-        }),
+      run(
+        `remove:${milestoneId}`,
+        { expectedStoreRevision: revision },
+        (operationId, expectedStoreRevision) =>
+          client.milestoneRemove({
+            sessionId,
+            cwd,
+            projectId,
+            milestoneId,
+            mutation: { operationId, expectedStoreRevision },
+          }),
       )
     },
     assign(issueId: string, issueRevision: number, milestoneId: string | null): void {
-      run(`assign:${issueId}:${milestoneId ?? ''}:${issueRevision}`, (operationId) =>
-        client.milestoneAssign({
-          sessionId,
-          cwd,
-          issueId,
-          input: { projectId, milestoneId, reason: 'assigned from the project page' },
-          mutation: { operationId, actor: 'project-manager', expectedRevision: issueRevision, expectedStoreRevision: revision },
-        }),
+      run(
+        `assign:${issueId}:${milestoneId ?? ''}:${issueRevision}`,
+        { expectedStoreRevision: revision },
+        (operationId, expectedStoreRevision) =>
+          client.milestoneAssign({
+            sessionId,
+            cwd,
+            issueId,
+            input: { projectId, milestoneId, reason: 'assigned from the project page' },
+            mutation: { operationId, actor: 'project-manager', expectedRevision: issueRevision, expectedStoreRevision },
+          }),
       )
     },
   }
@@ -635,7 +684,7 @@ function useMilestoneWrites(seats: {
 }): MilestoneWriteChannel | undefined {
   const { client, sessionId, cwd, projectId, expectedStoreRevision, reload } = seats
   const [state, setState] = React.useState<{ busy: boolean; refusal: string | null }>({ busy: false, refusal: null })
-  const ids = React.useRef(writeOperationIds())
+  const ids = React.useRef(writeOperationIds<{ expectedStoreRevision: number }>())
   // Number.isInteger, not a null test: a schema-drifted envelope makes the member
   // `undefined`, and a channel armed with no revision would guarantee refusals.
   if (
@@ -741,11 +790,23 @@ export function PanelSeat(props: PanelSeatProps): React.ReactElement | null {
       : destination === 'iterations' ? { params: destinationReadParams(destination) } : {}),
   })
   const destinationRead = destinationView.state
+  // Focus's three project panels are members of ONE `overview` read, and that
+  // read answers `not-applicable` for milestones/iteration with no `project`
+  // filter — so the seat resolves the scope from the catalog project list first.
+  const focusProjectsView = useMstarDashboardView({
+    client: panelSnapshot,
+    sessionId: wireSession,
+    cwd,
+    view: snapshot !== null && destination === 'focus' ? 'projects' : null,
+  })
+  const focusProject =
+    focusProjectsView.state.kind === 'ok' ? focusOverviewProject(focusProjectsView.state.envelope.data) : null
   const focusOverviewView = useMstarDashboardView({
     client: panelSnapshot,
     sessionId: wireSession,
     cwd,
     view: snapshot !== null && destination === 'focus' ? 'overview' : null,
+    ...(focusProject === null ? {} : { params: { project: focusProject } }),
   })
   const focusOverview = overviewMemberOf(focusOverviewView.state)
   // The open record (list → detail), and its own read.
@@ -821,6 +882,7 @@ export function PanelSeat(props: PanelSeatProps): React.ReactElement | null {
     workflowView.reload()
     iterationsView.reload()
     destinationView.reload()
+    focusProjectsView.reload()
     focusOverviewView.reload()
     // A new commit is a new key; the first mount is not a commit.
   }, [pickReloadKey])

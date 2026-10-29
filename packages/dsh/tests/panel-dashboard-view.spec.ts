@@ -34,7 +34,7 @@ import {
 } from '../src/engine-status-wire.ts'
 import { MstarPanelSnapshotClient } from '../src/client/panel/panel-snapshot-client.ts'
 import { PANEL_SNAPSHOT_ENDPOINT } from '../src/engine-status-wire.ts'
-import { PanelShell, deliveryFromView } from '../src/client/panel/panel-shell.tsx'
+import { PanelShell, deliveryFromView, focusOverviewProject } from '../src/client/panel/panel-shell.tsx'
 import type { PanelSnapshot } from '../src/panel/panel-snapshot.ts'
 
 let booted: BootResult | undefined
@@ -344,5 +344,23 @@ describe('dashboardView — the delivery line is derived from the iterations vie
 
     expect(render({ iterationId: 'iter-view', gateStep: 4 })).toContain(uiEn.focus.deliveryLine('iter-view', 4, 5))
     expect(render(null)).toContain(uiEn.focus.deliveryNoIteration)
+  })
+})
+
+/* --------------- Focus's overview scope (Greptile 3) --------------- */
+
+describe("Focus's overview read carries a project scope", () => {
+  // The engine's `readOverview` answers `not-applicable` for milestones and
+  // latestIteration with no `project` filter, so the panel resolves one from the
+  // catalog project list — the same source the Projects destination renders.
+  it('resolves _default when it is registered, else the single project, else the first', () => {
+    const project = (id: string) => ({ project: { id } })
+    expect(focusOverviewProject({ items: [project('engine'), project('_default')] })).toBe('_default')
+    expect(focusOverviewProject({ items: [project('engine')] })).toBe('engine')
+    expect(focusOverviewProject({ items: [project('engine'), project('dsh-integration')] })).toBe('engine')
+    // Nothing to scope by: the read stays unscoped rather than inventing an id.
+    expect(focusOverviewProject({ items: [] })).toBe(null)
+    expect(focusOverviewProject(null)).toBe(null)
+    expect(focusOverviewProject({ items: [{ project: { id: '' } }] })).toBe(null)
   })
 })

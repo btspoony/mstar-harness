@@ -494,18 +494,6 @@ function RoadmapFeature(props: {
   const { model, copy } = props;
   return (
     <div className={"feature-body"} data-ms-feature="roadmap">
-      {props.writes === undefined ? null : (
-        <>
-          {/* The store's own refusal, verbatim, until the next write or reload
-              replaces it (contract C1: the client rewords nothing). */}
-          {props.writes.refusal === null ? null : (
-            <p className="muted t-12" role="alert" data-ms-write-refusal="">
-              {copy.roadmap.writes.refusalLead} {props.writes.refusal}
-            </p>
-          )}
-          <MilestoneCreateForm writes={props.writes} nextOrdinal={model.milestones.length} copy={copy} />
-        </>
-      )}
       {model.milestones.length === 0 && model.unassignedIssues === 0 ? null : (
         <section className={"panel"} data-ms-milestones="">
           <div className="panel-head">
@@ -548,6 +536,29 @@ function RoadmapFeature(props: {
 }
 
 /**
+ * The write controls, outside the populated arm: a roadmap that reads successfully
+ * but holds no milestone still needs a way to create the FIRST one, and an absent
+ * roadmap row must not make the project unwritable. The store is the authority on
+ * whether the write lands, so the form is offered and a refusal is surfaced.
+ */
+function RoadmapWrites(props: { writes?: MilestoneWriteSurface; nextOrdinal: number; copy: ProjectDetailCopy }) {
+  if (props.writes === undefined) return null;
+  const writes = props.writes;
+  return (
+    <>
+      {/* The store's own refusal, verbatim, until the next write or reload
+          replaces it (contract C1: the client rewords nothing). */}
+      {writes.refusal === null ? null : (
+        <p className="muted t-12" role="alert" data-ms-write-refusal="">
+          {props.copy.roadmap.writes.refusalLead} {writes.refusal}
+        </p>
+      )}
+      <MilestoneCreateForm writes={writes} nextOrdinal={props.nextOrdinal} copy={props.copy} />
+    </>
+  );
+}
+
+/**
  * The Roadmap feature's four arms.
  *
  * `absent` is the case IA §4 exists for: a project with no roadmap row (`_default`
@@ -563,25 +574,42 @@ function RoadmapArm(props: {
   assignable?: readonly AssignableIssue[];
 }) {
   const { roadmap, copy } = props;
+  // The write controls sit OUTSIDE the arm: a roadmap with no milestone (or no
+  // roadmap row at all) still needs a way to create the first one, so the form
+  // renders for every state where the read answered and the host can write.
+  const writes =
+    props.writes === undefined ? null : (
+      <RoadmapWrites
+        writes={props.writes}
+        nextOrdinal={roadmap.kind === "populated" ? roadmap.value.milestones.length : 0}
+        copy={copy}
+      />
+    );
   switch (roadmap.kind) {
     case "populated":
       return (
-        <RoadmapFeature
-          model={roadmap.value}
-          copy={copy}
-          {...(props.writes === undefined ? {} : { writes: props.writes })}
-          {...(props.assignable === undefined ? {} : { assignable: props.assignable })}
-        />
+        <div className={"feature-body-arm"} data-ms-roadmap-arm="populated">
+          {writes}
+          <RoadmapFeature
+            model={roadmap.value}
+            copy={copy}
+            {...(props.writes === undefined ? {} : { writes: props.writes })}
+            {...(props.assignable === undefined ? {} : { assignable: props.assignable })}
+          />
+        </div>
       );
     case "absent":
       return (
-        <EmptyState
-          arm="absent"
-          labelWord={copy.absence.absent.labelWord}
-          heading={copy.absence.absent.heading}
-          body={copy.absence.absent.body}
-          pointer={copy.roadmap.absentNextStep(`${copy.features.issues} · ${copy.features.iterations}`)}
-        />
+        <div className={"feature-body-arm"} data-ms-roadmap-arm="absent">
+          {writes}
+          <EmptyState
+            arm="absent"
+            labelWord={copy.absence.absent.labelWord}
+            heading={copy.absence.absent.heading}
+            body={copy.absence.absent.body}
+            pointer={copy.roadmap.absentNextStep(`${copy.features.issues} · ${copy.features.iterations}`)}
+          />
+        </div>
       );
     case "not-applicable":
       return (
@@ -595,13 +623,16 @@ function RoadmapArm(props: {
       );
     case "empty":
       return (
-        <EmptyState
-          arm="empty"
-          labelWord={copy.absence.empty.labelWord}
-          heading={copy.absence.empty.heading}
-          body={copy.absence.empty.body}
-          hint={copy.absence.empty.hint}
-        />
+        <div className={"feature-body-arm"} data-ms-roadmap-arm="empty">
+          {writes}
+          <EmptyState
+            arm="empty"
+            labelWord={copy.absence.empty.labelWord}
+            heading={copy.absence.empty.heading}
+            body={copy.absence.empty.body}
+            hint={copy.absence.empty.hint}
+          />
+        </div>
       );
     case "unavailable":
       return (
@@ -623,11 +654,13 @@ function RoadmapArm(props: {
 export function ProjectDetail(props: ProjectDetailProps) {
   const { identity, copy, feature } = props;
   // The header direction (plan Task 3): the roadmap's declared direction, falling
-  // back to the catalog description. Both absent renders nothing, not a dash.
+  // back to the catalog description WHENEVER no direction is available — an absent,
+  // empty or still-loading roadmap declares no direction, and the project's own
+  // description is then the only thing to say. Both absent renders nothing, not a dash.
   const direction =
     props.roadmap.kind === "populated"
       ? (props.roadmap.value.direction ?? identity.description)
-      : null;
+      : identity.description;
   // The head's `N open issues` is the project's open-issue total, which the scoped Issues
   // read already answers under its default `open` disposition. The roadmap's milestone
   // tallies cannot answer it: `unassignedIssues` counts every unassigned issue, retired
