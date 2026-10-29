@@ -99,6 +99,12 @@ export interface PanelSnapshotEndpointOptions {
    * `ok`, so the panel never loses its workspace body to a missing catalog.
    */
   readonly readRetained?: PanelRetainedReader
+  /**
+   * Apply-scoped diagnostic sink for the once-only degradation line. Unset in
+   * production, where the gateway writes through `ctx.logger`; a test (or a
+   * host with its own log router) binds it per apply generation.
+   */
+  readonly warnLeafSignal?: (message: string) => void
 }
 
 /** Structural view of the live sessions service (`get(id)` only). */
@@ -224,7 +230,8 @@ export class MstarPanelSnapshotGateway extends TypertRemoteService {
    * The once-only warning gate. The `shellEnv` probe is NOT cached (a service
    * that loads later must flip the state), only the "already warned" fact is.
    */
-  private readonly nextLeafSignalWarning = leafSignalWarningOnce()
+  private warnLeafSignal: ((message: string) => void) | undefined
+  private nextLeafSignalWarning = leafSignalWarningOnce()
 
   /**
    * @param ctx - owning Cordis context.
@@ -235,6 +242,23 @@ export class MstarPanelSnapshotGateway extends TypertRemoteService {
     this.resolver = options.resolver
     this.bootHarnessDir = options.bootHarnessDir
     this.readRetained = options.readRetained
+    this.warnLeafSignal = options.warnLeafSignal
+  }
+
+  /**
+   * Re-arm this gateway's once gate for a NEW apply generation (#619, review).
+   *
+   * The instance is kept across a re-apply (`installPanelSnapshotEndpoint`'s
+   * dedupe), so a gate created in the constructor would stay consumed forever
+   * and a legitimate warning could never be repeated after a reload while the
+   * service is still absent. The registration entry point calls this on every
+   * apply, rebinding the apply-scoped sink too, exactly like the plugin's other
+   * logger sinks.
+   * @param options - the re-applying scope's sink (unset ⇒ `ctx.logger`).
+   */
+  rearmLeafSignalWarning(options: Pick<PanelSnapshotEndpointOptions, 'warnLeafSignal'>): void {
+    this.nextLeafSignalWarning = leafSignalWarningOnce()
+    this.warnLeafSignal = options.warnLeafSignal
   }
 
   /**
@@ -320,14 +344,23 @@ export class MstarPanelSnapshotGateway extends TypertRemoteService {
    * withdrawn) is reflected on the next panel read without a restart. An
    * apply-time check would be wrong for exactly that reason.
    *
-   * The absence is disclosed through the payload; the first occurrence also
-   * writes one line, because a panel that is not open would never see it.
+   * REACHABILITY (review round 1): this method runs on a PANEL/STATUS READ, so
+   * both the payload state and the once-per-apply-generation log line are
+   * read-triggered. A host that never reads the panel gets neither — that is
+   * stated in the field's reason and the changes fragment instead of being
+   * papered over with a timer: no truthful apply-time signal exists, because a
+   * cordis composition can mount `shellEnv` after this plugin (the deferred
+   * `ctx.inject` exists for exactly that) and no "will never arrive" event
+   * exists. No other consumer reads this payload today (`engine-status` does
+   * not), so the panel snapshot is the one disclosure surface.
    * @returns the disclosure field for this read.
    */
   private leafSignal(): LeafSignalState {
     const state = leafSignalStateOf(this.ctx.get('shellEnv') !== undefined)
     const line = this.nextLeafSignalWarning(state)
-    if (line !== undefined) this.ctx.logger(LEAF_SIGNAL_LOGGER).warn(line)
+    if (line === undefined) return state
+    if (this.warnLeafSignal !== undefined) this.warnLeafSignal(line)
+    else this.ctx.logger(LEAF_SIGNAL_LOGGER).warn(line)
     return state
   }
 
@@ -543,6 +576,11 @@ export function installPanelSnapshotEndpoint(ctx: Context, options: PanelSnapsho
     present = false
   }
   if (present) {
+    // The kept instance is from an EARLIER apply generation: re-arm its
+    // once-gate (and rebind the generation's sink) before returning, or a
+    // reload could never disclose the same absence again.
+    const existing = ctx.get(PANEL_SNAPSHOT_SERVICE) as MstarPanelSnapshotGateway | undefined
+    existing?.rearmLeafSignalWarning(options)
     ctx.logger(ENDPOINT_LOGGER).debug('mstar panel-snapshot gateway already registered — kept as-is (multi-fiber dedupe)')
     return
   }
@@ -551,6 +589,10 @@ export function installPanelSnapshotEndpoint(ctx: Context, options: PanelSnapsho
   } catch (error) {
     // The admission test lost a race: the earlier registrant stays.
     if (!(error instanceof Error) || !error.message.includes('has been registered')) throw error
+    // Same generation boundary as the present-check above: the winner is kept,
+    // this apply still re-arms its warning.
+    const winner = ctx.get(PANEL_SNAPSHOT_SERVICE) as MstarPanelSnapshotGateway | undefined
+    winner?.rearmLeafSignalWarning(options)
     ctx.logger(ENDPOINT_LOGGER).debug('mstar panel-snapshot gateway registered concurrently — kept the first (multi-fiber dedupe)')
   }
 }

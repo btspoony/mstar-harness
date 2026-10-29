@@ -572,6 +572,10 @@ describe('panelSnapshot endpoint — the leaf-signal disclosure (#619)', () => {
       recovery: LEAF_SIGNAL_RECOVERY,
     })
     expect(result.snapshot.leafSignal.reason).toContain('undetectable limit')
+    // Reachability is disclosed, not implied: the state travels on a read and
+    // the log line is written on the first read, so a host that never reads the
+    // panel is disclosed on its next read rather than by a timer (review 1).
+    expect(result.snapshot.leafSignal.reason).toContain('first panel read')
   })
 
   it('reports active once the service is present — a late load flips it without a restart', async () => {
@@ -588,6 +592,37 @@ describe('panelSnapshot endpoint — the leaf-signal disclosure (#619)', () => {
     const after = await endpointOf(app).panelSnapshot('ses_alpha', app.root)
     if (after.kind !== 'ok') throw new Error('unreachable')
     expect(after.snapshot.leafSignal).toEqual({ active: true })
+  })
+
+  it('re-arms the once warning on a re-apply generation (kept gateway instance)', async () => {
+    const app = (booted = await bootApp({ sessionsService: 'fake', harnessDir: null }))
+    await seedStore(app.harnessDir)
+    liveSession(app, 'ses_alpha', app.root)
+
+    // The plugin already installed the gateway. A re-apply KEEPS that instance
+    // (dedupe), so this is the generation boundary the once-gate must follow:
+    // it re-arms the existing gateway and rebinds the apply-scoped sink.
+    const first: string[] = []
+    installPanelSnapshotEndpoint(app.ctx, {
+      resolver: { forWorkspace: () => null },
+      bootHarnessDir: null,
+      warnLeafSignal: (line) => first.push(line),
+    })
+    await endpointOf(app).panelSnapshot('ses_alpha', app.root)
+    await endpointOf(app).panelSnapshot('ses_alpha', app.root)
+    expect(first).toHaveLength(1)
+    expect(first[0]).toContain('leaf-seat shell marker inactive')
+
+    // The NEXT apply is a new generation: the same absence warns again, so a
+    // reload cannot hide a still-missing service behind a consumed gate.
+    const second: string[] = []
+    installPanelSnapshotEndpoint(app.ctx, {
+      resolver: { forWorkspace: () => null },
+      bootHarnessDir: null,
+      warnLeafSignal: (line) => second.push(line),
+    })
+    await endpointOf(app).panelSnapshot('ses_alpha', app.root)
+    expect(second).toHaveLength(1)
   })
 
   it('warns once on the first absent read and never for an active state', () => {

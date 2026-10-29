@@ -73,7 +73,9 @@ export interface LeafSignalState {
 export const LEAF_SIGNAL_ABSENT_REASON =
   'the host "shellEnv" service is absent, so DSH_MSTAR_LEAF_SEAT is never injected and a CLI launched from this session ' +
   'carries no leaf marker; this reports the missing service only — a leaf that strips the variable from its own ' +
-  'environment remains an undetectable limit of the environment channel'
+  'environment remains an undetectable limit of the environment channel. Reachability: the state travels on a panel ' +
+  'read and the once-per-apply warning is written on the first panel read, so a host that never reads the panel ' +
+  'produces neither and is disclosed on its next read'
 
 /** The recovery: put the host service back in the composition. */
 export const LEAF_SIGNAL_RECOVERY =
