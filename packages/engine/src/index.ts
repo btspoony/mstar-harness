@@ -871,6 +871,7 @@ export type {
   IssueFlow,
   IssueFlowBucket,
   IterationDTO,
+  IterationExecutionLifecycle,
   IterationGateStep,
   IterationListDTO,
   IterationPlanDTO,

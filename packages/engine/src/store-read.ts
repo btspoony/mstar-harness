@@ -232,6 +232,15 @@ export type IterationPlanDTO = {
 export type IterationGateStep = 1 | 2 | 3 | 4;
 
 /**
+ * The iteration's EXECUTION lifecycle, derived from its iteration workflow
+ * (contract C1): `active` while the workflow is active-registered, the
+ * projected terminal status otherwise, and the literal `"none"` when the
+ * iteration has no projected workflow row at all. Catalog lifecycle stays a
+ * separate fact on `catalog.lifecycle`.
+ */
+export type IterationExecutionLifecycle = "active" | "completed" | "stopped" | "failed" | "none";
+
+/**
  * One iteration. Membership comes from the catalog -- plan and document
  * membership is disclosed even before any workflow starts -- and the execution
  * projection only adds the compass and the plan execution overlay.
@@ -241,6 +250,8 @@ export type IterationDTO = {
   catalog: CatalogIdentityDTO | null;
   compass: CompassDTO | null;
   workflow: { id: string; status: string; phase: string | null; activeRegistration: boolean } | null;
+  /** Execution lifecycle from the workflow (C1): `"none"` when there is no workflow row. */
+  executionLifecycle: IterationExecutionLifecycle;
   plans: IterationPlanDTO[];
   documents: CatalogIdentityDTO[];
   /**
@@ -1570,6 +1581,15 @@ function composeIteration(
             phase: workflowRow.phase,
             activeRegistration: workflowRow.active_registration === 1,
           },
+    // C1: the execution lifecycle derives here and nowhere else — no workflow
+    // row is `"none"`, an active registration is `"active"`, and a terminal
+    // workflow answers with its projected status literal.
+    executionLifecycle:
+      workflowRow === undefined
+        ? "none"
+        : workflowRow.active_registration === 1
+          ? "active"
+          : (workflowRow.status as Exclude<IterationExecutionLifecycle, "active" | "none">),
     plans,
     documents: documentIds.flatMap((documentId) => {
       const document = identities.get(identityToken("document", documentId));

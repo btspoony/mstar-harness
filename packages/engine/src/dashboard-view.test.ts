@@ -490,6 +490,83 @@ describe("overview read model", () => {
     expect(list.attribution).toBe("present");
   });
 
+  test("executionLifecycle answers from the iteration workflow, never the catalog row (C1)", async () => {
+    const context = await workspace("execution-lifecycle-");
+    const register = async (id: string): Promise<void> => {
+      await registerCatalogEntity(
+        context,
+        { kind: "iteration", id, title: id, rootKind: "iterations", relativePath: id },
+        operation(`register-${id}`),
+      );
+    };
+    const activeState = {
+      schema_version: 1,
+      id: "iter-active",
+      type: "iteration",
+      status: "running",
+      phase: "phase-2-execute",
+      started_at: STARTED_AT,
+      updated_at: STARTED_AT,
+      compass_ref: "iter-active/delivery-compass.md",
+      branch: { base: "main", integration: "int/iter-active", target: "main" },
+      plans: [],
+    };
+    for (const id of ["iter-active", "iter-completed", "iter-stopped"]) {
+      await register(id);
+      // The root token's revision advances with every creation, so each
+      // creation re-reads it (CAS freshness, not identity).
+      const initialized = await readExecutionState(context);
+      await createExecutionWorkflow(
+        { harnessDir: context.harnessDir, caller: { sessionId: "lifecycle-fixture", role: "coordinator", workflowId: id } },
+        {
+          entry: { id, type: "iteration", started_at: STARTED_AT, dir: `workflows/${id}` },
+          snapshot: { ...activeState, id } as never,
+          expected: initialized.token,
+          operationId: `create-${id}`,
+        },
+      );
+    }
+    // Two terminal headers: `completed` is planted because the close writer's
+    // full evidence ceremony is out of this fixture's scope; the stored end
+    // state (terminal header, no registry row) is exactly what a real close
+    // leaves, and `executionLifecycle` reads only that state.
+    const handle = await openStore(context, "write");
+    try {
+      for (const [id, status] of [
+        ["iter-completed", "completed"],
+        ["iter-stopped", "stopped"],
+      ] as const) {
+        const row = handle.db.prepare("select state_json from execution_workflows where workflow_id = ?").get(id) as {
+          state_json: string;
+        };
+        handle.db
+          .prepare("update execution_workflows set state_json = ? where workflow_id = ?")
+          .run(JSON.stringify({ ...JSON.parse(row.state_json), status, ended_at: STARTED_AT }), id);
+        handle.db.prepare("delete from execution_registry where workflow_id = ?").run(id);
+      }
+    } finally {
+      handle.close();
+    }
+    await register("iter-none");
+
+    const listed = await readDashboardView({ context, view: "iterations" });
+    const lifecycle = Object.fromEntries(
+      ((listed.data as IterationListDTO).items).map((item) => [item.iterationId, item.executionLifecycle]),
+    );
+    // Task 3 widens the projection to terminal iteration workflows; until then
+    // the two terminal headers answer the honest "no projected row" arm.
+    expect(lifecycle).toEqual({
+      "iter-active": "active",
+      "iter-completed": "none",
+      "iter-stopped": "none",
+      "iter-none": "none",
+    });
+    // The catalog lifecycle is untouched: every row still reads `active`.
+    const detail = await readDashboardView({ context, view: "iteration-detail", id: "iter-active" });
+    expect((detail.data as IterationDTO).catalog?.lifecycle).toBe("active");
+    expect((detail.data as IterationDTO).executionLifecycle).toBe("active");
+  });
+
   test("without a project the two project-scoped members answer not-applicable only", async () => {
     const context = await workspace("overview-unscoped-");
     await registerCatalogEntity(
