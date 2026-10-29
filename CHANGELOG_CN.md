@@ -6,6 +6,22 @@
 
 ## [Unreleased]
 
+## [4.1.2] - 2026-10-29
+
+### Harness
+
+- **Focus** 现在渲染确认基线的四个面板——Active workflow（含计划看板）、Open residual issues、Milestones、Latest iteration（含五步闸门）；其中三个项目面板共用**一次** `overview` 仪表盘视图读取。既有会话事实全部保留，每个面板独立解析自己的空缺臂，overview 读取失败只降级这三个面板，无活动生命周期时不轮询。
+- **Overview** 移除「有日期历史（表格替代）」折叠块及其文案：Issue 流走势图、图例、差异说明与区间元信息保留。
+- **项目页**：路线图方向移入页头（无方向时回落到 catalog 描述）；catalog 身份、路线图权威、存储 Markdown、存储事实四个文档块移除；Roadmap 功能新增按目标日期排序的里程碑时间线（每节点含 open / total，无目标者排末尾，另加一个未归属事项节点），其下保持原里程碑板。
+- **里程碑写通道**（项目页）：创建、编辑名称/目标/状态、分配与取消分配事项、移除空里程碑——每个动作对应一个引擎写命令并携带读取到的存储版本，存储自身的拒绝原文就地呈现，成功或拒绝之后都重新发起读取。传输结果不明的写会以**相同的**操作 ID 重试，由引擎回放已记录回执而非重复写入。
+- **Iterations** 列表与详情读取引擎 DTO：生命周期列与筛选使用执行生命周期（`active` / `completed` / `stopped`，catalog 归档状态留在详情页），新增 Projects 列呈现迭代的项目成员关系，计划计数取自 DTO 自身组合的成员关系（不做本地 join），终态迭代也能给出其投影执行状态。基于 attribution 的空缺臂与项目范围筛选保持不变。
+- `packages/ui/design-system/prototype.html`、`snapshot.json` 与 `DESIGN.md` 按「原型优先」顺序同步：项目详情与迭代模板已载入确认基线，时间线与写控件的样式声明在原型与产品样式表中逐一相同。
+- **Leaf-seat shell 信号（#548）：** leaf/subagent 会话现在能把自身 seat 带进 shell 传输层，弥补"leaf 以父级 ambient identity 启动 CLI"的缺口（对正常使用 shell 的 leaf 生效）。dsh 插件注册 `shellEnv` 贡献者，在 leaf 执行上导出 `DSH_MSTAR_LEAF_SEAT=1`（复用共享的 `isLeafSeatHeader` 判定——leaf 规则只有一份）；omp 在 task 会话的 bash 命令前加 `export MSTAR_LEAF_SEAT=1;`；CLI 读取任一标记，并在其交给引擎的每份协调者 **注册** 元组上声明 `leafSeat: true`（bind、recover、register、adopt、close、reopen 及涉及 seat 的读取；leaf 允许的写入如 `workflow-note.append` 有意不声明），使引擎的 `coordination.leaf-seat` 拒绝在 CLI 传输层生效。边界：这是环境变量通道——leaf 若在调用 CLI 前主动去除标记（`env -u`）仍不可区分；非 `1` 的值一律忽略，不构成 leaf 声明。
+
+### 版本对齐
+
+- 提升 monorepo 根、`@mstar-harness/opencode`、`@mstar-harness/opencode-v2`、`@mstar-harness/cli`、`@mstar-harness/engine`、`@mstar-harness/dsh`、Cursor/Codex/Kimi/ZCode/omp/Claude 插件清单、便携式 Agent Plugins 清单及两份 marketplace 清单：**→ 4.1.2**。
+
 ## [4.1.1] - 2026-10-28
 
 ### Harness

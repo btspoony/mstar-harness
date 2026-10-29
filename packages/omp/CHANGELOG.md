@@ -6,6 +6,16 @@ The monorepo root [CHANGELOG.md](../../CHANGELOG.md) summarizes cross-surface re
 
 ## [Unreleased]
 
+## [4.1.2] - 2026-10-29
+
+### Harness
+
+- **Leaf-seat shell signal (#548):** a leaf/subagent session now carries its seat into the shell transport, closing the "leaf launches the CLI under the parent's ambient identity" gap for leafs that use their shell normally. The dsh plugin registers a `shellEnv` contributor exporting `DSH_MSTAR_LEAF_SEAT=1` on leaf executions (the shared `isLeafSeatHeader` predicate — one leaf rule), omp prefixes `export MSTAR_LEAF_SEAT=1;` onto a task session's bash calls, and the CLI reads either marker and attests `leafSeat: true` on every coordinator **registration** tuple it hands the engine (bind, recover, register, adopt, close, reopen and the seat-addressing reads — a leaf-permitted write such as `workflow-note.append` is deliberately left unstamped), so the engine's `coordination.leaf-seat` refusal fires on the CLI transport. Boundary: the marker is an environment channel — a leaf that deliberately strips it (`env -u`) before invoking the CLI is still indistinguishable, and non-`1` values are ignored, never a leaf claim.
+
+- Version alignment with harness **4.1.2**.
+
+See root [CHANGELOG.md](../../CHANGELOG.md) **4.1.2**.
+
 ## [4.1.1] - 2026-10-28
 
 ### Changed
