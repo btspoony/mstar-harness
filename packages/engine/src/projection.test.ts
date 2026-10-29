@@ -431,6 +431,74 @@ async function activeWorkflowFixture(name: string, workflowId: string, planId: s
       })],
     });
   });
+
+  test("a terminal iteration workflow is projected for the iteration views, and the workflows list keeps its registry membership (C3)", async () => {
+    const f = await fixture("terminal-iteration-");
+    const iterationId = "iter-terminal-projection";
+    const planWorkflowId = "wf-terminal-plan";
+    // One iteration workflow and one plan workflow, both then driven terminal:
+    // the stored end state (terminal header, no registry row) is what the real
+    // close writer leaves, so the fixture reads exactly the served graph a
+    // finished store serves.
+    for (const [workflowId, type] of [
+      [iterationId, "iteration"],
+      [planWorkflowId, "plan"],
+    ] as const) {
+      const initialized = await readExecutionState(f.context);
+      await createExecutionWorkflow(
+        { ...f.context, caller: { sessionId: "terminal-fixture", role: "coordinator", workflowId } },
+        {
+          entry: { id: workflowId, type, started_at: STARTED_AT, dir: `workflows/${workflowId}` },
+          snapshot: {
+            schema_version: 1, id: workflowId, type, status: "running", started_at: STARTED_AT,
+            updated_at: STARTED_AT, phase: "phase-4-pr-delivery",
+            branch: { base: "main", integration: `int/${workflowId}`, target: "main" },
+            ...(type === "plan" ? { plans: [], delivery_kind: "development" } : { plans: [], compass_ref: "delivery-compass.md" }),
+          } as unknown as WorkflowSnapshot,
+          expected: initialized.token,
+          operationId: `create-${workflowId}`,
+        },
+      );
+    }
+    const handle = await openStore(f.context, "write");
+    try {
+      for (const workflowId of [iterationId, planWorkflowId]) {
+        const row = handle.db.prepare("select state_json from execution_workflows where workflow_id = ?").get(workflowId) as {
+          state_json: string;
+        };
+        handle.db
+          .prepare("update execution_workflows set state_json = ? where workflow_id = ?")
+          .run(JSON.stringify({ ...JSON.parse(row.state_json), status: "completed", ended_at: STARTED_AT }), workflowId);
+        handle.db.prepare("delete from execution_registry where workflow_id = ?").run(workflowId);
+      }
+    } finally {
+      handle.close();
+    }
+
+    await refreshProjections(f.context);
+    const rows = await projections(f);
+    // The terminal ITERATION workflow produces the overlay row the iteration
+    // views read, marked as no longer active-registered.
+    expect(rows.workflows).toEqual([
+      expect.objectContaining({
+        id: iterationId,
+        type: "iteration",
+        status: "completed",
+        active_registration: 0,
+      }),
+    ]);
+    // A terminal PLAN workflow does not widen the projection.
+    expect(rows.workflows.some((workflow) => workflow.id === planWorkflowId)).toBe(false);
+
+    // The workflows list keeps its active-registration membership: the only
+    // workflows in this store are terminal, so the list is empty while the
+    // iteration views still find the row above.
+    const list = await withStoreRead(f.context, queryDashboard("workflows"));
+    expect(list.data).toMatchObject({ items: [], total: 0 });
+    const detail = await withStoreRead(f.context, queryDashboard("workflow-detail", { id: iterationId }));
+    expect(detail.data).toMatchObject({ id: iterationId, status: "completed", activeRegistration: false });
+  });
+
   test("an unreadable ACTIVE authority blocks capture without enumerating registry history", async () => {
     const workflowId = "wf-authority-unreadable";
     const planId = "plan-authority-unreadable";

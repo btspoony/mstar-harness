@@ -613,6 +613,54 @@ async function captureExecutionProjectionSources(context: StoreContext): Promise
       });
     }
     const workflowPhases = new Map(rows.workflows.map((workflow) => [workflow.id, workflow.phase]));
+    // C3: a TERMINAL iteration workflow joins the projection even though it has
+    // left the active registry — the served graph lists it in
+    // `terminalUnregistered`/`terminalAdoptions`, and the iteration views must
+    // still find its workflow row to answer the execution state. Terminal PLAN
+    // workflows do not widen the projection, so the workflows list keeps its
+    // active-registration membership.
+    const terminalGraphIds = [
+      ...(servedGraph.terminalUnregistered ?? []),
+      ...(servedGraph.terminalAdoptions ?? []),
+    ].map((entry) => entry.id);
+    const terminalHeaders =
+      terminalGraphIds.length === 0
+        ? []
+        : selectWhereIn<{ workflow_id: string; state_json: string }>(
+            db,
+            (placeholders) => `select workflow_id, state_json from execution_workflows where workflow_id in (${placeholders}) order by workflow_id`,
+            terminalGraphIds,
+            (id) => [id],
+          );
+    for (const item of terminalHeaders) {
+      const workflowSpec = spec("workflow", `execution/workflows/${item.workflow_id}`);
+      let state: unknown;
+      try { state = JSON.parse(item.state_json); } catch {
+        recordInvalid(workflowSpec, item.state_json, "invalid: terminal workflow state is not valid JSON", "invalid");
+        continue;
+      }
+      if (
+        !isPlainObject(state) ||
+        state.id !== item.workflow_id ||
+        state.type !== "iteration" ||
+        state.status !== "completed" && state.status !== "stopped" && state.status !== "failed"
+      ) {
+        // Not a terminal iteration (or unreadable): the projection stays
+        // registry-only for it, exactly as before.
+        if (!isPlainObject(state) || state.type === "iteration") {
+          recordInvalid(workflowSpec, item.state_json, "invalid: terminal workflow state has an invalid object, type, or status");
+        }
+        continue;
+      }
+      record(workflowSpec, item.state_json);
+      const branch = isPlainObject(state.branch) ? state.branch : {};
+      rows.workflows.push({
+        id: item.workflow_id, type: "iteration", status: state.status as string,
+        phase: text(state.phase), startedAt: text(state.started_at), endedAt: text(state.ended_at), updatedAt: text(state.updated_at),
+        branchBase: text(branch.base), branchSource: text(deliveryBranchOf(branch)), branchIntegration: text(branch.integration), branchTarget: text(branch.target),
+        activeRegistration: false,
+      });
+    }
     const servedPlanIdsByWorkflow = new Map(graphWorkflows.map((workflow) => [workflow.state.id, new Set(workflow.plans.map((plan) => plan.plan.id))]));
     const servedIntegrationLeaseIds = new Set(graphWorkflows.filter((workflow) => workflow.integrationLease !== null).map((workflow) => workflow.state.id));
     const plans = servedWorkflowIds.length === 0

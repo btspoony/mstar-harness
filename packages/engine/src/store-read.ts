@@ -1434,8 +1434,12 @@ function readWorkflowList(db: StoreDb, filters: DashboardFilters): WorkflowListD
 
   // The projection has no project column: membership is the catalog's own
   // `belongs-to` relation, on the workflow row or on one of its plan rows.
+  // The list's rows stay ACTIVE-REGISTERED only (C3): the projection now also
+  // carries terminal iteration workflows for the iteration views, and the
+  // membership rule is stated here rather than inherited from the row set.
   const membership = projectMembership(db);
   const scoped = generated.workflows.filter((workflow) => {
+    if (!workflow.active_registration) return false;
     if (projectId === null) return true;
     if (belongsTo(membership, workflowCatalogKey(workflow).kind, workflow.id, projectId)) return true;
     return (plansByWorkflow.get(workflow.id) ?? []).some((plan) => belongsTo(membership, "plan", plan.plan_id, projectId));

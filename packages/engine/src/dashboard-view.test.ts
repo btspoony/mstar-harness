@@ -575,18 +575,19 @@ describe("overview read model", () => {
     const lifecycle = Object.fromEntries(
       ((listed.data as IterationListDTO).items).map((item) => [item.iterationId, item.executionLifecycle]),
     );
-    // Task 3 widens the projection to terminal iteration workflows; until then
-    // the two terminal headers answer the honest "no projected row" arm.
+    // All four literals: the derivation reads the projected workflow row and
+    // never the catalog row.
     expect(lifecycle).toEqual({
       "iter-active": "active",
-      "iter-completed": "none",
-      "iter-stopped": "none",
+      "iter-completed": "completed",
+      "iter-stopped": "stopped",
       "iter-none": "none",
     });
-    // The catalog lifecycle is untouched: every row still reads `active`.
-    const detail = await readDashboardView({ context, view: "iteration-detail", id: "iter-active" });
+    // The catalog lifecycle is untouched: the row still reads `active` while
+    // the execution lifecycle answers `completed`.
+    const detail = await readDashboardView({ context, view: "iteration-detail", id: "iter-completed" });
     expect((detail.data as IterationDTO).catalog?.lifecycle).toBe("active");
-    expect((detail.data as IterationDTO).executionLifecycle).toBe("active");
+    expect((detail.data as IterationDTO).executionLifecycle).toBe("completed");
   });
 
   test("without a project the two project-scoped members answer not-applicable only", async () => {
