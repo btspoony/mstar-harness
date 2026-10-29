@@ -20,8 +20,6 @@ import {
 } from '@mstar-harness/commands'
 import { executionContextFor } from '@mstar-harness/engine'
 import { coordinatorSeatCommandFor } from '../src/gates/coordinator-seat.ts'
-import { readFileSync } from 'node:fs'
-import { join } from 'node:path'
 import { coordinatorIdentityFor, isLeafSeatHeader, leafSeatCoordinatorRefusal, leafSeatShellEnvOf, LEAF_SEAT_SHELL_ENV_DESCRIPTION, LEAF_SEAT_SHELL_ENV_KEY, registerLeafSeatShellEnv } from '../src/gates/leaf-seat.ts'
 
 const SRC = join(import.meta.dir, '..', 'src')
