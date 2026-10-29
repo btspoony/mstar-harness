@@ -25,9 +25,11 @@ import { bootApp, seedActiveWorkflow, seedStore, type BootResult } from './harne
 import {
   PANEL_SNAPSHOT_SERVICE,
   installPanelSnapshotEndpoint,
+  leafSignalWarningOnce,
   mstarPanelSnapshotInvocation,
   type PanelSnapshotEndpointOptions,
 } from '../src/panel/panel-snapshot-endpoint.ts'
+import { LEAF_SIGNAL_ABSENT_REASON, LEAF_SIGNAL_RECOVERY } from '../src/panel/panel-snapshot.ts'
 import { MSTAR_PANEL_SNAPSHOT_METHOD, MSTAR_PANEL_SNAPSHOT_NAMESPACE } from '../src/engine-status-wire.ts'
 import type { PanelSnapshotRead } from '../src/panel/panel-snapshot.ts'
 import { readWorkflowSessionBinding } from '../src/engine-status-store.ts'
@@ -54,6 +56,16 @@ class FakeSessionController extends Service {
 
   inspect(sessionId: string): Promise<unknown> {
     return this.handler(sessionId)
+  }
+}
+
+/**
+ * Minimal `shellEnv` seam: the ONLY fact the leaf-signal probe reads is whether
+ * the service is present, so registering this instance is what flips the state.
+ */
+class FakeShellEnv extends Service {
+  constructor(ctx: Context) {
+    super(ctx, 'shellEnv')
   }
 }
 
@@ -218,7 +230,7 @@ describe('panelSnapshot endpoint — server-side harness resolution', () => {
     if (result.kind !== 'ok') throw new Error('unreachable')
     // The shrunken payload: the session digest plus the delivery fallback, and
     // nothing from the five removed views (Task 4).
-    expect(Object.keys(result.snapshot).sort()).toEqual(['enforcement', 'iteration', 'knowledge', 'selection'])
+    expect(Object.keys(result.snapshot).sort()).toEqual(['enforcement', 'iteration', 'knowledge', 'leafSignal', 'selection'])
     expect(result.snapshot.iteration.state).toBe('not-applicable')
   })
 
@@ -541,5 +553,84 @@ describe('panelSnapshot endpoint — an explicit null id is an ABSENT id', () =>
     expect(result.kind).toBe('ok')
     if (result.kind !== 'ok') throw new Error('unreachable')
     expect(result.snapshot.iteration.state).toBe('not-applicable')
+  })
+})
+
+describe('panelSnapshot endpoint — the leaf-signal disclosure (#619)', () => {
+  it('discloses the absent shellEnv service with the one reason and the recovery', async () => {
+    const app = (booted = await bootApp({ sessionsService: 'fake', harnessDir: null }))
+    await seedStore(app.harnessDir)
+    liveSession(app, 'ses_alpha', app.root)
+    const result = await endpointOf(app).panelSnapshot('ses_alpha', app.root)
+    expect(result.kind).toBe('ok')
+    if (result.kind !== 'ok') throw new Error('unreachable')
+    // The field reports the MISSING SERVICE only; the marker-strip limit is not
+    // a state this can detect and must not appear as fixed here.
+    expect(result.snapshot.leafSignal).toEqual({
+      active: false,
+      reason: LEAF_SIGNAL_ABSENT_REASON,
+      recovery: LEAF_SIGNAL_RECOVERY,
+    })
+    expect(result.snapshot.leafSignal.reason).toContain('undetectable limit')
+    // Reachability is disclosed, not implied: the state travels on a read and
+    // the log line is written on the first read, so a host that never reads the
+    // panel is disclosed on its next read rather than by a timer (review 1).
+    expect(result.snapshot.leafSignal.reason).toContain('first panel read')
+  })
+
+  it('reports active once the service is present — a late load flips it without a restart', async () => {
+    const app = (booted = await bootApp({ sessionsService: 'fake', harnessDir: null }))
+    await seedStore(app.harnessDir)
+    liveSession(app, 'ses_alpha', app.root)
+    const before = await endpointOf(app).panelSnapshot('ses_alpha', app.root)
+    if (before.kind !== 'ok') throw new Error('unreachable')
+    expect(before.snapshot.leafSignal.active).toBe(false)
+
+    // The composition loads the service AFTER the first read: the probe is per
+    // read, so the very next answer is active and carries no reason.
+    new FakeShellEnv(app.ctx)
+    const after = await endpointOf(app).panelSnapshot('ses_alpha', app.root)
+    if (after.kind !== 'ok') throw new Error('unreachable')
+    expect(after.snapshot.leafSignal).toEqual({ active: true })
+  })
+
+  it('re-arms the once warning on a re-apply generation (kept gateway instance)', async () => {
+    const app = (booted = await bootApp({ sessionsService: 'fake', harnessDir: null }))
+    await seedStore(app.harnessDir)
+    liveSession(app, 'ses_alpha', app.root)
+
+    // The plugin already installed the gateway. A re-apply KEEPS that instance
+    // (dedupe), so this is the generation boundary the once-gate must follow:
+    // it re-arms the existing gateway and rebinds the apply-scoped sink.
+    const first: string[] = []
+    installPanelSnapshotEndpoint(app.ctx, {
+      resolver: { forWorkspace: () => null },
+      bootHarnessDir: null,
+      warnLeafSignal: (line) => first.push(line),
+    })
+    await endpointOf(app).panelSnapshot('ses_alpha', app.root)
+    await endpointOf(app).panelSnapshot('ses_alpha', app.root)
+    expect(first).toHaveLength(1)
+    expect(first[0]).toContain('leaf-seat shell marker inactive')
+
+    // The NEXT apply is a new generation: the same absence warns again, so a
+    // reload cannot hide a still-missing service behind a consumed gate.
+    const second: string[] = []
+    installPanelSnapshotEndpoint(app.ctx, {
+      resolver: { forWorkspace: () => null },
+      bootHarnessDir: null,
+      warnLeafSignal: (line) => second.push(line),
+    })
+    await endpointOf(app).panelSnapshot('ses_alpha', app.root)
+    expect(second).toHaveLength(1)
+  })
+
+  it('warns once on the first absent read and never for an active state', () => {
+    const gate = leafSignalWarningOnce()
+    const absent = { active: false, reason: 'r', recovery: 'x' } as const
+    expect(gate(absent)).toContain('leaf-seat shell marker inactive')
+    expect(gate(absent)).toBeUndefined()
+    // A composition that has the service never warns at all.
+    expect(leafSignalWarningOnce()({ active: true })).toBeUndefined()
   })
 })

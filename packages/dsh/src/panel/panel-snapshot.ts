@@ -44,6 +44,56 @@ export interface SessionDigest {
   readonly selection: WorkflowSelectionView | null
 }
 
+/**
+ * Whether the leaf-seat shell marker can reach a CLI process launched from this
+ * session (the `DSH_MSTAR_LEAF_SEAT` contributor, #548).
+ *
+ * SCOPE — read this before widening the prose: `active: false` says exactly ONE
+ * thing, the host's `shellEnv` service is absent, so the marker is never
+ * injected and the CLI transport degrades to its ungated behaviour. It says
+ * NOTHING about the channel's other, separately declared limit: a leaf that
+ * strips the variable from its own environment (`env -u`, `sudo`'s
+ * `env_reset`) is still indistinguishable, and this field cannot detect it. The
+ * missing-service state is disclosed; the strip stays a limit, not a fix.
+ */
+export interface LeafSignalState {
+  /** The `shellEnv` service is present, so a leaf's shell calls carry the marker. */
+  readonly active: boolean
+  /** The absent service — the one condition disclosed here (absent only when `active`). */
+  readonly reason?: string
+  /** The operator's route to restore the marker (absent only when `active`). */
+  readonly recovery?: string
+}
+
+/**
+ * The one reason line: the host service is missing, never the marker-strip
+ * limit. Worded so a reader cannot take it as "leaving the marker behind is now
+ * detected": carrying the variable is a precondition of attesting it.
+ */
+export const LEAF_SIGNAL_ABSENT_REASON =
+  'the host "shellEnv" service is absent, so DSH_MSTAR_LEAF_SEAT is never injected and a CLI launched from this session ' +
+  'carries no leaf marker; this reports the missing service only — a leaf that strips the variable from its own ' +
+  'environment remains an undetectable limit of the environment channel. Reachability: the state travels on a panel ' +
+  'read and the once-per-apply warning is written on the first panel read, so a host that never reads the panel ' +
+  'produces neither and is disclosed on its next read'
+
+/** The recovery: put the host service back in the composition. */
+export const LEAF_SIGNAL_RECOVERY =
+  'add "@deepseek-ai/dsh-shell-env" to this host composition (the dsh bundle already carries it; a custom composition is ' +
+  'the usual cause) and reload the plugin'
+
+/**
+ * Compose the disclosure field from the one probe: is the `shellEnv` service
+ * present? Pure so the endpoint owns the probe and the payload stays a value.
+ * @param shellEnvPresent - `ctx.get('shellEnv') !== undefined` at read time.
+ * @returns the active state, or the absent state with its reason and recovery.
+ */
+export function leafSignalStateOf(shellEnvPresent: boolean): LeafSignalState {
+  return shellEnvPresent
+    ? { active: true }
+    : { active: false, reason: LEAF_SIGNAL_ABSENT_REASON, recovery: LEAF_SIGNAL_RECOVERY }
+}
+
 /** The whole payload: the digest plus the delivery line's fallback member. */
 export interface PanelSnapshot extends SessionDigest {
   /**
@@ -51,6 +101,12 @@ export interface PanelSnapshot extends SessionDigest {
    * line's fallback while the per-view read has no answer.
    */
   readonly iteration: PanelWorkspaceView<IterationDTO | null>
+  /**
+   * The leaf-signal disclosure (#619): whether this host can inject the marker
+   * at all. Probed per read, never cached, so a host service that loads later
+   * flips it without a restart.
+   */
+  readonly leafSignal: LeafSignalState
 }
 
 /**
