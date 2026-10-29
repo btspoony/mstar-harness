@@ -179,6 +179,7 @@ export const en = {
     deliveryLine: (iterationId: string, step: number, of: number) => `${iterationId} · step ${step} of ${of}`,
     deliveryNoIteration: "No iteration",
     deliveryUnknownStep: "Iteration · no delivery step recorded",
+    iterationPlans: (count: number) => `${count} ${count === 1 ? "plan" : "plans"}`,
     enforcementLabel: (flag: string) => `Enforcement ${flag}`,
   },
 

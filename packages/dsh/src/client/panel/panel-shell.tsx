@@ -35,6 +35,7 @@ import {
   focusModel,
   type Copy,
   type FocusCopy,
+  type FocusOverviewInput,
   type Locale,
   type SessionBinding,
 } from '@mstar-harness/ui'
@@ -93,6 +94,12 @@ function focusCopy(copy: Copy): FocusCopy {
     // The gate step names live in the iteration detail's block; the focus track prints the
     // same five words.
     gateStepLabels: copy.iterationDetail.gateStepLabels,
+    // The two project panels reuse the Overview screen's strings: one fact, one copy.
+    residualsHeading: copy.overview.residualsHeading,
+    residualsTotal: copy.overview.residualsTotal,
+    milestonesHeading: copy.overview.milestonesHeading,
+    milestoneProgress: copy.overview.milestoneProgress,
+    milestoneOpenCount: copy.overview.milestoneOpenCount,
     absence: {
       'not-applicable': copy.state['not-applicable'],
       absent: copy.state.absent,
@@ -147,6 +154,27 @@ export function workflowMemberOf(state: MstarDashboardViewState): {
 }
 
 /**
+ * Map one per-view read of `overview` onto the member Focus's three project
+ * panels take (plan 20261029-dashboard-alignment Task 1, contract C3).
+ */
+export function overviewMemberOf(state: MstarDashboardViewState): {
+  readonly member: FocusOverviewInput
+  readonly phase: 'loading' | 'loaded'
+} {
+  switch (state.kind) {
+    case 'ok':
+      return { member: { state: 'read', data: state.envelope.data as never }, phase: 'loaded' }
+    case 'unavailable':
+      return { member: { state: 'unavailable', reason: state.reason }, phase: 'loaded' }
+    case 'no-harness':
+      return { member: { state: 'not-applicable', reason: 'no harness root resolves for this workspace' }, phase: 'loaded' }
+    case 'waiting':
+    case 'loading':
+      return { member: { state: 'not-applicable', reason: 'no overview read yet' }, phase: 'loading' }
+  }
+}
+
+/**
  * The delivery line as the per-view `iterations` read proves it.
  *
  * `undefined` = no answer (the digest's iteration member is the only evidence);
@@ -182,6 +210,10 @@ export function PanelShell(props: {
    * `undefined` means the envelope's own member is the only evidence.
    */
   delivery?: { iterationId: string; gateStep: IterationGateStep | null } | null
+  /** The shared `overview` read behind Focus's three project panels. */
+  overview?: FocusOverviewInput
+  /** A pending overview read: the project panels render no arm for an unread fact. */
+  overviewPhase?: 'loading' | 'loaded'
   destination: PanelDestination
   locale: Locale
   /** The host's resolved colour scheme (only the scheme is inherited). */
@@ -219,6 +251,8 @@ export function PanelShell(props: {
     selection,
     workflow: props.workflow,
     iteration: props.delivery === undefined ? deliveryOf(props.snapshot, props.workflow) ?? null : props.delivery,
+    ...(props.overview === undefined ? {} : { overview: props.overview }),
+    ...(props.overviewPhase === undefined ? {} : { overviewPhase: props.overviewPhase }),
     ...(props.phase === undefined ? {} : { phase: props.phase }),
   })
   return (
@@ -498,6 +532,8 @@ export function PanelSeat(props: PanelSeatProps): React.ReactElement | null {
   })
   // The ACTIVE destination's own view: one read, only while it is shown. The
   // Iterations destination reuses the delivery read above — one request, not two.
+  // Focus reads the shared `overview` view once: its three project panels are
+  // members of that one read, never three calls (contract C3).
   const [issueQueryState, setIssueQueryState] = React.useState<IssueQuery>(() => parseIssueQuery(''))
   // The screen's query IS the read's filter set: the shared serializer produces
   // the `/api`-style parameters the engine view layer validates.
@@ -518,6 +554,13 @@ export function PanelSeat(props: PanelSeatProps): React.ReactElement | null {
       : destination === 'iterations' ? { params: destinationReadParams(destination) } : {}),
   })
   const destinationRead = destinationView.state
+  const focusOverviewView = useMstarDashboardView({
+    client: panelSnapshot,
+    sessionId: wireSession,
+    cwd,
+    view: snapshot !== null && destination === 'focus' ? 'overview' : null,
+  })
+  const focusOverview = overviewMemberOf(focusOverviewView.state)
   // The open record (list → detail), and its own read.
   const [detail, setDetail] = React.useState<{ view: DetailView; id: string } | null>(null)
   React.useEffect(() => { setDetail(null) }, [destination])
@@ -559,6 +602,7 @@ export function PanelSeat(props: PanelSeatProps): React.ReactElement | null {
     workflowView.reload()
     iterationsView.reload()
     destinationView.reload()
+    focusOverviewView.reload()
     // A new commit is a new key; the first mount is not a commit.
   }, [pickReloadKey])
 
@@ -616,6 +660,8 @@ export function PanelSeat(props: PanelSeatProps): React.ReactElement | null {
       workflow={workflow}
       {...(phase === 'loading' ? { phase } : {})}
       delivery={deliveryFromView(iterationsView.state, planIds)}
+      overview={focusOverview.member}
+      {...(focusOverview.phase === 'loading' ? { overviewPhase: focusOverview.phase } : {})}
       reads={{ [destination]: destinationRead }}
       issueQuery={issueQueryState}
       onIssueQueryChange={setIssueQueryState}

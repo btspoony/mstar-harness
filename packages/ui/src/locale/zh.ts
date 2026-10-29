@@ -159,6 +159,7 @@ export const zh: Copy = {
     deliveryLine: (iterationId, step, of) => `${iterationId} · 第 ${step} / ${of} 步`,
     deliveryNoIteration: "无迭代",
     deliveryUnknownStep: "迭代 · 未记录交付步骤",
+    iterationPlans: (count: number) => `${count} 个计划`,
     enforcementLabel: (flag) => `强制执行：${flag}`,
   },
 

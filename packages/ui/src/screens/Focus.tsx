@@ -16,6 +16,7 @@
  */
 import { Fragment } from "react";
 import { EmptyState, type AbsenceArm } from "../components/EmptyState.tsx";
+import { ProgressBar } from "../components/ProgressBar.tsx";
 import { StatusDot } from "../components/StatusDot.tsx";
 import { TruncatedText } from "../components/TruncatedText.tsx";
 import type { FocusGroup, FocusModel, FocusPlan, FocusBinding } from "../view-model/focus.ts";
@@ -54,7 +55,15 @@ export type FocusCopy = {
   deliveryNoIteration: string;
   /** The iteration records no compass, so no step is proven — never `step 0 of 5`. */
   deliveryUnknownStep: string;
+  /** The overview read's plan count for the delivery iteration. */
+  iterationPlans: (count: number) => string;
   enforcementLabel: (flag: string) => string;
+  /** The three project-scoped panels, shared with the Overview screen's copy. */
+  residualsHeading: string;
+  residualsTotal: () => string;
+  milestonesHeading: string;
+  milestoneProgress: (done: number, total: number) => string;
+  milestoneOpenCount: (open: number) => string;
   absence: {
     "not-applicable": { labelWord: string; body: string };
     absent: { labelWord: string; body: string; pointer: string };
@@ -179,6 +188,116 @@ function Group(props: { group: FocusGroup; copy: FocusCopy }) {
   );
 }
 
+/** One project-scoped panel's arm, chosen from the model's own resolution. */
+function ProjectArm(props: {
+  arm: AbsenceArm;
+  copy: FocusCopy;
+  heading: string;
+  reason?: string;
+}) {
+  return (
+    <EmptyState
+      arm={props.arm}
+      labelWord={props.copy.absence[props.arm].labelWord}
+      heading={props.heading}
+      body={props.copy.absence[props.arm].body}
+      reason={props.arm === "unavailable" ? props.reason : undefined}
+      detail={props.arm === "not-applicable" ? props.reason : undefined}
+      pointer={props.arm === "absent" ? props.copy.absence.absent.pointer : undefined}
+      hint={props.arm === "empty" ? props.copy.absence.empty.hint : undefined}
+    />
+  );
+}
+
+/** Panel 2 — open residual issues by severity, from the shared overview read. */
+function ResidualsPanel(props: { overview: NonNullable<FocusModel["overview"]>; copy: FocusCopy }) {
+  const { overview, copy } = props;
+  const residuals = overview.residuals;
+  return (
+    <section className="panel" aria-labelledby="ms-focus-residuals">
+      <div className="panel-head">
+        <h2 className="panel-title" id="ms-focus-residuals">
+          {copy.residualsHeading}
+        </h2>
+      </div>
+      <div className="panel-body">
+        {residuals.kind === "populated" ? (
+          <dl className="res-grid" data-ms-focus-residuals="">
+            {residuals.value.rows.map((row) => (
+              <div key={row.severity} className="res-row" data-ms-severity={row.severity} data-ms-count={row.count}>
+                <dt className="sev">
+                  <StatusDot label={row.severity} tone={row.tone} mono />
+                </dt>
+                <dd className={row.emphasised ? "num is-strong" : "num"}>{row.count}</dd>
+              </div>
+            ))}
+          </dl>
+        ) : residuals.kind === "loading" ? null : (
+          <ProjectArm
+            arm={residuals.kind}
+            copy={copy}
+            heading={copy.residualsHeading}
+            reason={residuals.kind === "unavailable" || residuals.kind === "not-applicable" ? residuals.reason : undefined}
+          />
+        )}
+      </div>
+    </section>
+  );
+}
+
+/** Panel 3 — the project's milestones, up to the overview's own cap. */
+function MilestonesPanel(props: { overview: NonNullable<FocusModel["overview"]>; copy: FocusCopy }) {
+  const { overview, copy } = props;
+  const milestones = overview.milestones;
+  return (
+    <section className="panel" aria-labelledby="ms-focus-milestones">
+      <div className="panel-head">
+        <h2 className="panel-title" id="ms-focus-milestones">
+          {copy.milestonesHeading}
+        </h2>
+        {overview.milestoneProject === null ? null : <span className="panel-meta mono">{overview.milestoneProject}</span>}
+      </div>
+      <div className="panel-body">
+        {milestones.kind === "populated" ? (
+          <div data-ms-focus-milestones="">
+            {milestones.value.map((row) => (
+              <div key={row.milestoneId} className="milestone-row" data-ms-milestone-row="">
+                <div className="milestone-top">
+                  {row.status === null ? null : (
+                    <span className={`status tone-${row.statusTone}`} aria-label={row.status}>
+                      <span className="dot" aria-hidden="true" />
+                    </span>
+                  )}
+                  <span className="milestone-name">
+                    <TruncatedText text={row.name} />
+                  </span>
+                  {row.target === null ? null : <span className="milestone-target">{row.target}</span>}
+                </div>
+                {row.progress === null ? null : (
+                  <div className="milestone-foot">
+                    <ProgressBar done={row.progress.retired} total={row.progress.total} />
+                    <span className="milestone-counts">
+                      <span className="num">{copy.milestoneProgress(row.progress.retired, row.progress.total)}</span>
+                      <span>{copy.milestoneOpenCount(row.openIssues)}</span>
+                    </span>
+                  </div>
+                )}
+              </div>
+            ))}
+          </div>
+        ) : milestones.kind === "loading" ? null : (
+          <ProjectArm
+            arm={milestones.kind}
+            copy={copy}
+            heading={copy.milestonesHeading}
+            reason={milestones.kind === "unavailable" || milestones.kind === "not-applicable" ? milestones.reason : undefined}
+          />
+        )}
+      </div>
+    </section>
+  );
+}
+
 export function Focus(props: FocusProps) {
   const { model, copy } = props;
   const workflow = model.workflow;
@@ -259,6 +378,16 @@ export function Focus(props: FocusProps) {
         </div>
       </section>
 
+      {/* 2 + 3 — the project-scoped panels from ONE shared overview read (plan
+          Task 1, contract C3). No overview read wired, nothing renders for them:
+          an arm no transport answered must not be claimed. */}
+      {model.overview === undefined ? null : (
+        <>
+          <ResidualsPanel overview={model.overview} copy={copy} />
+          <MilestonesPanel overview={model.overview} copy={copy} />
+        </>
+      )}
+
       {/* 4 — the session's delivery line. A standalone delivery is sayable. */}
       <section className={"panel"} aria-labelledby="ms-focus-delivery">
         <h2 className={"panel-title"} id="ms-focus-delivery">
@@ -271,6 +400,20 @@ export function Focus(props: FocusProps) {
         ) : (
           <div className={"milestone-block"} data-ms-delivery={model.delivery.kind}>
             <p className={"milestone-block-name"}>{model.delivery.iterationId}</p>
+            {/* The overview read's compass facts for THIS iteration: the session's own
+                delivery line stays authoritative, the project read only adds what it
+                states about the same iteration. */}
+            {model.overview?.latestIteration.kind === "populated" &&
+            model.overview.latestIteration.value?.iterationId === model.delivery.iterationId ? (
+              <div className="wf-summary" data-ms-iteration-compass="">
+                {model.overview.latestIteration.value.compassStatus === null ? null : (
+                  <StatusDot label={model.overview.latestIteration.value.compassStatus} tone={model.overview.latestIteration.value.compassTone} mono />
+                )}
+                <span className="muted t-11">
+                  {copy.iterationPlans(model.overview.latestIteration.value.planCount)}
+                </span>
+              </div>
+            ) : null}
             {/* The five-step track, as the prototype's fourth panel carries it. The model
                 has held `steps` since this screen was written and nothing rendered it. */}
             <div className="gate-track" role="list" data-ms-focus-steps="">

@@ -230,7 +230,13 @@ const focusCopy: FocusCopy = {
   deliveryLine: (id, step, of) => `${id} · step ${step} of ${of}`,
   deliveryNoIteration: "No iteration",
   deliveryUnknownStep: "Iteration · no delivery step recorded",
+  iterationPlans: (count) => `${count} plans`,
   enforcementLabel: (flag) => `enforcement ${flag}`,
+  residualsHeading: "Open residual issues",
+  residualsTotal: () => "by severity",
+  milestonesHeading: "Milestones",
+  milestoneProgress: (done, total) => `${done}/${total}`,
+  milestoneOpenCount: (open) => ` · ${open} open`,
   absence: {
     "not-applicable": { labelWord: "n/a", body: "no active workflow" },
     absent: { labelWord: "absent", body: "the record is gone", pointer: "re-bind" },
@@ -243,6 +249,8 @@ const focus = (input: {
   selection?: Parameters<typeof focusModel>[0]["selection"];
   workflow?: Parameters<typeof focusModel>[0]["workflow"];
   iteration?: Parameters<typeof focusModel>[0]["iteration"];
+  overview?: Parameters<typeof focusModel>[0]["overview"];
+  overviewPhase?: "loading" | "loaded";
 }): string =>
   renderToStaticMarkup(
     <Focus
@@ -254,6 +262,8 @@ const focus = (input: {
         selection: "selection" in input ? input.selection ?? null : { kind: "active", workflowId: "w", dir: "workflows/w" },
         workflow: input.workflow ?? read(workflow()),
         iteration: "iteration" in input ? input.iteration ?? null : { iterationId: "iter-1", gateStep: 2 },
+        ...(input.overview === undefined ? {} : { overview: input.overview }),
+        ...(input.overviewPhase === undefined ? {} : { overviewPhase: input.overviewPhase }),
       })}
       copy={focusCopy}
     />,
@@ -778,5 +788,61 @@ describe("Focus — the prototype's four panel titles", () => {
     const html = focus({});
     expect(html).toContain("Latest iteration");
     expect(html).not.toContain(">Delivery<");
+  });
+});
+
+describe("Focus — the three project panels from one overview read (plan Task 1)", () => {
+  test("populated overview: residual tally, milestone rows and the delivery's compass facts", () => {
+    const page = focus({
+      overview: {
+        state: "read",
+        data: overviewRead({
+          // Same iteration as the session's delivery line, so the compass facts attach.
+          latestIteration: read(iteration({ iterationId: "iter-1" })),
+        }),
+      },
+    });
+    expect(page).toContain('data-ms-focus-residuals=""');
+    expect(page).toContain('data-ms-severity="critical"');
+    expect(page).toContain("Milestone 0");
+    expect(page).toContain('data-ms-iteration-compass=""');
+    expect(page).toContain("0 plans");
+  });
+
+  test("no active lifecycle keeps the picker and still renders the project panels", () => {
+    const page = focus({
+      selection: null,
+      workflow: { state: "not-applicable", reason: "no active workflow" },
+      overview: { state: "read", data: overviewRead() },
+    });
+    expect(page).toContain('data-ms-binding="unbound"');
+    expect(page).toContain('data-ms-focus-residuals=""');
+    expect(page).toContain('data-ms-focus-milestones=""');
+  });
+
+  test("a failed overview read degrades the project panels only; session facts stay", () => {
+    const page = focus({
+      overview: { state: "unavailable", reason: "the overview read failed" },
+    });
+    // Both project panels name the read's own failure.
+    expect((page.match(/data-ms-absence="unavailable"/g) ?? []).length).toBe(2);
+    expect(page).toContain("the overview read failed");
+    // The session facts are untouched.
+    expect(page).toContain('data-ms-enforcement="soft"');
+    expect(page).toContain('data-ms-binding="bound"');
+    expect(page).toContain('data-ms-delivery="iteration"');
+    expect(page).not.toContain('data-ms-focus-residuals=""');
+  });
+
+  test("a pending overview read claims no arm yet", () => {
+    const page = focus({ overview: { state: "read", data: overviewRead() }, overviewPhase: "loading" });
+    expect(page).not.toContain('data-ms-focus-residuals=""');
+    expect(page).not.toContain('data-ms-absence=');
+  });
+
+  test("without an overview read the panels render nothing rather than an unanswered arm", () => {
+    const page = focus({});
+    expect(page).not.toContain('data-ms-focus-residuals=""');
+    expect(page).not.toContain("Milestone 0");
   });
 });
