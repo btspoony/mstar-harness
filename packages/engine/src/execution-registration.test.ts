@@ -718,6 +718,34 @@ describe("execution-registration", () => {
     expect(noJsonRegistrationFiles(fixture.workspace)).toBe(true);
   });
 
+  test("execution-registration-replays-a-pre-upgrade-iteration-committed-under-the-prior-delta-shape", async () => {
+    const fixture = await activeFixture("iteration-prior-delta-replay");
+    const iterationId = "iter-20260921-prior-delta";
+    writeReviewedCompass(fixture.context.harnessDir, iterationId);
+    const request = iterationRequest(fixture, iterationId, "op-iteration-prior-delta");
+    const context: ExecutionContext = { ...fixture.context, caller: { ...fixture.caller, workflowId: iterationId } };
+    // The previous release reviewed a SMALLER delta: the iteration entity and
+    // its binding only — plan-row membership entities, their membership links
+    // and the project links are published by this version. A receipt recorded
+    // under that shape (committed here exactly as the prior producer hashed it)
+    // must still replay for an unchanged retry instead of the widened delta
+    // turning the retry into `execution.operation-conflict`.
+    const priorRequest = {
+      ...request,
+      delta: {
+        entities: [{ kind: "iteration", id: iterationId, title: iterationId, rootKind: "iterations", relativePath: iterationId }],
+        binding: { catalogKind: "iteration", catalogId: iterationId },
+      },
+    } as typeof request;
+    const committed = await commitExecutionRegistration(context, { ...priorRequest, expected: fixture.rootToken });
+    const accepted = await footprint(fixture.context);
+
+    const shipped = { actor: "project-manager", workflow: request.workflow, operationId: request.operationId };
+    expect(await registerShippedCatalogExecution(context, { ...shipped, expected: fixture.rootToken })).toEqual(committed);
+    expect(await commitExecutionRegistration(context, { ...priorRequest, expected: fixture.rootToken })).toEqual(committed);
+    expect(await footprint(fixture.context)).toEqual(accepted);
+  });
+
   test("execution-registration-replays-a-committed-iteration-whose-compass-was-emptied", async () => {
     const fixture = await activeFixture("iteration-compass-replay");
     const iterationId = "iter-20260921-compass-replay";
