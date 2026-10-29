@@ -8,6 +8,22 @@ Package-specific histories: [`packages/cli/CHANGELOG.md`](packages/cli/CHANGELOG
 
 ## [Unreleased]
 
+## [4.1.2] - 2026-10-29
+
+### Harness
+
+- **Focus** now renders the confirmed four panels — Active workflow with the plan board, Open residual issues, Milestones, and Latest iteration with the five-step gate — all three project panels fed by ONE shared `overview` dashboard-view read. Every session fact is kept, each panel resolves its own absence arm, a failed overview read degrades those panels only, and no lifecycle starts no polling.
+- **Overview** drops the "Dated history (table alternative)" disclosure and its copy: the issue-flow chart, legend, gap note and range meta stay.
+- **Project page**: the roadmap's direction moves into the header (falling back to the catalog description), the catalog-identity, roadmap-authority, stored-markdown and stored-facts blocks are removed, and the Roadmap feature gains a target-ordered milestone timeline (open / total per node, missing targets last, plus an unassigned-issues node) above the unchanged milestone board.
+- **Milestone write channel** on the project page: create, edit name/target/status, assign and unassign issues, and remove an empty milestone — one engine verb per action with the observed store revision, the store's own refusal surfaced verbatim in place, and the read re-issued after either arm. A transport-ambiguous write retries with the SAME operation id, so the engine replays its receipt instead of writing twice.
+- **Iterations** list and detail read the engine DTO: the lifecycle column and filter are the execution lifecycle (`active` / `completed` / `stopped`, catalog archive state stays on the detail), a new Projects column carries the iteration's project membership, plan counts come from the DTO's composed membership (no local join), and terminal iterations answer their projected execution. The attribution-based empty/absent arms and the scoped project filter are unchanged.
+- `packages/ui/design-system/prototype.html`, `snapshot.json` and `DESIGN.md` follow the prototype-first order: the project-detail and iterations templates carry the confirmed baseline, and the new timeline and write controls are declared identically in the prototype and the product stylesheet.
+- **Leaf-seat shell signal (#548):** a leaf/subagent session now carries its seat into the shell transport, closing the "leaf launches the CLI under the parent's ambient identity" gap for leafs that use their shell normally. The dsh plugin registers a `shellEnv` contributor exporting `DSH_MSTAR_LEAF_SEAT=1` on leaf executions (the shared `isLeafSeatHeader` predicate — one leaf rule), omp prefixes `export MSTAR_LEAF_SEAT=1;` onto a task session's bash calls, and the CLI reads either marker and attests `leafSeat: true` on every coordinator **registration** tuple it hands the engine (bind, recover, register, adopt, close, reopen and the seat-addressing reads — a leaf-permitted write such as `workflow-note.append` is deliberately left unstamped), so the engine's `coordination.leaf-seat` refusal fires on the CLI transport. Boundary: the marker is an environment channel — a leaf that deliberately strips it (`env -u`) before invoking the CLI is still indistinguishable, and non-`1` values are ignored, never a leaf claim.
+
+### Version alignment
+
+- Bump monorepo root, `@mstar-harness/opencode`, `@mstar-harness/opencode-v2`, `@mstar-harness/cli`, `@mstar-harness/engine`, `@mstar-harness/dsh`, Cursor/Codex/Kimi/ZCode/omp/Claude plugin manifests, the portable Agent Plugins manifest, and both marketplace manifests: **→ 4.1.2**.
+
 ## [4.1.1] - 2026-10-28
 
 ### Harness

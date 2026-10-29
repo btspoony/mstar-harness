@@ -6,6 +6,21 @@ The monorepo root [CHANGELOG.md](../../CHANGELOG.md) summarizes cross-surface re
 
 ## [Unreleased]
 
+## [4.1.2] - 2026-10-29
+
+### Changed
+
+- Iteration dashboard reads now tell the execution truth: `IterationDTO` carries `executionLifecycle` (`active` / `completed` / `stopped` / `failed` / `none`), derived from the iteration workflow instead of the catalog row, and `projects` lists every linked project.
+- Iteration plan membership is the union of the compass frontmatter `plans:` ids and the catalog `plan belongs-to iteration` links, de-duplicated and sorted; a declared plan missing from the catalog stays visible with its `catalog-missing` badge. No link-backfill migration ships — the read union is the membership record, and `mstar catalog reconcile` is unchanged.
+- The projection now also covers terminal **iteration** workflows, so finished iterations answer their execution state instead of "no execution"; terminal plan workflows do not widen the projection and the workflows list keeps its active-registration membership. A projection format bump rebuilds the published generation on the next read (store schema gains migration 14, `compass-plan-membership`).
+- `mstar iteration register --project` is repeatable: each occurrence publishes one `iteration belongs-to project` catalog link (the project must already be registered — the catalog refuses dangling relations), and the first value stays the snapshot's project record. Later add/remove uses the existing `mstar catalog link` family. Iteration registration now also registers its plan rows as catalog plan entities, because the membership links may not dangle.
+- New engine writer `removeMilestone` removes an empty milestone and refuses `milestone.not-empty` (naming the reassignment recovery) while issues remain. No new CLI verb family.
+- **Leaf-seat shell signal (#548):** a leaf/subagent session now carries its seat into the shell transport, closing the "leaf launches the CLI under the parent's ambient identity" gap for leafs that use their shell normally. The dsh plugin registers a `shellEnv` contributor exporting `DSH_MSTAR_LEAF_SEAT=1` on leaf executions (the shared `isLeafSeatHeader` predicate — one leaf rule), omp prefixes `export MSTAR_LEAF_SEAT=1;` onto a task session's bash calls, and the CLI reads either marker and attests `leafSeat: true` on every coordinator **registration** tuple it hands the engine (bind, recover, register, adopt, close, reopen and the seat-addressing reads — a leaf-permitted write such as `workflow-note.append` is deliberately left unstamped), so the engine's `coordination.leaf-seat` refusal fires on the CLI transport. Boundary: the marker is an environment channel — a leaf that deliberately strips it (`env -u`) before invoking the CLI is still indistinguishable, and non-`1` values are ignored, never a leaf claim.
+
+- Version alignment with harness **4.1.2**.
+
+See root [CHANGELOG.md](../../CHANGELOG.md) **4.1.2**.
+
 ## [4.1.1] - 2026-10-28
 
 ### Changed
