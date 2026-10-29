@@ -34,6 +34,10 @@ export type FocusCopy = {
   bindingBound: (workflowId: string) => string;
   bindingTerminal: (workflowId: string) => string;
   bindingUnbound: string;
+  /** The idle line: no active lifecycle is the ordinary state between lifecycles. */
+  bindingIdle: string;
+  /** One muted line in the workflow panel while the session is idle. */
+  idleHint: string;
   pickerLabel: string;
   boardHeading: string;
   boardEmpty: string;
@@ -60,7 +64,10 @@ export type FocusCopy = {
   enforcementLabel: (flag: string) => string;
   /** The three project-scoped panels, shared with the Overview screen's copy. */
   residualsHeading: string;
-  residualsTotal: () => string;
+  /** The residuals panel's scope, so its counts cannot be read as a project's. */
+  residualsScope: string;
+  /** The milestones panel's prefix for the store's unattributed bucket. */
+  milestoneProjectUnattributed: string;
   milestonesHeading: string;
   milestoneProgress: (done: number, total: number) => string;
   milestoneOpenCount: (open: number) => string;
@@ -114,10 +121,26 @@ function Binding(props: { binding: FocusBinding; copy: FocusCopy; onPick?: (id: 
           )}
         </div>
       );
+    case "idle":
+      // One compact status line: the session is between lifecycles, which is a
+      // state, not a failure to explain at length.
+      return (
+        <div className="screen-meta" data-ms-binding="idle">
+          <span className="status tone-neutral">
+            <span className="dot" aria-hidden="true" />
+            <span>{copy.bindingIdle}</span>
+          </span>
+        </div>
+      );
     case "error":
       return (
         <div className={"wf-summary"} data-ms-binding="error">
-          <p className={"wf-id"}>{binding.message}</p>
+          {/* A gate message is a diagnostic: one secondary line, truncated — the one
+              affordance is TruncatedText's, never a second one beside it, and never
+              the mono workflow-id slot. */}
+          <span className="secondary t-12" data-ms-binding-message="">
+            <TruncatedText text={binding.message} />
+          </span>
           {binding.candidates.length === 0 ? null : (
             <div className={"chips"} role="group" aria-label={copy.pickerLabel} data-ms-picker="">
               {binding.candidates.map((id) => (
@@ -219,8 +242,13 @@ function ResidualsPanel(props: { overview: NonNullable<FocusModel["overview"]>; 
         <h2 className="panel-title" id="ms-focus-residuals">
           {copy.residualsHeading}
         </h2>
-        {/* The prototype's meta is a grouping descriptor, as the Overview panel's is. */}
-        {residuals.kind === "populated" ? <span className="panel-meta">{copy.residualsTotal()}</span> : null}
+        {/* The scope, stated: these counts are store-wide while the milestones beside
+            them are project-scoped, and the two must not be read as one another's. */}
+        {residuals.kind === "populated" ? (
+          <span className="panel-meta" data-ms-residuals-scope="">
+            {copy.residualsScope}
+          </span>
+        ) : null}
       </div>
       <div className="panel-body">
         {residuals.kind === "populated" ? (
@@ -257,7 +285,12 @@ function MilestonesPanel(props: { overview: NonNullable<FocusModel["overview"]>;
         <h2 className="panel-title" id="ms-focus-milestones">
           {copy.milestonesHeading}
         </h2>
-        {overview.milestoneProject === null ? null : <span className="panel-meta mono">{overview.milestoneProject}</span>}
+        {overview.milestoneProject === null ? null : (
+          <span className="panel-meta mono" data-ms-milestone-scope="">
+            {overview.milestoneProject === "_default" ? `${copy.milestoneProjectUnattributed} ` : null}
+            {overview.milestoneProject}
+          </span>
+        )}
       </div>
       <div className="panel-body">
         {milestones.kind === "populated" ? (
@@ -323,7 +356,18 @@ export function Focus(props: FocusProps) {
           </h2>
         </div>
         <div className="panel-body">
-        {workflow.kind === "populated" && workflow.value !== null ? (
+        {(model.binding.kind === "idle" || model.binding.kind === "unbound") &&
+        workflow.kind !== "unavailable" &&
+        workflow.kind !== "loading" ? (
+          // No active lifecycle is the ordinary state between lifecycles: one muted
+          // hint, no board, and none of the absence stack's prose. But only for a
+          // SETTLED ordinary absence — a pending read claims no state yet, and an
+          // UNAVAILABLE one is a fact the reader still gets, in its own arm with the
+          // transport's reason.
+          <p className="muted t-12" data-ms-workflow-idle="">
+            {copy.idleHint}
+          </p>
+        ) : workflow.kind === "populated" && workflow.value !== null ? (
           <>
             <div className="wf-summary" data-ms-workflow="">
               <span className="wf-id">

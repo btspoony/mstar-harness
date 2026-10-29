@@ -66,12 +66,23 @@ export type FocusGroup = {
   plans: readonly FocusPlan[];
 };
 
-/** The binding line: bound, unbound, or a selection error with its own repair. */
+/**
+ * The binding line: bound, unbound, idle, or a selection error with its own repair.
+ *
+ * `idle` is the NORMAL state of a session between lifecycles. The gate reports it
+ * as `workflow.selection.no-active` with a long internal sentence, and that
+ * sentence is a host fact, not a product sentence — rendering it turned the whole
+ * screen into a paragraph of gate text. The UI says its own calm line instead.
+ */
 export type FocusBinding =
   | { kind: "bound"; workflowId: string; dir: string }
   | { kind: "terminal"; workflowId: string; dir: string }
   | { kind: "unbound"; picker: readonly string[] }
+  | { kind: "idle" }
   | { kind: "error"; code: string; message: string; candidates: readonly string[] };
+
+/** The gate code that means "this session has no active lifecycle": the idle state. */
+export const NO_ACTIVE_LIFECYCLE_CODE = "workflow.selection.no-active";
 
 /** The bound workflow's identity line (IA §8.2). */
 export type FocusWorkflow = {
@@ -180,6 +191,9 @@ export function focusBinding(selection: SessionBinding | null): FocusBinding {
     case "terminal":
       return { kind: "terminal", workflowId: selection.workflowId, dir: selection.dir };
     case "error":
+      // No active lifecycle is not a failure: it is the ordinary state of a session
+      // between lifecycles, and the product owns its copy for it.
+      if (selection.code === NO_ACTIVE_LIFECYCLE_CODE) return { kind: "idle" };
       // A multi-active selection error carries the pickable ids; any other error
       // carries none, and the message says why.
       return {
@@ -251,7 +265,7 @@ export function focusModel(input: {
     {
       phase: input.phase,
       whenNull: "absent",
-      subjectResolves: binding.kind !== "unbound",
+      subjectResolves: binding.kind !== "unbound" && binding.kind !== "idle",
       unresolvedReason: "no active workflow",
     },
   );

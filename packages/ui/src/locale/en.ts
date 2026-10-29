@@ -133,6 +133,8 @@ export const en = {
      * panel already states every number it would repeat.
      */
     residualsTotal: () => "by severity",
+    residualsScope: "all projects",
+    milestoneProjectUnattributed: "unattributed",
     iterationHeading: "Latest iteration",
     iterationNoIteration: "No iteration yet",
     gateStep: (step: number, of: number) => `step ${step} of ${of}`,
@@ -164,6 +166,8 @@ export const en = {
     bindingBound: (workflowId: string) => `Bound to ${workflowId}`,
     bindingTerminal: (workflowId: string) => `${workflowId} is terminal`,
     bindingUnbound: "No workflow is bound to this session.",
+    bindingIdle: "No workflow is running in this session.",
+    idleHint: "Start a plan or iteration and its plan board appears here.",
     pickerLabel: "Pick a workflow",
     boardHeading: "Plans",
     boardEmpty: "Plans",
