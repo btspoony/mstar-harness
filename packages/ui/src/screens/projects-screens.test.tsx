@@ -415,15 +415,16 @@ describe("ProjectDetail — no roadmap row is absent, an empty milestone set is 
       roadmap: roadmapBody(roadmapFeatureArm({ data: roadmap({ authority: { state: "absent" } }), projection })),
     });
     expect(html).toContain('data-ms-absence="absent"');
-    // Structure: no empty direction body, no empty board, no zero-width bar.
-    expect(html).not.toContain('data-ms-direction=""');
+    // Structure: no empty board, no zero-width bar.
+    expect(html).not.toContain('data-ms-milestones=""');
     expect(html).not.toContain('data-ms-milestones=""');
     expect(html).not.toContain("progressbar");
     // The continuation is offered: the two features that do have content.
     expect(html).toContain("Issues · Iterations");
-    // Task 3: the header renders no direction when the roadmap declares none and the
-    // catalog description is absent.
-    expect(html).not.toContain('data-ms-direction=""');
+    // Greptile 5: with no roadmap direction available, the header states the
+    // CATALOG description — an absent roadmap does not erase what the project is.
+    expect(html).toContain('data-ms-direction=""');
+    expect(html).toContain("Store, projection and gates");
   });
 
   test("a null roadmap read is absent too — never unreadable", () => {
@@ -629,5 +630,76 @@ describe("ProjectDetail — the milestone write controls (plan Task 4, minus rem
   test("NEGATIVE: no write surface, no remove control", () => {
     const html = renderDetail({});
     expect(html).not.toContain("data-ms-milestone-remove");
+  });
+});
+
+describe("ProjectDetail — the write controls reach every roadmap state (Greptile 2)", () => {
+  const writes: NonNullable<ProjectDetailProps["writes"]> = {
+    busy: false,
+    refusal: null,
+    create: () => {},
+    update: () => {},
+    assign: () => {},
+    remove: () => {},
+  };
+
+  test("an EMPTY milestone set still renders the create form, so the first one is creatable", () => {
+    const html = renderDetail({
+      roadmap: roadmapBody(
+        roadmapFeatureArm({
+          data: roadmap({ content: null, milestones: { projectId: "engine", milestones: [], issues: [], unassignedIssues: 0 } }),
+          projection,
+        }),
+      ),
+      writes,
+    });
+    // The empty arm is what a project with no milestones reads as — and the create
+    // control must be there, or the first milestone can never be added.
+    expect(html).toContain('data-ms-absence="empty"');
+    expect(html).toContain('data-ms-milestone-create=""');
+  });
+
+  test("an ABSENT roadmap row still renders the create form", () => {
+    const html = renderDetail({
+      roadmap: roadmapBody(roadmapFeatureArm({ data: roadmap({ authority: { state: "absent" } }), projection })),
+      writes,
+    });
+    expect(html).toContain('data-ms-absence="absent"');
+    expect(html).toContain('data-ms-milestone-create=""');
+    expect(html).toContain('data-ms-roadmap-arm="absent"');
+  });
+
+  test("no write surface, no create form, whatever the arm", () => {
+    const empty = renderDetail({
+      roadmap: roadmapBody(
+        roadmapFeatureArm({
+          data: roadmap({ content: null, milestones: { projectId: "engine", milestones: [], issues: [], unassignedIssues: 0 } }),
+          projection,
+        }),
+      ),
+    });
+    expect(empty).not.toContain("data-ms-milestone-create");
+    expect(renderDetail({})).not.toContain("data-ms-milestone-create");
+  });
+});
+
+describe("ProjectDetail — the catalog description survives the absent/empty arms (Greptile 5)", () => {
+  test("an empty roadmap shows the description the roadmap does not supply", () => {
+    const html = renderDetail({
+      roadmap: roadmapBody(
+        roadmapFeatureArm({
+          data: roadmap({ content: null, milestones: { projectId: "engine", milestones: [], issues: [], unassignedIssues: 0 } }),
+          projection,
+        }),
+      ),
+    });
+    expect(html).toContain('data-ms-direction=""');
+    expect(html).toContain("Store, projection and gates");
+  });
+
+  test("a populated roadmap's own direction still wins over the description", () => {
+    const html = renderDetail({});
+    expect(html).toContain("One product, two hosts.");
+    expect(html).not.toContain("Store, projection and gates");
   });
 });

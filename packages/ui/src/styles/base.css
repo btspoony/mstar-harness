@@ -548,8 +548,12 @@
 /* The project detail's feature body. It used to wear `.chip` — an 18px inline badge —
    which flattened a whole section and only worked by accident, because the badge's
    inline-flex also kept the goal rows from overlapping. A block container does the same
-   job without pretending a section is a label. */
-.ms-container .feature-body {
+   job without pretending a section is a label.
+   `.feature-body-arm` is the roadmap arm's wrapper: the milestone write controls sit
+   OUTSIDE the arm (so an empty or absent roadmap can still create its first
+   milestone), and this keeps their block rhythm identical to the body's. */
+.ms-container .feature-body,
+.ms-container .feature-body-arm {
   display: block;
   min-width: 0;
 }

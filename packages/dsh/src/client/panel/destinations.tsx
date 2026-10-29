@@ -242,6 +242,8 @@ import {
   issueDetailModel,
   workflowDetailModel,
   iterationDetailModel,
+  type AssignableIssue,
+  type MilestoneWriteSurface,
   type ProjectFeature,
 } from '@mstar-harness/ui'
 import type { IssueDetail as IssueDetailDTO, WorkflowDTO, IterationDTO } from '@mstar-harness/engine'
@@ -260,6 +262,14 @@ export type DetailProps = {
   readonly projectIterations?: MstarDashboardViewState
   /** A project detail's scoped Issues read (`project` enforced on the request). */
   readonly projectIssues?: MstarDashboardViewState
+  /**
+   * The milestone write channel, alive only while a project page is open. This
+   * adapter must carry it: dropping it here made every project page render its
+   * read-only shape even when the seat supplied a channel.
+   */
+  readonly writes?: MilestoneWriteSurface
+  /** The project's open unassigned issues, as the assign picker's options. */
+  readonly assignableIssues?: readonly AssignableIssue[]
 }
 
 /**
@@ -268,7 +278,18 @@ export type DetailProps = {
  * not be made) — the shared resolvers own that split, this adapter only passes
  * the envelope through.
  */
-export function DetailBody({ view, id, state, locale, onBack, onOpenWorkflow, projectIterations, projectIssues }: DetailProps): React.ReactElement {
+export function DetailBody({
+  view,
+  id,
+  state,
+  locale,
+  onBack,
+  onOpenWorkflow,
+  projectIterations,
+  projectIssues,
+  writes,
+  assignableIssues,
+}: DetailProps): React.ReactElement {
   const copy = copyFor(locale)
   if (state.kind !== 'ok') return <ReadState state={state} copy={copy} />
   const envelope = state.envelope
@@ -338,6 +359,8 @@ export function DetailBody({ view, id, state, locale, onBack, onOpenWorkflow, pr
           onBack={onBack}
           {...(projectIterations === undefined ? {} : { iterations: projectIterations })}
           {...(projectIssues === undefined ? {} : { issues: projectIssues })}
+          {...(writes === undefined ? {} : { writes })}
+          {...(assignableIssues === undefined ? {} : { assignableIssues })}
         />
       )
     }
@@ -377,6 +400,13 @@ export function ProjectDetailDestination(props: {
   onBack: () => void
   iterations?: MstarDashboardViewState
   issues?: MstarDashboardViewState
+  /**
+   * The milestone write channel and the assign picker's options. Carried here
+   * explicitly: this adapter sat between the seat and the screen, and any prop it
+   * does not declare stops at it.
+   */
+  writes?: MilestoneWriteSurface
+  assignableIssues?: readonly AssignableIssue[]
   /** Test seam: the tab the page opens on. Production always starts at Roadmap. */
   initialFeature?: ProjectFeature
 }): React.ReactElement {
@@ -472,6 +502,8 @@ export function ProjectDetailDestination(props: {
           'not-applicable': { ...copy.state['not-applicable'], heading: copy.projectDetail.features.roadmap },
         },
       }}
+      {...(props.writes === undefined ? {} : { writes: props.writes })}
+      {...(props.assignableIssues === undefined ? {} : { assignableIssues: props.assignableIssues })}
       {...(issuesModel === null ? {} : { issuesCount: issuesModel.total })}
       onBack={props.onBack}
     />
