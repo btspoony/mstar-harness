@@ -109,19 +109,11 @@ export const en = {
       undated === 0
         ? `Dated history closes at ${datedOpen} open.`
         : `Dated history closes at ${datedOpen} open; ${undated} events carry no recorded date.`,
-    trendTableSummary: "Dated history (table alternative)",
       flowDate: "Date",
       flowCaptured: "Captured",
       flowRetired: "Retired",
       flowOpen: "Open difference",
       flowOrigin: "Origin",
-    trendColumns: {
-      date: "Date",
-      captured: "Captured (cumulative)",
-      retired: "Retired (cumulative)",
-      open: "Open difference",
-      origin: "Origin",
-    },
     planColumns: { plan: "Plan", title: "Title", status: "Status", progress: "Progress", done: "Done" },
     workflowMeta: (plans: number, status: string) => `${plans} plans · ${status}`,
     plansLabel: (n: number): string => (n === 1 ? "plan" : "plans"),

@@ -95,19 +95,11 @@ export const zh: Copy = {
       undated === 0
         ? `有日期历史收在 ${datedOpen} 项未关闭。`
         : `有日期历史收在 ${datedOpen} 项未关闭；${undated} 个事件没有记录日期。`,
-    trendTableSummary: "有日期历史（表格替代）",
       flowDate: "日期",
       flowCaptured: "新增",
       flowRetired: "消退",
       flowOpen: "未决差值",
       flowOrigin: "来源",
-    trendColumns: {
-      date: "日期",
-      captured: "捕获（累计）",
-      retired: "退役（累计）",
-      open: "未解决差额",
-      origin: "来源",
-    },
     planColumns: { plan: "计划", title: "标题", status: "状态", progress: "进度", done: "完成" },
     workflowMeta: (plans, status) => `${plans} 个计划 · ${status}`,
     plansLabel: (n: number) => "个计划",

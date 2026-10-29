@@ -170,8 +170,6 @@ const overviewCopy: OverviewCopy = {
   trendRetired: "Retired (cumulative)",
   trendLegend: (datedOpen, recordedOpen) => `${datedOpen} dated open · ${recordedOpen} recorded open`,
   trendGap: (datedOpen, undated) => `Dated history closes at ${datedOpen} open; ${undated} events undated.`,
-  trendTableSummary: "Dated history (table alternative)",
-  trendColumns: { date: "Date", captured: "Captured", retired: "Retired", open: "Open difference", origin: "Origin" },
   residualsHeading: "Open residuals",
   residualsTotal: () => "by severity",
   iterationHeading: "Delivery",
@@ -473,12 +471,9 @@ describe("Overview — the issue-flow trend, drawn from the read", () => {
     expect(html).toContain("Dated history closes at 550 open; 2 events undated.");
   });
 
-  test("the table alternative carries every bucket, with its origin", () => {
-    expect(html).toContain("Dated history (table alternative)");
-    expect(html).toContain("<details");
-    // One row per bucket plus the header row.
-    expect((html.match(/register-history/g) ?? []).length).toBe(1);
-    expect((html.match(/2026-10-18/g) ?? []).length).toBeGreaterThanOrEqual(2);
+  test("NEGATIVE: the dated-history table disclosure is gone (plan Task 2)", () => {
+    expect(html).not.toContain("Dated history (table alternative)");
+    expect(html).not.toContain("<details");
   });
 
   test("an unavailable member renders the shared arm, never an empty chart", () => {
