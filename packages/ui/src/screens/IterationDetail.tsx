@@ -69,6 +69,10 @@ export type IterationDetailCopy = {
     /** The execution panel's workflow state. */
     status: string;
     phase: string;
+    /** The execution lifecycle beside the catalog's archive state (plan Task 5). */
+    executionLifecycle: string;
+    /** The projects the iteration belongs to (plan Task 5). */
+    projects: string;
     root: string;
     compassStatus: string;
     startedAt: string;
@@ -258,6 +262,9 @@ function IterationDetailBody(props: {
                 </button>
               )}
             </Field>
+            <Field label={copy.fields.executionLifecycle} mono>
+              {value.executionLifecycle}
+            </Field>
             {value.workflowId === null ? null : (
               <>
                 <Field label={copy.fields.status} mono>
@@ -268,6 +275,9 @@ function IterationDetailBody(props: {
                 </Field>
               </>
             )}
+            <Field label={copy.fields.projects} mono>
+              {value.projects.length === 0 ? "—" : value.projects.join(" · ")}
+            </Field>
               </dl>
             </div>
           </section>

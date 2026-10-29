@@ -236,7 +236,7 @@ function schema() {
   return z.object({
     workflow: z.string().min(1).optional(), harness: z.string().optional(), planId: z.string().min(1).optional(),
     planTitle: z.string().min(1).optional(), planFile: z.string().min(1).optional(), deliveryKind: z.enum(WORKFLOW_DELIVERY_KINDS).optional(),
-    project: z.string().min(1).optional(), branchWork: z.string().min(1).optional(), branchSource: z.string().min(1).optional(), branchTarget: z.string().min(1).optional(),
+    project: z.union([z.string().min(1), z.array(z.string().min(1))]).optional(), branchWork: z.string().min(1).optional(), branchSource: z.string().min(1).optional(), branchTarget: z.string().min(1).optional(),
     completionPolicy: z.string().min(1).optional(), startedAt: z.string().min(1).optional(), expect: z.string().min(1).optional(),
     operation: z.string().min(1).optional(), file: z.string().min(1).optional(),
     sessionRef: z.string().min(1).optional(), sessionId: z.string().min(1).optional(), priorSession: z.string().min(1).optional(),
@@ -375,7 +375,10 @@ function makeDefinition(
       arguments: [],
       options: optionNames.map((key) => {
         const field = input.shape[key as keyof typeof input.shape];
-        const variadic = key === "stopped" || field instanceof z.ZodArray || (field instanceof z.ZodOptional && field.unwrap() instanceof z.ZodArray);
+        const variadic = key === "stopped" || field instanceof z.ZodArray || (field instanceof z.ZodOptional && field.unwrap() instanceof z.ZodArray) ||
+          // Only `iteration.register` takes a repeatable `--project` (C4); the
+          // plan registration keeps its single-value flag.
+          (id === "iteration.register" && key === "project");
         return {
           key,
           flags: `--${key.replace(/[A-Z]/g, (x) => `-${x.toLowerCase()}`)} <value${variadic ? "..." : ""}>`,
@@ -466,6 +469,19 @@ export function getWorkflowCommandDefinitions(): readonly CommandDefinition[] {
         const required = [input.workflow, input.planId, input.planTitle, input.planFile, input.deliveryKind];
         if (required.some((value) => value === undefined || value.trim() === "")) return refusalEnvelope({ command: "workflow.register", status: "usage", code: "command.invalid-input", exitCode: 2, message: "workflow, planId, planTitle, planFile and deliveryKind are required" });
         if (!(WORKFLOW_DELIVERY_KINDS as readonly string[]).includes(input.deliveryKind!)) return refusalEnvelope({ command: "workflow.register", status: "usage", code: "command.invalid-input", exitCode: 2, message: `deliveryKind must be one of ${WORKFLOW_DELIVERY_KINDS.join(" | ")}` });
+        // The shared schema admits the repeatable form for `iteration.register`,
+        // so an array reaching this handler is a caller mistake that must be
+        // refused, never dropped: a plan workflow records ONE project id.
+        if (Array.isArray(input.project)) {
+          return refusalEnvelope({
+            command: "workflow.register",
+            status: "usage",
+            code: "command.invalid-input",
+            exitCode: 2,
+            message: `project takes one value on this command; a plan workflow records one project register id (received ${JSON.stringify(input.project)})`,
+            recovery: "Pass the single project id once (--project <projectId>). Multi-project membership is an iteration surface: register it with repeated `mstar iteration register --project <projectId>`, or add the relation with `mstar catalog link --from-kind iteration --from-id <workflow-id> --relation belongs-to --to-kind project --to-id <project-id>`.",
+          });
+        }
         const harnessDir = resolveProcessHarnessDir(context.cwd, input.harness);
         if (harnessDir === null) return refusalEnvelope({ command: "workflow.register", status: "usage", code: "command.invalid-input", exitCode: 2, message: "harness dir not found; supply harness" });
         // `--branch-source` is the deprecated alias of `--branch-work`: the two
@@ -821,7 +837,11 @@ export function getWorkflowCommandDefinitions(): readonly CommandDefinition[] {
       // a symlinked `--harness` and an external alias onto an in-root compass
       // are accepted, while a genuinely escaping pointer is still refused for a
       // new registration (I-000868, PR #578).
-      const workflow: CatalogExecutionWorkflow = { kind: "iteration", workflowId: input.workflow, options: { harnessDir, compassRef: input.compassRef, branch: { base: input.branchBase, integration: input.branchIntegration, target: input.branchTargetIteration }, rows: rows as never[], ...(input.project === undefined ? {} : { project: input.project }), ...(input.startedAt === undefined ? {} : { startedAt: input.startedAt }) } };
+      // C4: `--project` is repeatable; the first value stays the snapshot's
+      // project record, and every value becomes one `belongs-to` catalog link
+      // through the producer's derived delta.
+      const projects = input.project === undefined ? undefined : Array.isArray(input.project) ? input.project : [input.project];
+      const workflow: CatalogExecutionWorkflow = { kind: "iteration", workflowId: input.workflow, options: { harnessDir, compassRef: input.compassRef, branch: { base: input.branchBase, integration: input.branchIntegration, target: input.branchTargetIteration }, rows: rows as never[], ...(projects === undefined ? {} : { projects }), ...(input.startedAt === undefined ? {} : { startedAt: input.startedAt }) } };
       const identity = withLeafSeat(
         (context.executionIdentity ?? {
           source: context.host === undefined ? "local" : "host",

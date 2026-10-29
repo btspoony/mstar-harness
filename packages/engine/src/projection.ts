@@ -54,7 +54,7 @@ import {
 } from "./workflow.js";
 /** Projection payload/format version (contract §5). A bump invalidates every
  * published generation: the refresh discards the old rows and rebuilds. */
-export const PROJECTION_FORMAT_VERSION = 2;
+export const PROJECTION_FORMAT_VERSION = 3;
 
 /** Root execution source, resolved under the harness root. */
 
@@ -133,6 +133,8 @@ export type ProjectedCompass = {
   iterationId: string;
   summary: string | null;
   milestonesJson: string;
+  /** Plan ids the compass frontmatter declares (the authored membership record). */
+  plans: string[];
   startedAt: string | null;
   endedAt: string | null;
   status: string | null;
@@ -452,6 +454,11 @@ function deriveCompass(iterationId: string, content: string, relativePath: strin
     iterationId,
     summary: firstParagraph(body),
     milestonesJson: JSON.stringify(parseMilestoneTable(body)),
+    // The authored membership record: the frontmatter validator already admits
+    // the string-array member, so the non-empty strings are the declared ids.
+    plans: Array.isArray(frontmatter.plans)
+      ? frontmatter.plans.filter((plan): plan is string => typeof plan === "string" && plan !== "")
+      : [],
     startedAt: text(frontmatter.start_date),
     endedAt: text(frontmatter.end_date),
     status: text(frontmatter.status),
@@ -606,6 +613,54 @@ async function captureExecutionProjectionSources(context: StoreContext): Promise
       });
     }
     const workflowPhases = new Map(rows.workflows.map((workflow) => [workflow.id, workflow.phase]));
+    // C3: a TERMINAL iteration workflow joins the projection even though it has
+    // left the active registry — the served graph lists it in
+    // `terminalUnregistered`/`terminalAdoptions`, and the iteration views must
+    // still find its workflow row to answer the execution state. Terminal PLAN
+    // workflows do not widen the projection, so the workflows list keeps its
+    // active-registration membership.
+    const terminalGraphIds = [
+      ...(servedGraph.terminalUnregistered ?? []),
+      ...(servedGraph.terminalAdoptions ?? []),
+    ].map((entry) => entry.id);
+    const terminalHeaders =
+      terminalGraphIds.length === 0
+        ? []
+        : selectWhereIn<{ workflow_id: string; state_json: string }>(
+            db,
+            (placeholders) => `select workflow_id, state_json from execution_workflows where workflow_id in (${placeholders}) order by workflow_id`,
+            terminalGraphIds,
+            (id) => [id],
+          );
+    for (const item of terminalHeaders) {
+      const workflowSpec = spec("workflow", `execution/workflows/${item.workflow_id}`);
+      let state: unknown;
+      try { state = JSON.parse(item.state_json); } catch {
+        recordInvalid(workflowSpec, item.state_json, "invalid: terminal workflow state is not valid JSON", "invalid");
+        continue;
+      }
+      if (
+        !isPlainObject(state) ||
+        state.id !== item.workflow_id ||
+        state.type !== "iteration" ||
+        state.status !== "completed" && state.status !== "stopped" && state.status !== "failed"
+      ) {
+        // Not a terminal iteration (or unreadable): the projection stays
+        // registry-only for it, exactly as before.
+        if (!isPlainObject(state) || state.type === "iteration") {
+          recordInvalid(workflowSpec, item.state_json, "invalid: terminal workflow state has an invalid object, type, or status");
+        }
+        continue;
+      }
+      record(workflowSpec, item.state_json);
+      const branch = isPlainObject(state.branch) ? state.branch : {};
+      rows.workflows.push({
+        id: item.workflow_id, type: "iteration", status: state.status as string,
+        phase: text(state.phase), startedAt: text(state.started_at), endedAt: text(state.ended_at), updatedAt: text(state.updated_at),
+        branchBase: text(branch.base), branchSource: text(deliveryBranchOf(branch)), branchIntegration: text(branch.integration), branchTarget: text(branch.target),
+        activeRegistration: false,
+      });
+    }
     const servedPlanIdsByWorkflow = new Map(graphWorkflows.map((workflow) => [workflow.state.id, new Set(workflow.plans.map((plan) => plan.plan.id))]));
     const servedIntegrationLeaseIds = new Set(graphWorkflows.filter((workflow) => workflow.integrationLease !== null).map((workflow) => workflow.state.id));
     const plans = servedWorkflowIds.length === 0
@@ -896,6 +951,7 @@ const PROJECTION_RENDERS: ReadonlyArray<{
         iteration_id: compass.iterationId,
         summary: compass.summary,
         milestones_json: compass.milestonesJson,
+        plans_json: JSON.stringify(compass.plans),
         started_at: compass.startedAt,
         ended_at: compass.endedAt,
         status: compass.status,
@@ -1035,8 +1091,8 @@ function insertGeneration(db: StoreDb, generation: number, capture: ProjectionCa
     );
   }
   const compassStatement = db.prepare(
-    "insert into projection_compasses(generation, iteration_id, summary, milestones_json, started_at, ended_at, status) " +
-      "values (?, ?, ?, ?, ?, ?, ?)",
+    "insert into projection_compasses(generation, iteration_id, summary, milestones_json, plans_json, started_at, ended_at, status) " +
+      "values (?, ?, ?, ?, ?, ?, ?, ?)",
   );
   for (const compass of capture.rows.compasses) {
     compassStatement.run(
@@ -1044,6 +1100,7 @@ function insertGeneration(db: StoreDb, generation: number, capture: ProjectionCa
       compass.iterationId,
       compass.summary,
       compass.milestonesJson,
+      JSON.stringify(compass.plans),
       compass.startedAt,
       compass.endedAt,
       compass.status,

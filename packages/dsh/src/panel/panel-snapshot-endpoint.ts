@@ -43,12 +43,27 @@ import { TypertRemoteService } from '@deepseek-ai/dsh-typert-protocol'
 import type { HarnessResolver } from '../gates/_shared.ts'
 import {
   MSTAR_DASHBOARD_VIEW_METHOD,
+  MSTAR_MILESTONE_ADD_METHOD,
+  MSTAR_MILESTONE_ASSIGN_METHOD,
+  MSTAR_MILESTONE_REMOVE_METHOD,
+  MSTAR_MILESTONE_UPDATE_METHOD,
   MSTAR_PANEL_SNAPSHOT_METHOD,
   MSTAR_PANEL_SNAPSHOT_NAMESPACE,
 } from '../engine-status-wire.ts'
-import { readDashboardView, type DashboardView, type ReadEnvelope } from '@mstar-harness/engine'
+import {
+  addMilestone,
+  assignIssueMilestone,
+  readDashboardView,
+  removeMilestone,
+  updateMilestone,
+  type DashboardView,
+  type IssueReceipt,
+  type MilestonePatch,
+  type MilestoneReceipt,
+  type ReadEnvelope,
+} from '@mstar-harness/engine'
 import { leafSignalStateOf, type LeafSignalState, type PanelSnapshotRead } from './panel-snapshot.ts'
-import { readPanelSnapshot, type PanelRetainedReader } from './read-panel-snapshot.ts'
+import { readPanelSnapshot, resolveWorkflowId, type PanelRetainedReader } from './read-panel-snapshot.ts'
 
 /**
  * One per-view read's answer. The engine's own envelope passes through
@@ -69,6 +84,24 @@ function queryParams(value: unknown): Record<string, string | undefined> {
     if (typeof raw === 'string') params[key] = raw
   }
   return params
+}
+
+/**
+ * ONE answer shape for every milestone write (contract C1): the engine's own
+ * refusal passes through verbatim — the client maps nothing and rewords
+ * nothing — and a success carries the engine's own receipt.
+ */
+export type MilestoneWriteResult =
+  | { readonly ok: true; readonly receipt: MilestoneReceipt | IssueReceipt }
+  | { readonly ok: false; readonly code: string; readonly message: string }
+
+/** The ONE constructor of a refusal answer (an engine MilestoneError/IssueError). */
+function refused(error: unknown): MilestoneWriteResult {
+  const code = (error as { code?: unknown }).code
+  if (typeof code === 'string' && code !== '') {
+    return { ok: false, code, message: (error as Error)?.message ?? code }
+  }
+  return { ok: false, code: 'internal-error', message: (error as Error)?.message ?? 'internal-error' }
 }
 
 /** The contributing package identity (also the invocation id prefix). */
@@ -339,6 +372,142 @@ export class MstarPanelSnapshotGateway extends TypertRemoteService {
   }
 
   /**
+   * Create one milestone (engine `addMilestone`) under the observed store
+   * revision (contract C2: `expectedStoreRevision` comes from the roadmap
+   * read's envelope). One request, one transaction, no partial write.
+   */
+  async milestoneAdd(
+    sessionId: string,
+    cwd: string,
+    projectId: string,
+    input: { name: string; target: string | null; ordinal: number },
+    mutation: { operationId: string; expectedStoreRevision: number },
+  ): Promise<MilestoneWriteResult> {
+    try {
+      const target = await this.resolveTarget(sessionId, cwd)
+      if (target.kind !== 'ok') {
+        return {
+          ok: false,
+          code: 'store.not-active',
+          message: "write refused: " + (target.kind === 'no-harness' ? 'no harness root resolves for this workspace' : target.reason),
+        }
+      }
+      const receipt = await addMilestone(
+        { harnessDir: target.harnessDir },
+        { projectId, name: input.name, target: input.target ?? null, ordinal: input.ordinal },
+        mutation,
+      )
+      return { ok: true, receipt }
+    } catch (error) {
+      return refused(error)
+    }
+  }
+
+  /** Edit one milestone's name / target / ordinal / status (engine `updateMilestone`). */
+  async milestoneUpdate(
+    sessionId: string,
+    cwd: string,
+    projectId: string,
+    milestoneId: string,
+    patch: MilestonePatch,
+    mutation: { operationId: string; expectedStoreRevision: number },
+  ): Promise<MilestoneWriteResult> {
+    try {
+      const target = await this.resolveTarget(sessionId, cwd)
+      if (target.kind !== 'ok') {
+        return {
+          ok: false,
+          code: 'store.not-active',
+          message: "write refused: " + (target.kind === 'no-harness' ? 'no harness root resolves for this workspace' : target.reason),
+        }
+      }
+      const receipt = await updateMilestone({ harnessDir: target.harnessDir }, projectId, milestoneId, patch, mutation)
+      return { ok: true, receipt }
+    } catch (error) {
+      return refused(error)
+    }
+  }
+
+  /**
+   * Assign one issue to a milestone - or unassign it with `milestoneId: null`
+   * (engine `assignIssueMilestone`). The verb authorizes against the ACTIVE
+   * coordinator execution session bound to this DSH session, so the workflow
+   * id of that identity is resolved SERVER-side from the session pick and the
+   * registry, exactly like the reads. A bound session's authorization outcome
+   * (including `issue.scope-refused`) passes through verbatim; a session that
+   * resolves NO active workflow never reaches the verb, and this adapter names
+   * that cause itself under the same code.
+   */
+  async milestoneAssign(
+    sessionId: string,
+    cwd: string,
+    issueId: string,
+    input: { projectId: string; milestoneId: string | null; reason: string },
+    mutation: { operationId: string; actor: string; expectedRevision: number; expectedStoreRevision: number },
+  ): Promise<MilestoneWriteResult> {
+    try {
+      const target = await this.resolveTarget(sessionId, cwd)
+      if (target.kind !== 'ok') {
+        return {
+          ok: false,
+          code: 'store.not-active',
+          message: "write refused: " + (target.kind === 'no-harness' ? 'no harness root resolves for this workspace' : target.reason),
+        }
+      }
+      const workflowId = await resolveWorkflowId(target.harnessDir, target.sessionId, target.cwd)
+      if (workflowId === undefined) {
+        // Adapter-worded, not verbatim: the engine never ran because this
+        // session has no active workflow to authorize against. The CODE is the
+        // engine's own family so the client maps one axis; the message names
+        // the real cause instead of an identity mismatch the store never saw.
+        return {
+          ok: false,
+          code: 'issue.scope-refused',
+          message: 'No active workflow resolves for this session, so no coordinator seat authorizes the assignment.',
+        }
+      }
+      const receipt = await assignIssueMilestone(
+        { harnessDir: target.harnessDir, caller: { sessionId: target.sessionId, role: 'coordinator', workflowId } },
+        issueId,
+        input,
+        mutation,
+      )
+      return { ok: true, receipt }
+    } catch (error) {
+      return refused(error)
+    }
+  }
+
+  /**
+   * Remove one EMPTY milestone (engine `removeMilestone`). The emptiness rule
+   * is the engine's: a milestone that still holds issues is refused
+   * (`milestone.not-empty`) and that refusal passes through verbatim — the UI
+   * offers the control regardless and surfaces the store's own words.
+   */
+  async milestoneRemove(
+    sessionId: string,
+    cwd: string,
+    projectId: string,
+    milestoneId: string,
+    mutation: { operationId: string; expectedStoreRevision: number },
+  ): Promise<MilestoneWriteResult> {
+    try {
+      const target = await this.resolveTarget(sessionId, cwd)
+      if (target.kind !== 'ok') {
+        return {
+          ok: false,
+          code: 'store.not-active',
+          message: "write refused: " + (target.kind === 'no-harness' ? 'no harness root resolves for this workspace' : target.reason),
+        }
+      }
+      const receipt = await removeMilestone({ harnessDir: target.harnessDir }, projectId, milestoneId, mutation)
+      return { ok: true, receipt }
+    } catch (error) {
+      return refused(error)
+    }
+  }
+
+  /**
    * The leaf-signal state for ONE read (#619): `ctx.get('shellEnv')` is probed
    * at call time, never memoized, so a host service injected after `apply` (or
    * withdrawn) is reflected on the next panel read without a restart. An
@@ -546,6 +715,86 @@ export function mstarDashboardViewInvocation(): TypertContribution['invocations'
       { name: 'view', wire: 'view', source: 'json', codec: { mode: 'src-json' } },
       { name: 'params', wire: 'params', source: 'json', codec: { mode: 'src-json' } },
       { name: 'id', wire: 'id', source: 'json', codec: { mode: 'src-json' } },
+    ],
+    result: { mode: 'src-json' },
+  }
+}
+
+/**
+ * The milestone write descriptors (plan Task 4, contract C1). Each is one
+ * plain-object argument wire on the SAME service/namespace as the reads, and
+ * each is carried by `mstarEngineStatusContribution()` beside the read
+ * descriptors (one contribution per package face).
+ */
+export function mstarMilestoneAddInvocation(): TypertContribution['invocations'][number] {
+  return {
+    id: `${CONTRIBUTING_PACKAGE}#${MSTAR_PANEL_SNAPSHOT_NAMESPACE}/${MSTAR_MILESTONE_ADD_METHOD}`,
+    service: PANEL_SNAPSHOT_SERVICE,
+    namespace: MSTAR_PANEL_SNAPSHOT_NAMESPACE,
+    method: MSTAR_MILESTONE_ADD_METHOD,
+    invocation: { kind: 'direct' },
+    parameters: [
+      { name: 'sessionId', wire: 'sessionId', source: 'json', codec: { mode: 'src-json' } },
+      { name: 'cwd', wire: 'cwd', source: 'json', codec: { mode: 'src-json' } },
+      { name: 'projectId', wire: 'projectId', source: 'json', codec: { mode: 'src-json' } },
+      { name: 'input', wire: 'input', source: 'json', codec: { mode: 'src-json' } },
+      { name: 'mutation', wire: 'mutation', source: 'json', codec: { mode: 'src-json' } },
+    ],
+    result: { mode: 'src-json' },
+  }
+}
+
+export function mstarMilestoneUpdateInvocation(): TypertContribution['invocations'][number] {
+  return {
+    id: `${CONTRIBUTING_PACKAGE}#${MSTAR_PANEL_SNAPSHOT_NAMESPACE}/${MSTAR_MILESTONE_UPDATE_METHOD}`,
+    service: PANEL_SNAPSHOT_SERVICE,
+    namespace: MSTAR_PANEL_SNAPSHOT_NAMESPACE,
+    method: MSTAR_MILESTONE_UPDATE_METHOD,
+    invocation: { kind: 'direct' },
+    parameters: [
+      { name: 'sessionId', wire: 'sessionId', source: 'json', codec: { mode: 'src-json' } },
+      { name: 'cwd', wire: 'cwd', source: 'json', codec: { mode: 'src-json' } },
+      { name: 'projectId', wire: 'projectId', source: 'json', codec: { mode: 'src-json' } },
+      { name: 'milestoneId', wire: 'milestoneId', source: 'json', codec: { mode: 'src-json' } },
+      { name: 'patch', wire: 'patch', source: 'json', codec: { mode: 'src-json' } },
+      { name: 'mutation', wire: 'mutation', source: 'json', codec: { mode: 'src-json' } },
+    ],
+    result: { mode: 'src-json' },
+  }
+}
+
+export function mstarMilestoneAssignInvocation(): TypertContribution['invocations'][number] {
+  return {
+    id: `${CONTRIBUTING_PACKAGE}#${MSTAR_PANEL_SNAPSHOT_NAMESPACE}/${MSTAR_MILESTONE_ASSIGN_METHOD}`,
+    service: PANEL_SNAPSHOT_SERVICE,
+    namespace: MSTAR_PANEL_SNAPSHOT_NAMESPACE,
+    method: MSTAR_MILESTONE_ASSIGN_METHOD,
+    invocation: { kind: 'direct' },
+    parameters: [
+      { name: 'sessionId', wire: 'sessionId', source: 'json', codec: { mode: 'src-json' } },
+      { name: 'cwd', wire: 'cwd', source: 'json', codec: { mode: 'src-json' } },
+      { name: 'issueId', wire: 'issueId', source: 'json', codec: { mode: 'src-json' } },
+      { name: 'input', wire: 'input', source: 'json', codec: { mode: 'src-json' } },
+      { name: 'mutation', wire: 'mutation', source: 'json', codec: { mode: 'src-json' } },
+    ],
+    result: { mode: 'src-json' },
+  }
+}
+
+
+export function mstarMilestoneRemoveInvocation(): TypertContribution['invocations'][number] {
+  return {
+    id: `${CONTRIBUTING_PACKAGE}#${MSTAR_PANEL_SNAPSHOT_NAMESPACE}/${MSTAR_MILESTONE_REMOVE_METHOD}`,
+    service: PANEL_SNAPSHOT_SERVICE,
+    namespace: MSTAR_PANEL_SNAPSHOT_NAMESPACE,
+    method: MSTAR_MILESTONE_REMOVE_METHOD,
+    invocation: { kind: 'direct' },
+    parameters: [
+      { name: 'sessionId', wire: 'sessionId', source: 'json', codec: { mode: 'src-json' } },
+      { name: 'cwd', wire: 'cwd', source: 'json', codec: { mode: 'src-json' } },
+      { name: 'projectId', wire: 'projectId', source: 'json', codec: { mode: 'src-json' } },
+      { name: 'milestoneId', wire: 'milestoneId', source: 'json', codec: { mode: 'src-json' } },
+      { name: 'mutation', wire: 'mutation', source: 'json', codec: { mode: 'src-json' } },
     ],
     result: { mode: 'src-json' },
   }

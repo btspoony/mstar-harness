@@ -85,8 +85,8 @@ export type RoadmapMilestone = {
   openIssues: number;
   /** The four tallies the prototype's board row prints. */
   counts: { open: number; resolved: number; retired: number; total: number };
-  /** The issues assigned to this milestone: id, title, disposition. */
-  issues: readonly { id: string; title: string; disposition: string }[];
+  /** The issues assigned to this milestone: id, title, disposition, revision. */
+  issues: readonly { id: string; title: string; disposition: string; revision: number }[];
 };
 
 /**
@@ -96,27 +96,17 @@ export type RoadmapMilestone = {
  * from the milestone read, which is authoritative and independent of the file
  * (`RoadmapDTO` §4: a project with milestones and no content answers
  * `content: null` and still carries them). A project with neither is the
- * `absent` arm and never reaches this model.
+ * `absent` arm and never reaches this model. The document blocks (catalog
+ * identity, roadmap authority, stored markdown, stored facts) were removed from
+ * the page by the dashboard alignment change, Task 3, so the model no longer
+ * carries them.
  */
 export type RoadmapModel = {
-  /** The roadmap's authority row, for the prototype's `Roadmap authority` card. */
-  authority: { state: string; revision: string; contentHash: string; frontmatter: string } | null;
-  /** The prototype's `Stored facts` panel: what the stored document itself records.
-   *  Every field comes from the parsed frontmatter, so no extra read is needed. */
-  storedFacts: {
-    frontmatterStatus: string;
-    createdAt: string;
-    residualsRef: string;
-    goals: string;
-    sections: string;
-  } | null;
   direction: string | null;
   goals: readonly RoadmapGoal[];
   milestones: readonly RoadmapMilestone[];
   /** Issues with no milestone: a count, and the reason they are not on the board. */
   unassignedIssues: number;
-  /** The stored Markdown, for the collapsed disclosure. */
-  markdown: string | null;
 };
 
 /**
@@ -129,27 +119,6 @@ export type RoadmapModel = {
 export function roadmapModel(read: RoadmapDTO, content: RoadmapContent | null): RoadmapModel {
   const parents = new Set((content?.goals ?? []).map((goal) => goal.ordinal));
   return {
-    authority:
-      read.authority.state === "present"
-        ? {
-            state: read.authority.state,
-            revision: String(read.authority.revision),
-            contentHash: read.authority.contentHash,
-            // The frontmatter's own keys, which is what the prototype lists: the
-            // stored document's top-level fields, not a fixed set.
-            frontmatter: Object.keys(content?.frontmatter ?? {}).join(" · "),
-          }
-        : null,
-    storedFacts:
-      content === null
-        ? null
-        : {
-            frontmatterStatus: content.frontmatter.status,
-            createdAt: content.frontmatter.created_at,
-            residualsRef: content.frontmatter.residuals_ref ?? "—",
-            goals: `${content.goals.filter((goal) => goal.checked).length} / ${content.goals.length}`,
-            sections: String(content.sections.length),
-          },
     direction: content?.direction ?? null,
     goals: (content?.goals ?? []).map((goal) => ({
       ordinal: goal.ordinal,
@@ -172,10 +141,9 @@ export function roadmapModel(read: RoadmapDTO, content: RoadmapContent | null): 
       },
       issues: read.milestones.issues
         .filter((issue) => issue.milestoneId === milestone.milestoneId)
-        .map((issue) => ({ id: issue.id, title: issue.title, disposition: issue.disposition })),
+        .map((issue) => ({ id: issue.id, title: issue.title, disposition: issue.disposition, revision: issue.revision })),
     })),
     unassignedIssues: read.milestones.unassignedIssues,
-    markdown: content?.contentMarkdown ?? null,
   };
 }
 
@@ -245,8 +213,19 @@ export function roadmapFeatureArm(read: {
   const arm = resolveRecord(read, { unavailableReason: "the roadmap read could not be completed" });
   if (arm.kind !== "populated") return arm;
   // Domain judgement on top of the resolved arm: the project has a catalog row
-  // but no roadmap authority row, so the concept is undeclared.
-  if (arm.value.authority.state === "absent") return { kind: "absent" };
+  // but no roadmap authority row, so the DOCUMENT is undeclared.
+  //
+  // Except when the read still CARRIES milestones or unassigned issues: those come
+  // from the milestone read, which is independent of the stored document
+  // (`RoadmapDTO`: a project with milestones and no content answers `content: null`
+  // and still carries them). Answering `absent` there hid every milestone behind
+  // "this project declares no roadmap" — including one the operator had just
+  // created, which then could not be edited, assigned or removed.
+  if (arm.value.authority.state === "absent") {
+    const carried = roadmapModel(arm.value, null);
+    const ownsMilestoneWork = carried.milestones.length > 0 || carried.unassignedIssues > 0;
+    return ownsMilestoneWork ? arm : { kind: "absent" };
+  }
   return arm;
 }
 
@@ -254,7 +233,7 @@ export function roadmapFeatureArm(read: {
  * The Roadmap feature's arm, resolving one level further than the read.
  *
  * `empty` is reserved for a roadmap with **nothing at all to show** — no
- * milestones, no goals, no direction and no stored markdown. An earlier version
+ * milestones, no goals, no direction and no unassigned issues. An earlier version
  * tested only the first two, which hid an existing direction and a stored
  * document behind "the roadmap has no milestones": content the reader can act on,
  * declared empty. Anything that exists is rendered.
@@ -266,7 +245,6 @@ export function roadmapBody(raw: Resolved<RoadmapDTO>): Resolved<RoadmapModel> {
     model.milestones.length > 0 ||
     model.goals.length > 0 ||
     model.direction !== null ||
-    model.markdown !== null ||
     model.unassignedIssues > 0;
   return hasContent ? { kind: "populated", value: model } : { kind: "empty" };
 }

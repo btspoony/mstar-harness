@@ -492,6 +492,24 @@
 
 .ms-container .rm-project-go { color: var(--ms-text-muted); font-size: 11px; width: 14px; text-align: right; }
 
+/* Milestone timeline (project roadmap, plan 20261029-dashboard-alignment Task 6):
+   the declarations mirror the prototype's one-for-one, so `check:declarations`
+   compares identical values and the visual is the prototype's. */
+.ms-container .timeline { display: flex; gap: 10px; position: relative; margin: 6px 0 4px; padding: 4px 0 16px; }
+.ms-container .timeline::before { content: ""; position: absolute; left: 0; right: 0; top: 22px; height: 2px; background: var(--ms-border-hairline); }
+.ms-container .tl-node { position: relative; flex: 1 1 0; min-width: 0; padding-top: 26px; }
+.ms-container .tl-node::before { content: ""; position: absolute; top: 15px; left: 0; width: 12px; height: 12px; border-radius: 50%; background: var(--ms-bg-surface); border: 2px solid var(--ms-neutral); }
+.ms-container .tl-node.run::before { border-color: var(--ms-accent); }
+.ms-container .tl-node.done::before { border-color: var(--ms-success); background: var(--ms-success); }
+.ms-container .tl-name { font-size: var(--ms-fs-12); line-height: var(--ms-lh-12); font-weight: 500; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ms-container .tl-date { font-family: var(--ms-font-mono); font-size: var(--ms-fs-11); line-height: var(--ms-lh-11); color: var(--ms-text-muted); }
+.ms-container .tl-counts { font-family: var(--ms-font-mono); font-size: var(--ms-fs-11); line-height: var(--ms-lh-11); color: var(--ms-text-secondary); margin-top: 2px; }
+.ms-container .ms-actions { display: inline-flex; align-items: center; gap: 8px; margin-left: 8px; }
+.ms-container .ms-create { display: flex; align-items: end; gap: 8px; flex-wrap: wrap; margin: 0 0 10px; padding: 10px; border: 1px dashed var(--ms-border-strong); border-radius: var(--ms-radius-md); background: var(--ms-bg-inset); }
+.ms-container .ms-edit { display: flex; align-items: end; gap: 8px; flex-wrap: wrap; margin: 8px 0 0; }
+.ms-container .ms-create label, .ms-container .ms-edit label { display: grid; gap: 2px; font-size: var(--ms-fs-11); line-height: var(--ms-lh-11); color: var(--ms-text-muted); }
+.ms-container .ms-create input, .ms-container .ms-edit input, .ms-container .ms-edit select { font: inherit; font-size: var(--ms-fs-12); line-height: var(--ms-lh-12); padding: 4px 6px; border: var(--ms-hairline); border-radius: var(--ms-radius-sm); background: var(--ms-bg-surface); color: var(--ms-text-primary); }
+@container (max-width: 479px) { .ms-container .timeline { flex-wrap: wrap; row-gap: 14px; } }
 .ms-container .milestone-block { padding: 9px 12px; border-bottom: 1px solid var(--ms-border-hairline); }
 
 .ms-container .milestone-block:last-child { border-bottom: 0; }

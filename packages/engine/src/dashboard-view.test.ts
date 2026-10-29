@@ -237,9 +237,14 @@ const GATE_CASES: ReadonlyArray<{
   endDate?: string;
   planStatus: string;
   gateStep: IterationGateStep;
+  /** Compass-declared plan ids (C2 fixture); the linked one is `p-<id>`. */
+  plans?: string[];
 }> = [
   { iterationId: "iter-open", status: "active", startDate: "2026-09-01", planStatus: "Todo", gateStep: 1 },
-  { iterationId: "iter-flight", status: "locked", startDate: "2026-09-20", planStatus: "InProgress", gateStep: 2 },
+  { iterationId: "iter-flight", status: "locked", startDate: "2026-09-20", planStatus: "InProgress", gateStep: 2,
+    // C2 fixture: the compass declares two plans, one catalog-linked and one
+    // declared-only; the union read answers both rows exactly once.
+    plans: ["p-iter-flight", "p-ghost"] },
   { iterationId: "iter-close", status: "locked", startDate: "2026-09-10", planStatus: "Done", gateStep: 3 },
   { iterationId: "iter-done", status: "completed", startDate: "2026-09-05", endDate: "2026-09-25", planStatus: "InProgress", gateStep: 4 },
 ];
@@ -248,7 +253,8 @@ function operation(operationId: string): CatalogOperation {
   return { actor: "project-manager", operationId };
 }
 
-function compassDoc(entry: { iterationId: string; status: string; startDate: string; endDate?: string }): string {
+function compassDoc(entry: { iterationId: string; status: string; startDate: string; endDate?: string; plans?: string[] }): string {
+  const plans = entry.plans ?? [];
   return [
     "---",
     `iteration_id: ${entry.iterationId}`,
@@ -257,7 +263,9 @@ function compassDoc(entry: { iterationId: string; status: string; startDate: str
     ...(entry.endDate === undefined ? [] : [`end_date: ${entry.endDate}`]),
     "iteration_base_branch: main",
     "target_branch: main",
-    "plans: []",
+    ...(plans.length === 0
+      ? ["plans: []"]
+      : ["plans:", ...plans.map((plan) => `  - ${plan}`)]),
     "---",
     "",
     `# ${entry.iterationId} delivery compass`,
@@ -488,6 +496,137 @@ describe("overview read model", () => {
       "iter-open": 1,
     });
     expect(list.attribution).toBe("present");
+  });
+
+  test("plan membership is the union of compass plans and catalog links, deduplicated (C2)", async () => {
+    const context = await scopedOverview();
+    const listed = await readDashboardView({ context, view: "iterations" });
+    const row = ((listed.data as IterationListDTO).items).find((item) => item.iterationId === "iter-flight");
+    if (row === undefined) throw new Error("fixture: iter-flight missing");
+    // The compass declares two ids and one is catalog-linked: the union is
+    // two rows, each exactly once.
+    expect(row.plans.map((plan) => plan.planId)).toEqual(["p-ghost", "p-iter-flight"]);
+    // A declared id absent from the catalog is the explicit missing arm.
+    const ghost = row.plans.find((plan) => plan.planId === "p-ghost");
+    expect(ghost?.catalog).toBeNull();
+    expect(ghost?.badges).toContain("catalog-missing");
+  });
+
+  test("executionLifecycle answers from the iteration workflow, never the catalog row (C1)", async () => {
+    const context = await workspace("execution-lifecycle-");
+    const register = async (id: string): Promise<void> => {
+      await registerCatalogEntity(
+        context,
+        { kind: "iteration", id, title: id, rootKind: "iterations", relativePath: id },
+        operation(`register-${id}`),
+      );
+    };
+    const activeState = {
+      schema_version: 1,
+      id: "iter-active",
+      type: "iteration",
+      status: "running",
+      phase: "phase-2-execute",
+      started_at: STARTED_AT,
+      updated_at: STARTED_AT,
+      compass_ref: "iter-active/delivery-compass.md",
+      branch: { base: "main", integration: "int/iter-active", target: "main" },
+      plans: [],
+    };
+    for (const id of ["iter-active", "iter-completed", "iter-stopped"]) {
+      await register(id);
+      // The root token's revision advances with every creation, so each
+      // creation re-reads it (CAS freshness, not identity).
+      const initialized = await readExecutionState(context);
+      await createExecutionWorkflow(
+        { harnessDir: context.harnessDir, caller: { sessionId: "lifecycle-fixture", role: "coordinator", workflowId: id } },
+        {
+          entry: { id, type: "iteration", started_at: STARTED_AT, dir: `workflows/${id}` },
+          snapshot: { ...activeState, id } as never,
+          expected: initialized.token,
+          operationId: `create-${id}`,
+        },
+      );
+    }
+    // Two terminal headers: `completed` is planted because the close writer's
+    // full evidence ceremony is out of this fixture's scope; the stored end
+    // state (terminal header, no registry row) is exactly what a real close
+    // leaves, and `executionLifecycle` reads only that state.
+    const handle = await openStore(context, "write");
+    try {
+      for (const [id, status] of [
+        ["iter-completed", "completed"],
+        ["iter-stopped", "stopped"],
+      ] as const) {
+        const row = handle.db.prepare("select state_json from execution_workflows where workflow_id = ?").get(id) as {
+          state_json: string;
+        };
+        handle.db
+          .prepare("update execution_workflows set state_json = ? where workflow_id = ?")
+          .run(JSON.stringify({ ...JSON.parse(row.state_json), status, ended_at: STARTED_AT }), id);
+        handle.db.prepare("delete from execution_registry where workflow_id = ?").run(id);
+      }
+    } finally {
+      handle.close();
+    }
+    await register("iter-none");
+
+    // C4: one iteration, two projects — both disclosed sorted, and the list
+    // filter matches either of them.
+    for (const projectId of ["proj-b", "proj-a"]) {
+      await registerCatalogEntity(
+        context,
+        { kind: "project", id: projectId, title: projectId, rootKind: "projects", relativePath: projectId },
+        operation(`register-${projectId}`),
+      );
+      await linkCatalogEntities(
+        context,
+        { from: { kind: "iteration", id: "iter-active" }, relation: "belongs-to", to: { kind: "project", id: projectId } },
+        operation(`link-iter-active-${projectId}`),
+      );
+    }
+    for (const project of ["proj-a", "proj-b"]) {
+      const scoped = await readDashboardView({ context, view: "iterations", params: { project } });
+      expect(((scoped.data as IterationListDTO).items).map((item) => item.iterationId)).toEqual(["iter-active"]);
+    }
+    const allIterations = await readDashboardView({ context, view: "iterations" });
+    const active = ((allIterations.data as IterationListDTO).items).find((item) => item.iterationId === "iter-active");
+    expect(active?.projects).toEqual(["proj-a", "proj-b"]);
+
+    const listed = await readDashboardView({ context, view: "iterations" });
+    const lifecycle = Object.fromEntries(
+      ((listed.data as IterationListDTO).items).map((item) => [item.iterationId, item.executionLifecycle]),
+    );
+    // All four literals: the derivation reads the projected workflow row and
+    // never the catalog row.
+    expect(lifecycle).toEqual({
+      "iter-active": "active",
+      "iter-completed": "completed",
+      "iter-stopped": "stopped",
+      "iter-none": "none",
+    });
+    // The catalog lifecycle is untouched: the row still reads `active` while
+    // the execution lifecycle answers `completed`.
+    const detail = await readDashboardView({ context, view: "iteration-detail", id: "iter-completed" });
+    expect((detail.data as IterationDTO).catalog?.lifecycle).toBe("active");
+    expect((detail.data as IterationDTO).executionLifecycle).toBe("completed");
+
+    // The projected status is a free string: a NON-terminal value on a row the
+    // registry no longer lists must answer the closed vocabulary's
+    // non-terminal arm, never a terminal literal. The row is doctored AFTER a
+    // real read and read again WITHOUT the refresh — the same arm the compass
+    // status test uses, because no producer writes this state.
+    const write = await openStore(context, "write");
+    try {
+      write.db.prepare("update projection_workflows set status = 'paused' where id = 'iter-completed'").run();
+      write.db.prepare("update store_meta set revision = revision + 1 where id = 1").run();
+    } finally {
+      write.close();
+    }
+    const doctored = await withStoreRead(context, { ...queryDashboard("iterations"), needsProjection: false });
+    const paused = ((doctored.data as IterationListDTO).items).find((item) => item.iterationId === "iter-completed");
+    expect(paused?.workflow?.status).toBe("paused");
+    expect(paused?.executionLifecycle).toBe("active");
   });
 
   test("without a project the two project-scoped members answer not-applicable only", async () => {

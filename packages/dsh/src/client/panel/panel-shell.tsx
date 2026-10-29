@@ -29,18 +29,21 @@ import {
   LocaleProvider,
   MS_CONTAINER_CLASS,
   MS_PANE_BODY_CLASS,
+  ASSIGNABLE_ISSUE_LIMIT,
   MS_PANE_HEAD_CLASS,
   Nav,
   copyFor,
   focusModel,
   type Copy,
   type FocusCopy,
+  type FocusOverviewInput,
   type Locale,
   type SessionBinding,
 } from '@mstar-harness/ui'
 import type { IterationGateStep, IterationListDTO, WorkflowDTO } from '@mstar-harness/engine'
 import css from './panel.module.css'
 import type { PanelSnapshot } from '../../panel/panel-snapshot.ts'
+import type { MilestoneWriteResult } from './panel-snapshot-client.ts'
 import type { MstarWorkflowPickerClient } from './workflow-picker-client.ts'
 import type { MstarPanelSnapshotClient } from './panel-snapshot-client.ts'
 import { issueQuery as serializeIssueQuery, parseIssueQuery, type IssueQuery } from '@mstar-harness/ui'
@@ -93,6 +96,12 @@ function focusCopy(copy: Copy): FocusCopy {
     // The gate step names live in the iteration detail's block; the focus track prints the
     // same five words.
     gateStepLabels: copy.iterationDetail.gateStepLabels,
+    // The two project panels reuse the Overview screen's strings: one fact, one copy.
+    residualsHeading: copy.overview.residualsHeading,
+    residualsTotal: copy.overview.residualsTotal,
+    milestonesHeading: copy.overview.milestonesHeading,
+    milestoneProgress: copy.overview.milestoneProgress,
+    milestoneOpenCount: copy.overview.milestoneOpenCount,
     absence: {
       'not-applicable': copy.state['not-applicable'],
       absent: copy.state.absent,
@@ -147,6 +156,46 @@ export function workflowMemberOf(state: MstarDashboardViewState): {
 }
 
 /**
+ * Map one per-view read of `overview` onto the member Focus's three project
+ * panels take (the dashboard alignment change, contract C3).
+ */
+export function overviewMemberOf(state: MstarDashboardViewState): {
+  readonly member: FocusOverviewInput
+  readonly phase: 'loading' | 'loaded'
+} {
+  switch (state.kind) {
+    case 'ok':
+      return { member: { state: 'read', data: state.envelope.data as never }, phase: 'loaded' }
+    case 'unavailable':
+      return { member: { state: 'unavailable', reason: state.reason }, phase: 'loaded' }
+    case 'no-harness':
+      return { member: { state: 'not-applicable', reason: 'no harness root resolves for this workspace' }, phase: 'loaded' }
+    case 'waiting':
+    case 'loading':
+      return { member: { state: 'not-applicable', reason: 'no overview read yet' }, phase: 'loading' }
+  }
+}
+
+/**
+ * The project scope the Focus overview read must carry (Greptile 3): the engine's
+ * `readOverview` answers `not-applicable` for milestones and latestIteration with
+ * no `project` filter, so the panel resolves one from the catalog project list —
+ * the same source the Projects destination renders. `_default` wins when it is
+ * registered (it is the store's bucket for unattributed records), else the single
+ * project, else the first row. `null` = no project to scope by, and the read stays
+ * unscoped rather than inventing an id.
+ */
+export function focusOverviewProject(data: unknown): string | null {
+  const items = (data as { items?: ReadonlyArray<{ project?: { id?: unknown } }> } | null | undefined)?.items
+  if (!Array.isArray(items) || items.length === 0) return null
+  const ids = items
+    .map((item) => item?.project?.id)
+    .filter((id): id is string => typeof id === 'string' && id !== '')
+  if (ids.includes('_default')) return '_default'
+  return ids[0] ?? null
+}
+
+/**
  * The delivery line as the per-view `iterations` read proves it.
  *
  * `undefined` = no answer (the digest's iteration member is the only evidence);
@@ -182,6 +231,10 @@ export function PanelShell(props: {
    * `undefined` means the envelope's own member is the only evidence.
    */
   delivery?: { iterationId: string; gateStep: IterationGateStep | null } | null
+  /** The shared `overview` read behind Focus's three project panels. */
+  overview?: FocusOverviewInput
+  /** A pending overview read: the project panels render no arm for an unread fact. */
+  overviewPhase?: 'loading' | 'loaded'
   destination: PanelDestination
   locale: Locale
   /** The host's resolved colour scheme (only the scheme is inherited). */
@@ -204,6 +257,10 @@ export function PanelShell(props: {
   projectIterations?: MstarDashboardViewState
   /** A project detail's scoped Issues read. */
   projectIssues?: MstarDashboardViewState
+  /** The milestone write channel, alive only while a project page is open. */
+  writes?: MilestoneWriteChannel
+  /** The project's open unassigned issues, as the assign picker's options. */
+  assignableIssues?: ReadonlyArray<{ id: string; title: string; severity: string; revision: number }>
 }): React.ReactElement {
   const copy = copyFor(props.locale)
   const selection: SessionBinding | null = props.snapshot.selection
@@ -219,6 +276,8 @@ export function PanelShell(props: {
     selection,
     workflow: props.workflow,
     iteration: props.delivery === undefined ? deliveryOf(props.snapshot, props.workflow) ?? null : props.delivery,
+    ...(props.overview === undefined ? {} : { overview: props.overview }),
+    ...(props.overviewPhase === undefined ? {} : { overviewPhase: props.overviewPhase }),
     ...(props.phase === undefined ? {} : { phase: props.phase }),
   })
   return (
@@ -244,6 +303,8 @@ export function PanelShell(props: {
               onBack={props.onBack ?? (() => {})}
               {...(props.projectIterations === undefined ? {} : { projectIterations: props.projectIterations })}
               {...(props.projectIssues === undefined ? {} : { projectIssues: props.projectIssues })}
+              {...(props.writes === undefined ? {} : { writes: props.writes })}
+              {...(props.assignableIssues === undefined ? {} : { assignableIssues: props.assignableIssues })}
               {...(props.onOpen === undefined ? {} : { onOpenWorkflow: (id: string) => props.onOpen?.('workflow-detail', id) })}
             />
           )}
@@ -442,6 +503,215 @@ function sessionCwd(useSessions: UseSessions | undefined, sessionId: SessionId |
 }
 
 /**
+ * The milestone write channel the seat hands the project page (plan Task 4).
+ * The UI owns no optimistic state: a refused write only sets the refusal copy,
+ * and BOTH arms re-issue the roadmap read (contract C2 — a success proves new
+ * store state, a refusal may mean the observed revision moved).
+ */
+export type MilestoneWriteChannel = {
+  readonly busy: boolean
+  readonly refusal: string | null
+  create(input: { name: string; target: string | null; ordinal: number }): void
+  update(milestoneId: string, patch: { name?: string; target?: string | null; status?: string }): void
+  assign(issueId: string, issueRevision: number, milestoneId: string | null): void
+  remove(milestoneId: string): void
+}
+
+/**
+ * The C1 retry policy. One id — and the WHOLE request it was minted for — per
+ * LOGICAL write, retained until the store answers terminally: a success (the
+ * receipt replays) or a non-transport refusal (the store judged the request, so a
+ * retry is a new intent). A transport failure, the deadline abort above all, is
+ * AMBIGUOUS: the engine may have committed after the client gave up.
+ *
+ * Retaining the request and not just the id is the load-bearing part: the engine
+ * hashes `expectedStoreRevision` into the operation's request hash, so a retry
+ * carrying a NEWLY observed revision answers `store.operation-conflict` instead of
+ * replaying — a create would then be duplicated with a new id and ordinal. The
+ * ambiguous write therefore keeps its original revision, and the caller does not
+ * reload the read while the outcome is unknown.
+ */
+export function writeOperationIds<T>(
+  makeId: () => string = () => crypto.randomUUID(),
+): {
+  /** The id + request this logical write must carry (kept across an ambiguous retry). */
+  for(signature: string, request: T): { operationId: string; request: T }
+  /** The store answered terminally: the next write of any kind starts a fresh intent. */
+  settled(): void
+} {
+  let pending: { signature: string; operationId: string; request: T } | null = null
+  return {
+    for(signature, request) {
+      if (pending !== null && pending.signature === signature) return { operationId: pending.operationId, request: pending.request }
+      pending = { signature, operationId: makeId(), request }
+      return { operationId: pending.operationId, request }
+    },
+    settled() {
+      pending = null
+    },
+  }
+}
+
+/**
+ * One write at a time, and the EXECUTED C1 id policy: every write names its
+ * logical signature, {@link writeOperationIds} hands back the id for it, and the
+ * id is settled only on a terminal answer — success, or a refusal the store
+ * itself made. A transport-ambiguous deadline abort keeps the id, so the user's
+ * retry replays the engine's recorded receipt instead of writing twice.
+ */
+export function createMilestoneWrites(seats: {
+  client: MstarPanelSnapshotClient
+  sessionId: string
+  cwd: string
+  projectId: string
+  expectedStoreRevision: number
+  reload: () => void
+  /** The channel's busy/refusal mirror — React state in the seat, recorded in a spec. */
+  onState: (state: { busy: boolean; refusal: string | null }) => void
+  /** The id policy; the seat owns one instance for its lifetime. */
+  ids: ReturnType<typeof writeOperationIds<{ expectedStoreRevision: number }>>
+}): MilestoneWriteChannel {
+  const { client, sessionId, cwd, projectId, expectedStoreRevision: revision, reload, onState, ids } = seats
+  // The factory's own mirror of the busy/refusal state; the hook overrides both
+  // members with its React state, but a direct caller (a spec) reads these.
+  let busy = false
+  let refusal: string | null = null
+  const run = (
+    signature: string,
+    request: { expectedStoreRevision: number },
+    call: (operationId: string, expectedStoreRevision: number) => Promise<MilestoneWriteResult>,
+  ): void => {
+    if (busy) return
+    void (async () => {
+      busy = true
+      refusal = null
+      onState({ busy: true, refusal: null })
+      // The retained request wins: an ambiguous retry must hash the SAME revision
+      // the engine may already have committed, or it answers store.operation-conflict.
+      const retained = ids.for(signature, request)
+      const result = await call(retained.operationId, retained.request.expectedStoreRevision)
+      const ambiguous = !result.ok && result.code === 'transport-error'
+      // A terminal answer ends the logical write; an ambiguous transport failure
+      // keeps the id AND the request so the retry replays the engine's receipt.
+      if (!ambiguous) ids.settled()
+      busy = false
+      refusal = result.ok ? null : result.message
+      onState({ busy, refusal })
+      // Reloading on an ambiguous answer would refresh the read's revision and turn
+      // the retry into a DIFFERENT request — exactly the duplicate write C1 forbids.
+      if (!ambiguous) reload()
+    })()
+  }
+  return {
+    get busy(): boolean {
+      return busy
+    },
+    get refusal(): string | null {
+      return refusal
+    },
+    create(input: { name: string; target: string | null; ordinal: number }): void {
+      run(
+        `add:${input.name}:${input.target ?? ''}:${input.ordinal}`,
+        { expectedStoreRevision: revision },
+        (operationId, expectedStoreRevision) =>
+          client.milestoneAdd({
+            sessionId,
+            cwd,
+            projectId,
+            input: { name: input.name, target: input.target, ordinal: input.ordinal },
+            mutation: { operationId, expectedStoreRevision },
+          }),
+      )
+    },
+    update(milestoneId: string, patch: { name?: string; target?: string | null; status?: string }): void {
+      run(
+        `update:${milestoneId}:${JSON.stringify(patch)}`,
+        { expectedStoreRevision: revision },
+        (operationId, expectedStoreRevision) =>
+          client.milestoneUpdate({
+            sessionId,
+            cwd,
+            projectId,
+            milestoneId,
+            patch,
+            mutation: { operationId, expectedStoreRevision },
+          }),
+      )
+    },
+    remove(milestoneId: string): void {
+      run(
+        `remove:${milestoneId}`,
+        { expectedStoreRevision: revision },
+        (operationId, expectedStoreRevision) =>
+          client.milestoneRemove({
+            sessionId,
+            cwd,
+            projectId,
+            milestoneId,
+            mutation: { operationId, expectedStoreRevision },
+          }),
+      )
+    },
+    assign(issueId: string, issueRevision: number, milestoneId: string | null): void {
+      run(
+        `assign:${issueId}:${milestoneId ?? ''}:${issueRevision}`,
+        { expectedStoreRevision: revision },
+        (operationId, expectedStoreRevision) =>
+          client.milestoneAssign({
+            sessionId,
+            cwd,
+            issueId,
+            input: { projectId, milestoneId, reason: 'assigned from the project page' },
+            mutation: { operationId, actor: 'project-manager', expectedRevision: issueRevision, expectedStoreRevision },
+          }),
+      )
+    },
+  }
+}
+
+/**
+ * The React seam around the channel factory: one id-policy instance per seat,
+ * the busy/refusal mirror as state. All behaviour lives in
+ * {@link createMilestoneWrites}, which a spec drives without a renderer.
+ */
+function useMilestoneWrites(seats: {
+  client: MstarPanelSnapshotClient | undefined
+  sessionId: string | null
+  cwd: string | null
+  projectId: string | null
+  expectedStoreRevision: number | null
+  reload: () => void
+}): MilestoneWriteChannel | undefined {
+  const { client, sessionId, cwd, projectId, expectedStoreRevision, reload } = seats
+  const [state, setState] = React.useState<{ busy: boolean; refusal: string | null }>({ busy: false, refusal: null })
+  const ids = React.useRef(writeOperationIds<{ expectedStoreRevision: number }>())
+  // Number.isInteger, not a null test: a schema-drifted envelope makes the member
+  // `undefined`, and a channel armed with no revision would guarantee refusals.
+  if (
+    client === undefined ||
+    sessionId === null ||
+    cwd === null ||
+    projectId === null ||
+    !Number.isInteger(expectedStoreRevision)
+  ) {
+    return undefined
+  }
+  const channel = createMilestoneWrites({
+    client,
+    sessionId,
+    cwd,
+    projectId,
+    expectedStoreRevision: expectedStoreRevision as number,
+    reload,
+    onState: setState,
+    ids: ids.current,
+  })
+  // The factory's own busy flag is per-call-site state; the mirror the screen
+  // reads is this component's state, so return the channel with the live mirror.
+  return { ...channel, busy: state.busy, refusal: state.refusal }
+}
+
+/**
  * One seat's body: the digest read, the two per-view reads, the adapter and the
  * shell. `visible` is the seat's own gate (a collapsed sidebar column renders
  * nothing; the main panel is always visible).
@@ -498,6 +768,8 @@ export function PanelSeat(props: PanelSeatProps): React.ReactElement | null {
   })
   // The ACTIVE destination's own view: one read, only while it is shown. The
   // Iterations destination reuses the delivery read above — one request, not two.
+  // Focus reads the shared `overview` view once: its three project panels are
+  // members of that one read, never three calls (contract C3).
   const [issueQueryState, setIssueQueryState] = React.useState<IssueQuery>(() => parseIssueQuery(''))
   // The screen's query IS the read's filter set: the shared serializer produces
   // the `/api`-style parameters the engine view layer validates.
@@ -518,6 +790,25 @@ export function PanelSeat(props: PanelSeatProps): React.ReactElement | null {
       : destination === 'iterations' ? { params: destinationReadParams(destination) } : {}),
   })
   const destinationRead = destinationView.state
+  // Focus's three project panels are members of ONE `overview` read, and that
+  // read answers `not-applicable` for milestones/iteration with no `project`
+  // filter — so the seat resolves the scope from the catalog project list first.
+  const focusProjectsView = useMstarDashboardView({
+    client: panelSnapshot,
+    sessionId: wireSession,
+    cwd,
+    view: snapshot !== null && destination === 'focus' ? 'projects' : null,
+  })
+  const focusProject =
+    focusProjectsView.state.kind === 'ok' ? focusOverviewProject(focusProjectsView.state.envelope.data) : null
+  const focusOverviewView = useMstarDashboardView({
+    client: panelSnapshot,
+    sessionId: wireSession,
+    cwd,
+    view: snapshot !== null && destination === 'focus' ? 'overview' : null,
+    ...(focusProject === null ? {} : { params: { project: focusProject } }),
+  })
+  const focusOverview = overviewMemberOf(focusOverviewView.state)
   // The open record (list → detail), and its own read.
   const [detail, setDetail] = React.useState<{ view: DetailView; id: string } | null>(null)
   React.useEffect(() => { setDetail(null) }, [destination])
@@ -549,6 +840,38 @@ export function PanelSeat(props: PanelSeatProps): React.ReactElement | null {
     ...(detail !== null && detail.view === 'project-detail' ? { params: { project: detail.id, limit: '200' } } : {}),
   })
 
+  // The milestone write channel (plan Task 4): one write at a time, driven by
+  // the roadmap read's own store revision (contract C2). Only alive while a
+  // project page is open.
+  const expectedStoreRevision =
+    detailView.state.kind === 'ok' && Number.isInteger(detailView.state.envelope.storeRevision)
+      ? (detailView.state.envelope.storeRevision as number)
+      : null
+  const milestoneWrites = useMilestoneWrites({
+    client: panelSnapshot,
+    sessionId: wireSession,
+    cwd,
+    projectId: detail !== null && detail.view === 'project-detail' ? detail.id : null,
+    expectedStoreRevision,
+    reload: () => {
+      detailView.reload()
+      projectIssuesView.reload()
+    },
+  })
+  // The assign picker's options: the project's OPEN, UNASSIGNED issues as the
+  // scoped Issues read answers them (id, title, severity, revision for the CAS).
+  const assignableIssues =
+    projectIssuesView.state.kind === 'ok' && projectIssuesView.state.envelope.data !== null
+      ? (
+          projectIssuesView.state.envelope.data as {
+            items: Array<{ id: string; title: string; severity: string; disposition: string; milestoneId: string | null; revision: number }>
+          }
+        ).items
+          .filter((issue) => issue.disposition === 'open' && issue.milestoneId === null)
+          .slice(0, ASSIGNABLE_ISSUE_LIMIT)
+          .map((issue) => ({ id: issue.id, title: issue.title, severity: issue.severity, revision: issue.revision }))
+      : undefined
+
   // (b) The workflow pick is the product's only write: once the commit lands,
   // every read that DEPENDS on the binding re-reads — the digest (selection),
   // the bound workflow, the delivery iteration and the active destination.
@@ -559,6 +882,8 @@ export function PanelSeat(props: PanelSeatProps): React.ReactElement | null {
     workflowView.reload()
     iterationsView.reload()
     destinationView.reload()
+    focusProjectsView.reload()
+    focusOverviewView.reload()
     // A new commit is a new key; the first mount is not a commit.
   }, [pickReloadKey])
 
@@ -616,6 +941,8 @@ export function PanelSeat(props: PanelSeatProps): React.ReactElement | null {
       workflow={workflow}
       {...(phase === 'loading' ? { phase } : {})}
       delivery={deliveryFromView(iterationsView.state, planIds)}
+      overview={focusOverview.member}
+      {...(focusOverview.phase === 'loading' ? { overviewPhase: focusOverview.phase } : {})}
       reads={{ [destination]: destinationRead }}
       issueQuery={issueQueryState}
       onIssueQueryChange={setIssueQueryState}
@@ -624,6 +951,8 @@ export function PanelSeat(props: PanelSeatProps): React.ReactElement | null {
       onBack={() => setDetail(null)}
       projectIterations={projectIterationsView.state}
       projectIssues={projectIssuesView.state}
+      {...(milestoneWrites === undefined ? {} : { writes: milestoneWrites })}
+      {...(assignableIssues === undefined ? {} : { assignableIssues })}
       destination={destination}
       locale={locale}
       scheme={scheme}

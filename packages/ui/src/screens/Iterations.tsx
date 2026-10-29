@@ -1,9 +1,11 @@
 /**
  * `Iterations` — the list (IA §8.2).
  *
- * Facts: iteration id, catalog title, catalog lifecycle, the projected execution
- * (its workflow status), the delivery position (gate step of five), plan
- * `done/total`, started / ended. **No document inventory, no counters.**
+ * Facts: iteration id, catalog title, the EXECUTION lifecycle (`active` /
+ * `completed` / `stopped` — plan Task 5; the catalog archive state stays on the
+ * detail), the projected execution (its workflow status), the catalog projects,
+ * the delivery position (gate step of five), plan `done/total` from the DTO's
+ * own composed membership, started / ended. **No document inventory, no counters.**
  *
  * The `attribution` arm is the reason this list is not a plain table: a
  * project-scoped read must be able to say two different things about zero rows —
@@ -47,6 +49,8 @@ export type IterationsCopy = {
     execution: string;
     delivery: string;
     plans: string;
+    /** The catalog project ids the iteration belongs to (plan Task 5). */
+    projects: string;
     /** The prototype's `Documents` column. */
     documents: string;
     started: string;
@@ -80,9 +84,9 @@ const FILTERS_HEAD_ID = "ms-iterations-filters";
 
 export function Iterations(props: IterationsProps) {
   const { model, copy } = props;
-  // "Active" is the catalog's own lifecycle, not the execution state: an iteration whose
-  // workflow stopped running is still an active registration. The model counts the
-  // store's rows, not the current filter result.
+  // "Active" is the EXECUTION lifecycle's word (plan Task 5): the model counts the
+  // store's rows whose workflow is still running, not the current filter result. The
+  // catalog's archive state is read on the detail screen, not here.
   const activeCount = model.active;
   const filters = props.filters ?? DEFAULT_ITERATION_FILTERS;
 
@@ -95,11 +99,13 @@ export function Iterations(props: IterationsProps) {
         row.title === null ? <span className={"muted"}>{copy.notStarted}</span> : <TruncatedText text={row.title} />,
     },
     {
+      // The lifecycle column IS the execution lifecycle (plan Task 5): `active` /
+      // `completed` / `stopped`. The catalog's archive state stays on the detail.
       key: "lifecycle",
       header: copy.columns.lifecycle,
       width: "110px",
       secondary: true,
-      render: (row) => <span className={"mono t-12"}>{row.lifecycle ?? "—"}</span>,
+      render: (row) => <span className={"mono t-12"}>{row.executionLifecycle}</span>,
     },
     {
       key: "execution",
@@ -108,9 +114,19 @@ export function Iterations(props: IterationsProps) {
       secondary: true,
       // The prototype prints the projection's own words: `running · phase-2-execute`.
       // The compass status is a different fact and lives on the detail screen.
+      // Terminal iterations carry a projected workflow row too (engine plan merge),
+      // so a completed one answers instead of saying "No execution".
       render: (row) => (
         <span className={"mono t-11"}>{row.execution ?? copy.noExecution}</span>
       ),
+    },
+    {
+      // The catalog project ids this iteration belongs to, comma-joined (plan Task 5).
+      key: "projects",
+      header: copy.columns.projects,
+      width: "150px",
+      secondary: true,
+      render: (row) => <span className={"mono t-11"}>{row.projects.join(" · ")}</span>,
     },
     {
       key: "plans",
@@ -138,9 +154,11 @@ export function Iterations(props: IterationsProps) {
     },
   ];
 
+  // One vocabulary in the row meta: the same execution lifecycle the column prints,
+  // then the compass and the numbers. The catalog's archive state is the detail's.
   const meta = (row: IterationRow) =>
     [
-      row.lifecycle,
+      row.executionLifecycle,
       row.compassStatus ?? copy.noCompass,
       row.gatePosition === null ? copy.noCompass : copy.gateStep(row.gatePosition.step, row.gatePosition.of),
       copy.plansProgress(row.plansDone, row.plansTotal),

@@ -56,7 +56,14 @@ import {
 // admits one contribution per `<package>#<face>`, so a second `register` from
 // the same package is refused. Its descriptor names its own service and the
 // shared `mstar` namespace, so nothing here changes for the two above.
-import { mstarDashboardViewInvocation, mstarPanelSnapshotInvocation } from './panel/panel-snapshot-endpoint.ts'
+import {
+  mstarDashboardViewInvocation,
+  mstarMilestoneAddInvocation,
+  mstarMilestoneAssignInvocation,
+  mstarMilestoneRemoveInvocation,
+  mstarMilestoneUpdateInvocation,
+  mstarPanelSnapshotInvocation,
+} from './panel/panel-snapshot-endpoint.ts'
 
 // The wire address is declared ONCE for both halves (`./engine-status-wire.ts`)
 // and re-exported here for the host-side consumers that already import this
@@ -404,6 +411,12 @@ export function mstarEngineStatusContribution(): TypertContribution {
       // dashboard view, so a screen reads its own view instead of receiving a
       // polled envelope of five.
       mstarDashboardViewInvocation(),
+      // The milestone write channel (the dashboard alignment change, Task 4):
+      // one invocation per engine verb, on the same service and gateway.
+      mstarMilestoneAddInvocation(),
+      mstarMilestoneUpdateInvocation(),
+      mstarMilestoneAssignInvocation(),
+      mstarMilestoneRemoveInvocation(),
     ],
   }
 }

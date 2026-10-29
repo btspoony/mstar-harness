@@ -15,10 +15,8 @@
  * Not rendered anywhere here: `storeRevision`, `catalogRevision`, `builtAt`,
  * `checkedAt`, the catalog `revision`, `sourceHash`.
  */
-import { Collapsible } from "../components/Collapsible.tsx";
+import { useState } from "react";
 import { EmptyState, type AbsenceArm } from "../components/EmptyState.tsx";
-import { Field } from "../components/Field.tsx";
-import { FieldGroup } from "../components/FieldGroup.tsx";
 import { ProgressBar } from "../components/ProgressBar.tsx";
 import { StatusDot } from "../components/StatusDot.tsx";
 import { Tabs, type TabItem } from "../components/Tabs.tsx";
@@ -33,68 +31,84 @@ import {
 import type { Resolved } from "../view-model/state.ts";
 import type { Tone } from "../view-model/status.ts";
 
+/** The closed status set the engine accepts for a milestone patch. */
+const MILESTONE_STATUSES = ["planned", "active", "delivered", "dropped"] as const;
+
+/** One open, unassigned issue the assign picker can offer. */
+export type AssignableIssue = { id: string; title: string; severity: string; revision: number };
+
+/**
+ * How many assignable issues the host hands the picker. The host applies the
+ * same limit to its read, so the picker states the cap instead of truncating
+ * silently.
+ */
+export const ASSIGNABLE_ISSUE_LIMIT = 50;
+
+/**
+ * The milestone write surface, declared structurally so this screen stays
+ * transport-agnostic (the dashboard alignment change, Task 4). Every action
+ * is one engine verb — add, update, assign/unassign and remove — and the
+ * surface owns the busy/refusal state and the read reload; the screen owns
+ * only its control state. Removal is always offered: a milestone that still
+ * holds issues is ATTEMPTED and the store's own `milestone.not-empty` refusal
+ * surfaces verbatim, rather than being pre-empted by a disabled control.
+ */
+export type MilestoneWriteSurface = {
+  /** True while one write is in flight; every control is disabled. */
+  busy: boolean;
+  /** The store's own refusal message, verbatim, or `null`. */
+  refusal: string | null;
+  create: (input: { name: string; target: string | null; ordinal: number }) => void;
+  update: (milestoneId: string, patch: { name?: string; target?: string | null; status?: string }) => void;
+  /** `milestoneId: null` is the unassign. */
+  assign: (issueId: string, issueRevision: number, milestoneId: string | null) => void;
+  /** Remove one milestone; the engine refuses a non-empty one in place. */
+  remove: (milestoneId: string) => void;
+};
+
 /** Every visible string this screen needs. Task 5 supplies them. */
 export type ProjectDetailCopy = {
   breadcrumb: { label: string; trail: string };
-  fields: {
-    title: string;
-    id: string;
-    lifecycle: string;
-    path: string;
-    description: string;
-    noDescription: string;
-    /** The identity panel's remaining rows, matching the prototype's six. */
-    projectKind: string;
-    revision: string;
-    registeredAt: string;
-    catalogUpdatedAt: string;
-  };
-  /** The two identity panels the prototype puts side by side. */
-  catalogHeading: string;
-  /** The roadmap's presence, said beside the title (`roadmap present`). */
-  roadmapState: string;
   /** The word before the catalog revision in the head's meta line. */
   revisionLabel: string;
   /** The noun after the project's open-issue count. */
   openIssuesUnit: string;
-  authorityHeading: string;
-  authorityColumns: { state: string; revision: string; contentHash: string; frontmatter: string };
-  /** Said when the project declares no roadmap authority row. */
-  authorityAbsent: string;
-  /** The left panel of the prototype's last row. */
-  storedFactsHeading: string;
-  /** The right panel: the stored document's own facts. */
-  storedFacts: {
-    factsHeading: string;
-    columns: {
-      frontmatterStatus: string;
-      createdAt: string;
-      residualsRef: string;
-      goals: string;
-      sections: string;
-    };
-    note: string;
-  };
+  /** The roadmap's presence, said beside the title (`roadmap present`). */
+  roadmapState: string;
   tabLabel: string;
   /** The three fixed features, in order. `PROJECT_FEATURES` is the id list. */
   features: Record<ProjectFeature, string>;
   roadmap: {
-    directionHeading: string;
-    goalsHeading: string;
     milestonesHeading: string;
     /** The board head's two nouns, which the prototype prints after each count. */
     milestonesUnit: string;
     unassignedUnit: string;
-    markdownHeading: string;
-    noDirection: string;
-    goalChecked: string;
-    goalUnchecked: string;
     milestoneProgress: (done: number, total: number) => string;
     milestoneOpen: (open: number) => string;
     /** The four tallies of the prototype's board row. */
     countLabels: { open: string; resolved: string; retired: string; total: string };
     noTarget: string;
     unassigned: (count: number) => string;
+    /** The trailing timeline node's name for issues with no milestone. */
+    timelineUnassigned: string;
+    timelineUnassignedIssues: (count: number) => string;
+    /** The milestone write controls (plan Task 4). */
+    writes: {
+      create: string;
+      nameLabel: string;
+      targetLabel: string;
+      statusLabel: string;
+      edit: string;
+      save: string;
+      cancel: string;
+      assign: string;
+      unassign: string;
+      /** Said when the picker hit the cap, so the truncation is never silent. */
+      assignCap: string;
+      remove: string;
+      removeConfirm: string;
+      refusalLead: string;
+    };
     /** The next step offered when the roadmap is absent (§4). */
     absentNextStep: (features: string) => string;
   };
@@ -129,14 +143,148 @@ export type ProjectDetailProps = {
   issuesCount?: number;
   iterationsCount?: number;
   copy: ProjectDetailCopy;
+  /** The milestone write channel, when the host can write (plan Task 4). */
+  writes?: MilestoneWriteSurface;
+  /** The project's open, unassigned issues, as the assign picker's options. */
+  assignableIssues?: readonly AssignableIssue[];
   onBack?: () => void;
   /** Leaving the project's scope — the chip's own affordance. Omitted, there is no chip button. */
   onClearScope?: () => void;
 };
 
+/** The milestone board's inline write controls for one milestone (plan Task 4). */
+function MilestoneActions(props: {
+  milestone: RoadmapModel["milestones"][number];
+  writes: MilestoneWriteSurface;
+  /** The assign picker's options; absent means this host offers no picker here. */
+  assignable: readonly AssignableIssue[] | undefined;
+  copy: ProjectDetailCopy;
+}) {
+  const { milestone, writes, assignable, copy } = props;
+  const [editing, setEditing] = useState(false);
+  const [removing, setRemoving] = useState(false);
+  const [name, setName] = useState(milestone.name);
+  const [target, setTarget] = useState(milestone.target ?? "");
+  const [status, setStatus] = useState(milestone.status ?? "planned");
+  if (!editing) {
+    return (
+      <span className={"ms-actions"}>
+        <button type="button" className={"link"} disabled={writes.busy} data-ms-milestone-edit="" onClick={() => setEditing(true)}>
+          {copy.roadmap.writes.edit}
+        </button>
+        {removing ? (
+          // A two-step inline confirm: the attempt is real, so a non-empty
+          // milestone's refusal surfaces verbatim after it (plan Task 4 round 2).
+          <span data-ms-milestone-remove-confirm={milestone.milestoneId}>
+            <span className="muted t-11">{copy.roadmap.writes.removeConfirm}</span>
+            <button
+              type="button"
+              className={"link"}
+              disabled={writes.busy}
+              data-ms-milestone-remove={milestone.milestoneId}
+              onClick={() => {
+                setRemoving(false);
+                writes.remove(milestone.milestoneId);
+              }}
+            >
+              {copy.roadmap.writes.remove}
+            </button>
+            <button type="button" className={"link"} disabled={writes.busy} onClick={() => setRemoving(false)}>
+              {copy.roadmap.writes.cancel}
+            </button>
+          </span>
+        ) : (
+          <button type="button" className={"link"} disabled={writes.busy} data-ms-milestone-remove="" onClick={() => setRemoving(true)}>
+            {copy.roadmap.writes.remove}
+          </button>
+        )}
+        {assignable === undefined || assignable.length === 0 ? null : (
+          <details data-ms-milestone-assign="">
+            {/* The summary IS the control: it is natively focusable and toggles on
+                Enter/Space and on a pointer click. A nested button would swallow the
+                activation and leave the visible trigger inert. */}
+            <summary className={"link"} data-ms-milestone-assign-toggle={milestone.milestoneId}>
+              {copy.roadmap.writes.assign}
+            </summary>
+            {assignable.length >= ASSIGNABLE_ISSUE_LIMIT ? (
+              <span className="muted t-11" data-ms-assign-cap={ASSIGNABLE_ISSUE_LIMIT}>
+                {copy.roadmap.writes.assignCap}
+              </span>
+            ) : null}
+            {assignable.map((issue) => (
+              <button
+                key={issue.id}
+                type="button"
+                className={"chip"}
+                disabled={writes.busy}
+                title={issue.title}
+                data-ms-assign-issue={issue.id}
+                onClick={() => writes.assign(issue.id, issue.revision, milestone.milestoneId)}
+              >
+                {issue.id}
+                <span className="muted"> · {issue.severity}</span>
+              </button>
+            ))}
+          </details>
+        )}
+      </span>
+    );
+  }
+  return (
+    <form
+      className={"ms-edit"}
+      data-ms-milestone-edit-form={milestone.milestoneId}
+      onSubmit={(event) => {
+        event.preventDefault();
+        writes.update(
+          milestone.milestoneId,
+          {
+            ...(name.trim() === milestone.name ? {} : { name: name.trim() }),
+            ...(target === (milestone.target ?? "") ? {} : { target: target === "" ? null : target }),
+            ...(status === milestone.status ? {} : { status }),
+          },
+        );
+        setEditing(false);
+      }}
+    >
+      <label>
+        {copy.roadmap.writes.nameLabel}
+        <input value={name} disabled={writes.busy} onChange={(event) => setName(event.target.value)} />
+      </label>
+      <label>
+        {copy.roadmap.writes.targetLabel}
+        <input type="date" value={target} disabled={writes.busy} onChange={(event) => setTarget(event.target.value)} />
+      </label>
+      <label>
+        {copy.roadmap.writes.statusLabel}
+        <select value={status} disabled={writes.busy} onChange={(event) => setStatus(event.target.value)}>
+          {MILESTONE_STATUSES.map((option) => (
+            <option key={option} value={option}>
+              {option}
+            </option>
+          ))}
+        </select>
+      </label>
+      <button type="submit" className={"link"} disabled={writes.busy}>
+        {copy.roadmap.writes.save}
+      </button>
+      <button type="button" className={"link"} disabled={writes.busy} onClick={() => setEditing(false)}>
+        {copy.roadmap.writes.cancel}
+      </button>
+    </form>
+  );
+}
+
 /** One milestone of the roadmap board: status, target, progress, open, issues. */
-function Milestone(props: { milestone: RoadmapModel["milestones"][number]; copy: ProjectDetailCopy }) {
+function Milestone(props: {
+  milestone: RoadmapModel["milestones"][number];
+  copy: ProjectDetailCopy;
+  writes?: MilestoneWriteSurface;
+  assignable?: readonly AssignableIssue[];
+}) {
   const { milestone, copy } = props;
+  const writes = props.writes;
+  const unassign = writes === undefined ? undefined : (issueId: string, issueRevision: number) => writes.assign(issueId, issueRevision, null);
   return (
     <section className={"milestone-block"} data-ms-milestone={milestone.milestoneId}>
       <div className={"milestone-block-head"}>
@@ -169,14 +317,37 @@ function Milestone(props: { milestone: RoadmapModel["milestones"][number]; copy:
         // disposition, and the rest folded into `+N <disposition>`. The title stays on
         // the issue's own screen — this row answers "which issues", not "what are they".
         <div className="assigned">
-          {assignedChips(milestone.issues).shown.map((issue) => (
-            <span key={issue.id} className={`status tone-${dispositionTone(issue.disposition)}`}>
-              <span className="dot" aria-hidden="true" />
-              <span className="assigned-id" title={issue.title}>
-                {issue.id}
-              </span>
-            </span>
-          ))}
+          {assignedChips(milestone.issues).shown.map((issue) => {
+            const chip = (
+              <>
+                <span className="dot" aria-hidden="true" />
+                <span className="assigned-id" title={issue.title}>
+                  {issue.id}
+                </span>
+              </>
+            );
+            if (writes === undefined || unassign === undefined) {
+              return (
+                <span key={issue.id} className={`status tone-${dispositionTone(issue.disposition)}`}>
+                  {chip}
+                </span>
+              );
+            }
+            return (
+              <button
+                key={issue.id}
+                type="button"
+                className={`status tone-${dispositionTone(issue.disposition)}`}
+                disabled={writes.busy}
+                aria-label={`${copy.roadmap.writes.unassign} ${issue.id}`}
+                data-ms-unassign-issue={issue.id}
+                onClick={() => unassign(issue.id, issue.revision)}
+              >
+                {chip}
+                <span aria-hidden="true"> ×</span>
+              </button>
+            );
+          })}
           {assignedChips(milestone.issues).folded.map((fold) => (
             <span key={fold.disposition} className="assigned-id muted" data-ms-folded={fold.disposition}>
               +{fold.count} {fold.disposition}
@@ -184,7 +355,42 @@ function Milestone(props: { milestone: RoadmapModel["milestones"][number]; copy:
           ))}
         </div>
       )}
+      {writes === undefined ? null : (
+        <MilestoneActions milestone={milestone} writes={writes} assignable={props.assignable} copy={copy} />
+      )}
     </section>
+  );
+}
+
+/** The board's create form: name + optional target; the ordinal is the list length. */
+function MilestoneCreateForm(props: { writes: MilestoneWriteSurface; nextOrdinal: number; copy: ProjectDetailCopy }) {
+  const { writes, copy } = props;
+  const [name, setName] = useState("");
+  const [target, setTarget] = useState("");
+  return (
+    <form
+      className={"ms-create"}
+      data-ms-milestone-create=""
+      onSubmit={(event) => {
+        event.preventDefault();
+        if (name.trim() === "") return;
+        writes.create({ name: name.trim(), target: target === "" ? null : target, ordinal: props.nextOrdinal });
+        setName("");
+        setTarget("");
+      }}
+    >
+      <label>
+        {copy.roadmap.writes.nameLabel}
+        <input value={name} disabled={writes.busy} onChange={(event) => setName(event.target.value)} />
+      </label>
+      <label>
+        {copy.roadmap.writes.targetLabel}
+        <input type="date" value={target} disabled={writes.busy} onChange={(event) => setTarget(event.target.value)} />
+      </label>
+      <button type="submit" className={"link"} disabled={writes.busy || name.trim() === ""}>
+        {copy.roadmap.writes.create}
+      </button>
+    </form>
   );
 }
 
@@ -202,8 +408,8 @@ function milestoneStatusTone(status: string): Tone {
  * settled work, never an overflow indicator. A milestone whose open set is long lists all
  * of it — the row wraps, which is what the prototype's own CSS does.
  */
-function assignedChips(issues: readonly { id: string; title: string; disposition: string }[]): {
-  shown: typeof issues;
+function assignedChips(issues: readonly { id: string; title: string; disposition: string; revision: number }[]): {
+  shown: readonly { id: string; title: string; disposition: string; revision: number }[];
   folded: Array<{ disposition: string; count: number }>;
 } {
   const byDisposition = new Map<string, number>();
@@ -228,13 +434,64 @@ function dispositionTone(disposition: string): string {
 }
 
 /**
- * The Roadmap feature body: the board, then the direction and stored-facts row.
- *
- * The goals are **not** a block here. The prototype reports them as one count inside
- * `Stored facts` (`1 / 3 checked`) and nothing else — a list would be a second, longer
- * answer to the same question, and the stored markdown below already carries it.
+ * The Roadmap feature's timeline: one node per milestone, ordered by target with
+ * missing targets last, and one trailing node for the unassigned issues (plan
+ * the dashboard alignment change, Task 3). Every number is the read's own: the
+ * retired-over-total pair and the open count.
  */
-function RoadmapFeature(props: { model: RoadmapModel; copy: ProjectDetailCopy }) {
+function MilestoneTimeline(props: { model: RoadmapModel; copy: ProjectDetailCopy }) {
+  const { model, copy } = props;
+  const ordered = [...model.milestones].sort(
+    (a, b) => (a.target ?? "9999-12-31").localeCompare(b.target ?? "9999-12-31"),
+  );
+  return (
+    <div className="timeline" data-ms-milestone-timeline="" role="list">
+      {ordered.map((milestone) => (
+        <div
+          key={milestone.milestoneId}
+          role="listitem"
+          className={
+            milestone.status === "delivered"
+              ? "tl-node done"
+              : milestone.status === "active"
+                ? "tl-node run"
+                : "tl-node"
+          }
+          data-ms-timeline-node={milestone.milestoneId}
+        >
+          <div className="tl-name">{milestone.name}</div>
+          <div className="tl-date">
+            {milestone.target ?? copy.roadmap.noTarget}
+            {milestone.status === null ? "" : ` · ${milestone.status}`}
+          </div>
+          <div className="tl-counts" data-ms-timeline-counts="">
+            {milestone.counts.total - milestone.counts.open}/{milestone.counts.total} ·{" "}
+            {copy.roadmap.milestoneOpen(milestone.counts.open)}
+          </div>
+        </div>
+      ))}
+      <div className="tl-node" role="listitem" data-ms-timeline-node="unassigned">
+        <div className="tl-name muted">{copy.roadmap.timelineUnassigned}</div>
+        <div className="tl-date">{copy.roadmap.noTarget}</div>
+        <div className="tl-counts">{copy.roadmap.timelineUnassignedIssues(model.unassignedIssues)}</div>
+      </div>
+    </div>
+  );
+}
+
+/**
+ * The Roadmap feature body: the milestone timeline, then the board.
+ *
+ * The document blocks (direction disclosure, stored markdown, stored facts) are
+ * gone (plan Task 3): the direction moved to the page header, and the rest were
+ * removed with the user's decision.
+ */
+function RoadmapFeature(props: {
+  model: RoadmapModel;
+  copy: ProjectDetailCopy;
+  writes?: MilestoneWriteSurface;
+  assignable?: readonly AssignableIssue[];
+}) {
   const { model, copy } = props;
   return (
     <div className={"feature-body"} data-ms-feature="roadmap">
@@ -256,8 +513,15 @@ function RoadmapFeature(props: { model: RoadmapModel; copy: ProjectDetailCopy })
               )}
             </span>
           </div>
+          <MilestoneTimeline model={model} copy={copy} />
           {model.milestones.map((milestone) => (
-            <Milestone key={milestone.milestoneId} milestone={milestone} copy={copy} />
+            <Milestone
+              key={milestone.milestoneId}
+              milestone={milestone}
+              copy={copy}
+              {...(props.writes === undefined ? {} : { writes: props.writes })}
+              {...(props.assignable === undefined ? {} : { assignable: props.assignable })}
+            />
           ))}
           {model.unassignedIssues === 0 ? null : (
             <div className={"panel-foot"}>
@@ -268,70 +532,30 @@ function RoadmapFeature(props: { model: RoadmapModel; copy: ProjectDetailCopy })
           )}
         </section>
       )}
-      {/* The prototype's last row: two disclosures on the left (direction, stored
-          markdown), the stored document's facts on the right. */}
-      {model.storedFacts === null ? null : (
-        <div className="detail-grid">
-          {/* The prototype's left half of this row carries no title: it is two
-              disclosures, and the panel around them is a frame, not a titled card. */}
-          <section className="panel" aria-label={copy.storedFactsHeading}>
-            <div className="panel-body">
-              {model.direction === null ? null : (
-                <Collapsible summary={copy.roadmap.directionHeading}>
-                  <p className="prose t-12 secondary" data-ms-direction="">
-                    {model.direction}
-                  </p>
-                </Collapsible>
-              )}
-              {model.markdown === null ? null : (
-                <Collapsible summary={copy.roadmap.markdownHeading}>
-                  <pre data-ms-roadmap-markdown="">{model.markdown}</pre>
-                </Collapsible>
-              )}
-              {model.direction !== null || model.markdown !== null ? null : (
-                <p className="muted t-12">{copy.roadmap.noDirection}</p>
-              )}
-            </div>
-          </section>
-          <section className="panel" aria-labelledby="ms-project-stored">
-            <div className="panel-head">
-              <h2 className="panel-title" id="ms-project-stored">
-                {copy.storedFacts.factsHeading}
-              </h2>
-            </div>
-            <div className="panel-body">
-              <dl className="fields">
-                <div className="field">
-                  <dt>{copy.storedFacts.columns.frontmatterStatus}</dt>
-                  <dd className="mono">{model.storedFacts.frontmatterStatus}</dd>
-                </div>
-                <div className="field">
-                  <dt>{copy.storedFacts.columns.createdAt}</dt>
-                  <dd className="mono">{model.storedFacts.createdAt}</dd>
-                </div>
-                <div className="field">
-                  <dt>{copy.storedFacts.columns.residualsRef}</dt>
-                  <dd className="mono trunc">
-                    <TruncatedText text={model.storedFacts.residualsRef} />
-                  </dd>
-                </div>
-                <div className="field">
-                  <dt>{copy.storedFacts.columns.goals}</dt>
-                  <dd className="mono">{model.storedFacts.goals}</dd>
-                </div>
-                <div className="field">
-                  <dt>{copy.storedFacts.columns.sections}</dt>
-                  <dd className="mono">{model.storedFacts.sections}</dd>
-                </div>
-              </dl>
-            </div>
-            <div className="panel-foot">
-              <span className="muted">{copy.storedFacts.note}</span>
-            </div>
-          </section>
-        </div>
-      )}
     </div>
+  );
+}
+
+/**
+ * The write controls, outside the populated arm: a roadmap that reads successfully
+ * but holds no milestone still needs a way to create the FIRST one, and an absent
+ * roadmap row must not make the project unwritable. The store is the authority on
+ * whether the write lands, so the form is offered and a refusal is surfaced.
+ */
+function RoadmapWrites(props: { writes?: MilestoneWriteSurface; nextOrdinal: number; copy: ProjectDetailCopy }) {
+  if (props.writes === undefined) return null;
+  const writes = props.writes;
+  return (
+    <>
+      {/* The store's own refusal, verbatim, until the next write or reload
+          replaces it (contract C1: the client rewords nothing). */}
+      {writes.refusal === null ? null : (
+        <p className="muted t-12" role="alert" data-ms-write-refusal="">
+          {props.copy.roadmap.writes.refusalLead} {writes.refusal}
+        </p>
+      )}
+      <MilestoneCreateForm writes={writes} nextOrdinal={props.nextOrdinal} copy={props.copy} />
+    </>
   );
 }
 
@@ -344,20 +568,49 @@ function RoadmapFeature(props: { model: RoadmapModel; copy: ProjectDetailCopy })
  * the continuation. `empty` is a different fact: the roadmap exists, its milestone
  * set is empty. The two never share a string.
  */
-function RoadmapArm(props: { roadmap: Resolved<RoadmapModel>; copy: ProjectDetailCopy }) {
+function RoadmapArm(props: {
+  roadmap: Resolved<RoadmapModel>;
+  copy: ProjectDetailCopy;
+  writes?: MilestoneWriteSurface;
+  assignable?: readonly AssignableIssue[];
+}) {
   const { roadmap, copy } = props;
+  // The write controls sit OUTSIDE the arm: a roadmap with no milestone (or no
+  // roadmap row at all) still needs a way to create the first one, so the form
+  // renders for every state where the read answered and the host can write.
+  const writes =
+    props.writes === undefined ? null : (
+      <RoadmapWrites
+        writes={props.writes}
+        nextOrdinal={roadmap.kind === "populated" ? roadmap.value.milestones.length : 0}
+        copy={copy}
+      />
+    );
   switch (roadmap.kind) {
     case "populated":
-      return <RoadmapFeature model={roadmap.value} copy={copy} />;
+      return (
+        <div className={"feature-body-arm"} data-ms-roadmap-arm="populated">
+          {writes}
+          <RoadmapFeature
+            model={roadmap.value}
+            copy={copy}
+            {...(props.writes === undefined ? {} : { writes: props.writes })}
+            {...(props.assignable === undefined ? {} : { assignable: props.assignable })}
+          />
+        </div>
+      );
     case "absent":
       return (
-        <EmptyState
-          arm="absent"
-          labelWord={copy.absence.absent.labelWord}
-          heading={copy.absence.absent.heading}
-          body={copy.absence.absent.body}
-          pointer={copy.roadmap.absentNextStep(`${copy.features.issues} · ${copy.features.iterations}`)}
-        />
+        <div className={"feature-body-arm"} data-ms-roadmap-arm="absent">
+          {writes}
+          <EmptyState
+            arm="absent"
+            labelWord={copy.absence.absent.labelWord}
+            heading={copy.absence.absent.heading}
+            body={copy.absence.absent.body}
+            pointer={copy.roadmap.absentNextStep(`${copy.features.issues} · ${copy.features.iterations}`)}
+          />
+        </div>
       );
     case "not-applicable":
       return (
@@ -371,13 +624,16 @@ function RoadmapArm(props: { roadmap: Resolved<RoadmapModel>; copy: ProjectDetai
       );
     case "empty":
       return (
-        <EmptyState
-          arm="empty"
-          labelWord={copy.absence.empty.labelWord}
-          heading={copy.absence.empty.heading}
-          body={copy.absence.empty.body}
-          hint={copy.absence.empty.hint}
-        />
+        <div className={"feature-body-arm"} data-ms-roadmap-arm="empty">
+          {writes}
+          <EmptyState
+            arm="empty"
+            labelWord={copy.absence.empty.labelWord}
+            heading={copy.absence.empty.heading}
+            body={copy.absence.empty.body}
+            hint={copy.absence.empty.hint}
+          />
+        </div>
       );
     case "unavailable":
       return (
@@ -398,8 +654,14 @@ function RoadmapArm(props: { roadmap: Resolved<RoadmapModel>; copy: ProjectDetai
 
 export function ProjectDetail(props: ProjectDetailProps) {
   const { identity, copy, feature } = props;
-  /** The roadmap's authority row, or `null` when the record declares none. */
-  const authority = props.roadmap.kind === "populated" ? props.roadmap.value.authority : null;
+  // The header direction (plan Task 3): the roadmap's declared direction, falling
+  // back to the catalog description WHENEVER no direction is available — an absent,
+  // empty or still-loading roadmap declares no direction, and the project's own
+  // description is then the only thing to say. Both absent renders nothing, not a dash.
+  const direction =
+    props.roadmap.kind === "populated"
+      ? (props.roadmap.value.direction ?? identity.description)
+      : identity.description;
   // The head's `N open issues` is the project's open-issue total, which the scoped Issues
   // read already answers under its default `open` disposition. The roadmap's milestone
   // tallies cannot answer it: `unassignedIssues` counts every unassigned issue, retired
@@ -443,6 +705,12 @@ export function ProjectDetail(props: ProjectDetailProps) {
           <h1 className="detail-title">
             <TruncatedText text={identity.title} />
           </h1>
+          {/* Direction above the identity meta line, as the confirmed baseline has it. */}
+          {direction === null ? null : (
+            <p className="prose t-12 secondary" data-ms-direction="">
+              {direction}
+            </p>
+          )}
           <div className="detail-meta">
             <span className="mono">{identity.projectId}</span>
             <span aria-hidden="true">·</span>
@@ -466,9 +734,6 @@ export function ProjectDetail(props: ProjectDetailProps) {
               </>
             )}
           </div>
-          {identity.description === null ? null : (
-            <p className="prose t-12 secondary">{identity.description}</p>
-          )}
         </div>
         <div className="detail-actions">
           {/* The prototype states the roadmap's presence as a dot + word, then the
@@ -485,89 +750,6 @@ export function ProjectDetail(props: ProjectDetailProps) {
         </div>
       </header>
 
-      {/* The prototype puts the catalog identity and the roadmap's authority side by
-          side: what the record is, and what backs its roadmap. */}
-      <div className="detail-top">
-        <section className="panel" aria-labelledby="ms-project-catalog">
-          <div className="panel-head">
-            <h2 className="panel-title" id="ms-project-catalog">
-              {copy.catalogHeading}
-            </h2>
-          </div>
-          <div className="panel-body">
-            <dl className="fields">
-              {/* The prototype's order: Kind, Lifecycle, Revision, Registered, Location,
-                  Updated. */}
-              <div className="field">
-                <dt>{copy.fields.projectKind}</dt>
-                <dd className="mono">project</dd>
-              </div>
-              <div className="field">
-                <dt>{copy.fields.lifecycle}</dt>
-                <dd className="mono">{identity.lifecycle}</dd>
-              </div>
-              <div className="field">
-                <dt>{copy.fields.revision}</dt>
-                <dd className="mono">{identity.revision}</dd>
-              </div>
-              <div className="field">
-                <dt>{copy.fields.registeredAt}</dt>
-                <dd className="mono">{identity.registeredAt}</dd>
-              </div>
-              <div className="field">
-                <dt>{copy.fields.path}</dt>
-                <dd className="mono wrap">{identity.path}</dd>
-              </div>
-              <div className="field">
-                <dt>{copy.fields.catalogUpdatedAt}</dt>
-                <dd className="mono">{identity.updatedAt}</dd>
-              </div>
-            </dl>
-          </div>
-        </section>
-        <section className="panel" aria-labelledby="ms-project-authority">
-          <div className="panel-head">
-            <h2 className="panel-title" id="ms-project-authority">
-              {copy.authorityHeading}
-            </h2>
-          </div>
-          <div className="panel-body">
-            {props.roadmap.kind === "populated" ? (
-              authority === null ? (
-                <p className="muted t-12">{copy.authorityAbsent}</p>
-              ) : (
-                <dl className="fields">
-                  <div className="field">
-                    <dt>{copy.authorityColumns.state}</dt>
-                    <dd className="mono">{authority.state}</dd>
-                  </div>
-                  <div className="field">
-                    <dt>{copy.authorityColumns.revision}</dt>
-                    <dd className="mono">{authority.revision}</dd>
-                  </div>
-                  <div className="field">
-                    <dt>{copy.authorityColumns.contentHash}</dt>
-                    <dd className="mono trunc" title={authority.contentHash}>
-                      <TruncatedText text={authority.contentHash} />
-                    </dd>
-                  </div>
-                  <div className="field">
-                    <dt>{copy.authorityColumns.frontmatter}</dt>
-                    <dd className="mono trunc">
-                      <TruncatedText text={authority.frontmatter} />
-                    </dd>
-                  </div>
-                </dl>
-              )
-            ) : props.roadmap.kind === "loading" ? null : (
-              // The card must not claim the project declares no authority row when the
-              // roadmap read itself is what failed (or the concept is undeclared): say
-              // the read's own state instead.
-              <p className="muted t-12">{copy.absence[props.roadmap.kind].body}</p>
-            )}
-          </div>
-        </section>
-      </div>
 
       {/* The fixed three-feature set. `Roadmap` is always the default. */}
       <Tabs
@@ -578,7 +760,12 @@ export function ProjectDetail(props: ProjectDetailProps) {
       />
 
       {feature === DEFAULT_PROJECT_FEATURE ? (
-        <RoadmapArm roadmap={props.roadmap} copy={copy} />
+        <RoadmapArm
+          roadmap={props.roadmap}
+          copy={copy}
+          {...(props.writes === undefined ? {} : { writes: props.writes })}
+          {...(props.assignableIssues === undefined ? {} : { assignable: props.assignableIssues })}
+        />
       ) : (
         <div className={"feature-body"} data-ms-feature={feature}>
           {/* The scope chip: this list is this project's, and the scope is

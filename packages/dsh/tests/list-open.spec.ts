@@ -70,7 +70,7 @@ describe('list → detail — the remaining lists open their record', () => {
     const open = render('iterations', {
       view: 'iteration-detail',
       id: 'iter-1',
-      state: envelope({ iterationId: 'iter-1', catalog: null, compass: null, workflow: null, plans: [], documents: [], gateStep: 2, badges: [] }),
+      state: envelope({ iterationId: 'iter-1', catalog: null, compass: null, workflow: null, executionLifecycle: 'active', projects: [], plans: [], documents: [], gateStep: 2, badges: [] }),
     })
     expect(open).toContain('data-ms-screen="iteration-detail"')
     expect(open).not.toContain('data-ms-screen="iterations"')
@@ -82,7 +82,7 @@ describe('the Iterations destination never caps silently', () => {
   const envelope = (data: unknown) => ({ kind: 'ok' as const, envelope: { data, projection } })
 
   function renderIterations(items: number, total: number): string {
-    const one = { iterationId: 'iter-1', catalog: null, compass: null, workflow: null, plans: [], documents: [], gateStep: 2, badges: [] }
+    const one = { iterationId: 'iter-1', catalog: null, compass: null, workflow: null, executionLifecycle: 'active', projects: [], plans: [], documents: [], gateStep: 2, badges: [] }
     return renderToStaticMarkup(createElement(PanelShell, {
       snapshot: SNAPSHOT,
       workflow: { state: 'read', data: WORKFLOW as never },

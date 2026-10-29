@@ -403,7 +403,7 @@ describe('detail routes — a record read, not a landmark', () => {
     const markup = renderDetail({
       view: 'iteration-detail',
       id: 'iter-1',
-      ...envelope({ iterationId: 'iter-1', catalog: null, compass: null, workflow: null, plans: [], documents: [], gateStep: 2, badges: [] }),
+      ...envelope({ iterationId: 'iter-1', catalog: null, compass: null, workflow: null, executionLifecycle: 'active', projects: [], plans: [], documents: [], gateStep: 2, badges: [] }),
     })
     expect(markup).toContain('data-ms-screen="iteration-detail"')
   })
@@ -482,5 +482,33 @@ describe('the shell holds the open record and the project detail mounts', () => 
     // Iterations attribution arm is asserted at the resolver level, not here).
     expect(markup).not.toContain('data-ms-screen="projects"')
     expect(markup.length).toBeGreaterThan(200)
+  })
+
+  it('the milestone write channel reaches the project screen (Greptile 1)', () => {
+    // The adapter chain dropped `writes` once, so every project page rendered its
+    // read-only shape even when the seat supplied a channel. This proves the
+    // props arrive: with a channel the controls are there, without one they are not.
+    const roadmap = {
+      projectId: 'proj-1',
+      catalog: { kind: 'project', id: 'proj-1', title: 'Project One', description: null, rootKind: 'projects', relativePath: 'proj-1', documentKind: null, lifecycle: 'active', revision: 1, registeredAt: '2026-10-01T00:00:00.000Z', updatedAt: '2026-10-01T00:00:00.000Z' },
+      authority: { state: 'present', revision: 1, contentHash: 'sha256:fixture' },
+      content: null,
+      milestones: { projectId: 'proj-1', milestones: [], issues: [], unassignedIssues: 0 },
+    }
+    const writes = { busy: false, refusal: null, create: () => {}, update: () => {}, assign: () => {}, remove: () => {} }
+    const withWrites = render(
+      { view: 'project-detail', id: 'proj-1', state: envelope(roadmap) },
+      { writes, assignableIssues: [] },
+    )
+    expect(withWrites).toContain('data-ms-milestone-create=""')
+    // The refusal line is the channel's, and it appears only when the store refused.
+    const refused = render(
+      { view: 'project-detail', id: 'proj-1', state: envelope(roadmap) },
+      { writes: { ...writes, refusal: '[milestone.not-empty] Milestone still holds issues.' }, assignableIssues: [] },
+    )
+    expect(refused).toContain('data-ms-write-refusal=""')
+    expect(refused).toContain('[milestone.not-empty] Milestone still holds issues.')
+    const readOnly = render({ view: 'project-detail', id: 'proj-1', state: envelope(roadmap) })
+    expect(readOnly).not.toContain('data-ms-milestone-create')
   })
 })

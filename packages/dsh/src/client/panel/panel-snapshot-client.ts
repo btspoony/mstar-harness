@@ -25,7 +25,37 @@ import type { ConnectionRpcResult } from '@deepseek-ai/dsh-client-connection/cli
 import type { ReadEnvelope } from '@mstar-harness/engine'
 import type { PanelSnapshotRead } from '../../panel/panel-snapshot.ts'
 import type { DashboardViewRead } from '../../panel/panel-snapshot-endpoint.ts'
-import { DASHBOARD_VIEW_ENDPOINT, ENGINE_STATUS_CHANNEL, PANEL_SNAPSHOT_ENDPOINT } from '../../engine-status-wire.ts'
+import {
+  DASHBOARD_VIEW_ENDPOINT,
+  ENGINE_STATUS_CHANNEL,
+  MILESTONE_ADD_ENDPOINT,
+  MILESTONE_ASSIGN_ENDPOINT,
+  MILESTONE_REMOVE_ENDPOINT,
+  MILESTONE_UPDATE_ENDPOINT,
+  PANEL_SNAPSHOT_ENDPOINT,
+} from '../../engine-status-wire.ts'
+
+export { MILESTONE_ADD_ENDPOINT, MILESTONE_ASSIGN_ENDPOINT, MILESTONE_REMOVE_ENDPOINT, MILESTONE_UPDATE_ENDPOINT }
+
+/**
+ * ONE answer shape for every milestone write: the engine's own refusal passes
+ * through verbatim; a success carries the engine's own receipt (contract C1).
+ */
+export type MilestoneWriteResult =
+  | { readonly ok: true; readonly receipt: unknown }
+  | { readonly ok: false; readonly code: string; readonly message: string }
+
+/** Validate one write answer into the closed union; a malformed answer refuses. */
+export function parseMilestoneWriteResult(value: unknown): MilestoneWriteResult {
+  const row = value as { ok?: unknown; receipt?: unknown; code?: unknown; message?: unknown } | null | undefined
+  if (row === null || typeof row !== 'object') return { ok: false, code: 'internal-error', message: 'malformed-answer' }
+  if (row.ok === true) return { ok: true, receipt: row.receipt }
+  return {
+    ok: false,
+    code: str(row.code) ?? 'internal-error',
+    message: str(row.message) ?? str(row.code) ?? 'the write was refused',
+  }
+}
 
 export { DASHBOARD_VIEW_ENDPOINT, PANEL_SNAPSHOT_ENDPOINT }
 
@@ -196,5 +226,79 @@ export class MstarPanelSnapshotClient {
     } finally {
       clearTimeout(deadline)
     }
+  }
+
+  /**
+   * ONE milestone write (plan Task 4, contract C1): the same one-shot RPC face
+   * as the reads, with the same per-request deadline and the same closed
+   * answer union. The UI generates a fresh `operationId` per attempt and
+   * issues one write at a time, so nothing queues here.
+   */
+  private async milestoneWrite(endpoint: string, args: Record<string, unknown>): Promise<MilestoneWriteResult> {
+    if (this.connection === undefined) return { ok: false, code: 'transport-error', message: 'no-connection' }
+    const controller = new AbortController()
+    const deadline = setTimeout(() => controller.abort(), PANEL_READ_DEADLINE_MS)
+    try {
+      const result = await this.connection.rpc.call(ENGINE_STATUS_CHANNEL, endpoint, { args }, controller.signal)
+      if (result === null || typeof result !== 'object') return { ok: false, code: 'internal-error', message: 'malformed-answer' }
+      if (result.ok !== true) {
+        const error = result.error as { code?: unknown; message?: unknown } | null | undefined
+        return { ok: false, code: 'transport-error', message: str(error?.message) ?? str(error?.code) ?? 'transport-error' }
+      }
+      return parseMilestoneWriteResult(result.value)
+    } catch (error) {
+      return {
+        ok: false,
+        code: 'transport-error',
+        message: controller.signal.aborted ? `timeout: no answer in ${PANEL_READ_DEADLINE_MS}ms` : `transport-error: ${String(error)}`,
+      }
+    } finally {
+      clearTimeout(deadline)
+    }
+  }
+
+  /** Create one milestone (engine `addMilestone`). */
+  milestoneAdd(args: {
+    sessionId: string
+    cwd: string
+    projectId: string
+    input: { name: string; target: string | null; ordinal: number }
+    mutation: { operationId: string; expectedStoreRevision: number }
+  }): Promise<MilestoneWriteResult> {
+    return this.milestoneWrite(MILESTONE_ADD_ENDPOINT, args as Record<string, unknown>)
+  }
+
+  /** Edit one milestone (engine `updateMilestone`). */
+  milestoneUpdate(args: {
+    sessionId: string
+    cwd: string
+    projectId: string
+    milestoneId: string
+    patch: { name?: string; target?: string | null; ordinal?: number; status?: string }
+    mutation: { operationId: string; expectedStoreRevision: number }
+  }): Promise<MilestoneWriteResult> {
+    return this.milestoneWrite(MILESTONE_UPDATE_ENDPOINT, args as Record<string, unknown>)
+  }
+
+  /** Remove one EMPTY milestone (engine `removeMilestone`; the refusal is the engine's). */
+  milestoneRemove(args: {
+    sessionId: string
+    cwd: string
+    projectId: string
+    milestoneId: string
+    mutation: { operationId: string; expectedStoreRevision: number }
+  }): Promise<MilestoneWriteResult> {
+    return this.milestoneWrite(MILESTONE_REMOVE_ENDPOINT, args as Record<string, unknown>)
+  }
+
+  /** Assign — or, with `milestoneId: null`, unassign — one issue (engine `assignIssueMilestone`). */
+  milestoneAssign(args: {
+    sessionId: string
+    cwd: string
+    issueId: string
+    input: { projectId: string; milestoneId: string | null; reason: string }
+    mutation: { operationId: string; actor: string; expectedRevision: number; expectedStoreRevision: number }
+  }): Promise<MilestoneWriteResult> {
+    return this.milestoneWrite(MILESTONE_ASSIGN_ENDPOINT, args as Record<string, unknown>)
   }
 }

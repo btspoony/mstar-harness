@@ -58,6 +58,8 @@ import {
   type CatalogExecutionWorkflow,
 } from "./catalog-registration.js";
 import { isPlainObject } from "./coordination-write.js";
+import { canonicalRegisteredPlanPath } from "./plan-path.js";
+import { relative, sep } from "node:path";
 import {
   ExecutionError,
   assertExecutionToken,
@@ -176,15 +178,55 @@ function derivedOperationId(intent: {
  * that no longer resolves cannot have produced a legacy receipt this call can
  * match (same rule as `legacyRegistrationRequestHash`).
  */
-function legacyDerivedOperationId(actor: string, identity: CatalogExecutionRequest): string | null {
-  let legacy: CatalogExecutionRequest;
+/**
+ * The derived operation ids previous releases recorded for the same intent: the
+ * derivation over the identity forms and delta shapes those releases hashed.
+ * The live derivation keeps the caller's compass spelling, so a non-canonical
+ * spelling now derives a DIFFERENT id than the receipt an earlier release
+ * committed — the retry looks its receipt up under every prior id instead.
+ * Empty when this call has no distinct older form: a plan intent had none
+ * before the delta widened, and a pointer that no longer resolves cannot have
+ * produced a legacy receipt this call can match (same rule as
+ * `legacyRegistrationRequestHash`).
+ */
+function legacyDerivedOperationIds(actor: string, identity: CatalogExecutionRequest): string[] {
+  let legacy: CatalogExecutionRequest | null = null;
   try {
     legacy = normalizeIterationPlanPaths(identity);
   } catch {
-    return null;
+    legacy = null;
   }
-  if (legacy.workflow === identity.workflow) return null;
-  return derivedOperationId({ actor, workflow: legacy.workflow, delta: catalogDeltaFor(legacy.workflow) });
+  const candidates: Array<{ workflow: CatalogExecutionWorkflow; delta: CatalogExecutionCatalogDelta }> = [];
+  // This release widened the reviewed delta: a pre-upgrade receipt derived its
+  // id over the prior, smaller delta.
+  const priorIdentityDelta = priorReleaseDelta(identity.workflow);
+  if (priorIdentityDelta !== null) candidates.push({ workflow: identity.workflow, delta: priorIdentityDelta });
+  if (legacy !== null && legacy.workflow !== identity.workflow) {
+    // The pointer-normalized identity form (compass canonicalized too) an even
+    // earlier release hashed, under both delta shapes.
+    candidates.push({ workflow: legacy.workflow, delta: catalogDeltaFor(legacy.workflow) });
+    const priorLegacyDelta = priorReleaseDelta(legacy.workflow);
+    if (priorLegacyDelta !== null) candidates.push({ workflow: legacy.workflow, delta: priorLegacyDelta });
+  }
+  return [...new Set(candidates.map((candidate) => derivedOperationId({ actor, ...candidate })))];
+}
+
+/**
+ * The catalog delta the previous release reviewed for the same intent: an
+ * iteration registration published its iteration entity and binding only —
+ * plan-row membership entities, their `plan belongs-to iteration` links and the
+ * project links are published by this version. The delta is part of the request
+ * fingerprint and the derived operation id, so a committed pre-upgrade
+ * registration must be looked up under its own prior form instead of
+ * conflicting with its own retry. Null when this release introduced no delta
+ * change (a plan intent).
+ */
+function priorReleaseDelta(workflow: CatalogExecutionWorkflow): CatalogExecutionCatalogDelta | null {
+  if (workflow.kind !== "iteration") return null;
+  return {
+    entities: [{ kind: "iteration", id: workflow.workflowId, title: workflow.workflowId, rootKind: "iterations", relativePath: workflow.workflowId }],
+    binding: { catalogKind: "iteration", catalogId: workflow.workflowId },
+  };
 }
 
 /**
@@ -394,8 +436,48 @@ function catalogDeltaFor(workflow: CatalogExecutionWorkflow): CatalogExecutionCa
       binding: { catalogKind: "plan", catalogId: selected.plan.id },
     };
   }
+  // C2/C4: the registration delta is the catalog projection of the reviewed
+  // intent — the iteration's plan rows become catalog plan entities with one
+  // `plan belongs-to iteration` link each (a catalog relation may not dangle,
+  // so the link requires the entity), and every declared project gets one
+  // `iteration belongs-to project` link. Plan locations derive from the row
+  // pointers WITHOUT reading the documents, so a committed operation still
+  // replays after its files are gone (I-000868).
+  const planEntities = workflow.options.rows.map((row) => {
+    // One resolver for both halves: the catalog location is the plan document's
+    // path relative to the plan dir THE RESOLVER derives (same canonical root),
+    // never a second plan-dir spelling of the caller's harnessDir.
+    const resolved = canonicalRegisteredPlanPath({
+      harnessRoot: workflow.options.harnessDir,
+      planId: row.id,
+      file: row.file,
+    });
+    return {
+      kind: "plan" as const,
+      id: row.id,
+      title: row.title,
+      rootKind: "plans" as const,
+      relativePath: relative(resolved.planDir, resolved.planPath).split(sep).join("/"),
+    };
+  });
+  const projects = [...new Set(workflow.options.projects ?? (workflow.options.project === undefined ? [] : [workflow.options.project]))];
   return {
-    entities: [{ kind: "iteration", id: workflow.workflowId, title: workflow.workflowId, rootKind: "iterations", relativePath: workflow.workflowId }],
+    entities: [
+      { kind: "iteration", id: workflow.workflowId, title: workflow.workflowId, rootKind: "iterations", relativePath: workflow.workflowId },
+      ...planEntities,
+    ],
+    links: [
+      ...planEntities.map((plan) => ({
+        from: { kind: "plan" as const, id: plan.id },
+        relation: "belongs-to" as const,
+        to: { kind: "iteration" as const, id: workflow.workflowId },
+      })),
+      ...projects.map((project) => ({
+        from: { kind: "iteration" as const, id: workflow.workflowId },
+        relation: "belongs-to" as const,
+        to: { kind: "project" as const, id: project },
+      })),
+    ],
     binding: { catalogKind: "iteration", catalogId: workflow.workflowId },
   };
 }
@@ -444,10 +526,30 @@ export async function registerShippedCatalogExecution(
   const identity = canonicalRegistrationIdentity(request);
   const requestHash = registrationRequestHash(context.caller, identity);
   const legacyRequestHash = legacyRegistrationRequestHash(context.caller, identity);
-  // Only a DERIVED id moved with the identity form: a caller-supplied id keeps
-  // its single lookup plus the legacy fingerprint.
-  const legacyOperationId =
-    input.operationId === undefined ? legacyDerivedOperationId(input.actor, identity) : null;
+  // This release widened the reviewed delta (iteration plan-row membership and
+  // project links), which moved the fingerprint: a receipt committed before the
+  // upgrade carries the prior, smaller delta's fingerprint, so the replay
+  // lookup matches the prior release's forms too (the identity form, and the
+  // pointer-normalized form an even earlier release hashed) and an unchanged
+  // retry still replays.
+  const priorDelta = priorReleaseDelta(input.workflow);
+  let normalizedForm: CatalogExecutionRequest | null = null;
+  try {
+    normalizedForm = normalizeIterationPlanPaths(identity);
+  } catch {
+    normalizedForm = null;
+  }
+  const replayHashes = [
+    legacyRequestHash,
+    priorDelta === null ? null : registrationRequestHash(context.caller, { ...identity, delta: priorDelta }),
+    normalizedForm !== null && priorDelta !== null
+      ? registrationRequestHash(context.caller, { ...normalizedForm, delta: priorDelta })
+      : null,
+  ].filter((entry, index, all): entry is string => entry !== null && !all.slice(0, index).includes(entry));
+  // Only a DERIVED id moved with the identity and delta forms: a caller-supplied
+  // id keeps its single lookup plus the legacy fingerprints.
+  const legacyOperationIds =
+    input.operationId === undefined ? legacyDerivedOperationIds(input.actor, identity) : [];
   const resolved = await withExecutionTransaction<
     { replayed: CatalogExecutionReceipt } | { expected: ExecutionToken; catalogRevision: number }
   >(context, (tx) => {
@@ -459,20 +561,21 @@ export async function registerShippedCatalogExecution(
     const replayed = readOperationReplay<CatalogExecutionReceipt>(tx, {
       operationId: identity.operationId,
       requestHash,
-      legacyRequestHash,
+      legacyRequestHash: replayHashes,
       workflowId: identity.workflow.workflowId,
       planId: null,
       token: { kind: "root", key: [] },
     });
     if (replayed !== null) return { replayed: replayed.data };
-    if (legacyOperationId !== null) {
-      // The previous release addressed this same intent by the legacy derived
-      // id: its receipt replays here instead of the retry being judged a NEW
-      // registration (which would refuse `execution.not-empty`).
+    for (const legacyOperationId of legacyOperationIds) {
+      // A previous release addressed this same intent by a derived id this
+      // version no longer computes: its receipt replays here instead of the
+      // retry being judged a NEW registration (which would refuse
+      // `execution.not-empty`).
       const legacyReplayed = readOperationReplay<CatalogExecutionReceipt>(tx, {
         operationId: legacyOperationId,
         requestHash,
-        legacyRequestHash,
+        legacyRequestHash: replayHashes,
         workflowId: identity.workflow.workflowId,
         planId: null,
         token: { kind: "root", key: [] },

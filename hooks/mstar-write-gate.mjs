@@ -13630,7 +13630,8 @@ function readOperationReplay(tx, input) {
   const recorded = readCommittedOperation(tx.db, tx.epoch, input.operationId);
   if (recorded === null)
     return null;
-  if (recorded.requestHash !== input.requestHash && recorded.requestHash !== input.legacyRequestHash) {
+  const legacyHashes = input.legacyRequestHash === undefined || input.legacyRequestHash === null ? [] : Array.isArray(input.legacyRequestHash) ? input.legacyRequestHash : [input.legacyRequestHash];
+  if (recorded.requestHash !== input.requestHash && !legacyHashes.includes(recorded.requestHash)) {
     const problem = {
       component: "operation",
       path: "operationId",
@@ -16454,6 +16455,9 @@ create table issue_project_moves(
 );
 create index issue_project_moves_issue on issue_project_moves(issue_id, id);
 `;
+var MIGRATION_14_SQL = `
+alter table projection_compasses add column plans_json text not null default '[]';
+`;
 var MIGRATIONS;
 var DSH_HOST_STATE_MIGRATION;
 var EXECUTION_TABLE_NAMES;
@@ -16490,7 +16494,8 @@ var init_store_db = __esm(() => {
     { version: 10, name: "dsh-host-ledgers", sql: MIGRATION_10_SQL },
     { version: 11, name: "dsh-ledger-legacy-provenance", sql: MIGRATION_11_SQL },
     { version: 12, name: "severity-vocabulary-nit", sql: MIGRATION_12_SQL },
-    { version: 13, name: "issue-project-moves", sql: MIGRATION_13_SQL }
+    { version: 13, name: "issue-project-moves", sql: MIGRATION_13_SQL },
+    { version: 14, name: "compass-plan-membership", sql: MIGRATION_14_SQL }
   ];
   DSH_HOST_STATE_MIGRATION = MIGRATIONS.find((migration) => migration.name === "dsh-host-ledgers");
   EXECUTION_TABLE_NAMES = [
@@ -16992,7 +16997,7 @@ init_iteration();
 init_execution_store();
 init_status();
 init_workflow();
-var PROJECTION_FORMAT_VERSION = 2;
+var PROJECTION_FORMAT_VERSION = 3;
 
 class ProjectionError extends Error {
   code;
@@ -17163,6 +17168,7 @@ function deriveCompass(iterationId, content3, relativePath) {
     iterationId,
     summary: firstParagraph(body),
     milestonesJson: JSON.stringify(parseMilestoneTable(body)),
+    plans: Array.isArray(frontmatter.plans) ? frontmatter.plans.filter((plan) => typeof plan === "string" && plan !== "") : [],
     startedAt: text4(frontmatter.start_date),
     endedAt: text4(frontmatter.end_date),
     status: text4(frontmatter.status)
@@ -17307,6 +17313,43 @@ async function captureExecutionProjectionSources(context) {
       });
     }
     const workflowPhases = new Map(rows.workflows.map((workflow) => [workflow.id, workflow.phase]));
+    const terminalGraphIds = [
+      ...servedGraph.terminalUnregistered ?? [],
+      ...servedGraph.terminalAdoptions ?? []
+    ].map((entry) => entry.id);
+    const terminalHeaders = terminalGraphIds.length === 0 ? [] : selectWhereIn(db, (placeholders) => `select workflow_id, state_json from execution_workflows where workflow_id in (${placeholders}) order by workflow_id`, terminalGraphIds, (id) => [id]);
+    for (const item of terminalHeaders) {
+      const workflowSpec = spec("workflow", `execution/workflows/${item.workflow_id}`);
+      let state;
+      try {
+        state = JSON.parse(item.state_json);
+      } catch {
+        recordInvalid(workflowSpec, item.state_json, "invalid: terminal workflow state is not valid JSON", "invalid");
+        continue;
+      }
+      if (!isPlainObject(state) || state.id !== item.workflow_id || state.type !== "iteration" || state.status !== "completed" && state.status !== "stopped" && state.status !== "failed") {
+        if (!isPlainObject(state) || state.type === "iteration") {
+          recordInvalid(workflowSpec, item.state_json, "invalid: terminal workflow state has an invalid object, type, or status");
+        }
+        continue;
+      }
+      record(workflowSpec, item.state_json);
+      const branch = isPlainObject(state.branch) ? state.branch : {};
+      rows.workflows.push({
+        id: item.workflow_id,
+        type: "iteration",
+        status: state.status,
+        phase: text4(state.phase),
+        startedAt: text4(state.started_at),
+        endedAt: text4(state.ended_at),
+        updatedAt: text4(state.updated_at),
+        branchBase: text4(branch.base),
+        branchSource: text4(deliveryBranchOf(branch)),
+        branchIntegration: text4(branch.integration),
+        branchTarget: text4(branch.target),
+        activeRegistration: false
+      });
+    }
     const servedPlanIdsByWorkflow = new Map(graphWorkflows.map((workflow) => [workflow.state.id, new Set(workflow.plans.map((plan) => plan.plan.id))]));
     const servedIntegrationLeaseIds = new Set(graphWorkflows.filter((workflow) => workflow.integrationLease !== null).map((workflow) => workflow.state.id));
     const plans = servedWorkflowIds.length === 0 ? [] : selectWhereIn(db, (placeholders) => `select workflow_id, plan_id, revision, state_json, coordination_json from execution_plans where workflow_id in (${placeholders}) order by workflow_id, plan_id`, servedWorkflowIds, (id) => [id]);
@@ -17518,6 +17561,7 @@ var PROJECTION_RENDERS = [
       iteration_id: compass.iterationId,
       summary: compass.summary,
       milestones_json: compass.milestonesJson,
+      plans_json: JSON.stringify(compass.plans),
       started_at: compass.startedAt,
       ended_at: compass.endedAt,
       status: compass.status
@@ -17570,9 +17614,9 @@ function insertGeneration(db, generation, capture) {
   for (const lease of capture.rows.leases) {
     leaseStatement.run(generation, lease.workflowId, lease.planId, lease.kind, lease.holder, lease.worktreePath, lease.expiresAt);
   }
-  const compassStatement = db.prepare("insert into projection_compasses(generation, iteration_id, summary, milestones_json, started_at, ended_at, status) values (?, ?, ?, ?, ?, ?, ?)");
+  const compassStatement = db.prepare("insert into projection_compasses(generation, iteration_id, summary, milestones_json, plans_json, started_at, ended_at, status) values (?, ?, ?, ?, ?, ?, ?, ?)");
   for (const compass of capture.rows.compasses) {
-    compassStatement.run(generation, compass.iterationId, compass.summary, compass.milestonesJson, compass.startedAt, compass.endedAt, compass.status);
+    compassStatement.run(generation, compass.iterationId, compass.summary, compass.milestonesJson, JSON.stringify(compass.plans), compass.startedAt, compass.endedAt, compass.status);
   }
 }
 function reportOf(metadata, capture, changedKeys, published) {
@@ -17742,6 +17786,7 @@ async function refreshProjections(context, hooks = {}) {
 init_roadmap_content();
 init_store_db();
 init_execution_store();
+init_workflow();
 
 class StoreReadError extends Error {
   code;
@@ -18256,7 +18301,7 @@ function readGeneratedRows(db) {
     workflows: db.prepare("select id, type, status, phase, started_at, ended_at, updated_at, branch_base, branch_source, branch_integration, branch_target, active_registration from projection_workflows where generation = ? order by id asc").all(generation),
     plans: db.prepare("select workflow_id, plan_id, status, progress, phase, done_at, catalog_pin_revision from projection_plans where generation = ? order by workflow_id asc, plan_id asc").all(generation),
     leases: db.prepare("select workflow_id, plan_id, kind, holder, worktree_path, expires_at from projection_leases where generation = ? order by workflow_id asc, plan_id asc, kind asc").all(generation),
-    compasses: db.prepare("select iteration_id, summary, milestones_json, started_at, ended_at, status from projection_compasses where generation = ? order by iteration_id asc").all(generation)
+    compasses: db.prepare("select iteration_id, summary, milestones_json, plans_json, started_at, ended_at, status from projection_compasses where generation = ? order by iteration_id asc").all(generation)
   };
 }
 function workflowCatalogKey(workflow) {
@@ -18364,6 +18409,8 @@ function readWorkflowList(db, filters) {
   }
   const membership = projectMembership(db);
   const scoped = generated.workflows.filter((workflow) => {
+    if (!workflow.active_registration)
+      return false;
     if (projectId === null)
       return true;
     if (belongsTo(membership, workflowCatalogKey(workflow).kind, workflow.id, projectId))
@@ -18419,7 +18466,23 @@ function iterationDocumentIds(db) {
     list2.sort();
   return byIteration;
 }
-function composeIteration(iterationId, catalog, generated, planIds, documentIds, identities) {
+function iterationMembershipPlanIds(generated, linkIds, iterationIds) {
+  const merged = new Map;
+  for (const iterationId of iterationIds) {
+    const compassRow = generated.compasses.find((row) => row.iteration_id === iterationId);
+    const mergedIds = new Set([...linkIds.get(iterationId) ?? [], ...parseJsonArray(compassRow?.plans_json)]);
+    merged.set(iterationId, [...mergedIds].sort());
+  }
+  return merged;
+}
+function executionLifecycleOf(workflowRow) {
+  if (workflowRow === undefined)
+    return "none";
+  if (workflowRow.active_registration === 1)
+    return "active";
+  return WORKFLOW_TERMINAL_STATUSES.find((status) => status === workflowRow.status) ?? "active";
+}
+function composeIteration(iterationId, catalog, generated, planIds, documentIds, identities, projects) {
   const badges = [];
   if (catalog === null)
     badges.push("catalog-missing");
@@ -18473,6 +18536,8 @@ function composeIteration(iterationId, catalog, generated, planIds, documentIds,
       phase: workflowRow.phase,
       activeRegistration: workflowRow.active_registration === 1
     },
+    executionLifecycle: executionLifecycleOf(workflowRow),
+    projects: [...projects],
     plans,
     documents: documentIds.flatMap((documentId) => {
       const document3 = identities.get(identityToken("document", documentId));
@@ -18497,7 +18562,8 @@ function readIterationList(db, filters) {
   const projectId = text5(filters.projectId);
   const membership = projectMembership(db);
   const catalogRows = db.prepare(`select ${IDENTITY_COLUMNS} from catalog_entities where kind = 'iteration' order by title asc, id asc`).all().filter((row) => projectId === null || belongsTo(membership, "iteration", row.id, projectId));
-  const planIds = iterationPlanIds(db);
+  const linkPlanIds = iterationPlanIds(db);
+  const planIds = iterationMembershipPlanIds(generated, linkPlanIds, catalogRows.map((row) => row.id));
   const documentIds = iterationDocumentIds(db);
   const page = catalogRows.slice(offset, offset + limit);
   const identities = catalogIdentities(db, [
@@ -18506,7 +18572,7 @@ function readIterationList(db, filters) {
     ...page.flatMap((row) => (documentIds.get(row.id) ?? []).map((documentId) => ({ kind: "document", id: documentId })))
   ]);
   return {
-    items: page.map((row) => composeIteration(row.id, identities.get(identityToken("iteration", row.id)) ?? null, generated, planIds.get(row.id) ?? [], documentIds.get(row.id) ?? [], identities)),
+    items: page.map((row) => composeIteration(row.id, identities.get(identityToken("iteration", row.id)) ?? null, generated, planIds.get(row.id) ?? [], documentIds.get(row.id) ?? [], identities, [...membership.get(identityToken("iteration", row.id)) ?? []].sort())),
     total: catalogRows.length,
     attribution: iterationAttribution(db)
   };
@@ -18514,7 +18580,7 @@ function readIterationList(db, filters) {
 function readIterationDetail(db, filters) {
   const iterationId = requireId(filters, "iteration-detail");
   const generated = readGeneratedRows(db);
-  const planIds = iterationPlanIds(db).get(iterationId) ?? [];
+  const planIds = iterationMembershipPlanIds(generated, iterationPlanIds(db), [iterationId]).get(iterationId) ?? [];
   const documentIds = iterationDocumentIds(db).get(iterationId) ?? [];
   const compassRow = generated.compasses.find((row) => row.iteration_id === iterationId);
   const identities = catalogIdentities(db, [
@@ -18525,7 +18591,8 @@ function readIterationDetail(db, filters) {
   const catalog = identities.get(identityToken("iteration", iterationId)) ?? null;
   if (catalog === null && compassRow === undefined)
     return null;
-  return composeIteration(iterationId, catalog, generated, planIds, documentIds, identities);
+  const projects = [...projectMembership(db).get(identityToken("iteration", iterationId)) ?? []].sort();
+  return composeIteration(iterationId, catalog, generated, planIds, documentIds, identities, projects);
 }
 function readOverview(db, filters) {
   const projectId = text5(filters.projectId);
@@ -18632,6 +18699,7 @@ init_catalog_registration();
 init_catalog();
 init_catalog_registration();
 init_coordination_write();
+init_plan_path();
 init_execution_store();
 init_recovery_intent();
 init_workflow();

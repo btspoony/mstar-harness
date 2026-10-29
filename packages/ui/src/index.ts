@@ -97,12 +97,12 @@ export { IterationDetail } from "./screens/IterationDetail.tsx";
 export type { WorkflowsCopy, WorkflowsProps } from "./screens/Workflows.tsx";
 export type { WorkflowDetailCopy, WorkflowDetailProps } from "./screens/WorkflowDetail.tsx";
 export { Projects } from "./screens/Projects.tsx";
-export { ProjectDetail } from "./screens/ProjectDetail.tsx";
+export { ASSIGNABLE_ISSUE_LIMIT, ProjectDetail } from "./screens/ProjectDetail.tsx";
 
 export type { IterationsCopy, IterationsProps } from "./screens/Iterations.tsx";
 export type { IterationDetailCopy, IterationDetailProps } from "./screens/IterationDetail.tsx";
 export type { ProjectsCopy, ProjectsProps } from "./screens/Projects.tsx";
-export type { ProjectDetailCopy, ProjectDetailProps } from "./screens/ProjectDetail.tsx";
+export type { AssignableIssue, MilestoneWriteSurface, ProjectDetailCopy, ProjectDetailProps } from "./screens/ProjectDetail.tsx";
 
 /**
  * The bilingual dictionary and the provider (Task 5).

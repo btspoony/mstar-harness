@@ -61,6 +61,10 @@ const iteration = (over: Partial<IterationDTO> = {}): IterationDTO =>
       status: "locked",
     },
     workflow: { id: "issue-project-move", status: "running", phase: "phase-2-execute", activeRegistration: true },
+    // The engine DTO's own members (plan Task 5): the execution lifecycle and the
+    // catalog projects the iteration belongs to.
+    executionLifecycle: "active",
+    projects: ["engine"],
     plans: [
       {
         planId: "20261025-unified-ui-shared-layer",
@@ -171,6 +175,8 @@ const detailCopy: IterationDetailCopy = {
     workflow: "Workflow",
     status: "Status",
     phase: "Phase",
+    executionLifecycle: "Execution lifecycle",
+    projects: "Projects",
     noWorkflow: "none",
     noCompass: "no compass",
     noSummary: "no summary recorded",
@@ -237,6 +243,61 @@ describe("Iterations list — the facts of §8.2", () => {
     const detail = renderDetail(iteration());
     expect(detail).toContain('data-ms-gate-chip="true"');
     expect(detail).toContain("step 2 of 5");
+  });
+
+  test("the lifecycle column and filter read the EXECUTION lifecycle (plan Task 5)", () => {
+    const completed = iteration({
+      executionLifecycle: "completed",
+      workflow: { id: "wf-done", status: "completed", phase: null, activeRegistration: false },
+    });
+    const stopped = iteration({
+      iterationId: "iter-stopped",
+      executionLifecycle: "stopped",
+      workflow: { id: "wf-stopped", status: "stopped", phase: null, activeRegistration: false },
+    });
+    const html = renderList([completed, stopped], 2);
+    // Terminal rows answer in the lifecycle column AND the execution column — the
+    // projection now includes terminal workflow rows, so neither says "no execution".
+    expect(html).toContain("completed");
+    expect(html).toContain("stopped");
+    // Terminal rows answer in the execution column too — the projection now
+    // includes terminal workflow rows, so neither row says "no execution".
+    expect(html).not.toContain("No execution");
+
+    // The filter narrows on the execution lifecycle, not the catalog archive state.
+    const model = iterationListModel({
+      data: { items: [completed, stopped], total: 2, attribution: "present" },
+      projection,
+      filters: { lifecycle: "stopped", q: "" },
+    });
+    expect(model.filtered).toBe(1);
+    expect(model.rows).toMatchObject({ kind: "populated", value: [{ iterationId: "iter-stopped" }] });
+    expect(model.lifecycles).toEqual(["completed", "stopped"]);
+    expect(model.active).toBe(0);
+  });
+
+  test("the projects column carries the DTO's own membership (plan Task 5)", () => {
+    const html = renderList(
+      [iteration({ projects: ["engine", "dsh-integration"] })],
+      1,
+    );
+    expect(html).toContain("engine · dsh-integration");
+  });
+
+  test("the plan count is the DTO's composed membership, not a local join (plan Task 5)", () => {
+    // The engine plan union backfills historical iterations: the DTO carries four
+    // plans of which one is Done, and the row prints that pair untouched.
+    const html = renderList([iteration()], 1);
+    expect(html).toContain("1/2 plans");
+  });
+
+  test("the detail states the execution lifecycle beside the catalog state, and lists the projects", () => {
+    const detail = renderDetail(iteration({ projects: ["engine", "dsh-integration"] }));
+    expect(detail).toContain('data-ms-screen="iteration-detail"');
+    expect(detail).toContain("Execution lifecycle");
+    expect(detail).toContain("engine · dsh-integration");
+    // The catalog archive state stays visible (plan: it moves to the detail).
+    expect(detail).toContain("active registration");
   });
 
   test("the attribution arm is stated beside the rows", () => {
