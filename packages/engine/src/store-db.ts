@@ -1566,6 +1566,18 @@ create table issue_project_moves(
 create index issue_project_moves_issue on issue_project_moves(issue_id, id);
 `;
 
+/**
+ * Migration 14 — compass plan membership on the projection.
+ *
+ * The compass frontmatter `plans:` list is the authored membership record, and
+ * the iteration reads join it with the catalog links. The projected compass row
+ * therefore carries the declared ids; existing rows default to the empty list
+ * and the projection format bump rebuilds them from the documents.
+ */
+export const MIGRATION_14_SQL = `
+alter table projection_compasses add column plans_json text not null default '[]';
+`;
+
 /** Ordered immutable migrations. Never mutate an applied entry — append only. */
 export const MIGRATIONS: readonly Migration[] = [
   { version: 1, name: "issue-core", sql: MIGRATION_1_SQL },
@@ -1581,6 +1593,7 @@ export const MIGRATIONS: readonly Migration[] = [
   { version: 11, name: "dsh-ledger-legacy-provenance", sql: MIGRATION_11_SQL },
   { version: 12, name: "severity-vocabulary-nit", sql: MIGRATION_12_SQL },
   { version: 13, name: "issue-project-moves", sql: MIGRATION_13_SQL },
+  { version: 14, name: "compass-plan-membership", sql: MIGRATION_14_SQL },
 ];
 const DSH_HOST_STATE_MIGRATION = MIGRATIONS.find((migration) => migration.name === "dsh-host-ledgers");
 

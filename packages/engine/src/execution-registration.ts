@@ -58,6 +58,8 @@ import {
   type CatalogExecutionWorkflow,
 } from "./catalog-registration.js";
 import { isPlainObject } from "./coordination-write.js";
+import { canonicalRegisteredPlanPath } from "./plan-path.js";
+import { relative, sep } from "node:path";
 import {
   ExecutionError,
   assertExecutionToken,
@@ -394,8 +396,48 @@ function catalogDeltaFor(workflow: CatalogExecutionWorkflow): CatalogExecutionCa
       binding: { catalogKind: "plan", catalogId: selected.plan.id },
     };
   }
+  // C2/C4: the registration delta is the catalog projection of the reviewed
+  // intent — the iteration's plan rows become catalog plan entities with one
+  // `plan belongs-to iteration` link each (a catalog relation may not dangle,
+  // so the link requires the entity), and every declared project gets one
+  // `iteration belongs-to project` link. Plan locations derive from the row
+  // pointers WITHOUT reading the documents, so a committed operation still
+  // replays after its files are gone (I-000868).
+  const planEntities = workflow.options.rows.map((row) => {
+    // One resolver for both halves: the catalog location is the plan document's
+    // path relative to the plan dir THE RESOLVER derives (same canonical root),
+    // never a second plan-dir spelling of the caller's harnessDir.
+    const resolved = canonicalRegisteredPlanPath({
+      harnessRoot: workflow.options.harnessDir,
+      planId: row.id,
+      file: row.file,
+    });
+    return {
+      kind: "plan" as const,
+      id: row.id,
+      title: row.title,
+      rootKind: "plans" as const,
+      relativePath: relative(resolved.planDir, resolved.planPath).split(sep).join("/"),
+    };
+  });
+  const projects = [...new Set(workflow.options.projects ?? (workflow.options.project === undefined ? [] : [workflow.options.project]))];
   return {
-    entities: [{ kind: "iteration", id: workflow.workflowId, title: workflow.workflowId, rootKind: "iterations", relativePath: workflow.workflowId }],
+    entities: [
+      { kind: "iteration", id: workflow.workflowId, title: workflow.workflowId, rootKind: "iterations", relativePath: workflow.workflowId },
+      ...planEntities,
+    ],
+    links: [
+      ...planEntities.map((plan) => ({
+        from: { kind: "plan" as const, id: plan.id },
+        relation: "belongs-to" as const,
+        to: { kind: "iteration" as const, id: workflow.workflowId },
+      })),
+      ...projects.map((project) => ({
+        from: { kind: "iteration" as const, id: workflow.workflowId },
+        relation: "belongs-to" as const,
+        to: { kind: "project" as const, id: project },
+      })),
+    ],
     binding: { catalogKind: "iteration", catalogId: workflow.workflowId },
   };
 }

@@ -1261,6 +1261,7 @@ type ProjectedCompassRow = {
   iteration_id: string;
   summary: string | null;
   milestones_json: string;
+  plans_json: string;
   started_at: string | null;
   ended_at: string | null;
   status: string | null;
@@ -1308,7 +1309,7 @@ function readGeneratedRows(db: StoreDb): GeneratedRows {
       .all(generation) as ProjectedLeaseRow[],
     compasses: db
       .prepare(
-        "select iteration_id, summary, milestones_json, started_at, ended_at, status from projection_compasses where generation = ? " +
+        "select iteration_id, summary, milestones_json, plans_json, started_at, ended_at, status from projection_compasses where generation = ? " +
           "order by iteration_id asc",
       )
       .all(generation) as ProjectedCompassRow[],
@@ -1508,6 +1509,26 @@ function iterationDocumentIds(db: StoreDb): Map<string, string[]> {
   return byIteration;
 }
 
+/**
+ * The iteration's plan membership (C2): the de-duplicated, sorted union of the
+ * compass frontmatter `plans:` ids and the catalog `plan belongs-to iteration`
+ * links. The compass is the authored membership record; the link is its
+ * registration projection — neither side alone is the answer.
+ */
+function iterationMembershipPlanIds(
+  generated: GeneratedRows,
+  linkIds: Map<string, string[]>,
+  iterationIds: readonly string[],
+): Map<string, string[]> {
+  const merged = new Map<string, string[]>();
+  for (const iterationId of iterationIds) {
+    const compassRow = generated.compasses.find((row) => row.iteration_id === iterationId);
+    const mergedIds = new Set([...(linkIds.get(iterationId) ?? []), ...parseJsonArray<string>(compassRow?.plans_json)]);
+    merged.set(iterationId, [...mergedIds].sort());
+  }
+  return merged;
+}
+
 function composeIteration(
   iterationId: string,
   catalog: CatalogIdentityDTO | null,
@@ -1644,7 +1665,8 @@ function readIterationList(db: StoreDb, filters: DashboardFilters): IterationLis
       .all() as IdentityRow[]
   ).filter((row) => projectId === null || belongsTo(membership, "iteration", row.id, projectId));
 
-  const planIds = iterationPlanIds(db);
+  const linkPlanIds = iterationPlanIds(db);
+  const planIds = iterationMembershipPlanIds(generated, linkPlanIds, catalogRows.map((row) => row.id));
   const documentIds = iterationDocumentIds(db);
   const page = catalogRows.slice(offset, offset + limit);
   const identities = catalogIdentities(db, [
@@ -1673,7 +1695,7 @@ function readIterationList(db: StoreDb, filters: DashboardFilters): IterationLis
 function readIterationDetail(db: StoreDb, filters: DashboardFilters): IterationDTO | null {
   const iterationId = requireId(filters, "iteration-detail");
   const generated = readGeneratedRows(db);
-  const planIds = iterationPlanIds(db).get(iterationId) ?? [];
+  const planIds = iterationMembershipPlanIds(generated, iterationPlanIds(db), [iterationId]).get(iterationId) ?? [];
   const documentIds = iterationDocumentIds(db).get(iterationId) ?? [];
   const compassRow = generated.compasses.find((row) => row.iteration_id === iterationId);
   const identities = catalogIdentities(db, [

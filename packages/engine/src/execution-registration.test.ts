@@ -230,11 +230,18 @@ function iterationRequest(fixture: Fixture, iterationId: string, operationId: st
         compassRef: "delivery-compass.md",
         branch: { base: "main", integration: `iteration/${iterationId}`, target: "main" },
         rows: [row],
-        project: "_default",
       },
     },
     delta: {
-      entities: [{ kind: "iteration", id: iterationId, title: iterationId, rootKind: "iterations", relativePath: iterationId }],
+      entities: [
+        { kind: "iteration", id: iterationId, title: iterationId, rootKind: "iterations", relativePath: iterationId },
+        // C2: the reviewed delta carries the iteration's plan rows as catalog
+        // plan entities with one `plan belongs-to iteration` link each — the
+        // same derivation the shipped producer composes, so the two seams stay
+        // one semantic request.
+        { kind: "plan", id: row.id, title: row.title, rootKind: "plans", relativePath: `${row.id}.md` },
+      ],
+      links: [{ from: { kind: "plan", id: row.id }, relation: "belongs-to", to: { kind: "iteration", id: iterationId } }],
       binding: { catalogKind: "iteration", catalogId: iterationId },
     },
   };
@@ -561,8 +568,7 @@ describe("execution-registration", () => {
             compassRef: "delivery-compass.md",
             branch: { base: "main", integration: `iteration/${iterationId}`, target: "main" },
             rows: [row],
-            project: "_default",
-          },
+                      },
         },
         delta: {
           entities: [{ kind: "iteration", id: iterationId, title: iterationId, rootKind: "iterations", relativePath: iterationId }],
@@ -636,8 +642,7 @@ describe("execution-registration", () => {
                 compassRef,
                 branch: { base: "main", integration: `iteration/${iterationId}`, target: "main" },
                 rows: [row],
-                project: "_default",
-              },
+                              },
             },
             delta: {
               entities: [{ kind: "iteration", id: iterationId, title: iterationId, rootKind: "iterations", relativePath: iterationId }],
@@ -762,8 +767,7 @@ describe("execution-registration", () => {
             compassRef: aliasPath,
             branch: { base: "main", integration: `iteration/${iterationId}`, target: "main" },
             rows: [row],
-            project: "_default",
-          },
+                      },
         },
         delta: {
           entities: [{ kind: "iteration", id: iterationId, title: iterationId, rootKind: "iterations", relativePath: iterationId }],
@@ -816,11 +820,17 @@ describe("execution-registration", () => {
           compassRef: aliasRef,
           branch: { base: "main", integration: `iteration/${iterationId}`, target: "main" },
           rows: [row],
-          project: "_default",
         },
       },
+      // The reviewed delta is the shipped producer's own derivation (C2): plan
+      // entities plus the membership links, so the commit and producer seams
+      // spell one semantic request.
       delta: {
-        entities: [{ kind: "iteration", id: iterationId, title: iterationId, rootKind: "iterations", relativePath: iterationId }],
+        entities: [
+          { kind: "iteration", id: iterationId, title: iterationId, rootKind: "iterations", relativePath: iterationId },
+          { kind: "plan", id: row.id, title: row.title, rootKind: "plans", relativePath: `${row.id}.md` },
+        ],
+        links: [{ from: { kind: "plan", id: row.id }, relation: "belongs-to", to: { kind: "iteration", id: iterationId } }],
         binding: { catalogKind: "iteration", catalogId: iterationId },
       },
     };
@@ -1031,8 +1041,7 @@ describe("execution-registration", () => {
                 compassRef: attempt.compassRef,
                 branch: { base: "main", integration: `iteration/${attempt.id}`, target: "main" },
                 rows: [row],
-                project: "_default",
-              },
+                              },
             },
             delta: {
               entities: [{ kind: "iteration", id: attempt.id, title: attempt.id, rootKind: "iterations", relativePath: attempt.id }],
@@ -1292,8 +1301,7 @@ describe("execution-registration \u2014 recovery-first registration", () => {
             compassRef: "delivery-compass.md",
             branch: { base: "main", integration: `iteration/${iterationId}`, target: "main" },
             rows: [row],
-            project: "_default",
-          },
+                      },
         },
         delta: {
           entities: [{ kind: "iteration", id: iterationId, title: iterationId, rootKind: "iterations", relativePath: iterationId }],

@@ -1226,8 +1226,14 @@ export type RegisterIterationWorkflowOptions = {
   branch: { base: string; integration: string; target: string };
   /** Initial plan rows. At least one. Every row is written `status: "Todo"`. */
   rows: Array<{ id: string; title: string; file: string }>;
-  /** Project register id recorded on the snapshot. */
+  /** Project register id recorded on the snapshot (the first of `projects`). */
   project?: string;
+  /**
+   * Every project the iteration belongs to (C4): one `belongs-to` catalog link
+   * per id is published with the registration delta. Optional; when omitted the
+   * iteration records no project membership.
+   */
+  projects?: string[];
   /** Registration timestamp (YYYY-MM-DD or RFC3339). Default: now. */
   startedAt?: string;
 };
@@ -1367,7 +1373,7 @@ export function iterationWorkflowSnapshot(
       },
     })),
   };
-  if (options.project !== undefined) snapshot.project = options.project;
+  const firstProject = options.projects?.[0] ?? options.project;
+  if (firstProject !== undefined) snapshot.project = firstProject;
   return snapshot;
 }
-

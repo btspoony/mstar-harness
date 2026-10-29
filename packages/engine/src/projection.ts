@@ -54,7 +54,7 @@ import {
 } from "./workflow.js";
 /** Projection payload/format version (contract §5). A bump invalidates every
  * published generation: the refresh discards the old rows and rebuilds. */
-export const PROJECTION_FORMAT_VERSION = 2;
+export const PROJECTION_FORMAT_VERSION = 3;
 
 /** Root execution source, resolved under the harness root. */
 
@@ -133,6 +133,8 @@ export type ProjectedCompass = {
   iterationId: string;
   summary: string | null;
   milestonesJson: string;
+  /** Plan ids the compass frontmatter declares (the authored membership record). */
+  plans: string[];
   startedAt: string | null;
   endedAt: string | null;
   status: string | null;
@@ -452,6 +454,11 @@ function deriveCompass(iterationId: string, content: string, relativePath: strin
     iterationId,
     summary: firstParagraph(body),
     milestonesJson: JSON.stringify(parseMilestoneTable(body)),
+    // The authored membership record: the frontmatter validator already admits
+    // the string-array member, so the non-empty strings are the declared ids.
+    plans: Array.isArray(frontmatter.plans)
+      ? frontmatter.plans.filter((plan): plan is string => typeof plan === "string" && plan !== "")
+      : [],
     startedAt: text(frontmatter.start_date),
     endedAt: text(frontmatter.end_date),
     status: text(frontmatter.status),
@@ -896,6 +903,7 @@ const PROJECTION_RENDERS: ReadonlyArray<{
         iteration_id: compass.iterationId,
         summary: compass.summary,
         milestones_json: compass.milestonesJson,
+        plans_json: JSON.stringify(compass.plans),
         started_at: compass.startedAt,
         ended_at: compass.endedAt,
         status: compass.status,
@@ -1035,8 +1043,8 @@ function insertGeneration(db: StoreDb, generation: number, capture: ProjectionCa
     );
   }
   const compassStatement = db.prepare(
-    "insert into projection_compasses(generation, iteration_id, summary, milestones_json, started_at, ended_at, status) " +
-      "values (?, ?, ?, ?, ?, ?, ?)",
+    "insert into projection_compasses(generation, iteration_id, summary, milestones_json, plans_json, started_at, ended_at, status) " +
+      "values (?, ?, ?, ?, ?, ?, ?, ?)",
   );
   for (const compass of capture.rows.compasses) {
     compassStatement.run(
@@ -1044,6 +1052,7 @@ function insertGeneration(db: StoreDb, generation: number, capture: ProjectionCa
       compass.iterationId,
       compass.summary,
       compass.milestonesJson,
+      JSON.stringify(compass.plans),
       compass.startedAt,
       compass.endedAt,
       compass.status,

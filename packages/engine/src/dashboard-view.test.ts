@@ -237,9 +237,14 @@ const GATE_CASES: ReadonlyArray<{
   endDate?: string;
   planStatus: string;
   gateStep: IterationGateStep;
+  /** Compass-declared plan ids (C2 fixture); the linked one is `p-<id>`. */
+  plans?: string[];
 }> = [
   { iterationId: "iter-open", status: "active", startDate: "2026-09-01", planStatus: "Todo", gateStep: 1 },
-  { iterationId: "iter-flight", status: "locked", startDate: "2026-09-20", planStatus: "InProgress", gateStep: 2 },
+  { iterationId: "iter-flight", status: "locked", startDate: "2026-09-20", planStatus: "InProgress", gateStep: 2,
+    // C2 fixture: the compass declares two plans, one catalog-linked and one
+    // declared-only; the union read answers both rows exactly once.
+    plans: ["p-iter-flight", "p-ghost"] },
   { iterationId: "iter-close", status: "locked", startDate: "2026-09-10", planStatus: "Done", gateStep: 3 },
   { iterationId: "iter-done", status: "completed", startDate: "2026-09-05", endDate: "2026-09-25", planStatus: "InProgress", gateStep: 4 },
 ];
@@ -248,7 +253,8 @@ function operation(operationId: string): CatalogOperation {
   return { actor: "project-manager", operationId };
 }
 
-function compassDoc(entry: { iterationId: string; status: string; startDate: string; endDate?: string }): string {
+function compassDoc(entry: { iterationId: string; status: string; startDate: string; endDate?: string; plans?: string[] }): string {
+  const plans = entry.plans ?? [];
   return [
     "---",
     `iteration_id: ${entry.iterationId}`,
@@ -257,7 +263,9 @@ function compassDoc(entry: { iterationId: string; status: string; startDate: str
     ...(entry.endDate === undefined ? [] : [`end_date: ${entry.endDate}`]),
     "iteration_base_branch: main",
     "target_branch: main",
-    "plans: []",
+    ...(plans.length === 0
+      ? ["plans: []"]
+      : ["plans:", ...plans.map((plan) => `  - ${plan}`)]),
     "---",
     "",
     `# ${entry.iterationId} delivery compass`,
@@ -488,6 +496,20 @@ describe("overview read model", () => {
       "iter-open": 1,
     });
     expect(list.attribution).toBe("present");
+  });
+
+  test("plan membership is the union of compass plans and catalog links, deduplicated (C2)", async () => {
+    const context = await scopedOverview();
+    const listed = await readDashboardView({ context, view: "iterations" });
+    const row = ((listed.data as IterationListDTO).items).find((item) => item.iterationId === "iter-flight");
+    if (row === undefined) throw new Error("fixture: iter-flight missing");
+    // The compass declares two ids and one is catalog-linked: the union is
+    // two rows, each exactly once.
+    expect(row.plans.map((plan) => plan.planId)).toEqual(["p-ghost", "p-iter-flight"]);
+    // A declared id absent from the catalog is the explicit missing arm.
+    const ghost = row.plans.find((plan) => plan.planId === "p-ghost");
+    expect(ghost?.catalog).toBeNull();
+    expect(ghost?.badges).toContain("catalog-missing");
   });
 
   test("executionLifecycle answers from the iteration workflow, never the catalog row (C1)", async () => {

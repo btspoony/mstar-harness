@@ -318,8 +318,10 @@ async function projectedRows(f: Fixture): Promise<Omit<Projections, "meta">> {
 }
 
 /** SHA-256 of the changed-compass render, recorded from the write-always
- * implementation before this optimization: the byte-identity gate. */
-const LEGACY_CHANGED_RENDER_SHA256 = "05a11a2db1c7591261e236a9122009cc6cf6f858ed209b171a1f52d6dc139d6d";
+ * implementation before this optimization: the byte-identity gate. Re-recorded
+ * when the projection render itself gains a column (last: `plans_json`, the
+ * compass plan membership of the iteration-execution-truth plan). */
+const LEGACY_CHANGED_RENDER_SHA256 = "d0169663a5107e1ede678e161fd1686e27844b5ec59e44d9abe60a11c8ee478e";
 
 /** Store facts a projection rebuild must never move (issue/catalog authority). */
 async function authorityFacts(f: Fixture): Promise<Record<string, unknown>> {
@@ -832,6 +834,8 @@ describe("projection publication and last-good handling", () => {
       { milestone: "Spec freeze", target: "2026-09-18", status: "done" },
       { milestone: "Dev complete", target: "2026-09-20", status: "pending" },
     ]);
+    // C2: the compass frontmatter's authored plan membership is projected.
+    expect(JSON.parse(String(rows.compasses[0]?.plans_json))).toEqual(["plan-a"]);
 
     // An unchanged source set must not rewrite the published generation. The
     // witness is SQLite's own `data_version`: it advances for every commit
