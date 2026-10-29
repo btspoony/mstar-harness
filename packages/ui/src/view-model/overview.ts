@@ -21,7 +21,7 @@
  * `{HARNESS_DIR}`, and every counter (`storeRevision`, `catalogRevision`,
  * `builtAt`, `checkedAt`).
  */
-import type { IssueFlow, IterationGateStep, OverviewDTO, ResidualCounts } from "@mstar-harness/engine";
+import type { IssueFlow, IterationDTO, IterationGateStep, OverviewDTO, ResidualCounts } from "@mstar-harness/engine";
 import type { Resolved } from "./state.ts";
 import { resolveMember } from "./state.ts";
 import { SEVERITIES, gateStepPosition, gateSteps, severityTone, type GateStepId, type GateStepPosition, type Tone, milestoneStatusTone } from "./status.ts";
@@ -272,7 +272,7 @@ function overviewWorkflowRow(workflow: Parameters<typeof workflowRow>[0]): Overv
 }
 
 /** One milestone row; progress is resolved-over-total so `0` is a real zero. */
-function milestoneRow(milestone: {
+export function milestoneRow(milestone: {
   milestoneId: string;
   name: string;
   status: string | null;
@@ -292,6 +292,24 @@ function milestoneRow(milestone: {
         ? null
         : { retired: milestone.totalIssues - milestone.openIssues, total: milestone.totalIssues },
     openIssues: milestone.openIssues,
+  };
+}
+
+/**
+ * One iteration DTO → the summary both the Overview and the Focus screen render.
+ * Extracted so the Focus panel reads the same mapping instead of a second one.
+ */
+export function overviewIterationOf(iteration: IterationDTO): OverviewIteration {
+  const step = iterationGateStep(iteration);
+  return {
+    iterationId: iteration.iterationId,
+    title: iteration.catalog?.title ?? null,
+    compassStatus: iteration.compass?.status ?? null,
+    compassTone: compassStatusToneOf(iteration.compass?.status ?? null),
+    planCount: iteration.plans.length,
+    gateStep: step,
+    gatePosition: gateStepPosition(step),
+    steps: gateSteps(step),
   };
 }
 
@@ -359,23 +377,7 @@ export function overviewModel(
       latestIteration.kind === "populated"
         ? {
             kind: "populated",
-            value:
-              latestIteration.value === null
-                ? null
-                : (() => {
-                    const iteration = latestIteration.value;
-                    const step = iterationGateStep(iteration);
-                    return {
-                      iterationId: iteration.iterationId,
-                      title: iteration.catalog?.title ?? null,
-                      compassStatus: iteration.compass?.status ?? null,
-                      compassTone: compassStatusToneOf(iteration.compass?.status ?? null),
-                      planCount: iteration.plans.length,
-                      gateStep: step,
-                      gatePosition: gateStepPosition(step),
-                      steps: gateSteps(step),
-                    } satisfies OverviewIteration;
-                  })(),
+            value: latestIteration.value === null ? null : overviewIterationOf(latestIteration.value),
           }
         : latestIteration,
     issueFlow:

@@ -523,34 +523,40 @@ the exclusion no longer describes this screen, rather than deleting the reasonin
 
 ## ProjectDetail: the shape, and the two blocks that are deliberately absent
 
-The screen is the prototype's, in its order:
+The screen is the prototype's, in its order — **as of the confirmed baseline
+(plan 20261029-dashboard-alignment), which removed every document block**:
 
 ```
-.detail-head        title, meta (id · lifecycle · Revision N · N open issues), the
-                    description, then the roadmap's presence and the catalog path
+.detail-head        title, the roadmap's direction above the identity meta
+                    (id · lifecycle · Revision N · N open issues), then the roadmap's
+                    presence chip and the catalog path
 .subtabs            Roadmap / Issues / Iterations, each with its count
-.detail-top         Catalog identity  |  Roadmap authority
-.panel              the milestone board, one row per milestone
-.detail-grid        Direction + stored markdown  |  Stored facts
+.panel              the milestone timeline — one node per milestone, target-ordered,
+                    missing targets last, plus one trailing unassigned-issues node
+.panel              the milestone board (writable), one row per milestone
 ```
+
+The catalog-identity panel, the roadmap-authority panel, the stored-markdown disclosure
+and the stored-facts panel are **removed** with the user's decision; the direction moved
+into the header (falling back to the catalog description when the roadmap declares none;
+both absent renders nothing). The roadmap-presence chip and the location line stay.
 
 Each milestone row carries four tallies (`N open`, `N resolved`, `N retired without
 resolution`, `N total`), each with its own `data-ms-count` hook so a test can pin the
 number rather than the label. The issues it owns render as compact id chips, toned by
-disposition, with the settled ones folded into `+N <disposition>`.
+disposition, with the settled ones folded into `+N <disposition>`. Each timeline node
+carries the retired-over-total pair and the open count; a milestone with no issues still
+renders its node.
 
-**Two things the prototype does not have, and this screen does not either** — both
-measured on the prototype's own project-detail section, not inferred:
-
-| Claim | Prototype evidence |
-| --- | --- |
-| no goals block | `section[data-screen="project-detail"] li` count = **0** |
-| goals stated once | `Stored facts` rows are exactly `Frontmatter status`, `Created at`, `Residuals ref`, `Goals = 1 / 3 checked`, `Sections` |
-| no empty frames | `.panel` elements with empty text = **0** |
-| two disclosures | `details` summaries = `["Direction", "Stored markdown"]` |
-
-A goals list here would answer the same question twice, at greater length; the stored
-markdown disclosure already carries the full text.
+**The milestone board is the page's only write surface**: a create form carrying **name
+and target only** (the engine's add verb has no status field — creation always inserts
+`planned`, and status is changed through the edit control), per-milestone inline edit
+(name / target / status), an assign picker over the project's open unassigned issues
+(stating the 50-row cap when it applies), per-chip unassign, and a two-step inline remove
+confirm behind which the engine's own emptiness rule answers — a non-empty removal is attempted and its
+`milestone.not-empty` refusal surfaced verbatim, then the read reloads. Every write goes
+through one engine verb with the read's own store revision (contract C1/C2); no
+optimistic state survives a refusal.
 
 **One thing this screen has that the prototype cannot**: truncation. The prototype's
 milestone name is plain text in static HTML with nothing to ellipsis. Ours must fit
@@ -619,7 +625,7 @@ Measured with the correct selector, the prototype's screens are:
 | projects | Catalog projects |
 | workflow-detail | Execution, Catalog identity, Plans, Leases |
 | iteration-detail | Catalog identity, Execution, Compass, Plans, Documents |
-| project-detail | Catalog identity, Roadmap authority, Milestone board, Stored facts |
+| project-detail | Milestone timeline, Milestone board |
 | workflows, iterations, issue-detail | *(none — these screens have no titled panels)* |
 
 ## The iteration gate track is gone, because the prototype has none
@@ -2225,8 +2231,13 @@ segment — exported as text in one pass and compared, rather than screen by scr
 **Fixed from it:**
 
 - `iterations`' first column reads `Catalog title`, not `Title` — and the whole header row is
-  now `Iteration · Catalog title · Lifecycle · Projected execution · Plans · Documents`,
+  now `Iteration · Catalog title · Lifecycle · Projected execution · Projects · Plans · Documents`,
   matching the prototype column for column
+- **confirmed baseline (plan 20261029-dashboard-alignment)**: the Lifecycle column and its
+  filter read the engine DTO's `executionLifecycle` (`active` / `completed` / `stopped`;
+  the catalog archive state stays on the detail), the Projects column carries the DTO's own
+  composed membership, and the plan count reads the DTO's plans — no local join. The
+  attribution-based empty/absent arms and the scoped project filter are unchanged
 - the plan tables' last dated column reads `Done at`, not `Completed`
 
 **What the diff still reports, and why none of it is a styling gap:**

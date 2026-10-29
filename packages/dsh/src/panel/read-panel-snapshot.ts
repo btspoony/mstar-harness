@@ -131,7 +131,7 @@ async function readRetained(
  * multi-active registry answers undefined and the member stays
  * `not-applicable` instead of guessing a lifecycle.
  */
-async function resolveWorkflowId(
+export async function resolveWorkflowId(
   harnessDir: string,
   sessionId: string,
   cwd: string,

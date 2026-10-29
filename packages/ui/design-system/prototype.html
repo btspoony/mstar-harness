@@ -449,6 +449,21 @@ select.ctl { cursor: pointer; max-width: 180px; }
 .rm-project-id { font-family: var(--ms-font-mono); font-size: var(--ms-fs-11); color: var(--ms-text-muted); }
 .rm-project-open { margin-left: auto; font-family: var(--ms-font-mono); font-size: var(--ms-fs-12); color: var(--ms-text-secondary); }
 .rm-project-go { color: var(--ms-text-muted); font-size: 11px; width: 14px; text-align: right; }
+.timeline { display: flex; gap: 10px; position: relative; margin: 6px 0 4px; padding: 4px 0 16px; }
+.timeline::before { content: ""; position: absolute; left: 0; right: 0; top: 22px; height: 2px; background: var(--ms-border-hairline); }
+.tl-node { position: relative; flex: 1 1 0; min-width: 0; padding-top: 26px; }
+.tl-node::before { content: ""; position: absolute; top: 15px; left: 0; width: 12px; height: 12px; border-radius: 50%; background: var(--ms-bg-surface); border: 2px solid var(--ms-neutral); }
+.tl-node.run::before { border-color: var(--ms-accent); }
+.tl-node.done::before { border-color: var(--ms-success); background: var(--ms-success); }
+.tl-name { font-size: var(--ms-fs-12); line-height: var(--ms-lh-12); font-weight: 500; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.tl-date { font-family: var(--ms-font-mono); font-size: var(--ms-fs-11); line-height: var(--ms-lh-11); color: var(--ms-text-muted); }
+.tl-counts { font-family: var(--ms-font-mono); font-size: var(--ms-fs-11); line-height: var(--ms-lh-11); color: var(--ms-text-secondary); margin-top: 2px; }
+.ms-actions { display: inline-flex; align-items: center; gap: 8px; margin-left: 8px; }
+.ms-create { display: flex; align-items: end; gap: 8px; flex-wrap: wrap; margin: 0 0 10px; padding: 10px; border: 1px dashed var(--ms-border-strong); border-radius: var(--ms-radius-md); background: var(--ms-bg-inset); }
+.ms-edit { display: flex; align-items: end; gap: 8px; flex-wrap: wrap; margin: 8px 0 0; }
+.ms-create label, .ms-edit label { display: grid; gap: 2px; font-size: var(--ms-fs-11); line-height: var(--ms-lh-11); color: var(--ms-text-muted); }
+.ms-create input, .ms-edit input, .ms-edit select { font: inherit; font-size: var(--ms-fs-12); line-height: var(--ms-lh-12); padding: 4px 6px; border: var(--ms-hairline); border-radius: var(--ms-radius-sm); background: var(--ms-bg-surface); color: var(--ms-text-primary); }
+@container pane (max-width: 479px) { .timeline { flex-wrap: wrap; row-gap: 14px; } }
 .milestone-block { padding: 9px 12px; border-bottom: 1px solid var(--ms-border-hairline); }
 .milestone-block:last-child { border-bottom: 0; }
 .milestone-block-head { display: flex; align-items: baseline; gap: 8px; flex-wrap: wrap; }
@@ -1721,9 +1736,11 @@ select.ctl { cursor: pointer; max-width: 180px; }
         <div class="screen-meta">
           <span><span class="num mono">4</span> <span data-t="it.count">iterations</span></span>
           <span aria-hidden="true">·</span>
-          <span><span class="num mono">1</span> <span data-t="it.activeCount">active</span></span>
+          <span><span class="num mono">1</span> active</span>
           <span aria-hidden="true">·</span>
-          <span data-t="it.meta">catalog membership, independent of execution</span>
+          <span><span class="num mono">3</span> completed</span>
+          <span aria-hidden="true">·</span>
+          <span data-t="it.metaExec">execution lifecycle</span>
         </div>
       </div>
 
@@ -1735,8 +1752,8 @@ select.ctl { cursor: pointer; max-width: 180px; }
               <select id="i-lifecycle" class="ctl">
                 <option data-t="label.any" selected>Any</option>
                 <option>active</option>
-                <option>archived</option>
-                <option>superseded</option>
+                <option>completed</option>
+                <option>stopped</option>
               </select>
             </span>
             <label class="search">
@@ -1749,13 +1766,14 @@ select.ctl { cursor: pointer; max-width: 180px; }
         </div>
         <div class="table-wrap">
           <table class="table" data-narrow-cols="2">
-            <colgroup><col style="width:310px"><col><col style="width:110px"><col style="width:210px"><col style="width:90px"><col style="width:110px"></colgroup>
+            <colgroup><col style="width:310px"><col><col style="width:110px"><col style="width:210px"><col style="width:150px"><col style="width:90px"><col style="width:110px"></colgroup>
             <thead>
               <tr>
                 <th data-t="it.thId">Iteration</th>
                 <th data-t="it.thTitle">Catalog title</th>
                 <th data-t="f.lifecycle">Lifecycle</th>
                 <th data-t="it.thExecution">Projected execution</th>
+                <th data-t="it.thProjects">Projects</th>
                 <th class="t-num" data-t="it.thPlans">Plans</th>
                 <th class="t-num" data-t="it.thDocs">Documents</th>
               </tr>
@@ -1764,29 +1782,33 @@ select.ctl { cursor: pointer; max-width: 180px; }
               <tr class="is-link" tabindex="0" data-go-screen="iteration-detail">
                 <td class="t-id">iter-1</td>
                 <td class="t-title">Unified frontend, one implementation</td>
-                <td class="mono">active</td>
+                <td><span class="status tone-running"><span class="dot"></span><span class="label mono">active</span></span></td>
                 <td><span class="status tone-running"><span class="dot"></span><span class="label mono">running</span></span> <span class="muted" aria-hidden="true">·</span> <span class="mono t-11 secondary">phase-2-execute</span></td>
+                <td class="mono t-11">engine · dsh-integration</td>
                 <td class="t-num">3</td><td class="t-num">5</td>
               </tr>
               <tr class="is-link" tabindex="0" data-go-screen="iteration-detail">
                 <td class="t-id">iter-4</td>
                 <td class="t-title">Authorization recovery, second pass</td>
-                <td class="mono">archived</td>
-                <td><span class="status tone-terminal"><span class="dot"></span><span class="label mono">completed</span></span> <span class="muted" aria-hidden="true">·</span> <span class="mono t-11 secondary">—</span></td>
+                <td><span class="chip">completed</span></td>
+                <td><span class="status tone-terminal"><span class="dot"></span><span class="label mono">completed</span></span> <span class="muted" aria-hidden="true">·</span> <span class="mono t-11 secondary">completed</span></td>
+                <td class="mono t-11">engine</td>
                 <td class="t-num">4</td><td class="t-num">7</td>
               </tr>
               <tr class="is-link" tabindex="0" data-go-screen="iteration-detail">
                 <td class="t-id">iter-3</td>
                 <td class="t-title">dsh channel adoption</td>
-                <td class="mono">archived</td>
-                <td><span class="status tone-terminal"><span class="dot"></span><span class="label mono">completed</span></span> <span class="muted" aria-hidden="true">·</span> <span class="mono t-11 secondary">—</span></td>
+                <td><span class="chip">completed</span></td>
+                <td><span class="status tone-terminal"><span class="dot"></span><span class="label mono">completed</span></span> <span class="muted" aria-hidden="true">·</span> <span class="mono t-11 secondary">completed</span></td>
+                <td class="mono t-11">dsh-integration</td>
                 <td class="t-num">2</td><td class="t-num">3</td>
               </tr>
               <tr class="is-link" tabindex="0" data-go-screen="iteration-detail">
                 <td class="t-id">iter-2</td>
                 <td class="t-title">Dashboard roadmap UX</td>
-                <td class="mono">archived</td>
-                <td><span class="status tone-terminal"><span class="dot"></span><span class="label mono">completed</span></span> <span class="muted" aria-hidden="true">·</span> <span class="mono t-11 secondary">—</span></td>
+                <td><span class="chip">completed</span></td>
+                <td><span class="status tone-terminal"><span class="dot"></span><span class="label mono">completed</span></span> <span class="muted" aria-hidden="true">·</span> <span class="mono t-11 secondary">completed</span></td>
+                <td class="mono t-11">engine · dsh-integration</td>
                 <td class="t-num">3</td><td class="t-num">4</td>
               </tr>
             </tbody>
@@ -1991,13 +2013,13 @@ select.ctl { cursor: pointer; max-width: 180px; }
       <div class="detail-head">
         <div class="detail-head-main">
           <h1 class="detail-title">Engine</h1>
+          <p class="prose t-12 secondary" style="margin:6px 0 0;max-width:80ch" data-t="pj.direction">One store, one projection, one read contract. The engine owns issue, milestone and roadmap authority; hosts only render what it answers.</p>
           <div class="detail-meta">
             <span class="mono">engine</span><span aria-hidden="true">·</span>
             <span class="mono">active</span><span aria-hidden="true">·</span>
             <span><span data-t="f.revision">Revision</span> <span class="mono">12</span></span><span aria-hidden="true">·</span>
             <span><span class="num">14</span> <span data-t="rm.openIssues">open issues</span></span>
           </div>
-          <p class="prose t-12 secondary" style="margin-top:5px" data-t="pj.descEngine">Store, projection and gates — the engine package</p>
         </div>
         <div class="detail-actions">
           <span class="status tone-active"><span class="dot"></span><span class="label mono" data-t="rm.present">roadmap present</span></span>
@@ -2013,38 +2035,49 @@ select.ctl { cursor: pointer; max-width: 180px; }
 
       <!-- ---- Roadmap tab ---- -->
       <div data-tabpanel="roadmap">
-        <div class="detail-top">
-          <section class="panel">
-            <div class="panel-head"><h2 class="panel-title" data-t="sec.catalog">Catalog identity</h2></div>
-            <div class="panel-body">
-              <dl class="fields">
-                <div class="field"><dt data-t="f.kind">Kind</dt><dd class="mono">project</dd></div>
-                <div class="field"><dt data-t="f.lifecycle">Lifecycle</dt><dd class="mono">active</dd></div>
-                <div class="field"><dt data-t="f.revision">Revision</dt><dd class="mono">12</dd></div>
-                <div class="field"><dt data-t="f.registered">Registered</dt><dd class="mono">2026-08-09 10:00</dd></div>
-                <div class="field"><dt data-t="f.location">Location</dt><dd class="mono wrap">projects/engine</dd></div>
-                <div class="field"><dt data-t="f.updated">Updated</dt><dd class="mono">2026-10-23 17:42</dd></div>
-              </dl>
+        <section class="panel" style="margin-bottom:12px">
+          <div class="panel-head"><h2 class="panel-title" data-t="rm.timeline">Milestone timeline</h2><span class="panel-meta"><span class="num mono">3</span> <span data-t="f.milestonesLower">milestones</span></span></div>
+          <div class="panel-body">
+            <!-- Target-ordered nodes; missing targets last; one trailing unassigned node. -->
+            <div class="timeline" data-ms-milestone-timeline="">
+              <div class="tl-node done">
+                <div class="tl-name">Issue store authority v4</div>
+                <div class="tl-date">2026-10-18 · delivered</div>
+                <div class="tl-counts">13/13 · 0 open</div>
+              </div>
+              <div class="tl-node">
+                <div class="tl-name">Read-path correctness</div>
+                <div class="tl-date">2026-10-31 · planned</div>
+                <div class="tl-counts">2/6 · 4 open</div>
+              </div>
+              <div class="tl-node run">
+                <div class="tl-name">Unified frontend, one implementation</div>
+                <div class="tl-date">2026-11-07 · active</div>
+                <div class="tl-counts">5/14 · 9 open</div>
+              </div>
+              <div class="tl-node">
+                <div class="tl-name" style="color:var(--ms-text-muted)">unassigned</div>
+                <div class="tl-date">no target</div>
+                <div class="tl-counts">3 issues</div>
+              </div>
             </div>
-          </section>
-          <section class="panel">
-            <div class="panel-head"><h2 class="panel-title" data-t="rm.authority">Roadmap authority</h2></div>
-            <div class="panel-body">
-              <dl class="fields">
-                <div class="field"><dt data-t="f.state">State</dt><dd class="mono">present</dd></div>
-                <div class="field"><dt data-t="f.authorityRevision">Revision</dt><dd class="mono">7</dd></div>
-                <div class="field"><dt data-t="rm.contentHash">Content hash</dt><dd class="mono trunc" title="sha256:6d41c8f0…">sha256:6d41c8f0…</dd></div>
-                <div class="field"><dt data-t="rm.frontmatter">Frontmatter</dt><dd class="mono trunc">project_id · title · status</dd></div>
-              </dl>
-            </div>
-          </section>
-        </div>
+            <p class="sec-note">Nodes are ordered by target date; each carries retired/total and the open count. Unassigned issues sit at the end as one node.</p>
+          </div>
+        </section>
 
         <section class="panel" style="margin-bottom:12px">
           <div class="panel-head">
             <h2 class="panel-title" data-t="sec.milestones">Milestone board</h2>
             <span class="panel-meta"><span class="num mono">3</span> <span data-t="f.milestonesLower">milestones</span><span aria-hidden="true">·</span><span class="num mono">3</span> <span data-t="rm.unassigned">unassigned issues</span></span>
           </div>
+
+          <form class="ms-create" data-ms-milestone-create="">
+            <label><span data-t="rm.wName">Milestone name</span><input type="text" placeholder="Milestone name"></label>
+            <label><span data-t="rm.wTarget">Target</span><input type="date" placeholder="2026-11-30"></label>
+            <!-- Creation is name + target: the engine's add verb has no status field and
+                 always inserts `planned`. Status changes are the edit control's. -->
+            <button class="btn" type="button" data-t="rm.wCreate">Create</button>
+          </form>
 
           <div class="milestone-block">
             <div class="milestone-block-head">
@@ -2058,6 +2091,12 @@ select.ctl { cursor: pointer; max-width: 180px; }
                 <span><span class="num">4</span><span class="milestone-count-label" data-t="m.resolved">resolved</span></span>
                 <span><span class="num">1</span><span class="milestone-count-label" data-t="m.retiredOther">retired without resolution</span></span>
                 <span><span class="num">14</span><span class="milestone-count-label" data-t="m.total">total</span></span>
+              </span>
+              </span>
+              <span class="ms-actions">
+                <button class="link" data-t="rm.wEdit">Edit</button>
+                <button class="link" data-t="rm.wAssign">Assign issues</button>
+                <button class="link" data-t="rm.wRemove">Remove</button>
               </span>
             </div>
             <div class="assigned">
@@ -2129,66 +2168,17 @@ select.ctl { cursor: pointer; max-width: 180px; }
             </span>
             <button class="link" style="margin-left:auto" data-project-issues-link data-t="pj.openProjectIssues">Open project issues</button>
           </div>
+
+          <div class="ms-edit" data-ms-milestone-picker="">
+            <span class="mono t-11 muted" data-t="rm.wPickerNote">Assign issues — one write at a time; unassign is the same control minus the selection.</span>
+            <span class="assigned" style="margin-left:auto">
+              <button class="link" data-t="rm.wAssign2">Assign selected</button>
+              <button class="link" data-t="rm.wCancel">Cancel</button>
+            </span>
+          </div>
         </section>
 
-        <div class="detail-grid">
-          <section class="panel">
-            <div class="panel-body" style="padding-top:8px;padding-bottom:8px">
-              <details class="disc">
-                <summary data-t="rm.direction">Direction</summary>
-                <p class="prose t-12 secondary" style="margin-top:6px">One store, one projection, one read contract. The engine owns issue, milestone and roadmap authority; hosts only render what it answers. Nothing in the read path guesses a join: a missing catalog link or a stale projection is disclosed as such.</p>
-              </details>
-              <details class="disc">
-                <summary data-t="rm.markdown">Stored markdown</summary>
-                <pre># Engine
-
-status: active
-project_id: engine
-
-## Direction
-
-One store, one projection, one read contract.
-
-## Milestones
-
-- Unified frontend, one implementation (2026-11-07)
-- Read-path correctness (2026-10-31)
-- Issue store authority v4 (2026-10-18, delivered)
-
-## Goals
-
-- [x] Issue store authority
-- [ ] Unified front-end
-- [ ] One component package
-</pre>
-              </details>
-            </div>
-            <div class="freshness-line">
-              <span class="dot tone-active" aria-hidden="true"></span>
-              <span data-t="rm.freshnessProjection">projection current</span>
-              <span aria-hidden="true">·</span>
-              <span><span data-t="rm.freshStore">store rev</span> <span class="num">1224</span></span>
-              <span aria-hidden="true">·</span>
-              <span><span data-t="rm.freshRoadmap">roadmap rev</span> <span class="num">7</span></span>
-              <span aria-hidden="true">·</span>
-              <span data-t="id.read">read 13:58:04</span>
-            </div>
-          </section>
-          <section class="panel">
-            <div class="panel-head"><h2 class="panel-title" data-t="rm.storedFacts">Stored facts</h2></div>
-            <div class="panel-body">
-              <dl class="fields one">
-                <div class="field"><dt data-t="rm.projectStatus">Frontmatter status</dt><dd class="mono">active</dd></div>
-                <div class="field"><dt data-t="rm.createdAt">Created at</dt><dd class="mono">2026-08-09 10:00</dd></div>
-                <div class="field"><dt data-t="rm.residualsRef">Residuals ref</dt><dd class="mono">projects/engine/residuals.json</dd></div>
-                <div class="field"><dt data-t="rm.goalCount">Goals</dt><dd class="mono"><span class="num">1</span> / <span class="num">3</span> <span data-t="rm.checked">checked</span></dd></div>
-                <div class="field"><dt data-t="rm.sectionCount">Sections</dt><dd class="mono"><span class="num">3</span></dd></div>
-              </dl>
-              <p class="sec-note" data-t="rm.directionNote">Direction is rendered as text; goals are read-only, never checkboxes in the UI.</p>
-              <p class="sec-note" data-t="pj.absenceRule">A project with no roadmap row, or with no milestones, says so in this section instead of rendering an empty frame.</p>
-            </div>
-          </section>
-        </div>
+        
       </div>
 
       <!-- ---- Issues tab ---- -->
@@ -2236,7 +2226,7 @@ One store, one projection, one read contract.
           <div class="table-wrap">
             <table class="table" data-narrow-cols="2" data-project-iterations="iter-1,iter-4">
               <colgroup>
-                <col style="width:310px"><col><col style="width:110px"><col style="width:210px"><col style="width:90px"><col style="width:110px">
+                <col style="width:310px"><col><col style="width:110px"><col style="width:210px"><col style="width:150px"><col style="width:90px"><col style="width:110px">
               </colgroup>
               <thead>
                 <tr>
@@ -2244,6 +2234,7 @@ One store, one projection, one read contract.
                   <th data-t="it.thTitle">Catalog title</th>
                   <th data-t="f.lifecycle">Lifecycle</th>
                   <th data-t="it.thExecution">Projected execution</th>
+                  <th data-t="it.thProjects">Projects</th>
                   <th class="t-num" data-t="it.thPlans">Plans</th>
                   <th class="t-num" data-t="it.thDocs">Documents</th>
                 </tr>

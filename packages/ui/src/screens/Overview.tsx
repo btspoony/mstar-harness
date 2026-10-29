@@ -10,9 +10,10 @@
  * recomputing anything. An unavailable member renders the shared unavailable arm —
  * never an empty chart — and a store with fewer than two dated buckets is `empty`,
  * because a one-point line is a dot pretending to be a trend. The numbers the figure
- * encodes are text beside it: the legend's two open counts, the gap note, and the
- * dated-history table. The series' cumulative totals are NOT printed — the prototype's
- * legend does not state them, and its last table row already does.
+ * encodes are text beside it: the legend's two open counts and the gap note. The
+ * series' cumulative totals are NOT printed — the prototype's legend does not state
+ * them, and the dated-history table that used to repeat them is gone (plan
+ * 20261029-dashboard-alignment Task 2).
  *
  * Not here, by construction and by test: the version, `{HARNESS_DIR}`, and any
  * revision counter.
@@ -100,9 +101,6 @@ export type OverviewCopy = {
   trendLegend: (datedOpen: number, recordedOpen: number) => string;
   /** The one-line reason the two counts differ. */
   trendGap: (datedOpen: number, undated: number) => string;
-  /** The disclosure that carries the same numbers as a table. */
-  trendTableSummary: string;
-  trendColumns: { date: string; captured: string; retired: string; open: string; origin: string };
   residualsHeading: string;
   /** The residuals panel's meta: a grouping descriptor, as the prototype's is. */
   residualsTotal: () => string;
@@ -348,8 +346,10 @@ function MilestoneRowView(props: { row: MilestoneRow; copy: OverviewCopy }) {
 
 /**
  * The trend card: two cumulative lines, the axis labels, the legend with both
- * totals, the gap note, and the table that carries the same numbers for a reader
- * who cannot use the figure (`design-v1.html:929-945`).
+ * open counts, and the gap note (`design-v1.html:929-945`). The dated-history
+ * table that used to repeat the same numbers is gone (plan
+ * 20261029-dashboard-alignment Task 2), so the figure and its two text lines are
+ * the whole card.
  */
 function TrendPanel(props: { series: IssueFlowSeries; copy: OverviewCopy }) {
   const { series, copy } = props;
@@ -385,33 +385,6 @@ function TrendPanel(props: { series: IssueFlowSeries; copy: OverviewCopy }) {
           <span className="chart-note">{copy.trendLegend(series.datedOpen, series.recordedOpen)}</span>
         </div>
         <p className="chart-note">{copy.trendGap(series.datedOpen, series.undatedEvents)}</p>
-        {/* A disclosure, not a chart label: `.chart-note` is the flex row above, and
-            reusing it here made this table's summary and body flex items. */}
-        <details className="disc">
-          <summary>{copy.trendTableSummary}</summary>
-          <table className="table">
-            <thead>
-              <tr>
-                <th scope="col">{copy.trendColumns.date}</th>
-                <th scope="col">{copy.trendColumns.captured}</th>
-                <th scope="col">{copy.trendColumns.retired}</th>
-                <th scope="col">{copy.trendColumns.open}</th>
-                <th scope="col">{copy.trendColumns.origin}</th>
-              </tr>
-            </thead>
-            <tbody>
-              {series.points.map((point) => (
-                <tr key={point.date}>
-                  <td>{point.date}</td>
-                  <td>{point.captured}</td>
-                  <td>{point.retired}</td>
-                  <td>{point.open}</td>
-                  <td>{point.origin}</td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </details>
       </div>
     </Panel>
   );

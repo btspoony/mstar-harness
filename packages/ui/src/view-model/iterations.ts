@@ -49,7 +49,12 @@ export function iterationGateStep(iteration: IterationDTO): IterationGateStep | 
 export type IterationRow = {
   iterationId: string;
   title: string | null;
+  /** The catalog's archive state — kept on the detail screen, not this list. */
   lifecycle: string | null;
+  /** The execution lifecycle (plan Task 5): `active` / `completed` / `stopped` / `failed` / `none`. */
+  executionLifecycle: string;
+  /** The catalog project ids this iteration is linked `belongs-to`, as the DTO carries them. */
+  projects: readonly string[];
   compassStatus: string | null;
   compassTone: Tone;
   /** The execution the projection records for this iteration: `status · phase`, the
@@ -81,6 +86,8 @@ export function iterationRow(iteration: IterationDTO): IterationRow {
     iterationId: iteration.iterationId,
     title: iteration.catalog?.title ?? null,
     lifecycle: iteration.catalog?.lifecycle ?? null,
+    executionLifecycle: iteration.executionLifecycle,
+    projects: iteration.projects,
     compassStatus: iteration.compass?.status ?? null,
     compassTone: compassStatusTone(iteration.compass?.status ?? null),
     execution:
@@ -122,9 +129,10 @@ export type IterationListModel = {
   /** How many rows the filters leave. */
   filtered: number;
   /**
-   * Active registrations in the store's rows, before the filters narrow them: the head's
-   * count states the store, not the current filter result. "Active" is the catalog's own
-   * lifecycle, not the execution state.
+   * Iterations whose EXECUTION lifecycle is `active`, before the filters narrow them:
+   * the head's count states the store, not the current filter result. The list's
+   * lifecycle column and filter read the execution lifecycle (plan Task 5); the
+   * catalog's archive state stays visible on the detail screen.
    */
   active: number;
 };
@@ -152,7 +160,7 @@ export function iterationListModel(read: {
   const q = filters.q.trim().toLowerCase();
   const kept = mapped.filter(
     (row) =>
-      (filters.lifecycle === "" || row.lifecycle === filters.lifecycle) &&
+      (filters.lifecycle === "" || row.executionLifecycle === filters.lifecycle) &&
       (q === "" || row.iterationId.toLowerCase().includes(q) || (row.title ?? "").toLowerCase().includes(q)),
   );
   const rows: Resolved<readonly IterationRow[]> =
@@ -161,9 +169,9 @@ export function iterationListModel(read: {
     rows,
     total: read.data.total,
     attribution,
-    lifecycles: [...new Set(mapped.map((row) => row.lifecycle).filter((v): v is string => v !== null))].sort(),
+    lifecycles: [...new Set(mapped.map((row) => row.executionLifecycle))].sort(),
     filtered: kept.length,
-    active: mapped.filter((row) => row.lifecycle === "active").length,
+    active: mapped.filter((row) => row.executionLifecycle === "active").length,
   };
 }
 
@@ -214,6 +222,10 @@ export type IterationDetailModel = {
   description: string | null;
   title: string | null;
   lifecycle: string | null;
+  /** The execution lifecycle beside the catalog's archive state (plan Task 5). */
+  executionLifecycle: string;
+  /** The catalog project ids this iteration belongs to. */
+  projects: readonly string[];
   compassStatus: string | null;
   compassTone: Tone;
   /** The compass's one-line summary, or `null` when it records none. */
@@ -263,6 +275,8 @@ export function iterationDetailModel(read: {
       iterationId: iteration.iterationId,
       title: iteration.catalog?.title ?? null,
       lifecycle: iteration.catalog?.lifecycle ?? null,
+      executionLifecycle: iteration.executionLifecycle,
+      projects: iteration.projects,
       catalogKind: iteration.catalog?.kind ?? null,
       revision: iteration.catalog?.revision ?? null,
       registeredAt: iteration.catalog ? formatDate(iteration.catalog.registeredAt) : null,

@@ -20,6 +20,10 @@ import {
   DASHBOARD_VIEW_ENDPOINT,
   ENGINE_STATUS_CHANNEL,
   PANEL_SNAPSHOT_ENDPOINT,
+  MILESTONE_ADD_ENDPOINT,
+  MILESTONE_ASSIGN_ENDPOINT,
+  MILESTONE_REMOVE_ENDPOINT,
+  MILESTONE_UPDATE_ENDPOINT,
   SELECT_WORKFLOW_ENDPOINT,
 } from '../src/engine-status-wire.ts'
 import { mstarEngineStatusContribution } from '../src/engine-status-endpoint.ts'
@@ -37,6 +41,10 @@ describe('panel wire addresses — one declaration, both halves', () => {
       SELECT_WORKFLOW_ENDPOINT,
       PANEL_SNAPSHOT_ENDPOINT,
       DASHBOARD_VIEW_ENDPOINT,
+      MILESTONE_ADD_ENDPOINT,
+      MILESTONE_UPDATE_ENDPOINT,
+      MILESTONE_ASSIGN_ENDPOINT,
+      MILESTONE_REMOVE_ENDPOINT,
     ])
   })
 
