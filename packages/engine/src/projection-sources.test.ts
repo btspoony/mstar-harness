@@ -371,6 +371,9 @@ describe("projection source capture (contract \u00a75)", () => {
         "started_at",
         "ended_at",
         "status",
+        // Migration 14: the compass frontmatter `plans:` membership, appended
+        // by the ALTER so the physical order follows the migration order.
+        "plans_json",
       ]);
       expect(primaryKey(db, "projection_compasses")).toEqual(["generation", "iteration_id"]);
     } finally {
