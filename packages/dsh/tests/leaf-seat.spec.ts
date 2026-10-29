@@ -20,7 +20,7 @@ import {
 } from '@mstar-harness/commands'
 import { executionContextFor } from '@mstar-harness/engine'
 import { coordinatorSeatCommandFor } from '../src/gates/coordinator-seat.ts'
-import { coordinatorIdentityFor, isLeafSeatHeader, leafSeatCoordinatorRefusal, leafSeatShellEnvOf, LEAF_SEAT_SHELL_ENV_KEY } from '../src/gates/leaf-seat.ts'
+import { coordinatorIdentityFor, isLeafSeatHeader, leafSeatCoordinatorRefusal, leafSeatShellEnvOf, LEAF_SEAT_SHELL_ENV_DESCRIPTION, LEAF_SEAT_SHELL_ENV_KEY, registerLeafSeatShellEnv } from '../src/gates/leaf-seat.ts'
 
 const SRC = join(import.meta.dir, '..', 'src')
 const SEAT_SYMBOLS = ['coordinatorSeatCommandFor', 'isCoordinatorSeatCommand'] as const
@@ -190,5 +190,47 @@ describe('the leaf-seat shell-env contributor', () => {
     expect(resolveFor({ origin: 'team-lead' })).toEqual({})
     expect(leafSeatShellEnvOf({})).toEqual({})
     expect(leafSeatShellEnvOf({ agent: undefined })).toEqual({})
+  })
+})
+
+/**
+ * The deferred registration is the wiring `index.ts` performs: deleting it (or
+ * registering a contributor that stops delegating to the predicate) must fail
+ * here. A fake ctx carries the `inject` + `shellEnv.register` spies, so the test
+ * asserts the contract the host service sees, not the plugin's internals.
+ */
+describe('the deferred shell-env registration', () => {
+  function registeredContributor() {
+    const registrations: Array<{
+      name: string
+      variables: Record<string, { description: string }>
+      resolve(execution: { agent?: unknown }): Record<string, string>
+    }> = []
+    const injected: string[][] = []
+    const ctx = {
+      inject(names: string[], callback: (child: unknown) => void) {
+        injected.push(names)
+        callback({ shellEnv: { register: (contributor: (typeof registrations)[number]) => registrations.push(contributor) } })
+      },
+    }
+    registerLeafSeatShellEnv(ctx)
+    return { injected, registrations }
+  }
+
+  test('injects shellEnv and registers exactly one contributor declaring the marker key', () => {
+    const { injected, registrations } = registeredContributor()
+    expect(injected).toEqual([['shellEnv']])
+    expect(registrations).toHaveLength(1)
+    const contributor = registrations[0]!
+    expect(contributor.name).toBe('mstar-leaf-seat')
+    expect(Object.keys(contributor.variables)).toEqual([LEAF_SEAT_SHELL_ENV_KEY])
+    expect(contributor.variables[LEAF_SEAT_SHELL_ENV_KEY]!.description).toBe(LEAF_SEAT_SHELL_ENV_DESCRIPTION)
+  })
+
+  test('its resolve delegates to the shared predicate', () => {
+    const contributor = registeredContributor().registrations[0]!
+    expect(contributor.resolve({ agent: { session: { header: { origin: 'subagent' } } } })).toEqual({ [LEAF_SEAT_SHELL_ENV_KEY]: '1' })
+    expect(contributor.resolve({ agent: { session: { header: { delegationDepth: 1 } } } })).toEqual({ [LEAF_SEAT_SHELL_ENV_KEY]: '1' })
+    expect(contributor.resolve({ agent: { session: { header: { origin: 'team-lead' } } } })).toEqual({})
   })
 })

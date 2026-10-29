@@ -587,9 +587,10 @@ export function resolveCliSessionIdentity(
 ): Pick<InvocationContext, "sessionId" | "sessionIdSource" | "executionIdentity" | "leafSeat"> {
   // The shell-transport leaf marker (#548): exported by the trusted shell tool
   // (dsh shell-env registry / omp bash prefix) when the calling session header
-  // says leaf. Fail-closed only — it can only trigger the engine's
-  // `coordination.leaf-seat` refusal — and an empty/other value is not a leaf
-  // claim, so it never throws here.
+  // says leaf. It is stamped on the coordinator registration tuples the command
+  // families build (never on a leaf-permitted write such as a workflow note), is
+  // fail-closed only — it can only trigger the engine's `coordination.leaf-seat`
+  // refusal — and an empty/other value is not a leaf claim, so it never throws.
   const leafSeat =
     process.env.DSH_MSTAR_LEAF_SEAT === "1" || process.env.MSTAR_LEAF_SEAT === "1" ? { leafSeat: true as const } : {};
   if (typeof sessionId === "string") return { sessionId, sessionIdSource: "flag", ...leafSeat };

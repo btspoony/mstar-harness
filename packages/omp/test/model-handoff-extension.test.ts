@@ -980,17 +980,26 @@ describe("host session identity injection", () => {
     expect(leafRevision.input.command).toContain("export MSTAR_LEAF_SEAT=1; ");
     expect((leafRevision.input.command as string).match(/export MSTAR_LEAF_SEAT=/g)).toHaveLength(1);
 
-    // A command that already exports the marker is left alone about the marker.
-    const preExported = await leafHarness.emitToolCall({
-      type: "tool_call",
-      toolCallId: "call-leaf-pre",
-      toolName: "bash",
-      input: { command: "export MSTAR_LEAF_SEAT=1; mstar plan prepare --workflow wf-1" },
-    });
-    if (!isPlainFixtureRecord(preExported) || !isPlainFixtureRecord(preExported.input)) {
-      throw new Error("expected a revised bash input");
+    // No "already exported" guard: a bare substring match would let ANY command
+    // text (here an echo of the marker) suppress the fail-closed fact, so the
+    // prefix is applied unconditionally. A duplicate export is harmless.
+    for (const command of [
+      "export MSTAR_LEAF_SEAT=1; mstar plan prepare --workflow wf-1",
+      "echo 'export MSTAR_LEAF_SEAT='; mstar plan prepare --workflow wf-1",
+    ]) {
+      const revised = await leafHarness.emitToolCall({
+        type: "tool_call",
+        toolCallId: "call-leaf-pre",
+        toolName: "bash",
+        input: { command },
+      });
+      if (!isPlainFixtureRecord(revised) || !isPlainFixtureRecord(revised.input)) {
+        throw new Error("expected a revised bash input");
+      }
+      // The host-id prefix may precede it (this session id is present); the
+      // marker is applied once per call, ahead of the caller's command.
+      expect(String(revised.input.command).endsWith(`export MSTAR_LEAF_SEAT=1; ${command}`)).toBe(true);
     }
-    expect((preExported.input.command as string).match(/export MSTAR_LEAF_SEAT=/g)).toHaveLength(1);
 
     // A coordinator session (no session_init entry) exports no marker.
     const coordinatorHarness = await createHarness({

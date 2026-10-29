@@ -72,6 +72,33 @@ export function leafSeatShellEnvOf(execution: { agent?: unknown }): Partial<Reco
 export const LEAF_SEAT_SHELL_ENV_DESCRIPTION =
   'Set to 1 when the calling session is a leaf/subagent seat; the mstar CLI attests it so the engine refuses workflow coordinator registration from this seat.'
 
+/**
+ * Register the marker's shell-env contributor on the host registry. Deferred
+ * injection (`ctx.inject`) keeps a composition without the shell-env plugin
+ * loading — the registry is a host service this package never imports, so the
+ * contributor shape is structural and the peer is optional.
+ */
+export function registerLeafSeatShellEnv(ctx: {
+  inject(names: string[], callback: (child: unknown) => void): unknown
+}): void {
+  ctx.inject(['shellEnv'], (child) => {
+    const registry = (child as {
+      shellEnv: {
+        register(contributor: {
+          name: string
+          variables: Record<string, { description: string }>
+          resolve(execution: { agent?: unknown }): Record<string, string>
+        }): unknown
+      }
+    }).shellEnv
+    registry.register({
+      name: 'mstar-leaf-seat',
+      variables: { [LEAF_SEAT_SHELL_ENV_KEY]: { description: LEAF_SEAT_SHELL_ENV_DESCRIPTION } },
+      resolve: (execution) => leafSeatShellEnvOf(execution),
+    })
+  })
+}
+
 /** The named cause every refusal carries (the seam's refusal vocabulary). */
 export const LEAF_SEAT_COORDINATOR_CAUSE = 'leaf-seat.coordinator-action'
 
