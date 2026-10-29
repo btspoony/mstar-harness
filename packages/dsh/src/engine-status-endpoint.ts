@@ -411,7 +411,7 @@ export function mstarEngineStatusContribution(): TypertContribution {
       // dashboard view, so a screen reads its own view instead of receiving a
       // polled envelope of five.
       mstarDashboardViewInvocation(),
-      // The milestone write channel (plan 20261029-dashboard-alignment Task 4):
+      // The milestone write channel (the dashboard alignment change, Task 4):
       // one invocation per engine verb, on the same service and gateway.
       mstarMilestoneAddInvocation(),
       mstarMilestoneUpdateInvocation(),

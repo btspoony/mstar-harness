@@ -13,7 +13,7 @@
  * encodes are text beside it: the legend's two open counts and the gap note. The
  * series' cumulative totals are NOT printed — the prototype's legend does not state
  * them, and the dated-history table that used to repeat them is gone (plan
- * 20261029-dashboard-alignment Task 2).
+ * the dashboard alignment change, Task 2).
  *
  * Not here, by construction and by test: the version, `{HARNESS_DIR}`, and any
  * revision counter.
@@ -348,7 +348,7 @@ function MilestoneRowView(props: { row: MilestoneRow; copy: OverviewCopy }) {
  * The trend card: two cumulative lines, the axis labels, the legend with both
  * open counts, and the gap note (`design-v1.html:929-945`). The dated-history
  * table that used to repeat the same numbers is gone (plan
- * 20261029-dashboard-alignment Task 2), so the figure and its two text lines are
+ * the dashboard alignment change, Task 2), so the figure and its two text lines are
  * the whole card.
  */
 function TrendPanel(props: { series: IssueFlowSeries; copy: OverviewCopy }) {
