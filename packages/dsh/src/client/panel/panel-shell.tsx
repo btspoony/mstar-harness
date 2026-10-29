@@ -29,6 +29,7 @@ import {
   LocaleProvider,
   MS_CONTAINER_CLASS,
   MS_PANE_BODY_CLASS,
+  ASSIGNABLE_ISSUE_LIMIT,
   MS_PANE_HEAD_CLASS,
   Nav,
   copyFor,
@@ -497,7 +498,34 @@ export type MilestoneWriteChannel = {
   remove(milestoneId: string): void
 }
 
-/** One write at a time; a fresh operationId per attempt (idempotency is the engine's). */
+/**
+ * The C1 operation-id policy. One id per LOGICAL write, reused by a retry until
+ * the store answers terminally: a success (the receipt replays) or a non-transport
+ * refusal (the store judged the request, so a retry is a new intent). A transport
+ * failure — the deadline abort above all — is AMBIGUOUS: the engine may have
+ * committed after the client gave up, so the retry must carry the same id and let
+ * the store replay its recorded receipt instead of writing twice.
+ */
+export function writeOperationIds(makeId: () => string = () => crypto.randomUUID()): {
+  /** The id this logical write must carry (kept across an ambiguous retry). */
+  for(signature: string): string
+  /** The store answered terminally: the next write of any kind starts a fresh id. */
+  settled(): void
+} {
+  let pending: { signature: string; operationId: string } | null = null
+  return {
+    for(signature) {
+      if (pending !== null && pending.signature === signature) return pending.operationId
+      pending = { signature, operationId: makeId() }
+      return pending.operationId
+    },
+    settled() {
+      pending = null
+    },
+  }
+}
+
+/** One write at a time; see {@link writeOperationIds} for the id policy. */
 function useMilestoneWrites(seats: {
   client: MstarPanelSnapshotClient | undefined
   sessionId: string | null
@@ -676,7 +704,9 @@ export function PanelSeat(props: PanelSeatProps): React.ReactElement | null {
   // the roadmap read's own store revision (contract C2). Only alive while a
   // project page is open.
   const expectedStoreRevision =
-    detailView.state.kind === 'ok' ? (detailView.state.envelope.storeRevision as number) : null
+    detailView.state.kind === 'ok' && Number.isInteger(detailView.state.envelope.storeRevision)
+      ? (detailView.state.envelope.storeRevision as number)
+      : null
   const milestoneWrites = useMilestoneWrites({
     client: panelSnapshot,
     sessionId: wireSession,
@@ -698,7 +728,7 @@ export function PanelSeat(props: PanelSeatProps): React.ReactElement | null {
           }
         ).items
           .filter((issue) => issue.disposition === 'open' && issue.milestoneId === null)
-          .slice(0, 50)
+          .slice(0, ASSIGNABLE_ISSUE_LIMIT)
           .map((issue) => ({ id: issue.id, title: issue.title, severity: issue.severity, revision: issue.revision }))
       : undefined
 

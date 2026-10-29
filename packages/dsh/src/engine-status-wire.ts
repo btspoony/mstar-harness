@@ -65,9 +65,9 @@ export const DASHBOARD_VIEW_ENDPOINT = `${MSTAR_PANEL_SNAPSHOT_NAMESPACE}/${MSTA
  * Wire methods of the milestone write channel (plan 20261029-dashboard-alignment
  * Task 4, contract C1): one endpoint per engine verb, riding the SAME typert
  * service and namespace as the reads. `milestoneAssign` covers unassign — the
- * engine's `assignIssueMilestone` takes `milestoneId: null`. There is no
- * `milestoneRemove` yet: the engine's `removeMilestone` verb is landing on the
- * engine track and the remove action ships after it merges.
+ * engine's `assignIssueMilestone` takes `milestoneId: null` — and
+ * `milestoneRemove` calls the engine's own `removeMilestone`, whose emptiness
+ * rule (`milestone.not-empty`) answers the attempt.
  */
 export const MSTAR_MILESTONE_ADD_METHOD = 'milestoneAdd'
 export const MSTAR_MILESTONE_UPDATE_METHOD = 'milestoneUpdate'

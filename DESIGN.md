@@ -548,10 +548,12 @@ disposition, with the settled ones folded into `+N <disposition>`. Each timeline
 carries the retired-over-total pair and the open count; a milestone with no issues still
 renders its node.
 
-**The milestone board is the page's only write surface**: a create form (name, target),
-per-milestone inline edit (name / target / status), an assign picker over the project's
-open unassigned issues, per-chip unassign, and a two-step inline remove confirm behind
-which the engine's own emptiness rule answers — a non-empty removal is attempted and its
+**The milestone board is the page's only write surface**: a create form carrying **name
+and target only** (the engine's add verb has no status field — creation always inserts
+`planned`, and status is changed through the edit control), per-milestone inline edit
+(name / target / status), an assign picker over the project's open unassigned issues
+(stating the 50-row cap when it applies), per-chip unassign, and a two-step inline remove
+confirm behind which the engine's own emptiness rule answers — a non-empty removal is attempted and its
 `milestone.not-empty` refusal surfaced verbatim, then the read reloads. Every write goes
 through one engine verb with the read's own store revision (contract C1/C2); no
 optimistic state survives a refusal.

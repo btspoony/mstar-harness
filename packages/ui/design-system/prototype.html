@@ -2074,9 +2074,8 @@ select.ctl { cursor: pointer; max-width: 180px; }
           <form class="ms-create" data-ms-milestone-create="">
             <label><span data-t="rm.wName">Milestone name</span><input type="text" placeholder="Milestone name"></label>
             <label><span data-t="rm.wTarget">Target</span><input type="date" placeholder="2026-11-30"></label>
-            <label><span data-t="rm.wStatus">Status</span>
-              <select><option>planned</option><option>active</option><option>delivered</option><option>dropped</option></select>
-            </label>
+            <!-- Creation is name + target: the engine's add verb has no status field and
+                 always inserts `planned`. Status changes are the edit control's. -->
             <button class="btn" type="button" data-t="rm.wCreate">Create</button>
           </form>
 

@@ -459,6 +459,7 @@ export const zh: Copy = {
         cancel: "取消",
         assign: "分配问题",
         unassign: "取消分配",
+        assignCap: "仅显示前 50 个未归属的未关闭问题；请缩小问题列表以查看其余。",
         remove: "移除",
         removeConfirm: "移除该里程碑？",
         refusalLead: "存储拒绝了此次变更：",

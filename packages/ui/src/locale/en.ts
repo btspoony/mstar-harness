@@ -488,6 +488,7 @@ export const en = {
         cancel: "Cancel",
         assign: "Assign issues",
         unassign: "Unassign",
+        assignCap: "Showing the first 50 unassigned open issues. Narrow the issue list to see the rest.",
         remove: "Remove",
         removeConfirm: "Remove this milestone?",
         refusalLead: "The store refused the change:",

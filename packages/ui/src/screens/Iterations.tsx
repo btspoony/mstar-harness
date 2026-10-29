@@ -84,11 +84,9 @@ const FILTERS_HEAD_ID = "ms-iterations-filters";
 
 export function Iterations(props: IterationsProps) {
   const { model, copy } = props;
-  // "Active" is the catalog's own lifecycle, not the execution state: an iteration whose
-  // workflow stopped running is still an active registration. The model counts the
-  // store's rows, not the current filter result.
-  // "Active" is now the execution lifecycle's own word (plan Task 5): the model counts
-  // the store's rows whose workflow is still running, not the current filter result.
+  // "Active" is the EXECUTION lifecycle's word (plan Task 5): the model counts the
+  // store's rows whose workflow is still running, not the current filter result. The
+  // catalog's archive state is read on the detail screen, not here.
   const activeCount = model.active;
   const filters = props.filters ?? DEFAULT_ITERATION_FILTERS;
 
@@ -156,9 +154,11 @@ export function Iterations(props: IterationsProps) {
     },
   ];
 
+  // One vocabulary in the row meta: the same execution lifecycle the column prints,
+  // then the compass and the numbers. The catalog's archive state is the detail's.
   const meta = (row: IterationRow) =>
     [
-      row.lifecycle,
+      row.executionLifecycle,
       row.compassStatus ?? copy.noCompass,
       row.gatePosition === null ? copy.noCompass : copy.gateStep(row.gatePosition.step, row.gatePosition.of),
       copy.plansProgress(row.plansDone, row.plansTotal),

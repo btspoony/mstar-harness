@@ -38,14 +38,20 @@ const MILESTONE_STATUSES = ["planned", "active", "delivered", "dropped"] as cons
 export type AssignableIssue = { id: string; title: string; severity: string; revision: number };
 
 /**
+ * How many assignable issues the host hands the picker. The host applies the
+ * same limit to its read, so the picker states the cap instead of truncating
+ * silently.
+ */
+export const ASSIGNABLE_ISSUE_LIMIT = 50;
+
+/**
  * The milestone write surface, declared structurally so this screen stays
  * transport-agnostic (plan 20261029-dashboard-alignment Task 4). Every action
- * is one engine verb; the surface owns the busy/refusal state and the read
- * reload — the screen owns only its control state. There is no remove action
- * yet: the engine's `removeMilestone` verb is landing on the engine track, so
- * the remove control ships with it: removing a milestone that still holds
- * issues is ATTEMPTED and the store's refusal surfaced verbatim, not
- * pre-empted by a disabled control.
+ * is one engine verb — add, update, assign/unassign and remove — and the
+ * surface owns the busy/refusal state and the read reload; the screen owns
+ * only its control state. Removal is always offered: a milestone that still
+ * holds issues is ATTEMPTED and the store's own `milestone.not-empty` refusal
+ * surfaces verbatim, rather than being pre-empted by a disabled control.
  */
 export type MilestoneWriteSurface = {
   /** True while one write is in flight; every control is disabled. */
@@ -97,6 +103,8 @@ export type ProjectDetailCopy = {
       cancel: string;
       assign: string;
       unassign: string;
+      /** Said when the picker hit the cap, so the truncation is never silent. */
+      assignCap: string;
       remove: string;
       removeConfirm: string;
       refusalLead: string;
@@ -191,11 +199,17 @@ function MilestoneActions(props: {
         )}
         {assignable.length === 0 ? null : (
           <details data-ms-milestone-assign="">
-            <summary>
-              <button type="button" className={"link"} disabled={writes.busy} tabIndex={-1}>
-                {copy.roadmap.writes.assign}
-              </button>
+            {/* The summary IS the control: it is natively focusable and toggles on
+                Enter/Space and on a pointer click. A nested button would swallow the
+                activation and leave the visible trigger inert. */}
+            <summary className={"link"} data-ms-milestone-assign-toggle={milestone.milestoneId}>
+              {copy.roadmap.writes.assign}
             </summary>
+            {assignable.length >= ASSIGNABLE_ISSUE_LIMIT ? (
+              <span className="muted t-11" data-ms-assign-cap={ASSIGNABLE_ISSUE_LIMIT}>
+                {copy.roadmap.writes.assignCap}
+              </span>
+            ) : null}
             {assignable.map((issue) => (
               <button
                 key={issue.id}

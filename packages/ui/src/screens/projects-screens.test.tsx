@@ -27,7 +27,12 @@ import {
 import type { Resolved } from "../view-model/state.ts";
 import type { RoadmapModel } from "../view-model/projects.ts";
 import { Projects, type ProjectsCopy } from "./Projects.tsx";
-import { ProjectDetail as ProjectDetailScreen, type ProjectDetailCopy, type ProjectDetailProps } from "./ProjectDetail.tsx";
+import {
+  ASSIGNABLE_ISSUE_LIMIT,
+  ProjectDetail as ProjectDetailScreen,
+  type ProjectDetailCopy,
+  type ProjectDetailProps,
+} from "./ProjectDetail.tsx";
 
 const projection = {
   generation: 7,
@@ -145,6 +150,7 @@ const detailCopy: ProjectDetailCopy = {
       cancel: "Cancel",
       assign: "Assign issues",
       unassign: "Unassign",
+      assignCap: "Showing the first 50 unassigned open issues.",
       remove: "Remove",
       removeConfirm: "Remove this milestone?",
       refusalLead: "The store refused the change:",
@@ -569,6 +575,34 @@ describe("ProjectDetail — the milestone write controls (plan Task 4, minus rem
     expect(html).toContain('data-ms-milestone-assign=""');
     expect(html).toContain('data-ms-assign-issue="I-000900"');
     expect(html).toContain('data-ms-unassign-issue="I-000870"');
+    // Creation is name + target only: the engine's add verb has no status field.
+    const createForm = html.slice(html.indexOf('data-ms-milestone-create=""'), html.indexOf("</form>", html.indexOf('data-ms-milestone-create=""')));
+    expect(createForm).not.toContain("<select");
+    expect(html).not.toContain('data-ms-assign-cap');
+  });
+
+  test("the assign picker's summary is the control, and the cap is stated when it applies", () => {
+    const html = renderDetail({
+      writes: writes(),
+      assignableIssues: [{ id: "I-000900", title: "Loose end", severity: "low", revision: 3 }],
+    });
+    // The summary itself carries the label and the list's only interactive role: a
+    // nested button swallowed activation, which left the visible trigger inert.
+    expect(html).toContain('<summary class="link" data-ms-milestone-assign-toggle="9f2c4a10">Assign issues</summary>');
+    expect(html).not.toMatch(/<summary[^>]*>\s*<button/);
+    expect(html).not.toContain('tabindex="-1"');
+
+    const capped = renderDetail({
+      writes: writes(),
+      assignableIssues: Array.from({ length: ASSIGNABLE_ISSUE_LIMIT }, (_, index) => ({
+        id: `I-0009${String(index).padStart(2, "0")}`,
+        title: `Issue ${index}`,
+        severity: "low",
+        revision: 1,
+      })),
+    });
+    expect(capped).toContain(`data-ms-assign-cap="${ASSIGNABLE_ISSUE_LIMIT}"`);
+    expect(capped).toContain("Showing the first 50 unassigned open issues.");
   });
 
   test("no write surface, no controls: the read-only page stays read-only", () => {

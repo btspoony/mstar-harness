@@ -1,10 +1,11 @@
 /**
  * The milestone write channel (plan 20261029-dashboard-alignment Task 4,
- * contract C1): the three write invocations ride the panel's own typert
- * service, call the engine verbs with the observed store revision, and answer
- * `{ ok, receipt }` or the engine's own refusal verbatim. Milestone REMOVE is
- * deliberately absent: the engine's `removeMilestone` verb is landing on the
- * engine track and the remove action ships after it merges.
+ * contract C1): the four write invocations — add, update, assign/unassign and
+ * remove — ride the panel's own typert service, call the engine verbs with the
+ * observed store revision, and answer `{ ok, receipt }` or the engine's own
+ * refusal verbatim. Removal's emptiness rule is the engine's
+ * (`milestone.not-empty`), so the attempt is made and the refusal passed
+ * through.
  *
  * No test pins this workspace's revision: every expected revision is read
  * through the panel's own `roadmap` view first (contract C2).
@@ -15,6 +16,7 @@ import { rm } from 'node:fs/promises'
 import { bootApp, seedOpenIssue, seedStore, type BootResult } from './harness.ts'
 import { stubGateway } from './gateway-stub.ts'
 import { MstarPanelSnapshotClient } from '../src/client/panel/panel-snapshot-client.ts'
+import { writeOperationIds } from '../src/client/panel/panel-shell.tsx'
 import { openStore, registerCatalogEntity } from '@mstar-harness/engine'
 import {
   PANEL_SNAPSHOT_SERVICE,
@@ -146,6 +148,30 @@ describe('milestone write descriptors', () => {
       })
       expect(`${descriptor.namespace}/${descriptor.method}`).toBe(endpoint)
     }
+  })
+})
+
+describe('the C1 operation-id policy — one id per logical write, reused by a retry', () => {
+  const deterministic = () => {
+    let next = 0
+    return () => `op-${++next}`
+  }
+
+  it('reuses the id for the same write and mints a fresh one for a different write', () => {
+    const ids = writeOperationIds(deterministic())
+    const first = ids.for('add:Milestone:null:0')
+    // An ambiguous retry (the deadline abort) retries the SAME logical write.
+    expect(ids.for('add:Milestone:null:0')).toBe(first)
+    expect(ids.for('add:Other:null:1')).not.toBe(first)
+  })
+
+  it('a terminal answer settles the write, so the next attempt is a new intent', () => {
+    const ids = writeOperationIds(deterministic())
+    const first = ids.for('remove:m-1')
+    ids.settled()
+    // A refusal the store made (not a transport failure) ends the logical write:
+    // retrying it later must be a new request, not a replay of a judged one.
+    expect(ids.for('remove:m-1')).not.toBe(first)
   })
 })
 
@@ -337,6 +363,11 @@ describe('milestoneAdd / milestoneUpdate — engine verbs with the observed revi
     const second = await endpoint.milestoneAdd('ses_ms3', app.root, '_default', { name: 'Once', target: null, ordinal: 0 }, mutation)
     expect(first.ok).toBe(true)
     expect(second).toEqual(first)
+    // The retry replayed the recorded receipt: the store holds ONE milestone, which
+    // is the whole point of reusing the id across an ambiguous attempt (C1).
+    const read = await endpoint.dashboardView('ses_ms3', app.root, 'roadmap', { project: '_default' })
+    const held = (read.envelope?.data as { milestones: { milestones: unknown[] } }).milestones.milestones
+    expect(held).toHaveLength(1)
     // And a DIFFERENT request reusing the id is refused, per the engine's rule.
     const conflict = await endpoint.milestoneAdd('ses_ms3', app.root, '_default', { name: 'Other', target: null, ordinal: 1 }, mutation)
     expect(conflict.ok).toBe(false)
