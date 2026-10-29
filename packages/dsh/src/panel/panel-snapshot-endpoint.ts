@@ -45,6 +45,7 @@ import {
   MSTAR_DASHBOARD_VIEW_METHOD,
   MSTAR_MILESTONE_ADD_METHOD,
   MSTAR_MILESTONE_ASSIGN_METHOD,
+  MSTAR_MILESTONE_REMOVE_METHOD,
   MSTAR_MILESTONE_UPDATE_METHOD,
   MSTAR_PANEL_SNAPSHOT_METHOD,
   MSTAR_PANEL_SNAPSHOT_NAMESPACE,
@@ -53,6 +54,7 @@ import {
   addMilestone,
   assignIssueMilestone,
   readDashboardView,
+  removeMilestone,
   updateMilestone,
   type DashboardView,
   type IssueReceipt,
@@ -477,6 +479,35 @@ export class MstarPanelSnapshotGateway extends TypertRemoteService {
   }
 
   /**
+   * Remove one EMPTY milestone (engine `removeMilestone`). The emptiness rule
+   * is the engine's: a milestone that still holds issues is refused
+   * (`milestone.not-empty`) and that refusal passes through verbatim — the UI
+   * offers the control regardless and surfaces the store's own words.
+   */
+  async milestoneRemove(
+    sessionId: string,
+    cwd: string,
+    projectId: string,
+    milestoneId: string,
+    mutation: { operationId: string; expectedStoreRevision: number },
+  ): Promise<MilestoneWriteResult> {
+    try {
+      const target = await this.resolveTarget(sessionId, cwd)
+      if (target.kind !== 'ok') {
+        return {
+          ok: false,
+          code: 'store.not-active',
+          message: "write refused: " + (target.kind === 'no-harness' ? 'no harness root resolves for this workspace' : target.reason),
+        }
+      }
+      const receipt = await removeMilestone({ harnessDir: target.harnessDir }, projectId, milestoneId, mutation)
+      return { ok: true, receipt }
+    } catch (error) {
+      return refused(error)
+    }
+  }
+
+  /**
    * The leaf-signal state for ONE read (#619): `ctx.get('shellEnv')` is probed
    * at call time, never memoized, so a host service injected after `apply` (or
    * withdrawn) is reflected on the next panel read without a restart. An
@@ -744,6 +775,25 @@ export function mstarMilestoneAssignInvocation(): TypertContribution['invocation
       { name: 'cwd', wire: 'cwd', source: 'json', codec: { mode: 'src-json' } },
       { name: 'issueId', wire: 'issueId', source: 'json', codec: { mode: 'src-json' } },
       { name: 'input', wire: 'input', source: 'json', codec: { mode: 'src-json' } },
+      { name: 'mutation', wire: 'mutation', source: 'json', codec: { mode: 'src-json' } },
+    ],
+    result: { mode: 'src-json' },
+  }
+}
+
+
+export function mstarMilestoneRemoveInvocation(): TypertContribution['invocations'][number] {
+  return {
+    id: `${CONTRIBUTING_PACKAGE}#${MSTAR_PANEL_SNAPSHOT_NAMESPACE}/${MSTAR_MILESTONE_REMOVE_METHOD}`,
+    service: PANEL_SNAPSHOT_SERVICE,
+    namespace: MSTAR_PANEL_SNAPSHOT_NAMESPACE,
+    method: MSTAR_MILESTONE_REMOVE_METHOD,
+    invocation: { kind: 'direct' },
+    parameters: [
+      { name: 'sessionId', wire: 'sessionId', source: 'json', codec: { mode: 'src-json' } },
+      { name: 'cwd', wire: 'cwd', source: 'json', codec: { mode: 'src-json' } },
+      { name: 'projectId', wire: 'projectId', source: 'json', codec: { mode: 'src-json' } },
+      { name: 'milestoneId', wire: 'milestoneId', source: 'json', codec: { mode: 'src-json' } },
       { name: 'mutation', wire: 'mutation', source: 'json', codec: { mode: 'src-json' } },
     ],
     result: { mode: 'src-json' },

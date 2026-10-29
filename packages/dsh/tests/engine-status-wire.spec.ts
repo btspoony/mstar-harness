@@ -22,6 +22,7 @@ import {
   PANEL_SNAPSHOT_ENDPOINT,
   MILESTONE_ADD_ENDPOINT,
   MILESTONE_ASSIGN_ENDPOINT,
+  MILESTONE_REMOVE_ENDPOINT,
   MILESTONE_UPDATE_ENDPOINT,
   SELECT_WORKFLOW_ENDPOINT,
 } from '../src/engine-status-wire.ts'
@@ -43,6 +44,7 @@ describe('panel wire addresses — one declaration, both halves', () => {
       MILESTONE_ADD_ENDPOINT,
       MILESTONE_UPDATE_ENDPOINT,
       MILESTONE_ASSIGN_ENDPOINT,
+      MILESTONE_REMOVE_ENDPOINT,
     ])
   })
 

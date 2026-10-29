@@ -459,6 +459,8 @@ export const zh: Copy = {
         cancel: "取消",
         assign: "分配问题",
         unassign: "取消分配",
+        remove: "移除",
+        removeConfirm: "移除该里程碑？",
         refusalLead: "存储拒绝了此次变更：",
       },
       absentNextStep: (features) => `本项目仍可使用：${features}。`,

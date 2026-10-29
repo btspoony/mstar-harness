@@ -30,11 +30,12 @@ import {
   ENGINE_STATUS_CHANNEL,
   MILESTONE_ADD_ENDPOINT,
   MILESTONE_ASSIGN_ENDPOINT,
+  MILESTONE_REMOVE_ENDPOINT,
   MILESTONE_UPDATE_ENDPOINT,
   PANEL_SNAPSHOT_ENDPOINT,
 } from '../../engine-status-wire.ts'
 
-export { MILESTONE_ADD_ENDPOINT, MILESTONE_ASSIGN_ENDPOINT, MILESTONE_UPDATE_ENDPOINT }
+export { MILESTONE_ADD_ENDPOINT, MILESTONE_ASSIGN_ENDPOINT, MILESTONE_REMOVE_ENDPOINT, MILESTONE_UPDATE_ENDPOINT }
 
 /**
  * ONE answer shape for every milestone write: the engine's own refusal passes
@@ -277,6 +278,17 @@ export class MstarPanelSnapshotClient {
     mutation: { operationId: string; expectedStoreRevision: number }
   }): Promise<MilestoneWriteResult> {
     return this.milestoneWrite(MILESTONE_UPDATE_ENDPOINT, args as Record<string, unknown>)
+  }
+
+  /** Remove one EMPTY milestone (engine `removeMilestone`; the refusal is the engine's). */
+  milestoneRemove(args: {
+    sessionId: string
+    cwd: string
+    projectId: string
+    milestoneId: string
+    mutation: { operationId: string; expectedStoreRevision: number }
+  }): Promise<MilestoneWriteResult> {
+    return this.milestoneWrite(MILESTONE_REMOVE_ENDPOINT, args as Record<string, unknown>)
   }
 
   /** Assign — or, with `milestoneId: null`, unassign — one issue (engine `assignIssueMilestone`). */

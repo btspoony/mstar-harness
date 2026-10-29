@@ -488,6 +488,8 @@ export const en = {
         cancel: "Cancel",
         assign: "Assign issues",
         unassign: "Unassign",
+        remove: "Remove",
+        removeConfirm: "Remove this milestone?",
         refusalLead: "The store refused the change:",
       },
       absentNextStep: (features: string) => `This project still has: ${features}.`,

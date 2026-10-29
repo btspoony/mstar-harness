@@ -15,21 +15,24 @@ import { rm } from 'node:fs/promises'
 import { bootApp, seedOpenIssue, seedStore, type BootResult } from './harness.ts'
 import { stubGateway } from './gateway-stub.ts'
 import { MstarPanelSnapshotClient } from '../src/client/panel/panel-snapshot-client.ts'
-import { registerCatalogEntity } from '@mstar-harness/engine'
+import { openStore, registerCatalogEntity } from '@mstar-harness/engine'
 import {
   PANEL_SNAPSHOT_SERVICE,
   mstarMilestoneAddInvocation,
   mstarMilestoneUpdateInvocation,
   mstarMilestoneAssignInvocation,
+  mstarMilestoneRemoveInvocation,
   type MilestoneWriteResult,
 } from '../src/panel/panel-snapshot-endpoint.ts'
 import {
   ENGINE_STATUS_CHANNEL,
   MILESTONE_ADD_ENDPOINT,
   MILESTONE_ASSIGN_ENDPOINT,
+  MILESTONE_REMOVE_ENDPOINT,
   MILESTONE_UPDATE_ENDPOINT,
   MSTAR_MILESTONE_ADD_METHOD,
   MSTAR_MILESTONE_ASSIGN_METHOD,
+  MSTAR_MILESTONE_REMOVE_METHOD,
   MSTAR_MILESTONE_UPDATE_METHOD,
   MSTAR_PANEL_SNAPSHOT_NAMESPACE,
 } from '../src/engine-status-wire.ts'
@@ -58,6 +61,13 @@ interface WriteEndpoint {
     projectId: string,
     milestoneId: string,
     patch: { name?: string; target?: string | null; status?: string },
+    mutation: { operationId: string; expectedStoreRevision: number },
+  ): Promise<MilestoneWriteResult>
+  milestoneRemove(
+    sessionId: string,
+    cwd: string,
+    projectId: string,
+    milestoneId: string,
     mutation: { operationId: string; expectedStoreRevision: number },
   ): Promise<MilestoneWriteResult>
   milestoneAssign(
@@ -91,6 +101,21 @@ async function seedProject(harnessDir: string): Promise<void> {
   )
 }
 
+/**
+ * Attach one issue to a milestone directly in the store. The assign CHANNEL
+ * needs a coordinator execution binding a fixture cannot mint (its refusal is
+ * covered by its own test); the emptiness rule under test only needs the row.
+ */
+async function assignDirectly(harnessDir: string, milestoneId: string | null, issueId: string): Promise<void> {
+  const handle = await openStore({ harnessDir }, 'write')
+  try {
+    handle.db.prepare('update issues set milestone_id=? where id=?').run(milestoneId, issueId)
+    handle.db.prepare('update store_meta set revision=revision+1 where id=1').run()
+  } finally {
+    handle.close()
+  }
+}
+
 function liveSession(app: BootResult, id: string, cwd: string): void {
   const sessions = app.ctx.get('sessions') as { register(session: unknown): void } | undefined
   if (sessions === undefined) throw new Error('sessions service not mounted')
@@ -110,6 +135,7 @@ describe('milestone write descriptors', () => {
       [mstarMilestoneAddInvocation(), MSTAR_MILESTONE_ADD_METHOD, MILESTONE_ADD_ENDPOINT],
       [mstarMilestoneUpdateInvocation(), MSTAR_MILESTONE_UPDATE_METHOD, MILESTONE_UPDATE_ENDPOINT],
       [mstarMilestoneAssignInvocation(), MSTAR_MILESTONE_ASSIGN_METHOD, MILESTONE_ASSIGN_ENDPOINT],
+      [mstarMilestoneRemoveInvocation(), MSTAR_MILESTONE_REMOVE_METHOD, MILESTONE_REMOVE_ENDPOINT],
     ] as const) {
       expect(descriptor).toMatchObject({
         service: PANEL_SNAPSHOT_SERVICE,
@@ -197,6 +223,70 @@ describe('milestoneAdd / milestoneUpdate — engine verbs with the observed revi
       .milestones.milestones
     expect(milestones).toHaveLength(1)
     expect(milestones[0]).toMatchObject({ name: 'Renamed', status: 'active' })
+  })
+
+  it('removes an EMPTY milestone, and a non-empty one is refused verbatim', async () => {
+    const app = (booted = await bootApp({ sessionsService: 'fake', harnessDir: null }))
+    await seedStore(app.harnessDir)
+    liveSession(app, 'ses_rm', app.root)
+    const endpoint = endpointOf(app)
+    await seedProject(app.harnessDir)
+    const issueId = await seedOpenIssue(app.harnessDir, {
+      title: 'Sticky issue',
+      severity: 'low',
+      projectId: '_default',
+      operationId: 'op-rm-seed',
+    })
+
+    const created = await endpoint.milestoneAdd(
+      'ses_rm',
+      app.root,
+      '_default',
+      { name: 'Doomed', target: null, ordinal: 0 },
+      { operationId: 'op-rm-create', expectedStoreRevision: await observedRevision(endpoint, 'ses_rm', app.root) },
+    )
+    expect(created.ok).toBe(true)
+    if (!created.ok) return
+    const milestoneId = (created.receipt as { milestoneId: string }).milestoneId
+
+    // Non-empty: the engine refuses, and the channel passes code + message through.
+    await assignDirectly(app.harnessDir, milestoneId, issueId)
+
+    const nonEmpty = await endpoint.milestoneRemove(
+      'ses_rm',
+      app.root,
+      '_default',
+      milestoneId,
+      { operationId: 'op-rm-nonempty', expectedStoreRevision: await observedRevision(endpoint, 'ses_rm', app.root) },
+    )
+    expect(nonEmpty).toMatchObject({ ok: false, code: 'milestone.not-empty' })
+    expect(nonEmpty.ok === false && nonEmpty.message.length).toBeGreaterThan(0)
+
+    // A revision that moved under the caller is the engine's own CAS refusal.
+    const stale = await endpoint.milestoneRemove(
+      'ses_rm',
+      app.root,
+      '_default',
+      milestoneId,
+      { operationId: 'op-rm-stale', expectedStoreRevision: 0 },
+    )
+    expect(stale).toMatchObject({ ok: false, code: 'milestone.revision-conflict' })
+
+    // Empty the milestone again, then the removal succeeds on the fresh revision.
+    await assignDirectly(app.harnessDir, null, issueId)
+    const removed = await endpoint.milestoneRemove(
+      'ses_rm',
+      app.root,
+      '_default',
+      milestoneId,
+      { operationId: 'op-rm-go', expectedStoreRevision: await observedRevision(endpoint, 'ses_rm', app.root) },
+    )
+    expect(removed.ok).toBe(true)
+    if (!removed.ok) return
+    expect((removed.receipt as { changed: boolean }).changed).toBe(true)
+    const read = await endpoint.dashboardView('ses_rm', app.root, 'roadmap', { project: '_default' })
+    const milestones = (read.envelope?.data as { milestones: { milestones: unknown[] } }).milestones.milestones
+    expect(milestones).toHaveLength(0)
   })
 
   it('honours the ordinal the caller supplies, so a second create is not silently ordinal 0', async () => {

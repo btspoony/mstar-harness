@@ -60,6 +60,7 @@ import {
   mstarDashboardViewInvocation,
   mstarMilestoneAddInvocation,
   mstarMilestoneAssignInvocation,
+  mstarMilestoneRemoveInvocation,
   mstarMilestoneUpdateInvocation,
   mstarPanelSnapshotInvocation,
 } from './panel/panel-snapshot-endpoint.ts'
@@ -415,6 +416,7 @@ export function mstarEngineStatusContribution(): TypertContribution {
       mstarMilestoneAddInvocation(),
       mstarMilestoneUpdateInvocation(),
       mstarMilestoneAssignInvocation(),
+      mstarMilestoneRemoveInvocation(),
     ],
   }
 }

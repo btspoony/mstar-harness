@@ -145,6 +145,8 @@ const detailCopy: ProjectDetailCopy = {
       cancel: "Cancel",
       assign: "Assign issues",
       unassign: "Unassign",
+      remove: "Remove",
+      removeConfirm: "Remove this milestone?",
       refusalLead: "The store refused the change:",
     },
     timelineUnassigned: "unassigned",
@@ -553,6 +555,7 @@ describe("ProjectDetail — the milestone write controls (plan Task 4, minus rem
     create: () => {},
     update: () => {},
     assign: () => {},
+    remove: () => {},
     ...over,
   });
 
@@ -582,9 +585,15 @@ describe("ProjectDetail — the milestone write controls (plan Task 4, minus rem
     expect((busy.match(/disabled=""/g) ?? []).length).toBeGreaterThan(2);
   });
 
-  test("NEGATIVE: there is no remove control — the engine verb has not landed", () => {
-    const html = renderDetail({ writes: writes() });
+  test("the remove control arms a two-step confirm, not a direct delete", () => {
+    const html = renderDetail({ writes: writes(), assignableIssues: [] });
+    // The first render arms the confirm; the removal itself is a separate click.
+    expect((html.match(/data-ms-milestone-remove=""/g) ?? []).length).toBe(1);
+    expect(html).not.toContain('data-ms-milestone-remove="9f2c4a10"');
+  });
+
+  test("NEGATIVE: no write surface, no remove control", () => {
+    const html = renderDetail({});
     expect(html).not.toContain("data-ms-milestone-remove");
-    expect(html).not.toContain("Remove");
   });
 });

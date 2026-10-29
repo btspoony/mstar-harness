@@ -43,7 +43,9 @@ export type AssignableIssue = { id: string; title: string; severity: string; rev
  * is one engine verb; the surface owns the busy/refusal state and the read
  * reload — the screen owns only its control state. There is no remove action
  * yet: the engine's `removeMilestone` verb is landing on the engine track, so
- * the remove control ships after that merge.
+ * the remove control ships with it: removing a milestone that still holds
+ * issues is ATTEMPTED and the store's refusal surfaced verbatim, not
+ * pre-empted by a disabled control.
  */
 export type MilestoneWriteSurface = {
   /** True while one write is in flight; every control is disabled. */
@@ -54,6 +56,8 @@ export type MilestoneWriteSurface = {
   update: (milestoneId: string, patch: { name?: string; target?: string | null; status?: string }) => void;
   /** `milestoneId: null` is the unassign. */
   assign: (issueId: string, issueRevision: number, milestoneId: string | null) => void;
+  /** Remove one milestone; the engine refuses a non-empty one in place. */
+  remove: (milestoneId: string) => void;
 };
 
 /** Every visible string this screen needs. Task 5 supplies them. */
@@ -93,6 +97,8 @@ export type ProjectDetailCopy = {
       cancel: string;
       assign: string;
       unassign: string;
+      remove: string;
+      removeConfirm: string;
       refusalLead: string;
     };
     /** The next step offered when the roadmap is absent (§4). */
@@ -147,6 +153,7 @@ function MilestoneActions(props: {
 }) {
   const { milestone, writes, assignable, copy } = props;
   const [editing, setEditing] = useState(false);
+  const [removing, setRemoving] = useState(false);
   const [name, setName] = useState(milestone.name);
   const [target, setTarget] = useState(milestone.target ?? "");
   const [status, setStatus] = useState(milestone.status ?? "planned");
@@ -156,6 +163,32 @@ function MilestoneActions(props: {
         <button type="button" className={"link"} disabled={writes.busy} data-ms-milestone-edit="" onClick={() => setEditing(true)}>
           {copy.roadmap.writes.edit}
         </button>
+        {removing ? (
+          // A two-step inline confirm: the attempt is real, so a non-empty
+          // milestone's refusal surfaces verbatim after it (plan Task 4 round 2).
+          <span data-ms-milestone-remove-confirm={milestone.milestoneId}>
+            <span className="muted t-11">{copy.roadmap.writes.removeConfirm}</span>
+            <button
+              type="button"
+              className={"link"}
+              disabled={writes.busy}
+              data-ms-milestone-remove={milestone.milestoneId}
+              onClick={() => {
+                setRemoving(false);
+                writes.remove(milestone.milestoneId);
+              }}
+            >
+              {copy.roadmap.writes.remove}
+            </button>
+            <button type="button" className={"link"} disabled={writes.busy} onClick={() => setRemoving(false)}>
+              {copy.roadmap.writes.cancel}
+            </button>
+          </span>
+        ) : (
+          <button type="button" className={"link"} disabled={writes.busy} data-ms-milestone-remove="" onClick={() => setRemoving(true)}>
+            {copy.roadmap.writes.remove}
+          </button>
+        )}
         {assignable.length === 0 ? null : (
           <details data-ms-milestone-assign="">
             <summary>

@@ -494,6 +494,7 @@ export type MilestoneWriteChannel = {
   create(input: { name: string; target: string | null; ordinal: number }): void
   update(milestoneId: string, patch: { name?: string; target?: string | null; status?: string }): void
   assign(issueId: string, issueRevision: number, milestoneId: string | null): void
+  remove(milestoneId: string): void
 }
 
 /** One write at a time; a fresh operationId per attempt (idempotency is the engine's). */
@@ -536,6 +537,10 @@ function useMilestoneWrites(seats: {
     update: (milestoneId, patch) =>
       run(() =>
         client.milestoneUpdate({ sessionId, cwd, projectId, milestoneId, patch, mutation: mutation() }),
+      ),
+    remove: (milestoneId) =>
+      run(() =>
+        client.milestoneRemove({ sessionId, cwd, projectId, milestoneId, mutation: mutation() }),
       ),
     assign: (issueId, issueRevision, milestoneId) =>
       run(() =>
