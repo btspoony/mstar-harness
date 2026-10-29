@@ -479,7 +479,7 @@ export function getWorkflowCommandDefinitions(): readonly CommandDefinition[] {
             code: "command.invalid-input",
             exitCode: 2,
             message: `project takes one value on this command; a plan workflow records one project register id (received ${JSON.stringify(input.project)})`,
-            recovery: "Pass the single project id once (--project <projectId>). Multi-project membership is an iteration surface: register it with repeated `mstar iteration register --project <projectId>`, or add relations with the `mstar catalog link` family.",
+            recovery: "Pass the single project id once (--project <projectId>). Multi-project membership is an iteration surface: register it with repeated `mstar iteration register --project <projectId>`, or add the relation with `mstar catalog link --from-kind iteration --from-id <workflow-id> --relation belongs-to --to-kind project --to-id <project-id>`.",
           });
         }
         const harnessDir = resolveProcessHarnessDir(context.cwd, input.harness);
