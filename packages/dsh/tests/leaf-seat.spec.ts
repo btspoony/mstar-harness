@@ -20,6 +20,8 @@ import {
 } from '@mstar-harness/commands'
 import { executionContextFor } from '@mstar-harness/engine'
 import { coordinatorSeatCommandFor } from '../src/gates/coordinator-seat.ts'
+import { readFileSync } from 'node:fs'
+import { join } from 'node:path'
 import { coordinatorIdentityFor, isLeafSeatHeader, leafSeatCoordinatorRefusal, leafSeatShellEnvOf, LEAF_SEAT_SHELL_ENV_DESCRIPTION, LEAF_SEAT_SHELL_ENV_KEY, registerLeafSeatShellEnv } from '../src/gates/leaf-seat.ts'
 
 const SRC = join(import.meta.dir, '..', 'src')
@@ -232,5 +234,28 @@ describe('the deferred shell-env registration', () => {
     expect(contributor.resolve({ agent: { session: { header: { origin: 'subagent' } } } })).toEqual({ [LEAF_SEAT_SHELL_ENV_KEY]: '1' })
     expect(contributor.resolve({ agent: { session: { header: { delegationDepth: 1 } } } })).toEqual({ [LEAF_SEAT_SHELL_ENV_KEY]: '1' })
     expect(contributor.resolve({ agent: { session: { header: { origin: 'team-lead' } } } })).toEqual({})
+  })
+})
+
+/**
+ * The wiring pin: `index.ts` must actually call the registration helper inside
+ * the deferred `ctx.inject(['shellEnv'], ...)` shape — the same source-scan
+ * style the `SEAT_SYMBOLS` checks above use, because the dsh test env cannot
+ * load the plugin graph.
+ */
+describe('the index.ts wiring calls the deferred registration', () => {
+  const indexSource = readFileSync(join(import.meta.dir, '..', 'src', 'index.ts'), 'utf8')
+
+  test('index.ts imports registerLeafSeatShellEnv and calls it', () => {
+    expect(indexSource).toContain("from './gates/leaf-seat.ts'")
+    expect(indexSource).toMatch(/import \{[^}]*registerLeafSeatShellEnv[^}]*\} from '\.\/gates\/leaf-seat\.ts'/)
+    expect(indexSource).toContain('registerLeafSeatShellEnv(ctx)')
+  })
+
+  test('the call site is the shellEnv deferred injection, not a static import', () => {
+    expect(indexSource).not.toMatch(/ctx\.inject\(\['shellEnv'\]/)
+    // The helper owns the inject; index.ts only forwards ctx.
+    const helperSource = readFileSync(join(import.meta.dir, '..', 'src', 'gates', 'leaf-seat.ts'), 'utf8')
+    expect(helperSource).toContain("ctx.inject(['shellEnv']")
   })
 })

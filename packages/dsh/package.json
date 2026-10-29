@@ -142,13 +142,7 @@
     "@deepseek-ai/dsh-workspace": "^0.2.1-rc.4",
     "@deepseek-ai/schemastery": "^3.18.1",
     "@mstar-harness/engine": "^4.0.3"
-  },
-  "peerDependenciesMeta": {
-    "@deepseek-ai/dsh-shell-env": {
-      "optional": true
-    }
-  },
-  "publishConfig": {
+  },  "publishConfig": {
     "access": "public"
   },
   "devDependencies": {
