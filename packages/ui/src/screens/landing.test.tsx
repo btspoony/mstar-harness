@@ -881,6 +881,8 @@ describe("Focus — a session with no active lifecycle is a calm idle state (pla
     // The gate's internal refusal is a host fact, not a product sentence.
     expect(page).not.toContain("no active lifecycle is registered");
     expect(page).not.toContain(gateSentence);
+    // And it is not smuggled into the mono workflow-id slot either.
+    expect(page).not.toContain('class="wf-id"');
   });
 
   test("the workflow panel shows one hint line: no planboard, no absence stack", () => {
@@ -891,7 +893,17 @@ describe("Focus — a session with no active lifecycle is a calm idle state (pla
     expect(page).not.toContain('data-ms-absence=');
     // The panel head survives: the section is still named.
     expect(page).toContain("Plans");
-    expect(page).not.toContain(".wf-id");
+    expect(page).not.toContain('class="wf-id"');
+  });
+
+  test("a FAILED workflow read renders its own arm even while the session is idle", () => {
+    // The hint is for the ordinary absence, not a blanket over any non-populated
+    // read: a transport failure still states itself, with its reason.
+    const page = idle({ workflow: { state: "unavailable", reason: "projection has no generation" } });
+    expect(page).toContain('data-ms-binding="idle"');
+    expect(page).toContain('data-ms-absence="unavailable"');
+    expect(page).toContain("projection has no generation");
+    expect(page).not.toContain('data-ms-workflow-idle=""');
   });
 
   test("the idle state keeps the session facts and the project panels", () => {

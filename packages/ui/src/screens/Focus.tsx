@@ -356,9 +356,12 @@ export function Focus(props: FocusProps) {
           </h2>
         </div>
         <div className="panel-body">
-        {model.binding.kind === "idle" || model.binding.kind === "unbound" ? (
+        {(model.binding.kind === "idle" || model.binding.kind === "unbound") &&
+        workflow.kind !== "unavailable" ? (
           // No active lifecycle is the ordinary state between lifecycles: one muted
-          // hint, no board, and none of the absence stack's prose.
+          // hint, no board, and none of the absence stack's prose. But only while the
+          // read is merely absent — an UNAVAILABLE read is a fact the reader still
+          // gets, in its own arm with the transport's reason.
           <p className="muted t-12" data-ms-workflow-idle="">
             {copy.idleHint}
           </p>
