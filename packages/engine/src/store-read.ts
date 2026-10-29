@@ -39,6 +39,7 @@ import { SddScriptError } from "./sdd.js";
 import { openStore, StoreError, type StoreContext, type StoreDb, type StoreHandle } from "./store-db.js";
 import { ExecutionError } from "./execution-store.js";
 import type { AuthorityVerdict } from "./recovery-intent.js";
+import { WORKFLOW_TERMINAL_STATUSES } from "./workflow.js";
 
 /** Refusal codes the read boundary itself raises (both already frozen). */
 export type StoreReadErrorCode = "store.not-active";
@@ -232,6 +233,15 @@ export type IterationPlanDTO = {
 export type IterationGateStep = 1 | 2 | 3 | 4;
 
 /**
+ * The iteration's EXECUTION lifecycle, derived from its iteration workflow
+ * (contract C1): `active` while the workflow is active-registered, the
+ * projected terminal status otherwise, and the literal `"none"` when the
+ * iteration has no projected workflow row at all. Catalog lifecycle stays a
+ * separate fact on `catalog.lifecycle`.
+ */
+export type IterationExecutionLifecycle = "active" | "completed" | "stopped" | "failed" | "none";
+
+/**
  * One iteration. Membership comes from the catalog -- plan and document
  * membership is disclosed even before any workflow starts -- and the execution
  * projection only adds the compass and the plan execution overlay.
@@ -241,6 +251,10 @@ export type IterationDTO = {
   catalog: CatalogIdentityDTO | null;
   compass: CompassDTO | null;
   workflow: { id: string; status: string; phase: string | null; activeRegistration: boolean } | null;
+  /** Execution lifecycle from the workflow (C1): `"none"` when there is no workflow row. */
+  executionLifecycle: IterationExecutionLifecycle;
+  /** Catalog project ids the iteration is linked `belongs-to`, sorted (C4). */
+  projects: string[];
   plans: IterationPlanDTO[];
   documents: CatalogIdentityDTO[];
   /**
@@ -1250,6 +1264,7 @@ type ProjectedCompassRow = {
   iteration_id: string;
   summary: string | null;
   milestones_json: string;
+  plans_json: string;
   started_at: string | null;
   ended_at: string | null;
   status: string | null;
@@ -1297,7 +1312,7 @@ function readGeneratedRows(db: StoreDb): GeneratedRows {
       .all(generation) as ProjectedLeaseRow[],
     compasses: db
       .prepare(
-        "select iteration_id, summary, milestones_json, started_at, ended_at, status from projection_compasses where generation = ? " +
+        "select iteration_id, summary, milestones_json, plans_json, started_at, ended_at, status from projection_compasses where generation = ? " +
           "order by iteration_id asc",
       )
       .all(generation) as ProjectedCompassRow[],
@@ -1422,8 +1437,12 @@ function readWorkflowList(db: StoreDb, filters: DashboardFilters): WorkflowListD
 
   // The projection has no project column: membership is the catalog's own
   // `belongs-to` relation, on the workflow row or on one of its plan rows.
+  // The list's rows stay ACTIVE-REGISTERED only (C3): the projection now also
+  // carries terminal iteration workflows for the iteration views, and the
+  // membership rule is stated here rather than inherited from the row set.
   const membership = projectMembership(db);
   const scoped = generated.workflows.filter((workflow) => {
+    if (!workflow.active_registration) return false;
     if (projectId === null) return true;
     if (belongsTo(membership, workflowCatalogKey(workflow).kind, workflow.id, projectId)) return true;
     return (plansByWorkflow.get(workflow.id) ?? []).some((plan) => belongsTo(membership, "plan", plan.plan_id, projectId));
@@ -1497,6 +1516,39 @@ function iterationDocumentIds(db: StoreDb): Map<string, string[]> {
   return byIteration;
 }
 
+/**
+ * The iteration's plan membership (C2): the de-duplicated, sorted union of the
+ * compass frontmatter `plans:` ids and the catalog `plan belongs-to iteration`
+ * links. The compass is the authored membership record; the link is its
+ * registration projection — neither side alone is the answer.
+ */
+function iterationMembershipPlanIds(
+  generated: GeneratedRows,
+  linkIds: Map<string, string[]>,
+  iterationIds: readonly string[],
+): Map<string, string[]> {
+  const merged = new Map<string, string[]>();
+  for (const iterationId of iterationIds) {
+    const compassRow = generated.compasses.find((row) => row.iteration_id === iterationId);
+    const mergedIds = new Set([...(linkIds.get(iterationId) ?? []), ...parseJsonArray<string>(compassRow?.plans_json)]);
+    merged.set(iterationId, [...mergedIds].sort());
+  }
+  return merged;
+}
+
+/**
+ * C1's one derivation of the execution lifecycle. The projected `status` is a
+ * free string, so the terminal arm is a CLOSED mapping against the workflow
+ * domain's own terminal set: a terminal literal answers for itself, and any
+ * other projected status is not terminal — it answers the vocabulary's
+ * non-terminal arm rather than leaking an out-of-union literal.
+ */
+function executionLifecycleOf(workflowRow: ProjectedWorkflowRow | undefined): IterationExecutionLifecycle {
+  if (workflowRow === undefined) return "none";
+  if (workflowRow.active_registration === 1) return "active";
+  return WORKFLOW_TERMINAL_STATUSES.find((status) => status === workflowRow.status) ?? "active";
+}
+
 function composeIteration(
   iterationId: string,
   catalog: CatalogIdentityDTO | null,
@@ -1504,6 +1556,7 @@ function composeIteration(
   planIds: readonly string[],
   documentIds: readonly string[],
   identities: Map<string, CatalogIdentityDTO>,
+  projects: readonly string[],
 ): IterationDTO {
   const badges: DashboardBadge[] = [];
   if (catalog === null) badges.push("catalog-missing");
@@ -1570,6 +1623,9 @@ function composeIteration(
             phase: workflowRow.phase,
             activeRegistration: workflowRow.active_registration === 1,
           },
+    // C1: the execution lifecycle derives here and nowhere else.
+    executionLifecycle: executionLifecycleOf(workflowRow),
+    projects: [...projects],
     plans,
     documents: documentIds.flatMap((documentId) => {
       const document = identities.get(identityToken("document", documentId));
@@ -1624,7 +1680,8 @@ function readIterationList(db: StoreDb, filters: DashboardFilters): IterationLis
       .all() as IdentityRow[]
   ).filter((row) => projectId === null || belongsTo(membership, "iteration", row.id, projectId));
 
-  const planIds = iterationPlanIds(db);
+  const linkPlanIds = iterationPlanIds(db);
+  const planIds = iterationMembershipPlanIds(generated, linkPlanIds, catalogRows.map((row) => row.id));
   const documentIds = iterationDocumentIds(db);
   const page = catalogRows.slice(offset, offset + limit);
   const identities = catalogIdentities(db, [
@@ -1641,6 +1698,9 @@ function readIterationList(db: StoreDb, filters: DashboardFilters): IterationLis
         planIds.get(row.id) ?? [],
         documentIds.get(row.id) ?? [],
         identities,
+        // The list filter already matches ANY linked project (C4): the same
+        // belongs-to membership is disclosed per row, sorted.
+        [...(membership.get(identityToken("iteration", row.id)) ?? [])].sort(),
       ),
     ),
     total: catalogRows.length,
@@ -1653,7 +1713,7 @@ function readIterationList(db: StoreDb, filters: DashboardFilters): IterationLis
 function readIterationDetail(db: StoreDb, filters: DashboardFilters): IterationDTO | null {
   const iterationId = requireId(filters, "iteration-detail");
   const generated = readGeneratedRows(db);
-  const planIds = iterationPlanIds(db).get(iterationId) ?? [];
+  const planIds = iterationMembershipPlanIds(generated, iterationPlanIds(db), [iterationId]).get(iterationId) ?? [];
   const documentIds = iterationDocumentIds(db).get(iterationId) ?? [];
   const compassRow = generated.compasses.find((row) => row.iteration_id === iterationId);
   const identities = catalogIdentities(db, [
@@ -1663,7 +1723,8 @@ function readIterationDetail(db: StoreDb, filters: DashboardFilters): IterationD
   ]);
   const catalog = identities.get(identityToken("iteration", iterationId)) ?? null;
   if (catalog === null && compassRow === undefined) return null;
-  return composeIteration(iterationId, catalog, generated, planIds, documentIds, identities);
+  const projects = [...(projectMembership(db).get(identityToken("iteration", iterationId)) ?? [])].sort();
+  return composeIteration(iterationId, catalog, generated, planIds, documentIds, identities, projects);
 }
 
 // ---------------------------------------------------------------------------
