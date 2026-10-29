@@ -12,10 +12,10 @@
  *
  * There is no `ctx.tools.get('subagent')` (or any other mounted-surface probe)
  * anywhere on that path: the presence or absence of the `subagent` tool does
- * not choose the branch, and cannot. The registry pipeline is what bounds the
- * question — `tools/pre-execute` fires only for a tool the caller can actually
- * name, so on a surface where the team tools are absent a `spawn_teammate`
- * call never reaches any gate at all (`UNKNOWN_TOOL`).
+ * not choose the branch, and cannot. And because `tools/pre-execute` runs
+ * BEFORE the registry resolves the tool, the gate fires on the CALL NAME even
+ * when the team tool is unmounted — absence of the tool is never a bypass;
+ * `unknown tool` appears only after a gate-allowed call reaches resolution.
  *
  * This fixture therefore pins the truthful pair — and the registry ORDER is
  * part of the truth, not an implementation detail: `tools/pre-execute` runs
