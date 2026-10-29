@@ -469,13 +469,26 @@ export function getWorkflowCommandDefinitions(): readonly CommandDefinition[] {
         const required = [input.workflow, input.planId, input.planTitle, input.planFile, input.deliveryKind];
         if (required.some((value) => value === undefined || value.trim() === "")) return refusalEnvelope({ command: "workflow.register", status: "usage", code: "command.invalid-input", exitCode: 2, message: "workflow, planId, planTitle, planFile and deliveryKind are required" });
         if (!(WORKFLOW_DELIVERY_KINDS as readonly string[]).includes(input.deliveryKind!)) return refusalEnvelope({ command: "workflow.register", status: "usage", code: "command.invalid-input", exitCode: 2, message: `deliveryKind must be one of ${WORKFLOW_DELIVERY_KINDS.join(" | ")}` });
+        // The shared schema admits the repeatable form for `iteration.register`,
+        // so an array reaching this handler is a caller mistake that must be
+        // refused, never dropped: a plan workflow records ONE project id.
+        if (Array.isArray(input.project)) {
+          return refusalEnvelope({
+            command: "workflow.register",
+            status: "usage",
+            code: "command.invalid-input",
+            exitCode: 2,
+            message: `project takes one value on this command; a plan workflow records one project register id (received ${JSON.stringify(input.project)})`,
+            recovery: "Pass the single project id once (--project <projectId>). Multi-project membership is an iteration surface: register it with repeated `mstar iteration register --project <projectId>`, or add relations with the `mstar catalog link` family.",
+          });
+        }
         const harnessDir = resolveProcessHarnessDir(context.cwd, input.harness);
         if (harnessDir === null) return refusalEnvelope({ command: "workflow.register", status: "usage", code: "command.invalid-input", exitCode: 2, message: "harness dir not found; supply harness" });
         // `--branch-source` is the deprecated alias of `--branch-work`: the two
         // flags write the one delivery branch, and the current name wins when
         // both are supplied.
         const branchWork = input.branchWork ?? input.branchSource;
-        const workflow: CatalogExecutionWorkflow = { kind: "plan", workflowId: input.workflow!, options: { harnessDir, plan: { id: input.planId!, title: input.planTitle!, file: input.planFile! }, deliveryKind: input.deliveryKind as never, ...(input.project === undefined || Array.isArray(input.project) ? {} : { project: input.project }), ...(input.branchBase === undefined ? {} : { branchBase: input.branchBase }), ...(branchWork === undefined ? {} : { branchWork }), ...(input.branchTarget === undefined ? {} : { branchTarget: input.branchTarget }), ...(input.completionPolicy === undefined ? {} : { completionPolicy: input.completionPolicy }), ...(input.startedAt === undefined ? {} : { startedAt: input.startedAt }) } };
+        const workflow: CatalogExecutionWorkflow = { kind: "plan", workflowId: input.workflow!, options: { harnessDir, plan: { id: input.planId!, title: input.planTitle!, file: input.planFile! }, deliveryKind: input.deliveryKind as never, ...(input.project === undefined ? {} : { project: input.project }), ...(input.branchBase === undefined ? {} : { branchBase: input.branchBase }), ...(branchWork === undefined ? {} : { branchWork }), ...(input.branchTarget === undefined ? {} : { branchTarget: input.branchTarget }), ...(input.completionPolicy === undefined ? {} : { completionPolicy: input.completionPolicy }), ...(input.startedAt === undefined ? {} : { startedAt: input.startedAt }) } };
         const identity = withLeafSeat(
           (context.executionIdentity ?? {
             source: context.host === undefined ? "local" : "host",
