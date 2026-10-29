@@ -16,7 +16,7 @@ import { rm } from 'node:fs/promises'
 import { bootApp, seedOpenIssue, seedStore, type BootResult } from './harness.ts'
 import { stubGateway } from './gateway-stub.ts'
 import { MstarPanelSnapshotClient } from '../src/client/panel/panel-snapshot-client.ts'
-import { writeOperationIds } from '../src/client/panel/panel-shell.tsx'
+import { createMilestoneWrites, writeOperationIds } from '../src/client/panel/panel-shell.tsx'
 import { openStore, registerCatalogEntity } from '@mstar-harness/engine'
 import {
   PANEL_SNAPSHOT_SERVICE,
@@ -172,6 +172,70 @@ describe('the C1 operation-id policy — one id per logical write, reused by a r
     // A refusal the store made (not a transport failure) ends the logical write:
     // retrying it later must be a new request, not a replay of a judged one.
     expect(ids.for('remove:m-1')).not.toBe(first)
+  })
+})
+
+describe('the write CHANNEL retries a transport-ambiguous write with the SAME operationId', () => {
+  it('reuses the id across the ambiguous retry; a different write gets a fresh one', async () => {
+    // First milestoneAdd answers like the 5s deadline abort (transport-error, the
+    // engine may or may not have committed); the retry of the same logical write
+    // succeeds. The stub records every request payload.
+    let milestoneAddCalls = 0
+    const gateway = stubGateway()
+    gateway.replyWith((_sessionId, _cwd, payload) => {
+      const request = (payload as { args: { input: { name: string }; endpoint?: unknown } }).args
+      if (request.input.name === 'Milestone one') {
+        milestoneAddCalls += 1
+        return milestoneAddCalls === 1
+          ? { ok: false, error: { code: 'transport-error', message: 'timeout: no answer in 5000ms' } }
+          : { ok: true, value: { ok: true, receipt: { milestoneId: 'm-1', changed: true, storeRevision: 9 } } }
+      }
+      return { ok: true, value: { ok: true, receipt: { milestoneId: 'm-2', changed: true, storeRevision: 10 } } }
+    })
+    const client = new MstarPanelSnapshotClient(gateway.connection)
+    let minted = 0
+    const ids = writeOperationIds(() => `op-logical-${++minted}`)
+    const refusals: Array<string | null> = []
+    const channel = createMilestoneWrites({
+      client,
+      sessionId: 's-1',
+      cwd: '/proj',
+      projectId: '_default',
+      expectedStoreRevision: 7,
+      reload: () => {},
+      onState: (state) => refusals.push(state.refusal),
+      ids,
+    })
+
+    // The ambiguous attempt, then the user's retry of the SAME logical write.
+    channel.create({ name: 'Milestone one', target: null, ordinal: 0 })
+    await new Promise((resolve) => setTimeout(resolve, 0))
+    channel.create({ name: 'Milestone one', target: null, ordinal: 0 })
+    await new Promise((resolve) => setTimeout(resolve, 0))
+
+    const adds = gateway.calls.filter((call) => call.endpoint === MILESTONE_ADD_ENDPOINT)
+    expect(adds).toHaveLength(2)
+    const firstId = (adds[0]!.payload as { args: { mutation: { operationId: string } } }).args.mutation.operationId
+    const retryId = (adds[1]!.payload as { args: { mutation: { operationId: string } } }).args.mutation.operationId
+    // THE contract: the ambiguous retry carries the SAME operationId, so the
+    // engine replays its recorded receipt instead of creating twice.
+    expect(firstId).toBe('op-logical-1')
+    expect(retryId).toBe(firstId)
+    // The transport failure surfaced as the refusal, and the successful retry cleared it.
+    const stated = refusals.filter((value): value is string => value !== null)
+    expect(stated).toHaveLength(1)
+    expect(stated[0]).toContain('timeout')
+
+    // A DIFFERENT logical write is a new intent: fresh id, because the previous
+    // write settled on success.
+    channel.create({ name: 'Another milestone', target: null, ordinal: 1 })
+    await new Promise((resolve) => setTimeout(resolve, 0))
+    const thirdId = (
+      gateway.calls.filter((call) => call.endpoint === MILESTONE_ADD_ENDPOINT)[2]!.payload as {
+        args: { mutation: { operationId: string } }
+      }
+    ).args.mutation.operationId
+    expect(thirdId).not.toBe(firstId)
   })
 })
 

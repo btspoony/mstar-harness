@@ -525,7 +525,106 @@ export function writeOperationIds(makeId: () => string = () => crypto.randomUUID
   }
 }
 
-/** One write at a time; see {@link writeOperationIds} for the id policy. */
+/**
+ * One write at a time, and the EXECUTED C1 id policy: every write names its
+ * logical signature, {@link writeOperationIds} hands back the id for it, and the
+ * id is settled only on a terminal answer — success, or a refusal the store
+ * itself made. A transport-ambiguous deadline abort keeps the id, so the user's
+ * retry replays the engine's recorded receipt instead of writing twice.
+ */
+export function createMilestoneWrites(seats: {
+  client: MstarPanelSnapshotClient
+  sessionId: string
+  cwd: string
+  projectId: string
+  expectedStoreRevision: number
+  reload: () => void
+  /** The channel's busy/refusal mirror — React state in the seat, recorded in a spec. */
+  onState: (state: { busy: boolean; refusal: string | null }) => void
+  /** The id policy; the seat owns one instance for its lifetime. */
+  ids: ReturnType<typeof writeOperationIds>
+}): MilestoneWriteChannel {
+  const { client, sessionId, cwd, projectId, expectedStoreRevision: revision, reload, onState, ids } = seats
+  // The factory's own mirror of the busy/refusal state; the hook overrides both
+  // members with its React state, but a direct caller (a spec) reads these.
+  let busy = false
+  let refusal: string | null = null
+  const run = (signature: string, call: (operationId: string) => Promise<MilestoneWriteResult>): void => {
+    if (busy) return
+    void (async () => {
+      busy = true
+      refusal = null
+      onState({ busy: true, refusal: null })
+      const result = await call(ids.for(signature))
+      // A terminal answer ends the logical write; an ambiguous transport failure
+      // keeps the id so the retry replays the engine's receipt (contract C1).
+      if (result.ok || result.code !== 'transport-error') ids.settled()
+      busy = false
+      refusal = result.ok ? null : result.message
+      onState({ busy, refusal })
+      reload()
+    })()
+  }
+  return {
+    get busy(): boolean {
+      return busy
+    },
+    get refusal(): string | null {
+      return refusal
+    },
+    create(input: { name: string; target: string | null; ordinal: number }): void {
+      run(`add:${input.name}:${input.target ?? ''}:${input.ordinal}`, (operationId) =>
+        client.milestoneAdd({
+          sessionId,
+          cwd,
+          projectId,
+          input: { name: input.name, target: input.target, ordinal: input.ordinal },
+          mutation: { operationId, expectedStoreRevision: revision },
+        }),
+      )
+    },
+    update(milestoneId: string, patch: { name?: string; target?: string | null; status?: string }): void {
+      run(`update:${milestoneId}:${JSON.stringify(patch)}`, (operationId) =>
+        client.milestoneUpdate({
+          sessionId,
+          cwd,
+          projectId,
+          milestoneId,
+          patch,
+          mutation: { operationId, expectedStoreRevision: revision },
+        }),
+      )
+    },
+    remove(milestoneId: string): void {
+      run(`remove:${milestoneId}`, (operationId) =>
+        client.milestoneRemove({
+          sessionId,
+          cwd,
+          projectId,
+          milestoneId,
+          mutation: { operationId, expectedStoreRevision: revision },
+        }),
+      )
+    },
+    assign(issueId: string, issueRevision: number, milestoneId: string | null): void {
+      run(`assign:${issueId}:${milestoneId ?? ''}:${issueRevision}`, (operationId) =>
+        client.milestoneAssign({
+          sessionId,
+          cwd,
+          issueId,
+          input: { projectId, milestoneId, reason: 'assigned from the project page' },
+          mutation: { operationId, actor: 'project-manager', expectedRevision: issueRevision, expectedStoreRevision: revision },
+        }),
+      )
+    },
+  }
+}
+
+/**
+ * The React seam around the channel factory: one id-policy instance per seat,
+ * the busy/refusal mirror as state. All behaviour lives in
+ * {@link createMilestoneWrites}, which a spec drives without a renderer.
+ */
 function useMilestoneWrites(seats: {
   client: MstarPanelSnapshotClient | undefined
   sessionId: string | null
@@ -536,51 +635,31 @@ function useMilestoneWrites(seats: {
 }): MilestoneWriteChannel | undefined {
   const { client, sessionId, cwd, projectId, expectedStoreRevision, reload } = seats
   const [state, setState] = React.useState<{ busy: boolean; refusal: string | null }>({ busy: false, refusal: null })
-  if (client === undefined || sessionId === null || cwd === null || projectId === null || expectedStoreRevision === null) {
+  const ids = React.useRef(writeOperationIds())
+  // Number.isInteger, not a null test: a schema-drifted envelope makes the member
+  // `undefined`, and a channel armed with no revision would guarantee refusals.
+  if (
+    client === undefined ||
+    sessionId === null ||
+    cwd === null ||
+    projectId === null ||
+    !Number.isInteger(expectedStoreRevision)
+  ) {
     return undefined
   }
-  const run = (call: () => Promise<MilestoneWriteResult>): void => {
-    if (state.busy) return
-    void (async () => {
-      setState({ busy: true, refusal: null })
-      const result = await call()
-      setState(result.ok ? { busy: false, refusal: null } : { busy: false, refusal: result.message })
-      reload()
-    })()
-  }
-  const mutation = () => ({ operationId: crypto.randomUUID(), expectedStoreRevision })
-  return {
-    busy: state.busy,
-    refusal: state.refusal,
-    create: (input) =>
-      run(() =>
-        client.milestoneAdd({
-          sessionId,
-          cwd,
-          projectId,
-          input: { name: input.name, target: input.target, ordinal: input.ordinal },
-          mutation: mutation(),
-        }),
-      ),
-    update: (milestoneId, patch) =>
-      run(() =>
-        client.milestoneUpdate({ sessionId, cwd, projectId, milestoneId, patch, mutation: mutation() }),
-      ),
-    remove: (milestoneId) =>
-      run(() =>
-        client.milestoneRemove({ sessionId, cwd, projectId, milestoneId, mutation: mutation() }),
-      ),
-    assign: (issueId, issueRevision, milestoneId) =>
-      run(() =>
-        client.milestoneAssign({
-          sessionId,
-          cwd,
-          issueId,
-          input: { projectId, milestoneId, reason: 'assigned from the project page' },
-          mutation: { operationId: crypto.randomUUID(), actor: 'project-manager', expectedRevision: issueRevision, expectedStoreRevision },
-        }),
-      ),
-  }
+  const channel = createMilestoneWrites({
+    client,
+    sessionId,
+    cwd,
+    projectId,
+    expectedStoreRevision: expectedStoreRevision as number,
+    reload,
+    onState: setState,
+    ids: ids.current,
+  })
+  // The factory's own busy flag is per-call-site state; the mirror the screen
+  // reads is this component's state, so return the channel with the live mirror.
+  return { ...channel, busy: state.busy, refusal: state.refusal }
 }
 
 /**
