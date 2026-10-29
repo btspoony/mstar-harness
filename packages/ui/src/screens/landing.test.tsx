@@ -237,7 +237,6 @@ const focusCopy: FocusCopy = {
   iterationPlans: (count) => `${count} plans`,
   enforcementLabel: (flag) => `enforcement ${flag}`,
   residualsHeading: "Open residual issues",
-  residualsTotal: () => "by severity",
   residualsScope: "all projects",
   milestoneProjectUnattributed: "unattributed",
   milestonesHeading: "Milestones",

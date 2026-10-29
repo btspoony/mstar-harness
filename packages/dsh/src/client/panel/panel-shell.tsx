@@ -98,7 +98,6 @@ function focusCopy(copy: Copy): FocusCopy {
     gateStepLabels: copy.iterationDetail.gateStepLabels,
     // The two project panels reuse the Overview screen's strings: one fact, one copy.
     residualsHeading: copy.overview.residualsHeading,
-    residualsTotal: copy.overview.residualsTotal,
     // The Focus-only scope labels live beside those strings; the adapter must carry
     // them or the typed copy contract is unsatisfied (a required mapping, not a
     // product decision).

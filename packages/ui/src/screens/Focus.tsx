@@ -64,7 +64,6 @@ export type FocusCopy = {
   enforcementLabel: (flag: string) => string;
   /** The three project-scoped panels, shared with the Overview screen's copy. */
   residualsHeading: string;
-  residualsTotal: () => string;
   /** The residuals panel's scope, so its counts cannot be read as a project's. */
   residualsScope: string;
   /** The milestones panel's prefix for the store's unattributed bucket. */
@@ -136,9 +135,10 @@ function Binding(props: { binding: FocusBinding; copy: FocusCopy; onPick?: (id: 
     case "error":
       return (
         <div className={"wf-summary"} data-ms-binding="error">
-          {/* A gate message is a diagnostic: one secondary line, truncated, with the
-              full text on the title — never the mono workflow-id slot. */}
-          <span className="secondary t-12 trunc" data-ms-binding-message="" title={binding.message}>
+          {/* A gate message is a diagnostic: one secondary line, truncated — the one
+              affordance is TruncatedText's, never a second one beside it, and never
+              the mono workflow-id slot. */}
+          <span className="secondary t-12" data-ms-binding-message="">
             <TruncatedText text={binding.message} />
           </span>
           {binding.candidates.length === 0 ? null : (
@@ -357,11 +357,13 @@ export function Focus(props: FocusProps) {
         </div>
         <div className="panel-body">
         {(model.binding.kind === "idle" || model.binding.kind === "unbound") &&
-        workflow.kind !== "unavailable" ? (
+        workflow.kind !== "unavailable" &&
+        workflow.kind !== "loading" ? (
           // No active lifecycle is the ordinary state between lifecycles: one muted
-          // hint, no board, and none of the absence stack's prose. But only while the
-          // read is merely absent — an UNAVAILABLE read is a fact the reader still
-          // gets, in its own arm with the transport's reason.
+          // hint, no board, and none of the absence stack's prose. But only for a
+          // SETTLED ordinary absence — a pending read claims no state yet, and an
+          // UNAVAILABLE one is a fact the reader still gets, in its own arm with the
+          // transport's reason.
           <p className="muted t-12" data-ms-workflow-idle="">
             {copy.idleHint}
           </p>
