@@ -196,10 +196,16 @@ export function appendDshWorkflowEvent(
       // refusal IS the recovery: the ledger resolver re-runs per event, so the
       // next event re-resolves the current authority and is attributed there.
       if (input.selectedGeneration !== undefined) {
-        const seat = tx.db.prepare(
-          "select 1 as present from execution_sessions where workflow_id = ? and session_id = ? and role = 'coordinator' and state = 'active' and epoch = ?",
-        ).get(input.workflowId, input.source.sessionId, input.selectedGeneration.epoch);
-        if (seat === undefined) {
+        // Seat-bearing lifecycles only: a workflow with NO coordinator rows at
+        // all (a pure host-state ledger in this store) never had a seat to
+        // drift, so it is appended to without the check below.
+        const rows = tx.db.prepare(
+          "select session_id, state, epoch from execution_sessions where workflow_id = ? and role = 'coordinator'",
+        ).all(input.workflowId) as Array<{ session_id: string; state: string; epoch: number }>;
+        const mine = rows.find(
+          (row) => row.session_id === input.source.sessionId && row.state === "active" && row.epoch === input.selectedGeneration!.epoch,
+        );
+        if (rows.length > 0 && mine === undefined) {
           return {
             kind: "refused" as const,
             reason:
