@@ -213,8 +213,19 @@ export function roadmapFeatureArm(read: {
   const arm = resolveRecord(read, { unavailableReason: "the roadmap read could not be completed" });
   if (arm.kind !== "populated") return arm;
   // Domain judgement on top of the resolved arm: the project has a catalog row
-  // but no roadmap authority row, so the concept is undeclared.
-  if (arm.value.authority.state === "absent") return { kind: "absent" };
+  // but no roadmap authority row, so the DOCUMENT is undeclared.
+  //
+  // Except when the read still CARRIES milestones or unassigned issues: those come
+  // from the milestone read, which is independent of the stored document
+  // (`RoadmapDTO`: a project with milestones and no content answers `content: null`
+  // and still carries them). Answering `absent` there hid every milestone behind
+  // "this project declares no roadmap" — including one the operator had just
+  // created, which then could not be edited, assigned or removed.
+  if (arm.value.authority.state === "absent") {
+    const carried = roadmapModel(arm.value, null);
+    const ownsMilestoneWork = carried.milestones.length > 0 || carried.unassignedIssues > 0;
+    return ownsMilestoneWork ? arm : { kind: "absent" };
+  }
   return arm;
 }
 

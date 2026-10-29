@@ -156,7 +156,8 @@ export type ProjectDetailProps = {
 function MilestoneActions(props: {
   milestone: RoadmapModel["milestones"][number];
   writes: MilestoneWriteSurface;
-  assignable: readonly AssignableIssue[];
+  /** The assign picker's options; absent means this host offers no picker here. */
+  assignable: readonly AssignableIssue[] | undefined;
   copy: ProjectDetailCopy;
 }) {
   const { milestone, writes, assignable, copy } = props;
@@ -197,7 +198,7 @@ function MilestoneActions(props: {
             {copy.roadmap.writes.remove}
           </button>
         )}
-        {assignable.length === 0 ? null : (
+        {assignable === undefined || assignable.length === 0 ? null : (
           <details data-ms-milestone-assign="">
             {/* The summary IS the control: it is natively focusable and toggles on
                 Enter/Space and on a pointer click. A nested button would swallow the
@@ -354,7 +355,7 @@ function Milestone(props: {
           ))}
         </div>
       )}
-      {writes === undefined || props.assignable === undefined ? null : (
+      {writes === undefined ? null : (
         <MilestoneActions milestone={milestone} writes={writes} assignable={props.assignable} copy={copy} />
       )}
     </section>
