@@ -211,7 +211,7 @@ export function appendDshWorkflowEvent(
             reason:
               `ledger attribution drift refused: the store generation still matches the selected one, but session ` +
               `"${input.source.sessionId}" no longer holds the ACTIVE coordinator seat of workflow ${input.workflowId} at ` +
-              `epoch ${input.selectedGeneration.epoch} — the seat was revoked or replaced after the target was resolved. ` +
+              `epoch ${input.selectedGeneration.epoch}: the seat was revoked or replaced after the target was resolved. ` +
               `Nothing was appended; the ledger resolver re-runs on the next event and attributes it against the current authority.`,
           };
         }
