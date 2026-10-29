@@ -18,7 +18,7 @@
  * fixture harness — no live harness is ever touched.
  */
 import { describe, expect, test } from "bun:test";
-import { initializeStore, openStore, readExecutionState, type ExecutionState } from "@mstar-harness/engine";
+import { initializeStore, openStore, readExecutionState, registerCatalogEntity, type ExecutionState } from "@mstar-harness/engine";
 import { execFileSync } from "node:child_process";
 import { existsSync, mkdirSync, mkdtempSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -142,8 +142,15 @@ async function setupHarness(fn: (harness: string, paths: { root: string; snapsho
   mkdirSync(dirname(join(harness, COMPASS_REF)), { recursive: true });
   writeFileSync(join(harness, COMPASS_REF), `${compassFrontmatter(WORKFLOW_ID)}\n# Iteration compass\n`);
   // Contract §3: registration goes through the catalog journal, which requires
-  // an initialized ACTIVE store — the fixture provisions one.
+  // an initialized ACTIVE store — the fixture provisions one. Registration also
+  // writes `iteration belongs-to project` links, and a catalog relation may not
+  // dangle, so the named project is registered like any real workspace does.
   await initializeStore({ harnessDir: harness }).then((handle) => handle.close());
+  await registerCatalogEntity(
+    { harnessDir: harness },
+    { kind: "project", id: "engine", title: "engine", rootKind: "projects", relativePath: "engine" },
+    { actor: "project-manager", operationId: "fixture-register-project-engine" },
+  );
   expect(existsSync(join(harness, "store.db"))).toBe(true);
   try {
     await fn(harness, {

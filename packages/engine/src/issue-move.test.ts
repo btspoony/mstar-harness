@@ -296,7 +296,8 @@ describe("issue project move", () => {
         "values('I-900001', 'legacy-project', 'Legacy finding', 'bug', 'high', 'impact', 'acceptance', 'now', 'now', 'legacy-identity')",
     ).run();
     legacyHandle.db.exec("drop table issue_project_moves");
-    legacyHandle.db.prepare("delete from schema_version where version = 13").run();
+    legacyHandle.db.exec("alter table projection_compasses drop column plans_json");
+    legacyHandle.db.prepare("delete from schema_version where version in (13, 14)").run();
     legacyHandle.close();
 
     expect(await upgradeStore(legacy)).toEqual({ schemaVersion: MIGRATIONS.length });
