@@ -35,7 +35,7 @@ import {
 import { readExecutionWorkflowSource, type SessionHint } from '../gates/workflow-selection.ts'
 import { readWorkflowSessionBinding } from '../engine-status-store.ts'
 import type { MstarEngineStatusPayload } from '../types.ts'
-import type { PanelSnapshot, PanelSnapshotRead, PanelWorkspaceView } from './panel-snapshot.ts'
+import type { LeafSignalState, PanelSnapshot, PanelSnapshotRead, PanelWorkspaceView } from './panel-snapshot.ts'
 
 /** The store's own failure text, verbatim; a non-Error carries its string form. */
 function reasonOf(error: unknown): string {
@@ -207,6 +207,12 @@ export async function readPanelSnapshot(input: {
   retained?: PanelRetainedReader
   /** Carrier lifetime: checked before every read so a cancelled call stops paying. */
   signal?: AbortSignal
+  /**
+   * The leaf-signal disclosure the caller probed (#619). REQUIRED: this module
+   * has no host context and must never guess the fact; the endpoint owns the
+   * `shellEnv` probe and passes its answer here.
+   */
+  leafSignal: LeafSignalState
 }): Promise<PanelSnapshotRead> {
   if (input.harnessDir === null || input.harnessDir === '') return { kind: 'no-harness' }
 
@@ -262,6 +268,7 @@ export async function readPanelSnapshot(input: {
       knowledge: retainedRead?.payload.state?.knowledge ?? null,
       selection: retainedRead?.payload.state?.selection ?? null,
       iteration,
+      leafSignal: scope.leafSignal,
     }
     return { kind: 'ok', snapshot }
   }

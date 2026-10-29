@@ -47,7 +47,7 @@ import {
   MSTAR_PANEL_SNAPSHOT_NAMESPACE,
 } from '../engine-status-wire.ts'
 import { readDashboardView, type DashboardView, type ReadEnvelope } from '@mstar-harness/engine'
-import type { PanelSnapshotRead } from './panel-snapshot.ts'
+import { leafSignalStateOf, type LeafSignalState, type PanelSnapshotRead } from './panel-snapshot.ts'
 import { readPanelSnapshot, type PanelRetainedReader } from './read-panel-snapshot.ts'
 
 /**
@@ -75,6 +75,11 @@ function queryParams(value: unknown): Record<string, string | undefined> {
 const CONTRIBUTING_PACKAGE = '@mstar-harness/dsh'
 /** Logger label for the endpoint's own degradation lines. */
 const ENDPOINT_LOGGER = 'mstar-panel-snapshot-endpoint'
+/**
+ * Logger label of the once-only leaf-signal degradation line. Its own label so
+ * an operator reading host logs can grep the capability, not the endpoint.
+ */
+const LEAF_SIGNAL_LOGGER = 'mstar-leaf-signal'
 /**
  * The cordis service key of this half. Deliberately NOT the wire namespace:
  * the `mstar` key already belongs to the engine-status gateway, and a second
@@ -104,6 +109,21 @@ interface SessionsView {
 /** Structural view of the session controller's persisted (cold) read. */
 interface SessionControllerView {
   inspect(sessionId: string, signal?: AbortSignal): Promise<unknown>
+}
+
+/**
+ * The warning-once gate (#619): the FIRST read that finds the shell service
+ * absent yields the one line; every later read stays silent while the payload
+ * keeps reporting the state. A factory so the flag is per gateway instance.
+ * @returns a function yielding the line once, then `undefined`.
+ */
+export function leafSignalWarningOnce(): (state: LeafSignalState) => string | undefined {
+  let warned = false
+  return (state) => {
+    if (warned || state.active) return undefined
+    warned = true
+    return `leaf-seat shell marker inactive: ${state.reason ?? 'shellEnv service absent'} Recovery: ${state.recovery ?? ''}`
+  }
 }
 
 /** The explicit unavailable answer (one constructor — one shape everywhere). */
@@ -200,6 +220,11 @@ export class MstarPanelSnapshotGateway extends TypertRemoteService {
   private readonly resolver: Pick<HarnessResolver, 'forWorkspace'>
   private readonly bootHarnessDir: string | null
   private readonly readRetained: PanelRetainedReader | undefined
+  /**
+   * The once-only warning gate. The `shellEnv` probe is NOT cached (a service
+   * that loads later must flip the state), only the "already warned" fact is.
+   */
+  private readonly nextLeafSignalWarning = leafSignalWarningOnce()
 
   /**
    * @param ctx - owning Cordis context.
@@ -290,6 +315,23 @@ export class MstarPanelSnapshotGateway extends TypertRemoteService {
   }
 
   /**
+   * The leaf-signal state for ONE read (#619): `ctx.get('shellEnv')` is probed
+   * at call time, never memoized, so a host service injected after `apply` (or
+   * withdrawn) is reflected on the next panel read without a restart. An
+   * apply-time check would be wrong for exactly that reason.
+   *
+   * The absence is disclosed through the payload; the first occurrence also
+   * writes one line, because a panel that is not open would never see it.
+   * @returns the disclosure field for this read.
+   */
+  private leafSignal(): LeafSignalState {
+    const state = leafSignalStateOf(this.ctx.get('shellEnv') !== undefined)
+    const line = this.nextLeafSignalWarning(state)
+    if (line !== undefined) this.ctx.logger(LEAF_SIGNAL_LOGGER).warn(line)
+    return state
+  }
+
+  /**
    * The shared argument chain: shape → server-resolved session → store root →
    * cwd equality. Both invocations take it, so a second read path cannot drift
    * from the first one's trust rules.
@@ -374,6 +416,9 @@ export class MstarPanelSnapshotGateway extends TypertRemoteService {
 
     return readPanelSnapshot({
       harnessDir,
+      // The capability fact is probed here (the reader has no host context) and
+      // travels as a value so one poll tick cannot disagree with the warning.
+      leafSignal: this.leafSignal(),
       // The carrier's own lifetime: a client timeout or a closed socket stops
       // the read before its next view instead of leaving it running unpaid.
       ...(signal === undefined ? {} : { signal }),
