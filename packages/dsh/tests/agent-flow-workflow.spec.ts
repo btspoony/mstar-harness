@@ -3,8 +3,8 @@ import { Context } from '@deepseek-ai/cordis'
 import { mkdtemp, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { openStore, readDshScanBound } from '@mstar-harness/engine'
-import { readAgentFlow, recordDispatch, recordSettle, recordSubagentLink, recordWorkflowEvent } from '../src/gates/agent-flow.ts'
+import { ACTIVATION_PROTOCOL_VERSION, openStore, readDshScanBound, recoverExecutionCoordinator } from '@mstar-harness/engine'
+import { readAgentFlow, recordDispatch, recordSettle, recordSubagentLink, recordWorkflowEvent, setAgentFlowLogger } from '../src/gates/agent-flow.ts'
 import type { AgentFlowWorkflowEvent } from '../src/gates/agent-flow.ts'
 import { HarnessResolver } from '../src/gates/_shared.ts'
 import { awaitWorkflowLedgerIdle, registerWorkflowLedger, setWorkflowLedgerLogger } from '../src/gates/workflow-ledger.ts'
@@ -104,6 +104,82 @@ describe('workflow event native acceptance and scan bound', () => {
     expect(readAgentFlow(workflowDir, 'wf-1')?.events.map((event) => event.kind === 'workflow-run' ? event.runId : event.kind)).toEqual(['live-run', 'cold-run'])
     expect(readDshScanBound({ harnessDir }, 'wf-1', 'session-1')).toMatchObject({ next: 2 })
   })
+  it('refuses attribution when the seat moves inside one store generation (supported recovery producer)', async () => {
+    // #550: `selectedGeneration` pins storeId+epoch, but the seat itself can be
+    // replaced epoch-preservingly by the supported recovery producer. The append
+    // must refuse (never misattribute), and the refused row stays eligible.
+    const { root, harnessDir, workflowDir } = await activeFixture()
+    const session = {
+      header: { id: 'session-1', cwd: root, createdAt: 1_700_000_000_030 },
+      seq: 1,
+      inheritedEventCount: 0,
+      eventAt: (seq: number) => seq === 0 ? {
+        type: 'tool-workflow/run-start',
+        seq: 0,
+        time: 1_700_000_000_031,
+        data: { runId: 'drift-run', name: 'drift' },
+      } : undefined,
+    }
+    let replaced = false
+    const resolveThenReplaceSeat = async (sessionId: string, cwd: string) => {
+      const selected = await resolveExecutionLedgerTarget(sessionId, cwd)
+      if (selected !== null && !replaced) {
+        replaced = true
+        // SUPPORTED producer, epoch-preserving: the recovery revokes session-1's
+        // active seat and binds the caller, without advancing the epoch — the
+        // exact window the generation guard cannot see.
+        await recoverExecutionCoordinator({ harnessDir, caller: { sessionId: 'session-2', role: 'coordinator', workflowId: 'wf-1' } }, {
+          operationId: 'op-ledger-drift-recover',
+          priorSessionId: 'session-1',
+          reason: 'issue #550: replace the coordinator between resolve and append',
+          attestation: {
+            version: ACTIVATION_PROTOCOL_VERSION,
+            attestedAt: '2026-01-01T00:00:00.000Z',
+            operator: { actor: 'operator-test', authorizationRef: 'auth-test' },
+            consumers: [{
+              entryId: 'coordinator-test',
+              kind: 'coordinator',
+              entrypoint: '/opt/mstar/coordinator',
+              runtime: 'node',
+              runtimeVersion: process.version,
+              version: 'test',
+              current: true,
+              disposition: 'reloaded',
+            }],
+            stoppedSessions: [{ sessionId: 'session-1', host: 'omp', state: 'stopped' }],
+          },
+        })
+      }
+      return selected
+    }
+    const ctx = new Context()
+    ctx.provide('sessions', { list: () => [session], get: () => session } as never)
+    const warnings: string[] = []
+    registerWorkflowLedger(ctx, new HarnessResolver(harnessDir), undefined, resolveThenReplaceSeat)
+    // The refusal warn goes through the agent-flow sink (`recordWorkflowEvent`).
+    setAgentFlowLogger((level, message) => { if (level === 'warn') warnings.push(message) })
+    await awaitWorkflowLedgerIdle()
+    expect(replaced).toBe(true)
+    // Not vacuous: the supported producer really moved the seat to session-2.
+    const seat = await openStore({ harnessDir }, 'read')
+    try {
+      expect(seat.db.prepare(
+        "select session_id from execution_sessions where workflow_id = 'wf-1' and role = 'coordinator' and state = 'active'",
+      ).get()).toEqual({ session_id: 'session-2' })
+    } finally {
+      seat.close()
+    }
+    // The in-window event was refused WITH its named cause, never attributed.
+    expect(warnings.some((line) => line.includes('ledger attribution drift refused'))).toBe(true)
+    expect(readAgentFlow(workflowDir, 'wf-1')?.events).toEqual([])
+    // The next event re-resolves: session-1 no longer holds the seat, so the
+    // resolver answers null and the row is dropped — no silent misattribution,
+    // no fallback write.
+    ctx.events.emit({}, 'session/created', session)
+    await awaitWorkflowLedgerIdle()
+    expect(readAgentFlow(workflowDir, 'wf-1')?.events).toEqual([])
+  })
+
   it('refuses a source event when the resolved original generation is superseded before commit', async () => {
     const { root, harnessDir, workflowDir, selectedGeneration } = await activeFixture()
     const session = {
