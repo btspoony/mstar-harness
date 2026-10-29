@@ -529,7 +529,7 @@ function useMilestoneWrites(seats: {
           sessionId,
           cwd,
           projectId,
-          input: { name: input.name, target: input.target, ordinal: 0 },
+          input: { name: input.name, target: input.target, ordinal: input.ordinal },
           mutation: mutation(),
         }),
       ),

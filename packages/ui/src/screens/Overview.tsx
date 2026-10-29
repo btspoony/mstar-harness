@@ -346,8 +346,10 @@ function MilestoneRowView(props: { row: MilestoneRow; copy: OverviewCopy }) {
 
 /**
  * The trend card: two cumulative lines, the axis labels, the legend with both
- * totals, the gap note, and the table that carries the same numbers for a reader
- * who cannot use the figure (`design-v1.html:929-945`).
+ * open counts, and the gap note (`design-v1.html:929-945`). The dated-history
+ * table that used to repeat the same numbers is gone (plan
+ * 20261029-dashboard-alignment Task 2), so the figure and its two text lines are
+ * the whole card.
  */
 function TrendPanel(props: { series: IssueFlowSeries; copy: OverviewCopy }) {
   const { series, copy } = props;

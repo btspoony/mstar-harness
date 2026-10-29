@@ -431,8 +431,10 @@ export class MstarPanelSnapshotGateway extends TypertRemoteService {
    * (engine `assignIssueMilestone`). The verb authorizes against the ACTIVE
    * coordinator execution session bound to this DSH session, so the workflow
    * id of that identity is resolved SERVER-side from the session pick and the
-   * registry, exactly like the reads. A session holding no coordinator
-   * binding gets the engine's own `issue.scope-refused` refusal verbatim.
+   * registry, exactly like the reads. A bound session's authorization outcome
+   * (including `issue.scope-refused`) passes through verbatim; a session that
+   * resolves NO active workflow never reaches the verb, and this adapter names
+   * that cause itself under the same code.
    */
   async milestoneAssign(
     sessionId: string,
@@ -452,6 +454,10 @@ export class MstarPanelSnapshotGateway extends TypertRemoteService {
       }
       const workflowId = await resolveWorkflowId(target.harnessDir, target.sessionId, target.cwd)
       if (workflowId === undefined) {
+        // Adapter-worded, not verbatim: the engine never ran because this
+        // session has no active workflow to authorize against. The CODE is the
+        // engine's own family so the client maps one axis; the message names
+        // the real cause instead of an identity mismatch the store never saw.
         return {
           ok: false,
           code: 'issue.scope-refused',

@@ -804,6 +804,8 @@ describe("Focus — the three project panels from one overview read (plan Task 1
     });
     expect(page).toContain('data-ms-focus-residuals=""');
     expect(page).toContain('data-ms-severity="critical"');
+    // The panel head states the grouping descriptor, as the Overview panel's does.
+    expect(page).toContain("by severity");
     expect(page).toContain("Milestone 0");
     expect(page).toContain('data-ms-iteration-compass=""');
     expect(page).toContain("0 plans");

@@ -219,6 +219,8 @@ function ResidualsPanel(props: { overview: NonNullable<FocusModel["overview"]>; 
         <h2 className="panel-title" id="ms-focus-residuals">
           {copy.residualsHeading}
         </h2>
+        {/* The prototype's meta is a grouping descriptor, as the Overview panel's is. */}
+        {residuals.kind === "populated" ? <span className="panel-meta">{copy.residualsTotal()}</span> : null}
       </div>
       <div className="panel-body">
         {residuals.kind === "populated" ? (

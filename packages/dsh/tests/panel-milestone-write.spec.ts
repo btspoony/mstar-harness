@@ -13,6 +13,8 @@
 import { afterEach, describe, expect, it } from 'bun:test'
 import { rm } from 'node:fs/promises'
 import { bootApp, seedOpenIssue, seedStore, type BootResult } from './harness.ts'
+import { stubGateway } from './gateway-stub.ts'
+import { MstarPanelSnapshotClient } from '../src/client/panel/panel-snapshot-client.ts'
 import { registerCatalogEntity } from '@mstar-harness/engine'
 import {
   PANEL_SNAPSHOT_SERVICE,
@@ -22,6 +24,7 @@ import {
   type MilestoneWriteResult,
 } from '../src/panel/panel-snapshot-endpoint.ts'
 import {
+  ENGINE_STATUS_CHANNEL,
   MILESTONE_ADD_ENDPOINT,
   MILESTONE_ASSIGN_ENDPOINT,
   MILESTONE_UPDATE_ENDPOINT,
@@ -196,6 +199,42 @@ describe('milestoneAdd / milestoneUpdate — engine verbs with the observed revi
     expect(milestones[0]).toMatchObject({ name: 'Renamed', status: 'active' })
   })
 
+  it('honours the ordinal the caller supplies, so a second create is not silently ordinal 0', async () => {
+    const app = (booted = await bootApp({ sessionsService: 'fake', harnessDir: null }))
+    await seedStore(app.harnessDir)
+    liveSession(app, 'ses_ms4', app.root)
+    const endpoint = endpointOf(app)
+    await seedProject(app.harnessDir)
+
+    const first = await endpoint.milestoneAdd(
+      'ses_ms4',
+      app.root,
+      '_default',
+      { name: 'First', target: null, ordinal: 0 },
+      { operationId: 'op-ordinal-1', expectedStoreRevision: await observedRevision(endpoint, 'ses_ms4', app.root) },
+    )
+    expect(first.ok).toBe(true)
+    // The screen's second create carries the current list length, not a constant:
+    // dropping it made every milestone land at ordinal 0 and the board order
+    // collapse to insertion order.
+    const second = await endpoint.milestoneAdd(
+      'ses_ms4',
+      app.root,
+      '_default',
+      { name: 'Second', target: null, ordinal: 1 },
+      { operationId: 'op-ordinal-2', expectedStoreRevision: await observedRevision(endpoint, 'ses_ms4', app.root) },
+    )
+    expect(second.ok).toBe(true)
+
+    const read = await endpoint.dashboardView('ses_ms4', app.root, 'roadmap', { project: '_default' })
+    const milestones = (read.envelope?.data as { milestones: { milestones: Array<{ name: string; ordinal: number }> } })
+      .milestones.milestones
+    expect(milestones.map((row) => [row.name, row.ordinal])).toEqual([
+      ['First', 0],
+      ['Second', 1],
+    ])
+  })
+
   it('replays an identical retry by operationId instead of writing twice', async () => {
     const app = (booted = await bootApp({ sessionsService: 'fake', harnessDir: null }))
     await seedStore(app.harnessDir)
@@ -213,6 +252,55 @@ describe('milestoneAdd / milestoneUpdate — engine verbs with the observed revi
     expect(conflict.ok).toBe(false)
     if (conflict.ok) return
     expect(conflict.code).toBe('store.operation-conflict')
+  })
+})
+
+describe('the client surface — one request per write, arguments intact', () => {
+  it('sends the ordinal and the observed revision it was given, on the write endpoint', async () => {
+    const gateway = stubGateway({ ok: true, value: { ok: true, receipt: { milestoneId: 'm-1', changed: true } } })
+    const client = new MstarPanelSnapshotClient(gateway.connection)
+    const result = await client.milestoneAdd({
+      sessionId: 's-1',
+      cwd: '/proj',
+      projectId: '_default',
+      input: { name: 'Second', target: '2026-11-30', ordinal: 1 },
+      mutation: { operationId: 'op-client-1', expectedStoreRevision: 7 },
+    })
+    expect(result.ok).toBe(true)
+    expect(gateway.calls).toHaveLength(1)
+    expect(gateway.calls[0]!.channel).toBe(ENGINE_STATUS_CHANNEL)
+    expect(gateway.calls[0]!.endpoint).toBe(MILESTONE_ADD_ENDPOINT)
+    expect(gateway.calls[0]!.payload).toEqual({
+      args: {
+        sessionId: 's-1',
+        cwd: '/proj',
+        projectId: '_default',
+        input: { name: 'Second', target: '2026-11-30', ordinal: 1 },
+        mutation: { operationId: 'op-client-1', expectedStoreRevision: 7 },
+      },
+    })
+  })
+
+  it('passes an engine refusal through as the closed union, message intact', async () => {
+    const gateway = stubGateway({
+      ok: true,
+      value: { ok: false, code: 'milestone.revision-conflict', message: '[milestone.revision-conflict] Store revision changed since it was observed.' },
+    })
+    const client = new MstarPanelSnapshotClient(gateway.connection)
+    const result = await client.milestoneUpdate({
+      sessionId: 's-1',
+      cwd: '/proj',
+      projectId: '_default',
+      milestoneId: 'm-1',
+      patch: { name: 'Renamed' },
+      mutation: { operationId: 'op-client-2', expectedStoreRevision: 7 },
+    })
+    expect(result).toEqual({
+      ok: false,
+      code: 'milestone.revision-conflict',
+      message: '[milestone.revision-conflict] Store revision changed since it was observed.',
+    })
+    expect(gateway.calls[0]!.endpoint).toBe(MILESTONE_UPDATE_ENDPOINT)
   })
 })
 
