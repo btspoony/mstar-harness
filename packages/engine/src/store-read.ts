@@ -39,6 +39,7 @@ import { SddScriptError } from "./sdd.js";
 import { openStore, StoreError, type StoreContext, type StoreDb, type StoreHandle } from "./store-db.js";
 import { ExecutionError } from "./execution-store.js";
 import type { AuthorityVerdict } from "./recovery-intent.js";
+import { WORKFLOW_TERMINAL_STATUSES } from "./workflow.js";
 
 /** Refusal codes the read boundary itself raises (both already frozen). */
 export type StoreReadErrorCode = "store.not-active";
@@ -1535,6 +1536,19 @@ function iterationMembershipPlanIds(
   return merged;
 }
 
+/**
+ * C1's one derivation of the execution lifecycle. The projected `status` is a
+ * free string, so the terminal arm is a CLOSED mapping against the workflow
+ * domain's own terminal set: a terminal literal answers for itself, and any
+ * other projected status is not terminal — it answers the vocabulary's
+ * non-terminal arm rather than leaking an out-of-union literal.
+ */
+function executionLifecycleOf(workflowRow: ProjectedWorkflowRow | undefined): IterationExecutionLifecycle {
+  if (workflowRow === undefined) return "none";
+  if (workflowRow.active_registration === 1) return "active";
+  return WORKFLOW_TERMINAL_STATUSES.find((status) => status === workflowRow.status) ?? "active";
+}
+
 function composeIteration(
   iterationId: string,
   catalog: CatalogIdentityDTO | null,
@@ -1609,15 +1623,8 @@ function composeIteration(
             phase: workflowRow.phase,
             activeRegistration: workflowRow.active_registration === 1,
           },
-    // C1: the execution lifecycle derives here and nowhere else — no workflow
-    // row is `"none"`, an active registration is `"active"`, and a terminal
-    // workflow answers with its projected status literal.
-    executionLifecycle:
-      workflowRow === undefined
-        ? "none"
-        : workflowRow.active_registration === 1
-          ? "active"
-          : (workflowRow.status as Exclude<IterationExecutionLifecycle, "active" | "none">),
+    // C1: the execution lifecycle derives here and nowhere else.
+    executionLifecycle: executionLifecycleOf(workflowRow),
     projects: [...projects],
     plans,
     documents: documentIds.flatMap((documentId) => {

@@ -610,6 +610,23 @@ describe("overview read model", () => {
     const detail = await readDashboardView({ context, view: "iteration-detail", id: "iter-completed" });
     expect((detail.data as IterationDTO).catalog?.lifecycle).toBe("active");
     expect((detail.data as IterationDTO).executionLifecycle).toBe("completed");
+
+    // The projected status is a free string: a NON-terminal value on a row the
+    // registry no longer lists must answer the closed vocabulary's
+    // non-terminal arm, never a terminal literal. The row is doctored AFTER a
+    // real read and read again WITHOUT the refresh — the same arm the compass
+    // status test uses, because no producer writes this state.
+    const write = await openStore(context, "write");
+    try {
+      write.db.prepare("update projection_workflows set status = 'paused' where id = 'iter-completed'").run();
+      write.db.prepare("update store_meta set revision = revision + 1 where id = 1").run();
+    } finally {
+      write.close();
+    }
+    const doctored = await withStoreRead(context, { ...queryDashboard("iterations"), needsProjection: false });
+    const paused = ((doctored.data as IterationListDTO).items).find((item) => item.iterationId === "iter-completed");
+    expect(paused?.workflow?.status).toBe("paused");
+    expect(paused?.executionLifecycle).toBe("active");
   });
 
   test("without a project the two project-scoped members answer not-applicable only", async () => {
