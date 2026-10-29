@@ -247,7 +247,12 @@ describe("ProjectDetail — the fixed feature set", () => {
 
   test("it never auto-selects a feature that has content", () => {
     const withEmptyRoadmap = renderDetail({
-      roadmap: roadmapBody(roadmapFeatureArm({ data: roadmap({ authority: { state: "absent" } }), projection })),
+      roadmap: roadmapBody(
+        roadmapFeatureArm({
+          data: roadmap({ authority: { state: "absent" }, milestones: { projectId: "engine", milestones: [], issues: [], unassignedIssues: 0 } }),
+          projection,
+        }),
+      ),
     });
     // The roadmap is absent and Issues would have content — the tab must not move.
     expect(withEmptyRoadmap).toContain('data-ms-absence="absent"');
@@ -410,9 +415,14 @@ describe("ProjectDetail — the Roadmap feature", () => {
 });
 
 describe("ProjectDetail — no roadmap row is absent, an empty milestone set is empty", () => {
-  test("a project with no roadmap authority row renders the absent arm", () => {
+  test("a project with no roadmap authority row and no milestone work renders the absent arm", () => {
     const html = renderDetail({
-      roadmap: roadmapBody(roadmapFeatureArm({ data: roadmap({ authority: { state: "absent" } }), projection })),
+      roadmap: roadmapBody(
+        roadmapFeatureArm({
+          data: roadmap({ authority: { state: "absent" }, milestones: { projectId: "engine", milestones: [], issues: [], unassignedIssues: 0 } }),
+          projection,
+        }),
+      ),
     });
     expect(html).toContain('data-ms-absence="absent"');
     // Structure: no empty board, no zero-width bar.
@@ -661,7 +671,15 @@ describe("ProjectDetail — the write controls reach every roadmap state (Grepti
 
   test("an ABSENT roadmap row still renders the create form", () => {
     const html = renderDetail({
-      roadmap: roadmapBody(roadmapFeatureArm({ data: roadmap({ authority: { state: "absent" } }), projection })),
+      roadmap: roadmapBody(
+        roadmapFeatureArm({
+          data: roadmap({
+            authority: { state: "absent" },
+            milestones: { projectId: "engine", milestones: [], issues: [], unassignedIssues: 0 },
+          }),
+          projection,
+        }),
+      ),
       writes,
     });
     expect(html).toContain('data-ms-absence="absent"');
@@ -701,5 +719,83 @@ describe("ProjectDetail — the catalog description survives the absent/empty ar
     const html = renderDetail({});
     expect(html).toContain("One product, two hosts.");
     expect(html).not.toContain("Store, projection and gates");
+  });
+});
+
+describe("ProjectDetail — a project with no roadmap row keeps its milestones (Greptile)", () => {
+  const writes: NonNullable<ProjectDetailProps["writes"]> = {
+    busy: false,
+    refusal: null,
+    create: () => {},
+    update: () => {},
+    assign: () => {},
+    remove: () => {},
+  };
+
+  test("carried milestones lift the absent roadmap into the populated board", () => {
+    // The milestone read is independent of the stored document, so a project with no
+    // roadmap ROW can still own milestones — including one created from this page.
+    // Answering the bare `absent` arm hid them, which made the saved milestone
+    // disappear and left it uneditable.
+    const carried = roadmap({
+      authority: { state: "absent" },
+      // No roadmap ROW means no stored document either: milestones only.
+      content: null,
+      milestones: {
+        projectId: "engine",
+        milestones: [
+          {
+            milestoneId: "a1b2c3d4",
+            projectId: "engine",
+            name: "Created without a roadmap",
+            target: "2026-12-01",
+            status: "planned",
+            ordinal: 0,
+            revision: 1,
+            createdAt: "2026-10-01T00:00:00.000Z",
+            updatedAt: "2026-10-01T00:00:00.000Z",
+            totalIssues: 0,
+            openIssues: 0,
+            resolvedIssues: 0,
+            otherRetiredIssues: 0,
+          },
+        ],
+        issues: [],
+        unassignedIssues: 0,
+      },
+    });
+    const html = renderDetail({ roadmap: roadmapBody(roadmapFeatureArm({ data: carried, projection })), writes });
+    // The board and the timeline both show it; the absence arm is gone.
+    expect(html).not.toContain('data-ms-absence="absent"');
+    expect(html).toContain('data-ms-milestones=""');
+    expect(html).toContain("Created without a roadmap");
+    expect(html).toContain('data-ms-timeline-node="a1b2c3d4"');
+    expect(html).toContain('data-ms-milestone="a1b2c3d4"');
+    // And it stays writable: the create form and its edit control are there.
+    expect(html).toContain('data-ms-milestone-create=""');
+    expect(html).toContain('data-ms-milestone-edit=""');
+    // No roadmap direction exists, so the header keeps the catalog description.
+    expect(html).toContain('data-ms-direction=""');
+    expect(html).toContain("Store, projection and gates");
+  });
+
+  test("carried UNASSIGNED issues alone also lift the arm (they are milestone work too)", () => {
+    const carried = roadmap({
+      authority: { state: "absent" },
+      milestones: { projectId: "engine", milestones: [], issues: [], unassignedIssues: 4 },
+    });
+    const html = renderDetail({ roadmap: roadmapBody(roadmapFeatureArm({ data: carried, projection })) });
+    expect(html).not.toContain('data-ms-absence="absent"');
+    expect(html).toContain('data-ms-unassigned="4"');
+  });
+
+  test("no carried milestone work keeps the absent EmptyState", () => {
+    const bare = roadmap({
+      authority: { state: "absent" },
+      milestones: { projectId: "engine", milestones: [], issues: [], unassignedIssues: 0 },
+    });
+    const html = renderDetail({ roadmap: roadmapBody(roadmapFeatureArm({ data: bare, projection })) });
+    expect(html).toContain('data-ms-absence="absent"');
+    expect(html).not.toContain('data-ms-milestones=""');
   });
 });
