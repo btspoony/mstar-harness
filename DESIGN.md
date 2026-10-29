@@ -524,7 +524,7 @@ the exclusion no longer describes this screen, rather than deleting the reasonin
 ## ProjectDetail: the shape, and the two blocks that are deliberately absent
 
 The screen is the prototype's, in its order — **as of the confirmed baseline
-(plan 20261029-dashboard-alignment), which removed every document block**:
+(the dashboard alignment change), which removed every document block**:
 
 ```
 .detail-head        title, the roadmap's direction above the identity meta
@@ -2233,7 +2233,7 @@ segment — exported as text in one pass and compared, rather than screen by scr
 - `iterations`' first column reads `Catalog title`, not `Title` — and the whole header row is
   now `Iteration · Catalog title · Lifecycle · Projected execution · Projects · Plans · Documents`,
   matching the prototype column for column
-- **confirmed baseline (plan 20261029-dashboard-alignment)**: the Lifecycle column and its
+- **confirmed baseline (the dashboard alignment change)**: the Lifecycle column and its
   filter read the engine DTO's `executionLifecycle` (`active` / `completed` / `stopped`;
   the catalog archive state stays on the detail), the Projects column carries the DTO's own
   composed membership, and the plan count reads the DTO's plans — no local join. The

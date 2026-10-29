@@ -157,7 +157,7 @@ export function workflowMemberOf(state: MstarDashboardViewState): {
 
 /**
  * Map one per-view read of `overview` onto the member Focus's three project
- * panels take (plan 20261029-dashboard-alignment Task 1, contract C3).
+ * panels take (the dashboard alignment change, contract C3).
  */
 export function overviewMemberOf(state: MstarDashboardViewState): {
   readonly member: FocusOverviewInput
