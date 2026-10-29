@@ -339,7 +339,7 @@ function issuesTrendCopy(copy: ReturnType<typeof useCopy>) {
     captured: copy.overview.trendCaptured,
     retired: copy.overview.trendRetired,
     legend: copy.overview.trendLegend,
-    tableSummary: copy.overview.trendTableSummary,
+    tableSummary: copy.issues.trendTableSummary,
     table: {
       columns: {
         date: copy.overview.flowDate,

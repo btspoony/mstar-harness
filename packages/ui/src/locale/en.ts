@@ -215,6 +215,8 @@ export const en = {
       return projects === 1 ? `${word} across 1 project` : `${word} across ${projects} projects`;
     },
     order: "severity desc, last activity desc, id asc",
+    /** The Issues screen keeps its own dated-history disclosure (the Overview one is gone). */
+    trendTableSummary: "Dated history (table alternative)",
     resultSummary: (total: number) => `${total} results`,
     range: (from: number, to: number, total: number) => `${from}–${to} of ${total}`,
   },
