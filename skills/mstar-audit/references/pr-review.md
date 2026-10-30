@@ -58,7 +58,7 @@ A re-review is the same target reviewed again after its head moved: the run dire
 - **The tally describes the current state** — `fixed` findings leave the tally; carrying them would penalize one defect twice and keep the verdict from ever improving. `still present` and `regressed` are re-classed by the current merge-class criteria (§ Merge class), with the prior class as a reference point only — a defect that now reaches data loss or an auth bypass is `must-fix` whatever it was before. New findings come only from the reviewed scope (the increment on the covering path, the full diff otherwise) and the fix sites. Both groups are listed separately (§ Report template). Linked-issue AC is re-scored against the new head: a prior `unmet` criterion the reviewed scope now satisfies stops incrementing the tally (§ Linked-issue hygiene).
 - **Scope widens only for a stated reason** — new files or hunks the reviewed scope introduces; a prior cross-domain `- notes:` it now touches. A prior `incomplete` never narrows scope — it takes the full `base...<new-head>` review — and a rewritten history follows the rewritten-history rule.
 - **Seats and tier follow the reviewed scope** — a covering re-review derives them from the increment; a full review derives them from the full `base...<new-head>` diff. Same bands either way (§ Inference ladder); a security-sensitive increment stays `deep` at any size. A domain that neither the reviewed scope nor any revalidated finding touches needs no seat, and every seat that raised a prior finding takes that finding's revalidation. The verdict contract is unchanged: one verdict from the current tally, one GitHub Review, posted by the main agent.
-- **Post a new Review, never rewrite the old one** — `event: COMMENT` as always (§ Comment posting), with the `### Revalidated findings` subsection in the body; do not edit, resolve, or reopen prior threads. The reviewed scope bounds what you read, not the posting coordinates: inline `path` + `line` resolve against the PR's `base...<new-head>` diff, and the line fallback is unchanged.
+- **Post a new Review, never rewrite the old one** — `event: COMMENT` as always (§ Comment posting), with the `### Revalidated findings` subsection in the body; after the POST run **Thread lifecycle** (§ Comment posting — resolve `fixed` threads, fold superseded review bodies) — never reopen a thread, never edit an inline comment body, never rewrite a human/third-party review. The reviewed scope bounds what you read, not the posting coordinates: inline `path` + `line` resolve against the PR's `base...<new-head>` diff, and the line fallback is unchanged.
 - **Issue store — disclose the disposition, never close.** A prior finding already captured as an issue is reported with its revalidated state (issue id + state). A recurrence appends an occurrence through the capture contract; a finding that is now `fixed` is reported as `fixed` for the closure authority to act on — the review never closes an issue, because closure is a separate authorized act (§4 of the capture contract in **`mstar-project-governance`「Issue capture」**).
 
 ## Review depth (tiers)
@@ -394,9 +394,33 @@ Executed by the main agent at Stage 3 — review seats never run this procedure.
 1. **Target resolution** — the **base** repo is `owner/repo` parsed from the PR `url` (`https://github.com/{owner}/{repo}/pull/{n}`); `commit_id` is `headRefOid`. **Never** derive the repo from `headRepository` (the fork view) — Reviews API paths are scoped to the repository that owns the PR number.
 2. **Payload** — `event` is the fixed literal `COMMENT` (**never** `APPROVE`, **never** `REQUEST_CHANGES`, never a merge — the engine's literal type admits no other value); `body` follows **§ Report template (below)**; `comments[]`: one entry per finding whose `path` + `line` sits in the three-dot diff, `side: RIGHT` — finding body = title + evidence + impact + fix sketch, not the whole plan.
 3. **Line fallback** — if GitHub rejects some inline comments (e.g. 422 — line outside the diff), retry the review **once**, without exactly the rejected entries and with them folded into the summary body; never loop a second time.
-4. **Save the local report (§ Local report archive) — mandatory in all three branches**: POST succeeded (record `html_url` / review id for `comments:` first), POST failed, or `n/a-no-pr` (archive the chat display content). Only then clean up the worktree (§ Worktree isolation); bare branch/diff reviews have no worktree, but the save still happens.
+4. **Thread lifecycle** — only when the POST succeeded (`comments: posted`) and the target is a PR: run **Thread lifecycle** (below) — resolve the threads of findings revalidated as `fixed`, then fold superseded review bodies, then save.
+5. **Save the local report (§ Local report archive) — mandatory in all three branches**: POST succeeded (record `html_url` / review id for `comments:` first), POST failed, or `n/a-no-pr` (archive the chat display content). Only then clean up the worktree (§ Worktree isolation); bare branch/diff reviews have no worktree, but the save still happens.
 
 > **Engine check (when available):** run `mstar pr-review post --pr <n> --body-file <path> [--findings <file.json>]` (or `import { planReviewPost } from "@mstar-harness/engine"` in a host hook) to execute these contracts mechanically — url-based repo resolution, the `COMMENT` literal, payload POST via stdin, and the at-most-once 422 fallback printing `review_url`; auth/API failure exits 1 (`comments: failed`). On `fail` -> do not proceed; fix and re-run. Skill text below remains authoritative when the runtime is absent.
+
+### Thread lifecycle
+
+Runs only for a PR target whose review POST succeeded this run (`comments: posted`), at Stage 3 in the main agent, between the POST and the local report save; review seats never post and never call GitHub. The lifecycle has two passes, in order: resolve, then fold. Inline comment bodies are never edited or deleted, threads are never reopened, and unresolved findings keep their inline threads open and visible — that is the point of the contract, not a side condition.
+
+**Resolve — threads of findings revalidated as `fixed`.** Input is this run's `### Revalidated findings` table; only state `fixed` is eligible — `still present` / `regressed` / `not verifiable` are never resolved. Read threads with `gh api graphql` over `repository.pullRequest.reviewThreads(first: 100, after: $cursor)` selecting `id`, `isResolved`, `isOutdated`, `path`, `line`, `comments(first: 20) { nodes { databaseId body } }`, paging through `pageInfo { hasNextPage endCursor }`. Match a `fixed` prior finding to a thread by `path` equality plus an inline comment body whose first line equals the prior finding title verbatim (trimmed); `line` and `isOutdated` never gate the match — a thread moves or goes stale while the finding identity does not. Threads already resolved are skipped. Zero matches (the finding was summary-only after the 422 line fallback, or an earlier round posted no inline) are not an error: record it and move on. An ambiguous match — two or more candidate threads for one finding — is never guessed: leave all candidates open and record it. Resolve each matched thread with the GraphQL mutation `resolveReviewThread(input: {threadId: "<id>"})`.
+
+**Fold — superseded review bodies from this flow.** Candidates are this PR's **earlier** reviews authored by the authenticated `gh` account whose body starts with this flow's verdict heading (`## <emoji> Verdict: \`<token>\``); human or third-party reviews are never touched, and reviews are never deleted. Each candidate body becomes the pointer line `> **Superseded** — latest review: <new review url>` followed by the original body wrapped in `<details><summary>Original review (superseded)</summary>` … `</details>`. Idempotent across rounds: a body already carrying the pointer line has only that line replaced (repointed at the newest review); it is never nested a second time. Write with `gh api --method PUT repos/<owner>/<repo>/pulls/<n>/reviews/<id> -f body=@-` — the body comes from stdin, never interpolated into a shell argument:
+
+```bash
+gh api graphql -f query='mutation { resolveReviewThread(input: {threadId: "<thread-id>"}) { thread { id } } }'
+gh api --method PUT repos/example-owner/example-repo/pulls/42/reviews/1234567 -f body=@- <<EOF
+> **Superseded** — latest review: https://github.com/example-owner/example-repo/pull/42#pullrequestreview-7654321
+
+<details><summary>Original review (superseded)</summary>
+
+<original body>
+
+</details>
+EOF
+```
+
+**Failure and reporting.** A failed resolve or fold never downgrades a successful POST: the run stays `comments: posted`, the failure is named under `- notes:` with the API error and the unattempted scope, and the reported counts are what actually succeeded (`threads:` and `superseded:`, § Output shape). Non-goals, all binding: no review deletion, no thread reopen, no inline comment edit, no `APPROVE` / `REQUEST_CHANGES`, no merge.
 
 ### Report template (GitHub Review `body`)
 
@@ -534,6 +558,8 @@ The posted PR comment is the deliverable; the local report is the durable refere
   - `posted: yes` | `n/a-no-pr` | `failed` — these three are distinct; a failed POST is **`failed`**, never `n/a-no-pr`
   - `review_url: <url>` when `posted: yes`; `n/a` when `n/a-no-pr` or `failed`
   - `inline: <N> posted / <M> attempted (<K> summary-only fallback)`
+  - `threads: <resolved>/<matched> resolved` — thread lifecycle result (§ Comment posting — Thread lifecycle); `n/a` when there was no PR target or no eligible prior finding
+  - `superseded: <n> review(s) folded` — fold result; `n/a` when there was no PR target or no earlier review from this flow
 
 - `- report:` — local archive path (§ Local report archive), e.g. `{REVIEW_DIR}/2026-08-24-pr134/report.md`; `n/a` only when the harness dir is undiscoverable.
 
