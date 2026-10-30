@@ -54,14 +54,17 @@ describe("session.recover input discovery", () => {
     const result = await executeCommand("session.recover", { workflow: "wf-recover", harness }, context(root));
     expect(result).toMatchObject({ status: "usage", code: "command.invalid-input", exitCode: 2 });
     const diagnostics = diagnosticsOf(result);
-    // The four unconditional minima (workflow itself is present) plus the
+    // The unconditional minima (workflow itself is present) plus the
     // caller identity are each reported on their own path. `expect` is
     // optional: an omitted expectation is derived inside the guarded
-    // transaction, so it is never a missing-field diagnostic.
-    for (const field of ["reason", "attestation", "operation", "sessionId"]) {
+    // transaction, so it is never a missing-field diagnostic. `attestation`
+    // is optional too: the override file is never required, because the
+    // engine generates the recovery document when it is omitted (I-000297).
+    for (const field of ["reason", "operation", "sessionId"]) {
       expect(diagnostics).toContainEqual(expect.objectContaining({ path: field, code: "required" }));
     }
     expect(diagnostics).not.toContainEqual(expect.objectContaining({ path: "expect" }));
+    expect(diagnostics).not.toContainEqual(expect.objectContaining({ path: "attestation" }));
     // The source is the contract's exactly-one alternative, not two required
     // fields: with no source selected and none required individually, the
     // reported fact is the cardinality one.

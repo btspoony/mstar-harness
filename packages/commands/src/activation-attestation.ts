@@ -7,7 +7,13 @@ import {
 } from "@mstar-harness/engine";
 import { z } from "zod";
 
-/** Descriptive facts from validateActivationAttestation; this is not a validator. */
+/**
+ * Descriptive facts from validateActivationAttestation; this is not a
+ * validator. The document describes the EXPLICIT `--attestation <path>`
+ * override only: when the file is omitted, the consuming verb generates the
+ * document from live facts (and a Bun-driven run refuses, because Bun is never
+ * an admissible consumer runtime).
+ */
 export const activationAttestationDocumentConstraints: readonly Readonly<{ path: string; rule: string }>[] = [
   { path: "*", rule: "Every string value must be nonblank (trim() is not empty)." },
   { path: "attestedAt", rule: "Date.parse(value) must be finite; the engine diagnostic calls this an ISO/RFC3339 instant, but validation uses Date.parse semantics." },

@@ -278,8 +278,15 @@ test("a held retired schema-8 claim refuses without mutation and settles on the 
 
     const before = await protectedStoreState(harness);
     expect(before.schemaVersion).toBe(8);
+    // Without an attestation the upgrade GENERATES the operator document
+    // (I-000297); the Bun test runtime is never an admissible attested
+    // consumer, so this commands-level run refuses with the named cause and
+    // the installed-Node-CLI recovery — the documented escape, not a dead end.
     const refused = await executeCommand("store.upgrade", { harness, operator: "fixture-operator" }, invocation(root));
-    expect(refused).toMatchObject({ status: "refused", code: "store.upgrade-attestation-missing", exitCode: 1 });
+    expect(refused).toMatchObject({ status: "refused", code: "store.attestation-invalid", exitCode: 1 });
+    expect(refused.status === "ok" ? undefined : refused.message).toContain("the running process is Bun");
+    expect(refused.status === "ok" ? undefined : (refused.details as { recovery?: string }).recovery)
+      .toContain("mstar store upgrade --operator <name>");
     expect(await protectedStoreState(harness)).toEqual(before);
 
     // The same protected store also witnesses the public file-input boundary:

@@ -67,6 +67,11 @@ function refused(id: string, error: unknown): CommandEnvelope<never> {
   if (id === "store.upgrade" && (code === "store.upgrade-dsh-ack-unmatched" || code === "execution.delivery-declaration-required" || code === "execution.workflow-skip-unmatched" || code === "execution.compass-skip-unmatched")) {
     return refusalEnvelope({ command: id, status: "usage", code, exitCode: 2, message });
   }
+  // An engine-raised recovery names the supported route the engine knows;
+  // the family chain below covers the caller-input causes it owns.
+  const engineRecovery = error !== null && typeof error === "object" && "recovery" in error && typeof error.recovery === "string"
+    ? error.recovery
+    : undefined;
   return error instanceof SddScriptError
     ? refusalEnvelope({ command: id, status: "usage", code: "usage", exitCode: 2, message })
     : refusalEnvelope({
@@ -75,8 +80,8 @@ function refused(id: string, error: unknown): CommandEnvelope<never> {
       code,
       exitCode: 1,
       message,
-      recovery: code === "store.runtime-unsupported"
-        ? "This command needs a runtime that provides native node:sqlite: install or select Node.js >=24.18.0 on PATH, then rerun the store verb you invoked with the same options — mstar store init, mstar store upgrade --operator <name> --harness <control-root>, mstar store backup --out <path>, mstar store migrate --manifest <path> --apply, mstar store activate --manifest <path> --attestation <absolute-json>, or mstar store retire --manifest <path>. An existing store is untouched by this refusal, so nothing needs repair first."
+      recovery: engineRecovery ?? (code === "store.runtime-unsupported"
+        ? "This command needs a runtime that provides native node:sqlite: install or select Node.js >=24.18.0 on PATH, then rerun the store verb you invoked with the same options — mstar store init, mstar store upgrade --operator <name> --harness <control-root>, mstar store backup --out <path>, mstar store migrate --manifest <path> --apply, mstar store activate --manifest <path> --operator <name>, or mstar store retire --manifest <path>. An existing store is untouched by this refusal, so nothing needs repair first."
         : id === "store.init" && (message.includes("legacy execution state exists at ") || message.includes("legacy catalog data exists at "))
         ? "For a fresh workspace, run mstar harness scaffold then mstar store init; to preserve historical files, run mstar store upgrade --operator <name> --harness <control-root>."
         : code === "store.already-exists"
@@ -103,8 +108,8 @@ function refused(id: string, error: unknown): CommandEnvelope<never> {
                       : id === "store.backup"
                         ? "Choose a writable backup destination and confirm the active store is readable. Run mstar store backup."
                         : id === "store.activate"
-                          ? "Align the migration manifest and activation attestation to the same verified store state. Run mstar store activate."
-                          : "Resolve the retirement preconditions and recorded activation evidence named by the diagnostic. Run mstar store retire.",
+                          ? "Align the migration manifest and activation state to the same verified store state. Run mstar store activate --manifest <path> --operator <name>."
+                          : "Resolve the retirement preconditions and recorded activation evidence named by the diagnostic. Run mstar store retire."),
     });
 }
 
@@ -246,11 +251,14 @@ async function execute(id: string, input: StoreInput, invocation: InvocationCont
         });
       }
       case "store.activate": {
-        requireInputs(input, ["manifest", "attestation"]);
+        // The generated attestation records the invoking operator, so
+        // `--operator` is required; `--attestation <absolute-json>` stays an
+        // optional 1:1 override of the generated document, never a merge.
+        requireInputs(input, ["manifest", "operator"]);
         const manifest = jsonFile<MigrationManifest>(required(input.manifest, "--manifest"), "--manifest");
-        const attestation = jsonFile<ActivationAttestation>(required(input.attestation, "--attestation"), "--attestation");
+        const attestation = input.attestation === undefined ? undefined : jsonFile<ActivationAttestation>(input.attestation, "--attestation");
         const applied = await appliedReceiptFor(context, manifest);
-        const receipt = await activateStore(context, applied, attestation);
+        const receipt = await activateStore(context, applied, attestation, {}, { operator: required(input.operator, "--operator") });
         const out = outputPath(input.out, invocation.cwd);
         if (out !== undefined) writeFileSync(out, `${JSON.stringify(receipt, null, 2)}\n`);
         return ok(id, { ...receipt, out: out ?? null });
@@ -290,14 +298,17 @@ function cliDefinition(id: string): CommandDefinition<StoreInput, unknown> {
     upgrade: ["harness", "operator", "attestation", "ackSkipDsh", "ackSkipWorkflow", "ackSkipCompass", "delivery"],
     backup: ["harness", "out"],
     migrate: ["harness", "apply", "manifest", "out"],
-    activate: ["harness", "manifest", "attestation", "out"],
+    activate: ["harness", "manifest", "operator", "attestation", "out"],
     retire: ["harness", "manifest", "out"],
   };
   const optionKeys = optionsByVerb[verb]!;
   const attestationHelp = activationAttestationDocumentConstraints.map(({ path, rule }) => `${path}: ${rule}`).join(" ");
   const optionHelp: Partial<Record<keyof StoreInput, string>> = {
     harness: "project harness directory, including the canonical control root; defaults to discovery from the working directory",
-    attestation: `absolute path to the operator's full ActivationAttestation JSON; optional when no retired held claim exists, required when one does — retry with the same \`mstar store upgrade --operator <name> --attestation <absolute-json>\` call. ${attestationHelp}`,
+    operator: "the invoking operator, recorded on the generated attestation document (required for store activate; also the upgrade path's recorded operator)",
+    attestation: verb === "upgrade"
+      ? `absolute path to the operator's full ActivationAttestation JSON; optional — when a retired held claim exists and the file is omitted, the verb generates the operator document automatically. Supply it only to override that generated document. ${attestationHelp}`
+      : `absolute path to the operator's full ActivationAttestation JSON; optional — when omitted the verb generates the document from live process facts (a Bun-driven run refuses: run the installed Node CLI). Supply it only to override that generated document. ${attestationHelp}`,
     ackSkipDsh: "Explicitly drop legacy DSH host-state facts this run refused. Selectors: dsh-ledger:<workflowId>, dsh-bounds:<workflowId>, dsh-status, or dsh-workflows (a symlinked workflows tree). The refusal lists exact facts; importable facts still import. The commit report states the exact loss. Default never skips. Source bytes remain unchanged and ordinary upgrade remains retryable.",
     ackSkipWorkflow: "Explicitly skip IMPORTING the named registered workflows whose legacy execution source this run refuses. A registered source is refused when its whole `workflows/` root or per-workflow path is not a real in-root directory \u2014 a symlink (never followed) or a non-directory path \u2014 or when a recognized legacy source's id already exists in the native execution authority WITHOUT a retained import receipt for this run's exact source bytes (an upgrade never overwrites, deletes or silently omits an existing native workflow). Pass the exact original workflow ids (repeat or space-separate; a repeated id is harmless). Either way the native rows and the source bytes stay in place, no execution row is imported or fabricated for the named id, and the report records the skipped import with its loss. A collision this store's OWN retained import receipt already proves was imported from these exact source bytes is a PROVEN REPLAY: it needs no acknowledgement, is reported in dispositions as already current and already held by the native authority, and acknowledging it anyway is accepted but reported as unnecessary. Source bytes alone prove a replay only for a run carrying no --delivery/--ack-skip-compass input; a run that carries either needs the receipt to record the same input, because an earlier import of these bytes may have converted them from a different declaration set, so a receipt without that record leaves the id an unproven collision (the refusal says so, and the native row keeps its original shape). Skipping a source this run does NOT refuse is rejected, because that would silently drop a trusted source. Separate from --ack-skip-dsh, which can never discard a registered execution source. Default never skips.",
     delivery: `Declare the delivery kind of one active standalone v1 plan this upgrade lifts; repeat once per such lift (an active standalone v1 plan fixes its delivery kind at registration and cannot be closed without one, so the upgrade refuses before registering any of them until each is declared). Each value is one JSON object {"workflow": <lifted id>, "deliveryKind": "${WORKFLOW_DELIVERY_KINDS.join('" | "')}", plus "branchSource"/"branchTarget" for development or "completionPolicy" for verification/report-only}. Completed v1 rows, already-declared v2 snapshots and iterations need none; an entry addressing no active standalone lift is refused, never ignored.`,
