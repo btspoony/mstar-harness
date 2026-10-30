@@ -273,3 +273,11 @@ export function readDeclaredNodeFloor(): string | null {
   return null;
 }
 
+/**
+ * Protocol version of the activation attestation, its receipts and the
+ * retirement ledger. It lives in this leaf module (not `store-activation.ts`)
+ * so the document builder can import it without closing a value-cycle with the
+ * module that consumes the builder; `store-activation.ts` re-exports it, so
+ * every existing importer is unchanged.
+ */
+export const ACTIVATION_PROTOCOL_VERSION = 1;

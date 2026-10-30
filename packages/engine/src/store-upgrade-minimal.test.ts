@@ -831,6 +831,36 @@ async function historicalClaimWorkspace(name: string) {
   return { context, workflowId, planId, sessionId };
 }
 
+test("a generated document that cannot cover a future-dated claim refuses with the named attestation cause", async () => {
+  // The reachable failure of the generated path: the claim's instant is newer
+  // than the generated document's (this transaction's own clock), so the
+  // settlement cannot be satisfied. The refusal is the named
+  // `store.upgrade-attestation-missing` cause with the retry that covers it —
+  // never the internal settlement marker escaping as a bare error.
+  const { context, workflowId } = await historicalClaimWorkspace("future-claim-generated");
+  const fixture = await openStore(context, "write");
+  try {
+    const row = fixture.db.prepare("select lease_json from execution_integration_leases where workflow_id = ?")
+      .get(workflowId) as { lease_json: string };
+    const claim = { ...JSON.parse(row.lease_json), claimed_at: "2999-01-01T00:00:00Z" } as Record<string, unknown>;
+    fixture.db.prepare("update execution_integration_leases set lease_json = ? where workflow_id = ?")
+      .run(JSON.stringify(claim), workflowId);
+  } finally {
+    fixture.close();
+  }
+  const before = await protectedStore(context);
+  const refused = await upgradeStoreMinimal({
+    context,
+    operator: "operator",
+    operationId: "op-generated-future-claim",
+    processFacts: { entrypoint: "/opt/mstar/coordinator/dist/mstar-harness.js", runtimeVersion: atOrAboveRuntime, isBun: false },
+  }).catch((error: unknown) => error) as Error & { code?: string };
+  expect(refused.code).toBe("store.upgrade-attestation-missing");
+  expect(refused.message).toContain("at or after the claim instant");
+  // The store is untouched: schema 8, claim bytes intact.
+  expect(await protectedStore(context)).toEqual(before);
+});
+
 test("an unattested retired plan-PM integration mutex refuses the upgrade and keeps schema 8", async () => {
   const { context, sessionId } = await historicalClaimWorkspace("schema8-unattested-orphan");
   const before = await protectedStore(context);

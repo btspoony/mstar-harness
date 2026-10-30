@@ -11,14 +11,14 @@
  * stays the acceptance authority, so a generated document must pass the same
  * rules a hand-authored one always did — by construction.
  *
- * Import note: this module imports the protocol-version constant from
- * `store-activation.js` by value (a plain const, not a function), and
- * `store-activation.ts` imports this module's builders. The cycle is safe
- * because neither module reads the other's bindings during its own module
- * evaluation — every read happens inside a function at call time.
+ * Import note: this module imports only the leaf `core.ts` by value (the
+ * protocol-version constant and the harness version) and the attestation
+ * document types from `store-activation.js` as erased types, so the
+ * `store-activation.ts` → this module edge (the builders it consumes) is
+ * one-way. That keeps the runtime import graph acyclic by construction.
  */
-import { readHarnessVersion } from "./core.js";
-import { ACTIVATION_PROTOCOL_VERSION, type ActivationAttestation, type StoppedSessionAttestation } from "./store-activation.js";
+import { ACTIVATION_PROTOCOL_VERSION, readHarnessVersion } from "./core.js";
+import type { ActivationAttestation, StoppedSessionAttestation } from "./store-activation.js";
 
 /**
  * The process facts a consumer row attests, resolved once by the caller.

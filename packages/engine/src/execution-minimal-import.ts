@@ -1095,7 +1095,33 @@ export async function upgradeStoreMinimal(input: {
     }
     // The generated document is accepted only through the same validator a
     // supplied one always faced; this module already imports it statically.
-    schemaVersion = await run(validateActivationAttestation(provisioned.document));
+    try {
+      schemaVersion = await run(validateActivationAttestation(provisioned.document));
+    } catch (retryError) {
+      // Defensive, and structurally unreachable TODAY: the retry always forwards
+      // the generated document, and the settlement raises the marker only while
+      // `attestation === undefined`. It becomes reachable the moment a refactor
+      // stops forwarding it, and the internal marker must never escape as a bare
+      // error then, so it is converted to the same named, recoverable refusal a
+      // caller-supplied document earns. (The reachable "generated instant cannot
+      // cover the claim" case — a claimed_at newer than this transaction's clock —
+      // is refused inside the migration as `store.upgrade-attestation-missing`.)
+      if (!(retryError instanceof SettlementAttestationNeeded)) throw retryError;
+      const holders = retryError.holders.map((holder) => JSON.stringify(holder)).join(", ");
+      throw Object.assign(
+        new StoreError(
+          "store.upgrade-attestation-missing",
+          `the retired plan-PM claim(s) held by ${holders} cannot be covered by the document this upgrade generated: its ` +
+            `attestedAt is this cutover's own instant, and the settlement requires the stop evidence to sit at or after the ` +
+            `claim instant and at or before the cutover. The store was left at schema 8 unchanged.`,
+        ),
+        {
+          recovery:
+            "rerun the same command with an explicit document whose attestedAt is at or after the claim instant: " +
+            "mstar store upgrade --operator <name> --attestation <absolute-json>",
+        },
+      );
+    }
   }
   let result: MinimalImportResult;
   try {

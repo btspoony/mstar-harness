@@ -60,7 +60,7 @@ import {
   type IndexFamily,
   type RawTable,
 } from "./catalog-import.js";
-import { readDeclaredNodeFloor, writeJson } from "./core.js";
+import { ACTIVATION_PROTOCOL_VERSION, readDeclaredNodeFloor, writeJson } from "./core.js";
 import { provisionActivationDocument, type ProvisionProcessFacts } from "./activation-provisioning.js";
 import type { MigrationManifest, MigrationReceipt } from "./store-migrate.js";
 import {
@@ -76,8 +76,12 @@ import {
   type StoreDb,
 } from "./store-db.js";
 
-/** Protocol version of the attestation, the receipts and the retirement ledger. */
-export const ACTIVATION_PROTOCOL_VERSION = 1;
+/**
+ * Protocol version of the attestation, the receipts and the retirement ledger.
+ * Defined in the leaf `core.ts` (so `activation-provisioning.ts` can import it
+ * without a value-cycle) and re-exported here for every existing importer.
+ */
+export { ACTIVATION_PROTOCOL_VERSION };
 
 /**
  * §7: the backup RECEIPT generation. Version 2 is the whole-image receipt:

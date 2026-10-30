@@ -2173,19 +2173,11 @@ export async function adoptTerminalWorkflow(
   // generated inside the transaction from the holder rows that transaction
   // settles (below) and is accepted by the recovery-scope validator.
   const attestation = input.attestation === undefined ? undefined : validateActivationAttestation(input.attestation);
-  // Self-settlement is refused exactly as coordinator recovery refuses it: the
-  // identity that invokes the settlement must not be one the document declares
-  // stopped, so the attested stop always comes from a distinct observer.
-  if (attestation !== undefined && attestation.stoppedSessions.some((session) => session.sessionId === caller.sessionId)) {
-    throw new ExecutionError(
-      "execution.adoption-refused",
-      `the adopting caller ${JSON.stringify(caller.sessionId)} is named as stopped/reloaded in this attestation; terminal adoption ` +
-        `settles a workflow's ACTIVE holder rows and never the identity making the call, so the attested stop must come from a ` +
-        `distinct operator identity. Rerun from a session id other than the one this document names stopped, with a stop list ` +
-        `covering only the addressed workflow's ACTIVE holder(s).`,
-      { workflow_id: input.workflowId, caller_session_id: caller.sessionId, adoption_refusal: "self-settlement" },
-    );
-  }
+  // Self-settlement is refused by the ONE rule below, inside the transaction,
+  // on the EFFECTIVE document (supplied or generated): the identity making the
+  // adoption must not be one the proof declares stopped. Keeping it there means
+  // a supplied and a generated document face the same predicate and the same
+  // refusal text, and a refusal leaves no committed state either way.
   const requestHash = semanticRequestHash({
     operation: "workflow.adopt-terminal",
     address: { workflowId: input.workflowId },
@@ -2274,17 +2266,18 @@ export async function adoptTerminalWorkflow(
       attestedAt: now,
       stoppedSessions: activeHolders.map((sessionId) => ({ sessionId, host: "local" as const, state: "stopped" as const })),
     }));
-    // Self-settlement is refused on BOTH branches, exactly as coordinator
-    // recovery refuses it: the identity invoking the settlement must not be one
-    // the document declares stopped. A generated document that names the caller
-    // means the caller IS the holder this adoption would revoke, so the caller
-    // must run it from a distinct operator identity rather than settle itself.
+    // The ONE self-settlement rule, on the effective document: whoever invokes
+    // the settlement must not be one the proof declares stopped. A supplied
+    // document naming the caller and a generated one that names the caller (the
+    // caller IS the holder this adoption would revoke) are the same fact, so
+    // they refuse identically — the stop must come from a distinct observer.
     if (proof.stoppedSessions.some((session) => session.sessionId === caller.sessionId)) {
       throw new ExecutionError(
         "execution.adoption-refused",
-        `the adopting caller ${JSON.stringify(caller.sessionId)} is an ACTIVE holder this adoption would settle, so the ` +
-          `settlement cannot be attested by the identity being settled. Rerun from a session id other than the one this ` +
-          `adoption names stopped, with a stop list covering only the addressed workflow's ACTIVE holder(s).`,
+        `the adopting caller ${JSON.stringify(caller.sessionId)} is named as stopped/reloaded by this adoption's proof; terminal ` +
+          `adoption settles a workflow's ACTIVE holder rows and never the identity making the call, so the attested stop must come ` +
+          `from a distinct operator identity. Rerun from a session id other than the one the proof names stopped, with a stop list ` +
+          `covering only the addressed workflow's ACTIVE holder(s).`,
         { workflow_id: input.workflowId, caller_session_id: caller.sessionId, adoption_refusal: "self-settlement" },
       );
     }
