@@ -1389,7 +1389,9 @@ function settleRetiredPlanPmIntegrationClaims(db: StoreDb, context: MigrationCon
   const attestedInstant = attestation === undefined ? null : parsedInstant(attestation.attestedAt);
   const cutoverInstant = parsedInstant(new Date().toISOString());
   const pendingHolders = new Set<string>();
-  const pendingStopped: StoppedSessionAttestation[] = [];
+  // One stop row per HOLDER, however many claims that holder left behind: a
+  // duplicate row would attest the same stop twice and read as two holders.
+  const pendingStoppedBySessionId = new Map<string, StoppedSessionAttestation>();
   const claims = db
     .prepare("select workflow_id, lease_json from execution_integration_cutover")
     .all() as Array<{ workflow_id?: unknown; lease_json?: unknown }>;
@@ -1430,7 +1432,7 @@ function settleRetiredPlanPmIntegrationClaims(db: StoreDb, context: MigrationCon
     // authority: nothing is settled on this pass.
     if (attestation === undefined) {
       pendingHolders.add(holder);
-      pendingStopped.push({ sessionId: holder, host: "local", state: "stopped" });
+      pendingStoppedBySessionId.set(holder, { sessionId: holder, host: "local", state: "stopped" });
       continue;
     }
     const attested = attestation.stoppedSessions.find((session) => session.sessionId === holder);
@@ -1463,15 +1465,19 @@ function settleRetiredPlanPmIntegrationClaims(db: StoreDb, context: MigrationCon
       prior_holder: holder,
       released_by: "store-upgrade",
       released_at: attestation!.attestedAt,
-      // The literal the tombstone records — and the exact format the generated
-      // document's authorizationRef reconstructs (holder only; the workflow id
-      // is this tombstone row's key, not part of the reason string).
-      release_reason: `retired-plan-pm-seat:${holder}`,
+      // The receiving document's OWN authorization reference, copied verbatim:
+      // a batch that settles several holders keeps ONE reference, so every
+      // holder's tombstone still matches the document it was settled under.
+      // Holder identity stays in `prior_holder` above.
+      release_reason: attestation!.operator.authorizationRef,
     };
     update.run(JSON.stringify(tombstone), workflowId);
   }
   if (pendingHolders.size > 0) {
-    throw new SettlementAttestationNeeded([...pendingHolders], pendingStopped);
+    // Deterministic order: the generated reference and the stop rows it is
+    // built from never depend on which claim row was read first.
+    const holders = [...pendingHolders].sort();
+    throw new SettlementAttestationNeeded(holders, holders.map((holder) => pendingStoppedBySessionId.get(holder)!));
   }
 }
 /** Five host-state tables for DSH-owned ledger facts. */

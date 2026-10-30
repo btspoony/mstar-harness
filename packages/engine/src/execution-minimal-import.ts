@@ -1074,14 +1074,14 @@ export async function upgradeStoreMinimal(input: {
     schemaVersion = await run(attestation);
   } catch (error) {
     if (!(error instanceof SettlementAttestationNeeded)) throw error;
-    // The generated authorizationRef records the same literal the tombstone
-    // writes — `retired-plan-pm-seat:<holder>` (the workflow id is the
-    // tombstone row key, not part of the reason string) — joined for the
-    // multi-holder case this document covers in one operation.
+    // The generated authorizationRef is the ONE batch reference this document
+    // settles under — `retired-plan-pm-seat:` plus the sorted unique holders —
+    // and every settled tombstone copies it verbatim, so each holder's
+    // tombstone literal still matches the supplied/generated document.
     const provisioned = provisionActivationDocument(
       {
         actor: input.operator,
-        authorizationRef: `retired-plan-pm-seat:${error.holders.join(",")}`,
+        authorizationRef: `retired-plan-pm-seat:${[...new Set(error.holders)].sort().join(",")}`,
         attestedAt: new Date().toISOString(),
         stoppedSessions: error.stopped,
       },
