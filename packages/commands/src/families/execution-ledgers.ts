@@ -38,11 +38,12 @@
  * This rationale lives with the module that owns the route boundary; it is NOT
  * duplicated into command metadata of unrelated exports.
  */
-import { closeSync, constants as fsConstants, fstatSync, lstatSync, openSync, readFileSync } from "node:fs";
+import { closeSync, constants as fsConstants, fstatSync, lstatSync, openSync, readSync } from "node:fs";
 import path from "node:path";
 import { z } from "zod";
 import {
   ExecutionLedgerError,
+  WORKFLOW_NOTES_LEDGER_READ_BYTES,
   appendWorkflowNote,
   decodeExecutionSessionRef,
   executionContextFor,
@@ -50,6 +51,7 @@ import {
   resolveProcessHarnessDir,
   workflowNotesLedgerPath,
   type ExecutionIdentity,
+  type WorkflowNotesReadWindow,
 } from "@mstar-harness/engine";
 import { commandEnvelopeSchema } from "../envelope.js";
 import { redactSessionIds } from "../session-redaction.js";
@@ -112,12 +114,23 @@ const coverageInput = z.object({
   harness: z.string().optional(),
 });
 
+/** One bounded coverage read: the bytes disclosed and the window they came from. */
+export type LedgerRead = Readonly<{ bytes: Uint8Array | null; readWindow: WorkflowNotesReadWindow }>;
+
+const EMPTY_READ_WINDOW: WorkflowNotesReadWindow = { offset: 0, totalBytes: 0, truncated: false };
+
 /**
  * The no-follow, nonblocking open prevents leaf-link races without waiting on
  * a FIFO; fstat validates the opened object. Explicit files are intentionally
  * not confined beneath root.
+ *
+ * The read is a TAIL WINDOW, never the whole ledger: at most
+ * `WORKFLOW_NOTES_LEDGER_READ_BYTES` from the end, and the first, partial line
+ * the window starts in is dropped so no half record becomes a fact. The window
+ * it saw travels with the bytes, so coverage discloses a truncation instead of
+ * reporting a slice as the whole file.
  */
-function readLedgerBytes(file: string): Uint8Array | null {
+export function readLedgerBytes(file: string): LedgerRead {
   let fd: number;
   try {
     fd = openSync(file, fsConstants.O_RDONLY | (fsConstants.O_NOFOLLOW ?? 0) | (fsConstants.O_NONBLOCK ?? 0));
@@ -134,7 +147,7 @@ function readLedgerBytes(file: string): Uint8Array | null {
     try {
       info = lstatSync(file);
     } catch (statError) {
-      if ((statError as NodeJS.ErrnoException).code === "ENOENT") return null;
+      if ((statError as NodeJS.ErrnoException).code === "ENOENT") return { bytes: null, readWindow: EMPTY_READ_WINDOW };
       throw statError;
     }
     if (info.isSymbolicLink() || !info.isFile()) {
@@ -146,13 +159,32 @@ function readLedgerBytes(file: string): Uint8Array | null {
     throw error;
   }
   try {
-    if (!fstatSync(fd).isFile()) {
+    const opened = fstatSync(fd);
+    if (!opened.isFile()) {
       throw new ExecutionLedgerError(
         "execution-ledgers.target-untrusted",
         `the retained notes ledger at ${file} is not a regular file.`,
       );
     }
-    return readFileSync(fd);
+    const totalBytes = opened.size;
+    const windowBytes = Math.min(totalBytes, WORKFLOW_NOTES_LEDGER_READ_BYTES);
+    const windowOffset = totalBytes - windowBytes;
+    const buffer = Buffer.alloc(windowBytes);
+    let read = 0;
+    while (read < windowBytes) {
+      const step = readSync(fd, buffer, read, windowBytes - read, windowOffset + read);
+      if (step <= 0) break;
+      read += step;
+    }
+    const window = buffer.subarray(0, read);
+    // A window that starts mid-file starts mid-line: the bytes before its first
+    // LF are a fragment of a record the reader cannot see whole.
+    const boundary = windowOffset === 0 ? 0 : window.indexOf(0x0a) + 1;
+    const bytes = window.subarray(boundary);
+    return {
+      bytes,
+      readWindow: { offset: windowOffset + boundary, totalBytes, truncated: windowOffset > 0 },
+    };
   } finally {
     closeSync(fd);
   }
@@ -260,11 +292,14 @@ export function getExecutionLedgerCommandDefinitions(): readonly CommandDefiniti
             return usage(COVERAGE_ID, "file must be an absolute path", "file");
           }
           const file = input.file ?? workflowNotesLedgerPath({ harnessDir: root }, input.workflow);
-          const bytes = readLedgerBytes(file);
+          const { bytes, readWindow } = readLedgerBytes(file);
           // A note records the session that appended it, and this command needs
           // no identity to run, so the raw record would hand out a bearer id for
           // coordinator-scoped writes on an opted-in connection.
-          return ok(COVERAGE_ID, redactSessionIds(normalizeWorkflowNotesCoverage({ workflowId: input.workflow, path: file, bytes })));
+          return ok(
+            COVERAGE_ID,
+            redactSessionIds(normalizeWorkflowNotesCoverage({ workflowId: input.workflow, path: file, bytes, readWindow })),
+          );
         } catch (error) {
           return engineRefusal(COVERAGE_ID, error);
         }
