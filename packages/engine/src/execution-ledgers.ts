@@ -533,11 +533,12 @@ function markerReserveBytes(totalBytes: number, workflowId: string): number {
 }
 
 /**
- * Replace one ledger with compacted bytes: a same-directory temporary file,
- * fsynced, atomically renamed over the leaf, then the directory fsynced. A
- * failure leaves the retained ledger untouched and removes the temporary file.
+ * Write one ledger's next bytes to a same-directory temporary file and fsync it,
+ * returning that path. The retained ledger is untouched: the caller publishes the
+ * temporary file over the leaf only after checking the bytes it classified are
+ * still what the leaf holds.
  */
-function replaceLedgerAtomically(path: string, content: Buffer): void {
+function writeLedgerTempFile(path: string, content: Buffer): string {
   const temp = join(dirname(path), `${basename(path)}.compaction-${randomUUID()}.tmp`);
   try {
     const fd = openWithoutFollowing(temp, fsConstants.O_WRONLY | fsConstants.O_CREAT | fsConstants.O_EXCL, 0o644);
@@ -558,6 +559,7 @@ function replaceLedgerAtomically(path: string, content: Buffer): void {
     } finally {
       closeSync(fd);
     }
+    return temp;
   } catch (error) {
     try {
       unlinkSync(temp);
@@ -566,16 +568,35 @@ function replaceLedgerAtomically(path: string, content: Buffer): void {
     }
     throw error;
   }
-  renameSync(temp, path);
-  fsyncDirectory(dirname(path));
+}
+
+/**
+ * Whether the ledger still holds exactly the bytes this compaction classified:
+ * `totalBytes` unchanged. An ordinary append is lock-free and only lengthens the
+ * leaf, so a changed size means the compacted prefix no longer describes what is
+ * there and the rewrite must be abandoned instead of deleting a peer's frame.
+ */
+function ledgerSnapshotUnchanged(path: string, totalBytes: number): boolean {
+  try {
+    return lstatSync(path).size === totalBytes;
+  } catch {
+    return false;
+  }
 }
 
 /**
  * Compact one over-ceiling ledger: keep the newest complete lines that fit the
  * read window, always keep the triggering note whole, and write the disclosure
  * marker as the FINAL row so a windowed tail read still sees it. `dropped` and
- * `prefixSha256` describe only the prefix THIS compaction removed; a marker this
- * ledger already ended with is replaced rather than retained.
+ * `prefixSha256` describe the bytes THIS compaction removed; every earlier
+ * marker is metadata and is dropped too, so exactly one marker survives and it
+ * is the last row.
+ *
+ * The rewrite is published only when the leaf still holds the snapshot this
+ * function classified: an ordinary append is lock-free and may lengthen the
+ * ledger between the read and the rename, and renaming over that frame would
+ * delete it. A changed snapshot abandons the compaction; the ledger stays over
+ * its ceiling and the next append past it retries.
  *
  * A single note larger than the window is the recorded exception to the target
  * size: it is retained whole, and the tail read discloses the cut instead of the
@@ -592,36 +613,41 @@ function compactWorkflowNotesLedger(path: string, workflowId: string): void {
   const totalBytes = bytes.length;
   if (totalBytes <= WORKFLOW_NOTES_LEDGER_MAX_BYTES) return;
   const spans = ledgerSpans(bytes);
-  const lastIndex = spans.length - 1;
-  const lastSpan = lastIndex < 0 ? null : spans[lastIndex]!;
-  const replacedMarkerStart =
-    lastSpan !== null && lastSpan.terminated &&
-    parseLedgerLine(bytes.subarray(lastSpan.start, lastSpan.end)).format === "compaction-marker"
-      ? lastSpan.start
-      : null;
-  const retainEnd = replacedMarkerStart ?? totalBytes;
-  const lastRetainable = replacedMarkerStart === null ? lastIndex : lastIndex - 1;
+  const lineOf = (span: LedgerSpan): LedgerLine => parseLedgerLine(bytes.subarray(span.start, span.end));
+  // A marker is never content: it is dropped wherever it sits, so a marker an
+  // earlier compaction left behind an interior line cannot survive alongside
+  // the one this pass writes.
+  const content = spans.filter((span) => lineOf(span).format !== "compaction-marker");
   const budget = WORKFLOW_NOTES_LEDGER_READ_BYTES - markerReserveBytes(totalBytes, workflowId);
-  let suffixStart = retainEnd;
-  for (let index = lastRetainable; index >= 0; index -= 1) {
-    const start = spans[index]!.start;
+  const spanBytes = (span: LedgerSpan): number =>
+    (span.terminated ? span.end + 1 : span.end) - span.start;
+  let firstKept = content.length;
+  let keptBytes = 0;
+  for (let index = content.length - 1; index >= 0; index -= 1) {
+    const size = spanBytes(content[index]!);
     // The triggering note is always retained whole; older lines only while they fit.
-    if (index !== lastRetainable && retainEnd - start > budget) break;
-    suffixStart = start;
+    if (index !== content.length - 1 && keptBytes + size > budget) break;
+    keptBytes += size;
+    firstKept = index;
   }
+  const kept = content.slice(firstKept);
+  const keptStarts = new Set(kept.map((span) => span.start));
   let lines = 0;
   let records = 0;
   let historical = 0;
   let unrecognized = 0;
+  const removed: Buffer[] = [];
   for (const span of spans) {
-    if (span.start >= suffixStart) break;
+    if (keptStarts.has(span.start)) continue;
+    const line = lineOf(span);
+    if (line.format === "compaction-marker") continue;
     lines += 1;
-    const line = parseLedgerLine(bytes.subarray(span.start, span.end));
     if (line.format === "versioned-note-v1") records += 1;
     else if (line.format === "legacy-note") historical += 1;
     else if (line.format === "unrecognized") unrecognized += 1;
+    removed.push(bytes.subarray(span.start, span.terminated ? span.end + 1 : span.end));
   }
-  const dropped = bytes.subarray(0, suffixStart);
+  const dropped = Buffer.concat(removed);
   const marker: WorkflowNotesCompactionMarker = {
     version: 1,
     kind: WORKFLOW_NOTES_COMPACTION_MARKER_KIND,
@@ -630,15 +656,27 @@ function compactWorkflowNotesLedger(path: string, workflowId: string): void {
     dropped: { bytes: dropped.length, lines, records, historical, unrecognized },
     prefixSha256: sha256Bytes(dropped),
   };
-  replaceLedgerAtomically(
+  const temp = writeLedgerTempFile(
     path,
     Buffer.concat([
-      bytes.subarray(suffixStart, retainEnd),
+      ...kept.map((span) => bytes.subarray(span.start, span.terminated ? span.end + 1 : span.end)),
       Buffer.from("\n", "utf8"),
       Buffer.from(canonicalMarkerLine(marker), "utf8"),
       Buffer.from("\n", "utf8"),
     ]),
   );
+  if (!ledgerSnapshotUnchanged(path, totalBytes)) {
+    // A peer frame landed after this snapshot; renaming over it would delete
+    // that frame. The append that lengthened the ledger is the next trigger.
+    try {
+      unlinkSync(temp);
+    } catch {
+      // the temporary file is already gone
+    }
+    return;
+  }
+  renameSync(temp, path);
+  fsyncDirectory(dirname(path));
 }
 
 /**
@@ -794,11 +832,14 @@ export async function appendWorkflowNote(
   if (ledgerAtOrOverCeiling(ledgerPath, 0)) {
     // shortcut: a peer that measured the ledger below the ceiling before this
     // frame landed can leave it over the ceiling with that append uncompacted;
-    // this recheck compacts it instead of waiting for the next append. The same
-    // peer's frame can still be written into a leaf this compaction has already
-    // read during a multi-millisecond preemption; upgrade to an unconditional
-    // maintenance lock if the ceiling must hold at every instant, which costs a
-    // store write connection on every ordinary append.
+    // this recheck compacts it instead of waiting for the next append. The
+    // compactor verifies its snapshot right before the rename and abandons the
+    // rewrite when a frame lengthened the leaf, so the remaining window is the
+    // stat→rename gap itself: a frame that lands exactly there is still lost,
+    // and the ledger stays over its ceiling until the next over-ceiling append
+    // retries. Upgrade to an unconditional maintenance lock if the ceiling must
+    // hold at every instant, which costs a store write connection on every
+    // ordinary append.
     await withWorkflowNotesMaintenanceLock(context, () => compactWorkflowNotesLedger(ledgerPath, session.workflowId));
   }
   return { id: note.id };

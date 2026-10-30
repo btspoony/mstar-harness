@@ -1070,4 +1070,70 @@ describe("execution-ledgers: compaction at the ledger size ceiling", () => {
     expect(facts.counts).toEqual({ historical: 0, records: 0, unrecognized: 0 });
     expect(facts.tail).toBeNull();
   }, 30_000);
+
+  test("a peer frame appended between the compaction read and its rename is not deleted", async () => {
+    const fixture = shared;
+    const lineBytes = Buffer.byteLength(LEGACY_LINE, "utf8");
+    fixture.seed({ ledger: LEGACY_LINE.repeat(Math.ceil(WORKFLOW_NOTES_LEDGER_MAX_BYTES / lineBytes) + 1) });
+    const target = note("note-during-read", "triggering note");
+    const peer = note("note-peer", "peer frame appended during the read");
+    const originalReadFileSync = nodeFs.readFileSync;
+    let injected = false;
+    // The ordinary append is lock-free, so a peer frame can reach the leaf after
+    // the compactor took its snapshot. Landing it deterministically inside that
+    // window is what proves the rewrite is abandoned instead of overwriting it.
+    const spy = spyOn(nodeFs, "readFileSync").mockImplementation(((...args: Parameters<typeof nodeFs.readFileSync>) => {
+      const bytes = originalReadFileSync(...args);
+      if (!injected && typeof args[0] === "string" && args[0].endsWith("notes.jsonl")) {
+        injected = true;
+        nodeFs.appendFileSync(args[0], framedLineOf(peer));
+      }
+      return bytes;
+    }) as typeof nodeFs.readFileSync);
+    try {
+      await appendWorkflowNote(fixture.coordContext, fixture.session, target);
+    } finally {
+      spy.mockRestore();
+    }
+    expect(injected).toBe(true);
+    const facts = factsOf(fixture);
+    // Both frames are still readable: the abandoned compaction deleted neither.
+    expect(facts.records.map((entry) => entry.record.id)).toEqual([target.id, peer.id]);
+    expect(facts.compaction).toBeNull();
+    // The ledger is still over its ceiling; the next append past it retries.
+    expect(ledgerBytes(fixture).length).toBeGreaterThan(WORKFLOW_NOTES_LEDGER_MAX_BYTES);
+  }, 30_000);
+
+  test("a ledger carrying two markers compacts to exactly one final-row marker", async () => {
+    const fixture = shared;
+    const lineBytes = Buffer.byteLength(LEGACY_LINE, "utf8");
+    const markerRow = (ts: string): string => JSON.stringify({
+      version: 1,
+      kind: WORKFLOW_NOTES_COMPACTION_MARKER_KIND,
+      ts,
+      workflowId: WF,
+      dropped: { bytes: 1, lines: 1, records: 0, historical: 1, unrecognized: 0 },
+      prefixSha256: "0".repeat(64),
+    });
+    // Two earlier passes: the first marker ended the ledger, later appends made
+    // it an interior line, and a second marker ends it again.
+    const seedLines = Math.ceil(WORKFLOW_NOTES_LEDGER_MAX_BYTES / lineBytes) + 1;
+    const half = Math.ceil(seedLines / 2);
+    fixture.seed({
+      ledger:
+        `${LEGACY_LINE.repeat(half)}${markerRow("2026-09-30T00:00:00.000Z")}\n` +
+        `${LEGACY_LINE.repeat(seedLines - half)}${markerRow("2026-09-30T01:00:00.000Z")}\n`,
+    });
+    const target = note("note-recompact", "triggering note after two markers");
+    await appendWorkflowNote(fixture.coordContext, fixture.session, target);
+
+    const rows = retainedLines(ledgerBytes(fixture)).filter((line) => line.length > 0);
+    const markers = rows.filter((line) => line.includes(WORKFLOW_NOTES_COMPACTION_MARKER_KIND));
+    expect(markers).toHaveLength(1);
+    expect(rows[rows.length - 1]).toBe(markers[0]!);
+    const facts = factsOf(fixture);
+    expect(facts.compaction).not.toBeNull();
+    expect(facts.records.map((entry) => entry.record.id)).toEqual([target.id]);
+    expect(facts.counts.unrecognized).toBe(0);
+  }, 30_000);
 });
