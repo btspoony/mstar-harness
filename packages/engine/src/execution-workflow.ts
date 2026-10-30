@@ -2036,7 +2036,7 @@ export async function recoverExecutionCoordinator(
       "coordination.recovery-self-settlement",
       `the caller ${JSON.stringify(caller.sessionId)} names itself as the prior holder this recovery replaces; a recovery replaces ` +
         `a DIFFERENT recorded session, so no recovery may settle the identity making the call. Recovery: acquire a distinct ` +
-        `replacement session and rerun this recovery from it — pass a different --session-id, or set MSTAR_HOST_SESSION_ID to it; ` +
+        `replacement session and rerun this recovery from it \u2014 pass a different --session-id, or set MSTAR_HOST_SESSION_ID to it; ` +
         `the prior holder stays the session being replaced.`,
       {
         workflow_id: workflowId,
