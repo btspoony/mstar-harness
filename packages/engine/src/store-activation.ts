@@ -1404,6 +1404,20 @@ function findRetirementRow(
 // Activation barrier (§7)
 // ---------------------------------------------------------------------------
 
+/** The generated document's actor, or the coded refusal its preflight raises (same code, message and recovery as before the move). */
+function requireGeneratedOperator(operator: string | undefined): string {
+  if (operator === undefined || operator.trim() === "") {
+    throw Object.assign(
+      new StoreActivationError(
+        "store.operator-required",
+        "the activation generates its operator attestation when --attestation is omitted, and the generated document records the invoking operator; pass --operator <name> (or --attestation <absolute-json> to supply the document explicitly)",
+      ),
+      { recovery: "run mstar store activate --manifest <path> --operator <name> (add --attestation <absolute-json> to override the generated document)" },
+    );
+  }
+  return operator;
+}
+
 /**
  * `activateStore(context, receipt, attestation)` — the barrier. Addresses the
  * reviewed applied receipt by its OWN recorded row identity (the apply row
@@ -1417,11 +1431,16 @@ export async function activateStore(
   receipt: MigrationReceipt,
   attestation?: ActivationAttestation,
   hooks: { afterStage?(stage: "flip" | "inspection" | "retirement" | "section-write", completed: number): void } = {},
-  // `processFacts` is a test-only seam: production callers never pass it, and
-  // a Bun-driven run refuses on the generated path (Bun is never an admissible
-  // consumer), so the generated success path is proven at this transaction
-  // with injected facts — the same class of seam as the `hooks` above.
-  options: { operator?: string; processFacts?: ProvisionProcessFacts } = {},
+  // `processFacts` is the ACCEPTED provisioning limit
+  // `activation-provisioning.ts` documents at `ProvisionProcessFacts`: an
+  // explicit direct-engine/test input, never evidence of an installed consumer
+  // (production CLI callers omit it). It exists because a Bun-driven run
+  // refuses on the generated path — Bun is never an admissible consumer — so
+  // the generated success path is proven at this transaction with injected
+  // facts, the same class of seam as the `hooks` above.
+  // `now` is the activation transaction's own clock: one instant stamps the
+  // generated document and every activation stamp below.
+  options: { operator?: string; processFacts?: ProvisionProcessFacts; now?: () => string } = {},
 ): Promise<ActivationReceipt> {
   if (
     !receipt ||
@@ -1511,6 +1530,13 @@ export async function activateStore(
     inspection.close();
   }
 
+  // CLOSE (c): the generated document records the invoking operator, so a
+  // missing one is refused HERE — before the recovery point is written — and an
+  // unoperated activation never leaves an orphan backup behind. Same code,
+  // message and recovery the flip used to raise; the document itself is still
+  // assembled inside the flip transaction below.
+  const generatedOperator = validated === undefined ? requireGeneratedOperator(options.operator) : "";
+
   // The recovery point is taken on its own connection, after the validations
   // and before the barrier transaction: the staged store is quiesced (attested)
   // and never has two writers open at once.
@@ -1525,7 +1551,9 @@ export async function activateStore(
 
   const flip = await openStore(context, "write");
   try {
-    const at = new Date().toISOString();
+    // ONE instant for the whole flip: the generated document attests it and
+    // every activation stamp records it.
+    const at = (options.now ?? (() => new Date().toISOString()))();
     flip.db.exec("begin immediate");
     try {
       const current = readMetaRow(flip.db);
@@ -1565,21 +1593,14 @@ export async function activateStore(
       // attests row disposal, never an observed process death.
       let activationValidated = validated;
       if (activationValidated === undefined) {
-        if (options.operator === undefined || options.operator.trim() === "") {
-          throw Object.assign(
-            new StoreActivationError(
-              "store.operator-required",
-              "the activation generates its operator attestation when --attestation is omitted, and the generated document records the invoking operator; pass --operator <name> (or --attestation <absolute-json> to supply the document explicitly)",
-            ),
-            { recovery: "run mstar store activate --manifest <path> --operator <name> (add --attestation <absolute-json> to override the generated document)" },
-          );
-        }
+        // The operator was required before the backup (preflight above); this
+        // branch only runs when no document was supplied, so it is nonblank.
         const stoppedRows = flip.db
           .prepare("select session_id from execution_sessions where state = 'active' and epoch = ?")
           .all(current.epoch) as Array<{ session_id?: unknown }>;
         const provisioned = provisionActivationDocument(
           {
-            actor: options.operator,
+            actor: generatedOperator,
             authorizationRef: `migration-receipt:${receipt.receiptId}`,
             attestedAt: at,
             stoppedSessions: stoppedRows

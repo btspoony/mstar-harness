@@ -994,17 +994,29 @@ export type MigrationContext = {
   operator?: string;
   /** Test-injected process facts for the generated document's consumer row. */
   processFacts?: ProvisionProcessFacts;
+  /**
+   * The settling transaction's clock. ONE instant is captured per settling
+   * transaction and stamped on the generated document and on every tombstone
+   * it releases, so a recorded receipt never mixes ambient time with the
+   * caller's clock. Absent: the system clock.
+   */
+  now?: () => string;
 };
 
 /**
  * The one internal signal the settlement raises when a held retired claim
  * must be settled and the operator supplied no attestation: it names the
- * holders and the stop rows the generated document must attest. It never
- * escapes the upgrade entry, which catches it, provisions the document and
- * retries the (rolled-back, therefore clean) upgrade once.
+ * holders, one stop row per holder, and the settling transaction's single
+ * instant the generated document attests. It never escapes the upgrade entry,
+ * which catches it, provisions the document and retries the (rolled-back,
+ * therefore clean) upgrade once.
  */
 export class SettlementAttestationNeeded extends Error {
-  constructor(readonly holders: readonly string[], readonly stopped: readonly StoppedSessionAttestation[]) {
+  constructor(
+    readonly holders: readonly string[],
+    readonly stopped: readonly StoppedSessionAttestation[],
+    readonly attestedAt: string,
+  ) {
     super("a held retired plan-PM claim needs a generated attestation");
     this.name = "SettlementAttestationNeeded";
   }
@@ -1387,7 +1399,11 @@ function settleRetiredPlanPmIntegrationClaims(db: StoreDb, context: MigrationCon
   }
   const attestation = context.attestation;
   const attestedInstant = attestation === undefined ? null : parsedInstant(attestation.attestedAt);
-  const cutoverInstant = parsedInstant(new Date().toISOString());
+  // ONE instant for this settling transaction: the generated document attests
+  // it, every claim's window is measured against it, and the tombstones record
+  // it — never a second, ambient reading of the clock.
+  const at = (context.now ?? (() => new Date().toISOString()))();
+  const cutoverInstant = parsedInstant(at);
   const pendingHolders = new Set<string>();
   // One stop row per HOLDER, however many claims that holder left behind: a
   // duplicate row would attest the same stop twice and read as two holders.
@@ -1477,7 +1493,7 @@ function settleRetiredPlanPmIntegrationClaims(db: StoreDb, context: MigrationCon
     // Deterministic order: the generated reference and the stop rows it is
     // built from never depend on which claim row was read first.
     const holders = [...pendingHolders].sort();
-    throw new SettlementAttestationNeeded(holders, holders.map((holder) => pendingStoppedBySessionId.get(holder)!));
+    throw new SettlementAttestationNeeded(holders, holders.map((holder) => pendingStoppedBySessionId.get(holder)!), at);
   }
 }
 /** Five host-state tables for DSH-owned ledger facts. */
@@ -1799,7 +1815,10 @@ function validateAppliedMigrations(applied: AppliedMigration[]): number {
  */
 function applyPendingMigrations(
   db: StoreDb,
-  options: { alreadyInTransaction?: boolean; attestation?: MigrationContext["attestation"]; operator?: string; processFacts?: ProvisionProcessFacts; busyTimeoutMs?: number } = {},
+  options: {
+    alreadyInTransaction?: boolean; attestation?: MigrationContext["attestation"]; operator?: string;
+    processFacts?: ProvisionProcessFacts; now?: () => string; busyTimeoutMs?: number;
+  } = {},
 ): number {
   const own = !options.alreadyInTransaction;
   if (own) db.exec("begin immediate");
@@ -1812,7 +1831,11 @@ function applyPendingMigrations(
     if (prior.length === 0) db.exec(SCHEMA_VERSION_TABLE_SQL);
     for (const migration of pending) {
       db.exec(migration.sql);
-      if (migration.normalize !== undefined) migration.normalize(db, { attestation: options.attestation, operator: options.operator, processFacts: options.processFacts });
+      if (migration.normalize !== undefined) {
+        migration.normalize(db, {
+          attestation: options.attestation, operator: options.operator, processFacts: options.processFacts, now: options.now,
+        });
+      }
       // A migration's temporary staging tables are the normalizer's input only:
       // they never survive the batch, so a rolled-back or committed store holds
       // exactly the version's declared schema.
@@ -2555,7 +2578,8 @@ function publicationBarrierRefusal(error: unknown, dbPath: string, phase: "creat
 export async function initializeStore(
   context: StoreContext,
   options: {
-    attestation?: unknown; operator?: string; processFacts?: ProvisionProcessFacts; busyTimeoutMs?: number; afterStagingClaim?: () => void;
+    attestation?: unknown; operator?: string; processFacts?: ProvisionProcessFacts; now?: () => string;
+    busyTimeoutMs?: number; afterStagingClaim?: () => void;
     /**
      * INTERNAL to the upgrade pair (`upgradeStoreMinimal`): let the settlement
      * marker cross this boundary so that caller can generate the document and
@@ -2604,7 +2628,10 @@ export async function initializeStore(
     options.afterStagingClaim?.();
     db.exec("begin immediate");
     try {
-      applyPendingMigrations(db, { alreadyInTransaction: true, attestation, operator: options.operator, processFacts: options.processFacts, busyTimeoutMs: timeout });
+      applyPendingMigrations(db, {
+        alreadyInTransaction: true, attestation, operator: options.operator, processFacts: options.processFacts,
+        now: options.now, busyTimeoutMs: timeout,
+      });
       db.prepare("update store_meta set authority_state = 'active', activated_at = ? where id = 1").run(nowRfc3339());
       db.prepare("update execution_meta set authority_state = 'active', activated_at = ? where id = 1").run(nowRfc3339());
       db.exec("commit");
@@ -2715,7 +2742,7 @@ export async function initializeStore(
 export async function upgradeStore(
   context: StoreContext,
   options: {
-    attestation?: unknown; operator?: string; processFacts?: ProvisionProcessFacts;
+    attestation?: unknown; operator?: string; processFacts?: ProvisionProcessFacts; now?: () => string;
     /** INTERNAL to the upgrade pair — see `initializeStore`'s identical option. */
     raiseSettlementSignal?: boolean;
   } = {},
@@ -2741,7 +2768,9 @@ export async function upgradeStore(
   }
   let schemaVersion: number;
   try {
-    schemaVersion = applyPendingMigrations(db, { attestation, operator: options.operator, processFacts: options.processFacts });
+    schemaVersion = applyPendingMigrations(db, {
+      attestation, operator: options.operator, processFacts: options.processFacts, now: options.now,
+    });
     readStoreMeta(db);
     // The migration is atomic, so an upgraded store must carry the complete
     // execution schema; a recorded-but-incomplete one is drift, not progress.

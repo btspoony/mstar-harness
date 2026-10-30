@@ -1005,6 +1005,12 @@ export async function upgradeStoreMinimal(input: {
    * proven at this entry with injected facts.
    */
   processFacts?: ProvisionProcessFacts;
+  /**
+   * The clock the schema cutover's settling transaction reads once: the
+   * generated document attests that instant and the claims it settles are
+   * measured against it. Absent: the system clock.
+   */
+  now?: () => string;
   acknowledgedSkips?: readonly string[];
   /**
    * The operator's execution-specific acknowledgements: the exact ORIGINAL
@@ -1061,13 +1067,13 @@ export async function upgradeStoreMinimal(input: {
   // marker; every direct engine caller gets the named refusal instead.
   const run = (resolved: MigrationContext["attestation"]) =>
     !existsSync(dbPath)
-      ? initializeStore(context, { attestation: resolved, operator: input.operator, processFacts: input.processFacts, raiseSettlementSignal: true }).then(
+      ? initializeStore(context, { attestation: resolved, operator: input.operator, processFacts: input.processFacts, now: input.now, raiseSettlementSignal: true }).then(
           (initialized) => {
             initialized.close();
             return initialized.schemaVersion;
           },
         )
-      : upgradeStore(context, { attestation: resolved, operator: input.operator, processFacts: input.processFacts, raiseSettlementSignal: true }).then(
+      : upgradeStore(context, { attestation: resolved, operator: input.operator, processFacts: input.processFacts, now: input.now, raiseSettlementSignal: true }).then(
           (upgraded) => upgraded.schemaVersion,
         );
   try {
@@ -1082,7 +1088,9 @@ export async function upgradeStoreMinimal(input: {
       {
         actor: input.operator,
         authorizationRef: `retired-plan-pm-seat:${[...new Set(error.holders)].sort().join(",")}`,
-        attestedAt: new Date().toISOString(),
+        // The settling transaction's own instant, carried by the signal: the
+        // generated document attests when the cutover it authorizes ran.
+        attestedAt: error.attestedAt,
         stoppedSessions: error.stopped,
       },
       input.processFacts,

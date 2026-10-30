@@ -1576,4 +1576,28 @@ describe("retired plan-PM claim settlement", () => {
     expect(claims.map((claim) => claim.prior_holder)).toEqual(["holder-zeta", "holder-two", "holder-two"]);
     expect(claims.every((claim) => claim.status === "released" && claim.released_by === "store-upgrade")).toBe(true);
   });
+
+  test("a caller-supplied now is the ONE settlement instant and it is what covers the claim", async () => {
+    // The claim sits in the FUTURE of the ambient clock but before the caller's
+    // clock, so only the supplied instant can cover it: the settlement window
+    // is the transaction's own, never ambient time.
+    const settledAt = new Date(Date.now() + 48 * 60 * 60 * 1000).toISOString();
+    const claimedAt = new Date(Date.parse(settledAt) - 60 * 60 * 1000).toISOString();
+    const { context, workflowIds } = retiredClaimStore("clock", [
+      { workflowId: "wf-settlement-clock", holder: "holder-clock", claimedAt },
+    ]);
+    // Ambient time cannot cover the claim the upgrade generated its own
+    // document for: the named cause and recovery are unchanged.
+    await expect(
+      upgradeStoreMinimal({ context, operator: "operator", operationId: "op-clock-ambient", processFacts: SETTLEMENT_FACTS }),
+    ).rejects.toMatchObject({ code: "store.upgrade-attestation-missing" });
+    // With one supplied clock the generated document attests that instant and
+    // the tombstone it settles records the same one.
+    await upgradeStoreMinimal({
+      context, operator: "operator", operationId: "op-clock-supplied", now: () => settledAt, processFacts: SETTLEMENT_FACTS,
+    });
+    const claim = await tombstoneOf(context, workflowIds[0]!);
+    expect(claim.released_at).toBe(settledAt);
+    expect(claim.release_reason).toBe("retired-plan-pm-seat:holder-clock");
+  });
 });
