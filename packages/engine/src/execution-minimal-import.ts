@@ -1083,7 +1083,10 @@ export async function upgradeStoreMinimal(input: {
     // The generated authorizationRef is the ONE batch reference this document
     // settles under — `retired-plan-pm-seat:` plus the sorted unique holders —
     // and every settled tombstone copies it verbatim, so each holder's
-    // tombstone literal still matches the supplied/generated document.
+    // tombstone literal still matches the supplied/generated document. This
+    // dedupe+sort+join is the same normalization `settleRetiredPlanPmIntegrationClaims`
+    // reports in its `SettlementAttestationNeeded`; keep the two shapes identical.
+    // Tombstone↔document identity is carried by the verbatim copy, not the shape.
     const provisioned = provisionActivationDocument(
       {
         actor: input.operator,
