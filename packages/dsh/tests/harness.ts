@@ -1471,3 +1471,9 @@ export function isCiEnvironment(): boolean {
  * for those bodies).
  */
 export const LOCAL_SKILL_MOUNT_SKIP_REASON = 'local chokidar skill-mount timing is not deterministic; these real-composition assertions run unchanged in CI'
+
+/**
+ * Recorded skip reason for the packed-entry mtime guard: a CI checkout's mtimes
+ * carry no build order, so only the mtime comparison is skipped there.
+ */
+export const CI_MTIME_GUARD_SKIP_REASON = 'CI checkout mtimes do not preserve build order; mtime comparison is skipped, and packed-artifact assertions still run'

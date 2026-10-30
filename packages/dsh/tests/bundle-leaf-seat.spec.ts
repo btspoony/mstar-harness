@@ -23,6 +23,7 @@ import { join } from 'node:path'
 import { pathToFileURL } from 'node:url'
 import { Context } from '@deepseek-ai/cordis'
 import type { PreToolDecision, ToolExecution, ToolExecutionToken } from '@deepseek-ai/dsh-tools'
+import { CI_MTIME_GUARD_SKIP_REASON, isCiEnvironment } from './harness.ts'
 
 const ROOT = join(import.meta.dir, '..')
 /** The packed entry the source build produced (`package.json` `main`). */
@@ -59,11 +60,11 @@ afterAll(() => {
  * asserted here. The inputs are this package's sources plus the
  * `@mstar-harness/commands` sources the build inlines; the engine stays external.
  */
-function assertPackedEntryCurrent(): void {
+function assertPackedEntryCurrent(): string | null {
   const entry = join(ROOT, PACKED_ENTRY)
   if (!existsSync(entry)) throw new Error(`missing ${PACKED_ENTRY} — run \`bun run --cwd packages/dsh build\` first`)
   // CI checks out sources and builds in a fresh clone, so mtimes say nothing about order there.
-  if (process.env.CI !== undefined && process.env.CI !== "") return
+  if (isCiEnvironment()) return CI_MTIME_GUARD_SKIP_REASON
   const built = statSync(entry).mtimeMs
   for (const root of [join(ROOT, 'src'), join(ROOT, '..', 'commands', 'src')]) {
     for (const file of readdirSync(root, { recursive: true, encoding: 'utf8' })) {
@@ -72,6 +73,7 @@ function assertPackedEntryCurrent(): void {
       if (statSync(source).mtimeMs > built) throw new Error(`${source} is newer than ${PACKED_ENTRY} — run \`bun run --cwd packages/dsh build\` first`)
     }
   }
+  return null
 }
 
 /**
@@ -114,7 +116,8 @@ const defaultAllow = (): Promise<PreToolDecision> => Promise.resolve<PreToolDeci
 
 describe('packed dsh artifact — leaf-seat refusal without the private commands package', () => {
   test('the isolated consumer cannot resolve @mstar-harness/commands, yet the packed gate still refuses a leaf seat', async () => {
-    assertPackedEntryCurrent()
+    const mtimeGuard = assertPackedEntryCurrent()
+    expect(mtimeGuard).toBe(isCiEnvironment() ? CI_MTIME_GUARD_SKIP_REASON : null)
     const packageRoot = packedPackageRoot()
 
     // (a) The premise: no private-commands module resolution from the packed root.
