@@ -245,16 +245,26 @@ describe("terminal workflow adoption", () => {
     session.db.prepare("insert into execution_sessions(workflow_id, role, session_id, epoch, revision, state, bound_at) values (?, 'coordinator', ?, ?, 1, 'active', ?)")
       .run("wf-stranded", "active-holder", active.epoch, "2026-10-01T00:00:00.000Z");
     session.close();
-    // The touched refusal now names the supported optional-attestation recovery
-    // instead of the retired dead end, so the pin asserts the machine facts
-    // (code plus the exact addressed holder) rather than the wording.
-    const activeError = await refusalOf(() => adoptTerminalWorkflow({ harnessDir: active.context.harnessDir, caller: active.caller }, {
+    // An ACTIVE holder no longer turns the adoption into a demand for an
+    // operator-authored file: the transaction generates the recovery-scope
+    // document naming exactly the holder row it settles, and records it.
+    const activeAdopted = await adoptTerminalWorkflow({ harnessDir: active.context.harnessDir, caller: active.caller }, {
       workflowId: active.caller.workflowId, expectedRevision: 1, reason: "active", operationId: "adopt-active",
-    }));
-    expect(activeError).toMatchObject({
-      code: "execution.adoption-refused",
-      details: { active_holder_sessions: ["active-holder"], adoption_refusal: "active-session-proof-required" },
     });
+    expect(activeAdopted.recovery).toMatchObject({
+      outcome: "applied",
+      applied: ["execution_sessions(wf-stranded, coordinator, active-holder) revoked"],
+    });
+    expect(activeAdopted.recovery?.resolvedFrom).toEqual([
+      { path: "attestation.operator", source: `${active.caller.sessionId} (adopt-active)` },
+      { path: "attestation.attestedAt", source: expect.any(String) },
+      { path: "attestation.stoppedSessions", source: "active-holder" },
+    ]);
+    const settledHolder = await openStore(active.context, "read");
+    try {
+      expect(settledHolder.db.prepare("select state from execution_sessions where workflow_id = ? and session_id = ?").get("wf-stranded", "active-holder"))
+        .toEqual({ state: "revoked" });
+    } finally { settledHolder.close(); }
 
     const nonterminal = await strandedTerminal();
     const running = await openStore(nonterminal.context, "write");
@@ -351,6 +361,8 @@ describe("terminal adoption session settlement", () => {
       resolvedFrom: [
         { path: "attestation.operator", source: "recovery-operator (operator-authorization-fixture)" },
         { path: "attestation.attestedAt", source: "2026-10-08T00:00:00.000Z" },
+        // The recorded stop list is the disposed holder rows the document names.
+        { path: "attestation.stoppedSessions", source: "active-holder" },
       ],
       commitState: "committed",
     });
@@ -473,18 +485,34 @@ describe("terminal adoption session settlement", () => {
     expect((await readExecutionState(stranded.context)).data.terminalAdoptions).toHaveLength(1);
   });
 
-  test("refuses a holder with no proof, an incomplete proof and stale CAS without any mutation footprint", async () => {
+  test("an omitted proof generates the settlement document, while an incomplete proof and a stale CAS still refuse without any mutation footprint", async () => {
     const unproven = await strandedWithHolder("active-holder");
-    const before = await footprint(unproven.context);
-    const missingProof = await refusalOf(() => adopt(unproven, {}));
-    expect(missingProof).toMatchObject({
-      code: "execution.adoption-refused",
-      details: { active_holder_sessions: ["active-holder"], adoption_refusal: "active-session-proof-required" },
+    const generated = await adopt(unproven, {});
+    expect(generated.replayed).toBe(false);
+    // The generated recovery-scope document is accepted by the existing
+    // validator and attests exactly the row this transaction revoked: the
+    // caller as operator, the replay id as authorizationRef, and the disposed
+    // holder in the stop list.
+    expect(generated.recovery).toMatchObject({
+      outcome: "applied",
+      applied: ["execution_sessions(wf-stranded, coordinator, active-holder) revoked"],
+      resolvedFrom: [
+        { path: "attestation.operator", source: `${unproven.caller.sessionId} (adopt-settle-1)` },
+        { path: "attestation.attestedAt", source: expect.any(String) },
+        { path: "attestation.stoppedSessions", source: "active-holder" },
+      ],
     });
-    expect(missingProof.message).toContain("active-holder");
-    const staleCas = await refusalOf(() => adopt(unproven, { expectedRevision: 2, attestation: attestation(["active-holder"]) }));
+    const settled = await openStore(unproven.context, "read");
+    try {
+      expect(settled.db.prepare("select state from execution_sessions where workflow_id = ? and session_id = ?").get("wf-stranded", "active-holder"))
+        .toEqual({ state: "revoked" });
+    } finally { settled.close(); }
+
+    const stale = await strandedWithHolder("active-holder");
+    const staleBefore = await footprint(stale.context);
+    const staleCas = await refusalOf(() => adopt(stale, { expectedRevision: 2, attestation: attestation(["active-holder"]) }));
     expect(staleCas).toMatchObject({ code: "execution.header-revision-conflict" });
-    await expect(footprint(unproven.context)).resolves.toEqual(before);
+    await expect(footprint(stale.context)).resolves.toEqual(staleBefore);
 
     const wrongHolder = await strandedWithHolder("active-holder");
     const wrongBefore = await footprint(wrongHolder.context);
@@ -515,22 +543,28 @@ describe("terminal adoption session settlement", () => {
     await expect(footprint(stranded.context)).resolves.toEqual(before);
   });
 
-  test("refuses self-settlement of the invoking identity", async () => {
-    const stranded = await strandedWithHolder("adopter-session");
-    const before = await footprint(stranded.context);
-    const refused = await refusalOf(() => adopt(stranded, { attestation: attestation(["adopter-session"]) }));
-    expect(refused).toMatchObject({
-      code: "execution.adoption-refused",
-      details: { caller_session_id: "adopter-session", adoption_refusal: "self-settlement" },
-    });
-    await expect(footprint(stranded.context)).resolves.toEqual(before);
+  test("refuses self-settlement of the invoking identity, on a supplied and on the generated document", async () => {
+    for (const supplied of [true, false]) {
+      const stranded = await strandedWithHolder("adopter-session");
+      const before = await footprint(stranded.context);
+      const refused = await refusalOf(() => adopt(stranded, supplied ? { attestation: attestation(["adopter-session"]) } : {}));
+      expect(refused).toMatchObject({
+        code: "execution.adoption-refused",
+        details: { caller_session_id: "adopter-session", adoption_refusal: "self-settlement" },
+      });
+      await expect(footprint(stranded.context)).resolves.toEqual(before);
+    }
   });
 
   test("keeps the ordinary no-ACTIVE adoption unchanged and records a supplied-but-unneeded proof honestly", async () => {
     const ordinary = await strandedTerminal();
     const applied = await adopt(ordinary, {});
     expect(applied.replayed).toBe(false);
-    expect(applied.recovery).toBeUndefined();
+    // A generated document for a header with no ACTIVE holder is truthful: it
+    // records that nothing was settled, and it raises no caller-document warning
+    // (the caller supplied nothing that could have been silently dropped).
+    expect(applied.recovery).toMatchObject({ outcome: "already-satisfied", applied: [], warnings: [] });
+    expect(applied.recovery?.resolvedFrom).toContainEqual({ path: "attestation.stoppedSessions", source: "none" });
     const recorded = (await readExecutionState(ordinary.context)).data.terminalAdoptions ?? [];
     expect(recorded).toHaveLength(1);
 

@@ -2276,7 +2276,7 @@ const REOPEN_WORKFLOW_OPERATION = "reopenExecutionWorkflow";
 function reopenWorkflowRequestHash(
   caller: ExecutionCaller,
   workflowId: string,
-  input: { expected: ExecutionToken | undefined; reason: string; attestation: ActivationAttestation },
+  input: { expected: ExecutionToken | undefined; reason: string; attestation: ActivationAttestation | undefined },
 ): string {
   return createHash("sha256")
     .update(
@@ -2290,7 +2290,10 @@ function reopenWorkflowRequestHash(
           workflow_id: caller.workflowId,
         },
         reason: input.reason,
-        attestation: input.attestation,
+        // An omitted document hashes as its absence: the generated document is
+        // transaction fact, not request input, so an identical generated retry
+        // keeps the same hash and replays.
+        ...(input.attestation === undefined ? {} : { attestation: input.attestation }),
       }),
       "utf8",
     )
@@ -2333,7 +2336,14 @@ export async function reopenExecutionWorkflow(
   input: {
     workflowId: string;
     reason: string;
-    attestation: ActivationAttestation;
+    /**
+     * The optional explicit override. When omitted the reopen generates its
+     * own recovery-scope document inside the transaction (I-000297): reopening
+     * binds no coordinator and disposes no session row, so the generated
+     * document's truthful stop list is empty and the authorization record is
+     * operator + reason.
+     */
+    attestation?: ActivationAttestation;
     expected?: ExecutionToken;
     operationId: string;
   },
@@ -2356,12 +2366,13 @@ export async function reopenExecutionWorkflow(
   // The operator's authorization is a DOCUMENT, validated projectively BEFORE
   // any store access — the same recovery-scope rule the coordinator recovery
   // applies, so a credential-bearing or incomplete attestation never reaches
-  // the store.
-  const attestation = validateRecoveryAttestation(input.attestation);
+  // the store. An OMITTED document is generated inside the transaction below
+  // and passes the same validator there.
+  const supplied = input.attestation === undefined ? undefined : validateRecoveryAttestation(input.attestation);
   const requestHash = reopenWorkflowRequestHash(caller, workflowId, {
     expected: input.expected,
     reason: input.reason,
-    attestation,
+    attestation: supplied,
   });
   return withExecutionTransaction(context, (tx) => {
     if (tx.execution.authorityState !== "active") {
@@ -2434,6 +2445,17 @@ export async function reopenExecutionWorkflow(
       );
     }
     const now = new Date().toISOString();
+    // The generated authorization document: this transaction's own clock, the
+    // caller as operator, the replay id as the durable authorizationRef, and an
+    // EMPTY stop list — reopening binds no coordinator and revokes no session
+    // row, so it claims no stop. The builder never validates; the recovery
+    // validator above is the acceptance authority for both branches.
+    const attestation = supplied ?? validateRecoveryAttestation(provisionRecoveryDocument({
+      actor: caller.sessionId,
+      authorizationRef: operationId,
+      attestedAt: now,
+      stoppedSessions: [],
+    }));
     advanceWorkflowHeaderRevision(tx, { workflowId, now });
     // Registry membership changes DIRECTION here. A residue row a crashed close
     // left is the existing restatement edge's cleanup, so it is removed through
@@ -2466,6 +2488,9 @@ export async function reopenExecutionWorkflow(
       resolvedFrom: [
         { path: "attestation.operator", source: `${attestation.operator.actor} (${attestation.operator.authorizationRef})` },
         { path: "attestation.attestedAt", source: attestation.attestedAt },
+        // The recorded stop list. A reopen binds no coordinator and revokes no
+        // session row, so a generated document truthfully names none.
+        { path: "attestation.stoppedSessions", source: attestation.stoppedSessions.length === 0 ? "none" : attestation.stoppedSessions.map((session) => session.sessionId).join(", ") },
       ],
       warnings: [],
       commitState: "committed",

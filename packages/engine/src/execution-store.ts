@@ -69,8 +69,10 @@ import {
 } from "./status.js";
 import {
   validateActivationAttestation,
+  validateRecoveryAttestation,
   type ActivationAttestation,
 } from "./store-activation.js";
+import { provisionRecoveryDocument } from "./activation-provisioning.js";
 import {
   openStore,
   StoreError,
@@ -2167,7 +2169,9 @@ export async function adoptTerminalWorkflow(
   // the activation barrier and coordinator recovery use, BEFORE any store
   // access: a malformed, incomplete or credential-bearing document refuses
   // here instead of being silently ignored, and the projected declared shape is
-  // what the request fingerprint and the receipt carry.
+  // what the request fingerprint and the receipt carry. An OMITTED document is
+  // generated inside the transaction from the holder rows that transaction
+  // settles (below) and is accepted by the recovery-scope validator.
   const attestation = input.attestation === undefined ? undefined : validateActivationAttestation(input.attestation);
   // Self-settlement is refused exactly as coordinator recovery refuses it: the
   // identity that invokes the settlement must not be one the document declares
@@ -2251,28 +2255,41 @@ export async function adoptTerminalWorkflow(
     // complete proof for every listed target — rather than an unrecoverable
     // count limit. Coverage is validated for the whole set BEFORE any row is
     // revoked, and the transaction frame rolls the writes back on any refusal.
+    const now = new Date().toISOString();
     const activeHolders = readWorkflowSessionRows(tx, input.workflowId, "coordinator")
       .filter((row) => row.state === "active" && row.ref.epoch === tx.epoch)
       .map((row) => row.ref.sessionId)
       .sort();
+    // The generated document (I-000297): when the caller supplied none, the
+    // transaction attests exactly the holder rows IT disposes — this clock, the
+    // calling coordinator as operator, the replay id as the durable
+    // authorizationRef, and one stop row per addressed ACTIVE holder. The
+    // builder never validates; the recovery validator stays the acceptance
+    // authority, so the generated document must pass the same rules a
+    // hand-authored one always did. The narrowed meaning stands: the stop list
+    // attests row disposal, never observed process death.
+    const proof = attestation ?? validateRecoveryAttestation(provisionRecoveryDocument({
+      actor: caller.sessionId,
+      authorizationRef: input.operationId,
+      attestedAt: now,
+      stoppedSessions: activeHolders.map((sessionId) => ({ sessionId, host: "local" as const, state: "stopped" as const })),
+    }));
+    // Self-settlement is refused on BOTH branches, exactly as coordinator
+    // recovery refuses it: the identity invoking the settlement must not be one
+    // the document declares stopped. A generated document that names the caller
+    // means the caller IS the holder this adoption would revoke, so the caller
+    // must run it from a distinct operator identity rather than settle itself.
+    if (proof.stoppedSessions.some((session) => session.sessionId === caller.sessionId)) {
+      throw new ExecutionError(
+        "execution.adoption-refused",
+        `the adopting caller ${JSON.stringify(caller.sessionId)} is an ACTIVE holder this adoption would settle, so the ` +
+          `settlement cannot be attested by the identity being settled. Rerun from a session id other than the one this ` +
+          `adoption names stopped, with a stop list covering only the addressed workflow's ACTIVE holder(s).`,
+        { workflow_id: input.workflowId, caller_session_id: caller.sessionId, adoption_refusal: "self-settlement" },
+      );
+    }
     if (activeHolders.length > 0) {
-      const holders = activeHolders.map((sessionId) => JSON.stringify(sessionId)).join(", ");
-      if (attestation === undefined) {
-        throw new ExecutionError(
-          "execution.adoption-refused",
-          `workflow ${input.workflowId} holds ACTIVE coordinator session(s) ${holders} at epoch ${tx.epoch}; terminal adoption ` +
-            `settles them only against the operator's stop attestation, because it would otherwise revoke a holder nobody has ` +
-            `attested stopped. Supply --attestation <absolute-json> with the full ActivationAttestation whose stoppedSessions ` +
-            `name ${holders} as stopped/reloaded, then retry.`,
-          {
-            workflow_id: input.workflowId,
-            epoch: tx.epoch,
-            active_holder_sessions: activeHolders,
-            adoption_refusal: "active-session-proof-required",
-          },
-        );
-      }
-      const attested = new Set(attestation.stoppedSessions.map((session) => session.sessionId));
+      const attested = new Set(proof.stoppedSessions.map((session) => session.sessionId));
       const unattested = activeHolders.filter((sessionId) => !attested.has(sessionId));
       if (unattested.length > 0) {
         throw new ExecutionError(
@@ -2280,7 +2297,8 @@ export async function adoptTerminalWorkflow(
           `this attestation does not name ${unattested.map((sessionId) => JSON.stringify(sessionId)).join(", ")} \u2014 the ACTIVE ` +
             `coordinator session(s) of workflow ${input.workflowId} at epoch ${tx.epoch} \u2014 as stopped/reloaded, so the settlement ` +
             `cannot proceed: every addressed ACTIVE holder needs its own stop evidence, and the engine cannot observe a dead ` +
-            `process itself. Add each listed session to the attestation's stoppedSessions and retry.`,
+            `process itself. Omit --attestation and the engine generates that document from these rows itself; alternatively add ` +
+            `each listed session to the supplied document's stoppedSessions and retry.`,
           {
             workflow_id: input.workflowId,
             epoch: tx.epoch,
@@ -2294,7 +2312,6 @@ export async function adoptTerminalWorkflow(
         revokeSessionRow(tx, { workflowId: input.workflowId, role: "coordinator", sessionId });
       }
     }
-    const now = new Date().toISOString();
     const nextState = {
       ...state,
       // An unregistered header that never closed is terminalized HERE, inside
@@ -2323,16 +2340,26 @@ export async function adoptTerminalWorkflow(
     // settled, under whose attestation. Only declared attestation fields
     // travel (the validator refuses anything else), so no credential value is
     // ever recorded beside the settlement.
-    const settlement: RecoveryDetails | undefined = attestation === undefined ? undefined : {
+    const settlement: RecoveryDetails = {
       outcome: activeHolders.length === 0 ? "already-satisfied" : "applied",
       target: { workflowId: input.workflowId },
       applied: activeHolders.map((sessionId) => `execution_sessions(${input.workflowId}, coordinator, ${sessionId}) revoked`),
       unresolved: [],
       resolvedFrom: [
-        { path: "attestation.operator", source: `${attestation.operator.actor} (${attestation.operator.authorizationRef})` },
-        { path: "attestation.attestedAt", source: attestation.attestedAt },
+        { path: "attestation.operator", source: `${proof.operator.actor} (${proof.operator.authorizationRef})` },
+        { path: "attestation.attestedAt", source: proof.attestedAt },
+        // The recorded stop list: the disposed holder rows the document names,
+        // so the committed receipt carries the generated evidence itself.
+        {
+          path: "attestation.stoppedSessions",
+          source: proof.stoppedSessions.length === 0
+            ? "none"
+            : proof.stoppedSessions.map((session) => session.sessionId).join(", "),
+        },
       ],
-      warnings: activeHolders.length === 0
+      // Only a caller-supplied document can silently omit a settlement the
+      // caller expected; a generated one attests exactly the rows read.
+      warnings: activeHolders.length === 0 && attestation !== undefined
         ? [{
             code: "execution.adoption.nothing-to-settle",
             message: `the supplied attestation named no ACTIVE coordinator session of workflow ${input.workflowId}; the adoption was recorded without a settlement`,

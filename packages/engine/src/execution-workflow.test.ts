@@ -4021,14 +4021,15 @@ function reopenWorkflow(
     operationId: string;
     reason?: string;
     expected?: ExecutionToken;
-    attestation: ActivationAttestation;
+    /** Omitted → the engine generates the recovery-scope document (I-000297). */
+    attestation?: ActivationAttestation;
     who?: ExecutionCaller;
   },
 ) {
   return reopenExecutionWorkflow(domainContext(fixture.context, input.who ?? fixture.coordinatorCaller), {
     workflowId: WORKFLOW_ID,
     reason: input.reason ?? "the failed lifecycle is reopened for further work",
-    attestation: input.attestation,
+    ...(input.attestation === undefined ? {} : { attestation: input.attestation }),
     operationId: input.operationId,
     ...(input.expected === undefined ? {} : { expected: input.expected }),
   });
@@ -4098,6 +4099,8 @@ describe("execution-workflow-reopen: \u00A74.2 a closed lifecycle returns to run
       resolvedFrom: [
         { path: "attestation.operator", source: "ops-engineer (compass D29 / coordinator recovery decision)" },
         { path: "attestation.attestedAt", source: "2026-01-02T04:00:00.000Z" },
+        // A reopen disposes no session row, so the recorded stop list is empty.
+        { path: "attestation.stoppedSessions", source: "none" },
       ],
     });
 
@@ -4229,14 +4232,21 @@ describe("execution-workflow-reopen: \u00A74.2 a closed lifecycle returns to run
     expect(stale.code).toBe("execution.stale-token");
     expect(await workflowFootprint(fixture.context)).toEqual(before);
 
-    // No operator document: the authorization is the whole admission gate.
-    const unauthorized = await refusalOf(() => reopenWorkflow(fixture, {
-      operationId: "op-reopen-unauthorized",
+    // No operator document: the reopen generates its recovery-scope document
+    // (I-000297) from its own recorded facts — the caller as operator, the
+    // replay id as authorizationRef, and an EMPTY stop list (a reopen binds no
+    // coordinator and revokes no session row, so it claims no stop).
+    const generated = await reopenWorkflow(fixture, {
+      operationId: "op-reopen-generated",
       expected: terminal.token,
-      attestation: undefined as unknown as ActivationAttestation,
-    }));
-    expect(unauthorized.code).toBe("store.attestation-invalid");
-    expect(await workflowFootprint(fixture.context)).toEqual(before);
+    });
+    expect(generated.replayed).toBe(false);
+    expect(generated.recovery?.resolvedFrom).toEqual([
+      { path: "attestation.operator", source: `${fixture.coordinatorCaller.sessionId} (op-reopen-generated)` },
+      { path: "attestation.attestedAt", source: expect.any(String) },
+      { path: "attestation.stoppedSessions", source: "none" },
+    ]);
+    expect(storedHeader(fixture.context)).toMatchObject({ registered: 1, status: "running", ended_at: null });
   });
 
   test("an identical retry replays the attributed receipt and writes nothing", async () => {
