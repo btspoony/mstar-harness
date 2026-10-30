@@ -51,7 +51,7 @@
           {
             "root": "packages/cli/dist",
             "files": 1,
-            "sha256": "212f847a5b6cb5dfa1a035b457baa8d3139e2e8851f93f59578ca752faf8c8fe",
+            "sha256": "9b17b0c0cc1ab3adac212101e87127838c32e394a690a01823b713fd5f62d45f",
             "exclude": [
               "execution-consumer.json"
             ]
@@ -60,7 +60,7 @@
         "files": [
           {
             "path": "packages/cli/dist/mstar-harness.js",
-            "sha256": "71e7438bd1f45fc7aa94a452e0aac016ba3d816353455c300c2c63e7afbd0d10"
+            "sha256": "5ce076b663e095597e1cc0b445641f5e2e7f10ebcc9b8d245ef0dccd105b39c2"
           }
         ]
       },
@@ -106,7 +106,7 @@
           {
             "root": "packages/dsh/dist",
             "files": 59,
-            "sha256": "49866db82650bf2d6df66042b166e6224cd3b758102e947dc0081d6cd3460666",
+            "sha256": "8592809e4e9ccf02f71f01ed5e6620aecf065916395783301bd5e55f3d765b6b",
             "exclude": [
               "client.js",
               "execution-consumer.json"
@@ -116,7 +116,7 @@
         "files": [
           {
             "path": "packages/dsh/dist/index.js",
-            "sha256": "88b131207fb1271ce12199176591d7a866a6ddbf5e1494d05a368d6779350e2a"
+            "sha256": "942f4e72d35d272a2642e8870ce1f9f8f4b70c03856eaa7330014f7da0554bca"
           },
           {
             "path": "packages/dsh/dist/invariant.js",
@@ -255,7 +255,7 @@
           {
             "root": "packages/omp/dist",
             "files": 4,
-            "sha256": "d6a3d3075c712d651522115a08940cf18d6cdb1d3a66e1c9cd1b20d6d2b0775a",
+            "sha256": "57e88851771f8ee0c9a4219a8a10d29de496411bea6ceb5a6e3da10816abfa37",
             "exclude": [
               "execution-consumer.json"
             ]
@@ -263,7 +263,7 @@
           {
             "root": "packages/omp/extensions",
             "files": 3,
-            "sha256": "6bc73a17cf615ffb8f1fcb476dccf23b2fff4927088d65d6c6f5364197948250",
+            "sha256": "d1ad0d48ed7844a3ecff98f75b59581d03f72d3f45e05c8b2e43e2bf0ed71603",
             "exclude": [
               "execution-consumer.json"
             ]
@@ -271,7 +271,7 @@
           {
             "root": "packages/omp/hooks",
             "files": 1,
-            "sha256": "91c96343ed10f9640ba4979bf052e6ffd7fed217fdfd09660c08f28b1ae12971",
+            "sha256": "b334ab90cfbd8174e98afc2fc40d7c7abd703c0f2c43fbf0352409b7778cfce7",
             "exclude": [
               "execution-consumer.json"
             ]
@@ -280,15 +280,15 @@
         "files": [
           {
             "path": "packages/omp/dist/extensions/model-handoff.js",
-            "sha256": "5167ab0e17022b9df1fd6baa65d421a41e64087659d5c560ee14fdbdfad585c4"
+            "sha256": "e44421fa162400fdaaaf5d5372503bd69090ddde3bffe260f18f795660153a07"
           },
           {
             "path": "packages/omp/dist/extensions/phase2-orchestration.js",
-            "sha256": "069f75c01727c52e1d2ecc0e1457b0ea34851a2d84fd60aca314adeb2799c1a5"
+            "sha256": "0462879f0d0086dba6d0901aad879ef54a38a6ceb71b4a99f2d0517761fcf00b"
           },
           {
             "path": "packages/omp/dist/hooks/pre/mstar-gates.js",
-            "sha256": "71de6c5b1ce5e2531cac20c9d64eaf00ff2e1f9960f4158b5894817ad0d1944b"
+            "sha256": "e301a2e9a0830e331a75e009c0d2cd0e67d5db73d709afa533428958703ba1a9"
           },
           {
             "path": "packages/omp/mcp.json",
@@ -392,7 +392,7 @@
           {
             "root": "packages/opencode/dist",
             "files": 1,
-            "sha256": "346ef89ac0641cb74539134e7c3da7db0c88ad4a3f5a65988b06217af1b9bc1a",
+            "sha256": "603739ab4bc0e6d75f4aa5bb708f28d591dd6ff975a82b7a71ab4a022f7ca1a2",
             "exclude": [
               "execution-consumer.json"
             ]
@@ -401,7 +401,7 @@
         "files": [
           {
             "path": "packages/opencode/dist/mstar.js",
-            "sha256": "37f58935f741b52ca62890667c6d440feb86bcf1cc3dfc3c1fd8ab86041bf0f1"
+            "sha256": "ee63bd93be0d26ec6e9fcf3192e17db038fb8cdbdf675f97cd0dbd860c3b3f8d"
           }
         ]
       },
