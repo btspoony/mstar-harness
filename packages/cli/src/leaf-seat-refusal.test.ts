@@ -103,16 +103,21 @@ async function runRegisteredCli(argv: readonly string[], context: InvocationCont
   registerCliCommands(program, getCommandDefinitions(), context);
   const lines: string[] = [];
   const log = console.log;
-  const exitCode = process.exitCode;
   console.log = (...values: unknown[]) => {
     lines.push(values.map(String).join(" "));
   };
+  // The adapter's own writeEnvelope sets process.exitCode from the envelope.
+  // Reset it to 0 after the run (never restore a captured value): bun test
+  // exits 1 when a file leaves a non-zero exitCode behind even with zero
+  // failed assertions, and a shard-mate file may have set one before this file
+  // ran, so "restoring" it would re-import that stale value. The assertions
+  // judge the envelope, not the process exit code.
   process.exitCode = 0;
   try {
     await program.parseAsync(["node", "mstar", ...argv], { from: "node" });
   } finally {
     console.log = log;
-    process.exitCode = exitCode;
+    process.exitCode = 0;
   }
   return JSON.parse(lines.join("")) as Record<string, unknown>;
 }
