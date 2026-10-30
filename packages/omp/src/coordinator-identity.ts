@@ -10,7 +10,6 @@ import {
   executionContextFor,
   readExecutionAuthority,
   recoverExecutionCoordinator,
-  validateActivationAttestation,
   validateExecutionIdentity,
   type ExecutionBinding,
   type ExecutionIdentity,
@@ -20,6 +19,7 @@ import {
   type ExecutionSessionRef,
   type ExecutionState,
   type ExecutionToken,
+  type ActivationAttestation,
 } from "@mstar-harness/engine";
 import { randomUUID } from "node:crypto";
 
@@ -90,8 +90,13 @@ export type CoordinatorActiveRecoverRequest = Readonly<{
   /** The recorded holder this recovery replaces, or `null` only for an unowned workflow. */
   priorSessionId: string | null;
   reason: string;
-  /** The operator's own `ActivationAttestation` document; validated by the engine, never manufactured here. */
-  attestation: unknown;
+  /**
+   * The operator's own `ActivationAttestation` document, forwarded to the
+   * engine's validator — never manufactured here. OPTIONAL: when omitted the
+   * engine generates the recovery document from the recovery's own recorded
+   * facts (I-000297), so the host tool no longer demands one.
+   */
+  attestation?: unknown;
   /** Full `exec-v1:workflow:…` token; derived from the addressed authority when omitted. */
   expected?: string;
   /** Operation id; a fresh host-minted id when omitted. */
@@ -128,7 +133,7 @@ export type CoordinatorAuthorityDeps = Readonly<{
     operationId: string;
     priorSessionId: string | null;
     reason: string;
-    attestation: unknown;
+    attestation?: unknown;
   }) => Promise<ExecutionReceipt<ExecutionSessionRef>>;
   read: (input: { harnessDir: string; workflowId: string }) => Promise<ExecutionRead<ExecutionState | ExecutionPlanView>>;
 }>;
@@ -146,7 +151,11 @@ const DEFAULT_AUTHORITY_DEPS: CoordinatorAuthorityDeps = {
       operationId: input.operationId,
       priorSessionId: input.priorSessionId,
       reason: input.reason,
-      attestation: validateActivationAttestation(input.attestation),
+      // Forwarded UNTOUCHED: the engine owns both branches — it validates a
+      // supplied document and generates (then validates) an omitted one.
+      // The cast is the declared transport: the validator at the receiving
+      // site is the acceptance authority, never this forwarder.
+      attestation: input.attestation as ActivationAttestation | undefined,
     }),
   read: (input) => readExecutionAuthority({ harnessDir: input.harnessDir }, { workflowId: input.workflowId }),
 };
@@ -424,9 +433,9 @@ function classifyCoordinatorRecover(
       raw.priorSessionId === null
         ? []
         : unsafeSessionIdSubjects([{ subject: "priorSessionId", value: raw.priorSessionId }]),
-    unproven: !isPlainObject(raw.attestation),
+    unproven: raw.attestation !== undefined && !isPlainObject(raw.attestation),
     unprovenVerdict:
-      "attestation must be the operator's own ActivationAttestation document, forwarded to the engine's own validator — this adapter never manufactures or defaults one",
+      "attestation, when supplied, must be the operator's own ActivationAttestation document forwarded to the engine's own validator; when omitted the engine generates the recovery document — this adapter never manufactures or defaults one",
   };
   const refusal = shapeRefusalOf(raw, "recover", contract);
   if (refusal !== undefined) return { ok: false, outcome: refusal };
@@ -682,10 +691,11 @@ export async function recoverCoordinatorIdentity(
  * coordinator identity. Everything the engine owns stays the engine's — the
  * current epoch/root revalidation, the creator/prior-holder rule, the atomic
  * revocation and the immutable receipt — and the operator's attestation is
- * forwarded untouched to `validateActivationAttestation`. This adapter adds only
+ * forwarded untouched — the engine validates a supplied document and generates
+ * an omitted one. This adapter adds only
  * the caller-shape refusals (already aggregated by the shared classifier, which
- * validates the holder against the shared public-session-id rule and keeps the
- * missing attestation an `unauthorized` verdict)
+ * validates the holder against the shared public-session-id rule and keeps a
+ * present-but-non-object attestation an `unauthorized` verdict)
  * and the host-derived identity. It reads the workflow token from the addressed
  * authority when the operator omits `expected` (the recovery verb REQUIRES an
  * explicit token) and mints the operation id when omitted, and it never echoes
@@ -700,8 +710,9 @@ async function recoverActiveCoordinator(
   const workflowId = request.workflowId as string;
   const prior = request.priorSessionId as string | null;
   // The authorization document is forwarded UNTOUCHED: the classifier already
-  // refused an absent or non-object attestation as `unauthorized`, and the
-  // engine's own `validateActivationAttestation` projects the declared shape.
+  // refused a present-but-non-object attestation as `unauthorized`, and the
+  // engine owns the rest — it validates a supplied document and generates an
+  // omitted one inside its own transaction.
 
 
   const identity = coordinatorIdentityOf(facts.sessionId, workflowId, facts.leaf);

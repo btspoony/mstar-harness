@@ -29,7 +29,8 @@ import { readDeclaredNodeFloor, warnUncheckableNodeFloor } from "./core.js";
 // import of the activation validator must be loaded at call time (see
 // validatedActivationAttestation below) because store-activation.ts reads
 // MIGRATIONS from this module during its own module evaluation.
-import type { ActivationAttestation } from "./store-activation.js";
+import type { ActivationAttestation, StoppedSessionAttestation } from "./store-activation.js";
+import type { ProvisionProcessFacts } from "./activation-provisioning.js";
 
 /**
  * The existing operator stop evidence, run through the existing activation
@@ -982,10 +983,58 @@ export type MigrationContext = {
   /**
    * The operator's FULL validated activation attestation, when the upgrade
    * supplied one. It is the one supported authorization a cutover may act on:
-   * a migration never treats an unattested stopped id as authority.
+   * a migration never treats an unattested stopped id as authority. When it
+   * is absent and a held retired claim must be settled, the settlement raises
+   * `SettlementAttestationNeeded` and the upgrade entry generates the
+   * document (I-000297) and retries — a migration never treats an unattested
+   * stop id as authority either way.
    */
   attestation?: ActivationAttestation;
+  /** The invoking operator, recorded as the generated document's actor. */
+  operator?: string;
+  /** Test-injected process facts for the generated document's consumer row. */
+  processFacts?: ProvisionProcessFacts;
 };
+
+/**
+ * The one internal signal the settlement raises when a held retired claim
+ * must be settled and the operator supplied no attestation: it names the
+ * holders and the stop rows the generated document must attest. It never
+ * escapes the upgrade entry, which catches it, provisions the document and
+ * retries the (rolled-back, therefore clean) upgrade once.
+ */
+export class SettlementAttestationNeeded extends Error {
+  constructor(readonly holders: readonly string[], readonly stopped: readonly StoppedSessionAttestation[]) {
+    super("a held retired plan-PM claim needs a generated attestation");
+    this.name = "SettlementAttestationNeeded";
+  }
+}
+
+/**
+ * The PUBLIC-boundary form of the internal settlement signal: a direct engine
+ * caller (`initializeStore`/`upgradeStore` are exported) never receives the
+ * bare, code-less marker — only the upgrade pair consumes it, and only when it
+ * explicitly asks (`raiseSettlementSignal`). The refusal names the holders, the
+ * competing instants and the supported recovery, exactly like the refusal the
+ * settlement site itself emits for a supplied document.
+ */
+function settlementSignalRefusal(signal: SettlementAttestationNeeded): StoreError {
+  const holders = signal.holders.map((holder) => JSON.stringify(holder)).join(", ");
+  return Object.assign(
+    new StoreError(
+      "store.upgrade-attestation-missing",
+      `workflow(s) ${holders} hold a retired plan-PM integration claim this cutover must settle, and no operator ` +
+        `attestation was supplied; the generated document is built by the upgrade entry (mstar store upgrade), not by ` +
+        `this direct engine call. The store was left unchanged.`,
+      { holders: [...signal.holders], stopped_sessions: signal.stopped.map((session) => session.sessionId) },
+    ),
+    {
+      recovery:
+        "rerun the upgrade through the CLI, which generates the operator document itself: mstar store upgrade --operator <name>; " +
+        "to fix the document explicitly instead, pass --attestation <absolute-json> whose attestedAt is at or after the claim instant.",
+    },
+  );
+}
 
 export type Migration = { version: number; name: string; sql: string; normalize?: (db: StoreDb, context: MigrationContext) => void };
 
@@ -1339,6 +1388,8 @@ function settleRetiredPlanPmIntegrationClaims(db: StoreDb, context: MigrationCon
   const attestation = context.attestation;
   const attestedInstant = attestation === undefined ? null : parsedInstant(attestation.attestedAt);
   const cutoverInstant = parsedInstant(new Date().toISOString());
+  const pendingHolders = new Set<string>();
+  const pendingStopped: StoppedSessionAttestation[] = [];
   const claims = db
     .prepare("select workflow_id, lease_json from execution_integration_cutover")
     .all() as Array<{ workflow_id?: unknown; lease_json?: unknown }>;
@@ -1371,8 +1422,19 @@ function settleRetiredPlanPmIntegrationClaims(db: StoreDb, context: MigrationCon
           `(add \`--harness\` when needed). Nothing was modified.`,
       );
     }
-    const attested = attestation?.stoppedSessions.find((session) => session.sessionId === holder);
-    const attestedInstant = attestation === undefined ? null : parsedInstant(attestation.attestedAt);
+    // Lazy provisioning (I-000297): with no supplied attestation the upgrade
+    // entry generates one — this pass only records WHAT it must attest (the
+    // retired holder rows this cutover deletes) and rolls back cleanly, so the
+    // generated document is built and validated in the async entry and the
+    // upgrade retries once. A migration never treats an unattested stop id as
+    // authority: nothing is settled on this pass.
+    if (attestation === undefined) {
+      pendingHolders.add(holder);
+      pendingStopped.push({ sessionId: holder, host: "local", state: "stopped" });
+      continue;
+    }
+    const attested = attestation.stoppedSessions.find((session) => session.sessionId === holder);
+    const attestedInstant = parsedInstant(attestation.attestedAt);
     const claimedInstant = parsedInstant(claim.claimed_at);
     const settled =
       attestation !== undefined &&
@@ -1384,11 +1446,15 @@ function settleRetiredPlanPmIntegrationClaims(db: StoreDb, context: MigrationCon
       claimedInstant <= attestedInstant &&
       attestedInstant <= cutoverInstant;
     if (!settled) {
+      // The competing instants are named: the stop evidence must sit at or
+      // after the claim and at or before this cutover, whose generated
+      // document attests the cutover instant itself.
       throw new StoreError(
         "store.upgrade-attestation-missing",
-        `workflow ${workflowId} holds an integration claim for the retired plan-PM holder ${holder}, and this cutover has no valid, current ` +
-          `stop attestation for it; the store was left at schema 8 unchanged. Rerun the same \`store upgrade\` with the operator's full activation ` +
-          `attestation (version, operator authorization, a current consumer) naming ${holder} as stopped at or after the claim.`,
+        `workflow ${workflowId} holds an integration claim for the retired plan-PM holder ${holder} (claimed_at ${String(claim.claimed_at ?? "?")}) ` +
+          `that this cutover's attestation does not cover: the stop evidence must be dated at or after the claim and at or before this cutover ` +
+          `(the generated document attests the cutover instant itself). The store was left at schema 8 unchanged. Recovery: rerun the same ` +
+          `\`mstar store upgrade --operator <name>\` with --attestation <absolute-json> whose attestedAt is at or after the claim instant.`,
       );
     }
     const tombstone = {
@@ -1397,9 +1463,15 @@ function settleRetiredPlanPmIntegrationClaims(db: StoreDb, context: MigrationCon
       prior_holder: holder,
       released_by: "store-upgrade",
       released_at: attestation!.attestedAt,
+      // The literal the tombstone records — and the exact format the generated
+      // document's authorizationRef reconstructs (holder only; the workflow id
+      // is this tombstone row's key, not part of the reason string).
       release_reason: `retired-plan-pm-seat:${holder}`,
     };
     update.run(JSON.stringify(tombstone), workflowId);
+  }
+  if (pendingHolders.size > 0) {
+    throw new SettlementAttestationNeeded([...pendingHolders], pendingStopped);
   }
 }
 /** Five host-state tables for DSH-owned ledger facts. */
@@ -1721,7 +1793,7 @@ function validateAppliedMigrations(applied: AppliedMigration[]): number {
  */
 function applyPendingMigrations(
   db: StoreDb,
-  options: { alreadyInTransaction?: boolean; attestation?: MigrationContext["attestation"]; busyTimeoutMs?: number } = {},
+  options: { alreadyInTransaction?: boolean; attestation?: MigrationContext["attestation"]; operator?: string; processFacts?: ProvisionProcessFacts; busyTimeoutMs?: number } = {},
 ): number {
   const own = !options.alreadyInTransaction;
   if (own) db.exec("begin immediate");
@@ -1734,7 +1806,7 @@ function applyPendingMigrations(
     if (prior.length === 0) db.exec(SCHEMA_VERSION_TABLE_SQL);
     for (const migration of pending) {
       db.exec(migration.sql);
-      if (migration.normalize !== undefined) migration.normalize(db, { attestation: options.attestation });
+      if (migration.normalize !== undefined) migration.normalize(db, { attestation: options.attestation, operator: options.operator, processFacts: options.processFacts });
       // A migration's temporary staging tables are the normalizer's input only:
       // they never survive the batch, so a rolled-back or committed store holds
       // exactly the version's declared schema.
@@ -1767,6 +1839,10 @@ function applyPendingMigrations(
           `was rolled back and nothing was committed. Retry when the competing writer is done.`,
       );
     }
+    // The generated-attestation signal (I-000297) is control flow, not a
+    // corrupt store: it crosses the rollback wrapper untouched so the upgrade
+    // entry can provision and retry the clean, rolled-back batch.
+    if (error instanceof SettlementAttestationNeeded) throw error;
     throw new StoreError("store.corrupt", `Migration application failed and rolled back: ${(error as Error).message}`);
   }
 }
@@ -2120,7 +2196,7 @@ export function withExecutionReadGuard<T>(
   if (probe.kind === "unreadable") refuseOpenFailure(probe.error, probe.dbPath);
   if (probe.kind !== "active") {
     const recovery = probe.state === "staged"
-      ? 'Run "mstar store activate --manifest <migration.json> --attestation <file.json>" to finish the reviewed activation.'
+      ? 'Run "mstar store activate --manifest <migration.json> --operator <name>" to finish the reviewed activation.'
       : 'Run "mstar store upgrade" to import legacy state and activate the authority.';
     throw new StoreError("store.not-active", `The execution authority is ${probe.state ?? "missing"}. ${recovery}`);
   }
@@ -2184,7 +2260,7 @@ export function withDshWriteTransaction<T>(
     const execution = readExecutionMeta(db, schemaVersion);
     if (!execution || execution.authorityState !== "active") {
       const recovery = execution?.authorityState === "staged"
-        ? 'Run "mstar store activate --manifest <migration.json> --attestation <file.json>" to finish the reviewed activation.'
+        ? 'Run "mstar store activate --manifest <migration.json> --operator <name>" to finish the reviewed activation.'
         : `Run "mstar store upgrade --harness ${JSON.stringify(resolve(context.harnessDir))} --operator <name>" to import legacy state and activate the authority.`;
       throw new StoreError("store.not-active", `The execution authority is ${execution?.authorityState ?? "missing"}. ${recovery} Nothing was written.`);
     }
@@ -2198,7 +2274,7 @@ export function withDshWriteTransaction<T>(
       const currentExecution = readExecutionMeta(db, schemaVersion);
       if (!currentExecution || currentExecution.authorityState !== "active") {
         const recovery = currentExecution?.authorityState === "staged"
-          ? 'Run "mstar store activate --manifest <migration.json> --attestation <file.json>" to finish the reviewed activation.'
+          ? 'Run "mstar store activate --manifest <migration.json> --operator <name>" to finish the reviewed activation.'
           : `Run "mstar store upgrade --harness ${JSON.stringify(resolve(context.harnessDir))} --operator <name>" to import legacy state and activate the authority.`;
         throw new StoreError("store.not-active", `The execution authority is ${currentExecution?.authorityState ?? "missing"}. ${recovery} Nothing was written.`);
       }
@@ -2472,7 +2548,15 @@ function publicationBarrierRefusal(error: unknown, dbPath: string, phase: "creat
  */
 export async function initializeStore(
   context: StoreContext,
-  options: { attestation?: unknown; busyTimeoutMs?: number; afterStagingClaim?: () => void } = {},
+  options: {
+    attestation?: unknown; operator?: string; processFacts?: ProvisionProcessFacts; busyTimeoutMs?: number; afterStagingClaim?: () => void;
+    /**
+     * INTERNAL to the upgrade pair (`upgradeStoreMinimal`): let the settlement
+     * marker cross this boundary so that caller can generate the document and
+     * retry. Every other caller gets the named refusal instead of the marker.
+     */
+    raiseSettlementSignal?: boolean;
+  } = {},
 ): Promise<StoreHandle> {
   assertStoreRuntimeSupported();
   // The operator's stop evidence is validated by the existing activation
@@ -2514,7 +2598,7 @@ export async function initializeStore(
     options.afterStagingClaim?.();
     db.exec("begin immediate");
     try {
-      applyPendingMigrations(db, { alreadyInTransaction: true, attestation, busyTimeoutMs: timeout });
+      applyPendingMigrations(db, { alreadyInTransaction: true, attestation, operator: options.operator, processFacts: options.processFacts, busyTimeoutMs: timeout });
       db.prepare("update store_meta set authority_state = 'active', activated_at = ? where id = 1").run(nowRfc3339());
       db.prepare("update execution_meta set authority_state = 'active', activated_at = ? where id = 1").run(nowRfc3339());
       db.exec("commit");
@@ -2524,7 +2608,9 @@ export async function initializeStore(
       } catch {
         // nothing committed either way
       }
-      throw error;
+      throw error instanceof SettlementAttestationNeeded && options.raiseSettlementSignal !== true
+        ? settlementSignalRefusal(error)
+        : error;
     }
     // The staged bytes are verified as this build's own complete store before
     // they can be named.
@@ -2622,7 +2708,11 @@ export async function initializeStore(
  */
 export async function upgradeStore(
   context: StoreContext,
-  options: { attestation?: unknown } = {},
+  options: {
+    attestation?: unknown; operator?: string; processFacts?: ProvisionProcessFacts;
+    /** INTERNAL to the upgrade pair — see `initializeStore`'s identical option. */
+    raiseSettlementSignal?: boolean;
+  } = {},
 ): Promise<{ schemaVersion: number }> {
   assertStoreRuntimeSupported();
   const dbPath = storeDbPath(context);
@@ -2645,12 +2735,18 @@ export async function upgradeStore(
   }
   let schemaVersion: number;
   try {
-    schemaVersion = applyPendingMigrations(db, { attestation });
+    schemaVersion = applyPendingMigrations(db, { attestation, operator: options.operator, processFacts: options.processFacts });
     readStoreMeta(db);
     // The migration is atomic, so an upgraded store must carry the complete
     // execution schema; a recorded-but-incomplete one is drift, not progress.
     readExecutionMeta(db, schemaVersion);
   } catch (error) {
+    // The generated-attestation signal is control flow, not an open failure;
+    // the finally block owns the close. A DIRECT caller never sees the marker:
+    // only the upgrade pair opts in, and everyone else gets the named refusal.
+    if (error instanceof SettlementAttestationNeeded) {
+      throw options.raiseSettlementSignal === true ? error : settlementSignalRefusal(error);
+    }
     refuseOpenFailure(error, dbPath);
   } finally {
     db.close();

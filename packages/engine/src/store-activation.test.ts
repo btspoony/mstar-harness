@@ -37,6 +37,8 @@ import {
   type StoreActivationErrorCode,
 } from "./store-activation.js";
 import { initializeStore, MIGRATION_1_SQL, MIGRATIONS, migrationChecksum, openStore, SCHEMA_VERSION_TABLE_SQL, type StoreContext } from "./store-db.js";
+import { readHarnessVersion } from "./core.js";
+import { validateActivationAttestation } from "./store-activation.js";
 import { applyStoreMigration, planStoreMigration, type MigrationManifest, type MigrationReceipt } from "./store-migrate.js";
 
 const ROOT = mkdtempSync(join(tmpdir(), "mstar-store-activation-"));
@@ -347,6 +349,71 @@ async function patchReceiptJson(context: StoreContext, id: number, patch: (store
 // ---------------------------------------------------------------------------
 
 describe("store activation barrier", () => {
+  test("activation without an attestation generates the operator document inside the flip transaction", async () => {
+    const { context, apply } = await stagedFixture("activation-generated-");
+    // The generated success path is proven HERE with injected process facts:
+    // the Bun test runtime is itself inadmissible as an attested consumer, so
+    // the production process facts would refuse by design.
+    const receipt = await activateStore(context, apply, undefined, {}, {
+      operator: "ops-engineer",
+      processFacts: {
+        entrypoint: "/opt/mstar/cli/dist/mstar-harness.js",
+        // At/above the declared floor, which the validator derives itself.
+        runtimeVersion: atOrAboveRuntime,
+        isBun: false,
+      },
+    });
+    // The recorded document passes the acceptance authority, carries the hash
+    // the epoch bump was committed under, and records the generated operator.
+    expect(() => validateActivationAttestation(receipt.attestation)).not.toThrow();
+    expect(receipt.attestationHash).toMatch(/^[0-9a-f]{64}$/);
+    // The authorizationRef names the reviewed APPLY receipt, the durable
+    // record this activation was authorized from.
+    expect(receipt.attestation.operator).toEqual({
+      actor: "ops-engineer",
+      authorizationRef: `migration-receipt:${apply.receiptId}`,
+    });
+    expect(receipt.attestation.consumers).toEqual([
+      {
+        entryId: "mstar-harness.js",
+        kind: "coordinator",
+        entrypoint: "/opt/mstar/cli/dist/mstar-harness.js",
+        runtime: "node",
+        runtimeVersion: atOrAboveRuntime,
+        version: readHarnessVersion(),
+        current: true,
+        disposition: "reloaded",
+      },
+    ]);
+    // The stop list is exactly the active rows the epoch bump invalidated.
+    const store = await openStore(context, "read");
+    try {
+      const activeBefore = store.db
+        .prepare("select session_id from execution_sessions where state = 'active' and epoch < ?")
+        .all(receipt.epoch) as Array<{ session_id: string }>;
+      expect(receipt.attestation.stoppedSessions.map((session) => session.sessionId).sort())
+        .toEqual(activeBefore.map((row) => row.session_id).sort());
+    } finally {
+      store.close();
+    }
+  });
+
+  test("activation without an attestation and without an operator refuses with the named recovery", async () => {
+    const { context, apply } = await stagedFixture("activation-generated-noop-");
+    const error = await activateStore(context, apply, undefined).catch((caught: unknown) => caught) as Error & { code?: string; recovery?: string };
+    expect(error.code).toBe("store.operator-required");
+    expect(error.recovery).toContain("mstar store activate --manifest <path> --operator <name>");
+  });
+
+  test("a Bun-driven activation without an attestation refuses with the named cause and recovery", async () => {
+    const { context, apply } = await stagedFixture("activation-generated-bun-");
+    const error = await activateStore(context, apply, undefined, {}, { operator: "ops-engineer" })
+      .catch((caught: unknown) => caught) as Error & { code?: string; recovery?: string };
+    expect(error.code).toBe("store.attestation-invalid");
+    expect(error.message).toContain("the running process is Bun");
+    expect(error.recovery).toContain("mstar store activate --manifest <path> --operator <name>");
+  });
+
   test("activation refuses an attestation with no installed consumer", async () => {
     const { context, apply } = await stagedFixture("activation-consumers-");
     const error = await refusalOf("store.activation-blocked", () =>

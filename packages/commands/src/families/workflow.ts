@@ -54,17 +54,15 @@ function engineRefusal(id: string, error: unknown): CommandEnvelope<never> {
     : [];
   const holderList = holders.map((sessionId) => JSON.stringify(sessionId)).join(", ");
   const posixReadFailure = /^E[A-Z0-9]+$/.test(code);
-  const proofRequired = adoptionRefusal === "active-session-proof-required";
   const proofIncomplete = adoptionRefusal === "active-session-proof-incomplete";
-  const recovery = proofRequired
-    ? `Terminal adoption can settle the eligible unregistered header's ACTIVE coordinator session(s) ${holderList} only against genuine operator stop evidence. The refusal details include attestationContract.schema and attestationContract.constraints for the full document; write an absolute JSON file whose stoppedSessions names every listed target as stopped/reloaded, then retry ` +
-      "`mstar workflow adopt-terminal --workflow <id> --reason <text> --attestation <absolute-json>` (omitted --expect derives the current header revision in the guarded transaction; omitted --operation is generated once). Optional discovery: `mstar schema --command workflow.adopt-terminal`. The engine remains the authority; no stop, consumer-readiness, operator, or authorization facts are generated."
-    : proofIncomplete
-      ? `Add every listed ACTIVE coordinator session (${holderList}) to the attestation's stoppedSessions with state "stopped" or ` +
-        `"reloaded", then retry. The refusal details include the full attestationContract schema and constraints; each addressed holder needs its own genuine stop evidence, and rows outside the addressed workflow are never settled.`
-      : adoptionRefusal === "self-settlement"
-        ? "Run the adoption from a distinct operator identity — an acquired session id other than the one the attestation names " +
-          "stopped/reloaded; the attested stop must come from an observer other than the identity being settled."
+  const recovery = proofIncomplete
+    ? `Omit --attestation and the engine GENERATES the settlement document from the addressed holder rows itself, naming the listed ACTIVE ` +
+      `coordinator session(s) ${holderList}, and records it with the adoption — that is the supported default. Alternatively, add each listed ` +
+      `session to the supplied document's stoppedSessions with state "stopped" or "reloaded" and retry. The refusal details include the full ` +
+      `attestationContract schema and constraints; rows outside the addressed workflow are never settled.`
+    : adoptionRefusal === "self-settlement"
+        ? "Run the adoption from a distinct operator identity — an acquired session id other than the ACTIVE holder row this " +
+          "adoption settles; the settlement must come from an observer other than the identity being settled."
         : code === "workflow.register.title-constraint"
           ? "Use the title in the selected plan document's H1, or correct that document before registering."
           : code === "execution.header-revision-conflict"
@@ -79,15 +77,15 @@ function engineRefusal(id: string, error: unknown): CommandEnvelope<never> {
                       (code === `${id}.attestation-unreadable` ||
                         code === `${id}.attestation-malformed` || posixReadFailure)
                       ? id === "workflow.reopen"
-                        ? "Supply --attestation as an absolute path to the operator's recovery-scope JSON document: version, attestedAt, operator.actor, operator.authorizationRef and a stoppedSessions array (possibly empty); consumers is optional and ignored. The attestation is self-reported operator authorization, not verified host evidence."
-                        : "Supply --attestation as an absolute path to the operator's ActivationAttestation JSON document; `mstar schema --command workflow.adopt-terminal` (payload contract adoptionAttestation) publishes its structure and semantic constraints."
+                        ? "Correct the --attestation override path, or omit --attestation and let the reopen generate the recovery-scope document from its own recorded facts (operator = the calling session, authorizationRef = the replay id). A supplied document carries version, attestedAt, operator.actor, operator.authorizationRef and a stoppedSessions array (possibly empty); consumers is optional and ignored."
+                        : "Correct the --attestation override path, or omit --attestation and let the adoption generate the settlement document from the addressed ACTIVE holder rows; `mstar schema --command workflow.adopt-terminal` (payload contract adoptionAttestation) publishes the supplied document's structure and semantic constraints."
                     : (id === "workflow.evidence" || id === "workflow.execution-policy") &&
                       (code === `${id}.file-malformed` || posixReadFailure)
                       ? (id === "workflow.evidence"
                         ? "Correct the absolute JSON path supplied with --file, then retry mstar workflow evidence --workflow <id> --file <absolute-json>."
                         : "Correct the absolute JSON path supplied with --file, then retry mstar workflow execution-policy --workflow <id> --file <absolute-json>.")
                       : code === "store.attestation-invalid" || code === "store.activation-blocked"
-                        ? "The engine refused this operator attestation. Use `mstar schema --command workflow.adopt-terminal` for the structural contract and semantic rules; the engine validator remains authoritative. Do not invent operator, consumer-readiness, or stop facts."
+                        ? "The engine refused this supplied attestation. Omit --attestation to use the document the verb generates from its own recorded facts, or correct the file: `mstar schema --command workflow.adopt-terminal` publishes the structural contract and semantic rules; the engine validator remains authoritative. Do not invent operator, consumer-readiness, or stop facts."
                         : code.startsWith("execution.adoption")
                           ? "Preserve the header and resolve the stated cause; re-read `mstar status validate` before retrying."
                           : undefined;
@@ -95,7 +93,7 @@ function engineRefusal(id: string, error: unknown): CommandEnvelope<never> {
     ? undefined
     : {
         ...details,
-        ...(proofRequired || proofIncomplete ? {
+        ...(proofIncomplete ? {
           attestationContract: {
             schema: activationAttestationDocumentSchema.toJSONSchema(),
             constraints: activationAttestationDocumentConstraints,
@@ -331,14 +329,14 @@ function makeDefinition(
           ownership: "caller" as const,
           route: "cli" as const,
           required: false,
-          constraint: `required only for an eligible unregistered header with current-epoch ACTIVE coordinator session(s); --attestation remains an absolute JSON file path, and its stoppedSessions must name every exact target as stopped/reloaded. The engine refuses undeclared/credential-bearing fields and self-settlement. ${attestationRules}`,
+          constraint: `optional explicit override: when omitted the engine generates the settlement document from the addressed ACTIVE holder rows and records it. A supplied document is an absolute JSON file path whose stoppedSessions must name every exact target as stopped/reloaded. The engine refuses undeclared/credential-bearing fields and self-settlement. ${attestationRules}`,
         },
         {
           name: "attestation",
           ownership: "caller" as const,
           route: "mcp" as const,
           required: false,
-          constraint: `the same absolute JSON path string (same-host paths remain usable); the structure is adoptionAttestation in the command schema, and engine-semantic constraints are: ${attestationRules}`,
+          constraint: `optional explicit override: the same absolute JSON path string (same-host paths remain usable), replacing the generated document 1:1. The structure is adoptionAttestation in the command schema, and engine-semantic constraints are: ${attestationRules}`,
         },
       ],
     } : {}),
@@ -361,11 +359,13 @@ function makeDefinition(
           name: "attestation",
           ownership: "caller" as const,
           route,
-          required: true,
+          required: false,
           constraint:
-            "absolute JSON path to the operator's recovery-scope document: version, attestedAt, operator.actor, " +
-            "operator.authorizationRef and a stoppedSessions array (possibly empty); consumers is optional and ignored. " +
-            "The attestation is SELF-REPORTED operator authorization — structure is validated, host liveness is not",
+            "optional explicit override: an absolute JSON path to the operator's recovery-scope document (version, attestedAt, " +
+            "operator.actor, operator.authorizationRef and a stoppedSessions array, possibly empty; consumers is optional and ignored). " +
+            "When omitted the reopen generates the document from its own recorded facts (operator = the calling session, " +
+            "authorizationRef = the replay id, empty stops because nothing is revoked). A supplied document is SELF-REPORTED " +
+            "operator authorization — structure is validated, host liveness is not",
         },
       ]),
     } : {}),
@@ -677,7 +677,7 @@ export function getWorkflowCommandDefinitions(): readonly CommandDefinition[] {
     ),
     makeDefinition(
       "workflow.adopt-terminal",
-      "Adopt a header that has no ACTIVE registry membership. An optional --expect is a positive header-revision CAS; if omitted, the engine derives the current revision inside the guarded transaction. An omitted --operation gets one generated id for this invocation. A header that never closed is terminalized to stopped in the same transaction as its adoption record, so the committed state never carries an adoption on a still-running header; an already-terminal header keeps its recorded status and ended_at. If the eligible header holds current-epoch ACTIVE coordinator session(s), the same transaction settles only the exact sessions supported by genuine operator stop evidence supplied through --attestation <absolute-json>; its stoppedSessions must name every target stopped/reloaded. The engine refuses self-settlement, invalid proof, and changed proof under a committed operation id. It does not infer that a process stopped or that consumer/operator facts are true.",
+      "Adopt a header that has no ACTIVE registry membership. An optional --expect is a positive header-revision CAS; if omitted, the engine derives the current revision inside the guarded transaction. An omitted --operation gets one generated id for this invocation. A header that never closed is terminalized to stopped in the same transaction as its adoption record, so the committed state never carries an adoption on a still-running header; an already-terminal header keeps its recorded status and ended_at. If the eligible header holds current-epoch ACTIVE coordinator session(s), the same transaction settles them and RECORDS the recovery-scope document it generates from those rows (one stop per settled holder). --attestation <absolute-json> is an optional 1:1 override; a supplied document must name every addressed holder stopped/reloaded. The engine refuses self-settlement (the caller may not be one of the settled holders), invalid or uncovered proof, and changed proof under a committed operation id. The stop list attests row disposal, never observed process death.",
       "write",
       ["workflow", "harness", "expect", "operation", "reason", "attestation"],
       async (input, context) => {
@@ -718,13 +718,13 @@ export function getWorkflowCommandDefinitions(): readonly CommandDefinition[] {
       {
         expect: "Optional positive header-revision CAS; when omitted the engine derives the current addressed revision inside the guarded adoption transaction.",
         operation: "Optional idempotency/replay id; when omitted one id is generated for this invocation.",
-        attestation: `absolute JSON file path for operator proof; required only for an eligible unregistered header with current-epoch ACTIVE coordinator sessions. Exact structure is payload adoptionAttestation; shared semantic constraints: ${attestationRules}`,
+        attestation: `optional absolute JSON file path for an explicit operator-proof override; when omitted the engine generates the settlement document from the addressed ACTIVE holder rows and records it. A supplied document must name every addressed holder stopped/reloaded. Exact structure is payload adoptionAttestation; shared semantic constraints: ${attestationRules}`,
       },
       { adoptionAttestation: activationAttestationDocumentSchema },
     ),
     makeDefinition(
       "workflow.reopen",
-      "Return a failed or stopped workflow to running on the SAME id. The header keeps its identity anchors, plan rows, session rows and retained operation receipts; the lifecycle simply re-enters the ACTIVE registry, and the ordinary bind/recover routes resume ownership afterwards. Reopening a terminal workflow takes an EXPLICIT operator authorization: a coordinator identity addressing this workflow, a non-empty --reason, and --attestation <absolute-json>, the recovery-scope document whose operator + reason are the authorization (no installed consumer is required and an empty stoppedSessions is valid). The attestation is SELF-REPORTED operator evidence: its structure is validated, the operator's authorization is never verified against host liveness. --expect is the closed header's current terminal token; `mstar status validate` publishes the header itself as an identity row (id, status, revision) in data.authority.terminalUnregistered[] (or data.authority.terminalAdoptions[] for an adopted close), never its token, and when --expect is omitted this verb derives that token from the authority and passes it explicitly, so the transition is always CAS-guarded. `completed` is never reopened and this route has no override — register a new lifecycle instead. An omitted --operation gets one generated id for this invocation.",
+      "Return a failed or stopped workflow to running on the SAME id. The header keeps its identity anchors, plan rows, session rows and retained operation receipts; the lifecycle simply re-enters the ACTIVE registry, and the ordinary bind/recover routes resume ownership afterwards. Reopening a terminal workflow takes an EXPLICIT operator authorization: a coordinator identity addressing this workflow and a non-empty --reason. The authorization document is GENERATED automatically from the reopen's own recorded facts (operator = the calling session, authorizationRef = the replay id, an empty stoppedSessions because a reopen revokes no session row); --attestation <absolute-json> is an optional 1:1 override of that generated recovery-scope document. A supplied document is SELF-REPORTED operator evidence: its structure is validated, the operator's authorization is never verified against host liveness. --expect is the closed header's current terminal token; `mstar status validate` publishes the header itself as an identity row (id, status, revision) in data.authority.terminalUnregistered[] (or data.authority.terminalAdoptions[] for an adopted close), never its token, and when --expect is omitted this verb derives that token from the authority and passes it explicitly, so the transition is always CAS-guarded. `completed` is never reopened and this route has no override — register a new lifecycle instead. An omitted --operation gets one generated id for this invocation.",
       "write",
       ["workflow", "harness", "expect", "operation", "reason", "attestation"],
       async (input, context) => {
@@ -735,13 +735,15 @@ export function getWorkflowCommandDefinitions(): readonly CommandDefinition[] {
           }
           const acquired = context.executionIdentity;
           const workflowId = input.workflow ?? acquired?.workflowId;
-          if (workflowId === undefined || input.reason === undefined || input.attestation === undefined) {
-            return refusalEnvelope({ command: id, status: "usage", code: "command.invalid-input", exitCode: 2, message: "workflow, reason and attestation are required; expect and operation may be omitted safely" });
+          if (workflowId === undefined || input.reason === undefined) {
+            return refusalEnvelope({ command: id, status: "usage", code: "command.invalid-input", exitCode: 2, message: "workflow and reason are required; attestation, expect and operation may be omitted safely" });
           }
           if (acquired !== undefined && (acquired.workflowId !== workflowId || acquired.role !== "coordinator")) {
             return refusalEnvelope({ command: id, status: "usage", code: "command.invalid-input", exitCode: 2, message: "acquired caller identity does not address the selected coordinator workflow" });
           }
-          const attestation = readOperatorAttestation(absolute(input.attestation, "attestation"), id, "recovery-scope attestation");
+          const attestation = input.attestation === undefined
+            ? undefined
+            : readOperatorAttestation(absolute(input.attestation, "attestation"), id, "recovery-scope attestation");
           const harnessDir = resolveProcessHarnessDir(context.cwd, input.harness);
           if (harnessDir === null) return refusalEnvelope({ command: id, status: "usage", code: "command.invalid-input", exitCode: 2, message: "no control harness resolved; supply an absolute harness" });
           // The caller's own token (or its absence) is what the engine sees: the
@@ -753,7 +755,9 @@ export function getWorkflowCommandDefinitions(): readonly CommandDefinition[] {
           return ok(id, await reopenExecutionWorkflow(executionContextFor({ harnessDir }, identity), {
             workflowId,
             reason: input.reason,
-            attestation,
+            // The file is an optional override; omitted, the engine generates the
+            // recovery-scope document from the reopen's own recorded facts.
+            ...(attestation === undefined ? {} : { attestation }),
             ...(input.expect === undefined ? {} : { expected: input.expect as ExecutionToken }),
             operationId: input.operation ?? randomUUID(),
           }));
@@ -766,7 +770,7 @@ export function getWorkflowCommandDefinitions(): readonly CommandDefinition[] {
         expect: `Optional checked CAS on the closed header's current terminal token. \`mstar status validate\` publishes that header as an identity row (id, status, revision) and never its token, so the token is not published anywhere: when omitted the engine resolves the current terminal header revision inside the guarded transaction and checks it there. Only a token you pass explicitly enters the request fingerprint, so repeating the same --operation without --expect replays the committed reopen.`,
         operation: "Optional idempotency/replay id; when omitted one id is generated for this invocation.",
         reason: "Required. Why the terminal lifecycle is reopened; recorded with the transition as the operator-facing justification.",
-        attestation: "Required absolute JSON path to the operator's recovery-scope document: version, attestedAt, operator.actor, operator.authorizationRef and a stoppedSessions array (possibly empty); consumers is optional and ignored. SELF-REPORTED operator authorization — the structure is validated, host liveness is never verified.",
+        attestation: "Optional explicit override: an absolute JSON path to the operator's recovery-scope document (version, attestedAt, operator.actor, operator.authorizationRef and a stoppedSessions array, possibly empty; consumers is optional and ignored). When omitted the reopen generates that document from its own recorded facts. A supplied document is SELF-REPORTED operator authorization — the structure is validated, host liveness is never verified.",
       },
     ),
   ];

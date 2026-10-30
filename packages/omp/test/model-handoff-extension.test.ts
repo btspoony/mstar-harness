@@ -1282,12 +1282,16 @@ describe("native coordinator tool on the ACTIVE route", () => {
     const repo = buildControlRepo("fixture-sibling-iteration", { legacySources: false });
     const session = newSession(repo.main);
     const harness = await createHarness({ cwd: repo.main, sessionDir: scratchDir("unused-"), sessionManager: session });
-    const hostId = harness.sessionManager.getSessionId();
     const workflowId = "native-proof-iteration";
-    await seedBindableActiveWorkflow(repo, hostId, workflowId);
-    expect((await harness.runCoordinatorTool({ operation: "bind", workflowId })).isError).toBe(false);
+    // The recorded holder is a DIFFERENT session than the tool's caller: the
+    // engine refuses self-settlement first (coordination.recovery-self-settlement),
+    // so a fixture whose holder IS the caller would never reach the document
+    // validator or the stop-evidence rule this test pins.
+    const recordedOwner = "recorded-owner";
+    await seedActiveHandoffAuthority(repo, recordedOwner, workflowId);
     const afterBind = await readExecutionAuthority({ harnessDir: repo.harness }, { workflowId });
     const ownerBefore = await activeCoordinatorOf(repo, workflowId);
+    expect(ownerBefore).toBe(recordedOwner);
     const operationsBefore = executionOperationCount(repo);
 
     // A malformed operator document is not proof: the host forwards the object
@@ -1297,7 +1301,7 @@ describe("native coordinator tool on the ACTIVE route", () => {
     const malformed = await harness.runCoordinatorTool({
       operation: "recover",
       workflowId,
-      priorSessionId: hostId,
+      priorSessionId: recordedOwner,
       reason: "the recorded host session was stopped",
       attestation: { version: 1 },
     });
@@ -1311,9 +1315,9 @@ describe("native coordinator tool on the ACTIVE route", () => {
     const noStopEvidence = await harness.runCoordinatorTool({
       operation: "recover",
       workflowId,
-      priorSessionId: hostId,
+      priorSessionId: recordedOwner,
       reason: "the recorded host session was stopped",
-      attestation: activationAttestation(hostId, []),
+      attestation: activationAttestation(recordedOwner, []),
     });
     expect(noStopEvidence.isError).toBe(true);
     expect(coordinatorCodeOf(noStopEvidence)).toBe("coordination.invalid-transition");

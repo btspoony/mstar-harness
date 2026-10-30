@@ -38,7 +38,7 @@ function engineRefusal(id: string, error: unknown): CommandEnvelope<never> {
   const message = error instanceof Error ? error.message : String(error);
   const fallbackRecovery = id === "session.run"
     ? "Correct the reported executable or working directory, then rerun mstar session run."
-    : "Correct the workflow or attestation inputs, then rerun mstar session recover.";
+    : "Correct the workflow or recovery inputs, then rerun mstar session recover.";
   return refusalEnvelope({
     command: id, status: "refused", code: code ?? `${id}.refused`, exitCode: 1, message,
     details: details ?? {},
@@ -146,7 +146,7 @@ type RecoverInputs = Readonly<{
   workflow: string;
   priorSessionId: string | null;
   reason: string;
-  attestationPath: string;
+  attestationPath?: string;
   expect?: string;
   operation: string;
   sessionId: string;
@@ -173,14 +173,26 @@ function resolveRecoverInputs(
 ): { ok: true; inputs: RecoverInputs } | { ok: false; diagnostics: RefusalDiagnostic[] } {
   const { workflow, priorSession, unowned, reason, attestation, expect, operation, harness } = data;
   const sourceCount = Number(priorSession !== undefined) + Number(unowned === true);
-  const missing = [
-    ...(reason === undefined ? ["reason"] : []),
-    ...(attestation === undefined ? ["attestation"] : []),
-    ...(operation === undefined ? ["operation"] : []),
-    ...(sessionId === undefined || sessionId.trim() === "" ? ["sessionId"] : []),
-  ];
+  // `--attestation` is an optional explicit override: when omitted the engine
+  // generates the recovery document from the recovery's own recorded facts, so
+  // it is never a missing field. The one caller mistake this gate refuses
+  // itself is naming the caller as its own prior holder — the generated stop
+  // list and the replacement identity would otherwise be the same session,
+  // and the two engine rules (stop evidence vs a current replacement) are
+  // contradictory for that input.
   const diagnostics: RefusalDiagnostic[] = [
-    ...missing.map(requiredFact),
+    ...(priorSession !== undefined && priorSession === sessionId
+      ? [{
+          path: "priorSession",
+          code: "invalid-value",
+          message: "the caller names itself as the prior holder; a recovery replaces a different recorded session",
+          expected: "the recorded other session, or resume through the existing binding with `mstar session run`",
+          received: "priorSession equals the caller identity",
+        } satisfies RefusalDiagnostic]
+      : []),
+    ...(reason === undefined ? [requiredFact("reason")] : []),
+    ...(operation === undefined ? [requiredFact("operation")] : []),
+    ...(sessionId === undefined || sessionId.trim() === "" ? [requiredFact("sessionId")] : []),
     ...(sourceCount === 1 ? [] : [{
       path: "priorSession|unowned=true",
       code: "alternative-required",
@@ -191,7 +203,7 @@ function resolveRecoverInputs(
   ];
   if (
     diagnostics.length > 0 ||
-    reason === undefined || attestation === undefined || operation === undefined ||
+    reason === undefined || operation === undefined ||
     sessionId === undefined
   ) {
     return { ok: false, diagnostics };
@@ -411,16 +423,20 @@ export function getSessionCommandDefinitions(): readonly CommandDefinition[] {
       cli: { path: ["session", "recover"], aliases: [], arguments: [], options: [
         { key: "workflow", flags: "--workflow <id>", required: true }, { key: "priorSession", flags: "--prior-session <id>", required: false, help: "Exactly one of --prior-session or --unowned=true is required." },
         { key: "unowned", flags: "--unowned", required: false, help: "Only true selects ownerless recovery; false is not an alternative." }, { key: "reason", flags: "--reason <text>", required: true },
-        { key: "attestation", flags: "--attestation <path>", required: true }, { key: "expect", flags: "--expect <token>", required: false, help: SESSION_RECOVER_EXPECT_HELP },
+        { key: "attestation", flags: "--attestation <path>", required: false, help: "Absolute path to the operator's recovery attestation JSON; optional — when omitted the recovery records the document generated from its own recorded facts. Supply it only to override that generated document." }, { key: "expect", flags: "--expect <token>", required: false, help: SESSION_RECOVER_EXPECT_HELP },
         { key: "operation", flags: "--operation <id>", required: true }, { key: "harness", flags: "--harness <path>", required: false },
         { key: "sessionId", flags: "--session-id <value>", required: false, context: "sessionId" },
       ] },
       input: recoverInput, output: commandEnvelopeSchema, effects: ["write"],
       requirements: [
-        ...(["workflow", "reason", "attestation", "operation"] as const).flatMap((name) => [
+        ...(["workflow", "reason", "operation"] as const).flatMap((name) => [
           { name, ownership: "caller" as const, route: "cli" as const, required: true },
           { name, ownership: "caller" as const, route: "mcp" as const, required: true },
         ]),
+        ...(["cli", "mcp"] as const).map((route) => ({
+          name: "attestation" as const, ownership: "caller" as const, route, required: false,
+          constraint: "explicit override: an absolute JSON path replacing the generated document 1:1; when omitted the recovery records the document generated from its own recorded facts (operator = caller session, authorizationRef = the replay id, stops = the named prior holder)",
+        })),
         ...(["cli", "mcp"] as const).map((route) => ({
           name: "expect" as const, ownership: "caller" as const, route, required: false, tokenKind: "workflow" as const,
           constraint: "CAS on the addressed workflow's current token; when omitted this verb reads that token itself inside the guarded transaction, so the terminal held-lease release needs no published token",
@@ -431,7 +447,7 @@ export function getSessionCommandDefinitions(): readonly CommandDefinition[] {
           { name: "sessionId", ownership: "caller" as const, route, required: true, constraint: "current operator's acquired conversation identity; never derive or substitute it" },
         ]),
       ],
-      description: "Recover a stopped workflow coordinator through active DB authority. Requires the current operator identity, replay id, reason and operator attestation; specify exactly one prior session or --unowned=true. --expect is an optional CAS token: when omitted this verb reads the addressed header's current token itself inside the guarded transaction. Recovery never resumes a session.",
+      description: "Recover a stopped workflow coordinator through active DB authority. Requires the current operator identity, replay id and reason; specify exactly one prior session or --unowned=true. --attestation is an optional explicit override: when omitted the recovery records the operator document generated from its own recorded facts. --expect is an optional CAS token: when omitted this verb reads the addressed header's current token itself inside the guarded transaction. Recovery never resumes a session.",
       async execute(raw, context: InvocationContext) {
         const parsed = recoverInput.safeParse(raw);
         if (!parsed.success) return refusalEnvelope({ command: "session.recover", status: "usage", code: "command.invalid-input", exitCode: 2, message: "Invalid input.", diagnostics: decodeInputDiagnostics(parsed.error, raw) });
@@ -448,11 +464,13 @@ export function getSessionCommandDefinitions(): readonly CommandDefinition[] {
           const root = resolveProcessHarnessDir(context.cwd, harness);
           if (root === null) return refusalEnvelope({ command: "session.recover", status: "usage", code: "command.invalid-input", exitCode: 2, message: "no control harness resolved; supply an absolute harness" });
           const identity = withLeafSeat({ source: context.host === undefined ? "local" : "host", sessionId, workflowId: workflow, role: "coordinator" } satisfies ExecutionIdentity, context);
-          const parsedAttestation = readAttestationDocument(attestationPath);
+          // The file document is the explicit override; when omitted the
+          // engine generates the recovery document inside its own transaction.
+          const parsedAttestation = attestationPath === undefined ? undefined : readAttestationDocument(attestationPath);
           const contextForCaller = executionContextFor({ harnessDir: root }, identity);
           const receipt = await recoverExecutionCoordinator(contextForCaller, {
             ...(expect === undefined ? {} : { expected: expect as never }), operationId: operation, priorSessionId, reason,
-            attestation: parsedAttestation,
+            ...(parsedAttestation === undefined ? {} : { attestation: parsedAttestation }),
           });
           return ok("session.recover", receipt);
         } catch (error) {

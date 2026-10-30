@@ -9,7 +9,8 @@ import { CompassSkipError, convertLegacyV1Tree, DeliveryDeclarationError, MIGRAT
 import { ExecutionError, assertOperationId, suppliedCatalogPin, withExecutionTransaction } from "./execution-store.js";
 import { canonicalPath, isPathWithin, validateActivationAttestation } from "./store-activation.js";
 import { legacySnapshotInventory, projectLegacySnapshot, writeImportedExecutionWorkflow, type ImportedPlan, type ImportedSessionBinding } from "./execution-import-rows.js";
-import { initializeStore, openStore, StoreError, storeDbPath, upgradeStore, type MigrationContext, type StoreContext, type StoreDb } from "./store-db.js";
+import { SettlementAttestationNeeded, initializeStore, openStore, StoreError, storeDbPath, upgradeStore, type MigrationContext, type StoreContext, type StoreDb } from "./store-db.js";
+import { provisionActivationDocument, type ProvisionProcessFacts } from "./activation-provisioning.js";
 import { importDshHostStateFiles, type DshHostStateImportReport } from "./host-state-import.js";
 
 /** One registered workflow an execution-specific acknowledgement skipped importing. */
@@ -997,6 +998,13 @@ export async function upgradeStoreMinimal(input: {
    * treats a thin or unattested stop id as authority.
    */
   attestation?: unknown;
+  /**
+   * Test-only seam for the generated document's consumer row: production
+   * callers never pass it, and a Bun-driven run refuses on the generated path
+   * (Bun is never an admissible consumer), so the generated success path is
+   * proven at this entry with injected facts.
+   */
+  processFacts?: ProvisionProcessFacts;
   acknowledgedSkips?: readonly string[];
   /**
    * The operator's execution-specific acknowledgements: the exact ORIGINAL
@@ -1042,11 +1050,82 @@ export async function upgradeStoreMinimal(input: {
   // absent — and this process's own create-only claim loses the publish race
   // with a truthful `store.already-exists`, retried through this same public
   // operation — or a complete, committed store to upgrade.
-  if (!existsSync(dbPath)) {
-    const initialized = await initializeStore(context, { attestation });
-    schemaVersion = initialized.schemaVersion;
-    initialized.close();
-  } else schemaVersion = (await upgradeStore(context, { attestation })).schemaVersion;
+  // Lazy provisioning (I-000297): with no supplied attestation, a held
+  // retired claim surfaces as `SettlementAttestationNeeded` from the (rolled
+  // back, therefore clean) first pass. The document is then generated from the
+  // recorded facts, validated through the existing lazy validator, and the
+  // upgrade retries ONCE — a migration never treats an unattested stop id as
+  // authority, and any second signal is a defect, not a loop.
+  // `raiseSettlementSignal` is the documented internal opt-in: this entry is the
+  // one caller that generates the document and retries, so it receives the
+  // marker; every direct engine caller gets the named refusal instead.
+  const run = (resolved: MigrationContext["attestation"]) =>
+    !existsSync(dbPath)
+      ? initializeStore(context, { attestation: resolved, operator: input.operator, processFacts: input.processFacts, raiseSettlementSignal: true }).then(
+          (initialized) => {
+            initialized.close();
+            return initialized.schemaVersion;
+          },
+        )
+      : upgradeStore(context, { attestation: resolved, operator: input.operator, processFacts: input.processFacts, raiseSettlementSignal: true }).then(
+          (upgraded) => upgraded.schemaVersion,
+        );
+  try {
+    schemaVersion = await run(attestation);
+  } catch (error) {
+    if (!(error instanceof SettlementAttestationNeeded)) throw error;
+    // The generated authorizationRef records the same literal the tombstone
+    // writes — `retired-plan-pm-seat:<holder>` (the workflow id is the
+    // tombstone row key, not part of the reason string) — joined for the
+    // multi-holder case this document covers in one operation.
+    const provisioned = provisionActivationDocument(
+      {
+        actor: input.operator,
+        authorizationRef: `retired-plan-pm-seat:${error.holders.join(",")}`,
+        attestedAt: new Date().toISOString(),
+        stoppedSessions: error.stopped,
+      },
+      input.processFacts,
+    );
+    if (!provisioned.ok) {
+      // The site's own attestation code: a plain coded error (the store code
+      // union does not carry the activation-scope attestation refusals).
+      throw Object.assign(new Error(`[store.attestation-invalid] ${provisioned.message}`), {
+        code: "store.attestation-invalid",
+        recovery:
+          "run the same verb through the installed Node CLI: mstar store upgrade --operator <name> (an explicit --attestation <absolute-json> also overrides)",
+      });
+    }
+    // The generated document is accepted only through the same validator a
+    // supplied one always faced; this module already imports it statically.
+    try {
+      schemaVersion = await run(validateActivationAttestation(provisioned.document));
+    } catch (retryError) {
+      // Defensive, and structurally unreachable TODAY: the retry always forwards
+      // the generated document, and the settlement raises the marker only while
+      // `attestation === undefined`. It becomes reachable the moment a refactor
+      // stops forwarding it, and the internal marker must never escape as a bare
+      // error then, so it is converted to the same named, recoverable refusal a
+      // caller-supplied document earns. (The reachable "generated instant cannot
+      // cover the claim" case — a claimed_at newer than this transaction's clock —
+      // is refused inside the migration as `store.upgrade-attestation-missing`.)
+      if (!(retryError instanceof SettlementAttestationNeeded)) throw retryError;
+      const holders = retryError.holders.map((holder) => JSON.stringify(holder)).join(", ");
+      throw Object.assign(
+        new StoreError(
+          "store.upgrade-attestation-missing",
+          `the retired plan-PM claim(s) held by ${holders} cannot be covered by the document this upgrade generated: its ` +
+            `attestedAt is this cutover's own instant, and the settlement requires the stop evidence to sit at or after the ` +
+            `claim instant and at or before the cutover. The store was left at schema 8 unchanged.`,
+        ),
+        {
+          recovery:
+            "rerun the same command with an explicit document whose attestedAt is at or after the claim instant: " +
+            "mstar store upgrade --operator <name> --attestation <absolute-json>",
+        },
+      );
+    }
+  }
   let result: MinimalImportResult;
   try {
     result = await importExecutionMinimal(input);

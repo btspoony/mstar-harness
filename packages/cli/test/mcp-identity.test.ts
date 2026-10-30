@@ -357,9 +357,11 @@ describe("MCP session identity", () => {
     const paths = diagnostics.map((entry) => entry.path);
     expect(paths).toContain("sessionId");
     expect(paths).toContain("unknownKey");
-    // Admission's own verdict for the fields the action requires.
+    // Admission's own verdict for the fields the action requires. The
+    // attestation file is NOT among them: it is an optional override, because
+    // the engine generates the recovery document when it is omitted (I-000297).
     expect(diagnostics).toContainEqual(expect.objectContaining({ path: "workflow" }));
-    expect(diagnostics).toContainEqual(expect.objectContaining({ path: "attestation" }));
+    expect(diagnostics).not.toContainEqual(expect.objectContaining({ path: "attestation" }));
     // The identity cause and recovery still travel with the aggregated refusal.
     expect(refused.message).toContain("--trust-caller-session-id");
     expect(String(refused.details?.recovery ?? "")).toContain("mstar session recover");

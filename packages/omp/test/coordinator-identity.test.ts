@@ -436,7 +436,7 @@ describe("prerequisite identity — the active coordinator forms call the DB ver
     expect(engine.calls.recover).toHaveLength(0);
   });
 
-  test("the active recover requires an explicit holder and the operator's own attestation document", async () => {
+  test("the active recover requires an explicit holder and refuses a present non-object attestation", async () => {
     const engine = fakeAuthority();
     const base = {
       operation: "recover",
@@ -452,7 +452,11 @@ describe("prerequisite identity — the active coordinator forms call the DB ver
       const result = await recoverCoordinatorIdentity({ ...base, priorSessionId }, FACTS, engine.deps);
       expect({ ok: result.ok, code: result.code }).toEqual({ ok: false, code: "invalid-input" });
     }
-    for (const attestation of [undefined, null, "attestation.json", 7]) {
+    // A PRESENT non-object attestation is still refused: the engine validates
+    // whatever is forwarded, and the classifier refuses the misuse before the
+    // call. An OMITTED attestation is no longer refused — the engine generates
+    // the document (I-000297) — and reaches the deps untouched.
+    for (const attestation of [null, "attestation.json", 7]) {
       const result = await recoverCoordinatorIdentity(
         { ...base, priorSessionId: "prior-session", attestation },
         FACTS,
@@ -460,6 +464,14 @@ describe("prerequisite identity — the active coordinator forms call the DB ver
       );
       expect({ ok: result.ok, code: result.code }).toEqual({ ok: false, code: "unauthorized" });
     }
+    const { attestation: _omitted, ...withoutAttestation } = base;
+    const omitted = await recoverCoordinatorIdentity(
+      { ...withoutAttestation, priorSessionId: "prior-session" },
+      FACTS,
+      engine.deps,
+    );
+    expect(omitted.ok).toBe(true);
+    expect(engine.calls.recover.at(-1)?.attestation).toBeUndefined();
     // A public-session-id rule violation is refused without echoing the value.
     const smuggled = await recoverCoordinatorIdentity(
       { ...base, priorSessionId: "../creds/secret.json" },
@@ -468,7 +480,8 @@ describe("prerequisite identity — the active coordinator forms call the DB ver
     );
     expect({ ok: smuggled.ok, code: smuggled.code }).toEqual({ ok: false, code: "invalid-input" });
     expect(JSON.stringify(smuggled)).not.toContain("secret.json");
-    expect(engine.calls.recover).toHaveLength(0);
+    // Only the documented omitted-attestation case reached the deps.
+    expect(engine.calls.recover).toHaveLength(1);
   });
 
   // retired file-route subject (T7a/T21): the JSON/pre-activation recover form is gone;
@@ -590,6 +603,25 @@ afterAll(() => {
 });
 
 describe("prerequisite identity — coordinator recovery under an ACTIVE execution authority", () => {
+  test("a host tool that names its own session as the prior holder gets the engine's self-settlement refusal", async () => {
+    // This is the transport the CLI's usage gate cannot cover: the omp tool
+    // derives the caller session itself, so the engine is the only place the
+    // self-settlement fact can be refused. No workflow or written state is
+    // needed — the engine refuses before any store read.
+    const result = await recoverCoordinatorIdentity(
+      recoverRequest({ priorSessionId: FACTS.sessionId, attestation: undefined }),
+      FACTS,
+    );
+    expect(result.ok).toBe(false);
+    expect(result.isError).toBe(true);
+    expect(result.code).toBe("coordination.recovery-self-settlement");
+    // The engine's recovery travels with the refusal (the adapter needs no change
+    // to surface it): the fact in the message, the exact CLI route in details.
+    expect(result.text).toContain("a different --session-id");
+    expect(result.details.recovery).toContain("mstar session recover");
+    expect(result.details.recovery).toContain("--session-id");
+  });
+
   test("ACTIVE recover against a live empty authority surfaces the engine refusal, not a Prepare rewrite", async () => {
     // Single initializeStore activates the authority (never a second
     // initializeExecutionAuthority — it refuses execution.not-empty).

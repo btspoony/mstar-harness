@@ -85,11 +85,11 @@ Failure between steps 2 and 3 is reported as a partial close. A re-run finishes 
 A `failed` or `stopped` lifecycle returns to `running` on the SAME id through `mstar workflow reopen`; a `completed` lifecycle is never reopened and keeps `workflow.reopen-completed` with no override:
 
 ```sh
-mstar workflow reopen --workflow <id> --reason <text> --attestation <absolute-json> \
+mstar workflow reopen --workflow <id> --reason <text> [--attestation <absolute-json>] \
   [--expect <terminal-token>] [--operation <id>] [--harness <absolute-path>]
 ```
 
-The header keeps its identity anchors, plan rows, session rows and retained operation receipts, and the workflow re-enters the ACTIVE registry. Reopening is an explicit operator authorization: `--reason` is recorded, and `--attestation` is a required recovery-scope JSON document whose `attestedAt` + `operator.actor` / `operator.authorizationRef` are the authorization (no installed consumer is required, and an empty `stoppedSessions` is valid). The attestation is self-reported operator evidence — its structure is validated, the operator's authorization is never verified against host liveness. `--expect` is the closed header's terminal token; `mstar status validate` publishes that header as an identity row (`data.authority.terminalUnregistered[]`, or `data.authority.terminalAdoptions[]` for an adopted close) carrying only `id`, `status` and `revision`, never the token. Omitting `--expect` is safe: the verb reads the token from the authority and passes it as the CAS itself. The transition binds no coordinator: resume ownership afterwards through the ordinary bind/recover route.
+The header keeps its identity anchors, plan rows, session rows and retained operation receipts, and the workflow re-enters the ACTIVE registry. Reopening is an explicit operator authorization: `--reason` is recorded, and the recovery-scope document is GENERATED from the reopen's own recorded facts (operator = the calling session, `authorizationRef` = the replay id, an empty `stoppedSessions` because nothing is revoked); `--attestation <absolute-json>` is an optional 1:1 override of that generated document. A supplied override is self-reported operator evidence — its structure is validated, the operator's authorization is never verified against host liveness. `--expect` is the closed header's terminal token; `mstar status validate` publishes that header as an identity row (`data.authority.terminalUnregistered[]`, or `data.authority.terminalAdoptions[]` for an adopted close) carrying only `id`, `status` and `revision`, never the token. Omitting `--expect` is safe: the verb reads the token from the authority and passes it as the CAS itself. The transition binds no coordinator: resume ownership afterwards through the ordinary bind/recover route.
 
 ## Open items: the issue store
 
@@ -102,7 +102,7 @@ Open findings are issues in `{HARNESS_DIR}/store.db`; the project register above
 
 ## Store lifecycle: migration, activation, retirement
 
-`store init` creates a fresh active issue/catalog store; `store upgrade` opens/creates the store, imports recognizable execution state, activates authority and reports skipped inputs. Neither requires routine `activate` afterwards. The sequence below is the **staged migration** route; `activate` consumes its reviewed apply and attestation, not an init receipt. Initialization semantics → `mstar-conventions`.
+`store init` creates a fresh active issue/catalog store; `store upgrade` opens/creates the store, imports recognizable execution state, activates authority and reports skipped inputs. Neither requires routine `activate` afterwards. The sequence below is the **staged migration** route; `activate` consumes its reviewed apply receipt and its attestation (generated from live facts, or supplied explicitly as an override), not an init receipt. Initialization semantics → `mstar-conventions`.
 
 **When no store exists**, a consumer command refuses `store.not-initialized` (exit 1) instead of falling back to file state. Recovery names the two bootstrap paths and the third disposition: a genuinely empty workspace runs `mstar harness scaffold` then `mstar store init`; a workspace holding historical file state runs `mstar store upgrade --harness <absolute-path> --operator <name>` to import it and activate the store; and a workspace that needs no execution authority uses **conversation tracking (no-plan mode)** — plans stay unregistered and the gates still apply.
 
@@ -110,13 +110,13 @@ Open findings are issues in `{HARNESS_DIR}/store.db`; the project register above
 mstar store migrate --out <path>              # default: read-only preview manifest (writes no DB)
 mstar store migrate --apply --manifest <path> # the explicit reviewed apply → staged store
 mstar store backup --out <path>               # consistent native database image, verified read-only
-mstar store activate --manifest <path> --attestation <path>   # the barrier
+mstar store activate --manifest <path> --operator <name>      # the barrier; --attestation is an optional override
 mstar store retire --manifest <path>          # moves the reviewed legacy sources under a ledger
 ```
 
 - **`migrate`** previews a reviewable manifest and no DB; reviewed apply commits issue/catalog/receipt import into a staged store. Ordinary mutations remain refused until activation. Source identity/path/state requirements remain; legacy project registers stay migration history and are never a live capture path.
 - **`backup`** writes a SQLite-consistent `VACUUM INTO` database image (committed WAL state included) and verifies it by reopening the copy read-only. The image supplies its own identity and row facts; independently sampled live counts do not freeze time. Ordinary docs/logs/notes are neither frozen nor copied as transactional authority. Copying the live `store.db` alone without its WAL is not a backup.
-- **`activate`** is the barrier. It requires the reviewed apply receipt to be the **final** one, a compatible-consumer attestation (installed entrypoints and versions, quiesced sessions, the approving operator — never session credentials) and a verified backup; the state flip, the epoch increment and the receipt commit in one transaction. Ordinary mutations work only afterwards, and every command checks epoch and state.
+- **`activate`** is the barrier. It requires the reviewed apply receipt to be the **final** one, a compatible-consumer attestation (generated from the executing consumer's live facts plus the quiesced rows this epoch bump invalidates, or supplied explicitly as an override — never session credentials), the invoking `--operator`, and a verified backup; the state flip, the epoch increment and the receipt commit in one transaction. Ordinary mutations work only afterwards, and every command checks epoch and state.
 - **`retire`** moves the reviewed legacy registers and index sections into `{HARNESS_DIR}/archived/store-migration/<receipt-id>/` under a resumable per-item ledger, checking active identity, epoch, current paths and item state and preserving copy-before-remove ordering. Content-digest changes alone do not refuse retirement or replay. An unreviewed register path still refuses `store.legacy-write-detected`; resume uses current item/path/state facts and archive presence, not recorded-byte equality.
 
 Execution migration apply/activate/retire requests no longer take `manifestHash`, activation no longer takes `coverageDigest`, and restore no longer takes `acceptLossDigest`. Generated manifest/coverage/loss digests remain historical diagnostics only. Use current verb help for the remaining actor, authorization, identity, path, state and numeric revision inputs; no digest-confirmation flag or replacement seal is required.

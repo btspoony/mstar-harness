@@ -1182,7 +1182,7 @@ describe("execution-workflow: \u00A73 workflow-level phase, lifecycle, policy, c
     );
     expect(amended.code).toBe("coordination.workflow-not-found");
     const reopened = await refusalOf(() =>
-      recoverExecutionCoordinator(domainContext(fixture.context, fixture.coordinatorCaller), {
+      recoverExecutionCoordinator(domainContext(fixture.context, trustedCaller("closed-recovery", "coordinator")), {
         expected: workflowTokenOfRow(fixture.context),
         operationId: "op-close-recover",
         priorSessionId: COORDINATOR_ID,
@@ -1741,6 +1741,141 @@ describe("execution-coordinator-recovery: \u00A72.3/\u00A74.2 the named recovery
     expect(activationRefusal.code).toBe("store.attestation-invalid");
   });
 
+  test("recovery without an attestation generates the operator document from the recovery's own recorded facts", async () => {
+    const fixture = await workflowFixture("recovery-generated");
+    // The replay below must re-present the SAME expected token its first
+    // attempt was judged on, so it is captured once.
+    const expected = await liveWorkflowToken(fixture);
+    const receipt = await recoverExecutionCoordinator(
+      domainContext(fixture.context, trustedCaller(RECOVERY_ID, "coordinator")),
+      {
+        expected,
+        operationId: "op-recover-generated",
+        priorSessionId: COORDINATOR_ID,
+        reason: "coordinator process stopped",
+      },
+    );
+    expect(receipt.replayed).toBe(false);
+    // The generated stop names exactly the prior holder row this recovery
+    // revokes, and the replacement binds as the live coordinator.
+    expect(sessionState(fixture.context, COORDINATOR_ID)).toBe("revoked");
+    expect(sessionState(fixture.context, RECOVERY_ID)).toBe("active");
+    const recorded = JSON.parse(String(rows(
+      fixture.context,
+      "select result_json from execution_operations where operation_id = 'op-recover-generated'",
+    )[0]!.result_json)) as { recovery?: Record<string, unknown> };
+    // The generated facts: the caller is the operator, the replay id is the
+    // durable authorizationRef, the stop list is the named prior holder, and
+    // the clock is the transaction's own instant.
+    expect(recorded.recovery).toMatchObject({
+      operator: { actor: RECOVERY_ID, authorizationRef: "op-recover-generated" },
+      stopped_sessions: [COORDINATOR_ID],
+    });
+    expect(typeof recorded.recovery?.attested_at).toBe("string");
+    // The holder was LIVE when attested stopped: the narrowed provenance
+    // warning survives generation unchanged.
+    expect(recorded.recovery?.holder_live_warning).toMatchObject({ code: "recovery.holder-live", holder: COORDINATOR_ID });
+    // An identical generated retry replays instead of rebinding: the request
+    // hash is the supplied input's, not the generated document's.
+    const replay = await recoverExecutionCoordinator(
+      domainContext(fixture.context, trustedCaller(RECOVERY_ID, "coordinator")),
+      {
+        expected,
+        operationId: "op-recover-generated",
+        priorSessionId: COORDINATOR_ID,
+        reason: "coordinator process stopped",
+      },
+    );
+    expect(replay.replayed).toBe(true);
+    expect(replay.data).toEqual(receipt.data);
+  });
+
+  test("an unowned recovery generates an empty stop list: no prior row is revoked", async () => {
+    const fixture = await workflowFixture("recovery-generated-unowned");
+    // A workflow with NO recorded coordinator row: --unowned is the truthful
+    // source, and the generated document therefore carries stoppedSessions: []
+    // (the recovery validator accepts an empty stop list).
+    const state = await readExecutionState(fixture.context);
+    const siblingId = "wf-ownerless-sibling";
+    const siblingCaller: ExecutionCaller = { workflowId: siblingId, sessionId: "ownerless-coordinator", role: "coordinator" };
+    const created = await createExecutionWorkflow(domainContext(fixture.context, siblingCaller), {
+      expected: state.token,
+      operationId: "op-register-ownerless",
+      entry: { id: siblingId, type: "plan", started_at: TS, dir: `workflows/${siblingId}` } as WorkflowEntry,
+      snapshot: {
+        ...state.data.workflows[0]!.state,
+        id: siblingId,
+        branch: { base: "main", source: "feature/ownerless", target: "main" },
+        plans: [{ id: `${PLAN_ID}-ownerless`, title: "ownerless plan", file: `plans/${PLAN_ID}-ownerless.md`, status: "Todo",
+          metadata: { working_branch: "feature/ownerless" } }],
+      } as WorkflowSnapshot,
+    });
+    const receipt = await recoverExecutionCoordinator(domainContext(fixture.context, siblingCaller), {
+      expected: created.data.workflows.find((workflow) => workflow.state.id === siblingId)!.workflowToken,
+      operationId: "op-recover-ownerless",
+      priorSessionId: null,
+      reason: "no coordinator was ever recorded",
+    });
+    expect(receipt.replayed).toBe(false);
+    expect(receipt.data).toMatchObject({ workflowId: siblingId, sessionId: "ownerless-coordinator" });
+    const recorded = JSON.parse(String(rows(
+      fixture.context,
+      "select result_json from execution_operations where operation_id = 'op-recover-ownerless'",
+    )[0]!.result_json)) as { recovery?: Record<string, unknown> };
+    expect(recorded.recovery).toMatchObject({
+      operator: { actor: "ownerless-coordinator", authorizationRef: "op-recover-ownerless" },
+      stopped_sessions: [],
+    });
+  });
+
+  test("a caller naming itself as the prior holder is refused by the engine on both document branches", async () => {
+    const fixture = await workflowFixture("recovery-self-settlement");
+    const before = await workflowFootprint(fixture.context);
+    const expected = await liveWorkflowToken(fixture);
+    // The caller is COORDINATOR_ID, and it names COORDINATOR_ID as the holder it
+    // replaces. On the GENERATED branch the engine would otherwise build stop
+    // evidence for the identity making the call; on the SUPPLIED branch the same
+    // fact is a self-attested replacement. One engine-level refusal covers both,
+    // so a transport that never runs the CLI's usage gate cannot bypass it.
+    for (const [label, attestationArg] of [
+      ["generated", {}],
+      ["supplied", { attestation: attestation([COORDINATOR_ID]) }],
+    ] as const) {
+      const refused = await refusalOf(() =>
+        recoverExecutionCoordinator(domainContext(fixture.context, fixture.coordinatorCaller), {
+          expected,
+          operationId: `op-recover-self-${label}`,
+          priorSessionId: COORDINATOR_ID,
+          reason: "recover my own seat",
+          ...attestationArg,
+        }),
+      );
+      expect(refused.code, label).toBe("coordination.recovery-self-settlement");
+      expect(refused.details, label).toMatchObject({
+        workflow_id: WORKFLOW_ID,
+        session_id: COORDINATOR_ID,
+        prior_session_id: COORDINATOR_ID,
+        recovery_refusal: "self-settlement",
+      });
+      // The recovery names the supported route, not a dead end: a distinct
+      // replacement session on the same CLI verb.
+      expect(String(refused.details.recovery), label).toContain("mstar session recover");
+      expect(String(refused.details.recovery), label).toContain("--session-id");
+      // Nothing was written on either branch.
+      expect(await workflowFootprint(fixture.context), label).toEqual(before);
+    }
+
+    // The same caller still recovers a DIFFERENT holder: the rule refuses only
+    // the self-settlement fact, never recovery itself.
+    const recovered = await recoverExecutionCoordinator(
+      domainContext(fixture.context, trustedCaller(RECOVERY_ID, "coordinator")),
+      { expected, operationId: "op-recover-distinct", priorSessionId: COORDINATOR_ID, reason: "coordinator stopped" },
+    );
+    expect(recovered.replayed).toBe(false);
+    expect(sessionState(fixture.context, COORDINATOR_ID)).toBe("revoked");
+    expect(sessionState(fixture.context, RECOVERY_ID)).toBe("active");
+  });
+
   test("recovery never takes over an owner it may not replace", async () => {
     const fixture = await workflowFixture("recovery-live");
     // A live holder with NO stop evidence: the engine cannot observe a dead
@@ -1748,7 +1883,7 @@ describe("execution-coordinator-recovery: \u00A72.3/\u00A74.2 the named recovery
     const expected = await liveWorkflowToken(fixture);
     const before = await workflowFootprint(fixture.context);
     const silent = await refusalOf(() =>
-      recoverExecutionCoordinator(domainContext(fixture.context, fixture.coordinatorCaller), {
+      recoverExecutionCoordinator(domainContext(fixture.context, trustedCaller(RECOVERY_ID, "coordinator")), {
         expected,
         operationId: "op-recover-silent",
         priorSessionId: COORDINATOR_ID,
@@ -3934,14 +4069,15 @@ function reopenWorkflow(
     operationId: string;
     reason?: string;
     expected?: ExecutionToken;
-    attestation: ActivationAttestation;
+    /** Omitted → the engine generates the recovery-scope document (I-000297). */
+    attestation?: ActivationAttestation;
     who?: ExecutionCaller;
   },
 ) {
   return reopenExecutionWorkflow(domainContext(fixture.context, input.who ?? fixture.coordinatorCaller), {
     workflowId: WORKFLOW_ID,
     reason: input.reason ?? "the failed lifecycle is reopened for further work",
-    attestation: input.attestation,
+    ...(input.attestation === undefined ? {} : { attestation: input.attestation }),
     operationId: input.operationId,
     ...(input.expected === undefined ? {} : { expected: input.expected }),
   });
@@ -4011,6 +4147,8 @@ describe("execution-workflow-reopen: \u00A74.2 a closed lifecycle returns to run
       resolvedFrom: [
         { path: "attestation.operator", source: "ops-engineer (compass D29 / coordinator recovery decision)" },
         { path: "attestation.attestedAt", source: "2026-01-02T04:00:00.000Z" },
+        // A reopen disposes no session row, so the recorded stop list is empty.
+        { path: "attestation.stoppedSessions", source: "none" },
       ],
     });
 
@@ -4123,7 +4261,7 @@ describe("execution-workflow-reopen: \u00A74.2 a closed lifecycle returns to run
     expect(await workflowFootprint(active.context)).toEqual(pausedBefore);
   });
 
-  test("a stale terminal CAS and a missing authorization are refused without a footprint", async () => {
+  test("a stale terminal CAS refuses without a footprint, while an omitted authorization document is generated", async () => {
     const fixture = await workflowFixture("reopen-refusals");
     await workflowMutation(fixture, "op-reopen-refusal-close", {
       kind: "lifecycle",
@@ -4142,14 +4280,21 @@ describe("execution-workflow-reopen: \u00A74.2 a closed lifecycle returns to run
     expect(stale.code).toBe("execution.stale-token");
     expect(await workflowFootprint(fixture.context)).toEqual(before);
 
-    // No operator document: the authorization is the whole admission gate.
-    const unauthorized = await refusalOf(() => reopenWorkflow(fixture, {
-      operationId: "op-reopen-unauthorized",
+    // No operator document: the reopen generates its recovery-scope document
+    // (I-000297) from its own recorded facts — the caller as operator, the
+    // replay id as authorizationRef, and an EMPTY stop list (a reopen binds no
+    // coordinator and revokes no session row, so it claims no stop).
+    const generated = await reopenWorkflow(fixture, {
+      operationId: "op-reopen-generated",
       expected: terminal.token,
-      attestation: undefined as unknown as ActivationAttestation,
-    }));
-    expect(unauthorized.code).toBe("store.attestation-invalid");
-    expect(await workflowFootprint(fixture.context)).toEqual(before);
+    });
+    expect(generated.replayed).toBe(false);
+    expect(generated.recovery?.resolvedFrom).toEqual([
+      { path: "attestation.operator", source: `${fixture.coordinatorCaller.sessionId} (op-reopen-generated)` },
+      { path: "attestation.attestedAt", source: expect.any(String) },
+      { path: "attestation.stoppedSessions", source: "none" },
+    ]);
+    expect(storedHeader(fixture.context)).toMatchObject({ registered: 1, status: "running", ended_at: null });
   });
 
   test("an identical retry replays the attributed receipt and writes nothing", async () => {

@@ -1224,14 +1224,14 @@ export default function modelHandoff(pi: ExtensionAPI): void {
     attestation: z
       .unknown()
       .optional()
-      .describe("object: the operator's activation-attestation document; the engine validates its contents."),
+      .describe("object, optional: the operator's activation-attestation document, an explicit override the engine validates; when omitted the engine generates the recovery document."),
   } as const;
 
   pi.registerTool({
     name: COORDINATOR_TOOL_NAME,
     label: "Coordinator identity",
     description:
-      'Morning Star coordinator identity entry. The host derives the control root and native session id. `{operation:"bind", workflowId}` binds this session under ACTIVE DB authority, resolving omitted CAS inputs inside the engine. `{operation:"show-recovery", workflowId}` reads current workflow and coordinator facts. `{operation:"recover"}` replaces the explicitly named prior coordinator (or `null` only when none is recorded), with the operator attestation validated by the engine. No operation accepts a caller-selected identity, root or credential path.',
+      'Morning Star coordinator identity entry. The host derives the control root and native session id. `{operation:"bind", workflowId}` binds this session under ACTIVE DB authority, resolving omitted CAS inputs inside the engine. `{operation:"show-recovery", workflowId}` reads current workflow and coordinator facts. `{operation:"recover"}` replaces the explicitly named prior coordinator (or `null` only when none is recorded); the optional attestation object is an explicit override the engine validates — omit it and the engine generates the recovery document. No operation accepts a caller-selected identity, root or credential path.',
     parameters: z
       .union([
         z
