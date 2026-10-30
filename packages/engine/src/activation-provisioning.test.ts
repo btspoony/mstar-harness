@@ -68,6 +68,23 @@ describe("provisionActivationDocument", () => {
       message: "the executing entrypoint is not identifiable (`process.argv[1]` is absent)",
     });
   });
+
+  test("refuses an unestablishable installed version instead of fabricating 0.0.0", () => {
+    // The consumer row's version is durable evidence (it lands in a receipt), so
+    // a missing owning manifest refuses rather than inventing the historical
+    // "0.0.0" display fallback: every other unestablishable fact refuses too.
+    const provisioned = provisionActivationDocument(INPUT, { ...FACTS, harnessVersion: null });
+    expect(provisioned).toMatchObject({
+      ok: false,
+      cause: "missing-manifest",
+      message: "no visible manifest declares the installed harness version (`packages/*/package.json` or the repo root), so the consumer row's version cannot be attested",
+    });
+    // An explicit resolved version (the test seam) keeps the success path and is
+    // recorded verbatim — never the fabricated default.
+    const resolved = provisionActivationDocument(INPUT, { ...FACTS, harnessVersion: "0.0.0-synthetic" });
+    if (!resolved.ok) throw new Error(`unexpected refusal: ${resolved.message}`);
+    expect(resolved.document.consumers[0]?.version).toBe("0.0.0-synthetic");
+  });
 });
 
 describe("provisionRecoveryDocument", () => {

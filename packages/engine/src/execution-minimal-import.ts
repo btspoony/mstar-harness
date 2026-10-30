@@ -1056,15 +1056,18 @@ export async function upgradeStoreMinimal(input: {
   // recorded facts, validated through the existing lazy validator, and the
   // upgrade retries ONCE — a migration never treats an unattested stop id as
   // authority, and any second signal is a defect, not a loop.
+  // `raiseSettlementSignal` is the documented internal opt-in: this entry is the
+  // one caller that generates the document and retries, so it receives the
+  // marker; every direct engine caller gets the named refusal instead.
   const run = (resolved: MigrationContext["attestation"]) =>
     !existsSync(dbPath)
-      ? initializeStore(context, { attestation: resolved, operator: input.operator, processFacts: input.processFacts }).then(
+      ? initializeStore(context, { attestation: resolved, operator: input.operator, processFacts: input.processFacts, raiseSettlementSignal: true }).then(
           (initialized) => {
             initialized.close();
             return initialized.schemaVersion;
           },
         )
-      : upgradeStore(context, { attestation: resolved, operator: input.operator, processFacts: input.processFacts }).then(
+      : upgradeStore(context, { attestation: resolved, operator: input.operator, processFacts: input.processFacts, raiseSettlementSignal: true }).then(
           (upgraded) => upgraded.schemaVersion,
         );
   try {

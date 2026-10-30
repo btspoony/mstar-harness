@@ -831,6 +831,23 @@ async function historicalClaimWorkspace(name: string) {
   return { context, workflowId, planId, sessionId };
 }
 
+test("the PUBLIC upgrade entry refuses with a coded, recoverable error instead of leaking the internal settlement marker", async () => {
+  // `upgradeStore` is a public engine export: a direct caller (not the CLI) must
+  // never receive the bare, code-less marker the upgrade pair uses internally.
+  const { context } = await historicalClaimWorkspace("public-boundary-signal");
+  const before = await protectedStore(context);
+  const refused = await upgradeStore(context).catch((error: unknown) => error) as Error & {
+    code?: string; name?: string; recovery?: string; details?: Record<string, unknown>;
+  };
+  expect(refused.name).not.toBe("SettlementAttestationNeeded");
+  expect(refused.code).toBe("store.upgrade-attestation-missing");
+  expect(refused.recovery).toContain("mstar store upgrade --operator <name>");
+  expect(refused.recovery).toContain("--attestation <absolute-json>");
+  expect(refused.details).toMatchObject({ holders: expect.arrayContaining([expect.any(String)]) });
+  // The refusal changed nothing: the store is still at schema 8 with its claim.
+  expect(await protectedStore(context)).toEqual(before);
+});
+
 test("a generated document that cannot cover a future-dated claim refuses with the named attestation cause", async () => {
   // The reachable failure of the generated path: the claim's instant is newer
   // than the generated document's (this transaction's own clock), so the

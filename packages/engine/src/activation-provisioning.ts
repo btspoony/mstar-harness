@@ -17,7 +17,7 @@
  * `store-activation.ts` → this module edge (the builders it consumes) is
  * one-way. That keeps the runtime import graph acyclic by construction.
  */
-import { ACTIVATION_PROTOCOL_VERSION, readHarnessVersion } from "./core.js";
+import { ACTIVATION_PROTOCOL_VERSION, readHarnessVersionOrNull } from "./core.js";
 import type { ActivationAttestation, StoppedSessionAttestation } from "./store-activation.js";
 
 /**
@@ -34,6 +34,13 @@ export type ProvisionProcessFacts = {
   runtimeVersion: string;
   /** Whether the executing runtime is Bun — never an admissible consumer. */
   isBun: boolean;
+  /**
+   * The installed harness version the consumer row records. `undefined`
+   * resolves it from the owning manifest (production); `null` states the fact
+   * is unestablishable, which must refuse; a string is the test seam for a
+   * resolved value. Never defaulted to a fabricated version.
+   */
+  harnessVersion?: string | null;
 };
 
 /** The production process facts: what the running entrypoint actually is. */
@@ -47,7 +54,7 @@ export function currentProcessFacts(): ProvisionProcessFacts {
 
 export type ProvisionedActivation =
   | { ok: true; document: ActivationAttestation }
-  | { ok: false; cause: "bun-runtime" | "missing-entrypoint"; message: string };
+  | { ok: false; cause: "bun-runtime" | "missing-entrypoint" | "missing-manifest"; message: string };
 
 export type ProvisionInput = {
   actor: string;
@@ -78,6 +85,18 @@ export function provisionActivationDocument(input: ProvisionInput, facts: Provis
       message: "the executing entrypoint is not identifiable (`process.argv[1]` is absent)",
     };
   }
+  // The consumer row's installed version is evidence, so an unestablishable one
+  // refuses instead of being invented: `readHarnessVersion`'s `"0.0.0"` fallback
+  // is for display, never for a recorded attestation.
+  const version = facts.harnessVersion === undefined ? readHarnessVersionOrNull() : facts.harnessVersion;
+  if (version === null || version.trim() === "") {
+    return {
+      ok: false,
+      cause: "missing-manifest",
+      message:
+        "no visible manifest declares the installed harness version (`packages/*/package.json` or the repo root), so the consumer row's version cannot be attested",
+    };
+  }
   return {
     ok: true,
     document: {
@@ -93,7 +112,7 @@ export function provisionActivationDocument(input: ProvisionInput, facts: Provis
           entrypoint: facts.entrypoint,
           runtime: "node",
           runtimeVersion: facts.runtimeVersion,
-          version: readHarnessVersion(),
+          version,
           current: true,
           disposition: "reloaded",
         },

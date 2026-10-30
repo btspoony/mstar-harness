@@ -167,6 +167,20 @@ function findRootPackageJson(startDir: string): string | null {
  * `morning-star` manifest exists anywhere above `node_modules` and the walk
  * alone would regress to `"0.0.0"`. */
 export function harnessVersionFrom(moduleDir: string): string {
+  return harnessVersionOrNullFrom(moduleDir) ?? "0.0.0";
+}
+
+/**
+ * The same resolution as `harnessVersionFrom`, without the invented
+ * `"0.0.0"` fallback: `null` when no owning manifest declares a version.
+ *
+ * A fact that cannot be established must not be fabricated — an attestation
+ * consumer row carries this value into a durable receipt, so it uses this
+ * variant and refuses instead (`activation-provisioning.ts`). The fallback
+ * spelling survives only in `harnessVersionFrom`, whose consumers print a
+ * version rather than record it as evidence.
+ */
+export function harnessVersionOrNullFrom(moduleDir: string): string | null {
   const ownManifest = join(moduleDir, "..", "package.json");
   try {
     const pkg = JSON.parse(readFileSync(ownManifest, "utf8")) as { version?: string };
@@ -175,12 +189,12 @@ export function harnessVersionFrom(moduleDir: string): string {
     // no own manifest (e.g. source layout without package.json) — fall through
   }
   const root = findRootPackageJson(moduleDir);
-  if (!root) return "0.0.0";
+  if (root === null) return null;
   try {
     const pkg = JSON.parse(readFileSync(root, "utf8")) as { version?: string };
-    return pkg.version || "0.0.0";
+    return typeof pkg.version === "string" && pkg.version !== "" ? pkg.version : null;
   } catch {
-    return "0.0.0";
+    return null;
   }
 }
 
@@ -193,6 +207,16 @@ export function harnessVersionFrom(moduleDir: string): string {
  */
 export function readHarnessVersion(): string {
   return harnessVersionFrom(dirname(fileURLToPath(import.meta.url)));
+}
+
+/**
+ * The same read, without the invented `"0.0.0"` fallback: `null` when no
+ * owning manifest declares a version. A fact recorded as evidence (an
+ * attestation consumer row) uses this variant and refuses rather than
+ * fabricating a version; `readHarnessVersion` keeps the display fallback.
+ */
+export function readHarnessVersionOrNull(): string | null {
+  return harnessVersionOrNullFrom(dirname(fileURLToPath(import.meta.url)));
 }
 
 /**

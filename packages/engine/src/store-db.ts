@@ -1010,6 +1010,32 @@ export class SettlementAttestationNeeded extends Error {
   }
 }
 
+/**
+ * The PUBLIC-boundary form of the internal settlement signal: a direct engine
+ * caller (`initializeStore`/`upgradeStore` are exported) never receives the
+ * bare, code-less marker — only the upgrade pair consumes it, and only when it
+ * explicitly asks (`raiseSettlementSignal`). The refusal names the holders, the
+ * competing instants and the supported recovery, exactly like the refusal the
+ * settlement site itself emits for a supplied document.
+ */
+function settlementSignalRefusal(signal: SettlementAttestationNeeded): StoreError {
+  const holders = signal.holders.map((holder) => JSON.stringify(holder)).join(", ");
+  return Object.assign(
+    new StoreError(
+      "store.upgrade-attestation-missing",
+      `workflow(s) ${holders} hold a retired plan-PM integration claim this cutover must settle, and no operator ` +
+        `attestation was supplied; the generated document is built by the upgrade entry (mstar store upgrade), not by ` +
+        `this direct engine call. The store was left unchanged.`,
+      { holders: [...signal.holders], stopped_sessions: signal.stopped.map((session) => session.sessionId) },
+    ),
+    {
+      recovery:
+        "rerun the upgrade through the CLI, which generates the operator document itself: mstar store upgrade --operator <name>; " +
+        "to fix the document explicitly instead, pass --attestation <absolute-json> whose attestedAt is at or after the claim instant.",
+    },
+  );
+}
+
 export type Migration = { version: number; name: string; sql: string; normalize?: (db: StoreDb, context: MigrationContext) => void };
 
 /** Migration 6 — durable roadmap content authority; never import disposable projection rows. */
@@ -2522,7 +2548,15 @@ function publicationBarrierRefusal(error: unknown, dbPath: string, phase: "creat
  */
 export async function initializeStore(
   context: StoreContext,
-  options: { attestation?: unknown; operator?: string; processFacts?: ProvisionProcessFacts; busyTimeoutMs?: number; afterStagingClaim?: () => void } = {},
+  options: {
+    attestation?: unknown; operator?: string; processFacts?: ProvisionProcessFacts; busyTimeoutMs?: number; afterStagingClaim?: () => void;
+    /**
+     * INTERNAL to the upgrade pair (`upgradeStoreMinimal`): let the settlement
+     * marker cross this boundary so that caller can generate the document and
+     * retry. Every other caller gets the named refusal instead of the marker.
+     */
+    raiseSettlementSignal?: boolean;
+  } = {},
 ): Promise<StoreHandle> {
   assertStoreRuntimeSupported();
   // The operator's stop evidence is validated by the existing activation
@@ -2574,7 +2608,9 @@ export async function initializeStore(
       } catch {
         // nothing committed either way
       }
-      throw error;
+      throw error instanceof SettlementAttestationNeeded && options.raiseSettlementSignal !== true
+        ? settlementSignalRefusal(error)
+        : error;
     }
     // The staged bytes are verified as this build's own complete store before
     // they can be named.
@@ -2672,7 +2708,11 @@ export async function initializeStore(
  */
 export async function upgradeStore(
   context: StoreContext,
-  options: { attestation?: unknown; operator?: string; processFacts?: ProvisionProcessFacts } = {},
+  options: {
+    attestation?: unknown; operator?: string; processFacts?: ProvisionProcessFacts;
+    /** INTERNAL to the upgrade pair — see `initializeStore`'s identical option. */
+    raiseSettlementSignal?: boolean;
+  } = {},
 ): Promise<{ schemaVersion: number }> {
   assertStoreRuntimeSupported();
   const dbPath = storeDbPath(context);
@@ -2702,8 +2742,11 @@ export async function upgradeStore(
     readExecutionMeta(db, schemaVersion);
   } catch (error) {
     // The generated-attestation signal is control flow, not an open failure;
-    // the finally block owns the close.
-    if (error instanceof SettlementAttestationNeeded) throw error;
+    // the finally block owns the close. A DIRECT caller never sees the marker:
+    // only the upgrade pair opts in, and everyone else gets the named refusal.
+    if (error instanceof SettlementAttestationNeeded) {
+      throw options.raiseSettlementSignal === true ? error : settlementSignalRefusal(error);
+    }
     refuseOpenFailure(error, dbPath);
   } finally {
     db.close();
