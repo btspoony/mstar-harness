@@ -155,6 +155,7 @@ import {
   type ResolutionWarning,
 } from "./recovery-intent.js";
 import { validateRecoveryAttestation, type ActivationAttestation } from "./store-activation.js";
+import { provisionRecoveryDocument } from "./activation-provisioning.js";
 import { StoreError, storeDbPath } from "./store-db.js";
 import {
   WORKFLOW_LIFECYCLE_STATUSES,
@@ -1926,7 +1927,7 @@ const RECOVER_COORDINATOR_OPERATION = "recoverExecutionCoordinator";
 function recoverCoordinatorRequestHash(
   caller: ExecutionCaller,
   workflowId: string,
-  input: { expected?: ExecutionToken; priorSessionId: string | null; reason: string; attestation: ActivationAttestation },
+  input: { expected?: ExecutionToken; priorSessionId: string | null; reason: string; attestation?: ActivationAttestation },
 ): string {
   return createHash("sha256")
     .update(
@@ -1941,7 +1942,10 @@ function recoverCoordinatorRequestHash(
         },
         prior_session_id: input.priorSessionId,
         reason: input.reason,
-        attestation: input.attestation,
+        // An omitted attestation hashes as its absence: the generated document
+        // is transaction fact, not request input, so an identical generated
+        // retry keeps the same hash and replays.
+        ...(input.attestation === undefined ? {} : { attestation: input.attestation }),
       }),
       "utf8",
     )
@@ -1995,7 +1999,7 @@ function recoverCoordinatorRequestHash(
  */
 export async function recoverExecutionCoordinator(
   context: ExecutionContext,
-  input: { expected?: ExecutionToken; operationId: string; priorSessionId: string | null; reason: string; attestation: ActivationAttestation },
+  input: { expected?: ExecutionToken; operationId: string; priorSessionId: string | null; reason: string; attestation?: ActivationAttestation },
 ): Promise<ExecutionReceipt<ExecutionSessionRef>> {
   const caller = context.caller;
   if (caller?.role !== "coordinator") {
@@ -2025,15 +2029,17 @@ export async function recoverExecutionCoordinator(
   // active, so the installed-consumer obligation of the barrier does not
   // apply and the document only has to be a well-formed operator
   // authorization with attested stops. A credential-bearing or incomplete
-  // attestation never reaches the store.
-  const attestation = validateRecoveryAttestation(input?.attestation);
+  // attestation never reaches the store. A SUPPLIED document is validated
+  // here; an omitted one is generated inside the transaction below from the
+  // recovery's own recorded facts and runs through the same validator there.
+  const supplied = input?.attestation === undefined ? undefined : validateRecoveryAttestation(input.attestation);
   // The replacement identity must be a genuinely acquired, CURRENT session: an
   // attestation that names it as stopped/reloaded means the operator is asking
   // this recovery to resurrect a stopped identity, which it never does. The
   // refusal happens BEFORE any mutation, so every session row, claim and business
   // fact is left exactly as it was; the supported retry uses a real acquired
   // replacement and an attestation whose stop list covers only the prior holder.
-  if (attestation.stoppedSessions.some((session) => session.sessionId === caller.sessionId)) {
+  if (supplied !== undefined && supplied.stoppedSessions.some((session) => session.sessionId === caller.sessionId)) {
     throw invalidWorkflowTransition(
       `the replacement coordinator ${JSON.stringify(caller.sessionId)} is named as stopped/reloaded in this attestation; a recovery ` +
           `binds a genuinely acquired CURRENT session and never resurrects a stopped one. Rerun with the replacement's own acquired session id ` +
@@ -2045,7 +2051,7 @@ export async function recoverExecutionCoordinator(
     expected: input.expected,
     priorSessionId,
     reason,
-    attestation,
+    attestation: supplied,
   });
   return withExecutionTransaction(context, (tx) => {
     if (tx.execution.authorityState !== "active") {
@@ -2059,6 +2065,25 @@ export async function recoverExecutionCoordinator(
     // The omitted expectation is the current revision's token, resolved under
     // the same lock that checks it.
     const expected = input.expected ?? executionToken("workflow", tx.storeId, tx.epoch, [workflowId], header.revision);
+    // The transaction's own clock: the generated document's `attestedAt` and
+    // every row stamp this recovery writes are the SAME instant.
+    const now = new Date().toISOString();
+    // The generated authorization document, assembled inside the same
+    // transaction from this operation's own recorded facts: the caller is the
+    // operator (actor), the replay id is the durable authorizationRef, and the
+    // stop list names exactly the prior holder row this transaction revokes.
+    // `--unowned` (priorSessionId null) revokes no prior row, so the generated
+    // document intentionally carries `stoppedSessions: []` — the recovery
+    // validator accepts an empty stop list. The builder never validates: the
+    // existing validator stays the acceptance authority.
+    const attestation = supplied ?? validateRecoveryAttestation(provisionRecoveryDocument({
+      actor: caller.sessionId,
+      authorizationRef: operationId,
+      attestedAt: now,
+      stoppedSessions: priorSessionId === null
+        ? []
+        : [{ sessionId: priorSessionId, host: "local", state: "stopped" }],
+    }));
     const status = String(header.state.status ?? "");
     if ((WORKFLOW_TERMINAL_STATUSES as readonly string[]).includes(status)) {
       return releaseTerminalHeldLease(tx, {
@@ -2160,7 +2185,6 @@ export async function recoverExecutionCoordinator(
       }
     }
 
-    const now = new Date().toISOString();
     const claim = recoverableIntegrationClaim(tx, {
       workflowId,
       priorSessionId,

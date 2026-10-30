@@ -544,13 +544,13 @@ test("an ACTIVE schema-8 store is normalized in place: protocol JSON becomes the
     ],
     stoppedSessions: [{ sessionId, host: "omp", state: "stopped" }],
   };
-  // Without the operator's stop attestation the cutover refuses and rolls the
-  // whole batch back: schema 8, every business/claim byte intact, no staging
-  // table left behind. The SAME fixture then upgrades successfully under the
-  // attested retry, proving a supported public recovery rather than a one-way
-  // orphan.
-  await expect(upgradeStoreMinimal({ context, operator: "operator", operationId: "op-active-schema8-refused" }))
-    .rejects.toMatchObject({ code: "store.upgrade-attestation-missing" });
+  // A supplied attestation whose stop predates the claim still refuses and
+  // rolls the whole batch back: schema 8, every business/claim byte intact, no
+  // staging table left behind. The competing instants are named in the refusal.
+  await expect(upgradeStoreMinimal({
+    context, operator: "operator", operationId: "op-active-schema8-refused",
+    attestation: { ...retiredAttestation, attestedAt: "2026-10-04T00:00:00Z" },
+  })).rejects.toMatchObject({ code: "store.upgrade-attestation-missing", message: expect.stringContaining("at or after the claim instant") });
   const refused = await openStore(context, "read");
   try {
     expect(refused.schemaVersion).toBe(8);
@@ -583,11 +583,17 @@ test("an ACTIVE schema-8 store is normalized in place: protocol JSON becomes the
   } finally {
     refused.close();
   }
+  // Without an attestation the cutover now GENERATES its document (I-000297)
+  // and settles the claim: the run injects the executing process facts the
+  // consumer row attests (the Bun test runtime itself is inadmissible, so the
+  // production facts would refuse here by design). The generated
+  // authorizationRef records the exact `retired-plan-pm-seat:<holder>` literal
+  // the tombstone writes, asserted below on the settled claim.
   await upgradeStoreMinimal({
     context,
     operator: "operator",
     operationId: "op-active-schema8-normalize",
-    attestation: retiredAttestation,
+    processFacts: { entrypoint: "/opt/mstar/coordinator/dist/mstar-harness.js", runtimeVersion: atOrAboveRuntime, isBun: false },
     // The retained legacy source for this id collides with the native row the
     // schema-8 store already holds: the normalization keeps the native row and
     // skips only that legacy IMPORT.
@@ -687,8 +693,11 @@ test("an ACTIVE schema-8 store is normalized in place: protocol JSON becomes the
     expect(claim).toMatchObject({
       status: "released",
       prior_holder: sessionId,
+      released_by: "store-upgrade",
+      // The generated document's authorizationRef is this exact literal.
       release_reason: `retired-plan-pm-seat:${sessionId}`,
     });
+    expect(typeof claim.released_at).toBe("string");
     // The staging tables are gone.
     for (const staging of ["execution_lease_cutover", "execution_session_cutover", "execution_integration_cutover"]) {
       expect(store.db.prepare("select name from sqlite_master where type = 'table' and name = ?").get(staging)).toBeUndefined();
@@ -823,14 +832,11 @@ async function historicalClaimWorkspace(name: string) {
 }
 
 test("an unattested retired plan-PM integration mutex refuses the upgrade and keeps schema 8", async () => {
-  const { context } = await historicalClaimWorkspace("schema8-unattested-orphan");
+  const { context, sessionId } = await historicalClaimWorkspace("schema8-unattested-orphan");
   const before = await protectedStore(context);
 
-  // No attestation, and then an attestation that does not name this holder: both
-  // refuse, and the store is left at schema 8 with every byte intact.
-  await expect(upgradeStoreMinimal({ context, operator: "operator", operationId: "op-unattested-orphan" }))
-    .rejects.toMatchObject({ code: "store.upgrade-attestation-missing" });
-  expect(await protectedStore(context)).toEqual(before);
+  // An attestation that does not name this holder still refuses, and the
+  // store is left at schema 8 with every byte intact.
   const wrongHolder = {
     version: ACTIVATION_PROTOCOL_VERSION,
     attestedAt: "2026-10-04T04:00:00Z",
@@ -841,13 +847,35 @@ test("an unattested retired plan-PM integration mutex refuses the upgrade and ke
   await expect(upgradeStoreMinimal({ context, operator: "operator", operationId: "op-unattested-orphan-2", attestation: wrongHolder }))
     .rejects.toMatchObject({ code: "store.upgrade-attestation-missing" });
   expect(await protectedStore(context)).toEqual(before);
-  const store = await openStore(context, "read");
+
+  // Without an attestation the upgrade GENERATES the operator document
+  // (I-000297) and settles the orphan claim: injected process facts stand in
+  // for the executing entrypoint, because the Bun test runtime is never an
+  // admissible attested consumer. The tombstone records the generated
+  // operator/ref pair through its own release facts.
+  await upgradeStoreMinimal({
+    context, operator: "operator", operationId: "op-unattested-orphan-generated",
+    processFacts: { entrypoint: "/opt/mstar/coordinator/dist/mstar-harness.js", runtimeVersion: atOrAboveRuntime, isBun: false },
+    // This fixture's registered legacy source already exists natively: the
+    // generated pass keeps the native row and skips only that legacy IMPORT.
+    acknowledgedWorkflowSkips: ["wf-schema8-unattested-orphan"],
+  });
+  const upgraded = await openStore(context, "read");
   try {
-    expect(store.schemaVersion).toBe(8);
-    expect(store.db.prepare("select count(*) as n from execution_sessions where role = 'plan-pm'").get()).toEqual({ n: 1 });
-    expect(store.db.prepare("select count(*) as n from execution_integration_leases").get()).toEqual({ n: 1 });
+    expect(upgraded.schemaVersion).toBe(MIGRATIONS.length);
+    expect(upgraded.db.prepare("select count(*) as n from execution_sessions where role = 'plan-pm'").get()).toEqual({ n: 0 });
+    const tombstone = JSON.parse(
+      (upgraded.db.prepare("select lease_json from execution_integration_leases").get() as { lease_json: string }).lease_json,
+    ) as Record<string, unknown>;
+    expect(tombstone).toMatchObject({
+      status: "released",
+      prior_holder: sessionId,
+      released_by: "store-upgrade",
+      release_reason: `retired-plan-pm-seat:${sessionId}`,
+    });
+    expect(typeof tombstone.released_at).toBe("string");
   } finally {
-    store.close();
+    upgraded.close();
   }
 });
 

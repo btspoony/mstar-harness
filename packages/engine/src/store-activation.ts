@@ -61,6 +61,7 @@ import {
   type RawTable,
 } from "./catalog-import.js";
 import { readDeclaredNodeFloor, writeJson } from "./core.js";
+import { provisionActivationDocument, type ProvisionProcessFacts } from "./activation-provisioning.js";
 import type { MigrationManifest, MigrationReceipt } from "./store-migrate.js";
 import {
   MIGRATIONS,
@@ -93,6 +94,7 @@ export const BACKUP_RECEIPT_VERSION = 2;
 /** Stable refusal codes of the activation/retirement transport (§5 + §7). */
 export type StoreActivationErrorCode =
   | "store.attestation-invalid"
+  | "store.operator-required"
   | "store.activation-blocked"
   | "store.activation-stale"
   | "store.not-active"
@@ -1409,8 +1411,13 @@ function findRetirementRow(
 export async function activateStore(
   context: StoreContext,
   receipt: MigrationReceipt,
-  attestation: ActivationAttestation,
+  attestation?: ActivationAttestation,
   hooks: { afterStage?(stage: "flip" | "inspection" | "retirement" | "section-write", completed: number): void } = {},
+  // `processFacts` is a test-only seam: production callers never pass it, and
+  // a Bun-driven run refuses on the generated path (Bun is never an admissible
+  // consumer), so the generated success path is proven at this transaction
+  // with injected facts — the same class of seam as the `hooks` above.
+  options: { operator?: string; processFacts?: ProvisionProcessFacts } = {},
 ): Promise<ActivationReceipt> {
   if (
     !receipt ||
@@ -1424,8 +1431,11 @@ export async function activateStore(
       "the activation requires the reviewed apply receipt (receiptId, storeRevision; manifestHash is provenance); re-apply the reviewed manifest.",
     );
   }
-  const validated = validateActivationAttestation(attestation);
-  const attestationHash = sha256Bytes(Buffer.from(`attestation\u0000${JSON.stringify(validated)}`, "utf8"));
+  // A supplied document is the 1:1 override and is validated here, before the
+  // backup, exactly as before. An omitted one is generated inside the flip
+  // transaction below and validated at the same point — the validator stays
+  // the acceptance authority either way.
+  const validated = attestation === undefined ? undefined : validateActivationAttestation(attestation);
 
   const inspection = await openStore(context, "write");
   let meta: LiveMeta;
@@ -1541,6 +1551,48 @@ export async function activateStore(
       // gate; this note records the precondition so a future caller does not
       // widen the window.
       revalidateSources(context, manifest, "activation");
+      // The generated operator document, assembled inside this transaction:
+      // the invoking operator is the recorded actor, the reviewed apply
+      // receipt is the durable authorizationRef, the clock is the same
+      // instant the epoch bump is stamped with, and the stop list is exactly
+      // the active rows this epoch bump invalidates (an earlier-epoch row
+      // authorizes nothing afterwards). The narrowed meaning stays explicit:
+      // consumers attests the EXECUTING consumer only, and stoppedSessions
+      // attests row disposal, never an observed process death.
+      let activationValidated = validated;
+      if (activationValidated === undefined) {
+        if (options.operator === undefined || options.operator.trim() === "") {
+          throw Object.assign(
+            new StoreActivationError(
+              "store.operator-required",
+              "the activation generates its operator attestation when --attestation is omitted, and the generated document records the invoking operator; pass --operator <name> (or --attestation <absolute-json> to supply the document explicitly)",
+            ),
+            { recovery: "run mstar store activate --manifest <path> --operator <name> (add --attestation <absolute-json> to override the generated document)" },
+          );
+        }
+        const stoppedRows = flip.db
+          .prepare("select session_id from execution_sessions where state = 'active' and epoch = ?")
+          .all(current.epoch) as Array<{ session_id?: unknown }>;
+        const provisioned = provisionActivationDocument(
+          {
+            actor: options.operator,
+            authorizationRef: `migration-receipt:${receipt.receiptId}`,
+            attestedAt: at,
+            stoppedSessions: stoppedRows
+              .filter((row) => typeof row.session_id === "string" && row.session_id !== "")
+              .map((row) => ({ sessionId: row.session_id as string, host: "local", state: "stopped" as const })),
+          },
+          options.processFacts,
+        );
+        if (!provisioned.ok) {
+          throw Object.assign(
+            new StoreActivationError("store.attestation-invalid", provisioned.message),
+            { recovery: "run the same verb through the installed Node CLI: mstar store activate --manifest <path> --operator <name> (an explicit --attestation <absolute-json> also overrides)" },
+          );
+        }
+        activationValidated = validateActivationAttestation(provisioned.document);
+      }
+      const attestationHash = sha256Bytes(Buffer.from(`attestation\u0000${JSON.stringify(activationValidated)}`, "utf8"));
       const epoch = current.epoch + 1;
       const revision = current.revision + 1;
       const activationHash = activationHashOf({
@@ -1568,7 +1620,7 @@ export async function activateStore(
         revision,
         catalogRevision: current.catalogRevision,
         attestationHash,
-        attestation: validated,
+        attestation: activationValidated,
         backup,
       };
       const result = flip.db
@@ -1579,7 +1631,7 @@ export async function activateStore(
         .run(
           activationHash,
           JSON.stringify(stored),
-          JSON.stringify({ consumers: validated.consumers.length, stoppedSessions: validated.stoppedSessions.length }),
+          JSON.stringify({ consumers: activationValidated.consumers.length, stoppedSessions: activationValidated.stoppedSessions.length }),
           at,
           at,
         );

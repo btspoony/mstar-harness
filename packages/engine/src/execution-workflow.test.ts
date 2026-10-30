@@ -1741,6 +1741,93 @@ describe("execution-coordinator-recovery: \u00A72.3/\u00A74.2 the named recovery
     expect(activationRefusal.code).toBe("store.attestation-invalid");
   });
 
+  test("recovery without an attestation generates the operator document from the recovery's own recorded facts", async () => {
+    const fixture = await workflowFixture("recovery-generated");
+    // The replay below must re-present the SAME expected token its first
+    // attempt was judged on, so it is captured once.
+    const expected = await liveWorkflowToken(fixture);
+    const receipt = await recoverExecutionCoordinator(
+      domainContext(fixture.context, trustedCaller(RECOVERY_ID, "coordinator")),
+      {
+        expected,
+        operationId: "op-recover-generated",
+        priorSessionId: COORDINATOR_ID,
+        reason: "coordinator process stopped",
+      },
+    );
+    expect(receipt.replayed).toBe(false);
+    // The generated stop names exactly the prior holder row this recovery
+    // revokes, and the replacement binds as the live coordinator.
+    expect(sessionState(fixture.context, COORDINATOR_ID)).toBe("revoked");
+    expect(sessionState(fixture.context, RECOVERY_ID)).toBe("active");
+    const recorded = JSON.parse(String(rows(
+      fixture.context,
+      "select result_json from execution_operations where operation_id = 'op-recover-generated'",
+    )[0]!.result_json)) as { recovery?: Record<string, unknown> };
+    // The generated facts: the caller is the operator, the replay id is the
+    // durable authorizationRef, the stop list is the named prior holder, and
+    // the clock is the transaction's own instant.
+    expect(recorded.recovery).toMatchObject({
+      operator: { actor: RECOVERY_ID, authorizationRef: "op-recover-generated" },
+      stopped_sessions: [COORDINATOR_ID],
+    });
+    expect(typeof recorded.recovery?.attested_at).toBe("string");
+    // The holder was LIVE when attested stopped: the narrowed provenance
+    // warning survives generation unchanged.
+    expect(recorded.recovery?.holder_live_warning).toMatchObject({ code: "recovery.holder-live", holder: COORDINATOR_ID });
+    // An identical generated retry replays instead of rebinding: the request
+    // hash is the supplied input's, not the generated document's.
+    const replay = await recoverExecutionCoordinator(
+      domainContext(fixture.context, trustedCaller(RECOVERY_ID, "coordinator")),
+      {
+        expected,
+        operationId: "op-recover-generated",
+        priorSessionId: COORDINATOR_ID,
+        reason: "coordinator process stopped",
+      },
+    );
+    expect(replay.replayed).toBe(true);
+    expect(replay.data).toEqual(receipt.data);
+  });
+
+  test("an unowned recovery generates an empty stop list: no prior row is revoked", async () => {
+    const fixture = await workflowFixture("recovery-generated-unowned");
+    // A workflow with NO recorded coordinator row: --unowned is the truthful
+    // source, and the generated document therefore carries stoppedSessions: []
+    // (the recovery validator accepts an empty stop list).
+    const state = await readExecutionState(fixture.context);
+    const siblingId = "wf-ownerless-sibling";
+    const siblingCaller: ExecutionCaller = { workflowId: siblingId, sessionId: "ownerless-coordinator", role: "coordinator" };
+    const created = await createExecutionWorkflow(domainContext(fixture.context, siblingCaller), {
+      expected: state.token,
+      operationId: "op-register-ownerless",
+      entry: { id: siblingId, type: "plan", started_at: TS, dir: `workflows/${siblingId}` } as WorkflowEntry,
+      snapshot: {
+        ...state.data.workflows[0]!.state,
+        id: siblingId,
+        branch: { base: "main", source: "feature/ownerless", target: "main" },
+        plans: [{ id: `${PLAN_ID}-ownerless`, title: "ownerless plan", file: `plans/${PLAN_ID}-ownerless.md`, status: "Todo",
+          metadata: { working_branch: "feature/ownerless" } }],
+      } as WorkflowSnapshot,
+    });
+    const receipt = await recoverExecutionCoordinator(domainContext(fixture.context, siblingCaller), {
+      expected: created.data.workflows.find((workflow) => workflow.state.id === siblingId)!.workflowToken,
+      operationId: "op-recover-ownerless",
+      priorSessionId: null,
+      reason: "no coordinator was ever recorded",
+    });
+    expect(receipt.replayed).toBe(false);
+    expect(receipt.data).toMatchObject({ workflowId: siblingId, sessionId: "ownerless-coordinator" });
+    const recorded = JSON.parse(String(rows(
+      fixture.context,
+      "select result_json from execution_operations where operation_id = 'op-recover-ownerless'",
+    )[0]!.result_json)) as { recovery?: Record<string, unknown> };
+    expect(recorded.recovery).toMatchObject({
+      operator: { actor: "ownerless-coordinator", authorizationRef: "op-recover-ownerless" },
+      stopped_sessions: [],
+    });
+  });
+
   test("recovery never takes over an owner it may not replace", async () => {
     const fixture = await workflowFixture("recovery-live");
     // A live holder with NO stop evidence: the engine cannot observe a dead
