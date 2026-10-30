@@ -55,11 +55,16 @@
  * is enforced by the append that would reach it: when the frame can leave the
  * ledger at or past the ceiling, the frame and the compaction it triggers run as
  * ONE critical section under the store's own `BEGIN IMMEDIATE` write lock
- * (`withWorkflowNotesMaintenanceLock`, never a lock file), so no peer frame can
- * land between a compaction's read and its rename. Compaction keeps the newest
- * complete lines that fit `WORKFLOW_NOTES_LEDGER_READ_BYTES`, always keeps the
- * triggering note whole, and writes a `workflow-notes-compaction` row as the
- * FINAL line disclosing the dropped prefix. It is the only writer that rewrites
+ * (`withWorkflowNotesMaintenanceLock`, never a lock file), so no OTHER
+ * over-ceiling append can compact from the same stale size. An ordinary
+ * sub-ceiling append is lock-free by design and CAN land between a compaction's
+ * read and its rename; the compactor re-checks the leaf's size before publishing
+ * and abandons its temporary file instead of deleting that frame — the stat→
+ * rename gap itself is the recorded residual (see the `shortcut:` note on the
+ * append path). Compaction keeps the newest complete lines that fit
+ * `WORKFLOW_NOTES_LEDGER_READ_BYTES`, always keeps the triggering note whole,
+ * and writes a `workflow-notes-compaction` row as the FINAL line disclosing the
+ * dropped bytes. It is the only writer that rewrites
  * retained bytes, and it rewrites them atomically: a same-directory temporary
  * file, fsync, rename over the leaf, then the directory fsynced.
  *
@@ -137,11 +142,16 @@ export const WORKFLOW_NOTES_COMPACTION_MARKER_KIND = "workflow-notes-compaction"
 export type WorkflowNoteAppendReceipt = Readonly<{ id: string }>;
 
 /**
- * The disclosure row one compaction writes as the ledger's FINAL line, so even a
- * windowed tail read learns that history it cannot see was dropped. It carries
+ * The disclosure row one compaction writes as the ledger's FINAL line, so a
+ * windowed tail read learns that history it cannot see was dropped — as long as
+ * the marker is still inside that window. A ledger that grows past
+ * `WORKFLOW_NOTES_LEDGER_READ_BYTES` after a compaction puts the marker outside
+ * the tail; coverage then reports `readWindow.truncated` with `compaction: null`
+ * (the marker is not re-surfaced until the next compaction). It carries
  * no note `id`/`sessionId`: the retained line log is content, this row is the
- * count of content that is gone. `dropped` and `prefixSha256` describe only the
- * prefix THIS compaction removed — a later compaction replaces the row.
+ * count of content that is gone. `dropped` and `prefixSha256` describe every
+ * byte THIS compaction removed — note lines and any superseded marker row
+ * alike — and a later compaction replaces the row it wrote.
  */
 export type WorkflowNotesCompactionMarker = Readonly<{
   version: 1;
@@ -602,7 +612,7 @@ function ledgerSnapshotUnchanged(path: string, totalBytes: number): boolean {
  * size: it is retained whole, and the tail read discloses the cut instead of the
  * writer silently shortening the note.
  */
-function compactWorkflowNotesLedger(path: string, workflowId: string): void {
+function compactWorkflowNotesLedger(path: string, workflowId: string, trigger: Buffer): void {
   let bytes: Buffer;
   try {
     bytes = readFileSync(path);
@@ -614,22 +624,36 @@ function compactWorkflowNotesLedger(path: string, workflowId: string): void {
   if (totalBytes <= WORKFLOW_NOTES_LEDGER_MAX_BYTES) return;
   const spans = ledgerSpans(bytes);
   const lineOf = (span: LedgerSpan): LedgerLine => parseLedgerLine(bytes.subarray(span.start, span.end));
+  const spanBytes = (span: LedgerSpan): number =>
+    (span.terminated ? span.end + 1 : span.end) - span.start;
+  const spanToBytes = (span: LedgerSpan): Buffer => bytes.subarray(span.start, spanBytes(span) + span.start);
   // A marker is never content: it is dropped wherever it sits, so a marker an
   // earlier compaction left behind an interior line cannot survive alongside
   // the one this pass writes.
   const content = spans.filter((span) => lineOf(span).format !== "compaction-marker");
+  // The frame THIS append committed is identified by its bytes, not by its
+  // position: a lock-free peer that lands after the commit makes it an interior
+  // line, and it must survive whole anyway — its append was already receipted.
+  let triggerIndex = -1;
+  for (let index = content.length - 1; index >= 0; index -= 1) {
+    if (spanToBytes(content[index]!).equals(trigger)) {
+      triggerIndex = index;
+      break;
+    }
+  }
   const budget = WORKFLOW_NOTES_LEDGER_READ_BYTES - markerReserveBytes(totalBytes, workflowId);
-  const spanBytes = (span: LedgerSpan): number =>
-    (span.terminated ? span.end + 1 : span.end) - span.start;
   let firstKept = content.length;
   let keptBytes = 0;
   for (let index = content.length - 1; index >= 0; index -= 1) {
     const size = spanBytes(content[index]!);
-    // The triggering note is always retained whole; older lines only while they fit.
+    // The newest line is always retained whole; older lines only while they fit.
     if (index !== content.length - 1 && keptBytes + size > budget) break;
     keptBytes += size;
     firstKept = index;
   }
+  // The triggering line outranks the window: an oversize note, or a peer frame
+  // that landed after it, would otherwise leave the receipted note droppable.
+  if (triggerIndex !== -1 && triggerIndex < firstKept) firstKept = triggerIndex;
   const kept = content.slice(firstKept);
   const keptStarts = new Set(kept.map((span) => span.start));
   let lines = 0;
@@ -639,13 +663,15 @@ function compactWorkflowNotesLedger(path: string, workflowId: string): void {
   const removed: Buffer[] = [];
   for (const span of spans) {
     if (keptStarts.has(span.start)) continue;
+    // Removed bytes are accounted for whatever they are; a superseded marker
+    // row is disclosed as removed bytes even though it is not a note line.
+    removed.push(spanToBytes(span));
     const line = lineOf(span);
     if (line.format === "compaction-marker") continue;
     lines += 1;
     if (line.format === "versioned-note-v1") records += 1;
     else if (line.format === "legacy-note") historical += 1;
     else if (line.format === "unrecognized") unrecognized += 1;
-    removed.push(bytes.subarray(span.start, span.terminated ? span.end + 1 : span.end));
   }
   const dropped = Buffer.concat(removed);
   const marker: WorkflowNotesCompactionMarker = {
@@ -659,7 +685,7 @@ function compactWorkflowNotesLedger(path: string, workflowId: string): void {
   const temp = writeLedgerTempFile(
     path,
     Buffer.concat([
-      ...kept.map((span) => bytes.subarray(span.start, span.terminated ? span.end + 1 : span.end)),
+      ...kept.map(spanToBytes),
       Buffer.from("\n", "utf8"),
       Buffer.from(canonicalMarkerLine(marker), "utf8"),
       Buffer.from("\n", "utf8"),
@@ -683,8 +709,9 @@ function compactWorkflowNotesLedger(path: string, workflowId: string): void {
  * Serialize one append with the compaction it may trigger, through the store's
  * existing `BEGIN IMMEDIATE` transaction — the engine's one write lock, taken
  * here instead of a lock file. Two concurrent appends therefore cannot both
- * decide to compact from the same stale size, and no frame can land between a
- * compaction's read and its rename.
+ * decide to compact from the same stale size. It does not exclude the ordinary
+ * lock-free append: such a frame can land between a compaction's read and its
+ * rename, which is why the compactor re-checks the leaf's size before publishing.
  */
 function withWorkflowNotesMaintenanceLock<T>(context: StoreContext, body: () => T): Promise<T> {
   return withExecutionTransaction(context, () => body());
@@ -824,7 +851,7 @@ export async function appendWorkflowNote(
   if (ledgerAtOrOverCeiling(ledgerPath, frame.length)) {
     await withWorkflowNotesMaintenanceLock(context, () => {
       commitLedgerFrame(ledgerPath, frame);
-      compactWorkflowNotesLedger(ledgerPath, session.workflowId);
+      compactWorkflowNotesLedger(ledgerPath, session.workflowId, frame);
     });
     return { id: note.id };
   }
@@ -840,7 +867,7 @@ export async function appendWorkflowNote(
     // retries. Upgrade to an unconditional maintenance lock if the ceiling must
     // hold at every instant, which costs a store write connection on every
     // ordinary append.
-    await withWorkflowNotesMaintenanceLock(context, () => compactWorkflowNotesLedger(ledgerPath, session.workflowId));
+    await withWorkflowNotesMaintenanceLock(context, () => compactWorkflowNotesLedger(ledgerPath, session.workflowId, frame));
   }
   return { id: note.id };
 }
