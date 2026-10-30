@@ -1454,7 +1454,7 @@ export function restartSeam(medium: Map<string, string>, previous?: () => void):
   return uninstall
 }
 
-/* ------------------------ environment gates (I-000903) ------------------------ */
+/* ------------------------ environment gates (CI vs local runs) ------------------------ */
 
 /**
  * The one CI interpretation every environment-dependent test gate shares. Bun's
