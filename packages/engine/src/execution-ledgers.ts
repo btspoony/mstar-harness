@@ -930,7 +930,12 @@ export type WorkflowNotesCoverageFacts = Readonly<{
    * line index and count above describes that window, never the whole file.
    */
   readWindow: WorkflowNotesReadWindow;
-  /** The disclosure the ledger's last compaction wrote, or `null` if nothing was dropped. */
+  /**
+   * The disclosure the ledger's last compaction wrote. `null` means this window
+   * carries no marker — no compaction ran, or later appends pushed the marker
+   * outside the read window (then `readWindow.truncated` is set, and the marker
+   * is not re-surfaced until the next compaction).
+   */
   compaction: WorkflowNotesCompactionMarker | null;
 }>;
 
