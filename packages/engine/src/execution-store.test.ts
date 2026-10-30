@@ -48,7 +48,7 @@ import {
   type ExecutionToken,
   type ExecutionTransaction,
 } from "./execution-store.js";
-import { mutateExecutionWorkflow } from "./execution-workflow.js";
+import { mutateExecutionWorkflow, recoverExecutionCoordinator } from "./execution-workflow.js";
 import type { WorkflowEntry } from "./status.js";
 import {
   MIGRATIONS,
@@ -1940,6 +1940,63 @@ describe("execution-receipts: \u00A73.1 a running workflow's retained receipts s
     expect(closed.replayed).toBe(false);
     expect((await retainedRows()).map((row) => row.operation_id)).toEqual(["close-wf-1"]);
     expect(await replayOf(context, "wf-1", last.operation_id, last.request_hash)).toBeNull();
+  });
+
+  test("a workflow at the cap still recovers its coordinator and then closes", async () => {
+    // The same real graph as the cap case above, driven to the bound.
+    const { context } = await freshStore("receipt-retention-recovery");
+    const initialized = await readExecutionState(context);
+    await registerPlan(context, "p-1");
+    const created = await createExecutionWorkflow(domainContext(context, domainCaller("wf-1")), {
+      ...creationInput("wf-1", [planRow("p-1")]),
+      expected: initialized.token,
+      operationId: "create-wf-1",
+    });
+    await bindExecutionSession(domainContext(context, domainCaller("wf-1")), {
+      workflowId: "wf-1",
+      expected: created.data.workflows[0]!.workflowToken,
+      operationId: "bind-wf-1",
+    });
+    const retainedCount = (): number => {
+      const db = rawDb(storePath(context));
+      try {
+        return Number(scalar(db, "select count(*) as n from execution_operations where workflow_id = 'wf-1'"));
+      } finally {
+        db.close();
+      }
+    };
+    await fillRunningReceipts(context, "wf-1", RUNNING_WORKFLOW_OPERATION_RECEIPT_LIMIT - retainedCount());
+    expect(retainedCount()).toBe(RUNNING_WORKFLOW_OPERATION_RECEIPT_LIMIT);
+
+    // The prior coordinator is stopped; a distinct replacement recovers it. Its
+    // own receipt is the ONE exempt non-terminal write: without it the workflow
+    // holds no live binding, so nothing could close it either.
+    const replacement = domainCaller("wf-1", { sessionId: "session-wf-1-next" });
+    const recovered = await recoverExecutionCoordinator(domainContext(context, replacement), {
+      operationId: "recover-wf-1",
+      priorSessionId: "session-wf-1",
+      reason: "prior coordinator stopped at the retention bound",
+    });
+    expect(recovered.replayed).toBe(false);
+    expect(recovered.data.sessionId).toBe("session-wf-1-next");
+    expect(retainedCount()).toBe(RUNNING_WORKFLOW_OPERATION_RECEIPT_LIMIT + 1);
+
+    // The recovered binding is live, so the terminal close succeeds and its
+    // prune collapses the set back to exactly the close receipt.
+    const closed = await mutateExecutionWorkflow(domainContext(context, replacement), {
+      operationId: "close-wf-1",
+      session: recovered.data,
+      workflowId: "wf-1",
+      operation: { kind: "lifecycle", status: "stopped", reason: "recovered at the retention bound, then closed" },
+    });
+    expect(closed.replayed).toBe(false);
+    const db = rawDb(storePath(context));
+    try {
+      expect(all(db, "select operation_id from execution_operations where workflow_id = 'wf-1'").map((row) => row.operation_id))
+        .toEqual(["close-wf-1"]);
+    } finally {
+      db.close();
+    }
   });
 });
 

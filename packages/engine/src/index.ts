@@ -628,6 +628,7 @@ export type {
 } from "./execution-store.js";
 export {
   ExecutionError,
+  RUNNING_WORKFLOW_OPERATION_RECEIPT_LIMIT,
   adoptTerminalWorkflow,
   bindExecutionSession,
   createExecutionWorkflow,

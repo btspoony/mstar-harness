@@ -3267,12 +3267,21 @@ export const RUNNING_WORKFLOW_OPERATION_RECEIPT_LIMIT = 256;
  * A terminal mutation is exempt: its receipt is the durable replay anchor for a
  * close/adoption whose success response was lost, and the terminal prune that
  * follows it keeps exactly that one receipt, so the running bound never applies
- * to it. Every other write asks whether the workflow this transaction reads has
- * already retained the bound; at the bound it refuses BEFORE the insert, so the
- * transaction rolls back and no receipt, revision or effect of that operation
- * survives.
+ * to it. Coordinator recovery is exempt too, and for the same reason: it is the
+ * only way back from a stopped holder, and refusing its receipt would leave the
+ * workflow unable to recover AND unable to close (a close needs a live
+ * binding), so a workflow at the bound with a dead coordinator would be
+ * unrecoverable. Its receipt is still written, and the terminal close that
+ * follows prunes the set back to one. Every other write asks whether the
+ * workflow this transaction reads has already retained the bound; at the bound
+ * it refuses BEFORE the insert, so the transaction rolls back and no receipt,
+ * revision or effect of that operation survives.
  */
-function assertWorkflowOperationReceiptCapacity(tx: ExecutionTransaction, workflowId: string): void {
+function assertWorkflowOperationReceiptCapacity(
+  tx: ExecutionTransaction,
+  workflowId: string,
+  exemptFromRetentionCap: boolean,
+): void {
   const header = tx.db.prepare("select state_json from execution_workflows where workflow_id = ?").get(workflowId) as
     | { state_json?: unknown }
     | undefined;
@@ -3280,6 +3289,7 @@ function assertWorkflowOperationReceiptCapacity(tx: ExecutionTransaction, workfl
     const status = storedJsonObject(header.state_json, `execution_workflows(${workflowId}).state_json`).status;
     if ((WORKFLOW_TERMINAL_STATUSES as readonly string[]).includes(String(status))) return;
   }
+  if (exemptFromRetentionCap) return;
   const retained = tx.db
     .prepare("select count(*) as n from execution_operations where workflow_id = ? and epoch = ?")
     .get(workflowId, tx.epoch) as { n?: unknown };
@@ -3320,9 +3330,11 @@ export function writeOperationReceipt(
     receipt: ExecutionRead<unknown>;
     now: string;
     slim?: true;
+    /** Coordinator recovery at the running bound: see the capacity guard's exemption. */
+    exemptFromRetentionCap?: true;
   },
 ): void {
-  assertWorkflowOperationReceiptCapacity(tx, input.workflowId);
+  assertWorkflowOperationReceiptCapacity(tx, input.workflowId, input.exemptFromRetentionCap === true);
   tx.db
     .prepare(
       "insert into execution_operations(epoch, operation_id, request_hash, store_id, workflow_id, plan_id, result_json, committed_at) " +
