@@ -16,7 +16,7 @@
  * dev-time provider that makes mstar skills discoverable through
  * `ctx.skills` (the plan acceptance).
  */
-import { describe, expect, it, afterEach } from 'bun:test'
+import { describe, expect, it, test, afterEach } from 'bun:test'
 import { existsSync } from 'node:fs'
 import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
@@ -29,7 +29,7 @@ import { Config as SkillLocalSchema } from '@deepseek-ai/dsh-skill-filesystem'
 import * as plugin from '../src/index.ts'
 import { DshHostAdapter, skillLocalConfig } from '../src/index.ts'
 import { resolvePackagedSkillsDir } from '../src/gates/_shared.ts'
-import { bootApp, FakeLoaderRegistry, type BootResult } from './harness.ts'
+import { bootApp, FakeLoaderRegistry, isCiEnvironment, LOCAL_SKILL_MOUNT_SKIP_REASON, type BootResult } from './harness.ts'
 
 let booted: BootResult | undefined
 
@@ -200,7 +200,7 @@ describe('mirror skills/ frontmatter contract (engine lintSkillFrontmatter)', ()
 })
 
 describe('skills mount via the plugin (real composition)', () => {
-  it('mounts the mirror skills/ through the plugin Config and lists them on ctx.skills', async () => {
+  test.if(isCiEnvironment())(`mounts the mirror skills/ through the plugin Config and lists them on ctx.skills (${LOCAL_SKILL_MOUNT_SKIP_REASON})`, async () => {
     booted = await bootApp({ skillRoots: [MIRROR_SKILLS] })
     const skills = await booted.ctx.skills.list()
     const planConventions = skills.find((skill) => skill.name === 'mstar-conventions')
@@ -213,7 +213,7 @@ describe('skills mount via the plugin (real composition)', () => {
     expect(skills.some((skill) => skill.name === 'pm')).toBe(true)
   })
 
-  it('loads the full skill body through ctx.skills.get', async () => {
+  test.if(isCiEnvironment())(`loads the full skill body through ctx.skills.get (${LOCAL_SKILL_MOUNT_SKIP_REASON})`, async () => {
     booted = await bootApp({ skillRoots: [MIRROR_SKILLS] })
     const definition = await booted.ctx.skills.get('mstar-conventions')
     expect(definition).toBeDefined()
@@ -221,7 +221,7 @@ describe('skills mount via the plugin (real composition)', () => {
     expect(definition!.path).toBe(join(MIRROR_SKILLS, 'mstar-conventions', 'SKILL.md'))
   })
 
-  it('composes temp custom roots and the real mirror in one app (temp + real roots)', async () => {
+  test.if(isCiEnvironment())(`composes temp custom roots and the real mirror in one app (temp + real roots) (${LOCAL_SKILL_MOUNT_SKIP_REASON})`, async () => {
     const tempRoot = await seedSkillRoot()
     booted = await bootApp({ skillRoots: [tempRoot, MIRROR_SKILLS] })
     const skills = await booted.ctx.skills.list()
@@ -231,7 +231,7 @@ describe('skills mount via the plugin (real composition)', () => {
     expect(names).toContain('mstar-conventions')
   })
 
-  it('registers the bundled root with the bundled source', async () => {
+  test.if(isCiEnvironment())(`registers the bundled root with the bundled source (${LOCAL_SKILL_MOUNT_SKIP_REASON})`, async () => {
     const tempRoot = await seedSkillRoot()
     booted = await bootApp({ bundledSkillDir: tempRoot })
     const skills = await booted.ctx.skills.list()
@@ -240,7 +240,7 @@ describe('skills mount via the plugin (real composition)', () => {
     expect(bundled!.source).toBe('bundled')
   })
 
-  it('mounts the packaged harness-skills mirror by default (no skill roots configured)', async () => {
+  test.if(isCiEnvironment())(`mounts the packaged harness-skills mirror by default (no skill roots configured) (${LOCAL_SKILL_MOUNT_SKIP_REASON})`, async () => {
     const packaged = packagedBundled()
     if (packaged === undefined) {
       // bundle-assets has not run — no packaged mirror to mount.
@@ -257,7 +257,7 @@ describe('skills mount via the plugin (real composition)', () => {
     expect(planConventions!.provider).toBe('mstar')
   })
 
-  it('a missing skill root degrades to just the packaged mirror (ENOENT resilience)', async () => {
+  test.if(isCiEnvironment())(`a missing skill root degrades to just the packaged mirror (ENOENT resilience) (${LOCAL_SKILL_MOUNT_SKIP_REASON})`, async () => {
     const root = await mkdtemp(join(tmpdir(), 'dsh-mstar-skills-'))
     booted = await bootApp({ skillRoots: [join(root, 'does-not-exist')] })
     const skills = await booted.ctx.skills.list()
@@ -270,7 +270,7 @@ describe('skills mount via the plugin (real composition)', () => {
     expect(skills.some((skill) => skill.name === 'temp-one')).toBe(false)
   })
 
-  it('a vanished skill file loads as undefined (get ENOENT path)', async () => {
+  test.if(isCiEnvironment())(`a vanished skill file loads as undefined (get ENOENT path) (${LOCAL_SKILL_MOUNT_SKIP_REASON})`, async () => {
     const root = await seedSkillRoot()
     booted = await bootApp({ skillRoots: [root] })
     expect(await booted.ctx.skills.get('temp-one')).toBeDefined()
@@ -278,7 +278,7 @@ describe('skills mount via the plugin (real composition)', () => {
     expect(await booted.ctx.skills.get('temp-one')).toBeUndefined()
   })
 
-  it('unregisters the provider on fiber disposal (HMR safety)', async () => {
+  test.if(isCiEnvironment())(`unregisters the provider on fiber disposal (HMR safety) (${LOCAL_SKILL_MOUNT_SKIP_REASON})`, async () => {
     booted = await bootApp({ skillRoots: [MIRROR_SKILLS] })
     expect((await booted.ctx.skills.list()).length).toBeGreaterThan(0)
     await booted.dispose()

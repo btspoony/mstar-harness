@@ -28,7 +28,7 @@
  * full mstar-gated session" observable; the `dsh plugin --profile add`
  * CLI real-run outcome is documented in task-5-report.md.
  */
-import { describe, expect, it, afterEach } from 'bun:test'
+import { describe, expect, it, test, afterEach } from 'bun:test'
 import { execFileSync } from 'node:child_process'
 import { readFileSync } from 'node:fs'
 import { mkdir, mkdtemp, rm, symlink, writeFile } from 'node:fs/promises'
@@ -44,7 +44,7 @@ import type { UserMessage } from '@deepseek-ai/dsh-llm'
 import { createUserMessage } from '@deepseek-ai/dsh-llm'
 import type { DispatchGateAdvisory, SeamLintAdvisory, SkillLintAdvisory } from '../src/index.ts'
 import { DshHostAdapter, readAgentFlow } from '../src/index.ts'
-import { bootApp, seedActiveWorkflow, seedHarness, type BootResult } from './harness.ts'
+import { bootApp, isCiEnvironment, LOCAL_SKILL_MOUNT_SKIP_REASON, seedActiveWorkflow, seedHarness, type BootResult } from './harness.ts'
 import { buildCatalogPayloadWithStore } from '../src/gates/catalog.ts'
 import { ENGINE_VERSION } from './engine-version.ts'
 
@@ -213,7 +213,7 @@ async function seedScopedRow(app: BootResult): Promise<string> {
  * ========================================================================== */
 
 describe('full dsh app boot — fixture cordis.yml composition', () => {
-  it('boots the full-app fixture through the real Loader with gates, tools, and mounted skills live', async () => {
+  test.if(isCiEnvironment())(`boots the full-app fixture through the real Loader with gates, tools, and mounted skills live (${LOCAL_SKILL_MOUNT_SKIP_REASON})`, async () => {
     booted = await bootApp({ cordisYml: FIXTURE_CORDIS_YML, skillRoots: [MIRROR_SKILLS], enforcement: 'hard' })
 
     // Host adapter service attached (boot settled).
@@ -456,7 +456,7 @@ describe('agent/pre-step — one unified engine-status row (iteration gate + sta
  * ========================================================================== */
 
 describe('bundledSkillDir — launch-cwd resolution', () => {
-  it('a relative bundledSkillDir discovers bundled skills from the launch cwd, not the app workspace', async () => {
+  test.if(isCiEnvironment())(`a relative bundledSkillDir discovers bundled skills from the launch cwd, not the app workspace (${LOCAL_SKILL_MOUNT_SKIP_REASON})`, async () => {
     const launchRoot = await mkdtemp(join(tmpdir(), 'dsh-e2e-relative-skills-'))
     try {
       // Only the child has this launch cwd; no process-global chdir can race

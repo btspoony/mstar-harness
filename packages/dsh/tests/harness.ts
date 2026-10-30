@@ -1453,3 +1453,21 @@ export function restartSeam(medium: Map<string, string>, previous?: () => void):
   seamDisposers.push(uninstall)
   return uninstall
 }
+
+/* ------------------------ environment gates (I-000903) ------------------------ */
+
+/**
+ * The one CI interpretation every environment-dependent test gate shares. Bun's
+ * `test.if(cond)` then reports the gated cases as skips locally and executes them
+ * unchanged in CI.
+ */
+export function isCiEnvironment(): boolean {
+  return process.env.CI !== undefined && process.env.CI !== ''
+}
+
+/**
+ * Recorded skip reason for the gated real-composition cases: the local chokidar
+ * skill-mount race is not deterministic here (CI is the only execution evidence
+ * for those bodies).
+ */
+export const LOCAL_SKILL_MOUNT_SKIP_REASON = 'local chokidar skill-mount timing is not deterministic; these real-composition assertions run unchanged in CI'
