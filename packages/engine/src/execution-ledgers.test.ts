@@ -45,11 +45,15 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { DatabaseSync } from "node:sqlite";
 import {
+  WORKFLOW_NOTES_COMPACTION_MARKER_KIND,
+  WORKFLOW_NOTES_LEDGER_MAX_BYTES,
+  WORKFLOW_NOTES_LEDGER_READ_BYTES,
   appendWorkflowNote,
   normalizeWorkflowNotesCoverage,
   workflowNotesLedgerPath,
   type WorkflowNote,
 } from "./execution-ledgers.js";
+import { sha256Bytes } from "./coordination-write.js";
 import {
   bindExecutionSession,
   createExecutionWorkflow,
@@ -960,4 +964,108 @@ describe("execution-ledgers: normalized coverage facts", () => {
     expect(withRepeat.records.map((entry) => entry.id)).toEqual(["note-1", "note-1"]);
     expect(withRepeat.counts).toEqual({ historical: 0, records: 2, unrecognized: 0 });
   });
+});
+
+/* ------------------------------------------------------------------------ *
+ * Compaction: the size ceiling, the disclosure marker and the read window
+ * ------------------------------------------------------------------------ */
+
+/** One LF-terminated line of a retained ledger, counted the way the reader splits it. */
+function retainedLines(bytes: Buffer): string[] {
+  return bytes.toString("utf8").split("\n");
+}
+
+/** The final non-empty retained line, parsed. */
+function finalRow(bytes: Buffer): Record<string, unknown> {
+  const rows = retainedLines(bytes).filter((line) => line.length > 0);
+  return JSON.parse(rows[rows.length - 1]!) as Record<string, unknown>;
+}
+
+describe("execution-ledgers: compaction at the ledger size ceiling", () => {
+  test("an append over the ceiling leaves the exact final-row marker and keeps the triggering note whole", async () => {
+    const fixture = await notesFixture("compaction-marker");
+    // A retained ledger already past the ceiling: historical migrated lines, so
+    // the dropped facts are classifiable content rather than one blob.
+    const lineBytes = Buffer.byteLength(LEGACY_LINE, "utf8");
+    const seededLines = Math.ceil(WORKFLOW_NOTES_LEDGER_MAX_BYTES / lineBytes) + 1;
+    const seeded = LEGACY_LINE.repeat(seededLines);
+    fixture.seed({ ledger: seeded });
+    const target = note("note-trigger", "triggering note after the ceiling");
+    const before = Buffer.concat([Buffer.from(seeded, "utf8"), Buffer.from(framedLineOf(target), "utf8")]);
+    expect(before.length).toBeGreaterThan(WORKFLOW_NOTES_LEDGER_MAX_BYTES);
+
+    expect(await appendWorkflowNote(fixture.coordContext, fixture.session, target)).toEqual({ id: target.id });
+
+    const retained = ledgerBytes(fixture);
+    // Compaction kept the newest complete lines plus the marker: the retained
+    // ledger is back inside the read window, not the ceiling.
+    expect(retained.length).toBeLessThanOrEqual(WORKFLOW_NOTES_LEDGER_READ_BYTES);
+    const marker = finalRow(retained);
+    expect(Object.keys(marker)).toEqual(["version", "kind", "ts", "workflowId", "dropped", "prefixSha256"]);
+    expect(marker.version).toBe(1);
+    // The constant owns the kind the reader and the writer agree on.
+    expect(marker.kind).toBe(WORKFLOW_NOTES_COMPACTION_MARKER_KIND);
+    expect(marker.workflowId).toBe(WF);
+    expect(String(marker.ts)).toMatch(/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/);
+    const dropped = marker.dropped as Record<string, number>;
+    // The dropped prefix is whole seeded lines: bytes, lines and historical
+    // notes are three views of the same removed region.
+    const droppedLines = dropped.bytes! / lineBytes;
+    expect(Number.isInteger(droppedLines)).toBe(true);
+    expect(dropped).toEqual({
+      bytes: dropped.bytes,
+      lines: droppedLines,
+      records: 0,
+      historical: droppedLines,
+      unrecognized: 0,
+    });
+    expect(dropped.bytes).toBeGreaterThan(0);
+    // The digest describes exactly the removed prefix, derived from the bytes
+    // the append actually left behind before compaction.
+    expect(marker.prefixSha256).toBe(sha256Bytes(before.subarray(0, dropped.bytes)));
+
+    const facts = factsOf(fixture);
+    // The marker is a disclosure, never a note and never an unrecognized line.
+    expect(facts.compaction).toEqual(marker as never);
+    // The retained ledger holds the newest complete lines that fit the window:
+    // every seeded line the compaction did not drop, plus the triggering note.
+    expect(facts.counts).toEqual({ historical: seededLines - droppedLines, records: 1, unrecognized: 0 });
+    expect(facts.records.map((entry) => entry.record.id)).toEqual([target.id]);
+    expect(facts.records[0]!.record.text).toBe(target.text);
+    expect(facts.readWindow).toEqual({ offset: 0, totalBytes: retained.length, truncated: false });
+  }, 30_000);
+
+  test("a single oversize triggering note stays whole and is disclosed by tail-read truncation", async () => {
+    const fixture = await notesFixture("compaction-oversize-note");
+    fixture.seed({ ledger: LEGACY_LINE });
+    // One note larger than the ceiling: the recorded exception to the target
+    // size, disclosed by the truncated tail read rather than by another bound.
+    const target = note("note-oversize", "x".repeat(WORKFLOW_NOTES_LEDGER_MAX_BYTES + 1024));
+    await appendWorkflowNote(fixture.coordContext, fixture.session, target);
+
+    const retained = ledgerBytes(fixture);
+    expect(retained.length).toBeGreaterThan(WORKFLOW_NOTES_LEDGER_READ_BYTES);
+    const marker = finalRow(retained);
+    expect(marker.kind).toBe(WORKFLOW_NOTES_COMPACTION_MARKER_KIND);
+    expect((marker.dropped as Record<string, number>).historical).toBe(1);
+    expect((marker.dropped as Record<string, number>).records).toBe(0);
+
+    // A tail read of the retained ledger still reaches the final-row marker.
+    const readBytes = Math.min(retained.length, WORKFLOW_NOTES_LEDGER_READ_BYTES);
+    const offset = retained.length - readBytes;
+    const window = retained.subarray(offset + retained.subarray(offset).indexOf(0x0a) + 1);
+    const facts = normalizeWorkflowNotesCoverage({
+      workflowId: WF,
+      path: fixture.ledgerPath,
+      bytes: window,
+      readWindow: { offset: retained.length - window.length, totalBytes: retained.length, truncated: true },
+    });
+    expect(facts.readWindow).toEqual({ offset: retained.length - window.length, totalBytes: retained.length, truncated: true });
+    expect(facts.compaction?.kind).toBe(WORKFLOW_NOTES_COMPACTION_MARKER_KIND);
+    expect(facts.compaction).toEqual(marker as never);
+    // Counts describe the disclosed window: the note is cut, the marker is not
+    // a record, and the tail is the marker's own final LF.
+    expect(facts.counts).toEqual({ historical: 0, records: 0, unrecognized: 0 });
+    expect(facts.tail).toBeNull();
+  }, 30_000);
 });

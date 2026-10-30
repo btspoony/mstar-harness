@@ -58,6 +58,7 @@
  * later valid records, so a partial record never blocks a later append and a
  * record boundary always survives an earlier partial record.
  */
+import { randomUUID } from "node:crypto";
 import {
   closeSync,
   constants as fsConstants,
@@ -66,13 +67,16 @@ import {
   lstatSync,
   mkdirSync,
   openSync,
+  readFileSync,
+  renameSync,
+  unlinkSync,
   type Stats,
   writeSync,
 } from "node:fs";
-import { dirname, join } from "node:path";
+import { basename, dirname, join } from "node:path";
 import { canonicalTarget, isNonEmptyString, isPlainObject, sha256Bytes } from "./coordination-write.js";
 import { assertExecutionSessionCurrent } from "./execution-session.js";
-import type { ExecutionContext, ExecutionSessionRef } from "./execution-store.js";
+import { withExecutionTransaction, type ExecutionContext, type ExecutionSessionRef } from "./execution-store.js";
 import { NOTES_LEDGER_FILE } from "./migrate.js";
 import { assertSafePathComponent, resolveWorkflowDir } from "./path.js";
 import { storeDbPath, type StoreContext } from "./store-db.js";
@@ -97,8 +101,53 @@ export type WorkflowNote = Readonly<{
   text: string;
 }>;
 
+/**
+ * The retained ledger ceiling. An append that leaves the ledger above this size
+ * compacts it in the same maintenance transaction, so an actively written
+ * ledger costs a bounded amount of disk instead of growing with its age.
+ */
+export const WORKFLOW_NOTES_LEDGER_MAX_BYTES = 4 * 1024 * 1024;
+
+/**
+ * The coverage read window: a reader reads at most this many bytes of the
+ * ledger's tail and discloses the window it saw, so inspection cost is bounded
+ * regardless of the ledger's age. Compaction keeps the newest complete lines
+ * inside this window where it can.
+ */
+export const WORKFLOW_NOTES_LEDGER_READ_BYTES = 1024 * 1024;
+
+/** The `kind` of the disclosure row compaction writes; the constant owns it. */
+export const WORKFLOW_NOTES_COMPACTION_MARKER_KIND = "workflow-notes-compaction";
+
 /** The append receipt: the record id this append wrote. */
 export type WorkflowNoteAppendReceipt = Readonly<{ id: string }>;
+
+/**
+ * The disclosure row one compaction writes as the ledger's FINAL line, so even a
+ * windowed tail read learns that history it cannot see was dropped. It carries
+ * no note `id`/`sessionId`: the retained line log is content, this row is the
+ * count of content that is gone. `dropped` and `prefixSha256` describe only the
+ * prefix THIS compaction removed — a later compaction replaces the row.
+ */
+export type WorkflowNotesCompactionMarker = Readonly<{
+  version: 1;
+  kind: typeof WORKFLOW_NOTES_COMPACTION_MARKER_KIND;
+  ts: string;
+  workflowId: string;
+  dropped: Readonly<{ bytes: number; lines: number; records: number; historical: number; unrecognized: number }>;
+  /** sha256 of every dropped byte, in file order. */
+  prefixSha256: string;
+}>;
+
+/** The byte window a coverage reader actually read out of one ledger file. */
+export type WorkflowNotesReadWindow = Readonly<{
+  /** Offset of the window's first byte in the file. */
+  offset: number;
+  /** The whole file's size: what the window is a slice of. */
+  totalBytes: number;
+  /** Whether the file is larger than the window, so the head is undisclosed. */
+  truncated: boolean;
+}>;
 
 type WorkflowNoteRequest = Omit<WorkflowNote, "ts"> & Readonly<{ ts?: string }>;
 
@@ -193,6 +242,60 @@ function canonicalNoteLine(note: WorkflowNote & { ts: string }): string {
   });
 }
 
+const MARKER_KEYS = ["version", "kind", "ts", "workflowId", "dropped", "prefixSha256"] as const;
+const MARKER_KEY_ORDER = [...MARKER_KEYS].sort();
+const DROPPED_KEYS = ["bytes", "lines", "records", "historical", "unrecognized"] as const;
+const DROPPED_KEY_ORDER = [...DROPPED_KEYS].sort();
+
+/** Parse the exact compaction-marker shape; anything else is `null`. */
+function parseCompactionMarker(value: unknown): WorkflowNotesCompactionMarker | null {
+  if (!isPlainObject(value)) return null;
+  const keys = Object.keys(value).sort();
+  if (keys.length !== MARKER_KEY_ORDER.length || keys.some((key, index) => key !== MARKER_KEY_ORDER[index])) return null;
+  if (value.version !== 1 || value.kind !== WORKFLOW_NOTES_COMPACTION_MARKER_KIND) return null;
+  const { ts, workflowId, dropped, prefixSha256 } = value;
+  if (!isNonEmptyString(ts) || !isNonEmptyString(workflowId) || !isNonEmptyString(prefixSha256)) return null;
+  if (!isPlainObject(dropped)) return null;
+  const droppedKeys = Object.keys(dropped).sort();
+  if (droppedKeys.length !== DROPPED_KEY_ORDER.length || droppedKeys.some((key, index) => key !== DROPPED_KEY_ORDER[index])) {
+    return null;
+  }
+  const counts = dropped as Record<string, unknown>;
+  if (!DROPPED_KEYS.every((key) => typeof counts[key] === "number" && Number.isSafeInteger(counts[key]))) return null;
+  return {
+    version: 1,
+    kind: WORKFLOW_NOTES_COMPACTION_MARKER_KIND,
+    ts,
+    workflowId,
+    dropped: {
+      bytes: counts.bytes as number,
+      lines: counts.lines as number,
+      records: counts.records as number,
+      historical: counts.historical as number,
+      unrecognized: counts.unrecognized as number,
+    },
+    prefixSha256,
+  };
+}
+
+/** Serialize the marker in its declared field order, without a final LF. */
+function canonicalMarkerLine(marker: WorkflowNotesCompactionMarker): string {
+  return JSON.stringify({
+    version: 1,
+    kind: WORKFLOW_NOTES_COMPACTION_MARKER_KIND,
+    ts: marker.ts,
+    workflowId: marker.workflowId,
+    dropped: {
+      bytes: marker.dropped.bytes,
+      lines: marker.dropped.lines,
+      records: marker.dropped.records,
+      historical: marker.dropped.historical,
+      unrecognized: marker.dropped.unrecognized,
+    },
+    prefixSha256: marker.prefixSha256,
+  });
+}
+
 /* ------------------------------------------------------------------------ *
  * Ledger scan — bytes only, never a whole-file rewrite
  * ------------------------------------------------------------------------ */
@@ -200,6 +303,7 @@ function canonicalNoteLine(note: WorkflowNote & { ts: string }): string {
 type LedgerLine =
   | Readonly<{ format: "legacy-note"; record: Readonly<{ kind: "note"; ts: string; text: string }> }>
   | Readonly<{ format: "versioned-note-v1"; record: WorkflowNote }>
+  | Readonly<{ format: "compaction-marker"; marker: WorkflowNotesCompactionMarker }>
   | Readonly<{ format: "blank" }>
   | Readonly<{ format: "unrecognized" }>;
 
@@ -224,6 +328,10 @@ function parseLedgerLine(bytes: Buffer): LedgerLine {
   }
   const note = parseWorkflowNote(value);
   if (note !== null) return { format: "versioned-note-v1", record: note };
+  // A compaction marker is a disclosure, never content: the reader reports it
+  // as `compaction`, so it is neither a record nor an unrecognized line.
+  const marker = parseCompactionMarker(value);
+  if (marker !== null) return { format: "compaction-marker", marker };
   if (
     isPlainObject(value) &&
     value.version === undefined &&
@@ -370,6 +478,166 @@ function commitLedgerFrame(path: string, frame: Buffer): void {
 }
 
 /* ------------------------------------------------------------------------ *
+ * Compaction — the size ceiling, under the store's own write lock
+ * ------------------------------------------------------------------------ */
+
+/** One physical line of the retained ledger: its byte span and whether it ended with LF. */
+type LedgerSpan = Readonly<{ start: number; end: number; terminated: boolean }>;
+
+/** The physical lines of one byte buffer, in file order; a trailing partial record is its own span. */
+function ledgerSpans(bytes: Buffer): LedgerSpan[] {
+  const spans: LedgerSpan[] = [];
+  let start = 0;
+  let end = bytes.indexOf(0x0a, start);
+  while (end !== -1) {
+    spans.push({ start, end, terminated: true });
+    start = end + 1;
+    end = bytes.indexOf(0x0a, start);
+  }
+  if (start < bytes.length) spans.push({ start, end: bytes.length, terminated: false });
+  return spans;
+}
+
+/**
+ * The most bytes one marker line can occupy for a ledger of `totalBytes`: every
+ * `dropped` counter is bounded by the ledger's own size, so the digit count of
+ * that number bounds each one, and the two framing LFs are the writer's own.
+ */
+function markerReserveBytes(totalBytes: number, workflowId: string): number {
+  const reserve = Buffer.byteLength(
+    canonicalMarkerLine({
+      version: 1,
+      kind: WORKFLOW_NOTES_COMPACTION_MARKER_KIND,
+      ts: new Date(0).toISOString(),
+      workflowId,
+      dropped: { bytes: 0, lines: 0, records: 0, historical: 0, unrecognized: 0 },
+      prefixSha256: "0".repeat(64),
+    }),
+    "utf8",
+  );
+  return reserve + 5 * String(totalBytes).length + 2;
+}
+
+/**
+ * Replace one ledger with compacted bytes: a same-directory temporary file,
+ * fsynced, atomically renamed over the leaf, then the directory fsynced. A
+ * failure leaves the retained ledger untouched and removes the temporary file.
+ */
+function replaceLedgerAtomically(path: string, content: Buffer): void {
+  const temp = join(dirname(path), `${basename(path)}.compaction-${randomUUID()}.tmp`);
+  try {
+    const fd = openWithoutFollowing(temp, fsConstants.O_WRONLY | fsConstants.O_CREAT | fsConstants.O_EXCL, 0o644);
+    try {
+      let written = 0;
+      while (written < content.length) {
+        const step = writeSync(fd, content, written, content.length - written, null);
+        if (step <= 0) {
+          throw new ExecutionLedgerError(
+            "execution-ledgers.append-short",
+            `the compacted ledger for ${path} could not be written in full; the retained bytes are unchanged and ` +
+              `the temporary file was removed. Retry the append with a new record id.`,
+          );
+        }
+        written += step;
+      }
+      fsyncSync(fd);
+    } finally {
+      closeSync(fd);
+    }
+  } catch (error) {
+    try {
+      unlinkSync(temp);
+    } catch {
+      // the temporary file is already gone
+    }
+    throw error;
+  }
+  renameSync(temp, path);
+  fsyncDirectory(dirname(path));
+}
+
+/**
+ * Compact one over-ceiling ledger: keep the newest complete lines that fit the
+ * read window, always keep the triggering note whole, and write the disclosure
+ * marker as the FINAL row so a windowed tail read still sees it. `dropped` and
+ * `prefixSha256` describe only the prefix THIS compaction removed; a marker this
+ * ledger already ended with is replaced rather than retained.
+ *
+ * A single note larger than the window is the recorded exception to the target
+ * size: it is retained whole, and the tail read discloses the cut instead of the
+ * writer silently shortening the note.
+ */
+function compactWorkflowNotesLedger(path: string, workflowId: string): void {
+  let bytes: Buffer;
+  try {
+    bytes = readFileSync(path);
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return;
+    throw error;
+  }
+  const totalBytes = bytes.length;
+  if (totalBytes <= WORKFLOW_NOTES_LEDGER_MAX_BYTES) return;
+  const spans = ledgerSpans(bytes);
+  const lastIndex = spans.length - 1;
+  const lastSpan = lastIndex < 0 ? null : spans[lastIndex]!;
+  const replacedMarkerStart =
+    lastSpan !== null && lastSpan.terminated &&
+    parseLedgerLine(bytes.subarray(lastSpan.start, lastSpan.end)).format === "compaction-marker"
+      ? lastSpan.start
+      : null;
+  const retainEnd = replacedMarkerStart ?? totalBytes;
+  const lastRetainable = replacedMarkerStart === null ? lastIndex : lastIndex - 1;
+  const budget = WORKFLOW_NOTES_LEDGER_READ_BYTES - markerReserveBytes(totalBytes, workflowId);
+  let suffixStart = retainEnd;
+  for (let index = lastRetainable; index >= 0; index -= 1) {
+    const start = spans[index]!.start;
+    // The triggering note is always retained whole; older lines only while they fit.
+    if (index !== lastRetainable && retainEnd - start > budget) break;
+    suffixStart = start;
+  }
+  let lines = 0;
+  let records = 0;
+  let historical = 0;
+  let unrecognized = 0;
+  for (const span of spans) {
+    if (span.start >= suffixStart) break;
+    lines += 1;
+    const line = parseLedgerLine(bytes.subarray(span.start, span.end));
+    if (line.format === "versioned-note-v1") records += 1;
+    else if (line.format === "legacy-note") historical += 1;
+    else if (line.format === "unrecognized") unrecognized += 1;
+  }
+  const dropped = bytes.subarray(0, suffixStart);
+  const marker: WorkflowNotesCompactionMarker = {
+    version: 1,
+    kind: WORKFLOW_NOTES_COMPACTION_MARKER_KIND,
+    ts: new Date().toISOString(),
+    workflowId,
+    dropped: { bytes: dropped.length, lines, records, historical, unrecognized },
+    prefixSha256: sha256Bytes(dropped),
+  };
+  replaceLedgerAtomically(
+    path,
+    Buffer.concat([
+      bytes.subarray(suffixStart, retainEnd),
+      Buffer.from("\n", "utf8"),
+      Buffer.from(canonicalMarkerLine(marker), "utf8"),
+      Buffer.from("\n", "utf8"),
+    ]),
+  );
+}
+
+/**
+ * Serialize one append with the compaction it may trigger, through the store's
+ * existing `BEGIN IMMEDIATE` transaction — the engine's one write lock, taken
+ * here instead of a lock file. Two concurrent appends therefore cannot both
+ * decide to compact from the same stale size.
+ */
+function withWorkflowNotesMaintenanceLock<T>(context: StoreContext, body: () => T): Promise<T> {
+  return withExecutionTransaction(context, () => body());
+}
+
+/* ------------------------------------------------------------------------ *
  * Target trust
  * ------------------------------------------------------------------------ */
 
@@ -482,7 +750,13 @@ export async function appendWorkflowNote(
   const frame = Buffer.from(`${canonicalNoteLine({ ...note, ts: note.ts ?? new Date().toISOString() })}\n`, "utf8");
   // The final synchronous identity check, immediately before the byte mutation.
   assertExecutionSessionCurrent(context, session);
-  commitLedgerFrame(ledgerPath, frame);
+  // The append and the compaction it may trigger are ONE maintenance step under
+  // the store's write lock: a peer cannot append between this frame and a
+  // compaction decision taken from a size that no longer holds.
+  await withWorkflowNotesMaintenanceLock(context, () => {
+    commitLedgerFrame(ledgerPath, frame);
+    compactWorkflowNotesLedger(ledgerPath, session.workflowId);
+  });
   return { id: note.id };
 }
 
@@ -539,6 +813,13 @@ export type WorkflowNotesCoverageFacts = Readonly<{
   counts: Readonly<{ historical: number; records: number; unrecognized: number }>;
   /** Bytes after the last LF — a partial record a reader must skip. */
   tail: Readonly<{ sha256: string; bytes: number }> | null;
+  /**
+   * The byte window this projection saw. When `truncated` is set, every hash,
+   * line index and count above describes that window, never the whole file.
+   */
+  readWindow: WorkflowNotesReadWindow;
+  /** The disclosure the ledger's last compaction wrote, or `null` if nothing was dropped. */
+  compaction: WorkflowNotesCompactionMarker | null;
 }>;
 
 /**
@@ -552,6 +833,11 @@ export function normalizeWorkflowNotesCoverage(input: {
   workflowId: string;
   path: string;
   bytes: Uint8Array | null;
+  /**
+   * The window these bytes were read from. Absent means the caller handed over
+   * the whole file, which is what an in-memory projection of known bytes is.
+   */
+  readWindow?: WorkflowNotesReadWindow;
 }): WorkflowNotesCoverageFacts {
   if (input.bytes === null) {
     return {
@@ -566,6 +852,8 @@ export function normalizeWorkflowNotesCoverage(input: {
       records: [],
       counts: { historical: 0, records: 0, unrecognized: 0 },
       tail: null,
+      readWindow: input.readWindow ?? { offset: 0, totalBytes: 0, truncated: false },
+      compaction: null,
     };
   }
   const buffer = Buffer.isBuffer(input.bytes)
@@ -578,8 +866,15 @@ export function normalizeWorkflowNotesCoverage(input: {
   let legacy = 0;
   let versioned = 0;
   let unrecognized = 0;
+  let compaction: WorkflowNotesCompactionMarker | null = null;
   for (const entry of scan.lines) {
     const digest = sha256Bytes(entry.bytes);
+    if (entry.line.format === "compaction-marker") {
+      // The last disclosure a reader can see wins: a later compaction replaced
+      // its predecessor, and its facts describe only the prefix it removed.
+      compaction = entry.line.marker;
+      continue;
+    }
     if (entry.line.format === "legacy-note") {
       legacy += 1;
       historical.push({
@@ -633,5 +928,7 @@ export function normalizeWorkflowNotesCoverage(input: {
     records,
     counts: { historical: historical.length, records: records.length, unrecognized },
     tail: scan.tail.length === 0 ? null : { sha256: sha256Bytes(scan.tail), bytes: scan.tail.length },
+    readWindow: input.readWindow ?? { offset: 0, totalBytes: buffer.length, truncated: false },
+    compaction,
   };
 }
