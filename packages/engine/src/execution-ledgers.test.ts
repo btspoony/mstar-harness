@@ -1135,5 +1135,40 @@ describe("execution-ledgers: compaction at the ledger size ceiling", () => {
     expect(facts.compaction).not.toBeNull();
     expect(facts.records.map((entry) => entry.record.id)).toEqual([target.id]);
     expect(facts.counts.unrecognized).toBe(0);
+    // The superseded marker row is removed content too: its bytes are counted,
+    // so the removed-byte total cannot be explained by note lines alone.
+    expect((finalRow(ledgerBytes(fixture)).dropped as Record<string, number>).bytes)
+      .toBeGreaterThan((finalRow(ledgerBytes(fixture)).dropped as Record<string, number>).lines * lineBytes);
+  }, 30_000);
+
+  test("an oversize triggering note stays whole when a peer frame lands before the compaction read", async () => {
+    const fixture = shared;
+    fixture.seed({ ledger: LEGACY_LINE });
+    const target = note("note-oversize-peer", "z".repeat(WORKFLOW_NOTES_LEDGER_MAX_BYTES + 1024));
+    const peer = note("note-peer-after", "peer frame that makes the trigger an interior line");
+    const originalReadFileSync = nodeFs.readFileSync;
+    let injected = false;
+    // The peer frame lands BEFORE the snapshot is taken, so the compaction does
+    // publish — and the trigger is then an interior line over the budget.
+    const spy = spyOn(nodeFs, "readFileSync").mockImplementation(((...args: Parameters<typeof nodeFs.readFileSync>) => {
+      if (!injected && typeof args[0] === "string" && args[0].endsWith("notes.jsonl")) {
+        injected = true;
+        nodeFs.appendFileSync(args[0], framedLineOf(peer));
+      }
+      return originalReadFileSync(...args);
+    }) as typeof nodeFs.readFileSync);
+    try {
+      await appendWorkflowNote(fixture.coordContext, fixture.session, target);
+    } finally {
+      spy.mockRestore();
+    }
+    expect(injected).toBe(true);
+    const facts = factsOf(fixture);
+    expect(facts.compaction).not.toBeNull();
+    const byId = new Map(facts.records.map((entry) => [entry.record.id, entry.record]));
+    // The receipted triggering note survives whole even though the peer frame
+    // now sits after it and it alone exceeds the read window.
+    expect(byId.get(target.id)?.text).toBe(target.text);
+    expect(byId.has(peer.id)).toBe(true);
   }, 30_000);
 });
