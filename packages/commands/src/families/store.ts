@@ -82,7 +82,7 @@ function refused(id: string, error: unknown): CommandEnvelope<never> {
         // The generated-attestation refusal: Bun is never an admissible attested
         // consumer, and the supported route is the installed Node CLI (or an
         // explicit document that overrides the generated one).
-        ? "Rerun the same verb through the installed Node CLI: mstar store upgrade --operator <name> (or mstar store activate --manifest <path> --operator <name>), or supply --attestation <absolute-json> to override the generated document."
+        ? "Rerun the same verb through the installed Node CLI: mstar store upgrade --operator <name> --attestation <absolute-json> for an upgrade, or mstar store activate --manifest <path> --operator <name> for an activation."
         : code === "store.upgrade-attestation-missing"
           // A held retired claim needs stop evidence at or after the claim instant.
           ? "Rerun the same upgrade with an explicit document whose attestedAt is at or after the claim instant: mstar store upgrade --operator <name> --attestation <absolute-json>."
