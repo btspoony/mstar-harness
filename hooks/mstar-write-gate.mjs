@@ -33,7 +33,7 @@ import {
   writeFileSync as writeFileSync3
 } from "node:fs";
 import { createRequire } from "node:module";
-import { basename as basename5, dirname as dirname6, join as join9, resolve as resolve7, sep as sep4 } from "node:path";
+import { basename as basename6, dirname as dirname6, join as join9, resolve as resolve7, sep as sep4 } from "node:path";
 import { AsyncLocalStorage as AsyncLocalStorage2 } from "node:async_hooks";
 import { createHash as createHash5 } from "node:crypto";
 import { lstatSync as lstatSync4, readdirSync as readdirSync6 } from "node:fs";
@@ -41,8 +41,8 @@ import { dirname as dirname7, join as join10 } from "node:path";
 import { randomUUID as randomUUID3 } from "node:crypto";
 import { existsSync as existsSync9, mkdirSync as mkdirSync4, readdirSync as readdirSync8, readFileSync as readFileSync10, realpathSync as realpathSync5, statSync as statSync3 } from "node:fs";
 import { execFileSync as execFileSync2 } from "node:child_process";
-import { basename as basename6, dirname as dirname8, isAbsolute as isAbsolute3, join as join12, relative as relative2, resolve as resolve8 } from "node:path";
-import { basename as basename7, isAbsolute as isAbsolute5, join as join14, relative as relative3, resolve as resolve9, sep as sep6 } from "node:path";
+import { basename as basename7, dirname as dirname8, isAbsolute as isAbsolute3, join as join12, relative as relative2, resolve as resolve8 } from "node:path";
+import { basename as basename8, isAbsolute as isAbsolute5, join as join14, relative as relative3, resolve as resolve9, sep as sep6 } from "node:path";
 import { execFileSync as execFileSync3 } from "node:child_process";
 import { existsSync as existsSync12, realpathSync as realpathSync6 } from "node:fs";
 import { createHash as createHash8 } from "node:crypto";
@@ -51,11 +51,11 @@ import { dirname as dirname9, isAbsolute as isAbsolute8, join as join17, resolve
 import { createRequire as createRequire2 } from "node:module";
 import { setTimeout as sleep } from "node:timers/promises";
 import { closeSync, existsSync as existsSync14, fstatSync, fsyncSync, linkSync, lstatSync as lstatSync6, openSync, readSync, statSync as statSync7, unlinkSync as unlinkSync3 } from "node:fs";
-import { basename as basename8, dirname as dirname10, join as join18, resolve as resolve13 } from "node:path";
+import { basename as basename9, dirname as dirname10, join as join18, resolve as resolve13 } from "node:path";
 import { existsSync as existsSync15, statSync as statSync9 } from "node:fs";
-import { basename as basename11, dirname as dirname13, join as join20, relative as relative6, resolve as resolve15 } from "node:path";
+import { basename as basename12, dirname as dirname13, join as join20, relative as relative6, resolve as resolve15 } from "node:path";
 import { readlinkSync, realpathSync as realpathSync9 } from "node:fs";
-import { basename as basename12, dirname as dirname14, relative as relative7, resolve as resolve16 } from "node:path";
+import { basename as basename13, dirname as dirname14, relative as relative7, resolve as resolve16 } from "node:path";
 import { createHash as createHash16 } from "node:crypto";
 import { readFileSync as readFileSync23 } from "node:fs";
 import { join as join29 } from "node:path";
@@ -10045,6 +10045,26 @@ function findRootPackageJson(startDir) {
     dir = parent;
   }
 }
+function harnessVersionFrom(moduleDir) {
+  const ownManifest = join4(moduleDir, "..", "package.json");
+  try {
+    const pkg = JSON.parse(readFileSync3(ownManifest, "utf8"));
+    if (typeof pkg.version === "string" && pkg.version !== "")
+      return pkg.version;
+  } catch {}
+  const root = findRootPackageJson(moduleDir);
+  if (!root)
+    return "0.0.0";
+  try {
+    const pkg = JSON.parse(readFileSync3(root, "utf8"));
+    return pkg.version || "0.0.0";
+  } catch {
+    return "0.0.0";
+  }
+}
+function readHarnessVersion() {
+  return harnessVersionFrom(dirname4(fileURLToPath(import.meta.url)));
+}
 function warnUncheckableNodeFloor() {
   process.stderr.write("mstar: the runtime version floor is uncheckable in this layout - no visible manifest declares `engines.node`, " + "so the Node version is not compared (the native node:sqlite capability check still applies). " + "Recovery: run this from an installed package or a full checkout so the manifest that declares the floor is reachable " + "(`npm i -g @mstar-harness/cli` for the CLI; the harness checkout, not a copied bundle, for a hook entrypoint).\n");
 }
@@ -10088,6 +10108,7 @@ function readDeclaredNodeFloor() {
   return null;
 }
 var SEVERITY_ORDER;
+var ACTIVATION_PROTOCOL_VERSION = 1;
 var init_core = __esm(() => {
   SEVERITY_ORDER = ["critical", "high", "medium", "low", "nit"];
 });
@@ -11091,6 +11112,67 @@ var init_catalog_import = __esm(() => {
     }
   };
 });
+function currentProcessFacts() {
+  return {
+    entrypoint: process.argv[1],
+    runtimeVersion: process.versions.node,
+    isBun: process.versions.bun !== undefined
+  };
+}
+function provisionActivationDocument(input, facts = currentProcessFacts()) {
+  if (facts.isBun) {
+    return {
+      ok: false,
+      cause: "bun-runtime",
+      message: "the running process is Bun, which is never an admissible consumer runtime, so a Node consumer row cannot be attested"
+    };
+  }
+  if (facts.entrypoint === undefined || facts.entrypoint.trim() === "") {
+    return {
+      ok: false,
+      cause: "missing-entrypoint",
+      message: "the executing entrypoint is not identifiable (`process.argv[1]` is absent)"
+    };
+  }
+  return {
+    ok: true,
+    document: {
+      version: ACTIVATION_PROTOCOL_VERSION,
+      attestedAt: input.attestedAt,
+      operator: { actor: input.actor, authorizationRef: input.authorizationRef },
+      consumers: [
+        {
+          entryId: basename5(facts.entrypoint),
+          kind: "coordinator",
+          entrypoint: facts.entrypoint,
+          runtime: "node",
+          runtimeVersion: facts.runtimeVersion,
+          version: readHarnessVersion(),
+          current: true,
+          disposition: "reloaded"
+        }
+      ],
+      stoppedSessions: [...input.stoppedSessions]
+    }
+  };
+}
+function provisionRecoveryDocument(input) {
+  return {
+    version: ACTIVATION_PROTOCOL_VERSION,
+    attestedAt: input.attestedAt,
+    operator: { actor: input.actor, authorizationRef: input.authorizationRef },
+    consumers: [],
+    stoppedSessions: [...input.stoppedSessions]
+  };
+}
+function basename5(entrypoint) {
+  const normalized = entrypoint.replaceAll("\\", "/");
+  const last = normalized.lastIndexOf("/");
+  return last === -1 ? normalized : normalized.slice(last + 1);
+}
+var init_activation_provisioning = __esm(() => {
+  init_core();
+});
 var exports_store_activation = {};
 __export(exports_store_activation, {
   ACTIVATION_PROTOCOL_VERSION: () => ACTIVATION_PROTOCOL_VERSION,
@@ -11129,7 +11211,7 @@ function scalar2(db, sql) {
 }
 function writeTextAtomic(path2, text4) {
   mkdirSync3(dirname6(path2), { recursive: true });
-  const tmp = join9(dirname6(path2), `.${basename5(path2)}.${process.pid}.tmp`);
+  const tmp = join9(dirname6(path2), `.${basename6(path2)}.${process.pid}.tmp`);
   try {
     writeFileSync3(tmp, text4, "utf8");
     renameSync2(tmp, path2);
@@ -11215,7 +11297,7 @@ function canonicalPath(value) {
       const parent = dirname6(current);
       if (parent === current)
         return resolve7(value);
-      trailing.push(basename5(current));
+      trailing.push(basename6(current));
       current = parent;
     }
   }
@@ -11657,12 +11739,11 @@ function findRetirementRow(rows, activationReceiptId, live) {
   }
   return;
 }
-async function activateStore(context, receipt, attestation, hooks = {}) {
+async function activateStore(context, receipt, attestation, hooks = {}, options = {}) {
   if (!receipt || receipt.phase !== "applied" || typeof receipt.receiptId !== "number" || typeof receipt.manifestHash !== "string" || typeof receipt.storeRevision !== "number") {
     throw new StoreActivationError("store.activation-stale", "the activation requires the reviewed apply receipt (receiptId, storeRevision; manifestHash is provenance); re-apply the reviewed manifest.");
   }
-  const validated = validateActivationAttestation(attestation);
-  const attestationHash = sha256Bytes2(Buffer.from(`attestation\x00${JSON.stringify(validated)}`, "utf8"));
+  const validated = attestation === undefined ? undefined : validateActivationAttestation(attestation);
   const inspection = await openStore(context, "write");
   let meta;
   let manifest;
@@ -11713,6 +11794,24 @@ async function activateStore(context, receipt, attestation, hooks = {}) {
         throw new StoreActivationError("store.activation-stale", "the staged store changed while the barrier was running; the activation was rolled back. Re-check and retry.");
       }
       revalidateSources(context, manifest, "activation");
+      let activationValidated = validated;
+      if (activationValidated === undefined) {
+        if (options.operator === undefined || options.operator.trim() === "") {
+          throw Object.assign(new StoreActivationError("store.operator-required", "the activation generates its operator attestation when --attestation is omitted, and the generated document records the invoking operator; pass --operator <name> (or --attestation <absolute-json> to supply the document explicitly)"), { recovery: "run mstar store activate --manifest <path> --operator <name> (add --attestation <absolute-json> to override the generated document)" });
+        }
+        const stoppedRows = flip.db.prepare("select session_id from execution_sessions where state = 'active' and epoch = ?").all(current.epoch);
+        const provisioned = provisionActivationDocument({
+          actor: options.operator,
+          authorizationRef: `migration-receipt:${receipt.receiptId}`,
+          attestedAt: at,
+          stoppedSessions: stoppedRows.filter((row) => typeof row.session_id === "string" && row.session_id !== "").map((row) => ({ sessionId: row.session_id, host: "local", state: "stopped" }))
+        }, options.processFacts);
+        if (!provisioned.ok) {
+          throw Object.assign(new StoreActivationError("store.attestation-invalid", provisioned.message), { recovery: "run the same verb through the installed Node CLI: mstar store activate --manifest <path> --operator <name> (an explicit --attestation <absolute-json> also overrides)" });
+        }
+        activationValidated = validateActivationAttestation(provisioned.document);
+      }
+      const attestationHash = sha256Bytes2(Buffer.from(`attestation\x00${JSON.stringify(activationValidated)}`, "utf8"));
       const epoch = current.epoch + 1;
       const revision = current.revision + 1;
       const activationHash = activationHashOf({
@@ -11738,10 +11837,10 @@ async function activateStore(context, receipt, attestation, hooks = {}) {
         revision,
         catalogRevision: current.catalogRevision,
         attestationHash,
-        attestation: validated,
+        attestation: activationValidated,
         backup
       };
-      const result = flip.db.prepare("insert into migration_receipts(manifest_hash, phase, manifest_json, mapping_json, source_counts_json, applied_at, activated_at) " + "values (?, 'activated', ?, '[]', ?, ?, ?)").run(activationHash, JSON.stringify(stored), JSON.stringify({ consumers: validated.consumers.length, stoppedSessions: validated.stoppedSessions.length }), at, at);
+      const result = flip.db.prepare("insert into migration_receipts(manifest_hash, phase, manifest_json, mapping_json, source_counts_json, applied_at, activated_at) " + "values (?, 'activated', ?, '[]', ?, ?, ?)").run(activationHash, JSON.stringify(stored), JSON.stringify({ consumers: activationValidated.consumers.length, stoppedSessions: activationValidated.stoppedSessions.length }), at, at);
       const receiptId = Number(result.lastInsertRowid);
       flip.db.exec("commit");
       return { ...stored, receiptId, phase: "activated", replayed: false, activatedAt: at };
@@ -12099,7 +12198,6 @@ async function retireStoreSources(context, activationReceipt, hooks = {}) {
     handle.close();
   }
 }
-var ACTIVATION_PROTOCOL_VERSION = 1;
 var BACKUP_RECEIPT_VERSION = 2;
 var StoreActivationError;
 var EXECUTION_MIGRATION_VERSION;
@@ -12111,6 +12209,7 @@ var init_store_activation = __esm(() => {
   init_catalog();
   init_catalog_import();
   init_core();
+  init_activation_provisioning();
   init_store_db();
   StoreActivationError = class StoreActivationError2 extends Error {
     code;
@@ -13200,9 +13299,6 @@ async function adoptTerminalWorkflow(context, input) {
     throw new ExecutionError("execution.adoption-invalid", "workflowId, an optional positive expectedRevision, non-empty reason, and operationId are required");
   }
   const attestation = input.attestation === undefined ? undefined : validateActivationAttestation(input.attestation);
-  if (attestation !== undefined && attestation.stoppedSessions.some((session) => session.sessionId === caller.sessionId)) {
-    throw new ExecutionError("execution.adoption-refused", `the adopting caller ${JSON.stringify(caller.sessionId)} is named as stopped/reloaded in this attestation; terminal adoption ` + `settles a workflow's ACTIVE holder rows and never the identity making the call, so the attested stop must come from a ` + `distinct operator identity. Rerun from a session id other than the one this document names stopped, with a stop list ` + `covering only the addressed workflow's ACTIVE holder(s).`, { workflow_id: input.workflowId, caller_session_id: caller.sessionId, adoption_refusal: "self-settlement" });
-  }
   const requestHash2 = semanticRequestHash({
     operation: "workflow.adopt-terminal",
     address: { workflowId: input.workflowId },
@@ -13245,21 +13341,22 @@ async function adoptTerminalWorkflow(context, input) {
     if (state.lifecycle_adopted_at !== undefined || state.adopt_reason !== undefined) {
       throw new ExecutionError("execution.adoption-refused", `workflow ${input.workflowId} already has a terminal-adoption record; read status validate and use the recorded result`);
     }
+    const now = new Date().toISOString();
     const activeHolders = readWorkflowSessionRows(tx, input.workflowId, "coordinator").filter((row2) => row2.state === "active" && row2.ref.epoch === tx.epoch).map((row2) => row2.ref.sessionId).sort();
+    const proof = attestation ?? validateRecoveryAttestation(provisionRecoveryDocument({
+      actor: caller.sessionId,
+      authorizationRef: input.operationId,
+      attestedAt: now,
+      stoppedSessions: activeHolders.map((sessionId) => ({ sessionId, host: "local", state: "stopped" }))
+    }));
+    if (proof.stoppedSessions.some((session) => session.sessionId === caller.sessionId)) {
+      throw new ExecutionError("execution.adoption-refused", `the adopting caller ${JSON.stringify(caller.sessionId)} is named as stopped/reloaded by this adoption's proof; terminal ` + `adoption settles a workflow's ACTIVE holder rows and never the identity making the call, so the attested stop must come ` + `from a distinct operator identity. Rerun from a session id other than the one the proof names stopped, with a stop list ` + `covering only the addressed workflow's ACTIVE holder(s).`, { workflow_id: input.workflowId, caller_session_id: caller.sessionId, adoption_refusal: "self-settlement" });
+    }
     if (activeHolders.length > 0) {
-      const holders = activeHolders.map((sessionId) => JSON.stringify(sessionId)).join(", ");
-      if (attestation === undefined) {
-        throw new ExecutionError("execution.adoption-refused", `workflow ${input.workflowId} holds ACTIVE coordinator session(s) ${holders} at epoch ${tx.epoch}; terminal adoption ` + `settles them only against the operator's stop attestation, because it would otherwise revoke a holder nobody has ` + `attested stopped. Supply --attestation <absolute-json> with the full ActivationAttestation whose stoppedSessions ` + `name ${holders} as stopped/reloaded, then retry.`, {
-          workflow_id: input.workflowId,
-          epoch: tx.epoch,
-          active_holder_sessions: activeHolders,
-          adoption_refusal: "active-session-proof-required"
-        });
-      }
-      const attested = new Set(attestation.stoppedSessions.map((session) => session.sessionId));
+      const attested = new Set(proof.stoppedSessions.map((session) => session.sessionId));
       const unattested = activeHolders.filter((sessionId) => !attested.has(sessionId));
       if (unattested.length > 0) {
-        throw new ExecutionError("execution.adoption-refused", `this attestation does not name ${unattested.map((sessionId) => JSON.stringify(sessionId)).join(", ")} — the ACTIVE ` + `coordinator session(s) of workflow ${input.workflowId} at epoch ${tx.epoch} — as stopped/reloaded, so the settlement ` + `cannot proceed: every addressed ACTIVE holder needs its own stop evidence, and the engine cannot observe a dead ` + `process itself. Add each listed session to the attestation's stoppedSessions and retry.`, {
+        throw new ExecutionError("execution.adoption-refused", `this attestation does not name ${unattested.map((sessionId) => JSON.stringify(sessionId)).join(", ")} — the ACTIVE ` + `coordinator session(s) of workflow ${input.workflowId} at epoch ${tx.epoch} — as stopped/reloaded, so the settlement ` + `cannot proceed: every addressed ACTIVE holder needs its own stop evidence, and the engine cannot observe a dead ` + `process itself. Omit --attestation and the engine generates that document from these rows itself; alternatively add ` + `each listed session to the supplied document's stoppedSessions and retry.`, {
           workflow_id: input.workflowId,
           epoch: tx.epoch,
           active_holder_sessions: activeHolders,
@@ -13271,7 +13368,6 @@ async function adoptTerminalWorkflow(context, input) {
         revokeSessionRow(tx, { workflowId: input.workflowId, role: "coordinator", sessionId });
       }
     }
-    const now = new Date().toISOString();
     const nextState = {
       ...state,
       ...unclosed ? { status: "stopped", ended_at: now, updated_at: now } : {},
@@ -13284,16 +13380,20 @@ async function adoptTerminalWorkflow(context, input) {
     tx.db.prepare("update execution_workflows set revision = revision + 1, state_json = ?, updated_at = ? where workflow_id = ? and revision = ?").run(JSON.stringify(nextState), now, input.workflowId, expectedRevision);
     tx.db.prepare("update execution_meta set revision = revision + 1, root_updated_at = ? where id = 1").run(now);
     tx.db.prepare("update store_meta set revision = revision + 1 where id = 1").run();
-    const settlement = attestation === undefined ? undefined : {
+    const settlement = {
       outcome: activeHolders.length === 0 ? "already-satisfied" : "applied",
       target: { workflowId: input.workflowId },
       applied: activeHolders.map((sessionId) => `execution_sessions(${input.workflowId}, coordinator, ${sessionId}) revoked`),
       unresolved: [],
       resolvedFrom: [
-        { path: "attestation.operator", source: `${attestation.operator.actor} (${attestation.operator.authorizationRef})` },
-        { path: "attestation.attestedAt", source: attestation.attestedAt }
+        { path: "attestation.operator", source: `${proof.operator.actor} (${proof.operator.authorizationRef})` },
+        { path: "attestation.attestedAt", source: proof.attestedAt },
+        {
+          path: "attestation.stoppedSessions",
+          source: proof.stoppedSessions.length === 0 ? "none" : proof.stoppedSessions.map((session) => session.sessionId).join(", ")
+        }
       ],
-      warnings: activeHolders.length === 0 ? [{
+      warnings: activeHolders.length === 0 && attestation !== undefined ? [{
         code: "execution.adoption.nothing-to-settle",
         message: `the supplied attestation named no ACTIVE coordinator session of workflow ${input.workflowId}; the adoption was recorded without a settlement`
       }] : [],
@@ -14031,6 +14131,7 @@ var init_execution_store = __esm(() => {
   init_recovery_intent();
   init_status();
   init_store_activation();
+  init_activation_provisioning();
   init_store_db();
   init_workflow();
   ExecutionError = class ExecutionError2 extends Error {
@@ -14564,7 +14665,7 @@ function resolvePlanDir(harnessDir) {
   if (declared !== null)
     return declared;
   const dir = resolve8(harnessDir);
-  const name = basename6(dir);
+  const name = basename7(dir);
   if (name === ".plans" || name === "plans")
     return dir;
   return join12(dir, "plans");
@@ -15595,6 +15696,8 @@ function settleRetiredPlanPmIntegrationClaims(db, context) {
   const attestation = context.attestation;
   const attestedInstant = attestation === undefined ? null : parsedInstant(attestation.attestedAt);
   const cutoverInstant = parsedInstant(new Date().toISOString());
+  const pendingHolders = new Set;
+  const pendingStopped = [];
   const claims = db.prepare("select workflow_id, lease_json from execution_integration_cutover").all();
   const update = db.prepare("update execution_integration_leases set revision = revision + 1, lease_json = ? where workflow_id = ?");
   for (const row of claims) {
@@ -15616,12 +15719,17 @@ function settleRetiredPlanPmIntegrationClaims(db, context) {
     if (planRow === undefined) {
       throw new StoreError("store.corrupt", `execution_integration_leases(${workflowId}) holds a claim for plan ${JSON.stringify(claim.plan_id)}, which no longer exists in this workflow's registry. Recover the store from its supported backup/restore recovery point: run \`store execution restore-preview --backup <absolute-valid-pre-corruption-backup> --out <absolute-preview-path>\`, then \`store execution restore --preview <absolute-preview-path> --operator <name> --authorization <ref>\` (add \`--harness\` when needed). Nothing was modified.`);
     }
-    const attested = attestation?.stoppedSessions.find((session) => session.sessionId === holder);
-    const attestedInstant2 = attestation === undefined ? null : parsedInstant(attestation.attestedAt);
+    if (attestation === undefined) {
+      pendingHolders.add(holder);
+      pendingStopped.push({ sessionId: holder, host: "local", state: "stopped" });
+      continue;
+    }
+    const attested = attestation.stoppedSessions.find((session) => session.sessionId === holder);
+    const attestedInstant2 = parsedInstant(attestation.attestedAt);
     const claimedInstant = parsedInstant(claim.claimed_at);
     const settled = attestation !== undefined && attested !== undefined && (attested.state === "stopped" || attested.state === "reloaded") && claimedInstant !== null && attestedInstant2 !== null && cutoverInstant !== null && claimedInstant <= attestedInstant2 && attestedInstant2 <= cutoverInstant;
     if (!settled) {
-      throw new StoreError("store.upgrade-attestation-missing", `workflow ${workflowId} holds an integration claim for the retired plan-PM holder ${holder}, and this cutover has no valid, current stop attestation for it; the store was left at schema 8 unchanged. Rerun the same \`store upgrade\` with the operator's full activation attestation (version, operator authorization, a current consumer) naming ${holder} as stopped at or after the claim.`);
+      throw new StoreError("store.upgrade-attestation-missing", `workflow ${workflowId} holds an integration claim for the retired plan-PM holder ${holder} (claimed_at ${String(claim.claimed_at ?? "?")}) that this cutover's attestation does not cover: the stop evidence must be dated at or after the claim and at or before this cutover (the generated document attests the cutover instant itself). The store was left at schema 8 unchanged. Recovery: rerun the same \`mstar store upgrade --operator <name>\` with --attestation <absolute-json> whose attestedAt is at or after the claim instant.`);
     }
     const tombstone = {
       ...claim,
@@ -15632,6 +15740,9 @@ function settleRetiredPlanPmIntegrationClaims(db, context) {
       release_reason: `retired-plan-pm-seat:${holder}`
     };
     update.run(JSON.stringify(tombstone), workflowId);
+  }
+  if (pendingHolders.size > 0) {
+    throw new SettlementAttestationNeeded([...pendingHolders], pendingStopped);
   }
 }
 function readAppliedMigrations(db, tolerateMissingTable) {
@@ -15802,7 +15913,7 @@ function withExecutionReadGuard(context, body) {
   if (probe.kind === "unreadable")
     refuseOpenFailure(probe.error, probe.dbPath);
   if (probe.kind !== "active") {
-    const recovery = probe.state === "staged" ? 'Run "mstar store activate --manifest <migration.json> --attestation <file.json>" to finish the reviewed activation.' : 'Run "mstar store upgrade" to import legacy state and activate the authority.';
+    const recovery = probe.state === "staged" ? 'Run "mstar store activate --manifest <migration.json> --operator <name>" to finish the reviewed activation.' : 'Run "mstar store upgrade" to import legacy state and activate the authority.';
     throw new StoreError("store.not-active", `The execution authority is ${probe.state ?? "missing"}. ${recovery}`);
   }
   const db = probeConnectionFor(probe.dbPath);
@@ -16234,6 +16345,7 @@ create table execution_migrations(
 var MIGRATION_5_SQL = `
 alter table execution_migrations add column coverage_json text;
 `;
+var SettlementAttestationNeeded;
 var MIGRATION_6_SQL = `
 create table project_roadmaps(
   project_id text primary key,
@@ -16481,6 +16593,16 @@ var init_store_db = __esm(() => {
     }
   };
   RUNTIME_GLOBAL = globalThis;
+  SettlementAttestationNeeded = class SettlementAttestationNeeded2 extends Error {
+    holders;
+    stopped;
+    constructor(holders, stopped) {
+      super("a held retired plan-PM claim needs a generated attestation");
+      this.holders = holders;
+      this.stopped = stopped;
+      this.name = "SettlementAttestationNeeded";
+    }
+  };
   MIGRATIONS = [
     { version: 1, name: "issue-core", sql: MIGRATION_1_SQL },
     { version: 2, name: "catalog-authority", sql: MIGRATION_2_SQL },
@@ -16655,7 +16777,7 @@ function harnessDocKindOfTarget(targetPath) {
   if (typeof targetPath !== "string" || targetPath.trim() === "")
     return null;
   const resolved = resolve15(targetPath);
-  const name = basename11(resolved);
+  const name = basename12(resolved);
   if (name !== STATUS_FILE && name !== SNAPSHOT_FILE2 && name !== REGISTER_FILE)
     return null;
   const classify = (harnessDir2) => {
@@ -16702,7 +16824,7 @@ function oversizedViolation(filePath) {
     ok: false,
     severity: "high",
     code: "status.oversized",
-    message: `${basename11(filePath)} exceeds the ${MAX_STATUS_CONTENT_LENGTH}-byte (2 MiB) coordination-document validation budget — repair out of band or disable for this session with MSTAR_WRITE_GATE=off`
+    message: `${basename12(filePath)} exceeds the ${MAX_STATUS_CONTENT_LENGTH}-byte (2 MiB) coordination-document validation budget — repair out of band or disable for this session with MSTAR_WRITE_GATE=off`
   };
 }
 function validateStatusWriteDoc(content3, filePath, kind, options = {}) {
@@ -16730,7 +16852,7 @@ function validateStatusWriteDoc(content3, filePath, kind, options = {}) {
           ok: false,
           severity: "high",
           code: "status.invalid-json",
-          message: `${basename11(filePath)} content must be a JSON object`
+          message: `${basename12(filePath)} content must be a JSON object`
         }
       ];
     }
@@ -16820,7 +16942,7 @@ function landedPathOf(filePath) {
         const parent = dirname14(probe);
         if (parent === probe)
           return resolve16(filePath);
-        suffix.unshift(basename12(probe));
+        suffix.unshift(basename13(probe));
         probe = parent;
         continue;
       }
@@ -16832,13 +16954,13 @@ function landedPathOf(filePath) {
   }
 }
 function isStoreAuthorityTarget(target) {
-  if (!isStoreAuthorityName(basename12(target)))
+  if (!isStoreAuthorityName(basename13(target)))
     return false;
   return isHarnessRootDir(dirname14(target));
 }
 function caseFoldedDocKind(candidate) {
   const target = resolve16(candidate);
-  const name = basename12(target);
+  const name = basename13(target);
   const kind = caseFoldedKindOf(name);
   if (kind === null)
     return null;
@@ -16927,6 +17049,7 @@ init_execution_store();
 init_status();
 init_workflow();
 init_store_db();
+init_activation_provisioning();
 init_execution_store();
 init_store_db();
 var UNPARSEABLE_JSON = Symbol("unparseable-json");
@@ -18688,6 +18811,7 @@ init_iteration();
 init_path();
 init_recovery_intent();
 init_store_activation();
+init_activation_provisioning();
 init_store_db();
 init_workflow();
 init_worktree();
