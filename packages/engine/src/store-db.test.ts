@@ -30,7 +30,9 @@ import {
   compareVersions,
   initializeStore,
   openStore,
+  SettlementAttestationNeeded,
   upgradeStore,
+  type StoreContext,
 } from "./store-db.js";
 
 const ROOT = mkdtempSync(join(tmpdir(), "mstar-store-db-test-"));
@@ -1465,5 +1467,137 @@ describe("uncheckable Node floor", () => {
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
+  });
+});
+
+/* ------------------------------------------------------------------------ *
+ * Retired plan-PM claim settlement: ONE batch authorization reference every
+ * tombstone copies literally, and one stop row per holder however many claims
+ * that holder left behind.
+ * ------------------------------------------------------------------------ */
+
+/** The declared Node floor, read from this package's manifest at runtime. */
+const settlementManifest = JSON.parse(readFileSync(join(import.meta.dir, "..", "package.json"), "utf8")) as {
+  engines?: { node?: string };
+};
+const settlementRuntime = `${Number.parseInt((settlementManifest.engines?.node ?? "").replace(/^>=\s*/, "").trim().split(".")[0]!, 10) + 1}.0.0`;
+/** Injected consumer facts: the Bun test runtime is never an admissible consumer. */
+const SETTLEMENT_FACTS = {
+  entrypoint: "/opt/mstar/coordinator/dist/mstar-harness.js",
+  runtimeVersion: settlementRuntime,
+  isBun: false,
+};
+
+/**
+ * A schema-8 store carrying held `execution_integration_leases` claims for
+ * retired plan-PM holders — the exact input migration 9's settlement pass
+ * consumes. Claims are written in the given order, so a batch reference that
+ * follows it is distinguishable from the deterministic sorted one.
+ */
+function retiredClaimStore(
+  name: string,
+  claims: ReadonlyArray<{ workflowId: string; holder: string; claimedAt?: string }>,
+): { context: StoreContext; workflowIds: string[] } {
+  const dir = mkdtempSync(join(ROOT, `retired-claims-${name}-`));
+  const db = new DatabaseSync(join(dir, "store.db"));
+  try {
+    db.exec("pragma foreign_keys=on");
+    db.exec("begin");
+    db.exec(SCHEMA_VERSION_TABLE_SQL);
+    for (const migration of MIGRATIONS.filter((entry) => entry.version <= 8)) {
+      db.exec(migration.sql);
+      db.prepare("insert into schema_version(version, name, checksum, applied_at) values (?, ?, ?, ?)")
+        .run(migration.version, migration.name, migrationChecksum(migration), "2026-10-04T00:00:00Z");
+    }
+    db.prepare("update store_meta set authority_state = 'active' where id = 1").run();
+    db.prepare("update execution_meta set authority_state = 'active' where id = 1").run();
+    const insertWorkflow = db.prepare(
+      "insert into execution_workflows(workflow_id, revision, state_json, created_at, updated_at) values (?, 1, ?, '2026-10-04', '2026-10-04')",
+    );
+    const insertPlan = db.prepare(
+      "insert into execution_plans(workflow_id, plan_id, revision, ordinal, state_json, coordination_json) values (?, ?, 1, 0, ?, '{}')",
+    );
+    const insertSession = db.prepare(
+      "insert into execution_sessions(workflow_id, role, session_id, plan_id, epoch, revision, state, bound_at) values (?, 'plan-pm', ?, ?, 1, 1, 'suspended', '2026-10-04T00:00:00Z')",
+    );
+    const insertClaim = db.prepare(
+      "insert into execution_integration_leases(workflow_id, revision, owner_epoch, lease_json) values (?, 1, 1, ?)",
+    );
+    for (const claim of claims) {
+      const planId = `${claim.workflowId}-plan`;
+      insertWorkflow.run(claim.workflowId, JSON.stringify({ schema_version: 1, id: claim.workflowId, type: "plan", status: "running", delivery_kind: "development" }));
+      insertPlan.run(claim.workflowId, planId, JSON.stringify({ id: planId, title: "Retired claim plan", file: `${planId}.md`, status: "Todo" }));
+      insertSession.run(claim.workflowId, claim.holder, planId);
+      insertClaim.run(claim.workflowId, JSON.stringify({ holder: claim.holder, plan_id: planId, claimed_at: claim.claimedAt ?? "2026-10-04T00:30:00Z", status: "held" }));
+    }
+    db.exec("commit");
+  } finally {
+    db.close();
+  }
+  return { context: { harnessDir: dir }, workflowIds: claims.map((claim) => claim.workflowId) };
+}
+
+/** One settled claim's tombstone JSON, read through a fresh read-only handle. */
+async function tombstoneOf(context: StoreContext, workflowId: string): Promise<Record<string, unknown>> {
+  const store = await openStore(context, "read");
+  try {
+    const row = store.db.prepare("select lease_json from execution_integration_leases where workflow_id = ?").get(workflowId) as
+      | { lease_json: string }
+      | undefined;
+    expect(row).toBeDefined();
+    return JSON.parse(row!.lease_json) as Record<string, unknown>;
+  } finally {
+    store.close();
+  }
+}
+
+describe("retired plan-PM claim settlement", () => {
+  test("every tombstone copies the sorted batch authorizationRef and one holder's claims yield one stop row", async () => {
+    const { context, workflowIds } = retiredClaimStore("two-holder", [
+      // Deliberately unsorted claim order: holder-zeta is written first.
+      { workflowId: "wf-settlement-zeta", holder: "holder-zeta" },
+      { workflowId: "wf-settlement-two-a", holder: "holder-two" },
+      { workflowId: "wf-settlement-two-b", holder: "holder-two" },
+    ]);
+    // The settlement names one stop row per HOLDER in sorted order: the two
+    // claims holder-two left behind are ONE attested holder.
+    const signal = await upgradeStore(context, { operator: "operator", raiseSettlementSignal: true }).catch((error: unknown) => error);
+    expect(signal).toBeInstanceOf(SettlementAttestationNeeded);
+    const marker = signal as SettlementAttestationNeeded;
+    expect(marker.holders).toEqual(["holder-two", "holder-zeta"]);
+    expect(marker.stopped.map((session) => session.sessionId)).toEqual(["holder-two", "holder-zeta"]);
+    // The generated document is built from that signal, so every tombstone
+    // copies its ONE batch reference literally while keeping its own holder.
+    await upgradeStoreMinimal({ context, operator: "operator", operationId: "op-two-holder-settlement", processFacts: SETTLEMENT_FACTS });
+    const batch = "retired-plan-pm-seat:holder-two,holder-zeta";
+    const claims = [];
+    for (const workflowId of workflowIds) claims.push(await tombstoneOf(context, workflowId));
+    expect(claims.map((claim) => claim.release_reason)).toEqual([batch, batch, batch]);
+    expect(claims.map((claim) => claim.prior_holder)).toEqual(["holder-zeta", "holder-two", "holder-two"]);
+    expect(claims.every((claim) => claim.status === "released" && claim.released_by === "store-upgrade")).toBe(true);
+  });
+
+  test("a caller-supplied now is the ONE settlement instant and it is what covers the claim", async () => {
+    // The claim sits in the FUTURE of the ambient clock but before the caller's
+    // clock, so only the supplied instant can cover it: the settlement window
+    // is the transaction's own, never ambient time.
+    const settledAt = new Date(Date.now() + 48 * 60 * 60 * 1000).toISOString();
+    const claimedAt = new Date(Date.parse(settledAt) - 60 * 60 * 1000).toISOString();
+    const { context, workflowIds } = retiredClaimStore("clock", [
+      { workflowId: "wf-settlement-clock", holder: "holder-clock", claimedAt },
+    ]);
+    // Ambient time cannot cover the claim the upgrade generated its own
+    // document for: the named cause and recovery are unchanged.
+    await expect(
+      upgradeStoreMinimal({ context, operator: "operator", operationId: "op-clock-ambient", processFacts: SETTLEMENT_FACTS }),
+    ).rejects.toMatchObject({ code: "store.upgrade-attestation-missing" });
+    // With one supplied clock the generated document attests that instant and
+    // the tombstone it settles records the same one.
+    await upgradeStoreMinimal({
+      context, operator: "operator", operationId: "op-clock-supplied", now: () => settledAt, processFacts: SETTLEMENT_FACTS,
+    });
+    const claim = await tombstoneOf(context, workflowIds[0]!);
+    expect(claim.released_at).toBe(settledAt);
+    expect(claim.release_reason).toBe("retired-plan-pm-seat:holder-clock");
   });
 });

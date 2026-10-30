@@ -14,7 +14,7 @@
  */
 import { afterAll, describe, expect, test } from "bun:test";
 import { spawn } from "node:child_process";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { DatabaseSync } from "node:sqlite";
 import { dirname, join } from "node:path";
@@ -126,6 +126,13 @@ async function stagedFixture(name: string): Promise<Fixture & { manifest: Migrat
   const manifest = await planStoreMigration(fixture.context);
   const apply = await applyStoreMigration(fixture.context, manifest);
   return { ...fixture, manifest, apply };
+}
+
+/** Every backup artifact under a harness root; empty when none was written. */
+function backupArtifacts(context: StoreContext): string[] {
+  const dir = join(context.harnessDir, "archived", "store-migration", "backups");
+  if (!existsSync(dir)) return [];
+  return readdirSync(dir).filter((name) => name.endsWith(".db"));
 }
 
 /**
@@ -403,6 +410,29 @@ describe("store activation barrier", () => {
     const error = await activateStore(context, apply, undefined).catch((caught: unknown) => caught) as Error & { code?: string; recovery?: string };
     expect(error.code).toBe("store.operator-required");
     expect(error.recovery).toContain("mstar store activate --manifest <path> --operator <name>");
+    // The refusal runs BEFORE the recovery point is written: an unoperated
+    // activation never leaves an orphan backup behind.
+    expect(backupArtifacts(context)).toEqual([]);
+  });
+
+  test("a caller-supplied now stamps the generated activation document and its activation stamps", async () => {
+    const { context, apply } = await stagedFixture("activation-generated-clock-");
+    const at = "2026-10-30T12:00:00.000Z";
+    const receipt = await activateStore(context, apply, undefined, {}, {
+      operator: "ops-engineer",
+      now: () => at,
+      processFacts: { entrypoint: "/opt/mstar/cli/dist/mstar-harness.js", runtimeVersion: atOrAboveRuntime, isBun: false },
+    });
+    // ONE instant: the generated document attests it and the epoch bump, the
+    // receipt and the store's own activation stamp all record it.
+    expect(receipt.attestation.attestedAt).toBe(at);
+    expect(receipt.activatedAt).toBe(at);
+    const store = await openStore(context, "read");
+    try {
+      expect(store.db.prepare("select activated_at from store_meta where id = 1").get()).toEqual({ activated_at: at });
+    } finally {
+      store.close();
+    }
   });
 
   test("a Bun-driven activation without an attestation refuses with the named cause and recovery", async () => {
