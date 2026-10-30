@@ -6,6 +6,19 @@
 
 ## [Unreleased]
 
+## [4.1.3] - 2026-10-30
+
+### Harness
+
+- **Focus 把空闲会话当作一种状态而非闸门报错**：没有进行中的生命周期是两次迭代之间的常态，因此界面只显示一行紧凑状态与工作流面板中的一行提示。工作流选择闸门的内部句子不再出现在界面上，孤立的计划看板标题也已移除。
+- 其他绑定错误仍保留信息，但改为一行次要文本（截断显示，悬停可看全文）并保留修复用的选择器，不再占据整页。
+- Focus 各面板明确**作用域**：未关闭遗留项标注「全部项目」，里程碑保留其项目标识并对存储的未归属桶单独标注，交付行保持「无迭代」措辞——相邻数字不会被误读为彼此。
+- 不新增设计令牌或依赖；新增文案两种语言齐备。
+
+### 版本对齐
+
+- 提升 monorepo 根、`@mstar-harness/opencode`、`@mstar-harness/opencode-v2`、`@mstar-harness/cli`、`@mstar-harness/engine`、`@mstar-harness/dsh`、Cursor/Codex/Kimi/ZCode/omp/Claude 插件清单、便携式 Agent Plugins 清单及两份 marketplace 清单：**→ 4.1.3**。
+
 ## [4.1.2] - 2026-10-29
 
 ### Harness

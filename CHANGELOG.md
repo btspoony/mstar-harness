@@ -8,6 +8,19 @@ Package-specific histories: [`packages/cli/CHANGELOG.md`](packages/cli/CHANGELOG
 
 ## [Unreleased]
 
+## [4.1.3] - 2026-10-30
+
+### Harness
+
+- **Focus reads an idle session as a state, not a gate paragraph**: no active lifecycle is the ordinary state between lifecycles, so the screen shows one compact status line and a single hint in the workflow panel. The workflow-selection gate's internal sentence no longer reaches the screen, and the bare plan-board heading is gone.
+- Any **other** binding error keeps its message as one compact secondary line (truncated, full text on hover) with its repair picker, instead of a page-dominating paragraph.
+- The Focus panels state their **scope**: residual counts read "all projects", milestones keep their project id and label the store's unattributed bucket, and the delivery line keeps its "no iteration" wording — so neighbouring numbers cannot be read as one another's.
+- No new design tokens or dependencies; the new copy ships in both locales.
+
+### Version alignment
+
+- Bump monorepo root, `@mstar-harness/opencode`, `@mstar-harness/opencode-v2`, `@mstar-harness/cli`, `@mstar-harness/engine`, `@mstar-harness/dsh`, Cursor/Codex/Kimi/ZCode/omp/Claude plugin manifests, the portable Agent Plugins manifest, and both marketplace manifests: **→ 4.1.3**.
+
 ## [4.1.2] - 2026-10-29
 
 ### Harness
