@@ -11747,6 +11747,12 @@ function findRetirementRow(rows, activationReceiptId, live) {
   }
   return;
 }
+function requireGeneratedOperator(operator) {
+  if (operator === undefined || operator.trim() === "") {
+    throw Object.assign(new StoreActivationError("store.operator-required", "the activation generates its operator attestation when --attestation is omitted, and the generated document records the invoking operator; pass --operator <name> (or --attestation <absolute-json> to supply the document explicitly)"), { recovery: "run mstar store activate --manifest <path> --operator <name> (add --attestation <absolute-json> to override the generated document)" });
+  }
+  return operator;
+}
 async function activateStore(context, receipt, attestation, hooks = {}, options = {}) {
   if (!receipt || receipt.phase !== "applied" || typeof receipt.receiptId !== "number" || typeof receipt.manifestHash !== "string" || typeof receipt.storeRevision !== "number") {
     throw new StoreActivationError("store.activation-stale", "the activation requires the reviewed apply receipt (receiptId, storeRevision; manifestHash is provenance); re-apply the reviewed manifest.");
@@ -11787,6 +11793,7 @@ async function activateStore(context, receipt, attestation, hooks = {}, options 
   } finally {
     inspection.close();
   }
+  const generatedOperator = validated === undefined ? requireGeneratedOperator(options.operator) : "";
   const backup = await takeVerifiedBackup(context, {
     label: `pre-activation-${meta.storeId.slice(0, 8)}-r${meta.revision}`,
     reuseMatchingIdentity: true
@@ -11794,7 +11801,7 @@ async function activateStore(context, receipt, attestation, hooks = {}, options 
   hooks.afterStage?.("inspection", 0);
   const flip = await openStore(context, "write");
   try {
-    const at = new Date().toISOString();
+    const at = (options.now ?? (() => new Date().toISOString()))();
     flip.db.exec("begin immediate");
     try {
       const current = readMetaRow(flip.db);
@@ -11804,12 +11811,9 @@ async function activateStore(context, receipt, attestation, hooks = {}, options 
       revalidateSources(context, manifest, "activation");
       let activationValidated = validated;
       if (activationValidated === undefined) {
-        if (options.operator === undefined || options.operator.trim() === "") {
-          throw Object.assign(new StoreActivationError("store.operator-required", "the activation generates its operator attestation when --attestation is omitted, and the generated document records the invoking operator; pass --operator <name> (or --attestation <absolute-json> to supply the document explicitly)"), { recovery: "run mstar store activate --manifest <path> --operator <name> (add --attestation <absolute-json> to override the generated document)" });
-        }
         const stoppedRows = flip.db.prepare("select session_id from execution_sessions where state = 'active' and epoch = ?").all(current.epoch);
         const provisioned = provisionActivationDocument({
-          actor: options.operator,
+          actor: generatedOperator,
           authorizationRef: `migration-receipt:${receipt.receiptId}`,
           attestedAt: at,
           stoppedSessions: stoppedRows.filter((row) => typeof row.session_id === "string" && row.session_id !== "").map((row) => ({ sessionId: row.session_id, host: "local", state: "stopped" }))
@@ -12241,6 +12245,7 @@ var init_store_activation = __esm(() => {
 var exports_execution_store = {};
 __export(exports_execution_store, {
   ExecutionError: () => ExecutionError,
+  RUNNING_WORKFLOW_OPERATION_RECEIPT_LIMIT: () => RUNNING_WORKFLOW_OPERATION_RECEIPT_LIMIT,
   adoptTerminalWorkflow: () => adoptTerminalWorkflow,
   advancePlanOperationRevisions: () => advancePlanOperationRevisions,
   advanceWorkflowHeaderRevision: () => advanceWorkflowHeaderRevision,
@@ -13789,7 +13794,32 @@ function receiptFacts(receipt) {
     ...receipt.holder_live_warning === undefined ? {} : { holder_live_warning: receipt.holder_live_warning }
   };
 }
+function assertWorkflowOperationReceiptCapacity(tx, workflowId, exemptFromRetentionCap) {
+  const header = tx.db.prepare("select state_json from execution_workflows where workflow_id = ?").get(workflowId);
+  if (header !== undefined) {
+    const status = storedJsonObject(header.state_json, `execution_workflows(${workflowId}).state_json`).status;
+    if (WORKFLOW_TERMINAL_STATUSES.includes(String(status)))
+      return;
+  }
+  if (exemptFromRetentionCap)
+    return;
+  const retained = tx.db.prepare("select count(*) as n from execution_operations where workflow_id = ? and epoch = ?").get(workflowId, tx.epoch);
+  const count = typeof retained.n === "number" ? retained.n : 0;
+  if (count < RUNNING_WORKFLOW_OPERATION_RECEIPT_LIMIT)
+    return;
+  throw new ExecutionError("execution.receipt-retention-exhausted", `workflow ${workflowId} already retains ${count} operation receipts at its current epoch, the cap a running ` + `workflow may hold (${RUNNING_WORKFLOW_OPERATION_RECEIPT_LIMIT}). This receipt is not written: every retained ` + `receipt is a replay anchor, so the engine never discards one to make room. Adopt or close the workflow under a ` + `new operation id (its terminal prune keeps that close receipt only), then start a new workflow for further work.`, {
+    workflow_id: workflowId,
+    epoch: tx.epoch,
+    retained_receipts: count,
+    receipt_limit: RUNNING_WORKFLOW_OPERATION_RECEIPT_LIMIT,
+    available_work: [
+      `adopt or close workflow ${workflowId} under a new operation id`,
+      "start a new workflow for further work"
+    ]
+  });
+}
 function writeOperationReceipt(tx, input) {
+  assertWorkflowOperationReceiptCapacity(tx, input.workflowId, input.exemptFromRetentionCap === true);
   tx.db.prepare("insert into execution_operations(epoch, operation_id, request_hash, store_id, workflow_id, plan_id, result_json, committed_at) " + "values (?, ?, ?, ?, ?, ?, ?, ?)").run(tx.epoch, input.operationId, input.requestHash, tx.storeId, input.workflowId, input.planId, JSON.stringify(input.slim === true ? { slim: true, token: input.receipt.token, storeId: tx.storeId, epoch: tx.epoch, ...receiptFacts(input.receipt) } : input.receipt), input.now);
 }
 function pruneWorkflowOperationReceipts(tx, workflowId, keepOperationId) {
@@ -14131,6 +14161,7 @@ var OPERATION_ID_RE;
 var CREATE_WORKFLOW_OPERATION = "createExecutionWorkflow";
 var BIND_SESSION_OPERATION = "bindExecutionSession";
 var EXECUTION_SESSION_STATES;
+var RUNNING_WORKFLOW_OPERATION_RECEIPT_LIMIT = 256;
 var init_execution_store = __esm(() => {
   init_coordination();
   init_coordination_write();
@@ -15703,9 +15734,10 @@ function settleRetiredPlanPmIntegrationClaims(db, context) {
   }
   const attestation = context.attestation;
   const attestedInstant = attestation === undefined ? null : parsedInstant(attestation.attestedAt);
-  const cutoverInstant = parsedInstant(new Date().toISOString());
+  const at = (context.now ?? (() => new Date().toISOString()))();
+  const cutoverInstant = parsedInstant(at);
   const pendingHolders = new Set;
-  const pendingStopped = [];
+  const pendingStoppedBySessionId = new Map;
   const claims = db.prepare("select workflow_id, lease_json from execution_integration_cutover").all();
   const update = db.prepare("update execution_integration_leases set revision = revision + 1, lease_json = ? where workflow_id = ?");
   for (const row of claims) {
@@ -15729,7 +15761,7 @@ function settleRetiredPlanPmIntegrationClaims(db, context) {
     }
     if (attestation === undefined) {
       pendingHolders.add(holder);
-      pendingStopped.push({ sessionId: holder, host: "local", state: "stopped" });
+      pendingStoppedBySessionId.set(holder, { sessionId: holder, host: "local", state: "stopped" });
       continue;
     }
     const attested = attestation.stoppedSessions.find((session) => session.sessionId === holder);
@@ -15745,12 +15777,13 @@ function settleRetiredPlanPmIntegrationClaims(db, context) {
       prior_holder: holder,
       released_by: "store-upgrade",
       released_at: attestation.attestedAt,
-      release_reason: `retired-plan-pm-seat:${holder}`
+      release_reason: attestation.operator.authorizationRef
     };
     update.run(JSON.stringify(tombstone), workflowId);
   }
   if (pendingHolders.size > 0) {
-    throw new SettlementAttestationNeeded([...pendingHolders], pendingStopped);
+    const holders = [...pendingHolders].sort();
+    throw new SettlementAttestationNeeded(holders, holders.map((holder) => pendingStoppedBySessionId.get(holder)), at);
   }
 }
 function readAppliedMigrations(db, tolerateMissingTable) {
@@ -16604,10 +16637,12 @@ var init_store_db = __esm(() => {
   SettlementAttestationNeeded = class SettlementAttestationNeeded2 extends Error {
     holders;
     stopped;
-    constructor(holders, stopped) {
+    attestedAt;
+    constructor(holders, stopped, attestedAt) {
       super("a held retired plan-PM claim needs a generated attestation");
       this.holders = holders;
       this.stopped = stopped;
+      this.attestedAt = attestedAt;
       this.name = "SettlementAttestationNeeded";
     }
   };
@@ -18843,10 +18878,15 @@ init_status();
 init_store_activation();
 init_coordination_write();
 init_execution_session();
+init_execution_store();
 init_path();
 init_store_db();
 var NOTE_KEYS = ["version", "id", "workflowId", "sessionId", "kind", "ts", "text"];
 var NOTE_KEY_ORDER = [...NOTE_KEYS].sort();
+var MARKER_KEYS = ["version", "kind", "ts", "workflowId", "dropped", "prefixSha256"];
+var MARKER_KEY_ORDER = [...MARKER_KEYS].sort();
+var DROPPED_KEYS = ["bytes", "lines", "records", "historical", "unrecognized"];
+var DROPPED_KEY_ORDER = [...DROPPED_KEYS].sort();
 init_coordination_write();
 init_core();
 init_execution_store();
