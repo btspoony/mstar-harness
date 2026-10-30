@@ -98,6 +98,11 @@ export const COORDINATION_ERROR_CODES = [
   "coordination.identity-recovery.foreign-owner",
   "coordination.identity-recovery.unauthorized",
   "coordination.identity-recovery.operation-conflict",
+  // ACTIVE-store coordinator recovery: the caller named itself as the prior
+  // holder it replaces, so the generated stop evidence and the replacement
+  // identity would be the same session. One code for every transport; the CLI
+  // gate and the engine agree instead of relying on the CLI alone.
+  "coordination.recovery-self-settlement",
   // The close's root-removal step (plan-workflow-lifecycle-contract §3 close
   // row): the terminal state is committed, but the root register could not be
   // read as a v2 register, so its entry could not be removed — an explicit

@@ -2024,6 +2024,32 @@ export async function recoverExecutionCoordinator(
       "Coordinator recovery requires the prior session id to name the holder it replaces, or null only when no coordinator is recorded; inspect the workflow with mstar status validate.",
     );
   }
+  // A recovery replaces a DIFFERENT recorded session, on BOTH the supplied and
+  // the generated document branches. A caller naming itself as its prior holder
+  // would generate stop evidence for the identity making the call (and would
+  // attest its own replacement), so the refusal is ENGINE-level: a transport
+  // that never runs the CLI's own usage gate (MCP, a host tool) cannot bypass
+  // it. The recovery names the supported route — run the recovery from a
+  // distinct acquired replacement identity.
+  if (priorSessionId !== null && priorSessionId === caller.sessionId) {
+    throw new CoordinationError(
+      "coordination.recovery-self-settlement",
+      `the caller ${JSON.stringify(caller.sessionId)} names itself as the prior holder this recovery replaces; a recovery replaces ` +
+        `a DIFFERENT recorded session, so no recovery may settle the identity making the call. Recovery: acquire a distinct ` +
+        `replacement session and rerun this recovery from it — pass a different --session-id, or set MSTAR_HOST_SESSION_ID to it; ` +
+        `the prior holder stays the session being replaced.`,
+      {
+        workflow_id: workflowId,
+        session_id: caller.sessionId,
+        prior_session_id: priorSessionId,
+        recovery_refusal: "self-settlement",
+        recovery:
+          `Acquire a distinct replacement session and run the recovery from it: mstar session recover --workflow ${workflowId} ` +
+          `--prior-session ${priorSessionId} --reason <text> --session-id <new-session-id> --operation <id> (or set ` +
+          `MSTAR_HOST_SESSION_ID to the new session). The prior holder stays named as the session this recovery replaces.`,
+      },
+    );
+  }
   // The operator's authorization is a DOCUMENT here, exactly as at the
   // activation barrier, but the scope is RECOVERY: the store is already
   // active, so the installed-consumer obligation of the barrier does not

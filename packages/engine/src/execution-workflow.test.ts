@@ -1182,7 +1182,7 @@ describe("execution-workflow: \u00A73 workflow-level phase, lifecycle, policy, c
     );
     expect(amended.code).toBe("coordination.workflow-not-found");
     const reopened = await refusalOf(() =>
-      recoverExecutionCoordinator(domainContext(fixture.context, fixture.coordinatorCaller), {
+      recoverExecutionCoordinator(domainContext(fixture.context, trustedCaller("closed-recovery", "coordinator")), {
         expected: workflowTokenOfRow(fixture.context),
         operationId: "op-close-recover",
         priorSessionId: COORDINATOR_ID,
@@ -1828,6 +1828,54 @@ describe("execution-coordinator-recovery: \u00A72.3/\u00A74.2 the named recovery
     });
   });
 
+  test("a caller naming itself as the prior holder is refused by the engine on both document branches", async () => {
+    const fixture = await workflowFixture("recovery-self-settlement");
+    const before = await workflowFootprint(fixture.context);
+    const expected = await liveWorkflowToken(fixture);
+    // The caller is COORDINATOR_ID, and it names COORDINATOR_ID as the holder it
+    // replaces. On the GENERATED branch the engine would otherwise build stop
+    // evidence for the identity making the call; on the SUPPLIED branch the same
+    // fact is a self-attested replacement. One engine-level refusal covers both,
+    // so a transport that never runs the CLI's usage gate cannot bypass it.
+    for (const [label, attestationArg] of [
+      ["generated", {}],
+      ["supplied", { attestation: attestation([COORDINATOR_ID]) }],
+    ] as const) {
+      const refused = await refusalOf(() =>
+        recoverExecutionCoordinator(domainContext(fixture.context, fixture.coordinatorCaller), {
+          expected,
+          operationId: `op-recover-self-${label}`,
+          priorSessionId: COORDINATOR_ID,
+          reason: "recover my own seat",
+          ...attestationArg,
+        }),
+      );
+      expect(refused.code, label).toBe("coordination.recovery-self-settlement");
+      expect(refused.details, label).toMatchObject({
+        workflow_id: WORKFLOW_ID,
+        session_id: COORDINATOR_ID,
+        prior_session_id: COORDINATOR_ID,
+        recovery_refusal: "self-settlement",
+      });
+      // The recovery names the supported route, not a dead end: a distinct
+      // replacement session on the same CLI verb.
+      expect(String(refused.details.recovery), label).toContain("mstar session recover");
+      expect(String(refused.details.recovery), label).toContain("--session-id");
+      // Nothing was written on either branch.
+      expect(await workflowFootprint(fixture.context), label).toEqual(before);
+    }
+
+    // The same caller still recovers a DIFFERENT holder: the rule refuses only
+    // the self-settlement fact, never recovery itself.
+    const recovered = await recoverExecutionCoordinator(
+      domainContext(fixture.context, trustedCaller(RECOVERY_ID, "coordinator")),
+      { expected, operationId: "op-recover-distinct", priorSessionId: COORDINATOR_ID, reason: "coordinator stopped" },
+    );
+    expect(recovered.replayed).toBe(false);
+    expect(sessionState(fixture.context, COORDINATOR_ID)).toBe("revoked");
+    expect(sessionState(fixture.context, RECOVERY_ID)).toBe("active");
+  });
+
   test("recovery never takes over an owner it may not replace", async () => {
     const fixture = await workflowFixture("recovery-live");
     // A live holder with NO stop evidence: the engine cannot observe a dead
@@ -1835,7 +1883,7 @@ describe("execution-coordinator-recovery: \u00A72.3/\u00A74.2 the named recovery
     const expected = await liveWorkflowToken(fixture);
     const before = await workflowFootprint(fixture.context);
     const silent = await refusalOf(() =>
-      recoverExecutionCoordinator(domainContext(fixture.context, fixture.coordinatorCaller), {
+      recoverExecutionCoordinator(domainContext(fixture.context, trustedCaller(RECOVERY_ID, "coordinator")), {
         expected,
         operationId: "op-recover-silent",
         priorSessionId: COORDINATOR_ID,

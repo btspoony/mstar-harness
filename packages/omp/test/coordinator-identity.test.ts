@@ -603,6 +603,25 @@ afterAll(() => {
 });
 
 describe("prerequisite identity — coordinator recovery under an ACTIVE execution authority", () => {
+  test("a host tool that names its own session as the prior holder gets the engine's self-settlement refusal", async () => {
+    // This is the transport the CLI's usage gate cannot cover: the omp tool
+    // derives the caller session itself, so the engine is the only place the
+    // self-settlement fact can be refused. No workflow or written state is
+    // needed — the engine refuses before any store read.
+    const result = await recoverCoordinatorIdentity(
+      recoverRequest({ priorSessionId: FACTS.sessionId, attestation: undefined }),
+      FACTS,
+    );
+    expect(result.ok).toBe(false);
+    expect(result.isError).toBe(true);
+    expect(result.code).toBe("coordination.recovery-self-settlement");
+    // The engine's recovery travels with the refusal (the adapter needs no change
+    // to surface it): the fact in the message, the exact CLI route in details.
+    expect(result.text).toContain("a different --session-id");
+    expect(result.details.recovery).toContain("mstar session recover");
+    expect(result.details.recovery).toContain("--session-id");
+  });
+
   test("ACTIVE recover against a live empty authority surfaces the engine refusal, not a Prepare rewrite", async () => {
     // Single initializeStore activates the authority (never a second
     // initializeExecutionAuthority — it refuses execution.not-empty).
