@@ -51,7 +51,7 @@
           {
             "root": "packages/cli/dist",
             "files": 1,
-            "sha256": "8c0f8c699d0b30b00d1774e97b5b54282ec2e45742d0fad9b9cd1632551a2c9d",
+            "sha256": "212f847a5b6cb5dfa1a035b457baa8d3139e2e8851f93f59578ca752faf8c8fe",
             "exclude": [
               "execution-consumer.json"
             ]
@@ -60,7 +60,7 @@
         "files": [
           {
             "path": "packages/cli/dist/mstar-harness.js",
-            "sha256": "56f804d07ac501c761bbcbbbc057e9dca8d40e52c6a1e7b176ea10b4e27b0da2"
+            "sha256": "71e7438bd1f45fc7aa94a452e0aac016ba3d816353455c300c2c63e7afbd0d10"
           }
         ]
       },
