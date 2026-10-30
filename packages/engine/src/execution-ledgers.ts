@@ -33,9 +33,9 @@
  * body dir, then takes C1's synchronous current-session assertion immediately
  * before a **single `O_APPEND` write** of the complete framed record. The opened
  * descriptor must still name the canonical leaf immediately before writing and
- * again after fsync, before a success receipt is issued. There is no file lock,
- * no maintenance exclusion, no whole-file read, no dedup decision, no tail
- * repair, no truncation and no rewrite of peer bytes. A later external rotation
+ * again after fsync, before a success receipt is issued. An ordinary append
+ * takes no file lock, no maintenance exclusion, no whole-file read, no dedup
+ * decision, no tail repair and no truncation. A later external rotation
  * can still move an already-written inode after the final observation; this is
  * not a rotation lock. **Every** frame carries a leading LF, including the one
  * that creates the leaf, so its line survives when a peer writes a partial
@@ -48,6 +48,20 @@
  * The retained leaf is opened with `O_NOFOLLOW` and verified with `fstat`: it
  * must be a regular file. A symlinked leaf, a non-file, a symlinked body dir and
  * a missing control root refuse instead of being followed or materialized.
+ *
+ * ## Ceiling and compaction (the one maintenance step)
+ *
+ * A ledger only grows between compactions, so `WORKFLOW_NOTES_LEDGER_MAX_BYTES`
+ * is enforced by the append that would reach it: when the frame can leave the
+ * ledger at or past the ceiling, the frame and the compaction it triggers run as
+ * ONE critical section under the store's own `BEGIN IMMEDIATE` write lock
+ * (`withWorkflowNotesMaintenanceLock`, never a lock file), so no peer frame can
+ * land between a compaction's read and its rename. Compaction keeps the newest
+ * complete lines that fit `WORKFLOW_NOTES_LEDGER_READ_BYTES`, always keeps the
+ * triggering note whole, and writes a `workflow-notes-compaction` row as the
+ * FINAL line disclosing the dropped prefix. It is the only writer that rewrites
+ * retained bytes, and it rewrites them atomically: a same-directory temporary
+ * file, fsync, rename over the leaf, then the directory fsynced.
  *
  * ## Reader and failure semantics (S3)
  *
@@ -631,10 +645,24 @@ function compactWorkflowNotesLedger(path: string, workflowId: string): void {
  * Serialize one append with the compaction it may trigger, through the store's
  * existing `BEGIN IMMEDIATE` transaction — the engine's one write lock, taken
  * here instead of a lock file. Two concurrent appends therefore cannot both
- * decide to compact from the same stale size.
+ * decide to compact from the same stale size, and no frame can land between a
+ * compaction's read and its rename.
  */
 function withWorkflowNotesMaintenanceLock<T>(context: StoreContext, body: () => T): Promise<T> {
   return withExecutionTransaction(context, () => body());
+}
+
+/**
+ * Whether the ledger is at or past its ceiling once `appendBytes` land: the ONE
+ * case in which an append is a maintenance step (it can rewrite retained bytes)
+ * rather than an ordinary framed write.
+ */
+function ledgerAtOrOverCeiling(path: string, appendBytes: number): boolean {
+  try {
+    return lstatSync(path).size + appendBytes > WORKFLOW_NOTES_LEDGER_MAX_BYTES;
+  } catch {
+    return false;
+  }
 }
 
 /* ------------------------------------------------------------------------ *
@@ -750,13 +778,29 @@ export async function appendWorkflowNote(
   const frame = Buffer.from(`${canonicalNoteLine({ ...note, ts: note.ts ?? new Date().toISOString() })}\n`, "utf8");
   // The final synchronous identity check, immediately before the byte mutation.
   assertExecutionSessionCurrent(context, session);
-  // The append and the compaction it may trigger are ONE maintenance step under
-  // the store's write lock: a peer cannot append between this frame and a
-  // compaction decision taken from a size that no longer holds.
-  await withWorkflowNotesMaintenanceLock(context, () => {
-    commitLedgerFrame(ledgerPath, frame);
-    compactWorkflowNotesLedger(ledgerPath, session.workflowId);
-  });
+  // An append that can reach the ceiling is a maintenance step: the frame and
+  // the compaction it triggers are ONE critical section under the store's write
+  // lock, so a peer can neither append between the size this compaction acts on
+  // and its rename, nor compact from a stale size itself. An append far below
+  // the ceiling triggers nothing and keeps today's single lock-free `O_APPEND`.
+  if (ledgerAtOrOverCeiling(ledgerPath, frame.length)) {
+    await withWorkflowNotesMaintenanceLock(context, () => {
+      commitLedgerFrame(ledgerPath, frame);
+      compactWorkflowNotesLedger(ledgerPath, session.workflowId);
+    });
+    return { id: note.id };
+  }
+  commitLedgerFrame(ledgerPath, frame);
+  if (ledgerAtOrOverCeiling(ledgerPath, 0)) {
+    // shortcut: a peer that measured the ledger below the ceiling before this
+    // frame landed can leave it over the ceiling with that append uncompacted;
+    // this recheck compacts it instead of waiting for the next append. The same
+    // peer's frame can still be written into a leaf this compaction has already
+    // read during a multi-millisecond preemption; upgrade to an unconditional
+    // maintenance lock if the ceiling must hold at every instant, which costs a
+    // store write connection on every ordinary append.
+    await withWorkflowNotesMaintenanceLock(context, () => compactWorkflowNotesLedger(ledgerPath, session.workflowId));
+  }
   return { id: note.id };
 }
 

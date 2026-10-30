@@ -983,7 +983,9 @@ function finalRow(bytes: Buffer): Record<string, unknown> {
 
 describe("execution-ledgers: compaction at the ledger size ceiling", () => {
   test("an append over the ceiling leaves the exact final-row marker and keeps the triggering note whole", async () => {
-    const fixture = await notesFixture("compaction-marker");
+    // The shared fixture, reseeded: one store for the whole suite, as every other
+    // ordinary case does (the driver's descriptors are released only by GC).
+    const fixture = shared;
     // A retained ledger already past the ceiling: historical migrated lines, so
     // the dropped facts are classifiable content rather than one blob.
     const lineBytes = Buffer.byteLength(LEGACY_LINE, "utf8");
@@ -1036,7 +1038,7 @@ describe("execution-ledgers: compaction at the ledger size ceiling", () => {
   }, 30_000);
 
   test("a single oversize triggering note stays whole and is disclosed by tail-read truncation", async () => {
-    const fixture = await notesFixture("compaction-oversize-note");
+    const fixture = shared;
     fixture.seed({ ledger: LEGACY_LINE });
     // One note larger than the ceiling: the recorded exception to the target
     // size, disclosed by the truncated tail read rather than by another bound.
