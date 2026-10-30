@@ -395,7 +395,8 @@ test("a held retired schema-8 claim refuses without mutation and settles on the 
         holder: sessionId, plan_id: planId, claimed_at: "2026-10-04T00:30:00Z",
         source_branch: workingBranch, target_branch: "main", status: "released",
         prior_holder: sessionId, released_by: "store-upgrade",
-        released_at: "2026-10-04T04:00:00Z", release_reason: `retired-plan-pm-seat:${sessionId}`,
+        // The supplied document's own authorizationRef, copied verbatim.
+        released_at: "2026-10-04T04:00:00Z", release_reason: "fixture-authorization",
       });
       for (const table of ["execution_lease_cutover", "execution_session_cutover", "execution_integration_cutover"]) {
         expect(store.db.prepare("select name from sqlite_schema where type = 'table' and name = ?").get(table)).toBeUndefined();

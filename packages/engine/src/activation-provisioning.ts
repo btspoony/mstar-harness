@@ -27,7 +27,7 @@ import type { ActivationAttestation, StoppedSessionAttestation } from "./store-a
  * the activation-scope success path is otherwise unreachable under `bun test`
  * by design, never faked.
  *
- * ACCEPTED LIMIT (the caller contract, not a second seam): this is an optional
+ * Caller contract (not a second seam): this is an optional
  * DIRECT-ENGINE/TEST provisioning input. It is never evidence of an installed
  * consumer — a caller that passes facts supplies the consumer row itself, so
  * the recorded document attests the caller's claim rather than a discovered

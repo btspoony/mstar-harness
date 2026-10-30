@@ -1530,9 +1530,9 @@ export async function activateStore(
     inspection.close();
   }
 
-  // CLOSE (c): the generated document records the invoking operator, so a
-  // missing one is refused HERE — before the recovery point is written — and an
-  // unoperated activation never leaves an orphan backup behind. Same code,
+  // The generated document records the invoking operator, so a missing one is
+  // refused HERE — before the recovery point is written — and an unoperated
+  // activation never leaves an orphan backup artifact behind. Same code,
   // message and recovery the flip used to raise; the document itself is still
   // assembled inside the flip transaction below.
   const generatedOperator = validated === undefined ? requireGeneratedOperator(options.operator) : "";
