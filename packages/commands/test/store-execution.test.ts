@@ -277,7 +277,10 @@ describe("store and execution command surface", () => {
     expect(preview.status).toBe("ok");
     const attestationPath = join(root, "attestation.json");
     writeJson(attestationPath, { attestedAt: "2026-09-26T00:00:00.000Z", operator: "fixture-operator", consumers: [], stoppedSessions: [] });
-    const activation = await invoke(definition("store.activate"), { harness: control, manifest: manifestPath, attestation: attestationPath }, root, control);
+    // `--operator` is required since the attestation is generated (I-000297):
+    // the barrier's precondition failure this test pins is the engine's stale
+    // refusal, reached with a complete input.
+    const activation = await invoke(definition("store.activate"), { harness: control, manifest: manifestPath, operator: "fixture-operator", attestation: attestationPath }, root, control);
     expect(activation.status).toBe("refused");
     if (activation.status === "refused") expect(activation.code).toBe("store.activation-stale");
     expect(await storeSnapshot(control)).toEqual(before);
