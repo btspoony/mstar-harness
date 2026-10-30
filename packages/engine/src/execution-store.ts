@@ -84,6 +84,7 @@ import {
 import {
   isTerminalSnapshot,
   rowValidationRoute,
+  WORKFLOW_TERMINAL_STATUSES,
   validateIntegrationMergeLease,
   validateWorkflowSnapshot,
   WORKFLOW_SNAPSHOT_FILE,
@@ -112,6 +113,7 @@ export type ExecutionErrorCode =
   | "execution.session-unavailable"
   | "execution.canonical-value"
   | "execution.operation-conflict"
+  | "execution.receipt-retention-exhausted"
   | "execution.lease-held"
   | "execution.partial-effect"
   | "execution.migration-conflict"
@@ -3248,6 +3250,71 @@ function receiptFacts(receipt: ExecutionRead<unknown>): Record<string, unknown> 
 }
 
 /**
+ * The receipts one RUNNING workflow may retain at its current epoch.
+ *
+ * Every receipt is a replay anchor, so retention is a cap rather than a
+ * rotation: a running workflow keeps all of them up to this bound and refuses
+ * the next new one instead of deleting a key a caller may still retry under.
+ * The terminal prune (`pruneWorkflowOperationReceipts`) collapses the set to the
+ * terminal receipt, so the bound is a per-lifecycle running cost, not a
+ * per-workflow total.
+ */
+export const RUNNING_WORKFLOW_OPERATION_RECEIPT_LIMIT = 256;
+
+/**
+ * §3.1 the same-transaction capacity guard of one NEW non-terminal receipt.
+ *
+ * A terminal mutation is exempt: its receipt is the durable replay anchor for a
+ * close/adoption whose success response was lost, and the terminal prune that
+ * follows it keeps exactly that one receipt, so the running bound never applies
+ * to it. Coordinator recovery is exempt too, and for the same reason: it is the
+ * only way back from a stopped holder, and refusing its receipt would leave the
+ * workflow unable to recover AND unable to close (a close needs a live
+ * binding), so a workflow at the bound with a dead coordinator would be
+ * unrecoverable. Its receipt is still written, and the terminal close that
+ * follows prunes the set back to one. Every other write asks whether the
+ * workflow this transaction reads has already retained the bound; at the bound
+ * it refuses BEFORE the insert, so the transaction rolls back and no receipt,
+ * revision or effect of that operation survives.
+ */
+function assertWorkflowOperationReceiptCapacity(
+  tx: ExecutionTransaction,
+  workflowId: string,
+  exemptFromRetentionCap: boolean,
+): void {
+  const header = tx.db.prepare("select state_json from execution_workflows where workflow_id = ?").get(workflowId) as
+    | { state_json?: unknown }
+    | undefined;
+  if (header !== undefined) {
+    const status = storedJsonObject(header.state_json, `execution_workflows(${workflowId}).state_json`).status;
+    if ((WORKFLOW_TERMINAL_STATUSES as readonly string[]).includes(String(status))) return;
+  }
+  if (exemptFromRetentionCap) return;
+  const retained = tx.db
+    .prepare("select count(*) as n from execution_operations where workflow_id = ? and epoch = ?")
+    .get(workflowId, tx.epoch) as { n?: unknown };
+  const count = typeof retained.n === "number" ? retained.n : 0;
+  if (count < RUNNING_WORKFLOW_OPERATION_RECEIPT_LIMIT) return;
+  throw new ExecutionError(
+    "execution.receipt-retention-exhausted",
+    `workflow ${workflowId} already retains ${count} operation receipts at its current epoch, the cap a running ` +
+      `workflow may hold (${RUNNING_WORKFLOW_OPERATION_RECEIPT_LIMIT}). This receipt is not written: every retained ` +
+      `receipt is a replay anchor, so the engine never discards one to make room. Adopt or close the workflow under a ` +
+      `new operation id (its terminal prune keeps that close receipt only), then start a new workflow for further work.`,
+    {
+      workflow_id: workflowId,
+      epoch: tx.epoch,
+      retained_receipts: count,
+      receipt_limit: RUNNING_WORKFLOW_OPERATION_RECEIPT_LIMIT,
+      available_work: [
+        `adopt or close workflow ${workflowId} under a new operation id`,
+        "start a new workflow for further work",
+      ],
+    },
+  );
+}
+
+/**
  * §3.1 the one receipt writer: the committed receipt of an accepted operation
  * (`planId: null` for a workflow-level operation), recorded inside the same
  * transaction that produced the effect, so a rolled-back operation leaves no
@@ -3263,8 +3330,11 @@ export function writeOperationReceipt(
     receipt: ExecutionRead<unknown>;
     now: string;
     slim?: true;
+    /** Coordinator recovery at the running bound: see the capacity guard's exemption. */
+    exemptFromRetentionCap?: true;
   },
 ): void {
+  assertWorkflowOperationReceiptCapacity(tx, input.workflowId, input.exemptFromRetentionCap === true);
   tx.db
     .prepare(
       "insert into execution_operations(epoch, operation_id, request_hash, store_id, workflow_id, plan_id, result_json, committed_at) " +

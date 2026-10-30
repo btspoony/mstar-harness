@@ -628,6 +628,7 @@ export type {
 } from "./execution-store.js";
 export {
   ExecutionError,
+  RUNNING_WORKFLOW_OPERATION_RECEIPT_LIMIT,
   adoptTerminalWorkflow,
   bindExecutionSession,
   createExecutionWorkflow,
@@ -994,11 +995,16 @@ export type {
   WorkflowNoteAppendReceipt,
   WorkflowNoteHistoricalRecord,
   WorkflowNoteRecord,
+  WorkflowNotesCompactionMarker,
   WorkflowNotesCoverageFacts,
+  WorkflowNotesReadWindow,
 } from "./execution-ledgers.js";
 export {
   ExecutionLedgerError,
   EXECUTION_LEDGER_ERROR_CODES,
+  WORKFLOW_NOTES_COMPACTION_MARKER_KIND,
+  WORKFLOW_NOTES_LEDGER_MAX_BYTES,
+  WORKFLOW_NOTES_LEDGER_READ_BYTES,
   appendWorkflowNote,
   normalizeWorkflowNotesCoverage,
   workflowNotesLedgerPath,

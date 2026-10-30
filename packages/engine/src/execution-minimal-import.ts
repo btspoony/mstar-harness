@@ -1005,6 +1005,12 @@ export async function upgradeStoreMinimal(input: {
    * proven at this entry with injected facts.
    */
   processFacts?: ProvisionProcessFacts;
+  /**
+   * The clock the schema cutover's settling transaction reads once: the
+   * generated document attests that instant and the claims it settles are
+   * measured against it. Absent: the system clock.
+   */
+  now?: () => string;
   acknowledgedSkips?: readonly string[];
   /**
    * The operator's execution-specific acknowledgements: the exact ORIGINAL
@@ -1061,28 +1067,33 @@ export async function upgradeStoreMinimal(input: {
   // marker; every direct engine caller gets the named refusal instead.
   const run = (resolved: MigrationContext["attestation"]) =>
     !existsSync(dbPath)
-      ? initializeStore(context, { attestation: resolved, operator: input.operator, processFacts: input.processFacts, raiseSettlementSignal: true }).then(
+      ? initializeStore(context, { attestation: resolved, operator: input.operator, processFacts: input.processFacts, now: input.now, raiseSettlementSignal: true }).then(
           (initialized) => {
             initialized.close();
             return initialized.schemaVersion;
           },
         )
-      : upgradeStore(context, { attestation: resolved, operator: input.operator, processFacts: input.processFacts, raiseSettlementSignal: true }).then(
+      : upgradeStore(context, { attestation: resolved, operator: input.operator, processFacts: input.processFacts, now: input.now, raiseSettlementSignal: true }).then(
           (upgraded) => upgraded.schemaVersion,
         );
   try {
     schemaVersion = await run(attestation);
   } catch (error) {
     if (!(error instanceof SettlementAttestationNeeded)) throw error;
-    // The generated authorizationRef records the same literal the tombstone
-    // writes — `retired-plan-pm-seat:<holder>` (the workflow id is the
-    // tombstone row key, not part of the reason string) — joined for the
-    // multi-holder case this document covers in one operation.
+    // The generated authorizationRef is the ONE batch reference this document
+    // settles under — `retired-plan-pm-seat:` plus the sorted unique holders —
+    // and every settled tombstone copies it verbatim, so each holder's
+    // tombstone literal still matches the supplied/generated document. This
+    // dedupe+sort+join is the same normalization `settleRetiredPlanPmIntegrationClaims`
+    // reports in its `SettlementAttestationNeeded`; keep the two shapes identical.
+    // Tombstone↔document identity is carried by the verbatim copy, not the shape.
     const provisioned = provisionActivationDocument(
       {
         actor: input.operator,
-        authorizationRef: `retired-plan-pm-seat:${error.holders.join(",")}`,
-        attestedAt: new Date().toISOString(),
+        authorizationRef: `retired-plan-pm-seat:${[...new Set(error.holders)].sort().join(",")}`,
+        // The settling transaction's own instant, carried by the signal: the
+        // generated document attests when the cutover it authorizes ran.
+        attestedAt: error.attestedAt,
         stoppedSessions: error.stopped,
       },
       input.processFacts,

@@ -985,7 +985,10 @@ for (const boundary of [
       expect(row.owner_epoch).toBe(1);
       expect(JSON.parse(row.lease_json)).toEqual({
         ...claim!, status: "released", prior_holder: sessionId, released_by: "store-upgrade",
-        released_at: accepted.attestedAt, release_reason: `retired-plan-pm-seat:${sessionId}`,
+        // The tombstone copies the settling document's OWN authorizationRef
+        // verbatim — for a supplied document too — while `prior_holder` keeps
+        // the settled holder's identity.
+        released_at: accepted.attestedAt, release_reason: "schema-cutover-authorization",
       });
     } finally {
       upgraded.close();

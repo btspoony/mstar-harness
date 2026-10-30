@@ -42,14 +42,19 @@ import {
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
+import { createRequire } from "node:module";
 import { fileURLToPath } from "node:url";
 import { DatabaseSync } from "node:sqlite";
 import {
+  WORKFLOW_NOTES_COMPACTION_MARKER_KIND,
+  WORKFLOW_NOTES_LEDGER_MAX_BYTES,
+  WORKFLOW_NOTES_LEDGER_READ_BYTES,
   appendWorkflowNote,
   normalizeWorkflowNotesCoverage,
   workflowNotesLedgerPath,
   type WorkflowNote,
 } from "./execution-ledgers.js";
+import { sha256Bytes } from "./coordination-write.js";
 import {
   bindExecutionSession,
   createExecutionWorkflow,
@@ -231,6 +236,9 @@ const realWriteSync = nodeFs.writeSync;
 const realFsyncSync = nodeFs.fsyncSync;
 const realRenameSync = nodeFs.renameSync;
 const realWriteFileSync = nodeFs.writeFileSync;
+/** The driver module the store opens connections through, and its real constructor. */
+const sqliteDriver = createRequire(import.meta.url)("node:sqlite") as { DatabaseSync: new (...args: never[]) => unknown };
+const realDatabaseSync = sqliteDriver.DatabaseSync;
 
 /**
  * The sink boundaries this suite instruments: the single write call and the two
@@ -822,6 +830,35 @@ describe("execution-ledgers: stale authority, scope and target trust", () => {
     expect(existsSync(join(fixture.harnessDir, ".execution-maintenance"))).toBe(false);
   });
 
+  test("a session revoked while the maintenance lock is being acquired never appends or compacts", async () => {
+    // A ledger already over the ceiling, so this append takes the maintenance
+    // path: the pre-wait guard passes, then the store transaction is acquired.
+    const fixture = await notesFixture("revoked-during-maintenance");
+    fixture.seed({ ledger: LEGACY_LINE.repeat(Math.ceil(WORKFLOW_NOTES_LEDGER_MAX_BYTES / Buffer.byteLength(LEGACY_LINE)) + 1) });
+    const before = ledgerBytes(fixture);
+
+    // The peer revokes this session at exactly the boundary the pre-wait guard
+    // cannot cover: the WRITE connection the maintenance lock opens (a reader
+    // passes `{readOnly: true}`, a writer passes no options) is the acquisition
+    // the append then waits in.
+    const spy = spyOn(sqliteDriver, "DatabaseSync").mockImplementation(((...args: never[]) => {
+      if (args.length === 1) {
+        rawRun(fixture.context, `update execution_sessions set state = 'revoked' where workflow_id = '${WF}' and session_id = '${COORDINATOR_ID}'`);
+      }
+      return new realDatabaseSync(...args);
+    }) as never);
+    let refusal: { code: string };
+    try {
+      refusal = await refusalOf(() => appendWorkflowNote(fixture.coordContext, fixture.session, note("note-during-acquire", "revoked during acquisition")));
+    } finally {
+      spy.mockRestore();
+    }
+    expect(refusal.code).toBe("execution.session-unavailable");
+    // No byte of the refused frame landed and the over-ceiling ledger was not
+    // rewritten by a caller whose authority had already been withdrawn.
+    expect(ledgerBytes(fixture)).toEqual(before);
+  });
+
   test("a missing control root refuses with no directory side effect at all", async () => {
     const missingRoot = join(ROOT, "missing-control-root");
     const context: ExecutionContext = { harnessDir: missingRoot, caller: coordinatorCaller() };
@@ -960,4 +997,211 @@ describe("execution-ledgers: normalized coverage facts", () => {
     expect(withRepeat.records.map((entry) => entry.id)).toEqual(["note-1", "note-1"]);
     expect(withRepeat.counts).toEqual({ historical: 0, records: 2, unrecognized: 0 });
   });
+});
+
+/* ------------------------------------------------------------------------ *
+ * Compaction: the size ceiling, the disclosure marker and the read window
+ * ------------------------------------------------------------------------ */
+
+/** One LF-terminated line of a retained ledger, counted the way the reader splits it. */
+function retainedLines(bytes: Buffer): string[] {
+  return bytes.toString("utf8").split("\n");
+}
+
+/** The final non-empty retained line, parsed. */
+function finalRow(bytes: Buffer): Record<string, unknown> {
+  const rows = retainedLines(bytes).filter((line) => line.length > 0);
+  return JSON.parse(rows[rows.length - 1]!) as Record<string, unknown>;
+}
+
+describe("execution-ledgers: compaction at the ledger size ceiling", () => {
+  test("an append over the ceiling leaves the exact final-row marker and keeps the triggering note whole", async () => {
+    // The shared fixture, reseeded: one store for the whole suite, as every other
+    // ordinary case does (the driver's descriptors are released only by GC).
+    const fixture = shared;
+    // A retained ledger already past the ceiling: historical migrated lines, so
+    // the dropped facts are classifiable content rather than one blob.
+    const lineBytes = Buffer.byteLength(LEGACY_LINE, "utf8");
+    const seededLines = Math.ceil(WORKFLOW_NOTES_LEDGER_MAX_BYTES / lineBytes) + 1;
+    const seeded = LEGACY_LINE.repeat(seededLines);
+    fixture.seed({ ledger: seeded });
+    const target = note("note-trigger", "triggering note after the ceiling");
+    const before = Buffer.concat([Buffer.from(seeded, "utf8"), Buffer.from(framedLineOf(target), "utf8")]);
+    expect(before.length).toBeGreaterThan(WORKFLOW_NOTES_LEDGER_MAX_BYTES);
+
+    expect(await appendWorkflowNote(fixture.coordContext, fixture.session, target)).toEqual({ id: target.id });
+
+    const retained = ledgerBytes(fixture);
+    // Compaction kept the newest complete lines plus the marker: the retained
+    // ledger is back inside the read window, not the ceiling.
+    expect(retained.length).toBeLessThanOrEqual(WORKFLOW_NOTES_LEDGER_READ_BYTES);
+    const marker = finalRow(retained);
+    expect(Object.keys(marker)).toEqual(["version", "kind", "ts", "workflowId", "dropped", "prefixSha256"]);
+    expect(marker.version).toBe(1);
+    // The constant owns the kind the reader and the writer agree on.
+    expect(marker.kind).toBe(WORKFLOW_NOTES_COMPACTION_MARKER_KIND);
+    expect(marker.workflowId).toBe(WF);
+    expect(String(marker.ts)).toMatch(/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/);
+    const dropped = marker.dropped as Record<string, number>;
+    // The dropped prefix is whole seeded lines: bytes, lines and historical
+    // notes are three views of the same removed region.
+    const droppedLines = dropped.bytes! / lineBytes;
+    expect(Number.isInteger(droppedLines)).toBe(true);
+    expect(dropped).toEqual({
+      bytes: dropped.bytes,
+      lines: droppedLines,
+      records: 0,
+      historical: droppedLines,
+      unrecognized: 0,
+    });
+    expect(dropped.bytes).toBeGreaterThan(0);
+    // The digest describes exactly the removed prefix, derived from the bytes
+    // the append actually left behind before compaction.
+    expect(marker.prefixSha256).toBe(sha256Bytes(before.subarray(0, dropped.bytes)));
+
+    const facts = factsOf(fixture);
+    // The marker is a disclosure, never a note and never an unrecognized line.
+    expect(facts.compaction).toEqual(marker as never);
+    // The retained ledger holds the newest complete lines that fit the window:
+    // every seeded line the compaction did not drop, plus the triggering note.
+    expect(facts.counts).toEqual({ historical: seededLines - droppedLines, records: 1, unrecognized: 0 });
+    expect(facts.records.map((entry) => entry.record.id)).toEqual([target.id]);
+    expect(facts.records[0]!.record.text).toBe(target.text);
+    expect(facts.readWindow).toEqual({ offset: 0, totalBytes: retained.length, truncated: false });
+  }, 30_000);
+
+  test("a single oversize triggering note stays whole and is disclosed by tail-read truncation", async () => {
+    const fixture = shared;
+    fixture.seed({ ledger: LEGACY_LINE });
+    // One note larger than the ceiling: the recorded exception to the target
+    // size, disclosed by the truncated tail read rather than by another bound.
+    const target = note("note-oversize", "x".repeat(WORKFLOW_NOTES_LEDGER_MAX_BYTES + 1024));
+    await appendWorkflowNote(fixture.coordContext, fixture.session, target);
+
+    const retained = ledgerBytes(fixture);
+    expect(retained.length).toBeGreaterThan(WORKFLOW_NOTES_LEDGER_READ_BYTES);
+    const marker = finalRow(retained);
+    expect(marker.kind).toBe(WORKFLOW_NOTES_COMPACTION_MARKER_KIND);
+    expect((marker.dropped as Record<string, number>).historical).toBe(1);
+    expect((marker.dropped as Record<string, number>).records).toBe(0);
+
+    // A tail read of the retained ledger still reaches the final-row marker.
+    const readBytes = Math.min(retained.length, WORKFLOW_NOTES_LEDGER_READ_BYTES);
+    const offset = retained.length - readBytes;
+    const window = retained.subarray(offset + retained.subarray(offset).indexOf(0x0a) + 1);
+    const facts = normalizeWorkflowNotesCoverage({
+      workflowId: WF,
+      path: fixture.ledgerPath,
+      bytes: window,
+      readWindow: { offset: retained.length - window.length, totalBytes: retained.length, truncated: true },
+    });
+    expect(facts.readWindow).toEqual({ offset: retained.length - window.length, totalBytes: retained.length, truncated: true });
+    expect(facts.compaction?.kind).toBe(WORKFLOW_NOTES_COMPACTION_MARKER_KIND);
+    expect(facts.compaction).toEqual(marker as never);
+    // Counts describe the disclosed window: the note is cut, the marker is not
+    // a record, and the tail is the marker's own final LF.
+    expect(facts.counts).toEqual({ historical: 0, records: 0, unrecognized: 0 });
+    expect(facts.tail).toBeNull();
+  }, 30_000);
+
+  test("a peer frame appended between the compaction read and its rename is not deleted", async () => {
+    const fixture = shared;
+    const lineBytes = Buffer.byteLength(LEGACY_LINE, "utf8");
+    fixture.seed({ ledger: LEGACY_LINE.repeat(Math.ceil(WORKFLOW_NOTES_LEDGER_MAX_BYTES / lineBytes) + 1) });
+    const target = note("note-during-read", "triggering note");
+    const peer = note("note-peer", "peer frame appended during the read");
+    const originalReadFileSync = nodeFs.readFileSync;
+    let injected = false;
+    // The ordinary append is lock-free, so a peer frame can reach the leaf after
+    // the compactor took its snapshot. Landing it deterministically inside that
+    // window is what proves the rewrite is abandoned instead of overwriting it.
+    const spy = spyOn(nodeFs, "readFileSync").mockImplementation(((...args: Parameters<typeof nodeFs.readFileSync>) => {
+      const bytes = originalReadFileSync(...args);
+      if (!injected && typeof args[0] === "string" && args[0].endsWith("notes.jsonl")) {
+        injected = true;
+        nodeFs.appendFileSync(args[0], framedLineOf(peer));
+      }
+      return bytes;
+    }) as typeof nodeFs.readFileSync);
+    try {
+      await appendWorkflowNote(fixture.coordContext, fixture.session, target);
+    } finally {
+      spy.mockRestore();
+    }
+    expect(injected).toBe(true);
+    const facts = factsOf(fixture);
+    // Both frames are still readable: the abandoned compaction deleted neither.
+    expect(facts.records.map((entry) => entry.record.id)).toEqual([target.id, peer.id]);
+    expect(facts.compaction).toBeNull();
+    // The ledger is still over its ceiling; the next append past it retries.
+    expect(ledgerBytes(fixture).length).toBeGreaterThan(WORKFLOW_NOTES_LEDGER_MAX_BYTES);
+  }, 30_000);
+
+  test("a ledger carrying two markers compacts to exactly one final-row marker", async () => {
+    const fixture = shared;
+    const lineBytes = Buffer.byteLength(LEGACY_LINE, "utf8");
+    const markerRow = (ts: string): string => JSON.stringify({
+      version: 1,
+      kind: WORKFLOW_NOTES_COMPACTION_MARKER_KIND,
+      ts,
+      workflowId: WF,
+      dropped: { bytes: 1, lines: 1, records: 0, historical: 1, unrecognized: 0 },
+      prefixSha256: "0".repeat(64),
+    });
+    // Two earlier passes: the first marker ended the ledger, later appends made
+    // it an interior line, and a second marker ends it again.
+    const seedLines = Math.ceil(WORKFLOW_NOTES_LEDGER_MAX_BYTES / lineBytes) + 1;
+    const half = Math.ceil(seedLines / 2);
+    fixture.seed({
+      ledger:
+        `${LEGACY_LINE.repeat(half)}${markerRow("2026-09-30T00:00:00.000Z")}\n` +
+        `${LEGACY_LINE.repeat(seedLines - half)}${markerRow("2026-09-30T01:00:00.000Z")}\n`,
+    });
+    const target = note("note-recompact", "triggering note after two markers");
+    await appendWorkflowNote(fixture.coordContext, fixture.session, target);
+
+    const rows = retainedLines(ledgerBytes(fixture)).filter((line) => line.length > 0);
+    const markers = rows.filter((line) => line.includes(WORKFLOW_NOTES_COMPACTION_MARKER_KIND));
+    expect(markers).toHaveLength(1);
+    expect(rows[rows.length - 1]).toBe(markers[0]!);
+    const facts = factsOf(fixture);
+    expect(facts.compaction).not.toBeNull();
+    expect(facts.records.map((entry) => entry.record.id)).toEqual([target.id]);
+    expect(facts.counts.unrecognized).toBe(0);
+    // The superseded marker row is removed content too: its bytes are counted,
+    // so the removed-byte total cannot be explained by note lines alone.
+    expect((finalRow(ledgerBytes(fixture)).dropped as Record<string, number>).bytes)
+      .toBeGreaterThan((finalRow(ledgerBytes(fixture)).dropped as Record<string, number>).lines * lineBytes);
+  }, 30_000);
+
+  test("an oversize triggering note stays whole when a peer frame lands before the compaction read", async () => {
+    const fixture = shared;
+    fixture.seed({ ledger: LEGACY_LINE });
+    const target = note("note-oversize-peer", "z".repeat(WORKFLOW_NOTES_LEDGER_MAX_BYTES + 1024));
+    const peer = note("note-peer-after", "peer frame that makes the trigger an interior line");
+    const originalReadFileSync = nodeFs.readFileSync;
+    let injected = false;
+    // The peer frame lands BEFORE the snapshot is taken, so the compaction does
+    // publish — and the trigger is then an interior line over the budget.
+    const spy = spyOn(nodeFs, "readFileSync").mockImplementation(((...args: Parameters<typeof nodeFs.readFileSync>) => {
+      if (!injected && typeof args[0] === "string" && args[0].endsWith("notes.jsonl")) {
+        injected = true;
+        nodeFs.appendFileSync(args[0], framedLineOf(peer));
+      }
+      return originalReadFileSync(...args);
+    }) as typeof nodeFs.readFileSync);
+    try {
+      await appendWorkflowNote(fixture.coordContext, fixture.session, target);
+    } finally {
+      spy.mockRestore();
+    }
+    expect(injected).toBe(true);
+    const facts = factsOf(fixture);
+    expect(facts.compaction).not.toBeNull();
+    const byId = new Map(facts.records.map((entry) => [entry.record.id, entry.record]));
+    // The receipted triggering note survives whole even though the peer frame
+    // now sits after it and it alone exceeds the read window.
+    expect(byId.get(target.id)?.text).toBe(target.text);
+    expect(byId.has(peer.id)).toBe(true);
+  }, 30_000);
 });

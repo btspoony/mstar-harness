@@ -101,6 +101,7 @@ __export(exports_engine, {
   REVIEW_SEAT_ROLES: () => REVIEW_SEAT_ROLES,
   ROADMAP_STATUSES: () => ROADMAP_STATUSES,
   ROLE_MAPPING: () => ROLE_MAPPING,
+  RUNNING_WORKFLOW_OPERATION_RECEIPT_LIMIT: () => RUNNING_WORKFLOW_OPERATION_RECEIPT_LIMIT,
   RUNTIME_HEADING_ALIASES: () => RUNTIME_HEADING_ALIASES,
   RoadmapError: () => RoadmapError,
   SCHEMA_VERSION_TABLE_SQL: () => SCHEMA_VERSION_TABLE_SQL,
@@ -122,6 +123,9 @@ __export(exports_engine, {
   WORKFLOW_DELIVERY_KINDS: () => WORKFLOW_DELIVERY_KINDS,
   WORKFLOW_LIFECYCLE_STATUSES: () => WORKFLOW_LIFECYCLE_STATUSES,
   WORKFLOW_LIFECYCLE_TYPES: () => WORKFLOW_LIFECYCLE_TYPES,
+  WORKFLOW_NOTES_COMPACTION_MARKER_KIND: () => WORKFLOW_NOTES_COMPACTION_MARKER_KIND,
+  WORKFLOW_NOTES_LEDGER_MAX_BYTES: () => WORKFLOW_NOTES_LEDGER_MAX_BYTES,
+  WORKFLOW_NOTES_LEDGER_READ_BYTES: () => WORKFLOW_NOTES_LEDGER_READ_BYTES,
   WORKFLOW_OPERATION_SEMANTICS: () => WORKFLOW_OPERATION_SEMANTICS,
   WORKFLOW_SNAPSHOT_FILE: () => WORKFLOW_SNAPSHOT_FILE,
   WORKFLOW_SNAPSHOT_PAYLOAD_SCHEMA: () => WORKFLOW_SNAPSHOT_PAYLOAD_SCHEMA,
@@ -539,6 +543,7 @@ import { createHash as createHash18 } from "node:crypto";
 import { createHash as createHash19 } from "node:crypto";
 import { existsSync as existsSync22, lstatSync as lstatSync12, readFileSync as readFileSync25, readdirSync as readdirSync17 } from "node:fs";
 import { join as join31, resolve as resolve21 } from "node:path";
+import { randomUUID as randomUUID7 } from "node:crypto";
 import {
   closeSync as closeSync5,
   constants as fsConstants,
@@ -547,10 +552,13 @@ import {
   lstatSync as lstatSync13,
   mkdirSync as mkdirSync8,
   openSync as openSync5,
+  readFileSync as readFileSync26,
+  renameSync as renameSync3,
+  unlinkSync as unlinkSync5,
   writeSync
 } from "node:fs";
-import { dirname as dirname19, join as join32 } from "node:path";
-import { createHash as createHash20, randomUUID as randomUUID7 } from "node:crypto";
+import { basename as basename16, dirname as dirname19, join as join32 } from "node:path";
+import { createHash as createHash20, randomUUID as randomUUID8 } from "node:crypto";
 import {
   closeSync as closeSync6,
   copyFileSync as copyFileSync2,
@@ -558,7 +566,7 @@ import {
   existsSync as existsSync23,
   mkdtempSync,
   openSync as openSync6,
-  readFileSync as readFileSync26,
+  readFileSync as readFileSync27,
   readdirSync as readdirSync18,
   readSync as readSync2,
   rmSync as rmSync2,
@@ -11353,6 +11361,12 @@ function findRetirementRow(rows, activationReceiptId, live) {
   }
   return;
 }
+function requireGeneratedOperator(operator) {
+  if (operator === undefined || operator.trim() === "") {
+    throw Object.assign(new StoreActivationError("store.operator-required", "the activation generates its operator attestation when --attestation is omitted, and the generated document records the invoking operator; pass --operator <name> (or --attestation <absolute-json> to supply the document explicitly)"), { recovery: "run mstar store activate --manifest <path> --operator <name> (add --attestation <absolute-json> to override the generated document)" });
+  }
+  return operator;
+}
 async function activateStore(context, receipt, attestation, hooks = {}, options = {}) {
   if (!receipt || receipt.phase !== "applied" || typeof receipt.receiptId !== "number" || typeof receipt.manifestHash !== "string" || typeof receipt.storeRevision !== "number") {
     throw new StoreActivationError("store.activation-stale", "the activation requires the reviewed apply receipt (receiptId, storeRevision; manifestHash is provenance); re-apply the reviewed manifest.");
@@ -11393,6 +11407,7 @@ async function activateStore(context, receipt, attestation, hooks = {}, options 
   } finally {
     inspection.close();
   }
+  const generatedOperator = validated === undefined ? requireGeneratedOperator(options.operator) : "";
   const backup = await takeVerifiedBackup(context, {
     label: `pre-activation-${meta.storeId.slice(0, 8)}-r${meta.revision}`,
     reuseMatchingIdentity: true
@@ -11400,7 +11415,7 @@ async function activateStore(context, receipt, attestation, hooks = {}, options 
   hooks.afterStage?.("inspection", 0);
   const flip = await openStore(context, "write");
   try {
-    const at = new Date().toISOString();
+    const at = (options.now ?? (() => new Date().toISOString()))();
     flip.db.exec("begin immediate");
     try {
       const current = readMetaRow(flip.db);
@@ -11410,12 +11425,9 @@ async function activateStore(context, receipt, attestation, hooks = {}, options 
       revalidateSources(context, manifest, "activation");
       let activationValidated = validated;
       if (activationValidated === undefined) {
-        if (options.operator === undefined || options.operator.trim() === "") {
-          throw Object.assign(new StoreActivationError("store.operator-required", "the activation generates its operator attestation when --attestation is omitted, and the generated document records the invoking operator; pass --operator <name> (or --attestation <absolute-json> to supply the document explicitly)"), { recovery: "run mstar store activate --manifest <path> --operator <name> (add --attestation <absolute-json> to override the generated document)" });
-        }
         const stoppedRows = flip.db.prepare("select session_id from execution_sessions where state = 'active' and epoch = ?").all(current.epoch);
         const provisioned = provisionActivationDocument({
-          actor: options.operator,
+          actor: generatedOperator,
           authorizationRef: `migration-receipt:${receipt.receiptId}`,
           attestedAt: at,
           stoppedSessions: stoppedRows.filter((row) => typeof row.session_id === "string" && row.session_id !== "").map((row) => ({ sessionId: row.session_id, host: "local", state: "stopped" }))
@@ -13308,7 +13320,32 @@ function receiptFacts(receipt) {
     ...receipt.holder_live_warning === undefined ? {} : { holder_live_warning: receipt.holder_live_warning }
   };
 }
+function assertWorkflowOperationReceiptCapacity(tx, workflowId, exemptFromRetentionCap) {
+  const header = tx.db.prepare("select state_json from execution_workflows where workflow_id = ?").get(workflowId);
+  if (header !== undefined) {
+    const status = storedJsonObject(header.state_json, `execution_workflows(${workflowId}).state_json`).status;
+    if (WORKFLOW_TERMINAL_STATUSES.includes(String(status)))
+      return;
+  }
+  if (exemptFromRetentionCap)
+    return;
+  const retained = tx.db.prepare("select count(*) as n from execution_operations where workflow_id = ? and epoch = ?").get(workflowId, tx.epoch);
+  const count = typeof retained.n === "number" ? retained.n : 0;
+  if (count < RUNNING_WORKFLOW_OPERATION_RECEIPT_LIMIT)
+    return;
+  throw new ExecutionError("execution.receipt-retention-exhausted", `workflow ${workflowId} already retains ${count} operation receipts at its current epoch, the cap a running ` + `workflow may hold (${RUNNING_WORKFLOW_OPERATION_RECEIPT_LIMIT}). This receipt is not written: every retained ` + `receipt is a replay anchor, so the engine never discards one to make room. Adopt or close the workflow under a ` + `new operation id (its terminal prune keeps that close receipt only), then start a new workflow for further work.`, {
+    workflow_id: workflowId,
+    epoch: tx.epoch,
+    retained_receipts: count,
+    receipt_limit: RUNNING_WORKFLOW_OPERATION_RECEIPT_LIMIT,
+    available_work: [
+      `adopt or close workflow ${workflowId} under a new operation id`,
+      "start a new workflow for further work"
+    ]
+  });
+}
 function writeOperationReceipt(tx, input) {
+  assertWorkflowOperationReceiptCapacity(tx, input.workflowId, input.exemptFromRetentionCap === true);
   tx.db.prepare("insert into execution_operations(epoch, operation_id, request_hash, store_id, workflow_id, plan_id, result_json, committed_at) " + "values (?, ?, ?, ?, ?, ?, ?, ?)").run(tx.epoch, input.operationId, input.requestHash, tx.storeId, input.workflowId, input.planId, JSON.stringify(input.slim === true ? { slim: true, token: input.receipt.token, storeId: tx.storeId, epoch: tx.epoch, ...receiptFacts(input.receipt) } : input.receipt), input.now);
 }
 function pruneWorkflowOperationReceipts(tx, workflowId, keepOperationId) {
@@ -18023,9 +18060,10 @@ function settleRetiredPlanPmIntegrationClaims(db, context) {
   }
   const attestation = context.attestation;
   const attestedInstant = attestation === undefined ? null : parsedInstant(attestation.attestedAt);
-  const cutoverInstant = parsedInstant(new Date().toISOString());
+  const at = (context.now ?? (() => new Date().toISOString()))();
+  const cutoverInstant = parsedInstant(at);
   const pendingHolders = new Set;
-  const pendingStopped = [];
+  const pendingStoppedBySessionId = new Map;
   const claims = db.prepare("select workflow_id, lease_json from execution_integration_cutover").all();
   const update = db.prepare("update execution_integration_leases set revision = revision + 1, lease_json = ? where workflow_id = ?");
   for (const row of claims) {
@@ -18049,7 +18087,7 @@ function settleRetiredPlanPmIntegrationClaims(db, context) {
     }
     if (attestation === undefined) {
       pendingHolders.add(holder);
-      pendingStopped.push({ sessionId: holder, host: "local", state: "stopped" });
+      pendingStoppedBySessionId.set(holder, { sessionId: holder, host: "local", state: "stopped" });
       continue;
     }
     const attested = attestation.stoppedSessions.find((session) => session.sessionId === holder);
@@ -18065,12 +18103,13 @@ function settleRetiredPlanPmIntegrationClaims(db, context) {
       prior_holder: holder,
       released_by: "store-upgrade",
       released_at: attestation.attestedAt,
-      release_reason: `retired-plan-pm-seat:${holder}`
+      release_reason: attestation.operator.authorizationRef
     };
     update.run(JSON.stringify(tombstone), workflowId);
   }
   if (pendingHolders.size > 0) {
-    throw new SettlementAttestationNeeded([...pendingHolders], pendingStopped);
+    const holders = [...pendingHolders].sort();
+    throw new SettlementAttestationNeeded(holders, holders.map((holder) => pendingStoppedBySessionId.get(holder)), at);
   }
 }
 function migrationChecksum(migration) {
@@ -18137,8 +18176,14 @@ function applyPendingMigrations(db, options = {}) {
       db.exec(SCHEMA_VERSION_TABLE_SQL);
     for (const migration of pending) {
       db.exec(migration.sql);
-      if (migration.normalize !== undefined)
-        migration.normalize(db, { attestation: options.attestation, operator: options.operator, processFacts: options.processFacts });
+      if (migration.normalize !== undefined) {
+        migration.normalize(db, {
+          attestation: options.attestation,
+          operator: options.operator,
+          processFacts: options.processFacts,
+          now: options.now
+        });
+      }
       db.exec("drop table if exists execution_lease_cutover");
       db.exec("drop table if exists execution_session_cutover");
       db.exec("drop table if exists execution_integration_cutover");
@@ -18464,7 +18509,14 @@ async function initializeStore(context, options = {}) {
     options.afterStagingClaim?.();
     db.exec("begin immediate");
     try {
-      applyPendingMigrations(db, { alreadyInTransaction: true, attestation, operator: options.operator, processFacts: options.processFacts, busyTimeoutMs: timeout });
+      applyPendingMigrations(db, {
+        alreadyInTransaction: true,
+        attestation,
+        operator: options.operator,
+        processFacts: options.processFacts,
+        now: options.now,
+        busyTimeoutMs: timeout
+      });
       db.prepare("update store_meta set authority_state = 'active', activated_at = ? where id = 1").run(nowRfc33394());
       db.prepare("update execution_meta set authority_state = 'active', activated_at = ? where id = 1").run(nowRfc33394());
       db.exec("commit");
@@ -18529,7 +18581,12 @@ async function upgradeStore(context, options = {}) {
   }
   let schemaVersion;
   try {
-    schemaVersion = applyPendingMigrations(db, { attestation, operator: options.operator, processFacts: options.processFacts });
+    schemaVersion = applyPendingMigrations(db, {
+      attestation,
+      operator: options.operator,
+      processFacts: options.processFacts,
+      now: options.now
+    });
     readStoreMeta(db);
     readExecutionMeta(db, schemaVersion);
   } catch (error) {
@@ -25161,10 +25218,10 @@ async function upgradeStoreMinimal(input) {
   const dbPath = storeDbPath(context);
   let schemaVersion;
   mkdirSync7(dirname16(dbPath), { recursive: true });
-  const run = (resolved) => !existsSync20(dbPath) ? initializeStore(context, { attestation: resolved, operator: input.operator, processFacts: input.processFacts, raiseSettlementSignal: true }).then((initialized) => {
+  const run = (resolved) => !existsSync20(dbPath) ? initializeStore(context, { attestation: resolved, operator: input.operator, processFacts: input.processFacts, now: input.now, raiseSettlementSignal: true }).then((initialized) => {
     initialized.close();
     return initialized.schemaVersion;
-  }) : upgradeStore(context, { attestation: resolved, operator: input.operator, processFacts: input.processFacts, raiseSettlementSignal: true }).then((upgraded) => upgraded.schemaVersion);
+  }) : upgradeStore(context, { attestation: resolved, operator: input.operator, processFacts: input.processFacts, now: input.now, raiseSettlementSignal: true }).then((upgraded) => upgraded.schemaVersion);
   try {
     schemaVersion = await run(attestation);
   } catch (error) {
@@ -25172,8 +25229,8 @@ async function upgradeStoreMinimal(input) {
       throw error;
     const provisioned = provisionActivationDocument({
       actor: input.operator,
-      authorizationRef: `retired-plan-pm-seat:${error.holders.join(",")}`,
-      attestedAt: new Date().toISOString(),
+      authorizationRef: `retired-plan-pm-seat:${[...new Set(error.holders)].sort().join(",")}`,
+      attestedAt: error.attestedAt,
       stoppedSessions: error.stopped
     }, input.processFacts);
     if (!provisioned.ok) {
@@ -28984,7 +29041,8 @@ async function recoverExecutionCoordinator(context, input) {
           ...holderLiveWarning === undefined ? {} : { holder_live_warning: holderLiveWarning }
         }
       },
-      now: now2
+      now: now2,
+      exemptFromRetentionCap: true
     });
     return {
       ...receipt,
@@ -30238,6 +30296,57 @@ function canonicalNoteLine(note) {
     text: note.text
   });
 }
+function parseCompactionMarker(value) {
+  if (!isPlainObject(value))
+    return null;
+  const keys = Object.keys(value).sort();
+  if (keys.length !== MARKER_KEY_ORDER.length || keys.some((key, index2) => key !== MARKER_KEY_ORDER[index2]))
+    return null;
+  if (value.version !== 1 || value.kind !== WORKFLOW_NOTES_COMPACTION_MARKER_KIND)
+    return null;
+  const { ts, workflowId, dropped, prefixSha256 } = value;
+  if (!isNonEmptyString(ts) || !isNonEmptyString(workflowId) || !isNonEmptyString(prefixSha256))
+    return null;
+  if (!isPlainObject(dropped))
+    return null;
+  const droppedKeys = Object.keys(dropped).sort();
+  if (droppedKeys.length !== DROPPED_KEY_ORDER.length || droppedKeys.some((key, index2) => key !== DROPPED_KEY_ORDER[index2])) {
+    return null;
+  }
+  const counts = dropped;
+  if (!DROPPED_KEYS.every((key) => typeof counts[key] === "number" && Number.isSafeInteger(counts[key])))
+    return null;
+  return {
+    version: 1,
+    kind: WORKFLOW_NOTES_COMPACTION_MARKER_KIND,
+    ts,
+    workflowId,
+    dropped: {
+      bytes: counts.bytes,
+      lines: counts.lines,
+      records: counts.records,
+      historical: counts.historical,
+      unrecognized: counts.unrecognized
+    },
+    prefixSha256
+  };
+}
+function canonicalMarkerLine(marker) {
+  return JSON.stringify({
+    version: 1,
+    kind: WORKFLOW_NOTES_COMPACTION_MARKER_KIND,
+    ts: marker.ts,
+    workflowId: marker.workflowId,
+    dropped: {
+      bytes: marker.dropped.bytes,
+      lines: marker.dropped.lines,
+      records: marker.dropped.records,
+      historical: marker.dropped.historical,
+      unrecognized: marker.dropped.unrecognized
+    },
+    prefixSha256: marker.prefixSha256
+  });
+}
 function parseLedgerLine(bytes) {
   if (bytes.length === 0)
     return { format: "blank" };
@@ -30250,6 +30359,9 @@ function parseLedgerLine(bytes) {
   const note = parseWorkflowNote(value);
   if (note !== null)
     return { format: "versioned-note-v1", record: note };
+  const marker = parseCompactionMarker(value);
+  if (marker !== null)
+    return { format: "compaction-marker", marker };
   if (isPlainObject(value) && value.version === undefined && value.kind === "note" && typeof value.ts === "string" && typeof value.text === "string") {
     return { format: "legacy-note", record: { kind: "note", ts: value.ts, text: value.text } };
   }
@@ -30329,6 +30441,156 @@ function commitLedgerFrame(path2, frame) {
     fsyncDirectory(dirname19(path2));
   assertLedgerPathIdentity(path2, opened, "before success receipt");
 }
+function ledgerSpans(bytes) {
+  const spans = [];
+  let start = 0;
+  let end = bytes.indexOf(10, start);
+  while (end !== -1) {
+    spans.push({ start, end, terminated: true });
+    start = end + 1;
+    end = bytes.indexOf(10, start);
+  }
+  if (start < bytes.length)
+    spans.push({ start, end: bytes.length, terminated: false });
+  return spans;
+}
+function markerReserveBytes(totalBytes, workflowId) {
+  const reserve = Buffer.byteLength(canonicalMarkerLine({
+    version: 1,
+    kind: WORKFLOW_NOTES_COMPACTION_MARKER_KIND,
+    ts: new Date(0).toISOString(),
+    workflowId,
+    dropped: { bytes: 0, lines: 0, records: 0, historical: 0, unrecognized: 0 },
+    prefixSha256: "0".repeat(64)
+  }), "utf8");
+  return reserve + 5 * String(totalBytes).length + 2;
+}
+function writeLedgerTempFile(path2, content3) {
+  const temp = join32(dirname19(path2), `${basename16(path2)}.compaction-${randomUUID7()}.tmp`);
+  try {
+    const fd = openWithoutFollowing(temp, fsConstants.O_WRONLY | fsConstants.O_CREAT | fsConstants.O_EXCL, 420);
+    try {
+      let written = 0;
+      while (written < content3.length) {
+        const step = writeSync(fd, content3, written, content3.length - written, null);
+        if (step <= 0) {
+          throw new ExecutionLedgerError("execution-ledgers.append-short", `the compacted ledger for ${path2} could not be written in full; the retained bytes are unchanged and the temporary file was removed. Retry the append with a new record id.`);
+        }
+        written += step;
+      }
+      fsyncSync2(fd);
+    } finally {
+      closeSync5(fd);
+    }
+    return temp;
+  } catch (error) {
+    try {
+      unlinkSync5(temp);
+    } catch {}
+    throw error;
+  }
+}
+function ledgerSnapshotUnchanged(path2, totalBytes) {
+  try {
+    return lstatSync13(path2).size === totalBytes;
+  } catch {
+    return false;
+  }
+}
+function compactWorkflowNotesLedger(path2, workflowId, trigger) {
+  let bytes;
+  try {
+    bytes = readFileSync26(path2);
+  } catch (error) {
+    if (error.code === "ENOENT")
+      return;
+    throw error;
+  }
+  const totalBytes = bytes.length;
+  if (totalBytes <= WORKFLOW_NOTES_LEDGER_MAX_BYTES)
+    return;
+  const spans = ledgerSpans(bytes);
+  const lineOf = (span) => parseLedgerLine(bytes.subarray(span.start, span.end));
+  const spanBytes = (span) => (span.terminated ? span.end + 1 : span.end) - span.start;
+  const spanToBytes = (span) => bytes.subarray(span.start, spanBytes(span) + span.start);
+  const content3 = spans.filter((span) => lineOf(span).format !== "compaction-marker");
+  let triggerIndex = -1;
+  for (let index2 = content3.length - 1;index2 >= 0; index2 -= 1) {
+    if (spanToBytes(content3[index2]).equals(trigger)) {
+      triggerIndex = index2;
+      break;
+    }
+  }
+  const budget = WORKFLOW_NOTES_LEDGER_READ_BYTES - markerReserveBytes(totalBytes, workflowId);
+  let firstKept = content3.length;
+  let keptBytes = 0;
+  for (let index2 = content3.length - 1;index2 >= 0; index2 -= 1) {
+    const size = spanBytes(content3[index2]);
+    if (index2 !== content3.length - 1 && keptBytes + size > budget)
+      break;
+    keptBytes += size;
+    firstKept = index2;
+  }
+  if (triggerIndex !== -1 && triggerIndex < firstKept)
+    firstKept = triggerIndex;
+  const kept = content3.slice(firstKept);
+  const keptStarts = new Set(kept.map((span) => span.start));
+  let lines = 0;
+  let records = 0;
+  let historical = 0;
+  let unrecognized = 0;
+  const removed = [];
+  for (const span of spans) {
+    if (keptStarts.has(span.start))
+      continue;
+    removed.push(spanToBytes(span));
+    const line = lineOf(span);
+    if (line.format === "compaction-marker")
+      continue;
+    lines += 1;
+    if (line.format === "versioned-note-v1")
+      records += 1;
+    else if (line.format === "legacy-note")
+      historical += 1;
+    else if (line.format === "unrecognized")
+      unrecognized += 1;
+  }
+  const dropped = Buffer.concat(removed);
+  const marker = {
+    version: 1,
+    kind: WORKFLOW_NOTES_COMPACTION_MARKER_KIND,
+    ts: new Date().toISOString(),
+    workflowId,
+    dropped: { bytes: dropped.length, lines, records, historical, unrecognized },
+    prefixSha256: sha256Bytes(dropped)
+  };
+  const temp = writeLedgerTempFile(path2, Buffer.concat([
+    ...kept.map(spanToBytes),
+    Buffer.from(`
+`, "utf8"),
+    Buffer.from(canonicalMarkerLine(marker), "utf8"),
+    Buffer.from(`
+`, "utf8")
+  ]));
+  if (!ledgerSnapshotUnchanged(path2, totalBytes)) {
+    try {
+      unlinkSync5(temp);
+    } catch {}
+    return;
+  }
+  renameSync3(temp, path2);
+  fsyncDirectory(dirname19(path2));
+}
+function withWorkflowNotesMaintenanceLock(context, body) {
+  return withExecutionTransaction(context, () => body());
+}
+function ledgerAtOrOverCeiling(path2, appendBytes) {
+  try {
+    return lstatSync13(path2).size + appendBytes > WORKFLOW_NOTES_LEDGER_MAX_BYTES;
+  } catch {
+    return false;
+  }
+}
 function assertRealDirectory(path2, what) {
   let info = null;
   try {
@@ -30380,7 +30642,18 @@ async function appendWorkflowNote(context, session, note) {
   const frame = Buffer.from(`${canonicalNoteLine({ ...note, ts: note.ts ?? new Date().toISOString() })}
 `, "utf8");
   assertExecutionSessionCurrent(context, session);
+  if (ledgerAtOrOverCeiling(ledgerPath, frame.length)) {
+    await withWorkflowNotesMaintenanceLock(context, () => {
+      assertExecutionSessionCurrent(context, session);
+      commitLedgerFrame(ledgerPath, frame);
+      compactWorkflowNotesLedger(ledgerPath, session.workflowId, frame);
+    });
+    return { id: note.id };
+  }
   commitLedgerFrame(ledgerPath, frame);
+  if (ledgerAtOrOverCeiling(ledgerPath, 0)) {
+    await withWorkflowNotesMaintenanceLock(context, () => compactWorkflowNotesLedger(ledgerPath, session.workflowId, frame));
+  }
   return { id: note.id };
 }
 function normalizeWorkflowNotesCoverage(input) {
@@ -30396,7 +30669,9 @@ function normalizeWorkflowNotesCoverage(input) {
       historical: [],
       records: [],
       counts: { historical: 0, records: 0, unrecognized: 0 },
-      tail: null
+      tail: null,
+      readWindow: input.readWindow ?? { offset: 0, totalBytes: 0, truncated: false },
+      compaction: null
     };
   }
   const buffer = Buffer.isBuffer(input.bytes) ? input.bytes : Buffer.from(input.bytes.buffer, input.bytes.byteOffset, input.bytes.byteLength);
@@ -30407,8 +30682,13 @@ function normalizeWorkflowNotesCoverage(input) {
   let legacy = 0;
   let versioned = 0;
   let unrecognized = 0;
+  let compaction = null;
   for (const entry of scan.lines) {
     const digest = sha256Bytes(entry.bytes);
+    if (entry.line.format === "compaction-marker") {
+      compaction = entry.line.marker;
+      continue;
+    }
     if (entry.line.format === "legacy-note") {
       legacy += 1;
       historical.push({
@@ -30465,7 +30745,9 @@ function normalizeWorkflowNotesCoverage(input) {
     historical,
     records,
     counts: { historical: historical.length, records: records.length, unrecognized },
-    tail: scan.tail.length === 0 ? null : { sha256: sha256Bytes(scan.tail), bytes: scan.tail.length }
+    tail: scan.tail.length === 0 ? null : { sha256: sha256Bytes(scan.tail), bytes: scan.tail.length },
+    readWindow: input.readWindow ?? { offset: 0, totalBytes: buffer.length, truncated: false },
+    compaction
   };
 }
 function controlRootOf2(context) {
@@ -30482,7 +30764,7 @@ async function sha256OfFile(path2) {
 }
 function readIfExists2(path2) {
   try {
-    return readFileSync26(path2);
+    return readFileSync27(path2);
   } catch {
     return;
   }
@@ -31220,7 +31502,7 @@ async function readCommittedRestoreAttempts(context) {
 }
 async function runRestore(context, root, input) {
   const point3 = recoveryPointPath(context, root, input.preview.backupPath);
-  const attemptId = randomUUID7();
+  const attemptId = randomUUID8();
   const imagePath = join33(root, `.store-restore-${attemptId}.db`);
   try {
     try {
@@ -31233,7 +31515,7 @@ async function runRestore(context, root, input) {
       throw new StoreActivationError("store.activation-stale", `the recovery point at ${point3} belongs to store ${image.storeId}, not to the live store ${input.preview.liveStoreId}; a point of another store is never restored over this one.`);
     }
     const safety = await backupStore(context, {
-      out: join33(root, "archived", "store-migration", "backups", `pre-restore-e${input.preview.liveEpoch}-${randomUUID7()}.db`)
+      out: join33(root, "archived", "store-migration", "backups", `pre-restore-e${input.preview.liveEpoch}-${randomUUID8()}.db`)
     });
     try {
       const liveStoreSha256 = await sha256OfFile(storeDbPath(context));
@@ -31431,7 +31713,7 @@ var __defProp2, __returnValue2 = (v) => v, __export2 = (target, all) => {
     return typeFactory(test);
   }
   throw new Error("Expected function, string, or object as test");
-}, init_unist_util_is = () => {}, empty, CONTINUE = true, EXIT = false, SKIP = "skip", init_lib3, init_unist_util_visit_parents, init_lib4, init_mdast_util_find_and_replace, init_lib5, init_mdast_util_gfm_autolink_literal, init_lib6, init_mdast_util_gfm_footnote, init_lib7, init_mdast_util_gfm_strikethrough, init_lib8, init_mdast_util_gfm_table, init_lib9, init_mdast_util_gfm_task_list_item, init_lib10, init_mdast_util_gfm, wwwPrefix, domain, path, trail, emailDomainDotTrail, wwwAutolink, protocolAutolink, emailAutolink, text3, code, init_syntax, init_dev16, indent, init_syntax2, init_dev17, init_syntax3, init_dev18, init_infer, init_syntax4, init_dev19, tasklistCheck, init_syntax5, init_dev20, init_micromark_extension_gfm, SEVERITY_ORDER, ACTIVATION_PROTOCOL_VERSION = 1, init_core, BRANCH_FORMS_HINT = '"Working branch: <existing>" | "Working branch: create <new> from <base>" | "Branch policy: direct on <branch> — <reason>"', REQUIRED_FIELDS, REVIEW_SEAT_ROLES, BUDGET_LABELS, RETURN_SHAPE_LABELS, TASK_BUDGET_LABELS, ASSIGNMENT_ENFORCEMENT_BOLD_RE, ASSIGNMENT_ENFORCEMENT_PLAIN_RE, COMPASS_ENFORCEMENT_RE, ASSIGNMENT_BODY_START_RE, ASSIGNMENT_HEADING_RE, ASSIGNMENT_FIELD_RE, init_dispatch, WORKFLOW_SNAPSHOT_PAYLOAD_SCHEMA, STATUS_V2_PAYLOAD_SCHEMA, init_persist_payload_schemas, DATE_RE, PLAN_STATUSES, RESIDUAL_DECISIONS, RESIDUAL_LIFECYCLES, validateStatus, init_status, COMPASS_STATUSES, DATE_RE2, PLAN_STATUS_DONE = "Done", COMPASS_FILE = "delivery-compass.md", ROADMAP_FILE = "roadmap.md", COMPLETENESS_ROOTS, GAP_CODE, init_iteration, ROADMAP_STATUSES, DATE_RE3, init_roadmap_content, AUDIT_PRIORITIES, AUDIT_EFFORTS, AUDIT_RISKS, AUDIT_CONFIDENCES, AUDIT_CATEGORIES, WHOLE_MATCH_PATTERNS, VALUE_PATTERNS, NEVER_COMMIT_FILENAMES, CI_IAC_LEAK_SHAPES, SAFE_PLACEHOLDER_SHAPES, SAFE_PLACEHOLDER_VALUES, ACTIONS_ENV_KEY, LOCKFILE_NAMES, escapeCell = (value) => value.replace(/\|/g, "\\|"), truncate = (value, max) => value.length > max ? `${value.slice(0, max)}…` : value, collapseEvidenceWs = (value) => value.replace(/\s*[\r\n]\s*/g, " "), evidenceText = (item) => typeof item === "string" ? item : `${item.file}${item.line !== undefined ? `:${item.line}` : ""} — ${item.description}`, AUDIT_FINGERPRINT_RE, AUDIT_SEVERITY_ORDER, DEFAULT_IGNORABLE_RE, LONE_SURROGATE_RE, isPlainObject3 = (value) => typeof value === "object" && value !== null && !Array.isArray(value), init_audit, PLAN_OPERATION_SEMANTICS, WORKFLOW_OPERATION_SEMANTICS, init_recovery_intent, CATALOG_IMPORT_PLAN_VERSION = 1, CATALOG_EXPORT_VERSION = 1, CATALOG_PAGE_LIMIT = 200, ENTITY_KINDS2, ROOT_KINDS2, DOCUMENT_KINDS2, LIFECYCLES2, RELATIONS2, ORDINARY_FILES, COMPASS_FILE2 = "delivery-compass.md", ROADMAP_FILE2 = "roadmap.md", CatalogImportError, init_catalog_import, init_activation_provisioning, exports_store_activation, BACKUP_RECEIPT_VERSION = 2, StoreActivationError, EXECUTION_MIGRATION_VERSION, CONSUMER_KINDS, DISPOSITIONS, SESSION_STATES, RECEIPT_COLUMNS = "id, manifest_hash, manifest_json, mapping_json, source_counts_json, applied_at, activated_at, retired_at", init_store_activation, exports_execution_store, ExecutionError, KIND_KEY_LENGTHS, TOKEN_PREFIX = "exec-v1", STORE_UUID_RE, DECIMAL_RE, BASE64URL_RE, TOKEN_KEY_DECODER, ownedTransactions, OPERATION_ID_RE, CREATE_WORKFLOW_OPERATION = "createExecutionWorkflow", BIND_SESSION_OPERATION = "bindExecutionSession", EXECUTION_SESSION_STATES, init_execution_store, SESSION_ID_MAX_LENGTH = 128, init_session_identity, exports_execution_session, SESSION_WIRE_PREFIX = "exec-session-v1:", SESSION_DECODER, SESSION_KEYS, init_execution_session, KINDS, SEVERITIES, ISSUE_KIND_VALUES, SEVERITY_VALUES, ISSUE_PAYLOAD_SCHEMAS, ISSUE_ACTIONS, ISSUE_ACTION_NAMES, IssueError, DISPOSITIONS2, RELATIONS3, PROVENANCE_KINDS, LAST_ACTIVITY_SQL = `(select max(ts) from (
+}, init_unist_util_is = () => {}, empty, CONTINUE = true, EXIT = false, SKIP = "skip", init_lib3, init_unist_util_visit_parents, init_lib4, init_mdast_util_find_and_replace, init_lib5, init_mdast_util_gfm_autolink_literal, init_lib6, init_mdast_util_gfm_footnote, init_lib7, init_mdast_util_gfm_strikethrough, init_lib8, init_mdast_util_gfm_table, init_lib9, init_mdast_util_gfm_task_list_item, init_lib10, init_mdast_util_gfm, wwwPrefix, domain, path, trail, emailDomainDotTrail, wwwAutolink, protocolAutolink, emailAutolink, text3, code, init_syntax, init_dev16, indent, init_syntax2, init_dev17, init_syntax3, init_dev18, init_infer, init_syntax4, init_dev19, tasklistCheck, init_syntax5, init_dev20, init_micromark_extension_gfm, SEVERITY_ORDER, ACTIVATION_PROTOCOL_VERSION = 1, init_core, BRANCH_FORMS_HINT = '"Working branch: <existing>" | "Working branch: create <new> from <base>" | "Branch policy: direct on <branch> — <reason>"', REQUIRED_FIELDS, REVIEW_SEAT_ROLES, BUDGET_LABELS, RETURN_SHAPE_LABELS, TASK_BUDGET_LABELS, ASSIGNMENT_ENFORCEMENT_BOLD_RE, ASSIGNMENT_ENFORCEMENT_PLAIN_RE, COMPASS_ENFORCEMENT_RE, ASSIGNMENT_BODY_START_RE, ASSIGNMENT_HEADING_RE, ASSIGNMENT_FIELD_RE, init_dispatch, WORKFLOW_SNAPSHOT_PAYLOAD_SCHEMA, STATUS_V2_PAYLOAD_SCHEMA, init_persist_payload_schemas, DATE_RE, PLAN_STATUSES, RESIDUAL_DECISIONS, RESIDUAL_LIFECYCLES, validateStatus, init_status, COMPASS_STATUSES, DATE_RE2, PLAN_STATUS_DONE = "Done", COMPASS_FILE = "delivery-compass.md", ROADMAP_FILE = "roadmap.md", COMPLETENESS_ROOTS, GAP_CODE, init_iteration, ROADMAP_STATUSES, DATE_RE3, init_roadmap_content, AUDIT_PRIORITIES, AUDIT_EFFORTS, AUDIT_RISKS, AUDIT_CONFIDENCES, AUDIT_CATEGORIES, WHOLE_MATCH_PATTERNS, VALUE_PATTERNS, NEVER_COMMIT_FILENAMES, CI_IAC_LEAK_SHAPES, SAFE_PLACEHOLDER_SHAPES, SAFE_PLACEHOLDER_VALUES, ACTIONS_ENV_KEY, LOCKFILE_NAMES, escapeCell = (value) => value.replace(/\|/g, "\\|"), truncate = (value, max) => value.length > max ? `${value.slice(0, max)}…` : value, collapseEvidenceWs = (value) => value.replace(/\s*[\r\n]\s*/g, " "), evidenceText = (item) => typeof item === "string" ? item : `${item.file}${item.line !== undefined ? `:${item.line}` : ""} — ${item.description}`, AUDIT_FINGERPRINT_RE, AUDIT_SEVERITY_ORDER, DEFAULT_IGNORABLE_RE, LONE_SURROGATE_RE, isPlainObject3 = (value) => typeof value === "object" && value !== null && !Array.isArray(value), init_audit, PLAN_OPERATION_SEMANTICS, WORKFLOW_OPERATION_SEMANTICS, init_recovery_intent, CATALOG_IMPORT_PLAN_VERSION = 1, CATALOG_EXPORT_VERSION = 1, CATALOG_PAGE_LIMIT = 200, ENTITY_KINDS2, ROOT_KINDS2, DOCUMENT_KINDS2, LIFECYCLES2, RELATIONS2, ORDINARY_FILES, COMPASS_FILE2 = "delivery-compass.md", ROADMAP_FILE2 = "roadmap.md", CatalogImportError, init_catalog_import, init_activation_provisioning, exports_store_activation, BACKUP_RECEIPT_VERSION = 2, StoreActivationError, EXECUTION_MIGRATION_VERSION, CONSUMER_KINDS, DISPOSITIONS, SESSION_STATES, RECEIPT_COLUMNS = "id, manifest_hash, manifest_json, mapping_json, source_counts_json, applied_at, activated_at, retired_at", init_store_activation, exports_execution_store, ExecutionError, KIND_KEY_LENGTHS, TOKEN_PREFIX = "exec-v1", STORE_UUID_RE, DECIMAL_RE, BASE64URL_RE, TOKEN_KEY_DECODER, ownedTransactions, OPERATION_ID_RE, CREATE_WORKFLOW_OPERATION = "createExecutionWorkflow", BIND_SESSION_OPERATION = "bindExecutionSession", EXECUTION_SESSION_STATES, RUNNING_WORKFLOW_OPERATION_RECEIPT_LIMIT = 256, init_execution_store, SESSION_ID_MAX_LENGTH = 128, init_session_identity, exports_execution_session, SESSION_WIRE_PREFIX = "exec-session-v1:", SESSION_DECODER, SESSION_KEYS, init_execution_session, KINDS, SEVERITIES, ISSUE_KIND_VALUES, SEVERITY_VALUES, ISSUE_PAYLOAD_SCHEMAS, ISSUE_ACTIONS, ISSUE_ACTION_NAMES, IssueError, DISPOSITIONS2, RELATIONS3, PROVENANCE_KINDS, LAST_ACTIVITY_SQL = `(select max(ts) from (
   select issues.registered_at as ts
   union all select o.discovered_at from occurrences o where o.issue_id = issues.id
   union all select t.occurred_at from issue_transitions t where t.issue_id = issues.id
@@ -32035,7 +32317,7 @@ alter table projection_compasses add column plans_json text not null default '[]
   select issues.registered_at as ts
   union all select o.discovered_at from occurrences o where o.issue_id = issues.id
   union all select t.occurred_at from issue_transitions t where t.issue_id = issues.id
-))`, ISSUE_ORDER_SQL, TERMINAL_DISPOSITIONS = "'resolved', 'waived', 'duplicate', 'superseded'", IDENTITY_COLUMNS = "kind, id, title, description, root_kind, relative_path, document_kind, lifecycle, revision, registered_at, updated_at", completeWitnessGapForTest, workflowWitnessGapForTest, RECOVER_COORDINATOR_OPERATION = "recoverExecutionCoordinator", REOPEN_WORKFLOW_OPERATION = "reopenExecutionWorkflow", COMMIT_REGISTRATION_OPERATION = "commitExecutionRegistration", REGISTRATION_SEMANTICS, MAX_DASHBOARD_SEARCH_LENGTH = 200, VIEW_QUERY_FIELDS, DISPOSITIONS3, KINDS2, SEVERITIES2, MIGRATION_MANIFEST_VERSION = 1, LEGACY_ISSUE_KIND = "review-obligation", StoreMigrationError, MIGRATION_VOCABULARY, LEGACY_REQUIRED_FIELDS, HISTORY_ONLY_ABSENT_FIELDS, EXECUTION_LEDGER_ERROR_CODES, ExecutionLedgerError, NOTE_KEYS, NOTE_KEY_ORDER, UNRECOGNIZED_LINE, EXECUTION_RECOVERY_PROTOCOL_VERSION = 3, ExecutionRecoveryError, EXECUTION_MIGRATION_VERSION2, CATALOG_MIGRATION_VERSION, PROVENANCE_ORIGIN_MIGRATION_VERSION, ROADMAP_MIGRATION_VERSION, EXECUTION_COVERAGE_MIGRATION_VERSION, MILESTONE_MIGRATION_VERSION, PROJECT_MOVES_MIGRATION_VERSION, DSH_MIGRATION_VERSION, EXECUTION_COORDINATOR_ONLY_MIGRATION_VERSION, DSH_LEGACY_PROVENANCE_MIGRATION_VERSION, AUTHORITY_TABLES, REPLACEMENT_ORDER, DATABASE_HEADER_BYTES2 = 100, WAL_FILE_FORMAT_VERSION2 = 2, RESTORE_SCRATCH_NAME, RESTORE_SCRATCH_SIDECARS, REDACTED_KEYS;
+))`, ISSUE_ORDER_SQL, TERMINAL_DISPOSITIONS = "'resolved', 'waived', 'duplicate', 'superseded'", IDENTITY_COLUMNS = "kind, id, title, description, root_kind, relative_path, document_kind, lifecycle, revision, registered_at, updated_at", completeWitnessGapForTest, workflowWitnessGapForTest, RECOVER_COORDINATOR_OPERATION = "recoverExecutionCoordinator", REOPEN_WORKFLOW_OPERATION = "reopenExecutionWorkflow", COMMIT_REGISTRATION_OPERATION = "commitExecutionRegistration", REGISTRATION_SEMANTICS, MAX_DASHBOARD_SEARCH_LENGTH = 200, VIEW_QUERY_FIELDS, DISPOSITIONS3, KINDS2, SEVERITIES2, MIGRATION_MANIFEST_VERSION = 1, LEGACY_ISSUE_KIND = "review-obligation", StoreMigrationError, MIGRATION_VOCABULARY, LEGACY_REQUIRED_FIELDS, HISTORY_ONLY_ABSENT_FIELDS, WORKFLOW_NOTES_LEDGER_MAX_BYTES = 4194304, WORKFLOW_NOTES_LEDGER_READ_BYTES = 1048576, WORKFLOW_NOTES_COMPACTION_MARKER_KIND = "workflow-notes-compaction", EXECUTION_LEDGER_ERROR_CODES, ExecutionLedgerError, NOTE_KEYS, NOTE_KEY_ORDER, MARKER_KEYS, MARKER_KEY_ORDER, DROPPED_KEYS, DROPPED_KEY_ORDER, UNRECOGNIZED_LINE, EXECUTION_RECOVERY_PROTOCOL_VERSION = 3, ExecutionRecoveryError, EXECUTION_MIGRATION_VERSION2, CATALOG_MIGRATION_VERSION, PROVENANCE_ORIGIN_MIGRATION_VERSION, ROADMAP_MIGRATION_VERSION, EXECUTION_COVERAGE_MIGRATION_VERSION, MILESTONE_MIGRATION_VERSION, PROJECT_MOVES_MIGRATION_VERSION, DSH_MIGRATION_VERSION, EXECUTION_COORDINATOR_ONLY_MIGRATION_VERSION, DSH_LEGACY_PROVENANCE_MIGRATION_VERSION, AUTHORITY_TABLES, REPLACEMENT_ORDER, DATABASE_HEADER_BYTES2 = 100, WAL_FILE_FORMAT_VERSION2 = 2, RESTORE_SCRATCH_NAME, RESTORE_SCRATCH_SIDECARS, REDACTED_KEYS;
 var init_engine = __esm(() => {
   __defProp2 = Object.defineProperty;
   init_coordination_write = __esm2(() => {
@@ -35673,6 +35955,7 @@ var init_engine = __esm(() => {
   exports_execution_store = {};
   __export2(exports_execution_store, {
     ExecutionError: () => ExecutionError,
+    RUNNING_WORKFLOW_OPERATION_RECEIPT_LIMIT: () => RUNNING_WORKFLOW_OPERATION_RECEIPT_LIMIT,
     adoptTerminalWorkflow: () => adoptTerminalWorkflow,
     advancePlanOperationRevisions: () => advancePlanOperationRevisions,
     advanceWorkflowHeaderRevision: () => advanceWorkflowHeaderRevision,
@@ -36170,10 +36453,12 @@ var init_engine = __esm(() => {
     SettlementAttestationNeeded = class SettlementAttestationNeeded2 extends Error {
       holders;
       stopped;
-      constructor(holders, stopped) {
+      attestedAt;
+      constructor(holders, stopped, attestedAt) {
         super("a held retired plan-PM claim needs a generated attestation");
         this.holders = holders;
         this.stopped = stopped;
+        this.attestedAt = attestedAt;
         this.name = "SettlementAttestationNeeded";
       }
     };
@@ -36986,6 +37271,7 @@ var init_engine = __esm(() => {
   init_store_activation();
   init_coordination_write();
   init_execution_session();
+  init_execution_store();
   init_path();
   init_store_db();
   EXECUTION_LEDGER_ERROR_CODES = [
@@ -37005,6 +37291,10 @@ var init_engine = __esm(() => {
   };
   NOTE_KEYS = ["version", "id", "workflowId", "sessionId", "kind", "ts", "text"];
   NOTE_KEY_ORDER = [...NOTE_KEYS].sort();
+  MARKER_KEYS = ["version", "kind", "ts", "workflowId", "dropped", "prefixSha256"];
+  MARKER_KEY_ORDER = [...MARKER_KEYS].sort();
+  DROPPED_KEYS = ["bytes", "lines", "records", "historical", "unrecognized"];
+  DROPPED_KEY_ORDER = [...DROPPED_KEYS].sort();
   UNRECOGNIZED_LINE = { format: "unrecognized" };
   init_coordination_write();
   init_core();

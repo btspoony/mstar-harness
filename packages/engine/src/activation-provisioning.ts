@@ -26,6 +26,14 @@ import type { ActivationAttestation, StoppedSessionAttestation } from "./store-a
  * because the Bun test runtime is itself inadmissible as an attested consumer —
  * the activation-scope success path is otherwise unreachable under `bun test`
  * by design, never faked.
+ *
+ * Caller contract (not a second seam): this is an optional
+ * DIRECT-ENGINE/TEST provisioning input. It is never evidence of an installed
+ * consumer — a caller that passes facts supplies the consumer row itself, so
+ * the recorded document attests the caller's claim rather than a discovered
+ * installation. Production CLI callers omit it and let `currentProcessFacts()`
+ * describe the executing process; no internal injection mechanism exists
+ * besides this explicit parameter, and none should be added.
  */
 export type ProvisionProcessFacts = {
   /** The resolved executing entrypoint (`process.argv[1]`), or absent. */
