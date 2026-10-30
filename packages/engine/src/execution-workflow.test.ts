@@ -4213,7 +4213,7 @@ describe("execution-workflow-reopen: \u00A74.2 a closed lifecycle returns to run
     expect(await workflowFootprint(active.context)).toEqual(pausedBefore);
   });
 
-  test("a stale terminal CAS and a missing authorization are refused without a footprint", async () => {
+  test("a stale terminal CAS refuses without a footprint, while an omitted authorization document is generated", async () => {
     const fixture = await workflowFixture("reopen-refusals");
     await workflowMutation(fixture, "op-reopen-refusal-close", {
       kind: "lifecycle",

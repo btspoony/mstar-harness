@@ -221,7 +221,7 @@ describe("terminal workflow adoption", () => {
     }
   });
 
-  test("refuses stale CAS, registered rows, and unattested active-session rows", async () => {
+  test("refuses stale CAS and registered rows, while an ACTIVE holder is settled by the generated document", async () => {
     const stale = await strandedTerminal();
     const staleBefore = await footprint(stale.context);
     await expect(adoptTerminalWorkflow({ harnessDir: stale.context.harnessDir, caller: stale.caller }, {
