@@ -323,16 +323,20 @@ test("registered-row refusal advertises the existing close path", async () => {
   expect(close.status).toBe("ok");
 });
 
-test("ACTIVE-holder refusal publishes targets and full proof contract before a file correction and retry", async () => {
+test("uncovered supplied proof publishes targets and the full contract before a file correction and retry", async () => {
   const { root, harness } = await fixture();
   await withActiveHolder(harness, "stranded-holder");
   // Genuine preconditions are the caller identity, selected workflow, reason,
-  // and — supplied to withActiveHolder above — the real holder row.
+  // and — supplied to withActiveHolder above — the real holder row. The supplied
+  // override names another session, so it does not cover the addressed holder:
+  // that is the refusal which publishes the correction contract. (Omitting
+  // --attestation entirely is the supported default and simply succeeds.)
   const refused = await executeCommand("workflow.adopt-terminal", {
     workflow: "wf-command", harness, reason: "active holder",
+    attestation: writeAttestation(root, ["some-other-session"]),
   }, invocation(root));
   expect(refused).toMatchObject({ status: "refused", code: "execution.adoption-refused", exitCode: 1 });
-  if (refused.status !== "refused") throw new Error("expected the ACTIVE-holder refusal");
+  if (refused.status !== "refused") throw new Error("expected the uncovered-proof refusal");
   const details = refused.details;
   if (details === undefined || !("attestationContract" in details) || details.attestationContract === null || typeof details.attestationContract !== "object") {
     throw new Error("the first correction refusal must publish the proof contract");
@@ -597,32 +601,50 @@ test("an unregistered header that never closed is adopted into a terminal state 
   });
 });
 
-test("an ACTIVE holder on an unregistered header is settled only under the operator attestation", async () => {
+test("an ACTIVE holder on an unregistered header is settled by the document the adoption GENERATES", async () => {
+  const { root, harness } = await fixture();
+  await withWriter(harness, (db) => db.prepare("update execution_workflows set state_json = ? where workflow_id = ?")
+    .run(JSON.stringify({ id: "wf-command", schema_version: 1, type: "plan", status: "running", started_at: "2026-10-01T00:00:00.000Z", updated_at: "2026-10-01T01:00:00.000Z" }), "wf-command"));
+  await withActiveHolder(harness, "stranded-holder");
+  // No --attestation: the transaction generates the settlement document from
+  // the addressed holder row and records it, so no operator-authored file is
+  // ever required (I-000297).
+  const generated = await executeCommand("workflow.adopt-terminal", {
+    workflow: "wf-command", harness, expect: "1", operation: "adopt-running-holder", reason: "close an unregistered header",
+  }, invocation(root));
+  expect(generated).toMatchObject({ status: "ok", code: "workflow.adopt-terminal.ok", exitCode: 0 });
+  if (generated.status !== "ok") throw new Error("expected the generated-document adoption");
+  const recovery = (generated.data as { recovery?: { resolvedFrom?: readonly { path: string; source: string }[]; applied?: readonly string[] } }).recovery;
+  expect(recovery?.applied).toEqual(["execution_sessions(wf-command, coordinator, stranded-holder) revoked"]);
+  expect(recovery?.resolvedFrom).toContainEqual({ path: "attestation.stoppedSessions", source: "stranded-holder" });
+  await withWriter(harness, (db) => {
+    expect(db.prepare("select state, revision from execution_sessions where session_id = ?").get("stranded-holder")).toEqual({ state: "revoked", revision: 2 });
+    expect(db.prepare("select json_extract(state_json, '$.status') as status from execution_workflows where workflow_id = ?").get("wf-command")).toEqual({ status: "stopped" });
+  });
+});
+
+test("a supplied attestation that omits an addressed holder names the generated evidence as its recovery", async () => {
   const { root, harness } = await fixture();
   await withWriter(harness, (db) => db.prepare("update execution_workflows set state_json = ? where workflow_id = ?")
     .run(JSON.stringify({ id: "wf-command", schema_version: 1, type: "plan", status: "running", started_at: "2026-10-01T00:00:00.000Z", updated_at: "2026-10-01T01:00:00.000Z" }), "wf-command"));
   await withActiveHolder(harness, "stranded-holder");
   const refused = await executeCommand("workflow.adopt-terminal", {
-    workflow: "wf-command", harness, expect: "1", operation: "adopt-running-holder", reason: "close an unregistered header",
+    workflow: "wf-command", harness, expect: "1", operation: "adopt-uncovered-holder", reason: "close an unregistered header",
+    attestation: writeAttestation(root, ["some-other-session"]),
   }, invocation(root));
-  expect(refused).toMatchObject({ status: "refused", code: "execution.adoption-refused" });
-  if (refused.status !== "refused") throw new Error("expected the ACTIVE-holder refusal");
+  expect(refused).toMatchObject({ status: "refused", code: "execution.adoption-refused", exitCode: 1 });
+  if (refused.status !== "refused") throw new Error("expected the uncovered-proof refusal");
   expect(refused.details).toMatchObject({
     active_holder_sessions: ["stranded-holder"],
-    adoption_refusal: "active-session-proof-required",
+    unattested_sessions: ["stranded-holder"],
+    adoption_refusal: "active-session-proof-incomplete",
   });
+  // The refusal no longer asks for an authored file: it names the generated
+  // evidence as the supported default and keeps the supplied-file correction.
+  expect(refused.details?.recovery).toContain("GENERATES the settlement document");
+  expect(refused.details?.recovery).toContain("Omit --attestation");
   await withWriter(harness, (db) => {
     expect(db.prepare("select state from execution_sessions where session_id = ?").get("stranded-holder")).toEqual({ state: "active" });
-    expect(db.prepare("select json_extract(state_json, '$.status') as status from execution_workflows where workflow_id = ?").get("wf-command")).toEqual({ status: "running" });
-  });
-  const attestation = writeAttestation(root, ["stranded-holder"]);
-  const applied = await executeCommand("workflow.adopt-terminal", {
-    workflow: "wf-command", harness, expect: "1", operation: "adopt-running-holder", reason: "close an unregistered header", attestation,
-  }, invocation(root));
-  expect(applied).toMatchObject({ status: "ok", code: "workflow.adopt-terminal.ok", exitCode: 0 });
-  await withWriter(harness, (db) => {
-    expect(db.prepare("select state, revision from execution_sessions where session_id = ?").get("stranded-holder")).toEqual({ state: "revoked", revision: 2 });
-    expect(db.prepare("select json_extract(state_json, '$.status') as status from execution_workflows where workflow_id = ?").get("wf-command")).toEqual({ status: "stopped" });
   });
 });
 

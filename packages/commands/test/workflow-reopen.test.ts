@@ -112,15 +112,29 @@ describe("workflow.reopen — the public verb on a terminal lifecycle", () => {
     expect(await readExecutionState({ harnessDir: harness })).toEqual(committed);
   });
 
-  test("the operator attestation and reason are required inputs", async () => {
+  test("reason is required, while an omitted attestation is generated instead of demanded", async () => {
     const { root, harness } = await fixture("stopped");
-    const missingAttestation = await definition("workflow.reopen").execute({
-      workflow: WORKFLOW_ID, harness, reason: "no operator document",
+    // No --attestation: the reopen generates its recovery-scope document from
+    // its own recorded facts (I-000297) and succeeds — the file is never a
+    // required input.
+    const generated = await definition("workflow.reopen").execute({
+      workflow: WORKFLOW_ID, harness, reason: "no operator document supplied",
     }, invocation(root));
-    expect(missingAttestation).toMatchObject({ status: "usage", code: "command.invalid-input", exitCode: 2 });
+    expect(generated).toMatchObject({ status: "ok", code: "workflow.reopen.ok", exitCode: 0 });
+    // The generated facts: the calling session is the operator, the replay id
+    // (generated for an omitted --operation) is the authorizationRef, and a
+    // reopen disposes no session row so its stop list is empty.
+    const generatedRecovery = generated.status === "ok" ? generated.data.recovery : undefined;
+    expect(generatedRecovery?.resolvedFrom).toHaveLength(3);
+    expect(generatedRecovery?.resolvedFrom?.[0]).toMatchObject({ path: "attestation.operator" });
+    expect(generatedRecovery?.resolvedFrom?.[0]?.source).toMatch(/^coord-session \([0-9a-f-]{36}\)$/);
+    expect(generatedRecovery?.resolvedFrom?.[1]).toMatchObject({ path: "attestation.attestedAt" });
+    expect(generatedRecovery?.resolvedFrom?.[2]).toEqual({ path: "attestation.stoppedSessions", source: "none" });
+    // `reason` is still the one required authorization fact.
+    const stoppedAgain = await fixture("stopped");
     const missingReason = await definition("workflow.reopen").execute({
-      workflow: WORKFLOW_ID, harness, attestation: join(root, "unused.json"),
-    }, invocation(root));
+      workflow: WORKFLOW_ID, harness: stoppedAgain.harness,
+    }, invocation(stoppedAgain.root));
     expect(missingReason).toMatchObject({ status: "usage", code: "command.invalid-input", exitCode: 2 });
   });
 });
