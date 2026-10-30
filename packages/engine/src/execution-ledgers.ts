@@ -850,6 +850,12 @@ export async function appendWorkflowNote(
   // the ceiling triggers nothing and keeps today's single lock-free `O_APPEND`.
   if (ledgerAtOrOverCeiling(ledgerPath, frame.length)) {
     await withWorkflowNotesMaintenanceLock(context, () => {
+      // The guard above ran BEFORE the store transaction was acquired: opening
+      // the handle and `BEGIN IMMEDIATE` can wait on a writer, and a peer may
+      // revoke this session or advance the epoch during that wait. Re-proving
+      // the session here, inside the lock and before the first byte mutation,
+      // is what keeps a revoked caller from appending and compacting.
+      assertExecutionSessionCurrent(context, session);
       commitLedgerFrame(ledgerPath, frame);
       compactWorkflowNotesLedger(ledgerPath, session.workflowId, frame);
     });
