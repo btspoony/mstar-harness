@@ -67,11 +67,6 @@ function refused(id: string, error: unknown): CommandEnvelope<never> {
   if (id === "store.upgrade" && (code === "store.upgrade-dsh-ack-unmatched" || code === "execution.delivery-declaration-required" || code === "execution.workflow-skip-unmatched" || code === "execution.compass-skip-unmatched")) {
     return refusalEnvelope({ command: id, status: "usage", code, exitCode: 2, message });
   }
-  // An engine-raised recovery names the supported route the engine knows;
-  // the family chain below covers the caller-input causes it owns.
-  const engineRecovery = error !== null && typeof error === "object" && "recovery" in error && typeof error.recovery === "string"
-    ? error.recovery
-    : undefined;
   return error instanceof SddScriptError
     ? refusalEnvelope({ command: id, status: "usage", code: "usage", exitCode: 2, message })
     : refusalEnvelope({
@@ -80,36 +75,47 @@ function refused(id: string, error: unknown): CommandEnvelope<never> {
       code,
       exitCode: 1,
       message,
-      recovery: engineRecovery ?? (code === "store.runtime-unsupported"
-        ? "This command needs a runtime that provides native node:sqlite: install or select Node.js >=24.18.0 on PATH, then rerun the store verb you invoked with the same options — mstar store init, mstar store upgrade --operator <name> --harness <control-root>, mstar store backup --out <path>, mstar store migrate --manifest <path> --apply, mstar store activate --manifest <path> --operator <name>, or mstar store retire --manifest <path>. An existing store is untouched by this refusal, so nothing needs repair first."
-        : id === "store.init" && (message.includes("legacy execution state exists at ") || message.includes("legacy catalog data exists at "))
-        ? "For a fresh workspace, run mstar harness scaffold then mstar store init; to preserve historical files, run mstar store upgrade --operator <name> --harness <control-root>."
-        : code === "store.already-exists"
-          ? id === "store.upgrade"
-            // An upgrade that loses the create-only publication race did not
-            // finish its import: the supported continuation is the same command,
-            // not the "do not migrate" instruction meant for init.
-            ? "Another process already published this control root's store, so nothing was created here and its legacy import may be unfinished. Rerun mstar store upgrade --harness <same-control-root> --operator <name> to continue it, then inspect the result with mstar status validate; initialization is create-only."
-            : "Inspect the existing execution authority with mstar status validate; do not initialize or migrate an existing store."
-          : code === "store.created-handle-failed"
-            ? "The named store is created, active and retained. Once the named condition clears, inspect it with mstar status validate; initialization is create-only. For an interrupted upgrade, run mstar store upgrade --harness <same-control-root> --operator <name>."
-            : code === "store.publication-barrier-failed"
-              ? "The named store is published and retained, but this call could not synchronize its directory entry. Resolve the named platform/filesystem condition, then rerun mstar store upgrade --harness <same-control-root> --operator <name> to retry the barrier and finish any remaining import or activation; initialization is create-only."
-            : code === "store.publication-failed"
-              ? "No store was created at the named path. Resolve the named filesystem condition (permissions, space or hard-link support). For a fresh harness, run mstar store init --harness <control-root>; for existing legacy sources, run mstar store upgrade --operator <name> --harness <control-root>. Select a hard-link-capable filesystem before either attempt."
-              : id === "store.init"
-                ? "Choose an empty harness root and run mstar store init."
-                : code === "store.upgrade-dsh-source-refused"
-                  ? "Rerun mstar store upgrade --operator <name> --ack-skip-dsh <selector> for EVERY selector the refusal names in that same retry, because its list is the union of the selectors this invocation already acknowledged (an acknowledgement is not persisted, so the unchanged root refuses them again) and the selectors this refusal names, so leaving one out refuses that source again; pass --ack-skip-workflow <id> for the ids the refusal names in that same retry: it lists the union of the ids this invocation committed (which its own retained receipt now proves were imported from these exact bytes, so repeating them is accepted and reported as unnecessary) and the original acknowledgements this unchanged root still requires, such as a duplicated v1 plan id, and omitting the latter refuses that source again before the legacy Dsh phase; repeat that invocation's --delivery <json> declarations and --ack-skip-compass <iteration-id> acknowledgements when the source is a v1 root, because the unchanged root still needs one delivery declaration per active standalone plan lift and still refuses that non-regular compass; the message names every value to repeat. Ordinary retry remains available."
-                  : id === "store.upgrade"
-                    ? "Correct the operator input and legacy-store state named by the upgrade diagnostic, then run mstar store upgrade --operator <name>."
-                    : id === "store.migrate"
-                      ? "Correct the legacy source layout or manifest named by the migration diagnostic. Run mstar store migrate."
-                      : id === "store.backup"
-                        ? "Choose a writable backup destination and confirm the active store is readable. Run mstar store backup."
-                        : id === "store.activate"
-                          ? "Align the migration manifest and activation state to the same verified store state. Run mstar store activate --manifest <path> --operator <name>."
-                          : "Resolve the retirement preconditions and recorded activation evidence named by the diagnostic. Run mstar store retire."),
+      // Literal branches only: the repository's refusal-quality lint proves the
+      // text statically, so every code the engine can emit carries the family's
+      // own words for the exact route instead of a composed variable.
+      recovery: (code === "store.attestation-invalid"
+        // The generated-attestation refusal: Bun is never an admissible attested
+        // consumer, and the supported route is the installed Node CLI (or an
+        // explicit document that overrides the generated one).
+        ? "Rerun the same verb through the installed Node CLI: mstar store upgrade --operator <name> (or mstar store activate --manifest <path> --operator <name>), or supply --attestation <absolute-json> to override the generated document."
+        : code === "store.upgrade-attestation-missing"
+          // A held retired claim needs stop evidence at or after the claim instant.
+          ? "Rerun the same upgrade with an explicit document whose attestedAt is at or after the claim instant: mstar store upgrade --operator <name> --attestation <absolute-json>."
+          : code === "store.runtime-unsupported"
+          ? "This command needs a runtime that provides native node:sqlite: install or select Node.js >=24.18.0 on PATH, then rerun the store verb you invoked with the same options — mstar store init, mstar store upgrade --operator <name> --harness <control-root>, mstar store backup --out <path>, mstar store migrate --manifest <path> --apply, mstar store activate --manifest <path> --operator <name>, or mstar store retire --manifest <path>. An existing store is untouched by this refusal, so nothing needs repair first."
+          : id === "store.init" && (message.includes("legacy execution state exists at ") || message.includes("legacy catalog data exists at "))
+          ? "For a fresh workspace, run mstar harness scaffold then mstar store init; to preserve historical files, run mstar store upgrade --operator <name> --harness <control-root>."
+          : code === "store.already-exists"
+            ? id === "store.upgrade"
+              // An upgrade that loses the create-only publication race did not
+              // finish its import: the supported continuation is the same command,
+              // not the "do not migrate" instruction meant for init.
+              ? "Another process already published this control root's store, so nothing was created here and its legacy import may be unfinished. Rerun mstar store upgrade --harness <same-control-root> --operator <name> to continue it, then inspect the result with mstar status validate; initialization is create-only."
+              : "Inspect the existing execution authority with mstar status validate; do not initialize or migrate an existing store."
+            : code === "store.created-handle-failed"
+              ? "The named store is created, active and retained. Once the named condition clears, inspect it with mstar status validate; initialization is create-only. For an interrupted upgrade, run mstar store upgrade --harness <same-control-root> --operator <name>."
+              : code === "store.publication-barrier-failed"
+                ? "The named store is published and retained, but this call could not synchronize its directory entry. Resolve the named platform/filesystem condition, then rerun mstar store upgrade --harness <same-control-root> --operator <name> to retry the barrier and finish any remaining import or activation; initialization is create-only."
+              : code === "store.publication-failed"
+                ? "No store was created at the named path. Resolve the named filesystem condition (permissions, space or hard-link support). For a fresh harness, run mstar store init --harness <control-root>; for existing legacy sources, run mstar store upgrade --operator <name> --harness <control-root>. Select a hard-link-capable filesystem before either attempt."
+                : id === "store.init"
+                  ? "Choose an empty harness root and run mstar store init."
+                  : code === "store.upgrade-dsh-source-refused"
+                    ? "Rerun mstar store upgrade --operator <name> --ack-skip-dsh <selector> for EVERY selector the refusal names in that same retry, because its list is the union of the selectors this invocation already acknowledged (an acknowledgement is not persisted, so the unchanged root refuses them again) and the selectors this refusal names, so leaving one out refuses that source again; pass --ack-skip-workflow <id> for the ids the refusal names in that same retry: it lists the union of the ids this invocation committed (which its own retained receipt now proves were imported from these exact bytes, so repeating them is accepted and reported as unnecessary) and the original acknowledgements this unchanged root still requires, such as a duplicated v1 plan id, and omitting the latter refuses that source again before the legacy Dsh phase; repeat that invocation's --delivery <json> declarations and --ack-skip-compass <iteration-id> acknowledgements when the source is a v1 root, because the unchanged root still needs one delivery declaration per active standalone plan lift and still refuses that non-regular compass; the message names every value to repeat. Ordinary retry remains available."
+                    : id === "store.upgrade"
+                      ? "Correct the operator input and legacy-store state named by the upgrade diagnostic, then run mstar store upgrade --operator <name>."
+                      : id === "store.migrate"
+                        ? "Correct the legacy source layout or manifest named by the migration diagnostic. Run mstar store migrate."
+                        : id === "store.backup"
+                          ? "Choose a writable backup destination and confirm the active store is readable. Run mstar store backup."
+                          : id === "store.activate"
+                            ? "Align the migration manifest and activation state to the same verified store state. Run mstar store activate --manifest <path> --operator <name>."
+                            : "Resolve the retirement preconditions and recorded activation evidence named by the diagnostic. Run mstar store retire."),
     });
 }
 
