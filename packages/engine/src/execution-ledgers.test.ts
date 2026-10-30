@@ -42,6 +42,7 @@ import {
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
+import { createRequire } from "node:module";
 import { fileURLToPath } from "node:url";
 import { DatabaseSync } from "node:sqlite";
 import {
@@ -235,6 +236,9 @@ const realWriteSync = nodeFs.writeSync;
 const realFsyncSync = nodeFs.fsyncSync;
 const realRenameSync = nodeFs.renameSync;
 const realWriteFileSync = nodeFs.writeFileSync;
+/** The driver module the store opens connections through, and its real constructor. */
+const sqliteDriver = createRequire(import.meta.url)("node:sqlite") as { DatabaseSync: new (...args: never[]) => unknown };
+const realDatabaseSync = sqliteDriver.DatabaseSync;
 
 /**
  * The sink boundaries this suite instruments: the single write call and the two
@@ -824,6 +828,35 @@ describe("execution-ledgers: stale authority, scope and target trust", () => {
     expect(existsSync(fixture.workflowDir)).toBe(false);
     expect(existsSync(join(fixture.harnessDir, "status.json"))).toBe(false);
     expect(existsSync(join(fixture.harnessDir, ".execution-maintenance"))).toBe(false);
+  });
+
+  test("a session revoked while the maintenance lock is being acquired never appends or compacts", async () => {
+    // A ledger already over the ceiling, so this append takes the maintenance
+    // path: the pre-wait guard passes, then the store transaction is acquired.
+    const fixture = await notesFixture("revoked-during-maintenance");
+    fixture.seed({ ledger: LEGACY_LINE.repeat(Math.ceil(WORKFLOW_NOTES_LEDGER_MAX_BYTES / Buffer.byteLength(LEGACY_LINE)) + 1) });
+    const before = ledgerBytes(fixture);
+
+    // The peer revokes this session at exactly the boundary the pre-wait guard
+    // cannot cover: the WRITE connection the maintenance lock opens (a reader
+    // passes `{readOnly: true}`, a writer passes no options) is the acquisition
+    // the append then waits in.
+    const spy = spyOn(sqliteDriver, "DatabaseSync").mockImplementation(((...args: never[]) => {
+      if (args.length === 1) {
+        rawRun(fixture.context, `update execution_sessions set state = 'revoked' where workflow_id = '${WF}' and session_id = '${COORDINATOR_ID}'`);
+      }
+      return new realDatabaseSync(...args);
+    }) as never);
+    let refusal: { code: string };
+    try {
+      refusal = await refusalOf(() => appendWorkflowNote(fixture.coordContext, fixture.session, note("note-during-acquire", "revoked during acquisition")));
+    } finally {
+      spy.mockRestore();
+    }
+    expect(refusal.code).toBe("execution.session-unavailable");
+    // No byte of the refused frame landed and the over-ceiling ledger was not
+    // rewritten by a caller whose authority had already been withdrawn.
+    expect(ledgerBytes(fixture)).toEqual(before);
   });
 
   test("a missing control root refuses with no directory side effect at all", async () => {

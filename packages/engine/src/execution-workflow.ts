@@ -2281,6 +2281,10 @@ export async function recoverExecutionCoordinator(
         },
       } as ExecutionRead<ExecutionSessionRef>,
       now,
+      // The one exempt non-terminal write: at the retention bound a recovery
+      // must still commit, or a dead coordinator strands the workflow with no
+      // live binding to close.
+      exemptFromRetentionCap: true,
     });
     return {
       ...receipt,

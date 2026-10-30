@@ -42,6 +42,12 @@ function noteLine(index: number, text: string): string {
   })}\n`;
 }
 
+/** One record line padded to an exact byte length (LF included). */
+function exactLengthNoteLine(index: number, bytes: number): string {
+  const line = noteLine(index, "");
+  return noteLine(index, "y".repeat(bytes - Buffer.byteLength(line)));
+}
+
 /** The disclosure row a compaction leaves as the ledger's final line. */
 function markerLine(droppedBytes: number, droppedLines: number, digest: string): string {
   return `${JSON.stringify({
@@ -129,5 +135,62 @@ describe("execution-ledgers (command family): the coverage read window", () => {
     // The disclosure row is never counted as content.
     expect(facts.counts).toEqual({ historical: 0, records: 1, unrecognized: 0 });
     expect(facts.readWindow.truncated).toBe(false);
+  });
+
+  test("a tail window that starts exactly on a record keeps that whole record", () => {
+    // Every line is exactly one power-of-two length, so the read window (also a
+    // power of two) starts precisely on a record boundary: the byte before the
+    // window is the LF that ends the previous record.
+    const lineBytes = 4096;
+    const line = exactLengthNoteLine(0, lineBytes);
+    const count = Math.ceil(WORKFLOW_NOTES_LEDGER_READ_BYTES / lineBytes) + 2;
+    const ledger = line.repeat(count);
+    const file = scratchFile("aligned.jsonl", ledger);
+    const totalBytes = count * lineBytes;
+    const windowOffset = totalBytes - WORKFLOW_NOTES_LEDGER_READ_BYTES;
+
+    const read = readLedgerBytes(file);
+    // Nothing was trimmed: the window already began on a record.
+    expect(read.readWindow).toEqual({ offset: windowOffset, totalBytes, truncated: true });
+    expect(read.bytes!.length).toBe(WORKFLOW_NOTES_LEDGER_READ_BYTES);
+    expect(Buffer.from(read.bytes!).toString("utf8").startsWith('{"version":1,"id":"note-0"')).toBe(true);
+
+    const facts = normalizeWorkflowNotesCoverage({
+      workflowId: "wf-notes-window",
+      path: file,
+      bytes: read.bytes!,
+      readWindow: read.readWindow,
+    });
+    // Every record inside the window is counted; the aligned start costs none.
+    expect(facts.counts).toEqual({
+      historical: 0,
+      records: WORKFLOW_NOTES_LEDGER_READ_BYTES / lineBytes,
+      unrecognized: 0,
+    });
+    expect(facts.tail).toBeNull();
+  });
+
+  test("a single record that exactly fills the window is not dropped", () => {
+    // A whole-line filler, then one complete record of exactly the read window:
+    // the window starts on that record and holds nothing else.
+    const filler = exactLengthNoteLine(0, 1024).repeat(3);
+    const only = exactLengthNoteLine(1, WORKFLOW_NOTES_LEDGER_READ_BYTES);
+    const file = scratchFile("single-record-window.jsonl", filler + only);
+
+    const read = readLedgerBytes(file);
+    expect(read.readWindow).toEqual({
+      offset: Buffer.byteLength(filler),
+      totalBytes: Buffer.byteLength(filler) + WORKFLOW_NOTES_LEDGER_READ_BYTES,
+      truncated: true,
+    });
+    const facts = normalizeWorkflowNotesCoverage({
+      workflowId: "wf-notes-window",
+      path: file,
+      bytes: read.bytes!,
+      readWindow: read.readWindow,
+    });
+    // The one record the window holds entirely survives in the counts.
+    expect(facts.counts).toEqual({ historical: 0, records: 1, unrecognized: 0 });
+    expect(facts.records.map((entry) => entry.id)).toEqual(["note-1"]);
   });
 });

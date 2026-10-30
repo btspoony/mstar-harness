@@ -120,6 +120,16 @@ export type LedgerRead = Readonly<{ bytes: Uint8Array | null; readWindow: Workfl
 const EMPTY_READ_WINDOW: WorkflowNotesReadWindow = { offset: 0, totalBytes: 0, truncated: false };
 
 /**
+ * The one byte immediately before `offset`, or `-1` when the read returns none.
+ * Used to tell a window that starts on a record boundary from one that starts
+ * inside a record: the LF that terminates the previous record is the marker.
+ */
+function precedingByte(fd: number, offset: number): number {
+  const buffer = Buffer.alloc(1);
+  return readSync(fd, buffer, 0, 1, offset - 1) === 1 ? buffer[0]! : -1;
+}
+
+/**
  * The no-follow, nonblocking open prevents leaf-link races without waiting on
  * a FIFO; fstat validates the opened object. Explicit files are intentionally
  * not confined beneath root.
@@ -129,6 +139,11 @@ const EMPTY_READ_WINDOW: WorkflowNotesReadWindow = { offset: 0, totalBytes: 0, t
  * the window starts in is dropped so no half record becomes a fact. The window
  * it saw travels with the bytes, so coverage discloses a truncation instead of
  * reporting a slice as the whole file.
+ *
+ * The trim is boundary-aware: when the byte preceding the window is the LF that
+ * ends the previous record, the window already starts on a record boundary and
+ * nothing is dropped — including the case where a single record exactly fills
+ * the window.
  */
 export function readLedgerBytes(file: string): LedgerRead {
   let fd: number;
@@ -177,9 +192,12 @@ export function readLedgerBytes(file: string): LedgerRead {
       read += step;
     }
     const window = buffer.subarray(0, read);
-    // A window that starts mid-file starts mid-line: the bytes before its first
-    // LF are a fragment of a record the reader cannot see whole.
-    const boundary = windowOffset === 0 ? 0 : window.indexOf(0x0a) + 1;
+    // A window that starts mid-file starts mid-line UNLESS the byte before it is
+    // an LF: then the window already begins on a record boundary and trimming
+    // through the next LF would discard a complete record. The preceding byte is
+    // read from the same descriptor, ahead of the window.
+    const startsOnRecord = windowOffset === 0 || precedingByte(fd, windowOffset) === 0x0a;
+    const boundary = startsOnRecord ? 0 : window.indexOf(0x0a) + 1;
     const bytes = window.subarray(boundary);
     return {
       bytes,
