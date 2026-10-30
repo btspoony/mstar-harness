@@ -512,7 +512,7 @@
         "files": [
           {
             "path": "hooks/mstar-write-gate.mjs",
-            "sha256": "b7a571ad21b5e85aeaf531c6b231007a54714656a0db0bb0c5548fe3c2b774a6"
+            "sha256": "06b18b9d38317a1e4e4fc04654d488bd8a51d58083f55376cecf4d72119a679f"
           }
         ]
       },

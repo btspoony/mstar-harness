@@ -10045,7 +10045,7 @@ function findRootPackageJson(startDir) {
     dir = parent;
   }
 }
-function harnessVersionFrom(moduleDir) {
+function harnessVersionOrNullFrom(moduleDir) {
   const ownManifest = join4(moduleDir, "..", "package.json");
   try {
     const pkg = JSON.parse(readFileSync3(ownManifest, "utf8"));
@@ -10053,17 +10053,17 @@ function harnessVersionFrom(moduleDir) {
       return pkg.version;
   } catch {}
   const root = findRootPackageJson(moduleDir);
-  if (!root)
-    return "0.0.0";
+  if (root === null)
+    return null;
   try {
     const pkg = JSON.parse(readFileSync3(root, "utf8"));
-    return pkg.version || "0.0.0";
+    return typeof pkg.version === "string" && pkg.version !== "" ? pkg.version : null;
   } catch {
-    return "0.0.0";
+    return null;
   }
 }
-function readHarnessVersion() {
-  return harnessVersionFrom(dirname4(fileURLToPath(import.meta.url)));
+function readHarnessVersionOrNull() {
+  return harnessVersionOrNullFrom(dirname4(fileURLToPath(import.meta.url)));
 }
 function warnUncheckableNodeFloor() {
   process.stderr.write("mstar: the runtime version floor is uncheckable in this layout - no visible manifest declares `engines.node`, " + "so the Node version is not compared (the native node:sqlite capability check still applies). " + "Recovery: run this from an installed package or a full checkout so the manifest that declares the floor is reachable " + "(`npm i -g @mstar-harness/cli` for the CLI; the harness checkout, not a copied bundle, for a hook entrypoint).\n");
@@ -11134,6 +11134,14 @@ function provisionActivationDocument(input, facts = currentProcessFacts()) {
       message: "the executing entrypoint is not identifiable (`process.argv[1]` is absent)"
     };
   }
+  const version = facts.harnessVersion === undefined ? readHarnessVersionOrNull() : facts.harnessVersion;
+  if (version === null || version.trim() === "") {
+    return {
+      ok: false,
+      cause: "missing-manifest",
+      message: "no visible manifest declares the installed harness version (`packages/*/package.json` or the repo root), so the consumer row's version cannot be attested"
+    };
+  }
   return {
     ok: true,
     document: {
@@ -11147,7 +11155,7 @@ function provisionActivationDocument(input, facts = currentProcessFacts()) {
           entrypoint: facts.entrypoint,
           runtime: "node",
           runtimeVersion: facts.runtimeVersion,
-          version: readHarnessVersion(),
+          version,
           current: true,
           disposition: "reloaded"
         }
