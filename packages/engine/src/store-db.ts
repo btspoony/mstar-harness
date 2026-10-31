@@ -1677,7 +1677,8 @@ alter table projection_compasses add column plans_json text not null default '[]
  * project-level provider bindings. `binding_id` is derived ("<provider>:<project_id>"),
  * not a sequence, so crash recovery reconstructs it from the binding row alone.
  * The external_id partial index mirrors `issues_external_identity`; cross-provider
- * uniqueness stays only in the `issues` index.
+ * uniqueness stays only in the `issues` index. `last_skip_reason` is its own
+ * column so a deliberate skip never reads as a failure.
  */
 export const MIGRATION_15_SQL = `
 create table project_bindings(
@@ -1698,11 +1699,13 @@ create table issue_sync_state(
   item_state text not null check (item_state in ('unbound','pending','applied','failed','skipped')),
   last_remote_updated_at text,
   last_error text,
+  last_skip_reason text,
   revision integer not null,
   updated_at text not null,
   primary key (binding_id, direction, local_id)
 );
 create unique index issue_sync_state_external on issue_sync_state(binding_id, direction, external_id) where external_id is not null;
+create index issue_sync_state_last_error on issue_sync_state(binding_id, updated_at desc, revision desc) where last_error is not null;
 create table sync_cursor(
   binding_id text not null,
   direction text not null,

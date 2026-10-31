@@ -828,6 +828,10 @@ describe("migration 15 - sync ledger", () => {
       .prepare("select name from sqlite_master where type='table' and name in ('project_bindings','issue_sync_state','sync_cursor') order by name")
       .all() as Array<{ name: string }>;
     expect(tables.map((t) => t.name)).toEqual(["issue_sync_state", "project_bindings", "sync_cursor"]);
+    const stateColumns = (
+      upgraded.db.prepare("pragma table_info(issue_sync_state)").all() as Array<{ name?: string }>
+    ).map((column) => column.name);
+    expect(stateColumns).toContain("last_skip_reason");
     upgraded.close();
     // Re-open applies no pending migration and keeps the version.
     expect(await upgradeStore({ harnessDir: dir })).toEqual({ schemaVersion: MIGRATIONS.length });

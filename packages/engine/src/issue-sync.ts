@@ -1,9 +1,18 @@
 /**
  * issue-sync.ts — the sync ledger state machine over migration 15's tables
- * (spec: sync-ledger-contract). Every mutation is revision-guarded and
- * replayable by operationId through the existing `store_operations` ledger.
- * No network, no provider dependency: P2 writes `project_bindings`, P3 drives
- * the item transitions, and nothing here mutates on the read path.
+ * (spec: sync-ledger-contract). No network, no provider dependency: P2 writes
+ * `project_bindings`, P3 drives the item transitions, and nothing here mutates
+ * on the read path.
+ *
+ * TRANSACTION OWNERSHIP: every exported mutation owns exactly one
+ * `begin immediate` … `commit` transaction (house pattern: `issue.ts`
+ * `withWrite`). The row mutation and its `store_operations` receipt commit
+ * together or not at all, so an interruption cannot leave an advanced row
+ * without a receipt — the one-way door this ledger exists to prevent.
+ * Consequently a verb must NOT be called inside a caller-owned transaction:
+ * SQLite refuses to nest, and this surface has no composed route yet. Callers
+ * that need a wider unit of work call the verbs sequentially and rely on the
+ * per-verb receipt for idempotency.
  */
 import { createHash } from "node:crypto";
 import type { StoreDb } from "./store-db.js";
@@ -16,7 +25,8 @@ export type SyncErrorCode =
   | "sync.illegal-transition"
   | "sync.revision-conflict"
   | "sync.operation-conflict"
-  | "sync.invalid-input";
+  | "sync.invalid-input"
+  | "sync.local-issue-missing";
 
 export class SyncError extends Error {
   readonly code: SyncErrorCode;
@@ -36,6 +46,7 @@ export type SyncItem = {
   itemState: SyncItemState;
   lastRemoteUpdatedAt: string | null;
   lastError: string | null;
+  lastSkipReason: string | null;
   revision: number;
   updatedAt: string;
 };
@@ -76,6 +87,26 @@ function syncRequestHash(kind: string, payload: Record<string, unknown>): string
   return createHash("sha256").update(JSON.stringify([kind, payload])).digest("hex");
 }
 
+/**
+ * One transaction per public verb: the ledger row and the receipt that makes
+ * the operation replayable are one commit, never two.
+ */
+function withSyncTransaction<T>(db: StoreDb, fn: () => T): T {
+  db.exec("begin immediate");
+  try {
+    const result = fn();
+    db.exec("commit");
+    return result;
+  } catch (error) {
+    try {
+      db.exec("rollback");
+    } catch {
+      // nothing was committed
+    }
+    throw error;
+  }
+}
+
 function replayOrRefuse<T>(db: StoreDb, operationId: string, hash: string): T | undefined {
   const existing = db.prepare("select request_hash, result_json from store_operations where operation_id = ?").get(operationId) as
     | { request_hash: string; result_json: string }
@@ -107,6 +138,7 @@ type SyncRow = {
   item_state: string;
   last_remote_updated_at: string | null;
   last_error: string | null;
+  last_skip_reason: string | null;
   revision: number;
   updated_at: string;
 };
@@ -126,6 +158,7 @@ function toItem(row: SyncRow): SyncItem {
     itemState: row.item_state as SyncItemState,
     lastRemoteUpdatedAt: row.last_remote_updated_at,
     lastError: row.last_error,
+    lastSkipReason: row.last_skip_reason,
     revision: row.revision,
     updatedAt: row.updated_at,
   };
@@ -139,29 +172,38 @@ function requireItem(row: SyncRow | undefined): SyncRow {
 }
 
 function refuseTransition(from: string, verb: string): never {
-  throw new SyncError("sync.illegal-transition", `transition ${verb} from '${from}' is not in the contract`);
+  throw new SyncError(
+    "sync.illegal-transition",
+    `transition ${verb} from '${from}' is not in the contract; re-read the item state and use a legal verb`,
+  );
 }
 
 /**
  * CAS the row forward: the update only lands when the revision read a moment
- * ago still holds; a zero-changes result means a concurrent writer won (or the
- * row vanished, which cannot happen here — no delete verb exists).
+ * ago still holds; a zero-changes result means a concurrent writer won.
  */
 function casUpdate(
   db: StoreDb,
   key: { bindingId: string; direction: string; localId: string },
   revision: number,
-  patch: { item_state: string; external_id?: string | null; last_remote_updated_at?: string | null; last_error?: string | null },
+  patch: {
+    item_state: string;
+    external_id: string | null;
+    last_remote_updated_at: string | null;
+    last_error: string | null;
+    last_skip_reason: string | null;
+  },
   now: string,
 ): void {
   const result = db.prepare(
-    "update issue_sync_state set item_state = ?, external_id = ?, last_remote_updated_at = ?, last_error = ?, revision = revision + 1, updated_at = ?" +
-      " where binding_id = ? and direction = ? and local_id = ? and revision = ?",
+    "update issue_sync_state set item_state = ?, external_id = ?, last_remote_updated_at = ?, last_error = ?, last_skip_reason = ?," +
+      " revision = revision + 1, updated_at = ? where binding_id = ? and direction = ? and local_id = ? and revision = ?",
   ).run(
     patch.item_state,
-    patch.external_id ?? null,
-    patch.last_remote_updated_at ?? null,
-    patch.last_error ?? null,
+    patch.external_id,
+    patch.last_remote_updated_at,
+    patch.last_error,
+    patch.last_skip_reason,
     now,
     key.bindingId,
     key.direction,
@@ -173,10 +215,25 @@ function casUpdate(
   }
 }
 
+/** The local issue must exist before a ledger row can reference it. */
+function requireLocalIssue(db: StoreDb, localId: string): void {
+  const row = db.prepare("select id from issues where id = ?").get(localId) as { id: string } | undefined;
+  if (row === undefined) {
+    throw new SyncError(
+      "sync.local-issue-missing",
+      `localId '${localId}' is not an issue in this store; capture or import it before planning a sync`,
+    );
+  }
+}
+
 /**
  * Record intent as `pending` (unbound → pending, or failed → pending retry).
- * `last_error` is cleared: a fresh cycle must not inherit the previous one's
- * failure text.
+ *
+ * `unbound` is a conceptual pre-state, never a row value: absence of a row IS
+ * the unbound representation, so the summary counts it as 0 by construction.
+ * A retry keeps any remote identity already recorded — a caller omitting
+ * `externalId`/`remoteUpdatedAt` must not erase what the last attempt learned
+ * — and clears the failure/skip text of the previous cycle.
  */
 export function planItem(db: StoreDb, input: PlanItemInput): SyncItem {
   const bindingId = requireNonblank("bindingId", input.bindingId);
@@ -186,27 +243,32 @@ export function planItem(db: StoreDb, input: PlanItemInput): SyncItem {
   const remoteUpdatedAt = input.remoteUpdatedAt == null ? null : requireNonblank("remoteUpdatedAt", input.remoteUpdatedAt);
   const operationId = requireNonblank("operationId", input.operationId);
   const hash = syncRequestHash("planItem", { bindingId, direction, localId, externalId, remoteUpdatedAt });
-  const replayed = replayOrRefuse<SyncItem>(db, operationId, hash);
-  if (replayed !== undefined) return replayed;
-  const now = new Date().toISOString();
-  const row = selectRow(db, bindingId, direction, localId);
-  if (row === undefined || row.item_state === "unbound" || row.item_state === "failed") {
+  return withSyncTransaction(db, () => {
+    const replayed = replayOrRefuse<SyncItem>(db, operationId, hash);
+    if (replayed !== undefined) return replayed;
+    requireLocalIssue(db, localId);
+    const now = new Date().toISOString();
+    const row = selectRow(db, bindingId, direction, localId);
     if (row === undefined) {
       db.prepare(
-        "insert into issue_sync_state(binding_id, direction, local_id, external_id, item_state, last_remote_updated_at, last_error, revision, updated_at)" +
-          " values (?, ?, ?, ?, 'pending', ?, null, 1, ?)",
+        "insert into issue_sync_state(binding_id, direction, local_id, external_id, item_state, last_remote_updated_at, last_error, last_skip_reason, revision, updated_at)" +
+          " values (?, ?, ?, ?, 'pending', ?, null, null, 1, ?)",
       ).run(bindingId, direction, localId, externalId, remoteUpdatedAt, now);
-    } else {
+    } else if (row.item_state === "failed" || row.item_state === "unbound") {
       casUpdate(db, { bindingId, direction, localId }, row.revision, {
-        item_state: "pending", external_id: externalId, last_remote_updated_at: remoteUpdatedAt, last_error: null,
+        item_state: "pending",
+        external_id: externalId ?? row.external_id,
+        last_remote_updated_at: remoteUpdatedAt ?? row.last_remote_updated_at,
+        last_error: null,
+        last_skip_reason: null,
       }, now);
+    } else {
+      refuseTransition(row.item_state, "planItem");
     }
-  } else {
-    refuseTransition(row.item_state, "planItem");
-  }
-  const item = toItem(requireItem(selectRow(db, bindingId, direction, localId)));
-  recordOperation(db, operationId, hash, item, now);
-  return item;
+    const item = toItem(requireItem(selectRow(db, bindingId, direction, localId)));
+    recordOperation(db, operationId, hash, item, now);
+    return item;
+  });
 }
 
 export function markApplied(db: StoreDb, input: MarkItemInput): SyncItem {
@@ -218,8 +280,8 @@ export function markFailed(db: StoreDb, input: MarkFailedInput): SyncItem {
 }
 
 /**
- * Skipped carries its reason in `last_error`, the table's only free-text
- * column — it records why the item was left, not a failure of the item.
+ * The skip reason is its OWN column: a skip is a deliberate decision, not a
+ * failure, so it must not surface as the ledger's last error.
  */
 export function markSkipped(db: StoreDb, input: MarkSkippedInput): SyncItem {
   return markItem(db, input, "skipped", requireNonblank("reason", input.reason));
@@ -235,23 +297,28 @@ function markItem(
   const direction = requireDirection(input.direction);
   const localId = requireNonblank("localId", input.localId);
   const operationId = requireNonblank("operationId", input.operationId);
-  const hash = syncRequestHash(target, { bindingId, direction, localId });
-  const replayed = replayOrRefuse<SyncItem>(db, operationId, hash);
-  if (replayed !== undefined) return replayed;
-  const now = new Date().toISOString();
-  const row = requireItem(selectRow(db, bindingId, direction, localId));
-  if (row.item_state !== "pending" && !(target === "skipped" && row.item_state === "failed")) {
-    refuseTransition(row.item_state, `markItem -> ${target}`);
-  }
-  casUpdate(db, { bindingId, direction, localId }, row.revision, {
-    item_state: target,
-    external_id: row.external_id,
-    last_remote_updated_at: row.last_remote_updated_at,
-    last_error: text ?? null,
-  }, now);
-  const item = toItem(requireItem(selectRow(db, bindingId, direction, localId)));
-  recordOperation(db, operationId, hash, item, now);
-  return item;
+  // The text is part of the request: the same operationId with a different
+  // error/reason is a conflicting request, not a replay.
+  const hash = syncRequestHash(target, { bindingId, direction, localId, text });
+  return withSyncTransaction(db, () => {
+    const replayed = replayOrRefuse<SyncItem>(db, operationId, hash);
+    if (replayed !== undefined) return replayed;
+    const now = new Date().toISOString();
+    const row = requireItem(selectRow(db, bindingId, direction, localId));
+    if (row.item_state !== "pending" && !(target === "skipped" && row.item_state === "failed")) {
+      refuseTransition(row.item_state, `markItem -> ${target}`);
+    }
+    casUpdate(db, { bindingId, direction, localId }, row.revision, {
+      item_state: target,
+      external_id: row.external_id,
+      last_remote_updated_at: row.last_remote_updated_at,
+      last_error: target === "failed" ? (text ?? null) : null,
+      last_skip_reason: target === "skipped" ? (text ?? null) : null,
+    }, now);
+    const item = toItem(requireItem(selectRow(db, bindingId, direction, localId)));
+    recordOperation(db, operationId, hash, item, now);
+    return item;
+  });
 }
 
 export function readItem(db: StoreDb, input: ReadItemInput): SyncItem | null {
@@ -271,19 +338,28 @@ export function readCursor(db: StoreDb, input: CursorInput): string | null {
   return row === undefined ? null : row.cursor;
 }
 
+/**
+ * Advance the resumable position. Writing the cursor already recorded is a
+ * NO-OP — no row update, no receipt, unchanged `updated_at` — so a re-run over
+ * an unchanged page reports zero written rows. (A no-op records no receipt, so
+ * replaying its operationId is likewise a no-op rather than a conflict.)
+ */
 export function writeCursor(db: StoreDb, input: WriteCursorInput): void {
   const bindingId = requireNonblank("bindingId", input.bindingId);
   const direction = requireDirection(input.direction);
   const cursor = requireNonblank("cursor", input.cursor);
   const operationId = requireNonblank("operationId", input.operationId);
   const hash = syncRequestHash("writeCursor", { bindingId, direction, cursor });
-  if (replayOrRefuse<unknown>(db, operationId, hash) !== undefined) return;
-  const now = new Date().toISOString();
-  db.prepare(
-    "insert into sync_cursor(binding_id, direction, cursor, updated_at) values (?, ?, ?, ?)" +
-      " on conflict(binding_id, direction) do update set cursor = excluded.cursor, updated_at = excluded.updated_at",
-  ).run(bindingId, direction, cursor, now);
-  recordOperation(db, operationId, hash, { cursor }, now);
+  withSyncTransaction(db, () => {
+    if (replayOrRefuse<unknown>(db, operationId, hash) !== undefined) return;
+    if (readCursor(db, { bindingId, direction }) === cursor) return;
+    const now = new Date().toISOString();
+    db.prepare(
+      "insert into sync_cursor(binding_id, direction, cursor, updated_at) values (?, ?, ?, ?)" +
+        " on conflict(binding_id, direction) do update set cursor = excluded.cursor, updated_at = excluded.updated_at",
+    ).run(bindingId, direction, cursor, now);
+    recordOperation(db, operationId, hash, { cursor }, now);
+  });
 }
 
 export type LedgerSummary = {
@@ -294,8 +370,9 @@ export type LedgerSummary = {
 
 /**
  * Read-only observability for the CLI/dashboard: per-binding counts by item
- * state, the resumable cursor and the most recent error. No write statement
- * exists on this path.
+ * state, the resumable cursor and the most recent FAILURE. A skip reason is
+ * not an error and is reported on the item (`SyncItem.lastSkipReason`), not
+ * here. No write statement exists on this path.
  */
 export function readLedgerSummary(db: StoreDb, input: CursorInput): LedgerSummary {
   const bindingId = requireNonblank("bindingId", input.bindingId);
@@ -311,5 +388,9 @@ export function readLedgerSummary(db: StoreDb, input: CursorInput): LedgerSummar
   const lastErrorRow = db
     .prepare("select last_error from issue_sync_state where binding_id = ? and last_error is not null order by updated_at desc, revision desc limit 1")
     .get(bindingId) as { last_error: string } | undefined;
-  return { counts, lastCursor: lastCursorRow === undefined ? null : lastCursorRow.cursor, lastError: lastErrorRow === undefined ? null : lastErrorRow.last_error };
+  return {
+    counts,
+    lastCursor: lastCursorRow === undefined ? null : lastCursorRow.cursor,
+    lastError: lastErrorRow === undefined ? null : lastErrorRow.last_error,
+  };
 }

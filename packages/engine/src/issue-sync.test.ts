@@ -1,6 +1,7 @@
 /**
- * issue-sync.test.ts — transitions, replay and read-path proof for the sync
- * ledger state machine. Run with `bun test packages/engine/src/issue-sync.test.ts`.
+ * issue-sync.test.ts — transitions, replay, transaction atomicity and read-path
+ * proof for the sync ledger state machine.
+ * Run with `bun test packages/engine/src/issue-sync.test.ts`.
  */
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -17,7 +18,6 @@ import {
   readLedgerSummary,
   SyncError,
   writeCursor,
-  type SyncItem,
 } from "./issue-sync.js";
 
 const ROOT = mkdtempSync(join(tmpdir(), "mstar-issue-sync-test-"));
@@ -33,10 +33,11 @@ async function openedStore(name: string): Promise<{ db: StoreDb; close: () => vo
   db.prepare(
     "insert into catalog_entities(kind, id, title, root_kind, relative_path, registered_at, updated_at) values('project', 'p-t', 'T', 'projects', 'p-t/roadmap.md', 'now', 'now')",
   ).run();
-  db.prepare(
+  const insertIssue = db.prepare(
     "insert into issues(id, project_id, title, kind, severity, impact, acceptance, created_at, updated_at, identity_key)" +
-      " values ('I-000301', 'p-t', 'Issue', 'bug', 'high', 'impact', 'acceptance', 'now', 'now', 'sync-issue')",
-  ).run();
+      " values (?, 'p-t', 'Issue', 'bug', 'high', 'impact', 'acceptance', 'now', 'now', ?)",
+  );
+  for (const id of ["I-000301", "I-000302", "I-000303"]) insertIssue.run(id, `sync-issue-${id}`);
   return { db, close: () => handle.close() };
 }
 
@@ -54,10 +55,24 @@ function codeOf(fn: () => unknown): string {
   throw new Error("expected the call to throw a SyncError");
 }
 
-function rowOf(db: StoreDb): { item_state: string; revision: number; updated_at: string } {
+/** Run fn, return the error it throws (fail the test if it does not throw). */
+function errorOf(fn: () => unknown): Error {
+  try {
+    fn();
+  } catch (error) {
+    return error as Error;
+  }
+  throw new Error("expected the call to throw");
+}
+
+function rowOf(db: StoreDb): { item_state: string; revision: number; updated_at: string } | undefined {
   return db
     .prepare("select item_state, revision, updated_at from issue_sync_state where binding_id=? and direction=? and local_id=?")
-    .get(KEY.bindingId, KEY.direction, KEY.localId) as { item_state: string; revision: number; updated_at: string };
+    .get(KEY.bindingId, KEY.direction, KEY.localId) as { item_state: string; revision: number; updated_at: string } | undefined;
+}
+
+function receiptCount(db: StoreDb): number {
+  return (db.prepare("select count(*) as n from store_operations").get() as { n: number }).n;
 }
 
 /**
@@ -69,6 +84,8 @@ function conflictingDb(db: StoreDb): StoreDb {
   let armed = true;
   const real = db;
   return {
+    exec: (sql: string) => real.exec(sql),
+    close: () => real.close(),
     prepare(sql: string) {
       const stmt = real.prepare(sql);
       if (armed && sql.trim().startsWith("select") && sql.includes("issue_sync_state")) {
@@ -91,6 +108,46 @@ function conflictingDb(db: StoreDb): StoreDb {
   } as unknown as StoreDb;
 }
 
+/**
+ * A db whose receipt insert fails — the window a crash lands in. If the verb is
+ * one transaction, the ledger mutation rolls back with it.
+ */
+function failingReceipts(db: StoreDb): StoreDb {
+  return {
+    exec: (sql: string) => db.exec(sql),
+    close: () => db.close(),
+    prepare: (sql: string) => {
+      if (sql.trim().startsWith("insert into store_operations")) {
+        return {
+          run: () => {
+            throw new Error("simulated crash before the receipt committed");
+          },
+          get: () => undefined,
+          all: () => [],
+        };
+      }
+      return db.prepare(sql);
+    },
+  } as unknown as StoreDb;
+}
+
+/** Count the transaction statements a verb issues through this handle. */
+function transactionLog(db: StoreDb): { db: StoreDb; log: string[] } {
+  const log: string[] = [];
+  return {
+    log,
+    db: {
+      exec: (sql: string) => {
+        const verb = sql.trim().toLowerCase();
+        if (verb.startsWith("begin") || verb === "commit" || verb === "rollback") log.push(verb);
+        db.exec(sql);
+      },
+      prepare: (sql: string) => db.prepare(sql),
+      close: () => db.close(),
+    } as unknown as StoreDb,
+  };
+}
+
 describe("sync state machine transitions", () => {
   test("legal path unbound -> pending -> applied", async () => {
     const { db, close } = await openedStore("legal-applied");
@@ -102,7 +159,7 @@ describe("sync state machine transitions", () => {
     expect(applied.itemState).toBe("applied");
     // applied is terminal: a NEW planItem cycle is refused here, not mutated.
     expect(codeOf(() => planItem(db, { ...PLAN, operationId: "op-plan-again" }))).toBe("sync.illegal-transition");
-    expect(rowOf(db).item_state).toBe("applied");
+    expect(rowOf(db)?.item_state).toBe("applied");
     close();
   });
 
@@ -139,7 +196,51 @@ describe("sync state machine transitions", () => {
     expect(codeOf(() => markApplied(db, { ...KEY, operationId: "op-other" }))).toBe("sync.illegal-transition");
     // skipped -> applied is likewise outside the contract.
     expect(codeOf(() => markSkipped(db, { ...KEY, operationId: "op-skip-x", reason: "r" }))).toBe("sync.illegal-transition");
-    expect(codeOf(() => markApplied(db, { ...KEY, operationId: "op-y" }))).toBe("sync.illegal-transition");
+    close();
+  });
+
+  test("a localId absent from issues is refused sync.local-issue-missing", async () => {
+    const { db, close } = await openedStore("missing-local");
+    const ghost = { ...PLAN, localId: "I-999999" };
+    expect(codeOf(() => planItem(db, ghost))).toBe("sync.local-issue-missing");
+    // Nothing was written: the refusal is total, not a half-row.
+    expect(db.prepare("select count(*) as n from issue_sync_state").get()).toEqual({ n: 0 });
+    expect(receiptCount(db)).toBe(0);
+    close();
+  });
+});
+
+describe("transaction ownership (one transaction per verb)", () => {
+  test("each mutating verb opens exactly one begin and commits exactly once", async () => {
+    const { db, close } = await openedStore("tx-log");
+    const { db: logged, log } = transactionLog(db);
+    planItem(logged, PLAN);
+    expect(log).toEqual(["begin immediate", "commit"]);
+    log.length = 0;
+    markApplied(logged, { ...KEY, operationId: "op-tx-apply" });
+    expect(log).toEqual(["begin immediate", "commit"]);
+    log.length = 0;
+    writeCursor(logged, { ...KEY, cursor: "cur-tx", operationId: "op-tx-cur" });
+    expect(log).toEqual(["begin immediate", "commit"]);
+    close();
+  });
+
+  test("a failing receipt rolls the ledger row back, so the retry is not a one-way door", async () => {
+    const { db, close } = await openedStore("tx-rollback");
+    expect(() => planItem(failingReceipts(db), PLAN)).toThrow(/simulated crash/);
+    // The row did not advance, and no receipt exists.
+    expect(rowOf(db)).toBeUndefined();
+    expect(receiptCount(db)).toBe(0);
+    // The retry with the SAME operationId succeeds instead of being refused.
+    expect(planItem(db, PLAN).itemState).toBe("pending");
+    expect(receiptCount(db)).toBe(1);
+
+    expect(() => markApplied(failingReceipts(db), { ...KEY, operationId: "op-tx-applied" })).toThrow(/simulated crash/);
+    expect(rowOf(db)?.item_state).toBe("pending");
+    expect(rowOf(db)?.revision).toBe(1);
+    // The same operationId now lands, because no orphan receipt blocks it.
+    expect(markApplied(db, { ...KEY, operationId: "op-tx-applied" }).itemState).toBe("applied");
+    expect(rowOf(db)?.item_state).toBe("applied");
     close();
   });
 });
@@ -150,7 +251,7 @@ describe("sync replay semantics", () => {
     const first = planItem(db, PLAN);
     const second = planItem(db, PLAN);
     expect(second).toEqual(first);
-    expect(rowOf(db).revision).toBe(1);
+    expect(rowOf(db)?.revision).toBe(1);
     // Replay wins even where the transition would now be illegal, and reports
     // the ORIGINAL receipt unchanged.
     markApplied(db, { ...KEY, operationId: "op-apply-r" });
@@ -165,6 +266,34 @@ describe("sync replay semantics", () => {
     expect(codeOf(() => markApplied(db, { ...KEY, operationId: PLAN.operationId }))).toBe("sync.operation-conflict");
     close();
   });
+
+  test("the failure text is part of the request, not just the key", async () => {
+    const { db, close } = await openedStore("replay-text");
+    planItem(db, PLAN);
+    markFailed(db, { ...KEY, operationId: "op-fail-text", error: "timeout" });
+    expect(codeOf(() => markFailed(db, { ...KEY, operationId: "op-fail-text", error: "rate limited" }))).toBe(
+      "sync.operation-conflict",
+    );
+    planItem(db, { ...PLAN, operationId: "op-plan-text" });
+    markSkipped(db, { ...KEY, operationId: "op-skip-text", reason: "archived remotely" });
+    expect(codeOf(() => markSkipped(db, { ...KEY, operationId: "op-skip-text", reason: "other reason" }))).toBe(
+      "sync.operation-conflict",
+    );
+    close();
+  });
+});
+
+describe("retry preserves recorded remote identity", () => {
+  test("a retry that omits externalId / remoteUpdatedAt keeps the recorded values", async () => {
+    const { db, close } = await openedStore("retry-identity");
+    planItem(db, PLAN);
+    markFailed(db, { ...KEY, operationId: "op-retry-fail", error: "boom" });
+    const retried = planItem(db, { ...KEY, operationId: "op-retry-plan" });
+    expect(retried.externalId).toBe("EXT-1");
+    expect(retried.lastRemoteUpdatedAt).toBe("2026-10-31T00:00:00Z");
+    expect(retried.lastError).toBeNull();
+    close();
+  });
 });
 
 describe("sync revision guard", () => {
@@ -172,7 +301,7 @@ describe("sync revision guard", () => {
     const { db, close } = await openedStore("cas-conflict");
     planItem(db, PLAN);
     expect(codeOf(() => markApplied(conflictingDb(db), { ...KEY, operationId: "op-cas" }))).toBe("sync.revision-conflict");
-    expect(rowOf(db).item_state).toBe("pending");
+    expect(rowOf(db)?.item_state).toBe("pending");
     close();
   });
 });
@@ -202,32 +331,35 @@ describe("cursor and read helpers", () => {
     expect(readItem(db, KEY)?.itemState).toBe("pending");
     writeCursor(db, { ...KEY, cursor: "cur-1", operationId: "op-cur-1" });
     expect(readCursor(db, KEY)).toBe("cur-1");
-    // Upsert overwrites; replay of the same operationId changes nothing.
     writeCursor(db, { ...KEY, cursor: "cur-2", operationId: "op-cur-2" });
     expect(readCursor(db, KEY)).toBe("cur-2");
+    // Replaying the first operationId returns its receipt without moving back.
     writeCursor(db, { ...KEY, cursor: "cur-1", operationId: "op-cur-1" });
     expect(readCursor(db, KEY)).toBe("cur-2");
+    close();
+  });
+
+  test("writing the cursor already recorded is a no-op: no update, no receipt", async () => {
+    const { db, close } = await openedStore("cursor-noop");
+    writeCursor(db, { ...KEY, cursor: "cur-x", operationId: "op-noop-1" });
+    const before = db.prepare("select cursor, updated_at from sync_cursor").all();
+    const receiptsBefore = receiptCount(db);
+    writeCursor(db, { ...KEY, cursor: "cur-x", operationId: "op-noop-2" });
+    expect(db.prepare("select cursor, updated_at from sync_cursor").all()).toEqual(before);
+    expect(receiptCount(db)).toBe(receiptsBefore);
     close();
   });
 });
 
 describe("ledger read path (task 3)", () => {
-  test("a mixed-state ledger renders counts, last cursor and last error", async () => {
+  test("a mixed-state ledger renders counts, last cursor and the last FAILURE only", async () => {
     const { db, close } = await openedStore("ledger-summary");
+    const second = { ...KEY, localId: "I-000302" };
+    const third = { ...KEY, localId: "I-000303" };
     planItem(db, PLAN);
     markApplied(db, { ...KEY, operationId: "op-sum-a" });
-    const other = { ...KEY, localId: "I-000302" };
-    db.prepare(
-      "insert into issues(id, project_id, title, kind, severity, impact, acceptance, created_at, updated_at, identity_key)" +
-        " values ('I-000302', 'p-t', 'Two', 'bug', 'high', 'impact', 'acceptance', 'now', 'now', 'sync-issue-2')",
-    ).run();
-    planItem(db, { ...PLAN, localId: other.localId, externalId: "EXT-2", operationId: "op-sum-p" });
-    markFailed(db, { ...other, operationId: "op-sum-f", error: "boom last" });
-    const third = { ...KEY, localId: "I-000303" };
-    db.prepare(
-      "insert into issues(id, project_id, title, kind, severity, impact, acceptance, created_at, updated_at, identity_key)" +
-        " values ('I-000303', 'p-t', 'Three', 'bug', 'high', 'impact', 'acceptance', 'now', 'now', 'sync-issue-3')",
-    ).run();
+    planItem(db, { ...PLAN, localId: second.localId, externalId: "EXT-2", operationId: "op-sum-p" });
+    markFailed(db, { ...second, operationId: "op-sum-f", error: "boom last" });
     planItem(db, { ...PLAN, localId: third.localId, externalId: "EXT-3", operationId: "op-sum-s" });
     markSkipped(db, { ...third, operationId: "op-sum-x", reason: "gone" });
     writeCursor(db, { ...KEY, cursor: "cur-9", operationId: "op-sum-cur" });
@@ -235,14 +367,28 @@ describe("ledger read path (task 3)", () => {
     const summary = readLedgerSummary(db, KEY);
     expect(summary.counts).toEqual({ unbound: 0, pending: 0, applied: 1, failed: 1, skipped: 1 });
     expect(summary.lastCursor).toBe("cur-9");
-    // The skip reason ("gone") lands after the failure, so it is the latest
-    // free-text entry; the failure itself is visible on the failed item.
-    expect(summary.lastError).toBe("gone");
-    expect(readItem(db, other)?.lastError).toBe("boom last");
+    // The skip reason is not an error: the failure is still the reported one.
+    expect(summary.lastError).toBe("boom last");
+    const skipped = readItem(db, third);
+    expect(skipped?.lastSkipReason).toBe("gone");
+    expect(skipped?.lastError).toBeNull();
+    const failed = readItem(db, second);
+    expect(failed?.lastError).toBe("boom last");
+    expect(failed?.lastSkipReason).toBeNull();
     // Unrelated bindings contribute nothing.
     expect(readLedgerSummary(db, { bindingId: "linear:other", direction: "import" }).counts).toEqual({
       unbound: 0, pending: 0, applied: 0, failed: 0, skipped: 0,
     });
+    close();
+  });
+
+  test("unbound is represented by absence, never by a row", async () => {
+    const { db, close } = await openedStore("ledger-unbound");
+    expect(readItem(db, KEY)).toBeNull();
+    expect(readLedgerSummary(db, KEY).counts.unbound).toBe(0);
+    expect(db.prepare("select count(*) as n from issue_sync_state where item_state = 'unbound'").get()).toEqual({ n: 0 });
+    planItem(db, PLAN);
+    expect(readLedgerSummary(db, KEY).counts).toEqual({ unbound: 0, pending: 1, applied: 0, failed: 0, skipped: 0 });
     close();
   });
 
@@ -251,34 +397,28 @@ describe("ledger read path (task 3)", () => {
     planItem(db, PLAN);
     markFailed(db, { ...KEY, operationId: "op-ro-f", error: "err" });
     writeCursor(db, { ...KEY, cursor: "cur-ro", operationId: "op-ro-c" });
-    const before = [
+    const snapshot = () => [
       db.prepare("select * from issue_sync_state order by local_id").all(),
       db.prepare("select * from sync_cursor").all(),
-      db.prepare("select count(*) as n from store_operations").get(),
+      receiptCount(db),
     ];
+    const before = snapshot();
     readLedgerSummary(db, KEY);
     readItem(db, KEY);
     readCursor(db, KEY);
-    const after = [
-      db.prepare("select * from issue_sync_state order by local_id").all(),
-      db.prepare("select * from sync_cursor").all(),
-      db.prepare("select count(*) as n from store_operations").get(),
-    ];
-    expect(after).toEqual(before);
+    expect(snapshot()).toEqual(before);
     close();
   });
 });
 
 describe("sync error shape", () => {
-  test("SyncError mirrors IssueError: [code] message prefix plus .code", () => {
-    const error = new SyncError("sync.not-found", "no ledger row");
-    expect(error.message).toBe("[sync.not-found] no ledger row");
-    expect(error.code).toBe("sync.not-found");
-    expect(error).toBeInstanceOf(Error);
-    const sample: SyncItem = {
-      bindingId: "b", direction: "import", localId: "l", externalId: null,
-      itemState: "pending", lastRemoteUpdatedAt: null, lastError: null, revision: 1, updatedAt: "now",
-    };
-    expect(sample.itemState).toBe("pending");
+  test("a refusal raised by a verb carries [code] prefix, .code and .name", async () => {
+    const { db, close } = await openedStore("error-shape");
+    const error = errorOf(() => markApplied(db, { ...KEY, operationId: "op-shape" }));
+    expect(error).toBeInstanceOf(SyncError);
+    expect((error as SyncError).code).toBe("sync.not-found");
+    expect(error.name).toBe("SyncError");
+    expect(error.message.startsWith("[sync.not-found] ")).toBe(true);
+    close();
   });
 });
