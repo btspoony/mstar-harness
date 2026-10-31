@@ -148,7 +148,7 @@ function failure(id: string, error: unknown): CommandEnvelope<never> {
   if (error instanceof SddScriptError) {
     return refusalEnvelope({ command: id, status: "usage", code: "usage", exitCode: 2, message, details: { operation: id }, recovery });
   }
-  return refusalEnvelope({ command: id, status: "refused", code, exitCode: 1, message, details: { operation: id, ...facts.details }, recovery });
+  return refusalEnvelope({ command: id, status: "refused", code, exitCode: 1, message, details: { operation: id, ...facts.details }, recovery: recovery || "Run `mstar project bind --help` and correct the named binding condition before retrying." });
 }
 
 async function run(id: string, input: Input, invocation: InvocationContext): Promise<CommandEnvelope> {
