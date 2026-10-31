@@ -66,12 +66,6 @@
     "expectedCount": 1
   },
   {
-    "signature": "missing-recovery:packages/commands/src/families/project.ts:9531c165f925",
-    "justification": "The family selects its recovery text at runtime (engine-supplied facts, a documented per-code RECOVERY map, and a literal fallback); strict static proof cannot evaluate the expression, the same class as the other engine-fact forwards.",
-    "trackingIssue": "I-000872",
-    "expectedCount": 1
-  },
-  {
     "signature": "missing-recovery:packages/commands/src/families/issue-sync.ts:03f83182f1d6",
     "justification": "The family selects its recovery text at runtime (engine-supplied facts, a documented per-code RECOVERY map, and a literal fallback); strict static proof cannot evaluate the expression, the same class as the other engine-fact forwards.",
     "trackingIssue": "I-000872",
