@@ -723,6 +723,44 @@ export {
 // implements it. One probe-state vocabulary for every consumer.
 export type { IssueProvider, ProbeResult, ProbeState, ProviderItem, ProviderPage } from "./issue-sync/provider.js";
 export { PROBE_STATES } from "./issue-sync/provider.js";
+// Sync ledger (migration 15): the per-item state machine and its read path.
+// Every mutation owns its transaction; a caller composes the verbs sequentially.
+export type {
+  CursorInput,
+  LedgerSummary,
+  MarkFailedInput,
+  MarkItemInput,
+  MarkSkippedInput,
+  PlanItemInput,
+  ReadItemInput,
+  SyncDirection,
+  SyncErrorCode,
+  SyncItem,
+  SyncItemState,
+  WriteCursorInput,
+} from "./issue-sync.js";
+export {
+  SyncError,
+  markApplied,
+  markFailed,
+  markSkipped,
+  planItem,
+  readCursor,
+  readItem,
+  readLedgerSummary,
+  replanItem,
+  writeCursor,
+} from "./issue-sync.js";
+// M0 read-only mirror ingest: one listing page → store rows through the capture
+// path and the ledger above.
+export type { ImportPageResult } from "./issue-sync/import.js";
+export {
+  IMPORTED_ACCEPTANCE_KEY,
+  IMPORTED_ROOT_CAUSE_KEY,
+  IMPORT_DIRECTION,
+  LINEAR_PROVIDER,
+  importPage,
+} from "./issue-sync/import.js";
 // Catalog authority: catalog metadata is
 // the DB authority for project/iteration/plan/document identity, locations,
 // relations and archived/superseded lifecycle. No execution status, no

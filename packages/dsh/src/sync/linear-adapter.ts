@@ -1,0 +1,207 @@
+/**
+ * dsh Linear listing adapter (mirror-import plan Task 2): the read-only
+ * `listIssues(cursor)` half of the engine's `IssueProvider`. One MCP `tools/call`
+ * per page against the configured Linear entry; never a write call, never a
+ * per-issue poll, never a credential in output.
+ *
+ * The exact tool name and payload shape are NOT known in this checkout: the
+ * authenticated `tools/list` that would settle them needs a credential this
+ * environment does not have (`specs/linear-mcp-tool-surface.md` records the
+ * pending inventory). The plan authorises proceeding on the fixture boundary, so
+ * this adapter maps the documented FIXTURE envelope:
+ *
+ *   { issues: LinearItem[], nextCursor?: string | null, errors?: [{ message }] }
+ *
+ * and treats anything else as a page FAILURE rather than an empty page — an
+ * unmappable payload must never look like "this project has no issues".
+ * An embedded `errors` array is likewise a page failure (contract §5).
+ */
+import { SyncError, type ProviderItem, type ProviderPage } from "@mstar-harness/engine";
+import { redactTransportMessage } from "./linear-probe.js";
+
+/** A configured Linear MCP entry, as the host configuration names it. */
+export type LinearAdapterEntry = { url: string };
+
+/** The outcome of one injected `tools/call`. */
+export type LinearCallOutcome =
+  | { kind: "ok"; payload: unknown }
+  | { kind: "transport-error"; message: string }
+  | { kind: "http-status"; status: number };
+
+/** Host-owned capabilities injected at the MCP boundary (fixtures in tests). */
+export type LinearListDeps = {
+  /** Find the configured Linear MCP entry, or `null` when none exists. */
+  findLinearEntry(): LinearAdapterEntry | null;
+  /** Perform one read-only `tools/call` against the entry. */
+  call(entry: LinearAdapterEntry, request: { tool: string; arguments: Record<string, unknown> }): Promise<LinearCallOutcome>;
+  /**
+   * Candidate listing verbs, in preference order. Still the P2 probe's candidate
+   * set: the authenticated inventory has not been recorded yet, so the first entry
+   * is the verb this build tries.
+   */
+  listingVerbs: readonly string[];
+};
+
+/** Contract §5: 50 per page, so a run is a predictable number of requests. */
+export const LINEAR_PAGE_SIZE = 50;
+
+export type LinearListSide = {
+  listIssues(cursor: string | null): Promise<ProviderPage>;
+};
+
+/** Create the listing side of the dsh Linear provider. */
+export function createLinearAdapter(deps: LinearListDeps): LinearListSide {
+  const tool = deps.listingVerbs[0];
+  return {
+    async listIssues(cursor: string | null): Promise<ProviderPage> {
+      if (tool === undefined) {
+        throw new SyncError(
+          "linear.list-unimplemented",
+          "this host configuration names no Linear listing verb, so no page can be requested",
+        );
+      }
+      const entry = deps.findLinearEntry();
+      if (entry === null) {
+        throw new SyncError("linear.query-failed", "no Linear MCP entry is configured for this host; nothing was listed");
+      }
+      const outcome = await deps.call(entry, {
+        tool,
+        arguments: { limit: LINEAR_PAGE_SIZE, ...(cursor === null ? {} : { cursor }) },
+      });
+      if (outcome.kind === "transport-error") {
+        throw new SyncError(
+          "linear.query-failed",
+          `the Linear MCP call failed (${redactTransportMessage(outcome.message)}); the page was not ingested and the cursor did not advance`,
+        );
+      }
+      if (outcome.kind === "http-status") {
+        throw new SyncError(
+          "linear.query-failed",
+          `the Linear MCP call answered HTTP ${outcome.status}; the page was not ingested and the cursor did not advance`,
+        );
+      }
+      return mapPage(outcome.payload);
+    },
+  };
+}
+
+type Payload = Record<string, unknown>;
+
+function isRecord(value: unknown): value is Payload {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+/**
+ * An embedded GraphQL/proxy `errors` array is a failure, even next to partial
+ * `data`: a half page that looks full would silently skip issues (contract §5).
+ */
+function assertNoEmbeddedErrors(payload: Payload): void {
+  const errors = payload.errors;
+  if (errors === undefined || errors === null) return;
+  if (!Array.isArray(errors)) {
+    throw new SyncError("linear.query-failed", "the Linear MCP page carried a non-array `errors` field; nothing was ingested");
+  }
+  if (errors.length === 0) return;
+  const first = errors[0];
+  const message = isRecord(first) && typeof first.message === "string" ? first.message : String(first);
+  throw new SyncError(
+    "linear.query-failed",
+    `the Linear MCP page reported errors (${redactTransportMessage(message)}); nothing from that page was ingested`,
+  );
+}
+
+/** Map the documented fixture envelope; an unrecognised shape is a failure. */
+export function mapPage(payload: unknown): ProviderPage {
+  if (!isRecord(payload)) {
+    throw new SyncError("linear.query-failed", "the Linear MCP page was not an object; nothing was ingested");
+  }
+  assertNoEmbeddedErrors(payload);
+  const items = payload.issues;
+  if (!Array.isArray(items)) {
+    throw new SyncError(
+      "linear.query-failed",
+      "the Linear MCP page carries no `issues` array; an unmappable page is a failure, never an empty project",
+    );
+  }
+  return { items: items.map((entry, index) => mapItem(entry, index)), nextCursor: nextCursorOf(payload) };
+}
+
+function nextCursorOf(payload: Payload): string | null {
+  const cursor = payload.nextCursor;
+  if (cursor === undefined || cursor === null) return null;
+  if (typeof cursor !== "string") {
+    throw new SyncError("linear.query-failed", "the Linear MCP page carried a non-string `nextCursor`; nothing was ingested");
+  }
+  return cursor === "" ? null : cursor;
+}
+
+/** A missing required field is a page failure: no field is invented. */
+function required(item: Payload, field: string, index: number): string {
+  const value = item[field];
+  if (typeof value !== "string" || value.trim() === "") {
+    throw new SyncError(
+      "linear.query-failed",
+      `issue at page index ${index} has no usable "${field}"; the page was refused rather than ingested with a guessed value`,
+    );
+  }
+  return value;
+}
+
+/**
+ * `priority` is nullable (Linear allows an unset priority; the local severity
+ * enum does not) — the mapper keeps the label when the payload carries one and
+ * falls back to the numeric priority, nothing else.
+ */
+function priorityOf(item: Payload): string | null {
+  const label = item.priorityLabel;
+  if (typeof label === "string" && label.trim() !== "") return label.trim();
+  const value = item.priority;
+  if (typeof value === "number") return String(value);
+  if (typeof value === "string" && value.trim() !== "") return value.trim();
+  return null;
+}
+
+function labelsOf(item: Payload): string[] {
+  const labels = item.labels;
+  if (labels === undefined || labels === null) return [];
+  if (!Array.isArray(labels)) {
+    throw new SyncError("linear.query-failed", "an issue carried a non-array `labels` field; the page was refused");
+  }
+  return labels.map((label) => {
+    if (typeof label === "string") return label;
+    if (isRecord(label) && typeof label.name === "string") return label.name;
+    throw new SyncError("linear.query-failed", "an issue carried an unusable label entry; the page was refused");
+  });
+}
+
+function stateOf(item: Payload): string {
+  const state = item.state;
+  if (isRecord(state) && typeof state.name === "string") return state.name;
+  if (typeof state === "string") return state;
+  // Linear's MCP listing may name this `status`; both spellings are read, and an
+  // absent state is an empty string rather than an invented one.
+  const status = item.status;
+  if (isRecord(status) && typeof status.name === "string") return status.name;
+  if (typeof status === "string") return status;
+  return "";
+}
+
+function mapItem(entry: unknown, index: number): ProviderItem {
+  if (!isRecord(entry)) {
+    throw new SyncError("linear.query-failed", `issue at page index ${index} is not an object; the page was refused`);
+  }
+  // Linear lists the human key as `identifier` and the API id as `id`; the
+  // identifier is stable across runs and is what the ledger keys on.
+  const identifier =
+    typeof entry.identifier === "string" && entry.identifier.trim() !== "" ? entry.identifier : required(entry, "id", index);
+  return {
+    externalId: identifier,
+    title: required(entry, "title", index),
+    description: typeof entry.description === "string" ? entry.description : "",
+    state: stateOf(entry),
+    priority: priorityOf(entry),
+    labels: labelsOf(entry),
+    updatedAt: required(entry, "updatedAt", index),
+    url: required(entry, "url", index),
+  };
+}

@@ -4,7 +4,8 @@
  * `project_bindings`, P3 drives the item transitions, and nothing here mutates
  * on the read path.
  *
- * TRANSACTION OWNERSHIP: every exported mutation owns exactly one
+ * TRANSACTION OWNERSHIP: every exported mutation (`planItem`, `replanItem`,
+ * `markApplied`, `markFailed`, `markSkipped`, `writeCursor`) owns exactly one
  * `begin immediate` … `commit` transaction (house pattern: `issue.ts`
  * `withWrite`). The row mutation and its `store_operations` receipt commit
  * together or not at all, so an interruption cannot leave an advanced row
@@ -20,13 +21,21 @@ import type { StoreDb } from "./store-db.js";
 export type SyncDirection = "import" | "push";
 export type SyncItemState = "unbound" | "pending" | "applied" | "failed" | "skipped";
 
+/**
+ * The `sync.*` codes are this module's own; the `linear.*` entries are the
+ * provider-side vocabulary the contract documents for cross-reference (§4) and
+ * that the P3 adapter and ingest emit — one name per condition, no synonyms.
+ */
 export type SyncErrorCode =
   | "sync.not-found"
   | "sync.illegal-transition"
   | "sync.revision-conflict"
   | "sync.operation-conflict"
   | "sync.invalid-input"
-  | "sync.local-issue-missing";
+  | "sync.local-issue-missing"
+  | "linear.query-failed"
+  | "linear.identity-collision"
+  | "linear.list-unimplemented";
 
 export class SyncError extends Error {
   readonly code: SyncErrorCode;
@@ -265,6 +274,45 @@ export function planItem(db: StoreDb, input: PlanItemInput): SyncItem {
     } else {
       refuseTransition(row.item_state, "planItem");
     }
+    const item = toItem(requireItem(selectRow(db, bindingId, direction, localId)));
+    recordOperation(db, operationId, hash, item, now);
+    return item;
+  });
+}
+
+/**
+ * Re-plan an already-`applied` item whose remote revision moved on (§2, added
+ * for M0): the ONLY legal source state, everything else refuses
+ * `sync.illegal-transition`. The new watermark is the remote revision this
+ * re-plan is for, and the recorded `external_id` / `last_remote_updated_at`
+ * survive an omission exactly as they do on `planItem`'s retry.
+ *
+ * The transition is `applied → pending`; the caller still owes the `markApplied`
+ * of the cycle it opened, so a crash between the two leaves a `pending` row the
+ * next run resumes instead of a silent overwrite. Same transaction ownership and
+ * replay rules as every other mutation here.
+ */
+export function replanItem(db: StoreDb, input: PlanItemInput): SyncItem {
+  const bindingId = requireNonblank("bindingId", input.bindingId);
+  const direction = requireDirection(input.direction);
+  const localId = requireNonblank("localId", input.localId);
+  const externalId = input.externalId == null ? null : requireNonblank("externalId", input.externalId);
+  const remoteUpdatedAt = input.remoteUpdatedAt == null ? null : requireNonblank("remoteUpdatedAt", input.remoteUpdatedAt);
+  const operationId = requireNonblank("operationId", input.operationId);
+  const hash = syncRequestHash("replanItem", { bindingId, direction, localId, externalId, remoteUpdatedAt });
+  return withSyncTransaction(db, () => {
+    const replayed = replayOrRefuse<SyncItem>(db, operationId, hash);
+    if (replayed !== undefined) return replayed;
+    const now = new Date().toISOString();
+    const row = requireItem(selectRow(db, bindingId, direction, localId));
+    if (row.item_state !== "applied") refuseTransition(row.item_state, "replanItem");
+    casUpdate(db, { bindingId, direction, localId }, row.revision, {
+      item_state: "pending",
+      external_id: externalId ?? row.external_id,
+      last_remote_updated_at: remoteUpdatedAt ?? row.last_remote_updated_at,
+      last_error: null,
+      last_skip_reason: null,
+    }, now);
     const item = toItem(requireItem(selectRow(db, bindingId, direction, localId)));
     recordOperation(db, operationId, hash, item, now);
     return item;

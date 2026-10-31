@@ -16,6 +16,7 @@ import {
   readCursor,
   readItem,
   readLedgerSummary,
+  replanItem,
   SyncError,
   writeCursor,
 } from "./issue-sync.js";
@@ -279,6 +280,61 @@ describe("sync replay semantics", () => {
     expect(codeOf(() => markSkipped(db, { ...KEY, operationId: "op-skip-text", reason: "other reason" }))).toBe(
       "sync.operation-conflict",
     );
+    close();
+  });
+});
+
+describe("replanItem (applied -> pending)", () => {
+  test("a newer remote revision re-plans an applied item and advances the watermark", async () => {
+    const { db, close } = await openedStore("replan-legal");
+    planItem(db, PLAN);
+    markApplied(db, { ...KEY, operationId: "op-replan-apply" });
+    const replanned = replanItem(db, {
+      ...KEY,
+      externalId: "EXT-1",
+      remoteUpdatedAt: "2026-11-02T00:00:00Z",
+      operationId: "op-replan-1",
+    });
+    expect(replanned.itemState).toBe("pending");
+    expect(replanned.lastRemoteUpdatedAt).toBe("2026-11-02T00:00:00Z");
+    expect(markApplied(db, { ...KEY, operationId: "op-replan-applied" }).itemState).toBe("applied");
+    close();
+  });
+
+  test("it retains the recorded external_id / last_remote_updated_at when omitted", async () => {
+    const { db, close } = await openedStore("replan-retain");
+    planItem(db, PLAN);
+    markApplied(db, { ...KEY, operationId: "op-retain-apply" });
+    const replanned = replanItem(db, { ...KEY, operationId: "op-retain-replan" });
+    expect(replanned.externalId).toBe("EXT-1");
+    expect(replanned.lastRemoteUpdatedAt).toBe("2026-10-31T00:00:00Z");
+    close();
+  });
+
+  test("every source state other than applied refuses sync.illegal-transition", async () => {
+    const { db, close } = await openedStore("replan-illegal");
+    // No row at all: the addressed key does not exist.
+    expect(codeOf(() => replanItem(db, { ...KEY, operationId: "op-absent" }))).toBe("sync.not-found");
+    planItem(db, PLAN);
+    expect(codeOf(() => replanItem(db, { ...KEY, operationId: "op-pending" }))).toBe("sync.illegal-transition");
+    markFailed(db, { ...KEY, operationId: "op-fail", error: "boom" });
+    expect(codeOf(() => replanItem(db, { ...KEY, operationId: "op-failed" }))).toBe("sync.illegal-transition");
+    // failed -> pending makes it pending again; skipped is reachable only from failed.
+    planItem(db, { ...PLAN, operationId: "op-retry" });
+    markSkipped(db, { ...KEY, operationId: "op-skip", reason: "filtered" });
+    expect(codeOf(() => replanItem(db, { ...KEY, operationId: "op-skipped" }))).toBe("sync.illegal-transition");
+    close();
+  });
+
+  test("replay and conflict follow the same rules as planItem", async () => {
+    const { db, close } = await openedStore("replan-replay");
+    planItem(db, PLAN);
+    markApplied(db, { ...KEY, operationId: "op-rl-apply" });
+    const first = replanItem(db, { ...KEY, remoteUpdatedAt: "2026-11-02T00:00:00Z", operationId: "op-rl-1" });
+    expect(replanItem(db, { ...KEY, remoteUpdatedAt: "2026-11-02T00:00:00Z", operationId: "op-rl-1" })).toEqual(first);
+    expect(
+      codeOf(() => replanItem(db, { ...KEY, remoteUpdatedAt: "2026-11-03T00:00:00Z", operationId: "op-rl-1" })),
+    ).toBe("sync.operation-conflict");
     close();
   });
 });
