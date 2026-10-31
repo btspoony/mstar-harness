@@ -7,7 +7,7 @@
  * validation implementation. Every case runs the layer against the real store
  * boundary; nothing is mocked.
  */
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterAll, describe, expect, test } from "bun:test";
@@ -31,6 +31,7 @@ import type {
   OverviewDTO,
   OverviewMember,
   ReadEnvelope,
+  SyncBindingDTO,
 } from "./store-read.js";
 
 const ROOT = mkdtempSync(join(tmpdir(), "mstar-dashboard-view-"));
@@ -781,5 +782,80 @@ describe("overview read model", () => {
     for (const member of [overview.workflows, overview.residuals, overview.latestIteration, overview.issueFlow] as const) {
       expect(member.state).toBe("read");
     }
+  });
+});
+
+describe("sync-binding view", () => {
+  /** Snapshot every file under `dir` (path → content) for the no-write proof. */
+  function snapshot(dir: string): Map<string, string> {
+    const out = new Map<string, string>();
+    const walk = (current: string): void => {
+      for (const entry of readdirSync(current)) {
+        const full = join(current, entry);
+        if (statSync(full).isDirectory()) walk(full);
+        else out.set(full, readFileSync(full, "utf8"));
+      }
+    };
+    walk(dir);
+    return out;
+  }
+
+  test("a valid [linear] block answers the four-field summary; readiness defaults to honestly not-probed", async () => {
+    const context = await workspace("sync-binding-valid");
+    writeFileSync(join(context.harnessDir, "..", ".mstarc"), "[linear]\nenabled=true\nmode=mirror\nworkspace=acme\nteam=eng\n");
+    const data = (await readDashboardView({ context, view: "sync-binding" })).data as SyncBindingDTO;
+    expect(data.binding).toEqual({ enabled: true, mode: "mirror", workspace: "acme", team: "eng" });
+    expect(data.bindingError).toBeNull();
+    expect(data.readiness).toEqual({
+      state: "not-probed",
+      cause: "not-probed: readiness is host-owned; no probe result was supplied",
+    });
+  });
+
+  test("each host-supplied probe state passes through with its own distinguishable cause text", async () => {
+    const context = await workspace("sync-binding-probe");
+    const causes: Record<string, string> = {
+      ready: "ready: Linear MCP handshake succeeded (initialize + tools/list)",
+      "service-absent": "service-absent: no Linear entry in the host MCP configuration",
+      unreachable: "unreachable: Linear MCP transport failed (connection refused)",
+      "access-denied": "access-denied: Linear MCP handshake answered 401",
+    };
+    const states = Object.keys(causes) as Array<keyof typeof causes>;
+    for (const state of states) {
+      const data = (await readDashboardView({ context, view: "sync-binding", params: { probe_state: state, probe_cause: causes[state] } }))
+        .data as SyncBindingDTO;
+      expect<string>(data.readiness.state).toBe(state);
+      expect(data.readiness.cause).toBe(causes[state]);
+    }
+    // Text-distinguishable, not merely color: four distinct state words, four distinct causes.
+    expect(new Set(states).size).toBe(4);
+    expect(new Set(Object.values(causes)).size).toBe(4);
+  });
+
+  test("an invalid [linear] section answers the named refusal, not a fabricated binding", async () => {
+    const context = await workspace("sync-binding-invalid");
+    writeFileSync(join(context.harnessDir, "..", ".mstarc"), "[linear]\nenabled=true\nmode=yaml\nworkspace=acme\nteam=eng\n");
+    const data = (await readDashboardView({ context, view: "sync-binding" })).data as SyncBindingDTO;
+    expect(data.binding).toBeNull();
+    expect(data.bindingError).toContain('linear.mode-refused: [linear] mode "yaml"');
+  });
+
+  test("probe filter refusals: unknown state, cause without state, unknown field, over-long cause", async () => {
+    const context = await workspace("sync-binding-refusals");
+    const read = (params: Record<string, string>) => readDashboardView({ context, view: "sync-binding", params });
+    await expect(read({ probe_state: "not-probed" })).rejects.toThrow(/probe_state must be one of/);
+    await expect(read({ probe_cause: "orphan" })).rejects.toThrow(/probe_cause requires probe_state/);
+    await expect(read({ probe: "x" })).rejects.toThrow(/"probe" is not a supported sync-binding query parameter/);
+    await expect(read({ probe_state: "ready", probe_cause: "x".repeat(MAX_DASHBOARD_SEARCH_LENGTH + 1) })).rejects.toThrow(
+      /probe_cause must be at most 200 characters/,
+    );
+  });
+
+  test("no-write proof: reading the view leaves the harness tree byte-identical", async () => {
+    const context = await workspace("sync-binding-readonly");
+    writeFileSync(join(context.harnessDir, "..", ".mstarc"), "[linear]\nenabled=true\nmode=mirror\nworkspace=acme\nteam=eng\n");
+    const before = snapshot(context.harnessDir);
+    await readDashboardView({ context, view: "sync-binding", params: { probe_state: "ready", probe_cause: "ready: ok" } });
+    expect(snapshot(context.harnessDir)).toEqual(before);
   });
 });

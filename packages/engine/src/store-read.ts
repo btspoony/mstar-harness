@@ -36,6 +36,8 @@ import { ProjectionError, refreshProjections, type ProjectionFreshness, type Sou
 import { parseRoadmapContent, type RoadmapContent } from "./roadmap-content.js";
 import { readRoadmapAuthorityOn, type RoadmapRead } from "./roadmap-store.js";
 import { SddScriptError } from "./sdd.js";
+import { dirname } from "node:path";
+import { loadMstarc, parseLinearBinding } from "./mstarc.js";
 import { openStore, StoreError, type StoreContext, type StoreDb, type StoreHandle } from "./store-db.js";
 import { ExecutionError } from "./execution-store.js";
 import type { AuthorityVerdict } from "./recovery-intent.js";
@@ -100,7 +102,8 @@ export type DashboardView =
   | "projects"
   | "roadmap"
   | "issue-flow"
-  | "overview";
+  | "overview"
+  | "sync-binding";
 
 /**
  * Request filters. Only the fields a view needs are read: `id` for the three
@@ -113,6 +116,27 @@ export type DashboardFilters = {
   issue?: IssueFilter;
   limit?: number;
   offset?: number;
+  /** `sync-binding` only: a host-supplied probe result (both fields together). */
+  probeState?: SyncProbeState;
+  probeCause?: string;
+};
+
+/** Host-supplied readiness states; `not-probed` is the engine's honest default. */
+export type SyncProbeState = "ready" | "service-absent" | "unreachable" | "access-denied";
+
+/** Readiness as the binding panel shows it — never guessed from configuration. */
+export type SyncBindingReadiness = {
+  state: SyncProbeState | "not-probed";
+  cause: string;
+};
+
+/** The read-only binding DTO: connection summary + readiness with its cause. */
+export type SyncBindingDTO = {
+  /** The `[linear]` summary, or `null` when no section is declared. */
+  binding: { enabled: boolean; mode: string; workspace: string; team: string } | null;
+  /** The `parseLinearBinding` refusal message when the section is invalid. */
+  bindingError: string | null;
+  readiness: SyncBindingReadiness;
 };
 
 // ---------------------------------------------------------------------------
@@ -369,6 +393,7 @@ export type DashboardViewData = {
   roadmap: RoadmapDTO | null;
   "issue-flow": IssueFlow;
   overview: OverviewDTO;
+  "sync-binding": SyncBindingDTO;
 };
 
 /** Which views refresh projected execution rows (contract §6 refresh rule). */
@@ -385,6 +410,8 @@ const DASHBOARD_VIEWS: Record<DashboardView, { needsProjection: boolean }> = {
   // Joins projected workflow/plan/compass rows with non-projected issue and
   // milestone tables, so it takes the refresh the two iteration views take.
   overview: { needsProjection: true },
+  // Assembled from `.mstarc` + host-supplied probe filters; reads no store rows.
+  "sync-binding": { needsProjection: false },
 };
 // ---------------------------------------------------------------------------
 // Small conversions
@@ -629,6 +656,9 @@ export function queryDashboard<V extends DashboardView>(
   view: V,
   filters: DashboardFilters = {},
 ): StoreReadQuery<DashboardViewData[V]> {
+  if (view === "sync-binding") {
+    usage("the sync-binding view is served by querySyncBinding, not queryDashboard");
+  }
   if (!Object.hasOwn(DASHBOARD_VIEWS, view)) {
     usage(`unknown dashboard view ${JSON.stringify(String(view))}`);
   }
@@ -652,6 +682,28 @@ export function queryIssueFlow(projectId?: string): StoreReadQuery<IssueFlow> {
     needsProjection: false,
     run: (handle) => readIssueFlow(handle.db, scoped ?? undefined),
   };
+}
+
+/**
+ * The `sync-binding` view (contract §6): the `.mstarc` `[linear]` summary plus
+ * the readiness state with its cause. Assembled at query-build time from the
+ * config file and the host-supplied probe filters — the run reads no store
+ * rows and opens no file, so the view stays read-only end to end. Readiness is
+ * never guessed: with no host-supplied probe result it is honestly
+ * `not-probed`.
+ */
+export function querySyncBinding(harnessDir: string, filters: DashboardFilters): StoreReadQuery<SyncBindingDTO> {
+  const rc = loadMstarc(harnessDir, dirname(harnessDir));
+  const parsed = parseLinearBinding(rc?.config.linear, rc?.config.linearMapping);
+  const binding = parsed.ok
+    ? { enabled: parsed.binding.enabled, mode: parsed.binding.mode, workspace: parsed.binding.workspace, team: parsed.binding.team }
+    : null;
+  const bindingError = parsed.ok ? null : parsed.message;
+  const readiness: SyncBindingReadiness =
+    filters.probeState === undefined
+      ? { state: "not-probed", cause: "not-probed: readiness is host-owned; no probe result was supplied" }
+      : { state: filters.probeState, cause: filters.probeCause ?? "" };
+  return { view: "sync-binding", needsProjection: false, run: () => ({ binding, bindingError, readiness }) };
 }
 
 function dashboardView(view: DashboardView, handle: StoreHandle, filters: DashboardFilters): unknown {
