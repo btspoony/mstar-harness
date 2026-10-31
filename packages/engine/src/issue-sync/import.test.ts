@@ -1,5 +1,5 @@
 /**
- * import.test.ts — M0 read-only ingest (mirror-import plan Task 3): the
+ * import.test.ts -- M0 read-only ingest (mirror-import plan Task 3): the
  * external row shape, replay/zero-delta, exactly-once for a changed item, and
  * the local-only gate exclusion.
  * Run with `bun test packages/engine/src/issue-sync/import.test.ts`.
@@ -132,7 +132,7 @@ describe("a remote change imports exactly once", () => {
     close();
   });
 
-  test("an item first seen after it changed is imported once (row absent → planItem)", async () => {
+  test("an item first seen after it changed is imported once (row absent -> planItem)", async () => {
     const { db, close } = await store("first-seen-changed");
     expect(importPage(db, BINDING, [item()])).toEqual({ imported: 1, updated: 0, skipped: 0, failed: 0 });
     // A different remote item, already at its second revision, appears.
@@ -176,7 +176,7 @@ describe("local identity and local-only gates", () => {
     importPage(db, BINDING, [item({ priority: "urgent" })]);
     const localId = (db.prepare("select id from issues where external_id = 'LIN-1'").get() as { id: string }).id;
     // Link the mirrored row to a plan exactly like a local finding, at critical
-    // severity — the shape that WOULD violate zero-residual.
+    // severity -- the shape that WOULD violate zero-residual.
     db.prepare("insert into provenance(issue_id, kind, target, source_hash, origin) values (?, 'plan', 'plan-z', 'h', 'scoped')").run(localId);
     expect((db.prepare("select severity from issues where id = ?").get(localId) as { severity: string }).severity).toBe("critical");
     close();
