@@ -67,6 +67,11 @@ const required: Record<Verb, (keyof Input)[]> = {
 
 class UsageError extends Error {}
 
+/** Drop a leading refusal label (`linear.x: ` / `[linear.x] `) from a cause. */
+function withoutCodeLabel(message: string): string {
+  return message.replace(/^\[?linear\.[a-z-]+\]?:?\s*/, "");
+}
+
 function requireValue(value: string | undefined, flag: string): string {
   if (value === undefined || !value.trim()) throw new UsageError(`${flag} is required`);
   return value.trim();
@@ -94,6 +99,8 @@ const RECOVERY: Record<string, string> = {
     "The --operation id was already used for a different request. Retry with a new operation id.",
   "linear.binding-conflict":
     "Read the existing correspondence with `mstar project show --project <project-id>` and retry with a fresh --operation when the request differs.",
+  "linear.binding-absent":
+    "This repo declares no [linear] connection block. Add one to the repo root's .mstarc (`[linear]` with `enabled=true`, `mode=mirror`, `workspace=<slug>`, `team=<key>`) and retry the bind; a parent directory's configuration is never inherited.",
   "linear.binding-invalid":
     "Fix the value the message names. `[linear] enabled` accepts true/1/yes/on or false/0/no/off (case-insensitive); workspace/team/remoteProject must be non-empty; the store revision must still match when --expect-store is supplied. Check the block with `mstar project show --project <id>` and re-run bind with a fresh --operation.",
   "store.not-active":
@@ -163,7 +170,14 @@ async function run(id: string, input: Input, invocation: InvocationContext): Pro
     const provider = requireValue(input.provider, "--provider");
     const enabled = repo.kind === "bound" && repo.binding.enabled;
     if (!enabled || provider !== "linear") {
-      const why = repo.kind === "absent" ? repo.message : `[linear] enabled is not true in ${repo.file}`;
+      // The spec keeps `linear.binding-absent` a NAMED ABSENCE, never a refusal,
+      // so the refusal here carries `linear.provider-disabled` for every cause —
+      // including "no block at all" — and the message drops the other code's
+      // label instead of nesting two vocabularies in one line.
+      const why =
+        repo.kind === "absent"
+          ? withoutCodeLabel(repo.message)
+          : `a [${"linear"}] block exists in ${repo.file} but enabled is not true`;
       return failure(
         id,
         Object.assign(new Error(`[linear.provider-disabled] Provider "${provider}" is not enabled here: ${why}`), {

@@ -138,6 +138,62 @@ describe("createLinearProbe", () => {
     expect((await createLinearProbe(d).probe()).state).toBe("service-absent");
   });
 
+  test("R1: a transport that THROWS is caught and mapped to unreachable, never a rejected probe()", async () => {
+    const throwing: LinearProbeDeps = {
+      findLinearEntry: () => ENTRY,
+      listingVerbs: LISTING_VERBS,
+      rpc: () => {
+        throw new Error("socket hang up: Authorization: Bearer lin_api_topsecret");
+      },
+    };
+    const result = await createLinearProbe(throwing).probe();
+    expect(result.state).toBe("unreachable");
+    expect(result.cause).toContain("Linear MCP transport failed");
+    expect(result.cause).not.toContain("lin_api_topsecret");
+    expect(result.cause).toContain("[redacted]");
+  });
+
+  test("R1: a REJECTED transport promise is caught too, and covers the second call", async () => {
+    let call = 0;
+    const rejecting: LinearProbeDeps = {
+      findLinearEntry: () => ENTRY,
+      listingVerbs: LISTING_VERBS,
+      rpc: () => {
+        call += 1;
+        return call === 1 ? Promise.resolve(OK_INIT) : Promise.reject(new Error("connection reset"));
+      },
+    };
+    const result = await createLinearProbe(rejecting).probe();
+    expect(result.state).toBe("unreachable");
+    expect(result.cause).toBe("unreachable: Linear MCP transport failed (connection reset)");
+  });
+
+  test("R1: a thrown non-Error still yields a readable, credential-free cause", async () => {
+    const throwing: LinearProbeDeps = {
+      findLinearEntry: () => ENTRY,
+      listingVerbs: LISTING_VERBS,
+      rpc: () => {
+        throw undefined;
+      },
+    };
+    const result = await createLinearProbe(throwing).probe();
+    expect(result.state).toBe("unreachable");
+    expect(result.cause).toBe("unreachable: Linear MCP transport failed (the transport threw without a message)");
+  });
+
+  test("R3: URL userinfo is redacted out of the cause", async () => {
+    const leaky = "connect failed for https://alice:s3cr3t@mcp.linear.app/sse";
+    const d = deps([{ kind: "transport-error", message: leaky }]);
+    const result = await createLinearProbe(d).probe();
+    expect(result.cause).not.toContain("alice:s3cr3t");
+    expect(result.cause).not.toContain("s3cr3t");
+    expect(result.cause).toContain("[redacted]@mcp.linear.app");
+  });
+
+  test("R3: redaction leaves a bare URL host untouched", () => {
+    expect(redactTransportMessage("GET https://mcp.linear.app/sse failed")).toBe("GET https://mcp.linear.app/sse failed");
+  });
+
   test("F9: listIssues throws a named not-implemented instead of a fabricated empty page", async () => {
     const provider = createLinearProbe(deps([]));
     await expect(provider.listIssues(null)).rejects.toThrow(/\[linear\.list-unimplemented\]/);

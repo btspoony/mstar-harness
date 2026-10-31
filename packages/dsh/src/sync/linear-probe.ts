@@ -65,6 +65,9 @@ export function redactTransportMessage(message: string): string {
   return message
     .replace(/\b(bearer|basic)\s+[A-Za-z0-9._~+/=-]+/gi, `$1 ${REDACTED}`)
     .replace(/("?(?:access_token|refresh_token|api[_-]?key|token|authorization|secret|password)"?\s*[:=]\s*)("?)[^"',;\s]+/gi, `$1$2${REDACTED}`)
+    // URL userinfo (`https://user:pass@host`) is a credential class of its own:
+    // it survives every header/query rule above because it is neither.
+    .replace(/\/\/[^/@\s]+@/g, `//${REDACTED}@`)
     .replace(/\blin_(?:api|oauth)_[A-Za-z0-9]+/g, REDACTED)
     .replace(/\beyJ[A-Za-z0-9._-]{10,}/g, REDACTED)
     .slice(0, 200);
@@ -90,17 +93,33 @@ function timedOut(deadlineMs: number): ProbeResult {
  * Run `call` under `deadlineMs`. The injected `rpc` owns cancellation (it is
  * the host's transport); this race guarantees `probe()` returns even when it
  * never settles, which is what keeps every readiness caller unblocked.
+ *
+ * A transport that THROWS is the other half of the same promise: `probe()`
+ * returns `Promise<ProbeResult>`, so a rejection would escape the four-state
+ * vocabulary. A thrown transport error is therefore caught here and becomes the
+ * `transport-error` outcome `mapOutcome` already knows. `call` is a thunk so a
+ * SYNCHRONOUS throw is caught by the same boundary.
  */
-async function withDeadline(call: Promise<RpcOutcome>, deadlineMs: number): Promise<RpcOutcome | "timeout"> {
+async function withDeadline(call: () => Promise<RpcOutcome>, deadlineMs: number): Promise<RpcOutcome | "timeout"> {
   let timer: ReturnType<typeof setTimeout> | undefined;
   const expiry = new Promise<"timeout">((resolve) => {
     timer = setTimeout(() => resolve("timeout"), deadlineMs);
   });
+  const settled = Promise.resolve()
+    .then(call)
+    .catch((error: unknown): RpcOutcome => ({ kind: "transport-error", message: describeThrown(error) }));
   try {
-    return await Promise.race([call, expiry]);
+    return await Promise.race([settled, expiry]);
   } finally {
     if (timer !== undefined) clearTimeout(timer);
   }
+}
+
+/** A thrown transport error as text — never a stack, never a raw body dump. */
+function describeThrown(error: unknown): string {
+  if (error instanceof Error && error.message !== "") return error.message;
+  if (typeof error === "string" && error !== "") return error;
+  return "the transport threw without a message";
 }
 
 /** The first listed tool that satisfies the contract's listing requirement. */
@@ -119,11 +138,11 @@ export function createLinearProbe(deps: LinearProbeDeps): IssueProvider {
       if (entry === null) {
         return { state: "service-absent", cause: "service-absent: no Linear entry in the host MCP configuration" };
       }
-      const init = await withDeadline(deps.rpc(entry, "initialize"), deadlineMs);
+      const init = await withDeadline(() => deps.rpc(entry, "initialize"), deadlineMs);
       if (init === "timeout") return timedOut(deadlineMs);
       if (init.kind !== "ok") return mapOutcome(init);
 
-      const listing = await withDeadline(deps.rpc(entry, "tools/list"), deadlineMs);
+      const listing = await withDeadline(() => deps.rpc(entry, "tools/list"), deadlineMs);
       if (listing === "timeout") return timedOut(deadlineMs);
       if (listing.kind !== "ok") return mapOutcome(listing);
 

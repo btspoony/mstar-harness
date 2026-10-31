@@ -101,6 +101,14 @@ describe("mstar project bind", () => {
     }
   });
 
+  test("vocabulary: a disabled block says so in words, under linear.provider-disabled", async () => {
+    const context = await repo("[linear]\nenabled=false\nmode=mirror\nworkspace=acme\nteam=eng\n");
+    const refused = await bind({ project: "proj-a", provider: "linear", remoteProject: "Team Roadmap", operation: "op-1" }, context);
+    expect(refused.code).toBe("linear.provider-disabled");
+    expect(refused.message).toContain("enabled is not true");
+    expect(refused.message).not.toContain("linear.binding-absent");
+  });
+
   test("linear.provider-disabled — a provider other than linear is not supported", async () => {
     const context = await repo(LINEAR_BLOCK);
     const refused = await bind({ project: "proj-a", provider: "jira", remoteProject: "X", operation: "op-1" }, context);
@@ -214,6 +222,9 @@ describe("QC fix wave", () => {
     expect(refused.message).toContain("no .mstarc at the repo root");
     expect(refused.message).toContain("never inherited");
     expect(refused.message).not.toContain("other-repo");
+    // Vocabulary sync: one code per envelope — the absence is described inside
+    // a `linear.provider-disabled` refusal, not labelled with the other code.
+    expect(refused.message).not.toContain("linear.binding-absent");
   });
 
   test("F8: common boolean spellings are accepted; an unreadable value is refused by name", async () => {
