@@ -42,6 +42,8 @@ function deps(
       return next;
     },
     listingVerbs: VERBS,
+    // The probe's own `tools/list` answer, which the adapter must agree with.
+    listedVerbs: () => VERBS,
     ...override,
   };
 }
@@ -92,7 +94,21 @@ describe("listIssues pagination", () => {
 
   test("an empty page terminates the run without inventing an item", async () => {
     const d = deps([{ kind: "ok", payload: { issues: [], nextCursor: null } }]);
-    expect(await createLinearAdapter(d).listIssues(null)).toEqual({ items: [], nextCursor: null });
+    expect(await createLinearAdapter(d).listIssues(null)).toEqual({ items: [], nextCursor: null, failures: [] });
+  });
+
+  test("the adapter calls the verb the handshake actually listed, not merely the first candidate", async () => {
+    const d = deps([{ kind: "ok", payload: { issues: [issue("LIN-1")], nextCursor: null } }], {
+      listedVerbs: () => ["get_issue", "search_issues"],
+    });
+    await createLinearAdapter(d).listIssues(null);
+    expect(d.requests[0]?.tool).toBe("search_issues");
+  });
+
+  test("no listed candidate refuses instead of calling an unlisted verb", async () => {
+    const d = deps([], { listedVerbs: () => ["get_issue"] });
+    expect(await codeOf(() => createLinearAdapter(d).listIssues(null))).toBe("linear.list-unimplemented");
+    expect(d.requests).toEqual([]);
   });
 
   test("an item maps to the narrow internal record", async () => {
@@ -126,9 +142,29 @@ describe("page failures (never an empty page)", () => {
     }
   });
 
-  test("a missing required item field is a page failure", async () => {
-    const d = deps([{ kind: "ok", payload: { issues: [issue("LIN-1", { updatedAt: undefined })] } }]);
-    expect(await codeOf(() => createLinearAdapter(d).listIssues(null))).toBe("linear.query-failed");
+  test("a single unmappable item fails BY IDENTITY and the rest of the page proceeds", async () => {
+    const d = deps([
+      {
+        kind: "ok",
+        payload: {
+          issues: [issue("LIN-1"), issue("LIN-2", { updatedAt: undefined }), issue("LIN-3")],
+          nextCursor: "c-2",
+        },
+      },
+    ]);
+    const page = await createLinearAdapter(d).listIssues(null);
+    expect(page.items.map((item) => item.externalId)).toEqual(["LIN-1", "LIN-3"]);
+    expect(page.nextCursor).toBe("c-2");
+    expect(page.failures).toHaveLength(1);
+    expect(page.failures?.[0]).toMatchObject({ index: 1, externalId: "LIN-2" });
+    expect(page.failures?.[0]?.cause).toContain("updatedAt");
+  });
+
+  test("a poisoned item with no identity is still reported by index", async () => {
+    const d = deps([{ kind: "ok", payload: { issues: ["not-an-object", issue("LIN-2")] } }]);
+    const page = await createLinearAdapter(d).listIssues(null);
+    expect(page.items.map((item) => item.externalId)).toEqual(["LIN-2"]);
+    expect(page.failures?.[0]).toMatchObject({ index: 0, externalId: null });
   });
 
   test("transport and HTTP failures refuse linear.query-failed", async () => {
@@ -144,7 +180,10 @@ describe("page failures (never an empty page)", () => {
     expect(
       await codeOf(() => createLinearAdapter(deps([], { findLinearEntry: () => null })).listIssues(null)),
     ).toBe("linear.query-failed");
-    expect(await codeOf(() => createLinearAdapter(deps([], { listingVerbs: [] })).listIssues(null))).toBe(
+    expect(await codeOf(() => createLinearAdapter(deps([], { listingVerbs: [], listedVerbs: () => [] })).listIssues(null))).toBe(
+      "linear.list-unimplemented",
+    );
+    expect(await codeOf(() => createLinearAdapter(deps([], { listedVerbs: () => null })).listIssues(null))).toBe(
       "linear.list-unimplemented",
     );
   });

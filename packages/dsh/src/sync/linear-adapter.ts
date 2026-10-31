@@ -16,8 +16,8 @@
  * unmappable payload must never look like "this project has no issues".
  * An embedded `errors` array is likewise a page failure (contract §5).
  */
-import { SyncError, type ProviderItem, type ProviderPage } from "@mstar-harness/engine";
-import { redactTransportMessage } from "./linear-probe.js";
+import { SyncError, type ProviderItem, type ProviderItemFailure, type ProviderPage } from "@mstar-harness/engine";
+import { listingVerbIn, redactTransportMessage } from "./linear-probe.js";
 
 /** A configured Linear MCP entry, as the host configuration names it. */
 export type LinearAdapterEntry = { url: string };
@@ -36,10 +36,16 @@ export type LinearListDeps = {
   call(entry: LinearAdapterEntry, request: { tool: string; arguments: Record<string, unknown> }): Promise<LinearCallOutcome>;
   /**
    * Candidate listing verbs, in preference order. Still the P2 probe's candidate
-   * set: the authenticated inventory has not been recorded yet, so the first entry
-   * is the verb this build tries.
+   * set: the authenticated inventory has not been recorded yet.
    */
   listingVerbs: readonly string[];
+  /**
+   * The tools the host's own `tools/list` returned (the handshake the probe
+   * already ran), or `null` when no handshake has happened. The adapter resolves
+   * its verb through the SAME `listingVerbIn` rule the probe uses (QC F9), so
+   * readiness and use can never disagree on which verb is called.
+   */
+  listedVerbs(): readonly string[] | null;
 };
 
 /** Contract §5: 50 per page, so a run is a predictable number of requests. */
@@ -51,13 +57,16 @@ export type LinearListSide = {
 
 /** Create the listing side of the dsh Linear provider. */
 export function createLinearAdapter(deps: LinearListDeps): LinearListSide {
-  const tool = deps.listingVerbs[0];
   return {
     async listIssues(cursor: string | null): Promise<ProviderPage> {
-      if (tool === undefined) {
+      const listed = deps.listedVerbs();
+      const tool = listingVerbIn(listed ?? undefined, deps.listingVerbs);
+      if (tool === null) {
         throw new SyncError(
           "linear.list-unimplemented",
-          "this host configuration names no Linear listing verb, so no page can be requested",
+          listed === null
+            ? `this host has not completed the Linear handshake, so the listing verb is unknown (candidates: ${deps.listingVerbs.join(", ")})`
+            : `the Linear handshake listed none of ${deps.listingVerbs.join(", ")}, so no page can be requested`,
         );
       }
       const entry = deps.findLinearEntry();
@@ -110,7 +119,13 @@ function assertNoEmbeddedErrors(payload: Payload): void {
   );
 }
 
-/** Map the documented fixture envelope; an unrecognised shape is a failure. */
+/**
+ * Map the documented fixture envelope. A page whose ENVELOPE is unusable (not an
+ * object, no `issues` array, embedded `errors`) is still a page failure: nothing
+ * on it can be trusted. A single ITEM that cannot be mapped fails that item by
+ * identity and lets the rest of the page proceed (contract §2), so one poison
+ * item cannot block every later page forever.
+ */
 export function mapPage(payload: unknown): ProviderPage {
   if (!isRecord(payload)) {
     throw new SyncError("linear.query-failed", "the Linear MCP page was not an object; nothing was ingested");
@@ -123,7 +138,31 @@ export function mapPage(payload: unknown): ProviderPage {
       "the Linear MCP page carries no `issues` array; an unmappable page is a failure, never an empty project",
     );
   }
-  return { items: items.map((entry, index) => mapItem(entry, index)), nextCursor: nextCursorOf(payload) };
+  const mapped: ProviderItem[] = [];
+  const failures: ProviderItemFailure[] = [];
+  items.forEach((entry, index) => {
+    try {
+      mapped.push(mapItem(entry, index));
+    } catch (error) {
+      if (!(error instanceof SyncError)) throw error;
+      failures.push({ index, externalId: externalIdOf(entry), cause: stripCodeLabel(error.message) });
+    }
+  });
+  return { items: mapped, nextCursor: nextCursorOf(payload), failures };
+}
+
+/** The item's identity when the payload names one, for the failure report. */
+function externalIdOf(entry: unknown): string | null {
+  if (!isRecord(entry)) return null;
+  for (const key of ["identifier", "id"]) {
+    const value = entry[key];
+    if (typeof value === "string" && value.trim() !== "") return value;
+  }
+  return null;
+}
+
+function stripCodeLabel(message: string): string {
+  return message.replace(/^\[[^\]]+\]\s*/, "");
 }
 
 function nextCursorOf(payload: Payload): string | null {

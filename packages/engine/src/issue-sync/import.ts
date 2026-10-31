@@ -12,8 +12,25 @@
  * so a local capture can never be merged into them and a local-only gate that
  * filters `provider='local'` never counts them.
  */
-import { captureIssueOn, computeIdentityKey, type CaptureInput, type IssueKind, type Severity } from "../issue.js";
-import { markApplied, markFailed, planItem, readItem, replanItem, SyncError, type SyncDirection } from "../issue-sync.js";
+import { createHash } from "node:crypto";
+import {
+  assertIssueStoreActive,
+  captureIssueOn,
+  computeIdentityKey,
+  type CaptureInput,
+  type IssueKind,
+  type Severity,
+} from "../issue.js";
+import {
+  isNewerInstant,
+  markApplied,
+  markFailed,
+  planItem,
+  readItem,
+  replanItem,
+  SyncError,
+  type SyncDirection,
+} from "../issue-sync.js";
 import type { StoreDb } from "../store-db.js";
 import type { ProviderItem } from "./provider.js";
 
@@ -59,6 +76,10 @@ export type ImportPageResult = {
  */
 export function importPage(db: StoreDb, bindingId: string, items: readonly ProviderItem[]): ImportPageResult {
   const projectId = projectIdOf(bindingId);
+  // Every other capture route refuses a store that is not active
+  // (`issue.ts` captureIssue); the ingest path is a store mutation and must not
+  // be the one door that writes into a staged store.
+  assertIssueStoreActive(db);
   const result: ImportPageResult = { imported: 0, updated: 0, skipped: 0, failed: 0 };
   for (const item of items) {
     const externalId = requireField(item.externalId, "externalId");
@@ -97,6 +118,21 @@ export function importPage(db: StoreDb, bindingId: string, items: readonly Provi
           remoteUpdatedAt: item.updatedAt,
           operationId: operationId(bindingId, item, "replan"),
         });
+      } else if (ledger.itemState === "pending" && !remoteIsNewer(item, ledger.lastRemoteUpdatedAt)) {
+        // A resumed cycle whose page is STALE relative to the recorded
+        // watermark must not mirror older content: close the cycle on the
+        // recorded revision instead, so a replayed page cannot walk the row
+        // backwards and then read as zero-delta forever.
+        markApplied(db, {
+          bindingId,
+          direction: IMPORT_DIRECTION,
+          localId,
+          // Its own id: the page's revision is older than the one this cycle was
+          // opened for, so it must not replay that revision's `applied` receipt.
+          operationId: `linear-import:${bindingId}:${localId}:stale-applied:${ledger.lastRemoteUpdatedAt ?? "none"}`,
+        });
+        result.skipped++;
+        continue;
       } else if (ledger.itemState === "failed") {
         planItem(db, {
           bindingId,
@@ -243,6 +279,14 @@ function captureImportedIssue(db: StoreDb, projectId: string, item: ProviderItem
  * Mirror the remote fields the local row reflects (title, description, link).
  * Writes only when something differs, so a resumed run is a no-op rather than a
  * second `updated_at` bump; the row's `revision` advances with a real change.
+ *
+ * Receipt decision (QC F11): this is a raw-SQL field mirror with no
+ * `store_operations` receipt of its own, and its RECEIPT IS THE SURROUNDING
+ * TRANSACTION — the `begin immediate` … `commit` below is the atomic unit, so an
+ * interrupted mirror leaves no partial row. The durable "this remote revision is
+ * applied" record is the ledger receipt the caller writes with `markApplied`,
+ * keyed by `(bindingId, localId, updatedAt)`: that operation id is what a resumed
+ * run replays, and it is written after the mirror in the same item cycle.
  */
 function mirrorRemoteFields(db: StoreDb, localId: string, externalId: string, item: ProviderItem): void {
   const description = impactOf(item);
@@ -278,7 +322,7 @@ function mirrorRemoteFields(db: StoreDb, localId: string, externalId: string, it
 }
 
 function remoteIsNewer(item: ProviderItem, lastRemoteUpdatedAt: string | null): boolean {
-  return lastRemoteUpdatedAt === null || item.updatedAt > lastRemoteUpdatedAt;
+  return isNewerInstant(item.updatedAt, lastRemoteUpdatedAt);
 }
 
 /** Best-effort: record the failure on a pending row so the next run retries it. */
@@ -287,11 +331,15 @@ function recordFailure(db: StoreDb, bindingId: string, localId: string, error: u
   try {
     const ledger = readItem(db, { bindingId, direction: IMPORT_DIRECTION, localId });
     if (ledger === null || ledger.itemState !== "pending") return;
+    // Keyed by the CAUSE as well as the row revision: two different causes on
+    // the same revision are two different requests, and reusing one id for both
+    // would refuse the second as `sync.operation-conflict`.
+    const causeKey = createHash("sha256").update(message).digest("hex").slice(0, 12);
     markFailed(db, {
       bindingId,
       direction: IMPORT_DIRECTION,
       localId,
-      operationId: `linear-import:${bindingId}:${localId}:failed:${ledger.revision}`,
+      operationId: `linear-import:${bindingId}:${localId}:failed:${ledger.revision}:${causeKey}`,
       error: message,
     });
   } catch {

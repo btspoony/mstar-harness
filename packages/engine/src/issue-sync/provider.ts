@@ -37,10 +37,31 @@ export type ProviderItem = {
   url: string;
 };
 
+/**
+ * One item the host could not map at the adapter boundary (contract §2, cursor
+ * section): it fails THAT item by identity and lets the rest of the page
+ * proceed. `externalId` is null only when the payload did not carry one, in
+ * which case `index` is the only handle. A page carrying failures is treated
+ * as stranded by the ingest run: the cursor does not advance past it.
+ */
+export type ProviderItemFailure = {
+  /** Zero-based index of the item inside the page. */
+  index: number;
+  externalId: string | null;
+  /** Credential-free cause prepared for the operator. */
+  cause: string;
+};
+
 /** Cursor-paginated listing page. */
 export type ProviderPage = {
   items: ProviderItem[];
   nextCursor: string | null;
+  /**
+   * Per-item mapping failures. Absent means none; an INGESTABLE page is
+   * `items`; the ingest run must not advance past a page whose array is
+   * non-empty (contract §2 "Cursor advance and the overlap window").
+   */
+  failures?: readonly ProviderItemFailure[];
 };
 
 /**

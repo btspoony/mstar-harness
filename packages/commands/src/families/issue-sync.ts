@@ -48,6 +48,20 @@ type Verb = (typeof verbs)[number];
 /** Bound one run at 20 pages × 50 items, so a first run cannot run unbounded. */
 const DEFAULT_MAX_PAGES = 20;
 
+/** A `ready` probe is exactly `initialize` + `tools/list` (provider contract §5). */
+const HANDSHAKE_REQUESTS = 2;
+
+/**
+ * Probe state → refusal code (contract §4). `linear.provider-disabled` keeps its
+ * configuration-only meaning, so it is NOT the answer for a reachable-but-hosted
+ * provider.
+ */
+const PROBE_REFUSAL = {
+  "service-absent": "linear.host-unavailable",
+  unreachable: "linear.host-unavailable",
+  "access-denied": "linear.access-denied",
+} as const;
+
 const flags: Record<keyof Input, string> = {
   project: "--project <id>",
   maxPages: "--max-pages <n>",
@@ -71,7 +85,11 @@ function envelope(id: string, data: unknown): CommandEnvelope {
 /** Recovery text per refusal: every one names a documented entry to run. */
 const RECOVERY: Record<string, string> = {
   "linear.provider-disabled":
-    "The binding cannot run yet. Fix the .mstarc `[linear]` block (`enabled=true`, `mode=mirror`, `workspace=<slug>`, `team=<key>`), confirm Linear MCP is configured in the host, then re-run `mstar issue-sync import --project <project-id>`. The message names the probe state and its cause.",
+    "The binding is not enabled for this repo. Fix the .mstarc `[linear]` block (`enabled=true`, `mode=mirror`, `workspace=<slug>`, `team=<key>`), then re-run `mstar issue-sync import --project <project-id>`.",
+  "linear.host-unavailable":
+    "The provider is configured, but this host cannot reach its Linear MCP service right now. Add or repair the Linear MCP entry in the host's MCP configuration (the cause names what failed), then re-run the import. Nothing was written and the cursor did not advance.",
+  "linear.access-denied":
+    "This host reached the Linear MCP service and the credential was rejected or expired. Re-authorize the host's Linear connection (sign in / refresh the API key in the host, not in `.mstarc`), then re-run the import. Nothing was written and the cursor did not advance.",
   "linear.binding-absent":
     "This store project mirrors no Linear project yet. Bind one first: `mstar project bind --project <project-id> --provider linear --remote-project <name-or-id> --operation <id>`, then re-run the import.",
   "linear.query-failed":
@@ -128,6 +146,15 @@ function failure(id: string, error: unknown): CommandEnvelope<never> {
   });
 }
 
+/** One item the run could not process, reported by identity and page index. */
+type StrandedItem = {
+  page: number;
+  /** Zero-based item index inside the page, or null for a whole-page failure. */
+  index: number | null;
+  externalId: string | null;
+  cause: string;
+};
+
 type ImportReport = {
   projectId: string;
   bindingId: string;
@@ -136,10 +163,18 @@ type ImportReport = {
   skipped: number;
   failed: number;
   pages: number;
-  /** Provider page requests this run made — the rate-limit budget, evidenced. */
+  /**
+   * Every provider request this run made: the contract-defined handshake
+   * (`initialize` + `tools/list` = 2) plus one `tools/call` per page. This is
+   * the rate-limit budget, evidenced rather than assumed.
+   */
   requests: number;
   /** The cursor a later run resumes from (unchanged when nothing advanced). */
   cursor: string | null;
+  /** Items left unprocessed, by identity and page index (blocked the cursor). */
+  stranded: StrandedItem[];
+  /** Why the run stopped: the page bound, a stranded item, or the last page. */
+  stopped: "complete" | "max-pages" | "stranded";
 };
 
 async function runImport(id: string, input: Input, invocation: InvocationContext): Promise<CommandEnvelope> {
@@ -157,11 +192,16 @@ async function runImport(id: string, input: Input, invocation: InvocationContext
   }
 
   // Every refusal below happens BEFORE a store write or a provider listing call.
+  // Each non-ready probe state keeps its OWN cause and recovery (contract §4):
+  // a host that cannot reach its service and a host whose credential was
+  // rejected need different operator actions, and neither is a configuration
+  // fault of `.mstarc`.
   const probe = await provider.probe();
   if (probe.state !== "ready") {
+    const code = PROBE_REFUSAL[probe.state];
     throw Object.assign(
-      new Error(`[linear.provider-disabled] the binding cannot run: probe state "${probe.state}" — ${probe.cause}`),
-      { code: "linear.provider-disabled" },
+      new Error(`[${code}] the binding cannot run: probe state "${probe.state}" — ${probe.cause}`),
+      { code },
     );
   }
   const repo = readRepoLinearBinding(harnessDir);
@@ -194,8 +234,12 @@ async function runImport(id: string, input: Input, invocation: InvocationContext
     skipped: 0,
     failed: 0,
     pages: 0,
-    requests: 0,
+    // The probe already spent the two handshake calls; a `ready` state is
+    // exactly `initialize` + `tools/list` per the provider contract.
+    requests: HANDSHAKE_REQUESTS,
     cursor: null,
+    stranded: [],
+    stopped: "complete",
   };
   const handle = await openStore(context, "write");
   try {
@@ -213,7 +257,36 @@ async function runImport(id: string, input: Input, invocation: InvocationContext
       report.updated += counts.updated;
       report.skipped += counts.skipped;
       report.failed += counts.failed;
-      if (page.nextCursor === null) break;
+      // Contract §2 "Cursor advance and the overlap window": the cursor moves
+      // only when this page left NOTHING stranded. Both a failed ledger item and
+      // an unmappable item are stranded, so the next run re-reads this page
+      // (the overlap window) and the `failed → pending` retry can actually run.
+      for (const failure of page.failures ?? []) {
+        report.stranded.push({
+          page: report.pages,
+          index: failure.index,
+          externalId: failure.externalId,
+          cause: failure.cause,
+        });
+      }
+      if (page.failures !== undefined && page.failures.length > 0) {
+        report.stopped = "stranded";
+        break;
+      }
+      if (counts.failed > 0) {
+        report.stranded.push({
+          page: report.pages,
+          index: null,
+          externalId: null,
+          cause: `${counts.failed} item(s) on this page are failed; the ledger holds the cause and the next run retries them`,
+        });
+        report.stopped = "stranded";
+        break;
+      }
+      if (page.nextCursor === null) {
+        report.stopped = "complete";
+        break;
+      }
       writeCursor(db, {
         bindingId,
         direction: IMPORT_DIRECTION,
@@ -222,6 +295,7 @@ async function runImport(id: string, input: Input, invocation: InvocationContext
       });
       cursor = page.nextCursor;
       report.cursor = cursor;
+      report.stopped = "max-pages";
     }
     return envelope(id, report);
   } finally {

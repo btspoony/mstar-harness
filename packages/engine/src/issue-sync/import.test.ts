@@ -194,6 +194,72 @@ describe("local identity and local-only gates", () => {
     expect(violation.violations[0]?.code).toBe("findings.zero-residual-critical");
   });
 
+  test("a store that is not active refuses store.not-active before any write", async () => {
+    const { db, close } = await store("not-active");
+    db.prepare("update store_meta set authority_state = 'staged' where id = 1").run();
+    const before = issueRows(db);
+    expect(() => importPage(db, BINDING, [item()])).toThrow(/store\.not-active/);
+    expect(issueRows(db)).toEqual(before);
+    close();
+  });
+
+  test("a sub-second newer revision is ingested, not skipped by string order", async () => {
+    const { db, close } = await store("instant-order");
+    importPage(db, BINDING, [item()]);
+    const localId = (db.prepare("select id from issues where external_id = 'LIN-1'").get() as { id: string }).id;
+    // "…00.500Z" sorts BELOW "…00Z" as a string but is a LATER instant.
+    const later = item({ title: "Sub-second change", updatedAt: "2026-10-31T00:00:00.500Z" });
+    expect(importPage(db, BINDING, [later])).toEqual({ imported: 0, updated: 1, skipped: 0, failed: 0 });
+    expect((db.prepare("select title from issues where id = ?").get(localId) as { title: string }).title).toBe("Sub-second change");
+    close();
+  });
+
+  test("a stale page replayed over a pending row mirrors nothing and does not walk backwards", async () => {
+    const { db, close } = await store("stale-pending");
+    importPage(db, BINDING, [item()]);
+    const localId = (db.prepare("select id from issues where external_id = 'LIN-1'").get() as { id: string }).id;
+    // Open a re-plan cycle for a NEWER revision, then replay the OLD page.
+    const { replanItem } = await import("../issue-sync.js");
+    replanItem(db, {
+      bindingId: BINDING, direction: "import", localId,
+      externalId: "LIN-1", remoteUpdatedAt: "2026-12-01T00:00:00.000Z", operationId: "op-stale-replan",
+    });
+    expect(importPage(db, BINDING, [item({ title: "Older content" })])).toEqual({
+      imported: 0, updated: 0, skipped: 1, failed: 0,
+    });
+    const row = db.prepare("select title from issues where id = ?").get(localId) as { title: string };
+    expect(row.title).toBe("Remote title");
+    expect(readItem(db, { bindingId: BINDING, direction: "import", localId })).toMatchObject({
+      itemState: "applied",
+      lastRemoteUpdatedAt: "2026-12-01T00:00:00.000Z",
+    });
+    close();
+  });
+
+  test("a local capture never appends an occurrence to a mirrored row", async () => {
+    const { db, close } = await store("symmetry");
+    importPage(db, BINDING, [item()]);
+    const before = db.prepare("select revision from issues where external_id = 'LIN-1'").get();
+    const { captureIssueOn } = await import("../issue.js");
+    // The reserved triple the ingest uses, reached through the ordinary capture
+    // path: refusing here is the other half of the identity invariant.
+    const attempt = () =>
+      captureIssueOn(
+        db,
+        {
+          projectId: PROJECT, title: "Local capture", kind: "bug", severity: "low",
+          impact: "impact", acceptance: "acceptance",
+          sourceIdentity: "linear:LIN-1", rootCauseKey: IMPORTED_ROOT_CAUSE_KEY, acceptanceKey: IMPORTED_ACCEPTANCE_KEY,
+          occurrenceKey: "linear:LIN-1-other", sourceKind: "local", location: "here",
+          observedBehavior: "seen", evidence: [], discoveredAt: "2026-11-01T00:00:00.000Z",
+        },
+        { operationId: "op-symmetry", actor: "project-manager" },
+      );
+    expect(attempt).toThrow(/issue\.scope-refused/);
+    expect(db.prepare("select revision from issues where external_id = 'LIN-1'").get()).toEqual(before);
+    close();
+  });
+
   test("an unmappable binding id is refused sync.invalid-input", async () => {
     const { db, close } = await store("binding-shape");
     expect(() => importPage(db, "jira:p-mirror", [item()])).toThrow(SyncError);

@@ -305,9 +305,43 @@ describe("replanItem (applied -> pending)", () => {
     const { db, close } = await openedStore("replan-retain");
     planItem(db, PLAN);
     markApplied(db, { ...KEY, operationId: "op-retain-apply" });
-    const replanned = replanItem(db, { ...KEY, operationId: "op-retain-replan" });
+    // Omitted externalId: the recorded identity survives the re-plan.
+    const replanned = replanItem(db, { ...KEY, remoteUpdatedAt: "2026-11-05T00:00:00Z", operationId: "op-retain-replan" });
     expect(replanned.externalId).toBe("EXT-1");
-    expect(replanned.lastRemoteUpdatedAt).toBe("2026-10-31T00:00:00Z");
+    expect(replanned.lastRemoteUpdatedAt).toBe("2026-11-05T00:00:00Z");
+    close();
+  });
+
+  test("a row with no recorded watermark can be re-planned with nothing omitted", async () => {
+    const { db, close } = await openedStore("replan-null-watermark");
+    // A cycle that never learned a remote revision: the watermark stays null,
+    // so an omission leaves it null and the newer-guard has nothing to compare.
+    planItem(db, { ...KEY, externalId: "EXT-1", operationId: "op-null-plan" });
+    markApplied(db, { ...KEY, operationId: "op-null-apply" });
+    const replanned = replanItem(db, { ...KEY, operationId: "op-null-replan" });
+    expect(replanned.lastRemoteUpdatedAt).toBeNull();
+    expect(replanned.externalId).toBe("EXT-1");
+    close();
+  });
+
+  test("an equal or older remote revision is refused inside the verb (not only at the call site)", async () => {
+    const { db, close } = await openedStore("replan-newer");
+    planItem(db, PLAN);
+    markApplied(db, { ...KEY, operationId: "op-newer-apply" });
+    // Equal revision.
+    expect(codeOf(() => replanItem(db, { ...KEY, remoteUpdatedAt: PLAN.remoteUpdatedAt, operationId: "op-equal" })))
+      .toBe("sync.illegal-transition");
+    // Older revision.
+    expect(codeOf(() => replanItem(db, { ...KEY, remoteUpdatedAt: "2026-10-30T00:00:00Z", operationId: "op-older" })))
+      .toBe("sync.illegal-transition");
+    // Sub-second precision counts as newer even though the string sorts lower:
+    // "…:00.500Z" < "…:00Z" lexicographically.
+    const row = rowOf(db) as { revision: number };
+    db.prepare("update issue_sync_state set last_remote_updated_at = '2026-11-01T00:00:00Z' where binding_id=? and direction=? and local_id=?")
+      .run(KEY.bindingId, KEY.direction, KEY.localId);
+    expect(replanItem(db, { ...KEY, remoteUpdatedAt: "2026-11-01T00:00:00.500Z", operationId: "op-frac" }).itemState)
+      .toBe("pending");
+    expect(row.revision).toBe(2);
     close();
   });
 

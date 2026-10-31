@@ -35,7 +35,9 @@ export type SyncErrorCode =
   | "sync.local-issue-missing"
   | "linear.query-failed"
   | "linear.identity-collision"
-  | "linear.list-unimplemented";
+  | "linear.list-unimplemented"
+  | "linear.host-unavailable"
+  | "linear.access-denied";
 
 export class SyncError extends Error {
   readonly code: SyncErrorCode;
@@ -281,6 +283,23 @@ export function planItem(db: StoreDb, input: PlanItemInput): SyncItem {
 }
 
 /**
+ * The ONE freshness rule (contract §2): a remote revision is "newer" only when
+ * its INSTANT is later than the recorded one. ISO-8601 strings are not ordered
+ * lexicographically — `…T00:00:00.500Z` sorts below `…T00:00:00Z` — so a string
+ * comparison silently skips genuine changes. An unparseable instant is refused
+ * rather than guessed.
+ */
+export function isNewerInstant(candidate: string, recorded: string | null): boolean {
+  const next = Date.parse(candidate);
+  if (Number.isNaN(next)) {
+    throw new SyncError("sync.invalid-input", `remoteUpdatedAt ${JSON.stringify(candidate)} is not an ISO-8601 instant`);
+  }
+  if (recorded === null) return true;
+  const prior = Date.parse(recorded);
+  return Number.isNaN(prior) ? true : next > prior;
+}
+
+/**
  * Re-plan an already-`applied` item whose remote revision moved on (§2, added
  * for M0): the ONLY legal source state, everything else refuses
  * `sync.illegal-transition`. The new watermark is the remote revision this
@@ -306,6 +325,16 @@ export function replanItem(db: StoreDb, input: PlanItemInput): SyncItem {
     const now = new Date().toISOString();
     const row = requireItem(selectRow(db, bindingId, direction, localId));
     if (row.item_state !== "applied") refuseTransition(row.item_state, "replanItem");
+    // The other half of the contract: a re-plan is for a NEWER remote revision.
+    // An equal or older one would rewind the watermark, so it is refused as an
+    // out-of-contract call rather than accepted as a no-op.
+    const next = remoteUpdatedAt ?? row.last_remote_updated_at;
+    if (next !== null && row.last_remote_updated_at !== null && !isNewerInstant(next, row.last_remote_updated_at)) {
+      throw new SyncError(
+        "sync.illegal-transition",
+        `replanItem requires a newer remote revision: received ${JSON.stringify(next)}, recorded ${JSON.stringify(row.last_remote_updated_at)}`,
+      );
+    }
     casUpdate(db, { bindingId, direction, localId }, row.revision, {
       item_state: "pending",
       external_id: externalId ?? row.external_id,

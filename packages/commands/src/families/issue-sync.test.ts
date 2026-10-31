@@ -9,7 +9,10 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterAll, describe, expect, test } from "bun:test";
 import {
+  IMPORTED_ACCEPTANCE_KEY,
+  IMPORTED_ROOT_CAUSE_KEY,
   bindProject,
+  computeIdentityKey,
   initializeStore,
   openStore,
   readLedgerSummary,
@@ -120,6 +123,8 @@ type ImportData = {
   pages: number;
   requests: number;
   cursor: string | null;
+  stranded: Array<{ page: number; index: number | null; externalId: string | null; cause: string }>;
+  stopped: "complete" | "max-pages" | "stranded";
 };
 
 async function runImport(context: InvocationContext, extra: Record<string, unknown> = {}): Promise<{ status: string; code: string; data?: ImportData; message?: string }> {
@@ -147,23 +152,39 @@ async function storeSnapshot(f: Fixture): Promise<unknown> {
 }
 
 describe("refusals before any write", () => {
-  for (const [state, cause] of [
-    ["service-absent", "service-absent: no Linear entry in the host MCP configuration"],
-    ["access-denied", "access-denied: Linear MCP handshake answered 401"],
-  ] as const) {
-    test(`probe ${state} refuses linear.provider-disabled and writes nothing`, async () => {
-      const calls: unknown[] = [];
-      const f = await fixture(`refuse-${state}`, provider(() => ({ items: [], nextCursor: null }), { state, cause }));
-      const before = await storeSnapshot(f);
-      const result = await runImport(f.context as InvocationContext & { effects: { issueProvider?: () => unknown } });
-      expect(result.status).toBe("refused");
-      expect(result.code).toBe("linear.provider-disabled");
+  test("service-absent and unreachable are linear.host-unavailable (not 'disabled')", async () => {
+    for (const state of ["service-absent", "unreachable"] as const) {
+      const f = await fixture(`refuse-${state}`, provider(() => ({ items: [], nextCursor: null }), { state, cause: `${state}: cause` }));
+      const result = await runImport(f.context);
+      expect(result.code).toBe("linear.host-unavailable");
       expect(result.message).toContain(state);
-      expect(result.message).toContain(cause);
+    }
+  });
+
+  test("access-denied is linear.access-denied with a re-authorize recovery", async () => {
+    const f = await fixture(
+      "refuse-access-denied-coded",
+      provider(() => ({ items: [], nextCursor: null }), { state: "access-denied", cause: "access-denied: 401" }),
+    );
+    const result = (await runImport(f.context)) as unknown as {
+      status: string;
+      code: string;
+      details?: { recovery?: string };
+    };
+    expect(result.code).toBe("linear.access-denied");
+    expect(result.details?.recovery).toContain("Re-authorize");
+  });
+
+  test("each probe state writes nothing at all (no store open, no listing call)", async () => {
+    for (const state of ["service-absent", "unreachable", "access-denied"] as const) {
+      const p = provider(() => ({ items: [item()], nextCursor: null }), { state, cause: `${state}: cause` });
+      const f = await fixture(`nothing-written-${state}`, p);
+      const before = await storeSnapshot(f);
+      await runImport(f.context);
       expect(await storeSnapshot(f)).toEqual(before);
-      expect(calls).toEqual([]);
-    });
-  }
+      expect(p.requests).toEqual([]);
+    }
+  });
 
   test("a disabled .mstarc binding refuses linear.provider-disabled", async () => {
     const f = await fixture("refuse-disabled", provider(() => ({ items: [item()], nextCursor: null })), { enabled: false });
@@ -199,7 +220,7 @@ describe("zero-delta second run", () => {
 
     const first = await runImport(f.context);
     expect(first.status).toBe("ok");
-    expect(first.data).toMatchObject({ imported: 3, updated: 0, skipped: 0, failed: 0, pages: 2, requests: 2, cursor: "c-2" });
+    expect(first.data).toMatchObject({ imported: 3, updated: 0, skipped: 0, failed: 0, pages: 2, requests: 4, cursor: "c-2" });
 
     const snapshot = await storeSnapshot(f);
     p.requests.length = 0;
@@ -208,7 +229,7 @@ describe("zero-delta second run", () => {
     // The store's cursor is resumable: run 2 re-reads only from the recorded
     // position (the overlap window), so it costs ONE request and re-ingests it
     // as a no-op.
-    expect(second.data).toMatchObject({ imported: 0, updated: 0, skipped: 1, failed: 0, pages: 1, requests: 1, cursor: "c-2" });
+    expect(second.data).toMatchObject({ imported: 0, updated: 0, skipped: 1, failed: 0, pages: 1, requests: 3, cursor: "c-2" });
     // No row anywhere changed — the store's updated_at set included.
     expect(await storeSnapshot(f)).toEqual(snapshot);
     // The second run is evidenced by requests, not assumed: one page request.
@@ -219,9 +240,9 @@ describe("zero-delta second run", () => {
     const p = provider(() => ({ items: [item()], nextCursor: null }));
     const f = await fixture("single-page", p);
     const first = await runImport(f.context);
-    expect(first.data).toMatchObject({ imported: 1, pages: 1, requests: 1, cursor: null });
+    expect(first.data).toMatchObject({ imported: 1, pages: 1, requests: 3, cursor: null });
     const second = await runImport(f.context);
-    expect(second.data).toMatchObject({ imported: 0, updated: 0, skipped: 1, pages: 1, requests: 1 });
+    expect(second.data).toMatchObject({ imported: 0, updated: 0, skipped: 1, pages: 1, requests: 3 });
     expect(p.requests).toEqual([null, null]);
   });
 });
@@ -272,13 +293,79 @@ describe("a failing page keeps the cursor and ingests nothing from it", () => {
     }
   });
 
+  test("an item that fails blocks the cursor, and the next run retries it (F1)", async () => {
+    // The first item collides with a local issue holding its synthetic identity;
+    // the second is importable. The run must NOT advance past the collision.
+    const pages: Record<string, ProviderPage> = {
+      start: { items: [item(), item({ externalId: "LIN-2", title: "Second" })], nextCursor: "c-2" },
+      "c-2": { items: [], nextCursor: null },
+    };
+    const p = provider((cursor) => pages[cursor ?? "start"]!);
+    const f = await fixture("cursor-blocked", p);
+
+    // Plant the collision BEFORE the run: a local issue already holding LIN-1's identity.
+    const identityKey = computeIdentityKey(PROJECT, "linear:LIN-1", IMPORTED_ROOT_CAUSE_KEY, IMPORTED_ACCEPTANCE_KEY);
+    {
+      const handle = await openStore({ harnessDir: f.harnessDir }, "write");
+      handle.db.prepare(
+        "insert into issues(id, project_id, title, kind, severity, impact, acceptance, created_at, updated_at, identity_key)" +
+          " values ('I-000900', ?, 'Local', 'bug', 'high', 'i', 'a', 'now', 'now', ?)",
+      ).run(PROJECT, identityKey);
+      handle.close();
+    }
+
+    const first = await runImport(f.context);
+    expect(first.data).toMatchObject({ imported: 1, failed: 1, cursor: null, stopped: "stranded" });
+    expect(first.data?.stranded[0]).toMatchObject({ page: 1 });
+    {
+      const db = await f.db();
+      // The cursor did NOT advance, so page 1 is re-read next run.
+      expect(db.prepare("select count(*) as n from sync_cursor").get()).toEqual({ n: 0 });
+      db.close();
+    }
+
+    // Operator recovery: the collision is removed (the recovery text says how).
+    {
+      const handle = await openStore({ harnessDir: f.harnessDir }, "write");
+      handle.db.prepare("delete from issues where id = 'I-000900'").run();
+      handle.close();
+    }
+    const second = await runImport(f.context);
+    if (second.data === undefined) throw new Error(`second run refused: ${JSON.stringify(second)}`);
+    expect(second.data).toMatchObject({ imported: 1, failed: 0, updated: 0, skipped: 1, stopped: "complete", cursor: "c-2" });
+    // The first run stopped on page 1 (stranded); the second re-read page 1.
+    expect(p.requests).toEqual([null, null, "c-2"]);
+  });
+
+  test("an unmappable item is reported by identity and page index while the rest is ingested (F2)", async () => {
+    const p = provider(() => ({
+      items: [item(), item({ externalId: "LIN-2", title: "Second" })],
+      nextCursor: null,
+      failures: [{ index: 2, externalId: "LIN-BAD", cause: 'issue at page index 2 has no usable "title"' }],
+    }));
+    const f = await fixture("poison-item", p);
+    const result = await runImport(f.context);
+    expect(result.status).toBe("ok");
+    expect(result.data).toMatchObject({ imported: 2, failed: 0, stopped: "stranded" });
+    expect(result.data?.stranded).toEqual([
+      { page: 1, index: 2, externalId: "LIN-BAD", cause: 'issue at page index 2 has no usable "title"' },
+    ]);
+    // The good items were ingested; the poisoned one did not stop them.
+    const db = await f.db();
+    try {
+      expect(db.prepare("select count(*) as n from issues").get()).toEqual({ n: 2 });
+    } finally {
+      db.close();
+    }
+  });
+
   test("--max-pages bounds one run and the reported cursor resumes it", async () => {
     const p = provider((cursor) => ({ items: [item({ externalId: `LIN-${cursor ?? "start"}` })], nextCursor: `c-${cursor ?? "start"}` }));
     const f = await fixture("max-pages", p);
     const bounded = await runImport(f.context, { maxPages: 1 });
-    expect(bounded.data).toMatchObject({ imported: 1, pages: 1, requests: 1, cursor: "c-start" });
+    expect(bounded.data).toMatchObject({ imported: 1, pages: 1, requests: 3, cursor: "c-start" });
     const resumed = await runImport(f.context, { maxPages: 1 });
-    expect(resumed.data).toMatchObject({ imported: 1, pages: 1, requests: 1, cursor: "c-c-start" });
+    expect(resumed.data).toMatchObject({ imported: 1, pages: 1, requests: 3, cursor: "c-c-start" });
     expect(p.requests).toEqual([null, "c-start"]);
   });
 });
