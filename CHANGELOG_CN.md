@@ -6,6 +6,26 @@
 
 ## [Unreleased]
 
+## [4.1.4] - 2026-10-31
+
+### Harness
+
+- **Attestation 自动生成，不再要求人工撰写。** `mstar session recover`、`mstar store upgrade`、`mstar store activate`、`mstar workflow reopen` 与 `mstar workflow adopt-terminal` 不再要求 `--attestation <path>` 操作者文档：各消费动词在自己的事务内以实时、已记录的事实自动生成 operator attestation——调用 operator、操作自身的持久记录、事务时钟，以及恰好被该事务处置的会话行（激活屏障额外取执行进程事实；Bun 运行时直接拒绝并指向已安装 Node CLI）。`workflow adopt-terminal` 会在回执中记录生成的处置文档（每个被处置的 ACTIVE holder 一条 stop）；`workflow reopen` 因不撤销任何会话行而生成空 stop 列表。`--attestation <absolute-json>` 保留为 1:1 显式覆盖；引擎校验器不变，仍是唯一验收权威。`store activate` 新增必填 `--operator`；omp `recover` 工具的 attestation 输入改为可选。
+- **dsh 本地套件确定性：** 三个具名表面上的十个依赖启动的真实组合用例，现在只在环境确定的地方运行。`packages/dsh/tests/harness.ts` 导出唯一的 CI 判定（`isCiEnvironment()`）与两条记录化的原因；skills 真实组合 describe 中每个依赖 `bootApp` 的用例、完整应用启动用例以及 launch-cwd 子进程启动用例都改用 `test.if(isCiEnvironment())`，并在标题中携带 `LOCAL_SKILL_MOUNT_SKIP_REASON`，于是本地运行会把它们报告为显式 skip，而不再是 `timed out after 5000ms`；CI 则原样执行每一条断言。`assertPackedEntryCurrent()` 在 CI 下返回其 skip 原因而不再静默返回，既有测试现在断言该返回值，并在两种环境下照旧运行全部打包产物断言。未改动任何断言、超时或产品代码；本地 skip 不等于通过，被门控用例的唯一执行证据仍是 CI。陈旧安装这一共同因素（已装 `dsh-skill*` rc.4 与锁定 rc.5）记录为未被单独排除，不声称已修复。
+Bump `@deepseek-ai/dsh-*` peers to `^0.2.1-rc.5` (corridor rc.4 → rc.5; thinking-block rendering; no plugin source changes).
+- **被处置的退役租约记录其授权依据。** 一次模式切换若同时处置多个退役 plan-PM holder，只保留一个文档级 `authorizationRef`（`retired-plan-pm-seat:` 加排序去重后的 holder），每个墓志铭原样复制到 `release_reason`，holder 身份仍保留在 `prior_holder`——因此每个墓志铭都与授权它的文档一致。
+- **每个被处置 holder 只产生一条 stop 行。** 同一 holder 遗留多个集成租约时只认证一次：处置过程按排序后的 holder 逐条生成 stop 行，而不是按租约逐条生成。
+- **激活 operator 在恢复点之前校验。** 自动生成 operator 文档的激活在写入备份之前就拒绝缺少 `--operator`，被拒绝的激活不会留下孤立恢复点。拒绝码、消息与恢复方式保持不变。
+- **生成的文档使用同一个事务时钟。** 处置事务与 `store activate` 各自只读取一次注入的 `now`，其生成的文档与衡量的每个租约时间窗口共用同一时刻。同一事务仍从环境时钟取得的戳——`schema_version.applied_at` 以及外部提供文档的墓志铭 `released_at`（即该文档自身的 `attestedAt`）——不受该注入影响。该时钟是引擎层注入点（测试与直连调用方），CLI 不暴露该参数；`store init` 自身的 `activated_at` 仍取系统时钟。
+- **`processFacts` 接缝是已记录的限界，而非已安装消费方证据。** 它仍是可选的直连引擎/测试注入输入，生产 CLI 调用方不传；该限界记录在 `ProvisionProcessFacts` 并由激活屏障引用，不新增第二个注入接缝。
+- **store 的追加式台账现在有明确上限。** 运行中的工作流最多保留 `RUNNING_WORKFLOW_OPERATION_RECEIPT_LIMIT`（256）条操作回执：该上限在“插入新的非终态回执”的同一事务内校验，超限即以 `execution.receipt-retention-exhausted` 拒绝，且不留下任何回执、修订或副作用。引擎绝不会为腾空间而丢弃回执（每个保留的 operation id 的重放与变更意图冲突语义完全不变），拒绝文本同时给出恢复路径（用新的 operation id adopt/close 该工作流，然后为新工作新建工作流）。终态变更仍然豁免，其裁剪仍只保留 close 回执本身。协调者恢复（`recoverExecutionCoordinator`）是另一个豁免的非终态写入，理由相同：它是从已停止持有者回到可用的唯一路径，因此在上限处仍会写入其回执，随后该工作流可以被关闭，而不会因为缺少可用绑定而无法关闭。该上限本身以 `RUNNING_WORKFLOW_OPERATION_RECEIPT_LIMIT` 从包入口导出。`notes.jsonl` 台账在超过 `WORKFLOW_NOTES_LEDGER_MAX_BYTES`（4 MiB）时，在 store 自身的 `BEGIN IMMEDIATE` 写锁下压缩：同目录临时文件、fsync、原子 rename、再 fsync 目录；保留能放进读窗口的最新完整行，触发本次压缩的 note 始终整条保留，并以 `workflow-notes-compaction` 标记作为最后一行，记录被丢弃的字节/行/记录计数与该前缀的 sha256。coverage 只读 `WORKFLOW_NOTES_LEDGER_READ_BYTES`（1 MiB）尾部窗口，丢弃被截断的首行，并返回 `readWindow: {offset, totalBytes, truncated}` 与 `compaction`，因此被截断的读取会被明示，而不会被当作整份台账。只有当台账仍保持被分类的那份快照时才会发布重写：无锁 peer 帧使文件变长时，压缩会丢弃临时文件而不是删掉那一帧，并在下一次越过上限的追加时再试；所有旧标记也会一并剔除并计入已披露的被丢弃字节，最终只保留一个作为末行的标记。该标记会一直留在读窗口内，直到后续追加把台账推出窗口；此后 coverage 会报告被截断的窗口且 `compaction` 为 null，而不会重新浮现更早的披露。同一问题中记录的 codex `.bak` 增长此前已收敛为每次安装一份备份，无需改动代码。
+- PR review 合同新增**线程生命周期**：re-review POST 成功后，解决被复核为 `fixed` 的发现的 review thread，并把本流程此前的 review 正文折叠为指向最新 review 的一行指针；仍未解决的发现保持其 inline 线程原样可见。
+- 更新 `mstar-audit/references/pr-review.md`（新增 § Thread lifecycle、Procedure 步骤、输出计数）与 `mstar-pr-loop/SKILL.md`。
+
+### 版本对齐
+
+- 提升 monorepo 根、`@mstar-harness/opencode`、`@mstar-harness/opencode-v2`、`@mstar-harness/cli`、`@mstar-harness/engine`、`@mstar-harness/dsh`、Cursor/Codex/Kimi/ZCode/omp/Claude 插件清单、便携式 Agent Plugins 清单及两份 marketplace 清单：**→ 4.1.4**。
+
 ## [4.1.3] - 2026-10-30
 
 ### Harness

@@ -6,6 +6,17 @@ The monorepo root [CHANGELOG.md](../../CHANGELOG.md) summarizes cross-surface re
 
 ## [Unreleased]
 
+## [4.1.4] - 2026-10-31
+
+### Changed
+
+- **dsh local-suite determinism:** ten boot-dependent real-composition cases, on three named surfaces, now run only where the environment is deterministic. `packages/dsh/tests/harness.ts` exports the one CI interpretation (`isCiEnvironment()`) plus two recorded reasons; every `bootApp`-dependent case in the skills mount real-composition describe, the full-app boot case and the launch-cwd child-boot case use `test.if(isCiEnvironment())` and carry `LOCAL_SKILL_MOUNT_SKIP_REASON` in their titles, so a local run reports them as explicit skips instead of `timed out after 5000ms`, while CI executes every original assertion unchanged. `assertPackedEntryCurrent()` returns its skip reason in CI instead of silently returning, and the existing test now asserts that return and still runs every packed-artifact assertion in both environments. No assertion, timeout or product code changed; a local skip is not a pass, and CI remains the only execution evidence for the gated bodies. The stale-install co-factor (`dsh-skill*` rc.4 installed vs rc.5 pinned) is recorded as not separately excluded, not claimed fixed.
+Bump `@deepseek-ai/dsh-*` peers to `^0.2.1-rc.5` (corridor rc.4 → rc.5; thinking-block rendering; no plugin source changes).
+
+- Version alignment with harness **4.1.4**.
+
+See root [CHANGELOG.md](../../CHANGELOG.md) **4.1.4**.
+
 ## [4.1.3] - 2026-10-30
 
 ### Changed
