@@ -1,6 +1,6 @@
 {
   "name": "@mstar-harness/ui",
-  "version": "4.1.3",
+  "version": "4.1.4",
   "description": "Host-agnostic React presentation layer for the Morning Star harness: design tokens, view models, components and bilingual copy.",
   "private": true,
   "license": "MIT",

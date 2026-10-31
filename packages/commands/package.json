@@ -1,6 +1,6 @@
 {
   "name": "@mstar-harness/commands",
-  "version": "4.1.3",
+  "version": "4.1.4",
   "description": "Canonical command contracts for the Morning Star harness.",
   "private": true,
   "license": "MIT",

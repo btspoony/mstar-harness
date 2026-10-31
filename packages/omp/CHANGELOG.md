@@ -6,6 +6,16 @@ The monorepo root [CHANGELOG.md](../../CHANGELOG.md) summarizes cross-surface re
 
 ## [Unreleased]
 
+## [4.1.4] - 2026-10-31
+
+### Harness
+
+- **Attestations are generated, not authored.** `mstar session recover`, `mstar store upgrade`, `mstar store activate`, `mstar workflow reopen` and `mstar workflow adopt-terminal` no longer require an operator-authored `--attestation <path>` document: each consuming verb now generates the operator attestation inside its own transaction from live, recorded facts — the invoking operator, the operation's durable record, the transaction clock, and exactly the session rows that transaction disposes (for the activation barrier, the executing consumer's own process facts; a Bun-driven run refuses and names the installed Node CLI as the recovery). `workflow adopt-terminal` records the generated settlement document (one stop per settled ACTIVE holder) on its receipt; `workflow reopen` generates an empty stop list because it revokes no row. `--attestation <absolute-json>` remains a 1:1 explicit override; the engine validators are unchanged and stay the acceptance authority. `store activate` gains a required `--operator`; the omp `recover` tool makes its attestation input optional.
+
+- Version alignment with harness **4.1.4**.
+
+See root [CHANGELOG.md](../../CHANGELOG.md) **4.1.4**.
+
 ## [4.1.3] - 2026-10-30
 
 ### Changed
