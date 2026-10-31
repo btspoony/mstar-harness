@@ -4,7 +4,8 @@
  * `project_bindings`, P3 drives the item transitions, and nothing here mutates
  * on the read path.
  *
- * TRANSACTION OWNERSHIP: every exported mutation owns exactly one
+ * TRANSACTION OWNERSHIP: every exported mutation (`planItem`, `replanItem`,
+ * `markApplied`, `markFailed`, `markSkipped`, `writeCursor`) owns exactly one
  * `begin immediate` … `commit` transaction (house pattern: `issue.ts`
  * `withWrite`). The row mutation and its `store_operations` receipt commit
  * together or not at all, so an interruption cannot leave an advanced row
@@ -20,13 +21,23 @@ import type { StoreDb } from "./store-db.js";
 export type SyncDirection = "import" | "push";
 export type SyncItemState = "unbound" | "pending" | "applied" | "failed" | "skipped";
 
+/**
+ * The `sync.*` codes are this module's own; the `linear.*` entries are the
+ * provider-side vocabulary the contract documents for cross-reference (§4) and
+ * that the P3 adapter and ingest emit — one name per condition, no synonyms.
+ */
 export type SyncErrorCode =
   | "sync.not-found"
   | "sync.illegal-transition"
   | "sync.revision-conflict"
   | "sync.operation-conflict"
   | "sync.invalid-input"
-  | "sync.local-issue-missing";
+  | "sync.local-issue-missing"
+  | "linear.query-failed"
+  | "linear.identity-collision"
+  | "linear.list-unimplemented"
+  | "linear.host-unavailable"
+  | "linear.access-denied";
 
 export class SyncError extends Error {
   readonly code: SyncErrorCode;
@@ -265,6 +276,72 @@ export function planItem(db: StoreDb, input: PlanItemInput): SyncItem {
     } else {
       refuseTransition(row.item_state, "planItem");
     }
+    const item = toItem(requireItem(selectRow(db, bindingId, direction, localId)));
+    recordOperation(db, operationId, hash, item, now);
+    return item;
+  });
+}
+
+/**
+ * The ONE freshness rule (contract §2): a remote revision is "newer" only when
+ * its INSTANT is later than the recorded one. ISO-8601 strings are not ordered
+ * lexicographically — `…T00:00:00.500Z` sorts below `…T00:00:00Z` — so a string
+ * comparison silently skips genuine changes. An unparseable instant is refused
+ * rather than guessed.
+ */
+export function isNewerInstant(candidate: string, recorded: string | null): boolean {
+  const next = Date.parse(candidate);
+  if (Number.isNaN(next)) {
+    throw new SyncError("sync.invalid-input", `remoteUpdatedAt ${JSON.stringify(candidate)} is not an ISO-8601 instant`);
+  }
+  if (recorded === null) return true;
+  const prior = Date.parse(recorded);
+  return Number.isNaN(prior) ? true : next > prior;
+}
+
+/**
+ * Re-plan an already-`applied` item whose remote revision moved on (§2, added
+ * for M0): the ONLY legal source state, everything else refuses
+ * `sync.illegal-transition`. The new watermark is the remote revision this
+ * re-plan is for, and the recorded `external_id` / `last_remote_updated_at`
+ * survive an omission exactly as they do on `planItem`'s retry.
+ *
+ * The transition is `applied → pending`; the caller still owes the `markApplied`
+ * of the cycle it opened, so a crash between the two leaves a `pending` row the
+ * next run resumes instead of a silent overwrite. Same transaction ownership and
+ * replay rules as every other mutation here.
+ */
+export function replanItem(db: StoreDb, input: PlanItemInput): SyncItem {
+  const bindingId = requireNonblank("bindingId", input.bindingId);
+  const direction = requireDirection(input.direction);
+  const localId = requireNonblank("localId", input.localId);
+  const externalId = input.externalId == null ? null : requireNonblank("externalId", input.externalId);
+  const remoteUpdatedAt = input.remoteUpdatedAt == null ? null : requireNonblank("remoteUpdatedAt", input.remoteUpdatedAt);
+  const operationId = requireNonblank("operationId", input.operationId);
+  const hash = syncRequestHash("replanItem", { bindingId, direction, localId, externalId, remoteUpdatedAt });
+  return withSyncTransaction(db, () => {
+    const replayed = replayOrRefuse<SyncItem>(db, operationId, hash);
+    if (replayed !== undefined) return replayed;
+    const now = new Date().toISOString();
+    const row = requireItem(selectRow(db, bindingId, direction, localId));
+    if (row.item_state !== "applied") refuseTransition(row.item_state, "replanItem");
+    // The other half of the contract: a re-plan is for a NEWER remote revision.
+    // An equal or older one would rewind the watermark, so it is refused as an
+    // out-of-contract call rather than accepted as a no-op.
+    const next = remoteUpdatedAt ?? row.last_remote_updated_at;
+    if (next !== null && row.last_remote_updated_at !== null && !isNewerInstant(next, row.last_remote_updated_at)) {
+      throw new SyncError(
+        "sync.illegal-transition",
+        `replanItem requires a newer remote revision: received ${JSON.stringify(next)}, recorded ${JSON.stringify(row.last_remote_updated_at)}`,
+      );
+    }
+    casUpdate(db, { bindingId, direction, localId }, row.revision, {
+      item_state: "pending",
+      external_id: externalId ?? row.external_id,
+      last_remote_updated_at: remoteUpdatedAt ?? row.last_remote_updated_at,
+      last_error: null,
+      last_skip_reason: null,
+    }, now);
     const item = toItem(requireItem(selectRow(db, bindingId, direction, localId)));
     recordOperation(db, operationId, hash, item, now);
     return item;

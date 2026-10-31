@@ -265,7 +265,9 @@ export async function findingsCleanupGate(
       .prepare(
         "select issues.id as id, issues.severity as severity from issues " +
           "join provenance on provenance.issue_id = issues.id and provenance.kind = 'plan' and provenance.target = ? and provenance.origin = 'scoped' " +
-          "where issues.disposition = 'open' order by issues.id asc",
+          // A mirrored external row is not a local finding: this gate counts the
+          // work this repo owes, and an imported Linear issue is not that.
+          "where issues.disposition = 'open' and issues.provider = 'local' order by issues.id asc",
       )
       .all(planId) as Array<{ id: string; severity: string }>;
     const violations: ValidationResult[] = [];

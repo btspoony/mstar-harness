@@ -122,8 +122,13 @@ function describeThrown(error: unknown): string {
   return "the transport threw without a message";
 }
 
-/** The first listed tool that satisfies the contract's listing requirement. */
-function listingVerbIn(tools: readonly string[] | undefined, verbs: readonly string[]): string | null {
+/**
+ * The first listed tool that satisfies the contract's listing requirement. The
+ * probe answers `ready` with it and the listing adapter MUST use the same one
+ * (QC F9): a probe that accepts any candidate while the adapter hard-codes the
+ * first candidate reports `ready` and then fails every page.
+ */
+export function listingVerbIn(tools: readonly string[] | undefined, verbs: readonly string[]): string | null {
   if (tools === undefined) return null;
   const listed = new Set(tools);
   return verbs.find((verb) => listed.has(verb)) ?? null;
