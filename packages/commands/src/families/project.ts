@@ -144,11 +144,11 @@ function failure(id: string, error: unknown): CommandEnvelope<never> {
     RECOVERY[code] ??
     (code.startsWith("store.")
       ? "The store refused this operation on its own condition, named in the message. Retrying cannot change it — inspect `mstar status show` and follow the store's named condition."
-      : `Run ${id.replaceAll(".", " ")} --help and check the named condition; retry ${id} only after addressing it.`);
+      : "Inspect the recorded binding with `mstar project show`, correct the named condition, then retry.");
   if (error instanceof SddScriptError) {
     return refusalEnvelope({ command: id, status: "usage", code: "usage", exitCode: 2, message, details: { operation: id }, recovery });
   }
-  return refusalEnvelope({ command: id, status: "refused", code, exitCode: 1, message, details: { operation: id, ...facts.details }, recovery: recovery || "Run `mstar project bind --help` and correct the named binding condition before retrying." });
+  return refusalEnvelope({ command: id, status: "refused", code, exitCode: 1, message, details: { operation: id, ...facts.details }, recovery });
 }
 
 async function run(id: string, input: Input, invocation: InvocationContext): Promise<CommandEnvelope> {
