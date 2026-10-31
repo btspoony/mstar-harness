@@ -1095,6 +1095,7 @@ const CONTROL_ROOT_CLASS: Readonly<Record<string, "root" | "none">> = {
   "lint": "none", "migrate": "root", "milestone.add": "root",
   "milestone.assign": "root", "milestone.list": "root", "milestone.status": "root",
   "milestone.update": "root", "path.resolve": "none", "persist.delete": "root",
+  "project.bind": "root", "project.show": "root",
   "persist.get": "root", "persist.list": "root", "persist.write": "root",
   "plan.bind": "root", "plan.complete": "root", "plan.issue-add": "root",
   "plan.issue-close": "root", "plan.prepare": "root", "plan.progress": "root",

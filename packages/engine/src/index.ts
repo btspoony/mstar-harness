@@ -69,15 +69,20 @@ export type {
   ReviewRunSpec,
   ScaffoldOptions,
 } from "./path.js";
-export type { MstarcConfig } from "./mstarc.js";
+export type { LinearBinding, LinearBindingRefusal, LinearFacetMapping, MstarcConfig, MstarcStringKey } from "./mstarc.js";
 export {
+  LINEAR_MAPPING_SECTION,
+  LINEAR_SECTION,
   MSTARC_FILE,
   MSTARC_HARNESS_DIR_KEY,
   MSTARC_PROJECT_DIR_KEY,
   MSTARC_REVIEW_DIR_KEY,
   MSTARC_SECTION,
   MSTARC_WORKFLOW_DIR_KEY,
+  defaultLinearMapping,
   findMstarc,
+  loadMstarc,
+  parseLinearBinding,
   parseMstarc,
 } from "./mstarc.js";
 export {
@@ -299,6 +304,12 @@ export {
   validateCompassFrontmatter,
 } from "./iteration.js";
 export type {
+  BindingErrorCode,
+  ProjectBinding,
+  ProjectBindingMutation,
+  ProjectBindingRead,
+  ProjectBindingReceipt,
+  ProjectBindingTarget,
   ProjectRegisterDoc,
   ProjectRegisterEntry,
   RoadmapFrontmatter,
@@ -306,13 +317,16 @@ export type {
   RoadmapValidation,
 } from "./project.js";
 export {
+  BindingError,
   PROJECT_REFERENCES_DIR,
   PROJECT_REGISTER_FILE,
   PROJECT_ROADMAP_FILE,
   ROADMAP_STATUSES,
   _DEFAULT_PROJECT,
+  bindProject,
   findingsCleanupGate,
   listProjectReferenceFiles,
+  readProjectBinding,
   validateProjectRegister,
   validateRoadmap,
 } from "./project.js";
