@@ -1,10 +1,9 @@
 /**
- * Provider adapter contract (frozen: iterations/iter-20261031-issue-system-binding
- * specs/provider-adapter-contract.md). The engine knows external issue systems
- * only through this interface; the host owns credentials and the MCP transport
- * (compass D3). Read-only iteration: `apply` is deliberately absent until M1 —
- * an interface member with zero exercising implementations cannot be proven
- * safe; adding it later is purely additive.
+ * Provider adapter contract: the narrow surface through which the engine knows
+ * an external issue system. The host owns credentials and the MCP transport, so
+ * this interface carries neither. A write verb is deliberately absent while the
+ * surface is read-only: an interface member with zero exercising implementations
+ * cannot be proven safe, and adding it later is purely additive.
  */
 
 /**
