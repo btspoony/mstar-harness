@@ -65,6 +65,20 @@ describe("parseLinearBinding", () => {
     expect(parsed.ok).toBe(true);
   });
 
+  test("F8: common boolean spellings are enabled; an unreadable value is refused by name", () => {
+    for (const spelling of ["true", "TRUE", "1", "yes", "On"]) {
+      const parsed = parseLinearBinding({ enabled: spelling, workspace: "w", team: "t" }, undefined);
+      expect([spelling, parsed.ok && parsed.binding.enabled]).toEqual([spelling, true]);
+    }
+    for (const spelling of ["false", "FALSE", "0", "no", "off"]) {
+      const parsed = parseLinearBinding({ enabled: spelling }, undefined);
+      expect([spelling, parsed.ok && parsed.binding.enabled]).toEqual([spelling, false]);
+    }
+    const refused = parseLinearBinding({ enabled: "maybe" }, undefined);
+    expect(refused).toMatchObject({ ok: false, code: "linear.binding-invalid" });
+    expect((refused as { message: string }).message).toContain('enabled="maybe"');
+  });
+
   test(`section constant stays "${LINEAR_SECTION}"`, () => {
     expect(LINEAR_SECTION).toBe("linear");
   });

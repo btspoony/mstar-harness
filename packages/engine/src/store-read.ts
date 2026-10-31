@@ -36,8 +36,8 @@ import { ProjectionError, refreshProjections, type ProjectionFreshness, type Sou
 import { parseRoadmapContent, type RoadmapContent } from "./roadmap-content.js";
 import { readRoadmapAuthorityOn, type RoadmapRead } from "./roadmap-store.js";
 import { SddScriptError } from "./sdd.js";
-import { dirname } from "node:path";
-import { loadMstarc, parseLinearBinding } from "./mstarc.js";
+import { readRepoLinearBinding, type RepoLinearBinding } from "./mstarc.js";
+import type { ProbeState } from "./issue-sync/provider.js";
 import { openStore, StoreError, type StoreContext, type StoreDb, type StoreHandle } from "./store-db.js";
 import { ExecutionError } from "./execution-store.js";
 import type { AuthorityVerdict } from "./recovery-intent.js";
@@ -121,12 +121,13 @@ export type DashboardFilters = {
   probeCause?: string;
 };
 
-/** Host-supplied readiness states; `not-probed` is the engine's honest default. */
-export type SyncProbeState = "ready" | "service-absent" | "unreachable" | "access-denied";
+/** `not-probed` is the engine's own honest default; every other value is the
+ * host's `ProbeState` — one union, derived, never restated (F6). */
+export type SyncProbeState = ProbeState | "not-probed";
 
 /** Readiness as the binding panel shows it — never guessed from configuration. */
 export type SyncBindingReadiness = {
-  state: SyncProbeState | "not-probed";
+  state: SyncProbeState;
   cause: string;
 };
 
@@ -693,16 +694,21 @@ export function queryIssueFlow(projectId?: string): StoreReadQuery<IssueFlow> {
  * `not-probed`.
  */
 export function querySyncBinding(harnessDir: string, filters: DashboardFilters): StoreReadQuery<SyncBindingDTO> {
-  const rc = loadMstarc(harnessDir, dirname(harnessDir));
-  const parsed = parseLinearBinding(rc?.config.linear, rc?.config.linearMapping);
-  const binding = parsed.ok
-    ? { enabled: parsed.binding.enabled, mode: parsed.binding.mode, workspace: parsed.binding.workspace, team: parsed.binding.team }
-    : null;
-  const bindingError = parsed.ok ? null : parsed.message;
+  // The repo's own `.mstarc` is the authority — a parent directory's
+  // configuration never becomes this repo's connection identity (F4).
+  const repo: RepoLinearBinding = readRepoLinearBinding(harnessDir);
+  const binding =
+    repo.kind === "bound"
+      ? { enabled: repo.binding.enabled, mode: repo.binding.mode, workspace: repo.binding.workspace, team: repo.binding.team }
+      : null;
+  const bindingError = repo.kind === "bound" ? null : repo.message;
+  if (filters.probeState !== undefined && (filters.probeCause ?? "").trim() === "") {
+    usage("the sync-binding view requires probe_cause whenever probe_state is supplied");
+  }
   const readiness: SyncBindingReadiness =
     filters.probeState === undefined
       ? { state: "not-probed", cause: "not-probed: readiness is host-owned; no probe result was supplied" }
-      : { state: filters.probeState, cause: filters.probeCause ?? "" };
+      : { state: filters.probeState, cause: filters.probeCause as string };
   return { view: "sync-binding", needsProjection: false, run: () => ({ binding, bindingError, readiness }) };
 }
 

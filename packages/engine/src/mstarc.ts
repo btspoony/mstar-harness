@@ -189,7 +189,7 @@ export type LinearBinding = {
 /** Refusal for an invalid `[linear]` block (house dotted-lowercase codes). */
 export type LinearBindingRefusal = {
   ok: false;
-  code: "linear.mode-refused" | "linear.binding-incomplete";
+  code: "linear.mode-refused" | "linear.binding-incomplete" | "linear.binding-invalid";
   message: string;
 };
 
@@ -199,6 +199,19 @@ export function defaultLinearMapping(): LinearFacetMapping {
 }
 
 const LINEAR_MAPPING_FACETS = ["disposition", "kind", "severity"] as const;
+
+/** Accepted boolean spellings (case-insensitive); anything else is refused. */
+export const BOOLEAN_TRUE = ["true", "1", "yes", "on"] as const;
+export const BOOLEAN_FALSE = ["false", "0", "no", "off"] as const;
+
+/** Read one INI boolean, or `null` when the value is not a boolean spelling. */
+function parseBoolean(raw: string | undefined): boolean | null {
+  if (raw === undefined) return false;
+  const value = raw.trim().toLowerCase();
+  if ((BOOLEAN_TRUE as readonly string[]).includes(value)) return true;
+  if ((BOOLEAN_FALSE as readonly string[]).includes(value)) return false;
+  return null;
+}
 
 /**
  * Validate the raw `[linear]` / `[linear.mapping]` sections collected by
@@ -222,7 +235,17 @@ export function parseLinearBinding(
       message: `linear.mode-refused: [linear] mode "${mode}" is not supported; only "mirror" is accepted this iteration`,
     };
   }
-  const enabled = linear.enabled === "true";
+  const parsedEnabled = parseBoolean(linear.enabled);
+  if (parsedEnabled === null) {
+    // A value nobody can read is refused by name: silently treating `TRUE` or
+    // `1` as "off" would misdiagnose a deliberately enabled binding.
+    return {
+      ok: false,
+      code: "linear.binding-invalid",
+      message: `linear.binding-invalid: [linear] enabled="${linear.enabled}" is not a boolean; accepted spellings are ${BOOLEAN_TRUE.join(", ")} / ${BOOLEAN_FALSE.join(", ")} (case-insensitive)`,
+    };
+  }
+  const enabled = parsedEnabled;
   const workspace = linear.workspace ?? "";
   const team = linear.team ?? "";
   if (enabled && (workspace === "" || team === "")) {
@@ -298,4 +321,41 @@ export function loadMstarc(startDir: string, boundary: string): LoadedMstarc | n
 function isAtOrBelow(dir: string, root: string): boolean {
   const rel = relative(root, dir);
   return rel === "" || (!rel.startsWith("..") && !isAbsolute(rel));
+}
+
+/**
+ * The repo's own `[linear]` connection block, or a NAMED absence (§ F4).
+ *
+ * The `.mstarc` home is the repo root — the harness dir's parent. This reader
+ * NEVER walks up: a parent directory's `.mstarc` (in a worktree layout, another
+ * repo's binding) must not become this repo's connection identity, so a config
+ * that is not the repo's own is treated as absent rather than discovered.
+ */
+export type RepoLinearBinding =
+  | { kind: "bound"; file: string; binding: LinearBinding }
+  | { kind: "absent"; code: "linear.binding-absent"; message: string }
+  | { kind: "invalid"; code: LinearBindingRefusal["code"]; message: string };
+
+/** `[linear]` from `<repo-root>/.mstarc` only; never a parent's configuration. */
+export function readRepoLinearBinding(harnessDir: string): RepoLinearBinding {
+  const repoRoot = dirname(resolve(harnessDir));
+  const file = join(repoRoot, MSTARC_FILE);
+  if (!isFile(file)) {
+    return {
+      kind: "absent",
+      code: "linear.binding-absent",
+      message: `linear.binding-absent: no ${MSTARC_FILE} at the repo root ${repoRoot}; a parent directory's configuration is never inherited`,
+    };
+  }
+  const config = parseMstarc(readFileSync(file, "utf8"));
+  if (config.linear === undefined) {
+    return {
+      kind: "absent",
+      code: "linear.binding-absent",
+      message: `linear.binding-absent: ${file} declares no [${LINEAR_SECTION}] connection block`,
+    };
+  }
+  const parsed = parseLinearBinding(config.linear, config.linearMapping);
+  if (!parsed.ok) return { kind: "invalid", code: parsed.code, message: parsed.message };
+  return { kind: "bound", file, binding: parsed.binding };
 }

@@ -24,13 +24,11 @@ import { engineErrorFacts } from "./family-refusal.js";
 import { SddScriptError } from "@mstar-harness/engine";
 import {
   bindProject,
-  parseLinearBinding,
   readProjectBinding,
+  readRepoLinearBinding,
   resolveProcessHarnessDir,
   type ProjectBindingTarget,
 } from "@mstar-harness/engine";
-import { loadMstarc } from "@mstar-harness/engine";
-import { dirname } from "node:path";
 import { z } from "zod";
 import { commandEnvelopeSchema } from "../envelope.js";
 import type { CommandDefinition, CommandEnvelope, CommandRequirement, InvocationContext } from "../types.js";
@@ -97,9 +95,21 @@ const RECOVERY: Record<string, string> = {
   "linear.binding-conflict":
     "Read the existing correspondence with `mstar project show --project <project-id>` and retry with a fresh --operation when the request differs.",
   "linear.binding-invalid":
-    "Check the supplied values and the observed store revision (`mstar status show`), then retry with a fresh --operation.",
+    "Fix the value the message names. `[linear] enabled` accepts true/1/yes/on or false/0/no/off (case-insensitive); workspace/team/remoteProject must be non-empty; the store revision must still match when --expect-store is supplied. Check the block with `mstar project show --project <id>` and re-run bind with a fresh --operation.",
   "store.not-active":
     'Activate the store first: `mstar store upgrade --operator <name>`, then retry the bind.',
+  "store.not-initialized":
+    'Create and activate the store: `mstar harness scaffold` then `mstar store init`; for a workspace holding historical file state use `mstar store upgrade --operator <name>`. Retrying cannot create it.',
+  "store.runtime-unsupported":
+    "The store on disk was written by a runtime this build does not support. Retrying cannot change that: use the `mstar` release that wrote the store, or read the named condition in the message before touching the file.",
+  "store.schema-unsupported":
+    "This store's schema is not supported by this build. Retrying cannot resolve it: run the store's own upgrade path with a build that supports that schema (`mstar store upgrade --operator <name>`), or use the release that created the store.",
+  "store.schema-drift":
+    "The store schema does not match what this build expects. Retrying cannot resolve it: follow the named condition in the message (upgrade the store with `mstar store upgrade --operator <name>`, or use the release that matches the schema).",
+  "store.corrupt":
+    "The store file is corrupt. Retrying will not repair it: restore a backup (`mstar store restore`), or re-initialize a fresh harness and re-register the catalog.",
+  "store.busy":
+    "Another process holds the store. Wait for it to finish (or close the other mstar session), then retry.",
 };
 
 function failure(id: string, error: unknown): CommandEnvelope<never> {
@@ -120,7 +130,14 @@ function failure(id: string, error: unknown): CommandEnvelope<never> {
   }
   const facts = engineErrorFacts(error);
   const code = facts.code ?? `${id}.internal-error`;
-  const recovery = facts.recovery ?? RECOVERY[code] ?? `Run ${id.replaceAll(".", " ")} --help and retry ${id}.`;
+  // Unmapped codes keep their own code and a truthful recovery: "retry" is
+  // never the answer for a store this build cannot read (F5).
+  const recovery =
+    facts.recovery ??
+    RECOVERY[code] ??
+    (code.startsWith("store.")
+      ? "The store refused this operation on its own condition, named in the message. Retrying cannot change it — inspect `mstar status show` and follow the store's named condition."
+      : `Run ${id.replaceAll(".", " ")} --help and check the named condition; retry ${id} only after addressing it.`);
   if (error instanceof SddScriptError) {
     return refusalEnvelope({ command: id, status: "usage", code: "usage", exitCode: 2, message, details: { operation: id }, recovery });
   }
@@ -138,24 +155,28 @@ async function run(id: string, input: Input, invocation: InvocationContext): Pro
 
     // The connection layer is `.mstarc`, and only `.mstarc`: a Linear project
     // name never lives there, and workspace/team never become flags (D2).
-    // The `.mstarc` home is the repo root — the harness dir's parent (the same
-    // discovery the engine's own resolvers use).
-    const rc = loadMstarc(harnessDir, dirname(harnessDir));
-    const parsed = parseLinearBinding(rc?.config.linear, rc?.config.linearMapping);
-    if (!parsed.ok) return failure(id, Object.assign(new Error(parsed.message), { code: parsed.code }));
+    // The repo's OWN `.mstarc` is the authority — a parent directory's config
+    // is never inherited (F4), so a worktree cannot borrow another repo's
+    // workspace/team.
+    const repo = readRepoLinearBinding(harnessDir);
+    if (repo.kind === "invalid") return failure(id, Object.assign(new Error(repo.message), { code: repo.code }));
     const provider = requireValue(input.provider, "--provider");
-    if (!parsed.binding.enabled || provider !== "linear") {
+    const enabled = repo.kind === "bound" && repo.binding.enabled;
+    if (!enabled || provider !== "linear") {
+      const why = repo.kind === "absent" ? repo.message : `[linear] enabled is not true in ${repo.file}`;
       return failure(
         id,
-        Object.assign(new Error(`[linear.provider-disabled] Provider "${provider}" is not enabled in this repo's .mstarc [linear] block.`), {
+        Object.assign(new Error(`[linear.provider-disabled] Provider "${provider}" is not enabled here: ${why}`), {
           code: "linear.provider-disabled",
         }),
       );
     }
+    // Narrowed by `enabled` above: only a `bound` repo block reaches here.
+    if (repo.kind !== "bound") return failure(id, new Error("[linear.provider-disabled] no repo [linear] block"));
     const target: ProjectBindingTarget = {
       provider,
-      workspace: parsed.binding.workspace,
-      team: parsed.binding.team,
+      workspace: repo.binding.workspace,
+      team: repo.binding.team,
       remoteProject: requireValue(input.remoteProject, "--remote-project"),
     };
     return envelope(

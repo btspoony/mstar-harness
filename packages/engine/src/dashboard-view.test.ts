@@ -843,12 +843,50 @@ describe("sync-binding view", () => {
   test("probe filter refusals: unknown state, cause without state, unknown field, over-long cause", async () => {
     const context = await workspace("sync-binding-refusals");
     const read = (params: Record<string, string>) => readDashboardView({ context, view: "sync-binding", params });
-    await expect(read({ probe_state: "not-probed" })).rejects.toThrow(/probe_state must be one of/);
+    await expect(read({ probe_state: "not-probed", probe_cause: "x" })).rejects.toThrow(/probe_state must be one of ready, service-absent, unreachable, access-denied/);
     await expect(read({ probe_cause: "orphan" })).rejects.toThrow(/probe_cause requires probe_state/);
     await expect(read({ probe: "x" })).rejects.toThrow(/"probe" is not a supported sync-binding query parameter/);
     await expect(read({ probe_state: "ready", probe_cause: "x".repeat(MAX_DASHBOARD_SEARCH_LENGTH + 1) })).rejects.toThrow(
       /probe_cause must be at most 200 characters/,
     );
+  });
+
+  test("F7: probe_state without probe_cause is refused like the reverse half-pair", async () => {
+    const context = await workspace("sync-binding-half-pair");
+    await expect(readDashboardView({ context, view: "sync-binding", params: { probe_state: "ready" } })).rejects.toThrow(
+      /probe_state requires probe_cause/,
+    );
+    await expect(readDashboardView({ context, view: "sync-binding", params: { probe_cause: "orphan" } })).rejects.toThrow(
+      /probe_cause requires probe_state/,
+    );
+  });
+
+  test("F4: a parent directory's .mstarc is never inherited — the repo's own config is the authority", async () => {
+    const context = await workspace("sync-binding-parent");
+    // The parent (another repo's checkout) carries a complete connection block.
+    writeFileSync(join(context.harnessDir, "..", "..", ".mstarc"), "[linear]\nenabled=true\nmode=mirror\nworkspace=other\nteam=other\n");
+    const data = (await readDashboardView({ context, view: "sync-binding" })).data as SyncBindingDTO;
+    expect(data.binding).toBeNull();
+    expect(data.bindingError).toContain("no .mstarc at the repo root");
+    expect(data.bindingError).toContain("never inherited");
+    expect(JSON.stringify(data)).not.toContain("other");
+  });
+
+  test("F8: an unreadable enabled value surfaces as linear.binding-invalid in the panel", async () => {
+    const context = await workspace("sync-binding-enabled");
+    writeFileSync(join(context.harnessDir, "..", ".mstarc"), "[linear]\nenabled=maybe\nmode=mirror\nworkspace=acme\nteam=eng\n");
+    const data = (await readDashboardView({ context, view: "sync-binding" })).data as SyncBindingDTO;
+    expect(data.binding).toBeNull();
+    expect(data.bindingError).toContain('linear.binding-invalid: [linear] enabled="maybe"');
+  });
+
+  test("F8: common boolean spellings are read as enabled", async () => {
+    for (const spelling of ["TRUE", "1", "yes", "on"]) {
+      const context = await workspace(`sync-binding-enabled-${spelling}`);
+      writeFileSync(join(context.harnessDir, "..", ".mstarc"), `[linear]\nenabled=${spelling}\nmode=mirror\nworkspace=acme\nteam=eng\n`);
+      const data = (await readDashboardView({ context, view: "sync-binding" })).data as SyncBindingDTO;
+      expect([spelling, data.binding?.enabled]).toEqual([spelling, true]);
+    }
   });
 
   test("no-write proof: reading the view leaves the harness tree byte-identical", async () => {

@@ -7,9 +7,19 @@
  * safe; adding it later is purely additive.
  */
 
+/**
+ * The ONE probe-state vocabulary (frozen contract §2). Every consumer —
+ * the dsh adapter, the dashboard DTO, the query-parameter validator — derives
+ * from this union instead of restating the four strings.
+ */
+export type ProbeState = "ready" | "service-absent" | "unreachable" | "access-denied";
+
+/** The four states as a value, for validation and iteration. */
+export const PROBE_STATES: readonly ProbeState[] = ["ready", "service-absent", "unreachable", "access-denied"];
+
 /** Why the provider is or is not reachable right now (credential-free). */
 export type ProbeResult = {
-  state: "ready" | "service-absent" | "unreachable" | "access-denied";
+  state: ProbeState;
   /** Human-readable, credential-free cause naming the missing capability. */
   cause: string;
 };

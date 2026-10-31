@@ -180,6 +180,80 @@ async function issueCounts(harnessDir: string): Promise<Record<string, number>> 
   }
 }
 
+describe("QC fix wave", () => {
+  test("F4: a parent directory's .mstarc is never inherited — the repo's own config is the authority", async () => {
+    const parent = mkdtempSync(path.join(os.tmpdir(), "commands-project-parent-"));
+    roots.push(parent);
+    // The PARENT carries a complete connection block this repo does not have.
+    writeFileSync(path.join(parent, ".mstarc"), "[linear]\nenabled=true\nmode=mirror\nworkspace=other-repo\nteam=other-team\n");
+    const root = path.join(parent, "repo");
+    mkdirSync(root, { recursive: true });
+    const harness = path.join(root, ".mstar");
+    mkdirSync(harness, { recursive: true });
+    await (await initializeStore({ harnessDir: harness })).close();
+    await registerCatalogEntity(
+      { harnessDir: harness },
+      { kind: "project", id: "proj-a", title: "Project A", rootKind: "projects", relativePath: "projects/proj-a" },
+      { operationId: "register-proj-a", actor: "test" },
+    );
+    const context: InvocationContext = {
+      cwd: root,
+      controlRoot: harness,
+      versions: { engine: null, cli: null, plugin: null, host: null, platform: null },
+      signal: new AbortController().signal,
+      effects: {
+        async readInput() { return ""; },
+        async spawn() { throw new Error("not used"); },
+        async startDashboard() { throw new Error("not used"); },
+        async openBrowser() { throw new Error("not used"); },
+      },
+    };
+    const refused = await bind({ project: "proj-a", provider: "linear", remoteProject: "Team Roadmap", operation: "op-1" }, context);
+    expect(refused.status).toBe("refused");
+    expect(refused.code).toBe("linear.provider-disabled");
+    expect(refused.message).toContain("no .mstarc at the repo root");
+    expect(refused.message).toContain("never inherited");
+    expect(refused.message).not.toContain("other-repo");
+  });
+
+  test("F8: common boolean spellings are accepted; an unreadable value is refused by name", async () => {
+    for (const spelling of ["TRUE", "1", "yes", "On"]) {
+      const context = await repo(`[linear]\nenabled=${spelling}\nmode=mirror\nworkspace=acme\nteam=eng\n`);
+      const bound = await bind({ project: "proj-a", provider: "linear", remoteProject: "Team Roadmap", operation: `op-${spelling}` }, context);
+      expect([spelling, bound.status]).toEqual([spelling, "ok"]);
+    }
+    for (const spelling of ["false", "0", "no", "off"]) {
+      const context = await repo(`[linear]\nenabled=${spelling}\nmode=mirror\nworkspace=acme\nteam=eng\n`);
+      const refused = await bind({ project: "proj-a", provider: "linear", remoteProject: "Team Roadmap", operation: `op-${spelling}` }, context);
+      expect([spelling, refused.code]).toEqual([spelling, "linear.provider-disabled"]);
+    }
+    const context = await repo("[linear]\nenabled=maybe\nmode=mirror\nworkspace=acme\nteam=eng\n");
+    const refused = await bind({ project: "proj-a", provider: "linear", remoteProject: "Team Roadmap", operation: "op-x" }, context);
+    expect(refused.code).toBe("linear.binding-invalid");
+    expect(refused.message).toContain('enabled="maybe"');
+    expect(recoveryOf(refused)).toContain("true/1/yes/on");
+  });
+
+  test("F5: an unreadable store keeps its own code and never answers with 'retry'", async () => {
+    const context = await repo(LINEAR_BLOCK);
+    // A store whose schema this build cannot read.
+    const { openStore } = await import("@mstar-harness/engine");
+    const handle = await openStore({ harnessDir: context.controlRoot }, "write");
+    try {
+      // A migration row this build has never heard of → schema-unsupported.
+      handle.db.prepare("insert into schema_version(version, name, checksum, applied_at) values (999, 'future', 'x', 'now')").run();
+    } finally {
+      handle.close();
+    }
+    const refused = await bind({ project: "proj-a", provider: "linear", remoteProject: "Team Roadmap", operation: "op-1" }, context);
+    expect(refused.status).toBe("refused");
+    expect(String(refused.code).startsWith("store.")).toBe(true);
+    const recovery = recoveryOf(refused);
+    expect(recovery.toLowerCase()).not.toContain("retry project.bind");
+    expect(recovery).toMatch(/upgrade|release|schema/i);
+  });
+});
+
 describe("project family definitions", () => {
   test("both verbs are registered with effects and descriptions", () => {
     const ids = getCommandDefinitions().map((item) => item.id).filter((id) => id.startsWith("project."));

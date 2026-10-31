@@ -15,7 +15,8 @@
  * read boundary, which refreshes their projection from the current authority.
  */
 import { SddScriptError } from "./sdd.js";
-import { queryDashboard, querySyncBinding, withStoreRead, type StoreReadQuery, type SyncProbeState } from "./store-read.js";
+import { queryDashboard, querySyncBinding, withStoreRead, type StoreReadQuery } from "./store-read.js";
+import { PROBE_STATES, type ProbeState } from "./issue-sync/provider.js";
 import type { IssueFilter } from "./issue.js";
 import type { StoreContext } from "./store-db.js";
 import type { DashboardFilters, DashboardView, DashboardViewData, ReadEnvelope } from "./store-read.js";
@@ -52,13 +53,9 @@ const KINDS: Record<string, true> = {
 };
 const SEVERITIES: Record<string, true> = { critical: true, high: true, medium: true, low: true, nit: true };
 
-/** The host probe vocabulary (`ProbeResult`); `not-probed` is never accepted as input. */
-const SYNC_PROBE_STATES: Record<SyncProbeState, true> = {
-  ready: true,
-  "service-absent": true,
-  unreachable: true,
-  "access-denied": true,
-};
+/** The host probe vocabulary, derived from the one exported union. `not-probed`
+ * is the engine's own default and is never accepted as input. */
+const SYNC_PROBE_STATES: ReadonlySet<string> = new Set<string>(PROBE_STATES);
 
 function refuse(message: string): never {
   throw new SddScriptError(message, 2);
@@ -152,17 +149,22 @@ export function dashboardFilters(
   if (view === "sync-binding") {
     const probeState = queryValue(params, "probe_state");
     const probeCause = queryValue(params, "probe_cause");
+    // A state without its cause renders an empty explanation, which the AC
+    // forbids: the pair is accepted as a pair or not at all.
     if (probeState === undefined && probeCause !== undefined) {
       refuse("probe_cause requires probe_state — supply the host probe result as a pair");
     }
-    if (probeState !== undefined && !(probeState in SYNC_PROBE_STATES)) {
-      refuse(`probe_state must be one of ${Object.keys(SYNC_PROBE_STATES).join(", ")}`);
+    if (probeState !== undefined && probeCause === undefined) {
+      refuse("probe_state requires probe_cause — the readiness state must carry a readable cause");
+    }
+    if (probeState !== undefined && !SYNC_PROBE_STATES.has(probeState)) {
+      refuse(`probe_state must be one of ${PROBE_STATES.join(", ")}`);
     }
     if (probeCause !== undefined && probeCause.length > MAX_DASHBOARD_SEARCH_LENGTH) {
       refuse(`probe_cause must be at most ${MAX_DASHBOARD_SEARCH_LENGTH} characters`);
     }
     return {
-      ...(probeState === undefined ? {} : { probeState: probeState as SyncProbeState }),
+      ...(probeState === undefined ? {} : { probeState: probeState as ProbeState }),
       ...(probeCause === undefined ? {} : { probeCause }),
     };
   }
