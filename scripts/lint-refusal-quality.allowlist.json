@@ -1,67 +1,85 @@
 [
   {
     "signature": "missing-recovery:packages/commands/src/families/status.ts:1f78fdbe1af2",
-    "justification": "Engine-supplied recovery text destructured from engineErrorFacts(error) (family-refusal.ts type-checks the string but proves no reachable command); strict static proof cannot cover it — see I-000872.",
+    "justification": "Engine-supplied recovery text destructured from engineErrorFacts(error) (family-refusal.ts type-checks the string but proves no reachable command); strict static proof cannot cover it \u2014 see I-000872.",
     "trackingIssue": "I-000872",
     "expectedCount": 1
   },
   {
     "signature": "missing-recovery:packages/commands/src/families/milestone.ts:ee13cb6822a9",
-    "justification": "Engine-supplied recovery text destructured from engineErrorFacts(error) (family-refusal.ts type-checks the string but proves no reachable command); strict static proof cannot cover it — see I-000872.",
+    "justification": "Engine-supplied recovery text destructured from engineErrorFacts(error) (family-refusal.ts type-checks the string but proves no reachable command); strict static proof cannot cover it \u2014 see I-000872.",
     "trackingIssue": "I-000872",
     "expectedCount": 1
   },
   {
     "signature": "missing-recovery:packages/commands/src/families/issue.ts:5cb8fe0ab00c",
-    "justification": "Engine-supplied recovery text forwarded through a local refusal adapter whose caller passes engine facts (family-refusal.ts type-checks the string but proves no reachable command); strict static proof cannot cover it — see I-000872.",
+    "justification": "Engine-supplied recovery text forwarded through a local refusal adapter whose caller passes engine facts (family-refusal.ts type-checks the string but proves no reachable command); strict static proof cannot cover it \u2014 see I-000872.",
     "trackingIssue": "I-000872",
     "expectedCount": 1
   },
   {
     "signature": "missing-recovery:packages/commands/src/families/execution-ledgers.ts:4fa6d5edabaa",
-    "justification": "Engine-supplied recovery text forwarded through a local refusal adapter whose caller passes engine facts (family-refusal.ts type-checks the string but proves no reachable command); strict static proof cannot cover it — see I-000872.",
+    "justification": "Engine-supplied recovery text forwarded through a local refusal adapter whose caller passes engine facts (family-refusal.ts type-checks the string but proves no reachable command); strict static proof cannot cover it \u2014 see I-000872.",
     "trackingIssue": "I-000872",
     "expectedCount": 1
   },
   {
     "signature": "missing-recovery:packages/commands/src/families/execution-ledgers.ts:77fee71a8f3d",
-    "justification": "Engine-supplied recovery text forwarded through a local refusal adapter whose caller passes engine facts (family-refusal.ts type-checks the string but proves no reachable command); strict static proof cannot cover it — see I-000872.",
+    "justification": "Engine-supplied recovery text forwarded through a local refusal adapter whose caller passes engine facts (family-refusal.ts type-checks the string but proves no reachable command); strict static proof cannot cover it \u2014 see I-000872.",
     "trackingIssue": "I-000872",
     "expectedCount": 1
   },
   {
     "signature": "missing-recovery:packages/commands/src/families/dashboard.ts:04750519a45c",
-    "justification": "Local `new Error(...)` carries no recovery fact, so the adapter's literal fallback (`Resolve the reported dashboard startup issue, then rerun mstar dashboard.`) is the text that runs; the adapter destructures `recovery` from `engineErrorFacts(error)`, which strict static proof cannot evaluate — see I-000872.",
+    "justification": "Local `new Error(...)` carries no recovery fact, so the adapter's literal fallback (`Resolve the reported dashboard startup issue, then rerun mstar dashboard.`) is the text that runs; the adapter destructures `recovery` from `engineErrorFacts(error)`, which strict static proof cannot evaluate \u2014 see I-000872.",
     "trackingIssue": "I-000872",
     "expectedCount": 1
   },
   {
     "signature": "missing-recovery:packages/commands/src/families/dashboard.ts:2d2899e61f11",
-    "justification": "Engine-supplied recovery text forwarded through a local refusal adapter whose caller passes engine facts (family-refusal.ts type-checks the string but proves no reachable command); strict static proof cannot cover it — see I-000872.",
+    "justification": "Engine-supplied recovery text forwarded through a local refusal adapter whose caller passes engine facts (family-refusal.ts type-checks the string but proves no reachable command); strict static proof cannot cover it \u2014 see I-000872.",
     "trackingIssue": "I-000872",
     "expectedCount": 1
   },
   {
     "signature": "missing-recovery:packages/commands/src/families/session.ts:1fb700d536ac",
-    "justification": "Engine-supplied recovery text forwarded through a local refusal adapter whose caller passes engine facts (family-refusal.ts type-checks the string but proves no reachable command); strict static proof cannot cover it — see I-000872.",
+    "justification": "Engine-supplied recovery text forwarded through a local refusal adapter whose caller passes engine facts (family-refusal.ts type-checks the string but proves no reachable command); strict static proof cannot cover it \u2014 see I-000872.",
     "trackingIssue": "I-000872",
     "expectedCount": 2
   },
   {
     "signature": "missing-recovery:packages/commands/src/families/session.ts:1cb923e8e996",
-    "justification": "Engine-supplied recovery text forwarded through a local refusal adapter whose caller passes engine facts (family-refusal.ts type-checks the string but proves no reachable command); strict static proof cannot cover it — see I-000872.",
+    "justification": "Engine-supplied recovery text forwarded through a local refusal adapter whose caller passes engine facts (family-refusal.ts type-checks the string but proves no reachable command); strict static proof cannot cover it \u2014 see I-000872.",
     "trackingIssue": "I-000872",
     "expectedCount": 1
   },
   {
     "signature": "missing-recovery:packages/commands/src/families/pr-review.ts:11272c9ccda8",
-    "justification": "Engine-supplied recovery text forwarded through a local refusal adapter whose caller passes engine facts (family-refusal.ts type-checks the string but proves no reachable command); strict static proof cannot cover it — see I-000872.",
+    "justification": "Engine-supplied recovery text forwarded through a local refusal adapter whose caller passes engine facts (family-refusal.ts type-checks the string but proves no reachable command); strict static proof cannot cover it \u2014 see I-000872.",
     "trackingIssue": "I-000872",
     "expectedCount": 1
   },
   {
     "signature": "missing-recovery:packages/commands/src/families/audit.ts:be6c3ec7ad16",
-    "justification": "Engine-supplied recovery text forwarded through a local refusal adapter whose caller passes engine facts (family-refusal.ts type-checks the string but proves no reachable command); strict static proof cannot cover it — see I-000872.",
+    "justification": "Engine-supplied recovery text forwarded through a local refusal adapter whose caller passes engine facts (family-refusal.ts type-checks the string but proves no reachable command); strict static proof cannot cover it \u2014 see I-000872.",
+    "trackingIssue": "I-000872",
+    "expectedCount": 1
+  },
+  {
+    "signature": "missing-recovery:packages/commands/src/families/project.ts:9531c165f925",
+    "justification": "The family selects its recovery text at runtime (engine-supplied facts, a documented per-code RECOVERY map, and a literal fallback); strict static proof cannot evaluate the expression, the same class as the other engine-fact forwards.",
+    "trackingIssue": "I-000872",
+    "expectedCount": 1
+  },
+  {
+    "signature": "missing-recovery:packages/commands/src/families/issue-sync.ts:03f83182f1d6",
+    "justification": "The family selects its recovery text at runtime (engine-supplied facts, a documented per-code RECOVERY map, and a literal fallback); strict static proof cannot evaluate the expression, the same class as the other engine-fact forwards.",
+    "trackingIssue": "I-000872",
+    "expectedCount": 1
+  },
+  {
+    "signature": "missing-recovery:packages/commands/src/families/issue-sync.ts:7637e452d1f6",
+    "justification": "The family selects its recovery text at runtime (engine-supplied facts, a documented per-code RECOVERY map, and a literal fallback); strict static proof cannot evaluate the expression, the same class as the other engine-fact forwards.",
     "trackingIssue": "I-000872",
     "expectedCount": 1
   }

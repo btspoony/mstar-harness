@@ -297,7 +297,13 @@ describe("issue project move", () => {
     ).run();
     legacyHandle.db.exec("drop table issue_project_moves");
     legacyHandle.db.exec("alter table projection_compasses drop column plans_json");
-    legacyHandle.db.prepare("delete from schema_version where version in (13, 14)").run();
+    // Rewind to a schema-12 store: drop every object introduced by migration 13
+    // and later, then remove those rows from schema_version. Keeping this list in
+    // step with the migration tail is the cost of a hand-built legacy fixture.
+    legacyHandle.db.exec("drop table if exists issue_sync_state");
+    legacyHandle.db.exec("drop table if exists sync_cursor");
+    legacyHandle.db.exec("drop table if exists project_bindings");
+    legacyHandle.db.prepare("delete from schema_version where version >= 13").run();
     legacyHandle.close();
 
     expect(await upgradeStore(legacy)).toEqual({ schemaVersion: MIGRATIONS.length });

@@ -25,6 +25,8 @@ export const DASHBOARD_API_VIEWS = {
   "/api/projects": "projects",
   // The aggregated read: one list-shaped route whose only filter is `project`.
   "/api/overview": "overview",
+  // Read-only binding panel: `[linear]` summary + readiness (with its cause).
+  "/api/sync-binding": "sync-binding",
 } as const;
 
 /** Detail resource → contract §6 view. */
