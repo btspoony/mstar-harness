@@ -112,7 +112,7 @@ function refusalFor(id: string, code: string, message: string, details?: Record<
     exitCode: 1,
     message: `[${code}] ${message}`,
     details: { operation: id, ...details },
-    recovery: RECOVERY[code] ?? `Run \`mstar issue-sync import --help\` for the supported flags and check the named condition.`,
+    recovery: RECOVERY[code] ?? "Run `mstar issue-sync import --help` for the supported flags and check the named condition.",
   });
 }
 
