@@ -16,7 +16,7 @@ var __export = (target, all) => {
 };
 var __esm = (fn, res) => () => (fn && (res = fn(fn = 0)), res);
 
-// packages/engine/dist/engine.js
+// ../../../mstar-harness/packages/engine/dist/engine.js
 var exports_engine = {};
 __export(exports_engine, {
   ACTIVATION_PROTOCOL_VERSION: () => ACTIVATION_PROTOCOL_VERSION,
@@ -101,7 +101,6 @@ __export(exports_engine, {
   REVIEW_SEAT_ROLES: () => REVIEW_SEAT_ROLES,
   ROADMAP_STATUSES: () => ROADMAP_STATUSES,
   ROLE_MAPPING: () => ROLE_MAPPING,
-  RUNNING_WORKFLOW_OPERATION_RECEIPT_LIMIT: () => RUNNING_WORKFLOW_OPERATION_RECEIPT_LIMIT,
   RUNTIME_HEADING_ALIASES: () => RUNTIME_HEADING_ALIASES,
   RoadmapError: () => RoadmapError,
   SCHEMA_VERSION_TABLE_SQL: () => SCHEMA_VERSION_TABLE_SQL,
@@ -123,9 +122,6 @@ __export(exports_engine, {
   WORKFLOW_DELIVERY_KINDS: () => WORKFLOW_DELIVERY_KINDS,
   WORKFLOW_LIFECYCLE_STATUSES: () => WORKFLOW_LIFECYCLE_STATUSES,
   WORKFLOW_LIFECYCLE_TYPES: () => WORKFLOW_LIFECYCLE_TYPES,
-  WORKFLOW_NOTES_COMPACTION_MARKER_KIND: () => WORKFLOW_NOTES_COMPACTION_MARKER_KIND,
-  WORKFLOW_NOTES_LEDGER_MAX_BYTES: () => WORKFLOW_NOTES_LEDGER_MAX_BYTES,
-  WORKFLOW_NOTES_LEDGER_READ_BYTES: () => WORKFLOW_NOTES_LEDGER_READ_BYTES,
   WORKFLOW_OPERATION_SEMANTICS: () => WORKFLOW_OPERATION_SEMANTICS,
   WORKFLOW_SNAPSHOT_FILE: () => WORKFLOW_SNAPSHOT_FILE,
   WORKFLOW_SNAPSHOT_PAYLOAD_SCHEMA: () => WORKFLOW_SNAPSHOT_PAYLOAD_SCHEMA,
@@ -468,7 +464,7 @@ import {
   writeFileSync as writeFileSync3
 } from "node:fs";
 import { createRequire } from "node:module";
-import { basename as basename6, dirname as dirname6, join as join9, resolve as resolve7, sep as sep4 } from "node:path";
+import { basename as basename5, dirname as dirname6, join as join9, resolve as resolve7, sep as sep4 } from "node:path";
 import { AsyncLocalStorage as AsyncLocalStorage2 } from "node:async_hooks";
 import { createHash as createHash5 } from "node:crypto";
 import { lstatSync as lstatSync4, readdirSync as readdirSync6 } from "node:fs";
@@ -479,11 +475,11 @@ import { readFileSync as readFileSync9, readdirSync as readdirSync7 } from "node
 import { join as join11 } from "node:path";
 import { existsSync as existsSync9, mkdirSync as mkdirSync4, readdirSync as readdirSync8, readFileSync as readFileSync10, realpathSync as realpathSync5, statSync as statSync3 } from "node:fs";
 import { execFileSync as execFileSync2 } from "node:child_process";
-import { basename as basename7, dirname as dirname8, isAbsolute as isAbsolute3, join as join12, relative as relative2, resolve as resolve8 } from "node:path";
+import { basename as basename6, dirname as dirname8, isAbsolute as isAbsolute3, join as join12, relative as relative2, resolve as resolve8 } from "node:path";
 import { existsSync as existsSync10, readFileSync as readFileSync11, statSync as statSync4 } from "node:fs";
 import { isAbsolute as isAbsolute4, join as join13, normalize, sep as sep5 } from "node:path";
 import { existsSync as existsSync11, readFileSync as readFileSync12, statSync as statSync5 } from "node:fs";
-import { basename as basename8, isAbsolute as isAbsolute5, join as join14, relative as relative3, resolve as resolve9, sep as sep6 } from "node:path";
+import { basename as basename7, isAbsolute as isAbsolute5, join as join14, relative as relative3, resolve as resolve9, sep as sep6 } from "node:path";
 import { createHash as createHash7 } from "node:crypto";
 import { isAbsolute as isAbsolute6, join as join15, resolve as resolve10, sep as sep7 } from "node:path";
 import { readFileSync as readFileSync13 } from "node:fs";
@@ -498,30 +494,30 @@ import { createRequire as createRequire2 } from "node:module";
 import { createHash as createHash9, randomUUID as randomUUID5 } from "node:crypto";
 import { setTimeout as sleep } from "node:timers/promises";
 import { closeSync, existsSync as existsSync14, fstatSync, fsyncSync, linkSync, lstatSync as lstatSync6, openSync, readSync, statSync as statSync7, unlinkSync as unlinkSync3 } from "node:fs";
-import { basename as basename9, dirname as dirname10, join as join18, resolve as resolve13 } from "node:path";
+import { basename as basename8, dirname as dirname10, join as join18, resolve as resolve13 } from "node:path";
 import { createHash as createHash10 } from "node:crypto";
 import { lstatSync as lstatSync7, readFileSync as readFileSync15, realpathSync as realpathSync7 } from "node:fs";
 import { createHash as createHash11 } from "node:crypto";
-import { basename as basename10, dirname as dirname11 } from "node:path";
+import { basename as basename9, dirname as dirname11 } from "node:path";
 import { execFileSync as execFileSync5, spawn } from "node:child_process";
 import { mkdirSync as mkdirSync6, readFileSync as readFileSync16, realpathSync as realpathSync8, statSync as statSync8, writeFileSync as writeFileSync4 } from "node:fs";
 import { constants as osConstants } from "node:os";
-import { basename as basename11, dirname as dirname12, isAbsolute as isAbsolute9, join as join19, relative as relative5, resolve as resolve14 } from "node:path";
+import { basename as basename10, dirname as dirname12, isAbsolute as isAbsolute9, join as join19, relative as relative5, resolve as resolve14 } from "node:path";
 import { existsSync as existsSync15, statSync as statSync9 } from "node:fs";
-import { basename as basename12, dirname as dirname13, join as join20, relative as relative6, resolve as resolve15 } from "node:path";
+import { basename as basename11, dirname as dirname13, join as join20, relative as relative6, resolve as resolve15 } from "node:path";
 import { readlinkSync, realpathSync as realpathSync9 } from "node:fs";
-import { basename as basename13, dirname as dirname14, relative as relative7, resolve as resolve16 } from "node:path";
+import { basename as basename12, dirname as dirname14, relative as relative7, resolve as resolve16 } from "node:path";
 import { createHash as createHash12 } from "node:crypto";
 import { closeSync as closeSync2, constants as constants2, fstatSync as fstatSync2, lstatSync as lstatSync8, openSync as openSync2, readFileSync as readFileSync17, readdirSync as readdirSync10 } from "node:fs";
 import { join as join21, relative as relative8 } from "node:path";
 import { existsSync as existsSync16, readdirSync as readdirSync11 } from "node:fs";
-import { basename as basename14, isAbsolute as isAbsolute10, join as join22, resolve as resolve17, sep as sep9 } from "node:path";
+import { basename as basename13, isAbsolute as isAbsolute10, join as join22, resolve as resolve17, sep as sep9 } from "node:path";
 import { existsSync as existsSync17, readFileSync as readFileSync19, readdirSync as readdirSync12 } from "node:fs";
 import { join as join23 } from "node:path";
 import { lstatSync as lstatSync9, readdirSync as readdirSync13 } from "node:fs";
 import { isAbsolute as isAbsolute11, join as join24 } from "node:path";
 import { existsSync as existsSync18, readdirSync as readdirSync14, unlinkSync as unlinkSync4 } from "node:fs";
-import { basename as basename15, isAbsolute as isAbsolute12, join as join25, resolve as resolve18, sep as sep10 } from "node:path";
+import { basename as basename14, isAbsolute as isAbsolute12, join as join25, resolve as resolve18, sep as sep10 } from "node:path";
 import { existsSync as existsSync19, readFileSync as readFileSync20 } from "node:fs";
 import { isAbsolute as isAbsolute13, join as join26, resolve as resolve19 } from "node:path";
 import { closeSync as closeSync4, constants as constants4, existsSync as existsSync20, fstatSync as fstatSync4, lstatSync as lstatSync11, mkdirSync as mkdirSync7, openSync as openSync4, readFileSync as readFileSync22, readdirSync as readdirSync16 } from "node:fs";
@@ -543,7 +539,6 @@ import { createHash as createHash18 } from "node:crypto";
 import { createHash as createHash19 } from "node:crypto";
 import { existsSync as existsSync22, lstatSync as lstatSync12, readFileSync as readFileSync25, readdirSync as readdirSync17 } from "node:fs";
 import { join as join31, resolve as resolve21 } from "node:path";
-import { randomUUID as randomUUID7 } from "node:crypto";
 import {
   closeSync as closeSync5,
   constants as fsConstants,
@@ -552,13 +547,10 @@ import {
   lstatSync as lstatSync13,
   mkdirSync as mkdirSync8,
   openSync as openSync5,
-  readFileSync as readFileSync26,
-  renameSync as renameSync3,
-  unlinkSync as unlinkSync5,
   writeSync
 } from "node:fs";
-import { basename as basename16, dirname as dirname19, join as join32 } from "node:path";
-import { createHash as createHash20, randomUUID as randomUUID8 } from "node:crypto";
+import { dirname as dirname19, join as join32 } from "node:path";
+import { createHash as createHash20, randomUUID as randomUUID7 } from "node:crypto";
 import {
   closeSync as closeSync6,
   copyFileSync as copyFileSync2,
@@ -566,7 +558,7 @@ import {
   existsSync as existsSync23,
   mkdtempSync,
   openSync as openSync6,
-  readFileSync as readFileSync27,
+  readFileSync as readFileSync26,
   readdirSync as readdirSync18,
   readSync as readSync2,
   rmSync as rmSync2,
@@ -7660,9 +7652,6 @@ function findRootPackageJson(startDir) {
   }
 }
 function harnessVersionFrom(moduleDir) {
-  return harnessVersionOrNullFrom(moduleDir) ?? "0.0.0";
-}
-function harnessVersionOrNullFrom(moduleDir) {
   const ownManifest = join4(moduleDir, "..", "package.json");
   try {
     const pkg = JSON.parse(readFileSync3(ownManifest, "utf8"));
@@ -7670,20 +7659,17 @@ function harnessVersionOrNullFrom(moduleDir) {
       return pkg.version;
   } catch {}
   const root = findRootPackageJson(moduleDir);
-  if (root === null)
-    return null;
+  if (!root)
+    return "0.0.0";
   try {
     const pkg = JSON.parse(readFileSync3(root, "utf8"));
-    return typeof pkg.version === "string" && pkg.version !== "" ? pkg.version : null;
+    return pkg.version || "0.0.0";
   } catch {
-    return null;
+    return "0.0.0";
   }
 }
 function readHarnessVersion() {
   return harnessVersionFrom(dirname4(fileURLToPath(import.meta.url)));
-}
-function readHarnessVersionOrNull() {
-  return harnessVersionOrNullFrom(dirname4(fileURLToPath(import.meta.url)));
 }
 function warnUncheckableNodeFloor() {
   process.stderr.write("mstar: the runtime version floor is uncheckable in this layout - no visible manifest declares `engines.node`, " + "so the Node version is not compared (the native node:sqlite capability check still applies). " + "Recovery: run this from an installed package or a full checkout so the manifest that declares the floor is reachable " + "(`npm i -g @mstar-harness/cli` for the CLI; the harness checkout, not a copied bundle, for a hook entrypoint).\n");
@@ -10751,72 +10737,6 @@ async function importCatalog(context, plan, operation) {
     storeRevision
   };
 }
-function currentProcessFacts() {
-  return {
-    entrypoint: process.argv[1],
-    runtimeVersion: process.versions.node,
-    isBun: process.versions.bun !== undefined
-  };
-}
-function provisionActivationDocument(input, facts = currentProcessFacts()) {
-  if (facts.isBun) {
-    return {
-      ok: false,
-      cause: "bun-runtime",
-      message: "the running process is Bun, which is never an admissible consumer runtime, so a Node consumer row cannot be attested"
-    };
-  }
-  if (facts.entrypoint === undefined || facts.entrypoint.trim() === "") {
-    return {
-      ok: false,
-      cause: "missing-entrypoint",
-      message: "the executing entrypoint is not identifiable (`process.argv[1]` is absent)"
-    };
-  }
-  const version = facts.harnessVersion === undefined ? readHarnessVersionOrNull() : facts.harnessVersion;
-  if (version === null || version.trim() === "") {
-    return {
-      ok: false,
-      cause: "missing-manifest",
-      message: "no visible manifest declares the installed harness version (`packages/*/package.json` or the repo root), so the consumer row's version cannot be attested"
-    };
-  }
-  return {
-    ok: true,
-    document: {
-      version: ACTIVATION_PROTOCOL_VERSION,
-      attestedAt: input.attestedAt,
-      operator: { actor: input.actor, authorizationRef: input.authorizationRef },
-      consumers: [
-        {
-          entryId: basename5(facts.entrypoint),
-          kind: "coordinator",
-          entrypoint: facts.entrypoint,
-          runtime: "node",
-          runtimeVersion: facts.runtimeVersion,
-          version,
-          current: true,
-          disposition: "reloaded"
-        }
-      ],
-      stoppedSessions: [...input.stoppedSessions]
-    }
-  };
-}
-function provisionRecoveryDocument(input) {
-  return {
-    version: ACTIVATION_PROTOCOL_VERSION,
-    attestedAt: input.attestedAt,
-    operator: { actor: input.actor, authorizationRef: input.authorizationRef },
-    consumers: [],
-    stoppedSessions: [...input.stoppedSessions]
-  };
-}
-function basename5(entrypoint) {
-  const normalized = entrypoint.replaceAll("\\", "/");
-  const last = normalized.lastIndexOf("/");
-  return last === -1 ? normalized : normalized.slice(last + 1);
-}
 function sha256Bytes2(bytes) {
   return createHash4("sha256").update(bytes).digest("hex");
 }
@@ -10833,7 +10753,7 @@ function scalar2(db, sql) {
 }
 function writeTextAtomic(path2, text4) {
   mkdirSync3(dirname6(path2), { recursive: true });
-  const tmp = join9(dirname6(path2), `.${basename6(path2)}.${process.pid}.tmp`);
+  const tmp = join9(dirname6(path2), `.${basename5(path2)}.${process.pid}.tmp`);
   try {
     writeFileSync3(tmp, text4, "utf8");
     renameSync2(tmp, path2);
@@ -10919,7 +10839,7 @@ function canonicalPath(value) {
       const parent = dirname6(current);
       if (parent === current)
         return resolve7(value);
-      trailing.push(basename6(current));
+      trailing.push(basename5(current));
       current = parent;
     }
   }
@@ -11361,17 +11281,12 @@ function findRetirementRow(rows, activationReceiptId, live) {
   }
   return;
 }
-function requireGeneratedOperator(operator) {
-  if (operator === undefined || operator.trim() === "") {
-    throw Object.assign(new StoreActivationError("store.operator-required", "the activation generates its operator attestation when --attestation is omitted, and the generated document records the invoking operator; pass --operator <name> (or --attestation <absolute-json> to supply the document explicitly)"), { recovery: "run mstar store activate --manifest <path> --operator <name> (add --attestation <absolute-json> to override the generated document)" });
-  }
-  return operator;
-}
-async function activateStore(context, receipt, attestation, hooks = {}, options = {}) {
+async function activateStore(context, receipt, attestation, hooks = {}) {
   if (!receipt || receipt.phase !== "applied" || typeof receipt.receiptId !== "number" || typeof receipt.manifestHash !== "string" || typeof receipt.storeRevision !== "number") {
     throw new StoreActivationError("store.activation-stale", "the activation requires the reviewed apply receipt (receiptId, storeRevision; manifestHash is provenance); re-apply the reviewed manifest.");
   }
-  const validated = attestation === undefined ? undefined : validateActivationAttestation(attestation);
+  const validated = validateActivationAttestation(attestation);
+  const attestationHash = sha256Bytes2(Buffer.from(`attestation\x00${JSON.stringify(validated)}`, "utf8"));
   const inspection = await openStore(context, "write");
   let meta;
   let manifest;
@@ -11407,7 +11322,6 @@ async function activateStore(context, receipt, attestation, hooks = {}, options 
   } finally {
     inspection.close();
   }
-  const generatedOperator = validated === undefined ? requireGeneratedOperator(options.operator) : "";
   const backup = await takeVerifiedBackup(context, {
     label: `pre-activation-${meta.storeId.slice(0, 8)}-r${meta.revision}`,
     reuseMatchingIdentity: true
@@ -11415,7 +11329,7 @@ async function activateStore(context, receipt, attestation, hooks = {}, options 
   hooks.afterStage?.("inspection", 0);
   const flip = await openStore(context, "write");
   try {
-    const at = (options.now ?? (() => new Date().toISOString()))();
+    const at = new Date().toISOString();
     flip.db.exec("begin immediate");
     try {
       const current = readMetaRow(flip.db);
@@ -11423,21 +11337,6 @@ async function activateStore(context, receipt, attestation, hooks = {}, options 
         throw new StoreActivationError("store.activation-stale", "the staged store changed while the barrier was running; the activation was rolled back. Re-check and retry.");
       }
       revalidateSources(context, manifest, "activation");
-      let activationValidated = validated;
-      if (activationValidated === undefined) {
-        const stoppedRows = flip.db.prepare("select session_id from execution_sessions where state = 'active' and epoch = ?").all(current.epoch);
-        const provisioned = provisionActivationDocument({
-          actor: generatedOperator,
-          authorizationRef: `migration-receipt:${receipt.receiptId}`,
-          attestedAt: at,
-          stoppedSessions: stoppedRows.filter((row) => typeof row.session_id === "string" && row.session_id !== "").map((row) => ({ sessionId: row.session_id, host: "local", state: "stopped" }))
-        }, options.processFacts);
-        if (!provisioned.ok) {
-          throw Object.assign(new StoreActivationError("store.attestation-invalid", provisioned.message), { recovery: "run the same verb through the installed Node CLI: mstar store activate --manifest <path> --operator <name> (an explicit --attestation <absolute-json> also overrides)" });
-        }
-        activationValidated = validateActivationAttestation(provisioned.document);
-      }
-      const attestationHash = sha256Bytes2(Buffer.from(`attestation\x00${JSON.stringify(activationValidated)}`, "utf8"));
       const epoch = current.epoch + 1;
       const revision = current.revision + 1;
       const activationHash = activationHashOf({
@@ -11463,10 +11362,10 @@ async function activateStore(context, receipt, attestation, hooks = {}, options 
         revision,
         catalogRevision: current.catalogRevision,
         attestationHash,
-        attestation: activationValidated,
+        attestation: validated,
         backup
       };
-      const result = flip.db.prepare("insert into migration_receipts(manifest_hash, phase, manifest_json, mapping_json, source_counts_json, applied_at, activated_at) " + "values (?, 'activated', ?, '[]', ?, ?, ?)").run(activationHash, JSON.stringify(stored), JSON.stringify({ consumers: activationValidated.consumers.length, stoppedSessions: activationValidated.stoppedSessions.length }), at, at);
+      const result = flip.db.prepare("insert into migration_receipts(manifest_hash, phase, manifest_json, mapping_json, source_counts_json, applied_at, activated_at) " + "values (?, 'activated', ?, '[]', ?, ?, ?)").run(activationHash, JSON.stringify(stored), JSON.stringify({ consumers: validated.consumers.length, stoppedSessions: validated.stoppedSessions.length }), at, at);
       const receiptId = Number(result.lastInsertRowid);
       flip.db.exec("commit");
       return { ...stored, receiptId, phase: "activated", replayed: false, activatedAt: at };
@@ -12838,6 +12737,9 @@ async function adoptTerminalWorkflow(context, input) {
     throw new ExecutionError("execution.adoption-invalid", "workflowId, an optional positive expectedRevision, non-empty reason, and operationId are required");
   }
   const attestation = input.attestation === undefined ? undefined : validateActivationAttestation(input.attestation);
+  if (attestation !== undefined && attestation.stoppedSessions.some((session) => session.sessionId === caller.sessionId)) {
+    throw new ExecutionError("execution.adoption-refused", `the adopting caller ${JSON.stringify(caller.sessionId)} is named as stopped/reloaded in this attestation; terminal adoption ` + `settles a workflow's ACTIVE holder rows and never the identity making the call, so the attested stop must come from a ` + `distinct operator identity. Rerun from a session id other than the one this document names stopped, with a stop list ` + `covering only the addressed workflow's ACTIVE holder(s).`, { workflow_id: input.workflowId, caller_session_id: caller.sessionId, adoption_refusal: "self-settlement" });
+  }
   const requestHash2 = semanticRequestHash({
     operation: "workflow.adopt-terminal",
     address: { workflowId: input.workflowId },
@@ -12880,22 +12782,21 @@ async function adoptTerminalWorkflow(context, input) {
     if (state.lifecycle_adopted_at !== undefined || state.adopt_reason !== undefined) {
       throw new ExecutionError("execution.adoption-refused", `workflow ${input.workflowId} already has a terminal-adoption record; read status validate and use the recorded result`);
     }
-    const now = new Date().toISOString();
     const activeHolders = readWorkflowSessionRows(tx, input.workflowId, "coordinator").filter((row2) => row2.state === "active" && row2.ref.epoch === tx.epoch).map((row2) => row2.ref.sessionId).sort();
-    const proof = attestation ?? validateRecoveryAttestation(provisionRecoveryDocument({
-      actor: caller.sessionId,
-      authorizationRef: input.operationId,
-      attestedAt: now,
-      stoppedSessions: activeHolders.map((sessionId) => ({ sessionId, host: "local", state: "stopped" }))
-    }));
-    if (proof.stoppedSessions.some((session) => session.sessionId === caller.sessionId)) {
-      throw new ExecutionError("execution.adoption-refused", `the adopting caller ${JSON.stringify(caller.sessionId)} is named as stopped/reloaded by this adoption's proof; terminal ` + `adoption settles a workflow's ACTIVE holder rows and never the identity making the call, so the attested stop must come ` + `from a distinct operator identity. Rerun from a session id other than the one the proof names stopped, with a stop list ` + `covering only the addressed workflow's ACTIVE holder(s).`, { workflow_id: input.workflowId, caller_session_id: caller.sessionId, adoption_refusal: "self-settlement" });
-    }
     if (activeHolders.length > 0) {
-      const attested = new Set(proof.stoppedSessions.map((session) => session.sessionId));
+      const holders = activeHolders.map((sessionId) => JSON.stringify(sessionId)).join(", ");
+      if (attestation === undefined) {
+        throw new ExecutionError("execution.adoption-refused", `workflow ${input.workflowId} holds ACTIVE coordinator session(s) ${holders} at epoch ${tx.epoch}; terminal adoption ` + `settles them only against the operator's stop attestation, because it would otherwise revoke a holder nobody has ` + `attested stopped. Supply --attestation <absolute-json> with the full ActivationAttestation whose stoppedSessions ` + `name ${holders} as stopped/reloaded, then retry.`, {
+          workflow_id: input.workflowId,
+          epoch: tx.epoch,
+          active_holder_sessions: activeHolders,
+          adoption_refusal: "active-session-proof-required"
+        });
+      }
+      const attested = new Set(attestation.stoppedSessions.map((session) => session.sessionId));
       const unattested = activeHolders.filter((sessionId) => !attested.has(sessionId));
       if (unattested.length > 0) {
-        throw new ExecutionError("execution.adoption-refused", `this attestation does not name ${unattested.map((sessionId) => JSON.stringify(sessionId)).join(", ")} — the ACTIVE ` + `coordinator session(s) of workflow ${input.workflowId} at epoch ${tx.epoch} — as stopped/reloaded, so the settlement ` + `cannot proceed: every addressed ACTIVE holder needs its own stop evidence, and the engine cannot observe a dead ` + `process itself. Omit --attestation and the engine generates that document from these rows itself; alternatively add ` + `each listed session to the supplied document's stoppedSessions and retry.`, {
+        throw new ExecutionError("execution.adoption-refused", `this attestation does not name ${unattested.map((sessionId) => JSON.stringify(sessionId)).join(", ")} — the ACTIVE ` + `coordinator session(s) of workflow ${input.workflowId} at epoch ${tx.epoch} — as stopped/reloaded, so the settlement ` + `cannot proceed: every addressed ACTIVE holder needs its own stop evidence, and the engine cannot observe a dead ` + `process itself. Add each listed session to the attestation's stoppedSessions and retry.`, {
           workflow_id: input.workflowId,
           epoch: tx.epoch,
           active_holder_sessions: activeHolders,
@@ -12907,6 +12808,7 @@ async function adoptTerminalWorkflow(context, input) {
         revokeSessionRow(tx, { workflowId: input.workflowId, role: "coordinator", sessionId });
       }
     }
+    const now = new Date().toISOString();
     const nextState = {
       ...state,
       ...unclosed ? { status: "stopped", ended_at: now, updated_at: now } : {},
@@ -12919,20 +12821,16 @@ async function adoptTerminalWorkflow(context, input) {
     tx.db.prepare("update execution_workflows set revision = revision + 1, state_json = ?, updated_at = ? where workflow_id = ? and revision = ?").run(JSON.stringify(nextState), now, input.workflowId, expectedRevision);
     tx.db.prepare("update execution_meta set revision = revision + 1, root_updated_at = ? where id = 1").run(now);
     tx.db.prepare("update store_meta set revision = revision + 1 where id = 1").run();
-    const settlement = {
+    const settlement = attestation === undefined ? undefined : {
       outcome: activeHolders.length === 0 ? "already-satisfied" : "applied",
       target: { workflowId: input.workflowId },
       applied: activeHolders.map((sessionId) => `execution_sessions(${input.workflowId}, coordinator, ${sessionId}) revoked`),
       unresolved: [],
       resolvedFrom: [
-        { path: "attestation.operator", source: `${proof.operator.actor} (${proof.operator.authorizationRef})` },
-        { path: "attestation.attestedAt", source: proof.attestedAt },
-        {
-          path: "attestation.stoppedSessions",
-          source: proof.stoppedSessions.length === 0 ? "none" : proof.stoppedSessions.map((session) => session.sessionId).join(", ")
-        }
+        { path: "attestation.operator", source: `${attestation.operator.actor} (${attestation.operator.authorizationRef})` },
+        { path: "attestation.attestedAt", source: attestation.attestedAt }
       ],
-      warnings: activeHolders.length === 0 && attestation !== undefined ? [{
+      warnings: activeHolders.length === 0 ? [{
         code: "execution.adoption.nothing-to-settle",
         message: `the supplied attestation named no ACTIVE coordinator session of workflow ${input.workflowId}; the adoption was recorded without a settlement`
       }] : [],
@@ -13320,32 +13218,7 @@ function receiptFacts(receipt) {
     ...receipt.holder_live_warning === undefined ? {} : { holder_live_warning: receipt.holder_live_warning }
   };
 }
-function assertWorkflowOperationReceiptCapacity(tx, workflowId, exemptFromRetentionCap) {
-  const header = tx.db.prepare("select state_json from execution_workflows where workflow_id = ?").get(workflowId);
-  if (header !== undefined) {
-    const status = storedJsonObject(header.state_json, `execution_workflows(${workflowId}).state_json`).status;
-    if (WORKFLOW_TERMINAL_STATUSES.includes(String(status)))
-      return;
-  }
-  if (exemptFromRetentionCap)
-    return;
-  const retained = tx.db.prepare("select count(*) as n from execution_operations where workflow_id = ? and epoch = ?").get(workflowId, tx.epoch);
-  const count = typeof retained.n === "number" ? retained.n : 0;
-  if (count < RUNNING_WORKFLOW_OPERATION_RECEIPT_LIMIT)
-    return;
-  throw new ExecutionError("execution.receipt-retention-exhausted", `workflow ${workflowId} already retains ${count} operation receipts at its current epoch, the cap a running ` + `workflow may hold (${RUNNING_WORKFLOW_OPERATION_RECEIPT_LIMIT}). This receipt is not written: every retained ` + `receipt is a replay anchor, so the engine never discards one to make room. Adopt or close the workflow under a ` + `new operation id (its terminal prune keeps that close receipt only), then start a new workflow for further work.`, {
-    workflow_id: workflowId,
-    epoch: tx.epoch,
-    retained_receipts: count,
-    receipt_limit: RUNNING_WORKFLOW_OPERATION_RECEIPT_LIMIT,
-    available_work: [
-      `adopt or close workflow ${workflowId} under a new operation id`,
-      "start a new workflow for further work"
-    ]
-  });
-}
 function writeOperationReceipt(tx, input) {
-  assertWorkflowOperationReceiptCapacity(tx, input.workflowId, input.exemptFromRetentionCap === true);
   tx.db.prepare("insert into execution_operations(epoch, operation_id, request_hash, store_id, workflow_id, plan_id, result_json, committed_at) " + "values (?, ?, ?, ?, ?, ?, ?, ?)").run(tx.epoch, input.operationId, input.requestHash, tx.storeId, input.workflowId, input.planId, JSON.stringify(input.slim === true ? { slim: true, token: input.receipt.token, storeId: tx.storeId, epoch: tx.epoch, ...receiptFacts(input.receipt) } : input.receipt), input.now);
 }
 function pruneWorkflowOperationReceipts(tx, workflowId, keepOperationId) {
@@ -15012,7 +14885,7 @@ function resolvePlanDir(harnessDir) {
   if (declared !== null)
     return declared;
   const dir = resolve8(harnessDir);
-  const name = basename7(dir);
+  const name = basename6(dir);
   if (name === ".plans" || name === "plans")
     return dir;
   return join12(dir, "plans");
@@ -15037,7 +14910,7 @@ function canonicalizeNearestExisting(path2) {
     const parent = dirname8(dir);
     if (parent === dir)
       return abs;
-    tail.unshift(basename7(dir));
+    tail.unshift(basename6(dir));
     dir = parent;
   }
 }
@@ -15247,7 +15120,7 @@ function validateGitignore(root) {
 function detectHarnessKind(harnessDir) {
   if (!harnessDir)
     return null;
-  const name = basename7(resolve8(harnessDir));
+  const name = basename6(resolve8(harnessDir));
   if (name === ".mstar")
     return "mstar";
   if (name === ".agents")
@@ -15850,7 +15723,7 @@ function derivePlanRegistration(input) {
     throw new Error("derivePlanRegistration: the selected plan document is required - supply plan.file as the registered plan pointer " + "(`{PLAN_DIR}/<id>.md` or its canonical absolute path)");
   }
   const harnessRoot = resolve9(input.harnessDir);
-  const planId = declaredId ?? basename8(file).replace(/\.md$/, "");
+  const planId = declaredId ?? basename7(file).replace(/\.md$/, "");
   const resolved = resolveRegisteredPlanFile({ harnessRoot, planId, file });
   const heading = /^# (.+)$/m.exec(readFileSync12(resolved.planPath, "utf8"))?.[1]?.trim();
   const documentTitle = heading === undefined || heading === "" ? undefined : heading;
@@ -17921,12 +17794,6 @@ function openConnection(dbPath, mode, DatabaseSync, timeout = DEFAULT_BUSY_TIMEO
   }
   return busyAware(db, dbPath, timeout);
 }
-function settlementSignalRefusal(signal) {
-  const holders = signal.holders.map((holder) => JSON.stringify(holder)).join(", ");
-  return Object.assign(new StoreError("store.upgrade-attestation-missing", `workflow(s) ${holders} hold a retired plan-PM integration claim this cutover must settle, and no operator attestation was supplied; the generated document is built by the upgrade entry (mstar store upgrade), not by this direct engine call. The store was left unchanged.`, { holders: [...signal.holders], stopped_sessions: signal.stopped.map((session) => session.sessionId) }), {
-    recovery: "rerun the upgrade through the CLI, which generates the operator document itself: mstar store upgrade --operator <name>; to fix the document explicitly instead, pass --attestation <absolute-json> whose attestedAt is at or after the claim instant."
-  });
-}
 function isRecord(value) {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
@@ -18060,10 +17927,7 @@ function settleRetiredPlanPmIntegrationClaims(db, context) {
   }
   const attestation = context.attestation;
   const attestedInstant = attestation === undefined ? null : parsedInstant(attestation.attestedAt);
-  const at = (context.now ?? (() => new Date().toISOString()))();
-  const cutoverInstant = parsedInstant(at);
-  const pendingHolders = new Set;
-  const pendingStoppedBySessionId = new Map;
+  const cutoverInstant = parsedInstant(new Date().toISOString());
   const claims = db.prepare("select workflow_id, lease_json from execution_integration_cutover").all();
   const update = db.prepare("update execution_integration_leases set revision = revision + 1, lease_json = ? where workflow_id = ?");
   for (const row of claims) {
@@ -18085,17 +17949,12 @@ function settleRetiredPlanPmIntegrationClaims(db, context) {
     if (planRow === undefined) {
       throw new StoreError("store.corrupt", `execution_integration_leases(${workflowId}) holds a claim for plan ${JSON.stringify(claim.plan_id)}, which no longer exists in this workflow's registry. Recover the store from its supported backup/restore recovery point: run \`store execution restore-preview --backup <absolute-valid-pre-corruption-backup> --out <absolute-preview-path>\`, then \`store execution restore --preview <absolute-preview-path> --operator <name> --authorization <ref>\` (add \`--harness\` when needed). Nothing was modified.`);
     }
-    if (attestation === undefined) {
-      pendingHolders.add(holder);
-      pendingStoppedBySessionId.set(holder, { sessionId: holder, host: "local", state: "stopped" });
-      continue;
-    }
-    const attested = attestation.stoppedSessions.find((session) => session.sessionId === holder);
-    const attestedInstant2 = parsedInstant(attestation.attestedAt);
+    const attested = attestation?.stoppedSessions.find((session) => session.sessionId === holder);
+    const attestedInstant2 = attestation === undefined ? null : parsedInstant(attestation.attestedAt);
     const claimedInstant = parsedInstant(claim.claimed_at);
     const settled = attestation !== undefined && attested !== undefined && (attested.state === "stopped" || attested.state === "reloaded") && claimedInstant !== null && attestedInstant2 !== null && cutoverInstant !== null && claimedInstant <= attestedInstant2 && attestedInstant2 <= cutoverInstant;
     if (!settled) {
-      throw new StoreError("store.upgrade-attestation-missing", `workflow ${workflowId} holds an integration claim for the retired plan-PM holder ${holder} (claimed_at ${String(claim.claimed_at ?? "?")}) that this cutover's attestation does not cover: the stop evidence must be dated at or after the claim and at or before this cutover (the generated document attests the cutover instant itself). The store was left at schema 8 unchanged. Recovery: rerun the same \`mstar store upgrade --operator <name>\` with --attestation <absolute-json> whose attestedAt is at or after the claim instant.`);
+      throw new StoreError("store.upgrade-attestation-missing", `workflow ${workflowId} holds an integration claim for the retired plan-PM holder ${holder}, and this cutover has no valid, current stop attestation for it; the store was left at schema 8 unchanged. Rerun the same \`store upgrade\` with the operator's full activation attestation (version, operator authorization, a current consumer) naming ${holder} as stopped at or after the claim.`);
     }
     const tombstone = {
       ...claim,
@@ -18103,13 +17962,9 @@ function settleRetiredPlanPmIntegrationClaims(db, context) {
       prior_holder: holder,
       released_by: "store-upgrade",
       released_at: attestation.attestedAt,
-      release_reason: attestation.operator.authorizationRef
+      release_reason: `retired-plan-pm-seat:${holder}`
     };
     update.run(JSON.stringify(tombstone), workflowId);
-  }
-  if (pendingHolders.size > 0) {
-    const holders = [...pendingHolders].sort();
-    throw new SettlementAttestationNeeded(holders, holders.map((holder) => pendingStoppedBySessionId.get(holder)), at);
   }
 }
 function migrationChecksum(migration) {
@@ -18176,14 +18031,8 @@ function applyPendingMigrations(db, options = {}) {
       db.exec(SCHEMA_VERSION_TABLE_SQL);
     for (const migration of pending) {
       db.exec(migration.sql);
-      if (migration.normalize !== undefined) {
-        migration.normalize(db, {
-          attestation: options.attestation,
-          operator: options.operator,
-          processFacts: options.processFacts,
-          now: options.now
-        });
-      }
+      if (migration.normalize !== undefined)
+        migration.normalize(db, { attestation: options.attestation });
       db.exec("drop table if exists execution_lease_cutover");
       db.exec("drop table if exists execution_session_cutover");
       db.exec("drop table if exists execution_integration_cutover");
@@ -18204,8 +18053,6 @@ function applyPendingMigrations(db, options = {}) {
     if (isBusyError(error)) {
       throw new StoreError("store.busy", `Another writer held the store past the bounded wait (${busyTimeoutMs(options.busyTimeoutMs)}ms); the migration batch was rolled back and nothing was committed. Retry when the competing writer is done.`);
     }
-    if (error instanceof SettlementAttestationNeeded)
-      throw error;
     throw new StoreError("store.corrupt", `Migration application failed and rolled back: ${error.message}`);
   }
 }
@@ -18331,7 +18178,7 @@ function withExecutionReadGuard(context, body) {
   if (probe.kind === "unreadable")
     refuseOpenFailure(probe.error, probe.dbPath);
   if (probe.kind !== "active") {
-    const recovery = probe.state === "staged" ? 'Run "mstar store activate --manifest <migration.json> --operator <name>" to finish the reviewed activation.' : 'Run "mstar store upgrade" to import legacy state and activate the authority.';
+    const recovery = probe.state === "staged" ? 'Run "mstar store activate --manifest <migration.json> --attestation <file.json>" to finish the reviewed activation.' : 'Run "mstar store upgrade" to import legacy state and activate the authority.';
     throw new StoreError("store.not-active", `The execution authority is ${probe.state ?? "missing"}. ${recovery}`);
   }
   const db = probeConnectionFor(probe.dbPath);
@@ -18367,7 +18214,7 @@ function withDshWriteTransaction(context, body, selectedGeneration) {
     const initial = readStoreMeta(db);
     const execution = readExecutionMeta(db, schemaVersion);
     if (!execution || execution.authorityState !== "active") {
-      const recovery = execution?.authorityState === "staged" ? 'Run "mstar store activate --manifest <migration.json> --operator <name>" to finish the reviewed activation.' : `Run "mstar store upgrade --harness ${JSON.stringify(resolve13(context.harnessDir))} --operator <name>" to import legacy state and activate the authority.`;
+      const recovery = execution?.authorityState === "staged" ? 'Run "mstar store activate --manifest <migration.json> --attestation <file.json>" to finish the reviewed activation.' : `Run "mstar store upgrade --harness ${JSON.stringify(resolve13(context.harnessDir))} --operator <name>" to import legacy state and activate the authority.`;
       throw new StoreError("store.not-active", `The execution authority is ${execution?.authorityState ?? "missing"}. ${recovery} Nothing was written.`);
     }
     db.exec("begin immediate");
@@ -18379,7 +18226,7 @@ function withDshWriteTransaction(context, body, selectedGeneration) {
       const current = readStoreMeta(db);
       const currentExecution = readExecutionMeta(db, schemaVersion);
       if (!currentExecution || currentExecution.authorityState !== "active") {
-        const recovery = currentExecution?.authorityState === "staged" ? 'Run "mstar store activate --manifest <migration.json> --operator <name>" to finish the reviewed activation.' : `Run "mstar store upgrade --harness ${JSON.stringify(resolve13(context.harnessDir))} --operator <name>" to import legacy state and activate the authority.`;
+        const recovery = currentExecution?.authorityState === "staged" ? 'Run "mstar store activate --manifest <migration.json> --attestation <file.json>" to finish the reviewed activation.' : `Run "mstar store upgrade --harness ${JSON.stringify(resolve13(context.harnessDir))} --operator <name>" to import legacy state and activate the authority.`;
         throw new StoreError("store.not-active", `The execution authority is ${currentExecution?.authorityState ?? "missing"}. ${recovery} Nothing was written.`);
       }
       if (current.storeId !== initial.storeId || current.epoch !== initial.epoch || selectedGeneration !== undefined && (current.storeId !== selectedGeneration.storeId || current.epoch !== selectedGeneration.epoch)) {
@@ -18495,7 +18342,7 @@ async function initializeStore(context, options = {}) {
   await loadSqliteDriver();
   if (existsSync14(dbPath))
     throw alreadyExists();
-  const stagingPath = join18(dirname10(dbPath), `.${basename9(dbPath)}.init-${process.pid}-${randomUUID5()}.tmp`);
+  const stagingPath = join18(dirname10(dbPath), `.${basename8(dbPath)}.init-${process.pid}-${randomUUID5()}.tmp`);
   let claim;
   try {
     claim = openSync(stagingPath, "wx");
@@ -18509,14 +18356,7 @@ async function initializeStore(context, options = {}) {
     options.afterStagingClaim?.();
     db.exec("begin immediate");
     try {
-      applyPendingMigrations(db, {
-        alreadyInTransaction: true,
-        attestation,
-        operator: options.operator,
-        processFacts: options.processFacts,
-        now: options.now,
-        busyTimeoutMs: timeout
-      });
+      applyPendingMigrations(db, { alreadyInTransaction: true, attestation, busyTimeoutMs: timeout });
       db.prepare("update store_meta set authority_state = 'active', activated_at = ? where id = 1").run(nowRfc33394());
       db.prepare("update execution_meta set authority_state = 'active', activated_at = ? where id = 1").run(nowRfc33394());
       db.exec("commit");
@@ -18524,7 +18364,7 @@ async function initializeStore(context, options = {}) {
       try {
         db.exec("rollback");
       } catch {}
-      throw error instanceof SettlementAttestationNeeded && options.raiseSettlementSignal !== true ? settlementSignalRefusal(error) : error;
+      throw error;
     }
     readStoreMeta(db);
     readExecutionMeta(db, MIGRATIONS.length);
@@ -18581,18 +18421,10 @@ async function upgradeStore(context, options = {}) {
   }
   let schemaVersion;
   try {
-    schemaVersion = applyPendingMigrations(db, {
-      attestation,
-      operator: options.operator,
-      processFacts: options.processFacts,
-      now: options.now
-    });
+    schemaVersion = applyPendingMigrations(db, { attestation });
     readStoreMeta(db);
     readExecutionMeta(db, schemaVersion);
   } catch (error) {
-    if (error instanceof SettlementAttestationNeeded) {
-      throw options.raiseSettlementSignal === true ? error : settlementSignalRefusal(error);
-    }
     refuseOpenFailure(error, dbPath);
   } finally {
     db.close();
@@ -19636,10 +19468,10 @@ function verifyValidatedRecord(rec, artifacts, expected) {
   if (rec.request.context.planId !== expected.planId)
     identity.push(`planId ${JSON.stringify(expected.planId)}`);
   const sddDir = rec.request.context.sddDir;
-  if (basename10(sddDir) !== expected.planId) {
+  if (basename9(sddDir) !== expected.planId) {
     identity.push(`sddDir basename must be the expected plan id ${JSON.stringify(expected.planId)}`);
   }
-  if (basename10(dirname11(sddDir)) !== "sdd") {
+  if (basename9(dirname11(sddDir)) !== "sdd") {
     identity.push('sddDir parent directory must be named "sdd"');
   }
   if (dirname11(dirname11(sddDir)) !== rec.request.context.controlHarnessRoot) {
@@ -20269,7 +20101,7 @@ async function resolveSddExecutionContext(input) {
       contextViolation("high", "sdd.context.control-root-missing", `controlHarnessRoot "${input.controlHarnessRoot}" does not exist or is not a directory — a declared control root is authoritative and is never re-inferred from the feature cwd (A3)`)
     ]);
   }
-  const stem = basename11(input.planFile).replace(/\.md$/, "");
+  const stem = basename10(input.planFile).replace(/\.md$/, "");
   if (stem !== planId) {
     throwUsage(`SddExecutionContext.planFile "${input.planFile}" does not match plan "${planId}" — the plan file must be {PLAN_DIR}/<plan-id>.md under the declared control harness`);
   }
@@ -20567,7 +20399,7 @@ function harnessDocKindOfTarget(targetPath) {
   if (typeof targetPath !== "string" || targetPath.trim() === "")
     return null;
   const resolved = resolve15(targetPath);
-  const name = basename12(resolved);
+  const name = basename11(resolved);
   if (name !== STATUS_FILE && name !== SNAPSHOT_FILE2 && name !== REGISTER_FILE)
     return null;
   const classify = (harnessDir2) => {
@@ -20613,7 +20445,7 @@ function oversizedViolation(filePath) {
     ok: false,
     severity: "high",
     code: "status.oversized",
-    message: `${basename12(filePath)} exceeds the ${MAX_STATUS_CONTENT_LENGTH}-byte (2 MiB) coordination-document validation budget — repair out of band or disable for this session with MSTAR_WRITE_GATE=off`
+    message: `${basename11(filePath)} exceeds the ${MAX_STATUS_CONTENT_LENGTH}-byte (2 MiB) coordination-document validation budget — repair out of band or disable for this session with MSTAR_WRITE_GATE=off`
   };
 }
 function validateStatusWriteDoc(content3, filePath, kind, options = {}) {
@@ -20641,7 +20473,7 @@ function validateStatusWriteDoc(content3, filePath, kind, options = {}) {
           ok: false,
           severity: "high",
           code: "status.invalid-json",
-          message: `${basename12(filePath)} content must be a JSON object`
+          message: `${basename11(filePath)} content must be a JSON object`
         }
       ];
     }
@@ -20712,7 +20544,7 @@ function landedPathOf(filePath) {
         const parent = dirname14(probe);
         if (parent === probe)
           return resolve16(filePath);
-        suffix.unshift(basename13(probe));
+        suffix.unshift(basename12(probe));
         probe = parent;
         continue;
       }
@@ -20724,13 +20556,13 @@ function landedPathOf(filePath) {
   }
 }
 function isStoreAuthorityTarget(target) {
-  if (!isStoreAuthorityName(basename13(target)))
+  if (!isStoreAuthorityName(basename12(target)))
     return false;
   return isHarnessRootDir(dirname14(target));
 }
 function caseFoldedDocKind(candidate) {
   const target = resolve16(candidate);
-  const name = basename13(target);
+  const name = basename12(target);
   const kind = caseFoldedKindOf(name);
   if (kind === null)
     return null;
@@ -21771,7 +21603,7 @@ function compoundRefreshScope(harnessDir, projectRoot) {
   ];
 }
 function isFileLikeRoot(root) {
-  return /^[^.]*\.[A-Za-z0-9]{1,10}$/.test(basename14(root));
+  return /^[^.]*\.[A-Za-z0-9]{1,10}$/.test(basename13(root));
 }
 function scopeGuard(path2, allowedRoots) {
   const resolved = resolve17(path2);
@@ -23453,7 +23285,7 @@ function readDirEntries(dir) {
 function assertNotRetiredRegisterTarget(root, ref, filePath) {
   if (ref.kind === "json") {
     const canonical2 = canonicalTarget(filePath);
-    if (basename15(canonical2) !== "residuals.json")
+    if (basename14(canonical2) !== "residuals.json")
       return;
     const projectDir = canonicalTarget(resolveProjectDir(root, { harnessDir: root }));
     if (canonical2.startsWith(`${projectDir}${sep10}`)) {
@@ -23468,7 +23300,7 @@ function protectedKindOf(root, ref, filePath) {
   if (canonical2 === canonicalTarget(legacyStatusDocPath(root)))
     return "root";
   const workflowDir = canonicalTarget(resolveWorkflowDir(root, { harnessDir: root }));
-  if (basename15(canonical2) === "snapshot.json" && canonical2.startsWith(`${workflowDir}${sep10}`))
+  if (basename14(canonical2) === "snapshot.json" && canonical2.startsWith(`${workflowDir}${sep10}`))
     return "snapshot";
   return null;
 }
@@ -25218,38 +25050,12 @@ async function upgradeStoreMinimal(input) {
   const dbPath = storeDbPath(context);
   let schemaVersion;
   mkdirSync7(dirname16(dbPath), { recursive: true });
-  const run = (resolved) => !existsSync20(dbPath) ? initializeStore(context, { attestation: resolved, operator: input.operator, processFacts: input.processFacts, now: input.now, raiseSettlementSignal: true }).then((initialized) => {
+  if (!existsSync20(dbPath)) {
+    const initialized = await initializeStore(context, { attestation });
+    schemaVersion = initialized.schemaVersion;
     initialized.close();
-    return initialized.schemaVersion;
-  }) : upgradeStore(context, { attestation: resolved, operator: input.operator, processFacts: input.processFacts, now: input.now, raiseSettlementSignal: true }).then((upgraded) => upgraded.schemaVersion);
-  try {
-    schemaVersion = await run(attestation);
-  } catch (error) {
-    if (!(error instanceof SettlementAttestationNeeded))
-      throw error;
-    const provisioned = provisionActivationDocument({
-      actor: input.operator,
-      authorizationRef: `retired-plan-pm-seat:${[...new Set(error.holders)].sort().join(",")}`,
-      attestedAt: error.attestedAt,
-      stoppedSessions: error.stopped
-    }, input.processFacts);
-    if (!provisioned.ok) {
-      throw Object.assign(new Error(`[store.attestation-invalid] ${provisioned.message}`), {
-        code: "store.attestation-invalid",
-        recovery: "run the same verb through the installed Node CLI: mstar store upgrade --operator <name> (an explicit --attestation <absolute-json> also overrides)"
-      });
-    }
-    try {
-      schemaVersion = await run(validateActivationAttestation(provisioned.document));
-    } catch (retryError) {
-      if (!(retryError instanceof SettlementAttestationNeeded))
-        throw retryError;
-      const holders = retryError.holders.map((holder) => JSON.stringify(holder)).join(", ");
-      throw Object.assign(new StoreError("store.upgrade-attestation-missing", `the retired plan-PM claim(s) held by ${holders} cannot be covered by the document this upgrade generated: its attestedAt is this cutover's own instant, and the settlement requires the stop evidence to sit at or after the claim instant and at or before the cutover. The store was left at schema 8 unchanged.`), {
-        recovery: "rerun the same command with an explicit document whose attestedAt is at or after the claim instant: mstar store upgrade --operator <name> --attestation <absolute-json>"
-      });
-    }
-  }
+  } else
+    schemaVersion = (await upgradeStore(context, { attestation })).schemaVersion;
   let result;
   try {
     result = await importExecutionMinimal(input);
@@ -28866,7 +28672,7 @@ function recoverCoordinatorRequestHash(caller, workflowId, input) {
     },
     prior_session_id: input.priorSessionId,
     reason: input.reason,
-    ...input.attestation === undefined ? {} : { attestation: input.attestation }
+    attestation: input.attestation
   }), "utf8").digest("hex");
 }
 async function recoverExecutionCoordinator(context, input) {
@@ -28887,24 +28693,15 @@ async function recoverExecutionCoordinator(context, input) {
   if (priorSessionId !== null && !isNonEmptyString(priorSessionId)) {
     throw invalidWorkflowInput("Coordinator recovery requires the prior session id to name the holder it replaces, or null only when no coordinator is recorded; inspect the workflow with mstar status validate.");
   }
-  if (priorSessionId !== null && priorSessionId === caller.sessionId) {
-    throw new CoordinationError("coordination.recovery-self-settlement", `the caller ${JSON.stringify(caller.sessionId)} names itself as the prior holder this recovery replaces; a recovery replaces a DIFFERENT recorded session, so no recovery may settle the identity making the call. Recovery: acquire a distinct ` + `replacement session and rerun this recovery from it — pass a different --session-id, or set MSTAR_HOST_SESSION_ID to it; ` + `the prior holder stays the session being replaced.`, {
-      workflow_id: workflowId,
-      session_id: caller.sessionId,
-      prior_session_id: priorSessionId,
-      recovery_refusal: "self-settlement",
-      recovery: `Acquire a distinct replacement session and run the recovery from it: mstar session recover --workflow ${workflowId} --prior-session ${priorSessionId} --reason <text> --session-id <new-session-id> --operation <id> (or set MSTAR_HOST_SESSION_ID to the new session). The prior holder stays named as the session this recovery replaces.`
-    });
-  }
-  const supplied = input?.attestation === undefined ? undefined : validateRecoveryAttestation(input.attestation);
-  if (supplied !== undefined && supplied.stoppedSessions.some((session) => session.sessionId === caller.sessionId)) {
+  const attestation = validateRecoveryAttestation(input?.attestation);
+  if (attestation.stoppedSessions.some((session) => session.sessionId === caller.sessionId)) {
     throw invalidWorkflowTransition(`the replacement coordinator ${JSON.stringify(caller.sessionId)} is named as stopped/reloaded in this attestation; a recovery binds a genuinely acquired CURRENT session and never resurrects a stopped one. Rerun with the replacement's own acquired session id and an attestation whose stop list covers only the prior holder ${JSON.stringify(priorSessionId ?? "<none>")}.`, { workflow_id: workflowId, session_id: caller.sessionId });
   }
   const requestHash4 = recoverCoordinatorRequestHash(caller, workflowId, {
     expected: input.expected,
     priorSessionId,
     reason,
-    attestation: supplied
+    attestation
   });
   return withExecutionTransaction(context, (tx) => {
     if (tx.execution.authorityState !== "active") {
@@ -28912,13 +28709,6 @@ async function recoverExecutionCoordinator(context, input) {
     }
     const header = requireWorkflowState(tx, workflowId);
     const expected = input.expected ?? executionToken("workflow", tx.storeId, tx.epoch, [workflowId], header.revision);
-    const now2 = new Date().toISOString();
-    const attestation = supplied ?? validateRecoveryAttestation(provisionRecoveryDocument({
-      actor: caller.sessionId,
-      authorizationRef: operationId,
-      attestedAt: now2,
-      stoppedSessions: priorSessionId === null ? [] : [{ sessionId: priorSessionId, host: "local", state: "stopped" }]
-    }));
     const status = String(header.state.status ?? "");
     if (WORKFLOW_TERMINAL_STATUSES.includes(status)) {
       return releaseTerminalHeldLease(tx, {
@@ -28979,6 +28769,7 @@ async function recoverExecutionCoordinator(context, input) {
         throw invalidWorkflowTransition(`the attestation does not name the prior coordinator ${priorSessionId} as stopped/reloaded — recovery requires ` + `stop evidence for the holder it replaces, so it can never take over a session nobody observed to be gone`, { workflow_id: workflowId, session_id: priorSessionId });
       }
     }
+    const now2 = new Date().toISOString();
     const claim = recoverableIntegrationClaim(tx, {
       workflowId,
       priorSessionId,
@@ -29041,8 +28832,7 @@ async function recoverExecutionCoordinator(context, input) {
           ...holderLiveWarning === undefined ? {} : { holder_live_warning: holderLiveWarning }
         }
       },
-      now: now2,
-      exemptFromRetentionCap: true
+      now: now2
     });
     return {
       ...receipt,
@@ -29063,7 +28853,7 @@ function reopenWorkflowRequestHash(caller, workflowId, input) {
       workflow_id: caller.workflowId
     },
     reason: input.reason,
-    ...input.attestation === undefined ? {} : { attestation: input.attestation }
+    attestation: input.attestation
   }), "utf8").digest("hex");
 }
 async function reopenExecutionWorkflow(context, input) {
@@ -29076,11 +28866,11 @@ async function reopenExecutionWorkflow(context, input) {
     throw invalidWorkflowInput("Reopening a workflow requires its id and a non-empty reason; inspect the closed lifecycle with mstar status validate.");
   }
   const operationId = assertOperationId(input.operationId);
-  const supplied = input.attestation === undefined ? undefined : validateRecoveryAttestation(input.attestation);
+  const attestation = validateRecoveryAttestation(input.attestation);
   const requestHash4 = reopenWorkflowRequestHash(caller, workflowId, {
     expected: input.expected,
     reason: input.reason,
-    attestation: supplied
+    attestation
   });
   return withExecutionTransaction(context, (tx) => {
     if (tx.execution.authorityState !== "active") {
@@ -29123,12 +28913,6 @@ async function reopenExecutionWorkflow(context, input) {
       throw new CoordinationError("coordination.invalid-input", `workflow ${workflowId} cannot be restored to the ACTIVE registry: its header does not carry the entry identity anchors (id, type, started_at). Inspect it with mstar status validate.`, { workflow_id: workflowId, violations: entryGate.violations.map(({ code: code2, message }) => ({ code: code2, message })) });
     }
     const now2 = new Date().toISOString();
-    const attestation = supplied ?? validateRecoveryAttestation(provisionRecoveryDocument({
-      actor: caller.sessionId,
-      authorizationRef: operationId,
-      attestedAt: now2,
-      stoppedSessions: []
-    }));
     advanceWorkflowHeaderRevision(tx, { workflowId, now: now2 });
     const residue = tx.db.prepare("select 1 as present from execution_registry where workflow_id = ?").get(workflowId);
     if (residue !== undefined) {
@@ -29151,8 +28935,7 @@ async function reopenExecutionWorkflow(context, input) {
       unresolved: [],
       resolvedFrom: [
         { path: "attestation.operator", source: `${attestation.operator.actor} (${attestation.operator.authorizationRef})` },
-        { path: "attestation.attestedAt", source: attestation.attestedAt },
-        { path: "attestation.stoppedSessions", source: attestation.stoppedSessions.length === 0 ? "none" : attestation.stoppedSessions.map((session) => session.sessionId).join(", ") }
+        { path: "attestation.attestedAt", source: attestation.attestedAt }
       ],
       warnings: [],
       commitState: "committed"
@@ -30296,57 +30079,6 @@ function canonicalNoteLine(note) {
     text: note.text
   });
 }
-function parseCompactionMarker(value) {
-  if (!isPlainObject(value))
-    return null;
-  const keys = Object.keys(value).sort();
-  if (keys.length !== MARKER_KEY_ORDER.length || keys.some((key, index2) => key !== MARKER_KEY_ORDER[index2]))
-    return null;
-  if (value.version !== 1 || value.kind !== WORKFLOW_NOTES_COMPACTION_MARKER_KIND)
-    return null;
-  const { ts, workflowId, dropped, prefixSha256 } = value;
-  if (!isNonEmptyString(ts) || !isNonEmptyString(workflowId) || !isNonEmptyString(prefixSha256))
-    return null;
-  if (!isPlainObject(dropped))
-    return null;
-  const droppedKeys = Object.keys(dropped).sort();
-  if (droppedKeys.length !== DROPPED_KEY_ORDER.length || droppedKeys.some((key, index2) => key !== DROPPED_KEY_ORDER[index2])) {
-    return null;
-  }
-  const counts = dropped;
-  if (!DROPPED_KEYS.every((key) => typeof counts[key] === "number" && Number.isSafeInteger(counts[key])))
-    return null;
-  return {
-    version: 1,
-    kind: WORKFLOW_NOTES_COMPACTION_MARKER_KIND,
-    ts,
-    workflowId,
-    dropped: {
-      bytes: counts.bytes,
-      lines: counts.lines,
-      records: counts.records,
-      historical: counts.historical,
-      unrecognized: counts.unrecognized
-    },
-    prefixSha256
-  };
-}
-function canonicalMarkerLine(marker) {
-  return JSON.stringify({
-    version: 1,
-    kind: WORKFLOW_NOTES_COMPACTION_MARKER_KIND,
-    ts: marker.ts,
-    workflowId: marker.workflowId,
-    dropped: {
-      bytes: marker.dropped.bytes,
-      lines: marker.dropped.lines,
-      records: marker.dropped.records,
-      historical: marker.dropped.historical,
-      unrecognized: marker.dropped.unrecognized
-    },
-    prefixSha256: marker.prefixSha256
-  });
-}
 function parseLedgerLine(bytes) {
   if (bytes.length === 0)
     return { format: "blank" };
@@ -30359,9 +30091,6 @@ function parseLedgerLine(bytes) {
   const note = parseWorkflowNote(value);
   if (note !== null)
     return { format: "versioned-note-v1", record: note };
-  const marker = parseCompactionMarker(value);
-  if (marker !== null)
-    return { format: "compaction-marker", marker };
   if (isPlainObject(value) && value.version === undefined && value.kind === "note" && typeof value.ts === "string" && typeof value.text === "string") {
     return { format: "legacy-note", record: { kind: "note", ts: value.ts, text: value.text } };
   }
@@ -30441,156 +30170,6 @@ function commitLedgerFrame(path2, frame) {
     fsyncDirectory(dirname19(path2));
   assertLedgerPathIdentity(path2, opened, "before success receipt");
 }
-function ledgerSpans(bytes) {
-  const spans = [];
-  let start = 0;
-  let end = bytes.indexOf(10, start);
-  while (end !== -1) {
-    spans.push({ start, end, terminated: true });
-    start = end + 1;
-    end = bytes.indexOf(10, start);
-  }
-  if (start < bytes.length)
-    spans.push({ start, end: bytes.length, terminated: false });
-  return spans;
-}
-function markerReserveBytes(totalBytes, workflowId) {
-  const reserve = Buffer.byteLength(canonicalMarkerLine({
-    version: 1,
-    kind: WORKFLOW_NOTES_COMPACTION_MARKER_KIND,
-    ts: new Date(0).toISOString(),
-    workflowId,
-    dropped: { bytes: 0, lines: 0, records: 0, historical: 0, unrecognized: 0 },
-    prefixSha256: "0".repeat(64)
-  }), "utf8");
-  return reserve + 5 * String(totalBytes).length + 2;
-}
-function writeLedgerTempFile(path2, content3) {
-  const temp = join32(dirname19(path2), `${basename16(path2)}.compaction-${randomUUID7()}.tmp`);
-  try {
-    const fd = openWithoutFollowing(temp, fsConstants.O_WRONLY | fsConstants.O_CREAT | fsConstants.O_EXCL, 420);
-    try {
-      let written = 0;
-      while (written < content3.length) {
-        const step = writeSync(fd, content3, written, content3.length - written, null);
-        if (step <= 0) {
-          throw new ExecutionLedgerError("execution-ledgers.append-short", `the compacted ledger for ${path2} could not be written in full; the retained bytes are unchanged and the temporary file was removed. Retry the append with a new record id.`);
-        }
-        written += step;
-      }
-      fsyncSync2(fd);
-    } finally {
-      closeSync5(fd);
-    }
-    return temp;
-  } catch (error) {
-    try {
-      unlinkSync5(temp);
-    } catch {}
-    throw error;
-  }
-}
-function ledgerSnapshotUnchanged(path2, totalBytes) {
-  try {
-    return lstatSync13(path2).size === totalBytes;
-  } catch {
-    return false;
-  }
-}
-function compactWorkflowNotesLedger(path2, workflowId, trigger) {
-  let bytes;
-  try {
-    bytes = readFileSync26(path2);
-  } catch (error) {
-    if (error.code === "ENOENT")
-      return;
-    throw error;
-  }
-  const totalBytes = bytes.length;
-  if (totalBytes <= WORKFLOW_NOTES_LEDGER_MAX_BYTES)
-    return;
-  const spans = ledgerSpans(bytes);
-  const lineOf = (span) => parseLedgerLine(bytes.subarray(span.start, span.end));
-  const spanBytes = (span) => (span.terminated ? span.end + 1 : span.end) - span.start;
-  const spanToBytes = (span) => bytes.subarray(span.start, spanBytes(span) + span.start);
-  const content3 = spans.filter((span) => lineOf(span).format !== "compaction-marker");
-  let triggerIndex = -1;
-  for (let index2 = content3.length - 1;index2 >= 0; index2 -= 1) {
-    if (spanToBytes(content3[index2]).equals(trigger)) {
-      triggerIndex = index2;
-      break;
-    }
-  }
-  const budget = WORKFLOW_NOTES_LEDGER_READ_BYTES - markerReserveBytes(totalBytes, workflowId);
-  let firstKept = content3.length;
-  let keptBytes = 0;
-  for (let index2 = content3.length - 1;index2 >= 0; index2 -= 1) {
-    const size = spanBytes(content3[index2]);
-    if (index2 !== content3.length - 1 && keptBytes + size > budget)
-      break;
-    keptBytes += size;
-    firstKept = index2;
-  }
-  if (triggerIndex !== -1 && triggerIndex < firstKept)
-    firstKept = triggerIndex;
-  const kept = content3.slice(firstKept);
-  const keptStarts = new Set(kept.map((span) => span.start));
-  let lines = 0;
-  let records = 0;
-  let historical = 0;
-  let unrecognized = 0;
-  const removed = [];
-  for (const span of spans) {
-    if (keptStarts.has(span.start))
-      continue;
-    removed.push(spanToBytes(span));
-    const line = lineOf(span);
-    if (line.format === "compaction-marker")
-      continue;
-    lines += 1;
-    if (line.format === "versioned-note-v1")
-      records += 1;
-    else if (line.format === "legacy-note")
-      historical += 1;
-    else if (line.format === "unrecognized")
-      unrecognized += 1;
-  }
-  const dropped = Buffer.concat(removed);
-  const marker = {
-    version: 1,
-    kind: WORKFLOW_NOTES_COMPACTION_MARKER_KIND,
-    ts: new Date().toISOString(),
-    workflowId,
-    dropped: { bytes: dropped.length, lines, records, historical, unrecognized },
-    prefixSha256: sha256Bytes(dropped)
-  };
-  const temp = writeLedgerTempFile(path2, Buffer.concat([
-    ...kept.map(spanToBytes),
-    Buffer.from(`
-`, "utf8"),
-    Buffer.from(canonicalMarkerLine(marker), "utf8"),
-    Buffer.from(`
-`, "utf8")
-  ]));
-  if (!ledgerSnapshotUnchanged(path2, totalBytes)) {
-    try {
-      unlinkSync5(temp);
-    } catch {}
-    return;
-  }
-  renameSync3(temp, path2);
-  fsyncDirectory(dirname19(path2));
-}
-function withWorkflowNotesMaintenanceLock(context, body) {
-  return withExecutionTransaction(context, () => body());
-}
-function ledgerAtOrOverCeiling(path2, appendBytes) {
-  try {
-    return lstatSync13(path2).size + appendBytes > WORKFLOW_NOTES_LEDGER_MAX_BYTES;
-  } catch {
-    return false;
-  }
-}
 function assertRealDirectory(path2, what) {
   let info = null;
   try {
@@ -30642,18 +30221,7 @@ async function appendWorkflowNote(context, session, note) {
   const frame = Buffer.from(`${canonicalNoteLine({ ...note, ts: note.ts ?? new Date().toISOString() })}
 `, "utf8");
   assertExecutionSessionCurrent(context, session);
-  if (ledgerAtOrOverCeiling(ledgerPath, frame.length)) {
-    await withWorkflowNotesMaintenanceLock(context, () => {
-      assertExecutionSessionCurrent(context, session);
-      commitLedgerFrame(ledgerPath, frame);
-      compactWorkflowNotesLedger(ledgerPath, session.workflowId, frame);
-    });
-    return { id: note.id };
-  }
   commitLedgerFrame(ledgerPath, frame);
-  if (ledgerAtOrOverCeiling(ledgerPath, 0)) {
-    await withWorkflowNotesMaintenanceLock(context, () => compactWorkflowNotesLedger(ledgerPath, session.workflowId, frame));
-  }
   return { id: note.id };
 }
 function normalizeWorkflowNotesCoverage(input) {
@@ -30669,9 +30237,7 @@ function normalizeWorkflowNotesCoverage(input) {
       historical: [],
       records: [],
       counts: { historical: 0, records: 0, unrecognized: 0 },
-      tail: null,
-      readWindow: input.readWindow ?? { offset: 0, totalBytes: 0, truncated: false },
-      compaction: null
+      tail: null
     };
   }
   const buffer = Buffer.isBuffer(input.bytes) ? input.bytes : Buffer.from(input.bytes.buffer, input.bytes.byteOffset, input.bytes.byteLength);
@@ -30682,13 +30248,8 @@ function normalizeWorkflowNotesCoverage(input) {
   let legacy = 0;
   let versioned = 0;
   let unrecognized = 0;
-  let compaction = null;
   for (const entry of scan.lines) {
     const digest = sha256Bytes(entry.bytes);
-    if (entry.line.format === "compaction-marker") {
-      compaction = entry.line.marker;
-      continue;
-    }
     if (entry.line.format === "legacy-note") {
       legacy += 1;
       historical.push({
@@ -30745,9 +30306,7 @@ function normalizeWorkflowNotesCoverage(input) {
     historical,
     records,
     counts: { historical: historical.length, records: records.length, unrecognized },
-    tail: scan.tail.length === 0 ? null : { sha256: sha256Bytes(scan.tail), bytes: scan.tail.length },
-    readWindow: input.readWindow ?? { offset: 0, totalBytes: buffer.length, truncated: false },
-    compaction
+    tail: scan.tail.length === 0 ? null : { sha256: sha256Bytes(scan.tail), bytes: scan.tail.length }
   };
 }
 function controlRootOf2(context) {
@@ -30764,7 +30323,7 @@ async function sha256OfFile(path2) {
 }
 function readIfExists2(path2) {
   try {
-    return readFileSync27(path2);
+    return readFileSync26(path2);
   } catch {
     return;
   }
@@ -31502,7 +31061,7 @@ async function readCommittedRestoreAttempts(context) {
 }
 async function runRestore(context, root, input) {
   const point3 = recoveryPointPath(context, root, input.preview.backupPath);
-  const attemptId = randomUUID8();
+  const attemptId = randomUUID7();
   const imagePath = join33(root, `.store-restore-${attemptId}.db`);
   try {
     try {
@@ -31515,7 +31074,7 @@ async function runRestore(context, root, input) {
       throw new StoreActivationError("store.activation-stale", `the recovery point at ${point3} belongs to store ${image.storeId}, not to the live store ${input.preview.liveStoreId}; a point of another store is never restored over this one.`);
     }
     const safety = await backupStore(context, {
-      out: join33(root, "archived", "store-migration", "backups", `pre-restore-e${input.preview.liveEpoch}-${randomUUID8()}.db`)
+      out: join33(root, "archived", "store-migration", "backups", `pre-restore-e${input.preview.liveEpoch}-${randomUUID7()}.db`)
     });
     try {
       const liveStoreSha256 = await sha256OfFile(storeDbPath(context));
@@ -31713,7 +31272,7 @@ var __defProp2, __returnValue2 = (v) => v, __export2 = (target, all) => {
     return typeFactory(test);
   }
   throw new Error("Expected function, string, or object as test");
-}, init_unist_util_is = () => {}, empty, CONTINUE = true, EXIT = false, SKIP = "skip", init_lib3, init_unist_util_visit_parents, init_lib4, init_mdast_util_find_and_replace, init_lib5, init_mdast_util_gfm_autolink_literal, init_lib6, init_mdast_util_gfm_footnote, init_lib7, init_mdast_util_gfm_strikethrough, init_lib8, init_mdast_util_gfm_table, init_lib9, init_mdast_util_gfm_task_list_item, init_lib10, init_mdast_util_gfm, wwwPrefix, domain, path, trail, emailDomainDotTrail, wwwAutolink, protocolAutolink, emailAutolink, text3, code, init_syntax, init_dev16, indent, init_syntax2, init_dev17, init_syntax3, init_dev18, init_infer, init_syntax4, init_dev19, tasklistCheck, init_syntax5, init_dev20, init_micromark_extension_gfm, SEVERITY_ORDER, ACTIVATION_PROTOCOL_VERSION = 1, init_core, BRANCH_FORMS_HINT = '"Working branch: <existing>" | "Working branch: create <new> from <base>" | "Branch policy: direct on <branch> — <reason>"', REQUIRED_FIELDS, REVIEW_SEAT_ROLES, BUDGET_LABELS, RETURN_SHAPE_LABELS, TASK_BUDGET_LABELS, ASSIGNMENT_ENFORCEMENT_BOLD_RE, ASSIGNMENT_ENFORCEMENT_PLAIN_RE, COMPASS_ENFORCEMENT_RE, ASSIGNMENT_BODY_START_RE, ASSIGNMENT_HEADING_RE, ASSIGNMENT_FIELD_RE, init_dispatch, WORKFLOW_SNAPSHOT_PAYLOAD_SCHEMA, STATUS_V2_PAYLOAD_SCHEMA, init_persist_payload_schemas, DATE_RE, PLAN_STATUSES, RESIDUAL_DECISIONS, RESIDUAL_LIFECYCLES, validateStatus, init_status, COMPASS_STATUSES, DATE_RE2, PLAN_STATUS_DONE = "Done", COMPASS_FILE = "delivery-compass.md", ROADMAP_FILE = "roadmap.md", COMPLETENESS_ROOTS, GAP_CODE, init_iteration, ROADMAP_STATUSES, DATE_RE3, init_roadmap_content, AUDIT_PRIORITIES, AUDIT_EFFORTS, AUDIT_RISKS, AUDIT_CONFIDENCES, AUDIT_CATEGORIES, WHOLE_MATCH_PATTERNS, VALUE_PATTERNS, NEVER_COMMIT_FILENAMES, CI_IAC_LEAK_SHAPES, SAFE_PLACEHOLDER_SHAPES, SAFE_PLACEHOLDER_VALUES, ACTIONS_ENV_KEY, LOCKFILE_NAMES, escapeCell = (value) => value.replace(/\|/g, "\\|"), truncate = (value, max) => value.length > max ? `${value.slice(0, max)}…` : value, collapseEvidenceWs = (value) => value.replace(/\s*[\r\n]\s*/g, " "), evidenceText = (item) => typeof item === "string" ? item : `${item.file}${item.line !== undefined ? `:${item.line}` : ""} — ${item.description}`, AUDIT_FINGERPRINT_RE, AUDIT_SEVERITY_ORDER, DEFAULT_IGNORABLE_RE, LONE_SURROGATE_RE, isPlainObject3 = (value) => typeof value === "object" && value !== null && !Array.isArray(value), init_audit, PLAN_OPERATION_SEMANTICS, WORKFLOW_OPERATION_SEMANTICS, init_recovery_intent, CATALOG_IMPORT_PLAN_VERSION = 1, CATALOG_EXPORT_VERSION = 1, CATALOG_PAGE_LIMIT = 200, ENTITY_KINDS2, ROOT_KINDS2, DOCUMENT_KINDS2, LIFECYCLES2, RELATIONS2, ORDINARY_FILES, COMPASS_FILE2 = "delivery-compass.md", ROADMAP_FILE2 = "roadmap.md", CatalogImportError, init_catalog_import, init_activation_provisioning, exports_store_activation, BACKUP_RECEIPT_VERSION = 2, StoreActivationError, EXECUTION_MIGRATION_VERSION, CONSUMER_KINDS, DISPOSITIONS, SESSION_STATES, RECEIPT_COLUMNS = "id, manifest_hash, manifest_json, mapping_json, source_counts_json, applied_at, activated_at, retired_at", init_store_activation, exports_execution_store, ExecutionError, KIND_KEY_LENGTHS, TOKEN_PREFIX = "exec-v1", STORE_UUID_RE, DECIMAL_RE, BASE64URL_RE, TOKEN_KEY_DECODER, ownedTransactions, OPERATION_ID_RE, CREATE_WORKFLOW_OPERATION = "createExecutionWorkflow", BIND_SESSION_OPERATION = "bindExecutionSession", EXECUTION_SESSION_STATES, RUNNING_WORKFLOW_OPERATION_RECEIPT_LIMIT = 256, init_execution_store, SESSION_ID_MAX_LENGTH = 128, init_session_identity, exports_execution_session, SESSION_WIRE_PREFIX = "exec-session-v1:", SESSION_DECODER, SESSION_KEYS, init_execution_session, KINDS, SEVERITIES, ISSUE_KIND_VALUES, SEVERITY_VALUES, ISSUE_PAYLOAD_SCHEMAS, ISSUE_ACTIONS, ISSUE_ACTION_NAMES, IssueError, DISPOSITIONS2, RELATIONS3, PROVENANCE_KINDS, LAST_ACTIVITY_SQL = `(select max(ts) from (
+}, init_unist_util_is = () => {}, empty, CONTINUE = true, EXIT = false, SKIP = "skip", init_lib3, init_unist_util_visit_parents, init_lib4, init_mdast_util_find_and_replace, init_lib5, init_mdast_util_gfm_autolink_literal, init_lib6, init_mdast_util_gfm_footnote, init_lib7, init_mdast_util_gfm_strikethrough, init_lib8, init_mdast_util_gfm_table, init_lib9, init_mdast_util_gfm_task_list_item, init_lib10, init_mdast_util_gfm, wwwPrefix, domain, path, trail, emailDomainDotTrail, wwwAutolink, protocolAutolink, emailAutolink, text3, code, init_syntax, init_dev16, indent, init_syntax2, init_dev17, init_syntax3, init_dev18, init_infer, init_syntax4, init_dev19, tasklistCheck, init_syntax5, init_dev20, init_micromark_extension_gfm, SEVERITY_ORDER, init_core, BRANCH_FORMS_HINT = '"Working branch: <existing>" | "Working branch: create <new> from <base>" | "Branch policy: direct on <branch> — <reason>"', REQUIRED_FIELDS, REVIEW_SEAT_ROLES, BUDGET_LABELS, RETURN_SHAPE_LABELS, TASK_BUDGET_LABELS, ASSIGNMENT_ENFORCEMENT_BOLD_RE, ASSIGNMENT_ENFORCEMENT_PLAIN_RE, COMPASS_ENFORCEMENT_RE, ASSIGNMENT_BODY_START_RE, ASSIGNMENT_HEADING_RE, ASSIGNMENT_FIELD_RE, init_dispatch, WORKFLOW_SNAPSHOT_PAYLOAD_SCHEMA, STATUS_V2_PAYLOAD_SCHEMA, init_persist_payload_schemas, DATE_RE, PLAN_STATUSES, RESIDUAL_DECISIONS, RESIDUAL_LIFECYCLES, validateStatus, init_status, COMPASS_STATUSES, DATE_RE2, PLAN_STATUS_DONE = "Done", COMPASS_FILE = "delivery-compass.md", ROADMAP_FILE = "roadmap.md", COMPLETENESS_ROOTS, GAP_CODE, init_iteration, ROADMAP_STATUSES, DATE_RE3, init_roadmap_content, AUDIT_PRIORITIES, AUDIT_EFFORTS, AUDIT_RISKS, AUDIT_CONFIDENCES, AUDIT_CATEGORIES, WHOLE_MATCH_PATTERNS, VALUE_PATTERNS, NEVER_COMMIT_FILENAMES, CI_IAC_LEAK_SHAPES, SAFE_PLACEHOLDER_SHAPES, SAFE_PLACEHOLDER_VALUES, ACTIONS_ENV_KEY, LOCKFILE_NAMES, escapeCell = (value) => value.replace(/\|/g, "\\|"), truncate = (value, max) => value.length > max ? `${value.slice(0, max)}…` : value, collapseEvidenceWs = (value) => value.replace(/\s*[\r\n]\s*/g, " "), evidenceText = (item) => typeof item === "string" ? item : `${item.file}${item.line !== undefined ? `:${item.line}` : ""} — ${item.description}`, AUDIT_FINGERPRINT_RE, AUDIT_SEVERITY_ORDER, DEFAULT_IGNORABLE_RE, LONE_SURROGATE_RE, isPlainObject3 = (value) => typeof value === "object" && value !== null && !Array.isArray(value), init_audit, PLAN_OPERATION_SEMANTICS, WORKFLOW_OPERATION_SEMANTICS, init_recovery_intent, CATALOG_IMPORT_PLAN_VERSION = 1, CATALOG_EXPORT_VERSION = 1, CATALOG_PAGE_LIMIT = 200, ENTITY_KINDS2, ROOT_KINDS2, DOCUMENT_KINDS2, LIFECYCLES2, RELATIONS2, ORDINARY_FILES, COMPASS_FILE2 = "delivery-compass.md", ROADMAP_FILE2 = "roadmap.md", CatalogImportError, init_catalog_import, exports_store_activation, ACTIVATION_PROTOCOL_VERSION = 1, BACKUP_RECEIPT_VERSION = 2, StoreActivationError, EXECUTION_MIGRATION_VERSION, CONSUMER_KINDS, DISPOSITIONS, SESSION_STATES, RECEIPT_COLUMNS = "id, manifest_hash, manifest_json, mapping_json, source_counts_json, applied_at, activated_at, retired_at", init_store_activation, exports_execution_store, ExecutionError, KIND_KEY_LENGTHS, TOKEN_PREFIX = "exec-v1", STORE_UUID_RE, DECIMAL_RE, BASE64URL_RE, TOKEN_KEY_DECODER, ownedTransactions, OPERATION_ID_RE, CREATE_WORKFLOW_OPERATION = "createExecutionWorkflow", BIND_SESSION_OPERATION = "bindExecutionSession", EXECUTION_SESSION_STATES, init_execution_store, SESSION_ID_MAX_LENGTH = 128, init_session_identity, exports_execution_session, SESSION_WIRE_PREFIX = "exec-session-v1:", SESSION_DECODER, SESSION_KEYS, init_execution_session, KINDS, SEVERITIES, ISSUE_KIND_VALUES, SEVERITY_VALUES, ISSUE_PAYLOAD_SCHEMAS, ISSUE_ACTIONS, ISSUE_ACTION_NAMES, IssueError, DISPOSITIONS2, RELATIONS3, PROVENANCE_KINDS, LAST_ACTIVITY_SQL = `(select max(ts) from (
   select issues.registered_at as ts
   union all select o.discovered_at from occurrences o where o.issue_id = issues.id
   union all select t.occurred_at from issue_transitions t where t.issue_id = issues.id
@@ -32095,7 +31654,7 @@ create table execution_migrations(
 );
 `, MIGRATION_5_SQL = `
 alter table execution_migrations add column coverage_json text;
-`, SettlementAttestationNeeded, MIGRATION_6_SQL = `
+`, MIGRATION_6_SQL = `
 create table project_roadmaps(
   project_id text primary key,
   project_kind text not null default 'project' check (project_kind = 'project'),
@@ -32317,7 +31876,7 @@ alter table projection_compasses add column plans_json text not null default '[]
   select issues.registered_at as ts
   union all select o.discovered_at from occurrences o where o.issue_id = issues.id
   union all select t.occurred_at from issue_transitions t where t.issue_id = issues.id
-))`, ISSUE_ORDER_SQL, TERMINAL_DISPOSITIONS = "'resolved', 'waived', 'duplicate', 'superseded'", IDENTITY_COLUMNS = "kind, id, title, description, root_kind, relative_path, document_kind, lifecycle, revision, registered_at, updated_at", completeWitnessGapForTest, workflowWitnessGapForTest, RECOVER_COORDINATOR_OPERATION = "recoverExecutionCoordinator", REOPEN_WORKFLOW_OPERATION = "reopenExecutionWorkflow", COMMIT_REGISTRATION_OPERATION = "commitExecutionRegistration", REGISTRATION_SEMANTICS, MAX_DASHBOARD_SEARCH_LENGTH = 200, VIEW_QUERY_FIELDS, DISPOSITIONS3, KINDS2, SEVERITIES2, MIGRATION_MANIFEST_VERSION = 1, LEGACY_ISSUE_KIND = "review-obligation", StoreMigrationError, MIGRATION_VOCABULARY, LEGACY_REQUIRED_FIELDS, HISTORY_ONLY_ABSENT_FIELDS, WORKFLOW_NOTES_LEDGER_MAX_BYTES = 4194304, WORKFLOW_NOTES_LEDGER_READ_BYTES = 1048576, WORKFLOW_NOTES_COMPACTION_MARKER_KIND = "workflow-notes-compaction", EXECUTION_LEDGER_ERROR_CODES, ExecutionLedgerError, NOTE_KEYS, NOTE_KEY_ORDER, MARKER_KEYS, MARKER_KEY_ORDER, DROPPED_KEYS, DROPPED_KEY_ORDER, UNRECOGNIZED_LINE, EXECUTION_RECOVERY_PROTOCOL_VERSION = 3, ExecutionRecoveryError, EXECUTION_MIGRATION_VERSION2, CATALOG_MIGRATION_VERSION, PROVENANCE_ORIGIN_MIGRATION_VERSION, ROADMAP_MIGRATION_VERSION, EXECUTION_COVERAGE_MIGRATION_VERSION, MILESTONE_MIGRATION_VERSION, PROJECT_MOVES_MIGRATION_VERSION, DSH_MIGRATION_VERSION, EXECUTION_COORDINATOR_ONLY_MIGRATION_VERSION, DSH_LEGACY_PROVENANCE_MIGRATION_VERSION, AUTHORITY_TABLES, REPLACEMENT_ORDER, DATABASE_HEADER_BYTES2 = 100, WAL_FILE_FORMAT_VERSION2 = 2, RESTORE_SCRATCH_NAME, RESTORE_SCRATCH_SIDECARS, REDACTED_KEYS;
+))`, ISSUE_ORDER_SQL, TERMINAL_DISPOSITIONS = "'resolved', 'waived', 'duplicate', 'superseded'", IDENTITY_COLUMNS = "kind, id, title, description, root_kind, relative_path, document_kind, lifecycle, revision, registered_at, updated_at", completeWitnessGapForTest, workflowWitnessGapForTest, RECOVER_COORDINATOR_OPERATION = "recoverExecutionCoordinator", REOPEN_WORKFLOW_OPERATION = "reopenExecutionWorkflow", COMMIT_REGISTRATION_OPERATION = "commitExecutionRegistration", REGISTRATION_SEMANTICS, MAX_DASHBOARD_SEARCH_LENGTH = 200, VIEW_QUERY_FIELDS, DISPOSITIONS3, KINDS2, SEVERITIES2, MIGRATION_MANIFEST_VERSION = 1, LEGACY_ISSUE_KIND = "review-obligation", StoreMigrationError, MIGRATION_VOCABULARY, LEGACY_REQUIRED_FIELDS, HISTORY_ONLY_ABSENT_FIELDS, EXECUTION_LEDGER_ERROR_CODES, ExecutionLedgerError, NOTE_KEYS, NOTE_KEY_ORDER, UNRECOGNIZED_LINE, EXECUTION_RECOVERY_PROTOCOL_VERSION = 3, ExecutionRecoveryError, EXECUTION_MIGRATION_VERSION2, CATALOG_MIGRATION_VERSION, PROVENANCE_ORIGIN_MIGRATION_VERSION, ROADMAP_MIGRATION_VERSION, EXECUTION_COVERAGE_MIGRATION_VERSION, MILESTONE_MIGRATION_VERSION, PROJECT_MOVES_MIGRATION_VERSION, DSH_MIGRATION_VERSION, EXECUTION_COORDINATOR_ONLY_MIGRATION_VERSION, DSH_LEGACY_PROVENANCE_MIGRATION_VERSION, AUTHORITY_TABLES, REPLACEMENT_ORDER, DATABASE_HEADER_BYTES2 = 100, WAL_FILE_FORMAT_VERSION2 = 2, RESTORE_SCRATCH_NAME, RESTORE_SCRATCH_SIDECARS, REDACTED_KEYS;
 var init_engine = __esm(() => {
   __defProp2 = Object.defineProperty;
   init_coordination_write = __esm2(() => {
@@ -35902,9 +35461,6 @@ var init_engine = __esm(() => {
       }
     };
   });
-  init_activation_provisioning = __esm2(() => {
-    init_core();
-  });
   exports_store_activation = {};
   __export2(exports_store_activation, {
     ACTIVATION_PROTOCOL_VERSION: () => ACTIVATION_PROTOCOL_VERSION,
@@ -35931,7 +35487,6 @@ var init_engine = __esm(() => {
     init_catalog();
     init_catalog_import();
     init_core();
-    init_activation_provisioning();
     init_store_db();
     StoreActivationError = class StoreActivationError2 extends Error {
       code;
@@ -35955,7 +35510,6 @@ var init_engine = __esm(() => {
   exports_execution_store = {};
   __export2(exports_execution_store, {
     ExecutionError: () => ExecutionError,
-    RUNNING_WORKFLOW_OPERATION_RECEIPT_LIMIT: () => RUNNING_WORKFLOW_OPERATION_RECEIPT_LIMIT,
     adoptTerminalWorkflow: () => adoptTerminalWorkflow,
     advancePlanOperationRevisions: () => advancePlanOperationRevisions,
     advanceWorkflowHeaderRevision: () => advanceWorkflowHeaderRevision,
@@ -36016,7 +35570,6 @@ var init_engine = __esm(() => {
     init_recovery_intent();
     init_status();
     init_store_activation();
-    init_activation_provisioning();
     init_store_db();
     init_workflow();
     ExecutionError = class ExecutionError2 extends Error {
@@ -36450,18 +36003,6 @@ var init_engine = __esm(() => {
       }
     };
     RUNTIME_GLOBAL = globalThis;
-    SettlementAttestationNeeded = class SettlementAttestationNeeded2 extends Error {
-      holders;
-      stopped;
-      attestedAt;
-      constructor(holders, stopped, attestedAt) {
-        super("a held retired plan-PM claim needs a generated attestation");
-        this.holders = holders;
-        this.stopped = stopped;
-        this.attestedAt = attestedAt;
-        this.name = "SettlementAttestationNeeded";
-      }
-    };
     MIGRATIONS = [
       { version: 1, name: "issue-core", sql: MIGRATION_1_SQL },
       { version: 2, name: "catalog-authority", sql: MIGRATION_2_SQL },
@@ -36986,7 +36527,6 @@ var init_engine = __esm(() => {
   init_status();
   init_workflow();
   init_store_db();
-  init_activation_provisioning();
   init_execution_store();
   init_store_db();
   DIGEST = /^[0-9a-f]{64}$/;
@@ -37185,7 +36725,6 @@ var init_engine = __esm(() => {
   init_path();
   init_recovery_intent();
   init_store_activation();
-  init_activation_provisioning();
   init_store_db();
   init_workflow();
   init_worktree();
@@ -37271,7 +36810,6 @@ var init_engine = __esm(() => {
   init_store_activation();
   init_coordination_write();
   init_execution_session();
-  init_execution_store();
   init_path();
   init_store_db();
   EXECUTION_LEDGER_ERROR_CODES = [
@@ -37291,10 +36829,6 @@ var init_engine = __esm(() => {
   };
   NOTE_KEYS = ["version", "id", "workflowId", "sessionId", "kind", "ts", "text"];
   NOTE_KEY_ORDER = [...NOTE_KEYS].sort();
-  MARKER_KEYS = ["version", "kind", "ts", "workflowId", "dropped", "prefixSha256"];
-  MARKER_KEY_ORDER = [...MARKER_KEYS].sort();
-  DROPPED_KEYS = ["bytes", "lines", "records", "historical", "unrecognized"];
-  DROPPED_KEY_ORDER = [...DROPPED_KEYS].sort();
   UNRECOGNIZED_LINE = { format: "unrecognized" };
   init_coordination_write();
   init_core();
