@@ -127,7 +127,7 @@ function failure(id: string, error: unknown): CommandEnvelope<never> {
       message,
       details: { operation: id },
       recovery:
-        "Run `mstar issue-sync import --project <project-id> [--max-pages <n>]`; --project is required and names a store project whose Linear project is already bound.",
+        "Check the project binding with `mstar project show`, then pass --project naming a store project whose Linear project is already bound.",
     });
   }
   const facts = engineErrorFacts(error);
