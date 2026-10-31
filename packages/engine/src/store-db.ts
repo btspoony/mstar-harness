@@ -1672,6 +1672,49 @@ export const MIGRATION_14_SQL = `
 alter table projection_compasses add column plans_json text not null default '[]';
 `;
 
+/**
+ * Migration 15 — sync ledger: per-item sync state, resumable run cursors and
+ * project-level provider bindings. `binding_id` is derived ("<provider>:<project_id>"),
+ * not a sequence, so crash recovery reconstructs it from the binding row alone.
+ * The external_id partial index mirrors `issues_external_identity`; cross-provider
+ * uniqueness stays only in the `issues` index. `last_skip_reason` is its own
+ * column so a deliberate skip never reads as a failure.
+ */
+export const MIGRATION_15_SQL = `
+create table project_bindings(
+  project_id text primary key,
+  provider text not null,
+  workspace text not null,
+  team text not null,
+  remote_project text not null,
+  revision integer not null,
+  updated_at text not null
+);
+create unique index project_bindings_remote on project_bindings(provider, workspace, remote_project);
+create table issue_sync_state(
+  binding_id text not null,
+  direction text not null,
+  local_id text not null references issues(id),
+  external_id text,
+  item_state text not null check (item_state in ('unbound','pending','applied','failed','skipped')),
+  last_remote_updated_at text,
+  last_error text,
+  last_skip_reason text,
+  revision integer not null,
+  updated_at text not null,
+  primary key (binding_id, direction, local_id)
+);
+create unique index issue_sync_state_external on issue_sync_state(binding_id, direction, external_id) where external_id is not null;
+create index issue_sync_state_last_error on issue_sync_state(binding_id, updated_at desc, revision desc) where last_error is not null;
+create table sync_cursor(
+  binding_id text not null,
+  direction text not null,
+  cursor text not null,
+  updated_at text not null,
+  primary key (binding_id, direction)
+);
+`;
+
 /** Ordered immutable migrations. Never mutate an applied entry — append only. */
 export const MIGRATIONS: readonly Migration[] = [
   { version: 1, name: "issue-core", sql: MIGRATION_1_SQL },
@@ -1688,6 +1731,7 @@ export const MIGRATIONS: readonly Migration[] = [
   { version: 12, name: "severity-vocabulary-nit", sql: MIGRATION_12_SQL },
   { version: 13, name: "issue-project-moves", sql: MIGRATION_13_SQL },
   { version: 14, name: "compass-plan-membership", sql: MIGRATION_14_SQL },
+  { version: 15, name: "sync-ledger", sql: MIGRATION_15_SQL },
 ];
 const DSH_HOST_STATE_MIGRATION = MIGRATIONS.find((migration) => migration.name === "dsh-host-ledgers");
 
