@@ -37,7 +37,7 @@ import type { GateResult, ValidationResult } from "./core.js";
 // `scaffoldHarness`, so neither side dereferences the other during module
 // evaluation (same pattern as the project.ts / status.ts cycles below).
 import { CatalogError, getCatalog, registerCatalogEntity, type CatalogOperation } from "./catalog.js";
-import { loadMstarc, type MstarcConfig } from "./mstarc.js";
+import { loadMstarc, type MstarcConfig, type MstarcStringKey } from "./mstarc.js";
 // `project.ts` and `store-db.ts` are used from scaffold call paths only.
 import { _DEFAULT_PROJECT } from "./project.js";
 import { getArtifactStore } from "./store.js";
@@ -161,7 +161,7 @@ function isAtOrBelow(dir: string, root: string): boolean {
  * Returns the declared value resolved against the config file's directory,
  * or `null` when no config / no declaration exists.
  */
-function mstarcDirOverride(harnessDir: string, key: keyof MstarcConfig): string | null {
+function mstarcDirOverride(harnessDir: string, key: MstarcStringKey): string | null {
   const dir = resolve(harnessDir);
   const rc = loadMstarc(dir, dirname(dir));
   const declared = rc?.config[key];
@@ -332,7 +332,7 @@ export function resolveKnowledgeDir(harnessDir: string): string {
 function resolveHarnessSubdir(
   startDir: string,
   opts: ResolveHarnessDirOptions,
-  key: keyof MstarcConfig,
+  key: MstarcStringKey,
   fallback: string,
 ): string {
   const harness = resolveHarnessDir(startDir, opts);

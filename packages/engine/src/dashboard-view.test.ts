@@ -1,13 +1,13 @@
 /**
- * Dashboard view layer — the generic request half of the dashboard read
- * transport (view → validated filters → one `withStoreRead` envelope).
+ * Dashboard view layer -- the generic request half of the dashboard read
+ * transport (view -> validated filters -> one `withStoreRead` envelope).
  *
  * This suite pins the refusals the CLI transport asserted before the layer
  * moved here, so a second transport (the dsh panel) inherits exactly one
  * validation implementation. Every case runs the layer against the real store
  * boundary; nothing is mocked.
  */
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterAll, describe, expect, test } from "bun:test";
@@ -31,6 +31,7 @@ import type {
   OverviewDTO,
   OverviewMember,
   ReadEnvelope,
+  SyncBindingDTO,
 } from "./store-read.js";
 
 const ROOT = mkdtempSync(join(tmpdir(), "mstar-dashboard-view-"));
@@ -226,7 +227,7 @@ const STARTED_AT = "2026-09-18T00:00:00.000Z";
 /**
  * One iteration per store-provable gate step (spec §3): the compass status and
  * the iteration's plan execution status are the only inputs. `iter-done` is the
- * pinned interpretation of the overlapping rows — a `completed` compass answers
+ * pinned interpretation of the overlapping rows -- a `completed` compass answers
  * step 4 even while a plan row is not `Done` (close writes `completed`; a stale
  * plan row cannot un-close it). `iter-none` answers `null` and has no compass.
  */
@@ -365,7 +366,7 @@ async function scopedOverviewWorkspace(name: string): Promise<StoreContext> {
 
   // A locked iteration with a compass and ZERO plan links: the normal gap
   // between Phase 1 and the first plan `belongs-to` link. It proves Start, not
-  // Close — `plans.every(...)` would be vacuously true here (qc1/qc3 F-002).
+  // Close -- `plans.every(...)` would be vacuously true here (qc1/qc3 F-002).
   await register({ kind: "iteration", id: "iter-no-plan", title: "Locked, no plans", rootKind: "iterations", relativePath: "iter-no-plan" });
   await linkCatalogEntities(
     context,
@@ -571,7 +572,7 @@ describe("overview read model", () => {
     }
     await register("iter-none");
 
-    // C4: one iteration, two projects — both disclosed sorted, and the list
+    // C4: one iteration, two projects -- both disclosed sorted, and the list
     // filter matches either of them.
     for (const projectId of ["proj-b", "proj-a"]) {
       await registerCatalogEntity(
@@ -614,7 +615,7 @@ describe("overview read model", () => {
     // The projected status is a free string: a NON-terminal value on a row the
     // registry no longer lists must answer the closed vocabulary's
     // non-terminal arm, never a terminal literal. The row is doctored AFTER a
-    // real read and read again WITHOUT the refresh — the same arm the compass
+    // real read and read again WITHOUT the refresh -- the same arm the compass
     // status test uses, because no producer writes this state.
     const write = await openStore(context, "write");
     try {
@@ -781,5 +782,118 @@ describe("overview read model", () => {
     for (const member of [overview.workflows, overview.residuals, overview.latestIteration, overview.issueFlow] as const) {
       expect(member.state).toBe("read");
     }
+  });
+});
+
+describe("sync-binding view", () => {
+  /** Snapshot every file under `dir` (path -> content) for the no-write proof. */
+  function snapshot(dir: string): Map<string, string> {
+    const out = new Map<string, string>();
+    const walk = (current: string): void => {
+      for (const entry of readdirSync(current)) {
+        const full = join(current, entry);
+        if (statSync(full).isDirectory()) walk(full);
+        else out.set(full, readFileSync(full, "utf8"));
+      }
+    };
+    walk(dir);
+    return out;
+  }
+
+  test("a valid [linear] block answers the four-field summary; readiness defaults to honestly not-probed", async () => {
+    const context = await workspace("sync-binding-valid");
+    writeFileSync(join(context.harnessDir, "..", ".mstarc"), "[linear]\nenabled=true\nmode=mirror\nworkspace=acme\nteam=eng\n");
+    const data = (await readDashboardView({ context, view: "sync-binding" })).data as SyncBindingDTO;
+    expect(data.binding).toEqual({ enabled: true, mode: "mirror", workspace: "acme", team: "eng" });
+    expect(data.bindingError).toBeNull();
+    expect(data.readiness).toEqual({
+      state: "not-probed",
+      cause: "not-probed: readiness is host-owned; no probe result was supplied",
+    });
+  });
+
+  test("each host-supplied probe state passes through with its own distinguishable cause text", async () => {
+    const context = await workspace("sync-binding-probe");
+    const causes: Record<string, string> = {
+      ready: "ready: Linear MCP handshake succeeded (initialize + tools/list)",
+      "service-absent": "service-absent: no Linear entry in the host MCP configuration",
+      unreachable: "unreachable: Linear MCP transport failed (connection refused)",
+      "access-denied": "access-denied: Linear MCP handshake answered 401",
+    };
+    const states = Object.keys(causes) as Array<keyof typeof causes>;
+    for (const state of states) {
+      const data = (await readDashboardView({ context, view: "sync-binding", params: { probe_state: state, probe_cause: causes[state] } }))
+        .data as SyncBindingDTO;
+      expect<string>(data.readiness.state).toBe(state);
+      expect(data.readiness.cause).toBe(causes[state]);
+    }
+    // Text-distinguishable, not merely color: four distinct state words, four distinct causes.
+    expect(new Set(states).size).toBe(4);
+    expect(new Set(Object.values(causes)).size).toBe(4);
+  });
+
+  test("an invalid [linear] section answers the named refusal, not a fabricated binding", async () => {
+    const context = await workspace("sync-binding-invalid");
+    writeFileSync(join(context.harnessDir, "..", ".mstarc"), "[linear]\nenabled=true\nmode=yaml\nworkspace=acme\nteam=eng\n");
+    const data = (await readDashboardView({ context, view: "sync-binding" })).data as SyncBindingDTO;
+    expect(data.binding).toBeNull();
+    expect(data.bindingError).toContain('linear.mode-refused: [linear] mode "yaml"');
+  });
+
+  test("probe filter refusals: unknown state, cause without state, unknown field, over-long cause", async () => {
+    const context = await workspace("sync-binding-refusals");
+    const read = (params: Record<string, string>) => readDashboardView({ context, view: "sync-binding", params });
+    await expect(read({ probe_state: "not-probed", probe_cause: "x" })).rejects.toThrow(/probe_state must be one of ready, service-absent, unreachable, access-denied/);
+    await expect(read({ probe_cause: "orphan" })).rejects.toThrow(/probe_cause requires probe_state/);
+    await expect(read({ probe: "x" })).rejects.toThrow(/"probe" is not a supported sync-binding query parameter/);
+    await expect(read({ probe_state: "ready", probe_cause: "x".repeat(MAX_DASHBOARD_SEARCH_LENGTH + 1) })).rejects.toThrow(
+      /probe_cause must be at most 200 characters/,
+    );
+  });
+
+  test("F7: probe_state without probe_cause is refused like the reverse half-pair", async () => {
+    const context = await workspace("sync-binding-half-pair");
+    await expect(readDashboardView({ context, view: "sync-binding", params: { probe_state: "ready" } })).rejects.toThrow(
+      /probe_state requires probe_cause/,
+    );
+    await expect(readDashboardView({ context, view: "sync-binding", params: { probe_cause: "orphan" } })).rejects.toThrow(
+      /probe_cause requires probe_state/,
+    );
+  });
+
+  test("F4: a parent directory's .mstarc is never inherited -- the repo's own config is the authority", async () => {
+    const context = await workspace("sync-binding-parent");
+    // The parent (another repo's checkout) carries a complete connection block.
+    writeFileSync(join(context.harnessDir, "..", "..", ".mstarc"), "[linear]\nenabled=true\nmode=mirror\nworkspace=other\nteam=other\n");
+    const data = (await readDashboardView({ context, view: "sync-binding" })).data as SyncBindingDTO;
+    expect(data.binding).toBeNull();
+    expect(data.bindingError).toContain("no .mstarc at the repo root");
+    expect(data.bindingError).toContain("never inherited");
+    expect(JSON.stringify(data)).not.toContain("other");
+  });
+
+  test("F8: an unreadable enabled value surfaces as linear.binding-invalid in the panel", async () => {
+    const context = await workspace("sync-binding-enabled");
+    writeFileSync(join(context.harnessDir, "..", ".mstarc"), "[linear]\nenabled=maybe\nmode=mirror\nworkspace=acme\nteam=eng\n");
+    const data = (await readDashboardView({ context, view: "sync-binding" })).data as SyncBindingDTO;
+    expect(data.binding).toBeNull();
+    expect(data.bindingError).toContain('linear.binding-invalid: [linear] enabled="maybe"');
+  });
+
+  test("F8: common boolean spellings are read as enabled", async () => {
+    for (const spelling of ["TRUE", "1", "yes", "on"]) {
+      const context = await workspace(`sync-binding-enabled-${spelling}`);
+      writeFileSync(join(context.harnessDir, "..", ".mstarc"), `[linear]\nenabled=${spelling}\nmode=mirror\nworkspace=acme\nteam=eng\n`);
+      const data = (await readDashboardView({ context, view: "sync-binding" })).data as SyncBindingDTO;
+      expect([spelling, data.binding?.enabled]).toEqual([spelling, true]);
+    }
+  });
+
+  test("no-write proof: reading the view leaves the harness tree byte-identical", async () => {
+    const context = await workspace("sync-binding-readonly");
+    writeFileSync(join(context.harnessDir, "..", ".mstarc"), "[linear]\nenabled=true\nmode=mirror\nworkspace=acme\nteam=eng\n");
+    const before = snapshot(context.harnessDir);
+    await readDashboardView({ context, view: "sync-binding", params: { probe_state: "ready", probe_cause: "ready: ok" } });
+    expect(snapshot(context.harnessDir)).toEqual(before);
   });
 });
