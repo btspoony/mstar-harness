@@ -1,5 +1,5 @@
 /**
- * mstarc.test.ts — linear binding section: additive parse + validation
+ * mstarc.test.ts -- linear binding section: additive parse + validation
  * (binding-config plan Task 1).
  */
 import { describe, expect, test } from "bun:test";
@@ -33,7 +33,7 @@ describe("parseMstarc [linear] collection", () => {
 });
 
 describe("parseLinearBinding", () => {
-  test("absent section → enabled=false with the default (identity) mapping", () => {
+  test("absent section -> enabled=false with the default (identity) mapping", () => {
     const parsed = parseLinearBinding(undefined, undefined);
     expect(parsed.ok).toBe(true);
     if (parsed.ok) {

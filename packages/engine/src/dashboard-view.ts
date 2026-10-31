@@ -1,5 +1,5 @@
 /**
- * Dashboard view layer — the generic half of the dashboard read transport.
+ * Dashboard view layer -- the generic half of the dashboard read transport.
  *
  * One view name becomes validated `DashboardFilters`, then one `withStoreRead`
  * envelope: unknown enum values, an over-limit page and an excessive literal
@@ -89,7 +89,7 @@ function parsePageInteger(raw: string | undefined, field: string, max?: number):
 }
 
 /**
- * Raw query parameters → engine filters, refusing everything the contract does
+ * Raw query parameters -> engine filters, refusing everything the contract does
  * not define. Called before any store access, so a malformed request never
  * opens the database.
  */
@@ -152,10 +152,10 @@ export function dashboardFilters(
     // A state without its cause renders an empty explanation, which the AC
     // forbids: the pair is accepted as a pair or not at all.
     if (probeState === undefined && probeCause !== undefined) {
-      refuse("probe_cause requires probe_state — supply the host probe result as a pair");
+      refuse("probe_cause requires probe_state -- supply the host probe result as a pair");
     }
     if (probeState !== undefined && probeCause === undefined) {
-      refuse("probe_state requires probe_cause — the readiness state must carry a readable cause");
+      refuse("probe_state requires probe_cause -- the readiness state must carry a readable cause");
     }
     if (probeState !== undefined && !SYNC_PROBE_STATES.has(probeState)) {
       refuse(`probe_state must be one of ${PROBE_STATES.join(", ")}`);

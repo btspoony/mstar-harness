@@ -1,6 +1,6 @@
 /**
- * Dashboard view layer — the generic request half of the dashboard read
- * transport (view → validated filters → one `withStoreRead` envelope).
+ * Dashboard view layer -- the generic request half of the dashboard read
+ * transport (view -> validated filters -> one `withStoreRead` envelope).
  *
  * This suite pins the refusals the CLI transport asserted before the layer
  * moved here, so a second transport (the dsh panel) inherits exactly one
@@ -227,7 +227,7 @@ const STARTED_AT = "2026-09-18T00:00:00.000Z";
 /**
  * One iteration per store-provable gate step (spec §3): the compass status and
  * the iteration's plan execution status are the only inputs. `iter-done` is the
- * pinned interpretation of the overlapping rows — a `completed` compass answers
+ * pinned interpretation of the overlapping rows -- a `completed` compass answers
  * step 4 even while a plan row is not `Done` (close writes `completed`; a stale
  * plan row cannot un-close it). `iter-none` answers `null` and has no compass.
  */
@@ -366,7 +366,7 @@ async function scopedOverviewWorkspace(name: string): Promise<StoreContext> {
 
   // A locked iteration with a compass and ZERO plan links: the normal gap
   // between Phase 1 and the first plan `belongs-to` link. It proves Start, not
-  // Close — `plans.every(...)` would be vacuously true here (qc1/qc3 F-002).
+  // Close -- `plans.every(...)` would be vacuously true here (qc1/qc3 F-002).
   await register({ kind: "iteration", id: "iter-no-plan", title: "Locked, no plans", rootKind: "iterations", relativePath: "iter-no-plan" });
   await linkCatalogEntities(
     context,
@@ -572,7 +572,7 @@ describe("overview read model", () => {
     }
     await register("iter-none");
 
-    // C4: one iteration, two projects — both disclosed sorted, and the list
+    // C4: one iteration, two projects -- both disclosed sorted, and the list
     // filter matches either of them.
     for (const projectId of ["proj-b", "proj-a"]) {
       await registerCatalogEntity(
@@ -615,7 +615,7 @@ describe("overview read model", () => {
     // The projected status is a free string: a NON-terminal value on a row the
     // registry no longer lists must answer the closed vocabulary's
     // non-terminal arm, never a terminal literal. The row is doctored AFTER a
-    // real read and read again WITHOUT the refresh — the same arm the compass
+    // real read and read again WITHOUT the refresh -- the same arm the compass
     // status test uses, because no producer writes this state.
     const write = await openStore(context, "write");
     try {
@@ -786,7 +786,7 @@ describe("overview read model", () => {
 });
 
 describe("sync-binding view", () => {
-  /** Snapshot every file under `dir` (path → content) for the no-write proof. */
+  /** Snapshot every file under `dir` (path -> content) for the no-write proof. */
   function snapshot(dir: string): Map<string, string> {
     const out = new Map<string, string>();
     const walk = (current: string): void => {
@@ -861,7 +861,7 @@ describe("sync-binding view", () => {
     );
   });
 
-  test("F4: a parent directory's .mstarc is never inherited — the repo's own config is the authority", async () => {
+  test("F4: a parent directory's .mstarc is never inherited -- the repo's own config is the authority", async () => {
     const context = await workspace("sync-binding-parent");
     // The parent (another repo's checkout) carries a complete connection block.
     writeFileSync(join(context.harnessDir, "..", "..", ".mstarc"), "[linear]\nenabled=true\nmode=mirror\nworkspace=other\nteam=other\n");
