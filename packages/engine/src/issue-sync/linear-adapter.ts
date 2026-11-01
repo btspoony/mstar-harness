@@ -217,18 +217,15 @@ export function mapPage(payload: unknown, scope?: { team?: string; project?: str
       // A binding may scope by ID while the item names the entity: the pair
       // (name, id) identifies one thing, so either side matching is a match.
       const id = isRecord(entry) ? entry[`${key}Id`] : undefined;
-      if (typeof id === "string") return id !== expected;
-      // A team always comes back with BOTH a name and an id, so a mismatch here
-      // is real and the page is refused.
-      if (key === "team") return true;
-      // `project` additionally accepts an identifier or a slug. When the item
-      // carries a project id the comparison above already ran, so the only way
-      // here is an item that names a project WITHOUT an id — and then the value
-      // may legitimately be an identifier or slug this pair cannot name. Guessing
-      // from the string's shape would misfire both ways (a slug with spaces, a
-      // name without), so an id-less item is not treated as foreign. Making this
-      // a hard check needs the binding resolved to an id first (list_projects),
-      // tracked as follow-up rather than approximated here.
+      if (key === "team") {
+        // A team always comes back with BOTH a name and an id, so a mismatch is
+        // real and the page is refused.
+        return typeof id === "string" ? id !== expected : true;
+      }
+      // `project` also accepts an identifier or a slug. An item's (name, id)
+      // pair cannot name those, so a binding spelled that way would be refused
+      // on every page — the check is therefore advisory for this dimension and
+      // refuses nothing until the binding is resolved to an id (follow-up).
       return false;
     });
     if (foreign !== undefined) {

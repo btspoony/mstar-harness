@@ -400,9 +400,10 @@ function markItem(
   const direction = requireDirection(input.direction);
   const localId = requireNonblank("localId", input.localId);
   const operationId = requireNonblank("operationId", input.operationId);
-  // The text is part of the request: the same operationId with a different
-  // error/reason is a conflicting request, not a replay.
-  const hash = syncRequestHash(target, { bindingId, direction, localId, text });
+  // Everything that changes what this call MEANS belongs in the hash: the same
+  // operationId with a different error/reason, or with a different timestamp to
+  // record, is a conflicting request — not a replay of the first one.
+  const hash = syncRequestHash(target, { bindingId, direction, localId, text, remoteUpdatedAt: input.remoteUpdatedAt ?? null });
   return withSyncTransaction(db, () => {
     const replayed = replayOrRefuse<SyncItem>(db, operationId, hash);
     if (replayed !== undefined) return replayed;

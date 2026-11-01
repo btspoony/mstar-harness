@@ -3,10 +3,14 @@
  * (binding-config plan Task 1).
  */
 import { describe, expect, test } from "bun:test";
+import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import {
   LINEAR_SECTION,
   parseLinearBinding,
   parseMstarc,
+  readRepoLinearBinding,
 } from "./mstarc.js";
 
 const VALID_LINEAR = ["[linear]", "enabled=true", "mode=mirror", "workspace=acme", "team=eng"].join("\n");
@@ -81,5 +85,21 @@ describe("parseLinearBinding", () => {
 
   test(`section constant stays "${LINEAR_SECTION}"`, () => {
     expect(LINEAR_SECTION).toBe("linear");
+  });
+
+  test("a harness inside repo B reads B's .mstarc even when the CLI runs from repo A", async () => {
+    // The case that matters: `--harness B/.mstar` while cwd is A. Enablement,
+    // team and mapping must come from the repository the HARNESS belongs to,
+    // never from wherever the command happened to be invoked.
+    const a = mkdtempSync(join(tmpdir(), "repo-a-"));
+    const b = mkdtempSync(join(tmpdir(), "repo-b-"));
+    writeFileSync(join(a, ".mstarc"), "[linear]\nenabled = false\nmode = mirror\nworkspace = acme\nteam = Team A\n");
+    mkdirSync(join(b, ".mstar"), { recursive: true });
+    mkdirSync(join(b, ".git"), { recursive: true });
+    writeFileSync(join(b, ".mstarc"), "[linear]\nenabled = true\nmode = mirror\nworkspace = acme\nteam = Team B\n");
+    const binding = readRepoLinearBinding(join(b, ".mstar"), a);
+    expect(binding.kind).toBe("bound");
+    expect(binding.kind === "bound" && binding.binding.team).toBe("Team B");
+    expect(binding.kind === "bound" && binding.binding.enabled).toBe(true);
   });
 });

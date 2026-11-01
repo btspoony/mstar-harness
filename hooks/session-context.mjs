@@ -29831,7 +29831,7 @@ function markItem(db, input, target, text6) {
   const direction = requireDirection(input.direction);
   const localId = requireNonblank3("localId", input.localId);
   const operationId = requireNonblank3("operationId", input.operationId);
-  const hash2 = syncRequestHash(target, { bindingId, direction, localId, text: text6 });
+  const hash2 = syncRequestHash(target, { bindingId, direction, localId, text: text6, remoteUpdatedAt: input.remoteUpdatedAt ?? null });
   return withSyncTransaction(db, () => {
     const replayed = replayOrRefuse(db, operationId, hash2);
     if (replayed !== undefined)
@@ -30065,10 +30065,9 @@ function mapPage(payload, scope) {
       if (seen === expected)
         return false;
       const id = isRecord2(entry) ? entry[`${key}Id`] : undefined;
-      if (typeof id === "string")
-        return id !== expected;
-      if (key === "team")
-        return true;
+      if (key === "team") {
+        return typeof id === "string" ? id !== expected : true;
+      }
       return false;
     });
     if (foreign !== undefined) {
