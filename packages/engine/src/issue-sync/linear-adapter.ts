@@ -4,11 +4,13 @@
  * per page against the configured Linear entry; never a write call, never a
  * per-issue poll, never a credential in output.
  *
- * The tool name, argument schema and payload shape were recorded from the live
- * service with an authenticated `tools/list` + `tools/call` (serverInfo
- * `linear` 1.0.2, 38 tools) — the tool-surface note kept with the iteration
- * artifacts records the method and what a re-run should reproduce. The listing
- * verb is `list_issues`; its envelope is:
+ * The tool name, argument schema and payload shape below were read from the live
+ * service once, in an authenticated session (serverInfo `linear` 1.0.2, 38
+ * tools). That transcript is NOT in this repository — it was a local check — so
+ * a reader cannot audit it, only re-derive it by running `tools/list` and
+ * `tools/call` against the endpoint with a credential. Treat this module as
+ * recording what was observed, not as citing a document. The listing verb is
+ * `list_issues`; its observed envelope is:
  *
  *   { issues: LinearItem[], hasNextPage?: boolean, cursor?: string | null, errors?: [{ message }] }
  *
@@ -46,13 +48,17 @@ export type LinearListDeps = {
    * reaches several projects would file another project's issues under the one
    * local project.
    *
-   * Both argument names are recorded from the service's own schema (`team`:
-   * "Team name or ID"; `project`: "Project name, ID, identifier, or slug") —
-   * see the tool-surface note kept with the iteration artifacts for the method
-   * and what was captured. The schema proves the names; it does NOT prove the
-   * server honours them for every credential, which is why the page is still
-   * checked per item below: a filter that silently stops applying looks exactly
-   * like a filter with nothing to exclude.
+   * Both argument names come from the service's own schema (`team`: "Team name
+   * or ID"; `project`: "Project name, ID, identifier, or slug"). The schema
+   * proves the names exist; it proves nothing about whether the server honours
+   * them for a given credential, and the page is checked per item below because
+   * a filter that silently stops applying looks exactly like a filter with
+   * nothing to exclude.
+   *
+   * `fields` is requested as well so the page carries that ownership data. It
+   * was used in the same authenticated session, but only incidentally — unlike
+   * the argument names, it has not been exercised deliberately, so treat its
+   * acceptance as observed-once rather than established.
    */
   scope?: { team?: string; project?: string };
   /**
