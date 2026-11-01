@@ -217,7 +217,13 @@ export function mapPage(payload: unknown, scope?: { team?: string; project?: str
       // A binding may scope by ID while the item names the entity: the pair
       // (name, id) identifies one thing, so either side matching is a match.
       const id = isRecord(entry) ? entry[`${key}Id`] : undefined;
-      return typeof id === "string" ? id !== expected : true;
+      if (typeof id === "string") return id !== expected;
+      // Neither side of the pair matches, and the item simply does not carry an
+      // id. `project` also accepts an identifier or a slug, which an item's
+      // name cannot be compared against — refusing here would block legitimate
+      // imports for spellings the API explicitly supports. Only when the value
+      // looks like a display name (spaces) is the mismatch treated as real.
+      return expected.includes(" ");
     });
     if (foreign !== undefined) {
       throw new SyncError(

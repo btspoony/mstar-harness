@@ -1619,7 +1619,9 @@ function repoRootOf(harnessDir) {
   }
 }
 function readRepoLinearBinding(harnessDir, repoRootHint) {
-  const candidates = repoRootHint === undefined ? [repoRootOf(harnessDir)] : [repoRootOf(repoRootHint), repoRootOf(harnessDir)];
+  const harnessRoot = repoRootOf(harnessDir);
+  const harnessIsInCheckout = isDirectory(join3(harnessRoot, ".git"));
+  const candidates = harnessIsInCheckout || repoRootHint === undefined ? [harnessRoot] : [repoRootOf(repoRootHint), harnessRoot];
   const repoRoot = candidates.find((root) => isFile(join3(root, MSTARC_FILE))) ?? candidates[0];
   const file = join3(repoRoot, MSTARC_FILE);
   if (!isFile(file)) {
@@ -30063,7 +30065,9 @@ function mapPage(payload, scope) {
       if (seen === expected)
         return false;
       const id = isRecord2(entry) ? entry[`${key}Id`] : undefined;
-      return typeof id === "string" ? id !== expected : true;
+      if (typeof id === "string")
+        return id !== expected;
+      return expected.includes(" ");
     });
     if (foreign !== undefined) {
       throw new SyncError("linear.query-failed", `the page carries an issue whose ${key} is ${JSON.stringify(ownership(foreign, key))} although the binding scopes it to ${JSON.stringify(expected)}; the server-side filter did not take effect, so nothing was ingested`);

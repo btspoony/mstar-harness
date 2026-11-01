@@ -372,10 +372,14 @@ function repoRootOf(harnessDir: string): string {
  * silently read the wrong repository's configuration.
  */
 export function readRepoLinearBinding(harnessDir: string, repoRootHint?: string): RepoLinearBinding {
-  // The declaring repository wins when it actually holds a `.mstarc`; the
-  // harness-derived root stays as the fallback so a harness inside a checkout
-  // still finds its own file when the caller's cwd says nothing.
-  const candidates = repoRootHint === undefined ? [repoRootOf(harnessDir)] : [repoRootOf(repoRootHint), repoRootOf(harnessDir)];
+  // Order matters. The HARNESS's own repository wins whenever the harness sits
+  // inside a checkout: running the CLI from repo A against a `--harness` in repo
+  // B must read B's `.mstarc`, never A's. The caller's hint is only consulted
+  // when the harness lives outside any checkout (`harness_dir` pointing at, say,
+  // /var/mstar/state), where the storage path cannot name a repository at all.
+  const harnessRoot = repoRootOf(harnessDir);
+  const harnessIsInCheckout = isDirectory(join(harnessRoot, ".git"));
+  const candidates = harnessIsInCheckout || repoRootHint === undefined ? [harnessRoot] : [repoRootOf(repoRootHint), harnessRoot];
   const repoRoot = candidates.find((root) => isFile(join(root, MSTARC_FILE))) ?? candidates[0]!;
   const file = join(repoRoot, MSTARC_FILE);
   if (!isFile(file)) {
