@@ -221,11 +221,15 @@ export function mapPage(payload: unknown, scope?: { team?: string; project?: str
       // A team always comes back with BOTH a name and an id, so a mismatch here
       // is real and the page is refused.
       if (key === "team") return true;
-      // `project` is the only dimension the API also accepts as an identifier or
-      // a slug, and an item's (name, id) pair cannot name those. That is "cannot
-      // tell", not "different": refusing would block spellings the API supports.
-      // A value that looks like a display name is still comparable.
-      return expected.includes(" ");
+      // `project` additionally accepts an identifier or a slug. When the item
+      // carries a project id the comparison above already ran, so the only way
+      // here is an item that names a project WITHOUT an id — and then the value
+      // may legitimately be an identifier or slug this pair cannot name. Guessing
+      // from the string's shape would misfire both ways (a slug with spaces, a
+      // name without), so an id-less item is not treated as foreign. Making this
+      // a hard check needs the binding resolved to an id first (list_projects),
+      // tracked as follow-up rather than approximated here.
+      return false;
     });
     if (foreign !== undefined) {
       throw new SyncError(

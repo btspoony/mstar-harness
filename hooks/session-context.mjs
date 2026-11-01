@@ -30069,7 +30069,7 @@ function mapPage(payload, scope) {
         return id !== expected;
       if (key === "team")
         return true;
-      return expected.includes(" ");
+      return false;
     });
     if (foreign !== undefined) {
       throw new SyncError("linear.query-failed", `the page carries an issue whose ${key} is ${JSON.stringify(ownership(foreign, key))} although the binding scopes it to ${JSON.stringify(expected)}; the server-side filter did not take effect, so nothing was ingested`);
