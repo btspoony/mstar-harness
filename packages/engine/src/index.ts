@@ -87,6 +87,7 @@ export {
   parseLinearBinding,
   parseMstarc,
   readRepoLinearBinding,
+  resolveRepoRoot,
 } from "./mstarc.js";
 export {
   assertPlanWritingPath,

@@ -28,6 +28,7 @@ import {
   readCursor,
   readProjectBinding,
   readRepoLinearBinding,
+  resolveRepoRoot,
   resetCursor,
   resolveProcessHarnessDir,
   SyncError,
@@ -194,7 +195,12 @@ async function runImport(id: string, input: Input, invocation: InvocationContext
 
   // The two declarations are read FIRST: the provider needs the endpoint they
   // supply, and every refusal must happen before a store write or a listing call.
-  const repo = readRepoLinearBinding(harnessDir, invocation.cwd);
+  // The root is resolved HERE, once, and passed in. The harness's own checkout
+  // wins; a harness that lives outside any checkout (harness_dir pointing at
+  // shared state) has no repository to read, so the invocation's checkout is the
+  // only thing that can name one.
+  const repoRoot = resolveRepoRoot(harnessDir) ?? resolveRepoRoot(invocation.cwd) ?? invocation.cwd;
+  const repo = readRepoLinearBinding(repoRoot);
   if (repo.kind !== "bound" || !repo.binding.enabled) {
     const why =
       repo.kind === "absent"

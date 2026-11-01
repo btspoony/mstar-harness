@@ -394,6 +394,7 @@ __export(exports_engine, {
   resolveProjectRoot: () => resolveProjectRoot,
   resolveRegisteredPlanFile: () => resolveRegisteredPlanFile,
   resolveRepoEnforcement: () => resolveRepoEnforcement,
+  resolveRepoRoot: () => resolveRepoRoot,
   resolveReviewDir: () => resolveReviewDir,
   resolveReviewRunDir: () => resolveReviewRunDir,
   resolveScaffoldDirs: () => resolveScaffoldDirs,
@@ -1606,24 +1607,19 @@ function isAtOrBelow(dir, root) {
   const rel = relative(root, dir);
   return rel === "" || !rel.startsWith("..") && !isAbsolute2(rel);
 }
-function repoRootOf(harnessDir) {
-  const start = resolve2(harnessDir);
-  let dir = start;
+function resolveRepoRoot(startDir) {
+  let dir = resolve2(startDir);
   for (;; ) {
     if (isFile(join3(dir, ".git")) || isDirectory(join3(dir, ".git")))
       return dir;
     const parent = dirname3(dir);
     if (parent === dir)
-      return dirname3(start);
+      return null;
     dir = parent;
   }
 }
-function readRepoLinearBinding(harnessDir, repoRootHint) {
-  const harnessRoot = repoRootOf(harnessDir);
-  const harnessIsInCheckout = isDirectory(join3(harnessRoot, ".git"));
-  const candidates = harnessIsInCheckout || repoRootHint === undefined ? [harnessRoot] : [repoRootOf(repoRootHint), harnessRoot];
-  const repoRoot = candidates.find((root) => isFile(join3(root, MSTARC_FILE))) ?? candidates[0];
-  const file = join3(repoRoot, MSTARC_FILE);
+function readRepoLinearBinding(repoRoot) {
+  const file = join3(resolve2(repoRoot), MSTARC_FILE);
   if (!isFile(file)) {
     return {
       kind: "absent",

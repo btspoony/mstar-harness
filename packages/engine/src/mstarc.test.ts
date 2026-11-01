@@ -11,6 +11,7 @@ import {
   parseLinearBinding,
   parseMstarc,
   readRepoLinearBinding,
+  resolveRepoRoot,
 } from "./mstarc.js";
 
 const VALID_LINEAR = ["[linear]", "enabled=true", "mode=mirror", "workspace=acme", "team=eng"].join("\n");
@@ -97,7 +98,12 @@ describe("parseLinearBinding", () => {
     mkdirSync(join(b, ".mstar"), { recursive: true });
     mkdirSync(join(b, ".git"), { recursive: true });
     writeFileSync(join(b, ".mstarc"), "[linear]\nenabled = true\nmode = mirror\nworkspace = acme\nteam = Team B\n");
-    const binding = readRepoLinearBinding(join(b, ".mstar"), a);
+    // The root is an input now: the caller asks "which checkout does this
+    // harness belong to?" and passes the answer. A harness nested in B resolves
+    // to B, whatever directory the command was launched from.
+    const root = resolveRepoRoot(join(b, ".mstar"));
+    expect(root).toBe(b);
+    const binding = readRepoLinearBinding(root!);
     expect(binding.kind).toBe("bound");
     expect(binding.kind === "bound" && binding.binding.team).toBe("Team B");
     expect(binding.kind === "bound" && binding.binding.enabled).toBe(true);

@@ -351,37 +351,34 @@ export type RepoLinearBinding =
  * the answer: walk up to the first directory holding `.git`, and fall back to
  * the parent only when the walk finds none (a harness outside any checkout).
  */
-function repoRootOf(harnessDir: string): string {
-  const start = resolve(harnessDir);
-  let dir = start;
+/**
+ * Walk up from `startDir` to the first directory holding `.git`, or `null` when
+ * the path is not inside a checkout. Callers use this to name the repository
+ * they mean and pass it to `readRepoLinearBinding`; the reader itself never
+ * guesses.
+ */
+export function resolveRepoRoot(startDir: string): string | null {
+  let dir = resolve(startDir);
   for (;;) {
     if (isFile(join(dir, ".git")) || isDirectory(join(dir, ".git"))) return dir;
     const parent = dirname(dir);
-    if (parent === dir) return dirname(start);
+    if (parent === dir) return null;
     dir = parent;
   }
 }
 
 /**
- * `[linear]` from `<repo-root>/.mstarc` only; never a parent's configuration.
+ * `[linear]` from `<repoRoot>/.mstarc` only; never a parent's configuration.
  *
- * `repoRootHint` is the directory the CALLER considers its repository — normally
- * the invocation's cwd. It matters when the harness lives outside the checkout:
- * `<repo>/.mstarc` may declare `harness_dir = /var/mstar/state`, and walking up
- * from THAT directory finds no checkout (or, worse, a DIFFERENT one) and would
- * silently read the wrong repository's configuration.
+ * The repository root is an INPUT, not something this function works out. Any
+ * guess here (the harness's parent, the caller's cwd, the nearest `.git`) picks
+ * the wrong repository in some layout — a harness outside its checkout, two
+ * checkouts on one machine, a `harness_dir` pointing at shared state — and the
+ * wrong `.mstarc` silently changes enablement, team and classification. Callers
+ * resolve the root they mean with `resolveRepoRoot` and pass it.
  */
-export function readRepoLinearBinding(harnessDir: string, repoRootHint?: string): RepoLinearBinding {
-  // Order matters. The HARNESS's own repository wins whenever the harness sits
-  // inside a checkout: running the CLI from repo A against a `--harness` in repo
-  // B must read B's `.mstarc`, never A's. The caller's hint is only consulted
-  // when the harness lives outside any checkout (`harness_dir` pointing at, say,
-  // /var/mstar/state), where the storage path cannot name a repository at all.
-  const harnessRoot = repoRootOf(harnessDir);
-  const harnessIsInCheckout = isDirectory(join(harnessRoot, ".git"));
-  const candidates = harnessIsInCheckout || repoRootHint === undefined ? [harnessRoot] : [repoRootOf(repoRootHint), harnessRoot];
-  const repoRoot = candidates.find((root) => isFile(join(root, MSTARC_FILE))) ?? candidates[0]!;
-  const file = join(repoRoot, MSTARC_FILE);
+export function readRepoLinearBinding(repoRoot: string): RepoLinearBinding {
+  const file = join(resolve(repoRoot), MSTARC_FILE);
   if (!isFile(file)) {
     return {
       kind: "absent",

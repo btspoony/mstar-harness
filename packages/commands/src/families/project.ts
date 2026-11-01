@@ -26,6 +26,7 @@ import {
   bindProject,
   readProjectBinding,
   readRepoLinearBinding,
+  resolveRepoRoot,
   resolveProcessHarnessDir,
   type ProjectBindingTarget,
 } from "@mstar-harness/engine";
@@ -165,7 +166,8 @@ async function run(id: string, input: Input, invocation: InvocationContext): Pro
     // The repo's OWN `.mstarc` is the authority — a parent directory's config
     // is never inherited (F4), so a worktree cannot borrow another repo's
     // workspace/team.
-    const repo = readRepoLinearBinding(harnessDir);
+    const repoRoot = resolveRepoRoot(harnessDir) ?? resolveRepoRoot(invocation.cwd) ?? invocation.cwd;
+    const repo = readRepoLinearBinding(repoRoot);
     if (repo.kind === "invalid") return failure(id, Object.assign(new Error(repo.message), { code: repo.code }));
     const provider = requireValue(input.provider, "--provider");
     const enabled = repo.kind === "bound" && repo.binding.enabled;
