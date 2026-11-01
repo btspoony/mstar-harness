@@ -150,10 +150,14 @@ export function importPage(db: StoreDb, bindingId: string, items: readonly Provi
       }
       // `pending` needs no transition: a previous run already opened this cycle.
       mirrorRemoteFields(db, localId, externalId, item);
+      // Fields are copied FIRST; the watermark rides the applied commit, so a
+      // crash between the two leaves a pending row on the old revision instead
+      // of a newer timestamp over stale content.
       markApplied(db, {
         bindingId,
         direction: IMPORT_DIRECTION,
         localId,
+        remoteUpdatedAt: item.updatedAt,
         operationId: operationId(bindingId, item, "applied"),
       });
       result.updated++;
@@ -208,6 +212,7 @@ function planAndApply(
     bindingId,
     direction: IMPORT_DIRECTION,
     localId,
+    remoteUpdatedAt: item.updatedAt,
     operationId: operationId(bindingId, item, "applied"),
   });
 }

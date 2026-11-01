@@ -29841,7 +29841,7 @@ function markItem(db, input, target, text6) {
     casUpdate(db, { bindingId, direction, localId }, row.revision, {
       item_state: target,
       external_id: row.external_id,
-      last_remote_updated_at: row.last_remote_updated_at,
+      last_remote_updated_at: input.remoteUpdatedAt ?? row.last_remote_updated_at,
       last_error: target === "failed" ? text6 ?? null : null,
       last_skip_reason: target === "skipped" ? text6 ?? null : null
     }, now2);
@@ -30010,7 +30010,7 @@ function createLinearAdapter(deps) {
       if (outcome.kind === "http-status") {
         throw new SyncError("linear.query-failed", `the Linear MCP call answered HTTP ${outcome.status}; the page was not ingested and the cursor did not advance`);
       }
-      return mapPage(outcome.payload);
+      return mapPage(outcome.payload, deps.scope);
     }
   };
 }
@@ -30030,7 +30030,7 @@ function assertNoEmbeddedErrors(payload) {
   const message = isRecord2(first) && typeof first.message === "string" ? first.message : String(first);
   throw new SyncError("linear.query-failed", `the Linear MCP page reported errors (${redactTransportMessage(message)}); nothing from that page was ingested`);
 }
-function mapPage(payload) {
+function mapPage(payload, scope) {
   if (!isRecord2(payload)) {
     throw new SyncError("linear.query-failed", "the Linear MCP page was not an object; nothing was ingested");
   }
@@ -30038,6 +30038,13 @@ function mapPage(payload) {
   const items = payload.issues;
   if (!Array.isArray(items)) {
     throw new SyncError("linear.query-failed", "the Linear MCP page carries no `issues` array; an unmappable page is a failure, never an empty project");
+  }
+  if (scope?.team !== undefined) {
+    const foreign = items.find((entry) => isRecord2(entry) && typeof entry.team === "string" && entry.team !== scope.team);
+    if (foreign !== undefined) {
+      const seen = isRecord2(foreign) ? foreign.team : undefined;
+      throw new SyncError("linear.query-failed", `the page carries an issue from team ${JSON.stringify(seen)} although the binding scopes it to ${JSON.stringify(scope.team)}; the server-side filter did not take effect, so nothing was ingested`);
+    }
   }
   const mapped = [];
   const failures = [];
@@ -30066,13 +30073,18 @@ function stripCodeLabel(message) {
   return message.replace(/^\[[^\]]+\]\s*/, "");
 }
 function nextCursorOf(payload) {
-  const cursor = payload.nextCursor;
-  if (cursor === undefined || cursor === null)
+  const more = payload.hasNextPage;
+  if (more !== true) {
+    if (payload.cursor !== undefined && payload.cursor !== null && typeof payload.cursor !== "string") {
+      throw new SyncError("linear.query-failed", "the Linear MCP page carried a non-string `cursor`; nothing was ingested");
+    }
     return null;
-  if (typeof cursor !== "string") {
-    throw new SyncError("linear.query-failed", "the Linear MCP page carried a non-string `nextCursor`; nothing was ingested");
   }
-  return cursor === "" ? null : cursor;
+  const cursor = payload.cursor;
+  if (typeof cursor !== "string" || cursor.trim() === "") {
+    throw new SyncError("linear.query-failed", "the Linear MCP page said hasNextPage but carried no usable `cursor`; the run stopped rather than re-reading page one");
+  }
+  return cursor;
 }
 function required(item, field, index2) {
   const value = item[field];
@@ -30086,6 +30098,15 @@ function priorityOf(item) {
   if (typeof label === "string" && label.trim() !== "")
     return label.trim();
   const value = item.priority;
+  if (isRecord2(value)) {
+    if (typeof value.name === "string" && value.name.trim() !== "")
+      return value.name.trim();
+    if (typeof value.value === "number")
+      return String(value.value);
+    if (typeof value.value === "string" && value.value.trim() !== "")
+      return value.value.trim();
+    return null;
+  }
   if (typeof value === "number")
     return String(value);
   if (typeof value === "string" && value.trim() !== "")
@@ -30324,6 +30345,7 @@ function importPage(db, bindingId, items) {
         bindingId,
         direction: IMPORT_DIRECTION,
         localId,
+        remoteUpdatedAt: item.updatedAt,
         operationId: operationId(bindingId, item, "applied")
       });
       result.updated++;
@@ -30364,6 +30386,7 @@ function planAndApply(db, bindingId, localId, externalId, item) {
     bindingId,
     direction: IMPORT_DIRECTION,
     localId,
+    remoteUpdatedAt: item.updatedAt,
     operationId: operationId(bindingId, item, "applied")
   });
 }

@@ -285,7 +285,7 @@ describe("sync replay semantics", () => {
 });
 
 describe("replanItem (applied -> pending)", () => {
-  test("a newer remote revision re-plans an applied item and advances the watermark", async () => {
+  test("a newer remote revision re-plans an applied item and records the cycle target", async () => {
     const { db, close } = await openedStore("replan-legal");
     planItem(db, PLAN);
     markApplied(db, { ...KEY, operationId: "op-replan-apply" });
@@ -296,6 +296,8 @@ describe("replanItem (applied -> pending)", () => {
       operationId: "op-replan-1",
     });
     expect(replanned.itemState).toBe("pending");
+    // This is the CYCLE TARGET: the stale guard compares a replayed page
+    // against it, so a page older than the cycle it belongs to mirrors nothing.
     expect(replanned.lastRemoteUpdatedAt).toBe("2026-11-02T00:00:00Z");
     expect(markApplied(db, { ...KEY, operationId: "op-replan-applied" }).itemState).toBe("applied");
     close();

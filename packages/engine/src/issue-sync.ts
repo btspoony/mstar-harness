@@ -70,7 +70,13 @@ export type PlanItemInput = {
   remoteUpdatedAt?: string | null;
   operationId: string;
 };
-export type MarkItemInput = { bindingId: string; direction: SyncDirection; localId: string; operationId: string };
+export type MarkItemInput = {
+  /**
+   * The remote revision whose fields were copied just before this call. It is
+   * recorded in the SAME commit as the state change, which is what makes
+   * "applied" mean "applied AND captured" rather than "we saw it once".
+   */
+  remoteUpdatedAt?: string | null; bindingId: string; direction: SyncDirection; localId: string; operationId: string };
 export type MarkFailedInput = MarkItemInput & { error: string };
 export type MarkSkippedInput = MarkItemInput & { reason: string };
 export type ReadItemInput = { bindingId: string; direction: SyncDirection; localId: string };
@@ -354,6 +360,10 @@ export function replanItem(db: StoreDb, input: PlanItemInput): SyncItem {
     casUpdate(db, { bindingId, direction, localId }, row.revision, {
       item_state: "pending",
       external_id: externalId ?? row.external_id,
+      // The CYCLE TARGET, not a claim that the fields were copied: the stale
+      // guard compares a replayed page against it, and the applied commit is
+      // what makes the row's content match. Distinguishing the two would need a
+      // second column; see the follow-up issue on split watermarks.
       last_remote_updated_at: remoteUpdatedAt ?? row.last_remote_updated_at,
       last_error: null,
       last_skip_reason: null,
@@ -404,7 +414,11 @@ function markItem(
     casUpdate(db, { bindingId, direction, localId }, row.revision, {
       item_state: target,
       external_id: row.external_id,
-      last_remote_updated_at: row.last_remote_updated_at,
+      // The watermark advances ONLY here, in the same commit as the state
+      // change it describes. Recording it earlier (at plan time) let a crash
+      // leave a newer timestamp on a row whose fields were never copied, and
+      // every later run then read that revision as already applied.
+      last_remote_updated_at: input.remoteUpdatedAt ?? row.last_remote_updated_at,
       last_error: target === "failed" ? (text ?? null) : null,
       last_skip_reason: target === "skipped" ? (text ?? null) : null,
     }, now);
