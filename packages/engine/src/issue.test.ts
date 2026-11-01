@@ -399,6 +399,26 @@ describe("occurrence replay and recurrence", () => {
     expect(detail.identityKey).toBe(computeIdentityKey("proj-a", "qc/review.md", "missing-null-check", "null-guard-present"));
   });
 
+  test("an imported row refuses a by-id occurrence", async () => {
+    const context = ctx("occurrence-mirrored-");
+    await initializeStore(context).then((h) => h.close());
+    const created = await captureIssue(context, baseInput(), mut("cap-mirrored"));
+    const seed = await openStore(context, "write");
+    seed.db.prepare("update issues set provider = 'linear' where id = ?").run(created.issueId);
+    seed.close();
+    await expect(
+      appendOccurrence(context, created.issueId, occInput({ occurrenceKey: "run-onto-mirror" }), mut("occ-onto-mirror")),
+    ).rejects.toMatchObject({ code: "issue.scope-refused" });
+    const after = await openStore(context, "read");
+    const row = after.db.prepare("select revision, provider from issues where id = ?").get(created.issueId) as {
+      revision: number;
+      provider: string;
+    };
+    after.close();
+    expect(row.provider).toBe("linear");
+    expect(row.revision).toBe(created.revision);
+  });
+
   test("exact replay returns the existing occurrence and receipt", async () => {
     const context = ctx("occurrence-replay-");
     await initializeStore(context).then((h) => h.close());
