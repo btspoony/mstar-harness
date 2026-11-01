@@ -80,9 +80,10 @@ describe("mstar linear auth", () => {
     const result = await command.execute({ operation: "login" }, context({ linearAuthorize: async () => { throw timeout; } }));
     expect(result.status).toBe("refused");
     expect((result as { code: string }).code).toBe("linear.auth-timeout");
-    // The recovery the host supplied survives, instead of the generic fallback an
-    // escaped Error would have produced.
-    expect(JSON.stringify(result)).toMatch(/complete the browser step/);
+    // The CODE survives (it would otherwise read `internal-error`), and the
+    // recovery is a literal this file can prove reaches a real command — the
+    // reachability lint refuses a host-supplied string it cannot evaluate.
+    expect(JSON.stringify(result)).toMatch(/mstar linear auth/);
     const status = await command.execute({ operation: "status" }, context());
     expect(JSON.stringify(status)).toMatch(/"authorized":false/);
   });
