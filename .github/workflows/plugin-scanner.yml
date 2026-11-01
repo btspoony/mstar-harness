@@ -65,7 +65,7 @@ jobs:
           bun run dsh:build
 
       - name: Run HOL AI Plugin Scanner
-        uses: hashgraph-online/ai-plugin-scanner-action@8db741c699f3554e9c7f4947e8954f9190332e6b # scanner 3.0.151
+        uses: hashgraph-online/ai-plugin-scanner-action@3220f5fedcd269533a6275738b2ab5d5f9753e8e # scanner 3.0.151
         with:
           plugin_dir: .
           mode: scan
