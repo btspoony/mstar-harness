@@ -80,7 +80,9 @@ function bundleRows(): EntryRow[] {
   const patches = loadBundlePatch()
   expect(patches).toHaveLength(1)
   const rows = patches[0]?.insert
-  expect(rows).toHaveLength(2)
+  // Two mounts by default plus the disabled Linear provider row. A scoped or
+  // per-agent mount would still show up here as an unexpected id.
+  expect(rows?.map((entry) => entry.id)).toEqual(['mstar', 'mstar-mcp', 'linear-mcp'])
   return rows!
 }
 
@@ -126,12 +128,21 @@ describe('profile bundle layer (Task 4)', () => {
     expect(args[2]).toBe('mcp')
   })
 
-  it('ships exactly one MCP row: only the shared mstar-mcp row names the client package', () => {
+  it('ships exactly one ENABLED MCP row: the shared mstar-mcp channel, plus disabled provider rows', () => {
     const pkg = JSON.parse(readFileSync(join(PKG_DIR, 'package.json'), 'utf8'))
-    // The shared `mstar-mcp` row is the whole MCP channel. A second ROW naming
-    // the client — a scoped/per-agent mount — would mean two channels.
+    // The shared `mstar-mcp` row is the whole mstar MCP channel. A second
+    // ENABLED row naming the client — a scoped/per-agent mount — would mean two
+    // channels; a disabled provider row (Linear) carries the provider's tools,
+    // never mstar's, and must stay disabled because only an operator can hold
+    // the credential it needs.
     const mcpRows = bundleRows().filter((entry) => JSON.stringify(entry).includes('@deepseek-ai/dsh-mcp-client'))
-    expect(mcpRows.map((entry) => entry.id)).toEqual(['mstar-mcp'])
+    expect(mcpRows.filter((entry) => entry.disabled !== true).map((entry) => entry.id)).toEqual(['mstar-mcp'])
+    const linear = mcpRows.find((entry) => entry.id === 'linear-mcp')
+    expect(linear?.disabled).toBe(true)
+    const linearConfig = linear?.config as Record<string, unknown>
+    expect(linearConfig.serverName).toBe('linear')
+    expect(linearConfig.transport).toBe('streamable-http')
+    expect(String(linearConfig.url)).toBe('https://mcp.linear.app/mcp')
     // The plugin never declares the client as its own dependency: it mounts no
     // MCP instance, the Loader mounts the row.
     expect(pkg.dependencies?.['@deepseek-ai/dsh-mcp-client']).toBeUndefined()
