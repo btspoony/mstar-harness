@@ -571,21 +571,22 @@ import { createHash as createHash15 } from "node:crypto";
 import { createHash as createHash14 } from "node:crypto";
 import { closeSync as closeSync3, constants as constants3, fstatSync as fstatSync3, lstatSync as lstatSync10, openSync as openSync3, readFileSync as readFileSync21, readdirSync as readdirSync15 } from "node:fs";
 import { dirname as dirname15, join as join27 } from "node:path";
-import { dirname as dirname17, isAbsolute as isAbsolute15 } from "node:path";
+import { dirname as dirname18, isAbsolute as isAbsolute15 } from "node:path";
 import { createHash as createHash16, randomUUID as randomUUID6 } from "node:crypto";
 import { createHash as createHash17 } from "node:crypto";
 import { readFileSync as readFileSync23 } from "node:fs";
 import { join as join29 } from "node:path";
+import { dirname as dirname17, resolve as resolve21 } from "node:path";
 import { createHash as createHash18 } from "node:crypto";
 import { existsSync as existsSync21, readFileSync as readFileSync24, statSync as statSync10 } from "node:fs";
-import { dirname as dirname18, isAbsolute as isAbsolute16, join as join30 } from "node:path";
+import { dirname as dirname19, isAbsolute as isAbsolute16, join as join30 } from "node:path";
 import { createHash as createHash19 } from "node:crypto";
 import { createHash as createHash20 } from "node:crypto";
 import { relative as relative10, sep as sep12 } from "node:path";
 import { createHash as createHash21 } from "node:crypto";
 import { createHash as createHash22 } from "node:crypto";
 import { existsSync as existsSync22, lstatSync as lstatSync12, readFileSync as readFileSync25, readdirSync as readdirSync17 } from "node:fs";
-import { join as join31, resolve as resolve21 } from "node:path";
+import { join as join31, resolve as resolve22 } from "node:path";
 import { randomUUID as randomUUID7 } from "node:crypto";
 import {
   closeSync as closeSync5,
@@ -600,7 +601,7 @@ import {
   unlinkSync as unlinkSync5,
   writeSync
 } from "node:fs";
-import { basename as basename16, dirname as dirname19, join as join32 } from "node:path";
+import { basename as basename16, dirname as dirname20, join as join32 } from "node:path";
 import { createHash as createHash23, randomUUID as randomUUID8 } from "node:crypto";
 import {
   closeSync as closeSync6,
@@ -617,7 +618,7 @@ import {
 } from "node:fs";
 import { createRequire as createRequire3 } from "node:module";
 import { tmpdir } from "node:os";
-import { dirname as dirname20, join as join33, relative as relative11, resolve as resolve22, sep as sep13 } from "node:path";
+import { dirname as dirname21, join as join33, relative as relative11, resolve as resolve23, sep as sep13 } from "node:path";
 function __exportSetter2(name, newValue) {
   this[name] = __returnValue2.bind(null, newValue);
 }
@@ -26677,7 +26678,7 @@ function queryIssueFlow(projectId) {
   };
 }
 function querySyncBinding(harnessDir, filters) {
-  const repo = readRepoLinearBinding(harnessDir);
+  const repo = readRepoLinearBinding(resolveRepoRoot(harnessDir) ?? dirname17(resolve21(harnessDir)));
   const binding2 = repo.kind === "bound" ? { enabled: repo.binding.enabled, mode: repo.binding.mode, workspace: repo.binding.workspace, team: repo.binding.team } : null;
   const bindingError = repo.kind === "bound" ? null : repo.message;
   if (filters.probeState !== undefined && (filters.probeCause ?? "").trim() === "") {
@@ -27398,7 +27399,7 @@ function resolvePlanAddress(stated, kind) {
   });
 }
 function controlHarnessRoot(context) {
-  return canonicalizeNearestExisting(dirname17(storeDbPath(context)));
+  return canonicalizeNearestExisting(dirname18(storeDbPath(context)));
 }
 async function assertSparseExecutionAuthority(context, what) {
   const authority = await resolveCurrentAuthority(context);
@@ -28507,7 +28508,7 @@ function describeValue(value) {
   }
 }
 function controlHarnessRoot2(context) {
-  return canonicalizeNearestExisting(dirname18(storeDbPath(context)));
+  return canonicalizeNearestExisting(dirname19(storeDbPath(context)));
 }
 async function readWorkflowHeaderBefore(context, workflowId) {
   const state = await readExecutionState(context);
@@ -29923,8 +29924,8 @@ function timedOut(deadlineMs) {
 }
 async function withDeadline(call, deadlineMs) {
   let timer;
-  const expiry = new Promise((resolve212) => {
-    timer = setTimeout(() => resolve212("timeout"), deadlineMs);
+  const expiry = new Promise((resolve222) => {
+    timer = setTimeout(() => resolve222("timeout"), deadlineMs);
   });
   const settled = Promise.resolve().then(call).catch((error) => ({ kind: "transport-error", message: describeThrown(error) }));
   try {
@@ -31329,7 +31330,7 @@ async function applyStoreMigration(context, manifest, hooks = {}) {
   if (!manifest || manifest.version !== MIGRATION_MANIFEST_VERSION || typeof manifest.controlRoot !== "string") {
     throw new StoreMigrationError("store.migration-manifest-invalid", "the manifest is missing or carries an unsupported version; re-run the preview");
   }
-  if (resolve21(manifest.controlRoot) !== resolve21(context.harnessDir)) {
+  if (resolve22(manifest.controlRoot) !== resolve22(context.harnessDir)) {
     throw new StoreMigrationError("store.migration-manifest-invalid", `the manifest was reviewed for control root ${manifest.controlRoot}, not ${context.harnessDir}; nothing was written.`);
   }
   if (manifest.unresolved.length > 0 || manifest.catalog.conflicts.length > 0 || manifest.blocksApply) {
@@ -31466,7 +31467,7 @@ async function applyStoreMigration(context, manifest, hooks = {}) {
   }
 }
 function controlRootOf(context) {
-  return canonicalTarget(dirname19(storeDbPath(context)));
+  return canonicalTarget(dirname20(storeDbPath(context)));
 }
 function assertWorkflowId(workflowId, what = "workflow id") {
   try {
@@ -31649,7 +31650,7 @@ function commitLedgerFrame(path2, frame) {
     closeSync5(fd);
   }
   if (created)
-    fsyncDirectory(dirname19(path2));
+    fsyncDirectory(dirname20(path2));
   assertLedgerPathIdentity(path2, opened, "before success receipt");
 }
 function ledgerSpans(bytes) {
@@ -31677,7 +31678,7 @@ function markerReserveBytes(totalBytes, workflowId) {
   return reserve + 5 * String(totalBytes).length + 2;
 }
 function writeLedgerTempFile(path2, content3) {
-  const temp = join32(dirname19(path2), `${basename16(path2)}.compaction-${randomUUID7()}.tmp`);
+  const temp = join32(dirname20(path2), `${basename16(path2)}.compaction-${randomUUID7()}.tmp`);
   try {
     const fd = openWithoutFollowing(temp, fsConstants.O_WRONLY | fsConstants.O_CREAT | fsConstants.O_EXCL, 420);
     try {
@@ -31790,7 +31791,7 @@ function compactWorkflowNotesLedger(path2, workflowId, trigger) {
     return;
   }
   renameSync3(temp, path2);
-  fsyncDirectory(dirname19(path2));
+  fsyncDirectory(dirname20(path2));
 }
 function withWorkflowNotesMaintenanceLock(context, body) {
   return withExecutionTransaction(context, () => body());
@@ -31833,7 +31834,7 @@ function prepareWorkflowBodyDir(context, session, dir) {
   }
   assertExecutionSessionCurrent(context, session);
   mkdirSync8(dir, { recursive: true });
-  fsyncDirectory(dirname19(dir));
+  fsyncDirectory(dirname20(dir));
 }
 function assertNoteScope(session, note) {
   assertWorkflowId(session.workflowId, "execution session workflow id");
@@ -31849,7 +31850,7 @@ async function appendWorkflowNote(context, session, note) {
   assertNoteScope(session, note);
   assertRealDirectory(controlRootOf(context), "the control root");
   const ledgerPath = workflowNotesLedgerPath(context, session.workflowId);
-  prepareWorkflowBodyDir(context, session, dirname19(ledgerPath));
+  prepareWorkflowBodyDir(context, session, dirname20(ledgerPath));
   const frame = Buffer.from(`${canonicalNoteLine({ ...note, ts: note.ts ?? new Date().toISOString() })}
 `, "utf8");
   assertExecutionSessionCurrent(context, session);
@@ -31962,7 +31963,7 @@ function normalizeWorkflowNotesCoverage(input) {
   };
 }
 function controlRootOf2(context) {
-  return canonicalPath(dirname20(storeDbPath(context)));
+  return canonicalPath(dirname21(storeDbPath(context)));
 }
 function sha256Of(bytes) {
   return createHash23("sha256").update(bytes).digest("hex");
@@ -32374,7 +32375,7 @@ function recoveryPointPath(context, root, backupPath) {
   if (!isNonEmptyString(backupPath)) {
     throw conflict3("a restore preview needs the recovery point path it is previewed against");
   }
-  const point3 = canonicalPath(resolve22(backupPath));
+  const point3 = canonicalPath(resolve23(backupPath));
   if (!isPathWithin(root, point3)) {
     throw new StoreActivationError("store.activation-stale", `the recovery point ${backupPath} is outside the authorized control root ${root}; a recovery point must live inside the root it protects.`);
   }

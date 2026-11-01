@@ -36,7 +36,8 @@ import { ProjectionError, refreshProjections, type ProjectionFreshness, type Sou
 import { parseRoadmapContent, type RoadmapContent } from "./roadmap-content.js";
 import { readRoadmapAuthorityOn, type RoadmapRead } from "./roadmap-store.js";
 import { SddScriptError } from "./sdd.js";
-import { readRepoLinearBinding, type RepoLinearBinding } from "./mstarc.js";
+import { dirname, resolve } from "node:path";
+import { readRepoLinearBinding, resolveRepoRoot, type RepoLinearBinding } from "./mstarc.js";
 import type { ProbeState } from "./issue-sync/provider.js";
 import { openStore, StoreError, type StoreContext, type StoreDb, type StoreHandle } from "./store-db.js";
 import { ExecutionError } from "./execution-store.js";
@@ -696,7 +697,11 @@ export function queryIssueFlow(projectId?: string): StoreReadQuery<IssueFlow> {
 export function querySyncBinding(harnessDir: string, filters: DashboardFilters): StoreReadQuery<SyncBindingDTO> {
   // The repo's own `.mstarc` is the authority — a parent directory's
   // configuration never becomes this repo's connection identity (F4).
-  const repo: RepoLinearBinding = readRepoLinearBinding(harnessDir);
+  // The reader takes the repository root; this query is given the harness
+  // directory. Resolving it here (rather than passing the harness through) is
+  // what keeps the dashboard looking for `<repo>/.mstarc` instead of
+  // `<repo>/.mstar/.mstarc`, which reported every valid binding as absent.
+  const repo: RepoLinearBinding = readRepoLinearBinding(resolveRepoRoot(harnessDir) ?? dirname(resolve(harnessDir)));
   const binding =
     repo.kind === "bound"
       ? { enabled: repo.binding.enabled, mode: repo.binding.mode, workspace: repo.binding.workspace, team: repo.binding.team }
