@@ -1090,6 +1090,7 @@ const CONTROL_ROOT_CLASS: Readonly<Record<string, "root" | "none">> = {
   "issue.export": "root", "issue.link": "root", "issue.list": "root",
   "issue.move": "root",
   "issue.occurrence": "root", "issue.reopen": "root", "issue.show": "root",
+  "linear.auth": "root",
   "issue.supersede": "root", "issue.triage": "root", "issue.waive": "root",
   "issue-sync.import": "root",
   "iteration.gate": "root", "iteration.push-cadence": "none", "iteration.register": "root",
