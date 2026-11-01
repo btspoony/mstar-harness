@@ -10,6 +10,7 @@
  * The observable contract: nothing prints a token, and the only thing written to
  * disk is the credential file (mode 0600) that `linear-credential` owns.
  */
+import { createHash } from "node:crypto";
 import { createServer } from "node:http";
 
 /** The hosted endpoint; a deployment may point at its own. */
@@ -111,7 +112,9 @@ function base64url(bytes: Uint8Array): string {
 /** PKCE verifier/challenge pair (S256). */
 export function createPkce(): { verifier: string; challenge: string } {
   const verifier = base64url(crypto.getRandomValues(new Uint8Array(48)));
-  const digest = new Bun.CryptoHasher("sha256").update(verifier).digest();
+  // node:crypto, not a runtime-specific hasher: this module is compiled with the
+  // package's TypeScript config, which does not include Bun's globals.
+  const digest = createHash("sha256").update(verifier).digest();
   return { verifier, challenge: base64url(new Uint8Array(digest)) };
 }
 
