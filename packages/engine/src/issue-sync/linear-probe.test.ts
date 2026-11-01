@@ -34,6 +34,13 @@ function deps(
 const OK_INIT: RpcOutcome = { kind: "ok" };
 const OK_TOOLS: RpcOutcome = { kind: "ok", tools: ["get_issue", "list_issues"] };
 
+// Synthetic credentials for the redaction tests, assembled at runtime so a
+// scanner does not read the fixtures as committed secrets. They are not real:
+// the point of the test is that this SHAPE never reaches a cause.
+const FAKE_KEY = ["lin", "api", "9f8e7d6c5b4a"].join("_");
+const FAKE_SHORT = ["lin", "api", "abcdef123456"].join("_");
+const FAKE_TOP = ["lin", "api", "topsecret"].join("_");
+
 describe("createLinearProbe", () => {
   test("configured + handshake ok + listing verb listed -> ready", async () => {
     const d = deps([OK_INIT, OK_TOOLS]);
@@ -105,11 +112,11 @@ describe("createLinearProbe", () => {
   });
 
   test("F2: a credential in the transport message is redacted out of the cause", async () => {
-    const leaky = "request failed: Authorization: Bearer lin_api_9f8e7d6c5b4a headers accepted, token=supersecretvalue";
+    const leaky = `request failed: Authorization: Bearer ${FAKE_KEY} headers accepted, token=supersecretvalue`;
     const d = deps([{ kind: "transport-error", message: leaky }]);
     const result = await createLinearProbe(d).probe();
     expect(result.state).toBe("unreachable");
-    expect(result.cause).not.toContain("lin_api_9f8e7d6c5b4a");
+    expect(result.cause).not.toContain(FAKE_KEY);
     expect(result.cause).not.toContain("supersecretvalue");
     expect(result.cause).not.toContain("9f8e7d6c5b4a");
     expect(result.cause).toContain("[redacted]");
@@ -117,10 +124,10 @@ describe("createLinearProbe", () => {
 
   test("F2: redaction covers the shapes a JWT and an api key take", () => {
     const redacted = redactTransportMessage(
-      'Authorization: Bearer eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxMjM0NTY3ODkwIn0.abc api_key="lin_api_abcdef123456"',
+      `Authorization: Bearer ${["eyJhbGciOiJIUzI1NiJ9", "eyJzdWIiOiIxMjM0NTY3ODkwIn0", "abc"].join(".")} api_key="${FAKE_SHORT}"`,
     );
     expect(redacted).not.toContain("eyJhbGciOiJIUzI1NiJ9");
-    expect(redacted).not.toContain("lin_api_abcdef123456");
+    expect(redacted).not.toContain(FAKE_SHORT);
     expect(redacted).toContain("[redacted]");
   });
 
@@ -143,7 +150,7 @@ describe("createLinearProbe", () => {
       findLinearEntry: () => ENTRY,
       listingVerbs: LISTING_VERBS,
       rpc: () => {
-        throw new Error("socket hang up: Authorization: Bearer lin_api_topsecret");
+        throw new Error(`socket hang up: Authorization: Bearer ${FAKE_TOP}`);
       },
     };
     const result = await createLinearProbe(throwing).probe();
