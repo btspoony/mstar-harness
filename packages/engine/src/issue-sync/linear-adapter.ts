@@ -256,7 +256,8 @@ function stripCodeLabel(message: string): string {
 }
 
 /**
- * The REAL envelope (verified against the service): `{ issues, hasNextPage,
+ * The observed envelope (see the header for what "observed" can and cannot back):
+ * `{ issues, hasNextPage,
  * cursor }`. A page continues only when `hasNextPage` is true AND a non-blank
  * cursor came with it — an empty cursor with `hasNextPage: true` is a broken
  * page, not an invitation to loop on page one.

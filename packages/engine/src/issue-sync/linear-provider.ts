@@ -19,10 +19,10 @@ export type { LinearTransportOptions };
 
 /**
  * Candidate listing verbs, in preference order. The service advertises
- * `list_issues`, which was verified with an authenticated `tools/list`; the
- * second name stays as a fallback for a deployment fronting a different
- * revision. A host that lists neither is refused as
- * `linear.list-unimplemented` rather than guessed at.
+ * `list_issues` in the session recorded by the adapter's header (local, its
+ * transcript not in this repository); the second name stays as a fallback for a
+ * deployment fronting a different revision. A host that lists neither is
+ * refused as `linear.list-unimplemented` rather than guessed at.
  */
 export const LINEAR_LISTING_VERBS: readonly string[] = ["list_issues", "search_issues"];
 
