@@ -101,10 +101,18 @@ describe("listIssues pagination", () => {
     expect(await codeOf(() => createLinearAdapter(d).listIssues(null))).toBe("linear.query-failed");
   });
 
-  test("a team scoped by key still refuses a foreign team, and an id-less item is still checked", async () => {
-    // The project dimension tolerates an alias because a name/id pair cannot name
-    // one; team must not inherit that leniency — a team always comes back with
-    // both a name and an id, so a mismatch is a real mismatch.
+  test("a team scoped by key still refuses a foreign team when the item carries NO id", async () => {
+    // No `teamId`: the comparison must reach the team-only branch. With an id the
+    // existing id check answers first and this branch would never run, so the test
+    // would pass even if the branch were deleted.
+    const d = deps(
+      [{ kind: "ok", payload: { issues: [issue("LIN-1", { team: "Other Team", teamId: undefined })], hasNextPage: false, cursor: null } }],
+      { scope: { team: "NSD" } },
+    );
+    expect(await codeOf(() => createLinearAdapter(d).listIssues(null))).toBe("linear.query-failed");
+  });
+
+  test("the same page is refused when the item names the wrong team WITH an id", async () => {
     const d = deps(
       [{ kind: "ok", payload: { issues: [issue("LIN-1", { team: "Other Team", teamId: "team-other" })], hasNextPage: false, cursor: null } }],
       { scope: { team: "NSD" } },
