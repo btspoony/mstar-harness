@@ -28,6 +28,7 @@ import {
   readCursor,
   readProjectBinding,
   readLinearCredential,
+  writeLinearCredential,
   readRepoLinearBinding,
   resolveRepoRoot,
   resetCursor,
@@ -47,12 +48,36 @@ const LINEAR_MCP_URL = "https://mcp.linear.app/mcp";
 
 /**
  * The access token this machine stored through `mstar linear auth`, or null.
- * A credential that is due for refresh is still returned — it is usable until it
- * expires, and refusing here would turn a refreshable state into a hard stop.
+ *
+ * A credential past its expiry is refreshed first: sending an expired token only
+ * produces an access-denied that names nothing, while the refresh token beside it
+ * was still usable. A credential that is merely due (inside the refresh window)
+ * is returned as-is — it works until it expires.
  */
-function storedLinearToken(): string | null {
+export async function resolveStoredToken(invocation: InvocationContext): Promise<string | null> {
   const state = readLinearCredential();
-  return state.kind === "present" ? state.credential.accessToken : null;
+  if (state.kind !== "present") return null;
+  const { credential } = state;
+  const expired = credential.expiresAt !== null && credential.expiresAt <= Date.now();
+  if (!expired) return credential.accessToken;
+  const refresh = invocation.effects.linearRefresh;
+  if (refresh === undefined || credential.refreshToken === null || credential.clientId === null) {
+    throw new Error(
+      "[linear.reauth-required] the stored Linear credential has expired and this host cannot refresh it; run `mstar linear auth` on the machine that holds it",
+    );
+  }
+  const fresh = await refresh(LINEAR_MCP_URL, credential.clientId, credential.refreshToken);
+  if (fresh === null) {
+    throw new Error("[linear.reauth-required] the refresh was declined; run `mstar linear auth` again");
+  }
+  writeLinearCredential({
+    accessToken: fresh.accessToken,
+    refreshToken: fresh.refreshToken ?? credential.refreshToken,
+    expiresAt: fresh.expiresAt,
+    scope: fresh.scope ?? credential.scope,
+    clientId: fresh.clientId ?? credential.clientId,
+  });
+  return fresh.accessToken;
 }
 
 const schema = z.object({
@@ -243,7 +268,7 @@ async function runImport(id: string, input: Input, invocation: InvocationContext
       url: LINEAR_MCP_URL,
       // Precedence is explicit: the stored credential this machine authorized
       // wins, and an exported key is the fallback for a headless deployment.
-      token: storedLinearToken() ?? process.env.LINEAR_API_KEY,
+      token: (await resolveStoredToken(invocation)) ?? process.env.LINEAR_API_KEY,
       deadlineMs: DEFAULT_PROBE_DEADLINE_MS,
       // The listing is scoped to the binding: a credential that reaches several
       // teams or projects must never import another one's issues here.

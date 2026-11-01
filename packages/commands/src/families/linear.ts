@@ -65,7 +65,7 @@ async function run(operation: "login" | "status" | "logout", invocation: Invocat
       message: "this host cannot run the browser authorization leg",
       details: { credentialPath: linearCredentialPath() },
       recovery:
-        "Run `mstar linear auth` with a host that can open a browser, or export MSTAR_LINEAR_CREDENTIAL pointing at a credential file written elsewhere.",
+        "Run `mstar linear auth` with the standalone CLI on a machine that can open a browser, or export MSTAR_LINEAR_CREDENTIAL pointing at a credential file written elsewhere.",
     });
   }
   const tokens = await authorize(LINEAR_MCP_URL);
@@ -99,7 +99,7 @@ export function getLinearCommandDefinitions(): CommandDefinition[] {
     },
     input: schema,
     output: commandEnvelopeSchema,
-    effects: [],
+    effects: ["read", "write", "browser"],
     rootInputs: [],
     requirements: [],
     async execute(value: Input, invocation: InvocationContext): Promise<CommandEnvelope> {

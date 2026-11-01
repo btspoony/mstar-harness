@@ -32941,7 +32941,8 @@ function parse2(raw) {
   const refreshToken = typeof record.refresh_token === "string" && record.refresh_token.trim() !== "" ? record.refresh_token : null;
   const expiresAt = typeof record.expires_at === "number" && Number.isFinite(record.expires_at) ? record.expires_at : null;
   const scope = typeof record.scope === "string" ? record.scope : null;
-  return { accessToken, refreshToken, expiresAt, scope };
+  const clientId = typeof record.client_id === "string" && record.client_id !== "" ? record.client_id : null;
+  return { accessToken, refreshToken, expiresAt, scope, clientId };
 }
 function readLinearCredential(now2 = Date.now()) {
   const path2 = linearCredentialPath();
@@ -32966,6 +32967,7 @@ function writeLinearCredential(credential) {
   const payload = {
     access_token: credential.accessToken,
     refresh_token: credential.refreshToken,
+    client_id: credential.clientId,
     expires_at: credential.expiresAt,
     scope: credential.scope
   };

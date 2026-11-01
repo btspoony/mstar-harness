@@ -92,6 +92,20 @@ export interface CommandEffects {
     refreshToken: string | null;
     expiresAt: number | null;
     scope: string | null;
+    /** Needed later by a refresh, and not derivable from the token itself. */
+    clientId: string | null;
+  } | null>;
+  /**
+   * Host capability: exchange a stored refresh token for a new one. The engine
+   * cannot do this itself — the exchange needs the authorization server's
+   * metadata and the network, which are host concerns.
+   */
+  linearRefresh?(mcpUrl: string, clientId: string, refreshToken: string): Promise<{
+    accessToken: string;
+    refreshToken: string | null;
+    expiresAt: number | null;
+    scope: string | null;
+    clientId: string | null;
   } | null>;
   writeStderr?(message: string): void;
   captureSddEvidence?(requestPath: string, argv: readonly string[]): Promise<unknown>;

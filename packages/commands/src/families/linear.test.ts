@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { writeLinearCredential, readLinearCredential } from "@mstar-harness/engine";
 import { getLinearCommandDefinitions } from "./linear.js";
 import type { InvocationContext } from "../types.js";
 
@@ -24,7 +25,7 @@ function context(effects: Partial<InvocationContext["effects"]> = {}): Invocatio
   return { cwd: root, controlRoot: root, effects } as InvocationContext;
 }
 
-const tokens = { accessToken: "a", refreshToken: "r", expiresAt: Date.now() + 3_600_000, scope: "read" };
+const tokens = { accessToken: "a", refreshToken: "r", expiresAt: Date.now() + 3_600_000, scope: "read", clientId: "cid" };
 
 /** The success payload of an envelope; the union has no `data` on its other arms. */
 function dataOf(result: { status: string }): Record<string, unknown> {
@@ -73,5 +74,45 @@ describe("mstar linear auth", () => {
     expect(result.code).toBe("linear.auth-denied");
     const status = await command.execute({ operation: "status" }, context());
     expect(dataOf(status).authorized).toBe(false);
+  });
+});
+
+describe("an expired credential is refreshed before use", () => {
+  test("the import path refreshes an expired token and stores the replacement", async () => {
+    const { resolveStoredToken } = await import("./issue-sync.js");
+    const expired = Date.now() - 60_000;
+    writeLinearCredential({ accessToken: "old", refreshToken: "r1", expiresAt: expired, scope: "read", clientId: "cid" });
+    let asked: unknown[] = [];
+    const token = await resolveStoredToken(context({
+      linearRefresh: async (url: string, clientId: string, refresh: string) => {
+        asked = [url, clientId, refresh];
+        return { accessToken: "new", refreshToken: "r2", expiresAt: Date.now() + 3_600_000, scope: "read", clientId };
+      },
+    }));
+    expect(token).toBe("new");
+    expect(asked).toEqual(["https://mcp.linear.app/mcp", "cid", "r1"]);
+    const state = readLinearCredential();
+    expect(state.kind === "present" && state.credential.accessToken).toBe("new");
+    expect(state.kind === "present" && state.credential.refreshToken).toBe("r2");
+  });
+
+  test("a host that cannot refresh refuses with the command to re-run", async () => {
+    const { resolveStoredToken } = await import("./issue-sync.js");
+    writeLinearCredential({ accessToken: "old", refreshToken: "r1", expiresAt: Date.now() - 1, scope: "read", clientId: "cid" });
+    await expect(resolveStoredToken(context())).rejects.toThrow(/linear\.reauth-required/);
+  });
+
+  test("a live credential is used without a refresh round trip", async () => {
+    const { resolveStoredToken } = await import("./issue-sync.js");
+    writeLinearCredential({ accessToken: "live", refreshToken: "r1", expiresAt: Date.now() + 3_600_000, scope: "read", clientId: "cid" });
+    let called = false;
+    const token = await resolveStoredToken(context({
+      linearRefresh: async () => {
+        called = true;
+        return null;
+      },
+    }));
+    expect(token).toBe("live");
+    expect(called).toBe(false);
   });
 });

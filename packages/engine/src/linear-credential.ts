@@ -19,6 +19,12 @@ import { dirname, join } from "node:path";
 export type LinearCredential = {
   accessToken: string;
   refreshToken: string | null;
+  /**
+   * The dynamically registered client this credential belongs to. A refresh
+   * exchange must present it, and it is not derivable from the token, so losing
+   * it made a stored refresh token unusable.
+   */
+  clientId: string | null;
   /** Epoch milliseconds. */
   expiresAt: number | null;
   scope: string | null;
@@ -57,7 +63,8 @@ function parse(raw: string): LinearCredential | null {
   const refreshToken = typeof record.refresh_token === "string" && record.refresh_token.trim() !== "" ? record.refresh_token : null;
   const expiresAt = typeof record.expires_at === "number" && Number.isFinite(record.expires_at) ? record.expires_at : null;
   const scope = typeof record.scope === "string" ? record.scope : null;
-  return { accessToken, refreshToken, expiresAt, scope };
+  const clientId = typeof record.client_id === "string" && record.client_id !== "" ? record.client_id : null;
+  return { accessToken, refreshToken, expiresAt, scope, clientId };
 }
 
 /** What is on disk right now, and whether a refresh is due. Never throws. */
@@ -89,6 +96,7 @@ export function writeLinearCredential(credential: LinearCredential): string {
   const payload = {
     access_token: credential.accessToken,
     refresh_token: credential.refreshToken,
+    client_id: credential.clientId,
     expires_at: credential.expiresAt,
     scope: credential.scope,
   };

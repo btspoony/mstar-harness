@@ -199,9 +199,16 @@ export async function beginAuthorization(
   };
 }
 
-export type TokenSet = { accessToken: string; refreshToken: string | null; expiresAt: number | null; scope: string | null };
+export type TokenSet = {
+  accessToken: string;
+  refreshToken: string | null;
+  expiresAt: number | null;
+  scope: string | null;
+  /** The registered client the token was issued to; a refresh must present it. */
+  clientId: string | null;
+};
 
-function toTokenSet(body: Record<string, unknown>): TokenSet {
+function toTokenSet(body: Record<string, unknown>, clientId: string): TokenSet {
   const accessToken = body.access_token;
   if (typeof accessToken !== "string" || accessToken === "") {
     throw new Error("[linear.auth-unavailable] the token endpoint returned no access_token");
@@ -212,6 +219,9 @@ function toTokenSet(body: Record<string, unknown>): TokenSet {
     refreshToken: typeof body.refresh_token === "string" && body.refresh_token !== "" ? body.refresh_token : null,
     expiresAt: expiresIn === null ? null : Date.now() + expiresIn * 1000,
     scope: typeof body.scope === "string" ? body.scope : null,
+    // Recorded here because the response does not repeat it and a refresh
+    // exchange cannot proceed without it.
+    clientId,
   };
 }
 
@@ -235,7 +245,7 @@ export async function exchangeCode(
     }).toString(),
   });
   if (!response.ok) throw new Error(`[linear.auth-unavailable] the token exchange failed with HTTP ${response.status}`);
-  return toTokenSet((await response.json()) as Record<string, unknown>);
+  return toTokenSet((await response.json()) as Record<string, unknown>, client.clientId);
 }
 
 /** Refresh an expired access token without a browser. */
@@ -259,5 +269,5 @@ export async function refreshToken(
       `[linear.reauth-required] the refresh was rejected with HTTP ${response.status}; run \`mstar linear auth\` again`,
     );
   }
-  return toTokenSet((await response.json()) as Record<string, unknown>);
+  return toTokenSet((await response.json()) as Record<string, unknown>, client.clientId);
 }

@@ -27,6 +27,7 @@ afterEach(() => {
 const credential = (overrides: Partial<Parameters<typeof writeLinearCredential>[0]> = {}) => ({
   accessToken: "access-1",
   refreshToken: "refresh-1",
+  clientId: "client-1",
   expiresAt: Date.UTC(2026, 10, 2),
   scope: "read",
   ...overrides,
@@ -45,6 +46,7 @@ describe("linear credential store", () => {
     if (state.kind !== "present") return;
     expect(state.credential.accessToken).toBe("access-1");
     expect(state.credential.refreshToken).toBe("refresh-1");
+    expect(state.credential.clientId).toBe("client-1");
     expect(state.credential.scope).toBe("read");
   });
 

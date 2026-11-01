@@ -20,7 +20,7 @@ import {
   validateExecutionIdentity,
   type ExecutionIdentity,
 } from "@mstar-harness/engine";
-import { beginAuthorization, discoverAuthorizationServer, exchangeCode, registerClient } from "./linear-auth.js";
+import { beginAuthorization, discoverAuthorizationServer, exchangeCode, refreshToken, registerClient } from "./linear-auth.js";
 import { unionBranchSchemas } from "./schema-branches.js";
 import { captureSddEvidenceFromFile, verifySddEvidence } from "./sdd-evidence.js";
 import { detectInstalledPluginVersion } from "./plugin-version-alignment";
@@ -847,6 +847,17 @@ function cliEffects(services: Array<{ close(): Promise<void> }>): CommandEffects
       const handle = { url: running.url, async close() { await running.close(); } };
       services.push(handle);
       return handle;
+    },
+    async linearRefresh(mcpUrl: string, clientId: string, stored: string) {
+      // The authorization server is rediscovered from the endpoint rather than
+      // remembered: its location is metadata, and a stored copy would go stale.
+      const authorizationServer = await discoverAuthorizationServer(mcpUrl);
+      const tokens = await refreshToken(
+        authorizationServer,
+        { clientId, redirectUri: `http://localhost:0/callback` },
+        stored,
+      );
+      return tokens;
     },
     async linearAuthorize(mcpUrl: string) {
       // The browser leg lives in linear-auth; this only owns the platform
