@@ -5,7 +5,7 @@
  */
 import { describe, expect, test } from "bun:test";
 import { SyncError } from "../issue-sync.js";
-import { createLinearAdapter, LINEAR_PAGE_SIZE, type LinearCallOutcome, type LinearListDeps } from "./linear-adapter.js";
+import { createLinearAdapter, LINEAR_ITEM_FIELDS, LINEAR_PAGE_SIZE, type LinearCallOutcome, type LinearListDeps } from "./linear-adapter.js";
 
 const ENTRY = { url: "https://mcp.linear.app/sse" };
 const VERBS = ["list_issues", "search_issues"];
@@ -85,11 +85,23 @@ describe("listIssues pagination", () => {
     expect(second.items.map((item) => item.externalId)).toEqual(["LIN-3"]);
     expect(second.nextCursor).toBeNull();
 
-    // Exactly one request per page, carrying the page size and the cursor.
+    // Exactly one request per page, carrying the page size, the cursor and the
+    // ownership fields the scope guard needs.
     expect(d.requests).toEqual([
-      { tool: "list_issues", arguments: { limit: LINEAR_PAGE_SIZE } },
-      { tool: "list_issues", arguments: { limit: LINEAR_PAGE_SIZE, cursor: "c-2" } },
+      { tool: "list_issues", arguments: { limit: LINEAR_PAGE_SIZE, fields: [...LINEAR_ITEM_FIELDS] } },
+      { tool: "list_issues", arguments: { limit: LINEAR_PAGE_SIZE, fields: [...LINEAR_ITEM_FIELDS], cursor: "c-2" } },
     ]);
+  });
+
+  test("the verified priority object shape maps to its readable name", async () => {
+    // The service returns `priority: { value, name }`. A fixture that only ever
+    // used a plain string would agree with the code and disagree with the
+    // service — the exact failure this module is recovering from.
+    const d = deps([
+      { kind: "ok", payload: { issues: [issue("LIN-1", { priority: { value: 2, name: "High" } })], hasNextPage: false, cursor: null } },
+    ]);
+    const page = await createLinearAdapter(d).listIssues(null);
+    expect(page.items[0]?.priority).toBe("High");
   });
 
   test("an empty page terminates the run without inventing an item", async () => {
@@ -98,7 +110,7 @@ describe("listIssues pagination", () => {
   });
 
   test("the adapter calls the verb the handshake actually listed, not merely the first candidate", async () => {
-    const d = deps([{ kind: "ok", payload: { issues: [issue("LIN-1")], nextCursor: null } }], {
+    const d = deps([{ kind: "ok", payload: { issues: [issue("LIN-1")], hasNextPage: false, cursor: null } }], {
       listedVerbs: () => ["get_issue", "search_issues"],
     });
     await createLinearAdapter(d).listIssues(null);

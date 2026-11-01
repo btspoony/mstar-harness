@@ -30000,6 +30000,7 @@ function createLinearAdapter(deps) {
         tool,
         arguments: {
           limit: LINEAR_PAGE_SIZE,
+          fields: [...LINEAR_ITEM_FIELDS],
           ...scope.team === undefined ? {} : { team: scope.team },
           ...scope.project === undefined ? {} : { project: scope.project },
           ...cursor === null ? {} : { cursor }
@@ -30040,11 +30041,27 @@ function mapPage(payload, scope) {
   if (!Array.isArray(items)) {
     throw new SyncError("linear.query-failed", "the Linear MCP page carries no `issues` array; an unmappable page is a failure, never an empty project");
   }
-  if (scope?.team !== undefined) {
-    const foreign = items.find((entry) => isRecord2(entry) && typeof entry.team === "string" && entry.team !== scope.team);
+  const ownership = (entry, key) => {
+    if (!isRecord2(entry))
+      return null;
+    const raw = entry[key];
+    if (typeof raw === "string")
+      return raw;
+    if (isRecord2(raw) && typeof raw.name === "string")
+      return raw.name;
+    const id = entry[`${key}Id`];
+    return typeof id === "string" ? id : null;
+  };
+  for (const key of ["team", "project"]) {
+    const expected = scope?.[key];
+    if (expected === undefined)
+      continue;
+    const foreign = items.find((entry) => {
+      const seen = ownership(entry, key);
+      return seen !== null && seen !== expected && seen !== (isRecord2(entry) ? entry[`${key}Id`] : undefined);
+    });
     if (foreign !== undefined) {
-      const seen = isRecord2(foreign) ? foreign.team : undefined;
-      throw new SyncError("linear.query-failed", `the page carries an issue from team ${JSON.stringify(seen)} although the binding scopes it to ${JSON.stringify(scope.team)}; the server-side filter did not take effect, so nothing was ingested`);
+      throw new SyncError("linear.query-failed", `the page carries an issue whose ${key} is ${JSON.stringify(ownership(foreign, key))} although the binding scopes it to ${JSON.stringify(expected)}; the server-side filter did not take effect, so nothing was ingested`);
     }
   }
   const mapped = [];
@@ -33540,7 +33557,7 @@ create table sync_cursor(
   select issues.registered_at as ts
   union all select o.discovered_at from occurrences o where o.issue_id = issues.id
   union all select t.occurred_at from issue_transitions t where t.issue_id = issues.id
-))`, ISSUE_ORDER_SQL, TERMINAL_DISPOSITIONS = "'resolved', 'waived', 'duplicate', 'superseded'", IDENTITY_COLUMNS = "kind, id, title, description, root_kind, relative_path, document_kind, lifecycle, revision, registered_at, updated_at", completeWitnessGapForTest, workflowWitnessGapForTest, RECOVER_COORDINATOR_OPERATION = "recoverExecutionCoordinator", REOPEN_WORKFLOW_OPERATION = "reopenExecutionWorkflow", PROBE_STATES, SyncError, DIRECTIONS, DEFAULT_PROBE_DEADLINE_MS = 5000, REDACTED = "[redacted]", LINEAR_PAGE_SIZE = 50, nextId = 1, LINEAR_LISTING_VERBS, IMPORTED_ROOT_CAUSE_KEY = "linear:external", IMPORTED_ACCEPTANCE_KEY = "linear:external", LINEAR_PROVIDER = "linear", IMPORT_DIRECTION = "import", IMPORT_ACTOR = "sync-import", KIND_VALUES, SEVERITY_VALUES2, COMMIT_REGISTRATION_OPERATION = "commitExecutionRegistration", REGISTRATION_SEMANTICS, MAX_DASHBOARD_SEARCH_LENGTH = 200, VIEW_QUERY_FIELDS, DISPOSITIONS3, KINDS2, SEVERITIES2, SYNC_PROBE_STATES, MIGRATION_MANIFEST_VERSION = 1, LEGACY_ISSUE_KIND = "review-obligation", StoreMigrationError, MIGRATION_VOCABULARY, LEGACY_REQUIRED_FIELDS, HISTORY_ONLY_ABSENT_FIELDS, WORKFLOW_NOTES_LEDGER_MAX_BYTES = 4194304, WORKFLOW_NOTES_LEDGER_READ_BYTES = 1048576, WORKFLOW_NOTES_COMPACTION_MARKER_KIND = "workflow-notes-compaction", EXECUTION_LEDGER_ERROR_CODES, ExecutionLedgerError, NOTE_KEYS, NOTE_KEY_ORDER, MARKER_KEYS, MARKER_KEY_ORDER, DROPPED_KEYS, DROPPED_KEY_ORDER, UNRECOGNIZED_LINE, EXECUTION_RECOVERY_PROTOCOL_VERSION = 3, ExecutionRecoveryError, EXECUTION_MIGRATION_VERSION2, CATALOG_MIGRATION_VERSION, PROVENANCE_ORIGIN_MIGRATION_VERSION, ROADMAP_MIGRATION_VERSION, EXECUTION_COVERAGE_MIGRATION_VERSION, MILESTONE_MIGRATION_VERSION, PROJECT_MOVES_MIGRATION_VERSION, SYNC_LEDGER_MIGRATION_VERSION, DSH_MIGRATION_VERSION, EXECUTION_COORDINATOR_ONLY_MIGRATION_VERSION, DSH_LEGACY_PROVENANCE_MIGRATION_VERSION, AUTHORITY_TABLES, REPLACEMENT_ORDER, DATABASE_HEADER_BYTES2 = 100, WAL_FILE_FORMAT_VERSION2 = 2, RESTORE_SCRATCH_NAME, RESTORE_SCRATCH_SIDECARS, REDACTED_KEYS;
+))`, ISSUE_ORDER_SQL, TERMINAL_DISPOSITIONS = "'resolved', 'waived', 'duplicate', 'superseded'", IDENTITY_COLUMNS = "kind, id, title, description, root_kind, relative_path, document_kind, lifecycle, revision, registered_at, updated_at", completeWitnessGapForTest, workflowWitnessGapForTest, RECOVER_COORDINATOR_OPERATION = "recoverExecutionCoordinator", REOPEN_WORKFLOW_OPERATION = "reopenExecutionWorkflow", PROBE_STATES, SyncError, DIRECTIONS, DEFAULT_PROBE_DEADLINE_MS = 5000, REDACTED = "[redacted]", LINEAR_PAGE_SIZE = 50, LINEAR_ITEM_FIELDS, nextId = 1, LINEAR_LISTING_VERBS, IMPORTED_ROOT_CAUSE_KEY = "linear:external", IMPORTED_ACCEPTANCE_KEY = "linear:external", LINEAR_PROVIDER = "linear", IMPORT_DIRECTION = "import", IMPORT_ACTOR = "sync-import", KIND_VALUES, SEVERITY_VALUES2, COMMIT_REGISTRATION_OPERATION = "commitExecutionRegistration", REGISTRATION_SEMANTICS, MAX_DASHBOARD_SEARCH_LENGTH = 200, VIEW_QUERY_FIELDS, DISPOSITIONS3, KINDS2, SEVERITIES2, SYNC_PROBE_STATES, MIGRATION_MANIFEST_VERSION = 1, LEGACY_ISSUE_KIND = "review-obligation", StoreMigrationError, MIGRATION_VOCABULARY, LEGACY_REQUIRED_FIELDS, HISTORY_ONLY_ABSENT_FIELDS, WORKFLOW_NOTES_LEDGER_MAX_BYTES = 4194304, WORKFLOW_NOTES_LEDGER_READ_BYTES = 1048576, WORKFLOW_NOTES_COMPACTION_MARKER_KIND = "workflow-notes-compaction", EXECUTION_LEDGER_ERROR_CODES, ExecutionLedgerError, NOTE_KEYS, NOTE_KEY_ORDER, MARKER_KEYS, MARKER_KEY_ORDER, DROPPED_KEYS, DROPPED_KEY_ORDER, UNRECOGNIZED_LINE, EXECUTION_RECOVERY_PROTOCOL_VERSION = 3, ExecutionRecoveryError, EXECUTION_MIGRATION_VERSION2, CATALOG_MIGRATION_VERSION, PROVENANCE_ORIGIN_MIGRATION_VERSION, ROADMAP_MIGRATION_VERSION, EXECUTION_COVERAGE_MIGRATION_VERSION, MILESTONE_MIGRATION_VERSION, PROJECT_MOVES_MIGRATION_VERSION, SYNC_LEDGER_MIGRATION_VERSION, DSH_MIGRATION_VERSION, EXECUTION_COORDINATOR_ONLY_MIGRATION_VERSION, DSH_LEGACY_PROVENANCE_MIGRATION_VERSION, AUTHORITY_TABLES, REPLACEMENT_ORDER, DATABASE_HEADER_BYTES2 = 100, WAL_FILE_FORMAT_VERSION2 = 2, RESTORE_SCRATCH_NAME, RESTORE_SCRATCH_SIDECARS, REDACTED_KEYS;
 var init_engine = __esm(() => {
   __defProp2 = Object.defineProperty;
   init_coordination_write = __esm2(() => {
@@ -38438,6 +38455,23 @@ var init_engine = __esm(() => {
     }
   };
   DIRECTIONS = { import: true, push: true };
+  LINEAR_ITEM_FIELDS = [
+    "id",
+    "uuid",
+    "title",
+    "description",
+    "priority",
+    "url",
+    "createdAt",
+    "updatedAt",
+    "status",
+    "statusType",
+    "labels",
+    "team",
+    "teamId",
+    "project",
+    "projectId"
+  ];
   LINEAR_LISTING_VERBS = ["list_issues", "search_issues"];
   init_issue();
   KIND_VALUES = ["bug", "risk", "improvement", "request", "decision", "review-obligation"];

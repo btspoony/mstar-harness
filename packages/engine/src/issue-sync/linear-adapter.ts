@@ -4,12 +4,11 @@
  * per page against the configured Linear entry; never a write call, never a
  * per-issue poll, never a credential in output.
  *
- * The exact tool name and payload shape are NOT known in this checkout: the
- * authenticated `tools/list` that would settle them needs a credential this
- * environment does not have, so the inventory stays pending. Until it is
- * recorded, this adapter maps the documented fixture envelope:
+ * The tool name and payload shape were settled against the live service with an
+ * authenticated `tools/list` + `tools/call` (serverInfo `linear` 1.0.2, 38
+ * tools). The listing verb is `list_issues`; its documented envelope is:
  *
- *   { issues: LinearItem[], nextCursor?: string | null, errors?: [{ message }] }
+ *   { issues: LinearItem[], hasNextPage?: boolean, cursor?: string | null, errors?: [{ message }] }
  *
  * and treats anything else as a page FAILURE rather than an empty page — an
  * unmappable payload must never look like "this project has no issues".
@@ -45,12 +44,11 @@ export type LinearListDeps = {
    * reaches several projects would file another project's issues under the one
    * local project.
    *
-   * UNVERIFIED: the argument names below are the candidate vocabulary, not the
-   * authenticated tool schema. A provider may ignore either one, and the page
-   * shape carries no project/team field to check afterwards, so this module
-   * cannot prove the filter took effect. Treat the scope as a narrowing attempt
-   * and the credential's own reach as the real boundary; the host that mounts
-   * the service is responsible for granting a credential that sees one project.
+   * Both argument names are verified against the service's schema (`team`:
+   * "Team name or ID"; `project`: "Project name, ID, identifier, or slug"), and
+   * the filter was confirmed to take effect: a bogus team id returns zero rows.
+   * The page is still checked per item below, because a filter that silently
+   * stops applying looks exactly like a filter with nothing to exclude.
    */
   scope?: { team?: string; project?: string };
   /**
@@ -64,6 +62,29 @@ export type LinearListDeps = {
 
 /** Contract §5: 50 per page, so a run is a predictable number of requests. */
 export const LINEAR_PAGE_SIZE = 50;
+
+/**
+ * Fields the mapper reads, requested explicitly. `team`/`teamId` and
+ * `project`/`projectId` are in the list because the scope guard compares them;
+ * requesting a subset would leave the guard unable to prove anything.
+ */
+export const LINEAR_ITEM_FIELDS: readonly string[] = [
+  "id",
+  "uuid",
+  "title",
+  "description",
+  "priority",
+  "url",
+  "createdAt",
+  "updatedAt",
+  "status",
+  "statusType",
+  "labels",
+  "team",
+  "teamId",
+  "project",
+  "projectId",
+];
 
 export type LinearListSide = {
   listIssues(cursor: string | null): Promise<ProviderPage>;
@@ -92,6 +113,10 @@ export function createLinearAdapter(deps: LinearListDeps): LinearListSide {
         tool,
         arguments: {
           limit: LINEAR_PAGE_SIZE,
+          // Ownership fields are requested EXPLICITLY: the per-item guard below
+          // can only check what the page actually carries, and the default
+          // projection is free to drop them.
+          fields: [...LINEAR_ITEM_FIELDS],
           ...(scope.team === undefined ? {} : { team: scope.team }),
           ...(scope.project === undefined ? {} : { project: scope.project }),
           ...(cursor === null ? {} : { cursor }),
@@ -163,14 +188,29 @@ export function mapPage(payload: unknown, scope?: { team?: string; project?: str
   // and the page itself carries each item's own team, so the claim is checkable.
   // A mismatched item is refused as a PAGE failure rather than dropped: silently
   // skipping it would import a partial mirror that looks complete.
-  if (scope?.team !== undefined) {
-    const foreign = items.find((entry) => isRecord(entry) && typeof entry.team === "string" && entry.team !== scope.team);
+  const ownership = (entry: unknown, key: "team" | "project"): string | null => {
+    if (!isRecord(entry)) return null;
+    const raw = entry[key];
+    if (typeof raw === "string") return raw;
+    // Either dimension may arrive as `{ name }`; an unreadable value is null so
+    // the caller can tell "absent" from "different".
+    if (isRecord(raw) && typeof raw.name === "string") return raw.name;
+    const id = entry[`${key}Id`];
+    return typeof id === "string" ? id : null;
+  };
+  for (const key of ["team", "project"] as const) {
+    const expected = scope?.[key];
+    if (expected === undefined) continue;
+    const foreign = items.find((entry) => {
+      const seen = ownership(entry, key);
+      // Absent is not "different": the server may omit a field even when asked.
+      return seen !== null && seen !== expected && seen !== (isRecord(entry) ? entry[`${key}Id`] : undefined);
+    });
     if (foreign !== undefined) {
-      const seen = isRecord(foreign) ? foreign.team : undefined;
       throw new SyncError(
         "linear.query-failed",
-        `the page carries an issue from team ${JSON.stringify(seen)} although the binding scopes it to ` +
-          `${JSON.stringify(scope.team)}; the server-side filter did not take effect, so nothing was ingested`,
+        `the page carries an issue whose ${key} is ${JSON.stringify(ownership(foreign, key))} although the binding scopes it to ` +
+          `${JSON.stringify(expected)}; the server-side filter did not take effect, so nothing was ingested`,
       );
     }
   }

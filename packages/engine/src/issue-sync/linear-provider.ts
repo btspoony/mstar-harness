@@ -18,11 +18,11 @@ import { linearCall, linearRpc, type LinearTransportOptions } from "./linear-tra
 export type { LinearTransportOptions };
 
 /**
- * Candidate listing verbs, in preference order. The authenticated `tools/list`
- * that would pin the real name is still pending (no credential in this
- * checkout); until it is recorded, a host that lists any of these is usable and
- * one that lists none is refused as `linear.list-unimplemented` rather than
- * guessed at.
+ * Candidate listing verbs, in preference order. The service advertises
+ * `list_issues`, which was verified with an authenticated `tools/list`; the
+ * second name stays as a fallback for a deployment fronting a different
+ * revision. A host that lists neither is refused as
+ * `linear.list-unimplemented` rather than guessed at.
  */
 export const LINEAR_LISTING_VERBS: readonly string[] = ["list_issues", "search_issues"];
 
