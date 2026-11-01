@@ -130,3 +130,38 @@ describe("token exchange and refresh", () => {
     );
   });
 });
+
+describe("endpoint transport", () => {
+  test("a plaintext token endpoint is refused before any code is sent", async () => {
+    const fetchImpl = (async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes("oauth-protected-resource")) return json({ authorization_servers: ["https://as.example"] });
+      if (url.includes("oauth-authorization-server")) {
+        return json({
+          issuer: "https://as.example",
+          authorization_endpoint: "https://as.example/authorize",
+          token_endpoint: "http://as.example/token",
+        });
+      }
+      return new Response(null, { status: 401 });
+    }) as unknown as typeof fetch;
+    await expect(discoverAuthorizationServer("https://mcp.example/mcp", fetchImpl)).rejects.toThrow(/non-TLS endpoint/);
+  });
+
+  test("a loopback endpoint stays acceptable, because it never leaves the machine", async () => {
+    const fetchImpl = (async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes("oauth-protected-resource")) return json({ authorization_servers: ["https://as.example"] });
+      if (url.includes("oauth-authorization-server")) {
+        return json({
+          issuer: "https://as.example",
+          authorization_endpoint: "http://127.0.0.1:8080/authorize",
+          token_endpoint: "http://127.0.0.1:8080/token",
+        });
+      }
+      return new Response(null, { status: 401 });
+    }) as unknown as typeof fetch;
+    const as = await discoverAuthorizationServer("https://mcp.example/mcp", fetchImpl);
+    expect(as.tokenEndpoint).toBe("http://127.0.0.1:8080/token");
+  });
+});

@@ -64,12 +64,30 @@ export async function discoverAuthorizationServer(
   if (authorizationEndpoint === null || tokenEndpoint === null) {
     throw new Error(`[linear.auth-unavailable] ${issuer} does not advertise an authorization and token endpoint`);
   }
-  return {
-    issuer,
-    authorizationEndpoint,
-    tokenEndpoint,
-    registrationEndpoint: typeof as.registration_endpoint === "string" ? as.registration_endpoint : null,
-  };
+  const registrationEndpoint = typeof as.registration_endpoint === "string" ? as.registration_endpoint : null;
+  // The code and its PKCE verifier travel to these endpoints. A plaintext one
+  // would hand both to anyone on the path, so metadata cannot downgrade the
+  // flow: loopback is the only transport allowed to be insecure, and only
+  // because it never leaves the machine.
+  for (const endpoint of [authorizationEndpoint, tokenEndpoint, registrationEndpoint]) {
+    if (endpoint !== null) requireSecureEndpoint(endpoint, issuer);
+  }
+  return { issuer, authorizationEndpoint, tokenEndpoint, registrationEndpoint };
+}
+
+/** Refuse an endpoint that would carry the authorization material in the clear. */
+function requireSecureEndpoint(endpoint: string, issuer: string): void {
+  let parsed: URL;
+  try {
+    parsed = new URL(endpoint);
+  } catch {
+    throw new Error(`[linear.auth-unavailable] ${issuer} advertises an endpoint that is not a URL: ${endpoint}`);
+  }
+  const loopback = parsed.hostname === "127.0.0.1" || parsed.hostname === "::1" || parsed.hostname === "localhost";
+  if (parsed.protocol === "https:" || (parsed.protocol === "http:" && loopback)) return;
+  throw new Error(
+    `[linear.auth-unavailable] ${issuer} advertises a non-TLS endpoint (${endpoint}); refusing to send an authorization code there`,
+  );
 }
 
 /** Dynamic client registration, so nothing has to be configured by hand. */
