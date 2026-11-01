@@ -494,6 +494,7 @@ const AUTHORITY_TABLES: readonly AuthorityTable[] = [
       "external_id",
       "item_state",
       "last_remote_updated_at",
+      "pending_target",
       "last_error",
       "last_skip_reason",
       "revision",

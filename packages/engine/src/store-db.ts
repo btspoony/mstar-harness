@@ -1714,6 +1714,23 @@ create table sync_cursor(
   primary key (binding_id, direction)
 );
 `;
+/**
+ * Migration 16 — split the sync watermark.
+ *
+ * One column was carrying two meanings: the revision whose fields were actually
+ * COPIED (what makes an import incremental) and the revision a re-plan cycle is
+ * TARGETING (what makes a replayed old page stale). Both readings are needed and
+ * they disagree exactly when a cycle is open: with one column, either the target
+ * is recorded early — and a crash leaves a row claiming content it never copied —
+ * or it is recorded late and a replayed page walks the row backwards.
+ *
+ * `last_remote_updated_at` keeps its meaning (copied). `pending_target` holds the
+ * open cycle's target and is cleared when the cycle closes.
+ */
+export const MIGRATION_16_SQL = `
+alter table issue_sync_state add column pending_target text;
+`;
+
 
 /** Ordered immutable migrations. Never mutate an applied entry — append only. */
 export const MIGRATIONS: readonly Migration[] = [
@@ -1732,6 +1749,7 @@ export const MIGRATIONS: readonly Migration[] = [
   { version: 13, name: "issue-project-moves", sql: MIGRATION_13_SQL },
   { version: 14, name: "compass-plan-membership", sql: MIGRATION_14_SQL },
   { version: 15, name: "sync-ledger", sql: MIGRATION_15_SQL },
+  { version: 16, name: "sync-pending-target", sql: MIGRATION_16_SQL },
 ];
 const DSH_HOST_STATE_MIGRATION = MIGRATIONS.find((migration) => migration.name === "dsh-host-ledgers");
 

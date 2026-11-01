@@ -296,9 +296,13 @@ describe("replanItem (applied -> pending)", () => {
       operationId: "op-replan-1",
     });
     expect(replanned.itemState).toBe("pending");
-    // This is the CYCLE TARGET: the stale guard compares a replayed page
-    // against it, so a page older than the cycle it belongs to mirrors nothing.
-    expect(replanned.lastRemoteUpdatedAt).toBe("2026-11-02T00:00:00Z");
+    // The CYCLE TARGET lives in its own column: the stale guard compares a
+    // replayed page against it, while the copied watermark stays untouched until
+    // an apply actually writes those fields.
+    expect(replanned.pendingTarget).toBe("2026-11-02T00:00:00Z");
+    // The copied watermark is still the revision that was actually applied;
+    // opening a cycle must not look like having captured its content.
+    expect(replanned.lastRemoteUpdatedAt).toBe(PLAN.remoteUpdatedAt);
     expect(markApplied(db, { ...KEY, operationId: "op-replan-applied" }).itemState).toBe("applied");
     close();
   });
@@ -310,7 +314,7 @@ describe("replanItem (applied -> pending)", () => {
     // Omitted externalId: the recorded identity survives the re-plan.
     const replanned = replanItem(db, { ...KEY, remoteUpdatedAt: "2026-11-05T00:00:00Z", operationId: "op-retain-replan" });
     expect(replanned.externalId).toBe("EXT-1");
-    expect(replanned.lastRemoteUpdatedAt).toBe("2026-11-05T00:00:00Z");
+    expect(replanned.pendingTarget).toBe("2026-11-05T00:00:00Z");
     close();
   });
 

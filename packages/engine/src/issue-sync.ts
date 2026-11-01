@@ -56,6 +56,8 @@ export type SyncItem = {
   externalId: string | null;
   itemState: SyncItemState;
   lastRemoteUpdatedAt: string | null;
+  /** The open cycle's target revision, or null when no cycle is open. */
+  pendingTarget: string | null;
   lastError: string | null;
   lastSkipReason: string | null;
   revision: number;
@@ -154,6 +156,8 @@ type SyncRow = {
   external_id: string | null;
   item_state: string;
   last_remote_updated_at: string | null;
+  /** The open cycle's target revision; null when no cycle is open. */
+  pending_target: string | null;
   last_error: string | null;
   last_skip_reason: string | null;
   revision: number;
@@ -174,6 +178,7 @@ function toItem(row: SyncRow): SyncItem {
     externalId: row.external_id,
     itemState: row.item_state as SyncItemState,
     lastRemoteUpdatedAt: row.last_remote_updated_at,
+    pendingTarget: row.pending_target,
     lastError: row.last_error,
     lastSkipReason: row.last_skip_reason,
     revision: row.revision,
@@ -207,18 +212,20 @@ function casUpdate(
     item_state: string;
     external_id: string | null;
     last_remote_updated_at: string | null;
+    pending_target: string | null;
     last_error: string | null;
     last_skip_reason: string | null;
   },
   now: string,
 ): void {
   const result = db.prepare(
-    "update issue_sync_state set item_state = ?, external_id = ?, last_remote_updated_at = ?, last_error = ?, last_skip_reason = ?," +
+    "update issue_sync_state set item_state = ?, external_id = ?, last_remote_updated_at = ?, pending_target = ?, last_error = ?, last_skip_reason = ?," +
       " revision = revision + 1, updated_at = ? where binding_id = ? and direction = ? and local_id = ? and revision = ?",
   ).run(
     patch.item_state,
     patch.external_id,
     patch.last_remote_updated_at,
+    patch.pending_target,
     patch.last_error,
     patch.last_skip_reason,
     now,
@@ -268,14 +275,20 @@ export function planItem(db: StoreDb, input: PlanItemInput): SyncItem {
     const row = selectRow(db, bindingId, direction, localId);
     if (row === undefined) {
       db.prepare(
-        "insert into issue_sync_state(binding_id, direction, local_id, external_id, item_state, last_remote_updated_at, last_error, last_skip_reason, revision, updated_at)" +
-          " values (?, ?, ?, ?, 'pending', ?, null, null, 1, ?)",
+        "insert into issue_sync_state(binding_id, direction, local_id, external_id, item_state, last_remote_updated_at, pending_target, last_error, last_skip_reason, revision, updated_at)" +
+          // A brand-new row has copied nothing, so `last_remote_updated_at`
+          // starts null and the revision it was opened for sits in the target.
+          " values (?, ?, ?, ?, 'pending', null, ?, null, null, 1, ?)",
       ).run(bindingId, direction, localId, externalId, remoteUpdatedAt, now);
     } else if (row.item_state === "failed" || row.item_state === "unbound") {
       casUpdate(db, { bindingId, direction, localId }, row.revision, {
         item_state: "pending",
         external_id: externalId ?? row.external_id,
-        last_remote_updated_at: remoteUpdatedAt ?? row.last_remote_updated_at,
+        // Opening a cycle records its TARGET only. The copied watermark stays
+        // where it is until an apply actually writes those fields, so a crash
+        // cannot leave a row claiming content it never took.
+        last_remote_updated_at: row.last_remote_updated_at,
+        pending_target: remoteUpdatedAt ?? row.pending_target,
         last_error: null,
         last_skip_reason: null,
       }, now);
@@ -360,11 +373,11 @@ export function replanItem(db: StoreDb, input: PlanItemInput): SyncItem {
     casUpdate(db, { bindingId, direction, localId }, row.revision, {
       item_state: "pending",
       external_id: externalId ?? row.external_id,
-      // The CYCLE TARGET, not a claim that the fields were copied: the stale
-      // guard compares a replayed page against it, and the applied commit is
-      // what makes the row's content match. Distinguishing the two would need a
-      // second column; see the follow-up issue on split watermarks.
-      last_remote_updated_at: remoteUpdatedAt ?? row.last_remote_updated_at,
+      // The cycle TARGET, in its own column: the stale guard compares a
+      // replayed page against it, while `last_remote_updated_at` keeps meaning
+      // "what was actually copied".
+      last_remote_updated_at: row.last_remote_updated_at,
+      pending_target: remoteUpdatedAt ?? row.pending_target,
       last_error: null,
       last_skip_reason: null,
     }, now);
@@ -412,14 +425,17 @@ function markItem(
     if (row.item_state !== "pending" && !(target === "skipped" && row.item_state === "failed")) {
       refuseTransition(row.item_state, `markItem -> ${target}`);
     }
+    // What this apply is closing: the open cycle's target if one is open, else
+    // the revision the caller says it just wrote.
+    const closingTarget = row.pending_target ?? input.remoteUpdatedAt ?? null;
     casUpdate(db, { bindingId, direction, localId }, row.revision, {
       item_state: target,
       external_id: row.external_id,
-      // The watermark advances ONLY here, in the same commit as the state
-      // change it describes. Recording it earlier (at plan time) let a crash
-      // leave a newer timestamp on a row whose fields were never copied, and
-      // every later run then read that revision as already applied.
-      last_remote_updated_at: input.remoteUpdatedAt ?? row.last_remote_updated_at,
+      // Applying CLOSES the cycle: the target it was opened for becomes the
+      // copied watermark, in the same commit as the fields. `remoteUpdatedAt` is
+      // the caller's assertion that those fields were just written.
+      last_remote_updated_at: closingTarget ?? row.last_remote_updated_at,
+      pending_target: null,
       last_error: target === "failed" ? (text ?? null) : null,
       last_skip_reason: target === "skipped" ? (text ?? null) : null,
     }, now);

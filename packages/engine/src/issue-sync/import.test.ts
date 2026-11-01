@@ -260,9 +260,13 @@ describe("local identity and local-only gates", () => {
     });
     const row = db.prepare("select title from issues where id = ?").get(localId) as { title: string };
     expect(row.title).toBe("Remote title");
+    // The cycle stays OPEN: the revision it targets has not been copied, and
+    // closing it here would record that target as copied — the exact bug the
+    // split watermark exists to prevent.
     expect(readItem(db, { bindingId: BINDING, direction: "import", localId })).toMatchObject({
-      itemState: "applied",
-      lastRemoteUpdatedAt: "2026-12-01T00:00:00.000Z",
+      itemState: "pending",
+      lastRemoteUpdatedAt: "2026-10-31T00:00:00.000Z",
+      pendingTarget: "2026-12-01T00:00:00.000Z",
     });
     close();
   });
@@ -288,6 +292,35 @@ describe("local identity and local-only gates", () => {
       );
     expect(attempt).toThrow(/issue\.scope-refused/);
     expect(db.prepare("select revision from issues where external_id = 'LIN-1'").get()).toEqual(before);
+    close();
+  });
+
+  test("an interrupted re-plan still mirrors the target revision exactly once", async () => {
+    // The sequence that one shared watermark could not survive: a cycle is opened
+    // for T2, a stale T1 page replays, the process dies before the copy, and T2
+    // finally arrives. T1 must not walk the row backwards, and T2 must still be
+    // copied — not skipped because its timestamp was already "recorded".
+    const { db, close } = await store("split-watermark");
+    importPage(db, BINDING, [item({ title: "T1 title", updatedAt: "2026-10-31T00:00:00.000Z" })]);
+    const localId = (db.prepare("select id from issues where external_id = 'LIN-1'").get() as { id: string }).id;
+    const { replanItem } = await import("../issue-sync.js");
+    replanItem(db, {
+      bindingId: BINDING, direction: "import", localId,
+      externalId: "LIN-1", remoteUpdatedAt: "2026-11-05T00:00:00.000Z", operationId: "op-split-replan",
+    });
+    // A stale page replayed while the cycle is open mirrors nothing.
+    const replayed = importPage(db, BINDING, [item({ title: "T1 again", updatedAt: "2026-10-31T00:00:00.000Z" })]);
+    expect(replayed).toMatchObject({ updated: 0, skipped: 1 });
+    expect((db.prepare("select title from issues where id = ?").get(localId) as { title: string }).title).toBe("T1 title");
+    // The revision the cycle was opened for still arrives and is copied once.
+    const applied = importPage(db, BINDING, [item({ title: "T2 title", updatedAt: "2026-11-05T00:00:00.000Z" })]);
+    expect(applied).toMatchObject({ updated: 1, skipped: 0 });
+    expect((db.prepare("select title from issues where id = ?").get(localId) as { title: string }).title).toBe("T2 title");
+    expect(readItem(db, { bindingId: BINDING, direction: "import", localId })).toMatchObject({
+      itemState: "applied",
+      lastRemoteUpdatedAt: "2026-11-05T00:00:00.000Z",
+      pendingTarget: null,
+    });
     close();
   });
 
