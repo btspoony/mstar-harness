@@ -33646,7 +33646,7 @@ alter table issue_sync_state add column pending_target text;
 -- A cycle that was open at upgrade time recorded its TARGET in the copied
 -- column, because there was only one. Left alone, that row would claim it had
 -- copied content it never took, and the stale-page guard would compare against
--- that fake watermark and skip every page older than a revision nothing holds —
+-- that fake watermark and skip every page older than a revision nothing holds -
 -- the exact bug this split removes, surviving the upgrade. Move it across.
 update issue_sync_state
    set pending_target = last_remote_updated_at,

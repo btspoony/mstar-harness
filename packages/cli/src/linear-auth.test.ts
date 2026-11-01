@@ -131,9 +131,7 @@ describe("token exchange and refresh", () => {
 
   test("a token response without an access_token is refused", async () => {
     const fetchImpl = (async () => json({ refresh_token: fake("refresh") })) as unknown as typeof fetch;
-    await expect(exchangeCode(AS, { clientId: "cid", redirectUri: "http://localhost:1/callback" }, "c", "v", fetchImpl)).rejects.toThrow(
-      /no access_token/,
-    );
+    await expect(exchangeCode(AS, { clientId: "cid", redirectUri: "http://localhost:1/callback" }, "c", "v", fetchImpl)).rejects.toThrow(/no access token/);
   });
 });
 

@@ -100,7 +100,9 @@ function requireSecureEndpoint(endpoint: string, issuer: string): void {
   } catch {
     throw new Error(`[linear.auth-unavailable] ${issuer} advertises an endpoint that is not a URL: ${endpoint}`);
   }
-  const loopback = parsed.hostname === "127.0.0.1" || parsed.hostname === "::1" || parsed.hostname === "localhost";
+  // URL.hostname keeps the brackets on an IPv6 literal, so both forms are listed.
+  const loopback =
+    parsed.hostname === "127.0.0.1" || parsed.hostname === "::1" || parsed.hostname === "[::1]" || parsed.hostname === "localhost";
   if (parsed.protocol === "https:" || (parsed.protocol === "http:" && loopback)) return;
   throw new Error(
     `[linear.auth-unavailable] ${issuer} advertises a non-TLS endpoint (${endpoint}); refusing to send an authorization code there`,
@@ -200,7 +202,7 @@ export async function beginAuthorization(
   await new Promise<void>((ready) => server.listen(0, "127.0.0.1", ready));
   const address = server.address();
   const port = typeof address === "object" && address !== null ? address.port : 0;
-  const redirectUri = `http://localhost:${port}/callback`;
+  const redirectUri = `http://127.0.0.1:${port}/callback`;
   // The registration is bound to THIS redirect URI, so it happens after the
   // listener exists and before the URL is built.
   const client = await register(redirectUri).catch((error: unknown) => {
