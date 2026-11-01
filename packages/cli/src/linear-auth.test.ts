@@ -1,6 +1,12 @@
 import { describe, expect, test } from "bun:test";
 import { beginAuthorization, discoverAuthorizationServer, exchangeCode, refreshToken, registerClient } from "./linear-auth.js";
 
+/**
+ * Assembled at run time: a literal shaped like issued credential material is
+ * reported by secret scanners, and every value here is fake.
+ */
+const fake = (name: string): string => ["not", "a", "real", name].join("-");
+
 const AS = {
   issuer: "https://as.example",
   authorizationEndpoint: "https://as.example/authorize",
@@ -106,11 +112,11 @@ describe("token exchange and refresh", () => {
     let body: URLSearchParams | null = null;
     const fetchImpl = (async (_input: RequestInfo | URL, init?: RequestInit) => {
       body = new URLSearchParams(String(init?.body));
-      return json({ access_token: "a", refresh_token: "r", expires_in: 3600, scope: "read" });
+      return json({ access_token: fake("access"), refresh_token: fake("refresh"), expires_in: 3600, scope: "read" });
     }) as unknown as typeof fetch;
     const tokens = await exchangeCode(AS, { clientId: "cid", redirectUri: "http://localhost:1/callback" }, "code-1", "verifier-1", fetchImpl);
-    expect(tokens.accessToken).toBe("a");
-    expect(tokens.refreshToken).toBe("r");
+    expect(tokens.accessToken).toBe(fake("access"));
+    expect(tokens.refreshToken).toBe(fake("refresh"));
     expect(tokens.expiresAt).not.toBeNull();
     expect(body!.get("code_verifier")).toBe("verifier-1");
     expect(body!.get("redirect_uri")).toBe("http://localhost:1/callback");
@@ -118,13 +124,13 @@ describe("token exchange and refresh", () => {
 
   test("a rejected refresh names re-authorization, not a bare 401", async () => {
     const fetchImpl = (async () => json({}, 400)) as unknown as typeof fetch;
-    await expect(refreshToken(AS, { clientId: "cid", redirectUri: "http://localhost:1/callback" }, "r", fetchImpl)).rejects.toThrow(
+    await expect(refreshToken(AS, { clientId: "cid", redirectUri: "http://localhost:1/callback" }, fake("refresh"), fetchImpl)).rejects.toThrow(
       /linear\.reauth-required/,
     );
   });
 
   test("a token response without an access_token is refused", async () => {
-    const fetchImpl = (async () => json({ refresh_token: "r" })) as unknown as typeof fetch;
+    const fetchImpl = (async () => json({ refresh_token: fake("refresh") })) as unknown as typeof fetch;
     await expect(exchangeCode(AS, { clientId: "cid", redirectUri: "http://localhost:1/callback" }, "c", "v", fetchImpl)).rejects.toThrow(
       /no access_token/,
     );
