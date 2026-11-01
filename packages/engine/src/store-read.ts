@@ -36,8 +36,9 @@ import { ProjectionError, refreshProjections, type ProjectionFreshness, type Sou
 import { parseRoadmapContent, type RoadmapContent } from "./roadmap-content.js";
 import { readRoadmapAuthorityOn, type RoadmapRead } from "./roadmap-store.js";
 import { SddScriptError } from "./sdd.js";
-import { dirname, resolve } from "node:path";
-import { readRepoLinearBinding, resolveRepoRoot, type RepoLinearBinding } from "./mstarc.js";
+import { existsSync } from "node:fs";
+import { dirname, join, resolve } from "node:path";
+import { MSTARC_FILE, readRepoLinearBinding, resolveRepoRoot, type RepoLinearBinding } from "./mstarc.js";
 import type { ProbeState } from "./issue-sync/provider.js";
 import { openStore, StoreError, type StoreContext, type StoreDb, type StoreHandle } from "./store-db.js";
 import { ExecutionError } from "./execution-store.js";
@@ -694,14 +695,30 @@ export function queryIssueFlow(projectId?: string): StoreReadQuery<IssueFlow> {
  * never guessed: with no host-supplied probe result it is honestly
  * `not-probed`.
  */
+/**
+ * The parent directory counts as the declaring repository ONLY when it actually
+ * holds a `.mstarc`. Used when the harness sits outside any checkout: `<repo>/
+ * .mstar` is the normal layout, but `harness_dir = /var/mstar/state` has no
+ * declaring repository here, and its parent must not be substituted — that is
+ * how another checkout's settings get read.
+ */
+function parentThatDeclares(harnessDir: string): string | null {
+  const parent = dirname(resolve(harnessDir));
+  return existsSync(join(parent, MSTARC_FILE)) ? parent : null;
+}
+
 export function querySyncBinding(harnessDir: string, filters: DashboardFilters): StoreReadQuery<SyncBindingDTO> {
   // The repo's own `.mstarc` is the authority — a parent directory's
   // configuration never becomes this repo's connection identity (F4).
   // The reader takes the repository root; this query is given the harness
-  // directory. Resolving it here (rather than passing the harness through) is
-  // what keeps the dashboard looking for `<repo>/.mstarc` instead of
-  // `<repo>/.mstar/.mstarc`, which reported every valid binding as absent.
-  const repo: RepoLinearBinding = readRepoLinearBinding(resolveRepoRoot(harnessDir) ?? dirname(resolve(harnessDir)));
+  // directory. When the path is inside a checkout the root is the answer; when
+  // it is not, there is no repository to name and the harness directory itself
+  // is used — NOT its parent, which for `harness_dir = /var/mstar/state` would
+  // silently read `/var/mstar` and, if that happened to hold a `.mstarc`,
+  // another repository's settings.
+  const repo: RepoLinearBinding = readRepoLinearBinding(
+    resolveRepoRoot(harnessDir) ?? parentThatDeclares(harnessDir) ?? resolve(harnessDir),
+  );
   const binding =
     repo.kind === "bound"
       ? { enabled: repo.binding.enabled, mode: repo.binding.mode, workspace: repo.binding.workspace, team: repo.binding.team }

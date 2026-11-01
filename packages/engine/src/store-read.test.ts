@@ -66,6 +66,9 @@ async function workspace(name: string): Promise<Fixture> {
   const dir = mkdtempSync(join(ROOT, name));
   const harness = join(dir, ".mstar");
   mkdirSync(harness, { recursive: true });
+  // The fixture is a checkout: the sync-binding view resolves the repository
+  // root by walking to `.git`, and without one there is no root to name.
+  mkdirSync(join(dir, ".git"), { recursive: true });
   const context: StoreContext = { harnessDir: harness };
   const handle = await initializeStore(context);
   handle.close();

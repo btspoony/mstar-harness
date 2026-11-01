@@ -576,17 +576,18 @@ import { createHash as createHash16, randomUUID as randomUUID6 } from "node:cryp
 import { createHash as createHash17 } from "node:crypto";
 import { readFileSync as readFileSync23 } from "node:fs";
 import { join as join29 } from "node:path";
-import { dirname as dirname17, resolve as resolve21 } from "node:path";
+import { existsSync as existsSync21 } from "node:fs";
+import { dirname as dirname17, join as join30, resolve as resolve21 } from "node:path";
 import { createHash as createHash18 } from "node:crypto";
-import { existsSync as existsSync21, readFileSync as readFileSync24, statSync as statSync10 } from "node:fs";
-import { dirname as dirname19, isAbsolute as isAbsolute16, join as join30 } from "node:path";
+import { existsSync as existsSync22, readFileSync as readFileSync24, statSync as statSync10 } from "node:fs";
+import { dirname as dirname19, isAbsolute as isAbsolute16, join as join31 } from "node:path";
 import { createHash as createHash19 } from "node:crypto";
 import { createHash as createHash20 } from "node:crypto";
 import { relative as relative10, sep as sep12 } from "node:path";
 import { createHash as createHash21 } from "node:crypto";
 import { createHash as createHash22 } from "node:crypto";
-import { existsSync as existsSync22, lstatSync as lstatSync12, readFileSync as readFileSync25, readdirSync as readdirSync17 } from "node:fs";
-import { join as join31, resolve as resolve22 } from "node:path";
+import { existsSync as existsSync23, lstatSync as lstatSync12, readFileSync as readFileSync25, readdirSync as readdirSync17 } from "node:fs";
+import { join as join32, resolve as resolve22 } from "node:path";
 import { randomUUID as randomUUID7 } from "node:crypto";
 import {
   closeSync as closeSync5,
@@ -601,13 +602,13 @@ import {
   unlinkSync as unlinkSync5,
   writeSync
 } from "node:fs";
-import { basename as basename16, dirname as dirname20, join as join32 } from "node:path";
+import { basename as basename16, dirname as dirname20, join as join33 } from "node:path";
 import { createHash as createHash23, randomUUID as randomUUID8 } from "node:crypto";
 import {
   closeSync as closeSync6,
   copyFileSync as copyFileSync2,
   createReadStream,
-  existsSync as existsSync23,
+  existsSync as existsSync24,
   mkdtempSync,
   openSync as openSync6,
   readFileSync as readFileSync27,
@@ -618,7 +619,7 @@ import {
 } from "node:fs";
 import { createRequire as createRequire3 } from "node:module";
 import { tmpdir } from "node:os";
-import { dirname as dirname21, join as join33, relative as relative11, resolve as resolve23, sep as sep13 } from "node:path";
+import { dirname as dirname21, join as join34, relative as relative11, resolve as resolve23, sep as sep13 } from "node:path";
 function __exportSetter2(name, newValue) {
   this[name] = __returnValue2.bind(null, newValue);
 }
@@ -26677,8 +26678,12 @@ function queryIssueFlow(projectId) {
     run: (handle) => readIssueFlow(handle.db, scoped ?? undefined)
   };
 }
+function parentThatDeclares(harnessDir) {
+  const parent = dirname17(resolve21(harnessDir));
+  return existsSync21(join30(parent, MSTARC_FILE)) ? parent : null;
+}
 function querySyncBinding(harnessDir, filters) {
-  const repo = readRepoLinearBinding(resolveRepoRoot(harnessDir) ?? dirname17(resolve21(harnessDir)));
+  const repo = readRepoLinearBinding(resolveRepoRoot(harnessDir) ?? parentThatDeclares(harnessDir) ?? resolve21(harnessDir));
   const binding2 = repo.kind === "bound" ? { enabled: repo.binding.enabled, mode: repo.binding.mode, workspace: repo.binding.workspace, team: repo.binding.team } : null;
   const bindingError = repo.kind === "bound" ? null : repo.message;
   if (filters.probeState !== undefined && (filters.probeCause ?? "").trim() === "") {
@@ -28526,11 +28531,11 @@ async function readPhaseEvidence(context, workflowId, operation) {
   }
   const harnessRoot = controlHarnessRoot2(context);
   const canonical2 = canonicalTarget(operation.compassPath);
-  const expected = canonicalTarget(join30(harnessRoot, registered));
+  const expected = canonicalTarget(join31(harnessRoot, registered));
   if (canonical2 !== expected) {
     throw new CoordinationError("coordination.scope-mismatch", "Phase transition must use the workflow's registered compass; inspect the workflow with mstar status validate.", { workflow_id: workflowId, expected, actual: canonical2 });
   }
-  if (!existsSync21(canonical2)) {
+  if (!existsSync22(canonical2)) {
     throw invalidWorkflowTransition("The registered compass does not exist; repair it, then retry through mstar workflow phase.", {
       workflow_id: workflowId,
       compass_path: canonical2
@@ -28578,7 +28583,7 @@ async function readIntegrationWorktreeEvidence(context, workflowId, operation) {
   if (path2 === mainRoot || path2 === canonicalTarget(control)) {
     throw invalidWorkflowTransition("The integration checkout is the control checkout; provide a dedicated worktree, then retry through mstar workflow integration-worktree.", { workflow_id: workflowId, path: path2, expected: `a checkout distinct from ${mainRoot}` });
   }
-  if (!existsSync21(path2) || !statSync10(path2).isDirectory()) {
+  if (!existsSync22(path2) || !statSync10(path2).isDirectory()) {
     throw invalidWorkflowTransition("The integration checkout does not exist; provide an existing checkout path, then retry through mstar workflow integration-worktree.", { workflow_id: workflowId, path: path2 });
   }
   const owner = readMainWorktree(path2);
@@ -28614,7 +28619,7 @@ async function readCompassRefEvidence(context, workflowId, operation) {
   }
   const harnessRoot = controlHarnessRoot2(context);
   const relative102 = normalizeIterationCompassRef(operation.compassPath, harnessRoot, (detail) => invalidWorkflowInput(detail));
-  const path2 = canonicalizeNearestExisting(isAbsolute16(operation.compassPath) ? operation.compassPath : join30(harnessRoot, operation.compassPath));
+  const path2 = canonicalizeNearestExisting(isAbsolute16(operation.compassPath) ? operation.compassPath : join31(harnessRoot, operation.compassPath));
   const text6 = readFileSync24(path2, "utf8");
   if (text6.trim() === "") {
     throw invalidWorkflowTransition("The named compass document is empty; name the reviewed delivery compass, then retry through mstar workflow compass-ref.", {
@@ -28662,13 +28667,13 @@ async function readWorkflowEvidence(context, resolved) {
 }
 function revalidateWorkflowEvidence(evidence) {
   const compassRef = evidence.compassRef;
-  if (compassRef !== undefined && (!existsSync21(compassRef.path) || !statSync10(compassRef.path).isFile())) {
+  if (compassRef !== undefined && (!existsSync22(compassRef.path) || !statSync10(compassRef.path).isFile())) {
     throw invalidWorkflowTransition(`the named compass ${compassRef.path} disappeared after it was validated; restore the reviewed delivery compass and retry the workflow transition`, { path: compassRef.path });
   }
   const checkout = evidence.worktree ?? evidence.checkout;
   if (checkout !== undefined && checkout.branch !== null) {
     const { path: path2, branch } = checkout;
-    if (!existsSync21(path2) || !statSync10(path2).isDirectory()) {
+    if (!existsSync22(path2) || !statSync10(path2).isDirectory()) {
       throw new CoordinationError("coordination.integration-unresolved", `the integration checkout ${path2} disappeared after it was validated; restore the checkout at the registered path and retry the workflow transition`, { path: path2 });
     }
     const alignment = assertBranchAlignment(path2, branch);
@@ -30932,7 +30937,7 @@ function registerSources(context) {
   for (const entry of entries.sort((a, b) => a.name.localeCompare(b.name))) {
     if (entry.isSymbolicLink() || !entry.isDirectory())
       continue;
-    const registerPath = join31(projectsRoot, entry.name, "residuals.json");
+    const registerPath = join32(projectsRoot, entry.name, "residuals.json");
     let info;
     try {
       info = lstatSync12(registerPath);
@@ -31186,7 +31191,7 @@ function readCounter(db) {
   return row.next_value;
 }
 async function ensureStagedStore(context) {
-  if (!existsSync22(storeDbPath(context))) {
+  if (!existsSync23(storeDbPath(context))) {
     const created = await initializeStore(context);
     created.close();
   }
@@ -31479,7 +31484,7 @@ function assertWorkflowId(workflowId, what = "workflow id") {
 function workflowNotesLedgerPath(context, workflowId) {
   assertWorkflowId(workflowId);
   const root = controlRootOf(context);
-  return join32(resolveWorkflowDir(root, { harnessDir: root }), workflowId, NOTES_LEDGER_FILE);
+  return join33(resolveWorkflowDir(root, { harnessDir: root }), workflowId, NOTES_LEDGER_FILE);
 }
 function parseWorkflowNote(value) {
   if (!isPlainObject(value))
@@ -31678,7 +31683,7 @@ function markerReserveBytes(totalBytes, workflowId) {
   return reserve + 5 * String(totalBytes).length + 2;
 }
 function writeLedgerTempFile(path2, content3) {
-  const temp = join32(dirname20(path2), `${basename16(path2)}.compaction-${randomUUID7()}.tmp`);
+  const temp = join33(dirname20(path2), `${basename16(path2)}.compaction-${randomUUID7()}.tmp`);
   try {
     const fd = openWithoutFollowing(temp, fsConstants.O_WRONLY | fsConstants.O_CREAT | fsConstants.O_EXCL, 420);
     try {
@@ -32151,15 +32156,15 @@ function walStoreShapeOf(context) {
   }
   if (header[18] !== WAL_FILE_FORMAT_VERSION2 || header[19] !== WAL_FILE_FORMAT_VERSION2)
     return null;
-  return { header: header.toString("hex"), wal: existsSync23(`${dbPath}-wal`) };
+  return { header: header.toString("hex"), wal: existsSync24(`${dbPath}-wal`) };
 }
 async function openWalWithoutJournalReadSnapshot(context) {
   const walWithoutJournal = walStoreShapeOf(context);
   if (walWithoutJournal === null || walWithoutJournal.wal)
     return null;
-  const scratch = mkdtempSync(join33(tmpdir(), "mstar-store-read-"));
+  const scratch = mkdtempSync(join34(tmpdir(), "mstar-store-read-"));
   try {
-    const image = join33(scratch, "store.db");
+    const image = join34(scratch, "store.db");
     copyFileSync2(storeDbPath(context), image);
     writeFileSync5(`${image}-wal`, "");
     const handle = await openStore({ harnessDir: scratch }, "read");
@@ -32383,7 +32388,7 @@ function recoveryPointPath(context, root, backupPath) {
   if (point3 === liveStore || point3 === `${liveStore}-wal` || point3 === `${liveStore}-shm`) {
     throw new StoreActivationError("store.activation-stale", `the recovery point ${backupPath} names the live store database itself. §8: copying \`store.db\` bytes is not a backup, ` + `so the live database and its WAL/SHM sidecars are never their own recovery point.`);
   }
-  if (!existsSync23(point3)) {
+  if (!existsSync24(point3)) {
     throw new StoreActivationError("store.activation-stale", `no recovery point exists at ${point3}. Select an existing recovery point or create one with store backup --out <path> inside ${root}; run store execution restore-preview against that point before retrying restore.`);
   }
   return point3;
@@ -32569,7 +32574,7 @@ function requiredRebind() {
   return "Every reference that was valid before the replacement is invalid: the restore advances the store-wide epoch above both the live store and the recovery point, so a pre-restore handle refuses `store.stale-epoch`, the restored session rows are below the new epoch and authorize nothing, and any restored held lease keeps its old `owner_epoch`. Recover each workflow's coordinator with `recoverExecutionCoordinator` (naming the recorded prior holder and attesting it stopped), rebind its plans with `bindExecutionSession`, and reconcile any restored lease explicitly before reuse. A database image does not roll back the append-only logs and documents beside the store: notes, agent-flow history and the launch journal keep every byte they had, so their history is never resurrected or truncated by a restore.";
 }
 function recoveryReceiptPathOf(root, attemptId) {
-  return join33(root, "archived", "store-migration", "recovery", `restore-${Date.now().toString().padStart(16, "0")}-${attemptId}.json`);
+  return join34(root, "archived", "store-migration", "recovery", `restore-${Date.now().toString().padStart(16, "0")}-${attemptId}.json`);
 }
 function reclaimAbandonedRestoreScratch(root, currentAttemptId, committed) {
   if (committed === null)
@@ -32587,7 +32592,7 @@ function reclaimAbandonedRestoreScratch(root, currentAttemptId, committed) {
     if (attemptId === currentAttemptId || !committed.has(attemptId))
       continue;
     try {
-      const imagePath = join33(root, `.store-restore-${attemptId}.db`);
+      const imagePath = join34(root, `.store-restore-${attemptId}.db`);
       for (const suffix of RESTORE_SCRATCH_SIDECARS)
         rmSync2(`${imagePath}${suffix}`, { force: true });
       rmSync2(imagePath, { force: true });
@@ -32718,7 +32723,7 @@ async function readCommittedRestoreAttempts(context) {
 async function runRestore(context, root, input) {
   const point3 = recoveryPointPath(context, root, input.preview.backupPath);
   const attemptId = randomUUID8();
-  const imagePath = join33(root, `.store-restore-${attemptId}.db`);
+  const imagePath = join34(root, `.store-restore-${attemptId}.db`);
   try {
     try {
       copyFileSync2(point3, imagePath);
@@ -32730,7 +32735,7 @@ async function runRestore(context, root, input) {
       throw new StoreActivationError("store.activation-stale", `the recovery point at ${point3} belongs to store ${image.storeId}, not to the live store ${input.preview.liveStoreId}; a point of another store is never restored over this one.`);
     }
     const safety = await backupStore(context, {
-      out: join33(root, "archived", "store-migration", "backups", `pre-restore-e${input.preview.liveEpoch}-${randomUUID8()}.db`)
+      out: join34(root, "archived", "store-migration", "backups", `pre-restore-e${input.preview.liveEpoch}-${randomUUID8()}.db`)
     });
     try {
       const liveStoreSha256 = await sha256OfFile(storeDbPath(context));
@@ -32806,7 +32811,7 @@ function sourceStatusOf(root, manifestJson) {
     const kind = isNonEmptyString(record.kind) ? record.kind : "deferred";
     const path2 = typeof record.path === "string" ? record.path : "";
     if (kind === "session-envelope") {
-      return { kind, relativePath: null, state: existsSync23(path2) ? "present" : "absent" };
+      return { kind, relativePath: null, state: existsSync24(path2) ? "present" : "absent" };
     }
     const bytes = readIfExists2(path2);
     if (bytes === undefined)
