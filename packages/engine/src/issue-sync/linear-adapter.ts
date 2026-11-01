@@ -218,11 +218,13 @@ export function mapPage(payload: unknown, scope?: { team?: string; project?: str
       // (name, id) identifies one thing, so either side matching is a match.
       const id = isRecord(entry) ? entry[`${key}Id`] : undefined;
       if (typeof id === "string") return id !== expected;
-      // Neither side of the pair matches, and the item simply does not carry an
-      // id. `project` also accepts an identifier or a slug, which an item's
-      // name cannot be compared against — refusing here would block legitimate
-      // imports for spellings the API explicitly supports. Only when the value
-      // looks like a display name (spaces) is the mismatch treated as real.
+      // A team always comes back with BOTH a name and an id, so a mismatch here
+      // is real and the page is refused.
+      if (key === "team") return true;
+      // `project` is the only dimension the API also accepts as an identifier or
+      // a slug, and an item's (name, id) pair cannot name those. That is "cannot
+      // tell", not "different": refusing would block spellings the API supports.
+      // A value that looks like a display name is still comparable.
       return expected.includes(" ");
     });
     if (foreign !== undefined) {

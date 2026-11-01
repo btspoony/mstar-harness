@@ -101,6 +101,17 @@ describe("listIssues pagination", () => {
     expect(await codeOf(() => createLinearAdapter(d).listIssues(null))).toBe("linear.query-failed");
   });
 
+  test("a team scoped by key still refuses a foreign team, and an id-less item is still checked", async () => {
+    // The project dimension tolerates an alias because a name/id pair cannot name
+    // one; team must not inherit that leniency — a team always comes back with
+    // both a name and an id, so a mismatch is a real mismatch.
+    const d = deps(
+      [{ kind: "ok", payload: { issues: [issue("LIN-1", { team: "Other Team", teamId: "team-other" })], hasNextPage: false, cursor: null } }],
+      { scope: { team: "NSD" } },
+    );
+    expect(await codeOf(() => createLinearAdapter(d).listIssues(null))).toBe("linear.query-failed");
+  });
+
   test("a page matching the binding by name OR by id maps cleanly", async () => {
     // The filter accepts a name or an ID, so a page may echo either side of the
     // pair; refusing one of them would reject a legitimate result.

@@ -30067,6 +30067,8 @@ function mapPage(payload, scope) {
       const id = isRecord2(entry) ? entry[`${key}Id`] : undefined;
       if (typeof id === "string")
         return id !== expected;
+      if (key === "team")
+        return true;
       return expected.includes(" ");
     });
     if (foreign !== undefined) {
