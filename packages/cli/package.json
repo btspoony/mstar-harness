@@ -27,7 +27,7 @@
     "node": ">=24.18.0"
   },
   "mstar": {
-    "dshLlmFallbacks": "0.6.8"
+    "dshLlmFallbacks": "0.6.13"
   },
   "dependencies": {
     "@modelcontextprotocol/server": "2.1.0",
@@ -39,7 +39,7 @@
     "access": "public"
   },
   "devDependencies": {
-    "@modelcontextprotocol/client": "2.3.1",
+    "@modelcontextprotocol/client": "2.4.0",
     "@mstar-harness/commands": "workspace:*",
     "@mstar-harness/engine": "workspace:*",
     "@mstar-harness/judgment": "workspace:*",
