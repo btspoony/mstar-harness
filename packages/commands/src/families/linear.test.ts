@@ -26,11 +26,16 @@ function context(effects: Partial<InvocationContext["effects"]> = {}): Invocatio
 
 const tokens = { accessToken: "a", refreshToken: "r", expiresAt: Date.now() + 3_600_000, scope: "read" };
 
+/** The success payload of an envelope; the union has no `data` on its other arms. */
+function dataOf(result: { status: string }): Record<string, unknown> {
+  return (result as { data?: Record<string, unknown> }).data ?? {};
+}
+
 describe("mstar linear auth", () => {
   test("status on a machine with no credential says absent, with the path", async () => {
     const result = await command.execute({ action: "status" }, context());
     expect(result.status).toBe("ok");
-    const data = result.data as Record<string, unknown>;
+    const data = dataOf(result);
     expect(data.authorized).toBe(false);
     expect(String(data.credentialPath)).toBe(process.env.MSTAR_LINEAR_CREDENTIAL!);
   });
@@ -38,10 +43,10 @@ describe("mstar linear auth", () => {
   test("login stores what the host returned, and status then reports it", async () => {
     const authorized = await command.execute({ action: "login" }, context({ linearAuthorize: async () => tokens }));
     expect(authorized.status).toBe("ok");
-    expect((authorized.data as Record<string, unknown>).scope).toBe("read");
+    expect(dataOf(authorized).scope).toBe("read");
 
     const status = await command.execute({ action: "status" }, context());
-    const data = status.data as Record<string, unknown>;
+    const data = dataOf(status);
     expect(data.authorized).toBe(true);
     expect(data.hasRefreshToken).toBe(true);
   });
@@ -49,9 +54,9 @@ describe("mstar linear auth", () => {
   test("logout removes the credential and says whether anything was there", async () => {
     await command.execute({ action: "login" }, context({ linearAuthorize: async () => tokens }));
     const first = await command.execute({ action: "logout" }, context());
-    expect((first.data as Record<string, unknown>).removed).toBe(true);
+    expect(dataOf(first).removed).toBe(true);
     const second = await command.execute({ action: "logout" }, context());
-    expect((second.data as Record<string, unknown>).removed).toBe(false);
+    expect(dataOf(second).removed).toBe(false);
   });
 
   test("a host without the capability refuses and names a host that has it", async () => {
@@ -67,6 +72,6 @@ describe("mstar linear auth", () => {
     const result = await command.execute({ action: "login" }, context({ linearAuthorize: async () => null }));
     expect(result.code).toBe("linear.auth-denied");
     const status = await command.execute({ action: "status" }, context());
-    expect((status.data as Record<string, unknown>).authorized).toBe(false);
+    expect(dataOf(status).authorized).toBe(false);
   });
 });
