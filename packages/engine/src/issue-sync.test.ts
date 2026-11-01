@@ -386,7 +386,10 @@ describe("retry preserves recorded remote identity", () => {
     markFailed(db, { ...KEY, operationId: "op-retry-fail", error: "boom" });
     const retried = planItem(db, { ...KEY, operationId: "op-retry-plan" });
     expect(retried.externalId).toBe("EXT-1");
-    expect(retried.lastRemoteUpdatedAt).toBe("2026-10-31T00:00:00Z");
+    // A failed attempt copied nothing, so the COPIED watermark is still unset; the
+    // planned revision lives in `pendingTarget`, where the next apply closes it.
+    expect(retried.lastRemoteUpdatedAt).toBeNull();
+    expect(retried.pendingTarget).toBe("2026-10-31T00:00:00Z");
     expect(retried.lastError).toBeNull();
     close();
   });

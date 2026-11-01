@@ -18979,6 +18979,7 @@ var PROVENANCE_ORIGIN_MIGRATION_VERSION = MIGRATIONS.find((migration) => migrati
 var ROADMAP_MIGRATION_VERSION = MIGRATIONS.find((migration) => migration.name === "roadmap-content-authority")?.version ?? Number.POSITIVE_INFINITY;
 var EXECUTION_COVERAGE_MIGRATION_VERSION = MIGRATIONS.find((migration) => migration.name === "execution-coverage-column")?.version ?? Number.POSITIVE_INFINITY;
 var MILESTONE_MIGRATION_VERSION = MIGRATIONS.find((migration) => migration.name === "project-milestones")?.version ?? Number.POSITIVE_INFINITY;
+var SYNC_PENDING_TARGET_MIGRATION_VERSION = MIGRATIONS.find((migration) => migration.name === "sync-pending-target")?.version ?? 16;
 var PROJECT_MOVES_MIGRATION_VERSION = MIGRATIONS.find((migration) => migration.name === "issue-project-moves")?.version ?? Number.POSITIVE_INFINITY;
 var SYNC_LEDGER_MIGRATION_VERSION = MIGRATIONS.find((migration) => migration.name === "sync-ledger")?.version ?? Number.POSITIVE_INFINITY;
 var DSH_MIGRATION_VERSION = MIGRATIONS.find((migration) => migration.name === "dsh-host-ledgers")?.version ?? Number.POSITIVE_INFINITY;

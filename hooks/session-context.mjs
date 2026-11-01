@@ -29854,12 +29854,13 @@ function markItem(db, input, target, text6) {
     if (row.item_state !== "pending" && !(target === "skipped" && row.item_state === "failed")) {
       refuseTransition(row.item_state, `markItem -> ${target}`);
     }
-    const closingTarget = row.pending_target ?? input.remoteUpdatedAt ?? null;
+    const applied = target === "applied";
+    const copiedTarget = input.remoteUpdatedAt ?? row.pending_target ?? null;
     casUpdate(db, { bindingId, direction, localId }, row.revision, {
       item_state: target,
       external_id: row.external_id,
-      last_remote_updated_at: closingTarget ?? row.last_remote_updated_at,
-      pending_target: null,
+      last_remote_updated_at: applied ? copiedTarget ?? row.last_remote_updated_at : row.last_remote_updated_at,
+      pending_target: applied ? null : row.pending_target,
       last_error: target === "failed" ? text6 ?? null : null,
       last_skip_reason: target === "skipped" ? text6 ?? null : null
     }, now2);
@@ -32031,6 +32032,7 @@ function availabilityOf(schemaVersion) {
     executionCoverage: schemaVersion >= EXECUTION_COVERAGE_MIGRATION_VERSION,
     roadmap: schemaVersion >= ROADMAP_MIGRATION_VERSION,
     milestone: schemaVersion >= MILESTONE_MIGRATION_VERSION,
+    syncPendingTarget: schemaVersion >= SYNC_PENDING_TARGET_MIGRATION_VERSION,
     projectMoves: schemaVersion >= PROJECT_MOVES_MIGRATION_VERSION,
     syncLedger: schemaVersion >= SYNC_LEDGER_MIGRATION_VERSION,
     host: schemaVersion >= DSH_MIGRATION_VERSION,
@@ -32066,6 +32068,8 @@ function inventoryColumns(table, availability) {
   if (table.table === "execution_sessions" && !availability.legacySessionPlanColumn) {
     columns = columns.filter((column) => column !== "plan_id");
   }
+  if (!availability.syncPendingTarget)
+    columns = columns.filter((column) => column !== "pending_target");
   if (!availability.provenanceOrigin)
     columns = columns.filter((column) => column !== "origin");
   if (!availability.dshLegacyProvenance) {
@@ -33645,7 +33649,7 @@ alter table issue_sync_state add column pending_target text;
   select issues.registered_at as ts
   union all select o.discovered_at from occurrences o where o.issue_id = issues.id
   union all select t.occurred_at from issue_transitions t where t.issue_id = issues.id
-))`, ISSUE_ORDER_SQL, TERMINAL_DISPOSITIONS = "'resolved', 'waived', 'duplicate', 'superseded'", IDENTITY_COLUMNS = "kind, id, title, description, root_kind, relative_path, document_kind, lifecycle, revision, registered_at, updated_at", completeWitnessGapForTest, workflowWitnessGapForTest, RECOVER_COORDINATOR_OPERATION = "recoverExecutionCoordinator", REOPEN_WORKFLOW_OPERATION = "reopenExecutionWorkflow", PROBE_STATES, SyncError, DIRECTIONS, DEFAULT_PROBE_DEADLINE_MS = 5000, REDACTED = "[redacted]", LINEAR_PAGE_SIZE = 50, LINEAR_ITEM_FIELDS, nextId = 1, LINEAR_LISTING_VERBS, IMPORTED_ROOT_CAUSE_KEY = "linear:external", IMPORTED_ACCEPTANCE_KEY = "linear:external", LINEAR_PROVIDER = "linear", IMPORT_DIRECTION = "import", IMPORT_ACTOR = "sync-import", KIND_VALUES, SEVERITY_VALUES2, COMMIT_REGISTRATION_OPERATION = "commitExecutionRegistration", REGISTRATION_SEMANTICS, MAX_DASHBOARD_SEARCH_LENGTH = 200, VIEW_QUERY_FIELDS, DISPOSITIONS3, KINDS2, SEVERITIES2, SYNC_PROBE_STATES, MIGRATION_MANIFEST_VERSION = 1, LEGACY_ISSUE_KIND = "review-obligation", StoreMigrationError, MIGRATION_VOCABULARY, LEGACY_REQUIRED_FIELDS, HISTORY_ONLY_ABSENT_FIELDS, WORKFLOW_NOTES_LEDGER_MAX_BYTES = 4194304, WORKFLOW_NOTES_LEDGER_READ_BYTES = 1048576, WORKFLOW_NOTES_COMPACTION_MARKER_KIND = "workflow-notes-compaction", EXECUTION_LEDGER_ERROR_CODES, ExecutionLedgerError, NOTE_KEYS, NOTE_KEY_ORDER, MARKER_KEYS, MARKER_KEY_ORDER, DROPPED_KEYS, DROPPED_KEY_ORDER, UNRECOGNIZED_LINE, EXECUTION_RECOVERY_PROTOCOL_VERSION = 3, ExecutionRecoveryError, EXECUTION_MIGRATION_VERSION2, CATALOG_MIGRATION_VERSION, PROVENANCE_ORIGIN_MIGRATION_VERSION, ROADMAP_MIGRATION_VERSION, EXECUTION_COVERAGE_MIGRATION_VERSION, MILESTONE_MIGRATION_VERSION, PROJECT_MOVES_MIGRATION_VERSION, SYNC_LEDGER_MIGRATION_VERSION, DSH_MIGRATION_VERSION, EXECUTION_COORDINATOR_ONLY_MIGRATION_VERSION, DSH_LEGACY_PROVENANCE_MIGRATION_VERSION, AUTHORITY_TABLES, REPLACEMENT_ORDER, DATABASE_HEADER_BYTES2 = 100, WAL_FILE_FORMAT_VERSION2 = 2, RESTORE_SCRATCH_NAME, RESTORE_SCRATCH_SIDECARS, REDACTED_KEYS, REFRESH_WINDOW_MS = 300000;
+))`, ISSUE_ORDER_SQL, TERMINAL_DISPOSITIONS = "'resolved', 'waived', 'duplicate', 'superseded'", IDENTITY_COLUMNS = "kind, id, title, description, root_kind, relative_path, document_kind, lifecycle, revision, registered_at, updated_at", completeWitnessGapForTest, workflowWitnessGapForTest, RECOVER_COORDINATOR_OPERATION = "recoverExecutionCoordinator", REOPEN_WORKFLOW_OPERATION = "reopenExecutionWorkflow", PROBE_STATES, SyncError, DIRECTIONS, DEFAULT_PROBE_DEADLINE_MS = 5000, REDACTED = "[redacted]", LINEAR_PAGE_SIZE = 50, LINEAR_ITEM_FIELDS, nextId = 1, LINEAR_LISTING_VERBS, IMPORTED_ROOT_CAUSE_KEY = "linear:external", IMPORTED_ACCEPTANCE_KEY = "linear:external", LINEAR_PROVIDER = "linear", IMPORT_DIRECTION = "import", IMPORT_ACTOR = "sync-import", KIND_VALUES, SEVERITY_VALUES2, COMMIT_REGISTRATION_OPERATION = "commitExecutionRegistration", REGISTRATION_SEMANTICS, MAX_DASHBOARD_SEARCH_LENGTH = 200, VIEW_QUERY_FIELDS, DISPOSITIONS3, KINDS2, SEVERITIES2, SYNC_PROBE_STATES, MIGRATION_MANIFEST_VERSION = 1, LEGACY_ISSUE_KIND = "review-obligation", StoreMigrationError, MIGRATION_VOCABULARY, LEGACY_REQUIRED_FIELDS, HISTORY_ONLY_ABSENT_FIELDS, WORKFLOW_NOTES_LEDGER_MAX_BYTES = 4194304, WORKFLOW_NOTES_LEDGER_READ_BYTES = 1048576, WORKFLOW_NOTES_COMPACTION_MARKER_KIND = "workflow-notes-compaction", EXECUTION_LEDGER_ERROR_CODES, ExecutionLedgerError, NOTE_KEYS, NOTE_KEY_ORDER, MARKER_KEYS, MARKER_KEY_ORDER, DROPPED_KEYS, DROPPED_KEY_ORDER, UNRECOGNIZED_LINE, EXECUTION_RECOVERY_PROTOCOL_VERSION = 3, ExecutionRecoveryError, EXECUTION_MIGRATION_VERSION2, CATALOG_MIGRATION_VERSION, PROVENANCE_ORIGIN_MIGRATION_VERSION, ROADMAP_MIGRATION_VERSION, EXECUTION_COVERAGE_MIGRATION_VERSION, MILESTONE_MIGRATION_VERSION, SYNC_PENDING_TARGET_MIGRATION_VERSION, PROJECT_MOVES_MIGRATION_VERSION, SYNC_LEDGER_MIGRATION_VERSION, DSH_MIGRATION_VERSION, EXECUTION_COORDINATOR_ONLY_MIGRATION_VERSION, DSH_LEGACY_PROVENANCE_MIGRATION_VERSION, AUTHORITY_TABLES, REPLACEMENT_ORDER, DATABASE_HEADER_BYTES2 = 100, WAL_FILE_FORMAT_VERSION2 = 2, RESTORE_SCRATCH_NAME, RESTORE_SCRATCH_SIDECARS, REDACTED_KEYS, REFRESH_WINDOW_MS = 300000;
 var init_engine = __esm(() => {
   __defProp2 = Object.defineProperty;
   init_coordination_write = __esm2(() => {
@@ -38690,6 +38694,7 @@ var init_engine = __esm(() => {
   ROADMAP_MIGRATION_VERSION = MIGRATIONS.find((migration) => migration.name === "roadmap-content-authority")?.version ?? Number.POSITIVE_INFINITY;
   EXECUTION_COVERAGE_MIGRATION_VERSION = MIGRATIONS.find((migration) => migration.name === "execution-coverage-column")?.version ?? Number.POSITIVE_INFINITY;
   MILESTONE_MIGRATION_VERSION = MIGRATIONS.find((migration) => migration.name === "project-milestones")?.version ?? Number.POSITIVE_INFINITY;
+  SYNC_PENDING_TARGET_MIGRATION_VERSION = MIGRATIONS.find((migration) => migration.name === "sync-pending-target")?.version ?? 16;
   PROJECT_MOVES_MIGRATION_VERSION = MIGRATIONS.find((migration) => migration.name === "issue-project-moves")?.version ?? Number.POSITIVE_INFINITY;
   SYNC_LEDGER_MIGRATION_VERSION = MIGRATIONS.find((migration) => migration.name === "sync-ledger")?.version ?? Number.POSITIVE_INFINITY;
   DSH_MIGRATION_VERSION = MIGRATIONS.find((migration) => migration.name === "dsh-host-ledgers")?.version ?? Number.POSITIVE_INFINITY;

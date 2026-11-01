@@ -267,6 +267,8 @@ const EXECUTION_COVERAGE_MIGRATION_VERSION =
 /** The migration that introduced project milestones (both tables exist from here). */
 const MILESTONE_MIGRATION_VERSION =
   MIGRATIONS.find((migration) => migration.name === "project-milestones")?.version ?? Number.POSITIVE_INFINITY;
+const SYNC_PENDING_TARGET_MIGRATION_VERSION =
+  MIGRATIONS.find((migration) => migration.name === "sync-pending-target")?.version ?? 16;
 /** The migration that introduced the append-only project-move history. */
 const PROJECT_MOVES_MIGRATION_VERSION =
   MIGRATIONS.find((migration) => migration.name === "issue-project-moves")?.version ?? Number.POSITIVE_INFINITY;
@@ -815,6 +817,8 @@ type TableAvailability = {
   dshLegacyProvenance: boolean;
   /** False at or after the migration that made the session domain coordinator-only. */
   legacySessionPlanColumn: boolean;
+  /** The `pending_target` column exists on this store's schema. */
+  readonly syncPendingTarget: boolean;
 };
 
 /**
@@ -830,6 +834,7 @@ function availabilityOf(schemaVersion: number): TableAvailability {
     executionCoverage: schemaVersion >= EXECUTION_COVERAGE_MIGRATION_VERSION,
     roadmap: schemaVersion >= ROADMAP_MIGRATION_VERSION,
     milestone: schemaVersion >= MILESTONE_MIGRATION_VERSION,
+    syncPendingTarget: schemaVersion >= SYNC_PENDING_TARGET_MIGRATION_VERSION,
     projectMoves: schemaVersion >= PROJECT_MOVES_MIGRATION_VERSION,
     syncLedger: schemaVersion >= SYNC_LEDGER_MIGRATION_VERSION,
     host: schemaVersion >= DSH_MIGRATION_VERSION,
@@ -860,6 +865,9 @@ function inventoryColumns(table: AuthorityTable, availability: TableAvailability
   if (table.table === "execution_sessions" && !availability.legacySessionPlanColumn) {
     columns = columns.filter((column) => column !== "plan_id");
   }
+  // A store still at the previous schema has no `pending_target`: reading it
+  // would make every restore preview fail on a column the store never had.
+  if (!availability.syncPendingTarget) columns = columns.filter((column) => column !== "pending_target");
   if (!availability.provenanceOrigin) columns = columns.filter((column) => column !== "origin");
   if (!availability.dshLegacyProvenance) {
     columns = columns.filter((column) => column !== "legacy_source_digest" && column !== "legacy_line");

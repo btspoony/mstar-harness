@@ -425,17 +425,18 @@ function markItem(
     if (row.item_state !== "pending" && !(target === "skipped" && row.item_state === "failed")) {
       refuseTransition(row.item_state, `markItem -> ${target}`);
     }
-    // What this apply is closing: the open cycle's target if one is open, else
-    // the revision the caller says it just wrote.
-    const closingTarget = row.pending_target ?? input.remoteUpdatedAt ?? null;
+    // Only a successful apply has copied fields, so only it may advance the
+    // copied watermark; a failure or a stale skip leaves the cycle open and the
+    // watermark where it was. The caller's own revision wins over the planned
+    // target: a resumed cycle can copy a NEWER revision than it planned for, and
+    // recording the older one would let a page between the two overwrite it.
+    const applied = target === "applied";
+    const copiedTarget = input.remoteUpdatedAt ?? row.pending_target ?? null;
     casUpdate(db, { bindingId, direction, localId }, row.revision, {
       item_state: target,
       external_id: row.external_id,
-      // Applying CLOSES the cycle: the target it was opened for becomes the
-      // copied watermark, in the same commit as the fields. `remoteUpdatedAt` is
-      // the caller's assertion that those fields were just written.
-      last_remote_updated_at: closingTarget ?? row.last_remote_updated_at,
-      pending_target: null,
+      last_remote_updated_at: applied ? (copiedTarget ?? row.last_remote_updated_at) : row.last_remote_updated_at,
+      pending_target: applied ? null : row.pending_target,
       last_error: target === "failed" ? (text ?? null) : null,
       last_skip_reason: target === "skipped" ? (text ?? null) : null,
     }, now);

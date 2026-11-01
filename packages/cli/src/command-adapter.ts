@@ -868,13 +868,13 @@ function cliEffects(services: Array<{ close(): Promise<void> }>): CommandEffects
       );
       const opener = process.platform === "darwin" ? "open" : process.platform === "win32" ? "cmd" : "xdg-open";
       const argv = process.platform === "win32" ? ["/c", "start", "", pending.url] : [pending.url];
-      const child = spawn(opener, argv, { stdio: "ignore", shell: false });
-      await new Promise<void>((resolve, reject) => {
-        child.once("spawn", () => resolve());
-        child.once("error", reject);
-      });
-      process.stderr.write(`Authorize in the browser; waiting for the callback on ${pending.redirectUri}\n`);
       try {
+        const child = spawn(opener, argv, { stdio: "ignore", shell: false });
+        await new Promise<void>((resolve, reject) => {
+          child.once("spawn", () => resolve());
+          child.once("error", reject);
+        });
+        process.stderr.write(`Authorize in the browser; waiting for the callback on ${pending.redirectUri}\n`);
         const code = await pending.wait();
         return await exchangeCode(authorizationServer, { clientId: pending.clientId, redirectUri: pending.redirectUri }, code, pending.verifier);
       } finally {

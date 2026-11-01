@@ -167,7 +167,10 @@ export async function beginAuthorization(
   const redirectUri = `http://localhost:${port}/callback`;
   // The registration is bound to THIS redirect URI, so it happens after the
   // listener exists and before the URL is built.
-  const client = await register(redirectUri);
+  const client = await register(redirectUri).catch((error: unknown) => {
+    server.close();
+    throw error;
+  });
   if (client.redirectUri !== redirectUri) {
     server.close();
     throw new Error(
@@ -188,13 +191,19 @@ export async function beginAuthorization(
     redirectUri,
     verifier: pkce.verifier,
     clientId: client.clientId,
-    wait: (timeoutMs = 300_000) =>
-      Promise.race([
-        pending.promise,
-        new Promise<string>((_, reject) =>
-          setTimeout(() => reject(new Error("[linear.auth-timeout] no authorization callback arrived")), timeoutMs),
-        ),
-      ]).finally(() => server.close()),
+    wait: (timeoutMs = 300_000) => {
+      let timer: ReturnType<typeof setTimeout> | undefined;
+      const expiry = new Promise<string>((_, reject) => {
+        timer = setTimeout(() => reject(new Error("[linear.auth-timeout] no authorization callback arrived")), timeoutMs);
+        // The CLI waits on a human, not on work: an unref'd timer cannot be the
+        // reason the process stays alive.
+        timer.unref?.();
+      });
+      return Promise.race([pending.promise, expiry]).finally(() => {
+        clearTimeout(timer);
+        server.close();
+      });
+    },
     close: () => server.close(),
   };
 }
