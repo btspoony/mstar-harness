@@ -268,7 +268,7 @@ const EXECUTION_COVERAGE_MIGRATION_VERSION =
 const MILESTONE_MIGRATION_VERSION =
   MIGRATIONS.find((migration) => migration.name === "project-milestones")?.version ?? Number.POSITIVE_INFINITY;
 const SYNC_PENDING_TARGET_MIGRATION_VERSION =
-  MIGRATIONS.find((migration) => migration.name === "sync-pending-target")?.version ?? 16;
+  MIGRATIONS.find((migration) => migration.name === "sync-pending-target")?.version ?? Number.POSITIVE_INFINITY;
 /** The migration that introduced the append-only project-move history. */
 const PROJECT_MOVES_MIGRATION_VERSION =
   MIGRATIONS.find((migration) => migration.name === "issue-project-moves")?.version ?? Number.POSITIVE_INFINITY;

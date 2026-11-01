@@ -72,6 +72,21 @@ describe("mstar linear auth", () => {
     expect(JSON.stringify(result)).toMatch(/browser|CLI|MSTAR_LINEAR_CREDENTIAL/);
   });
 
+  test("a host failure becomes a refusal carrying its own code and recovery", async () => {
+    const timeout = Object.assign(new Error("no authorization callback arrived"), {
+      code: "linear.auth-timeout",
+      recovery: "Run `mstar linear auth` again and complete the browser step.",
+    });
+    const result = await command.execute({ operation: "login" }, context({ linearAuthorize: async () => { throw timeout; } }));
+    expect(result.status).toBe("refused");
+    expect((result as { code: string }).code).toBe("linear.auth-timeout");
+    // The recovery the host supplied survives, instead of the generic fallback an
+    // escaped Error would have produced.
+    expect(JSON.stringify(result)).toMatch(/complete the browser step/);
+    const status = await command.execute({ operation: "status" }, context());
+    expect(JSON.stringify(status)).toMatch(/"authorized":false/);
+  });
+
   test("an authorization that did not complete is a refusal, not a stored empty token", async () => {
     const result = await command.execute({ operation: "login" }, context({ linearAuthorize: async () => null }));
     expect(result.code).toBe("linear.auth-denied");
@@ -101,8 +116,29 @@ describe("an expired credential is refreshed before use", () => {
 
   test("a host that cannot refresh refuses with the command to re-run", async () => {
     const { resolveStoredToken } = await import("./issue-sync.js");
+    const previousKey = process.env.LINEAR_API_KEY;
+    delete process.env.LINEAR_API_KEY;
     writeLinearCredential({ accessToken: fake("expired"), refreshToken: fake("refresh"), expiresAt: Date.now() - 1, scope: "read", clientId: fake("client") });
-    await expect(resolveStoredToken(context())).rejects.toThrow(/linear\.reauth-required/);
+    try {
+      await expect(resolveStoredToken(context())).rejects.toMatchObject({ code: "linear.reauth-required" });
+    } finally {
+      if (previousKey !== undefined) process.env.LINEAR_API_KEY = previousKey;
+    }
+  });
+
+  test("an exported key still works when the stored credential cannot be refreshed", async () => {
+    const { resolveStoredToken } = await import("./issue-sync.js");
+    const previousKey = process.env.LINEAR_API_KEY;
+    process.env.LINEAR_API_KEY = fake("env");
+    writeLinearCredential({ accessToken: fake("expired"), refreshToken: fake("refresh"), expiresAt: Date.now() - 1, scope: "read", clientId: fake("client") });
+    try {
+      // Null tells the caller to fall back, which is what a headless deployment
+      // holding a stale credential and a working key needs.
+      expect(await resolveStoredToken(context())).toBeNull();
+    } finally {
+      if (previousKey === undefined) delete process.env.LINEAR_API_KEY;
+      else process.env.LINEAR_API_KEY = previousKey;
+    }
   });
 
   test("a live credential is used without a refresh round trip", async () => {

@@ -1,11 +1,11 @@
 /**
- * store-db.ts — issue-store runtime boundary, connection lifecycle and the
+ * store-db.ts - issue-store runtime boundary, connection lifecycle and the
  * checksum-verified migration framework.
  *
  * Authority: issue-store-contract.md §2 (connection/path/upgrades) and §8
  * (accepted runtime decision). User-selected runtime: direct in-process
  * `node:sqlite` on a runtime whose owning manifest declares the Node floor in
- * `engines.node` (the floor is read at runtime; `package.json` owns it) — no
+ * `engines.node` (the floor is read at runtime; `package.json` owns it) - no
  * child transport, daemon, `bun:sqlite`, driver dependency or older-runtime
  * fallback. Bun carries no floor: it is a development toolchain.
  *
@@ -15,7 +15,7 @@
  * touches the filesystem.
  *
  * Issue-domain verbs (capture/disposition/relations) are NOT implemented
- * here — they arrive with later tasks on top of this boundary.
+ * here - they arrive with later tasks on top of this boundary.
  */
 import { createRequire } from "node:module";
 import { createHash, randomUUID } from "node:crypto";
@@ -35,7 +35,7 @@ import type { ProvisionProcessFacts } from "./activation-provisioning.js";
 /**
  * The existing operator stop evidence, run through the existing activation
  * validator. Loaded at call time because `store-activation.ts` reads
- * `MIGRATIONS` from this module during its own module evaluation — a static
+ * `MIGRATIONS` from this module during its own module evaluation - a static
  * import from there would read an uninitialized binding before this module's
  * exported consts are initialised.
  */
@@ -55,7 +55,7 @@ function parsedInstant(value: unknown): number | null {
 const DEFAULT_BUSY_TIMEOUT_MS = 5000;
 
 /** Stable refusal codes (contract §5). `store.already-exists` is the
- * create-only initializer's refusal for an existing store — never reuse
+ * create-only initializer's refusal for an existing store - never reuse
  * `store.not-initialized` for a store that is already on disk. */
 export type StoreErrorCode =
   | "store.runtime-unsupported"
@@ -73,7 +73,7 @@ export type StoreErrorCode =
   | "store.upgrade-staged-manifest-missing"
   // The file-route guards below refuse through this boundary too: the control
   // harness's ACTIVE execution authority retires the root/snapshot/session file
-  // route (primary spec §4.3), and that refusal is a store-authority verdict —
+  // route (primary spec §4.3), and that refusal is a store-authority verdict -
   // not a `coordination.*` scoped-writer refusal and not a payload error.
   | "execution.direct-write-refused"
   | "execution.consumer-not-ready"
@@ -92,7 +92,7 @@ export class StoreError extends Error {
   readonly code: StoreErrorCode;
   /**
    * Structured facts for the caller when a prose message cannot carry them
-   * losslessly — e.g. the three distinct version facts of a schema refusal. It
+   * losslessly - e.g. the three distinct version facts of a schema refusal. It
    * is optional so the ~50 existing two-argument constructions keep their exact
    * shape; a caller that supplies none gets no `details` key at all.
    */
@@ -107,7 +107,7 @@ export class StoreError extends Error {
 }
 
 // ---------------------------------------------------------------------------
-// Runtime boundary — detect Bun before its emulated Node version (§8)
+// Runtime boundary - detect Bun before its emulated Node version (§8)
 // ---------------------------------------------------------------------------
 
 export type StoreRuntimeInfo = {
@@ -148,11 +148,11 @@ export function compareVersions(a: string, b: string): number {
 export function assertStoreRuntimeSupported(info: StoreRuntimeInfo = detectStoreRuntime()): void {
   // Each runtime's refusal names only its own floor and home: the published CLI
   // entrypoint is a Node entry (its shebang), so Bun floors are reachable only
-  // from a Bun-hosted plugin host or a development run — never rendered as a
+  // from a Bun-hosted plugin host or a development run - never rendered as a
   // CLI user's requirement.
   const kind = info.isBun ? "Bun" : "Node";
   // The floor is a version, so `package.json` owns it: read `engines.node` from
-  // the owning manifest at runtime. Bun has no floor — it is a development
+  // the owning manifest at runtime. Bun has no floor - it is a development
   // toolchain, and product code never gates on the Bun version. A manifest that
   // declares no floor leaves the version comparison unenforced; the capability
   // refusal below is unaffected.
@@ -179,7 +179,7 @@ export function assertStoreRuntimeSupported(info: StoreRuntimeInfo = detectStore
 }
 
 // ---------------------------------------------------------------------------
-// Lazy driver acquisition — node:sqlite only, in-process, no transport
+// Lazy driver acquisition - node:sqlite only, in-process, no transport
 // ---------------------------------------------------------------------------
 
 /** Minimal structural view of the synchronous driver used by the store. */
@@ -214,7 +214,7 @@ async function loadSqliteDriver(): Promise<SqliteModule> {
 
 /**
  * The SAME driver through the runtime's synchronous module loader
- * (`createRequire`) — the only acquisition path a synchronous guard may use
+ * (`createRequire`) - the only acquisition path a synchronous guard may use
  * (primary spec §4.3: no promise-returning guard). A static `import` cannot
  * stand in here: it is asynchronous by definition and would make every
  * synchronous file writer an unawaited async guard. Acquisition stays lazy: the
@@ -253,7 +253,7 @@ const MAX_BUSY_TIMEOUT_MS = 2147483647;
 /** The bounded wait, normalised ONCE at each public entry (contract §2): the
  * pragma only accepts a signed 32-bit integer millisecond count, so a caller's
  * value is floored into that domain and falls back to the published 5000ms
- * constant when even the floor is out of it — the number the pragma uses is
+ * constant when even the floor is out of it - the number the pragma uses is
  * then the number every refusal reports. */
 function busyTimeoutMs(value = DEFAULT_BUSY_TIMEOUT_MS): number {
   const floored = Math.floor(value);
@@ -347,13 +347,13 @@ const SQLITE_FORMAT_MAGIC = "SQLite format 3\u0000";
 const WAL_FILE_FORMAT_VERSION = 2;
 
 /**
- * The store's final path must be a genuinely missing file or a regular file —
+ * The store's final path must be a genuinely missing file or a regular file -
  * decided WITHOUT following a link (`lstat`). Only a missing path (ENOENT) is
- * "no store"; every path that EXISTS but is not a regular file — a symlink,
- * dangling or not, a directory, a device — and every path that cannot even be
+ * "no store"; every path that EXISTS but is not a regular file - a symlink,
+ * dangling or not, a directory, a device - and every path that cannot even be
  * examined is an existing-but-unreadable store and refuses `store.corrupt`
- * here. That is what keeps a link — whose target may sit outside the resolved
- * control root — from being answered as an absent store and reopening the
+ * here. That is what keeps a link - whose target may sit outside the resolved
+ * control root - from being answered as an absent store and reopening the
  * retired file route, and it runs before any existence check, header probe or
  * driver open.
  */
@@ -385,7 +385,7 @@ function assertAbsentOrRegularStoreFile(dbPath: string): void {
  * Is this complete SQLite file header the one shape a read-only connection
  * cannot open on its own: a WAL-format database with no journal beside it?
  * Decided from the file's own bytes, non-mutating, without a format
- * interpreter — the magic string, a legal page size, both WAL version bytes, the
+ * interpreter - the magic string, a legal page size, both WAL version bytes, the
  * three payload fractions and the schema/text-encoding values SQLite itself
  * writes, plus the page-aligned size every SQLite database file has. Bytes that
  * merely happen to carry `2` in both version positions are not a database and
@@ -413,22 +413,22 @@ function isWalFormatDatabase(header: Buffer, bytes: number): boolean {
  *
  * SQLite reads a WAL database THROUGH its journal: a read-only connection
  * creates the `-shm` index itself but can never create the `-wal`, so the
- * quiesced shape — every committed frame in the database file, header still
- * recording WAL, no sidecars — refuses the open with SQLITE_CANTOPEN, which
+ * quiesced shape - every committed frame in the database file, header still
+ * recording WAL, no sidecars - refuses the open with SQLITE_CANTOPEN, which
  * surfaces here as `store.corrupt` "unable to open database file". Node's
  * `node:sqlite` creates that empty journal inside its open; Bun 1.4.0 refuses
  * instead, and the shape is not rare: this runtime completes a closed handle's
- * cleanup — checkpoint, then remove the empty sidecars — when the handle is
+ * cleanup - checkpoint, then remove the empty sidecars - when the handle is
  * collected, so a read after any writer close can meet it. The same shape is
  * what a store file copied without its sidecars has.
  *
- * The database file IS the whole committed state in that shape — a journal is
+ * The database file IS the whole committed state in that shape - a journal is
  * only absent because SQLite's own clean close removed it, or the store file was
- * copied without it — so the empty journal the read needs is created here: never
+ * copied without it - so the empty journal the read needs is created here: never
  * a fabricated frame, and never over an existing file (`wx`), so a writer that
- * created its journal first is left exactly as it is. Every other shape — a
+ * created its journal first is left exactly as it is. Every other shape - a
  * rollback-journal store, a store that already has its journal, bytes that are
- * not a database, an unreadable file — is left untouched and keeps its own
+ * not a database, an unreadable file - is left untouched and keeps its own
  * refusal, so a refused store never gains a sidecar.
  */
 function ensureJournalForRead(dbPath: string): void {
@@ -453,7 +453,7 @@ function ensureJournalForRead(dbPath: string): void {
   try {
     journal = openSync(`${dbPath}-wal`, "wx");
   } catch {
-    // `EEXIST` — a writer created the journal first; nothing to add. Any other
+    // `EEXIST` - a writer created the journal first; nothing to add. Any other
     // failure leaves the store to the open below, which reports it.
     return;
   }
@@ -471,7 +471,7 @@ function openConnection(
   DatabaseSync: SqliteModule["DatabaseSync"],
   timeout = DEFAULT_BUSY_TIMEOUT_MS,
 ): StoreDb {
-  // node:sqlite rejects an explicit `undefined` options argument — open
+  // node:sqlite rejects an explicit `undefined` options argument - open
   // writers without a second argument, readers with the read-only option.
   let db: StoreDb;
   try {
@@ -522,7 +522,7 @@ function openConnection(
 }
 
 // ---------------------------------------------------------------------------
-// Schema framework — ordered, checksum-verified, immutable migrations
+// Schema framework - ordered, checksum-verified, immutable migrations
 // ---------------------------------------------------------------------------
 
 /** Base table recording applied migrations (contract §2). */
@@ -534,7 +534,7 @@ export const SCHEMA_VERSION_TABLE_SQL =
   "applied_at text not null)";
 
 /**
- * Migration 1 — shared metadata and issue tables (contract §2). Catalog
+ * Migration 1 - shared metadata and issue tables (contract §2). Catalog
  * tables arrive with migration 2 in a later task; `issues.project_id`
  * intentionally carries no foreign key until that table exists.
  */
@@ -658,13 +658,13 @@ insert into issue_counter(id, next_value) values (1, 1);
 `;
 
 /**
- * Migration 2 — catalog/registration tables (state-projection-contract §2),
+ * Migration 2 - catalog/registration tables (state-projection-contract §2),
  * appended through the runner above; migration 1 is untouched. One typed
  * entity table carries every catalog family, keyed by the composite
  * `(kind, id)`.
  *
  * Boundary (contract §1): these tables hold catalog metadata only. There is
- * no execution status/phase/progress/lease column anywhere here — the root
+ * no execution status/phase/progress/lease column anywhere here - the root
  * active-workflow register and the snapshots stay the execution authority,
  * and `catalog_execution_bindings` records the historical workflow
  * association plus the frozen plan-input identity, nothing else.
@@ -740,7 +740,7 @@ create table catalog_execution_bindings(
 `;
 
 /**
- * Migration 3 — disposable execution/roadmap projection tables
+ * Migration 3 - disposable execution/roadmap projection tables
  * (state-projection-contract §5), appended through the runner above;
  * migrations 1/2 stay untouched. Copying the whole model:
  * issue/catalog tables are the authority and are never rebuilt, while every
@@ -758,7 +758,7 @@ create table catalog_execution_bindings(
  * the reader/writer's current version. A later bump therefore makes the
  * existing generation invalid on sight (contract §5: a schema/format upgrade
  * rebuilds on the next read instead of reinterpreting old rows as
- * authority) — which is exactly why the value is baked into this immutable
+ * authority) - which is exactly why the value is baked into this immutable
  * SQL rather than read from code.
  *
  * `freshness` starts 'unavailable' with a null generation: a store that has
@@ -847,14 +847,14 @@ values (1, null, 1, null, null, strftime('%Y-%m-%dT%H:%M:%fZ','now'), 'unavailab
 `;
 
 /**
- * Migration 4 — execution authority tables (primary spec §2.2). Appended
+ * Migration 4 - execution authority tables (primary spec §2.2). Appended
  * through the runner above; migrations 1–3 stay byte-identical so every
  * applied store keeps its recorded checksum.
  *
  * These tables ARE the execution domain, never a projection: there is no
  * status/progress/done/holder/expiry copy of a `projection_*` column here, and
  * the issue/catalog authority in `store_meta` is left untouched. The
- * `execution_meta` singleton is created `legacy` and never `active` — a schema
+ * `execution_meta` singleton is created `legacy` and never `active` - a schema
  * upgrade is not an execution activation, and the JSON route stays live until
  * a separate activation commits. `root_updated_at` records the row-creation
  * instant because a schema upgrade imports no root; a migration that imports
@@ -977,7 +977,7 @@ alter table execution_migrations add column coverage_json text;
  * transformation the version's SQL cannot express (the members it removes or
  * rewrites live inside stored JSON), running in the SAME exclusive transaction
  * as this version's row. Its context carries the operator facts the upgrade was
- * invoked with — the one supported authorization a cutover may act on.
+ * invoked with - the one supported authorization a cutover may act on.
  */
 export type MigrationContext = {
   /**
@@ -986,7 +986,7 @@ export type MigrationContext = {
    * a migration never treats an unattested stopped id as authority. When it
    * is absent and a held retired claim must be settled, the settlement raises
    * `SettlementAttestationNeeded` and the upgrade entry generates the
-   * document (I-000297) and retries — a migration never treats an unattested
+   * document (I-000297) and retries - a migration never treats an unattested
    * stop id as authority either way.
    */
   attestation?: ActivationAttestation;
@@ -1025,7 +1025,7 @@ export class SettlementAttestationNeeded extends Error {
 /**
  * The PUBLIC-boundary form of the internal settlement signal: a direct engine
  * caller (`initializeStore`/`upgradeStore` are exported) never receives the
- * bare, code-less marker — only the upgrade pair consumes it, and only when it
+ * bare, code-less marker - only the upgrade pair consumes it, and only when it
  * explicitly asks (`raiseSettlementSignal`). The refusal names the holders, the
  * competing instants and the supported recovery, exactly like the refusal the
  * settlement site itself emits for a supplied document.
@@ -1050,7 +1050,7 @@ function settlementSignalRefusal(signal: SettlementAttestationNeeded): StoreErro
 
 export type Migration = { version: number; name: string; sql: string; normalize?: (db: StoreDb, context: MigrationContext) => void };
 
-/** Migration 6 — durable roadmap content authority; never import disposable projection rows. */
+/** Migration 6 - durable roadmap content authority; never import disposable projection rows. */
 export const MIGRATION_6_SQL = `
 create table project_roadmaps(
   project_id text primary key,
@@ -1063,7 +1063,7 @@ create table project_roadmaps(
 );
 drop table projection_roadmaps;
 `;
-/** Migration 7 — project-scoped milestones and nullable issue association. */
+/** Migration 7 - project-scoped milestones and nullable issue association. */
 export const MIGRATION_7_SQL = `
 create table project_milestones(
   milestone_id text primary key not null,
@@ -1114,19 +1114,19 @@ begin
   select raise(abort, 'milestone.identity-immutable');
 end;
 `;
-/** Migration 8 — historical provenance predates actor-only link writes. */
+/** Migration 8 - historical provenance predates actor-only link writes. */
 export const MIGRATION_8_SQL = `
 alter table provenance add column origin text not null default 'scoped' check (origin in ('scoped','unscoped'));
 `;
 
 
 /**
- * Migration 9 — coordinator-only execution sessions, and no per-plan lease,
+ * Migration 9 - coordinator-only execution sessions, and no per-plan lease,
  * with the retained business JSON normalized into the target shape.
  *
  * The removed plan-PM seat left three storage artefacts behind: per-plan
- * session rows, per-plan write leases, and — in every store that reached schema
- * 8 through the old protocol — a sealed `prepared` and a `handoff` inside each
+ * session rows, per-plan write leases, and - in every store that reached schema
+ * 8 through the old protocol - a sealed `prepared` and a `handoff` inside each
  * plan's `coordination_json` plus `self_amendments` in the workflow header.
  * None of them has a producer any more, and the store's own JSON cannot be
  * transformed by SQL alone, so the migration runner performs one
@@ -1134,7 +1134,7 @@ alter table provenance add column origin text not null default 'scoped' check (o
  * in the SAME exclusive transaction that records this version.
  *
  * The per-plan lease is the ONE place a schema-8 store records a plan's source
- * checkout and branch (the plan row itself never carries it — the old producer
+ * checkout and branch (the plan row itself never carries it - the old producer
  * deletes `execution_lease` before writing `state_json`). SQL cannot read a
  * value and copy it into JSON, so the capture of `execution_leases` is a
  * TEMPORARY table the normalizer reads after this SQL and the runner drops
@@ -1142,7 +1142,7 @@ alter table provenance add column origin text not null default 'scoped' check (o
  * row metadata BEFORE their table is gone.
  *
  * `execution_sessions` keeps only coordinator rows, so the `plan_id` column and
- * the role check that admitted `plan-pm` go with them — a column's CHECK cannot
+ * the role check that admitted `plan-pm` go with them - a column's CHECK cannot
  * be dropped in place, hence the table rewrite.
  *
  * Migrations 1–8 stay byte-identical: every applied store keeps its recorded
@@ -1192,7 +1192,7 @@ function parseStoredRecord(text: unknown, what: string): JsonRecord {
  * Normalize one legacy row-coordination block: the removed seat's sealed
  * `prepared` becomes the contracted ordinary configuration, its `progress` is
  * carried over, a `completed` attempt becomes a contracted `CompletionRecord`
- * (the row's real QC/QA and integration evidence — never rewritten), and every
+ * (the row's real QC/QA and integration evidence - never rewritten), and every
  * other protocol member is dropped. The result carries NO revision: that value
  * belongs to the `execution_plans.revision` column alone.
  */
@@ -1305,8 +1305,8 @@ function readLeaseCutover(db: StoreDb): Map<string, JsonRecord> {
  * Rewrite the retained business JSON of an upgraded store into the target
  * shape. Runs inside the migration runner's own exclusive transaction: either
  * the whole schema + JSON cutover commits, or nothing does. Rows it does not
- * recognize are left exactly as they are — never guessed at, never edited by
- * hand — so a store that needs operator attention refuses through the normal
+ * recognize are left exactly as they are - never guessed at, never edited by
+ * hand - so a store that needs operator attention refuses through the normal
  * read/validation path instead of being silently mangled.
  */
 function normalizeExecutionState(db: StoreDb, context: MigrationContext): void {
@@ -1375,7 +1375,7 @@ function normalizeExecutionState(db: StoreDb, context: MigrationContext): void {
  *
  * The safe basis is the staged REAL retired plan-PM session's exact
  * (workflow_id, session_id) pair matched against the held claim's own
- * `workflow_id`/`holder` — never a globally unique session-id assumption, and
+ * `workflow_id`/`holder` - never a globally unique session-id assumption, and
  * never a claim whose plan does not actually exist in that workflow. The
  * operator's FULL validated attestation must name that holder as stopped at or
  * after the claim, and at or before this cutover.
@@ -1401,7 +1401,7 @@ function settleRetiredPlanPmIntegrationClaims(db: StoreDb, context: MigrationCon
   const attestedInstant = attestation === undefined ? null : parsedInstant(attestation.attestedAt);
   // ONE instant for this settling transaction: the generated document attests
   // it, every claim's window is measured against it, and the tombstones record
-  // it — never a second, ambient reading of the clock.
+  // it - never a second, ambient reading of the clock.
   const at = (context.now ?? (() => new Date().toISOString()))();
   const cutoverInstant = parsedInstant(at);
   const pendingHolders = new Set<string>();
@@ -1441,7 +1441,7 @@ function settleRetiredPlanPmIntegrationClaims(db: StoreDb, context: MigrationCon
       );
     }
     // Lazy provisioning (I-000297): with no supplied attestation the upgrade
-    // entry generates one — this pass only records WHAT it must attest (the
+    // entry generates one - this pass only records WHAT it must attest (the
     // retired holder rows this cutover deletes) and rolls back cleanly, so the
     // generated document is built and validated in the async entry and the
     // upgrade retries once. A migration never treats an unattested stop id as
@@ -1549,7 +1549,7 @@ create unique index dsh_ledger_events_legacy_line
 `;
 
 /**
- * Migration 12 — the severity vocabulary is `critical|high|medium|low|nit`;
+ * Migration 12 - the severity vocabulary is `critical|high|medium|low|nit`;
  * the retired `info` value (migration 1's CHECK) is converted, not accepted.
  *
  * SQLite cannot alter a CHECK in place, so `issues` is rebuilt. Unlike
@@ -1561,7 +1561,7 @@ create unique index dsh_ledger_events_legacy_line
  * rewrites the children's REFERENCES clauses instead of retargeting them.
  * The child rows are therefore staged out (their tables, indexes and
  * constraints untouched), the parent is rebuilt, and the rows are restored
- * before COMMIT — so the store is FK-consistent at every statement boundary
+ * before COMMIT - so the store is FK-consistent at every statement boundary
  * and `foreign_key_check` holds at commit.
  *
  * The rebuilt table restores migration 1's indexes and migration 7's
@@ -1637,13 +1637,13 @@ drop table issue_transitions_v12_stage;
 `;
 
 /**
- * Migration 13 — append-only project-move history.
+ * Migration 13 - append-only project-move history.
  *
  * A project move changes the issue's project-scoped identity but not its
  * disposition, so `issue_transitions` (whose from/to columns are dispositions)
  * is the wrong ledger: an open→open row would pollute lifecycle history. This
- * table records one row per real move — old/new project, caller actor and
- * reason, and the issue revision the move produced — and is append-only.
+ * table records one row per real move - old/new project, caller actor and
+ * reason, and the issue revision the move produced - and is append-only.
  */
 export const MIGRATION_13_SQL = `
 create table issue_project_moves(
@@ -1661,7 +1661,7 @@ create index issue_project_moves_issue on issue_project_moves(issue_id, id);
 `;
 
 /**
- * Migration 14 — compass plan membership on the projection.
+ * Migration 14 - compass plan membership on the projection.
  *
  * The compass frontmatter `plans:` list is the authored membership record, and
  * the iteration reads join it with the catalog links. The projected compass row
@@ -1673,7 +1673,7 @@ alter table projection_compasses add column plans_json text not null default '[]
 `;
 
 /**
- * Migration 15 — sync ledger: per-item sync state, resumable run cursors and
+ * Migration 15 - sync ledger: per-item sync state, resumable run cursors and
  * project-level provider bindings. `binding_id` is derived ("<provider>:<project_id>"),
  * not a sequence, so crash recovery reconstructs it from the binding row alone.
  * The external_id partial index mirrors `issues_external_identity`; cross-provider
@@ -1715,13 +1715,13 @@ create table sync_cursor(
 );
 `;
 /**
- * Migration 16 — split the sync watermark.
+ * Migration 16 - split the sync watermark.
  *
  * One column was carrying two meanings: the revision whose fields were actually
  * COPIED (what makes an import incremental) and the revision a re-plan cycle is
  * TARGETING (what makes a replayed old page stale). Both readings are needed and
  * they disagree exactly when a cycle is open: with one column, either the target
- * is recorded early — and a crash leaves a row claiming content it never copied —
+ * is recorded early - and a crash leaves a row claiming content it never copied -
  * or it is recorded late and a replayed page walks the row backwards.
  *
  * `last_remote_updated_at` keeps its meaning (copied). `pending_target` holds the
@@ -1729,10 +1729,20 @@ create table sync_cursor(
  */
 export const MIGRATION_16_SQL = `
 alter table issue_sync_state add column pending_target text;
+-- A cycle that was open at upgrade time recorded its TARGET in the copied
+-- column, because there was only one. Left alone, that row would claim it had
+-- copied content it never took, and the stale-page guard would compare against
+-- that fake watermark and skip every page older than a revision nothing holds -
+-- the exact bug this split removes, surviving the upgrade. Move it across.
+update issue_sync_state
+   set pending_target = last_remote_updated_at,
+       last_remote_updated_at = null
+ where item_state = 'pending'
+   and last_remote_updated_at is not null;
 `;
 
 
-/** Ordered immutable migrations. Never mutate an applied entry — append only. */
+/** Ordered immutable migrations. Never mutate an applied entry - append only. */
 export const MIGRATIONS: readonly Migration[] = [
   { version: 1, name: "issue-core", sql: MIGRATION_1_SQL },
   { version: 2, name: "catalog-authority", sql: MIGRATION_2_SQL },
@@ -1754,7 +1764,7 @@ export const MIGRATIONS: readonly Migration[] = [
 const DSH_HOST_STATE_MIGRATION = MIGRATIONS.find((migration) => migration.name === "dsh-host-ledgers");
 
 /**
- * Execution tables the migrated schema must carry — the executable form of
+ * Execution tables the migrated schema must carry - the executable form of
  * §2.2 after migration 9. Migration 4 created `execution_leases`; migration 9
  * removed it with the plan-PM seat, so it is deliberately absent here: a store
  * at the current version that still held it would be drift, not a state to
@@ -1775,7 +1785,7 @@ const EXECUTION_TABLE_NAMES = [
 /** The migration above, looked up so the schema check cannot desync from it. */
 const EXECUTION_MIGRATION = MIGRATIONS.find((migration) => migration.name === "execution-authority");
 
-/** SHA-256 of the compiled migration SQL — what every applied row must match. */
+/** SHA-256 of the compiled migration SQL - what every applied row must match. */
 export function migrationChecksum(migration: Migration): string {
   return createHash("sha256").update(migration.sql, "utf8").digest("hex");
 }
@@ -1821,7 +1831,7 @@ function readAppliedMigrations(db: StoreDb, tolerateMissingTable: boolean): Appl
  * ids from 1, nothing unknown or newer. Refuses before any mutation (contract
  * §2: unknown/newer → schema-unsupported, version gap → schema-drift,
  * malformed → corrupt). The recorded `name`/`checksum` columns are provenance
- * and are never compared — "same version id, different SQL" is a build
+ * and are never compared - "same version id, different SQL" is a build
  * mismatch caught by CI, not a runtime gate.
  */
 function validateAppliedMigrations(applied: AppliedMigration[]): number {
@@ -1868,7 +1878,7 @@ function validateAppliedMigrations(applied: AppliedMigration[]): number {
  * Apply pending migrations inside ONE exclusive write transaction, record
  * each version row only as it applies, normalize the retained business JSON the
  * newly applied version requires, verify the final set, and roll the whole
- * batch back on any failure — no dirty partial schema (contract §2).
+ * batch back on any failure - no dirty partial schema (contract §2).
  *
  * The normalization is not SQL: the members the removed protocol wrote live in
  * `execution_plans`/`execution_workflows` JSON, so a version that changes their
@@ -1919,7 +1929,7 @@ function applyPendingMigrations(
       try {
         db.exec("rollback");
       } catch {
-        // connection-level failure during rollback — nothing was committed
+        // connection-level failure during rollback - nothing was committed
       }
     }
     if (error instanceof StoreError) throw error;
@@ -2024,7 +2034,7 @@ function presentExecutionTables(db: StoreDb): string[] {
  * decides whether this store HAS an execution schema at all: a store that
  * predates migration 4 has none (null) and opening a store never applies the
  * migration (contract §2). Once the migration is recorded, its whole table set
- * must exist and the singleton must be well formed — a recorded-but-incomplete
+ * must exist and the singleton must be well formed - a recorded-but-incomplete
  * execution schema is drift to refuse, not a state to reinterpret.
  */
 function readExecutionMeta(db: StoreDb, schemaVersion: number): ExecutionMeta | null {
@@ -2086,13 +2096,13 @@ function readExecutionMeta(db: StoreDb, schemaVersion: number): ExecutionMeta | 
  * How an authority probe ended. The two arms ARE the discrimination primary
  * spec §2.1/§5 requires, so neither guard has to guess:
  *
- * - `state` — the path carries no store file to read (`state: null`, the
+ * - `state` - the path carries no store file to read (`state: null`, the
  *   never-initialized case: no `store.db`, a `store.db` whose applied schema
  *   predates the execution tables, or one that vanished between the existence
  *   check and the open) or it carries one that was read successfully
  *   (`state: "legacy" | "staged" | "active"`). The file route is a live route
  *   for everything except a KNOWN `active` authority.
- * - `unreadable` — a store file EXISTS at `dbPath` and could not be read as a
+ * - `unreadable` - a store file EXISTS at `dbPath` and could not be read as a
  *   database: it cannot be opened, an I/O error, or another writer held it
  *   past the bounded wait. This is never the legacy route: a store that exists
  *   and cannot be read is refused, never answered from leftover JSON (§2.1/§5:
@@ -2120,22 +2130,22 @@ function isOpenLevelFailure(error: unknown): boolean {
 /**
  * Is this a failure the SAME-PROCESS writer-close window produces, rather than
  * a real store verdict? Bun 1.4.0's `node:sqlite` completes a closed handle's
- * cleanup — checkpoint, then removal of the now-empty `-wal`/`-shm` — when the
+ * cleanup - checkpoint, then removal of the now-empty `-wal`/`-shm` - when the
  * handle is COLLECTED, so a read-only open (or a read through it) can have its
  * sidecars deleted underneath it and report SQLITE_CANTOPEN for a store that is
  * entirely intact. The window is transient: once the deferred cleanup settles,
  * the same open converges.
  *
- * The discrimination reads the DRIVER's own structured fact on the raw error —
- * the numeric SQLITE error code (`errcode` 14 = SQLITE_CANTOPEN) — and never
+ * The discrimination reads the DRIVER's own structured fact on the raw error -
+ * the numeric SQLITE error code (`errcode` 14 = SQLITE_CANTOPEN) - and never
  * the mapped refusal shape or the database path: a harness path that merely
  * contains the word "open" must not turn an ordinary content failure into a
  * retry, and a `store.corrupt` `StoreError` is never transient.
  *
  * Only that shape is transient, and only while the database FILE itself still
  * exists: a missing file is the caller's own `store.not-initialized` decision
- * (taken before this open) and a persistent CANTOPEN — a shape that never
- * becomes readable — keeps its existing refusal once the budget is spent. Every
+ * (taken before this open) and a persistent CANTOPEN - a shape that never
+ * becomes readable - keeps its existing refusal once the budget is spent. Every
  * non-CANTOPEN failure (BUSY, an I/O error, a content verdict) is never
  * retried, so no genuine refusal is deferred or weakened.
  */
@@ -2173,7 +2183,7 @@ function dropProbeConnection(): void {
   try {
     current.db.close();
   } catch {
-    // already closed by the failing call — nothing to release here
+    // already closed by the failing call - nothing to release here
   }
 }
 
@@ -2186,7 +2196,7 @@ function dropProbeConnection(): void {
  * so opening a connection per guard call exhausts the descriptor table of a
  * long-lived process and turns every later store open into a spurious
  * `SQLITE_CANTOPEN`. A changed store identity (a new store, an atomic
- * replacement, a restore) closes and reopens — and the authority itself is
+ * replacement, a restore) closes and reopens - and the authority itself is
  * re-read through the connection on every probe, so no verdict is ever cached.
  */
 function probeConnectionFor(dbPath: string): StoreDb | null {
@@ -2226,7 +2236,7 @@ function probeConnectionFor(dbPath: string): StoreDb | null {
  * path refuses `store.corrupt` first and can never reopen the retired file
  * route. A store file that EXISTS
  * and fails to open (SQLITE_CANTOPEN / an I/O error) or that another writer
- * holds past the bounded wait answers `unreadable` — never "no authority", so
+ * holds past the bounded wait answers `unreadable` - never "no authority", so
  * neither guard can fall back to the retired file route for a store that is
  * there but unreadable. A path whose file vanishes between the existence check
  * and the open is the never-initialized case again (there is nothing to read).
@@ -2414,11 +2424,11 @@ export type StoreHandle = {
 
 /**
  * Open an existing store for reading or writing. Creates no store: a missing
- * database is a `store.not-initialized` refusal — and "missing" is decided on
+ * database is a `store.not-initialized` refusal - and "missing" is decided on
  * the final path without following a link, so a dangling symlink or any other
  * non-regular file is an existing-but-unreadable store and refuses
  * `store.corrupt` instead, never answering as an absent store. The final path
- * must also be a regular file at the store's own canonical path — a link target
+ * must also be a regular file at the store's own canonical path - a link target
  * outside the resolved control root is never followed. Readers open with the
  * read-only option plus `query_only=ON`; a WAL store whose journal SQLite's own
  * clean close removed gets that empty `-wal` back beside it before the open
@@ -2446,7 +2456,7 @@ export async function openStore(
   const timeout = busyTimeoutMs(options.busyTimeoutMs);
   // The existence discrimination runs on the final path WITHOUT following a
   // link: a dangling symlink or any other non-regular file is an existing store
-  // that cannot be read — `store.corrupt`, never "no store" — so neither this
+  // that cannot be read - `store.corrupt`, never "no store" - so neither this
   // open nor the retired file route can answer from a link target.
   assertAbsentOrRegularStoreFile(dbPath);
   if (!existsSync(dbPath)) {
@@ -2532,7 +2542,7 @@ function publicationCause(error: unknown): string {
 /**
  * The refusal for a creation step that failed BEFORE any store existed at the
  * canonical path: the real cause is preserved, the absence of a published
- * store is stated (a canonical path is never called corrupt here — none was
+ * store is stated (a canonical path is never called corrupt here - none was
  * ever created), and the recovery is the same public entry once the filesystem
  * condition is resolved, or a harness on a hard-link-capable filesystem
  * selected through the existing `--harness` argument.
@@ -2554,14 +2564,14 @@ function publicationRefusal(step: string, error: unknown, dbPath: string): Store
  * bytes it writes, but the create-only hard link that PUBLISHES those bytes is
  * an application-created directory entry that no transaction makes durable:
  * until the containing directory is synchronized, a power loss can leave the
- * control root with no `store.db` at all — and, once the only other name for
+ * control root with no `store.db` at all - and, once the only other name for
  * that inode is gone, with no fallback name either. Atomicity is not
  * durability. The same primitive the repo's other durable writers use
  * (`execution-ledgers.ts` `fsyncDirectory`); nothing here is a new protocol.
  *
  * Where the platform refuses to open or synchronize a directory (Windows does,
  * for one), the operating system's own error is preserved and disclosed as the
- * failed barrier — never swallowed into a durable success claim.
+ * failed barrier - never swallowed into a durable success claim.
  */
 function syncDirectoryEntry(dir: string): void {
   const fd = openSync(dir, "r");
@@ -2575,11 +2585,11 @@ function syncDirectoryEntry(dir: string): void {
 /**
  * The PARTIAL outcome of a creation or upgrade whose canonical store IS
  * published and retained, but whose directory entry could not be made durable
- * — or confirmed durable. It never reports a clean success, never calls the
+ * - or confirmed durable. It never reports a clean success, never calls the
  * store corrupt and never removes it: the real barrier cause is preserved, only
  * the facts this boundary actually established are stated, and the ordinary
  * public `store upgrade` on that same published path is the supported retry for
- * the barrier — `store init` stays create-only.
+ * the barrier - `store init` stays create-only.
  */
 function publicationBarrierRefusal(error: unknown, dbPath: string, phase: "creation" | "upgrade"): StoreError {
   const cause = publicationCause(error);
@@ -2610,14 +2620,14 @@ function publicationBarrierRefusal(error: unknown, dbPath: string, phase: "creat
 /**
  * Create-only initialization for a genuinely empty workspace (contract §2).
  *
- * The complete store — every migration, the shared metadata and the ACTIVE
- * epoch-1 authority flip in ONE transaction — is built in a private staging
+ * The complete store - every migration, the shared metadata and the ACTIVE
+ * epoch-1 authority flip in ONE transaction - is built in a private staging
  * file beside the canonical path and only then PUBLISHED there with a single
  * create-only hard link. The canonical path therefore never names a
  * half-built store: it is either absent, or a complete, committed,
  * self-contained database. That removes the first-creator window an upgrade
  * observer could previously read (`store.corrupt` on a claimed-but-unmigrated
- * file) without a lock, a mutex or any polling — the publish itself is the
+ * file) without a lock, a mutex or any polling - the publish itself is the
  * one atomic step, and it is also the whole existence check: a competing
  * initializer's store, a pre-existing file, a link or a directory all refuse
  * `store.already-exists` there (EEXIST) and are not read or rewritten. Only
@@ -2626,15 +2636,15 @@ function publicationBarrierRefusal(error: unknown, dbPath: string, phase: "creat
  *
  * Failure outcomes are named at their actual phase. Before publication,
  * `store.publication-failed` preserves the operating system's own cause and
- * states that NO store exists at the canonical path — which is never called
+ * states that NO store exists at the canonical path - which is never called
  * corrupt, because none was created. After the link, a failed DIRECTORY
  * SYNCHRONIZATION reports `store.publication-barrier-failed`: the store is
  * published and complete but its name is not confirmed durable, so the
  * attempt's staging name is RETAINED as the fallback reference to those bytes
  * and the ordinary public upgrade on that same path re-attempts the barrier.
  * After a successful barrier, a failed handle acquisition reports
- * `store.created-handle-failed`: the PARTIAL outcome that it is — the store is
- * created, activated and retained — with the real cause and the supported
+ * `store.created-handle-failed`: the PARTIAL outcome that it is - the store is
+ * created, activated and retained - with the real cause and the supported
  * same-entry continuation.
  */
 export async function initializeStore(
@@ -2666,7 +2676,7 @@ export async function initializeStore(
   // The driver is acquired before anything is created, so a runtime that
   // cannot run SQLite refuses without leaving a file behind.
   await loadSqliteDriver();
-  // A fast pre-check only — the create-only decision itself is the publish
+  // A fast pre-check only - the create-only decision itself is the publish
   // below, where EEXIST is the atomic arbiter even when this observation has
   // already gone stale.
   if (existsSync(dbPath)) throw alreadyExists();
@@ -2715,7 +2725,7 @@ export async function initializeStore(
     // lives in its `-wal` beside it, and the staging file is about to be read
     // under a SECOND name. Fold the journal back into the database file and
     // return to rollback-journal mode, so the published name carries every
-    // committed frame with no sidecar beside it — the first ordinary writer
+    // committed frame with no sidecar beside it - the first ordinary writer
     // open converts the published store back to WAL through the usual pragma
     // path, and a read-only open needs no journal at all.
     const folded = db.prepare("pragma journal_mode=delete").get() as { journal_mode?: string } | undefined;
@@ -2743,7 +2753,7 @@ export async function initializeStore(
     throw error;
   }
   // Publish: the atomic create-only step. EEXIST is a competing initializer's
-  // committed store (or a pre-existing file) — refuse it untouched. Any other
+  // committed store (or a pre-existing file) - refuse it untouched. Any other
   // failure is a filesystem/publication condition, never store corruption: no
   // canonical store exists to be corrupted.
   try {
@@ -2758,7 +2768,7 @@ export async function initializeStore(
   // Publish the canonical DIRECTORY ENTRY before removing the only other name
   // for this inode: if the barrier fails, the staging name is the fallback
   // reference to the same bytes and stays, and the outcome is disclosed as the
-  // partial one it is — the store exists and is complete, so it is never removed
+  // partial one it is - the store exists and is complete, so it is never removed
   // and never called corrupt.
   try {
     syncDirectoryEntry(dirname(dbPath));
@@ -2768,8 +2778,8 @@ export async function initializeStore(
   removeStagingFiles(stagingPath);
   // The store is now committed, complete, ACTIVE and durable at the canonical
   // path. If this attempt cannot acquire its returned handle, that is a PARTIAL
-  // outcome and must be disclosed as one: the published image is kept — never
-  // unlinked, never reported as if nothing was created — and the caller is
+  // outcome and must be disclosed as one: the published image is kept - never
+  // unlinked, never reported as if nothing was created - and the caller is
   // pointed at the supported continuation for its entry.
   try {
     return await openStore(context, "write", { busyTimeoutMs: timeout });
@@ -2790,22 +2800,22 @@ export async function initializeStore(
 
 /**
  * Apply pending migrations to an existing store. The caller is responsible
- * for a SQLite-consistent backup and quiesced writers (contract §2/§7) —
+ * for a SQLite-consistent backup and quiesced writers (contract §2/§7) -
  * this function itself is atomic: the whole pending batch commits or rolls
  * back together. Idempotent when the store is already current.
  *
  * Observer guarantee: creation publishes the canonical path in ONE atomic
  * create-only step (`initializeStore`), so a path that exists here always
  * names a complete, committed store. A store file that exists but records no
- * migration history is therefore genuine corruption — never an in-flight
- * first creation to wait out or reinterpret — and still refuses
+ * migration history is therefore genuine corruption - never an in-flight
+ * first creation to wait out or reinterpret - and still refuses
  * `store.corrupt` untouched.
  */
 export async function upgradeStore(
   context: StoreContext,
   options: {
     attestation?: unknown; operator?: string; processFacts?: ProvisionProcessFacts; now?: () => string;
-    /** INTERNAL to the upgrade pair — see `initializeStore`'s identical option. */
+    /** INTERNAL to the upgrade pair - see `initializeStore`'s identical option. */
     raiseSettlementSignal?: boolean;
   } = {},
 ): Promise<{ schemaVersion: number }> {
@@ -2853,7 +2863,7 @@ export async function upgradeStore(
   // already exists at this path, so this attempt re-synchronizes its containing
   // directory entry. It runs on the CLOSED handle and strictly AFTER the content
   // checks above, so an unverifiable store syncs nothing and the barrier's own
-  // failure is its own refusal — never `store.corrupt`, never a lost commit.
+  // failure is its own refusal - never `store.corrupt`, never a lost commit.
   try {
     syncDirectoryEntry(dirname(dbPath));
   } catch (error) {

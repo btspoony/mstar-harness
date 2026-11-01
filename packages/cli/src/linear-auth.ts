@@ -32,6 +32,15 @@ export type RegisteredClient = { clientId: string; redirectUri: string };
  * moves.
  */
 /**
+ * Authorization failures carry their code and recovery on the error itself: a
+ * plain Error reaches the envelope as `internal-error`, which tells an operator
+ * nothing they can act on.
+ */
+function authFailure(code: string, message: string, recovery: string): Error {
+  return Object.assign(new Error(message), { code, recovery });
+}
+
+/**
  * Every call here is a network round trip inside an interactive login; without a
  * deadline a black-holed endpoint leaves the operator watching a spinner forever.
  */
@@ -183,9 +192,9 @@ export async function beginAuthorization(
     response.end(
       error !== null ? "<h1>Authorization failed</h1>" : "<h1>Authorized</h1><p>You can return to the terminal.</p>",
     );
-    if (error !== null) pending.reject(new Error(`[linear.auth-denied] the authorization server returned ${error}`));
-    else if (returned !== state) pending.reject(new Error("[linear.auth-denied] the callback state did not match"));
-    else if (code === null) pending.reject(new Error("[linear.auth-denied] the callback carried no code"));
+    if (error !== null) pending.reject(authFailure("linear.auth-denied", `the authorization server returned ${error}`, "Run `mstar linear auth` again; the authorization server declined the request."));
+    else if (returned !== state) pending.reject(authFailure("linear.auth-denied", "the callback state did not match", "Run `mstar linear auth` again; a callback whose state does not match is refused rather than trusted."));
+    else if (code === null) pending.reject(authFailure("linear.auth-denied", "the callback carried no code", "Run `mstar linear auth` again and complete the browser step."));
     else pending.resolve(code);
   });
   await new Promise<void>((ready) => server.listen(0, "127.0.0.1", ready));
@@ -221,7 +230,7 @@ export async function beginAuthorization(
     wait: (timeoutMs = 300_000) => {
       let timer: ReturnType<typeof setTimeout> | undefined;
       const expiry = new Promise<string>((_, reject) => {
-        timer = setTimeout(() => reject(new Error("[linear.auth-timeout] no authorization callback arrived")), timeoutMs);
+        timer = setTimeout(() => reject(authFailure("linear.auth-timeout", "no authorization callback arrived", "Run `mstar linear auth` again and complete the browser step, or check the authorization server is reachable.")), timeoutMs);
         // The CLI waits on a human, not on work: an unref'd timer cannot be the
         // reason the process stays alive.
         timer.unref?.();
@@ -247,7 +256,7 @@ export type TokenSet = {
 function toTokenSet(body: Record<string, unknown>, clientId: string): TokenSet {
   const accessToken = body.access_token;
   if (typeof accessToken !== "string" || accessToken === "") {
-    throw new Error("[linear.auth-unavailable] the token endpoint returned no access_token");
+    throw authFailure("linear.auth-unavailable", "the token endpoint returned no access token", "Run `mstar linear auth` again; if it repeats, the authorization server is misbehaving.");
   }
   const expiresIn = typeof body.expires_in === "number" ? body.expires_in : null;
   return {

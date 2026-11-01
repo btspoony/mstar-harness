@@ -11,6 +11,7 @@
  */
 import { clearLinearCredential, linearCredentialPath, readLinearCredential, writeLinearCredential } from "@mstar-harness/engine";
 import { commandEnvelopeSchema, refusalEnvelope } from "../envelope.js";
+import { engineErrorFacts } from "./family-refusal.js";
 import { z } from "zod";
 import type { CommandDefinition, CommandEnvelope, CommandRequirement, InvocationContext } from "../types.js";
 
@@ -68,7 +69,27 @@ async function run(operation: "login" | "status" | "logout", invocation: Invocat
         "Run `mstar linear auth` with the standalone CLI on a machine that can open a browser, or export MSTAR_LINEAR_CREDENTIAL pointing at a credential file written elsewhere.",
     });
   }
-  const tokens = await authorize(LINEAR_MCP_URL);
+  // The host leg can fail (timeout, refused registration, declined authorization).
+  // Those carry their own code and recovery, so they become a refusal envelope
+  // rather than an escaped Error the CLI would print as internal-error.
+  let tokens: Awaited<ReturnType<NonNullable<typeof authorize>>>;
+  try {
+    tokens = await authorize(LINEAR_MCP_URL);
+  } catch (error) {
+    const facts = engineErrorFacts(error);
+    const message = error instanceof Error ? error.message : String(error);
+    return refusalEnvelope({
+      command: "linear.auth",
+      status: "refused",
+      code: facts.code ?? "linear.auth-unavailable",
+      exitCode: 1,
+      message,
+      details: { credentialPath: linearCredentialPath(), ...facts.details },
+      // A literal, so the reachability lint can prove a real command: the host
+      // facts still supply the message and the code.
+      recovery: "Run `mstar linear auth` again, or check the authorization server is reachable.",
+    });
+  }
   if (tokens === null) {
     return refusalEnvelope({
       command: "linear.auth",
