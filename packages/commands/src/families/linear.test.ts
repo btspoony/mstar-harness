@@ -33,7 +33,7 @@ function dataOf(result: { status: string }): Record<string, unknown> {
 
 describe("mstar linear auth", () => {
   test("status on a machine with no credential says absent, with the path", async () => {
-    const result = await command.execute({ action: "status" }, context());
+    const result = await command.execute({ operation: "status" }, context());
     expect(result.status).toBe("ok");
     const data = dataOf(result);
     expect(data.authorized).toBe(false);
@@ -41,26 +41,26 @@ describe("mstar linear auth", () => {
   });
 
   test("login stores what the host returned, and status then reports it", async () => {
-    const authorized = await command.execute({ action: "login" }, context({ linearAuthorize: async () => tokens }));
+    const authorized = await command.execute({ operation: "login" }, context({ linearAuthorize: async () => tokens }));
     expect(authorized.status).toBe("ok");
     expect(dataOf(authorized).scope).toBe("read");
 
-    const status = await command.execute({ action: "status" }, context());
+    const status = await command.execute({ operation: "status" }, context());
     const data = dataOf(status);
     expect(data.authorized).toBe(true);
     expect(data.hasRefreshToken).toBe(true);
   });
 
   test("logout removes the credential and says whether anything was there", async () => {
-    await command.execute({ action: "login" }, context({ linearAuthorize: async () => tokens }));
-    const first = await command.execute({ action: "logout" }, context());
+    await command.execute({ operation: "login" }, context({ linearAuthorize: async () => tokens }));
+    const first = await command.execute({ operation: "logout" }, context());
     expect(dataOf(first).removed).toBe(true);
-    const second = await command.execute({ action: "logout" }, context());
+    const second = await command.execute({ operation: "logout" }, context());
     expect(dataOf(second).removed).toBe(false);
   });
 
   test("a host without the capability refuses and names a host that has it", async () => {
-    const result = await command.execute({ action: "login" }, context());
+    const result = await command.execute({ operation: "login" }, context());
     expect(result.status).toBe("refused");
     expect(result.code).toBe("linear.auth-unsupported");
     // The recovery is part of the refusal envelope; check the whole thing so the
@@ -69,9 +69,9 @@ describe("mstar linear auth", () => {
   });
 
   test("an authorization that did not complete is a refusal, not a stored empty token", async () => {
-    const result = await command.execute({ action: "login" }, context({ linearAuthorize: async () => null }));
+    const result = await command.execute({ operation: "login" }, context({ linearAuthorize: async () => null }));
     expect(result.code).toBe("linear.auth-denied");
-    const status = await command.execute({ action: "status" }, context());
+    const status = await command.execute({ operation: "status" }, context());
     expect(dataOf(status).authorized).toBe(false);
   });
 });

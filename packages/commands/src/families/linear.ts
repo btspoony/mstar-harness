@@ -15,7 +15,7 @@ import { z } from "zod";
 import type { CommandDefinition, CommandEnvelope, CommandRequirement, InvocationContext } from "../types.js";
 
 const schema = z.object({
-  action: z.enum(["login", "status", "logout"]).optional(),
+  operation: z.enum(["login", "status", "logout"]).optional(),
 });
 
 type Input = z.infer<typeof schema>;
@@ -47,11 +47,11 @@ function describe(now = Date.now()): Record<string, unknown> {
   };
 }
 
-async function run(action: "login" | "status" | "logout", invocation: InvocationContext): Promise<CommandEnvelope> {
-  if (action === "status") {
+async function run(operation: "login" | "status" | "logout", invocation: InvocationContext): Promise<CommandEnvelope> {
+  if (operation === "status") {
     return envelope("linear.auth", describe());
   }
-  if (action === "logout") {
+  if (operation === "logout") {
     const removed = clearLinearCredential();
     return envelope("linear.auth", { removed, credentialPath: linearCredentialPath() });
   }
@@ -65,7 +65,7 @@ async function run(action: "login" | "status" | "logout", invocation: Invocation
       message: "this host cannot run the browser authorization leg",
       details: { credentialPath: linearCredentialPath() },
       recovery:
-        "Run the login from a host that can open a browser (the dsh plugin or the CLI), or set MSTAR_LINEAR_CREDENTIAL to a credential file written elsewhere.",
+        "Run `mstar linear auth` with a host that can open a browser, or export MSTAR_LINEAR_CREDENTIAL pointing at a credential file written elsewhere.",
     });
   }
   const tokens = await authorize(LINEAR_MCP_URL);
@@ -77,7 +77,7 @@ async function run(action: "login" | "status" | "logout", invocation: Invocation
       exitCode: 1,
       message: "the authorization did not complete",
       details: { credentialPath: linearCredentialPath() },
-      recovery: "Re-run `mstar linear auth`; if the browser never returned, copy the callback URL here or check the server is reachable.",
+      recovery: "Re-run `mstar linear auth`; if the browser never returned, check the authorization server is reachable.",
     });
   }
   const written = writeLinearCredential(tokens);
@@ -94,8 +94,8 @@ export function getLinearCommandDefinitions(): CommandDefinition[] {
     cli: {
       path: ["linear", "auth"],
       aliases: [],
-      arguments: [{ key: "action", required: false, variadic: false, choices: ["login", "status", "logout"] }],
-      options: [],
+      arguments: [],
+      options: [{ key: "operation", flags: "--operation <verb>", required: false }],
     },
     input: schema,
     output: commandEnvelopeSchema,
@@ -103,7 +103,7 @@ export function getLinearCommandDefinitions(): CommandDefinition[] {
     rootInputs: [],
     requirements: [],
     async execute(value: Input, invocation: InvocationContext): Promise<CommandEnvelope> {
-      return run(value.action ?? "login", invocation);
+      return run(value.operation ?? "login", invocation);
     },
     } satisfies CommandDefinition,
   ];
