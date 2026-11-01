@@ -20,6 +20,7 @@ import {
   validateExecutionIdentity,
   type ExecutionIdentity,
 } from "@mstar-harness/engine";
+import { beginAuthorization, discoverAuthorizationServer, exchangeCode, registerClient } from "./linear-auth.js";
 import { unionBranchSchemas } from "./schema-branches.js";
 import { captureSddEvidenceFromFile, verifySddEvidence } from "./sdd-evidence.js";
 import { detectInstalledPluginVersion } from "./plugin-version-alignment";
@@ -846,6 +847,28 @@ function cliEffects(services: Array<{ close(): Promise<void> }>): CommandEffects
       const handle = { url: running.url, async close() { await running.close(); } };
       services.push(handle);
       return handle;
+    },
+    async linearAuthorize(mcpUrl: string) {
+      // The browser leg lives in linear-auth; this only owns the platform
+      // interaction it needs. Nothing here sees or prints a token.
+      const authorizationServer = await discoverAuthorizationServer(mcpUrl);
+      const pending = await beginAuthorization(authorizationServer, (redirectUri) =>
+        registerClient(authorizationServer, redirectUri),
+      );
+      const opener = process.platform === "darwin" ? "open" : process.platform === "win32" ? "cmd" : "xdg-open";
+      const argv = process.platform === "win32" ? ["/c", "start", "", pending.url] : [pending.url];
+      const child = spawn(opener, argv, { stdio: "ignore", shell: false });
+      await new Promise<void>((resolve, reject) => {
+        child.once("spawn", () => resolve());
+        child.once("error", reject);
+      });
+      process.stderr.write(`Authorize in the browser; waiting for the callback on ${pending.redirectUri}\n`);
+      try {
+        const code = await pending.wait();
+        return await exchangeCode(authorizationServer, { clientId: pending.clientId, redirectUri: pending.redirectUri }, code, pending.verifier);
+      } finally {
+        pending.close();
+      }
     },
     openBrowser(url: string) {
       const opener = process.platform === "darwin" ? "open" : process.platform === "win32" ? "cmd" : "xdg-open";

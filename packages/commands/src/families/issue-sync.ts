@@ -27,6 +27,7 @@ import {
   openStore,
   readCursor,
   readProjectBinding,
+  readLinearCredential,
   readRepoLinearBinding,
   resolveRepoRoot,
   resetCursor,
@@ -43,6 +44,16 @@ import type { CommandDefinition, CommandEnvelope, CommandRequirement, Invocation
 // default the provider assembly needs; a deployment that self-hosts or proxies
 // the endpoint overrides it where the assembly is constructed.
 const LINEAR_MCP_URL = "https://mcp.linear.app/mcp";
+
+/**
+ * The access token this machine stored through `mstar linear auth`, or null.
+ * A credential that is due for refresh is still returned — it is usable until it
+ * expires, and refusing here would turn a refreshable state into a hard stop.
+ */
+function storedLinearToken(): string | null {
+  const state = readLinearCredential();
+  return state.kind === "present" ? state.credential.accessToken : null;
+}
 
 const schema = z.object({
   project: z.string().optional(),
@@ -230,7 +241,9 @@ async function runImport(id: string, input: Input, invocation: InvocationContext
     invocation.effects.issueProvider?.(projectId) ??
     createLinearProvider({
       url: LINEAR_MCP_URL,
-      token: process.env.LINEAR_API_KEY,
+      // Precedence is explicit: the stored credential this machine authorized
+      // wins, and an exported key is the fallback for a headless deployment.
+      token: storedLinearToken() ?? process.env.LINEAR_API_KEY,
       deadlineMs: DEFAULT_PROBE_DEADLINE_MS,
       // The listing is scoped to the binding: a credential that reaches several
       // teams or projects must never import another one's issues here.

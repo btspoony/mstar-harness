@@ -1,0 +1,110 @@
+/**
+ * `linear auth` — the one place an operator turns Linear on.
+ *
+ * Enabling the bundled `linear-mcp` row without a credential leaves a 401 and no
+ * way forward, so the flow that produces a credential belongs in the product
+ * rather than in a README. The command orchestrates; the host performs the
+ * browser leg through `effects.linearAuthorize`.
+ *
+ * Storing is the command's job on purpose: the credential file is engine state
+ * with a documented location and permissions, not something each host invents.
+ */
+import { clearLinearCredential, linearCredentialPath, readLinearCredential, writeLinearCredential } from "@mstar-harness/engine";
+import { commandEnvelopeSchema, refusalEnvelope } from "../envelope.js";
+import { z } from "zod";
+import type { CommandDefinition, CommandEnvelope, CommandRequirement, InvocationContext } from "../types.js";
+
+const schema = z.object({
+  action: z.enum(["login", "status", "logout"]).optional(),
+});
+
+type Input = z.infer<typeof schema>;
+
+const LINEAR_MCP_URL = "https://mcp.linear.app/mcp";
+
+function envelope(id: string, data: unknown): CommandEnvelope {
+  return { version: 1, command: id, status: "ok", code: `${id}.ok`, exitCode: 0, data };
+}
+
+function describe(now = Date.now()): Record<string, unknown> {
+  const state = readLinearCredential(now);
+  if (state.kind === "absent") {
+    return { authorized: false, credentialPath: linearCredentialPath(), reason: "no credential is stored" };
+  }
+  if (state.kind === "unreadable") {
+    return { authorized: false, credentialPath: state.path, reason: state.reason };
+  }
+  const expiresIn = state.credential.expiresAt === null ? null : Math.max(0, state.credential.expiresAt - now);
+  return {
+    authorized: true,
+    credentialPath: state.path,
+    scope: state.credential.scope,
+    // Reported as facts, not as a verdict: a credential inside the refresh
+    // window is still usable and is refreshed by the import path.
+    refreshDue: state.refreshDue,
+    expiresInMs: expiresIn,
+    hasRefreshToken: state.credential.refreshToken !== null,
+  };
+}
+
+async function run(action: "login" | "status" | "logout", invocation: InvocationContext): Promise<CommandEnvelope> {
+  if (action === "status") {
+    return envelope("linear.auth", describe());
+  }
+  if (action === "logout") {
+    const removed = clearLinearCredential();
+    return envelope("linear.auth", { removed, credentialPath: linearCredentialPath() });
+  }
+  const authorize = invocation.effects.linearAuthorize;
+  if (authorize === undefined) {
+    return refusalEnvelope({
+      command: "linear.auth",
+      status: "refused",
+      code: "linear.auth-unsupported",
+      exitCode: 1,
+      message: "this host cannot run the browser authorization leg",
+      details: { credentialPath: linearCredentialPath() },
+      recovery:
+        "Run the login from a host that can open a browser (the dsh plugin or the CLI), or set MSTAR_LINEAR_CREDENTIAL to a credential file written elsewhere.",
+    });
+  }
+  const tokens = await authorize(LINEAR_MCP_URL);
+  if (tokens === null) {
+    return refusalEnvelope({
+      command: "linear.auth",
+      status: "refused",
+      code: "linear.auth-denied",
+      exitCode: 1,
+      message: "the authorization did not complete",
+      details: { credentialPath: linearCredentialPath() },
+      recovery: "Re-run `mstar linear auth`; if the browser never returned, copy the callback URL here or check the server is reachable.",
+    });
+  }
+  const written = writeLinearCredential(tokens);
+  return envelope("linear.auth", { credentialPath: written, scope: tokens.scope, expiresAt: tokens.expiresAt });
+}
+
+const description = "Authorize this machine against Linear's MCP server and store the credential";
+
+export function getLinearCommandDefinitions(): CommandDefinition[] {
+  return [
+  {
+    id: "linear.auth",
+    description,
+    cli: {
+      path: ["linear", "auth"],
+      aliases: [],
+      arguments: [{ key: "action", required: false, variadic: false, choices: ["login", "status", "logout"] }],
+      options: [],
+    },
+    input: schema,
+    output: commandEnvelopeSchema,
+    effects: [],
+    rootInputs: [],
+    requirements: [],
+    async execute(value: Input, invocation: InvocationContext): Promise<CommandEnvelope> {
+      return run(value.action ?? "login", invocation);
+    },
+    } satisfies CommandDefinition,
+  ];
+}

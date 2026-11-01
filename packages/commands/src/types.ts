@@ -82,6 +82,17 @@ export interface CommandEffects {
    * a token. Absent on the CLI, which has no host transport.
    */
   issueProvider?(projectId: string): IssueProvider | null;
+  /**
+   * Host capability: run the browser authorization leg and return the token set,
+   * or null when the host cannot. The command decides what to store; the host
+   * only knows how to talk to the authorization server.
+   */
+  linearAuthorize?(mcpUrl: string): Promise<{
+    accessToken: string;
+    refreshToken: string | null;
+    expiresAt: number | null;
+    scope: string | null;
+  } | null>;
   writeStderr?(message: string): void;
   captureSddEvidence?(requestPath: string, argv: readonly string[]): Promise<unknown>;
   verifySddEvidence?(request: {

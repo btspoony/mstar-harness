@@ -109,6 +109,7 @@ __export(exports_engine, {
   ProjectionError: () => ProjectionError,
   QC_REVIEWER_PARAMS: () => QC_REVIEWER_PARAMS,
   QC_VERDICTS: () => QC_VERDICTS,
+  REFRESH_WINDOW_MS: () => REFRESH_WINDOW_MS,
   RETURN_SHAPE_LABELS: () => RETURN_SHAPE_LABELS,
   REVIEW_EMOJI: () => REVIEW_EMOJI,
   REVIEW_SEAT_ROLES: () => REVIEW_SEAT_ROLES,
@@ -198,6 +199,7 @@ __export(exports_engine, {
   catalogRootDir: () => catalogRootDir,
   checkSddAction: () => checkSddAction,
   classifySkillLint: () => classifySkillLint,
+  clearLinearCredential: () => clearLinearCredential,
   closeIssue: () => closeIssue,
   collectActiveLifecycleBranches: () => collectActiveLifecycleBranches,
   collectLegacyArchiveReferenceTexts: () => collectLegacyArchiveReferenceTexts,
@@ -270,6 +272,7 @@ __export(exports_engine, {
   landedPathOf: () => landedPathOf,
   legacyStatusDocPath: () => legacyStatusDocPath,
   linearCall: () => linearCall,
+  linearCredentialPath: () => linearCredentialPath,
   linearRpc: () => linearRpc,
   linkCatalogEntities: () => linkCatalogEntities,
   linkIssue: () => linkIssue,
@@ -350,6 +353,7 @@ __export(exports_engine, {
   readItem: () => readItem,
   readJson: () => readJson,
   readLedgerSummary: () => readLedgerSummary,
+  readLinearCredential: () => readLinearCredential,
   readMainWorktree: () => readMainWorktree,
   readMilestonesOn: () => readMilestonesOn,
   readProgressLedger: () => readProgressLedger,
@@ -467,7 +471,8 @@ __export(exports_engine, {
   workflowNotesLedgerPath: () => workflowNotesLedgerPath,
   writeCursor: () => writeCursor,
   writeDshSessionBinding: () => writeDshSessionBinding,
-  writeJson: () => writeJson
+  writeJson: () => writeJson,
+  writeLinearCredential: () => writeLinearCredential
 });
 import { AsyncLocalStorage } from "node:async_hooks";
 import { createHash } from "node:crypto";
@@ -620,6 +625,9 @@ import {
 import { createRequire as createRequire3 } from "node:module";
 import { tmpdir } from "node:os";
 import { dirname as dirname21, join as join34, relative as relative11, resolve as resolve23, sep as sep13 } from "node:path";
+import { chmodSync, existsSync as existsSync25, mkdirSync as mkdirSync9, readFileSync as readFileSync28, renameSync as renameSync4, rmSync as rmSync3, writeFileSync as writeFileSync6 } from "node:fs";
+import { homedir } from "node:os";
+import { dirname as dirname22, join as join35 } from "node:path";
 function __exportSetter2(name, newValue) {
   this[name] = __returnValue2.bind(null, newValue);
 }
@@ -32910,6 +32918,70 @@ function latestGoverningMigration(db) {
   const row = db.prepare("select manifest_json from execution_migrations order by case phase when 'retired' then 4 when 'active' then 3 when 'staged' then 2 else 1 end desc, rowid desc limit 1").get();
   return row ?? null;
 }
+function linearCredentialPath() {
+  const explicit = process.env.MSTAR_LINEAR_CREDENTIAL;
+  if (explicit !== undefined && explicit.trim() !== "")
+    return explicit;
+  const base = process.env.XDG_CONFIG_HOME?.trim() || join35(homedir(), ".config");
+  return join35(base, "mstar", "linear", "credential.json");
+}
+function parse2(raw) {
+  let data;
+  try {
+    data = JSON.parse(raw);
+  } catch {
+    return null;
+  }
+  if (typeof data !== "object" || data === null)
+    return null;
+  const record = data;
+  const accessToken = record.access_token;
+  if (typeof accessToken !== "string" || accessToken.trim() === "")
+    return null;
+  const refreshToken = typeof record.refresh_token === "string" && record.refresh_token.trim() !== "" ? record.refresh_token : null;
+  const expiresAt = typeof record.expires_at === "number" && Number.isFinite(record.expires_at) ? record.expires_at : null;
+  const scope = typeof record.scope === "string" ? record.scope : null;
+  return { accessToken, refreshToken, expiresAt, scope };
+}
+function readLinearCredential(now2 = Date.now()) {
+  const path2 = linearCredentialPath();
+  if (!existsSync25(path2))
+    return { kind: "absent" };
+  let raw;
+  try {
+    raw = readFileSync28(path2, "utf8");
+  } catch (error) {
+    return { kind: "unreadable", path: path2, reason: error instanceof Error ? error.message : String(error) };
+  }
+  const credential = parse2(raw);
+  if (credential === null) {
+    return { kind: "unreadable", path: path2, reason: "the file does not hold an access_token; re-authorize to replace it" };
+  }
+  const refreshDue = credential.expiresAt !== null && now2 >= credential.expiresAt - REFRESH_WINDOW_MS;
+  return { kind: "present", path: path2, credential, refreshDue };
+}
+function writeLinearCredential(credential) {
+  const path2 = linearCredentialPath();
+  mkdirSync9(dirname22(path2), { recursive: true, mode: 448 });
+  const payload = {
+    access_token: credential.accessToken,
+    refresh_token: credential.refreshToken,
+    expires_at: credential.expiresAt,
+    scope: credential.scope
+  };
+  const temporary = `${path2}.${process.pid}.tmp`;
+  writeFileSync6(temporary, JSON.stringify(payload, null, 2), { mode: 384 });
+  chmodSync(temporary, 384);
+  renameSync4(temporary, path2);
+  return path2;
+}
+function clearLinearCredential() {
+  const path2 = linearCredentialPath();
+  if (!existsSync25(path2))
+    return false;
+  rmSync3(path2, { force: true });
+  return true;
+}
 var __defProp2, __returnValue2 = (v) => v, __export2 = (target, all) => {
   for (var name in all)
     __defProp2(target, name, {
@@ -33571,7 +33643,7 @@ alter table issue_sync_state add column pending_target text;
   select issues.registered_at as ts
   union all select o.discovered_at from occurrences o where o.issue_id = issues.id
   union all select t.occurred_at from issue_transitions t where t.issue_id = issues.id
-))`, ISSUE_ORDER_SQL, TERMINAL_DISPOSITIONS = "'resolved', 'waived', 'duplicate', 'superseded'", IDENTITY_COLUMNS = "kind, id, title, description, root_kind, relative_path, document_kind, lifecycle, revision, registered_at, updated_at", completeWitnessGapForTest, workflowWitnessGapForTest, RECOVER_COORDINATOR_OPERATION = "recoverExecutionCoordinator", REOPEN_WORKFLOW_OPERATION = "reopenExecutionWorkflow", PROBE_STATES, SyncError, DIRECTIONS, DEFAULT_PROBE_DEADLINE_MS = 5000, REDACTED = "[redacted]", LINEAR_PAGE_SIZE = 50, LINEAR_ITEM_FIELDS, nextId = 1, LINEAR_LISTING_VERBS, IMPORTED_ROOT_CAUSE_KEY = "linear:external", IMPORTED_ACCEPTANCE_KEY = "linear:external", LINEAR_PROVIDER = "linear", IMPORT_DIRECTION = "import", IMPORT_ACTOR = "sync-import", KIND_VALUES, SEVERITY_VALUES2, COMMIT_REGISTRATION_OPERATION = "commitExecutionRegistration", REGISTRATION_SEMANTICS, MAX_DASHBOARD_SEARCH_LENGTH = 200, VIEW_QUERY_FIELDS, DISPOSITIONS3, KINDS2, SEVERITIES2, SYNC_PROBE_STATES, MIGRATION_MANIFEST_VERSION = 1, LEGACY_ISSUE_KIND = "review-obligation", StoreMigrationError, MIGRATION_VOCABULARY, LEGACY_REQUIRED_FIELDS, HISTORY_ONLY_ABSENT_FIELDS, WORKFLOW_NOTES_LEDGER_MAX_BYTES = 4194304, WORKFLOW_NOTES_LEDGER_READ_BYTES = 1048576, WORKFLOW_NOTES_COMPACTION_MARKER_KIND = "workflow-notes-compaction", EXECUTION_LEDGER_ERROR_CODES, ExecutionLedgerError, NOTE_KEYS, NOTE_KEY_ORDER, MARKER_KEYS, MARKER_KEY_ORDER, DROPPED_KEYS, DROPPED_KEY_ORDER, UNRECOGNIZED_LINE, EXECUTION_RECOVERY_PROTOCOL_VERSION = 3, ExecutionRecoveryError, EXECUTION_MIGRATION_VERSION2, CATALOG_MIGRATION_VERSION, PROVENANCE_ORIGIN_MIGRATION_VERSION, ROADMAP_MIGRATION_VERSION, EXECUTION_COVERAGE_MIGRATION_VERSION, MILESTONE_MIGRATION_VERSION, PROJECT_MOVES_MIGRATION_VERSION, SYNC_LEDGER_MIGRATION_VERSION, DSH_MIGRATION_VERSION, EXECUTION_COORDINATOR_ONLY_MIGRATION_VERSION, DSH_LEGACY_PROVENANCE_MIGRATION_VERSION, AUTHORITY_TABLES, REPLACEMENT_ORDER, DATABASE_HEADER_BYTES2 = 100, WAL_FILE_FORMAT_VERSION2 = 2, RESTORE_SCRATCH_NAME, RESTORE_SCRATCH_SIDECARS, REDACTED_KEYS;
+))`, ISSUE_ORDER_SQL, TERMINAL_DISPOSITIONS = "'resolved', 'waived', 'duplicate', 'superseded'", IDENTITY_COLUMNS = "kind, id, title, description, root_kind, relative_path, document_kind, lifecycle, revision, registered_at, updated_at", completeWitnessGapForTest, workflowWitnessGapForTest, RECOVER_COORDINATOR_OPERATION = "recoverExecutionCoordinator", REOPEN_WORKFLOW_OPERATION = "reopenExecutionWorkflow", PROBE_STATES, SyncError, DIRECTIONS, DEFAULT_PROBE_DEADLINE_MS = 5000, REDACTED = "[redacted]", LINEAR_PAGE_SIZE = 50, LINEAR_ITEM_FIELDS, nextId = 1, LINEAR_LISTING_VERBS, IMPORTED_ROOT_CAUSE_KEY = "linear:external", IMPORTED_ACCEPTANCE_KEY = "linear:external", LINEAR_PROVIDER = "linear", IMPORT_DIRECTION = "import", IMPORT_ACTOR = "sync-import", KIND_VALUES, SEVERITY_VALUES2, COMMIT_REGISTRATION_OPERATION = "commitExecutionRegistration", REGISTRATION_SEMANTICS, MAX_DASHBOARD_SEARCH_LENGTH = 200, VIEW_QUERY_FIELDS, DISPOSITIONS3, KINDS2, SEVERITIES2, SYNC_PROBE_STATES, MIGRATION_MANIFEST_VERSION = 1, LEGACY_ISSUE_KIND = "review-obligation", StoreMigrationError, MIGRATION_VOCABULARY, LEGACY_REQUIRED_FIELDS, HISTORY_ONLY_ABSENT_FIELDS, WORKFLOW_NOTES_LEDGER_MAX_BYTES = 4194304, WORKFLOW_NOTES_LEDGER_READ_BYTES = 1048576, WORKFLOW_NOTES_COMPACTION_MARKER_KIND = "workflow-notes-compaction", EXECUTION_LEDGER_ERROR_CODES, ExecutionLedgerError, NOTE_KEYS, NOTE_KEY_ORDER, MARKER_KEYS, MARKER_KEY_ORDER, DROPPED_KEYS, DROPPED_KEY_ORDER, UNRECOGNIZED_LINE, EXECUTION_RECOVERY_PROTOCOL_VERSION = 3, ExecutionRecoveryError, EXECUTION_MIGRATION_VERSION2, CATALOG_MIGRATION_VERSION, PROVENANCE_ORIGIN_MIGRATION_VERSION, ROADMAP_MIGRATION_VERSION, EXECUTION_COVERAGE_MIGRATION_VERSION, MILESTONE_MIGRATION_VERSION, PROJECT_MOVES_MIGRATION_VERSION, SYNC_LEDGER_MIGRATION_VERSION, DSH_MIGRATION_VERSION, EXECUTION_COORDINATOR_ONLY_MIGRATION_VERSION, DSH_LEGACY_PROVENANCE_MIGRATION_VERSION, AUTHORITY_TABLES, REPLACEMENT_ORDER, DATABASE_HEADER_BYTES2 = 100, WAL_FILE_FORMAT_VERSION2 = 2, RESTORE_SCRATCH_NAME, RESTORE_SCRATCH_SIDECARS, REDACTED_KEYS, REFRESH_WINDOW_MS = 300000;
 var init_engine = __esm(() => {
   __defProp2 = Object.defineProperty;
   init_coordination_write = __esm2(() => {
