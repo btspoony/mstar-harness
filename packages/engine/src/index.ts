@@ -1162,3 +1162,14 @@ export {
   selectSemanticFields,
   WORKFLOW_OPERATION_SEMANTICS,
 } from "./recovery-intent.js";
+
+// The Linear credential this machine holds: host state, stored outside any
+// repository, read by whoever needs to call the service.
+export type { LinearCredential, LinearCredentialState } from "./linear-credential.js";
+export {
+  clearLinearCredential,
+  linearCredentialPath,
+  readLinearCredential,
+  REFRESH_WINDOW_MS,
+  writeLinearCredential,
+} from "./linear-credential.js";

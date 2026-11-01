@@ -62,6 +62,7 @@ export const FAMILY_PURPOSE: Readonly<Record<string, string>> = {
   iteration: "Iteration phase gates, push cadence and registration.",
   plan: "Coordinator plan rows: bind, progress, complete and issue links. bind writes the engine row only; a dsh-coordinating session that needs dsh-local ledger attribution uses the native mstar_plan_bind.",
   session: "Launch or recover a coordinator session identity.",
+  linear: "Linear authorization: run the OAuth flow, report the stored credential, or remove it. The credential is host state, not project state.",
   workflow: "Workflow lifecycle: register, evidence, phase, policy and branch anchors.",
   issue: "Issue store: capture, triage, closure and links.",
   milestone: "Project milestones: add, update, assign issues and read rollups.",

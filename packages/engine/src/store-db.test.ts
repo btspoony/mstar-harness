@@ -1,9 +1,9 @@
 /**
- * store-db.test.ts — proof for the issue-store runtime boundary.
+ * store-db.test.ts - proof for the issue-store runtime boundary.
  * Run with `bun test packages/engine/src/store-db.test.ts`.
  *
  * The scenario suite below is executed against the REAL store-db.ts
- * implementation and the REAL node:sqlite driver — twice: once in-process
+ * implementation and the REAL node:sqlite driver - twice: once in-process
  * under the Bun test runner itself and once per scenario as a child process
  * under the declared Node floor and the same Bun binary, using the test-only
  * `store-test-runtime.ts` helper bundled into a temporary directory. No mock
@@ -22,6 +22,8 @@ import { historicalStore } from "./store-migration-fixtures.js";
 import { upgradeStoreMinimal } from "./execution-minimal-import.js";
 import { backupStore } from "./store-activation.js";
 import {
+  MIGRATION_15_SQL,
+  MIGRATION_16_SQL,
   MIGRATIONS,
   migrationChecksum,
   SCHEMA_VERSION_TABLE_SQL,
@@ -84,7 +86,7 @@ describe("store-db runtime floors (declared manifest floor)", () => {
   test("compareVersions orders synthetic vectors numerically", () => {
     // Synthetic comparator vectors, not repository versions. The comparator is
     // purely numeric per dotted segment (parseInt), so pre-release suffixes
-    // would all collapse to 0 — the vectors must differ in numeric segments.
+    // would all collapse to 0 - the vectors must differ in numeric segments.
     const same = "0.0.1";
     const low = "0.0.9";
     const high = "0.0.10";
@@ -915,7 +917,7 @@ describe("store-db schema-unsupported reports store / build / first-unknown dist
       ? refusal.message
       : "";
     expect(message).not.toBe("");
-    // The store's OWN highest applied version — which is NOT the first row this
+    // The store's OWN highest applied version - which is NOT the first row this
     // build cannot interpret (that is the whole defect this regression pins).
     expect(message).toContain(`highest applied schema version is ${highestApplied}`);
     expect(message).not.toContain(`highest applied schema version is ${firstUnsupported}`);
@@ -942,7 +944,7 @@ describe("store-db schema-unsupported reports store / build / first-unknown dist
  * `store.corrupt`. Creation now builds the complete store beside the path and
  * publishes it with one create-only hard link: the canonical name is either
  * absent or a complete committed store, and the publish is the only
- * serialization point — no lock, no mutex, no polling.
+ * serialization point - no lock, no mutex, no polling.
  * ------------------------------------------------------------------------ */
 
 describe("store-db creation publishes atomically", () => {
@@ -971,7 +973,7 @@ describe("store-db creation publishes atomically", () => {
     const dir = mkdtempSync(join(ROOT, "publish-atomic-"));
     const storePath = join(dir, "store.db");
     // The peer runs in its OWN process, so it can look between the creator's
-    // synchronous steps — the same interleaving that produced the reported
+    // synchronous steps - the same interleaving that produced the reported
     // false corruption. It spins on the canonical path's first appearance and
     // immediately runs the real public upgrade against those bytes.
     const observer = join(ROOT, "upgrade-observer.mjs");
@@ -1086,7 +1088,7 @@ try {
     const published = outcomes.filter((outcome) => outcome.refused === undefined);
     const refused = outcomes.filter((outcome) => outcome.refused !== undefined);
     // The create-only publish has exactly one winner; every loser refuses with
-    // the truthful create-only code — never a corruption or lock verdict — and
+    // the truthful create-only code - never a corruption or lock verdict - and
     // the refusal is retried through the same public operation below.
     expect(published).toHaveLength(1);
     expect(refused).toHaveLength(3);
@@ -1156,7 +1158,7 @@ try {
     writeFileSync(storePath, retained);
     await expect(initializeStore({ harnessDir: dir })).rejects.toMatchObject({ code: "store.already-exists" });
     expect([...readFileSync(storePath)]).toEqual([...retained]);
-    // An upgrade peer classifies it as the corruption it is — it never
+    // An upgrade peer classifies it as the corruption it is - it never
     // misreads it as a creation in progress to wait out, and no staging
     // scratch appears beside it.
     await expect(upgradeStore({ harnessDir: dir })).rejects.toMatchObject({ code: "store.corrupt" });
@@ -1223,8 +1225,8 @@ try {
     );
     competitorDone.resolve();
     await competitor;
-    // The partial outcome is disclosed as one: created, activated, published —
-    // and this attempt's handle acquisition failed on the real busy path —
+    // The partial outcome is disclosed as one: created, activated, published -
+    // and this attempt's handle acquisition failed on the real busy path -
     // with the actual cause and the supported continuation.
     expect(refusal).toMatchObject({ code: "store.created-handle-failed" });
     const message = refusal instanceof Error ? refusal.message : "";
@@ -1272,7 +1274,7 @@ try {
 describe("store-db publication makes the canonical directory entry durable", () => {
   const realFsyncSync = nodeFs.fsyncSync;
 
-  /** Whether this descriptor currently names a directory — the barrier's target. */
+  /** Whether this descriptor currently names a directory - the barrier's target. */
   const namesDirectory = (fd: number): boolean => {
     try {
       return fstatSync(fd).isDirectory();
@@ -1318,7 +1320,7 @@ describe("store-db publication makes the canonical directory entry durable", () 
     }
 
     // Disclosed as the PARTIAL outcome it is: the store exists and is complete,
-    // only the barrier failed — never a clean success, never corruption, and
+    // only the barrier failed - never a clean success, never corruption, and
     // never a claim that nothing was created.
     expect(refusal).toMatchObject({
       code: "store.publication-barrier-failed",
@@ -1400,7 +1402,7 @@ describe("store-db publication makes the canonical directory entry durable", () 
     const message = refusal instanceof Error ? refusal.message : "";
     expect(message).toMatch(/EIO|simulated directory fsync failure/);
 
-    // The committed store is intact — the row written before the barrier is
+    // The committed store is intact - the row written before the barrier is
     // still there, the schema is current, and the idempotent public upgrade
     // succeeds once the condition clears.
     const reader = await openStore({ harnessDir: dir }, "read");
@@ -1563,7 +1565,7 @@ const SETTLEMENT_FACTS = {
 
 /**
  * A schema-8 store carrying held `execution_integration_leases` claims for
- * retired plan-PM holders — the exact input migration 9's settlement pass
+ * retired plan-PM holders - the exact input migration 9's settlement pass
  * consumes. Claims are written in the given order, so a batch reference that
  * follows it is distinguishable from the deterministic sorted one.
  */
@@ -1672,5 +1674,50 @@ describe("retired plan-PM claim settlement", () => {
     const claim = await tombstoneOf(context, workflowIds[0]!);
     expect(claim.released_at).toBe(settledAt);
     expect(claim.release_reason).toBe("retired-plan-pm-seat:holder-clock");
+  });
+});
+
+describe("migration 16 - the open cycle survives the upgrade", () => {
+  test("a pending row's planned target moves out of the copied column", async () => {
+    const { Database } = await import("bun:sqlite");
+    const db = new Database(":memory:");
+    db.exec(MIGRATION_15_SQL);
+    // Before the split, an open cycle recorded its TARGET in the copied column
+    // because there was only one.
+    db.exec(
+      "insert into issue_sync_state(binding_id, direction, local_id, external_id, item_state, last_remote_updated_at, last_error, last_skip_reason, revision, updated_at)" +
+        " values ('b', 'import', 'I-1', 'EXT-1', 'pending', '2026-11-01T00:00:00Z', null, null, 1, '2026-11-01T00:00:00Z')",
+    );
+    db.exec(MIGRATION_16_SQL);
+    const row = db.query("select item_state, last_remote_updated_at, pending_target from issue_sync_state").get() as {
+      item_state: string;
+      last_remote_updated_at: string | null;
+      pending_target: string | null;
+    };
+    // Leaving it would make the row claim content it never copied, and the stale
+    // guard would skip every page older than a revision nothing holds.
+    expect(row).toEqual({
+      item_state: "pending",
+      last_remote_updated_at: null,
+      pending_target: "2026-11-01T00:00:00Z",
+    });
+    db.close();
+  });
+
+  test("a settled row keeps its copied watermark and gains no target", async () => {
+    const { Database } = await import("bun:sqlite");
+    const db = new Database(":memory:");
+    db.exec(MIGRATION_15_SQL);
+    db.exec(
+      "insert into issue_sync_state(binding_id, direction, local_id, external_id, item_state, last_remote_updated_at, last_error, last_skip_reason, revision, updated_at)" +
+        " values ('b', 'import', 'I-1', 'EXT-1', 'applied', '2026-11-01T00:00:00Z', null, null, 1, '2026-11-01T00:00:00Z')",
+    );
+    db.exec(MIGRATION_16_SQL);
+    const row = db.query("select last_remote_updated_at, pending_target from issue_sync_state").get() as {
+      last_remote_updated_at: string | null;
+      pending_target: string | null;
+    };
+    expect(row).toEqual({ last_remote_updated_at: "2026-11-01T00:00:00Z", pending_target: null });
+    db.close();
   });
 });

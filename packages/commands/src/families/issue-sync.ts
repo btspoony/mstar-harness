@@ -27,6 +27,8 @@ import {
   openStore,
   readCursor,
   readProjectBinding,
+  readLinearCredential,
+  writeLinearCredential,
   readRepoLinearBinding,
   resolveRepoRoot,
   resetCursor,
@@ -43,6 +45,60 @@ import type { CommandDefinition, CommandEnvelope, CommandRequirement, Invocation
 // default the provider assembly needs; a deployment that self-hosts or proxies
 // the endpoint overrides it where the assembly is constructed.
 const LINEAR_MCP_URL = "https://mcp.linear.app/mcp";
+
+/**
+ * The access token this machine stored through `mstar linear auth`, or null.
+ *
+ * A credential past its expiry is refreshed first: sending an expired token only
+ * produces an access-denied that names nothing, while the refresh token beside it
+ * was still usable. A credential that is merely due (inside the refresh window)
+ * is returned as-is — it works until it expires.
+ */
+/**
+ * A refusal that survives the trip to the envelope: a plain Error loses its code,
+ * and the operator would be told `internal-error` for a condition with an exact
+ * recovery.
+ */
+function refusalWith(code: string, message: string, recovery: string): Error {
+  return Object.assign(new Error(message), { code, recovery });
+}
+
+export async function resolveStoredToken(invocation: InvocationContext): Promise<string | null> {
+  const state = readLinearCredential();
+  if (state.kind !== "present") return null;
+  const { credential } = state;
+  const expired = credential.expiresAt !== null && credential.expiresAt <= Date.now();
+  if (!expired) return credential.accessToken;
+  const refresh = invocation.effects.linearRefresh;
+  const fallbackKey = process.env.LINEAR_API_KEY;
+  if (refresh === undefined || credential.refreshToken === null || credential.clientId === null) {
+    // An exported key is a documented fallback, not a dead branch: without this,
+    // a headless machine holding both a stale credential and a working key would
+    // refuse instead of importing.
+    if (fallbackKey !== undefined && fallbackKey !== "") return null;
+    throw refusalWith(
+      "linear.reauth-required",
+      "the stored Linear credential has expired and this host cannot refresh it",
+      "Run `mstar linear auth` on the machine that holds the credential, or export LINEAR_API_KEY for a headless run.",
+    );
+  }
+  const fresh = await refresh(LINEAR_MCP_URL, credential.clientId, credential.refreshToken);
+  if (fresh === null) {
+    throw refusalWith(
+      "linear.reauth-required",
+      "the refresh was declined",
+      "Run `mstar linear auth` again; the stored refresh token is no longer accepted.",
+    );
+  }
+  writeLinearCredential({
+    accessToken: fresh.accessToken,
+    refreshToken: fresh.refreshToken ?? credential.refreshToken,
+    expiresAt: fresh.expiresAt,
+    scope: fresh.scope ?? credential.scope,
+    clientId: fresh.clientId ?? credential.clientId,
+  });
+  return fresh.accessToken;
+}
 
 const schema = z.object({
   project: z.string().optional(),
@@ -230,7 +286,9 @@ async function runImport(id: string, input: Input, invocation: InvocationContext
     invocation.effects.issueProvider?.(projectId) ??
     createLinearProvider({
       url: LINEAR_MCP_URL,
-      token: process.env.LINEAR_API_KEY,
+      // Precedence is explicit: the stored credential this machine authorized
+      // wins, and an exported key is the fallback for a headless deployment.
+      token: (await resolveStoredToken(invocation)) ?? process.env.LINEAR_API_KEY,
       deadlineMs: DEFAULT_PROBE_DEADLINE_MS,
       // The listing is scoped to the binding: a credential that reaches several
       // teams or projects must never import another one's issues here.
