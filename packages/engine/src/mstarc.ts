@@ -362,9 +362,21 @@ function repoRootOf(harnessDir: string): string {
   }
 }
 
-/** `[linear]` from `<repo-root>/.mstarc` only; never a parent's configuration. */
-export function readRepoLinearBinding(harnessDir: string): RepoLinearBinding {
-  const repoRoot = repoRootOf(harnessDir);
+/**
+ * `[linear]` from `<repo-root>/.mstarc` only; never a parent's configuration.
+ *
+ * `repoRootHint` is the directory the CALLER considers its repository — normally
+ * the invocation's cwd. It matters when the harness lives outside the checkout:
+ * `<repo>/.mstarc` may declare `harness_dir = /var/mstar/state`, and walking up
+ * from THAT directory finds no checkout (or, worse, a DIFFERENT one) and would
+ * silently read the wrong repository's configuration.
+ */
+export function readRepoLinearBinding(harnessDir: string, repoRootHint?: string): RepoLinearBinding {
+  // The declaring repository wins when it actually holds a `.mstarc`; the
+  // harness-derived root stays as the fallback so a harness inside a checkout
+  // still finds its own file when the caller's cwd says nothing.
+  const candidates = repoRootHint === undefined ? [repoRootOf(harnessDir)] : [repoRootOf(repoRootHint), repoRootOf(harnessDir)];
+  const repoRoot = candidates.find((root) => isFile(join(root, MSTARC_FILE))) ?? candidates[0]!;
   const file = join(repoRoot, MSTARC_FILE);
   if (!isFile(file)) {
     return {

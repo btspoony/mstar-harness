@@ -194,7 +194,7 @@ async function runImport(id: string, input: Input, invocation: InvocationContext
 
   // The two declarations are read FIRST: the provider needs the endpoint they
   // supply, and every refusal must happen before a store write or a listing call.
-  const repo = readRepoLinearBinding(harnessDir);
+  const repo = readRepoLinearBinding(harnessDir, invocation.cwd);
   if (repo.kind !== "bound" || !repo.binding.enabled) {
     const why =
       repo.kind === "absent"

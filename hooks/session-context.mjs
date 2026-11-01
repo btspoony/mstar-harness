@@ -1618,8 +1618,9 @@ function repoRootOf(harnessDir) {
     dir = parent;
   }
 }
-function readRepoLinearBinding(harnessDir) {
-  const repoRoot = repoRootOf(harnessDir);
+function readRepoLinearBinding(harnessDir, repoRootHint) {
+  const candidates = repoRootHint === undefined ? [repoRootOf(harnessDir)] : [repoRootOf(repoRootHint), repoRootOf(harnessDir)];
+  const repoRoot = candidates.find((root) => isFile(join3(root, MSTARC_FILE))) ?? candidates[0];
   const file = join3(repoRoot, MSTARC_FILE);
   if (!isFile(file)) {
     return {
