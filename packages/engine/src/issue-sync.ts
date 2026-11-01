@@ -289,6 +289,22 @@ export function planItem(db: StoreDb, input: PlanItemInput): SyncItem {
  * comparison silently skips genuine changes. An unparseable instant is refused
  * rather than guessed.
  */
+/**
+ * The strict complement of `isNewerInstant`, used where EQUALITY must mirror
+ * rather than skip: a `pending` row can be the residue of an interrupted write,
+ * so an unchanged timestamp still has to be copied. Only a genuinely older
+ * revision is stale.
+ */
+export function isOlderInstant(candidate: string, recorded: string | null): boolean {
+  const next = Date.parse(candidate);
+  if (Number.isNaN(next)) {
+    throw new SyncError("sync.invalid-input", `remoteUpdatedAt ${JSON.stringify(candidate)} is not an ISO-8601 instant`);
+  }
+  if (recorded === null) return false;
+  const prior = Date.parse(recorded);
+  return Number.isNaN(prior) ? false : next < prior;
+}
+
 export function isNewerInstant(candidate: string, recorded: string | null): boolean {
   const next = Date.parse(candidate);
   if (Number.isNaN(next)) {

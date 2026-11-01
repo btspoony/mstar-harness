@@ -268,6 +268,14 @@ export function parseLinearBinding(
 }
 
 /** True when `file` is an existing regular file. */
+function isDirectory(dir: string): boolean {
+  try {
+    return statSync(dir).isDirectory();
+  } catch {
+    return false;
+  }
+}
+
 function isFile(file: string): boolean {
   try {
     return statSync(file).isFile();
@@ -336,9 +344,27 @@ export type RepoLinearBinding =
   | { kind: "absent"; code: "linear.binding-absent"; message: string }
   | { kind: "invalid"; code: LinearBindingRefusal["code"]; message: string };
 
+/**
+ * The repository root that owns this harness. `<repoRoot>/.mstar` is the common
+ * layout, but a deployment may put the harness anywhere (`.mstarc` records
+ * `harnessDir`), so the parent of the harness directory is a guess rather than
+ * the answer: walk up to the first directory holding `.git`, and fall back to
+ * the parent only when the walk finds none (a harness outside any checkout).
+ */
+function repoRootOf(harnessDir: string): string {
+  const start = resolve(harnessDir);
+  let dir = start;
+  for (;;) {
+    if (isFile(join(dir, ".git")) || isDirectory(join(dir, ".git"))) return dir;
+    const parent = dirname(dir);
+    if (parent === dir) return dirname(start);
+    dir = parent;
+  }
+}
+
 /** `[linear]` from `<repo-root>/.mstarc` only; never a parent's configuration. */
 export function readRepoLinearBinding(harnessDir: string): RepoLinearBinding {
-  const repoRoot = dirname(resolve(harnessDir));
+  const repoRoot = repoRootOf(harnessDir);
   const file = join(repoRoot, MSTARC_FILE);
   if (!isFile(file)) {
     return {

@@ -23,6 +23,7 @@ import {
 } from "../issue.js";
 import {
   isNewerInstant,
+  isOlderInstant,
   markApplied,
   markFailed,
   planItem,
@@ -104,7 +105,7 @@ export function importPage(db: StoreDb, bindingId: string, items: readonly Provi
         result.skipped++;
         continue;
       }
-      if (ledger.itemState === "applied" && !remoteIsNewer(item, ledger.lastRemoteUpdatedAt)) {
+      if (ledger.itemState === "applied" && !isNewerInstant(item.updatedAt, ledger.lastRemoteUpdatedAt)) {
         // Zero-delta: no ledger write, no issue write, not even a timestamp.
         result.skipped++;
         continue;
@@ -118,7 +119,7 @@ export function importPage(db: StoreDb, bindingId: string, items: readonly Provi
           remoteUpdatedAt: item.updatedAt,
           operationId: operationId(bindingId, item, "replan"),
         });
-      } else if (ledger.itemState === "pending" && !remoteIsNewer(item, ledger.lastRemoteUpdatedAt)) {
+      } else if (ledger.itemState === "pending" && isOlderInstant(item.updatedAt, ledger.lastRemoteUpdatedAt)) {
         // A resumed cycle whose page is STALE relative to the recorded
         // watermark must not mirror older content: close the cycle on the
         // recorded revision instead, so a replayed page cannot walk the row
@@ -319,10 +320,6 @@ function mirrorRemoteFields(db: StoreDb, localId: string, externalId: string, it
   // `externalId` is the ledger's own key; the row's copy is written at capture
   // time, so a mirror never re-points it.
   void externalId;
-}
-
-function remoteIsNewer(item: ProviderItem, lastRemoteUpdatedAt: string | null): boolean {
-  return isNewerInstant(item.updatedAt, lastRemoteUpdatedAt);
 }
 
 /** Best-effort: record the failure on a pending row so the next run retries it. */
