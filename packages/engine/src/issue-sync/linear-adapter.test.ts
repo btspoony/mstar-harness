@@ -93,6 +93,30 @@ describe("listIssues pagination", () => {
     ]);
   });
 
+  test("a page whose items belong to another team is refused, not partially ingested", async () => {
+    const d = deps(
+      [{ kind: "ok", payload: { issues: [issue("LIN-1", { team: "Other Team" })], hasNextPage: false, cursor: null } }],
+      { scope: { team: "Nexus Dev" } },
+    );
+    expect(await codeOf(() => createLinearAdapter(d).listIssues(null))).toBe("linear.query-failed");
+  });
+
+  test("a page matching the binding by name OR by id maps cleanly", async () => {
+    // The filter accepts a name or an ID, so a page may echo either side of the
+    // pair; refusing one of them would reject a legitimate result.
+    const byName = deps(
+      [{ kind: "ok", payload: { issues: [issue("LIN-1", { project: { name: "Roadmap" }, projectId: "proj-1" })], hasNextPage: false, cursor: null } }],
+      { scope: { project: "Roadmap" } },
+    );
+    expect((await createLinearAdapter(byName).listIssues(null)).items).toHaveLength(1);
+
+    const byId = deps(
+      [{ kind: "ok", payload: { issues: [issue("LIN-2", { project: { name: "Roadmap" }, projectId: "proj-1" })], hasNextPage: false, cursor: null } }],
+      { scope: { project: "proj-1" } },
+    );
+    expect((await createLinearAdapter(byId).listIssues(null)).items).toHaveLength(1);
+  });
+
   test("the verified priority object shape maps to its readable name", async () => {
     // The service returns `priority: { value, name }`. A fixture that only ever
     // used a plain string would agree with the code and disagree with the

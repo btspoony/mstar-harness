@@ -4,9 +4,11 @@
  * per page against the configured Linear entry; never a write call, never a
  * per-issue poll, never a credential in output.
  *
- * The tool name and payload shape were settled against the live service with an
- * authenticated `tools/list` + `tools/call` (serverInfo `linear` 1.0.2, 38
- * tools). The listing verb is `list_issues`; its documented envelope is:
+ * The tool name, argument schema and payload shape were recorded from the live
+ * service with an authenticated `tools/list` + `tools/call` (serverInfo
+ * `linear` 1.0.2, 38 tools) — the tool-surface note kept with the iteration
+ * artifacts records the method and what a re-run should reproduce. The listing
+ * verb is `list_issues`; its envelope is:
  *
  *   { issues: LinearItem[], hasNextPage?: boolean, cursor?: string | null, errors?: [{ message }] }
  *
@@ -44,11 +46,13 @@ export type LinearListDeps = {
    * reaches several projects would file another project's issues under the one
    * local project.
    *
-   * Both argument names are verified against the service's schema (`team`:
-   * "Team name or ID"; `project`: "Project name, ID, identifier, or slug"), and
-   * the filter was confirmed to take effect: a bogus team id returns zero rows.
-   * The page is still checked per item below, because a filter that silently
-   * stops applying looks exactly like a filter with nothing to exclude.
+   * Both argument names are recorded from the service's own schema (`team`:
+   * "Team name or ID"; `project`: "Project name, ID, identifier, or slug") —
+   * see the tool-surface note kept with the iteration artifacts for the method
+   * and what was captured. The schema proves the names; it does NOT prove the
+   * server honours them for every credential, which is why the page is still
+   * checked per item below: a filter that silently stops applying looks exactly
+   * like a filter with nothing to exclude.
    */
   scope?: { team?: string; project?: string };
   /**
@@ -70,7 +74,6 @@ export const LINEAR_PAGE_SIZE = 50;
  */
 export const LINEAR_ITEM_FIELDS: readonly string[] = [
   "id",
-  "uuid",
   "title",
   "description",
   "priority",
@@ -203,8 +206,12 @@ export function mapPage(payload: unknown, scope?: { team?: string; project?: str
     if (expected === undefined) continue;
     const foreign = items.find((entry) => {
       const seen = ownership(entry, key);
-      // Absent is not "different": the server may omit a field even when asked.
-      return seen !== null && seen !== expected && seen !== (isRecord(entry) ? entry[`${key}Id`] : undefined);
+      if (seen === null) return false; // absent is not "different"
+      if (seen === expected) return false;
+      // A binding may scope by ID while the item names the entity: the pair
+      // (name, id) identifies one thing, so either side matching is a match.
+      const id = isRecord(entry) ? entry[`${key}Id`] : undefined;
+      return typeof id === "string" ? id !== expected : true;
     });
     if (foreign !== undefined) {
       throw new SyncError(

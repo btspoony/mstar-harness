@@ -30058,7 +30058,12 @@ function mapPage(payload, scope) {
       continue;
     const foreign = items.find((entry) => {
       const seen = ownership(entry, key);
-      return seen !== null && seen !== expected && seen !== (isRecord2(entry) ? entry[`${key}Id`] : undefined);
+      if (seen === null)
+        return false;
+      if (seen === expected)
+        return false;
+      const id = isRecord2(entry) ? entry[`${key}Id`] : undefined;
+      return typeof id === "string" ? id !== expected : true;
     });
     if (foreign !== undefined) {
       throw new SyncError("linear.query-failed", `the page carries an issue whose ${key} is ${JSON.stringify(ownership(foreign, key))} although the binding scopes it to ${JSON.stringify(expected)}; the server-side filter did not take effect, so nothing was ingested`);
@@ -38457,7 +38462,6 @@ var init_engine = __esm(() => {
   DIRECTIONS = { import: true, push: true };
   LINEAR_ITEM_FIELDS = [
     "id",
-    "uuid",
     "title",
     "description",
     "priority",
