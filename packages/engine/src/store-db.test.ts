@@ -18,6 +18,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { applyStoreMigration, planStoreMigration } from "./store-migrate.js";
+import { historicalStore } from "./store-migration-fixtures.js";
 import { upgradeStoreMinimal } from "./execution-minimal-import.js";
 import { backupStore } from "./store-activation.js";
 import {
@@ -813,6 +814,78 @@ describe("migration 12 - severity vocabulary accepts nit and converts info", () 
  * reporting that first-unknown row as "the store version" understates the store
  * by a whole generation and sends the operator to the wrong upgrade target.
  * ------------------------------------------------------------------------ */
+
+describe("migration 15 - sync ledger", () => {
+  test("upgrades a store at the previous version and re-opens idempotently", async () => {
+    const dir = mkdtempSync(join(ROOT, "sync-ledger-upgrade-"));
+    const db = historicalStore(dir, 14);
+    const before = db.prepare("select max(version) as v from schema_version").get() as { v: number };
+    expect(before.v).toBe(14);
+    db.close();
+    expect(await upgradeStore({ harnessDir: dir })).toEqual({ schemaVersion: MIGRATIONS.length });
+    const upgraded = await openStore({ harnessDir: dir }, "read");
+    const tables = upgraded.db
+      .prepare("select name from sqlite_master where type='table' and name in ('project_bindings','issue_sync_state','sync_cursor') order by name")
+      .all() as Array<{ name: string }>;
+    expect(tables.map((t) => t.name)).toEqual(["issue_sync_state", "project_bindings", "sync_cursor"]);
+    const stateColumns = (
+      upgraded.db.prepare("pragma table_info(issue_sync_state)").all() as Array<{ name?: string }>
+    ).map((column) => column.name);
+    expect(stateColumns).toContain("last_skip_reason");
+    upgraded.close();
+    // Re-open applies no pending migration and keeps the version.
+    expect(await upgradeStore({ harnessDir: dir })).toEqual({ schemaVersion: MIGRATIONS.length });
+  });
+
+  test("ledger DDL holds its keys and uniqueness", async () => {
+    const dir = mkdtempSync(join(ROOT, "sync-ledger-keys-"));
+    const handle = await initializeStore({ harnessDir: dir });
+    const { db } = handle;
+    db.prepare(
+      "insert into catalog_entities(kind, id, title, root_kind, relative_path, registered_at, updated_at) values('project', 'p-one', 'P', 'projects', 'p-one/roadmap.md', 'now', 'now')",
+    ).run();
+    const insertIssue = db.prepare(
+      "insert into issues(id, project_id, title, kind, severity, impact, acceptance, created_at, updated_at, identity_key)" +
+        " values (?, 'p-one', 'Issue', 'bug', 'high', 'impact', 'acceptance', 'now', 'now', ?)",
+    );
+    insertIssue.run("I-000201", "ledger-issue-1");
+    insertIssue.run("I-000202", "ledger-issue-2");
+    insertIssue.run("I-000203", "ledger-issue-3");
+    db.prepare(
+      "insert into project_bindings(project_id, provider, workspace, team, remote_project, revision, updated_at) values ('p-one','linear','ws','team','RP',1,'now')",
+    ).run();
+    // A second store project cannot claim the same remote project.
+    expect(() =>
+      db.prepare(
+        "insert into project_bindings(project_id, provider, workspace, team, remote_project, revision, updated_at) values ('p-two','linear','ws','team','RP',1,'now')",
+      ).run(),
+    ).toThrow();
+    const insertState = db.prepare(
+      "insert into issue_sync_state(binding_id, direction, local_id, external_id, item_state, revision, updated_at)" +
+        " values ('linear:p-one','import',?, ?, 'pending', 1, 'now')",
+    );
+    insertState.run("I-000201", "EXT-1");
+    // A second row for the same item key is refused by the primary key.
+    expect(() => insertState.run("I-000201", "EXT-1")).toThrow();
+    // ...but null external_id rows are not subject to the partial index.
+    db.prepare(
+      "insert into issue_sync_state(binding_id, direction, local_id, external_id, item_state, revision, updated_at)" +
+        " values ('linear:p-one','import',?, null, 'pending', 1, 'now')",
+    ).run("I-000202");
+    db.prepare(
+      "insert into issue_sync_state(binding_id, direction, local_id, external_id, item_state, revision, updated_at)" +
+        " values ('linear:p-one','import',?, null, 'pending', 1, 'now')",
+    ).run("I-000203");
+    const cursor = db.prepare(
+      "insert into sync_cursor(binding_id, direction, cursor, updated_at) values ('linear:p-one','import','c1','now')" +
+        " on conflict(binding_id, direction) do update set cursor=excluded.cursor",
+    );
+    cursor.run();
+    cursor.run();
+    expect(db.prepare("select count(*) as n from sync_cursor").get()).toEqual({ n: 1 });
+    handle.close();
+  });
+});
 
 describe("store-db schema-unsupported reports store / build / first-unknown distinctly", () => {
   test("a store written past this build's supported maximum reports all three facts, not the first unknown row as the store version", async () => {
