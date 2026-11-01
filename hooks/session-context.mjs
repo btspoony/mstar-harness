@@ -30281,7 +30281,7 @@ function createLinearProvider(options) {
   });
   return { probe: () => probe.probe(), listIssues: (cursor) => listing.listIssues(cursor) };
 }
-function importPage(db, bindingId, items) {
+function importPage(db, bindingId, items, mapping) {
   const projectId = projectIdOf(bindingId);
   assertIssueStoreActive(db);
   const result = { imported: 0, updated: 0, skipped: 0, failed: 0 };
@@ -30292,7 +30292,7 @@ function importPage(db, bindingId, items) {
       const existing = findImportedIssue(db, externalId);
       if (existing === null) {
         assertNoLocalIdentityCollision(db, projectId, externalId);
-        localId = captureImportedIssue(db, projectId, item);
+        localId = captureImportedIssue(db, projectId, item, mapping);
         planAndApply(db, bindingId, localId, externalId, item);
         result.imported++;
         continue;
@@ -30404,9 +30404,9 @@ function assertNoLocalIdentityCollision(db, projectId, externalId) {
 function sourceIdentity(externalId) {
   return `${LINEAR_PROVIDER}:${externalId}`;
 }
-function captureImportedIssue(db, projectId, item) {
+function captureImportedIssue(db, projectId, item, mapping) {
   const externalId = requireField2(item.externalId, "externalId");
-  const input = captureInput(projectId, item);
+  const input = captureInput(projectId, item, mapping);
   db.exec("begin immediate");
   try {
     const receipt = captureIssueOn(db, input, {
@@ -30462,14 +30462,23 @@ function impactOf(item) {
   const description = typeof item.description === "string" ? item.description.trim() : "";
   return description === "" ? item.title : description;
 }
-function captureInput(projectId, item) {
+function facet(overrides, value, allowed) {
+  const mapped = overrides?.[value];
+  if (mapped === undefined || mapped.trim() === "")
+    return value;
+  if (!allowed.includes(mapped)) {
+    throw new SyncError("sync.invalid-input", `[linear.mapping] maps ${JSON.stringify(value)} to ${JSON.stringify(mapped)}, which is not a recognised value`);
+  }
+  return mapped;
+}
+function captureInput(projectId, item, mapping) {
   const externalId = requireField2(item.externalId, "externalId");
   const identity = sourceIdentity(externalId);
   return {
     projectId,
     title: requireField2(item.title, "title"),
-    kind: kindOf(item),
-    severity: severityOf(item.priority),
+    kind: facet(mapping?.kind, kindOf(item), KIND_VALUES),
+    severity: facet(mapping?.severity, severityOf(item.priority), SEVERITY_VALUES2),
     impact: impactOf(item),
     acceptance: `Mirror of Linear issue ${externalId}; the remote item owns its own acceptance.`,
     sourceIdentity: identity,
@@ -33530,7 +33539,7 @@ create table sync_cursor(
   select issues.registered_at as ts
   union all select o.discovered_at from occurrences o where o.issue_id = issues.id
   union all select t.occurred_at from issue_transitions t where t.issue_id = issues.id
-))`, ISSUE_ORDER_SQL, TERMINAL_DISPOSITIONS = "'resolved', 'waived', 'duplicate', 'superseded'", IDENTITY_COLUMNS = "kind, id, title, description, root_kind, relative_path, document_kind, lifecycle, revision, registered_at, updated_at", completeWitnessGapForTest, workflowWitnessGapForTest, RECOVER_COORDINATOR_OPERATION = "recoverExecutionCoordinator", REOPEN_WORKFLOW_OPERATION = "reopenExecutionWorkflow", PROBE_STATES, SyncError, DIRECTIONS, DEFAULT_PROBE_DEADLINE_MS = 5000, REDACTED = "[redacted]", LINEAR_PAGE_SIZE = 50, nextId = 1, LINEAR_LISTING_VERBS, IMPORTED_ROOT_CAUSE_KEY = "linear:external", IMPORTED_ACCEPTANCE_KEY = "linear:external", LINEAR_PROVIDER = "linear", IMPORT_DIRECTION = "import", IMPORT_ACTOR = "sync-import", KIND_VALUES, COMMIT_REGISTRATION_OPERATION = "commitExecutionRegistration", REGISTRATION_SEMANTICS, MAX_DASHBOARD_SEARCH_LENGTH = 200, VIEW_QUERY_FIELDS, DISPOSITIONS3, KINDS2, SEVERITIES2, SYNC_PROBE_STATES, MIGRATION_MANIFEST_VERSION = 1, LEGACY_ISSUE_KIND = "review-obligation", StoreMigrationError, MIGRATION_VOCABULARY, LEGACY_REQUIRED_FIELDS, HISTORY_ONLY_ABSENT_FIELDS, WORKFLOW_NOTES_LEDGER_MAX_BYTES = 4194304, WORKFLOW_NOTES_LEDGER_READ_BYTES = 1048576, WORKFLOW_NOTES_COMPACTION_MARKER_KIND = "workflow-notes-compaction", EXECUTION_LEDGER_ERROR_CODES, ExecutionLedgerError, NOTE_KEYS, NOTE_KEY_ORDER, MARKER_KEYS, MARKER_KEY_ORDER, DROPPED_KEYS, DROPPED_KEY_ORDER, UNRECOGNIZED_LINE, EXECUTION_RECOVERY_PROTOCOL_VERSION = 3, ExecutionRecoveryError, EXECUTION_MIGRATION_VERSION2, CATALOG_MIGRATION_VERSION, PROVENANCE_ORIGIN_MIGRATION_VERSION, ROADMAP_MIGRATION_VERSION, EXECUTION_COVERAGE_MIGRATION_VERSION, MILESTONE_MIGRATION_VERSION, PROJECT_MOVES_MIGRATION_VERSION, SYNC_LEDGER_MIGRATION_VERSION, DSH_MIGRATION_VERSION, EXECUTION_COORDINATOR_ONLY_MIGRATION_VERSION, DSH_LEGACY_PROVENANCE_MIGRATION_VERSION, AUTHORITY_TABLES, REPLACEMENT_ORDER, DATABASE_HEADER_BYTES2 = 100, WAL_FILE_FORMAT_VERSION2 = 2, RESTORE_SCRATCH_NAME, RESTORE_SCRATCH_SIDECARS, REDACTED_KEYS;
+))`, ISSUE_ORDER_SQL, TERMINAL_DISPOSITIONS = "'resolved', 'waived', 'duplicate', 'superseded'", IDENTITY_COLUMNS = "kind, id, title, description, root_kind, relative_path, document_kind, lifecycle, revision, registered_at, updated_at", completeWitnessGapForTest, workflowWitnessGapForTest, RECOVER_COORDINATOR_OPERATION = "recoverExecutionCoordinator", REOPEN_WORKFLOW_OPERATION = "reopenExecutionWorkflow", PROBE_STATES, SyncError, DIRECTIONS, DEFAULT_PROBE_DEADLINE_MS = 5000, REDACTED = "[redacted]", LINEAR_PAGE_SIZE = 50, nextId = 1, LINEAR_LISTING_VERBS, IMPORTED_ROOT_CAUSE_KEY = "linear:external", IMPORTED_ACCEPTANCE_KEY = "linear:external", LINEAR_PROVIDER = "linear", IMPORT_DIRECTION = "import", IMPORT_ACTOR = "sync-import", KIND_VALUES, SEVERITY_VALUES2, COMMIT_REGISTRATION_OPERATION = "commitExecutionRegistration", REGISTRATION_SEMANTICS, MAX_DASHBOARD_SEARCH_LENGTH = 200, VIEW_QUERY_FIELDS, DISPOSITIONS3, KINDS2, SEVERITIES2, SYNC_PROBE_STATES, MIGRATION_MANIFEST_VERSION = 1, LEGACY_ISSUE_KIND = "review-obligation", StoreMigrationError, MIGRATION_VOCABULARY, LEGACY_REQUIRED_FIELDS, HISTORY_ONLY_ABSENT_FIELDS, WORKFLOW_NOTES_LEDGER_MAX_BYTES = 4194304, WORKFLOW_NOTES_LEDGER_READ_BYTES = 1048576, WORKFLOW_NOTES_COMPACTION_MARKER_KIND = "workflow-notes-compaction", EXECUTION_LEDGER_ERROR_CODES, ExecutionLedgerError, NOTE_KEYS, NOTE_KEY_ORDER, MARKER_KEYS, MARKER_KEY_ORDER, DROPPED_KEYS, DROPPED_KEY_ORDER, UNRECOGNIZED_LINE, EXECUTION_RECOVERY_PROTOCOL_VERSION = 3, ExecutionRecoveryError, EXECUTION_MIGRATION_VERSION2, CATALOG_MIGRATION_VERSION, PROVENANCE_ORIGIN_MIGRATION_VERSION, ROADMAP_MIGRATION_VERSION, EXECUTION_COVERAGE_MIGRATION_VERSION, MILESTONE_MIGRATION_VERSION, PROJECT_MOVES_MIGRATION_VERSION, SYNC_LEDGER_MIGRATION_VERSION, DSH_MIGRATION_VERSION, EXECUTION_COORDINATOR_ONLY_MIGRATION_VERSION, DSH_LEGACY_PROVENANCE_MIGRATION_VERSION, AUTHORITY_TABLES, REPLACEMENT_ORDER, DATABASE_HEADER_BYTES2 = 100, WAL_FILE_FORMAT_VERSION2 = 2, RESTORE_SCRATCH_NAME, RESTORE_SCRATCH_SIDECARS, REDACTED_KEYS;
 var init_engine = __esm(() => {
   __defProp2 = Object.defineProperty;
   init_coordination_write = __esm2(() => {
@@ -38431,6 +38440,7 @@ var init_engine = __esm(() => {
   LINEAR_LISTING_VERBS = ["list_issues", "search_issues"];
   init_issue();
   KIND_VALUES = ["bug", "risk", "improvement", "request", "decision", "review-obligation"];
+  SEVERITY_VALUES2 = ["critical", "high", "medium", "low", "nit"];
   init_catalog();
   init_catalog_import();
   init_catalog_registration();

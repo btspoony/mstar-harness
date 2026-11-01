@@ -203,6 +203,22 @@ describe("local identity and local-only gates", () => {
     close();
   });
 
+  test("a [linear.mapping] override reaches the captured row, and an illegal target is refused", async () => {
+    const { db, close } = await store("mapping-override");
+    const mapping = { disposition: {}, kind: {}, severity: { high: "critical" } };
+    importPage(db, BINDING, [item({ priority: "high" })], mapping);
+    const row = db.prepare("select severity from issues where external_id = 'LIN-1'").get() as { severity: string };
+    expect(row.severity).toBe("critical");
+
+    // A target the local enum does not have is refused by name instead of being
+    // stored and failing validation somewhere that no longer names the .mstarc.
+    // A per-item refusal fails THAT item and lets the page proceed, so the run
+    // reports it rather than throwing the whole page away.
+    const refused = importPage(db, BINDING, [item({ externalId: "LIN-9", priority: "low" })], { disposition: {}, kind: {}, severity: { low: "nonexistent" } });
+    expect(refused).toMatchObject({ imported: 0, updated: 0, failed: 1 });
+    close();
+  });
+
   test("a sub-second newer revision is ingested, not skipped by string order", async () => {
     const { db, close } = await store("instant-order");
     importPage(db, BINDING, [item()]);

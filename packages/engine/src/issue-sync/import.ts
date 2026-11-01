@@ -21,6 +21,7 @@ import {
   type IssueKind,
   type Severity,
 } from "../issue.js";
+import type { LinearFacetMapping } from "../mstarc.js";
 import {
   isNewerInstant,
   isOlderInstant,
@@ -75,7 +76,12 @@ export type ImportPageResult = {
  * - `skipped` → `skipped` (the contract has no out-edge from it)
  * - any per-item error → `markFailed` where a pending row exists → `failed`
  */
-export function importPage(db: StoreDb, bindingId: string, items: readonly ProviderItem[]): ImportPageResult {
+export function importPage(
+  db: StoreDb,
+  bindingId: string,
+  items: readonly ProviderItem[],
+  mapping?: LinearFacetMapping,
+): ImportPageResult {
   const projectId = projectIdOf(bindingId);
   // Every other capture route refuses a store that is not active
   // (`issue.ts` captureIssue); the ingest path is a store mutation and must not
@@ -89,7 +95,7 @@ export function importPage(db: StoreDb, bindingId: string, items: readonly Provi
       const existing = findImportedIssue(db, externalId);
       if (existing === null) {
         assertNoLocalIdentityCollision(db, projectId, externalId);
-        localId = captureImportedIssue(db, projectId, item);
+        localId = captureImportedIssue(db, projectId, item, mapping);
         planAndApply(db, bindingId, localId, externalId, item);
         result.imported++;
         continue;
@@ -258,9 +264,9 @@ function sourceIdentity(externalId: string): string {
  * by its operation id, so a resumed run replays it instead of creating a second
  * issue.
  */
-function captureImportedIssue(db: StoreDb, projectId: string, item: ProviderItem): string {
+function captureImportedIssue(db: StoreDb, projectId: string, item: ProviderItem, mapping?: LinearFacetMapping): string {
   const externalId = requireField(item.externalId, "externalId");
-  const input = captureInput(projectId, item);
+  const input = captureInput(projectId, item, mapping);
   db.exec("begin immediate");
   try {
     const receipt = captureIssueOn(db, input, {
@@ -359,14 +365,38 @@ function impactOf(item: ProviderItem): string {
   return description === "" ? item.title : description;
 }
 
-function captureInput(projectId: string, item: ProviderItem): CaptureInput {
+/**
+ * Apply one `[linear.mapping]` facet. The override is keyed by the value the
+ * default mapping produced, so an operator can retarget a facet without
+ * restating the whole correspondence; an unmapped value passes through.
+ */
+function facet<T extends string>(
+  overrides: Record<string, string> | undefined,
+  value: T,
+  allowed: readonly T[],
+): T {
+  const mapped = overrides?.[value];
+  if (mapped === undefined || mapped.trim() === "") return value;
+  // A correspondence that targets a value the local enum does not have is
+  // refused by name: storing it would fail validation later with a message that
+  // no longer points at the .mstarc line that caused it.
+  if (!allowed.includes(mapped as T)) {
+    throw new SyncError(
+      "sync.invalid-input",
+      `[linear.mapping] maps ${JSON.stringify(value)} to ${JSON.stringify(mapped)}, which is not a recognised value`,
+    );
+  }
+  return mapped as T;
+}
+
+function captureInput(projectId: string, item: ProviderItem, mapping?: LinearFacetMapping): CaptureInput {
   const externalId = requireField(item.externalId, "externalId");
   const identity = sourceIdentity(externalId);
   return {
     projectId,
     title: requireField(item.title, "title"),
-    kind: kindOf(item),
-    severity: severityOf(item.priority),
+    kind: facet(mapping?.kind, kindOf(item), KIND_VALUES),
+    severity: facet(mapping?.severity, severityOf(item.priority), SEVERITY_VALUES),
     impact: impactOf(item),
     acceptance: `Mirror of Linear issue ${externalId}; the remote item owns its own acceptance.`,
     sourceIdentity: identity,
@@ -382,6 +412,7 @@ function captureInput(projectId: string, item: ProviderItem): CaptureInput {
 }
 
 const KIND_VALUES: readonly IssueKind[] = ["bug", "risk", "improvement", "request", "decision", "review-obligation"];
+const SEVERITY_VALUES: readonly Severity[] = ["critical", "high", "medium", "low", "nit"];
 
 /**
  * Compass D4's default correspondence: a label naming a local kind selects it,

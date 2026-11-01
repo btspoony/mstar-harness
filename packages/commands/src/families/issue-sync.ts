@@ -277,7 +277,9 @@ async function runImport(id: string, input: Input, invocation: InvocationContext
       const page = await provider.listIssues(cursor);
       report.requests++;
       report.pages++;
-      const counts = importPage(db, bindingId, page.items);
+      // The repo's own [linear.mapping] correspondence, applied at capture time.
+      // Accepting an override and then ignoring it made the setting a lie.
+      const counts = importPage(db, bindingId, page.items, repo.binding.mapping);
       report.imported += counts.imported;
       report.updated += counts.updated;
       report.skipped += counts.skipped;
