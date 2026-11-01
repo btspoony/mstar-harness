@@ -5,7 +5,7 @@
 import { readFileSync, statSync as statSync4, writeSync } from "node:fs";
 import { dirname as dirname11, isAbsolute as isAbsolute4, join as join6, relative as relative4, resolve as resolve5 } from "node:path";
 
-// packages/engine/dist/engine.js
+// ../../../mstar-harness/packages/engine/dist/engine.js
 import { AsyncLocalStorage } from "node:async_hooks";
 import { basename, dirname, isAbsolute, join, resolve } from "node:path";
 import { dirname as dirname2, join as join2, sep } from "node:path";

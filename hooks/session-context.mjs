@@ -16,7 +16,7 @@ var __export = (target, all) => {
 };
 var __esm = (fn, res) => () => (fn && (res = fn(fn = 0)), res);
 
-// packages/engine/dist/engine.js
+// ../../../mstar-harness/packages/engine/dist/engine.js
 var exports_engine = {};
 __export(exports_engine, {
   ACTIVATION_PROTOCOL_VERSION: () => ACTIVATION_PROTOCOL_VERSION,
