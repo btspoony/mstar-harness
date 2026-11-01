@@ -25,6 +25,17 @@
 # argument-rewrite arm), so it would buy nothing but one Node process per
 # agent. Everything a caller needs is on this connection.
 #
+# The `linear-mcp` row is the same bridge pointed at Linear's hosted MCP
+# server. It ships DISABLED: Linear needs an OAuth grant (or a team-scoped API
+# key) that only the operator can supply, and an enabled-but-unauthenticated
+# row would spend a startup probe on a 401 and log a connection failure every
+# boot. Enable it by overriding the row in the profile (or home) layer —
+# `disabled: false` plus, if the deployment holds a token, a `headers` entry
+# (`Authorization: Bearer <key>`). With no token the server's own OAuth flow
+# applies. A non-blank `serverName` is required: it namespaces the tools as
+# `mcp__linear__<tool>`. The row is not part of the mstar MCP channel above —
+# it carries the provider's tools, never mstar's.
+#
 # Control root: every command that needs a harness root must be TOLD one. The
 # server never infers it from the launch cwd — that directory is the HOST's,
 # it says nothing about which workspace a caller belongs to, and adopting it
@@ -68,3 +79,10 @@
         transport: stdio
         command: npx
         args: ['-y', '@mstar-harness/cli', 'mcp', '--trust-caller-session-id']
+    - id: linear-mcp
+      name: '@deepseek-ai/dsh-mcp-client'
+      disabled: true
+      config:
+        serverName: linear
+        transport: streamable-http
+        url: https://mcp.linear.app/mcp

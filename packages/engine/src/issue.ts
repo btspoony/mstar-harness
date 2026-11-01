@@ -936,6 +936,19 @@ export function captureIssueOn(
   const existing = findByIdentity(db, identityKey);
   const at = nowRfc3339();
   if (existing) {
+    // Symmetric half of the reserved-namespace invariant (mirror import): a
+    // local capture reproducing an imported row's synthetic identity would
+    // append an occurrence to an EXTERNALLY mirrored issue. The import side
+    // refuses to capture onto a local row; this side refuses to capture onto a
+    // mirrored one, so the two identity spaces cannot merge in either direction.
+    const owner = db.prepare("select provider from issues where id = ?").get(existing.id) as { provider: string } | undefined;
+    if (owner !== undefined && owner.provider !== "local") {
+      throw new IssueError(
+        "issue.scope-refused",
+        `identity_key ${identityKey} belongs to a "${owner.provider}" mirrored issue; a local capture never appends to an imported row. ` +
+          `Choose a sourceIdentity outside the reserved "${owner.provider}:" namespace.`,
+      );
+    }
     const occurrenceId = insertOccurrence(db, existing.id, cols, at);
     const revision = existing.revision + 1;
     db.prepare("update issues set revision = ?, updated_at = ? where id = ?").run(revision, at, existing.id);
@@ -1023,11 +1036,22 @@ export async function appendOccurrence(
     const existingOp = lookupOperation(db, mutation.operationId);
     if (existingOp) return replayOrConflict(existingOp, hash);
 
-    const issue = db.prepare("select id, revision, disposition, project_id, identity_key from issues where id = ?").get(issueId) as
-      | { id: string; revision: number; disposition: string; project_id: string; identity_key: string }
+    const issue = db.prepare("select id, revision, disposition, project_id, identity_key, provider from issues where id = ?").get(issueId) as
+      | { id: string; revision: number; disposition: string; project_id: string; identity_key: string; provider: string }
       | undefined;
     if (!issue) {
       throw new IssueError("issue.not-found", `Issue ${issueId} does not exist`);
+    }
+    // The id-addressed half of the mirrored-row invariant. `captureIssueOn`
+    // refuses a local capture whose identity collides with an imported row; this
+    // verb addresses the row directly, so the same boundary has to be stated
+    // here or a local recurrence can still land on an externally mirrored issue.
+    if (issue.provider !== "local") {
+      throw new IssueError(
+        "issue.scope-refused",
+        `issue ${issueId} is mirrored from "${issue.provider}"; an occurrence is never appended to an imported row by id. ` +
+          `Record it against a local issue, or let the import carry the remote revision.`,
+      );
     }
     // A recurrence is another observation of the SAME identity (contract §3):
     // a distinct source/root-cause/acceptance pair belongs to its own issue.

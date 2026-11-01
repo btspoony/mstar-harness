@@ -18,5 +18,17 @@
     "signature": "capability-unreachable:packages/commands/src/families/session.ts:42a9f5d7c3fb",
     "justification": "The recovery names the registered `mstar session run` verb with its required workflow/role options and a positional placeholder; the checker's tokenizer does not accept the angle-bracket placeholder here, while the emitted command is executable and the launch-scope tests cover it.",
     "trackingIssue": "I-000865"
+  },
+  {
+    "signature": "capability-unreachable:packages/commands/src/families/project.ts:29a290e605ed",
+    "justification": "The recovery text is deliberately free-form for a usage refusal: the command's required flags are supplied by the operator from `--help`, and a static check cannot prove a fully-specified invocation when the recovery points at a read command instead. Same class as the other manual-escape recoveries.",
+    "trackingIssue": "I-000872",
+    "expectedCount": 1
+  },
+  {
+    "signature": "capability-unreachable:packages/commands/src/families/issue-sync.ts:3ad5780979d3",
+    "justification": "The recovery text is deliberately free-form for a usage refusal: the command's required flags are supplied by the operator from `--help`, and a static check cannot prove a fully-specified invocation when the recovery points at a read command instead. Same class as the other manual-escape recoveries.",
+    "trackingIssue": "I-000872",
+    "expectedCount": 1
   }
 ]

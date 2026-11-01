@@ -33,3 +33,6 @@ packages/dsh/mcp/
 
 # Bun cache output that some session environments land inside the worktree root
 /Library/Caches/bun/
+
+# SwiftPM build cache (never part of the product)
+.build/

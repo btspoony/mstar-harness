@@ -61,11 +61,13 @@ config:
 2. `@deepseek-ai/dsh-web-app` — the shipped web app layer (the `web` profile
    template the install targets; absent from a hand-made profile).
 3. This bundle — inserts the `mstar` plugin row (`id: mstar`,
-   `name: @mstar-harness/dsh`) and the `mstar-mcp` MCP client row
+   `name: @mstar-harness/dsh`), the `mstar-mcp` MCP client row
    (`id: mstar-mcp`, `name: @deepseek-ai/dsh-mcp-client`, stdio launch of
    `npx @mstar-harness/cli mcp`; requires the bridge plugin
    `@deepseek-ai/dsh-mcp-client` in the profile's dependencies — see the
-   patch header).
+   patch header), and a **disabled** `linear-mcp` row pointed at Linear's
+   hosted server (`id: linear-mcp`, `transport: streamable-http`,
+   `url: https://mcp.linear.app/mcp`).
 4. The profile's own `cordis.patch.yml`, then `$DSH_HOME/cordis.patch.yml`
    (the home-level layer outranks the per-profile layer).
 
@@ -73,6 +75,18 @@ Patches are id-targeted and the last write wins per row. **A patch replaces
 the targeted row's whole `config` — no deep merge** — so a user-level
 override must restate every field it keeps (the dsh-bundle whole-row-config
 semantics, not a merge).
+
+## Linear MCP row (shipped disabled)
+
+`linear-mcp` is the same bridge pointed at `https://mcp.linear.app/mcp`. It ships with `disabled: true`
+because Linear needs an OAuth grant or a team-scoped API key that only the operator can supply: an enabled row
+without credentials spends a startup probe on a 401 and logs a failed connection on every boot.
+
+Enable it by overriding the row in the profile (or home) layer — `disabled: false`, plus a `headers` entry
+(`Authorization: Bearer <key>`) when the deployment holds a token; without one the server's own OAuth flow
+applies. Tools then appear as `mcp__linear__<tool>`. This row is **not** part of the mstar channel above: it
+carries the provider's tools, never mstar's, and disabling or removing it changes nothing about the mstar
+surface.
 
 ## MCP mount contract
 

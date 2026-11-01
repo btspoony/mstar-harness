@@ -120,4 +120,9 @@ When both babysit/`*-babysit` and greploop apply: **babysit/`*-babysit` first**�
 - **`owner-gated` 未满足 → hard stop**：给出 PR 链接 + merge-ready 证据后**等待**；**人类 owner**（操作者/用户，**不是** coordinator 席位）书面批准前不得 merge，任何自动化证据（mergeable / CI 绿 / QC Approve / `ship it`）都不能替代。恢复路径：人类 owner 书面批准当前 PR head，或**重新进入 Phase 1 的 §1.2 流程**——加载 `mstar-iteration` → `references/phase-1-prepare.md`，按其「必须与用户显式确认，绝不默认」规则与用户重新确认后改动 compass 记录的 policy，新增 `## Decisions` 行记 `source: user`，并刷新 Phase 4 步骤 5 写入 PR 正文的 policy 行。PM **不得**在 Phase 5 就地改写。
 - **`pr_merge_policy` 缺失 → STOP**：**绝不**推断默认值。恢复路径：**重新进入 Phase 1 的 §1.2 流程**——加载 `mstar-iteration` → `references/phase-1-prepare.md`，按其「必须与用户显式确认，绝不默认」规则与用户确认该字段，写入 compass frontmatter 并在 `## Decisions` 记 `source: user`。
 
+**Merge 前的 head 对账（可执行，不是谓词的复述）**：执行 merge 的前一步，取 `gh pr view <n> --json headRefOid` 与授权报告记录的 `head` 逐字比较。
+
+- 相等 → 授权成立，可以 merge。
+- 不等 → **授权已失效**。授权之后任何 push 都作废它，包括 doc-only 的 changelog 补齐、allowlist 增删、注释修正——"delta 很小"不是理由，因为小 delta 同样会引入不准确的断言。此时只有两条合法出路：取**新 head** 的完整结论，或对该 head 做一次**窄 delta ack**（同一席位签发，记录 `reviewed_head`、新 head、delta 的文件范围、以及"是否仍维持原结论"）。delta ack 不是新 review：它只在 delta 不触及代码/测试/配置/生成产物时可用，且必须写明被确认的 delta 范围。
+
 **谁执行 merge**：`reviewed-auto` 下，§5.3 授权谓词成立后由 **PM** 执行 merge；`owner-gated` 下，**人类 owner** 可自行 merge，或书面批准后由 PM 执行。两种 policy 都只在 §5.3 满足后才 merge；verified merge 之后进入 **Phase 6** —— merge 不是生命周期终点。

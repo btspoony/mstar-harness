@@ -69,16 +69,25 @@ export type {
   ReviewRunSpec,
   ScaffoldOptions,
 } from "./path.js";
-export type { MstarcConfig } from "./mstarc.js";
+export type { LinearBinding, LinearBindingRefusal, LinearFacetMapping, MstarcConfig, MstarcStringKey, RepoLinearBinding } from "./mstarc.js";
 export {
+  LINEAR_MAPPING_SECTION,
+  LINEAR_SECTION,
   MSTARC_FILE,
   MSTARC_HARNESS_DIR_KEY,
   MSTARC_PROJECT_DIR_KEY,
   MSTARC_REVIEW_DIR_KEY,
   MSTARC_SECTION,
   MSTARC_WORKFLOW_DIR_KEY,
+  BOOLEAN_FALSE,
+  BOOLEAN_TRUE,
+  defaultLinearMapping,
   findMstarc,
+  loadMstarc,
+  parseLinearBinding,
   parseMstarc,
+  readRepoLinearBinding,
+  resolveRepoRoot,
 } from "./mstarc.js";
 export {
   assertPlanWritingPath,
@@ -299,6 +308,12 @@ export {
   validateCompassFrontmatter,
 } from "./iteration.js";
 export type {
+  BindingErrorCode,
+  ProjectBinding,
+  ProjectBindingMutation,
+  ProjectBindingRead,
+  ProjectBindingReceipt,
+  ProjectBindingTarget,
   ProjectRegisterDoc,
   ProjectRegisterEntry,
   RoadmapFrontmatter,
@@ -306,13 +321,16 @@ export type {
   RoadmapValidation,
 } from "./project.js";
 export {
+  BindingError,
   PROJECT_REFERENCES_DIR,
   PROJECT_REGISTER_FILE,
   PROJECT_ROADMAP_FILE,
   ROADMAP_STATUSES,
   _DEFAULT_PROJECT,
+  bindProject,
   findingsCleanupGate,
   listProjectReferenceFiles,
+  readProjectBinding,
   validateProjectRegister,
   validateRoadmap,
 } from "./project.js";
@@ -689,6 +707,7 @@ export {
   assertIssueTriageVocabulary,
   captureIssue,
   closeIssue,
+  computeIdentityKey,
   getIssue,
   linkIssue,
   listIssues,
@@ -702,6 +721,69 @@ export {
   ISSUE_ACTION_NAMES,
   ISSUE_PAYLOAD_SCHEMAS,
 } from "./issue.js";
+// Provider adapter contract (issue-sync): the engine defines it, the host
+// implements it. One probe-state vocabulary for every consumer.
+export type {
+  IssueProvider,
+  ProbeResult,
+  ProbeState,
+  ProviderItem,
+  ProviderItemFailure,
+  ProviderPage,
+} from "./issue-sync/provider.js";
+export { PROBE_STATES } from "./issue-sync/provider.js";
+// Sync ledger (migration 15): the per-item state machine and its read path.
+// Every mutation owns its transaction; a caller composes the verbs sequentially.
+export type {
+  CursorInput,
+  LedgerSummary,
+  MarkFailedInput,
+  MarkItemInput,
+  MarkSkippedInput,
+  PlanItemInput,
+  ReadItemInput,
+  SyncDirection,
+  SyncErrorCode,
+  SyncItem,
+  SyncItemState,
+  WriteCursorInput,
+} from "./issue-sync.js";
+export {
+  SyncError,
+  markApplied,
+  markFailed,
+  markSkipped,
+  planItem,
+  readCursor,
+  readItem,
+  readLedgerSummary,
+  replanItem,
+  resetCursor,
+  writeCursor,
+} from "./issue-sync.js";
+// M0 read-only mirror ingest: one listing page → store rows through the capture
+// path and the ledger above.
+export type { ImportPageResult } from "./issue-sync/import.js";
+// Linear MCP adapter: the host-neutral read-only handshake and listing
+// implementation of the provider contract. Moved here from a single host so any
+// host (CLI, dsh, omp) can wire it rather than each writing its own.
+export type { LinearMcpEntry, LinearProbeDeps, RpcOutcome } from "./issue-sync/linear-probe.js";
+export { createLinearProbe, DEFAULT_PROBE_DEADLINE_MS, listingVerbIn, redactTransportMessage } from "./issue-sync/linear-probe.js";
+export type { LinearAdapterEntry, LinearCallOutcome, LinearListDeps, LinearListSide } from "./issue-sync/linear-adapter.js";
+export { createLinearAdapter, LINEAR_PAGE_SIZE } from "./issue-sync/linear-adapter.js";
+// Provider assembly + streamable-HTTP transport: what makes the import runnable
+// without a host wiring the probe and the adapter together.
+export type { LinearProviderOptions, LinearTransportOptions } from "./issue-sync/linear-provider.js";
+export { createLinearProvider, LINEAR_LISTING_VERBS } from "./issue-sync/linear-provider.js";
+export { linearCall, linearRpc } from "./issue-sync/linear-transport.js";
+
+export {
+  IMPORTED_ACCEPTANCE_KEY,
+  IMPORTED_ROOT_CAUSE_KEY,
+  IMPORT_DIRECTION,
+  LINEAR_PROVIDER,
+  importPage,
+} from "./issue-sync/import.js";
 // Catalog authority: catalog metadata is
 // the DB authority for project/iteration/plan/document identity, locations,
 // relations and archived/superseded lifecycle. No execution status, no
