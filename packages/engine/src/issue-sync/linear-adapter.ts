@@ -6,9 +6,8 @@
  *
  * The exact tool name and payload shape are NOT known in this checkout: the
  * authenticated `tools/list` that would settle them needs a credential this
- * environment does not have (`specs/linear-mcp-tool-surface.md` records the
- * pending inventory). The plan authorises proceeding on the fixture boundary, so
- * this adapter maps the documented FIXTURE envelope:
+ * environment does not have, so the inventory stays pending. Until it is
+ * recorded, this adapter maps the documented fixture envelope:
  *
  *   { issues: LinearItem[], nextCursor?: string | null, errors?: [{ message }] }
  *

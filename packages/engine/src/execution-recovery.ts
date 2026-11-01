@@ -270,6 +270,9 @@ const MILESTONE_MIGRATION_VERSION =
 /** The migration that introduced the append-only project-move history. */
 const PROJECT_MOVES_MIGRATION_VERSION =
   MIGRATIONS.find((migration) => migration.name === "issue-project-moves")?.version ?? Number.POSITIVE_INFINITY;
+/** The migration that introduced the sync ledger, bindings and cursors. */
+const SYNC_LEDGER_MIGRATION_VERSION =
+  MIGRATIONS.find((migration) => migration.name === "sync-ledger")?.version ?? Number.POSITIVE_INFINITY;
 /** The migration that introduced the native Dsh host-state domain. */
 const DSH_MIGRATION_VERSION =
   MIGRATIONS.find((migration) => migration.name === "dsh-host-ledgers")?.version ?? Number.POSITIVE_INFINITY;
@@ -362,7 +365,7 @@ type AuthorityTable = {
   /** The row's own authority revision column, when the table carries one. */
   revisionColumn?: string;
   /** True when the table only exists once its introducing migration applied. */
-  requires?: "catalog" | "execution" | "roadmap" | "milestone" | "projectMoves" | "host";
+  requires?: "catalog" | "execution" | "roadmap" | "milestone" | "projectMoves" | "host" | "syncLedger";
 };
 
 function text(row: Record<string, unknown>, column: string): string {
@@ -479,6 +482,7 @@ const AUTHORITY_TABLES: readonly AuthorityTable[] = [
     columns: ["project_id", "provider", "workspace", "team", "remote_project", "revision", "updated_at"],
     orderBy: "project_id",
     key: (row) => `binding:${text(row, "project_id")}`,
+    requires: "syncLedger",
   },
   {
     domain: "issue",
@@ -497,6 +501,7 @@ const AUTHORITY_TABLES: readonly AuthorityTable[] = [
     ],
     orderBy: "local_id",
     key: (row) => `sync:${text(row, "binding_id")}:${text(row, "direction")}:${text(row, "local_id")}`,
+    requires: "syncLedger",
   },
   {
     domain: "issue",
@@ -504,6 +509,7 @@ const AUTHORITY_TABLES: readonly AuthorityTable[] = [
     columns: ["binding_id", "direction", "cursor", "updated_at"],
     orderBy: "binding_id",
     key: (row) => `cursor:${text(row, "binding_id")}:${text(row, "direction")}`,
+    requires: "syncLedger",
   },
   {
     domain: "issue",
@@ -802,6 +808,7 @@ type TableAvailability = {
   roadmap: boolean;
   milestone: boolean;
   projectMoves: boolean;
+  syncLedger: boolean;
   host: boolean;
   provenanceOrigin: boolean;
   dshLegacyProvenance: boolean;
@@ -823,6 +830,7 @@ function availabilityOf(schemaVersion: number): TableAvailability {
     roadmap: schemaVersion >= ROADMAP_MIGRATION_VERSION,
     milestone: schemaVersion >= MILESTONE_MIGRATION_VERSION,
     projectMoves: schemaVersion >= PROJECT_MOVES_MIGRATION_VERSION,
+    syncLedger: schemaVersion >= SYNC_LEDGER_MIGRATION_VERSION,
     host: schemaVersion >= DSH_MIGRATION_VERSION,
     provenanceOrigin: schemaVersion >= PROVENANCE_ORIGIN_MIGRATION_VERSION,
     dshLegacyProvenance: schemaVersion >= DSH_LEGACY_PROVENANCE_MIGRATION_VERSION,
@@ -836,6 +844,7 @@ function available(table: AuthorityTable, availability: TableAvailability): bool
   if (table.requires === "roadmap") return availability.roadmap;
   if (table.requires === "milestone") return availability.milestone;
   if (table.requires === "projectMoves") return availability.projectMoves;
+  if (table.requires === "syncLedger") return availability.syncLedger;
   if (table.requires === "host") return availability.host;
   return true;
 }

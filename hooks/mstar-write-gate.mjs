@@ -5,7 +5,7 @@
 import { readFileSync, statSync as statSync4, writeSync } from "node:fs";
 import { dirname as dirname11, isAbsolute as isAbsolute4, join as join6, relative as relative4, resolve as resolve5 } from "node:path";
 
-// ../../../mstar-harness/packages/engine/dist/engine.js
+// packages/engine/dist/engine.js
 import { AsyncLocalStorage } from "node:async_hooks";
 import { basename, dirname, isAbsolute, join, resolve } from "node:path";
 import { dirname as dirname2, join as join2, sep } from "node:path";
@@ -45,7 +45,7 @@ import { basename as basename7, dirname as dirname8, isAbsolute as isAbsolute3, 
 import { basename as basename8, isAbsolute as isAbsolute5, join as join14, relative as relative3, resolve as resolve9, sep as sep6 } from "node:path";
 import { execFileSync as execFileSync3 } from "node:child_process";
 import { existsSync as existsSync12, realpathSync as realpathSync6 } from "node:fs";
-import { createHash as createHash8 } from "node:crypto";
+import { createHash as createHash9 } from "node:crypto";
 import { existsSync as existsSync13, readFileSync as readFileSync14, readdirSync as readdirSync9, statSync as statSync6 } from "node:fs";
 import { dirname as dirname9, isAbsolute as isAbsolute8, join as join17, resolve as resolve12, sep as sep8 } from "node:path";
 import { createRequire as createRequire2 } from "node:module";
@@ -56,7 +56,7 @@ import { existsSync as existsSync15, statSync as statSync9 } from "node:fs";
 import { basename as basename12, dirname as dirname13, join as join20, relative as relative6, resolve as resolve15 } from "node:path";
 import { readlinkSync, realpathSync as realpathSync9 } from "node:fs";
 import { basename as basename13, dirname as dirname14, relative as relative7, resolve as resolve16 } from "node:path";
-import { createHash as createHash16 } from "node:crypto";
+import { createHash as createHash17 } from "node:crypto";
 import { readFileSync as readFileSync23 } from "node:fs";
 import { join as join29 } from "node:path";
 var __defProp = Object.defineProperty;
@@ -426,6 +426,8 @@ var init_catalog = __esm(() => {
 function parseMstarc(text) {
   let section = null;
   const out = {};
+  const linear = {};
+  const linearMapping = {};
   for (const raw of text.split(/\r?\n/)) {
     const line = raw.trim();
     if (line === "" || line.startsWith("#") || line.startsWith(";"))
@@ -433,6 +435,17 @@ function parseMstarc(text) {
     const header = /^\[([^\]]+)\]$/.exec(line);
     if (header !== null) {
       section = header[1].trim();
+      continue;
+    }
+    if (section === LINEAR_SECTION || section === LINEAR_MAPPING_SECTION) {
+      const eq2 = line.indexOf("=");
+      if (eq2 === -1)
+        continue;
+      const key = line.slice(0, eq2).trim();
+      const value2 = line.slice(eq2 + 1).trim();
+      if (key === "" || value2 === "")
+        continue;
+      (section === LINEAR_SECTION ? linear : linearMapping)[key] = value2;
       continue;
     }
     if (section !== MSTARC_SECTION)
@@ -453,6 +466,10 @@ function parseMstarc(text) {
       continue;
     out[field] = value;
   }
+  if (Object.keys(linear).length > 0)
+    out.linear = linear;
+  if (Object.keys(linearMapping).length > 0)
+    out.linearMapping = linearMapping;
   return out;
 }
 function isFile(file) {
@@ -491,6 +508,8 @@ function isAtOrBelow(dir, root) {
 }
 var MSTARC_FILE = ".mstarc";
 var MSTARC_SECTION = "config";
+var LINEAR_SECTION = "linear";
+var LINEAR_MAPPING_SECTION = "linear.mapping";
 var MSTARC_HARNESS_DIR_KEY = "harness_dir";
 var MSTARC_PLAN_DIR_KEY = "plan_dir";
 var MSTARC_SDD_DIR_KEY = "sdd_dir";
@@ -502,6 +521,9 @@ var MSTARC_PROJECT_DIR_KEY = "project_dir";
 var MSTARC_REVIEW_DIR_KEY = "review_dir";
 var MSTARC_ENFORCEMENT_KEY = "enforcement";
 var CONFIG_KEYS;
+var LINEAR_MAPPING_FACETS;
+var BOOLEAN_TRUE;
+var BOOLEAN_FALSE;
 var init_mstarc = __esm(() => {
   CONFIG_KEYS = {
     [MSTARC_HARNESS_DIR_KEY]: "harnessDir",
@@ -517,6 +539,9 @@ var init_mstarc = __esm(() => {
     jev_mode: "jevMode",
     jev_transport: "jevTransport"
   };
+  LINEAR_MAPPING_FACETS = ["disposition", "kind", "severity"];
+  BOOLEAN_TRUE = ["true", "1", "yes", "on"];
+  BOOLEAN_FALSE = ["false", "0", "no", "off"];
 });
 var init_dist = () => {};
 function ok(value, message) {
@@ -14613,6 +14638,7 @@ function validateProjectRegister(doc) {
   return { ok: violations.length === 0, violations };
 }
 var DATE_RE4;
+var BindingError;
 var init_project = __esm(() => {
   init_roadmap_content();
   init_coordination_write();
@@ -14620,6 +14646,14 @@ var init_project = __esm(() => {
   init_issue();
   init_status();
   DATE_RE4 = /^\d{4}-\d{2}-\d{2}$/;
+  BindingError = class BindingError2 extends Error {
+    code;
+    constructor(code2, message) {
+      super(`[${code2}] ${message}`);
+      this.name = "BindingError";
+      this.code = code2;
+    }
+  };
 });
 function resolveHarnessDir(startDir = process.cwd(), opts = {}) {
   const start = resolve8(startDir);
@@ -14635,7 +14669,7 @@ function resolveHarnessDir(startDir = process.cwd(), opts = {}) {
     if (!isAtOrBelow2(dir, boundary))
       return null;
     for (const candidate of [join12(dir, ".mstar"), join12(dir, ".agents"), join12(dir, ".plans"), join12(dir, "plans")]) {
-      if (isDirectory(candidate))
+      if (isDirectory2(candidate))
         return candidate;
     }
     if (dir === boundary)
@@ -14691,7 +14725,7 @@ function resolveSpecsDir(harnessDir, opts = {}) {
     join12(repoRoot, "designs")
   ];
   for (const candidate of candidates) {
-    if (isDirectory(candidate) && hasFiles(candidate))
+    if (isDirectory2(candidate) && hasFiles(candidate))
       return candidate;
   }
   const fallback = join12(harness, "specs");
@@ -14740,7 +14774,7 @@ function resolveWorkflowDir(startDir = process.cwd(), opts = {}) {
 function resolveProjectDir(startDir = process.cwd(), opts = {}) {
   return resolveHarnessSubdir(startDir, opts, "projectDir", "projects");
 }
-function isDirectory(dir) {
+function isDirectory2(dir) {
   try {
     return statSync3(dir).isDirectory();
   } catch {
@@ -15327,7 +15361,7 @@ function executionInputSelection(row, planId) {
   return selection;
 }
 function executionInputHash(row, planId) {
-  return createHash8("sha256").update(stableJson(executionInputSelection(row, planId)), "utf8").digest("hex");
+  return createHash9("sha256").update(stableJson(executionInputSelection(row, planId)), "utf8").digest("hex");
 }
 var PERSIST_PAYLOAD_CONTRACTS;
 var EXECUTION_PIN_CONFLICT_CODE = "catalog.execution-pin-conflict";
@@ -17224,7 +17258,7 @@ function readCompassSource(spec) {
       diagnostic: `inaccessible: read refused (${code2 === "" ? "unknown" : code2}) at ${spec.relativePath}`
     };
   }
-  return { state: "ok", sha256: createHash16("sha256").update(content3, "utf8").digest("hex"), content: content3, diagnostic: null };
+  return { state: "ok", sha256: createHash17("sha256").update(content3, "utf8").digest("hex"), content: content3, diagnostic: null };
 }
 function sourceKeyOf2(kind, rootKind, relativePath) {
   return `${kind}:${rootKind}:${relativePath}`;
@@ -17419,12 +17453,12 @@ async function captureExecutionProjectionSources(context) {
     const diagnostics = [];
     const rows = { workflows: [], plans: [], leases: [], compasses: [] };
     const recordInvalid = (sourceSpec, content3, message, readState = "ok") => {
-      const sha2564 = readState === "invalid" ? null : createHash16("sha256").update(content3, "utf8").digest("hex");
+      const sha2564 = readState === "invalid" ? null : createHash17("sha256").update(content3, "utf8").digest("hex");
       sources.push({ sourceKey: sourceSpec.sourceKey, kind: sourceSpec.kind, rootKind: sourceSpec.rootKind, relativePath: sourceSpec.relativePath, sha256: sha2564, state: "invalid", diagnostic: message, declared: true });
       diagnostics.push({ sourceKey: sourceSpec.sourceKey, reason: "invalid", message });
     };
     const record = (sourceSpec, content3, shaText = content3) => {
-      const sha2564 = createHash16("sha256").update(shaText, "utf8").digest("hex");
+      const sha2564 = createHash17("sha256").update(shaText, "utf8").digest("hex");
       sources.push({ sourceKey: sourceSpec.sourceKey, kind: sourceSpec.kind, rootKind: sourceSpec.rootKind, relativePath: sourceSpec.relativePath, sha256: sha2564, state: "ok", diagnostic: null, declared: sourceSpec.declared });
     };
     const spec = (kind, rel) => ({
@@ -17643,7 +17677,7 @@ function computeSourceSetHash(catalogRevision, sources) {
   const tuples = sources.map((source) => [source.sourceKey, source.state, source.sha256 ?? "-"].join("\x00")).sort();
   const payload = [`projection-format:${PROJECTION_FORMAT_VERSION}`, `catalog-revision:${catalogRevision}`, ...tuples].join(`
 `);
-  return createHash16("sha256").update(payload, "utf8").digest("hex");
+  return createHash17("sha256").update(payload, "utf8").digest("hex");
 }
 var PROJECTION_TABLES = [
   "projection_sources",
@@ -17790,7 +17824,7 @@ function projectionRenders(db, rowsOf) {
   });
 }
 function renderedDigest(tables) {
-  return createHash16("sha256").update(JSON.stringify(tables), "utf8").digest("hex");
+  return createHash17("sha256").update(JSON.stringify(tables), "utf8").digest("hex");
 }
 function captureRenders(db, capture) {
   return projectionRenders(db, (spec) => spec.captureRows(capture));
@@ -17985,6 +18019,7 @@ async function refreshProjections(context, hooks = {}) {
   return attempt.report;
 }
 init_roadmap_content();
+init_mstarc();
 init_store_db();
 init_execution_store();
 init_workflow();
@@ -18007,7 +18042,8 @@ var DASHBOARD_VIEWS = {
   projects: { needsProjection: false },
   roadmap: { needsProjection: false },
   "issue-flow": { needsProjection: false },
-  overview: { needsProjection: true }
+  overview: { needsProjection: true },
+  "sync-binding": { needsProjection: false }
 };
 function text5(value) {
   return typeof value === "string" && value !== "" ? value : null;
@@ -18137,6 +18173,9 @@ async function resolveExecutionReadRoute(context) {
   return (await resolveCurrentAuthority(context)).route;
 }
 function queryDashboard(view, filters = {}) {
+  if (view === "sync-binding") {
+    usage("the sync-binding view is served by querySyncBinding, not queryDashboard");
+  }
   if (!Object.hasOwn(DASHBOARD_VIEWS, view)) {
     usage(`unknown dashboard view ${JSON.stringify(String(view))}`);
   }
@@ -18895,6 +18934,8 @@ init_workflow();
 init_worktree();
 init_status();
 init_issue();
+var PROBE_STATES = ["ready", "service-absent", "unreachable", "access-denied"];
+init_issue();
 init_catalog();
 init_catalog_import();
 init_catalog_registration();
@@ -18905,6 +18946,7 @@ init_plan_path();
 init_execution_store();
 init_recovery_intent();
 init_workflow();
+var SYNC_PROBE_STATES = new Set(PROBE_STATES);
 init_catalog_import();
 init_catalog();
 init_store_db();
@@ -18934,6 +18976,7 @@ var ROADMAP_MIGRATION_VERSION = MIGRATIONS.find((migration) => migration.name ==
 var EXECUTION_COVERAGE_MIGRATION_VERSION = MIGRATIONS.find((migration) => migration.name === "execution-coverage-column")?.version ?? Number.POSITIVE_INFINITY;
 var MILESTONE_MIGRATION_VERSION = MIGRATIONS.find((migration) => migration.name === "project-milestones")?.version ?? Number.POSITIVE_INFINITY;
 var PROJECT_MOVES_MIGRATION_VERSION = MIGRATIONS.find((migration) => migration.name === "issue-project-moves")?.version ?? Number.POSITIVE_INFINITY;
+var SYNC_LEDGER_MIGRATION_VERSION = MIGRATIONS.find((migration) => migration.name === "sync-ledger")?.version ?? Number.POSITIVE_INFINITY;
 var DSH_MIGRATION_VERSION = MIGRATIONS.find((migration) => migration.name === "dsh-host-ledgers")?.version ?? Number.POSITIVE_INFINITY;
 var EXECUTION_COORDINATOR_ONLY_MIGRATION_VERSION = MIGRATIONS.find((migration) => migration.name === "execution-coordinator-only")?.version ?? Number.POSITIVE_INFINITY;
 var DSH_LEGACY_PROVENANCE_MIGRATION_VERSION = MIGRATIONS.find((migration) => migration.name === "dsh-ledger-legacy-provenance")?.version ?? Number.POSITIVE_INFINITY;
