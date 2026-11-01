@@ -30410,6 +30410,7 @@ function planAndApply(db, bindingId, localId, externalId, item) {
     remoteUpdatedAt: item.updatedAt,
     operationId: operationId(bindingId, item, "plan")
   });
+  mirrorRemoteFields(db, localId, externalId, item);
   markApplied(db, {
     bindingId,
     direction: IMPORT_DIRECTION,

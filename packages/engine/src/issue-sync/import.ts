@@ -214,6 +214,12 @@ function planAndApply(
     remoteUpdatedAt: item.updatedAt,
     operationId: operationId(bindingId, item, "plan"),
   });
+  // Copy the fields BEFORE the applied commit. The `ledger === null` caller
+  // reaches here with an issue row that already exists (a capture committed but
+  // its ledger write did not), so without this the row keeps its old title and
+  // description while the watermark advances past the revision that changed
+  // them — and every later run reads that revision as already applied.
+  mirrorRemoteFields(db, localId, externalId, item);
   markApplied(db, {
     bindingId,
     direction: IMPORT_DIRECTION,

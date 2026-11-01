@@ -219,6 +219,21 @@ describe("local identity and local-only gates", () => {
     close();
   });
 
+  test("a row whose ledger write was lost still receives the changed fields", async () => {
+    // The capture committed, its ledger row did not, and the remote issue then
+    // changed. Reaching planAndApply with the NEW timestamp must copy the new
+    // fields; without that the row keeps its old title while the watermark moves
+    // past the revision that changed it.
+    const { db, close } = await store("lost-ledger");
+    importPage(db, BINDING, [item({ title: "First title" })]);
+    const localId = (db.prepare("select id from issues where external_id = 'LIN-1'").get() as { id: string }).id;
+    db.prepare("delete from issue_sync_state").run();
+    importPage(db, BINDING, [item({ title: "Renamed remotely", updatedAt: "2026-11-05T00:00:00.000Z" })]);
+    const row = db.prepare("select title from issues where id = ?").get(localId) as { title: string };
+    expect(row.title).toBe("Renamed remotely");
+    close();
+  });
+
   test("a sub-second newer revision is ingested, not skipped by string order", async () => {
     const { db, close } = await store("instant-order");
     importPage(db, BINDING, [item()]);
