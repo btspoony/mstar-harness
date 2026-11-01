@@ -227,7 +227,7 @@ describe("zero-delta second run", () => {
 
     const first = await runImport(f.context);
     expect(first.status).toBe("ok");
-    expect(first.data).toMatchObject({ imported: 3, updated: 0, skipped: 0, failed: 0, pages: 2, requests: 4, cursor: "c-2" });
+    expect(first.data).toMatchObject({ imported: 3, updated: 0, skipped: 0, failed: 0, pages: 2, requests: 4, cursor: null });
 
     const snapshot = await storeSnapshot(f);
     p.requests.length = 0;
@@ -236,11 +236,15 @@ describe("zero-delta second run", () => {
     // The store's cursor is resumable: run 2 re-reads only from the recorded
     // position (the overlap window), so it costs ONE request and re-ingests it
     // as a no-op.
-    expect(second.data).toMatchObject({ imported: 0, updated: 0, skipped: 1, failed: 0, pages: 1, requests: 3, cursor: "c-2" });
+    // A completed scan rewinds the pointer, so the second run walks every page
+    // again: the cost is a full walk, the saving comes from the ledger where
+    // every item is a no-op skip.
+    expect(second.data).toMatchObject({ imported: 0, updated: 0, skipped: 3, failed: 0, pages: 2, requests: 4, cursor: null });
     // No row anywhere changed — the store's updated_at set included.
     expect(await storeSnapshot(f)).toEqual(snapshot);
-    // The second run is evidenced by requests, not assumed: one page request.
-    expect(p.requests).toEqual(["c-2"]);
+    // The second run is evidenced by requests, not assumed: a rewound pointer
+    // means the walk starts from the first page again.
+    expect(p.requests).toEqual([null, "c-2"]);
   });
 
   test("a single page run reports one request and resumes from the recorded cursor", async () => {
@@ -339,7 +343,9 @@ describe("a failing page keeps the cursor and ingests nothing from it", () => {
     }
     const second = await runImport(f.context);
     if (second.data === undefined) throw new Error(`second run refused: ${JSON.stringify(second)}`);
-    expect(second.data).toMatchObject({ imported: 1, failed: 0, updated: 0, skipped: 1, stopped: "complete", cursor: "c-2" });
+    // The retry finishes the scan, so the pointer rewinds to null; the item that
+    // failed the first time is now mirrored.
+    expect(second.data).toMatchObject({ imported: 1, failed: 0, updated: 0, skipped: 1, stopped: "complete", cursor: null });
     // The first run stopped on page 1 (stranded); the second re-read page 1.
     expect(p.requests).toEqual([null, null, "c-2"]);
   });

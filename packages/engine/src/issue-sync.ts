@@ -455,6 +455,29 @@ export function writeCursor(db: StoreDb, input: WriteCursorInput): void {
   });
 }
 
+/**
+ * Clear the resumable cursor for a binding+direction.
+ *
+ * Only a COMPLETED scan may rewind. The cursor is a page pointer, not a
+ * watermark, so leaving it on the last page means every earlier page is never
+ * requested again and an item edited there stays invisible forever. A scan that
+ * STOPPED (a stranded item, the page bound, a thrown page) must keep its
+ * pointer: rewinding there would re-request the same failing page from the top
+ * on every run and lose the position that made progress possible.
+ */
+export function resetCursor(db: StoreDb, input: CursorInput & { operationId: string }): void {
+  const bindingId = requireNonblank("bindingId", input.bindingId);
+  const direction = requireDirection(input.direction);
+  const operationId = requireNonblank("operationId", input.operationId);
+  const hash = syncRequestHash("resetCursor", { bindingId, direction });
+  withSyncTransaction(db, () => {
+    if (replayOrRefuse<unknown>(db, operationId, hash) !== undefined) return;
+    const now = new Date().toISOString();
+    db.prepare("delete from sync_cursor where binding_id = ? and direction = ?").run(bindingId, direction);
+    recordOperation(db, operationId, hash, { cursor: null }, now);
+  });
+}
+
 export type LedgerSummary = {
   counts: Record<SyncItemState, number>;
   lastCursor: string | null;

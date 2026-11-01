@@ -28,6 +28,7 @@ import {
   readCursor,
   readProjectBinding,
   readRepoLinearBinding,
+  resetCursor,
   resolveProcessHarnessDir,
   SyncError,
   writeCursor,
@@ -296,6 +297,17 @@ async function runImport(id: string, input: Input, invocation: InvocationContext
       }
       if (page.nextCursor === null) {
         report.stopped = "complete";
+        // A COMPLETED scan rewinds the page pointer: leaving it on the last page
+        // makes every earlier page unreachable, so an issue edited there is
+        // never read again. A scan that stops for any other reason keeps its
+        // pointer — rewinding a stopped run would re-request the same page from
+        // the top forever and drop the position that made progress possible.
+        resetCursor(db, {
+          bindingId,
+          direction: IMPORT_DIRECTION,
+          operationId: `linear-import:${bindingId}:cursor:complete`,
+        });
+        report.cursor = null;
         break;
       }
       writeCursor(db, {

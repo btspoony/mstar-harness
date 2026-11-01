@@ -1,5 +1,5 @@
 /**
- * linear-probe.test.ts — dsh host probe (binding-config plan Task 3): the four
+ * linear-probe.test.ts -- dsh host probe (binding-config plan Task 3): the four
  * probe states proven by fixtures injected at the MCP boundary, plus the QC
  * wave's F1 (deadline), F2 (redaction), F3 (listing verb) and F9 (no
  * fabricated page).
@@ -35,7 +35,7 @@ const OK_INIT: RpcOutcome = { kind: "ok" };
 const OK_TOOLS: RpcOutcome = { kind: "ok", tools: ["get_issue", "list_issues"] };
 
 describe("createLinearProbe", () => {
-  test("configured + handshake ok + listing verb listed → ready", async () => {
+  test("configured + handshake ok + listing verb listed -> ready", async () => {
     const d = deps([OK_INIT, OK_TOOLS]);
     const result = await createLinearProbe(d).probe();
     expect(result.state).toBe("ready");
@@ -43,7 +43,7 @@ describe("createLinearProbe", () => {
     expect(d.calls).toEqual(["initialize", "tools/list"]);
   });
 
-  test("no configured entry → service-absent (no rpc call)", async () => {
+  test("no configured entry -> service-absent (no rpc call)", async () => {
     const d = deps([], false);
     const result = await createLinearProbe(d).probe();
     expect(result.state).toBe("service-absent");
@@ -51,14 +51,14 @@ describe("createLinearProbe", () => {
     expect(d.calls).toEqual([]);
   });
 
-  test("entry present but transport refused → unreachable, never ready", async () => {
+  test("entry present but transport refused -> unreachable, never ready", async () => {
     const d = deps([{ kind: "transport-error", message: "connection refused" }]);
     const result = await createLinearProbe(d).probe();
     expect(result.state).toBe("unreachable");
     expect(result.cause).toBe("unreachable: Linear MCP transport failed (connection refused)");
   });
 
-  test("handshake 401/403 or auth-class error → access-denied", async () => {
+  test("handshake 401/403 or auth-class error -> access-denied", async () => {
     for (const status of [401, 403]) {
       const d = deps([{ kind: "http-status", status }]);
       const result = await createLinearProbe(d).probe();
@@ -124,7 +124,7 @@ describe("createLinearProbe", () => {
     expect(redacted).toContain("[redacted]");
   });
 
-  test("F3: handshake ok but NO listing verb → never ready, cause names what was missing", async () => {
+  test("F3: handshake ok but NO listing verb -> never ready, cause names what was missing", async () => {
     const d = deps([OK_INIT, { kind: "ok", tools: ["get_issue", "get_project"] }]);
     const result = await createLinearProbe(d).probe();
     expect(result.state).not.toBe("ready");

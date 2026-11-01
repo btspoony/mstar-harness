@@ -757,6 +757,7 @@ export {
   readItem,
   readLedgerSummary,
   replanItem,
+  resetCursor,
   writeCursor,
 } from "./issue-sync.js";
 // M0 read-only mirror ingest: one listing page → store rows through the capture
