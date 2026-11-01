@@ -141,7 +141,11 @@ export function importPage(db: StoreDb, bindingId: string, items: readonly Provi
           localId,
           externalId,
           remoteUpdatedAt: item.updatedAt,
-          operationId: operationId(bindingId, item, "plan"),
+          // A DIFFERENT id per attempt. Reusing the failed attempt's id replays
+          // its receipt, so `planItem` returns the row untouched and a failed
+          // item could never be retried — the ledger would stay `failed`
+          // forever while every run reported another failure.
+          operationId: `linear-import:${bindingId}:${localId}:retry:${item.updatedAt}:${ledger.revision}`,
         });
       }
       // `pending` needs no transition: a previous run already opened this cycle.
