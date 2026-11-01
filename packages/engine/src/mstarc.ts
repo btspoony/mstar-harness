@@ -39,10 +39,6 @@ import { dirname, isAbsolute, join, relative, resolve } from "node:path";
 export const MSTARC_FILE = ".mstarc";
 /** INI section holding the harness config. */
 export const MSTARC_SECTION = "config";
-/** `[linear]` — provider connection settings (never a Linear project name). */
-export const LINEAR_SECTION = "linear";
-/** `[linear.mapping]` — optional per-value correspondence override. */
-export const LINEAR_MAPPING_SECTION = "linear.mapping";
 /** `[config]` key declaring the harness root. */
 export const MSTARC_HARNESS_DIR_KEY = "harness_dir";
 /** `[config]` key declaring `{PLAN_DIR}`. */
@@ -90,17 +86,7 @@ export type MstarcConfig = {
   jevMode?: string;
   /** Raw Jev transport; interpretation belongs to the judgment runtime. */
   jevTransport?: string;
-  /** Raw `[linear]` connection keys (unvalidated; see `parseLinearBinding`). */
-  linear?: Record<string, string>;
-  /** Raw `[linear.mapping]` override keys (unvalidated). */
-  linearMapping?: Record<string, string>;
 };
-
-/** String-valued `[config]` keys — the resolvers' override surface; the
- * additive linear sections are records, never directory overrides. */
-export type MstarcStringKey = {
-  [K in keyof MstarcConfig]-?: MstarcConfig[K] extends string | undefined ? K : never;
-}[keyof MstarcConfig];
 
 /** `[config]` key → config field mapping (unknown keys ignored). */
 const CONFIG_KEYS: Record<string, keyof MstarcConfig> = {
@@ -128,25 +114,12 @@ const CONFIG_KEYS: Record<string, keyof MstarcConfig> = {
 export function parseMstarc(text: string): MstarcConfig {
   let section: string | null = null;
   const out: MstarcConfig = {};
-  const linear: Record<string, string> = {};
-  const linearMapping: Record<string, string> = {};
   for (const raw of text.split(/\r?\n/)) {
     const line = raw.trim();
     if (line === "" || line.startsWith("#") || line.startsWith(";")) continue;
     const header = /^\[([^\]]+)\]$/.exec(line);
     if (header !== null) {
       section = header[1].trim();
-      continue;
-    }
-    // Additive linear sections (binding-config plan): collected alongside
-    // `[config]`; unknown sections stay ignored (forward compatibility).
-    if (section === LINEAR_SECTION || section === LINEAR_MAPPING_SECTION) {
-      const eq = line.indexOf("=");
-      if (eq === -1) continue;
-      const key = line.slice(0, eq).trim();
-      const value = line.slice(eq + 1).trim();
-      if (key === "" || value === "") continue;
-      (section === LINEAR_SECTION ? linear : linearMapping)[key] = value;
       continue;
     }
     if (section !== MSTARC_SECTION) continue;
@@ -164,107 +137,7 @@ export function parseMstarc(text: string): MstarcConfig {
     if (field === "enforcement" && value !== "hard" && value !== "soft") continue;
     (out as Record<string, string>)[field] = value;
   }
-  if (Object.keys(linear).length > 0) out.linear = linear;
-  if (Object.keys(linearMapping).length > 0) out.linearMapping = linearMapping;
   return out;
-}
-
-/** Provider correspondence facet for one engine value. */
-export type LinearFacetMapping = {
-  disposition: Record<string, string>;
-  kind: Record<string, string>;
-  severity: Record<string, string>;
-};
-
-/** Validated `[linear]` connection block (the only form consumers may use). */
-export type LinearBinding = {
-  enabled: boolean;
-  mode: "mirror";
-  workspace: string;
-  team: string;
-  /** Resolved correspondence: defaults overlaid by `[linear.mapping]`. */
-  mapping: LinearFacetMapping;
-};
-
-/** Refusal for an invalid `[linear]` block (house dotted-lowercase codes). */
-export type LinearBindingRefusal = {
-  ok: false;
-  code: "linear.mode-refused" | "linear.binding-incomplete" | "linear.binding-invalid";
-  message: string;
-};
-
-/** Built-in default correspondence — identity per facet (lossy by design). */
-export function defaultLinearMapping(): LinearFacetMapping {
-  return { disposition: {}, kind: {}, severity: {} };
-}
-
-const LINEAR_MAPPING_FACETS = ["disposition", "kind", "severity"] as const;
-
-/** Accepted boolean spellings (case-insensitive); anything else is refused. */
-export const BOOLEAN_TRUE = ["true", "1", "yes", "on"] as const;
-export const BOOLEAN_FALSE = ["false", "0", "no", "off"] as const;
-
-/** Read one INI boolean, or `null` when the value is not a boolean spelling. */
-function parseBoolean(raw: string | undefined): boolean | null {
-  if (raw === undefined) return false;
-  const value = raw.trim().toLowerCase();
-  if ((BOOLEAN_TRUE as readonly string[]).includes(value)) return true;
-  if ((BOOLEAN_FALSE as readonly string[]).includes(value)) return false;
-  return null;
-}
-
-/**
- * Validate the raw `[linear]` / `[linear.mapping]` sections collected by
- * `parseMstarc`. An absent `[linear]` section yields `ok: true` with
- * `enabled: false` (binding is opt-in). Refusals name the offending key;
- * unknown `[linear.mapping]` keys are ignored (same forward-compatibility
- * rule as unknown `[config]` keys).
- */
-export function parseLinearBinding(
-  linear: Record<string, string> | undefined,
-  mapping: Record<string, string> | undefined,
-): { ok: true; binding: LinearBinding } | LinearBindingRefusal {
-  if (linear === undefined) {
-    return { ok: true, binding: { enabled: false, mode: "mirror", workspace: "", team: "", mapping: defaultLinearMapping() } };
-  }
-  const mode = linear.mode ?? "mirror";
-  if (mode !== "mirror") {
-    return {
-      ok: false,
-      code: "linear.mode-refused",
-      message: `linear.mode-refused: [linear] mode "${mode}" is not supported; only "mirror" is accepted this iteration`,
-    };
-  }
-  const parsedEnabled = parseBoolean(linear.enabled);
-  if (parsedEnabled === null) {
-    // A value nobody can read is refused by name: silently treating `TRUE` or
-    // `1` as "off" would misdiagnose a deliberately enabled binding.
-    return {
-      ok: false,
-      code: "linear.binding-invalid",
-      message: `linear.binding-invalid: [linear] enabled="${linear.enabled}" is not a boolean; accepted spellings are ${BOOLEAN_TRUE.join(", ")} / ${BOOLEAN_FALSE.join(", ")} (case-insensitive)`,
-    };
-  }
-  const enabled = parsedEnabled;
-  const workspace = linear.workspace ?? "";
-  const team = linear.team ?? "";
-  if (enabled && (workspace === "" || team === "")) {
-    const missing = [workspace === "" ? "workspace" : null, team === "" ? "team" : null].filter(Boolean).join(", ");
-    return {
-      ok: false,
-      code: "linear.binding-incomplete",
-      message: `linear.binding-incomplete: enabled=true requires [linear] ${missing} to be set`,
-    };
-  }
-  const facet = (): LinearFacetMapping => ({ disposition: {}, kind: {}, severity: {} });
-  const resolved = facet();
-  for (const [key, value] of Object.entries(mapping ?? {})) {
-    const dot = key.indexOf(".");
-    const prefix = dot === -1 ? "" : key.slice(0, dot);
-    if (!(LINEAR_MAPPING_FACETS as readonly string[]).includes(prefix)) continue;
-    resolved[prefix as keyof LinearFacetMapping][key.slice(dot + 1)] = value;
-  }
-  return { ok: true, binding: { enabled, mode: "mirror", workspace, team, mapping: resolved } };
 }
 
 /** True when `file` is an existing regular file. */
@@ -321,41 +194,4 @@ export function loadMstarc(startDir: string, boundary: string): LoadedMstarc | n
 function isAtOrBelow(dir: string, root: string): boolean {
   const rel = relative(root, dir);
   return rel === "" || (!rel.startsWith("..") && !isAbsolute(rel));
-}
-
-/**
- * The repo's own `[linear]` connection block, or a NAMED absence (§ F4).
- *
- * The `.mstarc` home is the repo root — the harness dir's parent. This reader
- * NEVER walks up: a parent directory's `.mstarc` (in a worktree layout, another
- * repo's binding) must not become this repo's connection identity, so a config
- * that is not the repo's own is treated as absent rather than discovered.
- */
-export type RepoLinearBinding =
-  | { kind: "bound"; file: string; binding: LinearBinding }
-  | { kind: "absent"; code: "linear.binding-absent"; message: string }
-  | { kind: "invalid"; code: LinearBindingRefusal["code"]; message: string };
-
-/** `[linear]` from `<repo-root>/.mstarc` only; never a parent's configuration. */
-export function readRepoLinearBinding(harnessDir: string): RepoLinearBinding {
-  const repoRoot = dirname(resolve(harnessDir));
-  const file = join(repoRoot, MSTARC_FILE);
-  if (!isFile(file)) {
-    return {
-      kind: "absent",
-      code: "linear.binding-absent",
-      message: `linear.binding-absent: no ${MSTARC_FILE} at the repo root ${repoRoot}; a parent directory's configuration is never inherited`,
-    };
-  }
-  const config = parseMstarc(readFileSync(file, "utf8"));
-  if (config.linear === undefined) {
-    return {
-      kind: "absent",
-      code: "linear.binding-absent",
-      message: `linear.binding-absent: ${file} declares no [${LINEAR_SECTION}] connection block`,
-    };
-  }
-  const parsed = parseLinearBinding(config.linear, config.linearMapping);
-  if (!parsed.ok) return { kind: "invalid", code: parsed.code, message: parsed.message };
-  return { kind: "bound", file, binding: parsed.binding };
 }

@@ -23,7 +23,6 @@ export { getPlanCommandDefinitions, PLAN_COMPLETION_EVIDENCE_SCHEMA } from "./fa
 export { getSessionCommandDefinitions } from "./families/session.js";
 export { getWorkflowCommandDefinitions } from "./families/workflow.js";
 export { getIssueCommandDefinitions } from "./families/issue.js";
-export { getIssueSyncCommandDefinitions } from "./families/issue-sync.js";
 export { getCatalogCommandDefinitions } from "./families/catalog.js";
 export { getRoadmapCommandDefinitions } from "./families/roadmap.js";
 export { getStoreCommandDefinitions } from "./families/store.js";

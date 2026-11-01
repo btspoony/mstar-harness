@@ -936,19 +936,6 @@ export function captureIssueOn(
   const existing = findByIdentity(db, identityKey);
   const at = nowRfc3339();
   if (existing) {
-    // Symmetric half of the reserved-namespace invariant (mirror import): a
-    // local capture reproducing an imported row's synthetic identity would
-    // append an occurrence to an EXTERNALLY mirrored issue. The import side
-    // refuses to capture onto a local row; this side refuses to capture onto a
-    // mirrored one, so the two identity spaces cannot merge in either direction.
-    const owner = db.prepare("select provider from issues where id = ?").get(existing.id) as { provider: string } | undefined;
-    if (owner !== undefined && owner.provider !== "local") {
-      throw new IssueError(
-        "issue.scope-refused",
-        `identity_key ${identityKey} belongs to a "${owner.provider}" mirrored issue; a local capture never appends to an imported row. ` +
-          `Choose a sourceIdentity outside the reserved "${owner.provider}:" namespace.`,
-      );
-    }
     const occurrenceId = insertOccurrence(db, existing.id, cols, at);
     const revision = existing.revision + 1;
     db.prepare("update issues set revision = ?, updated_at = ? where id = ?").run(revision, at, existing.id);

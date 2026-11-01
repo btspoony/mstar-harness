@@ -1,5 +1,5 @@
 /**
- * Dashboard view layer -- the generic half of the dashboard read transport.
+ * Dashboard view layer — the generic half of the dashboard read transport.
  *
  * One view name becomes validated `DashboardFilters`, then one `withStoreRead`
  * envelope: unknown enum values, an over-limit page and an excessive literal
@@ -15,8 +15,7 @@
  * read boundary, which refreshes their projection from the current authority.
  */
 import { SddScriptError } from "./sdd.js";
-import { queryDashboard, querySyncBinding, withStoreRead, type StoreReadQuery } from "./store-read.js";
-import { PROBE_STATES, type ProbeState } from "./issue-sync/provider.js";
+import { queryDashboard, withStoreRead } from "./store-read.js";
 import type { IssueFilter } from "./issue.js";
 import type { StoreContext } from "./store-db.js";
 import type { DashboardFilters, DashboardView, DashboardViewData, ReadEnvelope } from "./store-read.js";
@@ -38,8 +37,6 @@ const VIEW_QUERY_FIELDS: Record<DashboardView, readonly string[]> = {
   // `project` scopes milestones, latestIteration and issueFlow; the view reads
   // no page window and no issue filter, so both keep refusing.
   overview: ["project"],
-  // The host may attach ONE probe result; both fields ride together or neither.
-  "sync-binding": ["probe_state", "probe_cause"],
 };
 
 const DISPOSITIONS: Record<string, true> = { open: true, resolved: true, waived: true, duplicate: true, superseded: true };
@@ -52,10 +49,6 @@ const KINDS: Record<string, true> = {
   "review-obligation": true,
 };
 const SEVERITIES: Record<string, true> = { critical: true, high: true, medium: true, low: true, nit: true };
-
-/** The host probe vocabulary, derived from the one exported union. `not-probed`
- * is the engine's own default and is never accepted as input. */
-const SYNC_PROBE_STATES: ReadonlySet<string> = new Set<string>(PROBE_STATES);
 
 function refuse(message: string): never {
   throw new SddScriptError(message, 2);
@@ -89,7 +82,7 @@ function parsePageInteger(raw: string | undefined, field: string, max?: number):
 }
 
 /**
- * Raw query parameters -> engine filters, refusing everything the contract does
+ * Raw query parameters → engine filters, refusing everything the contract does
  * not define. Called before any store access, so a malformed request never
  * opens the database.
  */
@@ -146,29 +139,6 @@ export function dashboardFilters(
     refuse("the roadmap view requires a project query parameter");
   }
 
-  if (view === "sync-binding") {
-    const probeState = queryValue(params, "probe_state");
-    const probeCause = queryValue(params, "probe_cause");
-    // A state without its cause renders an empty explanation, which the AC
-    // forbids: the pair is accepted as a pair or not at all.
-    if (probeState === undefined && probeCause !== undefined) {
-      refuse("probe_cause requires probe_state -- supply the host probe result as a pair");
-    }
-    if (probeState !== undefined && probeCause === undefined) {
-      refuse("probe_state requires probe_cause -- the readiness state must carry a readable cause");
-    }
-    if (probeState !== undefined && !SYNC_PROBE_STATES.has(probeState)) {
-      refuse(`probe_state must be one of ${PROBE_STATES.join(", ")}`);
-    }
-    if (probeCause !== undefined && probeCause.length > MAX_DASHBOARD_SEARCH_LENGTH) {
-      refuse(`probe_cause must be at most ${MAX_DASHBOARD_SEARCH_LENGTH} characters`);
-    }
-    return {
-      ...(probeState === undefined ? {} : { probeState: probeState as ProbeState }),
-      ...(probeCause === undefined ? {} : { probeCause }),
-    };
-  }
-
   return {
     ...(scoped === undefined ? {} : { projectId: scoped }),
     ...(limit === undefined ? {} : { limit }),
@@ -184,10 +154,7 @@ export async function readDashboardView(input: {
   id?: string;
 }): Promise<ReadEnvelope<DashboardViewData[DashboardView]>> {
   const filters = dashboardFilters(input.view, input.params ?? {}, input.id);
-  const query: StoreReadQuery<DashboardViewData[DashboardView]> =
-    input.view === "sync-binding"
-      ? querySyncBinding(input.context.harnessDir, filters)
-      : queryDashboard(input.view, filters);
+  const query = queryDashboard(input.view, filters);
   return withStoreRead(input.context, query);
 }
 
