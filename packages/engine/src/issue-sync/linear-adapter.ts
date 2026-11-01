@@ -42,9 +42,15 @@ export type LinearListDeps = {
   /**
    * The binding the page is requested FOR. Without it the request asks the
    * service for "everything this credential can see", so a credential that
-   * reaches several projects would import other projects' issues into the one
-   * local project. The field names below follow the candidate vocabulary until
-   * the authenticated tool inventory pins them.
+   * reaches several projects would file another project's issues under the one
+   * local project.
+   *
+   * UNVERIFIED: the argument names below are the candidate vocabulary, not the
+   * authenticated tool schema. A provider may ignore either one, and the page
+   * shape carries no project/team field to check afterwards, so this module
+   * cannot prove the filter took effect. Treat the scope as a narrowing attempt
+   * and the credential's own reach as the real boundary; the host that mounts
+   * the service is responsible for granting a credential that sees one project.
    */
   scope?: { team?: string; project?: string };
   /**
@@ -103,7 +109,7 @@ export function createLinearAdapter(deps: LinearListDeps): LinearListSide {
           `the Linear MCP call answered HTTP ${outcome.status}; the page was not ingested and the cursor did not advance`,
         );
       }
-      return mapPage(outcome.payload);
+      return mapPage(outcome.payload, deps.scope);
     },
   };
 }
@@ -140,7 +146,7 @@ function assertNoEmbeddedErrors(payload: Payload): void {
  * identity and lets the rest of the page proceed (contract §2), so one poison
  * item cannot block every later page forever.
  */
-export function mapPage(payload: unknown): ProviderPage {
+export function mapPage(payload: unknown, scope?: { team?: string; project?: string }): ProviderPage {
   if (!isRecord(payload)) {
     throw new SyncError("linear.query-failed", "the Linear MCP page was not an object; nothing was ingested");
   }
@@ -152,6 +158,23 @@ export function mapPage(payload: unknown): ProviderPage {
       "the Linear MCP page carries no `issues` array; an unmappable page is a failure, never an empty project",
     );
   }
+  // Cross-scope guard. The listing filters server-side, but a filter that did
+  // not take effect looks exactly like a filter that had nothing to exclude —
+  // and the page itself carries each item's own team, so the claim is checkable.
+  // A mismatched item is refused as a PAGE failure rather than dropped: silently
+  // skipping it would import a partial mirror that looks complete.
+  if (scope?.team !== undefined) {
+    const foreign = items.find((entry) => isRecord(entry) && typeof entry.team === "string" && entry.team !== scope.team);
+    if (foreign !== undefined) {
+      const seen = isRecord(foreign) ? foreign.team : undefined;
+      throw new SyncError(
+        "linear.query-failed",
+        `the page carries an issue from team ${JSON.stringify(seen)} although the binding scopes it to ` +
+          `${JSON.stringify(scope.team)}; the server-side filter did not take effect, so nothing was ingested`,
+      );
+    }
+  }
+
   const mapped: ProviderItem[] = [];
   const failures: ProviderItemFailure[] = [];
   items.forEach((entry, index) => {
@@ -179,13 +202,28 @@ function stripCodeLabel(message: string): string {
   return message.replace(/^\[[^\]]+\]\s*/, "");
 }
 
+/**
+ * The REAL envelope (verified against the service): `{ issues, hasNextPage,
+ * cursor }`. A page continues only when `hasNextPage` is true AND a non-blank
+ * cursor came with it — an empty cursor with `hasNextPage: true` is a broken
+ * page, not an invitation to loop on page one.
+ */
 function nextCursorOf(payload: Payload): string | null {
-  const cursor = payload.nextCursor;
-  if (cursor === undefined || cursor === null) return null;
-  if (typeof cursor !== "string") {
-    throw new SyncError("linear.query-failed", "the Linear MCP page carried a non-string `nextCursor`; nothing was ingested");
+  const more = payload.hasNextPage;
+  if (more !== true) {
+    if (payload.cursor !== undefined && payload.cursor !== null && typeof payload.cursor !== "string") {
+      throw new SyncError("linear.query-failed", "the Linear MCP page carried a non-string `cursor`; nothing was ingested");
+    }
+    return null;
   }
-  return cursor === "" ? null : cursor;
+  const cursor = payload.cursor;
+  if (typeof cursor !== "string" || cursor.trim() === "") {
+    throw new SyncError(
+      "linear.query-failed",
+      "the Linear MCP page said hasNextPage but carried no usable `cursor`; the run stopped rather than re-reading page one",
+    );
+  }
+  return cursor;
 }
 
 /** A missing required field is a page failure: no field is invented. */
@@ -209,6 +247,15 @@ function priorityOf(item: Payload): string | null {
   const label = item.priorityLabel;
   if (typeof label === "string" && label.trim() !== "") return label.trim();
   const value = item.priority;
+  // Verified shape: `{ value: 0, name: "No priority" }`. The NAME is the
+  // readable label and the number is the ordering key; whichever arrives, the
+  // mapper keeps a string and invents nothing.
+  if (isRecord(value)) {
+    if (typeof value.name === "string" && value.name.trim() !== "") return value.name.trim();
+    if (typeof value.value === "number") return String(value.value);
+    if (typeof value.value === "string" && value.value.trim() !== "") return value.value.trim();
+    return null;
+  }
   if (typeof value === "number") return String(value);
   if (typeof value === "string" && value.trim() !== "") return value.trim();
   return null;

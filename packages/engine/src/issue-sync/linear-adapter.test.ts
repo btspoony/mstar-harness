@@ -70,10 +70,10 @@ function codeOf(fn: () => Promise<unknown>): Promise<string> {
 }
 
 describe("listIssues pagination", () => {
-  test("two pages advance the cursor and stop on a null nextCursor", async () => {
+  test("two pages advance the cursor and stop when hasNextPage is false", async () => {
     const d = deps([
-      { kind: "ok", payload: { issues: [issue("LIN-1"), issue("LIN-2")], nextCursor: "c-2" } },
-      { kind: "ok", payload: { issues: [issue("LIN-3")], nextCursor: null } },
+      { kind: "ok", payload: { issues: [issue("LIN-1"), issue("LIN-2")], hasNextPage: true, cursor: "c-2" } },
+      { kind: "ok", payload: { issues: [issue("LIN-3")], hasNextPage: false, cursor: null } },
     ]);
     const adapter = createLinearAdapter(d);
 
@@ -93,7 +93,7 @@ describe("listIssues pagination", () => {
   });
 
   test("an empty page terminates the run without inventing an item", async () => {
-    const d = deps([{ kind: "ok", payload: { issues: [], nextCursor: null } }]);
+    const d = deps([{ kind: "ok", payload: { issues: [], hasNextPage: false, cursor: null } }]);
     expect(await createLinearAdapter(d).listIssues(null)).toEqual({ items: [], nextCursor: null, failures: [] });
   });
 
@@ -148,7 +148,8 @@ describe("page failures (never an empty page)", () => {
         kind: "ok",
         payload: {
           issues: [issue("LIN-1"), issue("LIN-2", { updatedAt: undefined }), issue("LIN-3")],
-          nextCursor: "c-2",
+          hasNextPage: true,
+          cursor: "c-2",
         },
       },
     ]);
