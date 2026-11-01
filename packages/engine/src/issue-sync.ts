@@ -431,7 +431,13 @@ function markItem(
     // target: a resumed cycle can copy a NEWER revision than it planned for, and
     // recording the older one would let a page between the two overwrite it.
     const applied = target === "applied";
-    const copiedTarget = input.remoteUpdatedAt ?? row.pending_target ?? null;
+    const proposed = input.remoteUpdatedAt ?? row.pending_target ?? null;
+    // A replayed page can be applied precisely BECAUSE it is not the oldest
+    // candidate: recording a revision older than the one already copied would
+    // make that page look fresh again on the next run. The watermark never
+    // moves backwards.
+    const copiedTarget =
+      proposed !== null && isOlderInstant(proposed, row.last_remote_updated_at) ? row.last_remote_updated_at : proposed;
     casUpdate(db, { bindingId, direction, localId }, row.revision, {
       item_state: target,
       external_id: row.external_id,

@@ -395,6 +395,21 @@ describe("retry preserves recorded remote identity", () => {
   });
 });
 
+describe("watermark monotonicity", () => {
+  test("an apply that would record an older revision keeps the newer watermark", async () => {
+    const { db, close } = await openedStore("watermark-mono");
+    planItem(db, { ...KEY, externalId: "EXT-1", remoteUpdatedAt: "2026-11-01T00:00:00Z", operationId: "op-new" });
+    markApplied(db, { ...KEY, operationId: "op-apply-new", remoteUpdatedAt: "2026-11-01T00:00:00Z" });
+    // `replanItem` refuses to open a cycle for an older revision, so the only way
+    // an older value reaches the watermark is the caller supplying one directly:
+    // that is the boundary this guards, and it must not walk back either.
+    replanItem(db, { ...KEY, remoteUpdatedAt: "2026-12-01T00:00:00Z", operationId: "op-newer" });
+    const applied = markApplied(db, { ...KEY, operationId: "op-apply-old", remoteUpdatedAt: "2026-10-01T00:00:00Z" });
+    expect(applied.lastRemoteUpdatedAt).toBe("2026-11-01T00:00:00Z");
+    close();
+  });
+});
+
 describe("sync revision guard", () => {
   test("a concurrent writer winning the CAS refuses with sync.revision-conflict", async () => {
     const { db, close } = await openedStore("cas-conflict");

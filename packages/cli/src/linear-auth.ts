@@ -31,6 +31,13 @@ export type RegisteredClient = { clientId: string; redirectUri: string };
  * Neither is assumed — a hard-coded endpoint would break silently the day it
  * moves.
  */
+/**
+ * Every call here is a network round trip inside an interactive login; without a
+ * deadline a black-holed endpoint leaves the operator watching a spinner forever.
+ */
+const NETWORK_TIMEOUT_MS = 30_000;
+const DEADLINE = (): { signal: AbortSignal } => ({ signal: AbortSignal.timeout(NETWORK_TIMEOUT_MS) });
+
 export async function discoverAuthorizationServer(
   mcpUrl: string = LINEAR_MCP_URL,
   fetchImpl: typeof fetch = fetch,
@@ -39,6 +46,7 @@ export async function discoverAuthorizationServer(
   // Unauthenticated probe: the 401 names where the resource metadata lives.
   let metadataUrl = `${origin.origin}/.well-known/oauth-protected-resource`;
   const probe = await fetchImpl(mcpUrl, {
+    ...DEADLINE(),
     method: "POST",
     headers: { "content-type": "application/json", accept: "application/json, text/event-stream" },
     body: JSON.stringify({
@@ -51,13 +59,13 @@ export async function discoverAuthorizationServer(
   const challenge = probe.headers.get("www-authenticate") ?? "";
   const named = /resource_metadata="([^"]+)"/.exec(challenge);
   if (named !== null) metadataUrl = named[1]!;
-  const resource = (await (await fetchImpl(metadataUrl, { headers: { accept: "application/json" } })).json()) as {
+  const resource = (await (await fetchImpl(metadataUrl, { ...DEADLINE(), headers: { accept: "application/json" } })).json()) as {
     authorization_servers?: unknown;
   };
   const issuers = Array.isArray(resource.authorization_servers) ? resource.authorization_servers : [];
   const issuer = typeof issuers[0] === "string" ? issuers[0] : origin.origin;
   const as = (await (
-    await fetchImpl(`${issuer}/.well-known/oauth-authorization-server`, { headers: { accept: "application/json" } })
+    await fetchImpl(`${issuer}/.well-known/oauth-authorization-server`, { ...DEADLINE(), headers: { accept: "application/json" } })
   ).json()) as Record<string, unknown>;
   const authorizationEndpoint = typeof as.authorization_endpoint === "string" ? as.authorization_endpoint : null;
   const tokenEndpoint = typeof as.token_endpoint === "string" ? as.token_endpoint : null;
@@ -102,6 +110,7 @@ export async function registerClient(
     );
   }
   const response = await fetchImpl(as.registrationEndpoint, {
+    ...DEADLINE(),
     method: "POST",
     headers: { "content-type": "application/json", accept: "application/json" },
     body: JSON.stringify({
@@ -261,6 +270,7 @@ export async function exchangeCode(
   fetchImpl: typeof fetch = fetch,
 ): Promise<TokenSet> {
   const response = await fetchImpl(as.tokenEndpoint, {
+    ...DEADLINE(),
     method: "POST",
     headers: { "content-type": "application/x-www-form-urlencoded", accept: "application/json" },
     body: new URLSearchParams({
@@ -283,6 +293,7 @@ export async function refreshToken(
   fetchImpl: typeof fetch = fetch,
 ): Promise<TokenSet> {
   const response = await fetchImpl(as.tokenEndpoint, {
+    ...DEADLINE(),
     method: "POST",
     headers: { "content-type": "application/x-www-form-urlencoded", accept: "application/json" },
     body: new URLSearchParams({
