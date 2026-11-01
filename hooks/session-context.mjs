@@ -29994,9 +29994,15 @@ function createLinearAdapter(deps) {
       if (entry === null) {
         throw new SyncError("linear.query-failed", "no Linear MCP entry is configured for this host; nothing was listed");
       }
+      const scope = deps.scope ?? {};
       const outcome = await deps.call(entry, {
         tool,
-        arguments: { limit: LINEAR_PAGE_SIZE, ...cursor === null ? {} : { cursor } }
+        arguments: {
+          limit: LINEAR_PAGE_SIZE,
+          ...scope.team === undefined ? {} : { team: scope.team },
+          ...scope.project === undefined ? {} : { project: scope.project },
+          ...cursor === null ? {} : { cursor }
+        }
       });
       if (outcome.kind === "transport-error") {
         throw new SyncError("linear.query-failed", `the Linear MCP call failed (${redactTransportMessage(outcome.message)}); the page was not ingested and the cursor did not advance`);
@@ -30249,7 +30255,8 @@ function createLinearProvider(options) {
     findLinearEntry: () => ({ url: options.url }),
     call: async (_entry, request) => linearCall(options, request),
     listingVerbs: verbs,
-    listedVerbs: () => listed
+    listedVerbs: () => listed,
+    scope: options.scope
   });
   return { probe: () => probe.probe(), listIssues: (cursor) => listing.listIssues(cursor) };
 }

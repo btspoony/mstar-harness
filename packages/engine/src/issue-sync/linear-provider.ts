@@ -27,6 +27,8 @@ export type { LinearTransportOptions };
 export const LINEAR_LISTING_VERBS: readonly string[] = ["list_issues", "search_issues"];
 
 export type LinearProviderOptions = LinearTransportOptions & {
+  /** The bound team/project; the listing never widens past it. */
+  scope?: { team?: string; project?: string };
   /** Overrides the module candidate set (tests, and a host that pins the verb). */
   listingVerbs?: readonly string[];
 };
@@ -55,6 +57,7 @@ export function createLinearProvider(options: LinearProviderOptions): IssueProvi
     call: async (_entry, request): Promise<LinearCallOutcome> => linearCall(options, request),
     listingVerbs: verbs,
     listedVerbs: () => listed,
+    scope: options.scope,
   });
 
   return { probe: () => probe.probe(), listIssues: (cursor) => listing.listIssues(cursor) };

@@ -40,6 +40,14 @@ export type LinearListDeps = {
    */
   listingVerbs: readonly string[];
   /**
+   * The binding the page is requested FOR. Without it the request asks the
+   * service for "everything this credential can see", so a credential that
+   * reaches several projects would import other projects' issues into the one
+   * local project. The field names below follow the candidate vocabulary until
+   * the authenticated tool inventory pins them.
+   */
+  scope?: { team?: string; project?: string };
+  /**
    * The tools the host's own `tools/list` returned (the handshake the probe
    * already ran), or `null` when no handshake has happened. The adapter resolves
    * its verb through the SAME `listingVerbIn` rule the probe uses (QC F9), so
@@ -73,9 +81,15 @@ export function createLinearAdapter(deps: LinearListDeps): LinearListSide {
       if (entry === null) {
         throw new SyncError("linear.query-failed", "no Linear MCP entry is configured for this host; nothing was listed");
       }
+      const scope = deps.scope ?? {};
       const outcome = await deps.call(entry, {
         tool,
-        arguments: { limit: LINEAR_PAGE_SIZE, ...(cursor === null ? {} : { cursor }) },
+        arguments: {
+          limit: LINEAR_PAGE_SIZE,
+          ...(scope.team === undefined ? {} : { team: scope.team }),
+          ...(scope.project === undefined ? {} : { project: scope.project }),
+          ...(cursor === null ? {} : { cursor }),
+        },
       });
       if (outcome.kind === "transport-error") {
         throw new SyncError(

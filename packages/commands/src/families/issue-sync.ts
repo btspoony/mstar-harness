@@ -222,7 +222,14 @@ async function runImport(id: string, input: Input, invocation: InvocationContext
   // recover from.
   const provider: IssueProvider =
     invocation.effects.issueProvider?.(projectId) ??
-    createLinearProvider({ url: LINEAR_MCP_URL, token: process.env.LINEAR_API_KEY, deadlineMs: DEFAULT_PROBE_DEADLINE_MS });
+    createLinearProvider({
+      url: LINEAR_MCP_URL,
+      token: process.env.LINEAR_API_KEY,
+      deadlineMs: DEFAULT_PROBE_DEADLINE_MS,
+      // The listing is scoped to the binding: a credential that reaches several
+      // teams or projects must never import another one's issues here.
+      scope: { team: repo.binding.team ?? undefined, project: binding.binding.remoteProject },
+    });
 
   // Each non-ready probe state keeps its OWN cause and recovery (contract §4):
   // a host that cannot reach its service and a host whose credential was
@@ -238,6 +245,12 @@ async function runImport(id: string, input: Input, invocation: InvocationContext
   }
 
   const bindingId = `linear:${projectId}`;
+  // Cursor writes are per SCAN, not per value: a fixed id made a second scan
+  // that reached the same cursor find the first scan's receipt and skip the
+  // write, so it reported progress the store never recorded.
+  const scanId = new Date().toISOString();
+  const cursorOperation = (suffix: string): string => `linear-import:${bindingId}:cursor:${scanId}:${suffix}`;
+
   const report: ImportReport = {
     projectId,
     bindingId,
@@ -305,7 +318,7 @@ async function runImport(id: string, input: Input, invocation: InvocationContext
         resetCursor(db, {
           bindingId,
           direction: IMPORT_DIRECTION,
-          operationId: `linear-import:${bindingId}:cursor:complete`,
+          operationId: cursorOperation("complete"),
         });
         report.cursor = null;
         break;
@@ -314,7 +327,7 @@ async function runImport(id: string, input: Input, invocation: InvocationContext
         bindingId,
         direction: IMPORT_DIRECTION,
         cursor: page.nextCursor,
-        operationId: `linear-import:${bindingId}:cursor:${page.nextCursor}`,
+        operationId: cursorOperation(page.nextCursor),
       });
       cursor = page.nextCursor;
       report.cursor = cursor;

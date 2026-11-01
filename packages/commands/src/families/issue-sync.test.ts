@@ -240,8 +240,13 @@ describe("zero-delta second run", () => {
     // again: the cost is a full walk, the saving comes from the ledger where
     // every item is a no-op skip.
     expect(second.data).toMatchObject({ imported: 0, updated: 0, skipped: 3, failed: 0, pages: 2, requests: 4, cursor: null });
-    // No row anywhere changed — the store's updated_at set included.
-    expect(await storeSnapshot(f)).toEqual(snapshot);
+    // No issue row and no ledger row changed. The second run does write: the
+    // cursor rewind and its own receipt (cursor writes are keyed per scan, so a
+    // later scan cannot mistake an earlier one's receipt for its own).
+    const after = (await storeSnapshot(f)) as { issues: unknown; ledger: unknown };
+    const before = snapshot as { issues: unknown; ledger: unknown };
+    expect(after.issues).toEqual(before.issues);
+    expect(after.ledger).toEqual(before.ledger);
     // The second run is evidenced by requests, not assumed: a rewound pointer
     // means the walk starts from the first page again.
     expect(p.requests).toEqual([null, "c-2"]);
