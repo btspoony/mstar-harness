@@ -62,7 +62,7 @@ export const en = {
       workflows: "Workflows",
       iterations: "Iterations",
       projects: "Projects",
-      syncBinding: "Sync binding",
+      "sync-binding": "Sync binding",
     },
     skipLink: "Skip to content",
     footer: "Read-only · Make changes with the CLI",

@@ -78,10 +78,16 @@ export function syncBindingModel(data: SyncBindingDTO): SyncBindingModel {
       ? { kind: "refused", reason: `readiness.${state} carries no cause` }
       : { kind: "probed", state, cause, tone: readinessTone(state) };
 
-  const rows = resolveRead(
-    { data: data.projectBindings, projection: { generation: null } },
-    { whenNull: "empty", isEmpty: (items) => items.length === 0 },
-  );
+  // A read that failed is not a store with no rows. `projectBindingsError`
+  // travels with the rows so the failure reaches `unavailable` with its own
+  // reason instead of being dressed as the `empty` answer.
+  const rows: SyncBindingModel["correspondence"] =
+    data.projectBindingsError === null
+      ? resolveRead(
+          { data: data.projectBindings, projection: { generation: null } },
+          { whenNull: "empty", isEmpty: (items) => items.length === 0 },
+        )
+      : { kind: "unavailable", reason: data.projectBindingsError };
 
   return { identity, correspondence: rows, readiness };
 }

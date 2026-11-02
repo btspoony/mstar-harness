@@ -49,7 +49,7 @@ export const zh: Copy = {
       workflows: "工作流",
       iterations: "迭代",
       projects: "项目",
-      syncBinding: "同步绑定",
+      "sync-binding": "同步绑定",
     },
     skipLink: "跳到主要内容",
     footer: "只读 · 请通过 CLI 进行修改",

@@ -13,7 +13,15 @@ import { readFileSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
-import { NAV_DESTINATIONS, scopedIssuesTarget, skipToMain, shellChrome } from "./shell-chrome";
+import {
+  NAV_DESTINATIONS,
+  isNavDestination,
+  navItemFor,
+  navRoute,
+  scopedIssuesTarget,
+  shellChrome,
+  skipToMain,
+} from "./shell-chrome";
 
 const mainSource = readFileSync(path.join(path.dirname(fileURLToPath(import.meta.url)), "main.tsx"), "utf8");
 
@@ -72,6 +80,17 @@ describe("the navigation entries are the product's, in the product's language", 
     );
   });
 
+  test("every entry routes to its own destination, the binding panel included", () => {
+    // The regression: the entry was cast to a list destination, so `sync-binding`
+    // and `overview` were emitted as routes named after a list id.
+    for (const id of NAV_DESTINATIONS) {
+      expect(navRoute(id).name).toBe(id);
+      expect(navItemFor(navRoute(id))).toBe(id);
+    }
+    expect(isNavDestination("sync-binding")).toBe(true);
+    expect(isNavDestination("not-a-destination")).toBe(false);
+  });
+
   test("no English shell string survives a Chinese render", () => {
     // The whole point: a zh reader previously got English navigation, skip link and
     // footer, because those three were literals or id-derived while every screen
@@ -118,6 +137,14 @@ describe("a project's Issues feature keeps its own state", () => {
 });
 
 describe("the shell's markup uses those pieces", () => {
+  test("the binding screen is mounted: route, nav entry, and a rendered destination", () => {
+    // The regression: the screen, its copy and the `shell.nav` entry all shipped
+    // while nothing mounted them — the feature was unreachable and the nav key dead.
+    expect(NAV_DESTINATIONS).toContain("sync-binding");
+    expect(mainSource).toMatch(/address\.route\.name === "sync-binding" \? <SyncBindingDestination \/> : null/);
+    expect(mainSource).toContain("readSyncBinding");
+  });
+
   test("the skip link has a click handler and the landmark is focusable", () => {
     // The behaviour test above passes even if nothing calls `skipToMain`; this is the
     // half that fails when the markup goes back to a plain `href="#main"`.

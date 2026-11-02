@@ -37,6 +37,7 @@ import {
   Overview,
   ProjectDetail,
   Projects,
+  SyncBinding,
   WorkflowDetail,
   Workflows,
   DEFAULT_ITERATION_FILTERS,
@@ -102,7 +103,6 @@ import {
   type WorkflowsOutcome,
 } from "./workflows-data";
 import {
-  LIST_DESTINATIONS,
   detailReturnTarget,
   escapeTarget,
   initialAddress,
@@ -113,7 +113,20 @@ import {
   type Address,
   type Route,
 } from "./route";
-import { navItemFor, scopedIssuesTarget, shellChrome, skipToMain } from "./shell-chrome";
+import {
+  isNavDestination,
+  navItemFor,
+  navRoute,
+  scopedIssuesTarget,
+  shellChrome,
+  skipToMain,
+} from "./shell-chrome";
+import {
+  readSyncBinding,
+  syncBindingCopy,
+  syncBindingOutcome,
+  type SyncBindingOutcome,
+} from "./sync-binding-data";
 
 /**
  * Push a destination, or replace the current entry when only the filters changed.
@@ -805,6 +818,45 @@ const DEFAULT_ISSUES: IssueQuery = {
   offset: 0,
 };
 
+/**
+ * The binding view, behind its own read.
+ *
+ * The dashboard is the host and has no Linear probe result to attach, so it sends
+ * no `probe_state`: readiness arrives as `not-probed` with the cause the engine
+ * sets. Composing a probe here would make the panel claim an observation nobody
+ * made — the one thing it refuses to do.
+ */
+function SyncBindingDestination() {
+  const [outcome, setOutcome] = useState<SyncBindingOutcome>({ kind: "loading" });
+  const copy = useCopy();
+  useEffect(() => {
+    const controller = new AbortController();
+    let current = true;
+    void readSyncBinding(fetch, controller.signal).then((result) => {
+      if (current) setOutcome(syncBindingOutcome(result));
+    });
+    return () => {
+      current = false;
+      controller.abort();
+    };
+  }, []);
+
+  if (outcome.kind === "loading") return null;
+  if (outcome.kind === "failed") {
+    return (
+      <EmptyState
+        arm="unavailable"
+        labelWord={copy.state.unavailable.labelWord}
+        heading={copy.syncBinding.pageTitle}
+        body={copy.state.unavailable.body}
+        reason={outcome.message}
+      />
+    );
+  }
+
+  return <SyncBinding model={outcome.model} copy={syncBindingCopy(copy)} />;
+}
+
 /** The shell: skip link, header with the shared navigation, the main region, footer. */
 function Shell(props: {
   locale: Locale;
@@ -911,7 +963,9 @@ function Shell(props: {
           activeId={activeId}
           onSelect={(id) => {
             // A destination change is a push: Back returns to where the reader was.
-            navigate({ name: id as (typeof LIST_DESTINATIONS)[number] }, "", "push");
+            // `Nav` is shared with the dsh host and hands back a plain string; an id
+            // outside this host's table has no route here.
+            if (isNavDestination(id)) navigate(navRoute(id), "", "push");
           }}
           label={copy.shell.nav.primary}
         />
@@ -978,6 +1032,7 @@ function Shell(props: {
           <IterationDetailDestination id={address.route.id} address={address} />
         ) : null}
         {address.route.name === "projects" ? <ProjectsDestination outcome={projects} /> : null}
+        {address.route.name === "sync-binding" ? <SyncBindingDestination /> : null}
         {address.route.name === "project" ? (
           <ProjectDetailDestination
             address={address}
