@@ -254,6 +254,9 @@ describe("state discovery", () => {
     expect([...names].sort()).toEqual(["Canceled", "Done", "Ready for Dev"]);
     expect(calls[0]!.tool).toBe("list_issue_statuses");
     expect(calls[0]!.arguments.team).toBe("ENG");
+    // A page limit the host cannot shrink: an unpaginated default could return
+    // a truncated state list and falsely refuse an item as state-unresolved.
+    expect(calls[0]!.arguments.limit).toBe(250);
   });
 
   test("an absent state verb refuses the run, naming the candidate", async () => {

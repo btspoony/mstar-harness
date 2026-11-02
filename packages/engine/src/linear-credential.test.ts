@@ -1,9 +1,12 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { spawn } from "node:child_process";
+import { existsSync, mkdtempSync, readFileSync, rmSync, statSync, utimesSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
   clearLinearCredential,
+  commitLinearCredential,
+  linearCredentialLockPath,
   linearCredentialPath,
   readLinearCredential,
   REFRESH_WINDOW_MS,
@@ -111,5 +114,83 @@ describe("linear credential store", () => {
     expect(path).toContain("mstar");
     expect(path).toContain("linear");
     expect(path.endsWith("credential.json")).toBe(true);
+  });
+});
+
+describe("the commit is one cross-process critical section", () => {
+  /** Busy-wait the exact milliseconds a real unlink needs to find its window. */
+  function holdFor(ms: number): void {
+    const until = Date.now() + ms;
+    while (Date.now() < until) Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 5);
+  }
+
+  /**
+   * A second process runs the real `mstar linear logout`: its own module
+   * instance and its own `clearLinearCredential`, against this credential path.
+   * It announces itself immediately before attempting the delete.
+   */
+  function logoutInAnotherProcess(ready: string): Promise<string> {
+    const moduleUrl = new URL("./linear-credential.ts", import.meta.url).href;
+    const source = `
+      const { writeFileSync } = await import("node:fs");
+      const { clearLinearCredential } = await import(process.env.MSTAR_IMPORT);
+      writeFileSync(process.env.MSTAR_LOGOUT_READY, "");
+      process.stdout.write(JSON.stringify(clearLinearCredential()));
+    `;
+    const child = spawn(process.execPath, ["-e", source], {
+      stdio: ["ignore", "pipe", "pipe"],
+      env: { ...process.env, MSTAR_IMPORT: moduleUrl, MSTAR_LOGOUT_READY: ready },
+    });
+    let out = "";
+    child.stdout.setEncoding("utf8").on("data", (chunk: string) => (out += chunk));
+    child.stderr.setEncoding("utf8").on("data", (chunk: string) => (out += chunk));
+    return new Promise<string>((resolve, reject) => {
+      child.on("error", reject);
+      child.on("close", (code) => (code === 0 ? resolve(out) : reject(new Error(`logout exit ${code}: ${out}`))));
+    });
+  }
+
+  test("a logout landing between the final read and the commit leaves the file absent", async () => {
+    writeLinearCredential(credential());
+    const ready = join(root, "logout-ready");
+    // The decision callback runs AFTER the re-read and BEFORE the rename — the
+    // exact instant this finding names. This is where the sign-out lands.
+    let logout!: Promise<string>;
+    const written = commitLinearCredential((state) => {
+      expect(state.kind).toBe("present");
+      logout = logoutInAnotherProcess(ready);
+      // Wait until the other process is at the unlink, then hold: a writer
+      // sharing no lock with it would see the delete land in this gap.
+      for (let waited = 0; !existsSync(ready) && waited < 5_000; waited += 5) holdFor(5);
+      holdFor(200);
+      return credential({ accessToken: fake("ours") });
+    });
+    expect(JSON.parse(await logout)).toBe(true);
+
+    // Deletion is the newest intent. The lock only orders the two writes; it
+    // must never let this refresh's grant outlive the delete.
+    expect(written).not.toBeNull();
+    expect(readLinearCredential()).toEqual({ kind: "absent" });
+    expect(existsSync(process.env.MSTAR_LINEAR_CREDENTIAL!)).toBe(false);
+  });
+
+  test("a lock left by a dead process is taken over instead of blocking forever", () => {
+    writeLinearCredential(credential());
+    const lock = linearCredentialLockPath();
+    writeFileSync(lock, "");
+    // Backdate it past the stale bound: the holder is presumed dead.
+    utimesSync(lock, new Date(Date.now() - 60_000), new Date(Date.now() - 60_000));
+    expect(commitLinearCredential(() => credential({ accessToken: fake("after-crash") }))).not.toBeNull();
+    expect(existsSync(lock)).toBe(false);
+  });
+
+  test("every exit path releases the lock", () => {
+    writeLinearCredential(credential());
+    const lock = linearCredentialLockPath();
+    // A throwing decision must not leave the mutex behind for the next writer.
+    expect(() => commitLinearCredential(() => { throw new Error("boom"); })).toThrow("boom");
+    expect(existsSync(lock)).toBe(false);
+    expect(clearLinearCredential()).toBe(true);
+    expect(existsSync(lock)).toBe(false);
   });
 });

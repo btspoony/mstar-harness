@@ -1208,9 +1208,12 @@ export {
 export type { LinearCredential, LinearCredentialState } from "./linear-credential.js";
 export {
   clearLinearCredential,
+  commitLinearCredential,
+  linearCredentialLockPath,
   linearCredentialPath,
   readLinearCredential,
   REFRESH_WINDOW_MS,
+  withLinearCredentialLock,
   writeLinearCredential,
 } from "./linear-credential.js";
 

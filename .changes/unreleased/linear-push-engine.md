@@ -39,6 +39,12 @@ packages: engine, commands
   abandoned while it keeps holding its socket. The caller still observes the same single
   `unreachable: Linear MCP handshake timed out after <n>ms` cause; a transport that reports the abort as its own
   error cannot turn that into a transport failure.
+- **A refresh commit cannot undo a sign-out.** Every credential write and the sign-out now share one
+  cross-process lock (`credential.json.lock`), and the refresh decides-and-commits inside it
+  (`commitLinearCredential`). `mstar linear logout` landing between the refresh's final read and its rename is
+  therefore honoured instead of being overwritten by the refreshed grant — the remaining microsecond window, on
+  top of the network window the earlier fix closed. The dsh refresh and the CLI `issue-sync` refresh both commit
+  through that seam. A lock left by a dead process is taken over after 5s, so a crash cannot block later writes.
 
 <!-- CN -->
 - **单向推送到 Linear。** `mstar issue-sync push --project <id>` 把本项目本地 issue 推送至绑定的 Linear 团队：
@@ -68,3 +74,7 @@ packages: engine, commands
   `AbortSignal`：卡在飞行中的传输会被真正取消，而不是被丢下继续占用 socket。调用方观察到的仍是同一条
   `unreachable: Linear MCP handshake timed out after <n>ms` 原因；传输把中止当成自己的错误上报也无法把它
   变成 transport 失败。
+- **刷新提交无法撤销登出。** 现在每一次凭据写入与登出共用同一把跨进程锁（`credential.json.lock`），刷新在锁内
+  完成「判断 + 提交」（`commitLinearCredential`）。因此落在刷新最后一次读取与其 rename 之间的
+  `mstar linear logout` 会被尊重，而不会被刷新后的授权覆盖——这是此前修复已关掉的网络窗口之外，剩下的那微秒级窗口。
+  dsh 的刷新与 CLI `issue-sync` 的刷新都经此接缝提交。崩溃进程留下的锁在 5 秒后被接管，所以进程死亡不会永久阻塞后续写入。
