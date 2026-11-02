@@ -407,10 +407,14 @@ export class LinearSettingsStore {
   }
 
   private update(next: LinearSettingsState): void {
+    // Only a snapshot that carries a new host-facts answer becomes the one a
+    // render may consume. A state-only change (attempt start/end, outcome)
+    // inherits the previous answer without a new observation, so it must not
+    // bless that answer: the marker stays as it was, and the next render treats
+    // the inherited bit as unknown and reads the host.
+    const carriesFacts = next.read !== this.state.read
     this.state = next
-    // A new answer is unverified until a render consumes the very snapshot it
-    // landed in: every later render re-reads instead of inheriting the bit.
-    this.unverified = next
+    if (carriesFacts) this.unverified = next
     for (const listener of this.listeners) listener()
   }
 

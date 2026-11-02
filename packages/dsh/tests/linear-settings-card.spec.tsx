@@ -544,6 +544,10 @@ describe('the card learns an outcome from a slow consent', () => {
       timers.fire()
       await flush()
 
+      // The outcome arrived without a new row bit: the first frame may only
+      // report unknown, never Authorize from the pre-attempt bit.
+      expect(render(store)).toContain('data-ms-linear-state="loading"')
+      await flush()
       const html = render(store)
       expect(html).toContain(`data-ms-linear-outcome="${terminal.status}"`)
       expect(html).toContain('data-ms-linear-action="authorize"')
@@ -636,10 +640,52 @@ describe('the card learns an outcome from a slow consent', () => {
     await store.cancel()
     await flush()
 
+    // The cancel response is an outcome, not a row bit: the first frame reads.
+    expect(render(store)).toContain('data-ms-linear-state="loading"')
+    await flush()
+
     const html = render(store)
     expect(calls.map((call) => call.endpoint)).toContain(LINEAR_AUTHORIZE_CANCEL_ENDPOINT)
     expect(html).toContain('data-ms-linear-outcome="cancelled"')
     expect(html).toContain('data-ms-linear-action="authorize"')
+    expect(timers.pending()).toBe(0)
+    store.dispose()
+  })
+
+  it('cancelling an attempt never blesses the pre-disable row bit', async () => {
+    // The reviewer's third gap. A cancel response carries an outcome, not a new
+    // row bit; copying the old `read` into that snapshot must not make the
+    // pre-disable `rowEnabled: true` usable by the first post-cancel render.
+    let statusAnswer: unknown = READY_ABSENT
+    const { connection, calls } = stubConnection((endpoint) => {
+      if (endpoint === LINEAR_STATUS_ENDPOINT) return statusAnswer
+      if (endpoint === LINEAR_AUTHORIZE_BEGIN_ENDPOINT) {
+        return { status: 'started', attemptId: 'attempt-stale', url: 'https://linear.test/authorize?state=one', expiresAt: START + 300_000 }
+      }
+      if (endpoint === LINEAR_AUTHORIZE_CANCEL_ENDPOINT) return { status: 'cancelled' }
+      throw new Error(`unexpected ${endpoint}`)
+    })
+    const timers = manualTimers()
+    const store = storeFor(connection, { openBrowser: () => {}, schedule: timers.schedule, cancelSchedule: timers.cancel })
+    await store.refresh()
+    expect(render(store)).toContain('data-ms-linear-action="authorize"')
+    await store.begin()
+    expect(render(store)).toContain('data-ms-linear-state="authorizing"')
+
+    // The native row is disabled while the consent is pending.
+    statusAnswer = READY_DISABLED
+    await store.cancel()
+
+    const firstFrame = render(store)
+    expect(firstFrame).toContain('data-ms-linear-state="loading"')
+    expect(firstFrame).not.toContain('data-ms-linear-action="authorize"')
+
+    await flush()
+    const settled = render(store)
+    expect(settled).toContain('data-ms-linear-state="disabled"')
+    expect(settled).not.toContain('data-ms-linear-action="authorize"')
+    // The settled frame came from a fresh host read, not the copied old bit.
+    expect(calls.filter((call) => call.endpoint === LINEAR_STATUS_ENDPOINT)).toHaveLength(2)
     expect(timers.pending()).toBe(0)
     store.dispose()
   })
