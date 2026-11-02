@@ -1383,24 +1383,36 @@ describe("sync-binding view", () => {
     expect(data.bindingError).toBeNull();
   });
 
-  test("a store that cannot answer the binding read yields no rows and keeps the .mstarc summary", async () => {
+  test("a store that cannot answer the binding read reports the failure, not an empty correspondence", async () => {
     const { dir, harness, context } = await workspace("sync-binding-unreadable-");
     writeFile(join(dir, ".mstarc"), MSTARC);
     // A store predating migration 15 has no `project_bindings` table at all:
-    // the panel still answers, with no correspondence rows.
+    // the panel still answers, and says the correspondence could not be read.
     await withWrite(context, (db) => {
       for (const table of ["sync_cursor", "issue_sync_state", "project_bindings"]) db.exec(`drop table ${table}`);
       db.prepare("delete from schema_version where version >= 15").run();
     });
     const data: SyncBindingDTO = (await withStoreRead(context, querySyncBinding(harness, {}))).data;
     expect(data.projectBindings).toEqual([]);
+    // The regression: an empty array alone cannot tell the panel that this read
+    // failed. Without the failure travelling beside it, `[]` renders as "the
+    // store holds no correspondence" — a wrong answer on a real read failure.
+    expect(data.projectBindingsError).toContain("sync-binding.correspondence-unreadable");
+    expect(data.projectBindingsError).toContain("project_bindings");
     expect(data.binding).toEqual({ enabled: true, mode: "mirror", workspace: "acme", team: "eng" });
+  });
+
+  test("a store that answers the binding read reports no failure beside its rows", async () => {
+    const { harness, context } = await boundWorkspace("sync-binding-readable-", [["proj-a", "Team Roadmap"]]);
+    const data: SyncBindingDTO = (await withStoreRead(context, querySyncBinding(harness, {}))).data;
+    expect(data.projectBindings).toEqual([{ projectId: "proj-a", remoteProject: "Team Roadmap" }]);
+    expect(data.projectBindingsError).toBeNull();
   });
 
   test("the DTO exposes no credential-bearing field", async () => {
     const { harness, context } = await boundWorkspace("sync-binding-credential-", [["proj-a", "Team Roadmap"]]);
     const data: SyncBindingDTO = (await withStoreRead(context, querySyncBinding(harness, {}))).data;
-    expect(Object.keys(data).sort()).toEqual(["binding", "bindingError", "projectBindings", "readiness"]);
+    expect(Object.keys(data).sort()).toEqual(["binding", "bindingError", "projectBindings", "projectBindingsError", "readiness"]);
     expect(Object.keys(data.projectBindings[0]).sort()).toEqual(["projectId", "remoteProject"]);
   });
 });

@@ -40,6 +40,7 @@ function dto(over: Partial<SyncBindingDTO> = {}): SyncBindingDTO {
       { projectId: "_default", remoteProject: "MST-BACKLOG" },
       { projectId: "engine", remoteProject: "MST-ENGINE" },
     ],
+    projectBindingsError: null,
     readiness: { state: "ready", cause: "ready: linear-mcp answered initialize and tools/list" },
     ...over,
   };
@@ -77,6 +78,17 @@ test("correspondence: no rows renders the explicit empty arm, not an empty table
   expect(html).toContain(en.state.empty.body);
   expect(html).toContain(en.syncBinding.correspondenceHeading);
   expect(html).not.toContain("data-ms-table");
+});
+
+test("correspondence: a failed read renders the unavailable arm with the read's reason", () => {
+  const reason = "sync-binding.correspondence-unreadable: no such table: project_bindings";
+  const html = render(dto({ projectBindings: [], projectBindingsError: reason }));
+  // The regression: an empty array rendered as `empty` before the failure rode
+  // beside it, so a real SQL failure told the reader the store held nothing.
+  expect(html).toContain('data-ms-absence="unavailable"');
+  expect(html).toContain(en.state.unavailable.body);
+  expect(html).toContain(reason);
+  expect(html).not.toContain(en.state.empty.body);
 });
 
 test("an empty correspondence is not a null binding: both facts render together", () => {
