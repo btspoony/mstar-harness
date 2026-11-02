@@ -506,6 +506,28 @@ describe("ledger read path (task 3)", () => {
     close();
   });
 
+  test("a store holding both directions summarises each one separately", async () => {
+    const { db, close } = await openedStore("ledger-directions");
+    const push = { bindingId: KEY.bindingId, direction: "push" as const, localId: KEY.localId };
+    planItem(db, { ...PLAN, operationId: "op-dir-imp-p" });
+    markApplied(db, { ...KEY, operationId: "op-dir-imp-a" });
+    writeCursor(db, { ...KEY, cursor: "cur-import", operationId: "op-dir-imp-c" });
+    planItem(db, { ...push, externalId: null, remoteUpdatedAt: null, operationId: "op-dir-push-p" });
+    markFailed(db, { ...push, operationId: "op-dir-push-f", error: "push failed" });
+    writeCursor(db, { ...push, cursor: "cur-push", operationId: "op-dir-push-c" });
+
+    const imported = readLedgerSummary(db, KEY);
+    expect(imported.counts).toEqual({ unbound: 0, pending: 0, applied: 1, failed: 0, skipped: 0 });
+    expect(imported.lastCursor).toBe("cur-import");
+    expect(imported.lastError).toBeNull();
+
+    const pushed = readLedgerSummary(db, { bindingId: KEY.bindingId, direction: "push" });
+    expect(pushed.counts).toEqual({ unbound: 0, pending: 0, applied: 0, failed: 1, skipped: 0 });
+    expect(pushed.lastCursor).toBe("cur-push");
+    expect(pushed.lastError).toBe("push failed");
+    close();
+  });
+
   test("the read path mutates nothing", async () => {
     const { db, close } = await openedStore("ledger-readonly");
     planItem(db, PLAN);

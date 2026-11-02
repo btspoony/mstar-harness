@@ -593,18 +593,22 @@ export type LedgerSummary = {
  */
 export function readLedgerSummary(db: StoreDb, input: CursorInput): LedgerSummary {
   const bindingId = requireNonblank("bindingId", input.bindingId);
+  const direction = requireDirection(input.direction);
   const counts: Record<SyncItemState, number> = { unbound: 0, pending: 0, applied: 0, failed: 0, skipped: 0 };
   for (const row of db
-    .prepare("select item_state, count(*) as n from issue_sync_state where binding_id = ? group by item_state")
-    .all(bindingId) as Array<{ item_state: string; n: number }>) {
+    .prepare("select item_state, count(*) as n from issue_sync_state where binding_id = ? and direction = ? group by item_state")
+    .all(bindingId, direction) as Array<{ item_state: string; n: number }>) {
     if (Object.hasOwn(counts, row.item_state)) counts[row.item_state as SyncItemState] = row.n;
   }
-  const lastCursorRow = db.prepare("select cursor from sync_cursor where binding_id = ?").get(bindingId) as
+  const lastCursorRow = db.prepare("select cursor from sync_cursor where binding_id = ? and direction = ?").get(bindingId, direction) as
     | { cursor: string }
     | undefined;
   const lastErrorRow = db
-    .prepare("select last_error from issue_sync_state where binding_id = ? and last_error is not null order by updated_at desc, revision desc limit 1")
-    .get(bindingId) as { last_error: string } | undefined;
+    .prepare(
+      "select last_error from issue_sync_state where binding_id = ? and direction = ? and last_error is not null" +
+        " order by updated_at desc, revision desc limit 1",
+    )
+    .get(bindingId, direction) as { last_error: string } | undefined;
   return {
     counts,
     lastCursor: lastCursorRow === undefined ? null : lastCursorRow.cursor,
