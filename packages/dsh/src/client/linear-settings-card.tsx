@@ -29,6 +29,7 @@ import type {
   LinearSettingsOutcome,
   LinearSettingsState,
   LinearSettingsStore,
+  LinearStatusRead,
 } from './linear-settings-store.ts'
 import type { LinearSettingsKey } from './linear-settings-locale.ts'
 import css from './linear-settings-card.module.css'
@@ -78,12 +79,16 @@ function expiryText(expiresAt: number | null, t: TranslateNS<'ui-mstar-linear-se
 }
 
 /** The one-line fallback the page renders when the entry has no description. */
-function summaryText(state: LinearSettingsState, t: TranslateNS<'ui-mstar-linear-settings'>): string {
-  if (state.read.status === 'idle' || state.read.status === 'loading') return t('state.loading')
-  if (state.read.status === 'unavailable') return t('state.unavailable', { reason: state.read.reason })
-  if (!state.read.rowEnabled) return t('state.disabled.title')
+function summaryText(
+  facts: LinearStatusRead | null,
+  state: LinearSettingsState,
+  t: TranslateNS<'ui-mstar-linear-settings'>,
+): string {
+  if (facts === null) return t('state.loading')
+  if (facts.status === 'unavailable') return t('state.unavailable', { reason: facts.reason })
+  if (!facts.rowEnabled) return t('state.disabled.title')
   if (state.attempt !== null) return t('state.authorizing.title')
-  switch (state.read.credential.display) {
+  switch (facts.credential.display) {
     case 'authorized': return t('state.authorized.title')
     case 'expired': return t('state.expired.summary')
     case 'unreadable': return t('state.unauthorized.title')
@@ -120,17 +125,14 @@ function authorizeButton(controller: LinearSettingsStore, t: TranslateNS<'ui-mst
 export function LinearSettingsCard(props: LinearSettingsCardProps): ReactNode {
   const { view, t, controller, useSnapshot } = props
   const state = useSnapshot(snapshot => snapshot)
-  const read = state.read
-
-  // The Plugins page mounts the card lazily and re-renders it on each visit;
-  // that render IS the host lifecycle boundary this slot exposes (its owner
-  // props carry only `view` and a config form — no row-change event). So every
-  // mount / summary→page transition re-reads the row bit and credential facts
-  // once they go stale, and the card never offers Authorize from a cached
-  // enable bit. `observe` flips the snapshot to `loading` synchronously, so
-  // the stale value is not rendered while the answer is in flight.
-  controller.observe()
-  if (view === 'summary') return summaryText(state, t)
+  // Every render is the host boundary this slot exposes (owner props carry only
+  // `view` and a config form — no row-change event), so the row bit and the
+  // credential facts are taken from `factsForRender`, which answers only facts
+  // this render cycle verified and queues the read otherwise. The card never
+  // offers Authorize from a bit it did not verify here: an unknown answer
+  // renders the loading state, and the queued read is coalesced.
+  const facts = controller.factsForRender()
+  if (view === 'summary') return summaryText(facts, state, t)
 
   if (!controller.loopback) {
     return (
@@ -141,7 +143,7 @@ export function LinearSettingsCard(props: LinearSettingsCardProps): ReactNode {
     )
   }
 
-  if (read.status === 'idle' || read.status === 'loading') {
+  if (facts === null) {
     return (
       <section className={css.card} data-ms-linear-state="loading" aria-live="polite">
         <p className={css.body}>{t('state.loading')}</p>
@@ -149,15 +151,15 @@ export function LinearSettingsCard(props: LinearSettingsCardProps): ReactNode {
     )
   }
 
-  if (read.status === 'unavailable') {
+  if (facts.status === 'unavailable') {
     return (
       <section className={css.card} data-ms-linear-state="unavailable" aria-live="polite">
-        <p className={css.body} role="alert">{t('state.unavailable', { reason: read.reason })}</p>
+        <p className={css.body} role="alert">{t('state.unavailable', { reason: facts.reason })}</p>
       </section>
     )
   }
 
-  if (!read.rowEnabled) {
+  if (!facts.rowEnabled) {
     return (
       <section className={css.card} data-ms-linear-state="disabled" aria-live="polite">
         <p className={css.title}>{t('state.disabled.title')}</p>
@@ -187,7 +189,7 @@ export function LinearSettingsCard(props: LinearSettingsCardProps): ReactNode {
     )
   }
 
-  const credential = read.credential
+  const credential = facts.credential
   const banner = outcomeCopy(state.outcome, t)
 
   if (credential.display === 'authorized') {

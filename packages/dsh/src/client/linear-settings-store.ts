@@ -32,14 +32,6 @@ export const LINEAR_SETTINGS_READ_DEADLINE_MS = 5_000
 /** Poll cadence while the host attempt is pending. */
 export const LINEAR_SETTINGS_POLL_MS = 1_000
 
-/**
- * Host facts older than this are re-read at the card's next render boundary
- * (a mount or a visible transition). The bound keeps a render-driven read from
- * re-triggering itself, and a row toggled while the card was closed is current
- * on the next visit.
- */
-export const LINEAR_SETTINGS_FRESH_MS = 1_000
-
 /** Consecutive polls without a host answer before the attempt stops observing. */
 export const LINEAR_SETTINGS_POLL_FAILURE_LIMIT = 5
 
@@ -113,8 +105,6 @@ export interface LinearSettingsOptions {
   readonly schedule?: (run: () => void, delayMs: number) => unknown
   readonly cancelSchedule?: (timer: unknown) => void
   readonly pollMs?: number
-  /** Clock seam for the host-facts freshness bound (default: `Date.now`). */
-  readonly now?: () => number
 }
 
 /** A guarded object read at the RPC boundary (malformed answers degrade explicitly). */
@@ -212,13 +202,19 @@ export class LinearSettingsStore {
   private disposed = false
   /** Consecutive polls that produced no host answer (reset by any real answer). */
   private pollFailures = 0
-  /** When the current `read` answer landed; `undefined` before the first one. */
-  private readAt: number | undefined
+  /**
+   * The snapshot no render has consumed yet. A render may decide from the
+   * current facts only while it is this snapshot: facts the host re-renders
+   * unchanged were not verified in this render cycle, so the card treats them
+   * as unknown and reads them again.
+   */
+  private unverified: LinearSettingsState | null = null
+  /** Whether the read the current render needs is already queued. */
+  private readQueued = false
   private readonly openBrowser: (url: string) => void
   private readonly schedule: (run: () => void, delayMs: number) => unknown
   private readonly cancelSchedule: (timer: unknown) => void
   private readonly pollMs: number
-  private readonly now: () => number
   /** Whether this browser may complete a loopback authorization at all. */
   readonly loopback: boolean
 
@@ -244,23 +240,53 @@ export class LinearSettingsStore {
       clearTimeout(timer as Parameters<typeof clearTimeout>[0])
     })
     this.pollMs = options.pollMs ?? LINEAR_SETTINGS_POLL_MS
-    this.now = options.now ?? (() => Date.now())
   }
 
   /**
-   * The host's render boundary: the Plugins page mounts this card and calls
-   * this on every card render. The slot contract exposes no row-change event
-   * (its owner props carry `view` and a config form only), so the row enable
-   * bit can only be re-read at a boundary the host actually produces — a
-   * mount, a summary→page transition, or any later render after the facts
-   * went stale. Nothing is re-read while an attempt is live (the attempt
-   * owns the state) and a freshly read snapshot is not re-fetched.
+   * The host's render boundary: the Plugins page calls this on every card
+   * render. The slot contract exposes no row-change event (owner props carry
+   * `view` and a config form only), so a render is the only boundary at which
+   * a row toggle can be re-read.
+   *
+   * A render may decide from facts only when it consumes the very snapshot the
+   * answer landed in; facts it inherited were not verified in this render
+   * cycle, so they answer `null` (unknown) and the read is queued. The read is
+   * skipped while one is in flight or an attempt owns the state, which is what
+   * keeps this from becoming a fetch loop.
+   *
+   * shortcut: one read per render body call, so a host that renders twice per
+   * commit (StrictMode) adds a read — re-verify if the host enables it.
+   * @returns the facts this render cycle may decide from, or null when unknown.
    */
-  observe(): void {
-    if (this.disposed || this.state.attempt !== null) return
-    if (this.state.read.status === 'loading') return
-    if (this.readAt !== undefined && this.now() - this.readAt < LINEAR_SETTINGS_FRESH_MS) return
-    void this.refresh()
+  factsForRender(): LinearStatusRead | null {
+    if (this.disposed) return null
+    const verified = this.unverified === this.state
+    this.unverified = null
+    const read = this.state.read
+    if (read.status !== 'ready' && read.status !== 'unavailable') {
+      // `idle` is the first render's request; `loading` is that request in
+      // flight, and `queueRead` drops the renders that land inside it.
+      if (read.status === 'idle') this.queueRead()
+      return null
+    }
+    if (verified) return read
+    // An attempt owns the state: it replaces the facts itself, so the card
+    // waits for it instead of re-reading underneath it.
+    if (this.state.attempt !== null) return read
+    this.queueRead()
+    return null
+  }
+
+  /** Queue one read for the renders that asked for it: never two, none while one is in flight. */
+  private queueRead(): void {
+    if (this.readQueued || this.state.read.status === 'loading') return
+    this.readQueued = true
+    // A microtask, not a call: the read never writes to the store during render.
+    queueMicrotask(() => {
+      this.readQueued = false
+      if (this.disposed) return
+      void this.refresh()
+    })
   }
 
   /** Read the host's credential/row facts. A first call flips `idle → loading` synchronously (no render loop). */
@@ -269,7 +295,6 @@ export class LinearSettingsStore {
     this.update({ ...this.state, read: { status: 'loading' } })
     const read = await this.call(LINEAR_STATUS_ENDPOINT, {})
     if (this.disposed) return
-    this.readAt = this.now()
     this.update({ ...this.state, read: parseLinearStatusRead(read) })
   }
 
@@ -383,6 +408,9 @@ export class LinearSettingsStore {
 
   private update(next: LinearSettingsState): void {
     this.state = next
+    // A new answer is unverified until a render consumes the very snapshot it
+    // landed in: every later render re-reads instead of inheriting the bit.
+    this.unverified = next
     for (const listener of this.listeners) listener()
   }
 

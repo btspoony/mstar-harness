@@ -286,12 +286,11 @@ describe('the card states', () => {
   })
 
   it('re-reads the row bit at each card visit, so a toggled row is never judged from a cached one', async () => {
-    // One store for the whole client plugin and a controllable clock: the
-    // freshness bound is a fact of the fixture, not of test timing.
-    let now = START
+    // One store for the whole client plugin: the fixtures control the host's
+    // answers and the render boundary, never a freshness clock (there is none).
     let answer: unknown = READY_DISABLED
     const { connection, calls } = stubConnection(() => answer)
-    const store = storeFor(connection, { now: () => now })
+    const store = storeFor(connection)
 
     // Visit 1: the host booted with the row disabled.
     expect(render(store)).toContain('data-ms-linear-state="loading"')
@@ -301,7 +300,6 @@ describe('the card states', () => {
 
     // The user enables the native row, then opens the card again.
     answer = READY_ABSENT
-    now += 60_000
     render(store)
     await flush()
     const enabled = render(store)
@@ -311,15 +309,105 @@ describe('the card states', () => {
     // The reverse direction is the rule the disabled row owns: disabling it
     // takes the authorization action away again, on the same store.
     answer = READY_DISABLED
-    now += 60_000
     render(store)
     await flush()
     const disabled = render(store)
     expect(disabled).toContain('data-ms-linear-state="disabled"')
     expect(disabled).not.toContain('data-ms-linear-action="authorize"')
 
-    // One read per visit — a re-render inside the freshness bound adds none.
+    // One read per visit — a re-render inside one visit adds none.
     expect(calls.filter((call) => call.endpoint === LINEAR_STATUS_ENDPOINT)).toHaveLength(3)
+    store.dispose()
+  })
+
+  it('a stale render never offers Authorize: the first render after a row toggle is unknown, not the old bit', async () => {
+    // The reviewer's first gap. Retain an enabled snapshot, disable the native
+    // row, and re-render: the first render of the visit must NOT reuse the
+    // retained `rowEnabled: true` while the re-read is in flight.
+    let answer: unknown = READY_ABSENT
+    const { connection, calls } = stubConnection(() => answer)
+    const store = storeFor(connection)
+    await store.refresh()
+    expect(render(store)).toContain('data-ms-linear-action="authorize"')
+
+    // The user disables the native row. The very next render is a stale one:
+    // its facts predate the toggle and this render cycle has verified nothing.
+    answer = READY_DISABLED
+    const stale = render(store)
+    expect(stale).toContain('data-ms-linear-state="loading"')
+    expect(stale).not.toContain('data-ms-linear-action="authorize"')
+    expect(stale).not.toContain('data-ms-linear-state="unauthorized"')
+
+    await flush()
+    const settled = render(store)
+    expect(settled).toContain('data-ms-linear-state="disabled"')
+    expect(settled).not.toContain('data-ms-linear-action="authorize"')
+    store.dispose()
+  })
+
+  it('a toggle immediately after a read is picked up on the next render, with no freshness window', async () => {
+    // The reviewer's second gap: the former 1 s LINEAR_SETTINGS_FRESH_MS bound
+    // skipped the re-read for a toggle inside it. The clock never advances here
+    // at all, so only the render boundary can start the read.
+    let answer: unknown = READY_ABSENT
+    const { connection, calls } = stubConnection(() => answer)
+    const store = storeFor(connection)
+    await store.refresh()
+    expect(render(store)).toContain('data-ms-linear-action="authorize"')
+    const readsAfterFirstVisit = calls.filter((call) => call.endpoint === LINEAR_STATUS_ENDPOINT).length
+
+    // Same instant: toggle off and visit again.
+    answer = READY_DISABLED
+    const stale = render(store)
+    expect(stale).toContain('data-ms-linear-state="loading"')
+    expect(stale).not.toContain('data-ms-linear-action="authorize"')
+
+    await flush()
+    expect(render(store)).toContain('data-ms-linear-state="disabled"')
+    // The re-read actually happened: a time bound would have skipped it here.
+    expect(calls.filter((call) => call.endpoint === LINEAR_STATUS_ENDPOINT))
+      .toHaveLength(readsAfterFirstVisit + 1)
+    store.dispose()
+  })
+
+  it('repeated renders during one pending read coalesce into a single request', async () => {
+    // The fix must not become a fetch loop: many renders inside one flight ask
+    // for the same read once, and the answer is consumed by exactly one render.
+    let release: (() => void) | undefined
+    let answer: unknown = READY_DISABLED
+    const calls: string[] = []
+    const connection: LinearSettingsConnection = {
+      isLoopback: true,
+      rpc: {
+        call: async (_channel, endpoint) => {
+          calls.push(endpoint)
+          if (calls.length > 1) {
+            const gate = Promise.withResolvers<void>()
+            release = () => gate.resolve()
+            await gate.promise
+          }
+          return { ok: true, value: answer }
+        },
+      },
+    }
+    const store = storeFor(connection, {})
+    await store.refresh()
+    expect(render(store)).toContain('data-ms-linear-state="disabled"')
+
+    answer = READY_ABSENT
+    for (let i = 0; i < 5; i += 1) {
+      expect(render(store)).toContain('data-ms-linear-state="loading"')
+    }
+    await flush()
+    expect(calls.filter((endpoint) => endpoint === LINEAR_STATUS_ENDPOINT)).toHaveLength(2)
+
+    release?.()
+    await flush()
+    // One consuming render sees the verified answer; a second render at once
+    // starts the next read rather than deciding from the same answer twice.
+    const verified = render(store)
+    expect(verified).toContain('data-ms-linear-state="unauthorized"')
+    expect(verified).toContain('data-ms-linear-action="authorize"')
     store.dispose()
   })
 
