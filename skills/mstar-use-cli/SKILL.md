@@ -42,51 +42,51 @@ Do not load for:
 
 
 Start with the intended ordinary action, not a universal preflight chain. The acquired primary coordinator's own reference/current scope token/operation id may be derived where unambiguous; explicit constraints validate. Address row actions with --plan and select workflow when needed. Genuine missing configuration/source facts use revisable prepare; defaults do not require a ceremonial record.
-Find the task, run the family, then read its owning skill for the rules around it.
+The CLI publishes each command's owning skill itself: a refusal envelope carries `details.skill` and `mstar <family> <verb> --help` ends with a `Skill:` line — read that skill for the semantics. This table owns task→family grouping only.
 
-| Task | Family | Owning skill |
-|---|---|---|
-| Read selected row state/configuration/evidence and token | `mstar plan show` | `mstar-artifacts` |
-| Bootstrap/resume the workflow coordinator only | `mstar plan bind` | `mstar-iteration` |
-| Revise row source metadata and QA/cleanup configuration (the Prepare view and its amendments) | `mstar plan prepare` | `mstar-artifacts`, `mstar-iteration` |
-| Update progress; capture findings on this plan as linked issues; close one with its disposition | `mstar plan progress`, `mstar plan issue-add`, `mstar plan issue-close` | `mstar-sdd`, `mstar-project-governance` (capture contract) |
-| Record Done directly from QC/QA and declared-route proof | `mstar plan complete` | `mstar-artifacts`, `mstar-branch-worktree`, `mstar-iteration` |
-| Register a standalone plan workflow; record delivery evidence | `mstar workflow register`, `mstar workflow evidence` | `mstar-artifacts` |
-| Register an iteration workflow | `mstar iteration register` | `mstar-artifacts` (lifecycle semantics) |
-| Close one finished lifecycle (terminal workflow state + root unregister in the current authority) | `mstar status workflow-close` | `mstar-iteration` (Phase 6) |
-| Return a `failed`/`stopped` lifecycle to `running` on the same id under explicit operator authorization (`completed` is never reopened) | `mstar workflow reopen` | `mstar-artifacts` (lifecycle semantics), `mstar-iteration` |
-| Validate a coordination document before trusting or replacing it | `mstar status validate` | `mstar-artifacts` |
-| Read the open-issue rollup; enforce a plan's findings-cleanup mode over the issues linked to it | `mstar status tech-debt`, `mstar status findings-cleanup` | `mstar-project-governance`, `mstar-artifacts` |
-| Initialize a fresh issue/catalog store; upgrade/import recognizable execution state and activate authority; or run staged migration, backup, activation and retirement | the `store` group (`init` / `upgrade` / `migrate` / `backup` / `activate` / `retire`) | `mstar-conventions` (store authority and bootstrap paths); help owns inputs; `activate` is not a routine step after `init` / `upgrade` |
-| Preview/apply execution recovery from a store backup; export current execution state | `mstar store execution restore-preview`, `mstar store execution restore`, `mstar store execution export` | `mstar-artifacts`; current help owns authorization and recovery inputs |
-| Read/write/list/delete retained persisted documents (`review` / unrelated `json`); the `residuals` kind refuses and the root/snapshot kinds are outside this surface | `mstar persist get`, `mstar persist write`, `mstar persist list`, `mstar persist delete` | `mstar-artifacts`; `residuals` kind is retired on every route |
-| Launch argv under a fresh local execution identity; recover a stopped coordinator or explicitly named plan owner (never resume) | `mstar session run`, `mstar session recover` | `mstar-iteration`, `mstar-artifacts` |
-| Land or check a QC seat report | `mstar qc validate-report` | `mstar-review-qc` |
-| Validate an Assignment before dispatch | `mstar dispatch validate` | `mstar-dispatch-gates` |
-| Map an execution mode to its QC seat count; assert tri identity | `mstar review seats` | `mstar-review-qc` |
-| Check workflow-entry facts (branch anchors, main residency, integration checkout cleanliness, integration merge lease) or the L1 / L2 pre-dispatch worktree topology | `mstar worktree check` (L1 per-plan gains the lease fact; `--entry` is the workflow-level form) | `mstar-branch-worktree`, `mstar-dispatch-gates` |
-| Assert QC / QA checkout alignment across seat files | `mstar worktree qc-alignment` | `mstar-branch-worktree` |
-| Post-merge worktree and branch cleanup (dry-run first) | `mstar worktree cleanup` | `mstar-iteration` |
-| SDD helpers: workspace, brief, branch diff package, bound launch, evidence capture | `mstar sdd workspace`, `mstar sdd task-brief`, `mstar sdd review-package`, `mstar sdd check-context`, `mstar sdd exec`, `mstar sdd evidence` | `mstar-sdd` |
-| Evaluate a phase-transition gate; probe push cadence | `mstar iteration gate`, `mstar iteration push-cadence` | `mstar-iteration`, `mstar-phase-gates` |
-| Resolve the harness / plan / SDD / workflow / project dirs | `mstar path resolve` | `mstar-conventions` |
-| Read/export or mutate issues in `{HARNESS_DIR}/store.db` (`add` / `list` / `show` / `occurrence` / `triage` / `close` / `move` / `waive` / `duplicate` / `supersede` / `link` / `export`) | `mstar issue …` | `mstar-project-governance` (capture/disposition), `mstar-conventions` (store path); help owns actor, operation, payload and issue-CAS inputs |
-| Serve the read-only local dashboard (issues, execution/roadmap views, issue-flow chart) on `127.0.0.1` | `mstar dashboard` | None — read-only surface; loopback binding is fixed and command help owns the flags |
-| Discover, import, register, update, link, list, show, export, reconcile or purge a verified producer registration in the harness catalog | `mstar catalog …` | `mstar-conventions` (catalog vs execution DB domains; Markdown index rows retired); group help owns verbs and flags |
-| Read a project's roadmap authority, preview/apply reviewed Markdown import, revision-guarded content replacement, or export the composed milestone roadmap (reporting transport) | `mstar roadmap show`, `mstar roadmap import`, `mstar roadmap replace`, `mstar roadmap export` | `mstar-project-governance` (single authoring/read/write rule home); group and verb help own flags and payloads |
-| Create, update, or assign project milestones (structured roadmap goals); read milestone rollups | the `milestone` group (`add` / `update` / `assign` / `list` / `status`) | `mstar-project-governance` (milestone rules); group help owns verbs and flags |
-| Detect the active host; resolve a loaded skill root | `mstar host detect`, `mstar host skill-root` | `mstar-host` |
-| Lint harness artifacts by content type | `mstar lint` | `mstar-skill-authoring`, `mstar-coding-behavior`, `mstar-strategy` |
-| Lint a skill's frontmatter and five-question body | `mstar skill lint` | `mstar-skill-authoring` |
-| Validate the role mapping and load-order corpus | `mstar roles validate` | `mstar-roles` |
-| Validate a knowledge doc's frontmatter and scope; the knowledge index-row assert is retired (refuses `compound.index.retired` → catalog completeness) | `mstar compound validate` | `mstar-compound` |
-| Validate DESIGN.md tokens and parity | `mstar design-md validate` | `mstar-design-md` |
-| Scaffold the audit review report; run static security checks | `mstar audit scaffold`, `mstar audit secret-scan`, `mstar audit supply-chain` | `mstar-audit` |
-| PR-review arithmetic, report path (`--reviews-dir`, default the resolved `{REVIEW_DIR}`), saved-report validation, worktree setup | `mstar pr-review tally`, `mstar pr-review report-path`, `mstar pr-review validate-report`, `mstar pr-review worktree-setup` | `mstar-audit` (pr variant) |
-| Bootstrap a harness directory | `mstar harness scaffold` | `mstar-conventions` |
-| Recover a workspace holding recognized v1/v2 execution sources; standalone file-staging `migrate` is retired | `mstar store upgrade` | `mstar-artifacts`, `mstar-conventions`; original source bytes remain untouched |
-| Discover one command or payload contract | `mstar schema` | `mstar-use-cli`; bounded schema/help is the input-shape authority |
-| Draft an offline redacted issue report | `mstar report` | `mstar-use-cli`; no automatic external submission |
+| Task | Family |
+|---|---|
+| Read selected row state/configuration/evidence and token | `mstar plan show` |
+| Bootstrap/resume the workflow coordinator only | `mstar plan bind` |
+| Revise row source metadata and QA/cleanup configuration (the Prepare view and its amendments) | `mstar plan prepare` |
+| Update progress; capture findings on this plan as linked issues; close one with its disposition | `mstar plan progress`, `mstar plan issue-add`, `mstar plan issue-close` |
+| Record Done directly from QC/QA and declared-route proof | `mstar plan complete` |
+| Register a standalone plan workflow; record delivery evidence | `mstar workflow register`, `mstar workflow evidence` |
+| Register an iteration workflow | `mstar iteration register` |
+| Close one finished lifecycle (terminal workflow state + root unregister in the current authority) | `mstar status workflow-close` |
+| Return a `failed`/`stopped` lifecycle to `running` on the same id under explicit operator authorization (`completed` is never reopened) | `mstar workflow reopen` |
+| Validate a coordination document before trusting or replacing it | `mstar status validate` |
+| Read the open-issue rollup; enforce a plan's findings-cleanup mode over the issues linked to it | `mstar status tech-debt`, `mstar status findings-cleanup` |
+| Initialize a fresh issue/catalog store; upgrade/import recognizable execution state and activate authority; or run staged migration, backup, activation and retirement | the `store` group (`init` / `upgrade` / `migrate` / `backup` / `activate` / `retire`) |
+| Preview/apply execution recovery from a store backup; export current execution state | `mstar store execution restore-preview`, `mstar store execution restore`, `mstar store execution export` |
+| Read/write/list/delete retained persisted documents (`review` / unrelated `json`); the `residuals` kind refuses and the root/snapshot kinds are outside this surface | `mstar persist get`, `mstar persist write`, `mstar persist list`, `mstar persist delete` |
+| Launch argv under a fresh local execution identity; recover a stopped coordinator or explicitly named plan owner (never resume) | `mstar session run`, `mstar session recover` |
+| Land or check a QC seat report | `mstar qc validate-report` |
+| Validate an Assignment before dispatch | `mstar dispatch validate` |
+| Map an execution mode to its QC seat count; assert tri identity | `mstar review seats` |
+| Check workflow-entry facts (branch anchors, main residency, integration checkout cleanliness, integration merge lease) or the L1 / L2 pre-dispatch worktree topology | `mstar worktree check` (L1 per-plan gains the lease fact; `--entry` is the workflow-level form) |
+| Assert QC / QA checkout alignment across seat files | `mstar worktree qc-alignment` |
+| Post-merge worktree and branch cleanup (dry-run first) | `mstar worktree cleanup` |
+| SDD helpers: workspace, brief, branch diff package, bound launch, evidence capture | `mstar sdd workspace`, `mstar sdd task-brief`, `mstar sdd review-package`, `mstar sdd check-context`, `mstar sdd exec`, `mstar sdd evidence` |
+| Evaluate a phase-transition gate; probe push cadence | `mstar iteration gate`, `mstar iteration push-cadence` |
+| Resolve the harness / plan / SDD / workflow / project dirs | `mstar path resolve` |
+| Read/export or mutate issues in `{HARNESS_DIR}/store.db` (`add` / `list` / `show` / `occurrence` / `triage` / `close` / `move` / `waive` / `duplicate` / `supersede` / `link` / `export`) | `mstar issue …` |
+| Serve the read-only local dashboard (issues, execution/roadmap views, issue-flow chart) on `127.0.0.1` | `mstar dashboard` |
+| Discover, import, register, update, link, list, show, export, reconcile or purge a verified producer registration in the harness catalog | `mstar catalog …` |
+| Read a project's roadmap authority, preview/apply reviewed Markdown import, revision-guarded content replacement, or export the composed milestone roadmap (reporting transport) | `mstar roadmap show`, `mstar roadmap import`, `mstar roadmap replace`, `mstar roadmap export` |
+| Create, update, or assign project milestones (structured roadmap goals); read milestone rollups | the `milestone` group (`add` / `update` / `assign` / `list` / `status`) |
+| Detect the active host; resolve a loaded skill root | `mstar host detect`, `mstar host skill-root` |
+| Lint harness artifacts by content type | `mstar lint` |
+| Lint a skill's frontmatter and five-question body | `mstar skill lint` |
+| Validate the role mapping and load-order corpus | `mstar roles validate` |
+| Validate a knowledge doc's frontmatter and scope; the knowledge index-row assert is retired (refuses `compound.index.retired` → catalog completeness) | `mstar compound validate` |
+| Validate DESIGN.md tokens and parity | `mstar design-md validate` |
+| Scaffold the audit review report; run static security checks | `mstar audit scaffold`, `mstar audit secret-scan`, `mstar audit supply-chain` |
+| PR-review arithmetic, report path (`--reviews-dir`, default the resolved `{REVIEW_DIR}`), saved-report validation, worktree setup | `mstar pr-review tally`, `mstar pr-review report-path`, `mstar pr-review validate-report`, `mstar pr-review worktree-setup` |
+| Bootstrap a harness directory | `mstar harness scaffold` |
+| Recover a workspace holding recognized v1/v2 execution sources; standalone file-staging `migrate` is retired | `mstar store upgrade` |
+| Discover one command or payload contract | `mstar schema` |
+| Draft an offline redacted issue report | `mstar report` |
 
 Per-family detail — refusal codes, JSON envelopes, sequence walkthroughs — is in the references listed at the end. Validator and lint families are indexed in `references/checks-and-lints.md`.
 Retired, never live alternatives: `status archive-residuals` / `backlog-register` / `backlog-close` → `status.verb-retired`; removed plan verbs (including `plan residual-add` / `residual-close`) → exit `2`, `command.invalid-input`; `persist … residuals` → `persist.kind-retired`. Capture and disposition use issue verbs, not aliases.
@@ -104,6 +104,7 @@ Complete writes Done/evidence/ownership atomically and releases applicable integ
 
 ## Decision Rules
 
+- **The command→skill pointer is published by the CLI.** It is derived from the command definitions (`details.skill` on refusals, a `Skill:` line in CLI help); do not restate the mapping in this skill or any document.
 - **Canonical binary is `mstar-harness`.** `mstar` is a short alias that shares its bin namespace with an unrelated third-party npm package of the same name: outside an environment where the harness package is installed, invoking the short alias through a package runner resolves via the registry to that other tool, and co-installing both packages globally silently overwrites the `mstar` shim — last install wins. Prefer the canonical name in scripts, CI and anything a reader might copy out of context.
 - **Exit codes: `0` ok, `1` engine refusal, `2` usage.** `0` includes idempotent no-ops and read-only reads. `1` carries a stable machine code; a refused call's commit state is action-local and stated by its receipt. `2` is a usage error — unknown flag, missing required argument or option, malformed or relative path where an absolute one is required, unreadable payload.
 - **Flags come from the CLI help, never from this skill.** Run the group help, or the verb help, before guessing an option; the group help is also the authority for which verbs exist at all.

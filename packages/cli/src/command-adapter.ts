@@ -1,7 +1,7 @@
 import { spawn } from "node:child_process";
 import { constants } from "node:os";
 import { Command, CommanderError } from "commander";
-import { refusalEnvelope, safeReceivedValue, admitCommandInput, type RefusalDiagnostic } from "@mstar-harness/commands";
+import { refusalEnvelope, safeReceivedValue, admitCommandInput, owningSkillFor, type RefusalDiagnostic } from "@mstar-harness/commands";
 import {
   executeCommand,
   getCommandDefinitions,
@@ -376,6 +376,12 @@ export function renderCommandContract(
   }
   if (payloadContracts.length > 0) {
     lines.push(`Payload contracts: ${payloadContracts.join(", ")} (keyed separately from input fields; resolve their shapes through the schema command)`);
+  }
+  // CLI route only: MCP callers get the contract per call and the folded
+  // description budget is already accounted for.
+  if (route === "cli") {
+    const skill = owningSkillFor(definition.id);
+    if (skill !== undefined) lines.push(`Skill: ${skill}`);
   }
   return lines.join("\n");
 }

@@ -191,6 +191,10 @@ async function runInit(options: InitOptions) {
 }
 
 program.name("mstar-harness").description("Morning Star harness CLI for target-based agent bootstrap").version(packageVersion);
+program.addHelpText(
+  "after",
+  "Skill: read mstar-use-cli before choosing or running a command.\nOne exact contract: mstar schema --command <id>.",
+);
 program
   .command("init")
   .description("Interactive/non-interactive setup for target agent bootstrap")

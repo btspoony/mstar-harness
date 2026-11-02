@@ -161,7 +161,7 @@ describe("status command family", () => {
     expect(result.message.split("\n")[0]).toBe("workflow selector or acquired workflow identity is required");
     expect(result.details).toMatchObject({
       helpRoute: "mstar status workflow-close --help",
-      recovery: "Run mstar status workflow-close --help and correct the flagged input.",
+      recovery: "Run mstar status workflow-close --help and correct the flagged input. Owning skill: mstar-iteration.",
     });
   });
 
