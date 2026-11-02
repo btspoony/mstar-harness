@@ -271,7 +271,7 @@ describe("shared host-health helpers", () => {
     expect(result).toMatchObject({
       status: "refused",
       code: "coordination.not-in-git",
-      message: expect.stringContaining("linked checkout"),
+      message: expect.stringContaining("cannot read its control root"),
       details: { controlRoot: null, controlHarnessDir: null, linkedWorktree: false },
     });
     expect((result.details as Record<string, unknown>).controlUnavailable).toEqual(expect.any(String));
@@ -300,10 +300,11 @@ describe("shared host-health helpers", () => {
           openBrowser: async () => {},
         },
       });
-      // Named refusal with details, never `command.internal`.
+      // Named refusal with its own code, never `command.internal` and never
+      // the Git-verdict code.
       expect(result).toMatchObject({
         status: "refused",
-        code: "coordination.not-in-git",
+        code: "path.control-root-unreadable",
         details: { controlRoot: null, controlHarnessDir: null, linkedWorktree: false },
       });
       expect((result.details as Record<string, unknown>).controlUnavailable).toEqual(expect.any(String));

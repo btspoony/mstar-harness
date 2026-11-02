@@ -475,17 +475,22 @@ export function getLocalCommandDefinitions(): readonly CommandDefinition[] {
         const controlRoot = main?.root ?? null;
         let controlHarnessDir: string | null = null;
         let controlUnavailable: string | undefined;
+        let controlUnavailableCode: "coordination.not-in-git" | "path.control-root-unreadable" | undefined;
         try {
           controlHarnessDir = resolveProcessHarnessDir(startDir);
         } catch (error) {
           // A linked checkout whose main worktree is unreadable is data here,
           // not a failed lookup: report the cause instead of a local guess.
           // Filesystem-availability errors escape the same walk-up and must
-          // answer the same named refusal, not an unclassified internal error.
+          // answer a named refusal, not an unclassified internal error — but
+          // they are not "not in git", so they carry their own code.
           const code = error instanceof CoordinationError
             ? error.code
             : (error as NodeJS.ErrnoException).code;
           if (code !== "coordination.not-in-git" && code !== "EACCES" && code !== "EPERM") throw error;
+          controlUnavailableCode = code === "coordination.not-in-git"
+            ? "coordination.not-in-git"
+            : "path.control-root-unreadable";
           controlUnavailable = error instanceof Error ? error.message : String(error);
         }
         // A start directory inside the main checkout IS that worktree; only a
@@ -508,7 +513,7 @@ export function getLocalCommandDefinitions(): readonly CommandDefinition[] {
         // back to local artifacts — misreporting the worktree's own directory
         // as the process root is the confusion this command exists to remove.
         if (controlUnavailable !== undefined) {
-          return refusalEnvelope({ command: "path.resolve", status: "refused", code: "coordination.not-in-git", exitCode: 1, message: `the linked checkout ${startDir} cannot read its main worktree`, details: {
+          return refusalEnvelope({ command: "path.resolve", status: "refused", code: controlUnavailableCode ?? "coordination.not-in-git", exitCode: 1, message: `the checkout ${startDir} cannot read its control root`, details: {
             startDir, harnessDir: null, specsDir: null, workflowDir: null, projectDir: null, reviewDir: null, ...control, local: { harnessDir },
           } , recovery: "From the main worktree: run mstar status validate; or set MSTAR_HARNESS_DIR to the control harness root. Run mstar path resolve."});
         }
