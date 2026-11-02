@@ -9,6 +9,7 @@ import { join } from "node:path";
 import { afterAll, describe, expect, test } from "bun:test";
 import { initializeStore, type StoreContext, type StoreDb } from "./store-db.js";
 import {
+  claimItem,
   markApplied,
   markFailed,
   markSkipped,
@@ -17,6 +18,7 @@ import {
   readCursor,
   readItem,
   readLedgerSummary,
+  recordRefusal,
   replanItem,
   SyncError,
   writeCursor,
@@ -584,6 +586,68 @@ describe("sync error shape", () => {
     expect((error as SyncError).code).toBe("sync.not-found");
     expect(error.name).toBe("SyncError");
     expect(error.message.startsWith("[sync.not-found] ")).toBe(true);
+    close();
+  });
+});
+
+describe("claimItem distinguishes a new send right from a historical replay", () => {
+  test("the same request claimed twice yields the right exactly once", async () => {
+    const { db, close } = await openedStore("claim-right");
+    const first = claimItem(db, PLAN);
+    const second = claimItem(db, { ...PLAN, operationId: PLAN.operationId });
+    expect(first.claimed).toBe(true);
+    expect(second.claimed).toBe(false);
+    // The loser sees the CURRENT row, which is what it must act on.
+    expect(second.item).toEqual(first.item);
+    close();
+  });
+
+  test("a claim still refuses a conflicting request on the same id, like planItem", async () => {
+    const { db, close } = await openedStore("claim-conflict");
+    claimItem(db, PLAN);
+    expect(codeOf(() => claimItem(db, { ...PLAN, externalId: "EXT-OTHER" }))).toBe("sync.operation-conflict");
+    close();
+  });
+
+  test("a fresh claim after a refusal opens the retry cycle", async () => {
+    const { db, close } = await openedStore("claim-retry");
+    claimItem(db, PLAN);
+    markFailed(db, { ...KEY, operationId: "op-claim-fail", error: "boom" });
+    const retried = claimItem(db, { ...KEY, operationId: "op-claim-retry" });
+    expect(retried.claimed).toBe(true);
+    expect(retried.item.itemState).toBe("pending");
+    close();
+  });
+});
+
+describe("recordRefusal records the error and moves nothing", () => {
+  test("a pending residue keeps its state, identity and payload proof, and stays reconcilable", async () => {
+    const { db, close } = await openedStore("refusal-residue");
+    claimItem(db, { ...KEY, externalId: null, remoteUpdatedAt: null, operationId: "op-refusal-plan" });
+    const before = readItem(db, KEY)!;
+    const after = recordRefusal(db, { ...KEY, operationId: "op-refusal-1", error: "[linear.label-unresolved] nope" });
+    expect(after.itemState).toBe("pending");
+    expect(after.externalId).toBeNull();
+    expect(after.lastError).toBe("[linear.label-unresolved] nope");
+    // Everything that makes the row an ambiguity survives: a `failed` row would
+    // be invisible to the marker scan.
+    expect(after.pendingTarget).toBe(before.pendingTarget);
+    expect(after.lastRequestHash).toBe(before.lastRequestHash);
+    expect(after.lastKindLabels).toEqual(before.lastKindLabels);
+    expect(after.revision).toBe(before.revision + 1);
+    const stillPending = db
+      .prepare("select local_id from issue_sync_state where binding_id = ? and direction = 'import' and item_state = 'pending' and external_id is null")
+      .all(KEY.bindingId) as Array<{ local_id: string }>;
+    expect(stillPending).toEqual([{ local_id: KEY.localId }]);
+    close();
+  });
+
+  test("the verb replays its receipt and conflicts on a different request", async () => {
+    const { db, close } = await openedStore("refusal-replay");
+    claimItem(db, { ...KEY, externalId: null, remoteUpdatedAt: null, operationId: "op-refusal-plan-2" });
+    const first = recordRefusal(db, { ...KEY, operationId: "op-refusal-2", error: "one" });
+    expect(recordRefusal(db, { ...KEY, operationId: "op-refusal-2", error: "one" })).toEqual(first);
+    expect(codeOf(() => recordRefusal(db, { ...KEY, operationId: "op-refusal-2", error: "two" }))).toBe("sync.operation-conflict");
     close();
   });
 });
