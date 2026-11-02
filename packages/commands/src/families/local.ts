@@ -8,6 +8,7 @@ import {
   detectHost,
   emitGitignoreSnippet,
   hasHarnessRootDeclaration,
+  isDistinctCheckout,
   readMainWorktree,
   resolveHarnessDir,
   resolveProcessHarnessDir,
@@ -493,16 +494,11 @@ export function getLocalCommandDefinitions(): readonly CommandDefinition[] {
             : "path.control-root-unreadable";
           controlUnavailable = error instanceof Error ? error.message : String(error);
         }
-        // A start directory inside the main checkout IS that worktree; only a
-        // checkout outside it is linked.
-        let startReal = path.resolve(startDir);
-        try {
-          startReal = fs.realpathSync(startDir);
-        } catch {
-          // the path does not exist yet; the lexical form is the best answer
-        }
-        const linkedWorktree =
-          controlRoot !== null && startReal !== controlRoot && !startReal.startsWith(`${controlRoot}${path.sep}`);
+        // A plain subdirectory of the main checkout belongs to that worktree;
+        // a nested `git worktree add` under it is a distinct checkout. Git's
+        // per-worktree git dirs decide this, not path prefixes — a linked
+        // checkout can live inside the main checkout's directory tree.
+        const linkedWorktree = controlRoot !== null && isDistinctCheckout(controlRoot, startDir);
         const control = {
           controlRoot,
           controlHarnessDir,
