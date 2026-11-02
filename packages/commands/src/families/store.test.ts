@@ -123,7 +123,7 @@ test("a store usage refusal carries the shared factory metadata and keeps its co
     expect(result.message.split("\n")[0]).toBe("--operator is required");
     expect(result.details).toMatchObject({
       helpRoute: "mstar store upgrade --help",
-      recovery: "Run mstar store upgrade --help and correct the flagged input.",
+      recovery: "Run mstar store upgrade --help and correct the flagged input. Owning skill: mstar-conventions.",
     });
   } finally {
     rmSync(root, { recursive: true, force: true });

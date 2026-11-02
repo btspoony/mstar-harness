@@ -170,7 +170,7 @@ describe("SDD command family", () => {
     expect(result.message.split("\n")[0]).toBe("PLAN_ID is required");
     expect(result.details).toMatchObject({
       helpRoute: "mstar sdd workspace --help",
-      recovery: "Run mstar sdd workspace --help and correct the flagged input.",
+      recovery: "Run mstar sdd workspace --help and correct the flagged input. Owning skill: mstar-sdd.",
     });
   });
 
