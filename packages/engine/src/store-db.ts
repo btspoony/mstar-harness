@@ -1749,9 +1749,10 @@ update issue_sync_state
  * exists - so it is recorded on `applied` from a confirmed receipt, never on
  * intent.
  *
- * `last_kind_label` is the ownership fact the kind->label replace rule reads:
- * the label THIS tool last wrote for the row. An update removes exactly that
- * recorded label and nothing else, so a human-added label is never touched.
+ * `last_kind_label` is the ownership fact the kind->label replace rule reads.
+ * It holds the CANDIDATE labels this tool may have written, as a JSON array: an
+ * ambiguous update proves neither that the old label was removed nor that the
+ * new one was added, so both stay removable and nothing else is ever touched.
  *
  * Both are nullable and left null by the import direction, which has neither
  * fact: an existing row keeps working, and its next changed push backfills the

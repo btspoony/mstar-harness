@@ -66,8 +66,13 @@ export type SyncItem = {
   lastSkipReason: string | null;
   /** The normalized payload hash of the last confirmed push write (migration 17). */
   lastRequestHash: string | null;
-  /** The kind label this tool last wrote for the row, the replace rule's ownership fact. */
-  lastKindLabel: string | null;
+  /**
+   * The kind labels this tool may have written for the row: the replace rule's
+   * ownership fact. More than one after an ambiguous update, because that
+   * receipt proves neither that the old label was removed nor that the new one
+   * was added, so both must stay removable.
+   */
+  lastKindLabels: string[];
   revision: number;
   updatedAt: string;
 };
@@ -95,7 +100,9 @@ export type MarkItemInput = {
   requestHash?: string | null;
   /**
    * The kind label this push actually wrote, recorded as the ownership fact a
-   * later kind change replaces. Absent when the payload carried no label.
+   * later kind change replaces. Absent when the payload carried no label. A
+   * CONFIRMED write makes it the whole ownership; it is exactly the label the
+   * remote now carries.
    */
   kindLabel?: string | null;
   /**
@@ -116,7 +123,11 @@ export type MarkUnconfirmedInput = {
   direction: SyncDirection;
   localId: string;
   operationId: string;
-  /** The label the unconfirmed write may have written; omitted keeps the recorded one. */
+  /**
+   * The label the unconfirmed write may have written. It JOINS the recorded
+   * ownership instead of replacing it: the receipt proves neither that the old
+   * label was removed nor that the new one was added, so both stay removable.
+   */
   kindLabel?: string | null;
 };
 export type ReadItemInput = { bindingId: string; direction: SyncDirection; localId: string };
@@ -222,10 +233,39 @@ function toItem(row: SyncRow): SyncItem {
     lastError: row.last_error,
     lastSkipReason: row.last_skip_reason,
     lastRequestHash: row.last_request_hash,
-    lastKindLabel: row.last_kind_label,
+    lastKindLabels: parseKindLabels(row.last_kind_label),
     revision: row.revision,
     updatedAt: row.updated_at,
   };
+}
+
+/**
+ * The ownership column holds the CANDIDATE labels as a JSON array, because an
+ * ambiguous update proves neither that the old label was removed nor that the
+ * new one was added: both may be on the remote, and a single value cannot say
+ * so. One nullable `text` column expresses that set, so no schema change was
+ * needed. A bare value is one candidate: this column was first written as a
+ * single label, and such a row must stay readable.
+ */
+function parseKindLabels(value: string | null): string[] {
+  if (value === null || value.trim() === "") return [];
+  if (!value.startsWith("[")) return [value];
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(value);
+  } catch {
+    throw new SyncError("sync.invalid-input", `the ledger's label ownership ${JSON.stringify(value)} is not a label list`);
+  }
+  if (!Array.isArray(parsed) || parsed.some((entry) => typeof entry !== "string")) {
+    throw new SyncError("sync.invalid-input", `the ledger's label ownership ${JSON.stringify(value)} is not a label list`);
+  }
+  return [...new Set(parsed as string[])];
+}
+
+/** The column form of an ownership set: empty owns nothing. */
+function encodeKindLabels(labels: readonly string[]): string | null {
+  const unique = [...new Set(labels)];
+  return unique.length === 0 ? null : JSON.stringify(unique);
 }
 
 function requireItem(row: SyncRow | undefined): SyncRow {
@@ -467,10 +507,13 @@ export function markSkipped(db: StoreDb, input: MarkSkippedInput): SyncItem {
  * match, so the next pass converges the desired fields instead of reporting a
  * `skipped` the receipt never earned.
  *
- * The label the unconfirmed write may have written becomes the recorded
- * ownership, so a later corrective update replaces exactly that label. Refused
- * for a `pending` row: an ambiguous CREATE has no identity and is its own
- * residue, which reconciliation (or an explicit adoption) owns.
+ * The label the unconfirmed write may have written JOINS the recorded
+ * ownership rather than replacing it: the receipt proves neither that the old
+ * label was removed nor that the new one was added, so the corrective update
+ * must remove whichever of them is actually on the remote (removing an absent
+ * label is a no-op). Refused for a `pending` row: an ambiguous CREATE has no
+ * identity and is its own residue, which reconciliation (or an explicit
+ * adoption) owns.
  */
 export function markUnconfirmed(db: StoreDb, input: MarkUnconfirmedInput): SyncItem {
   const bindingId = requireNonblank("bindingId", input.bindingId);
@@ -497,7 +540,7 @@ export function markUnconfirmed(db: StoreDb, input: MarkUnconfirmedInput): SyncI
       last_error: row.last_error,
       last_skip_reason: row.last_skip_reason,
       last_request_hash: null,
-      last_kind_label: kindLabel ?? row.last_kind_label,
+      last_kind_label: encodeKindLabels([...parseKindLabels(row.last_kind_label), ...(kindLabel === null ? [] : [kindLabel])]),
     }, now);
     const item = toItem(requireItem(selectRow(db, bindingId, direction, localId)));
     recordOperation(db, operationId, hash, item, now);
@@ -566,9 +609,13 @@ function markItem(
       last_error: target === "failed" ? (text ?? null) : null,
       last_skip_reason: target === "skipped" ? (text ?? null) : null,
       // The skip-rule hash and the label ownership follow the SAME rule: a
-      // confirmed apply updates them, anything else carries them forward.
+      // confirmed apply updates them, anything else carries them forward. A
+      // confirmed update carries exactly the label it wrote, so ownership
+      // narrows to that one label; the removal it sent already took the rest.
       last_request_hash: applied ? (input.requestHash ?? row.last_request_hash) : row.last_request_hash,
-      last_kind_label: applied ? (input.kindLabel ?? row.last_kind_label) : row.last_kind_label,
+      last_kind_label: applied
+        ? (input.kindLabel == null ? row.last_kind_label : encodeKindLabels([input.kindLabel]))
+        : row.last_kind_label,
     }, now);
     const item = toItem(requireItem(selectRow(db, bindingId, direction, localId)));
     recordOperation(db, operationId, hash, item, now);

@@ -149,7 +149,7 @@ describe("(a) a confirmed create records identity and hash; a later change updat
       expect(applied.itemState).toBe("applied");
       expect(applied.externalId).toBe("LIN-1");
       expect(applied.lastRequestHash).not.toBeNull();
-      expect(applied.lastKindLabel).toBe("bug");
+      expect(applied.lastKindLabels).toEqual(["bug"]);
 
       db.prepare("update issues set title = 'Retitled' where id = 'I-000911'").run();
       const second = await pushItem(db, fake, ctx, candidates(db)[0]!);
@@ -448,7 +448,7 @@ describe("(g) kind labels are resolved against the discovered set, never created
       expect(refused.cause).toContain('"risk"');
       expect(fake.writes).toHaveLength(1);
       // The failing item never wrote a label, so no ownership is claimed for it.
-      expect(row(db, "I-000982")!.lastKindLabel).toBeNull();
+      expect(row(db, "I-000982")!.lastKindLabels).toEqual([]);
     } finally {
       close();
     }
@@ -463,14 +463,14 @@ describe("(g2) a changed kind replaces exactly the label mstar recorded", () => 
       const fake = provider();
       const ctx = context();
       await pushItem(db, fake, ctx, candidates(db)[0]!);
-      expect(row(db, "I-000991")!.lastKindLabel).toBe("bug");
+      expect(row(db, "I-000991")!.lastKindLabels).toEqual(["bug"]);
 
       db.prepare("update issues set kind = 'risk' where id = 'I-000991'").run();
       await pushItem(db, fake, ctx, candidates(db)[0]!);
       const update = writeOf(fake, 1, "update").payload;
       expect(update.labels).toEqual(["risk"]);
       expect(update.removeLabels).toEqual(["bug"]);
-      expect(row(db, "I-000991")!.lastKindLabel).toBe("risk");
+      expect(row(db, "I-000991")!.lastKindLabels).toEqual(["risk"]);
     } finally {
       close();
     }
@@ -482,7 +482,7 @@ describe("(g2) a changed kind replaces exactly the label mstar recorded", () => 
       addIssue(db, "I-000992", { kind: "bug" });
       const fake = provider();
       adoptItem(db, BINDING, "I-000992", "LIN-42");
-      expect(row(db, "I-000992")!.lastKindLabel).toBeNull();
+      expect(row(db, "I-000992")!.lastKindLabels).toEqual([]);
       await pushItem(db, fake, context(), candidates(db)[0]!);
       const update = writeOf(fake, 0, "update").payload;
       expect(update.labels).toEqual(["bug"]);
@@ -599,6 +599,65 @@ describe("(i) an ambiguous update drops the payload proof but keeps the identity
     }
   });
 
+  test("an ambiguous kind change that did NOT land still converges: the remote ends with exactly the new label", async () => {
+    const { db, close } = await openedStore("ambiguous-label-not-applied");
+    try {
+      addIssue(db, "I-001013", { kind: "bug", title: "A" });
+      // A remote that really holds the labels the writes applied. The ambiguous
+      // second write is one that never landed, which its receipt cannot say.
+      const remote = new Set<string>();
+      const writes: ProviderWrite[] = [];
+      const outcomes: ProviderWriteReceipt[] = [
+        { kind: "confirmed", externalId: "LIN-1", updatedAt: "2026-11-02T00:00:00.000Z" },
+        { kind: "ambiguous", cause: "timeout after the request was sent" },
+        { kind: "confirmed", externalId: "LIN-1", updatedAt: "2026-11-02T00:10:00.000Z" },
+      ];
+      const fake: IssueProvider = {
+        async probe() {
+          return { state: "ready", cause: "ready: fixture" };
+        },
+        async listIssues() {
+          return { items: [], nextCursor: null };
+        },
+        async applyWrite(write) {
+          writes.push(write);
+          const outcome = outcomes.shift()!;
+          if (outcome.kind === "confirmed") {
+            for (const label of write.payload.removeLabels ?? []) remote.delete(label);
+            for (const label of write.payload.labels ?? []) remote.add(label);
+          }
+          return outcome;
+        },
+      };
+
+      const ctx = context();
+      await pushItem(db, fake, ctx, candidates(db)[0]!);
+      expect([...remote]).toEqual(["bug"]);
+
+      // The change to `risk` is sent and does not land; both labels are now
+      // possibly on the remote, so both stay owned.
+      db.prepare("update issues set kind = 'risk' where id = 'I-001013'").run();
+      expect((await pushItem(db, fake, ctx, candidates(db)[0]!)).outcome).toBe("unresolved");
+      expect([...remote]).toEqual(["bug"]);
+      expect(row(db, "I-001013")!.lastKindLabels).toEqual(["bug", "risk"]);
+
+      // Retry with the local kind unchanged: `bug` is the label the remote
+      // actually kept, so the corrective update has to remove it.
+      expect((await pushItem(db, fake, ctx, candidates(db)[0]!)).outcome).toBe("updated");
+      expect(writes[2]!.payload.removeLabels).toEqual(["bug"]);
+      expect([...remote]).toEqual(["risk"]);
+      expect(row(db, "I-001013")!.lastKindLabels).toEqual(["risk"]);
+
+      // Converged: the following pass skips because nothing changed, which the
+      // remote now really reflects.
+      expect((await pushItem(db, fake, ctx, candidates(db)[0]!)).outcome).toBe("skipped");
+      expect(writes).toHaveLength(3);
+      expect([...remote]).toEqual(["risk"]);
+    } finally {
+      close();
+    }
+  });
+
   test("a kind-label change during the unconfirmed update stays owned, so the corrective update replaces it", async () => {
     const { db, close } = await openedStore("ambiguous-update-label");
     try {
@@ -614,7 +673,7 @@ describe("(i) an ambiguous update drops the payload proof but keeps the identity
       await pushItem(db, scripted, ctx, candidates(db)[0]!);
       db.prepare("update issues set kind = 'risk' where id = 'I-001012'").run();
       await pushItem(db, scripted, ctx, candidates(db)[0]!);
-      expect(row(db, "I-001012")!.lastKindLabel).toBe("risk");
+      expect(row(db, "I-001012")!.lastKindLabels).toEqual(["bug", "risk"]);
       // Back to bug: the possibly-delivered `risk` label is the one to replace.
       db.prepare("update issues set kind = 'bug' where id = 'I-001012'").run();
       await pushItem(db, scripted, ctx, candidates(db)[0]!);

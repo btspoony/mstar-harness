@@ -571,7 +571,7 @@ describe("push — the credential scope preflight", () => {
       expect(db.prepare("select item_state, external_id, last_kind_label from issue_sync_state").get()).toEqual({
         item_state: "applied",
         external_id: "LIN-1",
-        last_kind_label: "bug",
+        last_kind_label: '["bug"]',
       });
     } finally {
       db.close();

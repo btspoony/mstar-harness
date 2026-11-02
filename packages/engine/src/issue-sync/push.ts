@@ -198,10 +198,13 @@ export async function pushItem(db: StoreDb, provider: IssueProvider, context: Pu
       // so the ledger is not touched at all.
       return { localId: candidate.localId, outcome: "skipped", externalId };
     }
-    // A changed kind replaces EXACTLY the label this tool last wrote. An
-    // unknown ownership (no recorded label) only adds — never a mass removal.
-    const recorded = ledger?.lastKindLabel ?? null;
-    if (recorded !== null && recorded !== fields.label) payload.removeLabels = [recorded];
+    // A changed kind replaces EXACTLY the labels this tool may own. An
+    // unconfirmed earlier update can leave more than one of them on the remote,
+    // so every recorded label except the desired one is removed (removing an
+    // absent label is a no-op). Unknown ownership (none recorded) only adds.
+    const recorded = ledger?.lastKindLabels ?? [];
+    const stale = recorded.filter((label) => label !== fields.label);
+    if (stale.length > 0) payload.removeLabels = stale;
     return apply(db, provider, context, candidate.localId, { kind: "update", externalId, payload }, hash, fields.label, ledger);
   }
 

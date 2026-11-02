@@ -207,7 +207,9 @@ describe("sync state machine transitions", () => {
     planItem(db, { ...PLAN, ...push, operationId: "op-push-plan" });
     markApplied(db, { ...push, operationId: "op-push-apply", externalId: "EXT-9", requestHash: "hash-b", kindLabel: "bug" });
     const dropped = markUnconfirmed(db, { ...push, operationId: "op-unconfirmed", kindLabel: "risk" });
-    expect(dropped).toMatchObject({ itemState: "applied", externalId: "EXT-9", lastRequestHash: null, lastKindLabel: "risk" });
+    // An ambiguous replacement proves neither the removal nor the addition, so
+    // BOTH candidates stay owned and either may still be on the remote.
+    expect(dropped).toMatchObject({ itemState: "applied", externalId: "EXT-9", lastRequestHash: null, lastKindLabels: ["bug", "risk"] });
     // The identity is still there, so the row is still update-addressable.
     expect(readItem(db, push)?.externalId).toBe("EXT-9");
     // Without a payload proof the skip rule cannot match.

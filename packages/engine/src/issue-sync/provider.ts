@@ -85,10 +85,12 @@ export type ProviderWritePayload = {
       the adapter against the discovered workspace label set and sent as
       `addLabels`. Absent when kind maps to no label. */
   labels?: string[];
-  /** The mstar-written label this update REPLACES (from `last_kind_label`), sent
-      as `removeLabels`. Removal is required for a mapped-kind update; a handshake
-      schema lacking the argument refuses the update before any write. Absent on
-      create. */
+  /** The mstar-written labels this update REPLACES (from `last_kind_label`),
+      sent as `removeLabels`. An unconfirmed earlier update may have left more
+      than one of them on the remote, and removing an absent label is a no-op,
+      so every recorded label but the desired one is sent. Removal is required
+      for a mapped-kind update; a handshake schema lacking the argument refuses
+      the update before any write. Absent on create. */
   removeLabels?: string[];
 };
 
