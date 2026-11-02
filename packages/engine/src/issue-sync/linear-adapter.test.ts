@@ -232,16 +232,26 @@ describe("page failures (never an empty page)", () => {
     );
   });
 
-  test("no configured entry or no listing verb refuses, never lists", async () => {
-    expect(
-      await codeOf(() => createLinearAdapter(deps([], { findLinearEntry: () => null })).listIssues(null)),
-    ).toBe("linear.query-failed");
-    expect(await codeOf(() => createLinearAdapter(deps([], { listingVerbs: [], listedVerbs: () => [] })).listIssues(null))).toBe(
-      "linear.list-unimplemented",
+  test("an absent handshake and a handshake without the verb are different codes", async () => {
+    // "this host has no usable service" and "this service exposes no listing
+    // verb" are different operator conditions: the first is fixed in the host's
+    // MCP configuration, the second needs a different adapter. One code for both
+    // (I-000949) sent the operator to the wrong recovery.
+    const notHandshaked = await codeOf(() =>
+      createLinearAdapter(deps([], { listedVerbs: () => null })).listIssues(null),
     );
-    expect(await codeOf(() => createLinearAdapter(deps([], { listedVerbs: () => null })).listIssues(null))).toBe(
-      "linear.list-unimplemented",
+    const listedWithoutTheVerb = await codeOf(() =>
+      createLinearAdapter(deps([], { listingVerbs: [], listedVerbs: () => [] })).listIssues(null),
     );
+    expect(notHandshaked).toBe("linear.host-unavailable");
+    expect(listedWithoutTheVerb).toBe("linear.list-unimplemented");
+    expect(notHandshaked).not.toBe(listedWithoutTheVerb);
+  });
+
+  test("no configured entry refuses linear.host-unavailable, not a page failure", async () => {
+    const d = deps([], { findLinearEntry: () => null });
+    expect(await codeOf(() => createLinearAdapter(d).listIssues(null))).toBe("linear.host-unavailable");
+    expect(d.requests).toEqual([]);
   });
 });
 

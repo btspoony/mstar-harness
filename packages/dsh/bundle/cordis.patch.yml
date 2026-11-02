@@ -29,10 +29,18 @@
 # server. It ships DISABLED: Linear needs an OAuth grant (or a team-scoped API
 # key) that only the operator can supply, and an enabled-but-unauthenticated
 # row would spend a startup probe on a 401 and log a connection failure every
-# boot. Enable it by overriding the row in the profile (or home) layer —
-# `disabled: false` plus, if the deployment holds a token, a `headers` entry
-# (`Authorization: Bearer <key>`). With no token the server's own OAuth flow
-# applies. A non-blank `serverName` is required: it namespaces the tools as
+# boot. Enable it by overriding the row in the profile (or home) layer with
+# `disabled: false`. The row carries NO token in config: its `headers` is the
+# `!!js` expression below, evaluated by the loader against the row's own
+# context, which reads the machine credential through the `mstarLinearAuth`
+# service (`packages/dsh/src/linear-settings.ts`, fed by the Settings
+# Authorize action or `mstar linear auth login`). The bearer therefore lives
+# only in host memory — a profile patch, a config dump or a settings payload
+# keeps the expression text. `inject` is what lets the expression resolve that
+# service; the row stays disabled until a human enables it, and enabling it
+# never grants a credential by itself. With no stored credential the
+# expression yields no header and the server's own OAuth challenge applies.
+# A non-blank `serverName` is required: it namespaces the tools as
 # `mcp__linear__<tool>`. The row is not part of the mstar MCP channel above —
 # it carries the provider's tools, never mstar's.
 #
@@ -81,8 +89,10 @@
         args: ['-y', '@mstar-harness/cli', 'mcp', '--trust-caller-session-id']
     - id: linear-mcp
       name: '@deepseek-ai/dsh-mcp-client'
+      inject: [mstarLinearAuth]
       disabled: true
       config:
         serverName: linear
         transport: streamable-http
         url: https://mcp.linear.app/mcp
+        headers: !!js ctx.mstarLinearAuth.authorizationHeaders()

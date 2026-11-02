@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { writeLinearCredential, readLinearCredential } from "@mstar-harness/engine";
@@ -40,7 +40,7 @@ describe("mstar linear auth", () => {
     const result = await command.execute({ operation: "status" }, context());
     expect(result.status).toBe("ok");
     const data = dataOf(result);
-    expect(data.authorized).toBe(false);
+    expect(data.display).toBe("absent");
     expect(String(data.credentialPath)).toBe(process.env.MSTAR_LINEAR_CREDENTIAL!);
   });
 
@@ -51,7 +51,7 @@ describe("mstar linear auth", () => {
 
     const status = await command.execute({ operation: "status" }, context());
     const data = dataOf(status);
-    expect(data.authorized).toBe(true);
+    expect(data.display).toBe("authorized");
     expect(data.hasRefreshToken).toBe(true);
   });
 
@@ -85,14 +85,68 @@ describe("mstar linear auth", () => {
     // reachability lint refuses a host-supplied string it cannot evaluate.
     expect(JSON.stringify(result)).toMatch(/mstar linear auth/);
     const status = await command.execute({ operation: "status" }, context());
-    expect(JSON.stringify(status)).toMatch(/"authorized":false/);
+    expect(JSON.stringify(status)).toMatch(/"display":"absent"/);
   });
 
   test("an authorization that did not complete is a refusal, not a stored empty token", async () => {
     const result = await command.execute({ operation: "login" }, context({ linearAuthorize: async () => null }));
     expect(result.code).toBe("linear.auth-denied");
     const status = await command.execute({ operation: "status" }, context());
-    expect(dataOf(status).authorized).toBe(false);
+    expect(dataOf(status).display).toBe("absent");
+  });
+});
+
+describe("the status word comes from the expiry instant", () => {
+  const status = async (): Promise<Record<string, unknown>> =>
+    dataOf(await command.execute({ operation: "status" }, context()));
+
+  test("a credential inside the refresh window is still authorized", async () => {
+    // Inside REFRESH_WINDOW_MS but not yet expired: the token still works.
+    writeLinearCredential({ ...tokens, expiresAt: Date.now() + 60_000 });
+    const data = await status();
+    expect(data.display).toBe("authorized");
+    expect(data.refreshDue).toBe(true);
+  });
+
+  test("no expiry is authorized, not guessed", async () => {
+    writeLinearCredential({ ...tokens, expiresAt: null });
+    const data = await status();
+    expect(data.display).toBe("authorized");
+    expect(data.expiresAt).toBeNull();
+  });
+
+  test("expired with a refresh token stays expired, says refresh is attempted, and promises nothing", async () => {
+    writeLinearCredential({ ...tokens, expiresAt: Date.now() - 60_000 });
+    const data = await status();
+    expect(data.display).toBe("expired");
+    expect(JSON.stringify(data)).not.toContain("revoked");
+    expect(String(data.detail)).toMatch(/refresh/);
+    expect(String(data.detail)).toMatch(/not a guarantee|no guarantee/);
+  });
+
+  test("expired without a refresh token names the command that re-authorizes", async () => {
+    writeLinearCredential({ ...tokens, refreshToken: null, expiresAt: Date.now() - 60_000 });
+    const data = await status();
+    expect(data.display).toBe("expired");
+    expect(JSON.stringify(data)).not.toContain("revoked");
+    expect(String(data.detail)).toContain("mstar linear auth");
+  });
+
+  test("absent and unreadable are their own words, never revoked", async () => {
+    const absent = await status();
+    expect(absent.display).toBe("absent");
+    writeLinearCredential({ ...tokens, expiresAt: Date.now() + 60_000 });
+    writeFileSync(process.env.MSTAR_LINEAR_CREDENTIAL!, "{not json");
+    const unreadable = await status();
+    expect(unreadable.display).toBe("unreadable");
+    expect(JSON.stringify(unreadable)).not.toContain("revoked");
+  });
+
+  test("status carries no access token, refresh token or client id", async () => {
+    writeLinearCredential(tokens);
+    const json = JSON.stringify(await status());
+    for (const secret of [tokens.accessToken, tokens.refreshToken, tokens.clientId]) expect(json).not.toContain(secret);
+    expect(json).not.toMatch(/access_token|refresh_token|client_id/);
   });
 });
 

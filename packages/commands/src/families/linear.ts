@@ -27,24 +27,38 @@ function envelope(id: string, data: unknown): CommandEnvelope {
   return { version: 1, command: id, status: "ok", code: `${id}.ok`, exitCode: 0, data };
 }
 
+/**
+ * One word per state, keyed on the expiry instant. `refreshDue` says a refresh
+ * is near, not that the token stopped working, and a saved refresh token is not
+ * proof the refresh will be accepted — so neither decides the word.
+ */
 function describe(now = Date.now()): Record<string, unknown> {
   const state = readLinearCredential(now);
   if (state.kind === "absent") {
-    return { authorized: false, credentialPath: linearCredentialPath(), reason: "no credential is stored" };
+    return { display: "absent", credentialPath: linearCredentialPath(), reason: "no credential is stored" };
   }
   if (state.kind === "unreadable") {
-    return { authorized: false, credentialPath: state.path, reason: state.reason };
+    return { display: "unreadable", credentialPath: state.path, reason: state.reason };
   }
-  const expiresIn = state.credential.expiresAt === null ? null : Math.max(0, state.credential.expiresAt - now);
+  const { scope, expiresAt, refreshToken } = state.credential;
+  const hasRefreshToken = refreshToken !== null;
+  const expired = expiresAt !== null && now >= expiresAt;
   return {
-    authorized: true,
+    display: expired ? "expired" : "authorized",
     credentialPath: state.path,
-    scope: state.credential.scope,
-    // Reported as facts, not as a verdict: a credential inside the refresh
-    // window is still usable and is refreshed by the import path.
+    scope,
+    expiresAt,
+    expiresInMs: expiresAt === null ? null : Math.max(0, expiresAt - now),
     refreshDue: state.refreshDue,
-    expiresInMs: expiresIn,
-    hasRefreshToken: state.credential.refreshToken !== null,
+    hasRefreshToken,
+    // The sub-case, so the operator knows whether to wait or to re-authorize.
+    ...(expired
+      ? {
+          detail: hasRefreshToken
+            ? "the access token expired; the next use attempts a refresh, but a saved refresh token is not a guarantee it will be accepted"
+            : "the access token expired and no refresh token is stored; run `mstar linear auth` to authorize again",
+        }
+      : {}),
   };
 }
 

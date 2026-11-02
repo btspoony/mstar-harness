@@ -79,13 +79,17 @@ semantics, not a merge).
 ## Linear MCP row (shipped disabled)
 
 `linear-mcp` is the same bridge pointed at `https://mcp.linear.app/mcp`. It ships with `disabled: true`
-because Linear needs an OAuth grant or a team-scoped API key that only the operator can supply: an enabled row
-without credentials spends a startup probe on a 401 and logs a failed connection on every boot.
+because Linear needs an OAuth grant that only the operator can supply: an enabled row without credentials spends
+a startup probe on a 401 and logs a failed connection on every boot.
 
-Enable it by overriding the row in the profile (or home) layer — `disabled: false`, plus a `headers` entry
-(`Authorization: Bearer <key>`) when the deployment holds a token; without one the server's own OAuth flow
-applies. Tools then appear as `mcp__linear__<tool>`. This row is **not** part of the mstar channel above: it
-carries the provider's tools, never mstar's, and disabling or removing it changes nothing about the mstar
+Enable it by overriding the row in the profile (or home) layer with `disabled: false`. The row carries **no token
+in its config**: its `headers` is the loader expression `!!js ctx.mstarLinearAuth.authorizationHeaders()`,
+evaluated against the row's own context on every mount, which reads the machine credential stored by the Settings
+Authorize action or `mstar linear auth login` (outside the repo, mode 0600). The `mstarLinearAuth` service
+(`src/linear-settings.ts`) also refreshes a due credential silently and re-mounts the enabled row, so no manual
+reload is needed. Never put a literal `Authorization` value in a profile patch — that copies a bearer token into
+tracked config. Tools then appear as `mcp__linear__<tool>`. This row is **not** part of the mstar channel above:
+it carries the provider's tools, never mstar's, and disabling or removing it changes nothing about the mstar
 surface.
 
 ## MCP mount contract

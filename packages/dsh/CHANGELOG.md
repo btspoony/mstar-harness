@@ -6,6 +6,26 @@ The monorepo root [CHANGELOG.md](../../CHANGELOG.md) summarizes cross-surface re
 
 ## [Unreleased]
 
+### Changed
+
+- **The enabled `linear-mcp` row consumes the stored credential.** The row gains `inject: [mstarLinearAuth]` and
+  its `headers` is the loader expression `!!js ctx.mstarLinearAuth.authorizationHeaders()`, so the bearer exists
+  only in the row's evaluated config — never in the bundle, a profile patch, a settings payload or a log. The new
+  `MstarLinearAuth` service (`src/linear-settings.ts`) reads the credential file on every call, silently refreshes
+  a due credential from its persisted expiry (one in-flight attempt, coalesced, newer-file-wins, no retry spin)
+  and re-mounts the enabled row through the public `Fiber.restart()` seam — no enabled-bit write and no
+  `setPluginEnabled` bounce. A rejected refresh is reported as the observed `linear.reauth-required` fact; an
+  unknown expiry is reported as unknown, never guessed. Every credential adoption — the first Settings
+  authorization, a reauthorization, or a newer file another process wrote — goes through the same service path,
+  so a host that booted without a credential arms its schedule on that first grant rather than never refreshing
+  it.
+- **The Linear Settings card re-reads host facts at each visit.** The one card store lives for the client
+  plugin, so it no longer trusts a cached row enable bit: the card's render (mount, summary→page, or a revisit
+  past the freshness bound) re-reads `linearStatus`, and stale facts render as unknown — disabling the row takes
+  the Authorize action away again. A status poll that gets no host answer is no longer folded into a terminal
+  `denied`: the card keeps observing for a bounded number of polls, then ends the attempt as `unreachable` after
+  re-reading the host facts. The summary view also loads on its own now.
+
 ## [4.1.5] - 2026-11-02
 
 ### Changed

@@ -1176,3 +1176,19 @@ export {
   REFRESH_WINDOW_MS,
   writeLinearCredential,
 } from "./linear-credential.js";
+
+// The one OAuth flow: discovery, dynamic registration, PKCE, the code exchange
+// and refresh. The CLI's login and the dsh Settings Authorize both call this,
+// so there is never a second implementation to drift. `LINEAR_MCP_SCOPE` is the
+// single constant both surfaces request.
+export type { AuthorizationServer, PendingAuthorization, RegisteredClient, TokenSet } from "./linear-auth.js";
+export {
+  beginAuthorization,
+  createPkce,
+  discoverAuthorizationServer,
+  exchangeCode,
+  LINEAR_MCP_SCOPE,
+  LINEAR_MCP_URL,
+  refreshToken,
+  registerClient,
+} from "./linear-auth.js";

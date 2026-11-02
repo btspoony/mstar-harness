@@ -25,6 +25,7 @@ import { resolveRepoEnforcement } from '@mstar-harness/engine'
 import type { CommandInvocation } from '@deepseek-ai/dsh-commands'
 import { createUserMessage } from '@deepseek-ai/dsh-llm'
 import { DshMstar } from './service.ts'
+import { MstarLinearAuth } from './linear-settings.ts'
 import {
   Config,
   HarnessResolver,
@@ -41,6 +42,7 @@ import {
 } from './gates/catalog.ts'
 import type { CatalogCacheEntry, EmissionDigest } from './gates/catalog.ts'
 import { installEngineStatusEndpoint } from './engine-status-endpoint.ts'
+import { installLinearSettingsEndpoint } from './linear-settings.ts'
 import { installPanelSnapshotEndpoint } from './panel/panel-snapshot-endpoint.ts'
 import { writeIntentListener, editIntentListener } from './gates/status.ts'
 import type { StatusGateAdvisory } from './gates/status.ts'
@@ -423,6 +425,11 @@ export function apply(ctx: Context, config: Config): void {
   // The Service constructor registers itself on the fiber via reflect.provide,
   // so construction alone exposes `ctx.dshMstar` (dsh service convention).
   new DshMstar(ctx, { harnessDir: bootHarnessDir })
+  // The Linear credential the enabled `linear-mcp` row consumes: the row's
+  // `!!js` headers expression reads `ctx.mstarLinearAuth`, and this service
+  // owns the silent refresh loop + the public `Fiber.restart()` reload (see
+  // `linear-settings.ts`). Construction alone exposes the service.
+  const linearAuth = new MstarLinearAuth(ctx)
   // Agent-flow settle pairing store : apply-scoped in-memory Maps, SAME lifetime as the
   // catalog cache below — an HMR restart resets them and completions outside
   // the window stay unpaired (documented honest degrade; no cross-apply
@@ -943,6 +950,10 @@ export function apply(ctx: Context, config: Config): void {
     // acknowledged binding (the other sessions' keys stay untouched).
     invalidateSelection: (harnessDir, sessionId) => catalogInvalidation.invalidateSession(harnessDir, sessionId),
   })
+  // The Linear Settings card's host service (plan 20261102-linear-oauth-guidance
+  // Task 3). Its four invocation descriptors ride the contribution above;
+  // this call only provides the `linear-settings` service they name.
+  installLinearSettingsEndpoint(ctx, { auth: linearAuth })
   // The panel's store-backed read: its own service under the shared `mstar`
   // wire namespace (its descriptor rides the contribution above — typert admits
   // one per package face). The `retained` facts (the iteration gate, the

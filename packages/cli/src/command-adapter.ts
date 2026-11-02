@@ -16,11 +16,15 @@ import {
 } from "@mstar-harness/commands";
 import {
   assertSafeSessionId,
+  beginAuthorization,
   decodeExecutionSessionRef,
+  discoverAuthorizationServer,
+  exchangeCode,
+  refreshToken,
+  registerClient,
   validateExecutionIdentity,
   type ExecutionIdentity,
 } from "@mstar-harness/engine";
-import { beginAuthorization, discoverAuthorizationServer, exchangeCode, refreshToken, registerClient } from "./linear-auth.js";
 import { unionBranchSchemas } from "./schema-branches.js";
 import { captureSddEvidenceFromFile, verifySddEvidence } from "./sdd-evidence.js";
 import { detectInstalledPluginVersion } from "./plugin-version-alignment";
@@ -858,15 +862,11 @@ function cliEffects(services: Array<{ close(): Promise<void> }>): CommandEffects
       // The authorization server is rediscovered from the endpoint rather than
       // remembered: its location is metadata, and a stored copy would go stale.
       const authorizationServer = await discoverAuthorizationServer(mcpUrl);
-      const tokens = await refreshToken(
-        authorizationServer,
-        { clientId, redirectUri: `http://localhost:0/callback` },
-        stored,
-      );
+      const tokens = await refreshToken(authorizationServer, clientId, stored);
       return tokens;
     },
     async linearAuthorize(mcpUrl: string) {
-      // The browser leg lives in linear-auth; this only owns the platform
+      // The browser leg is the shared engine module; this only owns the platform
       // interaction it needs. Nothing here sees or prints a token.
       const authorizationServer = await discoverAuthorizationServer(mcpUrl);
       const pending = await beginAuthorization(authorizationServer, (redirectUri) =>
