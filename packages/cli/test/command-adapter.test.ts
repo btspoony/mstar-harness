@@ -1635,3 +1635,36 @@ describe("opencode init CLI wiring (real entry, stubbed/absent opencode on PATH)
     expect(`${result.stdout}\n${result.stderr}`).toContain("--opencode-generation");
   });
 });
+
+describe("owning-skill pointer renderings", () => {
+  test("a mapped command's CLI help has exactly one Skill: line naming the mapped skill", () => {
+    const definition = getCommandDefinitions().find((candidate) => candidate.id === "plan.show");
+    if (definition === undefined) throw new Error("plan.show definition missing");
+    const lines = renderCommandContract(definition, "cli").split("\n").filter((line) => line.includes("Skill:"));
+    expect(lines).toEqual(["Skill: mstar-artifacts"]);
+  });
+
+  test("an unmapped command's CLI help has no Skill: line", () => {
+    const definition = getCommandDefinitions().find((candidate) => candidate.id === "dashboard");
+    if (definition === undefined) throw new Error("dashboard definition missing");
+    expect(renderCommandContract(definition, "cli")).not.toContain("Skill:");
+  });
+
+  test("the same command's MCP rendering has no Skill: line", () => {
+    const definition = getCommandDefinitions().find((candidate) => candidate.id === "plan.show");
+    if (definition === undefined) throw new Error("plan.show definition missing");
+    expect(renderCommandContract(definition, "mcp")).not.toContain("Skill:");
+  });
+
+  test("top-level --help carries the agent pointer and exits 0", () => {
+    const CLI_ROOT = resolve(import.meta.dir, "..");
+    const SRC_ENTRY = join(CLI_ROOT, "src/index.ts");
+    const proc = Bun.spawnSync([process.execPath, "run", SRC_ENTRY, "--help"], {
+      cwd: CLI_ROOT, stdout: "pipe", stderr: "pipe", timeout: 30_000,
+    });
+    const output = proc.stdout.toString();
+    expect(proc.exitCode).toBe(0);
+    expect(output).toContain("mstar-use-cli");
+    expect(output).toContain("schema --command");
+  });
+});
