@@ -24,6 +24,24 @@ export const LINEAR_MCP_URL = "https://mcp.linear.app/mcp";
  */
 export const LINEAR_MCP_SCOPE = "read,issues:create";
 
+/**
+ * The scopes a grant can carry that let it create or update issues. `write` is
+ * broader than the scope requested above and is accepted if an operator already
+ * holds it; `admin` is never inferred from either.
+ */
+const LINEAR_WRITE_SCOPES = ["issues:create", "write"] as const;
+
+/**
+ * Whether a stored grant's scope can write. Separate from "is the credential
+ * valid": a read-only grant keeps working for reads, and a refresh only echoes
+ * the original grant, so this can never turn false into true on its own.
+ */
+export function linearScopeCanWrite(scope: string | null): boolean {
+  if (scope === null) return false;
+  const granted = scope.split(/[\s,]+/).filter((part) => part !== "");
+  return LINEAR_WRITE_SCOPES.some((needed) => granted.includes(needed));
+}
+
 export type AuthorizationServer = {
   issuer: string;
   authorizationEndpoint: string;
@@ -330,6 +348,14 @@ export async function refreshToken(
     }).toString(),
   });
   if (!response.ok) {
+    // A 5xx, 429 or 408 is the provider or the path failing, not the grant: a
+    // fresh consent would not fix it, and a host that retries can. Only a
+    // rejection of the grant itself names re-authorization.
+    if (response.status >= 500 || response.status === 429 || response.status === 408) {
+      throw new Error(
+        `[linear.auth-unavailable] the refresh attempt failed with HTTP ${response.status}; the grant was not rejected, so the attempt is retryable`,
+      );
+    }
     throw new Error(
       `[linear.reauth-required] the refresh was rejected with HTTP ${response.status}; run \`mstar linear auth\` again`,
     );

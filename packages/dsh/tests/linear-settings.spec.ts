@@ -8,11 +8,17 @@
  * config, and the reload is observed on a fiber view that records `restart()`.
  */
 import { afterEach, beforeEach, describe, expect, it } from 'bun:test'
-import { mkdtempSync, readFileSync, rmSync } from 'node:fs'
+import { existsSync, mkdtempSync, readFileSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { Context } from '@deepseek-ai/cordis'
-import { LINEAR_MCP_URL, writeLinearCredential, type LinearCredential } from '@mstar-harness/engine'
+import {
+  LINEAR_MCP_URL,
+  clearLinearCredential,
+  readLinearCredential,
+  writeLinearCredential,
+  type LinearCredential,
+} from '@mstar-harness/engine'
 import { FakeLoaderRegistry } from './harness.ts'
 import { PATCH_PATH, readBundlePatch, type EntryRow } from './bundle-patch.ts'
 import {
@@ -358,6 +364,34 @@ describe('the silent refresh loop', () => {
     expect(clock.pending()).toBe(0)
   })
 
+  it('retries a transiently failed refresh on a bounded backoff instead of stranding the host', async () => {
+    let tokenCalls = 0
+    const provider = providerFetch(
+      discoveryRoutes(() => {
+        tokenCalls += 1
+        return tokenCalls === 1
+          ? new Response('upstream unavailable', { status: 503 })
+          : Response.json({ access_token: 'tok-retried', expires_in: 3600 })
+      }),
+    )
+    const { service, clock, restarts } = harness({ entry: credential({ expiresAt: START - 1_000 }), provider })
+
+    // The startup attempt reached the provider and was refused transiently —
+    // not rejected a grant, which only a new authorization could fix.
+    expect((await service.refreshIfDue()).kind).toBe('refused')
+    expect(service.refreshRefusal()?.code).toBe('linear.auth-unavailable')
+    // The still-due credential is not stranded: one bounded retry is armed.
+    expect(clock.pending()).toBe(1)
+
+    clock.advance(30_000)
+    expect((await service.refreshIfDue()).kind).toBe('refreshed')
+    expect(restarts).toEqual(['linear-mcp'])
+    expect(service.refreshRefusal()).toBeNull()
+    // The retried grant is live, and its own window replaced the retry slot.
+    expect(service.authorizationHeaders()).toEqual({ Authorization: 'Bearer tok-retried' })
+    expect(clock.pending()).toBe(1)
+  })
+
   it('arms the refresh schedule when a first Settings authorization adopts a credential', async () => {
     const provider = providerFetch(
       discoveryRoutes(() =>
@@ -396,7 +430,7 @@ describe('the silent refresh loop', () => {
 
     expect(service.refreshPlan()).toEqual({
       kind: 'unknown-expiry',
-      note: 'expiry unknown; refresh is attempted on the next observed need',
+      note: 'expiry unknown; no refresh is scheduled for this credential',
     })
     expect(clock.pending()).toBe(0)
     expect(provider.calls).toEqual([])
@@ -422,5 +456,60 @@ describe('the silent refresh loop', () => {
     expect(readFileSync(process.env.MSTAR_LINEAR_CREDENTIAL!, 'utf8')).toContain('tok-newer')
     // The row still re-mounts, so the connection picks up whichever token is on disk.
     expect(restarts).toEqual(['linear-mcp'])
+  })
+
+  it('never rewrites a credential the operator deleted while its refresh was in flight', async () => {
+    const gate = Promise.withResolvers<Response>()
+    const provider = providerFetch(discoveryRoutes(() => gate.promise))
+    const { service, clock } = harness({ entry: credential({ expiresAt: START + 60_000 }), provider })
+
+    const attempt = service.refreshIfDue()
+    // `mstar linear logout` removes the file mid-refresh.
+    expect(clearLinearCredential()).toBe(true)
+    gate.resolve(Response.json({ access_token: 'tok-ours', expires_in: 3600, scope: 'read,issues:create' }))
+    expect((await attempt).kind).toBe('adopted')
+
+    // Deletion is newer intent than the refresh: nothing is written back and
+    // the host does not resurrect an authenticated connection.
+    expect(readLinearCredential().kind).toBe('absent')
+    expect(existsSync(process.env.MSTAR_LINEAR_CREDENTIAL!)).toBe(false)
+    expect(service.authorizationHeaders()).toEqual({})
+    expect(clock.pending()).toBe(0)
+  })
+})
+
+describe('the reload failure classification', () => {
+  it('logs a genuine restart failure and stays silent for an unloaded fiber', async () => {
+    const lines: string[] = []
+    const restore = setLinearAuthLogger((level, message) => lines.push(`${level} ${message}`))
+    try {
+      const h = harness({ entry: credential() })
+
+      h.loader.entriesList = [
+        loaderRow('linear-mcp', {
+          uid: 9,
+          restart: async () => {
+            throw new Error('cannot create effect on inactive context')
+          },
+        }),
+      ]
+      expect(await h.service.reloadRow()).toBe(false)
+      expect(lines).toEqual([])
+
+      h.loader.entriesList = [
+        loaderRow('linear-mcp', {
+          uid: 9,
+          restart: async () => {
+            throw new Error('the headers expression threw')
+          },
+        }),
+      ]
+      expect(await h.service.reloadRow()).toBe(false)
+      // Anything that is not the known unload keeps the stale header and must
+      // be visible, not classified as benign.
+      expect(lines).toEqual(['warn the linear-mcp row failed to reload: the headers expression threw'])
+    } finally {
+      setLinearAuthLogger(restore)
+    }
   })
 })

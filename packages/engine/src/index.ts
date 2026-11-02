@@ -1226,6 +1226,7 @@ export {
   exchangeCode,
   LINEAR_MCP_SCOPE,
   LINEAR_MCP_URL,
+  linearScopeCanWrite,
   refreshToken,
   registerClient,
 } from "./linear-auth.js";
