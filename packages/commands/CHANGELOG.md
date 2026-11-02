@@ -6,6 +6,96 @@ The monorepo root [CHANGELOG.md](../../CHANGELOG.md) summarizes cross-surface re
 
 ## [Unreleased]
 
+## [4.1.5] - 2026-11-02
+
+### Harness
+
+- **Refusals name the owning skill.** Every refusal envelope whose command has a documented owner now carries `details.skill` (for example `skill: mstar-artifacts` on `plan show`), and a default-generated recovery appends one `Owning skill: <name>.` sentence; a caller-supplied `recovery` is preserved verbatim.
+- **CLI help points at the owning skill.** `mstar <family> <verb> --help` ends with a `Skill: <name>` line when the command has an owner (CLI route only — MCP tool descriptions are unchanged), and top-level `mstar-harness --help` tells agents to read `mstar-use-cli` first and get exact contracts via `mstar schema --command <id>`.
+- **One source of truth for command→skill.** The prose table in `mstar-use-cli` drops its `Owning skill` column; the mapping is derived from the command definitions. No command surface, flag or `--skill` verb was added.
+- **Linear binding configuration.** `.mstarc` gains an optional `[linear]` connection block (`enabled`, `mode`, `workspace`, `team`) plus `[linear.mapping]` for per-value correspondence overrides. Parsing stays INI and additive: `[config]` behavior is unchanged, unknown keys stay ignored, and validation lives in a separate `parseLinearBinding` so parse-time forward compatibility is preserved. Boolean spellings `true/1/yes/on` are read as enabled (an unreadable value is refused by name); `mode` accepts `mirror` only. Refusals: `linear.mode-refused`, `linear.binding-incomplete`, `linear.binding-invalid`.
+- **Project↔provider correspondence.** New `mstar project bind --project <id> --provider linear --remote-project <name-or-id>` records which external project a store project mirrors in `project_bindings` (one transaction per call, receipt in the same commit), and `mstar project show` returns it or the named absence `linear.binding-absent`. `workspace`/`team` are never flags — they come from the repo's own `.mstarc`, and a parent directory's configuration is never inherited. Re-binding the identical pair is a no-op success; a different pair is refused as `linear.rebind-refused`, an unregistered project as `linear.project-unregistered`, a remote project already backing another store project as `linear.binding-conflict`.
+- **Read-only readiness surface.** The dashboard gains a `sync-binding` view (`/api/sync-binding`) carrying the connection summary and a `ProbeResult`-shaped readiness state with its cause, never guessed from configuration — with no host probe it reports `not-probed`. The host defines the capability: the dsh Linear probe performs one `initialize` + `tools/list` handshake under a deadline, reports `ready` only when the listing verb is actually listed, redacts transport messages before they reach the cause, and throws `linear.list-unimplemented` instead of a fabricated empty page.
+- **An expired Linear credential is refreshed instead of sent.** `issue-sync import`
+  used to hand the stored access token over whether or not it had expired, so a
+  routine expiry surfaced as an access-denied that named nothing — while the
+  refresh token beside it was still usable. The import now refreshes first and
+  stores the replacement, and a host that cannot refresh refuses with
+  `linear.reauth-required` naming `mstar linear auth`. A credential that is merely
+  inside the refresh window is still used, because it works until it expires.
+- **The credential records the client it belongs to.** A refresh exchange must
+  present the registered client id and cannot derive it from the token, so
+  discarding it after login had already made every stored refresh token unusable.
+  It is written with the credential and carried by the token set.
+- **`linear.auth` declares the effects it performs**: it reads configuration,
+  writes host state and opens a browser. It also stays off the MCP surface — the
+  flow needs a human in a browser, so a tool call would block on an authorization
+  nobody is watching.
+- **The import has a working host.** `mstar issue-sync import` no longer requires a host-supplied `issueProvider`:
+  the Linear probe and listing adapter moved from the dsh package into the engine (they had no dsh-specific
+  dependency), a streamable-HTTP JSON-RPC transport was added, and one assembly joins probe + adapter + transport
+  over a single handshake. The command builds that assembly itself, so every environment can run the import; a
+  host override still wins where one exists. Previously every real run refused `linear.list-unimplemented`, which
+  no operator could recover from.
+- **A completed scan rewinds its page pointer.** Leaving the cursor on the last page made every earlier page
+  unreachable, so an issue edited there was never read again. A scan that finishes now clears the pointer and the
+  next run walks from the first page, skipping per item through the ledger; a scan that STOPS (a stranded item,
+  the page bound, a thrown page) keeps its pointer, because rewinding there would re-request the same failing page
+  from the top on every run and lose the position that made progress possible.
+- **An interrupted write resumes; a failed one retries.** A `pending` row whose remote revision EQUALED the
+  recorded watermark used to be closed as applied without copying any field — only a strictly older revision is
+  stale now. A `failed` row used to replay its own failed receipt because the retry reused the attempt's operation
+  id; each attempt now has its own, so the row can actually recover.
+- **Restore no longer leaves sync state behind.** `project_bindings`, `issue_sync_state` and `sync_cursor` joined
+  the backup inventory and the replacement order, so a restore restores the bindings and cursors its issues
+  describe rather than the issues alone.
+- **Custom harness layouts bind correctly.** `readRepoLinearBinding` walked to the parent of the harness
+  directory; it now walks up to the first directory holding `.git` and falls back to the parent only when no
+  checkout is found, so a harness placed anywhere still reads the repository's own `.mstarc`.
+- **`mstar linear auth` — the flow that turns Linear on.** Enabling the bundled
+  `linear-mcp` row without a credential used to leave an operator with a 401 and no
+  way forward. The command runs the real authorization: it discovers the
+  authorization server from the endpoint's own 401 challenge and metadata
+  (nothing is hard-coded), registers a client dynamically, authorizes with PKCE
+  S256 through the browser, and exchanges the code. `status` reports the stored
+  credential's path, scope and expiry as facts; `logout` removes it and says
+  whether anything was there. A host that cannot open a browser refuses with
+  `linear.auth-unsupported` and names one that can.
+- **The credential is host state, stored outside any repository.** It lives at
+  `$XDG_CONFIG_HOME/mstar/linear/credential.json` (`MSTAR_LINEAR_CREDENTIAL`
+  overrides), directory `0700`, file `0600`, written atomically so a failed write
+  leaves the previous credential usable. A corrupt file is reported as
+  `unreadable` with the reason; nothing throws on the read path.
+- **The import uses it.** `issue-sync import` now takes the stored credential
+  first and falls back to `LINEAR_API_KEY` for a headless deployment, so a machine
+  that authorized once no longer exports a token. A credential inside the refresh
+  window is still used — it is valid until it expires — and a rejected refresh
+  reports `linear.reauth-required` naming the command to re-run.
+- **A cycle that was open at upgrade time no longer survives as a lie.** The
+  single watermark column used to hold the planned target for a pending row.
+  Migration 16 created the new column but left those rows claiming they had copied
+  content they never took, so the stale-page guard compared against a revision
+  nothing holds and skipped every older page — the bug the split exists to remove,
+  persisting across the upgrade. The migration now moves the value across.
+- **Authorization refusals keep their code and recovery.** A closed browser tab,
+  a mismatched state or a refused registration used to escape as a plain Error and
+  reach the operator as `internal-error` with a generic recovery. The failures now
+  carry their own code and recovery, the command turns them into a refusal
+  envelope, and `linear.auth-timeout` is covered.
+- **An exported key is a real fallback.** When the stored credential had expired
+  and the host could not refresh it, the import refused even with a working
+  `LINEAR_API_KEY` exported — the branch that falls back to it could never be
+  reached. It now falls through, and the refusal (when there is nothing to fall
+  back to) names both `mstar linear auth` and the environment variable.
+- **The restore gate fails closed.** The migration lookup behind
+  `pending_target` defaulted to a version number, so a renamed migration entry
+  would have re-enabled that column on stores that never had it; it defaults to
+  the conservative value its siblings use.
+
+- Version alignment with harness **4.1.5**.
+
+See root [CHANGELOG.md](../../CHANGELOG.md) **4.1.5**.
+
 ## [4.1.4] - 2026-10-31
 
 ### Harness

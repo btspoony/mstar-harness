@@ -8,6 +8,26 @@ Package-specific histories: [`packages/cli/CHANGELOG.md`](packages/cli/CHANGELOG
 
 ## [Unreleased]
 
+## [4.1.5] - 2026-11-02
+
+### Harness
+
+- **Consolidated dependency refresh.** Six pending updates land together: `@opencode-ai/plugin` 1.4.8 → 1.19.5,
+  `@opencode/plugin` and `@opencode/schema` 2.1.3 → 2.2.1, `effect` 4.0.1 → 4.1.0, `@modelcontextprotocol/client`
+  2.3.1 → 2.4.0, the dev-dependency group (`@oh-my-pi/pi-coding-agent` 18.13.3, `@types/node` 26.6.6,
+  `@tanstack/react-virtual` 3.14.23, `katex` 0.19.1, `simple-icons` 16.36.0), and the pinned
+  `ai-plugin-scanner-action` commit. `bun.lock` is regenerated from `main`; no other dependency moves.
+- The `dsh-llm-fallbacks` cohort moves as one: `packages/dsh` now lists 0.6.13 **and** the CLI's
+  `mstar.dshLlmFallbacks` pin follows it, so `mstar init --target dsh` installs 0.6.13 instead of pinning the
+  previous release beside a newer plugin dependency.
+- **`mstar path resolve` reports the control facts.** Alongside the local probe it now returns `controlRoot` (the Git main worktree), `controlHarnessDir` (that checkout's `{HARNESS_DIR}`, or `null`) and `linkedWorktree`. Inside a linked worktree the top-level members are the effective answers — `harnessDir` and the four directory members resolve from the control root — and the checkout's own probe stays under `local`. A linked checkout is identified by its Git worktree identity, so one nested inside the main checkout's directory tree is treated the same as a sibling one; an unidentifiable start path anchors on the control root rather than a local probe and reports `linkedWorktree: true`, so that flag means "answer from the control root", not a proven distinct checkout. Non-Git and independent-repository answers are identical to before. When a linked checkout's main worktree cannot be read, the command **refuses** (`coordination.not-in-git`, exit 1) and carries the cause as `controlUnavailable` in the refusal details — it never falls back to the local probe. A filesystem-availability failure from the same walk-up (`EACCES`/`EPERM`) answers `path.control-root-unreadable` instead of masquerading as a Git verdict. The discovery path is published in `mstar-conventions`, `mstar-use-cli/references/preconditions.md`, and `mstar-branch-worktree`.
+- **The review-seat channel covers both terminal-agent carriers and discovers commands from the loaded one.** `mstar-pr-loop` → `references/terminal-agent-channel.md` replaces the product-specific `references/herdr.md`: `herdr-core` (CLI `hc`) and `herdr` (CLI `herdr`) are interchangeable carriers for the same channel, and the loaded skill is the sole authority for commands and lifecycle. The file records only the channel shape; carrier entry points (`hc --skill`, `herdr --skill`, per-command help) are discovered, not copied, and the two command models are never mixed.
+- **Gates, dispatch and recovery follow the loaded carrier.** The three legs use that carrier's own environment check, a template/kind-first agent target choice with a host-to-target fallback table, first-round prompt in the launch task where the carrier supports it, and carrier-specific wait semantics: `hc send --wait --timeout` is a check-in while `herdr agent prompt --wait --timeout` is the wait's total bound.
+
+### Version alignment
+
+- Bump monorepo root, `@mstar-harness/opencode`, `@mstar-harness/opencode-v2`, `@mstar-harness/cli`, `@mstar-harness/engine`, `@mstar-harness/dsh`, Cursor/Codex/Kimi/ZCode/omp/Claude plugin manifests, the portable Agent Plugins manifest, and both marketplace manifests: **→ 4.1.5**.
+
 ## [4.1.4] - 2026-10-31
 
 ### Harness
