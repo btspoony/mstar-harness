@@ -12,7 +12,8 @@
  * what is on disk and whether a refresh is due, so the caller can act instead of
  * discovering a 401 mid-import.
  */
-import { chmodSync, closeSync, existsSync, mkdirSync, openSync, readFileSync, renameSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { randomUUID } from "node:crypto";
+import { chmodSync, existsSync, mkdirSync, readFileSync, renameSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 
@@ -100,6 +101,14 @@ export function linearCredentialLockPath(): string {
  * write forever.
  */
 const LOCK_STALE_MS = 5_000;
+/**
+ * A stale lock whose stamp names a LIVE process is normally left alone: a
+ * holder stopped past `LOCK_STALE_MS` (SIGSTOP, a debugger, laptop sleep) is
+ * still inside the critical section, and taking its lock would admit a second
+ * writer. Past this much longer bound the pid is either wedged or recycled, so
+ * the lock is taken over instead of blocking every writer forever.
+ */
+const LOCK_WEDGED_MS = 60_000;
 const LOCK_POLL_MS = 10;
 
 /** Synchronous sleep: the writers here are synchronous by contract. */
@@ -115,35 +124,116 @@ function sleepSync(ms: number): void {
  * re-entrant on purpose: a nested call would recreate the very window this
  * closes, so the internal writes below are lock-free helpers.
  *
- * A holder that dies leaves the file behind; past `LOCK_STALE_MS` the lock is
- * taken over rather than waited on forever. Two waiters can both take over a
- * stale lock in the same instant, which is why the age has to be far longer
- * than any live holder's critical section (a read and a rename).
+ * The lock is OWNED: it carries `{pid, token}` from the instant it is created,
+ * so the file on disk says whose acquisition it is. That identity is what makes
+ * recovery safe — a waiter may remove only the stale lock it actually observed,
+ * and a holder may remove only its own. Without it, a takeover deletes by path,
+ * which can strip a lock another process just created and let two writers into
+ * the "one" critical section.
  *
- * shortcut: takeover races a holder stalled past LOCK_STALE_MS; upgrade if the
- * critical section ever does I/O or a network call.
+ * A holder that dies leaves the file behind; past `LOCK_STALE_MS` the lock is
+ * taken over rather than waited on forever — but only when the process named in
+ * the stamp is gone (or has been wedged past `LOCK_WEDGED_MS`). The age alone
+ * must never be the takeover test: a live holder merely stalled past the bound
+ * is still inside the critical section.
+ *
+ * shortcut: takeover is not atomic with the stale check, so two waiters can
+ * both decide to remove. The compare-and-delete keeps that harmless — only the
+ * first removal matches the observed stamp, and the loser re-reads and loses its
+ * own `wx` create to the winner. Upgrade if the lock ever guards I/O or a
+ * network call.
  */
 export function withLinearCredentialLock<T>(fn: () => T): T {
   const lock = linearCredentialLockPath();
   mkdirSync(dirname(lock), { recursive: true, mode: 0o700 });
+  // One write, one stamp: `wx` is create-or-fail, so the lock is never visible
+  // unstamped, and the token is unique to this acquisition.
+  const stamp = JSON.stringify({ pid: process.pid, token: randomUUID() });
   for (;;) {
     try {
-      closeSync(openSync(lock, "wx", 0o600));
+      writeFileSync(lock, stamp, { flag: "wx", mode: 0o600 });
       break;
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
-      if (ageOf(lock) > LOCK_STALE_MS) {
-        rmSync(lock, { force: true });
-        continue;
-      }
-      sleepSync(LOCK_POLL_MS);
+      if (!takeOverIfStale(lock)) sleepSync(LOCK_POLL_MS);
     }
   }
   try {
     return fn();
   } finally {
-    rmSync(lock, { force: true });
+    releaseOwnLock(lock, stamp);
   }
+}
+
+/** The lock's current content, or `null` when it is not there to read. */
+function readLock(lock: string): string | null {
+  try {
+    return readFileSync(lock, "utf8");
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Remove the lock only if it is still the stale one this waiter observed.
+ * Returns whether something was removed, so the caller can retry its own
+ * acquisition immediately instead of sleeping out the poll interval.
+ *
+ * Compare-and-delete, never delete-by-path: the stamp is unique per
+ * acquisition, so equal content means the same lock instance. A lock that
+ * replaced the stale one in the meantime carries a different stamp and is left
+ * to its holder.
+ *
+ * A lock whose stamp names a LIVE process is never taken over. That is the
+ * stalled-holder half of the cascade: a holder stopped past the bound (SIGSTOP,
+ * a debugger, laptop sleep) is still inside the critical section, so removing
+ * its lock would put two writers there at once. A dead or unreadable stamp —
+ * a crashed holder, or a lock written by an older build — stays recoverable, so
+ * the mutex is never left behind for good.
+ */
+function takeOverIfStale(lock: string): boolean {
+  const observed = readLock(lock);
+  if (observed === null) return true;
+  const age = ageOf(lock);
+  if (age <= LOCK_STALE_MS) return false;
+  // A live holder is only displaced once its lock is far past the stale bound:
+  // by then the pid is either wedged or recycled, and refusing forever would be
+  // the permanent block this takeover exists to prevent.
+  if (age <= LOCK_WEDGED_MS && stampHolderIsLive(observed)) return false;
+  if (readLock(lock) !== observed) return false;
+  rmSync(lock, { force: true });
+  return true;
+}
+
+/** Whether the pid inside a stamp is a process this machine still has. */
+function stampHolderIsLive(stamp: string): boolean {
+  let pid: number;
+  try {
+    const parsed: unknown = JSON.parse(stamp);
+    if (typeof parsed !== "object" || parsed === null || !("pid" in parsed)) return false;
+    const value = parsed.pid;
+    if (typeof value !== "number" || !Number.isInteger(value) || value <= 0) return false;
+    pid = value;
+  } catch {
+    return false;
+  }
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (error) {
+    // EPERM: the process exists but belongs to another user. Any other code
+    // (ESRCH) means it is gone.
+    return (error as NodeJS.ErrnoException).code === "EPERM";
+  }
+}
+
+/**
+ * Remove the lock this process created, and nothing else. A waiter that judged
+ * this acquisition expired has already replaced it; stripping that replacement
+ * is how one stalled holder used to admit a third writer.
+ */
+function releaseOwnLock(lock: string, stamp: string): void {
+  if (readLock(lock) === stamp) rmSync(lock, { force: true });
 }
 
 /** Milliseconds since the lock appeared; Infinity when it vanished under us. */
@@ -179,6 +269,29 @@ function writeUnlocked(credential: LinearCredential): string {
 
 export function writeLinearCredential(credential: LinearCredential): string {
   return withLinearCredentialLock(() => writeUnlocked(credential));
+}
+
+/**
+ * Whether the file changed under an in-flight refresh in a way that attempt
+ * must not overwrite — another process stored a newer grant to adopt, or the
+ * operator removed the credential (`mstar linear logout`) and deleting it is
+ * the newest intent. An unreadable file is overwritten: its credential is
+ * unusable, and the fresh grant is the recovery.
+ *
+ * One implementation for every writer: the dsh refresh loop and the CLI's
+ * `resolveStoredToken` both decide inside {@link commitLinearCredential}, and a
+ * second copy of this rule is how a re-auth landed by `mstar linear auth` gets
+ * replaced by an older lineage's refreshed token (including its narrower scope).
+ *
+ * `base` is the credential the attempt started from, read before its round trip.
+ */
+export function supersededBy(state: LinearCredentialState, base: LinearCredential): boolean {
+  if (state.kind === "absent") return true;
+  if (state.kind !== "present") return false;
+  const candidate = state.credential;
+  if (candidate.accessToken === base.accessToken) return false;
+  if (candidate.clientId !== base.clientId) return true;
+  return candidate.expiresAt !== null && (base.expiresAt === null || candidate.expiresAt > base.expiresAt);
 }
 
 /**

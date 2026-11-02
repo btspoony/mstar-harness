@@ -44,6 +44,7 @@ import {
   reconcilePendingCreate,
   selectPushCandidates,
   commitLinearCredential,
+  supersededBy,
   readRepoLinearBinding,
   resolveRepoRoot,
   resetCursor,
@@ -107,20 +108,22 @@ export async function resolveStoredToken(invocation: InvocationContext): Promise
       "Run `mstar linear auth` again; the stored refresh token is no longer accepted.",
     );
   }
-  // The refresh waited on the network, so the operator may have signed out
-  // meanwhile. Deciding inside the commit's lock makes the delete win: this
-  // run still uses the token it obtained, it just does not resurrect the file.
-  commitLinearCredential((current) =>
-    current.kind === "absent"
-      ? null
-      : {
-          accessToken: fresh.accessToken,
-          refreshToken: fresh.refreshToken ?? credential.refreshToken,
-          expiresAt: fresh.expiresAt,
-          scope: fresh.scope ?? credential.scope,
-          clientId: fresh.clientId ?? credential.clientId,
-        },
-  );
+  // The refresh waited on the network, so the file may have changed meanwhile.
+  // Deciding inside the commit's lock makes that change win: a sign-out stays
+  // deleted, and a grant `mstar linear auth` stored while this round trip was
+  // in flight is not replaced by this older lineage's token (whose
+  // `scope ?? credential.scope` fallback could also restore its narrower scope).
+  // This run still uses the token it obtained.
+  commitLinearCredential((current) => {
+    if (supersededBy(current, credential)) return null;
+    return {
+      accessToken: fresh.accessToken,
+      refreshToken: fresh.refreshToken ?? credential.refreshToken,
+      expiresAt: fresh.expiresAt,
+      scope: fresh.scope ?? credential.scope,
+      clientId: fresh.clientId ?? credential.clientId,
+    };
+  });
   return fresh.accessToken;
 }
 

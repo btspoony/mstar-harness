@@ -225,4 +225,40 @@ describe("an expired credential is refreshed before use", () => {
     expect(token).toBe(fake("live"));
     expect(called).toBe(false);
   });
+
+  test("a re-auth landing during the refresh round trip is not overwritten by the old lineage", async () => {
+    const { resolveStoredToken } = await import("./issue-sync.js");
+    writeLinearCredential({
+      accessToken: fake("expired"),
+      refreshToken: fake("refresh"),
+      expiresAt: Date.now() - 60_000,
+      scope: "read",
+      clientId: fake("client"),
+    });
+    const reauthorized = {
+      accessToken: fake("fresh-grant"),
+      refreshToken: fake("fresh-refresh"),
+      expiresAt: Date.now() + 7_200_000,
+      scope: "read,write",
+      clientId: fake("client"),
+    };
+    const token = await resolveStoredToken(context({
+      linearRefresh: async () => {
+        // `mstar linear auth` in another process stores a newer grant while
+        // this refresh waits on the provider — a re-authorization, not a logout.
+        const result = await command.execute({ operation: "login" }, context({ linearAuthorize: async () => reauthorized }));
+        expect(result.status).toBe("ok");
+        return { accessToken: fake("stale-lineage"), refreshToken: fake("stale-refresh"), expiresAt: Date.now() + 3_600_000, scope: "read", clientId: fake("client") };
+      },
+    }));
+
+    // This run still uses the token its round trip obtained...
+    expect(token).toBe(fake("stale-lineage"));
+    // ...but the operator's newer grant stays on disk: replacing it would also
+    // restore the older grant's narrower scope through the `?? credential.scope`.
+    const state = readLinearCredential();
+    expect(state.kind === "present" && state.credential.accessToken).toBe(fake("fresh-grant"));
+    expect(state.kind === "present" && state.credential.refreshToken).toBe(fake("fresh-refresh"));
+    expect(state.kind === "present" && state.credential.scope).toBe("read,write");
+  });
 });

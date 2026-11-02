@@ -1213,6 +1213,7 @@ export {
   linearCredentialPath,
   readLinearCredential,
   REFRESH_WINDOW_MS,
+  supersededBy,
   withLinearCredentialLock,
   writeLinearCredential,
 } from "./linear-credential.js";
