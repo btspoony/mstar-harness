@@ -296,9 +296,13 @@ describe("replanItem (applied -> pending)", () => {
       operationId: "op-replan-1",
     });
     expect(replanned.itemState).toBe("pending");
-    // This is the CYCLE TARGET: the stale guard compares a replayed page
-    // against it, so a page older than the cycle it belongs to mirrors nothing.
-    expect(replanned.lastRemoteUpdatedAt).toBe("2026-11-02T00:00:00Z");
+    // The CYCLE TARGET lives in its own column: the stale guard compares a
+    // replayed page against it, while the copied watermark stays untouched until
+    // an apply actually writes those fields.
+    expect(replanned.pendingTarget).toBe("2026-11-02T00:00:00Z");
+    // The copied watermark is still the revision that was actually applied;
+    // opening a cycle must not look like having captured its content.
+    expect(replanned.lastRemoteUpdatedAt).toBe(PLAN.remoteUpdatedAt);
     expect(markApplied(db, { ...KEY, operationId: "op-replan-applied" }).itemState).toBe("applied");
     close();
   });
@@ -310,7 +314,7 @@ describe("replanItem (applied -> pending)", () => {
     // Omitted externalId: the recorded identity survives the re-plan.
     const replanned = replanItem(db, { ...KEY, remoteUpdatedAt: "2026-11-05T00:00:00Z", operationId: "op-retain-replan" });
     expect(replanned.externalId).toBe("EXT-1");
-    expect(replanned.lastRemoteUpdatedAt).toBe("2026-11-05T00:00:00Z");
+    expect(replanned.pendingTarget).toBe("2026-11-05T00:00:00Z");
     close();
   });
 
@@ -382,8 +386,26 @@ describe("retry preserves recorded remote identity", () => {
     markFailed(db, { ...KEY, operationId: "op-retry-fail", error: "boom" });
     const retried = planItem(db, { ...KEY, operationId: "op-retry-plan" });
     expect(retried.externalId).toBe("EXT-1");
-    expect(retried.lastRemoteUpdatedAt).toBe("2026-10-31T00:00:00Z");
+    // A failed attempt copied nothing, so the COPIED watermark is still unset; the
+    // planned revision lives in `pendingTarget`, where the next apply closes it.
+    expect(retried.lastRemoteUpdatedAt).toBeNull();
+    expect(retried.pendingTarget).toBe("2026-10-31T00:00:00Z");
     expect(retried.lastError).toBeNull();
+    close();
+  });
+});
+
+describe("watermark monotonicity", () => {
+  test("an apply that would record an older revision keeps the newer watermark", async () => {
+    const { db, close } = await openedStore("watermark-mono");
+    planItem(db, { ...KEY, externalId: "EXT-1", remoteUpdatedAt: "2026-11-01T00:00:00Z", operationId: "op-new" });
+    markApplied(db, { ...KEY, operationId: "op-apply-new", remoteUpdatedAt: "2026-11-01T00:00:00Z" });
+    // `replanItem` refuses to open a cycle for an older revision, so the only way
+    // an older value reaches the watermark is the caller supplying one directly:
+    // that is the boundary this guards, and it must not walk back either.
+    replanItem(db, { ...KEY, remoteUpdatedAt: "2026-12-01T00:00:00Z", operationId: "op-newer" });
+    const applied = markApplied(db, { ...KEY, operationId: "op-apply-old", remoteUpdatedAt: "2026-10-01T00:00:00Z" });
+    expect(applied.lastRemoteUpdatedAt).toBe("2026-11-01T00:00:00Z");
     close();
   });
 });

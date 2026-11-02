@@ -125,19 +125,11 @@ export function importPage(
           remoteUpdatedAt: item.updatedAt,
           operationId: operationId(bindingId, item, "replan"),
         });
-      } else if (ledger.itemState === "pending" && isOlderInstant(item.updatedAt, ledger.lastRemoteUpdatedAt)) {
-        // A resumed cycle whose page is STALE relative to the recorded
-        // watermark must not mirror older content: close the cycle on the
-        // recorded revision instead, so a replayed page cannot walk the row
-        // backwards and then read as zero-delta forever.
-        markApplied(db, {
-          bindingId,
-          direction: IMPORT_DIRECTION,
-          localId,
-          // Its own id: the page's revision is older than the one this cycle was
-          // opened for, so it must not replay that revision's `applied` receipt.
-          operationId: `linear-import:${bindingId}:${localId}:stale-applied:${ledger.lastRemoteUpdatedAt ?? "none"}`,
-        });
+      } else if (ledger.itemState === "pending" && isOlderInstant(item.updatedAt, ledger.pendingTarget ?? ledger.lastRemoteUpdatedAt)) {
+        // A resumed cycle whose page predates the target mirrors nothing — and it
+        // must NOT close the cycle either. Closing it records the target as the
+        // copied revision, so when that revision finally arrives it reads as
+        // zero-delta and the row keeps stale content forever. Leave it pending.
         result.skipped++;
         continue;
       } else if (ledger.itemState === "failed") {

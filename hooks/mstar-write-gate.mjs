@@ -16679,6 +16679,19 @@ create table sync_cursor(
   primary key (binding_id, direction)
 );
 `;
+var MIGRATION_16_SQL = `
+alter table issue_sync_state add column pending_target text;
+-- A cycle that was open at upgrade time recorded its TARGET in the copied
+-- column, because there was only one. Left alone, that row would claim it had
+-- copied content it never took, and the stale-page guard would compare against
+-- that fake watermark and skip every page older than a revision nothing holds -
+-- the exact bug this split removes, surviving the upgrade. Move it across.
+update issue_sync_state
+   set pending_target = last_remote_updated_at,
+       last_remote_updated_at = null
+ where item_state = 'pending'
+   and last_remote_updated_at is not null;
+`;
 var MIGRATIONS;
 var DSH_HOST_STATE_MIGRATION;
 var EXECUTION_TABLE_NAMES;
@@ -16729,7 +16742,8 @@ var init_store_db = __esm(() => {
     { version: 12, name: "severity-vocabulary-nit", sql: MIGRATION_12_SQL },
     { version: 13, name: "issue-project-moves", sql: MIGRATION_13_SQL },
     { version: 14, name: "compass-plan-membership", sql: MIGRATION_14_SQL },
-    { version: 15, name: "sync-ledger", sql: MIGRATION_15_SQL }
+    { version: 15, name: "sync-ledger", sql: MIGRATION_15_SQL },
+    { version: 16, name: "sync-pending-target", sql: MIGRATION_16_SQL }
   ];
   DSH_HOST_STATE_MIGRATION = MIGRATIONS.find((migration) => migration.name === "dsh-host-ledgers");
   EXECUTION_TABLE_NAMES = [
@@ -18975,6 +18989,7 @@ var PROVENANCE_ORIGIN_MIGRATION_VERSION = MIGRATIONS.find((migration) => migrati
 var ROADMAP_MIGRATION_VERSION = MIGRATIONS.find((migration) => migration.name === "roadmap-content-authority")?.version ?? Number.POSITIVE_INFINITY;
 var EXECUTION_COVERAGE_MIGRATION_VERSION = MIGRATIONS.find((migration) => migration.name === "execution-coverage-column")?.version ?? Number.POSITIVE_INFINITY;
 var MILESTONE_MIGRATION_VERSION = MIGRATIONS.find((migration) => migration.name === "project-milestones")?.version ?? Number.POSITIVE_INFINITY;
+var SYNC_PENDING_TARGET_MIGRATION_VERSION = MIGRATIONS.find((migration) => migration.name === "sync-pending-target")?.version ?? Number.POSITIVE_INFINITY;
 var PROJECT_MOVES_MIGRATION_VERSION = MIGRATIONS.find((migration) => migration.name === "issue-project-moves")?.version ?? Number.POSITIVE_INFINITY;
 var SYNC_LEDGER_MIGRATION_VERSION = MIGRATIONS.find((migration) => migration.name === "sync-ledger")?.version ?? Number.POSITIVE_INFINITY;
 var DSH_MIGRATION_VERSION = MIGRATIONS.find((migration) => migration.name === "dsh-host-ledgers")?.version ?? Number.POSITIVE_INFINITY;
