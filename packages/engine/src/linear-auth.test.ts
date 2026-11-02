@@ -4,6 +4,7 @@ import {
   discoverAuthorizationServer,
   exchangeCode,
   LINEAR_MCP_SCOPE,
+  linearScopeCanWrite,
   refreshToken,
   registerClient,
 } from "./linear-auth.js";
@@ -181,6 +182,28 @@ describe("token exchange and refresh", () => {
     await expect(refreshToken(AS, "cid", fake("refresh"), fetchImpl)).rejects.toThrow(
       /linear\.reauth-required/,
     );
+  });
+
+  test("a provider 5xx is a retryable attempt failure, not a rejected grant", async () => {
+    // The grant was never judged: sending the operator through consent again
+    // would not help, and the host's bounded retry can.
+    for (const status of [500, 503, 429, 408]) {
+      const fetchImpl = (async () => json({}, status)) as unknown as typeof fetch;
+      await expect(refreshToken(AS, "cid", fake("refresh"), fetchImpl)).rejects.toThrow(
+        /linear\.auth-unavailable/,
+      );
+    }
+  });
+
+  test("push capability is read from the grant's own scope", () => {
+    // The scope Linear documents for creating AND updating issues, plus the
+    // broader scope an operator may already hold.
+    expect(linearScopeCanWrite(LINEAR_MCP_SCOPE)).toBe(true);
+    expect(linearScopeCanWrite("read write")).toBe(true);
+    // Read-only and unknown grants are never assumed push-capable.
+    expect(linearScopeCanWrite("read")).toBe(false);
+    expect(linearScopeCanWrite("read admin")).toBe(false);
+    expect(linearScopeCanWrite(null)).toBe(false);
   });
 
   test("a token response without an access_token is refused", async () => {

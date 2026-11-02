@@ -24,6 +24,8 @@ export type LinearSettingsKey =
   | 'state.expired.body'
   | 'state.expired.summary'
   | 'state.authorized.title'
+  | 'state.scope-insufficient.title'
+  | 'state.scope-insufficient.body'
   | 'state.authorizing.title'
   | 'state.authorizing.body'
   | 'state.recovery.title'
@@ -61,6 +63,8 @@ export const zh: LocaleDictOf<'ui-mstar-linear-settings'> = {
   'state.expired.body': '访问令牌已于 {expiry} 过期。宿主会在下次使用时尝试刷新；保存了 refresh token 并不保证刷新必定成功。',
   'state.expired.summary': '访问令牌已过期',
   'state.authorized.title': '已授权',
+  'state.scope-insufficient.title': '已授权（无法推送）',
+  'state.scope-insufficient.body': '该授权有效但只有读取范围，无法创建或更新 Linear issue。请重新 Authorize 以申请 read + issues:create；刷新不会扩大授权范围。',
   'state.authorizing.title': '授权中',
   'state.authorizing.body': '已在当前浏览器打开 Linear 授权页，等待你完成 consent。授权尝试与 PKCE verifier 由宿主持有；此卡片不保存任何秘密。等待可取消。',
   'state.recovery.title': '请在 host 本机完成授权',
@@ -93,6 +97,8 @@ export const en: LocaleDictOf<'ui-mstar-linear-settings'> = {
   'state.expired.body': 'The access token expired at {expiry}. The host attempts a refresh on the next use; a saved refresh token is not a guarantee that it succeeds.',
   'state.expired.summary': 'Access token expired',
   'state.authorized.title': 'Authorized',
+  'state.scope-insufficient.title': 'Authorized — cannot push',
+  'state.scope-insufficient.body': 'This grant is valid but read-only, so it cannot create or update Linear issues. Authorize again to request read + issues:create; a refresh never widens a grant.',
   'state.authorizing.title': 'Authorizing',
   'state.authorizing.body': 'Linear’s consent page is open in this browser; waiting for you to finish it. The host holds the authorization attempt and the PKCE verifier — this card stores no secret. You can cancel.',
   'state.recovery.title': 'Authorize on the host machine',

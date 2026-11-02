@@ -23,7 +23,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { Context } from '@deepseek-ai/cordis'
 import type { TranslateNS } from '@deepseek-ai/dsh-client-ui-slots'
-import { readLinearCredential, LINEAR_MCP_URL } from '@mstar-harness/engine'
+import { readLinearCredential, LINEAR_MCP_URL, writeLinearCredential } from '@mstar-harness/engine'
 import { createElement } from 'react'
 import { renderToStaticMarkup } from 'react-dom/server'
 import { apply } from '../src/client/index.ts'
@@ -147,14 +147,21 @@ const READY_ABSENT = {
   status: 'ready',
   rowEnabled: true,
   fiberPhase: 'live',
-  credential: { display: 'absent', scope: null, expiresAt: null },
+  credential: { display: 'absent', scope: null, expiresAt: null, canWrite: false },
 }
 const READY_DISABLED = { ...READY_ABSENT, rowEnabled: false }
 const READY_AUTHORIZED = {
   status: 'ready',
   rowEnabled: true,
   fiberPhase: 'live',
-  credential: { display: 'authorized', scope: 'read,issues:create', expiresAt: START + 3_600_000 },
+  credential: { display: 'authorized', scope: 'read,issues:create', expiresAt: START + 3_600_000, canWrite: true },
+}
+/** Valid, still inside its expiry, and read-only: authorized but cannot push. */
+const READY_READ_ONLY = {
+  status: 'ready',
+  rowEnabled: true,
+  fiberPhase: 'live',
+  credential: { display: 'authorized', scope: 'read', expiresAt: START + 3_600_000, canWrite: false },
 }
 
 /** The forbidden-material sweep for every result the browser receives. */
@@ -467,6 +474,23 @@ describe('the card states', () => {
     expect(timers.pending()).toBe(1)
     store.dispose()
   })
+
+  it('a valid read-only grant stays authorized and still offers Authorize to widen it', async () => {
+    const { connection } = stubConnection(() => READY_READ_ONLY)
+    const store = storeFor(connection)
+    await store.refresh()
+    const html = render(store)
+
+    // Valid and push-capable are separate facts: the expiry makes it
+    // authorized, and the scope keeps the widening path reachable.
+    expect(html).toContain('data-ms-linear-state="authorized"')
+    expect(html).toContain('data-ms-linear-push="scope-insufficient"')
+    expect(html).toContain(translate('en')('state.scope-insufficient.body'))
+    expect(html).toContain('data-ms-linear-action="authorize"')
+    expect(html).toContain(new Date(START + 3_600_000).toISOString())
+    expectNoSecret(READY_READ_ONLY)
+    store.dispose()
+  })
 })
 
 /* ------------------------------------------------------------------------ *
@@ -517,6 +541,7 @@ describe('the card learns an outcome from a slow consent', () => {
 
     const html = render(store)
     expect(html).toContain('data-ms-linear-state="authorized"')
+    expect(html).toContain('data-ms-linear-push="ready"')
     expect(html).toContain('read,issues:create')
     expect(html).toContain(new Date(START + 3_600_000).toISOString())
     expect(html).not.toContain('data-ms-linear-action="authorize"')
@@ -956,9 +981,28 @@ describe('the host-owned authorization attempt', () => {
       status: 'ready',
       rowEnabled: true,
       fiberPhase: 'live',
-      credential: { display: 'absent', scope: null, expiresAt: null },
+      credential: { display: 'absent', scope: null, expiresAt: null, canWrite: false },
     })
     expect(JSON.stringify(status)).not.toContain(root)
+    expectNoSecret(status)
+  })
+
+  it('linearStatus keeps "valid" and "can push" separate for a read-only grant', async () => {
+    writeLinearCredential({
+      accessToken: 'tok-read-only',
+      refreshToken: 'ref-read-only',
+      clientId: 'client-one',
+      expiresAt: Date.now() + 3_600_000,
+      scope: 'read',
+    })
+    const { gateway } = hostHarness()
+    const status = await gateway.linearStatus()
+    expect(status.status).toBe('ready')
+    if (status.status !== 'ready') return
+    // Expiry says the grant is usable; the scope says it cannot write. The
+    // card needs both to offer the widening path.
+    expect(status.credential.display).toBe('authorized')
+    expect(status.credential.canWrite).toBe(false)
     expectNoSecret(status)
   })
 })

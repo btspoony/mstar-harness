@@ -12,6 +12,9 @@
  * 3. authorizing — the host holds the attempt and the PKCE verifier, the card
  *    can cancel, and it stores no secret;
  * 4. authorized — scope and expiry only, never an account, email or token.
+ *    A valid grant whose scope cannot create or update issues stays
+ *    `authorized` and additionally offers Authorize: validity and push
+ *    capability are separate facts, and a refresh never widens a grant.
  *
  * A browser that is not on the host machine stays on the recovery text: the
  * loopback callback cannot return there, so the card never flips to
@@ -89,7 +92,8 @@ function summaryText(
   if (!facts.rowEnabled) return t('state.disabled.title')
   if (state.attempt !== null) return t('state.authorizing.title')
   switch (facts.credential.display) {
-    case 'authorized': return t('state.authorized.title')
+    case 'authorized':
+      return facts.credential.canWrite ? t('state.authorized.title') : t('state.scope-insufficient.title')
     case 'expired': return t('state.expired.summary')
     case 'unreadable': return t('state.unauthorized.title')
     case 'absent': return t('state.unauthorized.title')
@@ -193,17 +197,30 @@ export function LinearSettingsCard(props: LinearSettingsCardProps): ReactNode {
   const banner = outcomeCopy(state.outcome, t)
 
   if (credential.display === 'authorized') {
+    // A valid but read-only grant is authorized and cannot push. Both facts
+    // are rendered, and Authorize stays reachable: a refresh only echoes the
+    // original scope, so reauthorization is the only widening path.
+    const canWrite = credential.canWrite
     return (
-      <section className={css.card} data-ms-linear-state="authorized" aria-live="polite">
+      <section
+        className={css.card}
+        data-ms-linear-state="authorized"
+        data-ms-linear-push={canWrite ? 'ready' : 'scope-insufficient'}
+        aria-live="polite"
+      >
         <p className={css.title}>
-          <span className={`${css.pill} ${css.ok}`} role="status">{t('state.authorized.title')}</span>
+          <span className={`${css.pill} ${canWrite ? css.ok : css.warn}`} role="status">
+            {canWrite ? t('state.authorized.title') : t('state.scope-insufficient.title')}
+          </span>
         </p>
+        {canWrite ? null : <p className={css.notice} role="alert">{t('state.scope-insufficient.body')}</p>}
         {metaRow(t('scope.label'), scopeText(credential, t))}
         {metaRow(
           t('expiry.label'),
           expiryText(credential.expiresAt, t),
           credential.expiresAt === null ? undefined : new Date(credential.expiresAt).toISOString(),
         )}
+        {canWrite ? null : <div className={css.actions}>{authorizeButton(controller, t)}</div>}
         <p className={css.note}>{t('note.no-secret')}</p>
       </section>
     )

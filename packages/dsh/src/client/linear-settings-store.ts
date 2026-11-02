@@ -43,6 +43,8 @@ export interface LinearCredentialView {
   readonly display: LinearCredentialDisplay
   readonly scope: string | null
   readonly expiresAt: number | null
+  /** Whether the grant can create or update issues; `display` says whether it is valid. */
+  readonly canWrite: boolean
 }
 
 /** What `linearStatus` answered: the row's own bit plus non-secret credential facts. */
@@ -141,6 +143,9 @@ export function parseLinearStatusRead(value: unknown): LinearStatusRead {
       display,
       scope: typeof scope === 'string' ? scope : null,
       expiresAt: typeof expiresAt === 'number' && Number.isFinite(expiresAt) ? expiresAt : null,
+      // Fail closed: an answer that does not state the capability never earns
+      // an Authorize-suppressing render.
+      canWrite: credential?.canWrite === true,
     },
   }
 }

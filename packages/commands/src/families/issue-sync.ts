@@ -34,6 +34,7 @@ import {
   IMPORT_DIRECTION,
   PUSH_DIRECTION,
   importPage,
+  linearScopeCanWrite,
   openStore,
   pushItem,
   readCursor,
@@ -475,21 +476,6 @@ type PushReport = {
 };
 
 /**
- * The scope this machine's stored credential must carry to write. `issues:create`
- * is what Linear documents for creating AND updating issues; `write` is broader
- * and accepted if an operator already holds it. `admin` is never requested and
- * never inferred — a read-only grant stays read-only until an explicit
- * reauthorization, because a refresh only echoes the original grant.
- */
-const WRITE_SCOPES = ["issues:create", "write"] as const;
-
-function scopeCanWrite(scope: string | null): boolean {
-  if (scope === null) return false;
-  const granted = scope.split(/[\s,]+/).filter((part) => part !== "");
-  return WRITE_SCOPES.some((needed) => granted.includes(needed));
-}
-
-/**
  * Parse `--adopt <localId>=<issueUrl|externalId>`. The FIRST `=` splits, so an
  * identifier containing one survives; a value with no `=` is a usage error
  * rather than a silently ignored flag.
@@ -517,7 +503,7 @@ async function runPush(id: string, input: Input, invocation: InvocationContext):
   //    listing, no ledger write. An absent credential is not this preflight's
   //    call — a host may hold the transport, and the probe reports the truth.
   const stored = readLinearCredential();
-  if (stored.kind === "present" && !scopeCanWrite(stored.credential.scope)) {
+  if (stored.kind === "present" && !linearScopeCanWrite(stored.credential.scope)) {
     throw Object.assign(
       new Error(
         `[linear.scope-insufficient] the stored Linear credential's scope is ${JSON.stringify(stored.credential.scope ?? "absent")}, which cannot create or update issues; nothing was written`,

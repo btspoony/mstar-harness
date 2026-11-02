@@ -22,8 +22,9 @@
  * enabled row is reloaded so the re-evaluated header carries the new token
  * with no human toggle. A refresh refusal is the observed
  * `linear.reauth-required` fact and nothing else — never an inferred
- * authorization, never a widened grant (a refresh sends no scope), and never a
- * retry spin.
+ * authorization, never a widened grant (a refresh sends no scope). A refused
+ * grant is not retried; a transient attempt failure is, on a bounded backoff,
+ * so one bad round trip cannot leave the host unauthenticated.
  *
  * This module also serves the row's Settings card (plan
  * 20261102-linear-oauth-guidance Task 3): `MstarLinearSettingsGateway` answers
@@ -43,6 +44,7 @@ import {
   beginAuthorization,
   discoverAuthorizationServer,
   exchangeCode,
+  linearScopeCanWrite,
   readLinearCredential,
   refreshToken,
   registerClient,
@@ -133,6 +135,14 @@ const systemClock: LinearAuthClock = {
   },
 }
 
+/**
+ * Retry backoff after an attempt ended without a fresh grant: the first delay
+ * doubles per consecutive failure up to the ceiling, so one failed attempt
+ * cannot strand the host and a persistent failure cannot spin.
+ */
+const RETRY_BASE_MS = 30_000
+const RETRY_MAX_MS = 15 * 60_000
+
 /** The parts of a live `Fiber` this service drives. */
 interface ReloadableFiber {
   readonly uid?: number | null
@@ -158,11 +168,14 @@ function errorCodeOf(error: unknown): string | null {
 }
 
 /**
- * Whether the file changed under an in-flight refresh AND the change is newer
- * — another process (a CLI push/import) stored a credential this process must
- * adopt instead of overwriting with older data.
+ * Whether the file changed under an in-flight refresh in a way this attempt
+ * must not overwrite — another process stored a newer grant to adopt, or the
+ * operator removed the credential (`mstar linear logout`) and deleting it is
+ * the newest intent. An unreadable file is overwritten: its credential is
+ * unusable, and the fresh grant is the recovery.
  */
 function supersededBy(state: LinearCredentialState, base: LinearCredential): boolean {
+  if (state.kind === 'absent') return true
   if (state.kind !== 'present') return false
   const candidate = state.credential
   if (candidate.accessToken === base.accessToken) return false
@@ -182,6 +195,8 @@ export class MstarLinearAuth extends Service {
   private readonly clock: LinearAuthClock
   private inflight: Promise<LinearRefreshOutcome> | undefined
   private cancelTimer: (() => void) | undefined
+  /** Consecutive attempts that ended without a fresh grant; drives the retry backoff. */
+  private failures = 0
   private refusal: { code: string; message: string } | null = null
   private disposed = false
 
@@ -233,7 +248,10 @@ export class MstarLinearAuth extends Service {
     const state = readLinearCredential(this.clock.now())
     if (state.kind !== 'present') return { kind: 'none', reason: state.kind }
     if (state.credential.expiresAt === null) {
-      return { kind: 'unknown-expiry', note: 'expiry unknown; refresh is attempted on the next observed need' }
+      // No expiry was recorded, so there is no instant to schedule and no
+      // expiry to compare: the host never invents one, and nothing else
+      // triggers a refresh for this credential.
+      return { kind: 'unknown-expiry', note: 'expiry unknown; no refresh is scheduled for this credential' }
     }
     return { kind: 'scheduled', at: state.credential.expiresAt - REFRESH_WINDOW_MS }
   }
@@ -270,9 +288,15 @@ export class MstarLinearAuth extends Service {
     try {
       await fiber.restart()
       return true
-    } catch {
-      // A fiber that unloaded between the check and the call is not a failure:
-      // nothing was connected any more.
+    } catch (error) {
+      const message = messageOf(error)
+      // The one benign case: the fiber unloaded between the check and the call,
+      // so nothing was connected any more. Anything else keeps the stale
+      // header while authorization and refresh both claim success — it must be
+      // visible, never classified as an unload.
+      if (!message.includes('inactive context')) {
+        this.log('warn', `the ${LINEAR_MCP_ENTRY_ID} row failed to reload: ${message}`)
+      }
       return false
     }
   }
@@ -318,12 +342,14 @@ export class MstarLinearAuth extends Service {
     if (this.disposed) return { kind: 'skipped' }
     const before = readLinearCredential(this.clock.now())
     if (before.kind !== 'present' || !before.refreshDue) {
+      this.failures = 0
       this.schedule(before)
       return { kind: 'idle' }
     }
     const { credential } = before
     if (credential.refreshToken === null || credential.clientId === null) {
       this.refuse('linear.reauth-required', 'the stored credential is due and holds no refresh token to renew it')
+      this.failures = 0
       this.schedule(readLinearCredential(this.clock.now()))
       return { kind: 'refused', code: 'linear.reauth-required' }
     }
@@ -333,6 +359,7 @@ export class MstarLinearAuth extends Service {
       if (this.disposed) return { kind: 'skipped' }
       const outcome = this.persist(before, fresh)
       this.refusal = null
+      this.failures = 0
       this.log('info', `linear credential refreshed (${outcome}); reloading the ${LINEAR_MCP_ENTRY_ID} row`)
       await this.reloadRow()
       this.schedule(readLinearCredential(this.clock.now()))
@@ -340,8 +367,12 @@ export class MstarLinearAuth extends Service {
     } catch (error) {
       const code = errorCodeOf(error) ?? 'linear.auth-unavailable'
       this.refuse(code, messageOf(error))
-      // No retry spin: this attempt answered the tick. The next one waits for
-      // the following window or the next observed need.
+      // A rejected grant is not retried: only a new authorization can change
+      // it. Everything else — discovery, transport, a provider 5xx — is
+      // transient, so the still-due credential is retried on a bounded
+      // backoff instead of leaving the host unauthenticated after one attempt.
+      if (code === 'linear.reauth-required') this.failures = 0
+      else this.failures += 1
       this.schedule(readLinearCredential(this.clock.now()))
       return { kind: 'refused', code }
     }
@@ -363,17 +394,32 @@ export class MstarLinearAuth extends Service {
     return 'refreshed'
   }
 
+  /**
+   * Arm the one refresh slot. A credential due now normally arms nothing: this
+   * tick just ran, and re-arming at zero would spin. After a transient attempt
+   * failure it is retried on the bounded backoff instead, so a still-due
+   * credential is never left without a timer.
+   */
   private schedule(state: LinearCredentialState): void {
     this.cancelTimer?.()
     this.cancelTimer = undefined
-    if (this.disposed || state.kind !== 'present' || state.credential.expiresAt === null) return
-    const delay = state.credential.expiresAt - REFRESH_WINDOW_MS - this.clock.now()
-    // Already due: this tick just ran. Re-arming at zero would spin.
+    if (this.disposed || state.kind !== 'present' || state.credential.expiresAt === null) {
+      this.failures = 0
+      return
+    }
+    const due = state.credential.expiresAt - REFRESH_WINDOW_MS - this.clock.now()
+    const delay = due > 0 ? due : this.retryDelay()
     if (delay <= 0) return
     this.cancelTimer = this.clock.schedule(() => {
       this.cancelTimer = undefined
       void this.refreshIfDue()
     }, delay)
+  }
+
+  /** Doubling backoff for the next retry, capped at the ceiling; 0 when quiet. */
+  private retryDelay(): number {
+    if (this.failures === 0) return 0
+    return Math.min(RETRY_BASE_MS * 2 ** (this.failures - 1), RETRY_MAX_MS)
   }
 
   private linearMcpEntry(): LoaderEntryView | undefined {
@@ -420,6 +466,8 @@ export interface LinearCredentialView {
   display: LinearCredentialDisplay
   scope: string | null
   expiresAt: number | null
+  /** Whether this grant's scope can create or update issues (`display` is validity). */
+  canWrite: boolean
 }
 
 /** `linearStatus`: the row's enable bit + non-secret credential facts, or an explicit reason. */
@@ -466,13 +514,16 @@ interface LinearAuthorizeAttempt {
 
 /** Derive the display word from the file facts (never from a bare 401 or `refreshDue`). */
 function credentialView(state: LinearCredentialState, now: number): LinearCredentialView {
-  if (state.kind === 'absent') return { display: 'absent', scope: null, expiresAt: null }
-  if (state.kind === 'unreadable') return { display: 'unreadable', scope: null, expiresAt: null }
+  if (state.kind === 'absent') return { display: 'absent', scope: null, expiresAt: null, canWrite: false }
+  if (state.kind === 'unreadable') return { display: 'unreadable', scope: null, expiresAt: null, canWrite: false }
   const { scope, expiresAt } = state.credential
   return {
     display: expiresAt === null || now < expiresAt ? 'authorized' : 'expired',
     scope,
     expiresAt,
+    // Valid and push-capable are separate facts: a read-only grant is
+    // authorized, and only an explicit reauthorization can widen it.
+    canWrite: linearScopeCanWrite(scope),
   }
 }
 
