@@ -12,7 +12,7 @@ import { join } from "node:path";
 import { afterAll, describe, expect, test } from "bun:test";
 import { initializeStore, type StoreDb } from "../store-db.js";
 import type { IssueKind, Severity } from "../issue.js";
-import { readItem } from "../issue-sync.js";
+import { claimItem, planItem, readItem } from "../issue-sync.js";
 import type { IssueProvider, ProviderPage, ProviderWrite, ProviderWriteReceipt } from "./provider.js";
 import {
   adoptItem,
@@ -102,6 +102,7 @@ function context(overrides: Partial<PushContext> = {}): PushContext {
     binding: { workspace: "acme", team: "ENG" },
     storeId: STORE_ID,
     labels: new Set(["bug", "risk", "improvement", "request", "decision", "review-obligation"]),
+    states: new Set(["Todo", "Done", "Canceled"]),
     ...overrides,
   };
 }
@@ -680,6 +681,178 @@ describe("(i) an ambiguous update drops the payload proof but keeps the identity
       const corrective = writeOf(scripted, 2, "update").payload;
       expect(corrective.labels).toEqual(["bug"]);
       expect(corrective.removeLabels).toEqual(["risk"]);
+    } finally {
+      close();
+    }
+  });
+});
+
+describe("(j) a pre-send refusal under --force-create keeps the ambiguous residue reconcilable", () => {
+  test("pending residue + missing label: the row stays pending with the error recorded, and reconcile still sees it", async () => {
+    const { db, close } = await openedStore("force-create-refusal");
+    try {
+      addIssue(db, "I-001031", { kind: "risk" });
+      const ctx = context();
+      // 1. An ambiguous create leaves the residue: pending, no id.
+      const ambiguous = provider({ receipts: [{ kind: "ambiguous", cause: "connection closed mid-call" }] });
+      await pushItem(db, ambiguous, ctx, candidates(db)[0]!);
+      expect(row(db, "I-001031")).toMatchObject({ itemState: "pending", externalId: null, lastError: null });
+      const writesBefore = ambiguous.writes.length;
+
+      // 2. --force-create with a label the workspace does not have. The refusal
+      //    provably sent nothing, but the row it would have written `failed` on
+      //    is the ONLY record that a remote issue may already exist.
+      const missingLabel = context({ labels: new Set(["bug"]), forceCreate: true });
+      const blocked = await pushItem(db, ambiguous, missingLabel, candidates(db)[0]!);
+      expect(blocked.outcome).toBe("failed");
+      expect(blocked.cause).toContain("linear.label-unresolved");
+      // Nothing was sent for this attempt.
+      expect(ambiguous.writes).toHaveLength(writesBefore);
+
+      // The residue is untouched as an AMBIGUITY: still pending, still no id,
+      // and the diagnostic is recorded on the row.
+      const afterRefusal = row(db, "I-001031")!;
+      expect(afterRefusal).toMatchObject({ itemState: "pending", externalId: null });
+      expect(afterRefusal.lastError).toContain("linear.label-unresolved");
+
+      // 3. Reconciliation still finds it: that is what `failed` would have
+      //    destroyed. One marker match adopts the interrupted create.
+      const marker = correlationMarker({ workspace: "acme", team: "ENG" }, STORE_ID, "I-001031");
+      const scanning = provider({
+        pages: [
+          {
+            items: [
+              {
+                externalId: "LIN-77",
+                title: "Issue I-001031",
+                description: `## Impact\n\nimpact body\n\n${marker}`,
+                state: "Todo",
+                priority: "2",
+                labels: ["bug"],
+                updatedAt: "2026-11-02T00:00:00.000Z",
+                url: "https://linear.app/acme/issue/LIN-77",
+              },
+            ],
+            nextCursor: null,
+          },
+        ],
+      });
+      const report = await reconcilePendingCreate(db, scanning, ctx);
+      expect(report.adopted).toEqual([{ localId: "I-001031", externalId: "LIN-77" }]);
+      expect(row(db, "I-001031")).toMatchObject({ itemState: "applied", externalId: "LIN-77" });
+    } finally {
+      close();
+    }
+  });
+
+  test("a refusal on a row with NO ambiguity still records the retryable failed edge", async () => {
+    const { db, close } = await openedStore("refusal-no-residue");
+    try {
+      addIssue(db, "I-001032", { kind: "risk" });
+      // No prior attempt at all: the label preflight refuses before any write.
+      const fake = provider();
+      const refused = await pushItem(db, fake, context({ labels: new Set(["bug"]) }), candidates(db)[0]!);
+      expect(refused.outcome).toBe("failed");
+      expect(row(db, "I-001032")!.itemState).toBe("failed");
+      expect(fake.writes).toEqual([]);
+      // `failed → pending` is the legal retry edge, so the next run tries again.
+      const retried = await pushItem(db, fake, context(), candidates(db)[0]!);
+      expect(retried.outcome).toBe("created");
+    } finally {
+      close();
+    }
+  });
+});
+
+describe("(k) two pushes with the same content and revision produce exactly one create", () => {
+  const PLAN_OP = `linear-push:${BINDING}:I-001041:plan:hash:0`;
+  const planInput = { bindingId: BINDING, direction: "push" as const, localId: "I-001041", operationId: PLAN_OP };
+
+  test("only the first identical claim holds the send right; a replay of it does not", async () => {
+    const { db, close } = await openedStore("claim-once");
+    try {
+      addIssue(db, "I-001041");
+      // Two callers that derive the SAME operationId from content + revision.
+      // `planItem` replays its receipt for both of them, which is exactly how
+      // two concurrent pushes each concluded they owned the create.
+      const first = claimItem(db, planInput);
+      const second = claimItem(db, planInput);
+      expect(first.claimed).toBe(true);
+      expect(second.claimed).toBe(false);
+      // The loser is told what the ledger now holds, not what the winner's
+      // receipt said, so it can act on the current row.
+      expect(second.item).toEqual(first.item);
+      // `planItem` keeps its idempotent-replay semantics for everyone else.
+      expect(planItem(db, planInput)).toEqual(first.item);
+    } finally {
+      close();
+    }
+  });
+
+  test("a push that finds the claim already taken sends nothing", async () => {
+    const { db, close } = await openedStore("claim-lost");
+    try {
+      addIssue(db, "I-001042");
+      const fake = provider();
+      const ctx = context();
+      const candidate = candidates(db)[0]!;
+
+      // The winner: a create is sent and confirmed.
+      const won = await pushItem(db, fake, ctx, candidate);
+      expect(won.outcome).toBe("created");
+      expect(fake.writes.filter((write) => write.kind === "create")).toHaveLength(1);
+
+      // A concurrent caller that read the same unsynced issue now finds the
+      // claimed row. It must send nothing: the row's identity already exists.
+      const second = await pushItem(db, fake, ctx, candidate);
+      expect(second.outcome).toBe("skipped");
+      expect(fake.writes.filter((write) => write.kind === "create")).toHaveLength(1);
+      expect(row(db, "I-001042")).toMatchObject({ itemState: "applied", externalId: "LIN-1" });
+    } finally {
+      close();
+    }
+  });
+});
+
+describe("(l) disposition→state names are preflighted against the team, like labels", () => {
+  test("a team without the mapped state refuses that item before the call, naming the mapping key", async () => {
+    const { db, close } = await openedStore("state-preflight");
+    try {
+      addIssue(db, "I-001051", { disposition: "open" });
+      addIssue(db, "I-001052", { disposition: "resolved" });
+      // A team whose workflow renamed `Todo` to `Ready for Dev`.
+      const fake = provider();
+      const ctx = context({ states: new Set(["Ready for Dev", "Done", "Canceled"]) });
+      const [first, second] = candidates(db);
+
+      const refused = await pushItem(db, fake, ctx, first!);
+      expect(refused.outcome).toBe("failed");
+      expect(refused.cause).toContain("linear.state-unresolved");
+      expect(refused.cause).toContain('"Todo"');
+      expect(refused.cause).toContain("disposition.open");
+      expect(fake.writes).toEqual([]);
+
+      // The item whose state DOES exist proceeds: an unknown name refuses one item only.
+      const ok = await pushItem(db, fake, ctx, second!);
+      expect(ok.outcome).toBe("created");
+      expect(writeOf(fake, 0, "create").payload.state).toBe("Done");
+    } finally {
+      close();
+    }
+  });
+
+  test("a mapped state name that the team does have is sent verbatim", async () => {
+    const { db, close } = await openedStore("state-mapped");
+    try {
+      addIssue(db, "I-001053", { disposition: "open" });
+      const fake = provider();
+      const ctx = context({
+        states: new Set(["Ready for Dev", "Done", "Canceled"]),
+        mapping: { disposition: { Todo: "Ready for Dev" }, kind: {}, severity: {} },
+      });
+      const outcome = await pushItem(db, fake, ctx, candidates(db)[0]!);
+      expect(outcome.outcome).toBe("created");
+      expect(writeOf(fake, 0, "create").payload.state).toBe("Ready for Dev");
     } finally {
       close();
     }

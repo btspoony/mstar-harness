@@ -8,7 +8,7 @@
  */
 import { describe, expect, test } from "bun:test";
 import type { LinearCallOutcome } from "./linear-adapter.js";
-import { createLinearWrite, LINEAR_LABEL_VERBS, LINEAR_WRITE_VERBS } from "./linear-write.js";
+import { createLinearWrite, LINEAR_LABEL_VERBS, LINEAR_STATE_VERBS, LINEAR_WRITE_VERBS } from "./linear-write.js";
 import type { ProviderWritePayload } from "./provider.js";
 
 const payload = (overrides: Partial<ProviderWritePayload> = {}): ProviderWritePayload => ({
@@ -29,11 +29,12 @@ function side(
     advertised?: Record<string, readonly string[]> | null;
     writeVerbs?: readonly string[];
     labelVerbs?: readonly string[];
+    stateVerbs?: readonly string[];
     team?: string;
   } = {},
 ) {
   const calls: Call[] = [];
-  const listed = options.listed === undefined ? ["save_issue", "list_issue_labels"] : options.listed;
+  const listed = options.listed === undefined ? ["save_issue", "list_issue_labels", "list_issue_statuses"] : options.listed;
   const advertised =
     options.advertised === undefined
       ? { save_issue: ["id", "title", "description", "priority", "state", "labels", "addLabels", "removeLabels"] }
@@ -50,6 +51,7 @@ function side(
     advertisedArguments: (tool) => (advertised === null ? null : (advertised[tool] ?? null)),
     ...(options.writeVerbs === undefined ? {} : { writeVerbs: options.writeVerbs }),
     ...(options.labelVerbs === undefined ? {} : { labelVerbs: options.labelVerbs }),
+    ...(options.stateVerbs === undefined ? {} : { stateVerbs: options.stateVerbs }),
     ...(options.team === undefined ? {} : { scope: { team: options.team } }),
   });
   return { write, calls };
@@ -226,5 +228,49 @@ describe("label discovery", () => {
   test("a transport failure during discovery refuses the run", async () => {
     const { write } = side([{ kind: "transport-error", message: "ECONNRESET" }]);
     await expect(write.discoverLabels()).rejects.toThrow(/nothing was written/);
+  });
+});
+
+describe("state discovery", () => {
+  test("the candidate set is declared, and the bare-array envelope is read", () => {
+    expect(LINEAR_STATE_VERBS).toEqual(["list_issue_statuses"]);
+  });
+
+  test("returns the team's workflow state names from the observed envelope", async () => {
+    const { write, calls } = side(
+      [
+        {
+          kind: "ok",
+          payload: [
+            { id: "s1", type: "unstarted", name: "Ready for Dev" },
+            { id: "s2", type: "completed", name: "Done" },
+            { id: "s3", type: "canceled", name: "Canceled" },
+          ],
+        },
+      ],
+      { team: "ENG" },
+    );
+    const names = await write.discoverStates();
+    expect([...names].sort()).toEqual(["Canceled", "Done", "Ready for Dev"]);
+    expect(calls[0]!.tool).toBe("list_issue_statuses");
+    expect(calls[0]!.arguments.team).toBe("ENG");
+  });
+
+  test("an absent state verb refuses the run, naming the candidate", async () => {
+    const { write, calls } = side([], { listed: ["save_issue", "list_issue_labels"] });
+    await expect(write.discoverStates()).rejects.toThrow(/list_issue_statuses/);
+    expect(calls).toEqual([]);
+  });
+
+  test("a label envelope is NOT accepted as a state envelope", async () => {
+    // The two calls answer different shapes; one parser accepting both would
+    // turn a wire change into a silent empty set that refuses every item.
+    const { write } = side([{ kind: "ok", payload: { labels: [{ name: "Todo" }] } }]);
+    await expect(write.discoverStates()).rejects.toThrow(/documented envelope/);
+  });
+
+  test("a transport failure during state discovery refuses the run", async () => {
+    const { write } = side([{ kind: "http-status", status: 503 }]);
+    await expect(write.discoverStates()).rejects.toThrow(/nothing was written/);
   });
 });

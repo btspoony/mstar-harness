@@ -41,6 +41,7 @@ export type SyncErrorCode =
   | "linear.write-refused"
   | "linear.write-ambiguous"
   | "linear.label-unresolved"
+  | "linear.state-unresolved"
   | "linear.scope-insufficient";
 
 export class SyncError extends Error {
@@ -347,6 +348,29 @@ function requireLocalIssue(db: StoreDb, localId: string): void {
  * — and clears the failure/skip text of the previous cycle.
  */
 export function planItem(db: StoreDb, input: PlanItemInput): SyncItem {
+  return writePlan(db, input, "replay").item;
+}
+
+/**
+ * The SEND RIGHT for one create, not merely the intent to send one.
+ *
+ * `planItem` is idempotent by replay: two callers that derive the same
+ * operationId both receive the same receipt, and the second one is
+ * indistinguishable from a resume — which is exactly how two concurrent pushes
+ * both concluded they owned the create. This verb answers the other question:
+ * `claimed` is true only for the caller whose transaction was the one that
+ * opened the cycle. A replay reports `claimed: false` and the row as it now
+ * stands, so a caller that did not win sends nothing.
+ */
+export function claimItem(db: StoreDb, input: PlanItemInput): { claimed: boolean; item: SyncItem } {
+  return writePlan(db, input, "claim");
+}
+
+function writePlan(
+  db: StoreDb,
+  input: PlanItemInput,
+  mode: "replay" | "claim",
+): { claimed: boolean; item: SyncItem } {
   const bindingId = requireNonblank("bindingId", input.bindingId);
   const direction = requireDirection(input.direction);
   const localId = requireNonblank("localId", input.localId);
@@ -356,7 +380,13 @@ export function planItem(db: StoreDb, input: PlanItemInput): SyncItem {
   const hash = syncRequestHash("planItem", { bindingId, direction, localId, externalId, remoteUpdatedAt });
   return withSyncTransaction(db, () => {
     const replayed = replayOrRefuse<SyncItem>(db, operationId, hash);
-    if (replayed !== undefined) return replayed;
+    if (replayed !== undefined) {
+      // A replay answers "what did that call do", so it reports its receipt. A
+      // claim answers "may I send", so a receipt already on record means
+      // somebody else did — the CURRENT row is what that caller must act on.
+      if (mode === "replay") return { claimed: false, item: replayed };
+      return { claimed: false, item: toItem(requireItem(selectRow(db, bindingId, direction, localId))) };
+    }
     requireLocalIssue(db, localId);
     const now = new Date().toISOString();
     const row = selectRow(db, bindingId, direction, localId);
@@ -388,7 +418,7 @@ export function planItem(db: StoreDb, input: PlanItemInput): SyncItem {
     }
     const item = toItem(requireItem(selectRow(db, bindingId, direction, localId)));
     recordOperation(db, operationId, hash, item, now);
-    return item;
+    return { claimed: true, item };
   });
 }
 
@@ -486,6 +516,48 @@ export function markApplied(db: StoreDb, input: MarkItemInput): SyncItem {
 
 export function markFailed(db: StoreDb, input: MarkFailedInput): SyncItem {
   return markItem(db, input, "failed", requireNonblank("error", input.error));
+}
+
+/**
+ * Record a refusal that PROVABLY SENT NOTHING without moving the row's state.
+ *
+ * `markFailed` is the retry edge, and it is right for a row that owns no
+ * ambiguity: a refused write was never delivered, so the next run may retry.
+ * It is wrong for a `pending` row with no id, because that row IS an
+ * unattributed remote issue — `reconcilePendingCreate` scans exactly that
+ * shape. Downgrading it to `failed` would hide it from reconciliation, let the
+ * next run create a second remote issue, and leave the first one permanently
+ * unadoptable once its marker matches twice.
+ *
+ * So this verb writes the error text and nothing else: state, identity,
+ * watermark, cycle target, payload proof and label ownership all survive.
+ */
+export function recordRefusal(db: StoreDb, input: MarkFailedInput): SyncItem {
+  const bindingId = requireNonblank("bindingId", input.bindingId);
+  const direction = requireDirection(input.direction);
+  const localId = requireNonblank("localId", input.localId);
+  const operationId = requireNonblank("operationId", input.operationId);
+  const error = requireNonblank("error", input.error);
+  const hash = syncRequestHash("recordRefusal", { bindingId, direction, localId, error });
+  return withSyncTransaction(db, () => {
+    const replayed = replayOrRefuse<SyncItem>(db, operationId, hash);
+    if (replayed !== undefined) return replayed;
+    const now = new Date().toISOString();
+    const row = requireItem(selectRow(db, bindingId, direction, localId));
+    casUpdate(db, { bindingId, direction, localId }, row.revision, {
+      item_state: row.item_state,
+      external_id: row.external_id,
+      last_remote_updated_at: row.last_remote_updated_at,
+      pending_target: row.pending_target,
+      last_error: error,
+      last_skip_reason: row.last_skip_reason,
+      last_request_hash: row.last_request_hash,
+      last_kind_label: row.last_kind_label,
+    }, now);
+    const item = toItem(requireItem(selectRow(db, bindingId, direction, localId)));
+    recordOperation(db, operationId, hash, item, now);
+    return item;
+  });
 }
 
 /**

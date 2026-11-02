@@ -47,7 +47,8 @@ export type Route =
   | { name: "issue"; id: string }
   | { name: "workflow"; id: string }
   | { name: "iteration"; id: string }
-  | { name: "project"; id: string; feature: ProjectFeature };
+  | { name: "project"; id: string; feature: ProjectFeature }
+  | { name: "sync-binding" };
 
 /** The landing route: `#`, `#/` and anything unrecognised. */
 export const OVERVIEW: Route = { name: "overview" };
@@ -122,6 +123,7 @@ function parseSegments(segments: readonly string[]): Route {
   if (first === undefined) return OVERVIEW;
 
   if (first === "overview") return OVERVIEW;
+  if (first === "sync-binding") return { name: "sync-binding" };
   if (isListDestination(first)) return { name: first };
 
   if (first === "project") {

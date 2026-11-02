@@ -144,6 +144,13 @@ export type SyncBindingDTO = {
   bindingError: string | null;
   /** The stored `project_id` → `remote_project` correspondence, read-only. */
   projectBindings: SyncBindingProject[];
+  /**
+   * The read's own failure when `project_bindings` could not be read, or `null`
+   * when it could. A store that cannot answer is not a store with no rows: the
+   * panel renders `unavailable` with this message rather than claiming the
+   * correspondence is empty.
+   */
+  projectBindingsError: string | null;
   readiness: SyncBindingReadiness;
 };
 
@@ -714,19 +721,29 @@ function parentThatDeclares(harnessDir: string): string | null {
 }
 
 /**
- * The stored correspondence rows. A store that cannot answer the read (it
- * predates migration 15, so there is no `project_bindings` table) yields no
- * rows: the `.mstarc` summary must answer regardless, and the panel renders the
- * difference from `binding`/`bindingError`. `project_bindings` is never written.
+ * The stored correspondence rows, or the read's own failure.
+ *
+ * A store that cannot answer (it predates migration 15, so there is no
+ * `project_bindings` table, or the database refuses the read) has NOT answered
+ * "there are no rows", and the two must not render alike. The `.mstarc` summary
+ * answers regardless; the failure travels beside the rows in
+ * `projectBindingsError` so the panel can render `unavailable` with the
+ * reader's reason instead of `empty`. `project_bindings` is never written.
  */
-function readSyncBindingProjects(handle: StoreHandle): SyncBindingProject[] {
+function readSyncBindingProjects(handle: StoreHandle): {
+  rows: SyncBindingProject[];
+  error: string | null;
+} {
   try {
     const rows = handle.db
       .prepare("select project_id, remote_project from project_bindings order by project_id")
       .all() as Array<{ project_id: string; remote_project: string }>;
-    return rows.map((row) => ({ projectId: row.project_id, remoteProject: row.remote_project }));
-  } catch {
-    return [];
+    return { rows: rows.map((row) => ({ projectId: row.project_id, remoteProject: row.remote_project })), error: null };
+  } catch (cause) {
+    return {
+      rows: [],
+      error: `sync-binding.correspondence-unreadable: ${cause instanceof Error ? cause.message : String(cause)}`,
+    };
   }
 }
 
@@ -757,7 +774,16 @@ export function querySyncBinding(harnessDir: string, filters: DashboardFilters):
   return {
     view: "sync-binding",
     needsProjection: false,
-    run: (handle) => ({ binding, bindingError, projectBindings: readSyncBindingProjects(handle), readiness }),
+    run: (handle) => {
+      const correspondence = readSyncBindingProjects(handle);
+      return {
+        binding,
+        bindingError,
+        projectBindings: correspondence.rows,
+        projectBindingsError: correspondence.error,
+        readiness,
+      };
+    },
   };
 }
 

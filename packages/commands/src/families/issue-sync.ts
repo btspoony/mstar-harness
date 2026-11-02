@@ -215,6 +215,8 @@ const RECOVERY: Record<string, string> = {
     "The write was sent but not confirmed, so delivery is unknown and the item stays pending with no external id. The next run reconciles it by correlation marker; use `--adopt <localId>=<issueUrl>` if you can see the remote issue yourself, or `--force-create <localId>` when you are sure it does not exist.",
   "linear.label-unresolved":
     "The mapped kind label does not exist in this Linear workspace and push never creates labels. Create that label in Linear's UI, or redirect it in `.mstarc` with `[linear.mapping] kind.<kind>=<label>`; other items still push.",
+  "linear.state-unresolved":
+    "The mapped workflow state does not exist in this Linear team and push never creates or renames states. Rename it in Linear's workflow settings, or redirect it in `.mstarc` with `[linear.mapping] disposition.<state>=<name>`; other items still push.",
 };
 
 function refusalFor(id: string, code: string, message: string, details?: Record<string, unknown>): CommandEnvelope<never> {
@@ -473,6 +475,8 @@ type PushReport = {
   items: Array<{ localId: string; outcome: string; externalId: string | null; cause?: string }>;
   /** The workspace label set this run resolved kind labels against. */
   labels: string[];
+  /** The team's workflow state names this run resolved dispositions against. */
+  states: string[];
 };
 
 /**
@@ -535,7 +539,10 @@ async function runPush(id: string, input: Input, invocation: InvocationContext):
     );
   }
 
-  type WriteProvider = IssueProvider & { discoverLabels?: () => Promise<ReadonlySet<string>> };
+  type WriteProvider = IssueProvider & {
+    discoverLabels?: () => Promise<ReadonlySet<string>>;
+    discoverStates?: () => Promise<ReadonlySet<string>>;
+  };
   const provider: WriteProvider =
     invocation.effects.issueProvider?.(projectId) ??
     createLinearProvider({
@@ -553,6 +560,15 @@ async function runPush(id: string, input: Input, invocation: InvocationContext):
       { code: "linear.host-unavailable" },
     );
   }
+  const discoverStates = provider.discoverStates?.bind(provider);
+  if (discoverStates === undefined) {
+    throw Object.assign(
+      new Error(
+        "[linear.host-unavailable] this host's provider cannot discover the team's workflow states (list_issue_statuses), so no disposition could be resolved; nothing was written",
+      ),
+      { code: "linear.host-unavailable" },
+    );
+  }
 
   const probe = await provider.probe();
   if (probe.state !== "ready") {
@@ -560,9 +576,11 @@ async function runPush(id: string, input: Input, invocation: InvocationContext):
     throw Object.assign(new Error(`[${code}] the binding cannot run: probe state "${probe.state}" — ${probe.cause}`), { code });
   }
 
-  // 3. Label discovery: a run-level guard, still before any write. Only names
-  //    the workspace really has are ever sent, and push never creates one.
+  // 3. Discovery of BOTH mapped vocabularies: a run-level guard, still before
+  //    any write. Only names the workspace really has are ever sent, and push
+  //    never creates a label or a state.
   const labels = await discoverLabels();
+  const states = await discoverStates();
 
   const bindingId = `linear:${projectId}`;
   const handle = await openStore(context, "write");
@@ -580,6 +598,7 @@ async function runPush(id: string, input: Input, invocation: InvocationContext):
       storeId: storeRow.store_id,
       mapping: repo.binding.mapping,
       labels,
+      states,
     };
     const report: PushReport = {
       projectId,
@@ -592,6 +611,7 @@ async function runPush(id: string, input: Input, invocation: InvocationContext):
       reconciled: [],
       items: [],
       labels: [...labels].sort(),
+      states: [...states].sort(),
     };
 
     // 4. Operator-confirmed adoptions. These are ordinary ledger verbs: the row

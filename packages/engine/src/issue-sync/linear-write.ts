@@ -35,6 +35,14 @@ export const LINEAR_WRITE_VERBS: readonly string[] = ["save_issue"];
 /** Candidate label-discovery verbs, same discipline. */
 export const LINEAR_LABEL_VERBS: readonly string[] = ["list_issue_labels"];
 
+/**
+ * Candidate state-discovery verbs, same discipline. The observed envelope is a
+ * bare array of `{ id, type, name }` — `list_issue_labels` answers with
+ * `{ labels: [...] }` instead, so the two parsers are separate rather than one
+ * guessing at both.
+ */
+export const LINEAR_STATE_VERBS: readonly string[] = ["list_issue_statuses"];
+
 /** One discovery call asks for this many labels; the workspace set is small. */
 const LABEL_PAGE_LIMIT = 250;
 
@@ -45,6 +53,7 @@ export type LinearWriteDeps = {
   /** Overrides the module candidate sets (tests, and a host that pins a verb). */
   writeVerbs?: readonly string[];
   labelVerbs?: readonly string[];
+  stateVerbs?: readonly string[];
   /** The tools the host's `tools/list` returned, or `null` before a handshake. */
   listedVerbs(): readonly string[] | null;
   /**
@@ -66,12 +75,19 @@ export type LinearWriteSide = {
    * creates a provider label.
    */
   discoverLabels(): Promise<ReadonlySet<string>>;
+  /**
+   * The workflow state names the bound team really has. A mapped disposition
+   * state missing from this set refuses that ITEM (`linear.state-unresolved`)
+   * before the call; push never creates or renames a state.
+   */
+  discoverStates(): Promise<ReadonlySet<string>>;
 };
 
 /** Create the write side of the Linear provider. */
 export function createLinearWrite(deps: LinearWriteDeps): LinearWriteSide {
   const writeVerbs = deps.writeVerbs ?? LINEAR_WRITE_VERBS;
   const labelVerbs = deps.labelVerbs ?? LINEAR_LABEL_VERBS;
+  const stateVerbs = deps.stateVerbs ?? LINEAR_STATE_VERBS;
 
   /** The entry the write needs, or a named refusal (nothing was sent). */
   function entryOrRefuse(): LinearAdapterEntry {
@@ -112,44 +128,62 @@ export function createLinearWrite(deps: LinearWriteDeps): LinearWriteSide {
     },
 
     async discoverLabels(): Promise<ReadonlySet<string>> {
-      const listed = deps.listedVerbs();
-      const tool = listingVerbIn(listed ?? undefined, labelVerbs);
-      if (tool === null) {
-        throw new SyncError(
-          "linear.host-unavailable",
-          listed === null
-            ? `this host has not completed the Linear handshake, so the label discovery verb is unknown (candidates: ${labelVerbs.join(", ")})`
-            : `the Linear handshake listed none of ${labelVerbs.join(", ")}; the workspace label set cannot be discovered, so no label can be resolved`,
-        );
-      }
-      const entry = entryOrRefuse();
-      const team = deps.scope?.team;
-      const outcome = await deps.call(entry, {
-        tool,
-        arguments: { limit: LABEL_PAGE_LIMIT, ...(team === undefined ? {} : { team }) },
-      });
-      if (outcome.kind === "transport-error") {
-        throw new SyncError(
-          "linear.host-unavailable",
-          `the label discovery call (${tool}) failed (${redactTransportMessage(outcome.message)}); nothing was written`,
-        );
-      }
-      if (outcome.kind === "http-status") {
-        throw new SyncError(
-          "linear.host-unavailable",
-          `the label discovery call (${tool}) answered HTTP ${outcome.status}; nothing was written`,
-        );
-      }
-      const names = labelNames(outcome.payload);
-      if (names === null) {
-        throw new SyncError(
-          "linear.host-unavailable",
-          `the label discovery response from ${tool} did not match the documented envelope ({ labels: [{ name }] }); nothing was written`,
-        );
-      }
-      return names;
+      return discover(labelVerbs, "label", labelNames, { limit: LABEL_PAGE_LIMIT });
+    },
+
+    async discoverStates(): Promise<ReadonlySet<string>> {
+      return discover(stateVerbs, "state", stateNames, {});
     },
   };
+
+  /**
+   * One discovery call, shared by labels and states: same handshake rule, same
+   * refusal vocabulary, so a host that cannot enumerate one of them says so the
+   * same way. Only the verb candidates, the noun and the envelope parser differ.
+   */
+  async function discover(
+    candidates: readonly string[],
+    noun: "label" | "state",
+    parse: (payload: unknown) => ReadonlySet<string> | null,
+    baseArguments: Record<string, unknown>,
+  ): Promise<ReadonlySet<string>> {
+    const listed = deps.listedVerbs();
+    const tool = listingVerbIn(listed ?? undefined, candidates);
+    if (tool === null) {
+      throw new SyncError(
+        "linear.host-unavailable",
+        listed === null
+          ? `this host has not completed the Linear handshake, so the ${noun} discovery verb is unknown (candidates: ${candidates.join(", ")})`
+          : `the Linear handshake listed none of ${candidates.join(", ")}; the ${noun} set cannot be discovered, so no ${noun} can be resolved`,
+      );
+    }
+    const entry = entryOrRefuse();
+    const team = deps.scope?.team;
+    const outcome = await deps.call(entry, {
+      tool,
+      arguments: { ...baseArguments, ...(team === undefined ? {} : { team }) },
+    });
+    if (outcome.kind === "transport-error") {
+      throw new SyncError(
+        "linear.host-unavailable",
+        `the ${noun} discovery call (${tool}) failed (${redactTransportMessage(outcome.message)}); nothing was written`,
+      );
+    }
+    if (outcome.kind === "http-status") {
+      throw new SyncError(
+        "linear.host-unavailable",
+        `the ${noun} discovery call (${tool}) answered HTTP ${outcome.status}; nothing was written`,
+      );
+    }
+    const names = parse(outcome.payload);
+    if (names === null) {
+      throw new SyncError(
+        "linear.host-unavailable",
+        `the ${noun} discovery response from ${tool} did not match the documented envelope (${noun === "label" ? "{ labels: [{ name }] }" : "[{ name }]"}); nothing was written`,
+      );
+    }
+    return names;
+  }
 }
 
 function refused(code: string, cause: string): ProviderWriteReceipt {
@@ -268,6 +302,29 @@ function labelNames(payload: unknown): ReadonlySet<string> | null {
     const name = nonBlank(row.name);
     if (name === null) return null;
     if (row.isGroup === true) continue;
+    names.add(name);
+  }
+  return names;
+}
+
+/**
+ * State names from the observed discovery envelope: a bare array of
+ * `{ id, type, name }`. Deliberately not folded into `labelNames`: the wire
+ * shapes differ (the label call answers `{ labels: [...] }`), and one parser
+ * accepting both would turn an envelope change into a silent empty set — which
+ * would then refuse every item as `linear.state-unresolved`.
+ */
+function stateNames(payload: unknown): ReadonlySet<string> | null {
+  if (!Array.isArray(payload)) return null;
+  const names = new Set<string>();
+  for (const row of payload) {
+    if (typeof row === "string") {
+      if (row.trim() !== "") names.add(row.trim());
+      continue;
+    }
+    if (!isRecord(row)) return null;
+    const name = nonBlank(row.name);
+    if (name === null) return null;
     names.add(name);
   }
   return names;

@@ -16,11 +16,11 @@
 import type { IssueProvider } from "./provider.js";
 import { createLinearAdapter, type LinearCallOutcome, type LinearListSide } from "./linear-adapter.js";
 import { createLinearProbe, type LinearMcpEntry, type RpcOutcome } from "./linear-probe.js";
-import { createLinearWrite, LINEAR_LABEL_VERBS, LINEAR_WRITE_VERBS, type LinearWriteSide } from "./linear-write.js";
+import { createLinearWrite, LINEAR_LABEL_VERBS, LINEAR_STATE_VERBS, LINEAR_WRITE_VERBS, type LinearWriteSide } from "./linear-write.js";
 import { linearCall, linearRpc, type LinearTransportOptions } from "./linear-transport.js";
 
 export type { LinearTransportOptions };
-export { LINEAR_LABEL_VERBS, LINEAR_WRITE_VERBS };
+export { LINEAR_LABEL_VERBS, LINEAR_STATE_VERBS, LINEAR_WRITE_VERBS };
 
 /**
  * Candidate listing verbs, in preference order. The service advertises
@@ -38,12 +38,13 @@ export type LinearProviderOptions = LinearTransportOptions & {
   listingVerbs?: readonly string[];
   writeVerbs?: readonly string[];
   labelVerbs?: readonly string[];
+  stateVerbs?: readonly string[];
 };
 
 /** One provider backed by the streamable-HTTP transport. */
 export function createLinearProvider(
   options: LinearProviderOptions,
-): IssueProvider & Pick<LinearListSide, "listIssues"> & Pick<LinearWriteSide, "discoverLabels"> {
+): IssueProvider & Pick<LinearListSide, "listIssues"> & Pick<LinearWriteSide, "discoverLabels" | "discoverStates"> {
   const verbs = options.listingVerbs ?? LINEAR_LISTING_VERBS;
   const entry: LinearMcpEntry = { url: options.url };
   // Filled by the probe's handshake; `null` means no handshake has run yet, and
@@ -81,6 +82,7 @@ export function createLinearProvider(
     call,
     writeVerbs: options.writeVerbs,
     labelVerbs: options.labelVerbs,
+    stateVerbs: options.stateVerbs,
     listedVerbs: () => listed,
     // The schema for a tool the handshake did not describe is UNKNOWN, not
     // empty: `null` makes the write side refuse rather than guess.
@@ -93,5 +95,6 @@ export function createLinearProvider(
     listIssues: (cursor) => listing.listIssues(cursor),
     applyWrite: (write) => writing.applyWrite(write),
     discoverLabels: () => writing.discoverLabels(),
+    discoverStates: () => writing.discoverStates(),
   };
 }

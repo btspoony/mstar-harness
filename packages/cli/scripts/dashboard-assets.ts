@@ -40,6 +40,14 @@
 // for what is here now.
 // 348 KB: the four screen heads and the issue detail's meta line, all of which the prototype
 // carries and this implementation was missing.
+// 354 KB, and this raise is two measurements rather than one. The delivered `sync-binding`
+// screen and its two locale blocks cost 521 B over the 348 KB ceiling (356,873 B) — the
+// screen shipped without a host mount, so that was the whole of the growth. Mounting it is
+// the second: the dashboard route, its navigation entry, the destination's own read and the
+// nav id aligned with the copy key are a further 4,638 B, for 361,511 B measured. Both are
+// content the owner asked for; no unrelated copy was shrunk to fit. The ceiling lands on the
+// next whole KB above the measurement, leaving 985 B rather than a number that has to be
+// edited next round.
 // The previous raise, kept as the measurement it was: 340 → 344 because the footer gained the
 // open-issue count. That bundle came in **71 bytes over** 340 KB, so the raise was what the
 // footer actually cost, not slack.
@@ -48,7 +56,7 @@
 // rounds of measurement work**: an over-ceiling bundle leaves `dist/` stale, and the dashboard
 // then serves the previous build. `check:stale` catches that now; before it did, three
 // separate rounds measured the change before the one they had just made.
-export const JS_CEILING = 348 * 1024;
+export const JS_CEILING = 354 * 1024;
 // Raised, 60 KB to 100 KB: the product's component styles are now generated from the
 // approved prototype and shipped whole (values unchanged, selectors scoped, queries
 // unnamed) instead of being re-typed one screen at a time. Re-typing is exactly what

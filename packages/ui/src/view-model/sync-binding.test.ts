@@ -18,6 +18,7 @@ function dto(over: Partial<SyncBindingDTO> = {}): SyncBindingDTO {
     binding: BOUND,
     bindingError: null,
     projectBindings: [{ projectId: "_default", remoteProject: "MST-BACKLOG" }],
+    projectBindingsError: null,
     readiness: { state: "ready", cause: "ready: linear-mcp answered initialize and tools/list" },
     ...over,
   };
@@ -55,6 +56,19 @@ describe("correspondence", () => {
     const model = syncBindingModel(dto({ projectBindings: [] }));
     expect(model.correspondence).toEqual({ kind: "empty" });
     expect(model.identity.kind).toBe("bound");
+  });
+
+  test("a failed read is unavailable with its own reason, never the empty answer", () => {
+    const reason = "sync-binding.correspondence-unreadable: no such table: project_bindings";
+    const model = syncBindingModel(dto({ projectBindings: [], projectBindingsError: reason }));
+    // The regression: before the failure travelled in the DTO, this payload was
+    // indistinguishable from the empty list above, so a real SQL failure claimed
+    // the store held no correspondence.
+    expect(model.correspondence).toEqual({ kind: "unavailable", reason });
+    expect(model.correspondence).not.toEqual({ kind: "empty" });
+    // The read failure does not suppress the other two answers.
+    expect(model.identity.kind).toBe("bound");
+    expect(model.readiness.kind).toBe("probed");
   });
 });
 
