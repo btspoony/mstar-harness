@@ -3,11 +3,14 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import {
+  CoordinationError,
   detectHarnessKind,
   detectHost,
   emitGitignoreSnippet,
   hasHarnessRootDeclaration,
+  readMainWorktree,
   resolveHarnessDir,
+  resolveProcessHarnessDir,
   resolveProjectDir,
   resolveProjectRoot as projectRootFrom,
   resolveReviewDir,
@@ -466,9 +469,65 @@ export function getLocalCommandDefinitions(): readonly CommandDefinition[] {
         // sits inside (the boundary contains the answer). Resolve from the
         // start directory alone, as the contract's canonical form does.
         const harnessDir = resolveHarnessDir(startDir);
+        // The process root comes from Git only: the first `worktree list`
+        // record is the main checkout, whatever the start path looks like.
+        const main = readMainWorktree(startDir);
+        const controlRoot = main?.root ?? null;
+        let controlHarnessDir: string | null = null;
+        let controlUnavailable: string | undefined;
+        try {
+          controlHarnessDir = resolveProcessHarnessDir(startDir);
+        } catch (error) {
+          // A linked checkout whose main worktree is unreadable is data here,
+          // not a failed lookup: report the cause instead of a local guess.
+          if (!(error instanceof CoordinationError) || error.code !== "coordination.not-in-git") throw error;
+          controlUnavailable = error.message;
+        }
+        // A start directory inside the main checkout IS that worktree; only a
+        // checkout outside it is linked.
+        let startReal = path.resolve(startDir);
+        try {
+          startReal = fs.realpathSync(startDir);
+        } catch {
+          // the path does not exist yet; the lexical form is the best answer
+        }
+        const linkedWorktree =
+          controlRoot !== null && startReal !== controlRoot && !startReal.startsWith(`${controlRoot}${path.sep}`);
+        const control = {
+          controlRoot,
+          controlHarnessDir,
+          linkedWorktree,
+          ...(controlUnavailable === undefined ? {} : { controlUnavailable }),
+        };
+        if (linkedWorktree) {
+          // In a linked checkout the local probe is the worktree's own
+          // directory (tracked plugin dirs, usually not a harness at all);
+          // the process documents live at the control harness.
+          if (controlHarnessDir === null) {
+            return refusalEnvelope({ command: "path.resolve", status: "refused", code: "path.harness-not-found", exitCode: 1, message: `no control harness dir found for the linked checkout ${startDir} (control root ${controlRoot})`, details: {
+              startDir, harnessDir, specsDir: null, workflowDir: null, projectDir: null, reviewDir: null, ...control,
+            } , recovery: "Run `mstar harness scaffold` in the main worktree, or set MSTAR_HARNESS_DIR to the control harness root. Run mstar path resolve."});
+          }
+          return ok("path.resolve", {
+            startDir,
+            harnessDir,
+            specsDir: resolveSpecsDir(controlHarnessDir, { create: false }),
+            workflowDir: resolveWorkflowDir(controlRoot),
+            projectDir: resolveProjectDir(controlRoot),
+            reviewDir: resolveReviewDir(controlRoot),
+            ...control,
+            local: {
+              harnessDir,
+              specsDir: harnessDir === null ? null : resolveSpecsDir(harnessDir, { create: false }),
+              workflowDir: harnessDir === null ? null : resolveWorkflowDir(startDir),
+              projectDir: harnessDir === null ? null : resolveProjectDir(startDir),
+              reviewDir: harnessDir === null ? null : resolveReviewDir(startDir),
+            },
+          });
+        }
         if (harnessDir === null) {
-          return refusalEnvelope({ command: "path.resolve", status: "refused", code: "path.harness-not-found", exitCode: 1, message: `no harness dir found from ${startDir}`, details: {
-            startDir, harnessDir: null, specsDir: null, workflowDir: null, projectDir: null, reviewDir: null,
+          return refusalEnvelope({ command: "path.resolve", status: "refused", code: "path.harness-not-found", exitCode: 1, message: `no harness dir found from ${startDir}${controlRoot === null ? "" : ` (control root ${controlRoot})`}`, details: {
+            startDir, harnessDir: null, specsDir: null, workflowDir: null, projectDir: null, reviewDir: null, ...control,
           } , recovery: "Set the starting path to a directory inside an existing harness. Run mstar path resolve."});
         }
         return ok("path.resolve", {
@@ -478,6 +537,7 @@ export function getLocalCommandDefinitions(): readonly CommandDefinition[] {
           workflowDir: resolveWorkflowDir(startDir),
           projectDir: resolveProjectDir(startDir),
           reviewDir: resolveReviewDir(startDir),
+          ...control,
         });
       },
     }),
