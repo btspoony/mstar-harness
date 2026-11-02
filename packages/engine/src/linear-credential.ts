@@ -13,7 +13,7 @@
  * discovering a 401 mid-import.
  */
 import { randomUUID } from "node:crypto";
-import { chmodSync, existsSync, mkdirSync, readFileSync, renameSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, linkSync, mkdirSync, readFileSync, renameSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 
@@ -137,11 +137,21 @@ function sleepSync(ms: number): void {
  * must never be the takeover test: a live holder merely stalled past the bound
  * is still inside the critical section.
  *
- * shortcut: takeover is not atomic with the stale check, so two waiters can
- * both decide to remove. The compare-and-delete keeps that harmless — only the
- * first removal matches the observed stamp, and the loser re-reads and loses its
- * own `wx` create to the winner. Upgrade if the lock ever guards I/O or a
- * network call.
+ * Every removal — takeover and release — is compare-and-RENAME, not
+ * compare-and-delete. `renameSync` is atomic, so the waiter that wins the
+ * rename is the only one holding the observed inode: a loser gets `ENOENT`,
+ * never the fresh lock a winner has since created at the same path. The old
+ * two-statement compare-then-`rmSync` could delete that fresh lock and admit
+ * two writers.
+ *
+ * An unreadable lock is an error, not an absence: only `ENOENT` means gone.
+ * Anything else (a directory at that path, wrong ownership) is rethrown with
+ * its path, because retrying it would spin at full CPU until the heat death
+ * of the universe rather than telling the operator what is wrong.
+ *
+ * shortcut: the wait is a fixed 10 ms poll and the wedged bound is wall-clock,
+ * so a writer can wait up to `LOCK_WEDGED_MS` behind a stalled holder. Upgrade
+ * if the lock ever guards I/O or a network call.
  */
 export function withLinearCredentialLock<T>(fn: () => T): T {
   const lock = linearCredentialLockPath();
@@ -155,6 +165,9 @@ export function withLinearCredentialLock<T>(fn: () => T): T {
       break;
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
+      // Immediate retry only when the stale lock actually went away; every
+      // other outcome — still fresh, held by a live process, replaced under us
+      // — waits out one poll instead of spinning.
       if (!takeOverIfStale(lock)) sleepSync(LOCK_POLL_MS);
     }
   }
@@ -165,13 +178,27 @@ export function withLinearCredentialLock<T>(fn: () => T): T {
   }
 }
 
-/** The lock's current content, or `null` when it is not there to read. */
+/**
+ * The lock's current content. `null` means it is genuinely gone (`ENOENT`);
+ * every other failure is rethrown with the path, because a lock this process
+ * cannot read is a condition the operator has to fix, not one to poll.
+ */
 function readLock(lock: string): string | null {
   try {
     return readFileSync(lock, "utf8");
-  } catch {
-    return null;
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return null;
+    throw new Error(`cannot read the Linear credential lock at ${lock}`, { cause: error });
   }
+}
+
+/**
+ * The path a claim moves the observed lock to. Unique per rename: two waiters
+ * that both claim the same stale lock get different destinations, and only the
+ * one whose `renameSync` succeeded owns the file.
+ */
+function scratchPath(lock: string): string {
+  return `${lock}.${process.pid}.${randomUUID()}.takeover`;
 }
 
 /**
@@ -179,15 +206,18 @@ function readLock(lock: string): string | null {
  * Returns whether something was removed, so the caller can retry its own
  * acquisition immediately instead of sleeping out the poll interval.
  *
- * Compare-and-delete, never delete-by-path: the stamp is unique per
- * acquisition, so equal content means the same lock instance. A lock that
- * replaced the stale one in the meantime carries a different stamp and is left
- * to its holder.
+ * Claim-by-rename, never delete-by-path: `renameSync` moves exactly the file
+ * that is there at that instant to a path only this waiter knows, and the
+ * kernel does the compare and the move as one operation. A waiter whose rename
+ * fails with `ENOENT` lost the race to another waiter or to a release and
+ * simply retries. The stamp is re-read from the claimed copy before it is
+ * discarded, so the rare lock replaced between `statSync` and `renameSync` is
+ * moved back rather than thrown away.
  *
  * A lock whose stamp names a LIVE process is never taken over. That is the
  * stalled-holder half of the cascade: a holder stopped past the bound (SIGSTOP,
  * a debugger, laptop sleep) is still inside the critical section, so removing
- * its lock would put two writers there at once. A dead or unreadable stamp —
+ * its lock would put two writers there at once. A dead or unparseable stamp —
  * a crashed holder, or a lock written by an older build — stays recoverable, so
  * the mutex is never left behind for good.
  */
@@ -200,9 +230,60 @@ function takeOverIfStale(lock: string): boolean {
   // by then the pid is either wedged or recycled, and refusing forever would be
   // the permanent block this takeover exists to prevent.
   if (age <= LOCK_WEDGED_MS && stampHolderIsLive(observed)) return false;
-  if (readLock(lock) !== observed) return false;
-  rmSync(lock, { force: true });
-  return true;
+  const claimed = claim(lock);
+  // Nothing to rename: the lock is gone, so this waiter can retry its own `wx`
+  // now rather than sleep out a poll on a path it already knows is free.
+  if (claimed === null) return true;
+  return discardClaim(lock, claimed, observed);
+}
+
+type Claim = { path: string; stamp: string };
+
+/**
+ * Atomically move whatever is at `lock` out of the way. `null` when the rename
+ * lost (`ENOENT`): the lock is gone, so the caller's `wx` retry is the answer.
+ * Any other failure is a real error naming the path.
+ */
+function claim(lock: string): Claim | null {
+  const path = scratchPath(lock);
+  try {
+    renameSync(lock, path);
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return null;
+    throw new Error(`cannot take over the Linear credential lock at ${lock}`, { cause: error });
+  }
+  try {
+    return { path, stamp: readFileSync(path, "utf8") };
+  } catch (error) {
+    // Something occupies the lock path that cannot be read at all. It is already
+    // moved off the mutex path, so no writer is blocked; report it and leave the
+    // evidence at `path` for the operator instead of guessing at its contents.
+    throw new Error(`cannot read the Linear credential lock at ${lock} (moved to ${path})`, { cause: error });
+  }
+}
+
+/**
+ * Drop the claimed lock when it is still `expected`, else hand it back. Returns
+ * whether it was `expected`.
+ *
+ * Reaching the hand-back means the lock at `lock` changed between the stale
+ * check and our rename: the copy we hold is a NEWER instance, not the stale one
+ * we judged. `linkSync` refuses to overwrite an existing path, so it goes back
+ * only when nothing has taken that path since. Either way the copy itself is
+ * safe to delete — the mutex is `lock`, never the scratch — so it never leaks.
+ */
+function discardClaim(lock: string, claimed: Claim, expected: string): boolean {
+  if (claimed.stamp === expected) {
+    rmSync(claimed.path, { force: true });
+    return true;
+  }
+  try {
+    linkSync(claimed.path, lock);
+  } catch {
+    // A newer lock already owns the path; that one wins.
+  }
+  rmSync(claimed.path, { force: true });
+  return false;
 }
 
 /** Whether the pid inside a stamp is a process this machine still has. */
@@ -228,12 +309,25 @@ function stampHolderIsLive(stamp: string): boolean {
 }
 
 /**
- * Remove the lock this process created, and nothing else. A waiter that judged
+ * Release the lock this process created, and nothing else. A waiter that judged
  * this acquisition expired has already replaced it; stripping that replacement
  * is how one stalled holder used to admit a third writer.
+ *
+ * The ownership read keeps a foreign lock where it is. When the stamp IS ours,
+ * the drop still goes through the atomic claim so the removal and the ownership
+ * check cannot be split by a writer that created a lock at the freed path.
  */
 function releaseOwnLock(lock: string, stamp: string): void {
-  if (readLock(lock) === stamp) rmSync(lock, { force: true });
+  try {
+    // Release runs in a `finally`: a lock this process cannot read is not provably
+    // its own, and throwing here would replace whatever the critical section
+    // returned. The next acquisition reports the unreadable lock instead.
+    if (readFileSync(lock, "utf8") !== stamp) return;
+    const claimed = claim(lock);
+    if (claimed !== null) discardClaim(lock, claimed, stamp);
+  } catch {
+    // Best effort: the lock is at worst left for the next writer's takeover.
+  }
 }
 
 /** Milliseconds since the lock appeared; Infinity when it vanished under us. */
@@ -299,6 +393,11 @@ export function supersededBy(state: LinearCredentialState, base: LinearCredentia
  * refresh is never overwritten. `decide` sees the file as it is INSIDE the
  * lock: either the delete already happened (state is `absent`, decline) or the
  * rename happens first and the delete then removes it — both end absent.
+ *
+ * `decide` must only READ: it runs inside the lock, which is not re-entrant, so
+ * a write there re-enters `withLinearCredentialLock`, waits out the takeover
+ * bound on its own lock, and then takes that lock over. Return the new
+ * credential and let this function write it.
  *
  * Returns the written path, or `null` when `decide` declined.
  */

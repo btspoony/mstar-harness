@@ -1,8 +1,8 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { spawn, spawnSync } from "node:child_process";
-import { existsSync, mkdtempSync, readFileSync, rmSync, statSync, utimesSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, utimesSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import {
   clearLinearCredential,
   commitLinearCredential,
@@ -185,6 +185,46 @@ describe("the commit is one cross-process critical section", () => {
     expect(existsSync(process.env.MSTAR_LINEAR_CREDENTIAL!)).toBe(false);
   });
 
+  test("a lock that is there but cannot be read fails with its path instead of spinning", async () => {
+    writeLinearCredential(credential());
+    const lock = linearCredentialLockPath();
+    // The lock is present and every read of it fails (EISDIR). Before the fix
+    // every read error meant "not there", so the acquisition loop retried its
+    // `wx` forever at full CPU with no message and no way out.
+    mkdirSync(lock);
+    const moduleUrl = new URL("./linear-credential.ts", import.meta.url).href;
+    const source = `
+      const { commitLinearCredential } = await import(process.env.MSTAR_IMPORT);
+      try {
+        commitLinearCredential(() => null);
+        process.stdout.write("RESOLVED");
+      } catch (error) {
+        process.stdout.write(String(error && error.message) + "\\\\n" + String(error.cause && error.cause.code));
+      }
+    `;
+    const child = spawn(process.execPath, ["-e", source], {
+      stdio: ["ignore", "pipe", "pipe"],
+      env: { ...process.env, MSTAR_IMPORT: moduleUrl },
+    });
+    let out = "";
+    child.stdout.setEncoding("utf8").on("data", (chunk: string) => (out += chunk));
+    child.stderr.setEncoding("utf8").on("data", (chunk: string) => (out += chunk));
+    const started = Date.now();
+    const timer = setTimeout(() => child.kill("SIGKILL"), 2_000);
+    const code = await new Promise<number | null>((resolve, reject) => {
+      child.on("error", reject);
+      child.on("close", resolve);
+    });
+    clearTimeout(timer);
+
+    // Pre-fix the child never reaches either branch: it is still polling.
+    expect(code === null ? "killed after the timeout" : out).toContain("cannot read the Linear credential lock");
+    expect(out).toContain(lock);
+    expect(out).toContain("EISDIR");
+    expect(out).not.toContain("RESOLVED");
+    expect(Date.now() - started).toBeLessThan(2_000);
+  }, 15_000);
+
   test("a lock left by a dead process is taken over instead of blocking forever", () => {
     writeLinearCredential(credential());
     const lock = linearCredentialLockPath();
@@ -278,30 +318,40 @@ describe("the commit is one cross-process critical section", () => {
   test("two processes racing to take over one stale lock are never inside together", async () => {
     writeLinearCredential(credential());
     const lock = linearCredentialLockPath();
-    // The stale lock a crashed writer left: an age past the bound and a pid
-    // no process holds.
-    writeFileSync(lock, JSON.stringify({ pid: DEAD_PID, token: "stale-from-a-crashed-writer" }));
-    utimesSync(lock, new Date(Date.now() - 60_000), new Date(Date.now() - 60_000));
+    // Every trial starts from a fresh stale lock — the one a crashed writer
+    // left: an age past the bound and a pid no process holds — and releases both
+    // writers at the same instant, so their takeovers of that one lock overlap.
+    // A single overlap is the cascade: pre-fix the compare and the `rmSync` were
+    // two statements, so the loser of the `wx` race deleted the winner's fresh
+    // lock and both entered the "one" section. That window is microseconds wide,
+    // which is why this runs many trials rather than one: the pre-fix rate here
+    // is roughly one trial in six, so the fixture fails reliably on broken code.
+    const trials = 25;
+    const overlaps: string[] = [];
+    for (let trial = 0; trial < trials; trial += 1) {
+      const journal = join(root, `journal-${trial}`);
+      const guard = join(root, `guard-${trial}`);
+      const go = join(root, `go-${trial}`);
+      writeFileSync(lock, JSON.stringify({ pid: DEAD_PID, token: `stale-${trial}` }));
+      utimesSync(lock, new Date(Date.now() - 60_000), new Date(Date.now() - 60_000));
+      const writers = [1, 2].map(() => writerInAnotherProcess({ journal, go, guard, holdMs: 20 }));
+      writeFileSync(go, "");
+      expect(await Promise.all(writers)).toEqual(["done", "done"]);
 
-    const journal = join(root, "journal");
-    const guard = join(root, "guard");
-    const go = join(root, "go");
-    const writers = [1, 2].map(() =>
-      writerInAnotherProcess({ journal, go, guard, holdMs: 80, rounds: 3 }),
-    );
-    writeFileSync(go, "");
-    expect(await Promise.all(writers)).toEqual(["done", "done"]);
-
-    const lines = readFileSync(journal, "utf8").trim().split("\n");
-    // Neither writer was ever inside the "one" section with the other. Before
-    // the fix one waiter's takeover deleted the other's fresh lock and both ran.
-    expect(lines.filter((line) => line.startsWith("overlap"))).toEqual([]);
-    // Both got in on every round: the stale lock was taken over, and no takeover
-    // cascaded the mutex away.
-    expect(lines.filter((line) => line.startsWith("enter"))).toHaveLength(6);
-    expect(lines.filter((line) => line.startsWith("exit"))).toHaveLength(6);
-    expect(existsSync(lock)).toBe(false);
-    expect(existsSync(guard)).toBe(false);
+      const lines = readFileSync(journal, "utf8").trim().split("\n");
+      overlaps.push(...lines.filter((line) => line.startsWith("overlap")));
+      // Both got in: the stale lock was taken over, and no takeover cascaded the
+      // mutex away from the second writer.
+      expect(lines.filter((line) => line.startsWith("enter"))).toHaveLength(2);
+      expect(lines.filter((line) => line.startsWith("exit"))).toHaveLength(2);
+      expect(existsSync(guard)).toBe(false);
+      expect(existsSync(lock)).toBe(false);
+    }
+    // Neither writer was ever inside the "one" section with the other.
+    expect(overlaps).toEqual([]);
+    // A takeover moves the observed lock aside before dropping it; a claim that
+    // is never cleaned up would leave its scratch file beside the lock.
+    expect(readdirSync(dirname(lock)).filter((name) => name.endsWith(".takeover"))).toEqual([]);
   });
 
   test("a live holder stalled past the stale bound is not taken over", async () => {
