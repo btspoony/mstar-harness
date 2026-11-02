@@ -358,6 +358,38 @@ describe('the silent refresh loop', () => {
     expect(clock.pending()).toBe(0)
   })
 
+  it('arms the refresh schedule when a first Settings authorization adopts a credential', async () => {
+    const provider = providerFetch(
+      discoveryRoutes(() =>
+        Response.json({ access_token: 'tok-rotated', expires_in: 3600, scope: 'read,issues:create' }),
+      ),
+    )
+    // The host booted with no credential: the constructor's startup attempt
+    // armed nothing, and the row's fiber mounted without a bearer.
+    const { service, clock, restarts, ctx } = harness({ provider })
+    expect(clock.pending()).toBe(0)
+
+    // The Settings gateway completed the first authorization and writes the
+    // grant; the adoption must re-evaluate the expiry like any other grant.
+    const expiresAt = START + 60 * 60_000
+    writeLinearCredential(credential({ accessToken: 'tok-settings', expiresAt }))
+    expect((await service.adoptCredential()).kind).toBe('idle')
+
+    expect(restarts).toEqual(['linear-mcp'])
+    expect(clock.pending()).toBe(1)
+    expect(service.refreshPlan()).toEqual({ kind: 'scheduled', at: expiresAt - 5 * 60_000 })
+
+    // The armed tick is the silent refresh the plan promises: one exchange,
+    // then the reloaded row carries the rotated bearer.
+    clock.advance(55 * 60_000)
+    expect((await service.refreshIfDue()).kind).toBe('refreshed')
+    expect(provider.calls.filter((call) => call === `POST ${TOKEN_URL}`)).toHaveLength(1)
+    expect(restarts).toEqual(['linear-mcp', 'linear-mcp'])
+    expect(evaluate(ctx, headersExpression(linearMcpRow()))).toEqual({
+      Authorization: 'Bearer tok-rotated',
+    })
+  })
+
   it('reports an unknown expiry honestly and never guesses', async () => {
     const provider = providerFetch({})
     const { service, clock } = harness({ entry: credential({ expiresAt: null }), provider })

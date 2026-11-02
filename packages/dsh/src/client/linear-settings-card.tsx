@@ -64,6 +64,8 @@ function outcomeCopy(
       return { key: 'outcome.not-found' }
     case 'unavailable':
       return { key: 'outcome.unavailable', params: { reason: outcome.reason } }
+    case 'unreachable':
+      return { key: 'outcome.unreachable' }
   }
 }
 
@@ -120,11 +122,15 @@ export function LinearSettingsCard(props: LinearSettingsCardProps): ReactNode {
   const state = useSnapshot(snapshot => snapshot)
   const read = state.read
 
-  // The Plugins page mounts the card lazily; `idle` is what starts the one
-  // first read, and `refresh()` flips it to `loading` synchronously so a
-  // re-render cannot trigger a second fetch.
+  // The Plugins page mounts the card lazily and re-renders it on each visit;
+  // that render IS the host lifecycle boundary this slot exposes (its owner
+  // props carry only `view` and a config form — no row-change event). So every
+  // mount / summary→page transition re-reads the row bit and credential facts
+  // once they go stale, and the card never offers Authorize from a cached
+  // enable bit. `observe` flips the snapshot to `loading` synchronously, so
+  // the stale value is not rendered while the answer is in flight.
+  controller.observe()
   if (view === 'summary') return summaryText(state, t)
-  if (read.status === 'idle') void controller.refresh()
 
   if (!controller.loopback) {
     return (

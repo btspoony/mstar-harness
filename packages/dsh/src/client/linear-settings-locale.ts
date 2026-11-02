@@ -40,6 +40,7 @@ export type LinearSettingsKey =
   | 'outcome.cancelled'
   | 'outcome.not-found'
   | 'outcome.unavailable'
+  | 'outcome.unreachable'
   | 'note.no-secret'
 
 declare module '@deepseek-ai/dsh-client-ui-slots' {
@@ -76,6 +77,7 @@ export const zh: LocaleDictOf<'ui-mstar-linear-settings'> = {
   'outcome.cancelled': '已取消本次授权，可以重新开始。',
   'outcome.not-found': '此授权尝试已不在 host 上，请重新开始。',
   'outcome.unavailable': '无法开始授权（{reason}）。',
+  'outcome.unreachable': '宿主未能回答本次授权的状态；这不等于授权被拒绝。请重新读取行状态，或再次点击 Authorize。',
   'note.no-secret': '此卡片不读取、也不显示 access token、refresh token 或 PKCE verifier。',
 }
 
@@ -107,5 +109,6 @@ export const en: LocaleDictOf<'ui-mstar-linear-settings'> = {
   'outcome.cancelled': 'Authorization cancelled. You can start again.',
   'outcome.not-found': 'This authorization attempt is no longer on the host. Start again.',
   'outcome.unavailable': 'Authorization could not start ({reason}).',
+  'outcome.unreachable': 'The host did not answer this authorization’s status. That is not a denial — re-read the row state, or click Authorize again.',
   'note.no-secret': 'This card never reads or displays the access token, refresh token, or PKCE verifier.',
 }

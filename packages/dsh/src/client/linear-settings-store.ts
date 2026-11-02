@@ -32,6 +32,17 @@ export const LINEAR_SETTINGS_READ_DEADLINE_MS = 5_000
 /** Poll cadence while the host attempt is pending. */
 export const LINEAR_SETTINGS_POLL_MS = 1_000
 
+/**
+ * Host facts older than this are re-read at the card's next render boundary
+ * (a mount or a visible transition). The bound keeps a render-driven read from
+ * re-triggering itself, and a row toggled while the card was closed is current
+ * on the next visit.
+ */
+export const LINEAR_SETTINGS_FRESH_MS = 1_000
+
+/** Consecutive polls without a host answer before the attempt stops observing. */
+export const LINEAR_SETTINGS_POLL_FAILURE_LIMIT = 5
+
 /** The display words the host derives from the credential file (Task 4's shared vocabulary). */
 export type LinearCredentialDisplay = 'authorized' | 'expired' | 'absent' | 'unreadable'
 
@@ -74,6 +85,8 @@ export type LinearSettingsOutcome =
   | { readonly status: 'cancelled' }
   | { readonly status: 'not-found' }
   | { readonly status: 'unavailable'; readonly reason: string }
+  /** The host stopped answering the status RPC: no outcome was observed, not a denial. */
+  | { readonly status: 'unreachable' }
 
 /** One render snapshot. `read: idle` is what triggers the card's first load. */
 export interface LinearSettingsState {
@@ -100,6 +113,8 @@ export interface LinearSettingsOptions {
   readonly schedule?: (run: () => void, delayMs: number) => unknown
   readonly cancelSchedule?: (timer: unknown) => void
   readonly pollMs?: number
+  /** Clock seam for the host-facts freshness bound (default: `Date.now`). */
+  readonly now?: () => number
 }
 
 /** A guarded object read at the RPC boundary (malformed answers degrade explicitly). */
@@ -156,8 +171,13 @@ export function parseLinearAuthorizeBegin(value: unknown): LinearAuthorizeBegin 
   return { status: 'started', attemptId, url, expiresAt }
 }
 
-/** Validate one `linearAuthorizeStatus` answer into the closed union (total). */
-export function parseLinearAuthorizeStatus(value: unknown): LinearAuthorizeStatus {
+/**
+ * Validate one `linearAuthorizeStatus` answer into the closed union (total).
+ * `null` means the call produced no host answer at all (a transport failure,
+ * a deadline abort, or a shape no gateway emits) — never a `denied`, which is
+ * reserved for what the host itself reported.
+ */
+export function parseLinearAuthorizeStatus(value: unknown): LinearAuthorizeStatus | null {
   const record = recordOf(value)
   switch (record?.status) {
     case 'pending':
@@ -180,7 +200,7 @@ export function parseLinearAuthorizeStatus(value: unknown): LinearAuthorizeStatu
     case 'not-found':
       return { status: 'not-found' }
     default:
-      return { status: 'denied', reason: 'malformed-answer' }
+      return null
   }
 }
 
@@ -190,10 +210,15 @@ export class LinearSettingsStore {
   private readonly listeners = new Set<() => void>()
   private timer: unknown
   private disposed = false
+  /** Consecutive polls that produced no host answer (reset by any real answer). */
+  private pollFailures = 0
+  /** When the current `read` answer landed; `undefined` before the first one. */
+  private readAt: number | undefined
   private readonly openBrowser: (url: string) => void
   private readonly schedule: (run: () => void, delayMs: number) => unknown
   private readonly cancelSchedule: (timer: unknown) => void
   private readonly pollMs: number
+  private readonly now: () => number
   /** Whether this browser may complete a loopback authorization at all. */
   readonly loopback: boolean
 
@@ -219,6 +244,23 @@ export class LinearSettingsStore {
       clearTimeout(timer as Parameters<typeof clearTimeout>[0])
     })
     this.pollMs = options.pollMs ?? LINEAR_SETTINGS_POLL_MS
+    this.now = options.now ?? (() => Date.now())
+  }
+
+  /**
+   * The host's render boundary: the Plugins page mounts this card and calls
+   * this on every card render. The slot contract exposes no row-change event
+   * (its owner props carry `view` and a config form only), so the row enable
+   * bit can only be re-read at a boundary the host actually produces — a
+   * mount, a summary→page transition, or any later render after the facts
+   * went stale. Nothing is re-read while an attempt is live (the attempt
+   * owns the state) and a freshly read snapshot is not re-fetched.
+   */
+  observe(): void {
+    if (this.disposed || this.state.attempt !== null) return
+    if (this.state.read.status === 'loading') return
+    if (this.readAt !== undefined && this.now() - this.readAt < LINEAR_SETTINGS_FRESH_MS) return
+    void this.refresh()
   }
 
   /** Read the host's credential/row facts. A first call flips `idle → loading` synchronously (no render loop). */
@@ -227,6 +269,7 @@ export class LinearSettingsStore {
     this.update({ ...this.state, read: { status: 'loading' } })
     const read = await this.call(LINEAR_STATUS_ENDPOINT, {})
     if (this.disposed) return
+    this.readAt = this.now()
     this.update({ ...this.state, read: parseLinearStatusRead(read) })
   }
 
@@ -237,6 +280,7 @@ export class LinearSettingsStore {
    */
   async begin(): Promise<LinearAuthorizeBegin> {
     this.clearTimer()
+    this.pollFailures = 0
     const answer = parseLinearAuthorizeBegin(await this.call(LINEAR_AUTHORIZE_BEGIN_ENDPOINT, {}))
     if (this.disposed) return answer
     if (answer.status !== 'started') {
@@ -299,6 +343,23 @@ export class LinearSettingsStore {
       await this.call(LINEAR_AUTHORIZE_STATUS_ENDPOINT, { attemptId: attempt.id }),
     )
     if (this.disposed || this.state.attempt?.id !== attempt.id) return
+    if (status === null) {
+      // No host answer (transport wedge or deadline). That is NOT a denial:
+      // the consent may still be completing on the host, so keep observing —
+      // bounded, and the bounded end re-reads the host facts rather than
+      // inventing an outcome.
+      this.pollFailures += 1
+      if (this.pollFailures < LINEAR_SETTINGS_POLL_FAILURE_LIMIT) {
+        this.schedulePoll()
+        return
+      }
+      this.pollFailures = 0
+      this.clearTimer()
+      this.update({ ...this.state, attempt: null, outcome: { status: 'unreachable' } })
+      await this.refresh()
+      return
+    }
+    this.pollFailures = 0
     if (status.status === 'pending') {
       this.schedulePoll()
       return

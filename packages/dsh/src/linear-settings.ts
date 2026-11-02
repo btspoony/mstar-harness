@@ -278,6 +278,29 @@ export class MstarLinearAuth extends Service {
   }
 
   /**
+   * Adopt a credential that just landed in the file: a first Settings
+   * authorization, a reauthorization, or a newer grant another process wrote.
+   *
+   * Every adoption goes through the refresh path, so the persisted expiry is
+   * re-evaluated and exactly one schedule is armed — a host that booted with
+   * no credential armed nothing at startup, and without this the grant it
+   * just received would never be refreshed. A grant already inside the window
+   * rotates here instead, which is why the row reload below is only the
+   * not-yet-due case: the attempt reloads the row itself once it rotates.
+   */
+  async adoptCredential(): Promise<LinearRefreshOutcome> {
+    const outcome = await this.refreshIfDue()
+    // Re-read the file, not the attempt's snapshot: a grant that landed while
+    // the attempt was in flight still gets its expiry evaluated and its one
+    // timer armed (a cancelled re-arm is the same single slot).
+    this.schedule(readLinearCredential(this.clock.now()))
+    // A rotated/adopted grant was already reloaded by the attempt; anything
+    // else (a fresh grant, a refusal) still needs the row re-mounted once.
+    if (outcome.kind !== 'refreshed' && outcome.kind !== 'adopted') await this.reloadRow()
+    return outcome
+  }
+
+  /**
    * One refresh attempt, coalescing concurrent needs onto the in-flight one.
    * Never rejects — a refusal is reported as a value.
    */
@@ -595,7 +618,11 @@ export class MstarLinearSettingsGateway extends TypertRemoteService {
         expiresAt: tokens.expiresAt,
         scope: tokens.scope,
       })
-      await this.auth.reloadRow()
+      // Adoption, not a bare reload: the service re-evaluates the persisted
+      // expiry, arms exactly one schedule and reloads the row once. A host
+      // that booted with no credential armed nothing, so this is the only
+      // place a first grant can start its silent refresh.
+      await this.auth.adoptCredential()
       if (this.disposed || attempt.cancelled) return
       attempt.result = { status: 'authorized', scope: tokens.scope, expiresAt: tokens.expiresAt }
     } catch (error) {

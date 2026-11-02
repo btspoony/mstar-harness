@@ -285,6 +285,54 @@ describe('the card states', () => {
     expect(calls[0]!.payload).toEqual({ args: {} })
   })
 
+  it('re-reads the row bit at each card visit, so a toggled row is never judged from a cached one', async () => {
+    // One store for the whole client plugin and a controllable clock: the
+    // freshness bound is a fact of the fixture, not of test timing.
+    let now = START
+    let answer: unknown = READY_DISABLED
+    const { connection, calls } = stubConnection(() => answer)
+    const store = storeFor(connection, { now: () => now })
+
+    // Visit 1: the host booted with the row disabled.
+    expect(render(store)).toContain('data-ms-linear-state="loading"')
+    await flush()
+    expect(render(store)).toContain('data-ms-linear-state="disabled"')
+    expect(render(store)).not.toContain('data-ms-linear-action="authorize"')
+
+    // The user enables the native row, then opens the card again.
+    answer = READY_ABSENT
+    now += 60_000
+    render(store)
+    await flush()
+    const enabled = render(store)
+    expect(enabled).toContain('data-ms-linear-state="unauthorized"')
+    expect(enabled).toContain('data-ms-linear-action="authorize"')
+
+    // The reverse direction is the rule the disabled row owns: disabling it
+    // takes the authorization action away again, on the same store.
+    answer = READY_DISABLED
+    now += 60_000
+    render(store)
+    await flush()
+    const disabled = render(store)
+    expect(disabled).toContain('data-ms-linear-state="disabled"')
+    expect(disabled).not.toContain('data-ms-linear-action="authorize"')
+
+    // One read per visit — a re-render inside the freshness bound adds none.
+    expect(calls.filter((call) => call.endpoint === LINEAR_STATUS_ENDPOINT)).toHaveLength(3)
+    store.dispose()
+  })
+
+  it('the summary view loads on its own, before the page view was ever opened', async () => {
+    const { connection } = stubConnection(() => READY_AUTHORIZED)
+    const store = storeFor(connection)
+
+    expect(render(store, 'summary')).toBe(translate('en')('state.loading'))
+    await flush()
+    expect(render(store, 'summary')).toBe(translate('en')('state.authorized.title'))
+    store.dispose()
+  })
+
   it('authorizing: the host holds the attempt, the card cancels and stores no secret', async () => {
     const { connection, calls } = stubConnection((endpoint) => {
       if (endpoint === LINEAR_STATUS_ENDPOINT) return READY_ABSENT
@@ -416,6 +464,74 @@ describe('the card learns an outcome from a slow consent', () => {
     }
   })
 
+  it('a transport failure on one status poll keeps observing instead of collapsing into denied', async () => {
+    let polls = 0
+    const { connection } = stubConnection((endpoint) => {
+      if (endpoint === LINEAR_STATUS_ENDPOINT) return polls < 3 ? READY_ABSENT : READY_AUTHORIZED
+      if (endpoint === LINEAR_AUTHORIZE_BEGIN_ENDPOINT) {
+        return { status: 'started', attemptId: 'attempt-flaky', url: 'https://linear.test/authorize?state=one', expiresAt: START + 300_000 }
+      }
+      if (endpoint === LINEAR_AUTHORIZE_STATUS_ENDPOINT) {
+        polls += 1
+        // The host is still consenting; the second poll's transport wedges.
+        if (polls === 1) return { status: 'pending' }
+        if (polls === 2) throw new Error('transport wedged')
+        return { status: 'authorized', scope: 'read,issues:create', expiresAt: START + 3_600_000 }
+      }
+      throw new Error(`unexpected ${endpoint}`)
+    })
+    const timers = manualTimers()
+    const store = storeFor(connection, { openBrowser: () => {}, schedule: timers.schedule, cancelSchedule: timers.cancel })
+    await store.refresh()
+    await store.begin()
+
+    timers.fire() // pending
+    await flush()
+    timers.fire() // the failed poll
+    await flush()
+
+    // No host answer is not a denial: the attempt is still live and the card
+    // still observes, so a consent completing a moment later is seen.
+    expect(render(store)).toContain('data-ms-linear-state="authorizing"')
+    expect(render(store)).not.toContain('data-ms-linear-outcome="denied"')
+    expect(timers.pending()).toBe(1)
+
+    timers.fire()
+    await flush()
+    const html = render(store)
+    expect(html).toContain('data-ms-linear-state="authorized"')
+    expect(html).not.toContain('data-ms-linear-outcome="denied"')
+    store.dispose()
+  })
+
+  it('a host that never answers again ends the attempt as unreachable, never as denied', async () => {
+    const { connection, calls } = stubConnection((endpoint) => {
+      if (endpoint === LINEAR_STATUS_ENDPOINT) return READY_ABSENT
+      if (endpoint === LINEAR_AUTHORIZE_BEGIN_ENDPOINT) {
+        return { status: 'started', attemptId: 'attempt-gone', url: 'https://linear.test/authorize?state=one', expiresAt: START + 300_000 }
+      }
+      if (endpoint === LINEAR_AUTHORIZE_STATUS_ENDPOINT) throw new Error('transport wedged')
+      throw new Error(`unexpected ${endpoint}`)
+    })
+    const timers = manualTimers()
+    const store = storeFor(connection, { openBrowser: () => {}, schedule: timers.schedule, cancelSchedule: timers.cancel })
+    await store.refresh()
+    await store.begin()
+
+    for (let i = 0; i < 5; i += 1) {
+      timers.fire()
+      await flush()
+    }
+
+    const html = render(store)
+    expect(html).toContain('data-ms-linear-outcome="unreachable"')
+    expect(html).not.toContain('data-ms-linear-outcome="denied"')
+    // The bounded end re-reads the host fact rather than inventing an outcome.
+    expect(calls.filter((call) => call.endpoint === LINEAR_STATUS_ENDPOINT)).toHaveLength(2)
+    expect(timers.pending()).toBe(0)
+    store.dispose()
+  })
+
   it('cancel asks the host to close the attempt and offers Authorize again', async () => {
     const { connection, calls } = stubConnection((endpoint) => {
       if (endpoint === LINEAR_STATUS_ENDPOINT) return READY_ABSENT
@@ -543,6 +659,31 @@ interface HostHarness {
   auth: MstarLinearAuth
   gateway: MstarLinearSettingsGateway
   restarts: string[]
+  /** Timers the auth service armed (a real schedule, driven by the host path). */
+  clock: { pending(): number }
+}
+
+/** A clock seam with the real epoch, so token expiry math stays realistic. */
+function hostClock(): { now(): number; schedule(task: () => void, delayMs: number): () => void; pending(): number } {
+  const armed = new Set<{ cancelled: boolean }>()
+  return {
+    now: () => Date.now(),
+    schedule(task, delayMs) {
+      const timer = { cancelled: false }
+      armed.add(timer)
+      const handle = setTimeout(() => {
+        armed.delete(timer)
+        if (!timer.cancelled) task()
+      }, delayMs)
+      handle.unref?.()
+      return () => {
+        timer.cancelled = true
+        armed.delete(timer)
+        clearTimeout(handle)
+      }
+    },
+    pending: () => armed.size,
+  }
 }
 
 function hostHarness(waitTimeoutMs?: number): HostHarness {
@@ -556,13 +697,14 @@ function hostHarness(waitTimeoutMs?: number): HostHarness {
     fiber: { uid: 1, restart: async (): Promise<void> => { restarts.push('linear-mcp') } },
   }
   loader.entriesList = [row]
-  const auth = new MstarLinearAuth(ctx, { fetch: providerFetch() })
+  const clock = hostClock()
+  const auth = new MstarLinearAuth(ctx, { fetch: providerFetch(), clock })
   const gateway = new MstarLinearSettingsGateway(ctx, {
     auth,
     fetch: providerFetch(),
     ...(waitTimeoutMs === undefined ? {} : { waitTimeoutMs }),
   })
-  return { ctx, auth, gateway, restarts }
+  return { ctx, auth, gateway, restarts, clock }
 }
 
 async function waitForStatus(
@@ -596,7 +738,7 @@ afterEach(() => {
 
 describe('the host-owned authorization attempt', () => {
   it('begin returns while consent is still pending, then the callback completes and status reports authorized', async () => {
-    const { gateway, restarts } = hostHarness()
+    const { gateway, restarts, auth, clock } = hostHarness()
     const begin = await gateway.linearAuthorizeBegin()
     expect(begin.status).toBe('started')
     if (begin.status !== 'started') return
@@ -641,6 +783,14 @@ describe('the host-owned authorization attempt', () => {
     expect(stored.credential.accessToken).toBe('tok-card')
     expect(stored.credential.scope).toBe('read,issues:create')
     expect(restarts).toEqual(['linear-mcp'])
+    // The first-authorization path also started the silent refresh: the host
+    // booted with no credential (nothing was armed at startup), so this grant
+    // is the only thing that could have scheduled it — exactly once.
+    expect(clock.pending()).toBe(1)
+    expect(auth.refreshPlan()).toEqual({
+      kind: 'scheduled',
+      at: stored.credential.expiresAt! - 5 * 60_000,
+    })
 
     // Terminal attempts drop after their answer is observed.
     expect(await gateway.linearAuthorizeStatus(begin.attemptId)).toEqual({ status: 'not-found' })
