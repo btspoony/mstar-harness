@@ -56,6 +56,10 @@ const COMMAND_OWNING_SKILL: Readonly<Record<string, string>> = {
   "store.execution.restore-preview": "mstar-artifacts",
   "store.execution.restore": "mstar-artifacts",
   "store.execution.export": "mstar-artifacts",
+  // checks-and-lints names mstar-project-governance (capture/source mapping)
+  // as the staged issue/catalog migration's callout home, ahead of the
+  // store family's mstar-conventions default.
+  "store.migrate": "mstar-project-governance",
 };
 
 /** Exact id override, then family default, then nothing — no invented owner. */
