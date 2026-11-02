@@ -16,6 +16,14 @@ import { createServer } from "node:http";
 /** The hosted endpoint; a deployment may point at its own. */
 export const LINEAR_MCP_URL = "https://mcp.linear.app/mcp";
 
+/**
+ * The one scope both authorization surfaces request: read plus issue creation,
+ * which the issue-create/update tool needs. Narrow on purpose — `write` and
+ * `admin` are never asked for, and a refresh never re-sends a scope, so an
+ * existing grant is neither widened nor narrowed by refreshing.
+ */
+export const LINEAR_MCP_SCOPE = "read,issues:create";
+
 export type AuthorizationServer = {
   issuer: string;
   authorizationEndpoint: string;
@@ -130,7 +138,7 @@ export async function registerClient(
       grant_types: ["authorization_code", "refresh_token"],
       response_types: ["code"],
       token_endpoint_auth_method: "none",
-      scope: "read",
+      scope: LINEAR_MCP_SCOPE,
     }),
   });
   if (!response.ok) {
@@ -176,7 +184,7 @@ export type PendingAuthorization = {
 export async function beginAuthorization(
   as: AuthorizationServer,
   register: (redirectUri: string) => Promise<RegisteredClient>,
-  scope = "read",
+  scope = LINEAR_MCP_SCOPE,
 ): Promise<PendingAuthorization> {
   const pkce = createPkce();
   const state = base64url(crypto.getRandomValues(new Uint8Array(12)));

@@ -1,5 +1,12 @@
 import { describe, expect, test } from "bun:test";
-import { beginAuthorization, discoverAuthorizationServer, exchangeCode, refreshToken, registerClient } from "./linear-auth.js";
+import {
+  beginAuthorization,
+  discoverAuthorizationServer,
+  exchangeCode,
+  LINEAR_MCP_SCOPE,
+  refreshToken,
+  registerClient,
+} from "./linear-auth.js";
 
 /**
  * Assembled at run time: a literal shaped like issued credential material is
@@ -104,6 +111,35 @@ describe("the callback leg", () => {
     expect(url.searchParams.get("state")).toBe(pending.state);
     expect(url.origin + url.pathname).toBe(AS.authorizationEndpoint);
     pending.close();
+  });
+});
+
+describe("the shared scope", () => {
+  test("dynamic client registration requests read and issue creation", async () => {
+    let body: Record<string, unknown> = {};
+    const fetchImpl = (async (_input: RequestInfo | URL, init?: RequestInit) => {
+      body = JSON.parse(String(init?.body)) as Record<string, unknown>;
+      return json({ client_id: "cid" });
+    }) as unknown as typeof fetch;
+    await registerClient(AS, "http://127.0.0.1:1/callback", fetchImpl);
+    expect(body.scope).toBe("read,issues:create");
+    expect(LINEAR_MCP_SCOPE).toBe("read,issues:create");
+  });
+
+  test("the authorization URL a caller opens requests the same scope", async () => {
+    const pending = await beginAuthorization(AS, async (redirectUri) => ({ clientId: "cid", redirectUri }));
+    expect(new URL(pending.url).searchParams.get("scope")).toBe("read,issues:create");
+    pending.close();
+  });
+
+  test("a refresh carries no scope, so it never widens a grant", async () => {
+    let body: URLSearchParams | null = null;
+    const fetchImpl = (async (_input: RequestInfo | URL, init?: RequestInit) => {
+      body = new URLSearchParams(String(init?.body));
+      return json({ access_token: fake("access"), expires_in: 3600 });
+    }) as unknown as typeof fetch;
+    await refreshToken(AS, { clientId: "cid", redirectUri: "http://127.0.0.1:1/callback" }, fake("refresh"), fetchImpl);
+    expect(body!.has("scope")).toBe(false);
   });
 });
 

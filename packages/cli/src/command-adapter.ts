@@ -16,11 +16,15 @@ import {
 } from "@mstar-harness/commands";
 import {
   assertSafeSessionId,
+  beginAuthorization,
   decodeExecutionSessionRef,
+  discoverAuthorizationServer,
+  exchangeCode,
+  refreshToken,
+  registerClient,
   validateExecutionIdentity,
   type ExecutionIdentity,
 } from "@mstar-harness/engine";
-import { beginAuthorization, discoverAuthorizationServer, exchangeCode, refreshToken, registerClient } from "./linear-auth.js";
 import { unionBranchSchemas } from "./schema-branches.js";
 import { captureSddEvidenceFromFile, verifySddEvidence } from "./sdd-evidence.js";
 import { detectInstalledPluginVersion } from "./plugin-version-alignment";
@@ -866,7 +870,7 @@ function cliEffects(services: Array<{ close(): Promise<void> }>): CommandEffects
       return tokens;
     },
     async linearAuthorize(mcpUrl: string) {
-      // The browser leg lives in linear-auth; this only owns the platform
+      // The browser leg is the shared engine module; this only owns the platform
       // interaction it needs. Nothing here sees or prints a token.
       const authorizationServer = await discoverAuthorizationServer(mcpUrl);
       const pending = await beginAuthorization(authorizationServer, (redirectUri) =>
