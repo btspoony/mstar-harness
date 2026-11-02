@@ -138,7 +138,7 @@ Default process artifacts are **gitignored** (`mstar-conventions`「Git 跟踪�
 | **Tracked results** (Git-following) | `{KNOWLEDGE_DIR}`, `{SPECS_DIR}`, `{HARNESS_DIR}/AGENTS.md`, `CONCEPTS.md` | whichever checkout holds the target branch | **Yes.** Readable from any worktree; written where the target branch is checked out (iteration Phase 3 compound → the integration worktree), then committed on that branch. |
 | **Product source** | repository code | feature worktree on `Working branch` | feature worktree only. |
 
-**Control harness root** = `<main-repo-root>/{HARNESS_DIR}/` — resolved from Git (the main worktree), never from a recorded state field.
+**Control harness root** = `<main-repo-root>/{HARNESS_DIR}/` — resolved from Git (the main worktree), never from a recorded state field. Discover it instead of guessing: `mstar path resolve` reports `controlRoot` / `controlHarnessDir` / `linkedWorktree` (resolution order → **`mstar-conventions`**「`{HARNESS_DIR}` 解析顺序」). A linked checkout without `.mstar/` is **not** an uninitialized harness.
 
 **Hard rules**
 

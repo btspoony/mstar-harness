@@ -1,5 +1,6 @@
-import { afterEach, describe, expect, spyOn, test } from "bun:test";
-import { readFileSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { afterEach, beforeEach, describe, expect, spyOn, test } from "bun:test";
+import { execFileSync } from "node:child_process";
+import { readFileSync, chmodSync, mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import {
@@ -35,11 +36,23 @@ import {
 } from "../src/index.js";
 import { detectHost, resolveHarnessDir, resolveWorkflowDir } from "@mstar-harness/engine";
 import { getLocalCommandDefinitions } from "../src/index.js";
+import { linkedWorktreeOf } from "../src/families/local.js";
 
 const previousProjectRoot = process.env.MSTAR_CLI_PROJECT_ROOT;
 const fixtures: string[] = [];
+// Every path.resolve case here probes from a start directory, so an exported
+// harness override would short-circuit the probe and make the result depend on
+// the caller's shell. Clear it per test and restore it afterwards.
+let previousHarnessDir: string | undefined;
+
+beforeEach(() => {
+  previousHarnessDir = process.env.MSTAR_HARNESS_DIR;
+  delete process.env.MSTAR_HARNESS_DIR;
+});
 
 afterEach(() => {
+  if (previousHarnessDir === undefined) delete process.env.MSTAR_HARNESS_DIR;
+  else process.env.MSTAR_HARNESS_DIR = previousHarnessDir;
   if (previousProjectRoot === undefined) delete process.env.MSTAR_CLI_PROJECT_ROOT;
   else process.env.MSTAR_CLI_PROJECT_ROOT = previousProjectRoot;
   for (const fixture of fixtures.splice(0)) rmSync(fixture, { recursive: true, force: true });
@@ -116,6 +129,309 @@ describe("shared host-health helpers", () => {
         reviewDir: path.join(root, "process", "reviews"),
       },
     });
+  });
+
+  test("path resolve reports the control harness from a linked worktree", async () => {
+    // Real path: mkdtemp answers a /var path on macOS and the Git-derived
+    // control root is its /private/var twin, so comparing raw strings would
+    // fail on the symlink alone.
+    const root = realpathSync(fixture());
+    const main = path.join(root, "main");
+    const linked = path.join(root, "linked");
+    mkdirSync(main, { recursive: true });
+    const git = (...args: string[]) =>
+      execFileSync("git", ["-C", main, "-c", "user.email=fixture@example.invalid", "-c", "user.name=fixture", ...args], {
+        encoding: "utf8",
+        stdio: ["ignore", "pipe", "pipe"],
+      });
+    git("init", "--quiet");
+    writeText(main, "README.md", "fixture\n");
+    git("add", "README.md");
+    git("commit", "--quiet", "-m", "fixture");
+    mkdirSync(path.join(main, ".mstar"), { recursive: true });
+    git("worktree", "add", "--quiet", "-b", "linked-fixture", linked);
+    // A tracked plugin directory, not a harness: the live shape of this
+    // repository's worktrees.
+    mkdirSync(path.join(linked, ".agents", "plugins"), { recursive: true });
+    const controlHarness = path.join(main, ".mstar");
+    const definition = getLocalCommandDefinitions().find(({ id }) => id === "path.resolve");
+    expect(definition).toBeDefined();
+    if (!definition) return;
+    const context = {
+      cwd: main,
+      controlRoot: null,
+      versions: { engine: null, cli: null, plugin: null, host: null, platform: null },
+      signal: new AbortController().signal,
+      effects: {
+        readInput: async () => "",
+        spawn: async () => ({ exitCode: 0, signal: null, stdout: "", stderr: "" }),
+        startDashboard: async () => ({ url: "", close: async () => {} }),
+        openBrowser: async () => {},
+      },
+    };
+
+    const fromLinked = await definition.execute({ path: linked }, context);
+    expect(fromLinked).toMatchObject({
+      status: "ok",
+      data: {
+        // Top-level answers are effective: the control harness, not the
+        // worktree's own probe. A reader appending `plans/` lands at the
+        // process documents.
+        harnessDir: controlHarness,
+        controlRoot: main,
+        controlHarnessDir: controlHarness,
+        linkedWorktree: true,
+        specsDir: path.join(controlHarness, "specs"),
+        workflowDir: path.join(controlHarness, "workflows"),
+        projectDir: path.join(controlHarness, "projects"),
+        reviewDir: path.join(controlHarness, "reviews"),
+        local: { harnessDir: path.join(realpathSync(linked), ".agents") },
+      },
+    });
+
+    const fromMain = await definition.execute({ path: main }, context);
+    expect(fromMain.status).toBe("ok");
+    if (fromMain.status !== "ok") return;
+    const data = fromMain.data as Record<string, unknown>;
+    expect(data).toMatchObject({
+      harnessDir: controlHarness,
+      specsDir: path.join(controlHarness, "specs"),
+      workflowDir: path.join(controlHarness, "workflows"),
+      projectDir: path.join(controlHarness, "projects"),
+      reviewDir: path.join(controlHarness, "reviews"),
+      controlRoot: main,
+      controlHarnessDir: controlHarness,
+      linkedWorktree: false,
+    });
+    expect(data.local).toBeUndefined();
+  });
+
+  test("path resolve treats a nested worktree as a linked checkout", async () => {
+    // `git worktree add` is legal inside the main checkout's directory tree;
+    // its path prefix must not make it look like part of the main worktree.
+    const root = realpathSync(fixture());
+    const main = path.join(root, "main");
+    const nested = path.join(main, ".worktrees", "feat");
+    mkdirSync(main, { recursive: true });
+    const git = (...args: string[]) =>
+      execFileSync("git", ["-C", main, "-c", "user.email=fixture@example.invalid", "-c", "user.name=fixture", ...args], {
+        encoding: "utf8",
+        stdio: ["ignore", "pipe", "pipe"],
+      });
+    git("init", "--quiet");
+    writeText(main, "README.md", "fixture\n");
+    git("add", "README.md");
+    git("commit", "--quiet", "-m", "fixture");
+    mkdirSync(path.join(main, ".mstar"), { recursive: true });
+    git("worktree", "add", "--quiet", "-b", "nested-fixture", nested);
+    const definition = getLocalCommandDefinitions().find(({ id }) => id === "path.resolve");
+    expect(definition).toBeDefined();
+    if (!definition) return;
+    const result = await definition.execute({ path: nested }, {
+      cwd: main,
+      controlRoot: null,
+      versions: { engine: null, cli: null, plugin: null, host: null, platform: null },
+      signal: new AbortController().signal,
+      effects: {
+        readInput: async () => "",
+        spawn: async () => ({ exitCode: 0, signal: null, stdout: "", stderr: "" }),
+        startDashboard: async () => ({ url: "", close: async () => {} }),
+        openBrowser: async () => {},
+      },
+    });
+    expect(result).toMatchObject({
+      status: "ok",
+      data: {
+        harnessDir: path.join(main, ".mstar"),
+        controlRoot: main,
+        controlHarnessDir: path.join(main, ".mstar"),
+        linkedWorktree: true,
+        // The nested checkout carries no harness of its own, so its probe
+        // stays null while the top-level answers come from the control root.
+        local: { harnessDir: null },
+      },
+    });
+  });
+
+  test("path resolve keeps a plain subdirectory of the main checkout unlinked", async () => {
+    const root = realpathSync(fixture());
+    const main = path.join(root, "main");
+    const nested = path.join(main, "docs");
+    mkdirSync(nested, { recursive: true });
+    const git = (...args: string[]) =>
+      execFileSync("git", ["-C", main, "-c", "user.email=fixture@example.invalid", "-c", "user.name=fixture", ...args], {
+        encoding: "utf8",
+        stdio: ["ignore", "pipe", "pipe"],
+      });
+    git("init", "--quiet");
+    writeText(main, "README.md", "fixture\n");
+    git("add", "README.md");
+    git("commit", "--quiet", "-m", "fixture");
+    mkdirSync(path.join(main, ".mstar"), { recursive: true });
+    const definition = getLocalCommandDefinitions().find(({ id }) => id === "path.resolve");
+    expect(definition).toBeDefined();
+    if (!definition) return;
+    const result = await definition.execute({ path: nested }, {
+      cwd: main,
+      controlRoot: null,
+      versions: { engine: null, cli: null, plugin: null, host: null, platform: null },
+      signal: new AbortController().signal,
+      effects: {
+        readInput: async () => "",
+        spawn: async () => ({ exitCode: 0, signal: null, stdout: "", stderr: "" }),
+        startDashboard: async () => ({ url: "", close: async () => {} }),
+        openBrowser: async () => {},
+      },
+    });
+    expect(result).toMatchObject({
+      status: "ok",
+      data: {
+        harnessDir: path.join(main, ".mstar"),
+        controlRoot: main,
+        controlHarnessDir: path.join(main, ".mstar"),
+        linkedWorktree: false,
+      },
+    });
+    if (result.status !== "ok") return;
+    const data = result.data as Record<string, unknown>;
+    expect(data.local).toBeUndefined();
+  });
+
+  test("path resolve refuses a linked checkout whose main harness is absent", async () => {
+    const root = realpathSync(fixture());
+    const main = path.join(root, "main");
+    const linked = path.join(root, "linked");
+    mkdirSync(main, { recursive: true });
+    const git = (...args: string[]) =>
+      execFileSync("git", ["-C", main, "-c", "user.email=fixture@example.invalid", "-c", "user.name=fixture", ...args], {
+        encoding: "utf8",
+        stdio: ["ignore", "pipe", "pipe"],
+      });
+    git("init", "--quiet");
+    writeText(main, "README.md", "fixture\n");
+    git("add", "README.md");
+    git("commit", "--quiet", "-m", "fixture");
+    git("worktree", "add", "--quiet", "-b", "linked-no-harness", linked);
+    const definition = getLocalCommandDefinitions().find(({ id }) => id === "path.resolve");
+    expect(definition).toBeDefined();
+    if (!definition) return;
+    const result = await definition.execute({ path: linked }, {
+      cwd: main,
+      controlRoot: null,
+      versions: { engine: null, cli: null, plugin: null, host: null, platform: null },
+      signal: new AbortController().signal,
+      effects: {
+        readInput: async () => "",
+        spawn: async () => ({ exitCode: 0, signal: null, stdout: "", stderr: "" }),
+        startDashboard: async () => ({ url: "", close: async () => {} }),
+        openBrowser: async () => {},
+      },
+    });
+    expect(result).toMatchObject({
+      status: "refused",
+      code: "path.harness-not-found",
+      // Same code and same `...control` spread as the generic refusal, so the
+      // producer's own wording is the only assertion that tells the branches
+      // apart; collapsing them must not stay green.
+      message: expect.stringContaining("linked checkout"),
+      details: { controlRoot: main, controlHarnessDir: null, linkedWorktree: true },
+    });
+  });
+
+  test("path resolve refuses a linked checkout whose main worktree cannot be read", async () => {
+    const orphan = path.join(realpathSync(fixture()), "orphan");
+    mkdirSync(orphan, { recursive: true });
+    // A `.git` FILE is the linked-checkout marker; its gitdir points nowhere,
+    // so no main worktree can be read from it. The file-level beforeEach has
+    // already cleared MSTAR_HARNESS_DIR, which would short-circuit the walk.
+    writeText(orphan, ".git", "gitdir: /nonexistent/mstar-fixture.git\n");
+    const definition = getLocalCommandDefinitions().find(({ id }) => id === "path.resolve");
+    expect(definition).toBeDefined();
+    if (!definition) return;
+    const result = await definition.execute({ path: orphan }, {
+      cwd: orphan,
+      controlRoot: null,
+      versions: { engine: null, cli: null, plugin: null, host: null, platform: null },
+      signal: new AbortController().signal,
+      effects: {
+        readInput: async () => "",
+        spawn: async () => ({ exitCode: 0, signal: null, stdout: "", stderr: "" }),
+        startDashboard: async () => ({ url: "", close: async () => {} }),
+        openBrowser: async () => {},
+      },
+    });
+    expect(result).toMatchObject({
+      status: "refused",
+      code: "coordination.not-in-git",
+      message: expect.stringContaining("cannot read its control root"),
+      details: { controlRoot: null, controlHarnessDir: null, linkedWorktree: false },
+    });
+    expect((result.details as Record<string, unknown>).controlUnavailable).toEqual(expect.any(String));
+  });
+
+  test("path resolve names the refusal when the checkout cannot be traversed", async () => {
+    // Root ignores mode bits, so the fixture cannot express EACCES there.
+    if (typeof process.getuid === "function" && process.getuid() === 0) return;
+    const blocked = path.join(realpathSync(fixture()), "blocked");
+    const inner = path.join(blocked, "inner");
+    mkdirSync(inner, { recursive: true });
+    chmodSync(blocked, 0o000);
+    try {
+      const definition = getLocalCommandDefinitions().find(({ id }) => id === "path.resolve");
+      expect(definition).toBeDefined();
+      if (!definition) return;
+      const result = await definition.execute({ path: inner }, {
+        cwd: inner,
+        controlRoot: null,
+        versions: { engine: null, cli: null, plugin: null, host: null, platform: null },
+        signal: new AbortController().signal,
+        effects: {
+          readInput: async () => "",
+          spawn: async () => ({ exitCode: 0, signal: null, stdout: "", stderr: "" }),
+          startDashboard: async () => ({ url: "", close: async () => {} }),
+          openBrowser: async () => {},
+        },
+      });
+      // Named refusal with its own code, never `command.internal` and never
+      // the Git-verdict code.
+      expect(result).toMatchObject({
+        status: "refused",
+        code: "path.control-root-unreadable",
+        details: { controlRoot: null, controlHarnessDir: null, linkedWorktree: false },
+      });
+      expect((result.details as Record<string, unknown>).controlUnavailable).toEqual(expect.any(String));
+    } finally {
+      chmodSync(blocked, 0o755);
+    }
+  });
+
+  test("linkedWorktree treats an unidentifiable start path as linked", () => {
+    // Same checkout, a plain subdirectory, a nested worktree, and the
+    // fail-safe: no control root means no linked claim at all.
+    expect(linkedWorktreeOf("/main", "/main")).toBe(false);
+    expect(linkedWorktreeOf("/main", "/main/.worktrees/feat")).toBe(true);
+    expect(linkedWorktreeOf("/main", null)).toBe(true);
+    expect(linkedWorktreeOf(null, "/elsewhere")).toBe(false);
+  });
+
+  test("path resolve still refuses outside git with no harness", async () => {
+    const root = fixture();
+    const definition = getLocalCommandDefinitions().find(({ id }) => id === "path.resolve");
+    expect(definition).toBeDefined();
+    if (!definition) return;
+    const result = await definition.execute({ path: root }, {
+      cwd: root,
+      controlRoot: null,
+      versions: { engine: null, cli: null, plugin: null, host: null, platform: null },
+      signal: new AbortController().signal,
+      effects: {
+        readInput: async () => "",
+        spawn: async () => ({ exitCode: 0, signal: null, stdout: "", stderr: "" }),
+        startDashboard: async () => ({ url: "", close: async () => {} }),
+        openBrowser: async () => {},
+      },
+    });
+    expect(result).toMatchObject({ status: "refused", code: "path.harness-not-found" });
   });
 
   test("shared semver comparison applies prerelease precedence", () => {
