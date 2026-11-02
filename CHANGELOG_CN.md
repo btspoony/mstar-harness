@@ -6,6 +6,25 @@
 
 ## [Unreleased]
 
+## [4.1.5] - 2026-11-02
+
+### Harness
+
+- **合并依赖刷新。** 六项待处理更新一次性落地：`@opencode-ai/plugin` 1.4.8 → 1.19.5、`@opencode/plugin` 与
+  `@opencode/schema` 2.1.3 → 2.2.1、`effect` 4.0.1 → 4.1.0、`@modelcontextprotocol/client` 2.3.1 → 2.4.0、
+  开发依赖组（`@oh-my-pi/pi-coding-agent` 18.13.3、`@types/node` 26.6.6、`@tanstack/react-virtual` 3.14.23、
+  `katex` 0.19.1、`simple-icons` 16.36.0），以及 `ai-plugin-scanner-action` 的提交钉。`bun.lock` 基于 `main`
+  重新生成，其余依赖不动。
+- `dsh-llm-fallbacks` 同组齐动：`packages/dsh` 升到 0.6.13 的同时，CLI 的 `mstar.dshLlmFallbacks` 钉一并跟随，
+  因此 `mstar init --target dsh` 安装的是 0.6.13，不再出现插件依赖已升级、安装钉仍指向旧版的情况。
+- **`mstar path resolve` 现在报告 control 事实。** 除本地探测结果外，它新增 `controlRoot`（Git 主 worktree）、`controlHarnessDir`（该检出的 `{HARNESS_DIR}`，或 `null`）与 `linkedWorktree`。在 linked worktree 中，顶层成员即生效答案——`harnessDir` 与四个目录成员均从 control root 解析——本 checkout 自身的探测留在 `local` 下。linked checkout 由其 Git worktree 身份判定，因此嵌套在主 checkout 目录树内的工作区与兄弟目录的同等对待；无法识别的起始路径以 control root 为锚、不回退到本地探测，并报告 `linkedWorktree: true`——该标志表示「从 control root 作答」，而非已证实的独立检出。非 Git 与独立仓库的答案与以往一致。当 linked checkout 的主 worktree 不可读时，命令**拒绝**（`coordination.not-in-git`，exit 1），原因以 `controlUnavailable` 放在拒绝的 details 中——绝不回退到本地探测。同一 walk-up 上的文件系统不可用错误（`EACCES`/`EPERM`）以 `path.control-root-unreadable` 拒绝，不会伪装成 Git 判定。发现路径已写入 `mstar-conventions`、`mstar-use-cli/references/preconditions.md` 与 `mstar-branch-worktree`。
+- **审查席位通道覆盖两种 terminal-agent 载体，并只从已加载的载体发现命令。** `mstar-pr-loop` → `references/terminal-agent-channel.md` 取代产品专用的 `references/herdr.md`：`herdr-core`（CLI `hc`）与 `herdr`（CLI `herdr`）是同一通道可互换的载体，已加载的 skill 是命令与生命周期的唯一权威。文件只记录通道形状；载体入口（`hc --skill`、`herdr --skill`、逐命令帮助）通过发现获得而非复制，两种命令模型不得混用。
+- **门禁、派发与恢复按已加载载体执行。** 三道门禁使用该载体自身的环境检查；agent 目标优先取模板/kind，并有 host→目标回退表；载体支持时首轮 prompt 放入启动任务；等待语义按载体区分：`hc send --wait --timeout` 是 check-in，而 `herdr agent prompt --wait --timeout` 是本次等待的总上限。
+
+### 版本对齐
+
+- 提升 monorepo 根、`@mstar-harness/opencode`、`@mstar-harness/opencode-v2`、`@mstar-harness/cli`、`@mstar-harness/engine`、`@mstar-harness/dsh`、Cursor/Codex/Kimi/ZCode/omp/Claude 插件清单、便携式 Agent Plugins 清单及两份 marketplace 清单：**→ 4.1.5**。
+
 ## [4.1.4] - 2026-10-31
 
 ### Harness

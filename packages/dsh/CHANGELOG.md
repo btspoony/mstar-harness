@@ -6,6 +6,48 @@ The monorepo root [CHANGELOG.md](../../CHANGELOG.md) summarizes cross-surface re
 
 ## [Unreleased]
 
+## [4.1.5] - 2026-11-02
+
+### Changed
+
+- **Linear binding configuration.** `.mstarc` gains an optional `[linear]` connection block (`enabled`, `mode`, `workspace`, `team`) plus `[linear.mapping]` for per-value correspondence overrides. Parsing stays INI and additive: `[config]` behavior is unchanged, unknown keys stay ignored, and validation lives in a separate `parseLinearBinding` so parse-time forward compatibility is preserved. Boolean spellings `true/1/yes/on` are read as enabled (an unreadable value is refused by name); `mode` accepts `mirror` only. Refusals: `linear.mode-refused`, `linear.binding-incomplete`, `linear.binding-invalid`.
+- **Project↔provider correspondence.** New `mstar project bind --project <id> --provider linear --remote-project <name-or-id>` records which external project a store project mirrors in `project_bindings` (one transaction per call, receipt in the same commit), and `mstar project show` returns it or the named absence `linear.binding-absent`. `workspace`/`team` are never flags — they come from the repo's own `.mstarc`, and a parent directory's configuration is never inherited. Re-binding the identical pair is a no-op success; a different pair is refused as `linear.rebind-refused`, an unregistered project as `linear.project-unregistered`, a remote project already backing another store project as `linear.binding-conflict`.
+- **Read-only readiness surface.** The dashboard gains a `sync-binding` view (`/api/sync-binding`) carrying the connection summary and a `ProbeResult`-shaped readiness state with its cause, never guessed from configuration — with no host probe it reports `not-probed`. The host defines the capability: the dsh Linear probe performs one `initialize` + `tools/list` handshake under a deadline, reports `ready` only when the listing verb is actually listed, redacts transport messages before they reach the cause, and throws `linear.list-unimplemented` instead of a fabricated empty page.
+- **Linear MCP row, shipped disabled.** The dsh profile bundle now inserts a `linear-mcp` client row pointed at
+  Linear's hosted server (`transport: streamable-http`, `url: https://mcp.linear.app/mcp`) alongside the existing
+  `mstar-mcp` row. It ships with `disabled: true`: Linear needs an OAuth grant or a team-scoped API key only the
+  operator can supply, and an enabled row without credentials spends a startup probe on a 401 and logs a failed
+  connection every boot. Enable it by overriding the row in the profile (or home) layer — `disabled: false`, plus
+  a `headers` entry (`Authorization: Bearer <key>`) when a token is held; tools then appear as
+  `mcp__linear__<tool>`. It is not part of the mstar channel: removing it changes nothing about the mstar surface.
+- **Mirrored rows refuse an occurrence addressed by id.** `appendOccurrence` now refuses
+  `issue.scope-refused` when the target issue carries a non-`local` provider, completing the invariant that
+  `captureIssueOn` already enforced on the identity path. Previously a local recurrence could land on an imported
+  row by id, and the changelog wording over-claimed the guarantee.
+- **M0 read-only mirror import.** `mstar issue-sync import --project <id> [--max-pages <n>]` pulls the bound
+  Linear project's issues into the store through the existing capture path: rows carry `provider='linear'`,
+  `external_id` and `url`, a documented synthetic identity triple, and never merge into a local capture. A second
+  run with unchanged remote state imports nothing and writes no row (the cursor makes the re-read a no-op), and a
+  remote change to an already-imported item is re-planned once (`replanItem`, the new `applied → pending`
+  transition) and applied exactly once. Imported rows are excluded from the local-only findings gate.
+- A run advances its resumable cursor **only when the page it processed left nothing stranded**: an item still
+  `failed`, or one the adapter could not map, blocks the advance so the next run re-reads that page (the overlap
+  window) and the `failed → pending` retry can actually run. An unmappable item fails by identity with its page
+  index and lets the rest of the page proceed.
+- Probe failures keep their own cause and recovery: `linear.host-unavailable` (the host cannot reach its MCP
+  service) and `linear.access-denied` (re-authorize the host) are distinct from the configuration-only
+  `linear.provider-disabled`. The ingest path enforces the active-store guard, and remote revisions are compared
+  as instants, never as strings.
+- The dsh Linear listing adapter maps pages over an injected MCP transport: an embedded `errors` payload, an
+  unmappable page or a transport failure refuses `linear.query-failed` instead of looking like an empty project,
+  and no credential reaches a message. The tool name, argument schema and page envelope were read from the live
+  service once, in an authenticated session; that transcript is not part of this repository, so a reader re-derives
+  them by running `tools/list` and `tools/call` against the endpoint rather than auditing a stored record.
+
+- Version alignment with harness **4.1.5**.
+
+See root [CHANGELOG.md](../../CHANGELOG.md) **4.1.5**.
+
 ## [4.1.4] - 2026-10-31
 
 ### Changed
