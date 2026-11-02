@@ -13,7 +13,7 @@ description: "Opt-in skill loaded when the user explicitly asks for a review →
 4. `mstar-branch-worktree` — checkout authorization and the three-domain write table.
 5. `mstar-dispatch-gates` — Assignment fields, writable dispatch and leaf boundaries.
 
-Optional external review-seat channel (not part of the required reading order) — the channel reference under References applies only when this session can load a terminal-agent skill whose probe passes and the host has a matching agent kind; the default path above stays complete without it.
+Optional external review-seat channel (not part of the required reading order) — the channel reference under References applies only when this session can load a terminal-agent skill whose own availability check passes and the host maps to an agent it can start; the default path above stays complete without it.
 
 The project-manager orchestrates; implementers fix; review seats remain read-only. Loading the review variant does not authorize its seats to implement fixes.
 
@@ -89,4 +89,4 @@ Return the PR identity and current head, latest report path and review URL, tall
 - Review, tier inference, revalidation, settlement, tally, new COMMENT posting and report archival → `mstar-audit` → `references/pr-review.md` §§ Re-review (same target, later head), Verdict synthesis, Review depth (tiers), Comment posting, Local report archive.
 - Iteration-only fix integration and shared push timing → `mstar-iteration` → `references/phase-4-5-pr-delivery.md` §5.0 / §5.1a; legal STOP semantics → `references/command-shared-invariants.md`.
 - Checkout/write-domain ownership → `mstar-branch-worktree`; Assignment and dispatch shape → `mstar-dispatch-gates`.
-- External review-seat channel → `references/herdr.md`.
+- External review-seat channel → `references/terminal-agent-channel.md`.
