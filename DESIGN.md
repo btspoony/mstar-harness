@@ -793,7 +793,7 @@ guarding the wrong number — the dsh pane drifted from the dashboard for howeve
 **A literal in a test is a decision someone made, not a fact about the prototype**, unless
 something re-derives it. `bun run --cwd packages/ui check:snapshot` is that something.
 
-**What it does not cover**: the nine screens' structure — panel headings, column headings, each
+**What it does not cover**: the screens' structure — panel headings, column headings, each
 table's `data-narrow-cols`. Extracting those from the HTML was attempted and abandoned: the
 section boundary logic produced 0 panels for `workflows` and `iterations` and 16 for
 `project-detail`. A fixture that is wrong is worse than none, for the same reason the `24px`
@@ -2737,6 +2737,46 @@ review bot's suggestion to give it a spanning row would be a different design, n
 The reasoning that made me keep it one round earlier was wrong in a way worth naming: I argued
 "the prototype has nothing to copy here", but it does — it copies **nothing**, and matching that
 is the criterion. **"Better for a reader" is not a criterion this objective admits.**
+
+## The sync-binding panel: three answers, no fourth column
+
+The dashboard's binding view answers exactly three questions, and the prototype carries one
+screen (`data-screen="sync-binding"`, both themes) that shows all three without inventing a
+surface for any of them:
+
+| Question | Where it is answered | Primitive |
+| --- | --- | --- |
+| Which Linear workspace and team does this repo name? | **Binding identity** — `enabled`, `mode`, `workspace`, `team` | `.panel` + `dl.fields.one` |
+| Which local project is which remote project? | **Project correspondence** — `projectId` → `remoteProject`, one row per stored binding | `.panel` + `.table` with `data-narrow-cols="2"` |
+| Would a sync work right now, or why would it not? | **Sync readiness** — the state and its cause | `.panel` + `dl.fields.one`, plus a `.mini-table` catalogue of the five pairs |
+
+**No new token.** The panel is built from the same roles every other screen uses —
+`--ms-bg-surface` and `--ms-border-hairline` for the frame, `--ms-radius-md` for its corner,
+`--ms-fs-11/12/13` on their declared line heights for the type, `--ms-text-secondary` for a
+value and `--ms-text-muted` for a note, `--ms-font-mono` for every identifier. Tone reaches
+the reader only through the existing `.status tone-* .dot` rule, in the prototype's own tone
+names: `tone-done` for `ready`, `tone-warning` for `service-absent` and `unreachable`,
+`tone-danger` for `access-denied`, `tone-neutral` for `not-probed`. That is why `snapshot.json`
+did not change when the panel was added — the fixture derives the screen frame and the
+breakpoints, and the panel adds neither a gutter nor a reflow.
+
+**State and cause are one pair.** The identity and readiness blocks sit side by side in
+`detail-top`, which folds to one column below 899px of container. A state is never rendered
+without the cause the read supplied, and the panel never composes a cause: `not-probed` is
+`not-probed`, carrying the reason the view already sets, not an empty slot. The five pairs are
+shown together in the catalogue table so a reviewer can see every state's own cause rather
+than one example of each.
+
+**A null binding is not an unasked question.** When `binding` is `null` the panel renders
+`bindingError` verbatim in the identity block's place — the reader's refusal, in the same
+mono value style, under the same panel head. It is deliberately not the `not-probed` tone:
+a missing `[linear]` declaration and a probe nobody ran are different answers and must not
+share a treatment (DESIGN.md § Status versus the four absence states).
+
+**What the panel does not carry**, by the same rule that removed the failure count: no issue
+row, no failure counter, and no credential field. The correspondence rows show the stored
+`remoteProject` identifier exactly as `project_bindings` records it; a Linear project title
+would require a live listing call this view does not make.
 
 ## Verification coverage, stated
 
