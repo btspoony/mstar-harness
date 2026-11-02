@@ -49,9 +49,9 @@ import {
   readLinearCredential,
   refreshToken,
   registerClient,
+  supersededBy,
   writeLinearCredential,
   type AuthorizationServer,
-  type LinearCredential,
   type LinearCredentialState,
   type PendingAuthorization,
   type TokenSet,
@@ -166,22 +166,6 @@ function errorCodeOf(error: unknown): string | null {
     if (typeof code === 'string' && code !== '') return code
   }
   return /\[([a-z][a-z0-9.-]*)\]/.exec(messageOf(error))?.[1] ?? null
-}
-
-/**
- * Whether the file changed under an in-flight refresh in a way this attempt
- * must not overwrite — another process stored a newer grant to adopt, or the
- * operator removed the credential (`mstar linear logout`) and deleting it is
- * the newest intent. An unreadable file is overwritten: its credential is
- * unusable, and the fresh grant is the recovery.
- */
-function supersededBy(state: LinearCredentialState, base: LinearCredential): boolean {
-  if (state.kind === 'absent') return true
-  if (state.kind !== 'present') return false
-  const candidate = state.credential
-  if (candidate.accessToken === base.accessToken) return false
-  if (candidate.clientId !== base.clientId) return true
-  return candidate.expiresAt !== null && (base.expiresAt === null || candidate.expiresAt > base.expiresAt)
 }
 
 /**

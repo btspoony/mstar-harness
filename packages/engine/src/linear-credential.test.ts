@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { spawn } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
 import { existsSync, mkdtempSync, readFileSync, rmSync, statSync, utimesSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -35,6 +35,17 @@ const credential = (overrides: Partial<Parameters<typeof writeLinearCredential>[
   scope: "read",
   ...overrides,
 });
+
+/**
+ * A pid no process holds: spawn a short-lived child and wait for it to exit, so
+ * its pid is real and definitely gone. A fixed literal could collide with a
+ * live process on a busy machine, which would make the stale takeover test lie.
+ */
+const DEAD_PID = ((): number => {
+  const probe = spawnSync(process.execPath, ["-e", "process.exit(0)"]);
+  if (probe.pid === undefined) throw new Error("could not obtain a dead pid fixture");
+  return probe.pid;
+})();
 
 /**
  * Fixture values are assembled at run time: a literal that looks like issued
@@ -181,6 +192,184 @@ describe("the commit is one cross-process critical section", () => {
     // Backdate it past the stale bound: the holder is presumed dead.
     utimesSync(lock, new Date(Date.now() - 60_000), new Date(Date.now() - 60_000));
     expect(commitLinearCredential(() => credential({ accessToken: fake("after-crash") }))).not.toBeNull();
+    expect(existsSync(lock)).toBe(false);
+  });
+
+  /**
+   * A writer in ANOTHER process: its own module instance, its own lock.
+   *
+   * Inside the critical section it appends `enter`/`exit` to a shared journal
+   * and, when `guard` is given, creates a guard file with `wx`: a second writer
+   * reaching that line records `overlap`, which is the observable "two inside
+   * the one section" failure. It can gate its start (`go`) and hold its section
+   * until a `release` file appears, so the parent drives the interleaving
+   * instead of guessing sleeps.
+   */
+  function writerInAnotherProcess(options: {
+    journal: string;
+    holdMs: number;
+    guard?: string;
+    go?: string;
+    release?: string;
+    rounds?: number;
+  }): Promise<string> {
+    const moduleUrl = new URL("./linear-credential.ts", import.meta.url).href;
+    const source = `
+      const { existsSync, unlinkSync, writeFileSync, appendFileSync } = await import("node:fs");
+      const { withLinearCredentialLock } = await import(process.env.MSTAR_IMPORT);
+      const journal = (line) => appendFileSync(process.env.MSTAR_JOURNAL, line + "\\n");
+      const spin = (ms) => {
+        const until = Date.now() + ms;
+        while (Date.now() < until) Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 2);
+      };
+      if (process.env.MSTAR_GO) while (!existsSync(process.env.MSTAR_GO)) spin(2);
+      for (let round = 0; round < Number(process.env.MSTAR_ROUNDS); round += 1) {
+        withLinearCredentialLock(() => {
+          const guard = process.env.MSTAR_GUARD;
+          if (guard) {
+            try {
+              writeFileSync(guard, String(process.pid), { flag: "wx" });
+            } catch {
+              journal("overlap " + process.pid);
+            }
+          }
+          journal("enter " + process.pid);
+          if (process.env.MSTAR_RELEASE) {
+            const until = Date.now() + 10_000;
+            while (!existsSync(process.env.MSTAR_RELEASE) && Date.now() < until) spin(2);
+          }
+          spin(Number(process.env.MSTAR_HOLD_MS));
+          journal("exit " + process.pid);
+          if (guard && existsSync(guard)) unlinkSync(guard);
+        });
+      }
+      process.stdout.write("done");
+    `;
+    const child = spawn(process.execPath, ["-e", source], {
+      stdio: ["ignore", "pipe", "pipe"],
+      env: {
+        ...process.env,
+        MSTAR_IMPORT: moduleUrl,
+        MSTAR_JOURNAL: options.journal,
+        MSTAR_GUARD: options.guard ?? "",
+        MSTAR_GO: options.go ?? "",
+        MSTAR_RELEASE: options.release ?? "",
+        MSTAR_HOLD_MS: String(options.holdMs),
+        MSTAR_ROUNDS: String(options.rounds ?? 1),
+      },
+    });
+    let out = "";
+    child.stdout.setEncoding("utf8").on("data", (chunk: string) => (out += chunk));
+    child.stderr.setEncoding("utf8").on("data", (chunk: string) => (out += chunk));
+    return new Promise<string>((resolve, reject) => {
+      child.on("error", reject);
+      child.on("close", (code) => (code === 0 ? resolve(out) : reject(new Error(`writer exit ${code}: ${out}`))));
+    });
+  }
+
+  /** Wait for a path to appear, failing the test rather than hanging. */
+  function awaitPath(path: string): void {
+    for (let waited = 0; !existsSync(path); waited += 5) {
+      if (waited > 5_000) throw new Error(`timed out waiting for ${path}`);
+      holdFor(5);
+    }
+  }
+
+  test("two processes racing to take over one stale lock are never inside together", async () => {
+    writeLinearCredential(credential());
+    const lock = linearCredentialLockPath();
+    // The stale lock a crashed writer left: an age past the bound and a pid
+    // no process holds.
+    writeFileSync(lock, JSON.stringify({ pid: DEAD_PID, token: "stale-from-a-crashed-writer" }));
+    utimesSync(lock, new Date(Date.now() - 60_000), new Date(Date.now() - 60_000));
+
+    const journal = join(root, "journal");
+    const guard = join(root, "guard");
+    const go = join(root, "go");
+    const writers = [1, 2].map(() =>
+      writerInAnotherProcess({ journal, go, guard, holdMs: 80, rounds: 3 }),
+    );
+    writeFileSync(go, "");
+    expect(await Promise.all(writers)).toEqual(["done", "done"]);
+
+    const lines = readFileSync(journal, "utf8").trim().split("\n");
+    // Neither writer was ever inside the "one" section with the other. Before
+    // the fix one waiter's takeover deleted the other's fresh lock and both ran.
+    expect(lines.filter((line) => line.startsWith("overlap"))).toEqual([]);
+    // Both got in on every round: the stale lock was taken over, and no takeover
+    // cascaded the mutex away.
+    expect(lines.filter((line) => line.startsWith("enter"))).toHaveLength(6);
+    expect(lines.filter((line) => line.startsWith("exit"))).toHaveLength(6);
+    expect(existsSync(lock)).toBe(false);
+    expect(existsSync(guard)).toBe(false);
+  });
+
+  test("a live holder stalled past the stale bound is not taken over", async () => {
+    writeLinearCredential(credential());
+    const lock = linearCredentialLockPath();
+    const journal = join(root, "journal");
+    const guard = join(root, "guard");
+    const holderRelease = join(root, "holder-release");
+
+    // A is a real holder inside the section, and stays there until released.
+    const holder = writerInAnotherProcess({ journal, guard, release: holderRelease, holdMs: 0 });
+    awaitPath(guard);
+    const lockOfHolder = readFileSync(lock, "utf8");
+    // A laptop sleep or SIGSTOP from a waiter's point of view: the lock is old,
+    // but the pid stamped in it is still running.
+    utimesSync(lock, new Date(Date.now() - 6_000), new Date(Date.now() - 6_000));
+
+    // The waiter polls the stale-looking lock. It must not displace a live
+    // holder, so after a few hundred polls it is still outside the section.
+    const waiter = writerInAnotherProcess({ journal, guard, holdMs: 0 });
+    holdFor(300);
+    expect(readFileSync(lock, "utf8")).toBe(lockOfHolder);
+    expect(readFileSync(journal, "utf8")).not.toContain("overlap");
+    expect(readFileSync(journal, "utf8").trim().split("\n")).toHaveLength(1);
+
+    writeFileSync(holderRelease, "");
+    expect(await holder).toBe("done");
+    expect(await waiter).toBe("done");
+
+    const lines = readFileSync(journal, "utf8").trim().split("\n");
+    // The waiter entered only after the live holder exited; pre-fix it deleted
+    // the live holder's lock and ran beside it (recorded as `overlap`).
+    expect(lines.filter((line) => line.startsWith("overlap"))).toEqual([]);
+    expect(lines.filter((line) => line.startsWith("enter"))).toHaveLength(2);
+    expect(lines.filter((line) => line.startsWith("exit"))).toHaveLength(2);
+    expect(existsSync(lock)).toBe(false);
+  });
+
+  test("a woken holder releases only its own lock, never the one that replaced it", async () => {
+    writeLinearCredential(credential());
+    const lock = linearCredentialLockPath();
+    const journal = join(root, "journal");
+    const holderRelease = join(root, "holder-release");
+    const successorRelease = join(root, "successor-release");
+
+    // A is wedged: alive, inside its section, and its lock is far past the point
+    // where waiting is still rational, so a successor may take over.
+    const wedged = writerInAnotherProcess({ journal, release: holderRelease, holdMs: 0 });
+    awaitPath(join(root, "journal"));
+    for (let waited = 0; readFileSync(journal, "utf8") === "" && waited < 5_000; waited += 5) holdFor(5);
+    const lockOfWedged = readFileSync(lock, "utf8");
+    utimesSync(lock, new Date(Date.now() - 120_000), new Date(Date.now() - 120_000));
+
+    // The successor takes the wedged lock over and holds its own section.
+    const successor = writerInAnotherProcess({ journal, release: successorRelease, holdMs: 0 });
+    for (let waited = 0; waited < 5_000 && readFileSync(lock, "utf8") === lockOfWedged; waited += 5) holdFor(5);
+    const lockOfSuccessor = readFileSync(lock, "utf8");
+    expect(lockOfSuccessor).not.toBe(lockOfWedged);
+
+    // The wedged holder now wakes and runs its `finally`. Pre-fix that removed
+    // the file by path, which is the successor's lock: a third writer would walk
+    // straight into a section the successor still holds.
+    writeFileSync(holderRelease, "");
+    expect(await wedged).toBe("done");
+    expect(readFileSync(lock, "utf8")).toBe(lockOfSuccessor);
+
+    writeFileSync(successorRelease, "");
+    expect(await successor).toBe("done");
     expect(existsSync(lock)).toBe(false);
   });
 
