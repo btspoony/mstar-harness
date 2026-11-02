@@ -32,6 +32,9 @@ import { createHostThemeFace } from './panel/theme.ts'
 import { en, NS, zh } from './panel/locale.ts'
 import { createPanelStore } from './panel/panel-store.ts'
 import { PanelView } from './panel/PanelView.tsx'
+import { LinearSettingsCard, LINEAR_SETTINGS_ROW_KEY } from './linear-settings-card.tsx'
+import { LinearSettingsStore } from './linear-settings-store.ts'
+import { en as linearSettingsEn, NS as LINEAR_SETTINGS_NS, zh as linearSettingsZh } from './linear-settings-locale.ts'
 
 /**
  * Cordis service faces the plugin waits for (spec §4.4: slots + sessions +
@@ -45,7 +48,9 @@ import { PanelView } from './panel/PanelView.tsx'
 export const inject = ['slots', 'sessions', 'locale', 'connection', 'sidebarRightTabs', 'theme']
 
 export function apply(ctx: ClientContext): void {
-  const connection = (ctx as unknown as { connection?: MstarWorkflowPickerConnection }).connection
+  const connection = (ctx as unknown as {
+    connection?: MstarWorkflowPickerConnection & { isLoopback?: boolean }
+  }).connection
   const picker = new MstarWorkflowPickerClient(connection)
   ctx.effect(() => () => picker.dispose(), 'ui-mstar-panel: workflow picker client')
   // The store-backed read: the panel polls `mstar/panelSnapshot` while its tab
@@ -64,6 +69,49 @@ export function apply(ctx: ClientContext): void {
   ctx.effect(
     () => ctx.sidebarRightTabs.register(mstarPanelDefinition(t)),
     'ui-mstar-panel: tab type',
+  )
+  // The linear-mcp row's Settings card (plan 20261102-linear-oauth-guidance
+  // Task 3): one keyed `plugins.row.config` entry, keyed by the row the
+  // bundle patch declares. The row's native enable toggle stays the host's;
+  // this card only reads it and offers Authorize after it is on.
+  const linearSettings = new LinearSettingsStore(connection, {
+    loopback: connection?.isLoopback ?? true,
+  })
+  ctx.effect(() => () => linearSettings.dispose(), 'ui-mstar-linear-settings: card store')
+  ctx.effect(
+    () => ctx.locale.register(LINEAR_SETTINGS_NS, { zh: linearSettingsZh, en: linearSettingsEn }),
+    'ui-mstar-linear-settings: dictionaries',
+  )
+  // The slot is declared by the host's Plugins page (a different dsh package
+  // than this cohort's declared peers), so the registry is narrowed onto the
+  // one keyed-entry surface this registration consumes.
+  const pluginsRowSlots = ctx.slots as unknown as {
+    inject(name: string, factory: () => Generator<unknown, void, unknown>): () => void
+    register(
+      entry: {
+        name: string
+        key: string
+        locale: string
+        inject: () => {
+          controller: LinearSettingsStore
+          hooks: { snapshot: LinearSettingsStore['snapshot'] }
+        }
+      },
+      component: (props: never) => unknown,
+    ): () => void
+  }
+  ctx.effect(
+    () => pluginsRowSlots.inject('plugins.row.config', function* () {
+      yield pluginsRowSlots.register({
+        name: 'plugins.row.config',
+        key: LINEAR_SETTINGS_ROW_KEY,
+        locale: LINEAR_SETTINGS_NS,
+        // The renderer binds `hooks.snapshot` to the card's `useSnapshot`
+        // selector hook (the same contract the advisor card uses).
+        inject: () => ({ controller: linearSettings, hooks: { snapshot: linearSettings.snapshot } }),
+      }, LinearSettingsCard as unknown as (props: never) => unknown)
+    }),
+    'ui-mstar-linear-settings: row card',
   )
   // ONE entry: the session's right-pane tab. The product is per-repository state,
   // so the host's GLOBAL panel list gets no row from this plugin — and with no

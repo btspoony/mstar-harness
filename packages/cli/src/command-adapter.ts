@@ -862,11 +862,7 @@ function cliEffects(services: Array<{ close(): Promise<void> }>): CommandEffects
       // The authorization server is rediscovered from the endpoint rather than
       // remembered: its location is metadata, and a stored copy would go stale.
       const authorizationServer = await discoverAuthorizationServer(mcpUrl);
-      const tokens = await refreshToken(
-        authorizationServer,
-        { clientId, redirectUri: `http://localhost:0/callback` },
-        stored,
-      );
+      const tokens = await refreshToken(authorizationServer, clientId, stored);
       return tokens;
     },
     async linearAuthorize(mcpUrl: string) {

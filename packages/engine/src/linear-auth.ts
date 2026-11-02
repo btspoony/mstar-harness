@@ -304,10 +304,18 @@ export async function exchangeCode(
   return toTokenSet((await response.json()) as Record<string, unknown>, client.clientId);
 }
 
-/** Refresh an expired access token without a browser. */
+/**
+ * Refresh an expired access token without a browser.
+ *
+ * The refresh body carries no `redirect_uri`: the authorization request's
+ * redirect is the live loopback listener (an ephemeral port that no longer
+ * exists here), so there is no stable value a refresh could echo. A refresh
+ * therefore takes the registered client id only — one spelling, no placeholder
+ * redirect that could disagree with the authorization request.
+ */
 export async function refreshToken(
   as: AuthorizationServer,
-  client: RegisteredClient,
+  clientId: string,
   refresh: string,
   fetchImpl: typeof fetch = fetch,
 ): Promise<TokenSet> {
@@ -318,7 +326,7 @@ export async function refreshToken(
     body: new URLSearchParams({
       grant_type: "refresh_token",
       refresh_token: refresh,
-      client_id: client.clientId,
+      client_id: clientId,
     }).toString(),
   });
   if (!response.ok) {
@@ -326,5 +334,5 @@ export async function refreshToken(
       `[linear.reauth-required] the refresh was rejected with HTTP ${response.status}; run \`mstar linear auth\` again`,
     );
   }
-  return toTokenSet((await response.json()) as Record<string, unknown>, client.clientId);
+  return toTokenSet((await response.json()) as Record<string, unknown>, clientId);
 }

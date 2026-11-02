@@ -132,14 +132,17 @@ describe("the shared scope", () => {
     pending.close();
   });
 
-  test("a refresh carries no scope, so it never widens a grant", async () => {
+  test("a refresh carries no scope and no redirect, so it never widens a grant", async () => {
     let body: URLSearchParams | null = null;
     const fetchImpl = (async (_input: RequestInfo | URL, init?: RequestInit) => {
       body = new URLSearchParams(String(init?.body));
       return json({ access_token: fake("access"), expires_in: 3600 });
     }) as unknown as typeof fetch;
-    await refreshToken(AS, { clientId: "cid", redirectUri: "http://127.0.0.1:1/callback" }, fake("refresh"), fetchImpl);
+    await refreshToken(AS, "cid", fake("refresh"), fetchImpl);
     expect(body!.has("scope")).toBe(false);
+    // The authorization request's redirect is the live loopback listener; a
+    // refresh has no callback, so it must not invent one.
+    expect(body!.has("redirect_uri")).toBe(false);
   });
 });
 
@@ -160,7 +163,7 @@ describe("token exchange and refresh", () => {
 
   test("a rejected refresh names re-authorization, not a bare 401", async () => {
     const fetchImpl = (async () => json({}, 400)) as unknown as typeof fetch;
-    await expect(refreshToken(AS, { clientId: "cid", redirectUri: "http://localhost:1/callback" }, fake("refresh"), fetchImpl)).rejects.toThrow(
+    await expect(refreshToken(AS, "cid", fake("refresh"), fetchImpl)).rejects.toThrow(
       /linear\.reauth-required/,
     );
   });

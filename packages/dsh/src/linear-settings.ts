@@ -24,20 +24,44 @@
  * `linear.reauth-required` fact and nothing else — never an inferred
  * authorization, never a widened grant (a refresh sends no scope), and never a
  * retry spin.
+ *
+ * This module also serves the row's Settings card (plan
+ * 20261102-linear-oauth-guidance Task 3): `MstarLinearSettingsGateway` answers
+ * the card's four `mstar` operations, and owns the one authorization attempt.
+ * The attempt, its PKCE verifier and the loopback listener stay on the host;
+ * `linearAuthorizeBegin` answers with the attempt id and URL immediately, and
+ * the card polls `linearAuthorizeStatus` until a terminal answer. One begin
+ * while an attempt is live is refused (`attempt-active`), never forked.
  */
+import { randomUUID } from 'node:crypto'
 import { Service, type Context } from '@deepseek-ai/cordis'
+import { TypertRemoteService } from '@deepseek-ai/dsh-typert-protocol'
+import type { TypertContribution } from '@deepseek-ai/dsh-typert-registry'
 import {
   LINEAR_MCP_URL,
   REFRESH_WINDOW_MS,
+  beginAuthorization,
   discoverAuthorizationServer,
+  exchangeCode,
   readLinearCredential,
   refreshToken,
+  registerClient,
   writeLinearCredential,
+  type AuthorizationServer,
   type LinearCredential,
   type LinearCredentialState,
+  type PendingAuthorization,
   type TokenSet,
 } from '@mstar-harness/engine'
 import type { LoaderEntryView } from './gates/fallbacks-probe.ts'
+import {
+  MSTAR_CONTRIBUTING_PACKAGE,
+  MSTAR_ENGINE_STATUS_NAMESPACE,
+  MSTAR_LINEAR_AUTHORIZE_BEGIN_METHOD,
+  MSTAR_LINEAR_AUTHORIZE_CANCEL_METHOD,
+  MSTAR_LINEAR_AUTHORIZE_STATUS_METHOD,
+  MSTAR_LINEAR_STATUS_METHOD,
+} from './engine-status-wire.ts'
 
 /** The one Linear provider row this service feeds. */
 export const LINEAR_MCP_ENTRY_ID = 'linear-mcp'
@@ -45,8 +69,8 @@ export const LINEAR_MCP_ENTRY_ID = 'linear-mcp'
 /** The service name the row's `inject` and headers expression use. */
 export const LINEAR_AUTH_SERVICE = 'mstarLinearAuth'
 
-/** Refresh exchanges carry no redirect; the flow still takes one. */
-const REFRESH_REDIRECT = 'http://localhost:0/callback'
+/** The typert service key the Settings card's four calls are served from. */
+export const LINEAR_SETTINGS_SERVICE = 'linear-settings'
 
 declare module '@deepseek-ai/cordis' {
   interface Context {
@@ -86,6 +110,9 @@ export type LinearRefreshPlan =
 
 export type LinearAuthLogLevel = 'info' | 'warn'
 export type LinearAuthLogSink = (level: LinearAuthLogLevel, message: string) => void
+
+/** What the `linear-mcp` row's fiber is doing (the card renders only the enable bit). */
+export type LinearFiberPhase = 'absent' | 'disabled' | 'stopped' | 'live'
 
 let logSink: LinearAuthLogSink | undefined
 
@@ -212,6 +239,20 @@ export class MstarLinearAuth extends Service {
   }
 
   /**
+   * The row facts the Settings card may see: whether the host's native toggle
+   * is on, and what its fiber is doing. Point-in-time and by id — the card
+   * never writes the enable bit.
+   */
+  rowState(): { rowEnabled: boolean; fiberPhase: LinearFiberPhase } {
+    const entry = this.linearMcpEntry()
+    if (entry === undefined) return { rowEnabled: false, fiberPhase: 'absent' }
+    if (entry.disabled) return { rowEnabled: false, fiberPhase: 'disabled' }
+    const fiber = entry.fiber as ReloadableFiber | undefined
+    const live = fiber !== undefined && fiber !== null && fiber.uid !== null
+    return { rowEnabled: true, fiberPhase: live ? 'live' : 'stopped' }
+  }
+
+  /**
    * Reload the enabled row after a credential was granted (the post-authorize
    * hook) or rotated. Disabled or disposed rows are skipped explicitly: there
    * is no live connection to refresh, the next user enable mounts fresh, and
@@ -265,12 +306,7 @@ export class MstarLinearAuth extends Service {
     }
     try {
       const server = await discoverAuthorizationServer(LINEAR_MCP_URL, this.fetchImpl)
-      const fresh = await refreshToken(
-        server,
-        { clientId: credential.clientId, redirectUri: REFRESH_REDIRECT },
-        credential.refreshToken,
-        this.fetchImpl,
-      )
+      const fresh = await refreshToken(server, credential.clientId, credential.refreshToken, this.fetchImpl)
       if (this.disposed) return { kind: 'skipped' }
       const outcome = this.persist(before, fresh)
       this.refusal = null
@@ -346,5 +382,296 @@ export class MstarLinearAuth extends Service {
     } catch {
       // Logging is diagnostics; the attempt's outcome is unaffected.
     }
+  }
+}
+
+/* ------------------------------------------------------------------------ *
+ * The Settings card's host RPC (`linear-settings` service)
+ * ------------------------------------------------------------------------ */
+
+/** The display words derived from the credential file (one vocabulary with the CLI). */
+export type LinearCredentialDisplay = 'authorized' | 'expired' | 'absent' | 'unreadable'
+
+/** The only credential facts the browser may receive. */
+export interface LinearCredentialView {
+  display: LinearCredentialDisplay
+  scope: string | null
+  expiresAt: number | null
+}
+
+/** `linearStatus`: the row's enable bit + non-secret credential facts, or an explicit reason. */
+export type MstarLinearStatusResult =
+  | { status: 'unavailable'; reason: string }
+  | { status: 'ready'; rowEnabled: boolean; fiberPhase: LinearFiberPhase; credential: LinearCredentialView }
+
+/** `linearAuthorizeBegin`: the URL is the only thing that reaches the browser. */
+export type MstarLinearAuthorizeBeginResult =
+  | { status: 'started'; attemptId: string; url: string; expiresAt: number }
+  | { status: 'attempt-active' }
+  | { status: 'unavailable'; reason: string }
+
+/** `linearAuthorizeStatus`: the closed product union the card polls. */
+export type MstarLinearAuthorizeStatus =
+  | { status: 'pending' }
+  | { status: 'authorized'; scope: string | null; expiresAt: number | null }
+  | { status: 'denied'; reason: string }
+  | { status: 'timeout' }
+  | { status: 'cancelled' }
+  | { status: 'not-found' }
+
+/** `linearAuthorizeCancel`: the attempt is closed on the host. */
+export type MstarLinearAuthorizeCancelResult = { status: 'cancelled' } | { status: 'not-found' }
+
+/** Options the gateway needs from the plugin's apply scope (tests inject seams). */
+export interface MstarLinearSettingsOptions {
+  readonly auth: MstarLinearAuth
+  /** Network seam for discovery, registration and the code exchange. */
+  readonly fetch?: typeof fetch
+  readonly clock?: { now(): number }
+  /** Browser-consent bound. The shared flow's own default is five minutes. */
+  readonly waitTimeoutMs?: number
+}
+
+/** One live attempt: its PKCE state and listener never leave this object. */
+interface LinearAuthorizeAttempt {
+  readonly id: string
+  readonly pending: PendingAuthorization
+  readonly server: AuthorizationServer
+  result: MstarLinearAuthorizeStatus
+  cancelled: boolean
+}
+
+/** Derive the display word from the file facts (never from a bare 401 or `refreshDue`). */
+function credentialView(state: LinearCredentialState, now: number): LinearCredentialView {
+  if (state.kind === 'absent') return { display: 'absent', scope: null, expiresAt: null }
+  if (state.kind === 'unreadable') return { display: 'unreadable', scope: null, expiresAt: null }
+  const { scope, expiresAt } = state.credential
+  return {
+    display: expiresAt === null || now < expiresAt ? 'authorized' : 'expired',
+    scope,
+    expiresAt,
+  }
+}
+
+/**
+ * Host-side `linear-settings` gateway: the card's one root-scope surface.
+ *
+ * The attempt lives HERE, not inside an RPC: `linearAuthorizeBegin` starts the
+ * loopback listener and the code exchange in the background and answers with
+ * the attempt id and URL at once, so a slow consent never holds a request
+ * open. `linearAuthorizeStatus` is polled under the client's own short
+ * deadline until a terminal answer, then the attempt is dropped.
+ */
+export class MstarLinearSettingsGateway extends TypertRemoteService {
+  private readonly auth: MstarLinearAuth
+  private readonly fetchImpl: typeof fetch
+  private readonly clock: { now(): number }
+  private readonly waitTimeoutMs: number
+  private attempt: LinearAuthorizeAttempt | undefined
+  private beginInflight = false
+  private disposed = false
+
+  constructor(ctx: Context, options: MstarLinearSettingsOptions) {
+    super(ctx, LINEAR_SETTINGS_SERVICE, { namespace: MSTAR_ENGINE_STATUS_NAMESPACE })
+    this.auth = options.auth
+    this.fetchImpl = options.fetch ?? fetch
+    this.clock = options.clock ?? { now: () => Date.now() }
+    this.waitTimeoutMs = options.waitTimeoutMs ?? 300_000
+    ctx.effect(
+      () => () => {
+        this.disposed = true
+        const attempt = this.attempt
+        this.attempt = undefined
+        attempt?.pending.close()
+      },
+      'mstar:linear settings attempt',
+    )
+  }
+
+  private now(): number {
+    return this.clock.now()
+  }
+
+  /** The card's status read. Never returns a path, token, account or email. */
+  async linearStatus(): Promise<MstarLinearStatusResult> {
+    try {
+      const now = this.now()
+      const row = this.auth.rowState()
+      return {
+        status: 'ready',
+        rowEnabled: row.rowEnabled,
+        fiberPhase: row.fiberPhase,
+        credential: credentialView(readLinearCredential(now), now),
+      }
+    } catch {
+      return { status: 'unavailable', reason: 'internal-error' }
+    }
+  }
+
+  /**
+   * Start one attempt. The PKCE verifier, `state` and the loopback listener
+   * stay on the host; the browser receives only the authorization URL.
+   */
+  async linearAuthorizeBegin(): Promise<MstarLinearAuthorizeBeginResult> {
+    // A terminal answer the card never observed (it closed, or the browser
+    // tab is gone) must not lock the host out of a fresh attempt.
+    if (this.attempt !== undefined && this.attempt.result.status !== 'pending') {
+      this.attempt.pending.close()
+      this.attempt = undefined
+    }
+    // The synchronous guard (plus the in-flight flag) means a second click
+    // never forks a second PKCE state while discovery/registration is running.
+    if (this.attempt !== undefined || this.beginInflight) return { status: 'attempt-active' }
+    this.beginInflight = true
+    try {
+      const server = await discoverAuthorizationServer(LINEAR_MCP_URL, this.fetchImpl)
+      const pending = await beginAuthorization(server, (redirectUri) =>
+        registerClient(server, redirectUri, this.fetchImpl))
+      if (this.disposed) {
+        pending.close()
+        return { status: 'unavailable', reason: 'disposed' }
+      }
+      const attempt: LinearAuthorizeAttempt = {
+        id: randomUUID(),
+        pending,
+        server,
+        result: { status: 'pending' },
+        cancelled: false,
+      }
+      this.attempt = attempt
+      // Background completion: the exchange and the credential write happen
+      // after this call already answered. The card learns the outcome by
+      // polling `linearAuthorizeStatus`.
+      void this.settle(attempt)
+      return {
+        status: 'started',
+        attemptId: attempt.id,
+        url: pending.url,
+        expiresAt: this.now() + this.waitTimeoutMs,
+      }
+    } catch (error) {
+      return { status: 'unavailable', reason: errorCodeOf(error) ?? 'linear.auth-unavailable' }
+    } finally {
+      this.beginInflight = false
+    }
+  }
+
+  /** Answer the attempt's current state; a terminal answer is observed once. */
+  async linearAuthorizeStatus(attemptId: string): Promise<MstarLinearAuthorizeStatus> {
+    const attempt = this.attempt
+    if (attempt === undefined || attempt.id !== attemptId) return { status: 'not-found' }
+    if (attempt.result.status === 'pending') return attempt.result
+    this.attempt = undefined
+    attempt.pending.close()
+    return attempt.result
+  }
+
+  /** Close the live attempt (the card's cancel control). */
+  async linearAuthorizeCancel(attemptId: string): Promise<MstarLinearAuthorizeCancelResult> {
+    const attempt = this.attempt
+    if (attempt === undefined || attempt.id !== attemptId) return { status: 'not-found' }
+    attempt.cancelled = true
+    attempt.result = { status: 'cancelled' }
+    attempt.pending.close()
+    return { status: 'cancelled' }
+  }
+
+  /** The background leg: callback → exchange → credential write → row reload → terminal answer. */
+  private async settle(attempt: LinearAuthorizeAttempt): Promise<void> {
+    try {
+      const code = await attempt.pending.wait(this.waitTimeoutMs)
+      const tokens = await exchangeCode(
+        attempt.server,
+        { clientId: attempt.pending.clientId, redirectUri: attempt.pending.redirectUri },
+        code,
+        attempt.pending.verifier,
+        this.fetchImpl,
+      )
+      if (this.disposed || attempt.cancelled) return
+      writeLinearCredential({
+        accessToken: tokens.accessToken,
+        refreshToken: tokens.refreshToken,
+        clientId: tokens.clientId,
+        expiresAt: tokens.expiresAt,
+        scope: tokens.scope,
+      })
+      await this.auth.reloadRow()
+      if (this.disposed || attempt.cancelled) return
+      attempt.result = { status: 'authorized', scope: tokens.scope, expiresAt: tokens.expiresAt }
+    } catch (error) {
+      if (this.disposed || attempt.cancelled) return
+      const code = errorCodeOf(error)
+      attempt.result = code === 'linear.auth-timeout'
+        ? { status: 'timeout' }
+        : { status: 'denied', reason: code ?? 'linear.auth-unavailable' }
+    } finally {
+      attempt.pending.close()
+    }
+  }
+}
+
+/** One generated-style invocation descriptor (all four ride the card's service). */
+function linearInvocation(
+  method: string,
+  parameters: TypertContribution['invocations'][number]['parameters'],
+): TypertContribution['invocations'][number] {
+  return {
+    id: `${MSTAR_CONTRIBUTING_PACKAGE}#${MSTAR_ENGINE_STATUS_NAMESPACE}/${method}`,
+    service: LINEAR_SETTINGS_SERVICE,
+    namespace: MSTAR_ENGINE_STATUS_NAMESPACE,
+    method,
+    invocation: { kind: 'direct' },
+    parameters,
+    result: { mode: 'src-json' },
+  }
+}
+
+/** `mstar/linearStatus` — no arguments. */
+export function mstarLinearStatusInvocation(): TypertContribution['invocations'][number] {
+  return linearInvocation(MSTAR_LINEAR_STATUS_METHOD, [])
+}
+
+/** `mstar/linearAuthorizeBegin` — no arguments. */
+export function mstarLinearAuthorizeBeginInvocation(): TypertContribution['invocations'][number] {
+  return linearInvocation(MSTAR_LINEAR_AUTHORIZE_BEGIN_METHOD, [])
+}
+
+/** `mstar/linearAuthorizeStatus` — the attempt id. */
+export function mstarLinearAuthorizeStatusInvocation(): TypertContribution['invocations'][number] {
+  return linearInvocation(MSTAR_LINEAR_AUTHORIZE_STATUS_METHOD, [
+    { name: 'attemptId', wire: 'attemptId', source: 'json', codec: { mode: 'src-json' } },
+  ])
+}
+
+/** `mstar/linearAuthorizeCancel` — the attempt id. */
+export function mstarLinearAuthorizeCancelInvocation(): TypertContribution['invocations'][number] {
+  return linearInvocation(MSTAR_LINEAR_AUTHORIZE_CANCEL_METHOD, [
+    { name: 'attemptId', wire: 'attemptId', source: 'json', codec: { mode: 'src-json' } },
+  ])
+}
+
+/**
+ * Install the card's host service on one apply scope. Deduped like the other
+ * mstar gateways: the first instance keeps serving on a sibling apply.
+ * The invocation descriptors are carried by `mstarEngineStatusContribution()`
+ * (typert admits one contribution per package face) — this function only
+ * provides the service they name.
+ */
+export function installLinearSettingsEndpoint(ctx: Context, options: MstarLinearSettingsOptions): void {
+  let present = false
+  try {
+    present = ctx.get(LINEAR_SETTINGS_SERVICE) !== undefined
+  } catch {
+    present = false
+  }
+  if (present) {
+    ctx.logger('mstar/linear-settings').debug('linear-settings gateway already registered — kept as-is (multi-fiber dedupe)')
+    return
+  }
+  try {
+    void new MstarLinearSettingsGateway(ctx, options)
+  } catch (error) {
+    if (!(error instanceof Error) || !error.message.includes('has been registered')) throw error
+    ctx.logger('mstar/linear-settings').debug('linear-settings gateway registered concurrently — kept the first (multi-fiber dedupe)')
   }
 }
