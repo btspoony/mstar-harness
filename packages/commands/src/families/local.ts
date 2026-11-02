@@ -8,7 +8,7 @@ import {
   detectHost,
   emitGitignoreSnippet,
   hasHarnessRootDeclaration,
-  isDistinctCheckout,
+  probeCheckoutRoot,
   readMainWorktree,
   resolveHarnessDir,
   resolveProcessHarnessDir,
@@ -496,9 +496,12 @@ export function getLocalCommandDefinitions(): readonly CommandDefinition[] {
         }
         // A plain subdirectory of the main checkout belongs to that worktree;
         // a nested `git worktree add` under it is a distinct checkout. Git's
-        // per-worktree git dirs decide this, not path prefixes — a linked
-        // checkout can live inside the main checkout's directory tree.
-        const linkedWorktree = controlRoot !== null && isDistinctCheckout(controlRoot, startDir);
+        // own top-level for the start path decides this, not path prefixes.
+        // A failed probe is treated as linked on purpose: the effective
+        // answers then come from the control root, so the command cannot fall
+        // back to a local harness on a checkout it could not identify.
+        const startCheckout = probeCheckoutRoot(startDir);
+        const linkedWorktree = controlRoot !== null && startCheckout !== controlRoot;
         const control = {
           controlRoot,
           controlHarnessDir,

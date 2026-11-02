@@ -245,8 +245,55 @@ describe("shared host-health helpers", () => {
         controlRoot: main,
         controlHarnessDir: path.join(main, ".mstar"),
         linkedWorktree: true,
+        // The nested checkout carries no harness of its own, so its probe
+        // stays null while the top-level answers come from the control root.
+        local: { harnessDir: null },
       },
     });
+  });
+
+  test("path resolve keeps a plain subdirectory of the main checkout unlinked", async () => {
+    const root = realpathSync(fixture());
+    const main = path.join(root, "main");
+    const nested = path.join(main, "docs");
+    mkdirSync(nested, { recursive: true });
+    const git = (...args: string[]) =>
+      execFileSync("git", ["-C", main, "-c", "user.email=fixture@example.invalid", "-c", "user.name=fixture", ...args], {
+        encoding: "utf8",
+        stdio: ["ignore", "pipe", "pipe"],
+      });
+    git("init", "--quiet");
+    writeText(main, "README.md", "fixture\n");
+    git("add", "README.md");
+    git("commit", "--quiet", "-m", "fixture");
+    mkdirSync(path.join(main, ".mstar"), { recursive: true });
+    const definition = getLocalCommandDefinitions().find(({ id }) => id === "path.resolve");
+    expect(definition).toBeDefined();
+    if (!definition) return;
+    const result = await definition.execute({ path: nested }, {
+      cwd: main,
+      controlRoot: null,
+      versions: { engine: null, cli: null, plugin: null, host: null, platform: null },
+      signal: new AbortController().signal,
+      effects: {
+        readInput: async () => "",
+        spawn: async () => ({ exitCode: 0, signal: null, stdout: "", stderr: "" }),
+        startDashboard: async () => ({ url: "", close: async () => {} }),
+        openBrowser: async () => {},
+      },
+    });
+    expect(result).toMatchObject({
+      status: "ok",
+      data: {
+        harnessDir: path.join(main, ".mstar"),
+        controlRoot: main,
+        controlHarnessDir: path.join(main, ".mstar"),
+        linkedWorktree: false,
+      },
+    });
+    if (result.status !== "ok") return;
+    const data = result.data as Record<string, unknown>;
+    expect(data.local).toBeUndefined();
   });
 
   test("path resolve refuses a linked checkout whose main harness is absent", async () => {
