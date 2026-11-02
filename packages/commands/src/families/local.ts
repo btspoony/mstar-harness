@@ -499,6 +499,14 @@ export function getLocalCommandDefinitions(): readonly CommandDefinition[] {
           linkedWorktree,
           ...(controlUnavailable === undefined ? {} : { controlUnavailable }),
         };
+        // A linked checkout whose main worktree cannot be read must not fall
+        // back to local artifacts — misreporting the worktree's own directory
+        // as the process root is the confusion this command exists to remove.
+        if (controlUnavailable !== undefined) {
+          return refusalEnvelope({ command: "path.resolve", status: "refused", code: "coordination.not-in-git", exitCode: 1, message: `the linked checkout ${startDir} cannot read its main worktree: ${controlUnavailable}`, details: {
+            startDir, harnessDir: null, specsDir: null, workflowDir: null, projectDir: null, reviewDir: null, ...control, local: { harnessDir },
+          } , recovery: "From the main worktree: run mstar status validate; or set MSTAR_HARNESS_DIR to the control harness root. Run mstar path resolve."});
+        }
         if (linkedWorktree) {
           // In a linked checkout the local probe is the worktree's own
           // directory (tracked plugin dirs, usually not a harness at all);

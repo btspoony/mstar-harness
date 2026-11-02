@@ -194,6 +194,72 @@ describe("shared host-health helpers", () => {
     expect(data.local).toBeUndefined();
   });
 
+  test("path resolve refuses a linked checkout whose main harness is absent", async () => {
+    const root = realpathSync(fixture());
+    const main = path.join(root, "main");
+    const linked = path.join(root, "linked");
+    mkdirSync(main, { recursive: true });
+    const git = (...args: string[]) =>
+      execFileSync("git", ["-C", main, "-c", "user.email=fixture@example.invalid", "-c", "user.name=fixture", ...args], {
+        encoding: "utf8",
+        stdio: ["ignore", "pipe", "pipe"],
+      });
+    git("init", "--quiet");
+    writeText(main, "README.md", "fixture\n");
+    git("add", "README.md");
+    git("commit", "--quiet", "-m", "fixture");
+    git("worktree", "add", "--quiet", "-b", "linked-no-harness", linked);
+    const definition = getLocalCommandDefinitions().find(({ id }) => id === "path.resolve");
+    expect(definition).toBeDefined();
+    if (!definition) return;
+    const result = await definition.execute({ path: linked }, {
+      cwd: main,
+      controlRoot: null,
+      versions: { engine: null, cli: null, plugin: null, host: null, platform: null },
+      signal: new AbortController().signal,
+      effects: {
+        readInput: async () => "",
+        spawn: async () => ({ exitCode: 0, signal: null, stdout: "", stderr: "" }),
+        startDashboard: async () => ({ url: "", close: async () => {} }),
+        openBrowser: async () => {},
+      },
+    });
+    expect(result).toMatchObject({
+      status: "refused",
+      code: "path.harness-not-found",
+      details: { controlRoot: main, controlHarnessDir: null, linkedWorktree: true },
+    });
+  });
+
+  test("path resolve refuses a linked checkout whose main worktree cannot be read", async () => {
+    const orphan = path.join(realpathSync(fixture()), "orphan");
+    mkdirSync(orphan, { recursive: true });
+    // A `.git` FILE is the linked-checkout marker; its gitdir points nowhere,
+    // so no main worktree can be read from it.
+    writeText(orphan, ".git", "gitdir: /nonexistent/mstar-fixture.git\n");
+    const definition = getLocalCommandDefinitions().find(({ id }) => id === "path.resolve");
+    expect(definition).toBeDefined();
+    if (!definition) return;
+    const result = await definition.execute({ path: orphan }, {
+      cwd: orphan,
+      controlRoot: null,
+      versions: { engine: null, cli: null, plugin: null, host: null, platform: null },
+      signal: new AbortController().signal,
+      effects: {
+        readInput: async () => "",
+        spawn: async () => ({ exitCode: 0, signal: null, stdout: "", stderr: "" }),
+        startDashboard: async () => ({ url: "", close: async () => {} }),
+        openBrowser: async () => {},
+      },
+    });
+    expect(result).toMatchObject({
+      status: "refused",
+      code: "coordination.not-in-git",
+      details: { controlRoot: null, controlHarnessDir: null, linkedWorktree: false },
+    });
+    expect((result.details as Record<string, unknown>).controlUnavailable).toEqual(expect.any(String));
+  });
+
   test("path resolve still refuses outside git with no harness", async () => {
     const root = fixture();
     const definition = getLocalCommandDefinitions().find(({ id }) => id === "path.resolve");
