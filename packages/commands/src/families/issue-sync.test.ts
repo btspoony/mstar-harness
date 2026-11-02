@@ -472,6 +472,10 @@ describe("push — the credential scope preflight", () => {
         calls.push("discoverLabels");
         return new Set(labels);
       },
+      async discoverStates() {
+        calls.push("discoverStates");
+        return new Set(["Todo", "Done", "Canceled"]);
+      },
     };
     return fake;
   }
@@ -565,7 +569,7 @@ describe("push — the credential scope preflight", () => {
     expect(result.status).toBe("ok");
     expect(result.data).toMatchObject({ created: 1, failed: 0, labels: ["bug"] });
     expect(result.data?.items).toEqual([{ localId: "I-000801", outcome: "created", externalId: "LIN-1" }]);
-    expect(provider.calls).toEqual(["probe", "discoverLabels", "applyWrite"]);
+    expect(provider.calls).toEqual(["probe", "discoverLabels", "discoverStates", "applyWrite"]);
     const db = await f.db();
     try {
       expect(db.prepare("select item_state, external_id, last_kind_label from issue_sync_state").get()).toEqual({
@@ -606,6 +610,37 @@ describe("push — the credential scope preflight", () => {
     expect(provider.writes).toHaveLength(1);
   });
 
+  test("a team whose workflow lacks the mapped state refuses that item before the call, naming the mapping key", async () => {
+    const provider = writeProvider(["bug"]);
+    // The workflow renamed `Todo`; `open` dispositions map to it by default.
+    provider.discoverStates = async () => new Set(["Ready for Dev", "Done", "Canceled"]);
+    const f = await fixture("push-state-missing", null);
+    storeCredential("read,issues:create");
+    {
+      const handle = await openStore({ harnessDir: f.harnessDir }, "write");
+      handle.db.prepare(
+        "insert into issues(id, project_id, title, kind, severity, disposition, impact, acceptance, created_at, updated_at, identity_key)" +
+          " values ('I-000805', ?, 'Blocked', 'bug', 'high', 'open', 'i', 'a', 'now', 'now', 'sync-I-000805')",
+      ).run(PROJECT);
+      handle.close();
+    }
+    const result = (await executeCommand("issue-sync.push", { project: PROJECT }, withProvider(f, provider))) as {
+      status: string;
+      data?: { created: number; failed: number; states: string[]; items: Array<{ localId: string; outcome: string; cause?: string }> };
+    };
+    expect(result.status).toBe("ok");
+    expect(result.data).toMatchObject({ created: 0, failed: 1 });
+    // The report names the vocabulary the run resolved against, so an operator
+    // can see the mismatch without re-running discovery by hand.
+    expect(result.data?.states).toEqual(["Canceled", "Done", "Ready for Dev"]);
+    const failedItem = result.data?.items.find((entry) => entry.localId === "I-000805");
+    expect(failedItem?.cause).toContain("linear.state-unresolved");
+    expect(failedItem?.cause).toContain('"Todo"');
+    expect(failedItem?.cause).toContain("disposition.open");
+    // Nothing reached the provider.
+    expect(provider.writes).toHaveLength(0);
+  });
+
   test("--adopt recovers the pending residue an ambiguous create left behind", async () => {
     const writes: Array<{ kind: string; externalId?: string }> = [];
     const receipts = [
@@ -625,6 +660,9 @@ describe("push — the credential scope preflight", () => {
       },
       async discoverLabels() {
         return new Set(["bug"]);
+      },
+      async discoverStates() {
+        return new Set(["Todo", "Done", "Canceled"]);
       },
     };
     const f = await fixture("push-adopt-pending", null);
@@ -670,6 +708,79 @@ describe("push — the credential scope preflight", () => {
         item_state: "applied",
         external_id: "LIN-555",
       });
+    } finally {
+      db.close();
+    }
+  });
+
+  test("--force-create with a missing label keeps the pending residue reconcilable", async () => {
+    const writes: Array<{ kind: string }> = [];
+    const receipts = [{ kind: "ambiguous" as const, cause: "connection closed mid-call" }];
+    const provider = {
+      async probe() {
+        return { state: "ready" as const, cause: "ready: fixture handshake" };
+      },
+      async listIssues() {
+        return { items: [], nextCursor: null };
+      },
+      async applyWrite(write: { kind: string }) {
+        writes.push(write);
+        return receipts.shift() ?? { kind: "confirmed" as const, externalId: "LIN-999", updatedAt: "2026-11-02T00:10:00.000Z" };
+      },
+      async discoverLabels() {
+        // `risk` is genuinely absent, so the risk item's preflight refuses.
+        return new Set(["bug"]);
+      },
+      async discoverStates() {
+        return new Set(["Todo", "Done", "Canceled"]);
+      },
+    };
+    const f = await fixture("push-force-create-refusal", null);
+    storeCredential("read,issues:create");
+    {
+      const handle = await openStore({ harnessDir: f.harnessDir }, "write");
+      handle.db.prepare(
+        "insert into issues(id, project_id, title, kind, severity, impact, acceptance, created_at, updated_at, identity_key)" +
+          " values ('I-000806', ?, 'Residue', 'risk', 'high', 'i', 'a', 'now', 'now', 'sync-I-000806')",
+      ).run(PROJECT);
+      handle.close();
+    }
+    const context = { ...f.context, effects: { ...f.context.effects, issueProvider: () => provider as never } };
+
+    // 1. The ambiguous create, on a kind the workspace CAN label at the time.
+    provider.discoverLabels = async () => new Set(["bug", "risk"]);
+    const first = (await executeCommand("issue-sync.push", { project: PROJECT }, context)) as {
+      data?: { items: Array<{ localId: string; outcome: string }> };
+    };
+    expect(first.data?.items).toEqual([expect.objectContaining({ localId: "I-000806", outcome: "unresolved" })]);
+    expect(writes).toHaveLength(1);
+
+    // 2. `--force-create` while the label is gone: the refusal must not take
+    //    the ambiguity with it. Before the fix the row became `failed`, which
+    //    `reconcilePendingCreate` never scans, so the residue was lost.
+    provider.discoverLabels = async () => new Set(["bug"]);
+    const forced = (await executeCommand("issue-sync.push", { project: PROJECT, forceCreate: ["I-000806"] }, context)) as {
+      status: string;
+      data?: { failed: number; items: Array<{ localId: string; outcome: string; cause?: string }> };
+    };
+    expect(forced.status).toBe("ok");
+    expect(forced.data?.items).toEqual([
+      expect.objectContaining({ localId: "I-000806", outcome: "failed" }),
+    ]);
+    expect(forced.data?.items[0]?.cause).toContain("linear.label-unresolved");
+    expect(writes).toHaveLength(1);
+
+    const db = await f.db();
+    try {
+      // Still the ambiguous residue, with the diagnostic on the row.
+      const ledger = db.prepare("select item_state, external_id, last_error from issue_sync_state").get() as {
+        item_state: string;
+        external_id: string | null;
+        last_error: string | null;
+      };
+      expect(ledger.item_state).toBe("pending");
+      expect(ledger.external_id).toBeNull();
+      expect(ledger.last_error).toContain("linear.label-unresolved");
     } finally {
       db.close();
     }

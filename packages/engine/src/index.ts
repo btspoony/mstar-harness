@@ -754,6 +754,7 @@ export type {
 } from "./issue-sync.js";
 export {
   SyncError,
+  claimItem,
   markApplied,
   markFailed,
   markSkipped,
@@ -762,6 +763,7 @@ export {
   readCursor,
   readItem,
   readLedgerSummary,
+  recordRefusal,
   replanItem,
   resetCursor,
   writeCursor,
@@ -783,6 +785,7 @@ export {
   createLinearProvider,
   LINEAR_LABEL_VERBS,
   LINEAR_LISTING_VERBS,
+  LINEAR_STATE_VERBS,
   LINEAR_WRITE_VERBS,
 } from "./issue-sync/linear-provider.js";
 // Write side of the Linear adapter: the save verb, the strict fixture envelope

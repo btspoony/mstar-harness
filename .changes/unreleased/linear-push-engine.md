@@ -24,6 +24,11 @@ packages: engine, commands
   argument is never sent, and a host handshake whose schema does not advertise `removeLabels` refuses that
   update before any write. An update whose receipt is unconfirmed keeps BOTH the old and the attempted label as
   candidates, so the retry removes whichever one the remote actually kept.
+- **Workflow states are resolved the same way.** Disposition→state is resolved against the bound team's real
+  workflow states discovered through `list_issue_statuses`; a mapped name the team lacks refuses that item
+  (`linear.state-unresolved`) before the call and names the `[linear.mapping] disposition.<state>` redirect, so a
+  renamed workflow is diagnosed in the run instead of failing every item at the provider. The report carries the
+  state set the run resolved against, beside the label set.
 - **Writes need a write scope.** The run refuses with `linear.scope-insufficient` before any provider call when
   the stored credential's `scope` carries neither `issues:create` nor `write`, naming the explicit
   reauthorization (`mstar linear auth login` or the dsh Settings Authorize). A refresh never widens a read-only
@@ -51,6 +56,10 @@ packages: engine, commands
   全部已记录的候选标签；没有记录标签的行只做新增，全量替换的 `labels` 参数永不发送，握手 schema 未声明
   `removeLabels` 的宿主会在任何写入之前拒绝该次更新。未确认的更新会把旧标签与被尝试的新标签都保留为候选，
   因此重试会移除远端实际保留的那一个。
+- **工作流状态同样只解析、绝不创建。** disposition→state 会针对绑定的团队通过 `list_issue_statuses` 发现的真实工作流
+  状态解析；团队缺少该名称时仅拒绝该项（`linear.state-unresolved`），并在调用之前指名字段重定向
+  `[linear.mapping] disposition.<state>`，因此重命名过的流程会在本次运行里被诊断出来，而不是让每一项都在 provider
+  处失败。报告会同时带上本次运行解析所用的状态集与标签集。
 - **写入需要写权限。** 当存储凭据的 `scope` 既无 `issues:create` 也无 `write` 时，运行在任何 provider 调用之前即以
   `linear.scope-insufficient` 拒绝，并指明显式重新授权（`mstar linear auth login` 或 dsh Settings Authorize）。
   刷新永远不会扩大只读授权。自动对账之外的操作者恢复手段：`--adopt <localId>=<issueUrl|externalId>` 与
