@@ -133,12 +133,17 @@ export type SyncBindingReadiness = {
   cause: string;
 };
 
+/** One stored correspondence row (`project_bindings`, migration 15) as the panel shows it. */
+export type SyncBindingProject = { projectId: string; remoteProject: string };
+
 /** The read-only binding DTO: connection summary + readiness with its cause. */
 export type SyncBindingDTO = {
   /** The `[linear]` summary, or `null` when no section is declared. */
   binding: { enabled: boolean; mode: string; workspace: string; team: string } | null;
   /** The `parseLinearBinding` refusal message when the section is invalid. */
   bindingError: string | null;
+  /** The stored `project_id` → `remote_project` correspondence, read-only. */
+  projectBindings: SyncBindingProject[];
   readiness: SyncBindingReadiness;
 };
 
@@ -688,12 +693,13 @@ export function queryIssueFlow(projectId?: string): StoreReadQuery<IssueFlow> {
 }
 
 /**
- * The `sync-binding` view (contract §6): the `.mstarc` `[linear]` summary plus
- * the readiness state with its cause. Assembled at query-build time from the
- * config file and the host-supplied probe filters — the run reads no store
- * rows and opens no file, so the view stays read-only end to end. Readiness is
- * never guessed: with no host-supplied probe result it is honestly
- * `not-probed`.
+ * The `sync-binding` view (contract §6): the `.mstarc` `[linear]` summary, the
+ * store's read-only `project_bindings` correspondence, and the readiness state
+ * with its cause. The summary and readiness are assembled at query-build time
+ * from the config file and the host-supplied probe filters; the run reads only
+ * the correspondence rows and writes nothing, so the view stays read-only end
+ * to end. Readiness is never guessed: with no host-supplied probe result it is
+ * honestly `not-probed`.
  */
 /**
  * The parent directory counts as the declaring repository ONLY when it actually
@@ -705,6 +711,23 @@ export function queryIssueFlow(projectId?: string): StoreReadQuery<IssueFlow> {
 function parentThatDeclares(harnessDir: string): string | null {
   const parent = dirname(resolve(harnessDir));
   return existsSync(join(parent, MSTARC_FILE)) ? parent : null;
+}
+
+/**
+ * The stored correspondence rows. A store that cannot answer the read (it
+ * predates migration 15, so there is no `project_bindings` table) yields no
+ * rows: the `.mstarc` summary must answer regardless, and the panel renders the
+ * difference from `binding`/`bindingError`. `project_bindings` is never written.
+ */
+function readSyncBindingProjects(handle: StoreHandle): SyncBindingProject[] {
+  try {
+    const rows = handle.db
+      .prepare("select project_id, remote_project from project_bindings order by project_id")
+      .all() as Array<{ project_id: string; remote_project: string }>;
+    return rows.map((row) => ({ projectId: row.project_id, remoteProject: row.remote_project }));
+  } catch {
+    return [];
+  }
 }
 
 export function querySyncBinding(harnessDir: string, filters: DashboardFilters): StoreReadQuery<SyncBindingDTO> {
@@ -731,7 +754,11 @@ export function querySyncBinding(harnessDir: string, filters: DashboardFilters):
     filters.probeState === undefined
       ? { state: "not-probed", cause: "not-probed: readiness is host-owned; no probe result was supplied" }
       : { state: filters.probeState, cause: filters.probeCause as string };
-  return { view: "sync-binding", needsProjection: false, run: () => ({ binding, bindingError, readiness }) };
+  return {
+    view: "sync-binding",
+    needsProjection: false,
+    run: (handle) => ({ binding, bindingError, projectBindings: readSyncBindingProjects(handle), readiness }),
+  };
 }
 
 function dashboardView(view: DashboardView, handle: StoreHandle, filters: DashboardFilters): unknown {

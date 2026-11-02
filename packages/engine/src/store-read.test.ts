@@ -39,12 +39,15 @@ import { refreshProjections } from "./projection.js";
 import { importRoadmapAuthority, reviewRoadmapImport } from "./roadmap-store.js";
 import { createExecutionWorkflow, readExecutionState, type ExecutionCaller } from "./execution-store.js";
 import { initializeStore, openStore, storeDbPath, type StoreContext, type StoreDb } from "./store-db.js";
+import { bindProject } from "./project.js";
 import {
   queryDashboard,
   queryIssueFlow,
+  querySyncBinding,
   StoreReadError,
   withStoreRead,
   type IssueFlow,
+  type SyncBindingDTO,
   type WorkflowDTO,
 } from "./store-read.js";
 
@@ -1339,5 +1342,65 @@ describe("projects view", () => {
   test("projects empty catalog returns an empty successful list", async () => {
     const { context } = await workspace("projects-empty-");
     expect((await withStoreRead(context, queryDashboard("projects"))).data).toEqual({ items: [], total: 0 });
+  });
+});
+
+/**
+ * The `sync-binding` view (contract §6): the `.mstarc` summary, the stored
+ * `project_bindings` correspondence as a read-only list, and readiness with its
+ * cause. The correspondence is projected from rows that already exist; this
+ * view never writes them and exposes no credential.
+ */
+describe("sync-binding view", () => {
+  const MSTARC = "[linear]\nenabled=true\nmode=mirror\nworkspace=acme\nteam=eng\n";
+
+  /** One repo-shaped fixture with `.mstarc` beside `.mstar` and the given projects bound. */
+  async function boundWorkspace(name: string, bindings: Array<[string, string]>): Promise<Fixture> {
+    const fixture = await workspace(name);
+    writeFile(join(fixture.dir, ".mstarc"), MSTARC);
+    for (const [id, remoteProject] of bindings) {
+      await registerCatalogEntity(
+        fixture.context,
+        { kind: "project", id, title: `Project ${id}`, rootKind: "projects", relativePath: `projects/${id}` },
+        op(`register-${id}`),
+      );
+      await bindProject(fixture.context, id, { provider: "linear", workspace: "acme", team: "eng", remoteProject }, { operationId: `bind-${id}` });
+    }
+    return fixture;
+  }
+
+  test("every stored correspondence row is listed verbatim", async () => {
+    const { harness, context } = await boundWorkspace("sync-binding-rows-", [
+      ["proj-a", "Team Roadmap"],
+      ["proj-b", "Backlog 2026"],
+    ]);
+    const data: SyncBindingDTO = (await withStoreRead(context, querySyncBinding(harness, {}))).data;
+    expect(data.projectBindings).toEqual([
+      { projectId: "proj-a", remoteProject: "Team Roadmap" },
+      { projectId: "proj-b", remoteProject: "Backlog 2026" },
+    ]);
+    expect(data.binding).toEqual({ enabled: true, mode: "mirror", workspace: "acme", team: "eng" });
+    expect(data.bindingError).toBeNull();
+  });
+
+  test("a store that cannot answer the binding read yields no rows and keeps the .mstarc summary", async () => {
+    const { dir, harness, context } = await workspace("sync-binding-unreadable-");
+    writeFile(join(dir, ".mstarc"), MSTARC);
+    // A store predating migration 15 has no `project_bindings` table at all:
+    // the panel still answers, with no correspondence rows.
+    await withWrite(context, (db) => {
+      for (const table of ["sync_cursor", "issue_sync_state", "project_bindings"]) db.exec(`drop table ${table}`);
+      db.prepare("delete from schema_version where version >= 15").run();
+    });
+    const data: SyncBindingDTO = (await withStoreRead(context, querySyncBinding(harness, {}))).data;
+    expect(data.projectBindings).toEqual([]);
+    expect(data.binding).toEqual({ enabled: true, mode: "mirror", workspace: "acme", team: "eng" });
+  });
+
+  test("the DTO exposes no credential-bearing field", async () => {
+    const { harness, context } = await boundWorkspace("sync-binding-credential-", [["proj-a", "Team Roadmap"]]);
+    const data: SyncBindingDTO = (await withStoreRead(context, querySyncBinding(harness, {}))).data;
+    expect(Object.keys(data).sort()).toEqual(["binding", "bindingError", "projectBindings", "readiness"]);
+    expect(Object.keys(data.projectBindings[0]).sort()).toEqual(["projectId", "remoteProject"]);
   });
 });
