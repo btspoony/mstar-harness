@@ -10,10 +10,8 @@ const NO_SINGLE_OWNER_FAMILIES = [
   "doctor",
   "issue-sync",
   "linear",
-  "lint",
   "migrate",
   "plugin",
-  "session",
   "workflow-note",
 ] as const;
 
@@ -29,12 +27,23 @@ describe("owning-skill table", () => {
   });
 
   test("command override beats family default", () => {
-    // plan family has no default; plan.show / plan.bind are overridden.
+    // plan family has no default; each verb is overridden from its former owner row.
     expect(owningSkillFor("plan.show")).toBe("mstar-artifacts");
     expect(owningSkillFor("plan.bind")).toBe("mstar-iteration");
+    expect(owningSkillFor("plan.complete")).toBe("mstar-artifacts");
+    expect(owningSkillFor("plan.progress")).toBe("mstar-sdd");
+    expect(owningSkillFor("status.tech-debt")).toBe("mstar-project-governance");
     // store family default is mstar-conventions; execution commands override.
     expect(owningSkillFor("store.init")).toBe("mstar-conventions");
     expect(owningSkillFor("store.execution.restore")).toBe("mstar-artifacts");
+    // A family default still covers a verb without its own override.
+    expect(owningSkillFor("lint")).toBe("mstar-skill-authoring");
+  });
+
+  test("retired verbs publish no owning skill", () => {
+    for (const id of ["status.archive-residuals", "status.backlog-register", "status.backlog-close"]) {
+      expect(owningSkillFor(id)).toBeUndefined();
+    }
   });
 
   test("unknown id returns undefined without throwing", () => {
