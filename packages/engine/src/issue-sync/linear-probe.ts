@@ -46,8 +46,12 @@ export type RpcOutcome =
 export type LinearProbeDeps = {
   /** Find the configured Linear MCP entry, or `null` when none exists. */
   findLinearEntry(): LinearMcpEntry | null;
-  /** Perform one JSON-RPC call against the entry. */
-  rpc(entry: LinearMcpEntry, method: "initialize" | "tools/list"): Promise<RpcOutcome>;
+  /**
+   * Perform one JSON-RPC call against the entry. `signal` aborts on the
+   * deadline: a transport that ignores it keeps running past the timeout (the
+   * real streamable-HTTP transport aborts its fetch on the same signal).
+   */
+  rpc(entry: LinearMcpEntry, method: "initialize" | "tools/list", signal?: AbortSignal): Promise<RpcOutcome>;
   /**
    * Tool names that satisfy "the listing verb that supports an updatedAt
    * filter" (contract §5 — the exact name is pinned by the authenticated
@@ -97,9 +101,14 @@ function timedOut(deadlineMs: number): ProbeResult {
 }
 
 /**
- * Run `call` under `deadlineMs`. The injected `rpc` owns cancellation (it is
- * the host's transport); this race guarantees `probe()` returns even when it
- * never settles, which is what keeps every readiness caller unblocked.
+ * Run `call` under `deadlineMs`. On expiry the deadline ABORTS the call
+ * (I-000950): racing alone left the transport running past the deadline,
+ * spending the host's sockets and, for a real fetch, its bearer token, long
+ * after `probe()` had reported `unreachable`.
+ *
+ * The race still guarantees `probe()` returns even when a transport ignores the
+ * signal. An abort is reported as the timeout cause, never as a transport
+ * failure: whatever the transport does after the abort must not mask why.
  *
  * A transport that THROWS is the other half of the same promise: `probe()`
  * returns `Promise<ProbeResult>`, so a rejection would escape the four-state
@@ -107,18 +116,24 @@ function timedOut(deadlineMs: number): ProbeResult {
  * `transport-error` outcome `mapOutcome` already knows. `call` is a thunk so a
  * SYNCHRONOUS throw is caught by the same boundary.
  */
-async function withDeadline(call: () => Promise<RpcOutcome>, deadlineMs: number): Promise<RpcOutcome | "timeout"> {
-  let timer: ReturnType<typeof setTimeout> | undefined;
-  const expiry = new Promise<"timeout">((resolve) => {
-    timer = setTimeout(() => resolve("timeout"), deadlineMs);
-  });
+async function withDeadline(
+  call: (signal: AbortSignal) => Promise<RpcOutcome>,
+  deadlineMs: number,
+): Promise<RpcOutcome | "timeout"> {
+  const controller = new AbortController();
+  const { promise: expiry, resolve: expire } = Promise.withResolvers<"timeout">();
+  const timer = setTimeout(() => {
+    controller.abort();
+    expire("timeout");
+  }, deadlineMs);
   const settled = Promise.resolve()
-    .then(call)
-    .catch((error: unknown): RpcOutcome => ({ kind: "transport-error", message: describeThrown(error) }));
+    .then(() => call(controller.signal))
+    .catch((error: unknown): RpcOutcome => ({ kind: "transport-error", message: describeThrown(error) }))
+    .then((outcome): RpcOutcome | "timeout" => (controller.signal.aborted ? "timeout" : outcome));
   try {
     return await Promise.race([settled, expiry]);
   } finally {
-    if (timer !== undefined) clearTimeout(timer);
+    clearTimeout(timer);
   }
 }
 
@@ -155,11 +170,11 @@ export function createLinearProbe(deps: LinearProbeDeps): Pick<IssueProvider, "p
       if (entry === null) {
         return { state: "service-absent", cause: "service-absent: no Linear entry in the host MCP configuration" };
       }
-      const init = await withDeadline(() => deps.rpc(entry, "initialize"), deadlineMs);
+      const init = await withDeadline((signal) => deps.rpc(entry, "initialize", signal), deadlineMs);
       if (init === "timeout") return timedOut(deadlineMs);
       if (init.kind !== "ok") return mapOutcome(init);
 
-      const listing = await withDeadline(() => deps.rpc(entry, "tools/list"), deadlineMs);
+      const listing = await withDeadline((signal) => deps.rpc(entry, "tools/list", signal), deadlineMs);
       if (listing === "timeout") return timedOut(deadlineMs);
       if (listing.kind !== "ok") return mapOutcome(listing);
 

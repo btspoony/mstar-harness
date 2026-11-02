@@ -27,6 +27,11 @@ packages: engine, commands
   reauthorization (`mstar linear auth login` or the dsh Settings Authorize). A refresh never widens a read-only
   grant. Operator recovery beyond automatic reconcile: `--adopt <localId>=<issueUrl|externalId>` and
   `--force-create <localId>`.
+- **The probe deadline aborts the call it timed out.** `LinearProbeDeps.rpc` now receives an `AbortSignal` that
+  fires when the handshake deadline expires, so a transport stuck in flight is cancelled instead of being
+  abandoned while it keeps holding its socket. The caller still observes the same single
+  `unreachable: Linear MCP handshake timed out after <n>ms` cause; a transport that reports the abort as its own
+  error cannot turn that into a transport failure.
 
 <!-- CN -->
 - **单向推送到 Linear。** `mstar issue-sync push --project <id>` 把本项目本地 issue 推送至绑定的 Linear 团队：
@@ -46,3 +51,7 @@ packages: engine, commands
   `linear.scope-insufficient` 拒绝，并指明显式重新授权（`mstar linear auth login` 或 dsh Settings Authorize）。
   刷新永远不会扩大只读授权。自动对账之外的操作者恢复手段：`--adopt <localId>=<issueUrl|externalId>` 与
   `--force-create <localId>`。
+- **探测超时会中止它自己超时的那次调用。** `LinearProbeDeps.rpc` 现在会收到一个在握手超时到期时触发的
+  `AbortSignal`：卡在飞行中的传输会被真正取消，而不是被丢下继续占用 socket。调用方观察到的仍是同一条
+  `unreachable: Linear MCP handshake timed out after <n>ms` 原因；传输把中止当成自己的错误上报也无法把它
+  变成 transport 失败。
