@@ -7,7 +7,7 @@
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { afterAll, describe, expect, test } from "bun:test";
+import { afterAll, afterEach, beforeEach, describe, expect, test } from "bun:test";
 import {
   IMPORTED_ACCEPTANCE_KEY,
   IMPORTED_ROOT_CAUSE_KEY,
@@ -16,6 +16,7 @@ import {
   initializeStore,
   openStore,
   readLedgerSummary,
+  writeLinearCredential,
   type IssueProvider,
   type ProbeResult,
   type ProviderItem,
@@ -57,6 +58,11 @@ function provider(
     async listIssues(cursor) {
       requests.push(cursor);
       return pages(cursor);
+    },
+    // The import fixture never writes; the member must still exist so the
+    // fixture is a real provider rather than a partial one.
+    async applyWrite() {
+      throw new Error("the import fixture is read-only");
     },
   };
 }
@@ -404,5 +410,193 @@ describe("command surface", () => {
     const result = (await executeCommand("issue-sync.import", {}, f.context)) as { status: string; exitCode: number };
     expect(result.status).toBe("usage");
     expect(result.exitCode).toBe(2);
+  });
+});
+
+/**
+ * Push — the write surface. Case (h) of the SDD brief: the credential SCOPE
+ * preflight refuses the whole run before any write, and a refresh never widens
+ * a read-only grant into a write one.
+ *
+ * The store is the real one; the provider is a fixture whose label discovery and
+ * write receipts are scripted, so no network and no credential cross a boundary.
+ */
+describe("push — the credential scope preflight", () => {
+  const credentialPath = (): string => join(ROOT, "push-credential.json");
+  const previousCredential = process.env.MSTAR_LINEAR_CREDENTIAL;
+
+  /** A provider that records every call and can answer discovery + writes. */
+  function writeProvider(labels: string[] = ["bug"]) {
+    const calls: string[] = [];
+    const writes: unknown[] = [];
+    const fake = {
+      calls,
+      writes,
+      async probe() {
+        calls.push("probe");
+        return { state: "ready", cause: "ready: fixture handshake" };
+      },
+      async listIssues() {
+        calls.push("listIssues");
+        return { items: [], nextCursor: null };
+      },
+      async applyWrite(write: unknown) {
+        calls.push("applyWrite");
+        writes.push(write);
+        return { kind: "confirmed", externalId: "LIN-1", updatedAt: "2026-11-02T00:00:00.000Z" };
+      },
+      async discoverLabels() {
+        calls.push("discoverLabels");
+        return new Set(labels);
+      },
+    };
+    return fake;
+  }
+
+  function withProvider(f: Fixture, provider: ReturnType<typeof writeProvider>): InvocationContext {
+    return { ...f.context, effects: { ...f.context.effects, issueProvider: () => provider as never } };
+  }
+
+  function storeCredential(scope: string | null, expiresAt: number | null = Date.now() + 3_600_000): void {
+    writeLinearCredential({
+      accessToken: ["not", "a", "real", "access"].join("-"),
+      refreshToken: ["not", "a", "real", "refresh"].join("-"),
+      expiresAt,
+      scope,
+      clientId: ["not", "a", "real", "client"].join("-"),
+    });
+  }
+
+  beforeEach(() => {
+    process.env.MSTAR_LINEAR_CREDENTIAL = credentialPath();
+  });
+
+  afterEach(() => {
+    if (previousCredential === undefined) delete process.env.MSTAR_LINEAR_CREDENTIAL;
+    else process.env.MSTAR_LINEAR_CREDENTIAL = previousCredential;
+    rmSync(credentialPath(), { force: true });
+  });
+
+  test("a scope of `read` refuses the run before any provider call or ledger write", async () => {
+    const provider = writeProvider();
+    const f = await fixture("push-read-scope", null);
+    storeCredential("read");
+    const before = await storeSnapshot(f);
+    const result = (await executeCommand("issue-sync.push", { project: PROJECT }, withProvider(f, provider))) as {
+      status: string;
+      code: string;
+      message?: string;
+    };
+    expect(result.status).toBe("refused");
+    expect(result.code).toBe("linear.scope-insufficient");
+    // The recovery names BOTH surfaces that actually request the write scope.
+    expect(JSON.stringify(result)).toMatch(/Settings|Authorize/);
+    expect(JSON.stringify(result)).toMatch(/linear auth/);
+    // Zero provider calls — not even the probe — and nothing written.
+    expect(provider.calls).toEqual([]);
+    expect(await storeSnapshot(f)).toEqual(before);
+  });
+
+  test("a refreshed credential still echoing `read` still refuses, and the refresh request carries no scope", async () => {
+    const provider = writeProvider();
+    const f = await fixture("push-read-refreshed", null);
+    // Expired, so a run that got past the preflight would have to refresh first.
+    storeCredential("read", Date.now() - 60_000);
+    const refreshedScopes: Array<string | null> = [];
+    const context: InvocationContext = {
+      ...withProvider(f, provider),
+      effects: {
+        ...withProvider(f, provider).effects,
+        linearRefresh: async () => {
+          // The provider echoes the ORIGINAL grant's scope: refresh never widens.
+          refreshedScopes.push("read");
+          return { accessToken: "fresh", refreshToken: null, expiresAt: Date.now() + 3_600_000, scope: "read", clientId: "c" };
+        },
+      },
+    };
+    const result = (await executeCommand("issue-sync.push", { project: PROJECT }, context)) as { status: string; code: string };
+    expect(result.status).toBe("refused");
+    expect(result.code).toBe("linear.scope-insufficient");
+    // The conclusion holds whether or not the token was refreshed: a read grant
+    // is read-only on both axes (expiry and permission are different things).
+    expect(provider.calls).toEqual([]);
+  });
+
+  test("a scope carrying issues:create pushes: discovery runs, then one confirmed create", async () => {
+    const provider = writeProvider(["bug"]);
+    const f = await fixture("push-write-scope", null);
+    storeCredential("read,issues:create");
+    {
+      const handle = await openStore({ harnessDir: f.harnessDir }, "write");
+      handle.db.prepare(
+        "insert into issues(id, project_id, title, kind, severity, impact, acceptance, created_at, updated_at, identity_key)" +
+          " values ('I-000801', ?, 'Push me', 'bug', 'high', 'impact', 'acceptance', 'now', 'now', 'sync-I-000801')",
+      ).run(PROJECT);
+      handle.close();
+    }
+    const result = (await executeCommand("issue-sync.push", { project: PROJECT }, withProvider(f, provider))) as {
+      status: string;
+      code: string;
+      data?: { created: number; failed: number; labels: string[]; items: Array<{ localId: string; outcome: string; externalId: string | null }> };
+    };
+    expect(result.status).toBe("ok");
+    expect(result.data).toMatchObject({ created: 1, failed: 0, labels: ["bug"] });
+    expect(result.data?.items).toEqual([{ localId: "I-000801", outcome: "created", externalId: "LIN-1" }]);
+    expect(provider.calls).toEqual(["probe", "discoverLabels", "applyWrite"]);
+    const db = await f.db();
+    try {
+      expect(db.prepare("select item_state, external_id, last_kind_label from issue_sync_state").get()).toEqual({
+        item_state: "applied",
+        external_id: "LIN-1",
+        last_kind_label: "bug",
+      });
+    } finally {
+      db.close();
+    }
+  });
+
+  test("a mapped kind label the workspace lacks refuses that item only, and names the label", async () => {
+    const provider = writeProvider(["bug"]);
+    const f = await fixture("push-label-missing", null);
+    storeCredential("read,issues:create");
+    {
+      const handle = await openStore({ harnessDir: f.harnessDir }, "write");
+      const insert = handle.db.prepare(
+        "insert into issues(id, project_id, title, kind, severity, impact, acceptance, created_at, updated_at, identity_key)" +
+          " values (?, ?, ?, ?, 'high', 'i', 'a', 'now', 'now', ?)",
+      );
+      insert.run("I-000802", PROJECT, "Bug", "bug", "sync-I-000802");
+      insert.run("I-000803", PROJECT, "Risk", "risk", "sync-I-000803");
+      handle.close();
+    }
+    const result = (await executeCommand("issue-sync.push", { project: PROJECT }, withProvider(f, provider))) as {
+      status: string;
+      data?: { created: number; failed: number; items: Array<{ localId: string; outcome: string; cause?: string }> };
+    };
+    expect(result.status).toBe("ok");
+    expect(result.data).toMatchObject({ created: 1, failed: 1 });
+    const failedItem = result.data?.items.find((entry) => entry.localId === "I-000803");
+    expect(failedItem?.outcome).toBe("failed");
+    expect(failedItem?.cause).toContain("linear.label-unresolved");
+    expect(failedItem?.cause).toContain('"risk"');
+    // Only the resolvable item was written.
+    expect(provider.writes).toHaveLength(1);
+  });
+
+  test("the CLI spelling declares the push verb with its two repeatable operator flags", async () => {
+    const { getCommandDefinitions } = await import("../definitions.js");
+    const definition = getCommandDefinitions().find((entry) => entry.id === "issue-sync.push");
+    expect(definition).toBeDefined();
+    expect(definition!.cli.path).toEqual(["issue-sync", "push"]);
+    expect(definition!.cli.options.map((option) => option.flags)).toEqual([
+      "--project <id>",
+      "--adopt <localId>=<issueUrl|externalId>",
+      "--force-create <localId>",
+      "--harness <root>",
+    ]);
+    expect(definition!.cli.options.filter((option) => option.variadic === true).map((option) => option.key)).toEqual([
+      "adopt",
+      "forceCreate",
+    ]);
   });
 });

@@ -24,6 +24,7 @@ import { backupStore } from "./store-activation.js";
 import {
   MIGRATION_15_SQL,
   MIGRATION_16_SQL,
+  MIGRATION_17_SQL,
   MIGRATIONS,
   migrationChecksum,
   SCHEMA_VERSION_TABLE_SQL,
@@ -1718,6 +1719,54 @@ describe("migration 16 - the open cycle survives the upgrade", () => {
       pending_target: string | null;
     };
     expect(row).toEqual({ last_remote_updated_at: "2026-11-01T00:00:00Z", pending_target: null });
+    db.close();
+  });
+});
+
+describe("migration 17 - the push ledger facts", () => {
+  test("both columns arrive nullable, and an existing row keeps working with them null", async () => {
+    const { Database } = await import("bun:sqlite");
+    const db = new Database(":memory:");
+    db.exec(MIGRATION_15_SQL);
+    db.exec(MIGRATION_16_SQL);
+    db.exec(
+      "insert into issue_sync_state(binding_id, direction, local_id, external_id, item_state, last_remote_updated_at, pending_target, last_error, last_skip_reason, revision, updated_at)" +
+        " values ('b', 'push', 'I-1', null, 'pending', null, null, null, null, 1, '2026-11-02T00:00:00Z')",
+    );
+    db.exec(MIGRATION_17_SQL);
+    const row = db.query("select item_state, last_request_hash, last_kind_label from issue_sync_state").get() as {
+      item_state: string;
+      last_request_hash: string | null;
+      last_kind_label: string | null;
+    };
+    // The upgrade adds no fact: a row that never confirmed a write has neither
+    // a skip-rule hash nor a label ownership, and it stays a valid pending row.
+    expect(row).toEqual({ item_state: "pending", last_request_hash: null, last_kind_label: null });
+    db.close();
+  });
+
+  test("a confirmed push records both facts and an import row leaves them null", async () => {
+    const { Database } = await import("bun:sqlite");
+    const db = new Database(":memory:");
+    db.exec(MIGRATION_15_SQL);
+    db.exec(MIGRATION_16_SQL);
+    db.exec(MIGRATION_17_SQL);
+    db.exec(
+      "insert into issue_sync_state(binding_id, direction, local_id, external_id, item_state, last_remote_updated_at, pending_target, last_error, last_skip_reason, revision, updated_at)" +
+        " values ('b', 'push', 'I-1', 'LIN-1', 'applied', '2026-11-02T00:00:00Z', null, null, null, 1, '2026-11-02T00:00:00Z')",
+    );
+    db.exec("update issue_sync_state set last_request_hash = 'h', last_kind_label = 'bug' where local_id = 'I-1'");
+    db.exec(
+      "insert into issue_sync_state(binding_id, direction, local_id, external_id, item_state, last_remote_updated_at, pending_target, last_error, last_skip_reason, revision, updated_at)" +
+        " values ('b', 'import', 'I-2', 'LIN-2', 'applied', '2026-11-02T00:00:00Z', null, null, null, 1, '2026-11-02T00:00:00Z')",
+    );
+    const rows = db
+      .query("select direction, last_request_hash, last_kind_label from issue_sync_state order by direction")
+      .all() as Array<{ direction: string; last_request_hash: string | null; last_kind_label: string | null }>;
+    expect(rows).toEqual([
+      { direction: "import", last_request_hash: null, last_kind_label: null },
+      { direction: "push", last_request_hash: "h", last_kind_label: "bug" },
+    ]);
     db.close();
   });
 });

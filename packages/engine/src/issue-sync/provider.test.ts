@@ -57,7 +57,7 @@ describe("ProbeResult vocabulary", () => {
     expect(noTokenField).toBe(true);
   });
 
-  test("the interface exposes exactly probe and listIssues (apply absent until M1)", async () => {
+  test("the interface exposes probe, listIssues and one write member", async () => {
     const provider: IssueProvider = {
       async probe() {
         return FIXTURES.ready;
@@ -65,9 +65,22 @@ describe("ProbeResult vocabulary", () => {
       async listIssues() {
         return { items: [], nextCursor: null };
       },
+      async applyWrite() {
+        return { kind: "confirmed", externalId: "LIN-1", updatedAt: null };
+      },
     };
-    expect(Object.keys(provider).sort()).toEqual(["listIssues", "probe"]);
+    expect(Object.keys(provider).sort()).toEqual(["applyWrite", "listIssues", "probe"]);
     expect(await provider.probe()).toEqual(FIXTURES.ready);
     expect(await provider.listIssues(null)).toEqual({ items: [], nextCursor: null });
+    // No write receipt arm carries a credential: `confirmed` carries an id and a
+    // timestamp, `refused` a code and a cause, `ambiguous` only a cause.
+    const confirmed = await provider.applyWrite({
+      kind: "create",
+      payload: { title: "t", description: "d", priority: 2, state: "Todo" },
+    });
+    for (const key of Object.keys(confirmed)) {
+      expect(key.toLowerCase()).not.toContain("token");
+      expect(key.toLowerCase()).not.toContain("credential");
+    }
   });
 });

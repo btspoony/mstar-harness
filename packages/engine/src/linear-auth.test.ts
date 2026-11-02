@@ -132,6 +132,21 @@ describe("the shared scope", () => {
     pending.close();
   });
 
+  test("a refreshed credential echoes the ORIGINAL read grant: refresh never widens", async () => {
+    // The documented refresh response repeats the grant it was issued for. The
+    // parser keeps exactly what came back, so a read-only credential refreshed
+    // into a new access token is still read-only — the push preflight reads
+    // this same `scope` fact and refuses.
+    const fetchImpl = (async () => json({ access_token: fake("access"), expires_in: 3600, scope: "read" })) as unknown as typeof fetch;
+    const refreshed = await refreshToken(AS, "cid", fake("refresh"), fetchImpl);
+    expect(refreshed.scope).toBe("read");
+    expect(refreshed.scope).not.toContain("issues:create");
+    expect(refreshed.scope).not.toContain("write");
+    // The one constant both surfaces request is the ONLY place a write scope is
+    // named, and a refresh never reads it.
+    expect(LINEAR_MCP_SCOPE).toBe("read,issues:create");
+  });
+
   test("a refresh carries no scope and no redirect, so it never widens a grant", async () => {
     let body: URLSearchParams | null = null;
     const fetchImpl = (async (_input: RequestInfo | URL, init?: RequestInit) => {

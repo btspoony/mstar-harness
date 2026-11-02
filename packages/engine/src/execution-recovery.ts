@@ -269,6 +269,9 @@ const MILESTONE_MIGRATION_VERSION =
   MIGRATIONS.find((migration) => migration.name === "project-milestones")?.version ?? Number.POSITIVE_INFINITY;
 const SYNC_PENDING_TARGET_MIGRATION_VERSION =
   MIGRATIONS.find((migration) => migration.name === "sync-pending-target")?.version ?? Number.POSITIVE_INFINITY;
+/** The migration that added the push ledger's two facts (hash, label ownership). */
+const SYNC_PUSH_LEDGER_MIGRATION_VERSION =
+  MIGRATIONS.find((migration) => migration.name === "sync-push-ledger")?.version ?? Number.POSITIVE_INFINITY;
 /** The migration that introduced the append-only project-move history. */
 const PROJECT_MOVES_MIGRATION_VERSION =
   MIGRATIONS.find((migration) => migration.name === "issue-project-moves")?.version ?? Number.POSITIVE_INFINITY;
@@ -499,6 +502,8 @@ const AUTHORITY_TABLES: readonly AuthorityTable[] = [
       "pending_target",
       "last_error",
       "last_skip_reason",
+      "last_request_hash",
+      "last_kind_label",
       "revision",
       "updated_at",
     ],
@@ -819,6 +824,8 @@ type TableAvailability = {
   legacySessionPlanColumn: boolean;
   /** The `pending_target` column exists on this store's schema. */
   readonly syncPendingTarget: boolean;
+  /** The push ledger columns (`last_request_hash`, `last_kind_label`) exist. */
+  readonly syncPushLedger: boolean;
 };
 
 /**
@@ -835,6 +842,7 @@ function availabilityOf(schemaVersion: number): TableAvailability {
     roadmap: schemaVersion >= ROADMAP_MIGRATION_VERSION,
     milestone: schemaVersion >= MILESTONE_MIGRATION_VERSION,
     syncPendingTarget: schemaVersion >= SYNC_PENDING_TARGET_MIGRATION_VERSION,
+    syncPushLedger: schemaVersion >= SYNC_PUSH_LEDGER_MIGRATION_VERSION,
     projectMoves: schemaVersion >= PROJECT_MOVES_MIGRATION_VERSION,
     syncLedger: schemaVersion >= SYNC_LEDGER_MIGRATION_VERSION,
     host: schemaVersion >= DSH_MIGRATION_VERSION,
@@ -868,6 +876,11 @@ function inventoryColumns(table: AuthorityTable, availability: TableAvailability
   // A store still at the previous schema has no `pending_target`: reading it
   // would make every restore preview fail on a column the store never had.
   if (!availability.syncPendingTarget) columns = columns.filter((column) => column !== "pending_target");
+  // Same rule for the push facts: a store written before migration 17 has no
+  // such column, and its backup inventory must not ask for one.
+  if (!availability.syncPushLedger) {
+    columns = columns.filter((column) => column !== "last_request_hash" && column !== "last_kind_label");
+  }
   if (!availability.provenanceOrigin) columns = columns.filter((column) => column !== "origin");
   if (!availability.dshLegacyProvenance) {
     columns = columns.filter((column) => column !== "legacy_source_digest" && column !== "legacy_line");

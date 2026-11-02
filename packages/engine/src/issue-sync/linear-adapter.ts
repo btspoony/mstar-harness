@@ -159,7 +159,8 @@ export function createLinearAdapter(deps: LinearListDeps): LinearListSide {
 
 type Payload = Record<string, unknown>;
 
-function isRecord(value: unknown): value is Payload {
+/** The package's one record guard; the write side imports it rather than repeating it. */
+export function isRecord(value: unknown): value is Payload {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 

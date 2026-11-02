@@ -29,9 +29,16 @@ export type LinearMcpEntry = {
   url: string;
 };
 
+/**
+ * The argument names each listed tool advertises, when the handshake carried an
+ * input schema. Push never assumes an argument exists, so a tool missing from
+ * this map is one whose schema the handshake did not prove.
+ */
+export type ToolArguments = Record<string, readonly string[]>;
+
 /** The outcome of one injected JSON-RPC call. */
 export type RpcOutcome =
-  | { kind: "ok"; tools?: string[] }
+  | { kind: "ok"; tools?: string[]; toolArguments?: ToolArguments }
   | { kind: "transport-error"; message: string }
   | { kind: "http-status"; status: number };
 
@@ -134,8 +141,13 @@ export function listingVerbIn(tools: readonly string[] | undefined, verbs: reado
   return verbs.find((verb) => listed.has(verb)) ?? null;
 }
 
-/** Create the dsh Linear provider; deps come from the host fiber. */
-export function createLinearProbe(deps: LinearProbeDeps): IssueProvider {
+/**
+ * Create the readiness/listing half of the dsh Linear provider; deps come from
+ * the host fiber. The write member is deliberately absent: this value answers
+ * "can the provider be reached", and a write it cannot perform must be a missing
+ * member rather than a method that throws.
+ */
+export function createLinearProbe(deps: LinearProbeDeps): Pick<IssueProvider, "probe" | "listIssues"> {
   const deadlineMs = deps.deadlineMs ?? DEFAULT_PROBE_DEADLINE_MS;
   return {
     async probe(): Promise<ProbeResult> {

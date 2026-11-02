@@ -119,11 +119,23 @@ export async function linearRpc(
     return { kind: "transport-error", message: redactTransportMessage(response.error.message ?? "json-rpc error") };
   }
   if (method === "initialize") return { kind: "ok" };
-  const result = response.result as { tools?: Array<{ name?: unknown }> } | undefined;
+  const result = response.result as {
+    tools?: Array<{ name?: unknown; inputSchema?: { properties?: unknown } }>;
+  } | undefined;
   const tools = Array.isArray(result?.tools)
     ? result.tools.map((tool) => (typeof tool?.name === "string" ? tool.name : "")).filter((name) => name !== "")
     : [];
-  return { kind: "ok", tools };
+  // The advertised input schema is the only evidence that an argument EXISTS.
+  // A tool whose schema the handshake did not carry is simply absent from the
+  // map, which is what makes `removeLabels` provable rather than assumed.
+  const toolArguments: Record<string, readonly string[]> = {};
+  for (const tool of result?.tools ?? []) {
+    if (typeof tool?.name !== "string" || tool.name === "") continue;
+    const properties = tool.inputSchema?.properties;
+    if (typeof properties !== "object" || properties === null || Array.isArray(properties)) continue;
+    toolArguments[tool.name] = Object.keys(properties);
+  }
+  return { kind: "ok", tools, toolArguments };
 }
 
 /** One read-only `tools/call`; the payload is returned unmapped for the adapter. */

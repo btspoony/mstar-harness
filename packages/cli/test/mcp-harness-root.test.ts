@@ -1093,6 +1093,7 @@ const CONTROL_ROOT_CLASS: Readonly<Record<string, "root" | "none">> = {
   "linear.auth": "root",
   "issue.supersede": "root", "issue.triage": "root", "issue.waive": "root",
   "issue-sync.import": "root",
+  "issue-sync.push": "root",
   "iteration.gate": "root", "iteration.push-cadence": "none", "iteration.register": "root",
   "lint": "none", "migrate": "root", "milestone.add": "root",
   "milestone.assign": "root", "milestone.list": "root", "milestone.status": "root",
