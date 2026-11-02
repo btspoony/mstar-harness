@@ -12,6 +12,7 @@ import {
   markApplied,
   markFailed,
   markSkipped,
+  markUnconfirmed,
   planItem,
   readCursor,
   readItem,
@@ -200,6 +201,27 @@ describe("sync state machine transitions", () => {
     close();
   });
 
+  test("markUnconfirmed invalidates the payload hash and keeps the identity", async () => {
+    const { db, close } = await openedStore("unconfirmed");
+    const push = { ...KEY, direction: "push" as const };
+    planItem(db, { ...PLAN, ...push, operationId: "op-push-plan" });
+    markApplied(db, { ...push, operationId: "op-push-apply", externalId: "EXT-9", requestHash: "hash-b", kindLabel: "bug" });
+    const dropped = markUnconfirmed(db, { ...push, operationId: "op-unconfirmed", kindLabel: "risk" });
+    // An ambiguous replacement proves neither the removal nor the addition, so
+    // BOTH candidates stay owned and either may still be on the remote.
+    expect(dropped).toMatchObject({ itemState: "applied", externalId: "EXT-9", lastRequestHash: null, lastKindLabels: ["bug", "risk"] });
+    // The identity is still there, so the row is still update-addressable.
+    expect(readItem(db, push)?.externalId).toBe("EXT-9");
+    // Without a payload proof the skip rule cannot match.
+    expect(readItem(db, push)?.lastRequestHash).toBeNull();
+    // A row with no identity is an ambiguous CREATE: reconciliation owns it.
+    planItem(db, { ...PLAN, ...push, localId: "I-000302", externalId: null, operationId: "op-push-2" });
+    expect(codeOf(() => markUnconfirmed(db, { ...push, localId: "I-000302", operationId: "op-unconfirmed-2" }))).toBe(
+      "sync.illegal-transition",
+    );
+    close();
+  });
+
   test("a localId absent from issues is refused sync.local-issue-missing", async () => {
     const { db, close } = await openedStore("missing-local");
     const ghost = { ...PLAN, localId: "I-999999" };
@@ -219,6 +241,13 @@ describe("transaction ownership (one transaction per verb)", () => {
     expect(log).toEqual(["begin immediate", "commit"]);
     log.length = 0;
     markApplied(logged, { ...KEY, operationId: "op-tx-apply" });
+    expect(log).toEqual(["begin immediate", "commit"]);
+    log.length = 0;
+    const pushKey = { ...KEY, direction: "push" as const };
+    planItem(logged, { ...PLAN, ...pushKey, operationId: "op-tx-push-plan" });
+    markApplied(logged, { ...pushKey, operationId: "op-tx-push-apply", externalId: "EXT-2" });
+    log.length = 0;
+    markUnconfirmed(logged, { ...pushKey, operationId: "op-tx-unconfirmed" });
     expect(log).toEqual(["begin immediate", "commit"]);
     log.length = 0;
     writeCursor(logged, { ...KEY, cursor: "cur-tx", operationId: "op-tx-cur" });
@@ -503,6 +532,28 @@ describe("ledger read path (task 3)", () => {
     expect(db.prepare("select count(*) as n from issue_sync_state where item_state = 'unbound'").get()).toEqual({ n: 0 });
     planItem(db, PLAN);
     expect(readLedgerSummary(db, KEY).counts).toEqual({ unbound: 0, pending: 1, applied: 0, failed: 0, skipped: 0 });
+    close();
+  });
+
+  test("a store holding both directions summarises each one separately", async () => {
+    const { db, close } = await openedStore("ledger-directions");
+    const push = { bindingId: KEY.bindingId, direction: "push" as const, localId: KEY.localId };
+    planItem(db, { ...PLAN, operationId: "op-dir-imp-p" });
+    markApplied(db, { ...KEY, operationId: "op-dir-imp-a" });
+    writeCursor(db, { ...KEY, cursor: "cur-import", operationId: "op-dir-imp-c" });
+    planItem(db, { ...push, externalId: null, remoteUpdatedAt: null, operationId: "op-dir-push-p" });
+    markFailed(db, { ...push, operationId: "op-dir-push-f", error: "push failed" });
+    writeCursor(db, { ...push, cursor: "cur-push", operationId: "op-dir-push-c" });
+
+    const imported = readLedgerSummary(db, KEY);
+    expect(imported.counts).toEqual({ unbound: 0, pending: 0, applied: 1, failed: 0, skipped: 0 });
+    expect(imported.lastCursor).toBe("cur-import");
+    expect(imported.lastError).toBeNull();
+
+    const pushed = readLedgerSummary(db, { bindingId: KEY.bindingId, direction: "push" });
+    expect(pushed.counts).toEqual({ unbound: 0, pending: 0, applied: 0, failed: 1, skipped: 0 });
+    expect(pushed.lastCursor).toBe("cur-push");
+    expect(pushed.lastError).toBe("push failed");
     close();
   });
 

@@ -5,10 +5,10 @@
  * on the read path.
  *
  * TRANSACTION OWNERSHIP: every exported mutation (`planItem`, `replanItem`,
- * `markApplied`, `markFailed`, `markSkipped`, `writeCursor`) owns exactly one
- * `begin immediate` … `commit` transaction (house pattern: `issue.ts`
- * `withWrite`). The row mutation and its `store_operations` receipt commit
- * together or not at all, so an interruption cannot leave an advanced row
+ * `markApplied`, `markFailed`, `markSkipped`, `markUnconfirmed`, `writeCursor`)
+ * owns exactly one `begin immediate` … `commit` transaction (house pattern:
+ * `issue.ts` `withWrite`). The row mutation and its `store_operations` receipt
+ * commit together or not at all, so an interruption cannot leave an advanced row
  * without a receipt — the one-way door this ledger exists to prevent.
  * Consequently a verb must NOT be called inside a caller-owned transaction:
  * SQLite refuses to nest, and this surface has no composed route yet. Callers
@@ -37,7 +37,11 @@ export type SyncErrorCode =
   | "linear.identity-collision"
   | "linear.list-unimplemented"
   | "linear.host-unavailable"
-  | "linear.access-denied";
+  | "linear.access-denied"
+  | "linear.write-refused"
+  | "linear.write-ambiguous"
+  | "linear.label-unresolved"
+  | "linear.scope-insufficient";
 
 export class SyncError extends Error {
   readonly code: SyncErrorCode;
@@ -60,6 +64,15 @@ export type SyncItem = {
   pendingTarget: string | null;
   lastError: string | null;
   lastSkipReason: string | null;
+  /** The normalized payload hash of the last confirmed push write (migration 17). */
+  lastRequestHash: string | null;
+  /**
+   * The kind labels this tool may have written for the row: the replace rule's
+   * ownership fact. More than one after an ambiguous update, because that
+   * receipt proves neither that the old label was removed nor that the new one
+   * was added, so both must stay removable.
+   */
+  lastKindLabels: string[];
   revision: number;
   updatedAt: string;
 };
@@ -78,9 +91,45 @@ export type MarkItemInput = {
    * recorded in the SAME commit as the state change, which is what makes
    * "applied" mean "applied AND captured" rather than "we saw it once".
    */
-  remoteUpdatedAt?: string | null; bindingId: string; direction: SyncDirection; localId: string; operationId: string };
+  remoteUpdatedAt?: string | null;
+  /**
+   * The push skip rule's fact: the normalized payload hash of the write this
+   * `markApplied` CONFIRMS. Absent on import, and absent when a push recorded
+   * no confirmed write - never set from intent.
+   */
+  requestHash?: string | null;
+  /**
+   * The kind label this push actually wrote, recorded as the ownership fact a
+   * later kind change replaces. Absent when the payload carried no label. A
+   * CONFIRMED write makes it the whole ownership; it is exactly the label the
+   * remote now carries.
+   */
+  kindLabel?: string | null;
+  /**
+   * The remote identity a CONFIRMED write established (push) or a re-plan
+   * learned. Absent means "keep what the row already holds" — never "clear it",
+   * because an ambiguous write must not erase an id the last run proved.
+   */
+  externalId?: string | null;
+  bindingId: string; direction: SyncDirection; localId: string; operationId: string };
 export type MarkFailedInput = MarkItemInput & { error: string };
 export type MarkSkippedInput = MarkItemInput & { reason: string };
+/**
+ * An unconfirmed write: the row keeps the identity an earlier write proved and
+ * loses the payload proof that write established.
+ */
+export type MarkUnconfirmedInput = {
+  bindingId: string;
+  direction: SyncDirection;
+  localId: string;
+  operationId: string;
+  /**
+   * The label the unconfirmed write may have written. It JOINS the recorded
+   * ownership instead of replacing it: the receipt proves neither that the old
+   * label was removed nor that the new one was added, so both stay removable.
+   */
+  kindLabel?: string | null;
+};
 export type ReadItemInput = { bindingId: string; direction: SyncDirection; localId: string };
 export type CursorInput = { bindingId: string; direction: SyncDirection };
 export type WriteCursorInput = CursorInput & { cursor: string; operationId: string };
@@ -160,6 +209,8 @@ type SyncRow = {
   pending_target: string | null;
   last_error: string | null;
   last_skip_reason: string | null;
+  last_request_hash: string | null;
+  last_kind_label: string | null;
   revision: number;
   updated_at: string;
 };
@@ -181,9 +232,40 @@ function toItem(row: SyncRow): SyncItem {
     pendingTarget: row.pending_target,
     lastError: row.last_error,
     lastSkipReason: row.last_skip_reason,
+    lastRequestHash: row.last_request_hash,
+    lastKindLabels: parseKindLabels(row.last_kind_label),
     revision: row.revision,
     updatedAt: row.updated_at,
   };
+}
+
+/**
+ * The ownership column holds the CANDIDATE labels as a JSON array, because an
+ * ambiguous update proves neither that the old label was removed nor that the
+ * new one was added: both may be on the remote, and a single value cannot say
+ * so. One nullable `text` column expresses that set, so no schema change was
+ * needed. A bare value is one candidate: this column was first written as a
+ * single label, and such a row must stay readable.
+ */
+function parseKindLabels(value: string | null): string[] {
+  if (value === null || value.trim() === "") return [];
+  if (!value.startsWith("[")) return [value];
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(value);
+  } catch {
+    throw new SyncError("sync.invalid-input", `the ledger's label ownership ${JSON.stringify(value)} is not a label list`);
+  }
+  if (!Array.isArray(parsed) || parsed.some((entry) => typeof entry !== "string")) {
+    throw new SyncError("sync.invalid-input", `the ledger's label ownership ${JSON.stringify(value)} is not a label list`);
+  }
+  return [...new Set(parsed as string[])];
+}
+
+/** The column form of an ownership set: empty owns nothing. */
+function encodeKindLabels(labels: readonly string[]): string | null {
+  const unique = [...new Set(labels)];
+  return unique.length === 0 ? null : JSON.stringify(unique);
 }
 
 function requireItem(row: SyncRow | undefined): SyncRow {
@@ -215,11 +297,14 @@ function casUpdate(
     pending_target: string | null;
     last_error: string | null;
     last_skip_reason: string | null;
+    last_request_hash: string | null;
+    last_kind_label: string | null;
   },
   now: string,
 ): void {
   const result = db.prepare(
     "update issue_sync_state set item_state = ?, external_id = ?, last_remote_updated_at = ?, pending_target = ?, last_error = ?, last_skip_reason = ?," +
+      " last_request_hash = ?, last_kind_label = ?," +
       " revision = revision + 1, updated_at = ? where binding_id = ? and direction = ? and local_id = ? and revision = ?",
   ).run(
     patch.item_state,
@@ -228,6 +313,8 @@ function casUpdate(
     patch.pending_target,
     patch.last_error,
     patch.last_skip_reason,
+    patch.last_request_hash,
+    patch.last_kind_label,
     now,
     key.bindingId,
     key.direction,
@@ -291,6 +378,10 @@ export function planItem(db: StoreDb, input: PlanItemInput): SyncItem {
         pending_target: remoteUpdatedAt ?? row.pending_target,
         last_error: null,
         last_skip_reason: null,
+        // Opening a cycle changes no confirmed fact: both push columns carry
+        // forward, so a retry never forgets the hash or the ownership it holds.
+        last_request_hash: row.last_request_hash,
+        last_kind_label: row.last_kind_label,
       }, now);
     } else {
       refuseTransition(row.item_state, "planItem");
@@ -380,6 +471,8 @@ export function replanItem(db: StoreDb, input: PlanItemInput): SyncItem {
       pending_target: remoteUpdatedAt ?? row.pending_target,
       last_error: null,
       last_skip_reason: null,
+      last_request_hash: row.last_request_hash,
+      last_kind_label: row.last_kind_label,
     }, now);
     const item = toItem(requireItem(selectRow(db, bindingId, direction, localId)));
     recordOperation(db, operationId, hash, item, now);
@@ -403,6 +496,58 @@ export function markSkipped(db: StoreDb, input: MarkSkippedInput): SyncItem {
   return markItem(db, input, "skipped", requireNonblank("reason", input.reason));
 }
 
+/**
+ * Record a write that was SENT and never confirmed, on the row whose identity an
+ * earlier confirmed write proved.
+ *
+ * The state is preserved — `applied` and `failed` both carry the external
+ * identity and watermark an earlier confirmed write established — but the
+ * payload hash goes: it no longer proves the remote equals that payload, because
+ * the unconfirmed write may have changed it. With no hash the skip rule cannot
+ * match, so the next pass converges the desired fields instead of reporting a
+ * `skipped` the receipt never earned.
+ *
+ * The label the unconfirmed write may have written JOINS the recorded
+ * ownership rather than replacing it: the receipt proves neither that the old
+ * label was removed nor that the new one was added, so the corrective update
+ * must remove whichever of them is actually on the remote (removing an absent
+ * label is a no-op). Refused for a `pending` row: an ambiguous CREATE has no
+ * identity and is its own residue, which reconciliation (or an explicit
+ * adoption) owns.
+ */
+export function markUnconfirmed(db: StoreDb, input: MarkUnconfirmedInput): SyncItem {
+  const bindingId = requireNonblank("bindingId", input.bindingId);
+  const direction = requireDirection(input.direction);
+  const localId = requireNonblank("localId", input.localId);
+  const operationId = requireNonblank("operationId", input.operationId);
+  const kindLabel = input.kindLabel == null ? null : requireNonblank("kindLabel", input.kindLabel);
+  const hash = syncRequestHash("markUnconfirmed", { bindingId, direction, localId, kindLabel });
+  return withSyncTransaction(db, () => {
+    const replayed = replayOrRefuse<SyncItem>(db, operationId, hash);
+    if (replayed !== undefined) return replayed;
+    const now = new Date().toISOString();
+    const row = requireItem(selectRow(db, bindingId, direction, localId));
+    // The discriminating fact is IDENTITY, not state: an update always addresses a
+    // row an earlier confirmed write gave an id. `pending` without one is the
+    // ambiguous CREATE residue, which reconciliation (or an explicit adoption)
+    // owns; it has no payload proof to invalidate, so this verb refuses it.
+    if (row.external_id === null) refuseTransition(row.item_state, "markUnconfirmed");
+    casUpdate(db, { bindingId, direction, localId }, row.revision, {
+      item_state: row.item_state,
+      external_id: row.external_id,
+      last_remote_updated_at: row.last_remote_updated_at,
+      pending_target: row.pending_target,
+      last_error: row.last_error,
+      last_skip_reason: row.last_skip_reason,
+      last_request_hash: null,
+      last_kind_label: encodeKindLabels([...parseKindLabels(row.last_kind_label), ...(kindLabel === null ? [] : [kindLabel])]),
+    }, now);
+    const item = toItem(requireItem(selectRow(db, bindingId, direction, localId)));
+    recordOperation(db, operationId, hash, item, now);
+    return item;
+  });
+}
+
 function markItem(
   db: StoreDb,
   input: MarkItemInput,
@@ -415,14 +560,29 @@ function markItem(
   const operationId = requireNonblank("operationId", input.operationId);
   // Everything that changes what this call MEANS belongs in the hash: the same
   // operationId with a different error/reason, or with a different timestamp to
-  // record, is a conflicting request — not a replay of the first one.
-  const hash = syncRequestHash(target, { bindingId, direction, localId, text, remoteUpdatedAt: input.remoteUpdatedAt ?? null });
+  // record, is a conflicting request — not a replay of the first one. The push
+  // facts join only when the caller supplies them, so an import receipt written
+  // by an earlier build still replays instead of conflicting.
+  const hash = syncRequestHash(target, {
+    bindingId,
+    direction,
+    localId,
+    text,
+    remoteUpdatedAt: input.remoteUpdatedAt ?? null,
+    ...(input.externalId == null ? {} : { externalId: input.externalId }),
+    ...(input.requestHash == null ? {} : { requestHash: input.requestHash }),
+    ...(input.kindLabel == null ? {} : { kindLabel: input.kindLabel }),
+  });
   return withSyncTransaction(db, () => {
     const replayed = replayOrRefuse<SyncItem>(db, operationId, hash);
     if (replayed !== undefined) return replayed;
     const now = new Date().toISOString();
     const row = requireItem(selectRow(db, bindingId, direction, localId));
-    if (row.item_state !== "pending" && !(target === "skipped" && row.item_state === "failed")) {
+    // Push has no intermediate observable state: a confirmed update is applied
+    // OVER applied, and the write itself is not resumable through the ledger
+    // (the payload hash decides the next run). Import keeps its strict edges.
+    const pushReapply = target === "applied" && row.item_state === "applied" && direction === "push";
+    if (row.item_state !== "pending" && !pushReapply && !(target === "skipped" && row.item_state === "failed")) {
       refuseTransition(row.item_state, `markItem -> ${target}`);
     }
     // Only a successful apply has copied fields, so only it may advance the
@@ -440,11 +600,22 @@ function markItem(
       proposed !== null && isOlderInstant(proposed, row.last_remote_updated_at) ? row.last_remote_updated_at : proposed;
     casUpdate(db, { bindingId, direction, localId }, row.revision, {
       item_state: target,
-      external_id: row.external_id,
+      // A CONFIRMED identity from the caller is the only way a push records
+      // `external_id`; an omission keeps what the row holds, so an ambiguous
+      // write can never erase an identity a previous run proved.
+      external_id: applied ? (input.externalId ?? row.external_id) : row.external_id,
       last_remote_updated_at: applied ? (copiedTarget ?? row.last_remote_updated_at) : row.last_remote_updated_at,
       pending_target: applied ? null : row.pending_target,
       last_error: target === "failed" ? (text ?? null) : null,
       last_skip_reason: target === "skipped" ? (text ?? null) : null,
+      // The skip-rule hash and the label ownership follow the SAME rule: a
+      // confirmed apply updates them, anything else carries them forward. A
+      // confirmed update carries exactly the label it wrote, so ownership
+      // narrows to that one label; the removal it sent already took the rest.
+      last_request_hash: applied ? (input.requestHash ?? row.last_request_hash) : row.last_request_hash,
+      last_kind_label: applied
+        ? (input.kindLabel == null ? row.last_kind_label : encodeKindLabels([input.kindLabel]))
+        : row.last_kind_label,
     }, now);
     const item = toItem(requireItem(selectRow(db, bindingId, direction, localId)));
     recordOperation(db, operationId, hash, item, now);
@@ -530,18 +701,22 @@ export type LedgerSummary = {
  */
 export function readLedgerSummary(db: StoreDb, input: CursorInput): LedgerSummary {
   const bindingId = requireNonblank("bindingId", input.bindingId);
+  const direction = requireDirection(input.direction);
   const counts: Record<SyncItemState, number> = { unbound: 0, pending: 0, applied: 0, failed: 0, skipped: 0 };
   for (const row of db
-    .prepare("select item_state, count(*) as n from issue_sync_state where binding_id = ? group by item_state")
-    .all(bindingId) as Array<{ item_state: string; n: number }>) {
+    .prepare("select item_state, count(*) as n from issue_sync_state where binding_id = ? and direction = ? group by item_state")
+    .all(bindingId, direction) as Array<{ item_state: string; n: number }>) {
     if (Object.hasOwn(counts, row.item_state)) counts[row.item_state as SyncItemState] = row.n;
   }
-  const lastCursorRow = db.prepare("select cursor from sync_cursor where binding_id = ?").get(bindingId) as
+  const lastCursorRow = db.prepare("select cursor from sync_cursor where binding_id = ? and direction = ?").get(bindingId, direction) as
     | { cursor: string }
     | undefined;
   const lastErrorRow = db
-    .prepare("select last_error from issue_sync_state where binding_id = ? and last_error is not null order by updated_at desc, revision desc limit 1")
-    .get(bindingId) as { last_error: string } | undefined;
+    .prepare(
+      "select last_error from issue_sync_state where binding_id = ? and direction = ? and last_error is not null" +
+        " order by updated_at desc, revision desc limit 1",
+    )
+    .get(bindingId, direction) as { last_error: string } | undefined;
   return {
     counts,
     lastCursor: lastCursorRow === undefined ? null : lastCursorRow.cursor,

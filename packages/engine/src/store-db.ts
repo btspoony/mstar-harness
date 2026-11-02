@@ -1740,6 +1740,29 @@ update issue_sync_state
  where item_state = 'pending'
    and last_remote_updated_at is not null;
 `;
+/**
+ * Migration 17 - the push ledger's two facts.
+ *
+ * `last_request_hash` is the push skip rule's storage: a row whose normalized
+ * payload hash is unchanged since its last confirmed write is `skipped` without
+ * a single write call. It is a skip rule only - never proof the remote issue
+ * exists - so it is recorded on `applied` from a confirmed receipt, never on
+ * intent.
+ *
+ * `last_kind_label` is the ownership fact the kind->label replace rule reads.
+ * It holds the CANDIDATE labels this tool may have written, as a JSON array: an
+ * ambiguous update proves neither that the old label was removed nor that the
+ * new one was added, so both stay removable and nothing else is ever touched.
+ *
+ * Both are nullable and left null by the import direction, which has neither
+ * fact: an existing row keeps working, and its next changed push backfills the
+ * hash while the first recorded label fills the ownership column only when the
+ * write actually carried one.
+ */
+export const MIGRATION_17_SQL = `
+alter table issue_sync_state add column last_request_hash text;
+alter table issue_sync_state add column last_kind_label text;
+`;
 
 
 /** Ordered immutable migrations. Never mutate an applied entry - append only. */
@@ -1760,6 +1783,7 @@ export const MIGRATIONS: readonly Migration[] = [
   { version: 14, name: "compass-plan-membership", sql: MIGRATION_14_SQL },
   { version: 15, name: "sync-ledger", sql: MIGRATION_15_SQL },
   { version: 16, name: "sync-pending-target", sql: MIGRATION_16_SQL },
+  { version: 17, name: "sync-push-ledger", sql: MIGRATION_17_SQL },
 ];
 const DSH_HOST_STATE_MIGRATION = MIGRATIONS.find((migration) => migration.name === "dsh-host-ledgers");
 

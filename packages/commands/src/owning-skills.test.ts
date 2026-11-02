@@ -23,6 +23,7 @@ const NO_OWNER_COMMANDS: Readonly<Record<string, string>> = {
   dashboard: "read-only loopback surface; its help owns the flags",
   doctor: "host environment probe; no topical skill owns its output",
   "issue-sync.import": "external issue sync; no documented owner",
+  "issue-sync.push": "external issue sync; no documented owner",
   "linear.auth": "third-party connector; no documented owner",
   migrate: "standalone file-staging migrate is retired; use store upgrade",
   "plugin.validate": "packaging validation; no documented owner",

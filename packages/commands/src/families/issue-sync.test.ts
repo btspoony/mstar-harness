@@ -7,7 +7,7 @@
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { afterAll, describe, expect, test } from "bun:test";
+import { afterAll, afterEach, beforeEach, describe, expect, test } from "bun:test";
 import {
   IMPORTED_ACCEPTANCE_KEY,
   IMPORTED_ROOT_CAUSE_KEY,
@@ -16,6 +16,7 @@ import {
   initializeStore,
   openStore,
   readLedgerSummary,
+  writeLinearCredential,
   type IssueProvider,
   type ProbeResult,
   type ProviderItem,
@@ -57,6 +58,11 @@ function provider(
     async listIssues(cursor) {
       requests.push(cursor);
       return pages(cursor);
+    },
+    // The import fixture never writes; the member must still exist so the
+    // fixture is a real provider rather than a partial one.
+    async applyWrite() {
+      throw new Error("the import fixture is read-only");
     },
   };
 }
@@ -355,26 +361,49 @@ describe("a failing page keeps the cursor and ingests nothing from it", () => {
     expect(p.requests).toEqual([null, null, "c-2"]);
   });
 
-  test("an unmappable item is reported by identity and page index while the rest is ingested (F2)", async () => {
-    const p = provider(() => ({
-      items: [item(), item({ externalId: "LIN-2", title: "Second" })],
-      nextCursor: null,
-      failures: [{ index: 2, externalId: "LIN-BAD", cause: 'issue at page index 2 has no usable "title"' }],
-    }));
+  test("an unmappable item is reported by identity and page index while the run continues (F2)", async () => {
+    // I-000948: a title-less remote issue can never be fixed by retrying this
+    // page, so it must not cap later pages. It is reported as stranded with its
+    // cause; the cursor advances and the next page is read.
+    const pages: Record<string, ProviderPage> = {
+      start: {
+        items: [item(), item({ externalId: "LIN-2", title: "Second" })],
+        nextCursor: "c-2",
+        failures: [{ index: 2, externalId: "LIN-BAD", cause: 'issue at page index 2 has no usable "title"' }],
+      },
+      "c-2": { items: [item({ externalId: "LIN-3", title: "Third" })], nextCursor: null },
+    };
+    const p = provider((cursor) => pages[cursor ?? "start"]!);
     const f = await fixture("poison-item", p);
     const result = await runImport(f.context);
     expect(result.status).toBe("ok");
-    expect(result.data).toMatchObject({ imported: 2, failed: 0, stopped: "stranded" });
+    // The whole scan ran: two pages, all three mappable items ingested, and the
+    // completed scan rewound the pointer.
+    expect(result.data).toMatchObject({ imported: 3, failed: 0, pages: 2, stopped: "complete", cursor: null });
     expect(result.data?.stranded).toEqual([
       { page: 1, index: 2, externalId: "LIN-BAD", cause: 'issue at page index 2 has no usable "title"' },
     ]);
+    expect(p.requests).toEqual([null, "c-2"]);
     // The good items were ingested; the poisoned one did not stop them.
     const db = await f.db();
     try {
-      expect(db.prepare("select count(*) as n from issues").get()).toEqual({ n: 2 });
+      expect(db.prepare("select count(*) as n from issues").get()).toEqual({ n: 3 });
     } finally {
       db.close();
     }
+  });
+
+  test("a stranded page with a later page still advances the cursor (I-000948)", async () => {
+    // The stop-vs-advance split: only a ledger-level failure holds the cursor.
+    const pages: Record<string, ProviderPage> = {
+      start: { items: [item()], nextCursor: "c-2", failures: [{ index: 1, externalId: null, cause: "not-an-object" }] },
+      "c-2": { items: [item({ externalId: "LIN-2", title: "Second" })], nextCursor: null },
+    };
+    const f = await fixture("stranded-advance", provider((cursor) => pages[cursor ?? "start"]!));
+    const result = await runImport(f.context);
+    expect(result.data).toMatchObject({ imported: 2, failed: 0, pages: 2, stopped: "complete" });
+    // The unmappable item is still reported, with the page index that holds it.
+    expect(result.data?.stranded).toEqual([{ page: 1, index: 1, externalId: null, cause: "not-an-object" }]);
   });
 
   test("--max-pages bounds one run and the reported cursor resumes it", async () => {
@@ -404,5 +433,262 @@ describe("command surface", () => {
     const result = (await executeCommand("issue-sync.import", {}, f.context)) as { status: string; exitCode: number };
     expect(result.status).toBe("usage");
     expect(result.exitCode).toBe(2);
+  });
+});
+
+/**
+ * Push — the write surface. Case (h) of the SDD brief: the credential SCOPE
+ * preflight refuses the whole run before any write, and a refresh never widens
+ * a read-only grant into a write one.
+ *
+ * The store is the real one; the provider is a fixture whose label discovery and
+ * write receipts are scripted, so no network and no credential cross a boundary.
+ */
+describe("push — the credential scope preflight", () => {
+  const credentialPath = (): string => join(ROOT, "push-credential.json");
+  const previousCredential = process.env.MSTAR_LINEAR_CREDENTIAL;
+
+  /** A provider that records every call and can answer discovery + writes. */
+  function writeProvider(labels: string[] = ["bug"]) {
+    const calls: string[] = [];
+    const writes: unknown[] = [];
+    const fake = {
+      calls,
+      writes,
+      async probe() {
+        calls.push("probe");
+        return { state: "ready", cause: "ready: fixture handshake" };
+      },
+      async listIssues() {
+        calls.push("listIssues");
+        return { items: [], nextCursor: null };
+      },
+      async applyWrite(write: unknown) {
+        calls.push("applyWrite");
+        writes.push(write);
+        return { kind: "confirmed", externalId: "LIN-1", updatedAt: "2026-11-02T00:00:00.000Z" };
+      },
+      async discoverLabels() {
+        calls.push("discoverLabels");
+        return new Set(labels);
+      },
+    };
+    return fake;
+  }
+
+  function withProvider(f: Fixture, provider: ReturnType<typeof writeProvider>): InvocationContext {
+    return { ...f.context, effects: { ...f.context.effects, issueProvider: () => provider as never } };
+  }
+
+  function storeCredential(scope: string | null, expiresAt: number | null = Date.now() + 3_600_000): void {
+    writeLinearCredential({
+      accessToken: ["not", "a", "real", "access"].join("-"),
+      refreshToken: ["not", "a", "real", "refresh"].join("-"),
+      expiresAt,
+      scope,
+      clientId: ["not", "a", "real", "client"].join("-"),
+    });
+  }
+
+  beforeEach(() => {
+    process.env.MSTAR_LINEAR_CREDENTIAL = credentialPath();
+  });
+
+  afterEach(() => {
+    if (previousCredential === undefined) delete process.env.MSTAR_LINEAR_CREDENTIAL;
+    else process.env.MSTAR_LINEAR_CREDENTIAL = previousCredential;
+    rmSync(credentialPath(), { force: true });
+  });
+
+  test("a scope of `read` refuses the run before any provider call or ledger write", async () => {
+    const provider = writeProvider();
+    const f = await fixture("push-read-scope", null);
+    storeCredential("read");
+    const before = await storeSnapshot(f);
+    const result = (await executeCommand("issue-sync.push", { project: PROJECT }, withProvider(f, provider))) as {
+      status: string;
+      code: string;
+      message?: string;
+    };
+    expect(result.status).toBe("refused");
+    expect(result.code).toBe("linear.scope-insufficient");
+    // The recovery names BOTH surfaces that actually request the write scope.
+    expect(JSON.stringify(result)).toMatch(/Settings|Authorize/);
+    expect(JSON.stringify(result)).toMatch(/linear auth/);
+    // Zero provider calls — not even the probe — and nothing written.
+    expect(provider.calls).toEqual([]);
+    expect(await storeSnapshot(f)).toEqual(before);
+  });
+
+  test("a refreshed credential still echoing `read` still refuses, and the refresh request carries no scope", async () => {
+    const provider = writeProvider();
+    const f = await fixture("push-read-refreshed", null);
+    // Expired, so a run that got past the preflight would have to refresh first.
+    storeCredential("read", Date.now() - 60_000);
+    const refreshedScopes: Array<string | null> = [];
+    const context: InvocationContext = {
+      ...withProvider(f, provider),
+      effects: {
+        ...withProvider(f, provider).effects,
+        linearRefresh: async () => {
+          // The provider echoes the ORIGINAL grant's scope: refresh never widens.
+          refreshedScopes.push("read");
+          return { accessToken: "fresh", refreshToken: null, expiresAt: Date.now() + 3_600_000, scope: "read", clientId: "c" };
+        },
+      },
+    };
+    const result = (await executeCommand("issue-sync.push", { project: PROJECT }, context)) as { status: string; code: string };
+    expect(result.status).toBe("refused");
+    expect(result.code).toBe("linear.scope-insufficient");
+    // The conclusion holds whether or not the token was refreshed: a read grant
+    // is read-only on both axes (expiry and permission are different things).
+    expect(provider.calls).toEqual([]);
+  });
+
+  test("a scope carrying issues:create pushes: discovery runs, then one confirmed create", async () => {
+    const provider = writeProvider(["bug"]);
+    const f = await fixture("push-write-scope", null);
+    storeCredential("read,issues:create");
+    {
+      const handle = await openStore({ harnessDir: f.harnessDir }, "write");
+      handle.db.prepare(
+        "insert into issues(id, project_id, title, kind, severity, impact, acceptance, created_at, updated_at, identity_key)" +
+          " values ('I-000801', ?, 'Push me', 'bug', 'high', 'impact', 'acceptance', 'now', 'now', 'sync-I-000801')",
+      ).run(PROJECT);
+      handle.close();
+    }
+    const result = (await executeCommand("issue-sync.push", { project: PROJECT }, withProvider(f, provider))) as {
+      status: string;
+      code: string;
+      data?: { created: number; failed: number; labels: string[]; items: Array<{ localId: string; outcome: string; externalId: string | null }> };
+    };
+    expect(result.status).toBe("ok");
+    expect(result.data).toMatchObject({ created: 1, failed: 0, labels: ["bug"] });
+    expect(result.data?.items).toEqual([{ localId: "I-000801", outcome: "created", externalId: "LIN-1" }]);
+    expect(provider.calls).toEqual(["probe", "discoverLabels", "applyWrite"]);
+    const db = await f.db();
+    try {
+      expect(db.prepare("select item_state, external_id, last_kind_label from issue_sync_state").get()).toEqual({
+        item_state: "applied",
+        external_id: "LIN-1",
+        last_kind_label: '["bug"]',
+      });
+    } finally {
+      db.close();
+    }
+  });
+
+  test("a mapped kind label the workspace lacks refuses that item only, and names the label", async () => {
+    const provider = writeProvider(["bug"]);
+    const f = await fixture("push-label-missing", null);
+    storeCredential("read,issues:create");
+    {
+      const handle = await openStore({ harnessDir: f.harnessDir }, "write");
+      const insert = handle.db.prepare(
+        "insert into issues(id, project_id, title, kind, severity, impact, acceptance, created_at, updated_at, identity_key)" +
+          " values (?, ?, ?, ?, 'high', 'i', 'a', 'now', 'now', ?)",
+      );
+      insert.run("I-000802", PROJECT, "Bug", "bug", "sync-I-000802");
+      insert.run("I-000803", PROJECT, "Risk", "risk", "sync-I-000803");
+      handle.close();
+    }
+    const result = (await executeCommand("issue-sync.push", { project: PROJECT }, withProvider(f, provider))) as {
+      status: string;
+      data?: { created: number; failed: number; items: Array<{ localId: string; outcome: string; cause?: string }> };
+    };
+    expect(result.status).toBe("ok");
+    expect(result.data).toMatchObject({ created: 1, failed: 1 });
+    const failedItem = result.data?.items.find((entry) => entry.localId === "I-000803");
+    expect(failedItem?.outcome).toBe("failed");
+    expect(failedItem?.cause).toContain("linear.label-unresolved");
+    expect(failedItem?.cause).toContain('"risk"');
+    // Only the resolvable item was written.
+    expect(provider.writes).toHaveLength(1);
+  });
+
+  test("--adopt recovers the pending residue an ambiguous create left behind", async () => {
+    const writes: Array<{ kind: string; externalId?: string }> = [];
+    const receipts = [
+      { kind: "ambiguous" as const, cause: "connection closed mid-call" },
+      { kind: "confirmed" as const, externalId: "LIN-555", updatedAt: "2026-11-02T00:10:00.000Z" },
+    ];
+    const provider = {
+      async probe() {
+        return { state: "ready" as const, cause: "ready: fixture handshake" };
+      },
+      async listIssues() {
+        return { items: [], nextCursor: null };
+      },
+      async applyWrite(write: { kind: string; externalId?: string }) {
+        writes.push(write);
+        return receipts.shift()!;
+      },
+      async discoverLabels() {
+        return new Set(["bug"]);
+      },
+    };
+    const f = await fixture("push-adopt-pending", null);
+    storeCredential("read,issues:create");
+    {
+      const handle = await openStore({ harnessDir: f.harnessDir }, "write");
+      handle.db.prepare(
+        "insert into issues(id, project_id, title, kind, severity, impact, acceptance, created_at, updated_at, identity_key)" +
+          " values ('I-000804', ?, 'Ambiguous', 'bug', 'high', 'i', 'a', 'now', 'now', 'sync-I-000804')",
+      ).run(PROJECT);
+      handle.close();
+    }
+    const context = { ...f.context, effects: { ...f.context.effects, issueProvider: () => provider as never } };
+
+    const first = (await executeCommand("issue-sync.push", { project: PROJECT }, context)) as {
+      data?: { unresolved: number; items: Array<{ localId: string; outcome: string }> };
+    };
+    expect(first.data?.items).toEqual([
+      expect.objectContaining({ localId: "I-000804", outcome: "unresolved" }),
+    ]);
+
+    // The documented recovery: the operator confirms the remote issue they can
+    // see. It must not be refused by an illegal-transition guard.
+    const second = (await executeCommand(
+      "issue-sync.push",
+      { project: PROJECT, adopt: ["I-000804=https://linear.app/acme/issue/LIN-555/slug"] },
+      context,
+    )) as {
+      status: string;
+      data?: { created: number; updated: number; items: Array<{ localId: string; outcome: string; externalId: string | null }> };
+    };
+    expect(second.status).toBe("ok");
+    expect(second.data?.created).toBe(0);
+    expect(second.data?.items).toEqual([
+      { localId: "I-000804", outcome: "adopted", externalId: "LIN-555" },
+      { localId: "I-000804", outcome: "updated", externalId: "LIN-555" },
+    ]);
+    // Exactly one create (the ambiguous one) and one corrective update, ever.
+    expect(writes.map((write) => write.kind)).toEqual(["create", "update"]);
+    const db = await f.db();
+    try {
+      expect(db.prepare("select item_state, external_id from issue_sync_state").get()).toEqual({
+        item_state: "applied",
+        external_id: "LIN-555",
+      });
+    } finally {
+      db.close();
+    }
+  });
+
+  test("the CLI spelling declares the push verb with its two repeatable operator flags", async () => {
+    const { getCommandDefinitions } = await import("../definitions.js");
+    const definition = getCommandDefinitions().find((entry) => entry.id === "issue-sync.push");
+    expect(definition).toBeDefined();
+    expect(definition!.cli.path).toEqual(["issue-sync", "push"]);
+    expect(definition!.cli.options.map((option) => option.flags)).toEqual([
+      "--project <id>",
+      "--adopt <localId>=<issueUrl|externalId>",
+      "--force-create <localId>",
+      "--harness <root>",
+    ]);
+    expect(definition!.cli.options.filter((option) => option.variadic === true).map((option) => option.key)).toEqual([
+      "adopt",
+      "forceCreate",
+    ]);
   });
 });
