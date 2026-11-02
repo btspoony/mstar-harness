@@ -6,6 +6,17 @@ The monorepo root [CHANGELOG.md](../../CHANGELOG.md) summarizes cross-surface re
 
 ## [Unreleased]
 
+### Changed
+
+- **The enabled `linear-mcp` row consumes the stored credential.** The row gains `inject: [mstarLinearAuth]` and
+  its `headers` is the loader expression `!!js ctx.mstarLinearAuth.authorizationHeaders()`, so the bearer exists
+  only in the row's evaluated config — never in the bundle, a profile patch, a settings payload or a log. The new
+  `MstarLinearAuth` service (`src/linear-settings.ts`) reads the credential file on every call, silently refreshes
+  a due credential from its persisted expiry (one in-flight attempt, coalesced, newer-file-wins, no retry spin)
+  and re-mounts the enabled row through the public `Fiber.restart()` seam — no enabled-bit write and no
+  `setPluginEnabled` bounce. A rejected refresh is reported as the observed `linear.reauth-required` fact; an
+  unknown expiry is reported as unknown, never guessed.
+
 ## [4.1.5] - 2026-11-02
 
 ### Changed

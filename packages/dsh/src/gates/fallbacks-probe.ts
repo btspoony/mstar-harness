@@ -37,6 +37,12 @@ export const FALLBACKS_ENTRY_NAME = 'dsh-llm-fallbacks'
  * pattern as the optional `jobs` seam in agent-flow.ts).
  */
 export interface LoaderEntryView {
+  /**
+   * Stable id inside the containing entry tree (`EntryOptions.id`). Rows of
+   * ONE plugin share `options.name`, so id is the only field that tells them
+   * apart — the Linear auth service locates its `linear-mcp` row by this.
+   */
+  id?: string
   options: {
     name: string
     group?: boolean | null

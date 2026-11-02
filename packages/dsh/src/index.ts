@@ -25,6 +25,7 @@ import { resolveRepoEnforcement } from '@mstar-harness/engine'
 import type { CommandInvocation } from '@deepseek-ai/dsh-commands'
 import { createUserMessage } from '@deepseek-ai/dsh-llm'
 import { DshMstar } from './service.ts'
+import { MstarLinearAuth } from './linear-settings.ts'
 import {
   Config,
   HarnessResolver,
@@ -423,6 +424,11 @@ export function apply(ctx: Context, config: Config): void {
   // The Service constructor registers itself on the fiber via reflect.provide,
   // so construction alone exposes `ctx.dshMstar` (dsh service convention).
   new DshMstar(ctx, { harnessDir: bootHarnessDir })
+  // The Linear credential the enabled `linear-mcp` row consumes: the row's
+  // `!!js` headers expression reads `ctx.mstarLinearAuth`, and this service
+  // owns the silent refresh loop + the public `Fiber.restart()` reload (see
+  // `linear-settings.ts`). Construction alone exposes the service.
+  new MstarLinearAuth(ctx)
   // Agent-flow settle pairing store : apply-scoped in-memory Maps, SAME lifetime as the
   // catalog cache below — an HMR restart resets them and completions outside
   // the window stay unpaired (documented honest degrade; no cross-apply
