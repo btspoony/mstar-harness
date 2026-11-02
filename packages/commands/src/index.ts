@@ -1,6 +1,7 @@
 export * from "./types.js";
 export { refusalEnvelope } from "./envelope.js";
 export type { RefusalDiagnostic, RefusalInput } from "./envelope.js";
+export { owningSkillFor } from "./owning-skills.js";
 export { decodeInputDiagnostics, safeReceivedValue, sanitizeInputScalar } from "./input-diagnostics.js";
 export {
   CommandDefinitionError,

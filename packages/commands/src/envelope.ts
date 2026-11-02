@@ -1,5 +1,6 @@
 import { z } from "zod";
 import type { CommandEnvelope } from "./types.js";
+import { owningSkillFor } from "./owning-skills.js";
 
 export type RefusalDiagnostic = Readonly<{
   path?: string;
@@ -17,6 +18,7 @@ type RefusalInputFields = Readonly<{
   message: string;
   helpRoute?: string;
   recovery?: string;
+  skill?: string;
   diagnostics?: readonly RefusalDiagnostic[];
   rejected?: Readonly<{ path: string; expected: string; received: string }>;
   details?: Record<string, unknown>;
@@ -97,8 +99,9 @@ function diagnosticSummary(diagnostics: readonly RefusalDiagnostic[]) {
 /** Build the shared refusal shape without rewriting engine-authored messages. */
 export function refusalEnvelope(input: RefusalInput): CommandEnvelope<never> {
   const helpRoute = input.helpRoute ?? `mstar ${input.command.replaceAll(".", " ")} --help`;
+  const skill = input.skill ?? owningSkillFor(input.command);
   const recovery = input.recovery ?? (input.status === "usage"
-    ? `Run ${helpRoute} and correct the flagged input.`
+    ? `Run ${helpRoute} and correct the flagged input.${skill === undefined ? "" : ` Owning skill: ${skill}.`}`
     : undefined);
   const { diagnostics, details, rejected } = input;
   const summary = input.status === "usage" && diagnostics !== undefined && diagnostics.length > 1
@@ -112,6 +115,7 @@ export function refusalEnvelope(input: RefusalInput): CommandEnvelope<never> {
     ...(diagnostics === undefined ? {} : { diagnostics }),
     ...(summary === undefined ? {} : { diagnosticSummary: summary.counts }),
     helpRoute,
+    ...(skill === undefined ? {} : { skill }),
     ...(recovery === undefined ? {} : { recovery }),
   };
   if (input.status === "refused") {

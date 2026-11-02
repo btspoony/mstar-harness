@@ -38,7 +38,7 @@ describe("refusal envelope contract", () => {
     if (envelope.status !== "usage") throw new Error("expected usage refusal");
     expect(envelope.details).toMatchObject({
       helpRoute: "mstar plan bind --help",
-      recovery: "Run mstar plan bind --help and correct the flagged input.",
+      recovery: "Run mstar plan bind --help and correct the flagged input. Owning skill: mstar-iteration.",
     });
   });
 
@@ -58,5 +58,37 @@ describe("refusal envelope contract", () => {
     expect(envelope.message).toContain("Help: mstar plan bind --help");
     expect(envelope.message).not.toContain("Recovery:");
     expect(envelope.details).not.toHaveProperty("diagnostics");
+  });
+
+  test("mapped command with default recovery names the owning skill", () => {
+    const envelope = refusalEnvelope({
+      command: "plan.show", status: "usage", code: "command.invalid-input", exitCode: 2,
+      message: "plan show requires --plan",
+    });
+    if (envelope.status !== "usage") throw new Error("expected usage refusal");
+    expect(envelope.details).toMatchObject({ skill: "mstar-artifacts" });
+    expect(envelope.details?.recovery).toBe(
+      "Run mstar plan show --help and correct the flagged input. Owning skill: mstar-artifacts.",
+    );
+  });
+
+  test("mapped command keeps a caller-supplied recovery byte-identical", () => {
+    const recovery = "Review mstar plan show --help and correct the reported input.";
+    const envelope = refusalEnvelope({
+      command: "plan.show", status: "usage", code: "command.invalid-input", exitCode: 2,
+      message: "plan show requires --plan", recovery,
+    });
+    if (envelope.status !== "usage") throw new Error("expected usage refusal");
+    expect(envelope.details).toMatchObject({ skill: "mstar-artifacts", recovery });
+  });
+
+  test("unmapped command publishes no skill key", () => {
+    const envelope = refusalEnvelope({
+      command: "dashboard", status: "usage", code: "command.invalid-input", exitCode: 2,
+      message: "invalid input",
+    });
+    if (envelope.status !== "usage") throw new Error("expected usage refusal");
+    expect(envelope.details).not.toHaveProperty("skill");
+    expect(envelope.details?.recovery).toBe("Run mstar dashboard --help and correct the flagged input.");
   });
 });
