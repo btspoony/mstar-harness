@@ -257,6 +257,18 @@ function command<I>(id: string, definition: Omit<CommandDefinition<I, unknown>, 
   return { id, output: commandEnvelopeSchema, ...definition };
 }
 
+/**
+ * Whether the start path is a different checkout of this repository.
+ *
+ * An unidentifiable start path (Git probe failed, so `startCheckout` is null)
+ * counts as linked on purpose: the command then answers from the control root,
+ * which is the only safe anchor. Loosening this predicate is the fail-open
+ * regression the unit test beside it pins.
+ */
+export function linkedWorktreeOf(controlRoot: string | null, startCheckout: string | null): boolean {
+  return controlRoot !== null && startCheckout !== controlRoot;
+}
+
 export function getLocalCommandDefinitions(): readonly CommandDefinition[] {
   return [
     command("harness.scaffold", {
@@ -497,11 +509,8 @@ export function getLocalCommandDefinitions(): readonly CommandDefinition[] {
         // A plain subdirectory of the main checkout belongs to that worktree;
         // a nested `git worktree add` under it is a distinct checkout. Git's
         // own top-level for the start path decides this, not path prefixes.
-        // A failed probe is treated as linked on purpose: the effective
-        // answers then come from the control root, so the command cannot fall
-        // back to a local harness on a checkout it could not identify.
         const startCheckout = probeCheckoutRoot(startDir);
-        const linkedWorktree = controlRoot !== null && startCheckout !== controlRoot;
+        const linkedWorktree = linkedWorktreeOf(controlRoot, startCheckout);
         const control = {
           controlRoot,
           controlHarnessDir,
@@ -516,7 +525,7 @@ export function getLocalCommandDefinitions(): readonly CommandDefinition[] {
             startDir, harnessDir: null, specsDir: null, workflowDir: null, projectDir: null, reviewDir: null, ...control, local: { harnessDir },
           } , recovery: "From the main worktree: run mstar status validate; or set MSTAR_HARNESS_DIR to the control harness root. Run mstar path resolve."});
         }
-        if (linkedWorktree) {
+        if (linkedWorktree && controlRoot !== null) {
           // In a linked checkout the local probe is the worktree's own
           // directory (tracked plugin dirs, usually not a harness at all);
           // the process documents live at the control harness.

@@ -36,6 +36,7 @@ import {
 } from "../src/index.js";
 import { detectHost, resolveHarnessDir, resolveWorkflowDir } from "@mstar-harness/engine";
 import { getLocalCommandDefinitions } from "../src/index.js";
+import { linkedWorktreeOf } from "../src/families/local.js";
 
 const previousProjectRoot = process.env.MSTAR_CLI_PROJECT_ROOT;
 const fixtures: string[] = [];
@@ -402,6 +403,15 @@ describe("shared host-health helpers", () => {
     } finally {
       chmodSync(blocked, 0o755);
     }
+  });
+
+  test("linkedWorktree treats an unidentifiable start path as linked", () => {
+    // Same checkout, a plain subdirectory, a nested worktree, and the
+    // fail-safe: no control root means no linked claim at all.
+    expect(linkedWorktreeOf("/main", "/main")).toBe(false);
+    expect(linkedWorktreeOf("/main", "/main/.worktrees/feat")).toBe(true);
+    expect(linkedWorktreeOf("/main", null)).toBe(true);
+    expect(linkedWorktreeOf(null, "/elsewhere")).toBe(false);
   });
 
   test("path resolve still refuses outside git with no harness", async () => {
