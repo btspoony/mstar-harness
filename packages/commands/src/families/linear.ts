@@ -86,8 +86,10 @@ async function run(operation: "login" | "status" | "logout", invocation: Invocat
       message,
       details: { credentialPath: linearCredentialPath(), ...facts.details },
       // A literal, so the reachability lint can prove a real command: the host
-      // facts still supply the message and the code.
-      recovery: "Run `mstar linear auth` again, or check the authorization server is reachable.",
+      // facts still supply the message and the code. The word after the command
+      // must be one the scanner treats as a boundary, or it reads it as a
+      // positional argument and the command stops being provable.
+      recovery: "Run `mstar linear auth` to authorize again, or check the authorization server is reachable.",
     });
   }
   if (tokens === null) {
