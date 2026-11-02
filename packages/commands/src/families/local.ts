@@ -505,12 +505,16 @@ export function getLocalCommandDefinitions(): readonly CommandDefinition[] {
           // the process documents live at the control harness.
           if (controlHarnessDir === null) {
             return refusalEnvelope({ command: "path.resolve", status: "refused", code: "path.harness-not-found", exitCode: 1, message: `no control harness dir found for the linked checkout ${startDir} (control root ${controlRoot})`, details: {
-              startDir, harnessDir, specsDir: null, workflowDir: null, projectDir: null, reviewDir: null, ...control,
+              startDir, harnessDir: null, specsDir: null, workflowDir: null, projectDir: null, reviewDir: null, ...control, local: { harnessDir },
             } , recovery: "Run `mstar harness scaffold` in the main worktree, or set MSTAR_HARNESS_DIR to the control harness root. Run mstar path resolve."});
           }
           return ok("path.resolve", {
             startDir,
-            harnessDir,
+            // Top-level members are the EFFECTIVE answers for this run. In a
+            // linked checkout that is the control harness — a caller appending
+            // `plans/` to the worktree's own probe would land in the wrong
+            // checkout. The probe stays under `local`.
+            harnessDir: controlHarnessDir,
             specsDir: resolveSpecsDir(controlHarnessDir, { create: false }),
             workflowDir: resolveWorkflowDir(controlRoot),
             projectDir: resolveProjectDir(controlRoot),

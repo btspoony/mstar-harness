@@ -162,6 +162,10 @@ describe("shared host-health helpers", () => {
     expect(fromLinked).toMatchObject({
       status: "ok",
       data: {
+        // Top-level answers are effective: the control harness, not the
+        // worktree's own probe. A reader appending `plans/` lands at the
+        // process documents.
+        harnessDir: controlHarness,
         controlRoot: main,
         controlHarnessDir: controlHarness,
         linkedWorktree: true,
