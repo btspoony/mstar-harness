@@ -1,6 +1,6 @@
-import { afterEach, describe, expect, spyOn, test } from "bun:test";
+import { afterEach, beforeEach, describe, expect, spyOn, test } from "bun:test";
 import { execFileSync } from "node:child_process";
-import { readFileSync, mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+import { readFileSync, chmodSync, mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import {
@@ -39,8 +39,19 @@ import { getLocalCommandDefinitions } from "../src/index.js";
 
 const previousProjectRoot = process.env.MSTAR_CLI_PROJECT_ROOT;
 const fixtures: string[] = [];
+// Every path.resolve case here probes from a start directory, so an exported
+// harness override would short-circuit the probe and make the result depend on
+// the caller's shell. Clear it per test and restore it afterwards.
+let previousHarnessDir: string | undefined;
+
+beforeEach(() => {
+  previousHarnessDir = process.env.MSTAR_HARNESS_DIR;
+  delete process.env.MSTAR_HARNESS_DIR;
+});
 
 afterEach(() => {
+  if (previousHarnessDir === undefined) delete process.env.MSTAR_HARNESS_DIR;
+  else process.env.MSTAR_HARNESS_DIR = previousHarnessDir;
   if (previousProjectRoot === undefined) delete process.env.MSTAR_CLI_PROJECT_ROOT;
   else process.env.MSTAR_CLI_PROJECT_ROOT = previousProjectRoot;
   for (const fixture of fixtures.splice(0)) rmSync(fixture, { recursive: true, force: true });
@@ -227,6 +238,10 @@ describe("shared host-health helpers", () => {
     expect(result).toMatchObject({
       status: "refused",
       code: "path.harness-not-found",
+      // Same code and same `...control` spread as the generic refusal, so the
+      // producer's own wording is the only assertion that tells the branches
+      // apart; collapsing them must not stay green.
+      message: expect.stringContaining("linked checkout"),
       details: { controlRoot: main, controlHarnessDir: null, linkedWorktree: true },
     });
   });
@@ -235,7 +250,8 @@ describe("shared host-health helpers", () => {
     const orphan = path.join(realpathSync(fixture()), "orphan");
     mkdirSync(orphan, { recursive: true });
     // A `.git` FILE is the linked-checkout marker; its gitdir points nowhere,
-    // so no main worktree can be read from it.
+    // so no main worktree can be read from it. The file-level beforeEach has
+    // already cleared MSTAR_HARNESS_DIR, which would short-circuit the walk.
     writeText(orphan, ".git", "gitdir: /nonexistent/mstar-fixture.git\n");
     const definition = getLocalCommandDefinitions().find(({ id }) => id === "path.resolve");
     expect(definition).toBeDefined();
@@ -255,9 +271,45 @@ describe("shared host-health helpers", () => {
     expect(result).toMatchObject({
       status: "refused",
       code: "coordination.not-in-git",
+      message: expect.stringContaining("linked checkout"),
       details: { controlRoot: null, controlHarnessDir: null, linkedWorktree: false },
     });
     expect((result.details as Record<string, unknown>).controlUnavailable).toEqual(expect.any(String));
+  });
+
+  test("path resolve names the refusal when the checkout cannot be traversed", async () => {
+    // Root ignores mode bits, so the fixture cannot express EACCES there.
+    if (typeof process.getuid === "function" && process.getuid() === 0) return;
+    const blocked = path.join(realpathSync(fixture()), "blocked");
+    const inner = path.join(blocked, "inner");
+    mkdirSync(inner, { recursive: true });
+    chmodSync(blocked, 0o000);
+    try {
+      const definition = getLocalCommandDefinitions().find(({ id }) => id === "path.resolve");
+      expect(definition).toBeDefined();
+      if (!definition) return;
+      const result = await definition.execute({ path: inner }, {
+        cwd: inner,
+        controlRoot: null,
+        versions: { engine: null, cli: null, plugin: null, host: null, platform: null },
+        signal: new AbortController().signal,
+        effects: {
+          readInput: async () => "",
+          spawn: async () => ({ exitCode: 0, signal: null, stdout: "", stderr: "" }),
+          startDashboard: async () => ({ url: "", close: async () => {} }),
+          openBrowser: async () => {},
+        },
+      });
+      // Named refusal with details, never `command.internal`.
+      expect(result).toMatchObject({
+        status: "refused",
+        code: "coordination.not-in-git",
+        details: { controlRoot: null, controlHarnessDir: null, linkedWorktree: false },
+      });
+      expect((result.details as Record<string, unknown>).controlUnavailable).toEqual(expect.any(String));
+    } finally {
+      chmodSync(blocked, 0o755);
+    }
   });
 
   test("path resolve still refuses outside git with no harness", async () => {

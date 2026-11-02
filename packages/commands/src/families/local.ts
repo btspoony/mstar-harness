@@ -480,8 +480,13 @@ export function getLocalCommandDefinitions(): readonly CommandDefinition[] {
         } catch (error) {
           // A linked checkout whose main worktree is unreadable is data here,
           // not a failed lookup: report the cause instead of a local guess.
-          if (!(error instanceof CoordinationError) || error.code !== "coordination.not-in-git") throw error;
-          controlUnavailable = error.message;
+          // Filesystem-availability errors escape the same walk-up and must
+          // answer the same named refusal, not an unclassified internal error.
+          const code = error instanceof CoordinationError
+            ? error.code
+            : (error as NodeJS.ErrnoException).code;
+          if (code !== "coordination.not-in-git" && code !== "EACCES" && code !== "EPERM") throw error;
+          controlUnavailable = error instanceof Error ? error.message : String(error);
         }
         // A start directory inside the main checkout IS that worktree; only a
         // checkout outside it is linked.
@@ -503,7 +508,7 @@ export function getLocalCommandDefinitions(): readonly CommandDefinition[] {
         // back to local artifacts — misreporting the worktree's own directory
         // as the process root is the confusion this command exists to remove.
         if (controlUnavailable !== undefined) {
-          return refusalEnvelope({ command: "path.resolve", status: "refused", code: "coordination.not-in-git", exitCode: 1, message: `the linked checkout ${startDir} cannot read its main worktree: ${controlUnavailable}`, details: {
+          return refusalEnvelope({ command: "path.resolve", status: "refused", code: "coordination.not-in-git", exitCode: 1, message: `the linked checkout ${startDir} cannot read its main worktree`, details: {
             startDir, harnessDir: null, specsDir: null, workflowDir: null, projectDir: null, reviewDir: null, ...control, local: { harnessDir },
           } , recovery: "From the main worktree: run mstar status validate; or set MSTAR_HARNESS_DIR to the control harness root. Run mstar path resolve."});
         }
