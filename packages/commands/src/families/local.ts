@@ -506,7 +506,7 @@ export function getLocalCommandDefinitions(): readonly CommandDefinition[] {
           if (controlHarnessDir === null) {
             return refusalEnvelope({ command: "path.resolve", status: "refused", code: "path.harness-not-found", exitCode: 1, message: `no control harness dir found for the linked checkout ${startDir} (control root ${controlRoot})`, details: {
               startDir, harnessDir: null, specsDir: null, workflowDir: null, projectDir: null, reviewDir: null, ...control, local: { harnessDir },
-            } , recovery: "Run `mstar harness scaffold` in the main worktree, or set MSTAR_HARNESS_DIR to the control harness root. Run mstar path resolve."});
+            } , recovery: "From the main worktree: run mstar harness scaffold; or set MSTAR_HARNESS_DIR to the control harness root. Run mstar path resolve."});
           }
           return ok("path.resolve", {
             startDir,

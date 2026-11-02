@@ -184,13 +184,20 @@ describe("mstar path resolve — harness/specs dir resolution", () => {
       writeFileSync(join(root, ".mstar", "specs", "adr.md"), "# ADR\n");
       const result = runResolve([root]);
       expect(result.exitCode).toBe(0);
-      expect(data(result)).toEqual({
+      expect(data(result)).toMatchObject({
         startDir: root,
         harnessDir: join(root, ".mstar"),
         specsDir: join(root, ".mstar", "specs"),
         workflowDir: join(root, ".mstar", "workflows"),
         projectDir: join(root, ".mstar", "projects"),
         reviewDir: join(root, ".mstar", "reviews"),
+      });
+      // Outside Git there is no process root: controlRoot stays null, and the
+      // control harness falls back to the same local probe (never a guess).
+      expect(data(result)).toMatchObject({
+        controlRoot: null,
+        controlHarnessDir: join(root, ".mstar"),
+        linkedWorktree: false,
       });
     });
   });
