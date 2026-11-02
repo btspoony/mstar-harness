@@ -40,8 +40,11 @@ export type ProviderItem = {
  * One item the host could not map at the adapter boundary (contract §2, cursor
  * section): it fails THAT item by identity and lets the rest of the page
  * proceed. `externalId` is null only when the payload did not carry one, in
- * which case `index` is the only handle. A page carrying failures is treated
- * as stranded by the ingest run: the cursor does not advance past it.
+ * which case `index` is the only handle. The ingest run REPORTS a failure like
+ * this as stranded and still advances its cursor: a missing required field is
+ * not repaired by re-reading the same page, so one such item must never cap
+ * every later page (I-000948). Only a retryable ledger-level failure holds the
+ * cursor.
  */
 export type ProviderItemFailure = {
   /** Zero-based index of the item inside the page. */
@@ -57,8 +60,9 @@ export type ProviderPage = {
   nextCursor: string | null;
   /**
    * Per-item mapping failures. Absent means none; an INGESTABLE page is
-   * `items`; the ingest run must not advance past a page whose array is
-   * non-empty (contract §2 "Cursor advance and the overlap window").
+   * `items`, and the failures are reported as stranded while the cursor still
+   * advances (I-000948) — contract §2 "Cursor advance and the overlap window"
+   * reserves the cursor hold for retryable ledger failures.
    */
   failures?: readonly ProviderItemFailure[];
 };

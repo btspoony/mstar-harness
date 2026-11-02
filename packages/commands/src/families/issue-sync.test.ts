@@ -361,26 +361,49 @@ describe("a failing page keeps the cursor and ingests nothing from it", () => {
     expect(p.requests).toEqual([null, null, "c-2"]);
   });
 
-  test("an unmappable item is reported by identity and page index while the rest is ingested (F2)", async () => {
-    const p = provider(() => ({
-      items: [item(), item({ externalId: "LIN-2", title: "Second" })],
-      nextCursor: null,
-      failures: [{ index: 2, externalId: "LIN-BAD", cause: 'issue at page index 2 has no usable "title"' }],
-    }));
+  test("an unmappable item is reported by identity and page index while the run continues (F2)", async () => {
+    // I-000948: a title-less remote issue can never be fixed by retrying this
+    // page, so it must not cap later pages. It is reported as stranded with its
+    // cause; the cursor advances and the next page is read.
+    const pages: Record<string, ProviderPage> = {
+      start: {
+        items: [item(), item({ externalId: "LIN-2", title: "Second" })],
+        nextCursor: "c-2",
+        failures: [{ index: 2, externalId: "LIN-BAD", cause: 'issue at page index 2 has no usable "title"' }],
+      },
+      "c-2": { items: [item({ externalId: "LIN-3", title: "Third" })], nextCursor: null },
+    };
+    const p = provider((cursor) => pages[cursor ?? "start"]!);
     const f = await fixture("poison-item", p);
     const result = await runImport(f.context);
     expect(result.status).toBe("ok");
-    expect(result.data).toMatchObject({ imported: 2, failed: 0, stopped: "stranded" });
+    // The whole scan ran: two pages, all three mappable items ingested, and the
+    // completed scan rewound the pointer.
+    expect(result.data).toMatchObject({ imported: 3, failed: 0, pages: 2, stopped: "complete", cursor: null });
     expect(result.data?.stranded).toEqual([
       { page: 1, index: 2, externalId: "LIN-BAD", cause: 'issue at page index 2 has no usable "title"' },
     ]);
+    expect(p.requests).toEqual([null, "c-2"]);
     // The good items were ingested; the poisoned one did not stop them.
     const db = await f.db();
     try {
-      expect(db.prepare("select count(*) as n from issues").get()).toEqual({ n: 2 });
+      expect(db.prepare("select count(*) as n from issues").get()).toEqual({ n: 3 });
     } finally {
       db.close();
     }
+  });
+
+  test("a stranded page with a later page still advances the cursor (I-000948)", async () => {
+    // The stop-vs-advance split: only a ledger-level failure holds the cursor.
+    const pages: Record<string, ProviderPage> = {
+      start: { items: [item()], nextCursor: "c-2", failures: [{ index: 1, externalId: null, cause: "not-an-object" }] },
+      "c-2": { items: [item({ externalId: "LIN-2", title: "Second" })], nextCursor: null },
+    };
+    const f = await fixture("stranded-advance", provider((cursor) => pages[cursor ?? "start"]!));
+    const result = await runImport(f.context);
+    expect(result.data).toMatchObject({ imported: 2, failed: 0, pages: 2, stopped: "complete" });
+    // The unmappable item is still reported, with the page index that holds it.
+    expect(result.data?.stranded).toEqual([{ page: 1, index: 1, externalId: null, cause: "not-an-object" }]);
   });
 
   test("--max-pages bounds one run and the reported cursor resumes it", async () => {

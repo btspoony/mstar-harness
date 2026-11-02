@@ -9,7 +9,8 @@
  * `import` refuses — before any write — when the binding cannot run, and
  * otherwise pages the bound Linear project into the local store through the
  * ledger and reports what it imported, updated, skipped or failed plus where it
- * stopped.
+ * stopped. A retryable ledger failure holds the cursor for the next run; an
+ * adapter-unmappable item is reported as stranded and the scan continues.
  *
  * `push` is the only WRITE surface. It refuses the whole run before any write
  * when the stored credential's scope cannot create or update issues, discovers
@@ -282,9 +283,13 @@ type ImportReport = {
   requests: number;
   /** The cursor a later run resumes from (unchanged when nothing advanced). */
   cursor: string | null;
-  /** Items left unprocessed, by identity and page index (blocked the cursor). */
+  /** Items left unprocessed, by identity and page index. */
   stranded: StrandedItem[];
-  /** Why the run stopped: the page bound, a stranded item, or the last page. */
+  /**
+   * Why the run stopped: the page bound, a retryable ledger failure holding the
+   * cursor, or the last page. Adapter-level failures alone do not stop a run —
+   * they are reported in `stranded` and the cursor advances (I-000948).
+   */
   stopped: "complete" | "max-pages" | "stranded";
 };
 
@@ -394,10 +399,14 @@ async function runImport(id: string, input: Input, invocation: InvocationContext
       report.updated += counts.updated;
       report.skipped += counts.skipped;
       report.failed += counts.failed;
-      // Contract §2 "Cursor advance and the overlap window": the cursor moves
-      // only when this page left NOTHING stranded. Both a failed ledger item and
-      // an unmappable item are stranded, so the next run re-reads this page
-      // (the overlap window) and the `failed → pending` retry can actually run.
+      // Contract §2 "Cursor advance and the overlap window", split by whether a
+      // retry could ever help (I-000948):
+      // - an ADAPTER-level failure (a title-less item, a non-object) can never
+      //   change by re-reading the same page, so it is reported as stranded and
+      //   the cursor advances — one poison item must not cap every later page.
+      // - a LEDGER-level failure (identity collision, store refusal) is
+      //   retryable, so the next run re-reads this page (the overlap window) and
+      //   the `failed → pending` retry can actually run.
       for (const failure of page.failures ?? []) {
         report.stranded.push({
           page: report.pages,
@@ -405,10 +414,6 @@ async function runImport(id: string, input: Input, invocation: InvocationContext
           externalId: failure.externalId,
           cause: failure.cause,
         });
-      }
-      if (page.failures !== undefined && page.failures.length > 0) {
-        report.stopped = "stranded";
-        break;
       }
       if (counts.failed > 0) {
         report.stranded.push({
@@ -645,7 +650,7 @@ async function runPush(id: string, input: Input, invocation: InvocationContext):
 export function getIssueSyncCommandDefinitions(): readonly CommandDefinition[] {
   const descriptions: Record<Verb, string> = {
     import:
-      "Import the bound Linear project's issues into this store, read-only toward Linear; a second run with unchanged remote state imports nothing. --max-pages bounds one run (default 20 pages of 50) and the reported cursor resumes it.",
+      "Import the bound Linear project's issues into this store, read-only toward Linear; a second run with unchanged remote state imports nothing. --max-pages bounds one run (default 20 pages of 50) and the reported cursor resumes it. An issue Linear returns without a usable title/identifier is reported as stranded and the scan continues; repair it in Linear's UI and the next full scan picks it up.",
     push:
       "Push this project's local issues to the bound Linear team: create when no remote identity is known, update when a confirmed one exists, skip when the payload is unchanged. An unconfirmed create stays pending and the next run reconciles it by correlation marker — never by title/description. --adopt <localId>=<issueUrl|externalId> records an identity you confirmed yourself; --force-create <localId> says the remote issue does not exist. Requires a credential granted read + issues:create.",
   };

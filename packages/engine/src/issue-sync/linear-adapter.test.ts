@@ -216,6 +216,23 @@ describe("page failures (never an empty page)", () => {
     expect(page.failures?.[0]?.cause).toContain("updatedAt");
   });
 
+  test("a title-less item fails that item alone and the page still maps the rest (I-000948)", async () => {
+    // A missing required field can never be fixed by retrying the same page, so
+    // it fails its OWN index instead of refusing the whole page.
+    const d = deps([
+      {
+        kind: "ok",
+        payload: { issues: [issue("LIN-1"), issue("LIN-2", { title: undefined }), issue("LIN-3")], hasNextPage: true, cursor: "c-2" },
+      },
+    ]);
+    const page = await createLinearAdapter(d).listIssues(null);
+    expect(page.items.map((item) => item.externalId)).toEqual(["LIN-1", "LIN-3"]);
+    expect(page.nextCursor).toBe("c-2");
+    expect(page.failures).toHaveLength(1);
+    expect(page.failures?.[0]).toMatchObject({ index: 1, externalId: "LIN-2" });
+    expect(page.failures?.[0]?.cause).toContain("title");
+  });
+
   test("a poisoned item with no identity is still reported by index", async () => {
     const d = deps([{ kind: "ok", payload: { issues: ["not-an-object", issue("LIN-2")] } }]);
     const page = await createLinearAdapter(d).listIssues(null);

@@ -146,7 +146,7 @@ export function importPage(
         });
       }
       // `pending` needs no transition: a previous run already opened this cycle.
-      mirrorRemoteFields(db, localId, externalId, item);
+      const wrote = mirrorRemoteFields(db, localId, externalId, item);
       // Fields are copied FIRST; the watermark rides the applied commit, so a
       // crash between the two leaves a pending row on the old revision instead
       // of a newer timestamp over stale content.
@@ -157,7 +157,12 @@ export function importPage(
         remoteUpdatedAt: item.updatedAt,
         operationId: operationId(bindingId, item, "applied"),
       });
-      result.updated++;
+      // I-000946: a newer remote revision that changed nothing the row reflects
+      // (a `state` edit, say) leaves the row untouched, so the counter says
+      // `skipped` — while the watermark above still advances past the revision
+      // the run has now seen.
+      if (wrote) result.updated++;
+      else result.skipped++;
     } catch (error) {
       result.failed++;
       if (localId !== undefined) recordFailure(db, bindingId, localId, error);
@@ -292,6 +297,8 @@ function captureImportedIssue(db: StoreDb, projectId: string, item: ProviderItem
  * Mirror the remote fields the local row reflects (title, description, link).
  * Writes only when something differs, so a resumed run is a no-op rather than a
  * second `updated_at` bump; the row's `revision` advances with a real change.
+ * Returns whether it wrote, so the caller counts `skipped` when a newer remote
+ * revision changed nothing the row reflects (I-000946).
  *
  * Receipt decision (QC F11): this is a raw-SQL field mirror with no
  * `store_operations` receipt of its own, and its RECEIPT IS THE SURROUNDING
@@ -301,8 +308,9 @@ function captureImportedIssue(db: StoreDb, projectId: string, item: ProviderItem
  * keyed by `(bindingId, localId, updatedAt)`: that operation id is what a resumed
  * run replays, and it is written after the mirror in the same item cycle.
  */
-function mirrorRemoteFields(db: StoreDb, localId: string, externalId: string, item: ProviderItem): void {
+function mirrorRemoteFields(db: StoreDb, localId: string, externalId: string, item: ProviderItem): boolean {
   const description = impactOf(item);
+  let wrote = false;
   db.exec("begin immediate");
   try {
     const row = db
@@ -319,6 +327,7 @@ function mirrorRemoteFields(db: StoreDb, localId: string, externalId: string, it
         new Date().toISOString(),
         localId,
       );
+      wrote = true;
     }
     db.exec("commit");
   } catch (error) {
@@ -332,6 +341,7 @@ function mirrorRemoteFields(db: StoreDb, localId: string, externalId: string, it
   // `externalId` is the ledger's own key; the row's copy is written at capture
   // time, so a mirror never re-points it.
   void externalId;
+  return wrote;
 }
 
 /** Best-effort: record the failure on a pending row so the next run retries it. */

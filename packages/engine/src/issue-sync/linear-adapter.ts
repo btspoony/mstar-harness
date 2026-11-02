@@ -299,13 +299,13 @@ function nextCursorOf(payload: Payload): string | null {
   return cursor;
 }
 
-/** A missing required field is a page failure: no field is invented. */
+/** A missing required field fails THAT item: no field is invented. */
 function required(item: Payload, field: string, index: number): string {
   const value = item[field];
   if (typeof value !== "string" || value.trim() === "") {
     throw new SyncError(
       "linear.query-failed",
-      `issue at page index ${index} has no usable "${field}"; the page was refused rather than ingested with a guessed value`,
+      `issue at page index ${index} has no usable "${field}"; that issue was reported as stranded and the rest of the page was ingested`,
     );
   }
   return value;
@@ -338,12 +338,12 @@ function labelsOf(item: Payload): string[] {
   const labels = item.labels;
   if (labels === undefined || labels === null) return [];
   if (!Array.isArray(labels)) {
-    throw new SyncError("linear.query-failed", "an issue carried a non-array `labels` field; the page was refused");
+    throw new SyncError("linear.query-failed", "an issue carried a non-array `labels` field; that issue was reported as stranded");
   }
   return labels.map((label) => {
     if (typeof label === "string") return label;
     if (isRecord(label) && typeof label.name === "string") return label.name;
-    throw new SyncError("linear.query-failed", "an issue carried an unusable label entry; the page was refused");
+    throw new SyncError("linear.query-failed", "an issue carried an unusable label entry; that issue was reported as stranded");
   });
 }
 
@@ -361,7 +361,7 @@ function stateOf(item: Payload): string {
 
 function mapItem(entry: unknown, index: number): ProviderItem {
   if (!isRecord(entry)) {
-    throw new SyncError("linear.query-failed", `issue at page index ${index} is not an object; the page was refused`);
+    throw new SyncError("linear.query-failed", `issue at page index ${index} is not an object; that issue was reported as stranded`);
   }
   // Linear lists the human key as `identifier` and the API id as `id`; the
   // identifier is stable across runs and is what the ledger keys on.

@@ -132,6 +132,25 @@ describe("a remote change imports exactly once", () => {
     close();
   });
 
+  test("a newer revision that changes nothing local counts skipped and still advances the watermark", async () => {
+    // I-000946: the remote only changed `state`, which the local row does not
+    // reflect. The row is untouched, so the counter must say `skipped` — while
+    // the watermark still moves, or the next run would re-read the revision.
+    const { db, close } = await store("state-only");
+    importPage(db, BINDING, [item()]);
+    const localId = (db.prepare("select id from issues where external_id = 'LIN-1'").get() as { id: string }).id;
+    const before = issueRows(db);
+
+    const stateOnly = item({ state: "Done", updatedAt: "2026-11-02T00:00:00.000Z" });
+    expect(importPage(db, BINDING, [stateOnly])).toEqual({ imported: 0, updated: 0, skipped: 1, failed: 0 });
+    expect(issueRows(db)).toEqual(before);
+    expect(readItem(db, { bindingId: BINDING, direction: "import", localId })).toMatchObject({
+      itemState: "applied",
+      lastRemoteUpdatedAt: "2026-11-02T00:00:00.000Z",
+    });
+    close();
+  });
+
   test("an item first seen after it changed is imported once (row absent -> planItem)", async () => {
     const { db, close } = await store("first-seen-changed");
     expect(importPage(db, BINDING, [item()])).toEqual({ imported: 1, updated: 0, skipped: 0, failed: 0 });
