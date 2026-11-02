@@ -606,6 +606,75 @@ describe("push — the credential scope preflight", () => {
     expect(provider.writes).toHaveLength(1);
   });
 
+  test("--adopt recovers the pending residue an ambiguous create left behind", async () => {
+    const writes: Array<{ kind: string; externalId?: string }> = [];
+    const receipts = [
+      { kind: "ambiguous" as const, cause: "connection closed mid-call" },
+      { kind: "confirmed" as const, externalId: "LIN-555", updatedAt: "2026-11-02T00:10:00.000Z" },
+    ];
+    const provider = {
+      async probe() {
+        return { state: "ready" as const, cause: "ready: fixture handshake" };
+      },
+      async listIssues() {
+        return { items: [], nextCursor: null };
+      },
+      async applyWrite(write: { kind: string; externalId?: string }) {
+        writes.push(write);
+        return receipts.shift()!;
+      },
+      async discoverLabels() {
+        return new Set(["bug"]);
+      },
+    };
+    const f = await fixture("push-adopt-pending", null);
+    storeCredential("read,issues:create");
+    {
+      const handle = await openStore({ harnessDir: f.harnessDir }, "write");
+      handle.db.prepare(
+        "insert into issues(id, project_id, title, kind, severity, impact, acceptance, created_at, updated_at, identity_key)" +
+          " values ('I-000804', ?, 'Ambiguous', 'bug', 'high', 'i', 'a', 'now', 'now', 'sync-I-000804')",
+      ).run(PROJECT);
+      handle.close();
+    }
+    const context = { ...f.context, effects: { ...f.context.effects, issueProvider: () => provider as never } };
+
+    const first = (await executeCommand("issue-sync.push", { project: PROJECT }, context)) as {
+      data?: { unresolved: number; items: Array<{ localId: string; outcome: string }> };
+    };
+    expect(first.data?.items).toEqual([
+      expect.objectContaining({ localId: "I-000804", outcome: "unresolved" }),
+    ]);
+
+    // The documented recovery: the operator confirms the remote issue they can
+    // see. It must not be refused by an illegal-transition guard.
+    const second = (await executeCommand(
+      "issue-sync.push",
+      { project: PROJECT, adopt: ["I-000804=https://linear.app/acme/issue/LIN-555/slug"] },
+      context,
+    )) as {
+      status: string;
+      data?: { created: number; updated: number; items: Array<{ localId: string; outcome: string; externalId: string | null }> };
+    };
+    expect(second.status).toBe("ok");
+    expect(second.data?.created).toBe(0);
+    expect(second.data?.items).toEqual([
+      { localId: "I-000804", outcome: "adopted", externalId: "LIN-555" },
+      { localId: "I-000804", outcome: "updated", externalId: "LIN-555" },
+    ]);
+    // Exactly one create (the ambiguous one) and one corrective update, ever.
+    expect(writes.map((write) => write.kind)).toEqual(["create", "update"]);
+    const db = await f.db();
+    try {
+      expect(db.prepare("select item_state, external_id from issue_sync_state").get()).toEqual({
+        item_state: "applied",
+        external_id: "LIN-555",
+      });
+    } finally {
+      db.close();
+    }
+  });
+
   test("the CLI spelling declares the push verb with its two repeatable operator flags", async () => {
     const { getCommandDefinitions } = await import("../definitions.js");
     const definition = getCommandDefinitions().find((entry) => entry.id === "issue-sync.push");

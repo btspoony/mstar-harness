@@ -5,10 +5,10 @@
  * on the read path.
  *
  * TRANSACTION OWNERSHIP: every exported mutation (`planItem`, `replanItem`,
- * `markApplied`, `markFailed`, `markSkipped`, `writeCursor`) owns exactly one
- * `begin immediate` … `commit` transaction (house pattern: `issue.ts`
- * `withWrite`). The row mutation and its `store_operations` receipt commit
- * together or not at all, so an interruption cannot leave an advanced row
+ * `markApplied`, `markFailed`, `markSkipped`, `markUnconfirmed`, `writeCursor`)
+ * owns exactly one `begin immediate` … `commit` transaction (house pattern:
+ * `issue.ts` `withWrite`). The row mutation and its `store_operations` receipt
+ * commit together or not at all, so an interruption cannot leave an advanced row
  * without a receipt — the one-way door this ledger exists to prevent.
  * Consequently a verb must NOT be called inside a caller-owned transaction:
  * SQLite refuses to nest, and this surface has no composed route yet. Callers
@@ -107,6 +107,18 @@ export type MarkItemInput = {
   bindingId: string; direction: SyncDirection; localId: string; operationId: string };
 export type MarkFailedInput = MarkItemInput & { error: string };
 export type MarkSkippedInput = MarkItemInput & { reason: string };
+/**
+ * An unconfirmed write: the row keeps the identity an earlier write proved and
+ * loses the payload proof that write established.
+ */
+export type MarkUnconfirmedInput = {
+  bindingId: string;
+  direction: SyncDirection;
+  localId: string;
+  operationId: string;
+  /** The label the unconfirmed write may have written; omitted keeps the recorded one. */
+  kindLabel?: string | null;
+};
 export type ReadItemInput = { bindingId: string; direction: SyncDirection; localId: string };
 export type CursorInput = { bindingId: string; direction: SyncDirection };
 export type WriteCursorInput = CursorInput & { cursor: string; operationId: string };
@@ -442,6 +454,55 @@ export function markFailed(db: StoreDb, input: MarkFailedInput): SyncItem {
  */
 export function markSkipped(db: StoreDb, input: MarkSkippedInput): SyncItem {
   return markItem(db, input, "skipped", requireNonblank("reason", input.reason));
+}
+
+/**
+ * Record a write that was SENT and never confirmed, on the row whose identity an
+ * earlier confirmed write proved.
+ *
+ * The state is preserved — `applied` and `failed` both carry the external
+ * identity and watermark an earlier confirmed write established — but the
+ * payload hash goes: it no longer proves the remote equals that payload, because
+ * the unconfirmed write may have changed it. With no hash the skip rule cannot
+ * match, so the next pass converges the desired fields instead of reporting a
+ * `skipped` the receipt never earned.
+ *
+ * The label the unconfirmed write may have written becomes the recorded
+ * ownership, so a later corrective update replaces exactly that label. Refused
+ * for a `pending` row: an ambiguous CREATE has no identity and is its own
+ * residue, which reconciliation (or an explicit adoption) owns.
+ */
+export function markUnconfirmed(db: StoreDb, input: MarkUnconfirmedInput): SyncItem {
+  const bindingId = requireNonblank("bindingId", input.bindingId);
+  const direction = requireDirection(input.direction);
+  const localId = requireNonblank("localId", input.localId);
+  const operationId = requireNonblank("operationId", input.operationId);
+  const kindLabel = input.kindLabel == null ? null : requireNonblank("kindLabel", input.kindLabel);
+  const hash = syncRequestHash("markUnconfirmed", { bindingId, direction, localId, kindLabel });
+  return withSyncTransaction(db, () => {
+    const replayed = replayOrRefuse<SyncItem>(db, operationId, hash);
+    if (replayed !== undefined) return replayed;
+    const now = new Date().toISOString();
+    const row = requireItem(selectRow(db, bindingId, direction, localId));
+    // The discriminating fact is IDENTITY, not state: an update always addresses a
+    // row an earlier confirmed write gave an id. `pending` without one is the
+    // ambiguous CREATE residue, which reconciliation (or an explicit adoption)
+    // owns; it has no payload proof to invalidate, so this verb refuses it.
+    if (row.external_id === null) refuseTransition(row.item_state, "markUnconfirmed");
+    casUpdate(db, { bindingId, direction, localId }, row.revision, {
+      item_state: row.item_state,
+      external_id: row.external_id,
+      last_remote_updated_at: row.last_remote_updated_at,
+      pending_target: row.pending_target,
+      last_error: row.last_error,
+      last_skip_reason: row.last_skip_reason,
+      last_request_hash: null,
+      last_kind_label: kindLabel ?? row.last_kind_label,
+    }, now);
+    const item = toItem(requireItem(selectRow(db, bindingId, direction, localId)));
+    recordOperation(db, operationId, hash, item, now);
+    return item;
+  });
 }
 
 function markItem(

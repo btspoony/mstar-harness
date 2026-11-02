@@ -26,7 +26,7 @@ import { createHash } from "node:crypto";
 import type { StoreDb } from "../store-db.js";
 import type { Disposition, IssueKind, Severity } from "../issue.js";
 import type { LinearFacetMapping } from "../mstarc.js";
-import { markApplied, markFailed, planItem, readItem, type SyncItem } from "../issue-sync.js";
+import { markApplied, markFailed, markUnconfirmed, planItem, readItem, type SyncItem } from "../issue-sync.js";
 import { providerPayloadFields } from "./field-mapping.js";
 import type { IssueProvider, ProviderWrite, ProviderWritePayload } from "./provider.js";
 
@@ -148,12 +148,27 @@ function descriptionFor(candidate: PushCandidate, marker: string): string {
  * - `failed` without an id → retry the create (only a refusal writes `failed`,
  *   so delivery was never confirmed)
  * - `pending` without an id → ambiguous residue: reconcile first; without an
- *   adoption this run reports `unresolved` and NEVER creates
+ *   adoption this run reports `unresolved` and NEVER creates. This guard runs
+ *   BEFORE any current-attempt preflight: a label failure now says nothing
+ *   about whether the earlier request was delivered.
  * - `applied` with an id and an equal hash → `skipped`, zero write calls
  * - otherwise (an id exists) → update
  */
 export async function pushItem(db: StoreDb, provider: IssueProvider, context: PushContext, candidate: PushCandidate): Promise<PushOutcome> {
   const ledger = readItem(db, { bindingId: context.bindingId, direction: PUSH_DIRECTION, localId: candidate.localId });
+  const externalId = ledger?.externalId ?? null;
+  if (externalId === null && ledger?.itemState === "pending" && !context.forceCreate) {
+    // An ambiguous create from an earlier run. Adopting it is reconcile's job;
+    // creating again could duplicate the remote issue, which is the one thing
+    // this direction must never do. Checked before the label preflight so a
+    // preflight failure for THIS attempt cannot erase a historical ambiguity.
+    return {
+      localId: candidate.localId,
+      outcome: "unresolved",
+      externalId: null,
+      cause: "a previous create was never confirmed; the item awaits marker reconciliation (or an explicit --adopt / --force-create)",
+    };
+  }
   const marker = correlationMarker(context.binding, context.storeId, candidate.localId);
   const fields = providerPayloadFields(candidate, context.mapping);
   // The kind label is resolved against what the workspace HAS. Push never
@@ -176,7 +191,6 @@ export async function pushItem(db: StoreDb, provider: IssueProvider, context: Pu
     labels: [fields.label],
   };
   const hash = requestHash(payload);
-  const externalId = ledger?.externalId ?? null;
 
   if (externalId !== null) {
     if (ledger?.itemState === "applied" && ledger.lastRequestHash === hash) {
@@ -189,18 +203,6 @@ export async function pushItem(db: StoreDb, provider: IssueProvider, context: Pu
     const recorded = ledger?.lastKindLabel ?? null;
     if (recorded !== null && recorded !== fields.label) payload.removeLabels = [recorded];
     return apply(db, provider, context, candidate.localId, { kind: "update", externalId, payload }, hash, fields.label, ledger);
-  }
-
-  if (ledger?.itemState === "pending" && !context.forceCreate) {
-    // An ambiguous create from an earlier run. Adopting it is reconcile's job;
-    // creating again could duplicate the remote issue, which is the one thing
-    // this direction must never do.
-    return {
-      localId: candidate.localId,
-      outcome: "unresolved",
-      externalId: null,
-      cause: "a previous create was never confirmed; the item awaits marker reconciliation (or an explicit --adopt / --force-create)",
-    };
   }
 
   // No row, a retryable failure, or an operator-confirmed absence: this is a
@@ -242,8 +244,22 @@ async function apply(
     return failed(db, context, localId, receipt.code, receipt.cause, current, hash);
   }
   if (receipt.kind === "ambiguous") {
-    // Deliberately NO ledger write: the row keeps its identity (a create has
-    // none) and the next run decides by marker, never by guesswork.
+    if (write.kind === "create") {
+      // Deliberately NO ledger write: the row keeps its (absent) identity as
+      // `pending` residue, and the next run decides by marker, never by guesswork.
+      return { localId, outcome: "unresolved", externalId: null, cause: receipt.cause };
+    }
+    // An update the remote did not confirm: the identity stands, but the payload
+    // proof does not. Dropping the hash is what stops the next pass from
+    // reporting `skipped` off a fact that predates this write; the label this
+    // write may have applied becomes the ownership a corrective update replaces.
+    markUnconfirmed(db, {
+      bindingId: context.bindingId,
+      direction: PUSH_DIRECTION,
+      localId,
+      kindLabel,
+      operationId: opId("unconfirmed"),
+    });
     return { localId, outcome: "unresolved", externalId: ledger?.externalId ?? null, cause: receipt.cause };
   }
   markApplied(db, {
@@ -377,17 +393,27 @@ export async function reconcilePendingCreate(
 /**
  * Operator-confirmed adoption (`--adopt <localId>=<issueUrl|externalId>`): the
  * row takes the identity verbatim, and content converges on the next changed
- * push. `planItem` opens the row when absent; `markApplied` closes it.
+ * push.
+ *
+ * The existing row decides the composition, because the ambiguous residue this
+ * recovery exists for is a `pending` row and `planItem` has no edge from
+ * `pending`:
+ * - absent or retryable (`failed`) → `planItem` opens the cycle, then `markApplied`
+ *   closes it;
+ * - already `pending` → the confirmed identity is applied directly.
  */
 export function adoptItem(db: StoreDb, bindingId: string, localId: string, reference: string): SyncItem {
   const externalId = externalIdOf(reference);
-  planItem(db, {
-    bindingId,
-    direction: PUSH_DIRECTION,
-    localId,
-    externalId,
-    operationId: `linear-push:${bindingId}:${localId}:adopt-plan:${externalId}`,
-  });
+  const existing = readItem(db, { bindingId, direction: PUSH_DIRECTION, localId });
+  if (existing === null || existing.itemState === "failed") {
+    planItem(db, {
+      bindingId,
+      direction: PUSH_DIRECTION,
+      localId,
+      externalId,
+      operationId: `linear-push:${bindingId}:${localId}:adopt-plan:${externalId}`,
+    });
+  }
   return markApplied(db, {
     bindingId,
     direction: PUSH_DIRECTION,

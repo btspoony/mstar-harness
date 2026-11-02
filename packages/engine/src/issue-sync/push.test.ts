@@ -501,3 +501,128 @@ describe("requestHash", () => {
     expect(requestHash({ ...payload, removeLabels: ["risk"] })).toBe(requestHash(payload));
   });
 });
+
+describe("(f2) --adopt recovers an actual ambiguous residue", () => {
+  test("a pending row with no identity is adopted directly, never refused as an illegal transition", async () => {
+    const { db, close } = await openedStore("adopt-pending-residue");
+    try {
+      addIssue(db, "I-001021");
+      const ambiguous = provider({ receipts: [{ kind: "ambiguous", cause: "connection closed mid-call" }] });
+      await pushItem(db, ambiguous, context(), candidates(db)[0]!);
+      expect(row(db, "I-001021")).toMatchObject({ itemState: "pending", externalId: null });
+
+      const adopted = adoptItem(db, BINDING, "I-001021", "https://linear.app/acme/issue/LIN-321/slug");
+      expect(adopted).toMatchObject({ itemState: "applied", externalId: "LIN-321" });
+
+      // Content then converges onto the adopted identity: one update, no create.
+      const after = provider();
+      const converged = await pushItem(db, after, context(), candidates(db)[0]!);
+      expect(converged).toMatchObject({ outcome: "updated", externalId: "LIN-321" });
+      expect(after.writes.map((write) => write.kind)).toEqual(["update"]);
+    } finally {
+      close();
+    }
+  });
+});
+
+describe("(h) a label preflight failure never erases an earlier ambiguous create", () => {
+  test("ambiguous create, zero marker matches, label unavailable, restored: retry creates nothing", async () => {
+    const { db, close } = await openedStore("label-vs-ambiguity");
+    try {
+      addIssue(db, "I-001001", { kind: "risk" });
+      const ambiguous = provider({ receipts: [{ kind: "ambiguous", cause: "connection closed mid-call" }] });
+      const available = context();
+      await pushItem(db, ambiguous, available, candidates(db)[0]!);
+      expect(row(db, "I-001001")).toMatchObject({ itemState: "pending", externalId: null });
+
+      // Reconciliation finds no marker: the create stays unattributed.
+      const scanned = provider();
+      const report = await reconcilePendingCreate(db, scanned, available);
+      expect(report.unresolved).toHaveLength(1);
+
+      // The mapped label is unavailable now. That says nothing about whether the
+      // earlier create was delivered, so the residue must survive it untouched.
+      const missingLabel = context({ labels: new Set(["bug"]) });
+      const blocked = await pushItem(db, ambiguous, missingLabel, candidates(db)[0]!);
+      expect(blocked.outcome).toBe("unresolved");
+      expect(blocked.externalId).toBeNull();
+      expect(row(db, "I-001001")).toMatchObject({ itemState: "pending", externalId: null, lastError: null });
+      expect(ambiguous.writes).toHaveLength(1);
+
+      // Label restored: the row is still ambiguous residue, so it is NOT retried.
+      const retried = await pushItem(db, ambiguous, available, candidates(db)[0]!);
+      expect(retried.outcome).toBe("unresolved");
+      expect(ambiguous.writes).toHaveLength(1);
+      expect(row(db, "I-001001")).toMatchObject({ itemState: "pending", externalId: null });
+    } finally {
+      close();
+    }
+  });
+});
+
+describe("(i) an ambiguous update drops the payload proof but keeps the identity", () => {
+  test("confirm A, send B, ambiguous, local back to A: the next push converges instead of skipping", async () => {
+    const { db, close } = await openedStore("ambiguous-update");
+    try {
+      addIssue(db, "I-001011", { title: "A" });
+      // Explicit scripts: create confirms, the B update goes ambiguous, the
+      // corrective update confirms on the same id.
+      const scripted = provider({
+        receipts: [
+          { kind: "confirmed", externalId: "LIN-1", updatedAt: "2026-11-02T00:00:00.000Z" },
+          { kind: "ambiguous", cause: "timeout after the request was sent" },
+          { kind: "confirmed", externalId: "LIN-1", updatedAt: "2026-11-02T00:10:00.000Z" },
+        ],
+      });
+      const ctx = context();
+      const created = await pushItem(db, scripted, ctx, candidates(db)[0]!);
+      expect(created).toMatchObject({ outcome: "created", externalId: "LIN-1" });
+      const hashOfA = row(db, "I-001011")!.lastRequestHash;
+      expect(hashOfA).not.toBeNull();
+
+      db.prepare("update issues set title = 'B' where id = 'I-001011'").run();
+      const sent = await pushItem(db, scripted, ctx, candidates(db)[0]!);
+      expect(sent.outcome).toBe("unresolved");
+      // The identity survived; the proof that the remote says A did not.
+      const afterAmbiguous = row(db, "I-001011")!;
+      expect(afterAmbiguous.externalId).toBe("LIN-1");
+      expect(afterAmbiguous.itemState).toBe("applied");
+      expect(afterAmbiguous.lastRequestHash).toBeNull();
+
+      db.prepare("update issues set title = 'A' where id = 'I-001011'").run();
+      const converged = await pushItem(db, scripted, ctx, candidates(db)[0]!);
+      expect(converged).toMatchObject({ outcome: "updated", externalId: "LIN-1" });
+      expect(writeOf(scripted, 2, "update").payload.title).toBe("A");
+      expect(row(db, "I-001011")!.lastRequestHash).toBe(hashOfA);
+    } finally {
+      close();
+    }
+  });
+
+  test("a kind-label change during the unconfirmed update stays owned, so the corrective update replaces it", async () => {
+    const { db, close } = await openedStore("ambiguous-update-label");
+    try {
+      addIssue(db, "I-001012", { kind: "bug", title: "A" });
+      const scripted = provider({
+        receipts: [
+          { kind: "confirmed", externalId: "LIN-1", updatedAt: "2026-11-02T00:00:00.000Z" },
+          { kind: "ambiguous", cause: "dropped" },
+          { kind: "confirmed", externalId: "LIN-1", updatedAt: "2026-11-02T00:10:00.000Z" },
+        ],
+      });
+      const ctx = context();
+      await pushItem(db, scripted, ctx, candidates(db)[0]!);
+      db.prepare("update issues set kind = 'risk' where id = 'I-001012'").run();
+      await pushItem(db, scripted, ctx, candidates(db)[0]!);
+      expect(row(db, "I-001012")!.lastKindLabel).toBe("risk");
+      // Back to bug: the possibly-delivered `risk` label is the one to replace.
+      db.prepare("update issues set kind = 'bug' where id = 'I-001012'").run();
+      await pushItem(db, scripted, ctx, candidates(db)[0]!);
+      const corrective = writeOf(scripted, 2, "update").payload;
+      expect(corrective.labels).toEqual(["bug"]);
+      expect(corrective.removeLabels).toEqual(["risk"]);
+    } finally {
+      close();
+    }
+  });
+});
