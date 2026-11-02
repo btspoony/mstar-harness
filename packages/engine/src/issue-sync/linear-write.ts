@@ -46,6 +46,13 @@ export const LINEAR_STATE_VERBS: readonly string[] = ["list_issue_statuses"];
 /** One discovery call asks for this many labels; the workspace set is small. */
 const LABEL_PAGE_LIMIT = 250;
 
+/**
+ * The same page ask for states. A team has a handful of workflow states, so
+ * whatever the host's default page is, naming it removes the one way a state
+ * could be dropped from the discovered set and falsely refuse an item.
+ */
+const STATE_PAGE_LIMIT = 250;
+
 /** Host-owned capabilities injected at the MCP boundary (fixtures in tests). */
 export type LinearWriteDeps = {
   findLinearEntry(): LinearAdapterEntry | null;
@@ -132,7 +139,7 @@ export function createLinearWrite(deps: LinearWriteDeps): LinearWriteSide {
     },
 
     async discoverStates(): Promise<ReadonlySet<string>> {
-      return discover(stateVerbs, "state", stateNames, {});
+      return discover(stateVerbs, "state", stateNames, { limit: STATE_PAGE_LIMIT });
     },
   };
 

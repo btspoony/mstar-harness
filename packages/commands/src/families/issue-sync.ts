@@ -43,7 +43,7 @@ import {
   readLinearCredential,
   reconcilePendingCreate,
   selectPushCandidates,
-  writeLinearCredential,
+  commitLinearCredential,
   readRepoLinearBinding,
   resolveRepoRoot,
   resetCursor,
@@ -107,13 +107,20 @@ export async function resolveStoredToken(invocation: InvocationContext): Promise
       "Run `mstar linear auth` again; the stored refresh token is no longer accepted.",
     );
   }
-  writeLinearCredential({
-    accessToken: fresh.accessToken,
-    refreshToken: fresh.refreshToken ?? credential.refreshToken,
-    expiresAt: fresh.expiresAt,
-    scope: fresh.scope ?? credential.scope,
-    clientId: fresh.clientId ?? credential.clientId,
-  });
+  // The refresh waited on the network, so the operator may have signed out
+  // meanwhile. Deciding inside the commit's lock makes the delete win: this
+  // run still uses the token it obtained, it just does not resurrect the file.
+  commitLinearCredential((current) =>
+    current.kind === "absent"
+      ? null
+      : {
+          accessToken: fresh.accessToken,
+          refreshToken: fresh.refreshToken ?? credential.refreshToken,
+          expiresAt: fresh.expiresAt,
+          scope: fresh.scope ?? credential.scope,
+          clientId: fresh.clientId ?? credential.clientId,
+        },
+  );
   return fresh.accessToken;
 }
 

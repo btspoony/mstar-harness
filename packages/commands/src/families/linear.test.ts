@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { writeLinearCredential, readLinearCredential } from "@mstar-harness/engine";
+import { clearLinearCredential, writeLinearCredential, readLinearCredential } from "@mstar-harness/engine";
 import { getLinearCommandDefinitions } from "./linear.js";
 import type { InvocationContext } from "../types.js";
 
@@ -167,6 +167,22 @@ describe("an expired credential is refreshed before use", () => {
     const state = readLinearCredential();
     expect(state.kind === "present" && state.credential.accessToken).toBe(fake("renewed"));
     expect(state.kind === "present" && state.credential.refreshToken).toBe(fake("rotated"));
+  });
+
+  test("a sign-out during the refresh round trip is never undone", async () => {
+    const { resolveStoredToken } = await import("./issue-sync.js");
+    writeLinearCredential({ accessToken: fake("expired"), refreshToken: fake("refresh"), expiresAt: Date.now() - 60_000, scope: "read", clientId: fake("client") });
+    const token = await resolveStoredToken(context({
+      linearRefresh: async (_url, clientId) => {
+        // The operator signs out while this refresh waits on the provider.
+        expect(clearLinearCredential()).toBe(true);
+        return { accessToken: fake("renewed"), refreshToken: fake("rotated"), expiresAt: Date.now() + 3_600_000, scope: "read", clientId };
+      },
+    }));
+    // This run still uses the grant it obtained; it must not write a credential
+    // back over the deletion the operator just performed.
+    expect(token).toBe(fake("renewed"));
+    expect(readLinearCredential()).toEqual({ kind: "absent" });
   });
 
   test("a host that cannot refresh refuses with the command to re-run", async () => {

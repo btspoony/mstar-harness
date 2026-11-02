@@ -42,6 +42,7 @@ import {
   LINEAR_MCP_URL,
   REFRESH_WINDOW_MS,
   beginAuthorization,
+  commitLinearCredential,
   discoverAuthorizationServer,
   exchangeCode,
   linearScopeCanWrite,
@@ -382,16 +383,20 @@ export class MstarLinearAuth extends Service {
     before: Extract<LinearCredentialState, { kind: 'present' }>,
     fresh: TokenSet,
   ): 'refreshed' | 'adopted' {
-    const current = readLinearCredential(this.clock.now())
-    if (supersededBy(current, before.credential)) return 'adopted'
-    writeLinearCredential({
-      accessToken: fresh.accessToken,
-      refreshToken: fresh.refreshToken ?? before.credential.refreshToken,
-      clientId: fresh.clientId ?? before.credential.clientId,
-      expiresAt: fresh.expiresAt,
-      scope: fresh.scope ?? before.credential.scope,
-    })
-    return 'refreshed'
+    // One critical section: the superseded check and the rename cannot be
+    // separated by a `mstar linear logout` in another process, so the
+    // operator's deletion is never overwritten by this attempt's grant.
+    const written = commitLinearCredential((current) => {
+      if (supersededBy(current, before.credential)) return null
+      return {
+        accessToken: fresh.accessToken,
+        refreshToken: fresh.refreshToken ?? before.credential.refreshToken,
+        clientId: fresh.clientId ?? before.credential.clientId,
+        expiresAt: fresh.expiresAt,
+        scope: fresh.scope ?? before.credential.scope,
+      }
+    }, this.clock.now())
+    return written === null ? 'adopted' : 'refreshed'
   }
 
   /**

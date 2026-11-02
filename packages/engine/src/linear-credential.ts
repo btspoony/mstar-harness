@@ -12,7 +12,7 @@
  * what is on disk and whether a refresh is due, so the caller can act instead of
  * discovering a 401 mid-import.
  */
-import { chmodSync, existsSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, closeSync, existsSync, mkdirSync, openSync, readFileSync, renameSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 
@@ -86,11 +86,81 @@ export function readLinearCredential(now: number = Date.now()): LinearCredential
 }
 
 /**
+ * `credential.json.lock` — the only file that orders a refresh's commit against
+ * a sign-out. Its mere existence is the mutex: `open(..., "wx")` is an atomic
+ * create-or-fail across processes.
+ */
+export function linearCredentialLockPath(): string {
+  return `${linearCredentialPath()}.lock`;
+}
+
+/**
+ * A lock older than this is presumed to belong to a process that died while
+ * holding it. Taking it over is the only alternative to blocking every later
+ * write forever.
+ */
+const LOCK_STALE_MS = 5_000;
+const LOCK_POLL_MS = 10;
+
+/** Synchronous sleep: the writers here are synchronous by contract. */
+function sleepSync(ms: number): void {
+  Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
+}
+
+/**
+ * Run `fn` as ONE cross-process critical section over the credential file.
+ *
+ * Reached by every writer and by the delete, so a check-then-commit inside it
+ * cannot be interleaved by `mstar linear logout` in another process. Not
+ * re-entrant on purpose: a nested call would recreate the very window this
+ * closes, so the internal writes below are lock-free helpers.
+ *
+ * A holder that dies leaves the file behind; past `LOCK_STALE_MS` the lock is
+ * taken over rather than waited on forever. Two waiters can both take over a
+ * stale lock in the same instant, which is why the age has to be far longer
+ * than any live holder's critical section (a read and a rename).
+ *
+ * shortcut: takeover races a holder stalled past LOCK_STALE_MS; upgrade if the
+ * critical section ever does I/O or a network call.
+ */
+export function withLinearCredentialLock<T>(fn: () => T): T {
+  const lock = linearCredentialLockPath();
+  mkdirSync(dirname(lock), { recursive: true, mode: 0o700 });
+  for (;;) {
+    try {
+      closeSync(openSync(lock, "wx", 0o600));
+      break;
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
+      if (ageOf(lock) > LOCK_STALE_MS) {
+        rmSync(lock, { force: true });
+        continue;
+      }
+      sleepSync(LOCK_POLL_MS);
+    }
+  }
+  try {
+    return fn();
+  } finally {
+    rmSync(lock, { force: true });
+  }
+}
+
+/** Milliseconds since the lock appeared; Infinity when it vanished under us. */
+function ageOf(lock: string): number {
+  try {
+    return Date.now() - statSync(lock).mtimeMs;
+  } catch {
+    return Number.POSITIVE_INFINITY;
+  }
+}
+
+/**
  * Write the credential atomically with restrictive permissions. A failure here
  * leaves the previous file untouched: a half-written credential is worse than a
  * stale one, because the stale one can still refresh itself.
  */
-export function writeLinearCredential(credential: LinearCredential): string {
+function writeUnlocked(credential: LinearCredential): string {
   const path = linearCredentialPath();
   mkdirSync(dirname(path), { recursive: true, mode: 0o700 });
   const payload = {
@@ -107,10 +177,34 @@ export function writeLinearCredential(credential: LinearCredential): string {
   return path;
 }
 
+export function writeLinearCredential(credential: LinearCredential): string {
+  return withLinearCredentialLock(() => writeUnlocked(credential));
+}
+
+/**
+ * Decide and commit as one critical section, so a sign-out that lands during a
+ * refresh is never overwritten. `decide` sees the file as it is INSIDE the
+ * lock: either the delete already happened (state is `absent`, decline) or the
+ * rename happens first and the delete then removes it — both end absent.
+ *
+ * Returns the written path, or `null` when `decide` declined.
+ */
+export function commitLinearCredential(
+  decide: (state: LinearCredentialState) => LinearCredential | null,
+  now: number = Date.now(),
+): string | null {
+  return withLinearCredentialLock(() => {
+    const next = decide(readLinearCredential(now));
+    return next === null ? null : writeUnlocked(next);
+  });
+}
+
 /** Remove the stored credential (sign-out). Returns whether anything was there. */
 export function clearLinearCredential(): boolean {
-  const path = linearCredentialPath();
-  if (!existsSync(path)) return false;
-  rmSync(path, { force: true });
-  return true;
+  return withLinearCredentialLock(() => {
+    const path = linearCredentialPath();
+    if (!existsSync(path)) return false;
+    rmSync(path, { force: true });
+    return true;
+  });
 }
