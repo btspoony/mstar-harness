@@ -106,16 +106,25 @@ export function createLinearAdapter(deps: LinearListDeps): LinearListSide {
       const listed = deps.listedVerbs();
       const tool = listingVerbIn(listed ?? undefined, deps.listingVerbs);
       if (tool === null) {
+        // I-000949: "this host has no usable service" and "this service exposes
+        // no listing verb" need different operator actions, so they never share
+        // a code. An absent handshake is a host-side gap, resolved in the host's
+        // MCP configuration; a completed handshake without the verb is a
+        // capability the host cannot provide at all.
+        if (listed === null) {
+          throw new SyncError(
+            "linear.host-unavailable",
+            `this host has not completed the Linear handshake, so the listing verb is unknown (candidates: ${deps.listingVerbs.join(", ")})`,
+          );
+        }
         throw new SyncError(
           "linear.list-unimplemented",
-          listed === null
-            ? `this host has not completed the Linear handshake, so the listing verb is unknown (candidates: ${deps.listingVerbs.join(", ")})`
-            : `the Linear handshake listed none of ${deps.listingVerbs.join(", ")}, so no page can be requested`,
+          `the Linear handshake listed none of ${deps.listingVerbs.join(", ")}, so no page can be requested`,
         );
       }
       const entry = deps.findLinearEntry();
       if (entry === null) {
-        throw new SyncError("linear.query-failed", "no Linear MCP entry is configured for this host; nothing was listed");
+        throw new SyncError("linear.host-unavailable", "no Linear MCP entry is configured for this host; nothing was listed");
       }
       const scope = deps.scope ?? {};
       const outcome = await deps.call(entry, {
