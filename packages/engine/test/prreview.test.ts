@@ -1241,9 +1241,8 @@ describe("synthesizeReview — mstar.review/v1 envelope ", () => {
     expect("summary_md" in synthesized).toBe(false);
 
     const github = renderReviewMarkdown(synthesized, { surface: "github-comment" });
-    // The deleted fallback published `## Verdict: <verdict> · <pct>%` as the summary.
-    expect(github).not.toContain("## Verdict:");
-    expect(github).toContain("**Verdict: needs fixes**");
+    // The Thread-lifecycle candidate set keeps only bodies starting with this head.
+    expect(github.split("\n")[0]).toBe("## \u26A0\uFE0F Verdict: `needs fixes` \u00b7 Score 86% (good)");
     expect(github.split("Verdict")).toHaveLength(2);
     expect(github.split("Unhandled null deref")).toHaveLength(2);
     expect(github.split("Typo in comment")).toHaveLength(2);
@@ -1259,7 +1258,7 @@ describe("synthesizeReview — mstar.review/v1 envelope ", () => {
     expect("summary_md" in synthesized).toBe(false);
 
     const github = renderReviewMarkdown(synthesized, { surface: "github-comment" });
-    expect(github).toContain("**Verdict: ship it**");
+    expect(github.split("\n")[0]).toBe("## \u2705 Verdict: `ship it` \u00b7 Score 100% (mergeable)");
     expect(github).toContain("**Tally:**");
     expect(github).not.toContain("###");
     expect(github.endsWith("\n")).toBe(false);

@@ -120,7 +120,7 @@ describe("renderReviewMarkdown: github-comment surface", () => {
   test("(a) settled review renders verdict, tally line, narrative and findings by class", () => {
     expect(renderReviewMarkdown(SETTLED_REVIEW, { surface: "github-comment" })).toBe(
       [
-        "**Verdict: needs fixes**",
+        "## \u26A0\uFE0F Verdict: `needs fixes` \u00b7 Score 86% (good)",
         "",
         "**Tally:** \u{1F534} must-fix 0 \u00b7 \u{1F7E0} should-fix 1 \u00b7 \u{1F535} nit 1 \u00b7 \u2753 unverified 0",
         "",
@@ -144,7 +144,7 @@ describe("renderReviewMarkdown: github-comment surface", () => {
   test("(b) no tally and no narrative renders the verdict head only", () => {
     const review: MstarReviewV1 = { schema: "mstar.review/v1", verdict: "ship it", findings: [] };
     const body = renderReviewMarkdown(review, { surface: "github-comment" });
-    expect(body).toBe("**Verdict: ship it**");
+    expect(body).toBe("## \u2705 Verdict: `ship it`");
     expect(body).not.toContain("**Tally:**");
     expect(body).not.toContain("###");
   });
@@ -157,7 +157,7 @@ describe("renderReviewMarkdown: github-comment surface", () => {
       incomplete: { reason: "Seat timed out", unscanned: [] },
     };
     expect(renderReviewMarkdown(review, { surface: "github-comment" })).toBe(
-      "**Verdict: incomplete**\n\ncause: Seat timed out\nunscanned: none",
+      "## \u23F8\uFE0F Verdict: `incomplete`\n\ncause: Seat timed out\nunscanned: none",
     );
   });
 });
@@ -190,12 +190,14 @@ describe("renderReviewMarkdown: local-report surface", () => {
         "",
         "- **Merge class**: should-fix",
         "- **Category**: Correctness",
-        "- **Evidence**: The loop skips the last element.",
+        "",
+        "The loop skips the last element.",
         "",
         "#### \u{1F535} Naming",
         "",
         "- **Merge class**: nit",
-        "- **Evidence**: Rename the helper.",
+        "",
+        "Rename the helper.",
       ].join("\n"),
     );
   });
@@ -268,9 +270,45 @@ describe("renderReviewMarkdown: boundary line breaks in free-form Markdown", () 
     expect(github).not.toMatch(/\n{3,}/);
 
     const local = renderReviewMarkdown(review, { surface: "local-report" });
-    expect(local.endsWith("- **Evidence**: Rename the helper.")).toBe(true);
+    expect(local.endsWith("Rename the helper.")).toBe(true);
     expect(local).not.toMatch(/\n{3,}/);
     expect(validateMstarReviewV1(review).ok).toBe(true);
+  });
+});
+
+describe("renderReviewMarkdown: free-form finding bodies and titles", () => {
+  test("(k) a title bearing a pipe stays in the Finding column — three columns, no split", () => {
+    const findings = [
+      { mergeClass: "nit" as const, title: "Pipe | in title", body: "x" },
+      { mergeClass: "nit" as const, title: "Second | one", body: "y" },
+    ];
+    const tally = computePrTally({ findings });
+    const review: MstarReviewV1 = { schema: "mstar.review/v1", verdict: tally.verdict, tally, findings };
+    const local = renderReviewMarkdown(review, { surface: "local-report" });
+
+    const findingsTable = local.slice(local.indexOf("## Findings"));
+    const rows = findingsTable.split("\n").filter((line) => line.startsWith("| \u{1F535}"));
+    expect(rows).toHaveLength(2);
+    // Split on unescaped pipes only: the outer edges bracket exactly 3 cells.
+    for (const row of rows) expect(row.split(/(?<!\\)\|/).length - 2).toBe(3);
+    expect(local).toContain("| \u{1F535} nit | Pipe \\| in title | repo-wide |");
+  });
+
+  test("(l) a newline inside a title collapses so the row stays one line", () => {
+    const findings = [{ mergeClass: "nit" as const, title: "Two\nlines", body: "x" }];
+    const tally = computePrTally({ findings });
+    const review: MstarReviewV1 = { schema: "mstar.review/v1", verdict: tally.verdict, tally, findings };
+    expect(renderReviewMarkdown(review, { surface: "local-report" })).toContain("| \u{1F535} nit | Two lines | repo-wide |");
+  });
+
+  test("(m) a body opening with a fenced block keeps the fence and its own structure", () => {
+    const body = "```ts\nconst a = 1;\n```\n\nAfter the fence.";
+    const findings = [{ mergeClass: "should-fix" as const, title: "Fenced evidence", body }];
+    const tally = computePrTally({ findings });
+    const review: MstarReviewV1 = { schema: "mstar.review/v1", verdict: tally.verdict, tally, findings };
+    const local = renderReviewMarkdown(review, { surface: "local-report" });
+    expect(local).toContain(`- **Merge class**: should-fix\n\n${body}`);
+    expect(local).not.toContain("- **Evidence**");
   });
 });
 

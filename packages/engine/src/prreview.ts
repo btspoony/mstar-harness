@@ -904,8 +904,7 @@ export type ReviewRenderSurface = "github-comment" | "local-report";
 
 export type ReviewRenderOptions = { surface: ReviewRenderSurface };
 
-/** Verdict emoji for the local surface's heading (module-private: the github
- * surface states the token alone). */
+/** Verdict emoji for the verdict head on both surfaces (module-private). */
 const VERDICT_EMOJI: Record<PrVerdict, string> = {
   "ship it": "\u2705", // ✅
   "needs fixes": "\u26A0\uFE0F", // ⚠️
@@ -925,6 +924,19 @@ function renderFindingLocation(finding: MstarReviewFinding): string {
   if (finding.file_path === undefined || finding.file_path === null || finding.file_path === "") return "repo-wide";
   const line = typeof finding.line_start === "number" ? `:${finding.line_start}` : "";
   return `\`${finding.file_path}${line}\``;
+}
+
+/** The verdict head recognized by the Thread-lifecycle candidate set
+ * (pr-review.md § Comment posting — a review body starts with
+ * `## <emoji> Verdict: \`<token>\``), plus Score/band when a tally exists. */
+function renderVerdictHead(review: MstarReviewV1): string {
+  const { tally, incomplete } = review;
+  let head = `## ${VERDICT_EMOJI[review.verdict]} Verdict: \`${review.verdict}\``;
+  if (tally !== undefined) {
+    const band = tally.band ?? scoreBand(tally.scorePct);
+    head += ` \u00b7 Score ${tally.scorePct}% (${incomplete === undefined ? band : `${band}, partial`})`;
+  }
+  return head;
 }
 
 /** The `cause:` / `unscanned:` pair a bounded run must state (pr-review.md
@@ -956,8 +968,12 @@ function renderLocalFindings(findings: readonly MstarReviewFinding[]): string {
   const ordered = MERGE_CLASSES.flatMap((mergeClass) =>
     findings.filter((finding) => finding.mergeClass === mergeClass),
   );
+  // A table cell cannot carry a raw pipe (it adds a column) or a line break
+  // (it ends the row); every other cell keeps its text verbatim.
+  const cell = (text: string) => text.replace(/\r\n|\r|\n/g, " ").replace(/\|/g, "\\|");
   const rows = ordered.map(
-    (finding) => `| ${REVIEW_EMOJI[finding.mergeClass]} ${finding.mergeClass} | ${finding.title} | ${renderFindingLocation(finding)} |`,
+    (finding) =>
+      `| ${REVIEW_EMOJI[finding.mergeClass]} ${finding.mergeClass} | ${cell(finding.title)} | ${cell(renderFindingLocation(finding))} |`,
   );
   const details = ordered.map((finding) => {
     const lines = [
@@ -967,7 +983,8 @@ function renderLocalFindings(findings: readonly MstarReviewFinding[]): string {
     ];
     if (finding.category !== undefined) lines.push(`- **Category**: ${finding.category}`);
     const body = trimBoundaryNewlines(finding.body ?? "");
-    if (body !== "") lines.push(`- **Evidence**: ${body}`);
+    // A label prefix would flatten a body that opens with a fence or a list.
+    if (body !== "") lines.push("", body);
     return lines.join("\n");
   });
   const table = ["| Merge class | Finding | Location |", "| --- | --- | --- |", ...rows].join("\n");
@@ -992,43 +1009,38 @@ export function renderReviewMarkdown(review: MstarReviewV1, opts: ReviewRenderOp
     review.summary_md !== undefined && review.summary_md.trim() !== "" ? trimBoundaryNewlines(review.summary_md) : null;
   const hasFindings = review.findings.length > 0;
 
-  if (opts.surface === "github-comment") {
-    sections.push(`**Verdict: ${review.verdict}**`);
-    if (tally !== undefined) {
-      const { mustFix, shouldFix, nit, unverified } = tally.tally;
-      sections.push(
-        `**Tally:** ${REVIEW_EMOJI["must-fix"]} must-fix ${mustFix} \u00b7 ` +
-          `${REVIEW_EMOJI["should-fix"]} should-fix ${shouldFix} \u00b7 ` +
-          `${REVIEW_EMOJI.nit} nit ${nit} \u00b7 ` +
-          `${REVIEW_EMOJI.unverified} unverified ${unverified}`,
-      );
-    }
-    if (incomplete !== undefined) sections.push(renderIncompleteFacts(incomplete));
-    if (narrative !== null) sections.push(narrative);
-    if (hasFindings) sections.push(...renderGithubFindings(review.findings));
-  } else {
-    let head = `## ${VERDICT_EMOJI[review.verdict]} Verdict: \`${review.verdict}\``;
-    if (tally !== undefined) {
-      const band = tally.band ?? scoreBand(tally.scorePct);
-      head += ` \u00b7 Score ${tally.scorePct}% (${incomplete === undefined ? band : `${band}, partial`})`;
-    }
-    sections.push(head);
-    if (tally !== undefined) {
-      const { mustFix, shouldFix, nit, unverified } = tally.tally;
-      sections.push(
-        [
-          "| Findings | Count |",
-          "| --- | --- |",
-          `| ${REVIEW_EMOJI["must-fix"]} must-fix | ${mustFix} |`,
-          `| ${REVIEW_EMOJI["should-fix"]} should-fix | ${shouldFix} |`,
-          `| ${REVIEW_EMOJI.nit} nit | ${nit} |`,
-          `| ${REVIEW_EMOJI.unverified} unverified | ${unverified} |`,
-        ].join("\n"),
-      );
-    }
-    if (incomplete !== undefined) sections.push(renderIncompleteFacts(incomplete));
-    if (narrative !== null) sections.push(`## \u{1F4CB} Review\n\n${narrative}`); // 📋 seat narrative
-    if (hasFindings) sections.push(renderLocalFindings(review.findings));
+  // Both surfaces open with the Thread-lifecycle candidate heading: a body
+  // that does not start with it is invisible to later rounds' fold pass.
+  sections.push(renderVerdictHead(review));
+
+  if (tally !== undefined) {
+    const { mustFix, shouldFix, nit, unverified } = tally.tally;
+    sections.push(
+      opts.surface === "github-comment"
+        ? `**Tally:** ${REVIEW_EMOJI["must-fix"]} must-fix ${mustFix} \u00b7 ` +
+            `${REVIEW_EMOJI["should-fix"]} should-fix ${shouldFix} \u00b7 ` +
+            `${REVIEW_EMOJI.nit} nit ${nit} \u00b7 ` +
+            `${REVIEW_EMOJI.unverified} unverified ${unverified}`
+        : [
+            "| Findings | Count |",
+            "| --- | --- |",
+            `| ${REVIEW_EMOJI["must-fix"]} must-fix | ${mustFix} |`,
+            `| ${REVIEW_EMOJI["should-fix"]} should-fix | ${shouldFix} |`,
+            `| ${REVIEW_EMOJI.nit} nit | ${nit} |`,
+            `| ${REVIEW_EMOJI.unverified} unverified | ${unverified} |`,
+          ].join("\n"),
+    );
+  }
+  if (incomplete !== undefined) sections.push(renderIncompleteFacts(incomplete));
+  if (narrative !== null) {
+    sections.push(opts.surface === "github-comment" ? narrative : `## \u{1F4CB} Review\n\n${narrative}`); // 📋 seat narrative
+  }
+  if (hasFindings) {
+    sections.push(
+      ...(opts.surface === "github-comment"
+        ? renderGithubFindings(review.findings)
+        : [renderLocalFindings(review.findings)]),
+    );
   }
 
   return trimBoundaryNewlines(sections.join("\n\n"));

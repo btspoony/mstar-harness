@@ -504,7 +504,7 @@ unscanned: <csv | none>
 - The Verdict section replaces the old two-line tally header on GitHub: the same facts (verdict token + `score_pct` as Score with its band + four-class tally), structured — plus, for `incomplete`, the `partial` mark and its `cause:` / `unscanned:` lines. The chat display contract (§ Display contract) is unchanged.
 - When the fix plan itself contains fenced code blocks, open the outer fence with four backticks so the inner fences survive.
 
-> **Engine check (when available):** use `renderReviewMarkdown(review, { surface: "github-comment" | "local-report" })` (or import `renderReviewMarkdown` from `@mstar-harness/engine` in a CLI-less host hook) to render the complete body for that surface from the `mstar.review/v1` envelope. The engine owns verdict/tally/fact/findings layout; the consumer owns upsert markers, round headers and byte-budget clamping. `summary_md` is the optional seat narrative only, omitted when no seat produced one — never a header copy. The renderer's unit tests own the byte-exact templates.
+> **Engine check (when available):** use `renderReviewMarkdown(review, { surface: "github-comment" | "local-report" })` (or import `renderReviewMarkdown` from `@mstar-harness/engine` in a CLI-less host hook) to render the complete body for that surface from the `mstar.review/v1` envelope. The engine owns verdict/tally/fact/findings layout; the consumer owns upsert markers, round headers and byte-budget clamping. `summary_md` is the optional seat narrative only, omitted when no seat produced one — never a header copy. The renderer's unit tests own the byte-exact templates. On `fail` -> do not proceed; fix and re-run. Skill text below remains authoritative when the runtime is absent.
 
 ### Local report archive
 
