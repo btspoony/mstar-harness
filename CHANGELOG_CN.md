@@ -6,6 +6,18 @@
 
 ## [Unreleased]
 
+## [4.1.6] - 2026-11-03
+
+### Changed
+
+- 引擎新增 **`renderReviewMarkdown(review, { surface })`**：`mstar.review/v1` 信封的正文由同一布局所有者渲染（verdict 头、tally 表、incomplete 事实对、`## 📋 Review`、按信封影响序排列的 `### Findings`）。`surface` 的两个取值渲染同一个模板正文——该选项只为调用方兼容而保留，并不用于选择布局，因为 § Local report archive 要求归档正文与已发布正文逐字一致。
+- 引擎不再**自行生成** review summary。`summary_md` 是可选的席位叙述：缺失即表示没有席位产出，调用方提供的叙述则原样发布——引擎既不会剥离也不会复制它。若提供的值为空白或非字符串，则抛出 `TypeError`，而不是静默丢弃。
+- 空叙述的校验码由 **`review.missing-summary` 更名为 `review.blank-summary`**：缺少 `summary_md` 现已合法，该码只表示它仍在报告的唯一条条件（存在但为空）。依赖旧码的机器消费者需要同步切换。
+
+### 版本对齐
+
+- 提升 monorepo 根、`@mstar-harness/opencode`、`@mstar-harness/opencode-v2`、`@mstar-harness/cli`、`@mstar-harness/engine`、`@mstar-harness/dsh`、Cursor/Codex/Kimi/ZCode/omp/Claude 插件清单、便携式 Agent Plugins 清单及两份 marketplace 清单：**→ 4.1.6**。
+
 ## [4.1.5] - 2026-11-02
 
 ### Harness
