@@ -277,7 +277,7 @@ describe("renderReviewMarkdown: boundary line breaks in free-form Markdown", () 
 });
 
 describe("renderReviewMarkdown: free-form finding bodies and titles", () => {
-  test("(k) a title bearing a pipe stays in the Finding column — three columns, no split", () => {
+  test("(k) a title bearing a pipe stays in the Finding column \u2014 three columns, no split", () => {
     const findings = [
       { mergeClass: "nit" as const, title: "Pipe | in title", body: "x" },
       { mergeClass: "nit" as const, title: "Second | one", body: "y" },
