@@ -749,13 +749,14 @@ function readSyncBindingProjects(handle: StoreHandle): {
 
 export function querySyncBinding(harnessDir: string, filters: DashboardFilters): StoreReadQuery<SyncBindingDTO> {
   // The repo's own `.mstarc` is the authority — a parent directory's
-  // configuration never becomes this repo's connection identity (F4).
-  // The reader takes the repository root; this query is given the harness
-  // directory. When the path is inside a checkout the root is the answer; when
-  // it is not, there is no repository to name and the harness directory itself
-  // is used — NOT its parent, which for `harness_dir = /var/mstar/state` would
-  // silently read `/var/mstar` and, if that happened to hold a `.mstarc`,
-  // another repository's settings.
+  // configuration never becomes this repo's connection identity (F4). The reader
+  // takes the repository root; this query is given the harness directory, so the
+  // order is: a checkout root above it, then a parent that itself DECLARES a
+  // `.mstarc` (`<repo>/.mstar` is the normal layout), then the harness directory.
+  // That last fallback is why `parentThatDeclares` tests for the file: for
+  // `harness_dir = /var/mstar/state`, `/var/mstar` is used only if it really
+  // holds its own `.mstarc`; a bare parent is never substituted, which is how
+  // another repository's settings would get read.
   const repo: RepoLinearBinding = readRepoLinearBinding(
     resolveRepoRoot(harnessDir) ?? parentThatDeclares(harnessDir) ?? resolve(harnessDir),
   );

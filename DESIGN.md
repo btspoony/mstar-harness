@@ -2748,24 +2748,33 @@ surface for any of them:
 | --- | --- | --- |
 | Which Linear workspace and team does this repo name? | **Binding identity** — `enabled`, `mode`, `workspace`, `team` | `.panel` + `dl.fields.one` |
 | Which local project is which remote project? | **Project correspondence** — `projectId` → `remoteProject`, one row per stored binding | `.panel` + `.table` with `data-narrow-cols="2"` |
-| Would a sync work right now, or why would it not? | **Sync readiness** — the state and its cause | `.panel` + `dl.fields.one`, plus a `.mini-table` catalogue of the five pairs |
+| Would a sync work right now, or why would it not? | **Sync readiness** — the state and its cause | `.panel` + `dl.fields.one` |
+
+The prototype's screen additionally carries a `.mini-table` catalogue of all five probe
+states. The product screen does not: it renders the one pair its read returned, and the
+catalogue stays prototype-only.
 
 **No new token.** The panel is built from the same roles every other screen uses —
 `--ms-bg-surface` and `--ms-border-hairline` for the frame, `--ms-radius-md` for its corner,
 `--ms-fs-11/12/13` on their declared line heights for the type, `--ms-text-secondary` for a
 value and `--ms-text-muted` for a note, `--ms-font-mono` for every identifier. Tone reaches
-the reader only through the existing `.status tone-* .dot` rule, in the prototype's own tone
-names: `tone-done` for `ready`, `tone-warning` for `service-absent` and `unreachable`,
-`tone-danger` for `access-denied`, `tone-neutral` for `not-probed`. That is why `snapshot.json`
-did not change when the panel was added — the fixture derives the screen frame and the
-breakpoints, and the panel adds neither a gutter nor a reflow.
+the reader through the shared `.status tone-* .dot` rule in the product's own `Tone`
+vocabulary: `success` for `ready`, `warning` for `service-absent` and `unreachable`,
+`danger` for `access-denied`, `neutral` for `not-probed`; `StatusDot` renders
+`status tone-<tone>` from the mapped value. The prototype spells two of those dots
+`tone-done` and `tone-terminal`; `base.css` records that divergence and gives `tone-success`
+and `tone-purple` the same two colours, so the prototype's class names are the prototype's,
+never the product's. That is why `snapshot.json` did not change when the panel was added —
+the fixture derives the screen frame and the breakpoints, and the panel adds neither a
+gutter nor a reflow.
 
 **State and cause are one pair.** The identity and readiness blocks sit side by side in
 `detail-top`, which folds to one column below 899px of container. A state is never rendered
 without the cause the read supplied, and the panel never composes a cause: `not-probed` is
-`not-probed`, carrying the reason the view already sets, not an empty slot. The five pairs are
-shown together in the catalogue table so a reviewer can see every state's own cause rather
-than one example of each.
+`not-probed`, carrying the reason the view already sets, not an empty slot. The screen
+renders the ONE pair the read returned, beside its own note; the catalogue that shows all
+five answers side by side exists only in the prototype, which is where a reviewer can see
+every state's own cause rather than one example of each.
 
 **A null binding is not an unasked question.** When `binding` is `null` the panel renders
 `bindingError` verbatim in the identity block's place — the reader's refusal, in the same

@@ -636,7 +636,7 @@ describe("push — the credential scope preflight", () => {
     const failedItem = result.data?.items.find((entry) => entry.localId === "I-000805");
     expect(failedItem?.cause).toContain("linear.state-unresolved");
     expect(failedItem?.cause).toContain('"Todo"');
-    expect(failedItem?.cause).toContain("disposition.open");
+    expect(failedItem?.cause).toContain("disposition.Todo");
     // Nothing reached the provider.
     expect(provider.writes).toHaveLength(0);
   });
@@ -713,6 +713,78 @@ describe("push — the credential scope preflight", () => {
     }
   });
 
+  test("--adopt refuses to replace an established identity unless --force-adopt names the item", async () => {
+    const writes: Array<{ kind: string; externalId?: string }> = [];
+    const provider = {
+      async probe() {
+        return { state: "ready" as const, cause: "ready: fixture handshake" };
+      },
+      async listIssues() {
+        return { items: [], nextCursor: null };
+      },
+      async applyWrite(write: { kind: string; externalId?: string }) {
+        writes.push(write);
+        return write.kind === "update"
+          ? { kind: "confirmed" as const, externalId: write.externalId!, updatedAt: "2026-11-02T00:10:00.000Z" }
+          : { kind: "confirmed" as const, externalId: "LIN-1", updatedAt: "2026-11-02T00:10:00.000Z" };
+      },
+      async discoverLabels() {
+        return new Set(["bug"]);
+      },
+      async discoverStates() {
+        return new Set(["Todo", "Done", "Canceled"]);
+      },
+    };
+    const f = await fixture("push-adopt-identity-conflict", null);
+    storeCredential("read,issues:create");
+    {
+      const handle = await openStore({ harnessDir: f.harnessDir }, "write");
+      handle.db.prepare(
+        "insert into issues(id, project_id, title, kind, severity, impact, acceptance, created_at, updated_at, identity_key)" +
+          " values ('I-000805', ?, 'Established', 'bug', 'high', 'i', 'a', 'now', 'now', 'sync-I-000805')",
+      ).run(PROJECT);
+      handle.close();
+    }
+    const context = { ...f.context, effects: { ...f.context.effects, issueProvider: () => provider as never } };
+
+    // A confirmed create establishes the identity.
+    await executeCommand("issue-sync.push", { project: PROJECT }, context);
+    expect(writes.map((write) => write.kind)).toEqual(["create"]);
+
+    // Pointing the item at a DIFFERENT remote issue is refused by name, and the
+    // row keeps the identity an earlier confirmed write proved.
+    const refused = (await executeCommand(
+      "issue-sync.push",
+      { project: PROJECT, adopt: ["I-000805=LIN-2"] },
+      context,
+    )) as { status: string; code: string; details?: { recovery?: string } };
+    expect(refused.status).toBe("refused");
+    expect(refused.code).toBe("sync.identity-conflict");
+    expect(refused.details?.recovery).toContain("--force-adopt");
+    {
+      const db = await f.db();
+      try {
+        expect(db.prepare("select external_id from issue_sync_state").get()).toEqual({ external_id: "LIN-1" });
+      } finally {
+        db.close();
+      }
+    }
+
+    // The documented escape performs the replacement, and the changed content
+    // then converges onto the new id instead of reporting `skipped`.
+    const forcedAdopt = (await executeCommand(
+      "issue-sync.push",
+      { project: PROJECT, adopt: ["I-000805=LIN-2"], forceAdopt: ["I-000805"] },
+      context,
+    )) as { status: string; data?: { items: Array<{ localId: string; outcome: string; externalId: string | null }> } };
+    expect(forcedAdopt.status).toBe("ok");
+    expect(forcedAdopt.data?.items).toEqual([
+      { localId: "I-000805", outcome: "adopted", externalId: "LIN-2" },
+      { localId: "I-000805", outcome: "updated", externalId: "LIN-2" },
+    ]);
+    expect(writes.map((write) => write.kind)).toEqual(["create", "update"]);
+  });
+
   test("--force-create with a missing label keeps the pending residue reconcilable", async () => {
     const writes: Array<{ kind: string }> = [];
     const receipts = [{ kind: "ambiguous" as const, cause: "connection closed mid-call" }];
@@ -786,7 +858,7 @@ describe("push — the credential scope preflight", () => {
     }
   });
 
-  test("the CLI spelling declares the push verb with its two repeatable operator flags", async () => {
+  test("the CLI spelling declares the push verb with its three repeatable operator flags", async () => {
     const { getCommandDefinitions } = await import("../definitions.js");
     const definition = getCommandDefinitions().find((entry) => entry.id === "issue-sync.push");
     expect(definition).toBeDefined();
@@ -794,11 +866,13 @@ describe("push — the credential scope preflight", () => {
     expect(definition!.cli.options.map((option) => option.flags)).toEqual([
       "--project <id>",
       "--adopt <localId>=<issueUrl|externalId>",
+      "--force-adopt <localId>",
       "--force-create <localId>",
       "--harness <root>",
     ]);
     expect(definition!.cli.options.filter((option) => option.variadic === true).map((option) => option.key)).toEqual([
       "adopt",
+      "forceAdopt",
       "forceCreate",
     ]);
   });

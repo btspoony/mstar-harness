@@ -34,6 +34,26 @@ packages: engine, commands
   reauthorization (`mstar linear auth login` or the dsh Settings Authorize). A refresh never widens a read-only
   grant. Operator recovery beyond automatic reconcile: `--adopt <localId>=<issueUrl|externalId>` and
   `--force-create <localId>`.
+- **Adoption drops the previous identity's proof.** `--adopt` records the identity you confirmed and CLEARS the
+  payload hash and label ownership the row held: both described the issue it pointed at before, so carrying
+  them over would report `skipped` for content the newly adopted issue never received and let a later kind
+  change remove a label recorded for the previous one. Content therefore converges onto the adopted issue in
+  the same run. Replacing an identity that is already recorded is refused as `sync.identity-conflict` unless
+  `--force-adopt <localId>` names that item.
+- **A refused update is visible on the row.** A push whose write the provider refuses reports `failed`; when the
+  row already holds an identity, `applied → failed` is not a legal edge, so the cause is recorded through the
+  error-only verb instead. The row keeps its state, identity and proof, the dashboard shows the cause, and the
+  changed hash still makes the next run retry the write. A `pending` row with no id is untouched as before, so
+  reconciliation can still find it.
+- **A create lands in the bound project.** `save_issue` is called with the bound `project` as well as the
+  `team`, so a created issue sits where the binding says and the marker-based recovery reads (which filter by
+  that project) can find it. An update never sends `project`: the recorded identity already lives in the right
+  project, and the argument would move it.
+- **The state refusal names the key the resolver reads.** `linear.state-unresolved` points at
+  `[linear.mapping] disposition.<key>`, where `<key>` is the DEFAULT target state the local disposition maps to
+  (`Todo`/`Done`/`Canceled`), because that is the key `stateOfDisposition` looks up. `waived`, `duplicate` and
+  `superseded` all collapse onto `Canceled`, and the message says so instead of printing a local disposition
+  name no resolver reads.
 - **The probe deadline aborts the call it timed out.** `LinearProbeDeps.rpc` now receives an `AbortSignal` that
   fires when the handshake deadline expires, so a transport stuck in flight is cancelled instead of being
   abandoned while it keeps holding its socket. The caller still observes the same single
@@ -70,6 +90,20 @@ packages: engine, commands
   `linear.scope-insufficient` 拒绝，并指明显式重新授权（`mstar linear auth login` 或 dsh Settings Authorize）。
   刷新永远不会扩大只读授权。自动对账之外的操作者恢复手段：`--adopt <localId>=<issueUrl|externalId>` 与
   `--force-create <localId>`。
+- **采纳会丢弃上一身份的证明。** `--adopt` 记录操作者确认的身份，并**清除**该行原有的载荷 hash 与标签归属：
+  两者描述的是它此前指向的那个 issue，沿用会让本次运行对新采纳的远端从未收到的内容报告 `skipped`，
+  也会让之后的 kind 变更移除属于上一个 issue 的标签。因此内容会在同一次运行内收敛到被采纳的 issue 上。
+  替换一个已记录的身份会被拒绝为 `sync.identity-conflict`，除非用 `--force-adopt <localId>` 指名该项。
+- **被拒绝的更新在行上可见。** provider 拒绝写入时推送报告 `failed`；当该行已持有身份时，`applied → failed`
+  不是合法边，因此改用只写错误的那条动词。行保留自己的状态、身份与证明，面板能看到原因，而变化的 hash
+  仍会让下一次运行重试写入。没有 id 的 `pending` 行一如既往不受影响，对账依然能找到它。
+- **创建落在绑定的项目里。** `save_issue` 在 `team` 之外还会带上绑定的 `project`，使新建 issue 落在绑定所指的
+  项目内，按标记对账的恢复读取（以该项目过滤）也才找得到它。更新从不发送 `project`：已记录的身份本来就在
+  正确的项目里，带上该参数等于移动它。
+- **状态拒绝会点名解析器真正读取的键。** `linear.state-unresolved` 指向
+  `[linear.mapping] disposition.<key>`，其中 `<key>` 是本地 disposition 映射到的**默认**目标状态
+  （`Todo`/`Done`/`Canceled`），这正是 `stateOfDisposition` 查找的键。`waived`、`duplicate`、`superseded`
+  都收敛到 `Canceled`，消息会说明这一点，而不再打印任何解析器都不读的本地 disposition 名。
 - **探测超时会中止它自己超时的那次调用。** `LinearProbeDeps.rpc` 现在会收到一个在握手超时到期时触发的
   `AbortSignal`：卡在飞行中的传输会被真正取消，而不是被丢下继续占用 socket。调用方观察到的仍是同一条
   `unreachable: Linear MCP handshake timed out after <n>ms` 原因；传输把中止当成自己的错误上报也无法把它

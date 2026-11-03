@@ -31,6 +31,7 @@ function side(
     labelVerbs?: readonly string[];
     stateVerbs?: readonly string[];
     team?: string;
+    project?: string;
   } = {},
 ) {
   const calls: Call[] = [];
@@ -52,7 +53,7 @@ function side(
     ...(options.writeVerbs === undefined ? {} : { writeVerbs: options.writeVerbs }),
     ...(options.labelVerbs === undefined ? {} : { labelVerbs: options.labelVerbs }),
     ...(options.stateVerbs === undefined ? {} : { stateVerbs: options.stateVerbs }),
-    ...(options.team === undefined ? {} : { scope: { team: options.team } }),
+    ...(options.team === undefined ? {} : { scope: { team: options.team, ...(options.project === undefined ? {} : { project: options.project }) } }),
   });
   return { write, calls };
 }
@@ -103,6 +104,21 @@ describe("request arguments come from the advertised schema", () => {
     expect(args.team).toBeUndefined();
     expect(args.addLabels).toEqual(["bug"]);
     expect(args.removeLabels).toBeUndefined();
+  });
+
+  test("a create carries the bound project as well as the team; an update carries neither", async () => {
+    const { write, calls } = side([], { team: "ENG", project: "proj-7" });
+    await write.applyWrite({ kind: "create", payload: payload() });
+    await write.applyWrite({ kind: "update", externalId: "LIN-9", payload: payload() });
+    const [create, update] = calls.map((call) => call.arguments);
+    // A create outside the bound project is invisible to the recovery reads,
+    // which filter by exactly this project.
+    expect(create!.team).toBe("ENG");
+    expect(create!.project).toBe("proj-7");
+    // An update must never move an issue: the identity already lives where it belongs.
+    expect(update!.id).toBe("LIN-9");
+    expect(update!.team).toBeUndefined();
+    expect(update!.project).toBeUndefined();
   });
 
   test("a create with no bound team refuses before any write", async () => {

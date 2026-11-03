@@ -26,8 +26,8 @@ import { createHash } from "node:crypto";
 import type { StoreDb } from "../store-db.js";
 import type { Disposition, IssueKind, Severity } from "../issue.js";
 import type { LinearFacetMapping } from "../mstarc.js";
-import { claimItem, markApplied, markFailed, markUnconfirmed, planItem, readItem, recordRefusal, type SyncItem } from "../issue-sync.js";
-import { providerPayloadFields } from "./field-mapping.js";
+import { SyncError, claimItem, markApplied, markFailed, markUnconfirmed, planItem, readItem, recordRefusal, type SyncItem } from "../issue-sync.js";
+import { defaultStateOfDisposition, providerPayloadFields } from "./field-mapping.js";
 import type { IssueProvider, ProviderWrite, ProviderWritePayload } from "./provider.js";
 
 /** The only direction this module drives. */
@@ -187,12 +187,17 @@ export async function pushItem(db: StoreDb, provider: IssueProvider, context: Pu
   // refuses this item only — and a renamed workflow state is diagnosed here
   // instead of failing every item at the provider.
   if (!context.states.has(fields.state)) {
+    // The mapping key is the DEFAULT REMOTE name (`Canceled`), not the local
+    // disposition: that is the key `stateOfDisposition` reads. `waived`,
+    // `duplicate` and `superseded` all collapse onto it, so the message says so
+    // instead of naming a key nobody reads.
+    const mappingKey = defaultStateOfDisposition(candidate.disposition);
     return failed(
       db,
       context,
       candidate.localId,
       "linear.state-unresolved",
-      `the team has no workflow state named ${JSON.stringify(fields.state)}; push never creates states. Create or rename it in Linear's workflow settings, or redirect it through [linear.mapping] disposition.${candidate.disposition}=<name>.`,
+      `the team has no workflow state named ${JSON.stringify(fields.state)}; push never creates states. Create or rename it in Linear's workflow settings, or redirect it through [linear.mapping] disposition.${mappingKey}=<name>${mappingKey === candidate.disposition ? "" : ` (keyed by the default target, which ${candidate.disposition} maps to)`}.`,
       ledger,
       undefined,
       ambiguousResidue,
@@ -323,13 +328,19 @@ async function apply(
  * Record a refusal (or a pre-send refusal) on the item.
  *
  * Best-effort by design: the run's report is the record of what happened, and a
- * ledger refusal here must not mask the cause that produced it.
+ * ledger refusal here must not mask the cause that produced it. Only a genuine
+ * ledger conflict reaches the catch now that every state takes a legal verb.
  *
- * `ambiguousResidue` names the one row that must NOT take the `failed` edge: a
- * `pending` row with no id is an unattributed remote issue, and `failed` is
- * invisible to `reconcilePendingCreate`. Downgrading it would let the next run
- * create a duplicate nobody can adopt, so such a row keeps its state and only
- * records the error.
+ * Two rows must NOT take the `failed` edge, and both use `recordRefusal`, which
+ * writes the error and nothing else:
+ * - `ambiguousResidue`: a `pending` row with no id is an unattributed remote
+ *   issue, and `failed` is invisible to `reconcilePendingCreate`. Downgrading it
+ *   would let the next run create a duplicate nobody can adopt.
+ * - any row that already holds an identity or a settled state (`applied`,
+ *   `failed`, `skipped`): `applied → failed` is not in the contract, and the row's
+ *   identity, hash and ownership are facts an earlier confirmed write proved. A
+ *   refused UPDATE therefore leaves the row `applied` WITH its cause recorded,
+ *   and the changed hash still makes the next run retry the write.
  */
 function failed(
   db: StoreDb,
@@ -356,10 +367,13 @@ function failed(
     }
     const current = ledger ?? readItem(db, { bindingId: context.bindingId, direction: PUSH_DIRECTION, localId });
     if (current !== null) {
-      const operationId = `linear-push:${context.bindingId}:${localId}:${ambiguousResidue ? "refused" : "failed"}:${hash ?? "preflight"}:${current.revision}`;
+      // `markFailed` is the retry edge and is legal only from `pending`.
+      const retryable = !ambiguousResidue && current.itemState === "pending";
+      const step = retryable ? "failed" : "refused";
+      const operationId = `linear-push:${context.bindingId}:${localId}:${step}:${hash ?? "preflight"}:${current.revision}`;
       const input = { bindingId: context.bindingId, direction: PUSH_DIRECTION, localId, operationId };
-      if (ambiguousResidue) recordRefusal(db, { ...input, error: message });
-      else markFailed(db, { ...input, error: message });
+      if (retryable) markFailed(db, { ...input, error: message });
+      else recordRefusal(db, { ...input, error: message });
     }
   } catch {
     // The returned outcome still carries the cause.
@@ -441,19 +455,42 @@ export async function reconcilePendingCreate(
 
 /**
  * Operator-confirmed adoption (`--adopt <localId>=<issueUrl|externalId>`): the
- * row takes the identity verbatim, and content converges on the next changed
- * push.
+ * row takes the identity verbatim and FORGETS the proof that belonged to any
+ * previous identity.
+ *
+ * An existing row's payload hash and label ownership describe the issue that row
+ * pointed at before. Carrying them onto a different issue makes the skip rule
+ * match content the new remote never received (the run would report `skipped`
+ * without writing) and lets a later kind change remove a label recorded for the
+ * previous issue. So both are cleared here, and content converges on the next
+ * push of the same run.
+ *
+ * Replacing an ESTABLISHED identity is refused unless the operator forces it
+ * (`--force-adopt`): the recorded id is a fact an earlier confirmed write proved,
+ * and a mistaken edit would silently leave that remote issue behind.
  *
  * The existing row decides the composition, because the ambiguous residue this
  * recovery exists for is a `pending` row and `planItem` has no edge from
  * `pending`:
  * - absent or retryable (`failed`) → `planItem` opens the cycle, then `markApplied`
  *   closes it;
- * - already `pending` → the confirmed identity is applied directly.
+ * - already `pending` or `applied` → the confirmed identity is applied directly.
  */
-export function adoptItem(db: StoreDb, bindingId: string, localId: string, reference: string): SyncItem {
+export function adoptItem(
+  db: StoreDb,
+  bindingId: string,
+  localId: string,
+  reference: string,
+  options: { force?: boolean } = {},
+): SyncItem {
   const externalId = externalIdOf(reference);
   const existing = readItem(db, { bindingId, direction: PUSH_DIRECTION, localId });
+  if (existing !== null && existing.externalId !== null && existing.externalId !== externalId && options.force !== true) {
+    throw new SyncError(
+      "sync.identity-conflict",
+      `this item is already adopted as ${JSON.stringify(existing.externalId)}, and replacing an established remote identity is not an ordinary edit. Re-run with --force-adopt ${localId} if ${JSON.stringify(externalId)} is the right issue; nothing was written.`,
+    );
+  }
   if (existing === null || existing.itemState === "failed") {
     planItem(db, {
       bindingId,
@@ -468,6 +505,10 @@ export function adoptItem(db: StoreDb, bindingId: string, localId: string, refer
     direction: PUSH_DIRECTION,
     localId,
     externalId,
+    // Cleared, not carried: see the docstring above. `clearProof` is the only
+    // way to say "this identity has no proof yet", because an omitted hash
+    // means "keep the row's".
+    clearProof: true,
     operationId: `linear-push:${bindingId}:${localId}:adopt-apply:${externalId}`,
   });
 }

@@ -117,12 +117,22 @@ export function priorityOfSeverity(severity: Severity, mapping?: LinearFacetMapp
   return Number(mapped);
 }
 
-/** Local `disposition` → Linear workflow state name; an unknown one is refused. */
-export function stateOfDisposition(disposition: Disposition, mapping?: LinearFacetMapping): string {
+/**
+ * The DEFAULT remote state a disposition maps to — the key a
+ * `[linear.mapping] disposition.<key>` override must name. `waived`,
+ * `duplicate` and `superseded` all collapse onto `Canceled`, so one key
+ * redirects all three; per-disposition redirection is not expressible.
+ */
+export function defaultStateOfDisposition(disposition: Disposition): string {
   if (!Object.hasOwn(STATE_OF_DISPOSITION, disposition)) {
     throw new SyncError("sync.invalid-input", `disposition ${JSON.stringify(disposition)} is not a recognised local disposition`);
   }
-  const state = STATE_OF_DISPOSITION[disposition];
+  return STATE_OF_DISPOSITION[disposition];
+}
+
+/** Local `disposition` → Linear workflow state name; an unknown one is refused. */
+export function stateOfDisposition(disposition: Disposition, mapping?: LinearFacetMapping): string {
+  const state = defaultStateOfDisposition(disposition);
   const mapped = mapping?.disposition[state];
   // A state name is whatever the team's workflow calls it; only the default's
   // own target is validated, so a renamed workflow passes straight through.
