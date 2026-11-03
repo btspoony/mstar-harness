@@ -370,6 +370,11 @@ export function planItem(db: StoreDb, input: PlanItemInput): SyncItem {
  * `claimed` is true only for the caller whose transaction was the one that
  * opened the cycle. A replay reports `claimed: false` and the row as it now
  * stands, so a caller that did not win sends nothing.
+ *
+ * Only a row that has no send in flight can be claimed: absence opens a cycle,
+ * `failed` retries one. A `pending` row already holds it, so it refuses
+ * `sync.illegal-transition` — the send right over an unresolved attempt is what
+ * a second create must never take.
  */
 export function claimItem(db: StoreDb, input: PlanItemInput): { claimed: boolean; item: SyncItem } {
   return writePlan(db, input, "claim");
@@ -406,11 +411,6 @@ function writePlan(
           // starts null and the revision it was opened for sits in the target.
           " values (?, ?, ?, ?, 'pending', null, ?, null, null, 1, ?)",
       ).run(bindingId, direction, localId, externalId, remoteUpdatedAt, now);
-    } else if (mode === "claim" && row.item_state === "pending") {
-      // A `pending` row already records the intent to send, so a claim on it is
-      // the send-right check alone: no transition, no field change. This is the
-      // edge `--force-create` takes over an ambiguous residue, where the intent
-      // is recorded and the only open question is which run may send it.
     } else if (row.item_state === "failed" || row.item_state === "unbound") {
       casUpdate(db, { bindingId, direction, localId }, row.revision, {
         item_state: "pending",

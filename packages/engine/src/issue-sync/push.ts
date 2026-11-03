@@ -146,7 +146,10 @@ export function requestHash(payload: ProviderWritePayload): string {
  * The send-right key for one create: binding, item, content hash and the ledger
  * revision the attempt read. Revision is the ONLY discriminator between
  * attempts, so a sequential retry is distinct (its predecessor bumped it) while
- * an ordinary and a forced concurrent run share one key and arbitrate.
+ * two runs that read the same revision share one key and arbitrate. It cannot
+ * cover the window where the predecessor's own claim is what advanced the
+ * revision — that attempt is unresolved, and `pushItem` refuses to create at
+ * all while one is (see the residue guard).
  */
 function createClaimId(bindingId: string, localId: string, hash: string, entryRevision: number): string {
   return `linear-push:${bindingId}:${localId}:create:${hash}:${entryRevision}`;
@@ -164,10 +167,10 @@ function descriptionFor(candidate: PushCandidate, marker: string): string {
  * - no row → `claimItem` (pending, send right) → create
  * - `failed` without an id → claim the retry, then create (only a refusal or a
  *   pre-send refusal writes `failed`, so delivery was never confirmed)
- * - `pending` without an id → ambiguous residue: reconcile first; without an
- *   adoption this run reports `unresolved` and NEVER creates. This guard runs
- *   BEFORE any current-attempt preflight: a label failure now says nothing
- *   about whether the earlier request was delivered.
+ * - `pending` without an id → unresolved: reconcile first; without an adoption
+ *   this run reports `unresolved` and NEVER creates. This guard runs BEFORE any
+ *   current-attempt preflight: a label failure now says nothing about whether
+ *   the earlier request was delivered.
  * - `applied` with an id and an equal hash → `skipped`, zero write calls
  * - otherwise (an id exists) → update
  */
@@ -178,16 +181,25 @@ export async function pushItem(db: StoreDb, provider: IssueProvider, context: Pu
   // state is the ONLY record that a remote issue may exist, so a refusal later
   // in this attempt must not consume it (see `failed`).
   const ambiguousResidue = externalId === null && ledger?.itemState === "pending";
-  if (ambiguousResidue && !context.forceCreate) {
-    // An ambiguous create from an earlier run. Adopting it is reconcile's job;
-    // creating again could duplicate the remote issue, which is the one thing
-    // this direction must never do. Checked before the label preflight so a
-    // preflight failure for THIS attempt cannot erase a historical ambiguity.
+  if (ambiguousResidue) {
+    // An unresolved create. Adopting it is reconcile's job; creating again
+    // could duplicate the remote issue, which is the one thing this direction
+    // must never do. Checked before the label preflight so a preflight failure
+    // for THIS attempt cannot erase a historical ambiguity.
+    //
+    // `--force-create` does not lift this guard. The run that wrote this row may
+    // still be inside its provider call — its claim is what advanced the
+    // revision, so a forced run would claim a DIFFERENT key and both would send
+    // a create over the whole network wait — and a crashed attempt leaves the
+    // same row. The two are indistinguishable from the ledger, so the flag
+    // asserts only what an operator can establish: no unresolved attempt.
     return {
       localId: candidate.localId,
       outcome: "unresolved",
       externalId: null,
-      cause: "a previous create was never confirmed; the item awaits marker reconciliation (or an explicit --adopt / --force-create)",
+      cause: context.forceCreate
+        ? "a create for this item was never confirmed and may still be in flight, so --force-create cannot establish its absence; nothing was sent. Re-run push without it — reconcile adopts the issue when exactly one remote issue carries the item's correlation marker — or record the identity yourself with --adopt <localId>=<issueUrl|externalId>"
+        : "a previous create was never confirmed; the next run reconciles it by correlation marker, or name its remote issue with --adopt <localId>=<issueUrl|externalId>",
     };
   }
   const marker = correlationMarker(context.binding, context.storeId, candidate.localId);
@@ -210,7 +222,6 @@ export async function pushItem(db: StoreDb, provider: IssueProvider, context: Pu
       `the team has no workflow state named ${JSON.stringify(fields.state)}; push never creates states. Create or rename it in Linear's workflow settings, or redirect it through [linear.mapping] disposition.${mappingKey}=<name>${mappingKey === candidate.disposition ? "" : ` (keyed by the default target, which ${candidate.disposition} maps to)`}.`,
       ledger,
       undefined,
-      ambiguousResidue,
     );
   }
   if (!context.labels.has(fields.label)) {
@@ -222,7 +233,6 @@ export async function pushItem(db: StoreDb, provider: IssueProvider, context: Pu
       `the workspace has no label named ${JSON.stringify(fields.label)}; push never creates labels. Create it in Linear's UI, or redirect it through [linear.mapping] kind.${candidate.kind}=<name>.`,
       ledger,
       undefined,
-      ambiguousResidue,
     );
   }
   const payload: ProviderWritePayload = {
@@ -247,26 +257,23 @@ export async function pushItem(db: StoreDb, provider: IssueProvider, context: Pu
     const recorded = ledger?.lastKindLabels ?? [];
     const stale = recorded.filter((label) => label !== fields.label);
     if (stale.length > 0) payload.removeLabels = stale;
-    return apply(db, provider, context, candidate.localId, { kind: "update", externalId, payload }, hash, fields.label, ledger, ambiguousResidue);
+    return apply(db, provider, context, candidate.localId, { kind: "update", externalId, payload }, hash, fields.label, ledger);
   }
 
-  // No row, a retryable failure, or an operator-confirmed absence: this is a
-  // create. Intent is recorded BEFORE the write so an ambiguous result leaves a
-  // durable residue to reconcile against. An existing `pending` row already
-  // states that intent (and `planItem` has no edge from it), so it is reused —
-  // which is also what lets `--force-create` proceed past the guard above.
+  // No row or a retryable failure: this is a create. Intent is recorded BEFORE
+  // the write so an ambiguous result leaves a durable residue to reconcile
+  // against.
   //
   // The claim is what separates "I now hold the send right" from "someone else
   // already took it for this exact content and revision": an idempotent replay
   // returns the historical receipt, which two concurrent runs both treated as
   // permission to create. A caller that did not WIN the claim sends nothing.
   //
-  // EVERY create claims, the forced one included: operator intent says the
-  // remote issue is absent, not that two concurrent runs may each create it.
-  // The key carries NO intent segment, so an ordinary and a forced run that
-  // read the same content and revision arbitrate on ONE id — the revision
-  // component alone separates a sequential retry, because every refusal,
-  // failure and apply advances it.
+  // EVERY create claims, `--force-create` included: the flag says the remote
+  // issue is absent, not that two concurrent runs may each create it. The key
+  // carries NO intent segment, so two runs that read the same content and
+  // revision arbitrate on ONE id — the revision component alone separates a
+  // sequential retry, because every refusal, failure and apply advances it.
   const entryRevision = ledger?.revision ?? 0;
   const claim = claimItem(db, {
     bindingId: context.bindingId,
@@ -282,7 +289,7 @@ export async function pushItem(db: StoreDb, provider: IssueProvider, context: Pu
       cause: "another push already claimed this create for the same content and revision; this attempt sent nothing and the ledger's row decides the outcome",
     };
   }
-  return apply(db, provider, context, candidate.localId, { kind: "create", payload }, hash, fields.label, ledger, ambiguousResidue);
+  return apply(db, provider, context, candidate.localId, { kind: "create", payload }, hash, fields.label, ledger);
 }
 
 /** Send one write and record its classification; the row's identity comes only from `confirmed`. */
@@ -295,7 +302,6 @@ async function apply(
   hash: string,
   kindLabel: string,
   ledger: SyncItem | null,
-  ambiguousResidue: boolean,
 ): Promise<PushOutcome> {
   const entryRevision = ledger?.revision ?? 0;
   const opId = (step: string): string => `linear-push:${context.bindingId}:${localId}:${step}:${hash}:${entryRevision}`;
@@ -305,12 +311,14 @@ async function apply(
     // Provably not delivered: safe to retry, so it is written as `failed`. The
     // row is re-read because a create's intent was just planned above.
     const current = readItem(db, { bindingId: context.bindingId, direction: PUSH_DIRECTION, localId }) ?? ledger;
-    return failed(db, context, localId, receipt.code, receipt.cause, current, hash, ambiguousResidue);
+    return failed(db, context, localId, receipt.code, receipt.cause, current, hash);
   }
   if (receipt.kind === "ambiguous") {
     if (write.kind === "create") {
       // Deliberately NO ledger write: the row keeps its (absent) identity as
       // `pending` residue, and the next run decides by marker, never by guesswork.
+      // That residue is also why the next run cannot create at all until
+      // reconcile attributes it (see `pushItem`'s guard).
       return { localId, outcome: "unresolved", externalId: null, cause: receipt.cause };
     }
     // An update the remote did not confirm: the identity stands, but the payload
@@ -346,16 +354,17 @@ async function apply(
  * ledger refusal here must not mask the cause that produced it. Only a genuine
  * ledger conflict reaches the catch now that every state takes a legal verb.
  *
- * Two rows must NOT take the `failed` edge, and both use `recordRefusal`, which
- * writes the error and nothing else:
- * - `ambiguousResidue`: a `pending` row with no id is an unattributed remote
- *   issue, and `failed` is invisible to `reconcilePendingCreate`. Downgrading it
- *   would let the next run create a duplicate nobody can adopt.
- * - any row that already holds an identity or a settled state (`applied`,
- *   `failed`, `skipped`): `applied → failed` is not in the contract, and the row's
- *   identity, hash and ownership are facts an earlier confirmed write proved. A
- *   refused UPDATE therefore leaves the row `applied` WITH its cause recorded,
- *   and the changed hash still makes the next run retry the write.
+ * A row that already holds an identity or a settled state (`applied`, `failed`,
+ * `skipped`) must NOT take the `failed` edge: `applied → failed` is not in the
+ * contract, and the row's identity, hash and ownership are facts an earlier
+ * confirmed write proved. A refused UPDATE therefore leaves the row `applied`
+ * WITH its cause recorded, and the changed hash still makes the next run retry
+ * the write. `recordRefusal` is that error-only verb.
+ *
+ * A `pending` row with no id never reaches here: `pushItem`'s residue guard
+ * answers first, because `failed` is invisible to `reconcilePendingCreate` and
+ * downgrading the residue would let a later run create a duplicate nobody can
+ * adopt.
  */
 function failed(
   db: StoreDb,
@@ -365,7 +374,6 @@ function failed(
   cause: string,
   ledger: SyncItem | null,
   hash?: string,
-  ambiguousResidue = false,
 ): PushOutcome {
   const message = `[${code}] ${cause}`;
   try {
@@ -383,7 +391,7 @@ function failed(
     const current = ledger ?? readItem(db, { bindingId: context.bindingId, direction: PUSH_DIRECTION, localId });
     if (current !== null) {
       // `markFailed` is the retry edge and is legal only from `pending`.
-      const retryable = !ambiguousResidue && current.itemState === "pending";
+      const retryable = current.itemState === "pending";
       const step = retryable ? "failed" : "refused";
       const operationId = `linear-push:${context.bindingId}:${localId}:${step}:${hash ?? "preflight"}:${current.revision}`;
       const input = { bindingId: context.bindingId, direction: PUSH_DIRECTION, localId, operationId };

@@ -224,7 +224,7 @@ const RECOVERY: Record<string, string> = {
   "linear.write-refused":
     "The provider refused this write, so nothing was written and the item is failed for a safe retry. Read the cause: a request-level rejection (HTTP 4xx) and a schema missing `removeLabels` are both refused this way. Re-run `mstar issue-sync push --project <project-id>` after addressing it.",
   "linear.write-ambiguous":
-    "The write was sent but not confirmed, so delivery is unknown and the item stays pending with no external id. The next run reconciles it by correlation marker; use `--adopt <localId>=<issueUrl>` if you can see the remote issue yourself, or `--force-create <localId>` when you are sure it does not exist.",
+    "The write was sent but not confirmed, so delivery is unknown and the item stays pending with no external id. The next run reconciles it by correlation marker — exactly one match adopts that issue — and `--adopt <localId>=<issueUrl>` records the identity when you can see it yourself. `--force-create` cannot help here: an unresolved attempt may still be in flight, so it refuses instead of risking a second issue.",
   "linear.label-unresolved":
     "The mapped kind label does not exist in this Linear workspace and push never creates labels. Create that label in Linear's UI, or redirect it in `.mstarc` with `[linear.mapping] kind.<kind>=<label>`; other items still push.",
   "linear.state-unresolved":
@@ -676,7 +676,7 @@ export function getIssueSyncCommandDefinitions(): readonly CommandDefinition[] {
     import:
       "Import the bound Linear project's issues into this store, read-only toward Linear; a second run with unchanged remote state imports nothing. --max-pages bounds one run (default 20 pages of 50) and the reported cursor resumes it. An issue Linear returns without a usable title/identifier is reported as stranded and the scan continues; repair it in Linear's UI and the next full scan picks it up.",
     push:
-      "Push this project's local issues to the bound Linear team: create when no remote identity is known, update when a confirmed one exists, skip when the payload is unchanged. An unconfirmed create stays pending and the next run reconciles it by correlation marker — never by title/description. --adopt <localId>=<issueUrl|externalId> records an identity you confirmed yourself and, when that replaces a different recorded id, clears the old identity's proof; --force-adopt <localId> allows replacing an identity that is already recorded; --force-create <localId> says the remote issue does not exist. Requires a credential granted read + issues:create.",
+      "Push this project's local issues to the bound Linear team: create when no remote identity is known, update when a confirmed one exists, skip when the payload is unchanged. An unconfirmed create stays pending and the next run reconciles it by correlation marker — never by title/description — so nothing creates again while that attempt is unresolved. --adopt <localId>=<issueUrl|externalId> records an identity you confirmed yourself and, when that replaces a different recorded id, clears the old identity's proof; --force-adopt <localId> allows replacing an identity that is already recorded; --force-create <localId> says the remote issue does not exist, and is refused while an unresolved create attempt stands (reconcile or --adopt first). Requires a credential granted read + issues:create.",
   };
   return verbs.map((verb) => {
     const id = `issue-sync.${verb}`;
@@ -712,7 +712,8 @@ export function getIssueSyncCommandDefinitions(): readonly CommandDefinition[] {
               ownership: "caller" as const,
               route,
               required: false,
-              constraint: "optional, repeatable: <localId> whose remote absence you confirmed; bypasses the reconcile guard for that item only",
+              constraint:
+                "optional, repeatable: <localId> whose remote absence you confirmed. It asserts an item with NO unresolved create attempt and is refused while one stands (reconcile or --adopt first)",
             },
           ]),
     ]);
