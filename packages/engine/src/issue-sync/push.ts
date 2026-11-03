@@ -250,22 +250,26 @@ export async function pushItem(db: StoreDb, provider: IssueProvider, context: Pu
   // already took it for this exact content and revision": an idempotent replay
   // returns the historical receipt, which two concurrent runs both treated as
   // permission to create. A caller that did not WIN the claim sends nothing.
+  //
+  // EVERY create claims, the forced one included: operator intent says the
+  // remote issue is absent, not that two concurrent runs may each create it.
+  // The step carries that intent, so a forced retry is not refused by an
+  // ordinary create's receipt for the same content and revision.
   const entryRevision = ledger?.revision ?? 0;
-  if (ledger === null || ledger.itemState === "failed") {
-    const claim = claimItem(db, {
-      bindingId: context.bindingId,
-      direction: PUSH_DIRECTION,
+  const step = context.forceCreate === true ? "force-plan" : "plan";
+  const claim = claimItem(db, {
+    bindingId: context.bindingId,
+    direction: PUSH_DIRECTION,
+    localId: candidate.localId,
+    operationId: `linear-push:${context.bindingId}:${candidate.localId}:${step}:${hash}:${entryRevision}`,
+  });
+  if (!claim.claimed) {
+    return {
       localId: candidate.localId,
-      operationId: `linear-push:${context.bindingId}:${candidate.localId}:plan:${hash}:${entryRevision}`,
-    });
-    if (!claim.claimed) {
-      return {
-        localId: candidate.localId,
-        outcome: "unresolved",
-        externalId: claim.item.externalId,
-        cause: "another push already claimed this create for the same content and revision; this attempt sent nothing and the ledger's row decides the outcome",
-      };
-    }
+      outcome: "unresolved",
+      externalId: claim.item.externalId,
+      cause: "another push already claimed this create for the same content and revision; this attempt sent nothing and the ledger's row decides the outcome",
+    };
   }
   return apply(db, provider, context, candidate.localId, { kind: "create", payload }, hash, fields.label, ledger, ambiguousResidue);
 }

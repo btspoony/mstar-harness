@@ -1040,3 +1040,76 @@ describe("(l) disposition -> state names are preflighted against the team, like 
     }
   });
 });
+
+describe("(m) --force-create over an ambiguous residue holds the same send right", () => {
+  test("two forced runs with the same content and revision produce exactly one create", async () => {
+    const { db, close } = await openedStore("force-create-claim");
+    try {
+      addIssue(db, "I-001061");
+      const candidate = candidates(db)[0]!;
+      const ctx = context({ forceCreate: true });
+
+      // 1. An interrupted create leaves the residue the operator is about to
+      //    force past: `pending`, no id. The row records the send intent.
+      const first = provider({ receipts: [{ kind: "ambiguous", cause: "connection closed mid-call" }] });
+      await pushItem(db, first, ctx, candidate);
+      expect(row(db, "I-001061")).toMatchObject({ itemState: "pending", externalId: null });
+      const forcedPlanRevision = row(db, "I-001061")!.revision;
+
+      // 2. Two concurrent forced runs derive the SAME content hash and read the
+      //    SAME revision, so they derive the same operation id. Both read the
+      //    residue before either write lands, which is exactly the interleaving
+      //    a claim exists to arbitrate: only one may send the create.
+      const winner = provider();
+      const loser = provider();
+      const [won, lost] = await Promise.all([
+        pushItem(db, winner, ctx, candidate),
+        pushItem(db, loser, ctx, candidate),
+      ]);
+      const created = [...winner.writes, ...loser.writes].filter((write) => write.kind === "create");
+      expect(created).toHaveLength(1);
+      expect(won.outcome).toBe("created");
+      // A duplicate here is permanent: both remote issues would carry the
+      // marker, and `reconcilePendingCreate` refuses to adopt two matches.
+      expect(lost.outcome).toBe("unresolved");
+      expect(lost.cause).toContain("already claimed this create");
+      // The loser's view is the row as it stood at claim time (still no id);
+      // the winner's confirmed write is what the ledger ends up holding.
+      expect(row(db, "I-001061")).toMatchObject({ itemState: "applied", externalId: "LIN-1" });
+
+      // 4. The force intent is part of the claim key, so a LATER legitimate
+      //    forced retry is not refused by the ordinary create's receipt.
+      db.prepare("update issues set title = 'Retitled' where id = ?").run("I-001061");
+      db.prepare("update issue_sync_state set item_state = 'pending', external_id = null where local_id = ?").run("I-001061");
+      expect(row(db, "I-001061")!.revision).not.toBe(forcedPlanRevision);
+      const retry = provider();
+      const forced = await pushItem(db, retry, ctx, candidates(db)[0]!);
+      expect(forced.outcome).toBe("created");
+      expect(retry.writes.filter((write) => write.kind === "create")).toHaveLength(1);
+    } finally {
+      close();
+    }
+  });
+
+  test("an ordinary create's receipt does not refuse a forced retry on the same content", async () => {
+    const { db, close } = await openedStore("force-create-distinct-step");
+    try {
+      addIssue(db, "I-001062");
+      const candidate = candidates(db)[0]!;
+      // A plain create claims `plan`; it fails for a reason that proves nothing
+      // was delivered, so the row is retryable.
+      const refused = provider({ receipts: [{ kind: "refused", code: "linear.write-refused", cause: "HTTP 400" }] });
+      expect((await pushItem(db, refused, context(), candidate)).outcome).toBe("failed");
+      expect(row(db, "I-001062")).toMatchObject({ itemState: "failed", externalId: null });
+
+      // The operator confirms the remote absence: the forced step's claim is a
+      // different operation id, so the ordinary receipt cannot shadow it.
+      const forced = provider();
+      const outcome = await pushItem(db, forced, context({ forceCreate: true }), candidates(db)[0]!);
+      expect(outcome.outcome).toBe("created");
+      expect(forced.writes.filter((write) => write.kind === "create")).toHaveLength(1);
+    } finally {
+      close();
+    }
+  });
+});

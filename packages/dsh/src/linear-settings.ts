@@ -324,8 +324,15 @@ export class MstarLinearAuth extends Service {
     // the attempt was in flight still gets its expiry evaluated and its one
     // timer armed (a cancelled re-arm is the same single slot).
     this.schedule(readLinearCredential(this.clock.now()))
-    // A rotated/adopted grant was already reloaded by the attempt; anything
-    // else (a fresh grant, a refusal) still needs the row re-mounted once.
+    // The attempt reloads the row on BOTH outcomes it can return after a token
+    // exchange, `refreshed` and `adopted`. `adopted` means the attempt declined
+    // its older lineage because another process wrote a newer grant — the file
+    // holds that grant by the time it returns, so that one restart already
+    // re-evaluates the headers expression against the winner. Reloading here
+    // for `adopted` too would mount the row TWICE (this service's own
+    // host-use path also adopts mid-refresh), which is why the skip covers it.
+    // Anything else (a fresh grant, a refusal) still needs the row re-mounted
+    // once, because no attempt reached the exchange.
     if (outcome.kind !== 'refreshed' && outcome.kind !== 'adopted') await this.reloadRow()
     return outcome
   }

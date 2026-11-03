@@ -463,6 +463,35 @@ describe('the silent refresh loop', () => {
     expect(restarts).toEqual(['linear-mcp'])
   })
 
+  it('reloads the row once through the adoption path when a superseded refresh declines to overwrite', async () => {
+    const gate = Promise.withResolvers<Response>()
+    const provider = providerFetch(discoveryRoutes(() => gate.promise))
+    const { service, clock, restarts, ctx } = harness({
+      entry: credential({ expiresAt: START + 60_000 }),
+      provider,
+    })
+
+    // The Settings path (or a host-use header read) routes through
+    // `adoptCredential`, which is where the outcome's reload decision lives.
+    const adoption = service.adoptCredential()
+    // A CLI run rotated the file while that refresh was in flight, so
+    // `persist` declines this attempt's older lineage and answers `adopted`.
+    writeLinearCredential(
+      credential({ accessToken: 'tok-newer', refreshToken: 'ref-newer', expiresAt: START + 3_600_000 }),
+    )
+    gate.resolve(Response.json({ access_token: 'tok-ours', expires_in: 60 }))
+    expect((await adoption).kind).toBe('adopted')
+
+    // One reload, not zero and not two: the mounted client must evaluate the
+    // headers expression again to pick up the grant that actually won the race.
+    expect(restarts).toEqual(['linear-mcp'])
+    expect(evaluate(ctx, headersExpression(linearMcpRow()))).toEqual({ Authorization: 'Bearer tok-newer' })
+    // The declined attempt armed the one slot already; the adoption path's own
+    // re-read cancels and re-arms it, so there is still exactly one timer.
+    expect(clock.pending()).toBe(1)
+    expect(service.refreshPlan()).toEqual({ kind: 'scheduled', at: START + 3_600_000 - 5 * 60_000 })
+  })
+
   it('never rewrites a credential the operator deleted while its refresh was in flight', async () => {
     const gate = Promise.withResolvers<Response>()
     const provider = providerFetch(discoveryRoutes(() => gate.promise))
