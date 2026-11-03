@@ -899,7 +899,8 @@ export function synthesizeReview(input: {
 // ---------------------------------------------------------------------------
 
 /** Where a review body is published: a GitHub Review comment, or the local
- * report archive's Markdown body. */
+ * report archive's Markdown body. Layout-neutral: both surfaces carry the same
+ * template body, because the archive keeps the posted body verbatim. */
 export type ReviewRenderSurface = "github-comment" | "local-report";
 
 export type ReviewRenderOptions = { surface: ReviewRenderSurface };
@@ -926,11 +927,12 @@ function singleLine(text: string): string {
   return text.replace(/\r\n|\r|\n/g, " ");
 }
 
-/** One finding's location: `file:line` when a path is known, else repo-wide. */
+/** One finding's location: `file:line` when a path is known, else repo-wide.
+ * A renderer-owned single-line slot, so a newline-bearing path collapses. */
 function renderFindingLocation(finding: MstarReviewFinding): string {
   if (finding.file_path === undefined || finding.file_path === null || finding.file_path === "") return "repo-wide";
   const line = typeof finding.line_start === "number" ? `:${finding.line_start}` : "";
-  return `\`${finding.file_path}${line}\``;
+  return `\`${singleLine(finding.file_path)}${line}\``;
 }
 
 /** The verdict head recognized by the Thread-lifecycle candidate set
@@ -953,67 +955,56 @@ function renderIncompleteFacts(incomplete: PrIncomplete): string {
   return `cause: ${incomplete.reason}\nunscanned: ${unscanned}`;
 }
 
-/** Findings grouped in MERGE_CLASSES order with empty classes omitted; each
- * class renders one blank-line-delimited section. */
-function renderGithubFindings(findings: readonly MstarReviewFinding[]): string[] {
-  const sections: string[] = [];
-  for (const mergeClass of MERGE_CLASSES) {
-    const group = findings.filter((finding) => finding.mergeClass === mergeClass);
-    if (group.length === 0) continue;
-    const entries = group.map((finding, index) => {
-      const category = finding.category === undefined ? "" : ` (${singleLine(finding.category)})`;
-      const body = trimBoundaryNewlines(finding.body ?? "");
-      const bodyBlock = body === "" ? "" : `\n\n${body}`;
-      return `${index + 1}. **${singleLine(finding.title)}**${category} \u2014 ${renderFindingLocation(finding)}${bodyBlock}`;
-    });
-    sections.push([`### ${REVIEW_EMOJI[mergeClass]} ${mergeClass}`, "", entries.join("\n\n")].join("\n"));
+/** Continuation lines of a finding's evidence keep the `- **Evidence**: `
+ * content column, so the block stays inside the list item. */
+const EVIDENCE_INDENT = " ".repeat("- **Evidence**: ".length);
+
+/** One finding's template block: heading, then the slot bullets. The envelope
+ * carries Evidence / Merge class / Location / Category; Impact, Confidence and
+ * Fix sketch are agent-owned additions inside the same block. */
+function renderFindingBlock(finding: MstarReviewFinding): string {
+  const body = trimBoundaryNewlines(finding.body ?? "");
+  const lines = [`#### ${REVIEW_EMOJI[finding.mergeClass]} ${singleLine(finding.title)}`, ""];
+  if (body === "") {
+    lines.push("- **Evidence**: none");
+  } else if (!body.includes("\n")) {
+    lines.push(`- **Evidence**: ${body}`);
+  } else {
+    // A body opening a fence, a list or indented code must start its own line
+    // and stay at the bullet's content column, or it leaves the list item.
+    lines.push("- **Evidence**:", ...body.split("\n").map((line) => (line === "" ? "" : `${EVIDENCE_INDENT}${line}`)));
   }
-  return sections;
+  lines.push(`- **Merge class**: ${finding.mergeClass}`, `- **Location**: ${renderFindingLocation(finding)}`);
+  if (finding.category !== undefined) lines.push(`- **Category**: ${singleLine(finding.category)}`);
+  return lines.join("\n");
 }
 
-function renderLocalFindings(findings: readonly MstarReviewFinding[]): string {
+/** Findings in MERGE_CLASSES order, then document order; empty classes render
+ * nothing, and zero findings renders no findings section at all. */
+function renderFindings(findings: readonly MstarReviewFinding[]): string | null {
   const ordered = MERGE_CLASSES.flatMap((mergeClass) =>
     findings.filter((finding) => finding.mergeClass === mergeClass),
   );
-  // A table cell cannot carry a raw pipe (it adds a column) or a line break
-  // (it ends the row); every other cell keeps its text verbatim.
-  const cell = (text: string) => singleLine(text).replace(/\|/g, "\\|");
-  const rows = ordered.map(
-    (finding) =>
-      `| ${REVIEW_EMOJI[finding.mergeClass]} ${finding.mergeClass} | ${cell(finding.title)} | ${cell(renderFindingLocation(finding))} |`,
-  );
-  const details = ordered.map((finding) => {
-    const lines = [
-      `#### ${REVIEW_EMOJI[finding.mergeClass]} ${singleLine(finding.title)}`,
-      "",
-      `- **Merge class**: ${finding.mergeClass}`,
-    ];
-    if (finding.category !== undefined) lines.push(`- **Category**: ${singleLine(finding.category)}`);
-    const body = trimBoundaryNewlines(finding.body ?? "");
-    // A label prefix would flatten a body that opens with a fence or a list.
-    if (body !== "") lines.push("", body);
-    return lines.join("\n");
-  });
-  const table = ["| Merge class | Finding | Location |", "| --- | --- | --- |", ...rows].join("\n");
-  return ["## Findings", table, ...details].join("\n\n");
+  if (ordered.length === 0) return null;
+  return ["### Findings", ...ordered.map(renderFindingBlock)].join("\n\n");
 }
 
 /**
- * Render the review **body core** for one presentation surface from the
+ * Render the review **body** for one presentation surface from the
  * `mstar.review/v1` envelope — the engine's only review-body layout owner.
- * The core carries every envelope fact: verdict head, tally, the incomplete
- * fact pair, the seat narrative under `## 📋 Review`, and findings by class.
- * The consumer owns what surrounds the body (upsert markers, round headers,
- * byte-budget clamping).
+ * Both surfaces render the same pr-review.md § Report template body: verdict
+ * head, the four-class tally table, the `incomplete` fact pair, the seat
+ * narrative under `## 📋 Review`, and `### Findings` with one
+ * `#### <emoji> <title>` block per finding. `surface` is layout-neutral and
+ * exists for caller compatibility; the local archive keeps the posted body
+ * verbatim, so a per-surface layout would break that contract.
  *
- * The core is not the whole body pr-review.md § Report template mandates: the
- * main agent composes the full body as this core plus the agent-owned
- * sections, in their template order — `### Revalidated findings`, which
- * belongs before the findings and so cannot be placed by the renderer, then
- * `### Linked-issue AC`, `### ✅ Verified`, `### 🗑️ Considered & rejected`,
- * and `## 🛠️ Plan to fix`; heading levels follow the surface's hierarchy.
- * Those sections describe work outside the envelope and are never rendered
- * here.
+ * The renderer supplies Evidence, Merge class, Location and Category; the
+ * main agent inserts `### Revalidated findings` immediately **before**
+ * `### Findings`, adds `**What this PR does**` under `## 📋 Review`, then
+ * appends `### Linked-issue AC`, `### ✅ Verified`,
+ * `### 🗑️ Considered & rejected` and `## 🛠️ Plan to fix`. Frontmatter,
+ * `- notes:` and the output-shape bullets stay the agent's duty.
  *
  * `summary_md`, when a seat produced one, is the seat's narrative — never a
  * header copy — and is never read for facts. Free-form narrative and evidence
@@ -1021,44 +1012,32 @@ function renderLocalFindings(findings: readonly MstarReviewFinding[]): string {
  * single-line slots lose every line break. Sections join with one blank line;
  * no trailing newline.
  */
-export function renderReviewMarkdown(review: MstarReviewV1, opts: ReviewRenderOptions): string {
+export function renderReviewMarkdown(review: MstarReviewV1, _opts: ReviewRenderOptions): string {
   const sections: string[] = [];
   const { tally, incomplete } = review;
   const narrative =
     review.summary_md !== undefined && review.summary_md.trim() !== "" ? trimBoundaryNewlines(review.summary_md) : null;
-  const hasFindings = review.findings.length > 0;
 
-  // Both surfaces open with the Thread-lifecycle candidate heading: a body
-  // that does not start with it is invisible to later rounds' fold pass.
+  // The Thread-lifecycle candidate set keeps only bodies starting here.
   sections.push(renderVerdictHead(review));
 
+  if (incomplete !== undefined) sections.push(renderIncompleteFacts(incomplete));
   if (tally !== undefined) {
     const { mustFix, shouldFix, nit, unverified } = tally.tally;
     sections.push(
-      opts.surface === "github-comment"
-        ? `**Tally:** ${REVIEW_EMOJI["must-fix"]} must-fix ${mustFix} \u00b7 ` +
-            `${REVIEW_EMOJI["should-fix"]} should-fix ${shouldFix} \u00b7 ` +
-            `${REVIEW_EMOJI.nit} nit ${nit} \u00b7 ` +
-            `${REVIEW_EMOJI.unverified} unverified ${unverified}`
-        : [
-            "| Findings | Count |",
-            "| --- | --- |",
-            `| ${REVIEW_EMOJI["must-fix"]} must-fix | ${mustFix} |`,
-            `| ${REVIEW_EMOJI["should-fix"]} should-fix | ${shouldFix} |`,
-            `| ${REVIEW_EMOJI.nit} nit | ${nit} |`,
-            `| ${REVIEW_EMOJI.unverified} unverified | ${unverified} |`,
-          ].join("\n"),
+      [
+        "| Findings | Count |",
+        "| --- | --- |",
+        `| ${REVIEW_EMOJI["must-fix"]} must-fix | ${mustFix} |`,
+        `| ${REVIEW_EMOJI["should-fix"]} should-fix | ${shouldFix} |`,
+        `| ${REVIEW_EMOJI.nit} nit | ${nit} |`,
+        `| ${REVIEW_EMOJI.unverified} unverified | ${unverified} |`,
+      ].join("\n"),
     );
   }
-  if (incomplete !== undefined) sections.push(renderIncompleteFacts(incomplete));
-  if (narrative !== null) sections.push(`## \u{1F4CB} Review\n\n${narrative}`); // 📋 seat narrative, one heading on both surfaces
-  if (hasFindings) {
-    sections.push(
-      ...(opts.surface === "github-comment"
-        ? renderGithubFindings(review.findings)
-        : [renderLocalFindings(review.findings)]),
-    );
-  }
+  if (narrative !== null) sections.push(`## \u{1F4CB} Review\n\n${narrative}`); // 📋 seat narrative
+  const findings = renderFindings(review.findings);
+  if (findings !== null) sections.push(findings);
 
   return trimBoundaryNewlines(sections.join("\n\n"));
 }

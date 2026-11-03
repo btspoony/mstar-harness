@@ -1257,15 +1257,13 @@ describe("synthesizeReview — mstar.review/v1 envelope ", () => {
     const synthesized = synthesizeReview({ findings: [] });
     expect("summary_md" in synthesized).toBe(false);
 
-    const github = renderReviewMarkdown(synthesized, { surface: "github-comment" });
-    expect(github.split("\n")[0]).toBe("## \u2705 Verdict: `ship it` \u00b7 Score 100% (mergeable)");
-    expect(github).toContain("**Tally:**");
-    expect(github).not.toContain("###");
-    expect(github.endsWith("\n")).toBe(false);
-
-    const local = renderReviewMarkdown(synthesized, { surface: "local-report" });
-    expect(local).toContain("Score 100% (mergeable)");
-    expect(local).not.toContain("## Findings");
+    for (const surface of ["github-comment", "local-report"] as const) {
+      const body = renderReviewMarkdown(synthesized, { surface });
+      expect(body.split("\n")[0]).toBe("## \u2705 Verdict: `ship it` \u00b7 Score 100% (mergeable)");
+      expect(body).toContain("| \u{1F534} must-fix | 0 |");
+      expect(body).not.toContain("### Findings");
+      expect(body.endsWith("\n")).toBe(false);
+    }
   });
 
   test("an incomplete run states the partial mark, cause and unscanned scope once", () => {

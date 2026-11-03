@@ -116,38 +116,45 @@ const SETTLED_REVIEW: MstarReviewV1 = {
   findings: RENDER_FINDINGS,
 };
 
-describe("renderReviewMarkdown: github-comment surface", () => {
-  test("(a) settled review renders verdict, tally line, narrative and findings by class", () => {
-    expect(renderReviewMarkdown(SETTLED_REVIEW, { surface: "github-comment" })).toBe(
-      [
-        "## \u26A0\uFE0F Verdict: `needs fixes` \u00b7 Score 86% (good)",
-        "",
-        "**Tally:** \u{1F534} must-fix 0 \u00b7 \u{1F7E0} should-fix 1 \u00b7 \u{1F535} nit 1 \u00b7 \u2753 unverified 0",
-        "",
-        "## \u{1F4CB} Review",
-        "",
-        NARRATIVE,
-        "",
-        "### \u{1F7E0} should-fix",
-        "",
-        "1. **Off-by-one** (Correctness) \u2014 `src/a.ts:12`",
-        "",
-        "The loop skips the last element.",
-        "",
-        "### \u{1F535} nit",
-        "",
-        "1. **Naming** \u2014 `src/b.ts`",
-        "",
-        "Rename the helper.",
-      ].join("\n"),
-    );
+describe("renderReviewMarkdown: the template body", () => {
+  test("(a) settled review renders the tally table, narrative and one block per finding", () => {
+    const expected = [
+      "## \u26A0\uFE0F Verdict: `needs fixes` \u00b7 Score 86% (good)",
+      "",
+      "| Findings | Count |",
+      "| --- | --- |",
+      "| \u{1F534} must-fix | 0 |",
+      "| \u{1F7E0} should-fix | 1 |",
+      "| \u{1F535} nit | 1 |",
+      "| \u2753 unverified | 0 |",
+      "",
+      "## \u{1F4CB} Review",
+      "",
+      NARRATIVE,
+      "",
+      "### Findings",
+      "",
+      "#### \u{1F7E0} Off-by-one",
+      "",
+      "- **Evidence**: The loop skips the last element.",
+      "- **Merge class**: should-fix",
+      "- **Location**: `src/a.ts:12`",
+      "- **Category**: Correctness",
+      "",
+      "#### \u{1F535} Naming",
+      "",
+      "- **Evidence**: Rename the helper.",
+      "- **Merge class**: nit",
+      "- **Location**: `src/b.ts`",
+    ].join("\n");
+    expect(renderReviewMarkdown(SETTLED_REVIEW, { surface: "github-comment" })).toBe(expected);
   });
 
   test("(b) no tally and no narrative renders the verdict head only", () => {
     const review: MstarReviewV1 = { schema: "mstar.review/v1", verdict: "ship it", findings: [] };
     const body = renderReviewMarkdown(review, { surface: "github-comment" });
     expect(body).toBe("## \u2705 Verdict: `ship it`");
-    expect(body).not.toContain("**Tally:**");
+    expect(body).not.toContain("| Findings |");
     expect(body).not.toContain("###");
   });
 
@@ -164,44 +171,10 @@ describe("renderReviewMarkdown: github-comment surface", () => {
   });
 });
 
-describe("renderReviewMarkdown: local-report surface", () => {
-  test("(d) settled review renders emoji verdict head, Score/band, tally table, narrative and findings", () => {
-    expect(renderReviewMarkdown(SETTLED_REVIEW, { surface: "local-report" })).toBe(
-      [
-        "## \u26A0\uFE0F Verdict: `needs fixes` \u00b7 Score 86% (good)",
-        "",
-        "| Findings | Count |",
-        "| --- | --- |",
-        "| \u{1F534} must-fix | 0 |",
-        "| \u{1F7E0} should-fix | 1 |",
-        "| \u{1F535} nit | 1 |",
-        "| \u2753 unverified | 0 |",
-        "",
-        "## \u{1F4CB} Review",
-        "",
-        NARRATIVE,
-        "",
-        "## Findings",
-        "",
-        "| Merge class | Finding | Location |",
-        "| --- | --- | --- |",
-        "| \u{1F7E0} should-fix | Off-by-one | `src/a.ts:12` |",
-        "| \u{1F535} nit | Naming | `src/b.ts` |",
-        "",
-        "#### \u{1F7E0} Off-by-one",
-        "",
-        "- **Merge class**: should-fix",
-        "- **Category**: Correctness",
-        "",
-        "The loop skips the last element.",
-        "",
-        "#### \u{1F535} Naming",
-        "",
-        "- **Merge class**: nit",
-        "",
-        "Rename the helper.",
-      ].join("\n"),
-    );
+describe("renderReviewMarkdown: surface is layout-neutral", () => {
+  test("(d) both surfaces render the identical template body", () => {
+    const github = renderReviewMarkdown(SETTLED_REVIEW, { surface: "github-comment" });
+    expect(renderReviewMarkdown(SETTLED_REVIEW, { surface: "local-report" })).toBe(github);
   });
 
   test("(e) incomplete marks the band partial inside the parens", () => {
@@ -232,11 +205,11 @@ describe("renderReviewMarkdown: local-report surface", () => {
       verdict: "ship it",
       findings: [{ mergeClass: "nit", title: "Scattered TODOs", body: "Three TODO markers across the repo." }],
     };
-    const github = renderReviewMarkdown(review, { surface: "github-comment" });
-    expect(github).toContain("1. **Scattered TODOs** \u2014 repo-wide");
-    const local = renderReviewMarkdown(review, { surface: "local-report" });
-    expect(local).toContain("| \u{1F535} nit | Scattered TODOs | repo-wide |");
-    expect(local).not.toContain("undefined");
+    for (const surface of ["github-comment", "local-report"] as const) {
+      const body = renderReviewMarkdown(review, { surface });
+      expect(body).toContain("- **Location**: repo-wide");
+      expect(body).not.toContain("undefined");
+    }
   });
 });
 
@@ -267,65 +240,64 @@ describe("renderReviewMarkdown: boundary line breaks in free-form Markdown", () 
     const findings = [{ ...RENDER_FINDINGS[1], body: "Rename the helper.\n" }];
     const tally = computePrTally({ findings });
     const review: MstarReviewV1 = { ...SETTLED_REVIEW, verdict: tally.verdict, tally, findings };
-    const github = renderReviewMarkdown(review, { surface: "github-comment" });
-    expect(github.endsWith("Rename the helper.")).toBe(true);
-    expect(github).not.toMatch(/\n{3,}/);
-
-    const local = renderReviewMarkdown(review, { surface: "local-report" });
-    expect(local.endsWith("Rename the helper.")).toBe(true);
-    expect(local).not.toMatch(/\n{3,}/);
+    for (const surface of SURFACES) {
+      const body = renderReviewMarkdown(review, { surface });
+      expect(body).toContain("- **Evidence**: Rename the helper.");
+      expect(body).not.toMatch(/\n{3,}/);
+      expect(body.endsWith("\n")).toBe(false);
+    }
     expect(validateMstarReviewV1(review).ok).toBe(true);
   });
 });
 
 describe("renderReviewMarkdown: free-form finding bodies and titles", () => {
-  test("(k) a title bearing a pipe stays in the Finding column \u2014 three columns, no split", () => {
+  test("(k) a title bearing a pipe stays one heading line", () => {
     const findings = [
       { mergeClass: "nit" as const, title: "Pipe | in title", body: "x" },
       { mergeClass: "nit" as const, title: "Second | one", body: "y" },
     ];
     const tally = computePrTally({ findings });
     const review: MstarReviewV1 = { schema: "mstar.review/v1", verdict: tally.verdict, tally, findings };
-    const local = renderReviewMarkdown(review, { surface: "local-report" });
-
-    const findingsTable = local.slice(local.indexOf("## Findings"));
-    const rows = findingsTable.split("\n").filter((line) => line.startsWith("| \u{1F535}"));
-    expect(rows).toHaveLength(2);
-    // Split on unescaped pipes only: the outer edges bracket exactly 3 cells.
-    for (const row of rows) expect(row.split(/(?<!\\)\|/).length - 2).toBe(3);
-    expect(local).toContain("| \u{1F535} nit | Pipe \\| in title | repo-wide |");
+    const body = renderReviewMarkdown(review, { surface: "github-comment" });
+    expect(body).toContain("#### \u{1F535} Pipe | in title");
+    expect(body).toContain("#### \u{1F535} Second | one");
   });
 
-  test("(l) a newline inside a title collapses so the row stays one line", () => {
+  test("(l) a newline inside a title collapses so the heading stays one line", () => {
     const findings = [{ mergeClass: "nit" as const, title: "Two\nlines", body: "x" }];
     const tally = computePrTally({ findings });
     const review: MstarReviewV1 = { schema: "mstar.review/v1", verdict: tally.verdict, tally, findings };
-    expect(renderReviewMarkdown(review, { surface: "local-report" })).toContain("| \u{1F535} nit | Two lines | repo-wide |");
+    expect(renderReviewMarkdown(review, { surface: "local-report" })).toContain("#### \u{1F535} Two lines");
   });
 
-  test("(l2) a pipe/newline title cannot break the detail heading or the github entry", () => {
-    const findings = [{ mergeClass: "nit" as const, title: "Pipe | and\nbreak", body: "x" }];
+  test("(l2) a pipe/newline title and category cannot break the finding block", () => {
+    const findings = [
+      { mergeClass: "nit" as const, title: "Pipe | and\nbreak", category: "Docs\nsplit", body: "x" },
+    ];
     const tally = computePrTally({ findings });
     const review: MstarReviewV1 = { schema: "mstar.review/v1", verdict: tally.verdict, tally, findings };
 
-    const local = renderReviewMarkdown(review, { surface: "local-report" });
-    // A heading is a single line: the title keeps its pipe and loses its break.
-    expect(local).toContain("#### \u{1F535} Pipe | and break");
-    expect(local.split("\n").filter((line) => line.startsWith("#### "))).toHaveLength(1);
-
-    const github = renderReviewMarkdown(review, { surface: "github-comment" });
-    expect(github).toContain("1. **Pipe | and break** \u2014 repo-wide");
-    expect(github.split("\n").filter((line) => line.startsWith("1. "))).toHaveLength(1);
+    for (const surface of ["github-comment", "local-report"] as const) {
+      const body = renderReviewMarkdown(review, { surface });
+      expect(body).toContain("#### \u{1F535} Pipe | and break");
+      expect(body).toContain("- **Category**: Docs split");
+      expect(body.split("\n").filter((line) => line.startsWith("#### "))).toHaveLength(1);
+    }
   });
 
-  test("(m) a body opening with a fenced block keeps the fence and its own structure", () => {
+  test("(m) a body opening with a fenced block keeps the fence inside the evidence bullet", () => {
     const body = "```ts\nconst a = 1;\n```\n\nAfter the fence.";
     const findings = [{ mergeClass: "should-fix" as const, title: "Fenced evidence", body }];
     const tally = computePrTally({ findings });
     const review: MstarReviewV1 = { schema: "mstar.review/v1", verdict: tally.verdict, tally, findings };
-    const local = renderReviewMarkdown(review, { surface: "local-report" });
-    expect(local).toContain(`- **Merge class**: should-fix\n\n${body}`);
-    expect(local).not.toContain("- **Evidence**");
+    const rendered = renderReviewMarkdown(review, { surface: "local-report" });
+    const indent = " ".repeat("- **Evidence**: ".length);
+    const expected = `- **Evidence**:\n${["```ts", "const a = 1;", "```", "", "After the fence."]
+      .map((line) => (line === "" ? "" : indent + line))
+      .join("\n")}`;
+    expect(rendered).toContain(expected);
+    // The body stays inside the list item: the bullets that follow are siblings.
+    expect(rendered).toContain(`${expected}\n- **Merge class**: should-fix`);
   });
 });
 
