@@ -268,6 +268,22 @@ describe("renderReviewMarkdown: surface is layout-neutral", () => {
     expect(body.indexOf("#### \u{1F535} Second")).toBeLessThan(body.indexOf("#### \u{1F534} First"));
   });
 
+  test("(w) a non-object or incomplete tally renders no table and no Score segment", () => {
+    const broken = [
+      { schema: "mstar.review/v1", verdict: "needs fixes", tally: "86%", findings: [] },
+      { schema: "mstar.review/v1", verdict: "needs fixes", tally: null, findings: [] },
+      { schema: "mstar.review/v1", verdict: "needs fixes", tally: { tally: { mustFix: 0 } }, findings: [] },
+      { schema: "mstar.review/v1", verdict: "needs fixes", tally: { scorePct: 86 }, findings: [] },
+    ] as unknown as MstarReviewV1[];
+    for (const review of broken) {
+      const body = renderReviewMarkdown(review, { surface: "github-comment" });
+      expect(body).not.toContain("| Findings | Count |");
+      expect(body).not.toContain("Score ");
+      expect(body).not.toContain("undefined");
+      expect(body.split("\n")[0]).toBe("## \u26A0\uFE0F Verdict: `needs fixes`");
+    }
+  });
+
   test("(t) the options argument is optional and cannot select a layout", () => {
     const bare = renderReviewMarkdown(SETTLED_REVIEW);
     expect(bare).toBe(renderReviewMarkdown(SETTLED_REVIEW, {}));
@@ -353,33 +369,35 @@ describe("renderReviewMarkdown: free-form finding bodies and titles", () => {
     const tally = computePrTally({ findings });
     const review: MstarReviewV1 = { schema: "mstar.review/v1", verdict: tally.verdict, tally, findings };
     const rendered = renderReviewMarkdown(review, { surface: "local-report" });
-    // The list item's content column is two spaces: anything deeper would turn
-    // the body into an indented code block on the real renderer.
+    // The contract value: the list item's content column, i.e. two spaces past
+    // the `- ` marker. Anything deeper would be an indented code block.
+    const CONTENT_COLUMN = "  ";
     const expected = `- **Evidence**:\n${["```ts", "const a = 1;", "```", "", "After the fence."]
-      .map((line) => (line === "" ? "" : `  ${line}`))
+      .map((line) => (line === "" ? "" : CONTENT_COLUMN + line))
       .join("\n")}`;
     expect(rendered).toContain(expected);
     // The body stays inside the list item: the bullets that follow are siblings.
     expect(rendered).toContain(`${expected}\n- **Location**: repo-wide\n- **Merge class**: should-fix`);
-    expect(rendered).not.toContain("                ```ts");
+    // The label-width indent that would turn the body into a code block is gone.
+    expect(rendered).not.toContain(`${" ".repeat("- **Evidence**: ".length)}${"```ts"}`);
   });
 
-  test("(n) Merge class closes the rendered block, so an inserted Confidence lands immediately above it", () => {
+  test("(n) Merge class is the last bullet rendered, so an agent Confidence line lands directly above it", () => {
     const rendered = renderReviewMarkdown(SETTLED_REVIEW, { surface: "github-comment" });
-    // Merge class is the last bullet the renderer emits in the block.
-    const block = rendered.slice(rendered.indexOf("\n\n### Findings"));
-    const bullets = block.split("\n").filter((line) => line.startsWith("- **"));
-    expect(bullets[bullets.length - 1]).toBe("- **Merge class**: nit");
+    const lines = rendered.split("\n");
 
-    // Simulate the agent's insertion point: immediately above the trailing
-    // Merge class line, the adjacency `validateFindingDoc({ prVariant: true })`
-    // requires. The rendered block itself proves the insertion point is the
-    // last bullet, so Confidence ends up directly above Merge class.
-    const withConfidence = rendered.replace("- **Merge class**: nit", "- **Confidence**: HIGH\n- **Merge class**: nit");
-    const lines = withConfidence.split("\n");
+    // (a) The last bullet the renderer emits anywhere in the body is Merge class.
+    const lastBullet = [...lines].reverse().find((line) => line.startsWith("- **"));
+    expect(lastBullet).toBe("- **Merge class**: nit");
+
+    // (b) Insert the agent's `- **Confidence**:` immediately above that bullet
+    // and re-read the rendered text: the adjacency holds.
     const mergeAt = lines.indexOf("- **Merge class**: nit");
-    expect(lines[mergeAt - 1]).toBe("- **Confidence**: HIGH");
-    expect(lines.filter((line) => line.startsWith("- **Confidence**:"))).toHaveLength(1);
+    const withConfidence = [...lines.slice(0, mergeAt), "- **Confidence**: HIGH", ...lines.slice(mergeAt)].join("\n");
+    const after = withConfidence.split("\n");
+    const mergedAt = after.indexOf("- **Merge class**: nit");
+    expect(after[mergedAt - 1]).toBe("- **Confidence**: HIGH");
+    expect(after.filter((line) => line.startsWith("- **Confidence**:"))).toHaveLength(1);
   });
 
   test("(o) an off-enum class still renders, in document order", () => {

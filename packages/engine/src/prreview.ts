@@ -956,19 +956,52 @@ function renderFindingLocation(finding: MstarReviewFinding): string {
   return `\`${path}:${span}\``;
 }
 
+/** A tally the renderer can publish: score, band and the four counts. */
+type RenderedTally = {
+  scorePct: number;
+  band: PrScoreBand;
+  mustFix: number;
+  shouldFix: number;
+  nit: number;
+  unverified: number;
+};
+
+/** Read the envelope's tally defensively. A hand-built envelope may carry a
+ * non-object or incomplete `tally`; the renderer then omits the Score segment
+ * and the table (no throw, no `undefined` in the body) instead of trusting it. */
+function readTally(tally: unknown): RenderedTally | null {
+  if (typeof tally !== "object" || tally === null) return null;
+  const candidate = tally as { scorePct?: unknown; band?: unknown; tally?: unknown };
+  const counts = candidate.tally;
+  if (typeof counts !== "object" || counts === null) return null;
+  const { mustFix, shouldFix, nit, unverified } = counts as Record<string, unknown>;
+  if (![mustFix, shouldFix, nit, unverified].every((value) => typeof value === "number")) return null;
+  if (typeof candidate.scorePct !== "number") return null;
+  const band = (PR_SCORE_BANDS as readonly string[]).includes(candidate.band as string)
+    ? (candidate.band as PrScoreBand)
+    : scoreBand(candidate.scorePct);
+  return {
+    scorePct: candidate.scorePct,
+    band,
+    mustFix: mustFix as number,
+    shouldFix: shouldFix as number,
+    nit: nit as number,
+    unverified: unverified as number,
+  };
+}
+
 /** The verdict head recognized by the Thread-lifecycle candidate set
  * (pr-review.md § Comment posting — a review body starts with
- * `## <emoji> Verdict: \`<token>\``), plus Score/band when a tally exists. An
- * off-enum verdict falls back to a neutral marker: the lookup must not resolve
- * through the prototype chain (a bundled renderer would print function source). */
-function renderVerdictHead(review: MstarReviewV1): string {
-  const { tally, incomplete } = review;
+ * `## <emoji> Verdict: \`<token>\``), plus Score/band when a usable tally
+ * exists. An off-enum verdict falls back to a neutral marker: the lookup must
+ * not resolve through the prototype chain (a bundled renderer would print
+ * function source). */
+function renderVerdictHead(review: MstarReviewV1, tally: RenderedTally | null, partial: boolean): string {
   const token = typeof review.verdict === "string" ? singleLine(review.verdict) : "";
   const emoji = Object.hasOwn(VERDICT_EMOJI, review.verdict) ? VERDICT_EMOJI[review.verdict] : "\u2022";
   let head = `## ${emoji} Verdict: \`${token}\``;
-  if (tally !== undefined) {
-    const band = tally.band ?? scoreBand(tally.scorePct);
-    head += ` \u00b7 Score ${tally.scorePct}% (${incomplete === undefined ? band : `${band}, partial`})`;
+  if (tally !== null) {
+    head += ` \u00b7 Score ${tally.scorePct}% (${partial ? `${tally.band}, partial` : tally.band})`;
   }
   return head;
 }
@@ -1068,32 +1101,31 @@ function renderFindings(findings: readonly MstarReviewFinding[]): string | null 
  */
 export function renderReviewMarkdown(review: MstarReviewV1, _opts: ReviewRenderOptions = {}): string {
   const sections: string[] = [];
-  const { tally, incomplete } = review;
   const narrative =
     typeof review.summary_md === "string" && review.summary_md.trim() !== ""
       ? trimBoundaryNewlines(review.summary_md)
       : null;
+  const tally = readTally(review.tally);
 
   // The Thread-lifecycle candidate set keeps only bodies starting here.
-  sections.push(renderVerdictHead(review));
+  sections.push(renderVerdictHead(review, tally, review.incomplete !== undefined));
 
-  if (incomplete !== undefined) sections.push(renderIncompleteFacts(incomplete));
-  if (tally !== undefined) {
-    const { mustFix, shouldFix, nit, unverified } = tally.tally;
+  if (review.incomplete !== undefined) sections.push(renderIncompleteFacts(review.incomplete));
+  if (tally !== null) {
     sections.push(
       [
         "| Findings | Count |",
         "| --- | --- |",
-        `| ${REVIEW_EMOJI["must-fix"]} must-fix | ${mustFix} |`,
-        `| ${REVIEW_EMOJI["should-fix"]} should-fix | ${shouldFix} |`,
-        `| ${REVIEW_EMOJI.nit} nit | ${nit} |`,
-        `| ${REVIEW_EMOJI.unverified} unverified | ${unverified} |`,
+        `| ${REVIEW_EMOJI["must-fix"]} must-fix | ${tally.mustFix} |`,
+        `| ${REVIEW_EMOJI["should-fix"]} should-fix | ${tally.shouldFix} |`,
+        `| ${REVIEW_EMOJI.nit} nit | ${tally.nit} |`,
+        `| ${REVIEW_EMOJI.unverified} unverified | ${tally.unverified} |`,
       ].join("\n"),
     );
   }
   // Mandatory template section: the agent's `**What this PR does**` anchor.
   sections.push(narrative === null ? "## \u{1F4CB} Review" : `## \u{1F4CB} Review\n\n${narrative}`); // 📋
-  const findings = renderFindings(review.findings);
+  const findings = renderFindings(Array.isArray(review.findings) ? review.findings : []);
   if (findings !== null) sections.push(findings);
 
   return trimBoundaryNewlines(sections.join("\n\n"));
