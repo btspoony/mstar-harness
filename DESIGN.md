@@ -2769,7 +2769,7 @@ the fixture derives the screen frame and the breakpoints, and the panel adds nei
 gutter nor a reflow.
 
 **State and cause are one pair.** The identity and readiness blocks sit side by side in
-`detail-top`, which folds to one column below 899px of container. A state is never rendered
+`detail-top`, which folds to one column at a container width of 899px or narrower — the prototype's own `max-width: 899px` condition. A state is never rendered
 without the cause the read supplied, and the panel never composes a cause: `not-probed` is
 `not-probed`, carrying the reason the view already sets, not an empty slot. The screen
 renders the ONE pair the read returned, beside its own note; the catalogue that shows all
