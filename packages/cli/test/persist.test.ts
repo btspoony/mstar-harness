@@ -344,7 +344,6 @@ describe("mstar persist review — validateMstarReviewV1 before put", () => {
       // One refusal, every problem: the caller repairs the document once.
       expect(refusal).toContain("review.missing-schema");
       expect(refusal).toContain("review.missing-verdict");
-      expect(refusal).toContain("review.missing-summary");
       expect(refusal).toContain("review.findings-not-array");
       expect(existsSync(join(dir, "sdd", "_reviews", "review-empty.json"))).toBe(false);
     });
@@ -394,6 +393,34 @@ describe("mstar persist review — validateMstarReviewV1 before put", () => {
       expect(r.exitCode).toBe(0);
       expect(envelope(r)).toMatchObject({ command: "persist.write", status: "ok", data: { kind: "review", key: "pr-7" } });
       expect(existsSync(join(dir, "sdd", "_reviews", "pr-7.json"))).toBe(true);
+    });
+  });
+
+  test("accepts an envelope with no summary_md at all (exit 0, persisted)", () => {
+    withTempDir((dir) => {
+      const absent = synthesizeReview({ findings: REVIEW_PAYLOAD.findings });
+      // The optional-narrative contract in the exact shape the CLI receives.
+      expect("summary_md" in absent).toBe(false);
+      const payloadFile = writePayload(dir, "no-narrative.json", absent);
+      const r = runCli(["persist", "write", "review", "--key", "pr-8", "--file", payloadFile], { env: harnessEnv(dir) });
+      expect(r.exitCode).toBe(0);
+      expect(envelope(r)).toMatchObject({ command: "persist.write", status: "ok", data: { kind: "review", key: "pr-8" } });
+
+      const get = runCli(["persist", "get", "review", "--key", "pr-8"], { env: harnessEnv(dir) });
+      expect(get.exitCode).toBe(0);
+      const stored = persistedPayload(get) as Record<string, unknown>;
+      expect("summary_md" in stored).toBe(false);
+      expect(stored.findings).toEqual(REVIEW_PAYLOAD.findings);
+    });
+  });
+
+  test("still refuses a present-but-blank summary_md (exit 1, no write)", () => {
+    withTempDir((dir) => {
+      const payloadFile = writePayload(dir, "blank-narrative.json", { ...REVIEW_PAYLOAD, summary_md: "   " });
+      const r = runCli(["persist", "write", "review", "--key", "pr-9", "--file", payloadFile], { env: harnessEnv(dir) });
+      expect(r.exitCode).toBe(1);
+      expect(message(r)).toContain("review.blank-summary");
+      expect(existsSync(join(dir, "sdd", "_reviews", "pr-9.json"))).toBe(false);
     });
   });
 

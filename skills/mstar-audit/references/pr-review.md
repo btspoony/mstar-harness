@@ -247,7 +247,15 @@ Tie-break: unsafe to ship **and reachable in this change** → `must-fix`; shoul
 
 Presumptive-structural classes: a refactor that relocates complexity instead of reducing it · a change pushing a file past the size boundary with no decomposition · feature logic added to a shared module · a near-duplicate of an existing canonical helper · a silent fallback hiding an unclear invariant → default `should-fix`; downgrade to `nit` only with a stated reason; never `must-fix` on shape alone without correctness/security evidence.
 
-Field placement: on each finding, `- **Merge class**: must-fix | should-fix | nit`, immediately after `Confidence` (before `Fix sketch`). The shared finding template (`references/finding-format.md`) is unchanged — this field is PR-review-only.
+Field placement has one rule and one enforced artifact:
+
+- **The rule** — `- **Merge class**: must-fix | should-fix | nit` sits immediately after `Confidence` (and before `Fix sketch` in the draft form).
+- **What is machine-checked** — only the **stage-2 finding draft** (the seat's findings payload / draft file): `mstar lint <file.md> --type finding --pr-variant` (equivalently `validateFindingDoc(text, { prVariant: true })`) enforces presence, enum, and the line immediately after `Confidence` (`prreview.finding.merge-class-placement`).
+- **What is not machine-checked** — the **rendered report body** (§ Report template `####` block). Nothing lints it. It keeps the same ordering by construction: the renderer emits `Evidence` → `Location` → `Category` (when the envelope carries one) → `Merge class` **last**, and the agent inserts `Impact`, `Fix sketch`, `Confidence` above that trailing bullet, so the block ends `… Impact / Fix sketch / Confidence / Merge class` and the rule still holds. An agent line appended after `Merge class` would break the stated order, but no checker would flag it — which is precisely why the insertion point is the trailing bullet.
+
+The shared finding template (`references/finding-format.md`) is unchanged — this field is PR-review-only.
+
+**Evidence slot.** In the rendered report body, `- **Evidence**:` carries the finding's **free-text body** from the `mstar.review/v1` envelope (the renderer's `body`; `none` when it is empty), wrapped in the block's list item. It is **not** the stage-2 draft's evidence line: that one is the backtick-quoted `path:line` citation chain `validateFindingDoc({ prVariant: true })` checks (`prreview.finding.evidence-shape` / `evidence-path-line`). The two artifacts share a label, not a shape — never copy a rendered `Evidence` block into a findings draft, or a draft citation into a report body, and expect the other checker (or the renderer) to accept it.
 
 > **Engine check (when available):** run `mstar lint <file.md>` with `--type finding` (add `--pr-variant` for the PR Merge-class contract) — or `import { validateFindingDoc } from "@mstar-harness/engine"` in a host hook — to machine-check a findings document: `### [CATEGORY-NN]` numbering, category / effort / risk / confidence enums, evidence `path:line` shape, and the Merge-class presence/enum/placement rule. On `fail` -> do not proceed; fix and re-run. Skill text below remains authoritative when the runtime is absent.
 
@@ -459,11 +467,13 @@ unscanned: <csv | none>
 
 #### <class-emoji> <finding title>
 
-- **Evidence**: `file:line` — what the code does
+- **Evidence**: <the finding's free-text body — not the stage-2 draft line>
+- **Location**: `file:start-end` | `file:start` | `file` | repo-wide
+- **Category**: <short category — only when the envelope carries one>
 - **Impact**: why it matters
-- **Merge class**: must-fix | should-fix | nit
-- **Confidence**: HIGH | MEDIUM | LOW
 - **Fix sketch**: one-line suggestion
+- **Confidence**: HIGH | MEDIUM | LOW
+- **Merge class**: must-fix | should-fix | nit
 
 ### Linked-issue AC
 
@@ -495,7 +505,7 @@ unscanned: <csv | none>
 - **Verdict**: render the band bare (`mergeable` | `good` | `pass` | `fail`). For `incomplete` only, render it as `<band>, partial` and keep the `cause:` / `unscanned:` lines under the heading — `cause` is why the run stopped, `unscanned` the comma-joined scope it never reached (`none` when nothing was left unscanned). Every other verdict deletes both lines, so a settled body keeps its exact shape.
 - **What this PR does**: from the PR description plus your own read of the changed files, not copied marketing text.
 - **Revalidated findings**: the § Re-review pass — one row per prior accepted finding and prior `- unverified:` item, `<state>` being exactly one of `fixed` / `still present` / `regressed` / `not verifiable`, with the evidence that decided it; a prior `not verifiable` item counts in the `unverified` tally. A first review (no prior report) writes `none` here, and a re-review does not repeat these states inside `✅ Verified`.
-- **Findings**: ranked by impact-if-shipped (§ Verdict synthesis); every accepted finding listed, nothing truncated; repeat the `#### <class-emoji> <title>` block per finding. **Body soft cap ~150 lines**: past the cap, take degradation ③ (§ Time budget & degradation ladder) — nits fold into the summary body (display only: findings are never dropped — every accepted finding stays listed in some form), and the fold is declared in the report under `- notes:`.
+- **Findings**: ranked by impact-if-shipped (§ Verdict synthesis); every accepted finding listed, nothing truncated; repeat the `#### <class-emoji> <title>` block per finding. When the renderer is available it supplies `Evidence`, `Location`, `Category` (only when the envelope carries one — delete the whole line otherwise) and `Merge class` — Merge class closes the block, so `Impact` / `Fix sketch` / `Confidence` are agent-owned insertions above it, in that order, and `Confidence` ends up immediately before `Merge class` (§ Merge class field placement). The rendered `Evidence` slot is the envelope's free-text body, never the draft's `path:line` citation chain (§ Merge class — Evidence slot). **Body soft cap ~150 lines**: past the cap, take degradation ③ (§ Time budget & degradation ladder) — nits fold into the summary body (display only: findings are never dropped — every accepted finding stays listed in some form), and the fold is declared in the report under `- notes:`.
 - **Linked-issue AC**: fill only when § Linked-issue hygiene applied; otherwise a bare `none`.
 - **Verified**: the smallest runtime checks actually run and what they showed; unverified leads as `❓` lines here, never in the findings table.
 - **Considered & rejected**: one bullet per rejected candidate from the three-way attack / vet pass (§ Attack and vet), so the next reviewer does not re-chase it; bare `none` when nothing was rejected.
@@ -503,6 +513,8 @@ unscanned: <csv | none>
 
 - The Verdict section replaces the old two-line tally header on GitHub: the same facts (verdict token + `score_pct` as Score with its band + four-class tally), structured — plus, for `incomplete`, the `partial` mark and its `cause:` / `unscanned:` lines. The chat display contract (§ Display contract) is unchanged.
 - When the fix plan itself contains fenced code blocks, open the outer fence with four backticks so the inner fences survive.
+
+> **Engine check (when available):** use `renderReviewMarkdown(review, { surface: "github-comment" | "local-report" })` (or import `renderReviewMarkdown` from `@mstar-harness/engine` in a CLI-less host hook) to render this § Report template's body from the `mstar.review/v1` envelope — verdict head, the tally table (only when the envelope carries a tally; with no tally the head also drops its ` · Score <n>% (<band>)` segment), the `incomplete` fact pair, the **always-present** `## 📋 Review` section (empty without a seat narrative), and `### Findings` with one `#### <emoji> <title>` block per finding carrying `- **Evidence**:`, `- **Location**:`, `- **Category**:` (when the envelope has one) and `- **Merge class**:` last. `surface` is layout-neutral: both values render that one body, because § Local report archive keeps the archived body identical to the posted one. The renderer supplies Evidence, Location, Category and Merge class; the main agent completes the body around it — add `**What this PR does**` under `## 📋 Review`, insert `### Revalidated findings` immediately **before** the renderer's `### Findings` (and add an empty `### Findings` section itself when the envelope carries no findings, so the anchor exists), then append `### Linked-issue AC`, `### ✅ Verified`, `### 🗑️ Considered & rejected` and `## 🛠️ Plan to fix`. The frontmatter, `- notes:` and the § Output shape bullets remain the agent's duty. The engine owns verdict/tally/fact/findings layout; the consumer owns upsert markers, round headers and byte-budget clamping. `summary_md` is the optional seat narrative only: the engine does not generate one, does not rewrite or strip anything from a supplied one (it is published verbatim, headings included), and omits the section's prose when no seat produced any. The renderer's unit tests own the byte-exact templates. On `fail` -> do not proceed; fix and re-run. Skill text below remains authoritative when the runtime is absent.
 
 ### Local report archive
 
@@ -541,7 +553,7 @@ The posted PR comment is the deliverable; the local report is the durable refere
 **Posting failure does not skip archival.** The report is saved regardless of the POST outcome: on failure it archives the chat display content plus the `gh` error summary, so a failed POST still leaves the durable copy.
 
 > **Engine check (when available):** run `mstar pr-review report-path [--reviews-dir <dir>] --target pr:<n>|branch:<slug>|diff:<sha>|diff [--stage 1|2 --slug <domain-seat>] [--date <YYYY-MM-DD>]` (`--reviews-dir` defaults to the resolved `{REVIEW_DIR}`) (or `import { prReviewReportPath } from "@mstar-harness/engine"` in a host hook) to resolve the run directory, the report file, and the Evidence-file names above — including the same-day `report-r2`/`report-r3` escalation, which the resolver scans for instead of the agent eyeballing the directory. Pure resolution: it never writes; the main agent still writes the file content. On `fail` -> do not proceed; fix and re-run. Skill text below remains authoritative when the runtime is absent.
-- **Body**: the exact text posted as the GitHub Review body — verbatim, not a paraphrase. When `comments: n/a-no-pr` or posting failed, the body is the chat display content instead (§ Display contract header lines + ranked findings + leftover AC), so the local copy is still complete.
+- **Body**: `report.md` is the YAML frontmatter above, then the rendered body (`renderReviewMarkdown(review, { surface: "local-report" })` when the renderer is available) — the same template body posted to GitHub, so the archive is the posted body's twin, not a paraphrase — with the agent-owned sections composed into it: `## 📋 Review` is always present (the anchor for `**What this PR does**`), insert `### Revalidated findings` immediately before the renderer's `### Findings` (adding an empty `### Findings` yourself when a zero-finding envelope omitted it), then append `### Linked-issue AC`, `### ✅ Verified`, `### 🗑️ Considered & rejected` and `## 🛠️ Plan to fix`; the § Output shape bullets follow. The frontmatter, `- notes:` and the output-shape bullets stay the main agent's duty — the renderer emits none of them. Without the renderer, use the exact text posted as the GitHub Review body — verbatim, not a paraphrase — with the same composition. When `comments: n/a-no-pr` or posting failed and the renderer is unavailable, the body is the chat display content instead (§ Display contract header lines + ranked findings + leftover AC), so the local copy is still complete.
 
 ## Output shape
 
