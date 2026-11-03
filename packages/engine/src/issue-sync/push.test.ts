@@ -552,6 +552,23 @@ describe("(f3) adopting a different issue drops the previous issue's proof", () 
     }
   });
 
+  test("a forced re-point back to a previously held issue is a new operation, so the row follows it", async () => {
+    const { db, close } = await openedStore("adopt-repoint");
+    try {
+      addIssue(db, "I-000985");
+      expect(adoptItem(db, BINDING, "I-000985", "LIN-1").externalId).toBe("LIN-1");
+      expect(adoptItem(db, BINDING, "I-000985", "LIN-2", { force: true }).externalId).toBe("LIN-2");
+      // Back to LIN-1. The request repeats the FIRST adoption's binding, local
+      // id, external id and proof-clearing flag, so only the operation identity
+      // can tell them apart; replaying that receipt would leave the row on LIN-2
+      // while the caller reports LIN-1.
+      expect(adoptItem(db, BINDING, "I-000985", "LIN-1", { force: true }).externalId).toBe("LIN-1");
+      expect(row(db, "I-000985")!.externalId).toBe("LIN-1");
+    } finally {
+      close();
+    }
+  });
+
   test("replacing an already-recorded identity is refused unless the operator forces it", async () => {
     const { db, close } = await openedStore("adopt-fresh");
     try {
