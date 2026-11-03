@@ -882,13 +882,15 @@ export function synthesizeReview(input: {
     unmetAc: input.unmetAc,
     ...(input.incomplete === undefined ? {} : { incomplete: input.incomplete }),
   });
-  const blankSummary = input.summary_md === undefined || input.summary_md.trim() === "";
+  // Only a string can be a narrative. A non-string value is refused by
+  // validateMstarReviewV1, so it is dropped here rather than thrown on.
+  const narrative = typeof input.summary_md === "string" && input.summary_md.trim() !== "" ? input.summary_md : undefined;
   return {
     schema: "mstar.review/v1",
     verdict: tally.verdict,
     tally,
     findings: input.findings,
-    ...(blankSummary ? {} : { summary_md: input.summary_md }),
+    ...(narrative === undefined ? {} : { summary_md: narrative }),
     ...(input.incomplete === undefined ? {} : { incomplete: input.incomplete }),
     ...(input.target !== undefined ? { target: input.target } : {}),
   };
@@ -937,10 +939,13 @@ function renderFindingLocation(finding: MstarReviewFinding): string {
 
 /** The verdict head recognized by the Thread-lifecycle candidate set
  * (pr-review.md § Comment posting — a review body starts with
- * `## <emoji> Verdict: \`<token>\``), plus Score/band when a tally exists. */
+ * `## <emoji> Verdict: \`<token>\``), plus Score/band when a tally exists. An
+ * off-enum verdict falls back to a neutral marker: the lookup must not resolve
+ * through the prototype chain (a bundled renderer would print function source). */
 function renderVerdictHead(review: MstarReviewV1): string {
   const { tally, incomplete } = review;
-  let head = `## ${VERDICT_EMOJI[review.verdict]} Verdict: \`${review.verdict}\``;
+  const emoji = Object.hasOwn(VERDICT_EMOJI, review.verdict) ? VERDICT_EMOJI[review.verdict] : "\u2022";
+  let head = `## ${emoji} Verdict: \`${review.verdict}\``;
   if (tally !== undefined) {
     const band = tally.band ?? scoreBand(tally.scorePct);
     head += ` \u00b7 Score ${tally.scorePct}% (${incomplete === undefined ? band : `${band}, partial`})`;
@@ -949,10 +954,14 @@ function renderVerdictHead(review: MstarReviewV1): string {
 }
 
 /** The `cause:` / `unscanned:` pair a bounded run must state (pr-review.md
- * § Display contract) — one blank-line-delimited section. */
+ * § Display contract) — one blank-line-delimited section. Both values are
+ * renderer-owned slots, so a newline-bearing reason or scope collapses. */
 function renderIncompleteFacts(incomplete: PrIncomplete): string {
-  const unscanned = incomplete.unscanned.length === 0 ? "none" : incomplete.unscanned.join(", ");
-  return `cause: ${incomplete.reason}\nunscanned: ${unscanned}`;
+  const unscanned =
+    incomplete.unscanned.length === 0
+      ? "none"
+      : incomplete.unscanned.map((entry) => singleLine(entry).trim()).join(", ");
+  return `cause: ${singleLine(incomplete.reason).trim()}\nunscanned: ${unscanned}`;
 }
 
 /** One finding's template block: heading, then the slot bullets in the order
@@ -963,18 +972,21 @@ function renderIncompleteFacts(incomplete: PrIncomplete): string {
  * agent-owned additions inside the same block. */
 function renderFindingBlock(finding: MstarReviewFinding): string {
   const body = trimBoundaryNewlines(finding.body ?? "");
-  // A class outside MERGE_CLASSES has no emoji; the heading still publishes it.
-  const emoji: string | undefined = (REVIEW_EMOJI as Record<string, string | undefined>)[finding.mergeClass];
-  const lines = [`#### ${emoji === undefined ? "" : `${emoji} `}${singleLine(finding.title)}`, ""];
+  // Own-property lookup: an off-enum class gets the neutral marker, never a
+  // prototype member (a bundled renderer would print function source).
+  const emoji = Object.hasOwn(REVIEW_EMOJI, finding.mergeClass)
+    ? REVIEW_EMOJI[finding.mergeClass as MergeClass]
+    : "\u2022";
+  const lines = [`#### ${emoji} ${singleLine(finding.title)}`, ""];
   if (body === "") {
     lines.push("- **Evidence**: none");
   } else if (!body.includes("\n")) {
     lines.push(`- **Evidence**: ${body}`);
   } else {
     // A body opening a fence, a list or indented code must start its own line
-    // and stay at the bullet's content column, or it leaves the list item.
-    const indent = " ".repeat("- **Evidence**: ".length);
-    lines.push("- **Evidence**:", ...body.split("\n").map((line) => (line === "" ? "" : `${indent}${line}`)));
+    // and stay at the list item's content column (two spaces after the marker);
+    // a deeper indent would turn the whole body into an indented code block.
+    lines.push("- **Evidence**:", ...body.split("\n").map((line) => (line === "" ? "" : `  ${line}`)));
   }
   lines.push(`- **Location**: ${renderFindingLocation(finding)}`);
   if (finding.category !== undefined) lines.push(`- **Category**: ${singleLine(finding.category)}`);
@@ -1035,7 +1047,9 @@ export function renderReviewMarkdown(review: MstarReviewV1, _opts: ReviewRenderO
   const sections: string[] = [];
   const { tally, incomplete } = review;
   const narrative =
-    review.summary_md !== undefined && review.summary_md.trim() !== "" ? trimBoundaryNewlines(review.summary_md) : null;
+    typeof review.summary_md === "string" && review.summary_md.trim() !== ""
+      ? trimBoundaryNewlines(review.summary_md)
+      : null;
 
   // The Thread-lifecycle candidate set keeps only bodies starting here.
   sections.push(renderVerdictHead(review));

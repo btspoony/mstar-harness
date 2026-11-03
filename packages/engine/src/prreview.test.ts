@@ -293,13 +293,15 @@ describe("renderReviewMarkdown: free-form finding bodies and titles", () => {
     const tally = computePrTally({ findings });
     const review: MstarReviewV1 = { schema: "mstar.review/v1", verdict: tally.verdict, tally, findings };
     const rendered = renderReviewMarkdown(review, { surface: "local-report" });
-    const indent = " ".repeat("- **Evidence**: ".length);
+    // The list item's content column is two spaces: anything deeper would turn
+    // the body into an indented code block on the real renderer.
     const expected = `- **Evidence**:\n${["```ts", "const a = 1;", "```", "", "After the fence."]
-      .map((line) => (line === "" ? "" : indent + line))
+      .map((line) => (line === "" ? "" : `  ${line}`))
       .join("\n")}`;
     expect(rendered).toContain(expected);
     // The body stays inside the list item: the bullets that follow are siblings.
     expect(rendered).toContain(`${expected}\n- **Location**: repo-wide\n- **Merge class**: should-fix`);
+    expect(rendered).not.toContain("                ```ts");
   });
 
   test("(n) Merge class closes the renderer's bullets, so an inserted Confidence lands immediately above it", () => {
@@ -321,9 +323,33 @@ describe("renderReviewMarkdown: free-form finding bodies and titles", () => {
     ];
     const review: MstarReviewV1 = { schema: "mstar.review/v1", verdict: "needs fixes", findings };
     const body = renderReviewMarkdown(review, { surface: "github-comment" });
-    expect(body).toContain("#### Unknown class");
+    expect(body).toContain("#### \u2022 Unknown class");
     expect(body).toContain("- **Merge class**: blocker");
-    expect(body.indexOf("#### \u{1F535} Known class")).toBeLessThan(body.indexOf("#### Unknown class"));
+    expect(body.indexOf("#### \u{1F535} Known class")).toBeLessThan(body.indexOf("#### \u2022 Unknown class"));
+  });
+
+  test("(p) an off-enum verdict and class fall back to the neutral marker, not a prototype member", () => {
+    const review = {
+      schema: "mstar.review/v1",
+      verdict: "constructor",
+      findings: [{ mergeClass: "toString", title: "Proto class", body: "x" }],
+    } as unknown as MstarReviewV1;
+    const body = renderReviewMarkdown(review, { surface: "github-comment" });
+    expect(body.split("\n")[0]).toBe("## \u2022 Verdict: `constructor`");
+    expect(body).toContain("#### \u2022 Proto class");
+    expect(body).not.toContain("function");
+  });
+
+  test("(q) a newline-bearing cause or unscanned entry collapses to one line", () => {
+    const review: MstarReviewV1 = {
+      schema: "mstar.review/v1",
+      verdict: "incomplete",
+      findings: [],
+      incomplete: { reason: "Seat\ntimed out", unscanned: ["src/a.ts\n", "src/b.ts"] },
+    };
+    const body = renderReviewMarkdown(review, { surface: "github-comment" });
+    expect(body).toContain("cause: Seat timed out\nunscanned: src/a.ts, src/b.ts");
+    expect(body.split("\n").filter((line) => line.startsWith("cause:") || line.startsWith("unscanned:"))).toHaveLength(2);
   });
 });
 
@@ -344,6 +370,18 @@ describe("summary_md is an optional seat narrative", () => {
     const gate = validateMstarReviewV1({ ...SETTLED_REVIEW, summary_md: 42 } as unknown as MstarReviewV1);
     expect(gate.ok).toBe(false);
     expect(gate.violations.map((v) => v.code)).toContain("review.blank-summary");
+  });
+
+  test("(g3) a non-string summary_md never throws \u2014 the synthesizer drops it", () => {
+    const synthesized = synthesizeReview({ findings: [], summary_md: 42 } as unknown as Parameters<typeof synthesizeReview>[0]);
+    expect("summary_md" in synthesized).toBe(false);
+    expect(validateMstarReviewV1(synthesized).ok).toBe(true);
+    // The renderer tolerates the same value on an envelope handed to it directly.
+    const rendered = renderReviewMarkdown(
+      { ...SETTLED_REVIEW, summary_md: 42 } as unknown as MstarReviewV1,
+      { surface: "github-comment" },
+    );
+    expect(rendered.split("\n").filter((line) => line === "## \u{1F4CB} Review")).toHaveLength(1);
   });
 
   test("synthesizeReview turns a blank supplied summary into no narrative at all", () => {
