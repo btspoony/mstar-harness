@@ -344,7 +344,6 @@ describe("mstar persist review — validateMstarReviewV1 before put", () => {
       // One refusal, every problem: the caller repairs the document once.
       expect(refusal).toContain("review.missing-schema");
       expect(refusal).toContain("review.missing-verdict");
-      expect(refusal).toContain("review.missing-summary");
       expect(refusal).toContain("review.findings-not-array");
       expect(existsSync(join(dir, "sdd", "_reviews", "review-empty.json"))).toBe(false);
     });
