@@ -708,7 +708,7 @@ export function validateMstarReviewV1(doc: unknown): GateResult {
   // produces no narrative of its own), while a present-but-blank value is a
   // claim that cannot be rendered.
   if (doc.summary_md !== undefined && (typeof doc.summary_md !== "string" || doc.summary_md.trim() === "")) {
-    violations.push(violation("high", "review.missing-summary", "summary_md must be a non-empty string when present"));
+    violations.push(violation("high", "review.blank-summary", "summary_md must be a non-empty string when present"));
   }
 
   if (doc.findings === undefined || !Array.isArray(doc.findings)) {
@@ -919,6 +919,13 @@ function trimBoundaryNewlines(text: string): string {
   return text.replace(/^[\r\n]+/, "").replace(/[\r\n]+$/, "");
 }
 
+/** Renderer-owned single-line slots (headings, list items, table cells) cannot
+ * carry a raw line break: it ends the heading or the row. Every such slot goes
+ * through this one collapse. */
+function singleLine(text: string): string {
+  return text.replace(/\r\n|\r|\n/g, " ");
+}
+
 /** One finding's location: `file:line` when a path is known, else repo-wide. */
 function renderFindingLocation(finding: MstarReviewFinding): string {
   if (finding.file_path === undefined || finding.file_path === null || finding.file_path === "") return "repo-wide";
@@ -954,10 +961,10 @@ function renderGithubFindings(findings: readonly MstarReviewFinding[]): string[]
     const group = findings.filter((finding) => finding.mergeClass === mergeClass);
     if (group.length === 0) continue;
     const entries = group.map((finding, index) => {
-      const category = finding.category === undefined ? "" : ` (${finding.category})`;
+      const category = finding.category === undefined ? "" : ` (${singleLine(finding.category)})`;
       const body = trimBoundaryNewlines(finding.body ?? "");
       const bodyBlock = body === "" ? "" : `\n\n${body}`;
-      return `${index + 1}. **${finding.title}**${category} \u2014 ${renderFindingLocation(finding)}${bodyBlock}`;
+      return `${index + 1}. **${singleLine(finding.title)}**${category} \u2014 ${renderFindingLocation(finding)}${bodyBlock}`;
     });
     sections.push([`### ${REVIEW_EMOJI[mergeClass]} ${mergeClass}`, "", entries.join("\n\n")].join("\n"));
   }
@@ -970,18 +977,18 @@ function renderLocalFindings(findings: readonly MstarReviewFinding[]): string {
   );
   // A table cell cannot carry a raw pipe (it adds a column) or a line break
   // (it ends the row); every other cell keeps its text verbatim.
-  const cell = (text: string) => text.replace(/\r\n|\r|\n/g, " ").replace(/\|/g, "\\|");
+  const cell = (text: string) => singleLine(text).replace(/\|/g, "\\|");
   const rows = ordered.map(
     (finding) =>
       `| ${REVIEW_EMOJI[finding.mergeClass]} ${finding.mergeClass} | ${cell(finding.title)} | ${cell(renderFindingLocation(finding))} |`,
   );
   const details = ordered.map((finding) => {
     const lines = [
-      `#### ${REVIEW_EMOJI[finding.mergeClass]} ${finding.title}`,
+      `#### ${REVIEW_EMOJI[finding.mergeClass]} ${singleLine(finding.title)}`,
       "",
       `- **Merge class**: ${finding.mergeClass}`,
     ];
-    if (finding.category !== undefined) lines.push(`- **Category**: ${finding.category}`);
+    if (finding.category !== undefined) lines.push(`- **Category**: ${singleLine(finding.category)}`);
     const body = trimBoundaryNewlines(finding.body ?? "");
     // A label prefix would flatten a body that opens with a fence or a list.
     if (body !== "") lines.push("", body);
@@ -992,14 +999,26 @@ function renderLocalFindings(findings: readonly MstarReviewFinding[]): string {
 }
 
 /**
- * Render the complete review body for one presentation surface from the
+ * Render the review **body core** for one presentation surface from the
  * `mstar.review/v1` envelope — the engine's only review-body layout owner.
- * The envelope supplies every fact (verdict, tally, incomplete fact pair,
- * findings); the consumer owns what surrounds the body (upsert markers,
- * round headers, byte-budget clamping). `summary_md`, when a seat produced
- * one, is rendered as the seat's narrative — never as a header copy — and is
- * never read for facts. Free-form narrative and evidence keep their internal
- * Markdown but lose boundary line breaks. Sections join with one blank line;
+ * The core carries every envelope fact: verdict head, tally, the incomplete
+ * fact pair, the seat narrative under `## 📋 Review`, and findings by class.
+ * The consumer owns what surrounds the body (upsert markers, round headers,
+ * byte-budget clamping).
+ *
+ * The core is not the whole body pr-review.md § Report template mandates: the
+ * main agent composes the full body as this core plus the agent-owned
+ * sections, in their template order — `### Revalidated findings`, which
+ * belongs before the findings and so cannot be placed by the renderer, then
+ * `### Linked-issue AC`, `### ✅ Verified`, `### 🗑️ Considered & rejected`,
+ * and `## 🛠️ Plan to fix`; heading levels follow the surface's hierarchy.
+ * Those sections describe work outside the envelope and are never rendered
+ * here.
+ *
+ * `summary_md`, when a seat produced one, is the seat's narrative — never a
+ * header copy — and is never read for facts. Free-form narrative and evidence
+ * keep their internal Markdown but lose boundary line breaks; renderer-owned
+ * single-line slots lose every line break. Sections join with one blank line;
  * no trailing newline.
  */
 export function renderReviewMarkdown(review: MstarReviewV1, opts: ReviewRenderOptions): string {
@@ -1032,9 +1051,7 @@ export function renderReviewMarkdown(review: MstarReviewV1, opts: ReviewRenderOp
     );
   }
   if (incomplete !== undefined) sections.push(renderIncompleteFacts(incomplete));
-  if (narrative !== null) {
-    sections.push(opts.surface === "github-comment" ? narrative : `## \u{1F4CB} Review\n\n${narrative}`); // 📋 seat narrative
-  }
+  if (narrative !== null) sections.push(`## \u{1F4CB} Review\n\n${narrative}`); // 📋 seat narrative, one heading on both surfaces
   if (hasFindings) {
     sections.push(
       ...(opts.surface === "github-comment"

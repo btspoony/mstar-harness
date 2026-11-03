@@ -22833,7 +22833,7 @@ function validateMstarReviewV1(doc) {
     violations.push(violation15("high", "review.invalid-verdict", `verdict "${doc.verdict}" is not one of ${JSON.stringify(PR_VERDICTS)}`, `use one of: ${PR_VERDICTS.join(" | ")}`));
   }
   if (doc.summary_md !== undefined && (typeof doc.summary_md !== "string" || doc.summary_md.trim() === "")) {
-    violations.push(violation15("high", "review.missing-summary", "summary_md must be a non-empty string when present"));
+    violations.push(violation15("high", "review.blank-summary", "summary_md must be a non-empty string when present"));
   }
   if (doc.findings === undefined || !Array.isArray(doc.findings)) {
     violations.push(violation15("high", "review.findings-not-array", "findings must be an array"));
@@ -22943,6 +22943,9 @@ function synthesizeReview(input) {
 function trimBoundaryNewlines(text4) {
   return text4.replace(/^[\r\n]+/, "").replace(/[\r\n]+$/, "");
 }
+function singleLine(text4) {
+  return text4.replace(/\r\n|\r|\n/g, " ");
+}
 function renderFindingLocation(finding) {
   if (finding.file_path === undefined || finding.file_path === null || finding.file_path === "")
     return "repo-wide";
@@ -22970,12 +22973,12 @@ function renderGithubFindings(findings) {
     if (group.length === 0)
       continue;
     const entries = group.map((finding, index2) => {
-      const category = finding.category === undefined ? "" : ` (${finding.category})`;
+      const category = finding.category === undefined ? "" : ` (${singleLine(finding.category)})`;
       const body = trimBoundaryNewlines(finding.body ?? "");
       const bodyBlock = body === "" ? "" : `
 
 ${body}`;
-      return `${index2 + 1}. **${finding.title}**${category} — ${renderFindingLocation(finding)}${bodyBlock}`;
+      return `${index2 + 1}. **${singleLine(finding.title)}**${category} — ${renderFindingLocation(finding)}${bodyBlock}`;
     });
     sections.push([`### ${REVIEW_EMOJI[mergeClass]} ${mergeClass}`, "", entries.join(`
 
@@ -22986,16 +22989,16 @@ ${body}`;
 }
 function renderLocalFindings(findings) {
   const ordered = MERGE_CLASSES.flatMap((mergeClass) => findings.filter((finding) => finding.mergeClass === mergeClass));
-  const cell = (text4) => text4.replace(/\r\n|\r|\n/g, " ").replace(/\|/g, "\\|");
+  const cell = (text4) => singleLine(text4).replace(/\|/g, "\\|");
   const rows = ordered.map((finding) => `| ${REVIEW_EMOJI[finding.mergeClass]} ${finding.mergeClass} | ${cell(finding.title)} | ${cell(renderFindingLocation(finding))} |`);
   const details = ordered.map((finding) => {
     const lines = [
-      `#### ${REVIEW_EMOJI[finding.mergeClass]} ${finding.title}`,
+      `#### ${REVIEW_EMOJI[finding.mergeClass]} ${singleLine(finding.title)}`,
       "",
       `- **Merge class**: ${finding.mergeClass}`
     ];
     if (finding.category !== undefined)
-      lines.push(`- **Category**: ${finding.category}`);
+      lines.push(`- **Category**: ${singleLine(finding.category)}`);
     const body = trimBoundaryNewlines(finding.body ?? "");
     if (body !== "")
       lines.push("", body);
@@ -23028,11 +23031,10 @@ function renderReviewMarkdown(review, opts) {
   }
   if (incomplete !== undefined)
     sections.push(renderIncompleteFacts(incomplete));
-  if (narrative !== null) {
-    sections.push(opts.surface === "github-comment" ? narrative : `## \uD83D\uDCCB Review
+  if (narrative !== null)
+    sections.push(`## \uD83D\uDCCB Review
 
 ${narrative}`);
-  }
   if (hasFindings) {
     sections.push(...opts.surface === "github-comment" ? renderGithubFindings(review.findings) : [renderLocalFindings(review.findings)]);
   }

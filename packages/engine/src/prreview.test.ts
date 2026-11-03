@@ -124,6 +124,8 @@ describe("renderReviewMarkdown: github-comment surface", () => {
         "",
         "**Tally:** \u{1F534} must-fix 0 \u00b7 \u{1F7E0} should-fix 1 \u00b7 \u{1F535} nit 1 \u00b7 \u2753 unverified 0",
         "",
+        "## \u{1F4CB} Review",
+        "",
         NARRATIVE,
         "",
         "### \u{1F7E0} should-fix",
@@ -301,6 +303,21 @@ describe("renderReviewMarkdown: free-form finding bodies and titles", () => {
     expect(renderReviewMarkdown(review, { surface: "local-report" })).toContain("| \u{1F535} nit | Two lines | repo-wide |");
   });
 
+  test("(l2) a pipe/newline title cannot break the detail heading or the github entry", () => {
+    const findings = [{ mergeClass: "nit" as const, title: "Pipe | and\nbreak", body: "x" }];
+    const tally = computePrTally({ findings });
+    const review: MstarReviewV1 = { schema: "mstar.review/v1", verdict: tally.verdict, tally, findings };
+
+    const local = renderReviewMarkdown(review, { surface: "local-report" });
+    // A heading is a single line: the title keeps its pipe and loses its break.
+    expect(local).toContain("#### \u{1F535} Pipe | and break");
+    expect(local.split("\n").filter((line) => line.startsWith("#### "))).toHaveLength(1);
+
+    const github = renderReviewMarkdown(review, { surface: "github-comment" });
+    expect(github).toContain("1. **Pipe | and break** \u2014 repo-wide");
+    expect(github.split("\n").filter((line) => line.startsWith("1. "))).toHaveLength(1);
+  });
+
   test("(m) a body opening with a fenced block keeps the fence and its own structure", () => {
     const body = "```ts\nconst a = 1;\n```\n\nAfter the fence.";
     const findings = [{ mergeClass: "should-fix" as const, title: "Fenced evidence", body }];
@@ -319,10 +336,16 @@ describe("summary_md is an optional seat narrative", () => {
     expect(validateMstarReviewV1(synthesized).ok).toBe(true);
   });
 
-  test("(g) a present-but-blank summary_md is still refused", () => {
+  test("(g) a present-but-blank summary_md is refused", () => {
     const gate = validateMstarReviewV1({ ...SETTLED_REVIEW, summary_md: "   " });
     expect(gate.ok).toBe(false);
-    expect(gate.violations.map((v) => v.code)).toContain("review.missing-summary");
+    expect(gate.violations.map((v) => v.code)).toContain("review.blank-summary");
+  });
+
+  test("(g2) a non-string summary_md is refused with the same blank code", () => {
+    const gate = validateMstarReviewV1({ ...SETTLED_REVIEW, summary_md: 42 } as unknown as MstarReviewV1);
+    expect(gate.ok).toBe(false);
+    expect(gate.violations.map((v) => v.code)).toContain("review.blank-summary");
   });
 
   test("synthesizeReview turns a blank supplied summary into no narrative at all", () => {
