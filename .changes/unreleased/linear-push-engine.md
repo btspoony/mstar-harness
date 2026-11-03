@@ -19,8 +19,11 @@ packages: engine, commands
   carries the store's own identity so two harnesses mirroring one team never adopt each other's rows.
   `--force-create` decides that a remote issue is absent. It cannot decide that an attempt already in flight was
   never sent, so while a `pending` row carries no id the flag is REFUSED: the row may belong to a create still
-  inside its provider call, and a second one beside it could never be reconciled. The refusal names the two
-  recoveries — re-run push so reconcile adopts by marker, or record the identity with `--adopt`. Where no
+  inside its provider call, and a second one beside it could never be reconciled. The refusal names the three
+  recoveries — re-run push so reconcile adopts by marker, record an identity you can see with `--adopt`, or, when
+  the scan proves nothing carries the marker and the issue is genuinely gone, `--release <localId>`. A release
+  drops that `pending` create to the retryable `failed` edge with the operator's judgement as its reason, so the
+  same run may create; a scan that found a match refuses it, because that item's recovery is adoption. Where no
   unresolved attempt stands, a create takes the send-right claim under one shared key — binding, item, content
   hash and the ledger revision — so two runs that read the same revision contend for exactly one create, while a
   sequential retry stays distinct because every refusal, failure and apply advances that revision.
@@ -40,8 +43,9 @@ packages: engine, commands
   the stored credential's `scope` carries neither `issues:create` nor `write`, naming the explicit
   reauthorization (`mstar linear auth login` or the dsh Settings Authorize). A refresh never widens a read-only
   grant. Operator recovery beyond automatic reconcile: `--adopt <localId>=<issueUrl|externalId>` records an
-  identity you confirmed, and `--force-create <localId>` asserts remote absence — refused while an unresolved
-  create attempt stands, so reconcile or adopt first.
+  identity you confirmed, `--force-create <localId>` asserts remote absence — refused while an unresolved
+  create attempt stands, so reconcile, adopt or release first — and `--release <localId>` clears that attempt
+  once reconcile's own scan proves no remote issue carries the item's marker.
 - **Adoption drops the proof of a REPLACED identity.** `--adopt` records the identity you confirmed and, when that
   is a different issue than the row already pointed at, CLEARS the payload hash and label ownership it held: both
   described the previous issue, so carrying them over would report `skipped` for content the newly adopted issue
@@ -89,9 +93,12 @@ packages: engine, commands
   携带本 store 自身身份，因此两个镜像同一团队的 harness 永不互相采纳对方行。
   `--force-create` 判定的是远端 issue 不存在。它无法判定一次仍在飞行中的尝试从未发送，因此当存在不带 id 的
   `pending` 行时该标志会被拒绝：该行可能属于仍在 provider 调用中的创建，而在它旁边再建一个永远无法对账。
-  拒绝文本会点名两条恢复路径——重跑 push 让对账按标记采纳，或用 `--adopt` 记录身份。在不存在未解决尝试的情况下，
-  创建同样需要取得发送权，且共用同一个键：绑定、条目、内容 hash 与账本 revision——读过同一 revision 的两次运行
-  只会争到一次创建，而顺序重试仍能区分，因为每次拒绝、失败与应用都会推进该 revision。
+  拒绝文本会点名三条恢复路径——重跑 push 让对账按标记采纳，用 `--adopt` 记录你已看到的身份，或在扫描证明
+  没有任何 issue 携带该标记、且该 issue 确实已不存在时用 `--release <localId>`。释放会把这条 `pending`
+  创建落到可重试的 `failed` 边上，并以操作者的判断作为原因，因此同一次运行即可创建；若扫描找到了匹配则会
+  拒绝释放，因为那一项的恢复手段是采纳。在不存在未解决尝试的情况下，创建同样需要取得发送权，且共用同一个键：
+  绑定、条目、内容 hash 与账本 revision——读过同一 revision 的两次运行只会争到一次创建，而顺序重试仍能区分，
+  因为每次拒绝、失败与应用都会推进该 revision。
 - **标签只解析、绝不创建。** kind→label 会针对通过 `list_issue_labels` 发现的真实工作区标签集解析；工作区没有该
   名称时仅拒绝该项（`linear.label-unresolved`），其余项继续。kind 变化时新增新标签，并通过 `removeLabels` 移除
   全部已记录的候选标签；没有记录标签的行只做新增，全量替换的 `labels` 参数永不发送，握手 schema 未声明
@@ -104,7 +111,8 @@ packages: engine, commands
 - **写入需要写权限。** 当存储凭据的 `scope` 既无 `issues:create` 也无 `write` 时，运行在任何 provider 调用之前即以
   `linear.scope-insufficient` 拒绝，并指明显式重新授权（`mstar linear auth login` 或 dsh Settings Authorize）。
   刷新永远不会扩大只读授权。自动对账之外的操作者恢复手段：`--adopt <localId>=<issueUrl|externalId>` 记录你已确认的
-  身份；`--force-create <localId>` 断言远端不存在，但在存在未解决的创建尝试时会被拒绝，因此先对账或采纳。
+  身份；`--force-create <localId>` 断言远端不存在，但在存在未解决的创建尝试时会被拒绝，因此先对账、采纳或释放；
+  `--release <localId>` 在对账自身的扫描证明没有任何远端 issue 携带该项标记后，清除该次创建尝试。
 - **采纳会丢弃上一身份的证明。** `--adopt` 记录操作者确认的身份，并**清除**该行原有的载荷 hash 与标签归属：
   两者描述的是它此前指向的那个 issue，沿用会让本次运行对新采纳的远端从未收到的内容报告 `skipped`，
   也会让之后的 kind 变更移除属于上一个 issue 的标签。因此内容会在同一次运行内收敛到被采纳的 issue 上。

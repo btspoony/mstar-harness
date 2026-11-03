@@ -157,6 +157,35 @@ function writeInFlight(): { fake: Fake; started: Promise<void>; release: () => v
   };
 }
 
+/**
+ * A db whose FIRST `issue_sync_state` read returns `stale` instead of the store's
+ * row: the view a run has when it reads the ledger before a concurrent claim
+ * commits. Later reads (the claim's own, which must see the real row) pass
+ * through, so the race is reproduced deterministically instead of in prose.
+ */
+function staleFirstLedgerRead(db: StoreDb, stale: unknown): StoreDb {
+  let armed = true;
+  return {
+    exec: (sql: string) => db.exec(sql),
+    close: () => db.close(),
+    prepare(sql: string) {
+      const stmt = db.prepare(sql);
+      if (armed && sql.includes("from issue_sync_state")) {
+        return {
+          get: (...args: unknown[]) => {
+            if (!armed) return stmt.get(...(args as never[]));
+            armed = false;
+            return stale;
+          },
+          all: (...args: unknown[]) => stmt.all(...(args as never[])),
+          run: (...args: unknown[]) => stmt.run(...(args as never[])),
+        };
+      }
+      return stmt;
+    },
+  } as unknown as StoreDb;
+}
+
 describe("selectPushCandidates", () => {
   test("only this project's local captures are candidates; imported mirrors never echo back", async () => {
     const { db, close } = await openedStore("candidates");
@@ -976,24 +1005,43 @@ describe("(k) two pushes with the same content and revision produce exactly one 
     }
   });
 
-  test("a push that finds the claim already taken sends nothing", async () => {
+  test("a push that loses the create claim to a run already in flight sends nothing", async () => {
     const { db, close } = await openedStore("claim-lost");
     try {
       addIssue(db, "I-001042");
-      const fake = provider();
       const ctx = context();
       const candidate = candidates(db)[0]!;
 
-      // The winner: a create is sent and confirmed.
-      const won = await pushItem(db, fake, ctx, candidate);
-      expect(won.outcome).toBe("created");
-      expect(fake.writes.filter((write) => write.kind === "create")).toHaveLength(1);
+      // A provably-undelivered attempt leaves the retryable `failed` edge: the
+      // state a later run may claim over, at the revision its key will carry.
+      const refused = provider({ receipts: [{ kind: "refused", code: "linear.write-refused", cause: "HTTP 400" }] });
+      expect((await pushItem(db, refused, ctx, candidate)).outcome).toBe("failed");
+      const preClaim = db
+        .prepare("select * from issue_sync_state where binding_id = ? and direction = ? and local_id = ?")
+        .get(BINDING, "push", "I-001042");
+      expect(row(db, "I-001042")).toMatchObject({ itemState: "failed", externalId: null, revision: 2 });
 
-      // A concurrent caller that read the same unsynced issue now finds the
-      // claimed row. It must send nothing: the row's identity already exists.
-      const second = await pushItem(db, fake, ctx, candidate);
-      expect(second.outcome).toBe("skipped");
-      expect(fake.writes.filter((write) => write.kind === "create")).toHaveLength(1);
+      // The winner claims that revision and parks inside its provider call. The
+      // store now holds its claim receipt AND the pending row it wrote.
+      const { fake: winner, started, release } = writeInFlight();
+      const winnerRun = pushItem(db, winner, ctx, candidate);
+      await started;
+
+      // The loser read the ledger BEFORE that claim committed, so the row it
+      // sees is the failed one and it derives the SAME claim key. The store
+      // answers with the taken claim instead of a send right.
+      const loser = provider();
+      const lost = await pushItem(staleFirstLedgerRead(db, preClaim), loser, ctx, candidate);
+      expect(lost).toMatchObject({ outcome: "unresolved", externalId: null });
+      expect(lost.cause).toContain("another push already claimed this create");
+      expect(loser.writes).toEqual([]);
+      // Nothing else moved: the row is still the winner's unresolved create.
+      expect(row(db, "I-001042")).toMatchObject({ itemState: "pending", externalId: null });
+
+      release();
+      expect(await winnerRun).toMatchObject({ outcome: "created", externalId: "LIN-1" });
+      expect(winner.writes.filter((write) => write.kind === "create")).toHaveLength(1);
+      expect(loser.writes).toEqual([]);
       expect(row(db, "I-001042")).toMatchObject({ itemState: "applied", externalId: "LIN-1" });
     } finally {
       close();
@@ -1146,6 +1194,93 @@ describe("(m) one claim key arbitrates every create for a content and revision",
       const outcome = await pushItem(db, forced, context({ forceCreate: true }), candidates(db)[0]!);
       expect(outcome.outcome).toBe("created");
       expect(forced.writes.filter((write) => write.kind === "create")).toHaveLength(1);
+    } finally {
+      close();
+    }
+  });
+});
+
+describe("(n) an operator release clears a pending create only when reconciliation found nothing", () => {
+  async function residue(db: StoreDb, localId: string): Promise<void> {
+    addIssue(db, localId);
+    const ambiguous = provider({ receipts: [{ kind: "ambiguous", cause: "connection closed mid-call" }] });
+    await pushItem(db, ambiguous, context(), candidates(db)[0]!);
+    expect(row(db, localId)).toMatchObject({ itemState: "pending", externalId: null });
+  }
+
+  test("zero marker matches: the release drops the residue to failed, and the next push creates exactly one issue", async () => {
+    const { db, close } = await openedStore("release-zero");
+    try {
+      await residue(db, "I-001081");
+      // One push run: reconcile's full scan proves absence (one listing), the
+      // release lands on the retryable `failed` edge, and the candidate loop
+      // then creates the issue it just released.
+      const fake = provider();
+      const report = await reconcilePendingCreate(db, fake, context(), { release: new Set(["I-001081"]) });
+      expect(report).toEqual({ adopted: [], unresolved: [] });
+      expect(fake.listings).toEqual([null]);
+      expect(row(db, "I-001081")).toMatchObject({ itemState: "failed", externalId: null });
+      expect(row(db, "I-001081")!.lastError).toContain("released by the operator");
+
+      const created = await pushItem(db, fake, context(), candidates(db)[0]!);
+      expect(created).toMatchObject({ outcome: "created", externalId: "LIN-1" });
+      expect(fake.writes.filter((write) => write.kind === "create")).toHaveLength(1);
+      expect(row(db, "I-001081")).toMatchObject({ itemState: "applied", externalId: "LIN-1" });
+    } finally {
+      close();
+    }
+  });
+
+  test("a scan that finds the marker refuses the release and writes nothing: that item's recovery is adoption", async () => {
+    const { db, close } = await openedStore("release-found");
+    try {
+      await residue(db, "I-001082");
+      const marker = correlationMarker({ workspace: "acme", team: "ENG" }, STORE_ID, "I-001082");
+      const scanning = provider({
+        pages: [
+          {
+            items: [
+              {
+                externalId: "LIN-77",
+                title: "Issue I-001082",
+                description: `body\n\n${marker}`,
+                state: "Todo",
+                priority: "High",
+                labels: [],
+                updatedAt: "2026-11-02T00:00:00.000Z",
+                url: "https://linear.app/acme/issue/LIN-77",
+              },
+            ],
+            nextCursor: null,
+          },
+        ],
+      });
+      await expect(reconcilePendingCreate(db, scanning, context(), { release: new Set(["I-001082"]) })).rejects.toThrow(
+        /adoption, not release/,
+      );
+      expect(scanning.writes).toEqual([]);
+      // Refused over the whole scan, before the adoption write: the row is still
+      // the unresolved create that the next run can adopt.
+      expect(row(db, "I-001082")).toMatchObject({ itemState: "pending", externalId: null });
+    } finally {
+      close();
+    }
+  });
+
+  test("a release that names anything but an unresolved create is refused before the scan", async () => {
+    const { db, close } = await openedStore("release-wrong-shape");
+    try {
+      addIssue(db, "I-001083");
+      const created = provider();
+      await pushItem(db, created, context(), candidates(db)[0]!);
+      expect(row(db, "I-001083")).toMatchObject({ itemState: "applied", externalId: "LIN-1" });
+
+      const scanning = provider();
+      await expect(reconcilePendingCreate(db, scanning, context(), { release: new Set(["I-001083"]) })).rejects.toThrow(
+        /names no unresolved create/,
+      );
+      expect(scanning.listings).toEqual([]);
+      expect(row(db, "I-001083")).toMatchObject({ itemState: "applied", externalId: "LIN-1" });
     } finally {
       close();
     }
