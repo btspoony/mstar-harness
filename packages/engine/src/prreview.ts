@@ -335,7 +335,12 @@ export type MstarReviewTally = Omit<PrTallyResult, "band"> & { band?: PrScoreBan
 export type MstarReviewV1 = {
   schema: "mstar.review/v1";
   verdict: PrVerdict;
-  summary_md: string;
+  /**
+   * The seat's own review narrative in Markdown. Present = a seat produced
+   * this prose; absent = no narrative was produced. The engine never
+   * fabricates one, and no renderer echoes the envelope's facts back into it.
+   */
+  summary_md?: string;
   tally?: MstarReviewTally;
   findings: MstarReviewFinding[];
   target?: { owner?: string; repo?: string; pr?: number; head_sha?: string };
@@ -699,8 +704,11 @@ export function validateMstarReviewV1(doc: unknown): GateResult {
     ));
   }
 
-  if (doc.summary_md === undefined || typeof doc.summary_md !== "string" || doc.summary_md.trim() === "") {
-    violations.push(violation("high", "review.missing-summary", "summary_md must be a non-empty string"));
+  // `summary_md` is the optional seat narrative: absent is legal (the engine
+  // produces no narrative of its own), while a present-but-blank value is a
+  // claim that cannot be rendered.
+  if (doc.summary_md !== undefined && (typeof doc.summary_md !== "string" || doc.summary_md.trim() === "")) {
+    violations.push(violation("high", "review.blank-summary", "summary_md must be a non-empty string when present"));
   }
 
   if (doc.findings === undefined || !Array.isArray(doc.findings)) {
@@ -849,37 +857,6 @@ export function validateMstarReviewV1(doc: unknown): GateResult {
 // ---------------------------------------------------------------------------
 
 /**
- * Deterministic short Markdown summary for {@link synthesizeReview} when the
- * caller omits `summary_md` (template locked in the
- * engine test; no LLM). Verdict line mirrors the chat display contract
- * (score with its band); each finding contributes one
- * `- <mergeClass>: <title>` bullet. A bounded/stopped run adds the `partial`
- * mark and the two facts the token cannot carry — its cause and the scope it
- * never reached — mirroring pr-review.md § Display contract.
- */
-function defaultReviewSummary(tally: PrTallyResult, findings: MstarReviewV1["findings"]): string {
-  const incomplete = tally.incomplete;
-  const lines = [
-    `## Verdict: ${tally.verdict} \u00b7 ${tally.scorePct}% (${tally.band}${incomplete === undefined ? "" : ", partial"})`,
-    "",
-    `must-fix=${tally.tally.mustFix} should-fix=${tally.tally.shouldFix} nit=${tally.tally.nit} unverified=${tally.tally.unverified}`,
-  ];
-  if (incomplete !== undefined) {
-    lines.push(
-      `cause: ${incomplete.reason}`,
-      `unscanned: ${incomplete.unscanned.length === 0 ? "none" : incomplete.unscanned.join(", ")}`,
-    );
-  }
-  if (findings.length > 0) {
-    lines.push("");
-    for (const finding of findings) {
-      lines.push(`- ${finding.mergeClass}: ${finding.title}`);
-    }
-  }
-  return lines.join("\n");
-}
-
-/**
  * Fold already-vetted findings into a complete `mstar.review/v1` envelope
  * . Pure and synchronous — verdict/tally come ONLY
  * from {@link computePrTally}; no I/O, no GitHub, no store, no seat
@@ -887,8 +864,12 @@ function defaultReviewSummary(tally: PrTallyResult, findings: MstarReviewV1["fin
  * provided. A supplied `incomplete` marks the run stopped-short: the token
  * becomes `incomplete` (with the cause/scope carried on the envelope, since
  * {@link validateMstarReviewV1} requires it for that verdict) while the
- * tally stays the partial count-derived one. When `summary_md` is omitted,
- * {@link defaultReviewSummary} builds the locked deterministic template.
+ * tally stays the partial count-derived one. `summary_md` is the seat's
+ * narrative and stays absent when the caller supplies none — the engine
+ * never fabricates one. A supplied value that is not a non-empty string is a
+ * TypeError (same boundary posture as {@link computePrTally}'s `incomplete`
+ * guards): dropping it silently would leave the documented
+ * `review.blank-summary` refusal unreachable.
  */
 export function synthesizeReview(input: {
   findings: MstarReviewV1["findings"];
@@ -904,15 +885,250 @@ export function synthesizeReview(input: {
     unmetAc: input.unmetAc,
     ...(input.incomplete === undefined ? {} : { incomplete: input.incomplete }),
   });
+  // Engine boundary guard: a blank or non-string narrative is exactly what
+  // validateMstarReviewV1 refuses (`review.blank-summary`), so the caller
+  // learns it here instead of publishing an envelope its own gate rejects.
+  if (
+    input.summary_md !== undefined &&
+    (typeof input.summary_md !== "string" || input.summary_md.trim() === "")
+  ) {
+    throw new TypeError(
+      `synthesizeReview: summary_md must be a non-empty string when present - got ${JSON.stringify(input.summary_md)}`,
+    );
+  }
   return {
     schema: "mstar.review/v1",
     verdict: tally.verdict,
-    summary_md: input.summary_md ?? defaultReviewSummary(tally, input.findings),
     tally,
     findings: input.findings,
+    ...(input.summary_md === undefined ? {} : { summary_md: input.summary_md }),
     ...(input.incomplete === undefined ? {} : { incomplete: input.incomplete }),
     ...(input.target !== undefined ? { target: input.target } : {}),
   };
+}
+
+// ---------------------------------------------------------------------------
+// renderReviewMarkdown — the envelope's two presentation surfaces
+// ---------------------------------------------------------------------------
+
+/** Where a review body is published: a GitHub Review comment, or the local
+ * report archive's Markdown body. Layout-neutral: both surfaces carry the same
+ * template body, because the archive keeps the posted body verbatim. */
+export type ReviewRenderSurface = "github-comment" | "local-report";
+
+/** All fields optional: the layout does not vary by surface, so a caller that
+ * already renders the one body may omit the options entirely. */
+export type ReviewRenderOptions = { surface?: ReviewRenderSurface };
+
+/** Verdict emoji for the verdict head on both surfaces (module-private). */
+const VERDICT_EMOJI: Record<PrVerdict, string> = {
+  "ship it": "\u2705", // ✅
+  "needs fixes": "\u26A0\uFE0F", // ⚠️
+  blocked: "\u26D4", // ⛔
+  incomplete: "\u23F8\uFE0F", // ⏸️
+};
+
+/** Free-form Markdown (narrative, evidence) may legally arrive with boundary
+ * line breaks; strip only those so renderer-owned spacing survives. Internal
+ * blank lines, indentation and list structure stay verbatim. */
+function trimBoundaryNewlines(text: string): string {
+  return text.replace(/^[\r\n]+/, "").replace(/[\r\n]+$/, "");
+}
+
+/** Renderer-owned single-line slots (headings, list items, table cells) cannot
+ * carry a raw line break: it ends the heading or the row. Every such slot goes
+ * through this one collapse. */
+function singleLine(text: string): string {
+  return text.replace(/\r\n|\r|\n/g, " ");
+}
+
+/** One finding's location: `file:start-end` for a line range, `file:start` for
+ * a single line, the bare path otherwise, and `repo-wide` when no path is known.
+ * A renderer-owned single-line slot, so every part collapses. */
+function renderFindingLocation(finding: MstarReviewFinding): string {
+  const rawPath = typeof finding.file_path === "string" ? finding.file_path : "";
+  if (rawPath === "") return "repo-wide";
+  const path = singleLine(rawPath);
+  const start = typeof finding.line_start === "number" ? finding.line_start : null;
+  const end = typeof finding.line_end === "number" ? finding.line_end : null;
+  if (start === null) return `\`${path}\``;
+  const span = end !== null && end !== start ? `${start}-${end}` : `${start}`;
+  return `\`${path}:${span}\``;
+}
+
+/** A tally the renderer can publish: score, band and the four counts. */
+type RenderedTally = {
+  scorePct: number;
+  band: PrScoreBand;
+  mustFix: number;
+  shouldFix: number;
+  nit: number;
+  unverified: number;
+};
+
+/** Read the envelope's tally defensively. A hand-built envelope may carry a
+ * non-object or incomplete `tally`; the renderer then omits the Score segment
+ * and the table (no throw, no `undefined` in the body) instead of trusting it. */
+function readTally(tally: unknown): RenderedTally | null {
+  if (typeof tally !== "object" || tally === null) return null;
+  const candidate = tally as { scorePct?: unknown; band?: unknown; tally?: unknown };
+  const counts = candidate.tally;
+  if (typeof counts !== "object" || counts === null) return null;
+  const { mustFix, shouldFix, nit, unverified } = counts as Record<string, unknown>;
+  if (![mustFix, shouldFix, nit, unverified].every((value) => typeof value === "number")) return null;
+  if (typeof candidate.scorePct !== "number") return null;
+  const band = (PR_SCORE_BANDS as readonly string[]).includes(candidate.band as string)
+    ? (candidate.band as PrScoreBand)
+    : scoreBand(candidate.scorePct);
+  return {
+    scorePct: candidate.scorePct,
+    band,
+    mustFix: mustFix as number,
+    shouldFix: shouldFix as number,
+    nit: nit as number,
+    unverified: unverified as number,
+  };
+}
+
+/** The verdict head recognized by the Thread-lifecycle candidate set
+ * (pr-review.md § Comment posting — a review body starts with
+ * `## <emoji> Verdict: \`<token>\``), plus Score/band when a usable tally
+ * exists. An off-enum verdict falls back to a neutral marker: the lookup must
+ * not resolve through the prototype chain (a bundled renderer would print
+ * function source). */
+function renderVerdictHead(review: MstarReviewV1, tally: RenderedTally | null, partial: boolean): string {
+  const token = typeof review.verdict === "string" ? singleLine(review.verdict) : "";
+  const emoji = Object.hasOwn(VERDICT_EMOJI, review.verdict) ? VERDICT_EMOJI[review.verdict] : "\u2022";
+  let head = `## ${emoji} Verdict: \`${token}\``;
+  if (tally !== null) {
+    head += ` \u00b7 Score ${tally.scorePct}% (${partial ? `${tally.band}, partial` : tally.band})`;
+  }
+  return head;
+}
+
+/** The `cause:` / `unscanned:` pair a bounded run must state (pr-review.md
+ * § Display contract) — one blank-line-delimited section. Both values are
+ * renderer-owned slots, so a newline-bearing reason or scope collapses. */
+function renderIncompleteFacts(incomplete: PrIncomplete): string {
+  const reason = typeof incomplete.reason === "string" ? singleLine(incomplete.reason).trim() : "";
+  const scopes = Array.isArray(incomplete.unscanned)
+    ? incomplete.unscanned.filter((entry) => typeof entry === "string").map((entry) => singleLine(entry).trim())
+    : [];
+  const unscanned = scopes.length === 0 ? "none" : scopes.join(", ");
+  return `cause: ${reason}\nunscanned: ${unscanned}`;
+}
+
+/** One finding's template block: heading, then the slot bullets in the order
+ * the report body uses — Evidence, Location, Category, Merge class last, so an
+ * agent-inserted `- **Confidence**:` immediately above Merge class satisfies
+ * `validateFindingDoc({ prVariant: true })`. The envelope carries Evidence /
+ * Location / Category / Merge class; Impact, Confidence and Fix sketch are
+ * agent-owned additions inside the same block. */
+function renderFindingBlock(finding: MstarReviewFinding): string {
+  // Renderer reads tolerate a hand-built envelope: a non-string title or body
+  // renders an empty slot instead of throwing on .trim()/.split().
+  const rawBody = typeof finding.body === "string" ? finding.body : "";
+  const body = trimBoundaryNewlines(rawBody);
+  // Own-property lookup: an off-enum class gets the neutral marker, never a
+  // prototype member (a bundled renderer would print function source).
+  const emoji = Object.hasOwn(REVIEW_EMOJI, finding.mergeClass)
+    ? REVIEW_EMOJI[finding.mergeClass as MergeClass]
+    : "\u2022";
+  const title = typeof finding.title === "string" ? singleLine(finding.title) : "";
+  const lines = [`#### ${emoji} ${title}`.trimEnd(), ""];
+  if (body === "") {
+    lines.push("- **Evidence**: none");
+  } else if (!body.includes("\n")) {
+    lines.push(`- **Evidence**: ${body}`);
+  } else {
+    // A body opening a fence, a list or indented code must start its own line
+    // and stay at the list item's content column (two spaces after the marker);
+    // a deeper indent would turn the whole body into an indented code block.
+    lines.push("- **Evidence**:", ...body.split("\n").map((line) => (line === "" ? "" : `  ${line}`)));
+  }
+  lines.push(`- **Location**: ${renderFindingLocation(finding)}`);
+  if (typeof finding.category === "string") lines.push(`- **Category**: ${singleLine(finding.category)}`);
+  lines.push(`- **Merge class**: ${typeof finding.mergeClass === "string" ? singleLine(finding.mergeClass) : ""}`.trimEnd());
+  return lines.join("\n");
+}
+
+/** Findings render in the envelope's own order — the seats rank them by
+ * impact-if-shipped (§ Verdict synthesis), so a class re-sort would override
+ * that ranking. Every accepted finding renders, off-enum classes included.
+ * Zero findings render no findings section at all. */
+function renderFindings(findings: readonly MstarReviewFinding[]): string | null {
+  if (findings.length === 0) return null;
+  return ["### Findings", ...findings.map(renderFindingBlock)].join("\n\n");
+}
+
+/**
+ * Render the review **body** from the `mstar.review/v1` envelope — the engine's
+ * only review-body layout owner. Every surface renders the same pr-review.md
+ * § Report template body: verdict head, the `incomplete` fact pair, the
+ * four-class tally table, the mandatory `## 📋 Review` section, and
+ * `### Findings` with one `#### <emoji> <title>` block per finding, in the
+ * envelope's own order (the seats rank by impact-if-shipped; a class re-sort
+ * would override that ranking).
+ *
+ * `opts` (and its `surface`) is optional and **layout-neutral**: it exists only
+ * for caller compatibility with the two-surface signature callers already
+ * write. It cannot select a layout, because § Local report archive requires the
+ * archived body to be the posted body verbatim — a per-surface layout would
+ * break that contract. Omit it freely.
+ *
+ * Envelope-dependent facts: the ` · Score <n>% (<band>)` segment on the verdict
+ * head and the tally table appear only when the envelope carries a `tally`;
+ * the `cause:` / `unscanned:` pair only for `incomplete`; `### Findings` only
+ * when at least one finding exists. `## 📋 Review` is always present — the
+ * template mandates it and the agent anchors `**What this PR does**` there —
+ * with the seat narrative beneath it when `summary_md` carries one.
+ *
+ * The renderer supplies Evidence, Location, Category (when present) and Merge
+ * class, in that order, so an agent-inserted `- **Confidence**:` immediately
+ * above Merge class satisfies `validateFindingDoc({ prVariant: true })`.
+ * Impact, Confidence and Fix sketch are agent-owned insertions in the same
+ * block; the main agent also inserts `### Revalidated findings` immediately
+ * **before** `### Findings` (and adds an empty findings section when the
+ * envelope carries no findings), then appends `### Linked-issue AC`,
+ * `### ✅ Verified`, `### 🗑️ Considered & rejected` and `## 🛠️ Plan to fix`.
+ * Frontmatter, `- notes:` and the output-shape bullets stay the agent's duty.
+ *
+ * `summary_md`, when a seat produced one, is the seat's narrative: it is
+ * published verbatim (only boundary line breaks are trimmed — nothing inside
+ * it is rewritten or stripped) and is never read for facts. Free-form narrative
+ * and evidence keep their internal Markdown; renderer-owned single-line slots
+ * lose every line break. Sections join with one blank line; no trailing newline.
+ */
+export function renderReviewMarkdown(review: MstarReviewV1, _opts: ReviewRenderOptions = {}): string {
+  const sections: string[] = [];
+  const narrative =
+    typeof review.summary_md === "string" && review.summary_md.trim() !== ""
+      ? trimBoundaryNewlines(review.summary_md)
+      : null;
+  const tally = readTally(review.tally);
+
+  // The Thread-lifecycle candidate set keeps only bodies starting here.
+  sections.push(renderVerdictHead(review, tally, review.incomplete !== undefined));
+
+  if (review.incomplete !== undefined) sections.push(renderIncompleteFacts(review.incomplete));
+  if (tally !== null) {
+    sections.push(
+      [
+        "| Findings | Count |",
+        "| --- | --- |",
+        `| ${REVIEW_EMOJI["must-fix"]} must-fix | ${tally.mustFix} |`,
+        `| ${REVIEW_EMOJI["should-fix"]} should-fix | ${tally.shouldFix} |`,
+        `| ${REVIEW_EMOJI.nit} nit | ${tally.nit} |`,
+        `| ${REVIEW_EMOJI.unverified} unverified | ${tally.unverified} |`,
+      ].join("\n"),
+    );
+  }
+  // Mandatory template section: the agent's `**What this PR does**` anchor.
+  sections.push(narrative === null ? "## \u{1F4CB} Review" : `## \u{1F4CB} Review\n\n${narrative}`); // 📋
+  const findings = renderFindings(Array.isArray(review.findings) ? review.findings : []);
+  if (findings !== null) sections.push(findings);
+
+  return trimBoundaryNewlines(sections.join("\n\n"));
 }
 
 // ---------------------------------------------------------------------------

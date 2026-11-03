@@ -35,6 +35,7 @@ export type SyncErrorCode =
   | "sync.local-issue-missing"
   | "sync.identity-conflict"
   | "sync.run-held"
+  | "sync.run-taken"
   | "linear.query-failed"
   | "linear.identity-collision"
   | "linear.list-unimplemented"
@@ -87,6 +88,8 @@ export type PlanItemInput = {
   externalId?: string | null;
   remoteUpdatedAt?: string | null;
   operationId: string;
+  /** The run lease this write belongs to; see `requireRunLease`. */
+  runId?: string;
 };
 export type MarkItemInput = {
   /**
@@ -122,6 +125,12 @@ export type MarkItemInput = {
    * because an ambiguous write must not erase an id the last run proved.
    */
   externalId?: string | null;
+  /**
+   * The run lease this write belongs to. When present, the write is refused
+   * (`sync.run-taken`) unless the store still names this run for the direction;
+   * see `requireRunLease`. Absent for a caller with no lease (import).
+   */
+  runId?: string;
   bindingId: string; direction: SyncDirection; localId: string; operationId: string };
 export type MarkFailedInput = MarkItemInput & { error: string };
 export type MarkSkippedInput = MarkItemInput & { reason: string };
@@ -140,6 +149,8 @@ export type MarkUnconfirmedInput = {
    * label was removed nor that the new one was added, so both stay removable.
    */
   kindLabel?: string | null;
+  /** The run lease this write belongs to; see `requireRunLease`. */
+  runId?: string;
 };
 export type ReadItemInput = { bindingId: string; direction: SyncDirection; localId: string };
 export type CursorInput = { bindingId: string; direction: SyncDirection };
@@ -379,9 +390,10 @@ export function planItem(db: StoreDb, input: PlanItemInput): SyncItem {
  * while the cycle it opened is still open — a `pending` row — and the row is
  * reported as it now stands, so a caller that did not open it sends nothing.
  *
- * Concurrency between RUNS is not this verb's job: one push run per binding is
- * the run lease below. What the claim still does is record the intent before the
- * write, so an ambiguous create leaves a durable residue that reconciliation
+ * Concurrency between RUNNING runs is not this verb's job: the run lease below
+ * keeps a second run out of the direction, and `runId` makes a taken-over run's
+ * own write refuse itself. What the claim still does is record the intent BEFORE
+ * the write, so an ambiguous create leaves a durable residue that reconciliation
  * finds instead of a second create nobody can adopt.
  */
 export function claimItem(db: StoreDb, input: PlanItemInput): { claimed: boolean; item: SyncItem } {
@@ -399,6 +411,17 @@ export function claimItem(db: StoreDb, input: PlanItemInput): { claimed: boolean
 // any bypass or recovery mints a different key, so the keys could not be made to
 // collide. One row per (binding, direction) can: an insert that finds a row
 // means somebody already holds the direction, and no key derivation is involved.
+//
+// What the lease arbitrates is ACQUISITION, not the whole run, and the two
+// bounds are stated here once:
+// - The run token is carried into every ledger write (`requireRunLease`), so a
+//   run that `--take-run` replaced has its LATER writes refused (`sync.run-taken`)
+//   instead of applied. The successor is unaffected (its id is the one the row
+//   holds) and a caller with no lease is unaffected (import).
+// - A request the predecessor had ALREADY sent when the takeover landed cannot be
+//   recalled. It may still reach the provider, which is why the reconcile-by-marker
+//   scan remains the first recovery and why a takeover of a LIVE holder is unsafe:
+//   `--take-run` is for a holder the operator confirmed is dead.
 
 export type RunLease = {
   bindingId: string;
@@ -467,6 +490,11 @@ export function readRun(db: StoreDb, input: CursorInput): RunLease | null {
  * same statement into a replacement, so the previous holder's row is GONE
  * rather than coexisting — a leftover row would let two runs each believe they
  * hold the direction.
+ *
+ * A takeover proves nothing about the previous holder's liveness and cannot stop
+ * a request it already sent. What it does do is make the predecessor's LATER
+ * ledger writes refuse themselves against this new row (`requireRunLease`), so
+ * the replacement is not two runs writing the same rows.
  */
 export function acquireRun(db: StoreDb, input: AcquireRunInput): RunLease {
   const bindingId = requireNonblank("bindingId", input.bindingId);
@@ -509,6 +537,39 @@ export function acquireRun(db: StoreDb, input: AcquireRunInput): RunLease {
 }
 
 /**
+ * Refuse a ledger write whose run no longer holds the direction.
+ *
+ * The lease arbitrates at ACQUISITION only. `--take-run` replaces the holder's
+ * row while the predecessor may still be inside a provider call, so a write the
+ * predecessor makes afterwards would land on a row its successor now owns. A
+ * write that names its run therefore re-reads the row inside the SAME
+ * transaction, which turns a taken-over run's late write into a refusal instead
+ * of an apply. A caller that names no run (import) is unaffected, and the
+ * successor needs no exemption: its own id is the one the row holds.
+ *
+ * Liveness-independent by construction: it never asks whether a holder is alive,
+ * only whether this write's run is still the run the store names.
+ *
+ * Called by both sides of a provider call: once before the request leaves (so a
+ * run already replaced sends nothing) and once more inside each ledger write (so
+ * a takeover that lands while the request is in flight cannot be recorded as
+ * this run's apply).
+ */
+export function requireRunLease(db: StoreDb, input: { bindingId: string; direction: string; runId: string | undefined }): void {
+  if (input.runId === undefined) return;
+  const row = db.prepare("select run_id from sync_runs where binding_id = ? and direction = ?").get(input.bindingId, input.direction) as
+    | { run_id: string }
+    | undefined;
+  if (row?.run_id === input.runId) return;
+  throw new SyncError(
+    "sync.run-taken",
+    `run ${input.runId} no longer holds ${input.direction} of ${input.bindingId}` +
+      (row === undefined ? ": its run row is gone" : `: ${row.run_id} holds it now`) +
+      "; this write is refused instead of applied, because a taken-over run never writes",
+  );
+}
+
+/**
  * Release the direction IF this run still holds it. Naming the `runId` is what
  * keeps a taken-over run's `finally` from deleting its successor's row: the
  * delete simply matches nothing.
@@ -538,6 +599,7 @@ function writePlan(
   const operationId = requireNonblank("operationId", input.operationId);
   const hash = syncRequestHash("planItem", { bindingId, direction, localId, externalId, remoteUpdatedAt });
   return withSyncTransaction(db, () => {
+    requireRunLease(db, { bindingId, direction, runId: input.runId });
     const replayed = replayOrRefuse<SyncItem>(db, operationId, hash);
     if (replayed !== undefined) {
       // A replay answers "what did that call do", so it reports its receipt. A
@@ -641,6 +703,7 @@ export function replanItem(db: StoreDb, input: PlanItemInput): SyncItem {
   const operationId = requireNonblank("operationId", input.operationId);
   const hash = syncRequestHash("replanItem", { bindingId, direction, localId, externalId, remoteUpdatedAt });
   return withSyncTransaction(db, () => {
+    requireRunLease(db, { bindingId, direction, runId: input.runId });
     const replayed = replayOrRefuse<SyncItem>(db, operationId, hash);
     if (replayed !== undefined) return replayed;
     const now = new Date().toISOString();
@@ -705,6 +768,7 @@ export function recordRefusal(db: StoreDb, input: MarkFailedInput): SyncItem {
   const error = requireNonblank("error", input.error);
   const hash = syncRequestHash("recordRefusal", { bindingId, direction, localId, error });
   return withSyncTransaction(db, () => {
+    requireRunLease(db, { bindingId, direction, runId: input.runId });
     const replayed = replayOrRefuse<SyncItem>(db, operationId, hash);
     if (replayed !== undefined) return replayed;
     const now = new Date().toISOString();
@@ -760,6 +824,7 @@ export function markUnconfirmed(db: StoreDb, input: MarkUnconfirmedInput): SyncI
   const kindLabel = input.kindLabel == null ? null : requireNonblank("kindLabel", input.kindLabel);
   const hash = syncRequestHash("markUnconfirmed", { bindingId, direction, localId, kindLabel });
   return withSyncTransaction(db, () => {
+    requireRunLease(db, { bindingId, direction, runId: input.runId });
     const replayed = replayOrRefuse<SyncItem>(db, operationId, hash);
     if (replayed !== undefined) return replayed;
     const now = new Date().toISOString();
@@ -812,6 +877,7 @@ function markItem(
     ...(input.clearProof === true ? { clearProof: true } : {}),
   });
   return withSyncTransaction(db, () => {
+    requireRunLease(db, { bindingId, direction, runId: input.runId });
     const replayed = replayOrRefuse<SyncItem>(db, operationId, hash);
     if (replayed !== undefined) return replayed;
     const now = new Date().toISOString();

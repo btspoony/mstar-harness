@@ -26,6 +26,14 @@ The monorepo root [CHANGELOG.md](../../CHANGELOG.md) summarizes cross-surface re
   `denied`: the card keeps observing for a bounded number of polls, then ends the attempt as `unreachable` after
   re-reading the host facts. The summary view also loads on its own now.
 
+## [4.1.6] - 2026-11-03
+
+### Changed
+
+- Version alignment with harness **4.1.6**.
+
+See root [CHANGELOG.md](../../CHANGELOG.md) **4.1.6**.
+
 ## [4.1.5] - 2026-11-02
 
 ### Changed

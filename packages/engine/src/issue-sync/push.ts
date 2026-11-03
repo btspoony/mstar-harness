@@ -19,6 +19,21 @@
  * - The listing is used ONLY for reconciliation. A run with no ambiguous
  *   residue issues zero listing calls.
  *
+ * THE RUN LEASE IS NOT CONCURRENCY. `mstar issue-sync push` holds one lease per
+ * binding (`sync_runs`), and every ledger write this module performs carries the
+ * run token, so a run that a `--take-run` predecessor replaced has its later
+ * writes refused (`sync.run-taken`) instead of applied. What that buys is
+ * bounded, and the bound is the honest claim:
+ * - No RUNNING `push`'s create can be in flight beside this one's, because only
+ *   one run holds the direction.
+ * - A request already SENT by a holder that died mid-call may still land at the
+ *   provider after the successor has scanned. Nothing here can recall it, which
+ *   is why reconcile-by-correlation-marker remains the FIRST recovery and why a
+ *   `pending` residue is never created over.
+ * - Taking the run over from a LIVE holder is unsafe: the takeover cannot stop
+ *   the predecessor's in-flight write, only its later ones. `--take-run` is for a
+ *   holder the operator confirmed is dead.
+ *
  * Credential-free by construction: the provider is injected and carries its own
  * transport; nothing here reads a token.
  */
@@ -26,7 +41,7 @@ import { createHash } from "node:crypto";
 import type { StoreDb } from "../store-db.js";
 import type { Disposition, IssueKind, Severity } from "../issue.js";
 import type { LinearFacetMapping } from "../mstarc.js";
-import { SyncError, claimItem, markApplied, markFailed, markUnconfirmed, planItem, readItem, recordRefusal, type SyncItem } from "../issue-sync.js";
+import { SyncError, claimItem, markApplied, markFailed, markUnconfirmed, planItem, readItem, recordRefusal, requireRunLease, type SyncItem } from "../issue-sync.js";
 import { defaultStateOfDisposition, providerPayloadFields } from "./field-mapping.js";
 import type { IssueProvider, ProviderWrite, ProviderWritePayload } from "./provider.js";
 
@@ -61,6 +76,14 @@ export type PushContext = {
   states: ReadonlySet<string>;
   /** Operator confirmed remote absence for this one item (`--force-create`). */
   forceCreate?: boolean;
+  /**
+   * The run lease this push holds (`RunLease.runId`). Every ledger write this
+   * run performs carries it, so a run that `--take-run` replaced mid-flight has
+   * its later writes REFUSED (`sync.run-taken`) instead of applied — the lease
+   * check at acquisition cannot cover a write the predecessor had not made yet.
+   * Omitted by a caller with no lease, which is the same path import takes.
+   */
+  runId?: string;
 };
 
 export type PushOutcomeKind = "created" | "updated" | "skipped" | "unresolved" | "failed";
@@ -149,7 +172,7 @@ export function requestHash(payload: ProviderWritePayload): string {
  * and apply advances. Revision keying existed only to discriminate attempts by
  * making a bypass mint a different key — and it could not cover the window where
  * the predecessor's own claim advanced it, which is the wedge three review rounds
- * found. One run per binding (the run lease) is what separates attempts now, so
+ * found. The run lease is what separates RUNNING attempts now, so
  * the key is a stable per-residue identity: a re-run of the same item can never
  * mint a new key mid-attempt, and `claimItem` re-opens the cycle under this same
  * key when the previous attempt ended.
@@ -192,10 +215,11 @@ export async function pushItem(db: StoreDb, provider: IssueProvider, context: Pu
     // own reconcile scan finds no match, `--release <localId>` clears the row to
     // the retryable `failed` edge, which is the one exit for proven absence.
     //
-    // `--force-create` does not lift this guard. One run per binding means no
+    // `--force-create` does not lift this guard. The lease means no RUNNING
     // create can be in flight beside this one, so the row is a CRASHED attempt's
-    // residue: the flag still cannot assert that no remote issue exists, which is
-    // the only thing that would make a second create safe.
+    // residue — and a request that crashed attempt already sent may still land:
+    // the flag still cannot assert that no remote issue exists, which is the only
+    // thing that would make a second create safe.
     return {
       localId: candidate.localId,
       outcome: "unresolved",
@@ -267,18 +291,19 @@ export async function pushItem(db: StoreDb, provider: IssueProvider, context: Pu
   // the write so an ambiguous result leaves a durable residue to reconcile
   // against.
   //
-  // The claim is the intent record, not the concurrency arbiter: one run per
-  // binding (the run lease) means no second run exists to race this create, so
-  // the key is a stable per-residue identity — binding, item, content — and a
-  // re-run of the same item opens the cycle under that same key rather than
-  // minting a new one. A `pending` claim is still refused here (the residue
-  // guard above answers first), so a crashed attempt's send right is never
+  // The claim is the intent record, not the concurrency arbiter: the run lease
+  // means no RUNNING second run exists to race this create, so the key is a
+  // stable per-residue identity — binding, item, content — and a re-run of the
+  // same item opens the cycle under that same key rather than minting a new one.
+  // A `pending` claim is still refused here (the residue guard above answers
+  // first), so a crashed attempt's send right is never
   // silently taken twice.
   const claim = claimItem(db, {
     bindingId: context.bindingId,
     direction: PUSH_DIRECTION,
     localId: candidate.localId,
     operationId: createClaimId(context.bindingId, candidate.localId, hash),
+    ...(context.runId === undefined ? {} : { runId: context.runId }),
   });
   if (!claim.claimed) {
     return {
@@ -304,6 +329,11 @@ async function apply(
 ): Promise<PushOutcome> {
   const entryRevision = ledger?.revision ?? 0;
   const opId = (step: string): string => `linear-push:${context.bindingId}:${localId}:${step}:${hash}:${entryRevision}`;
+  // Checked BEFORE the request leaves as well as inside each ledger write below:
+  // a run that `--take-run` has already replaced sends nothing further, so only a
+  // request that was already in flight when the takeover landed can still arrive
+  // at the provider. Nothing is compared for a caller with no lease.
+  requireRunLease(db, { bindingId: context.bindingId, direction: PUSH_DIRECTION, runId: context.runId });
   const receipt = await provider.applyWrite(write);
 
   if (receipt.kind === "refused") {
@@ -330,6 +360,7 @@ async function apply(
       localId,
       kindLabel,
       operationId: opId("unconfirmed"),
+      ...(context.runId === undefined ? {} : { runId: context.runId }),
     });
     return { localId, outcome: "unresolved", externalId: ledger?.externalId ?? null, cause: receipt.cause };
   }
@@ -342,6 +373,7 @@ async function apply(
     requestHash: hash,
     kindLabel,
     operationId: opId("applied"),
+    ...(context.runId === undefined ? {} : { runId: context.runId }),
   });
   return { localId, outcome: write.kind === "create" ? "created" : "updated", externalId: receipt.externalId };
 }
@@ -385,6 +417,7 @@ function failed(
         direction: PUSH_DIRECTION,
         localId,
         operationId: `linear-push:${context.bindingId}:${localId}:plan:preflight`,
+        ...(context.runId === undefined ? {} : { runId: context.runId }),
       });
     }
     const current = ledger ?? readItem(db, { bindingId: context.bindingId, direction: PUSH_DIRECTION, localId });
@@ -393,11 +426,20 @@ function failed(
       const retryable = current.itemState === "pending";
       const step = retryable ? "failed" : "refused";
       const operationId = `linear-push:${context.bindingId}:${localId}:${step}:${hash ?? "preflight"}:${current.revision}`;
-      const input = { bindingId: context.bindingId, direction: PUSH_DIRECTION, localId, operationId };
+      const input = {
+        bindingId: context.bindingId,
+        direction: PUSH_DIRECTION,
+        localId,
+        operationId,
+        ...(context.runId === undefined ? {} : { runId: context.runId }),
+      };
       if (retryable) markFailed(db, { ...input, error: message });
       else recordRefusal(db, { ...input, error: message });
     }
-  } catch {
+  } catch (error) {
+    // A lease refusal is not this item's cause: the run no longer owns the
+    // direction, so the whole run must stop instead of being reported per item.
+    if (error instanceof SyncError && error.code === "sync.run-taken") throw error;
     // The returned outcome still carries the cause.
   }
   return { localId, outcome: "failed", externalId: ledger?.externalId ?? null, cause: message };
@@ -423,9 +465,13 @@ const RELEASE_REASON =
  * the next push claims the create again. The revision joins the operation id so
  * a later ambiguity for the same item is a new release, not a replay.
  *
- * No in-flight check is needed and none exists: this run holds the binding's
- * only run (the run lease), so no create for that residue can be inside a
- * provider call while this release runs.
+ * What the release CANNOT do is see a request another holder already sent: this
+ * run holds the binding's only lease, so no RUNNING create for that residue can
+ * be inside a provider call beside it — but a create sent by a holder that died
+ * mid-call may still land after this scan. That is why reconcile-by-marker is
+ * the first recovery and why releasing over a scan that found nothing is the
+ * operator's judgement, recorded as such. The write carries this run's token, so
+ * a run a takeover replaced cannot release anything at all.
  */
 function releasePendingCreate(db: StoreDb, context: PushContext, localId: string): void {
   const current = readItem(db, { bindingId: context.bindingId, direction: PUSH_DIRECTION, localId });
@@ -435,6 +481,7 @@ function releasePendingCreate(db: StoreDb, context: PushContext, localId: string
     localId,
     error: RELEASE_REASON,
     operationId: `linear-push:${context.bindingId}:${localId}:release:${current?.revision ?? 0}`,
+    ...(context.runId === undefined ? {} : { runId: context.runId }),
   });
 }
 
@@ -537,6 +584,7 @@ export async function reconcilePendingCreate(
       localId,
       externalId,
       operationId: `linear-push:${context.bindingId}:${localId}:adopt:${externalId}`,
+      ...(context.runId === undefined ? {} : { runId: context.runId }),
     });
     report.adopted.push({ localId, externalId });
   }
@@ -574,7 +622,7 @@ export function adoptItem(
   bindingId: string,
   localId: string,
   reference: string,
-  options: { force?: boolean } = {},
+  options: { force?: boolean; runId?: string } = {},
 ): SyncItem {
   const externalId = externalIdOf(reference);
   const existing = readItem(db, { bindingId, direction: PUSH_DIRECTION, localId });
@@ -599,6 +647,7 @@ export function adoptItem(
       localId,
       externalId,
       operationId: `linear-push:${bindingId}:${localId}:adopt-plan:${externalId}:${generation}`,
+      ...(options.runId === undefined ? {} : { runId: options.runId }),
     });
   }
   // Re-confirming the recorded id is not an identity change: its hash and label
@@ -618,6 +667,7 @@ export function adoptItem(
     // Only a re-point needs the generation: going back to an issue this row held
     // earlier repeats every other fact of the adoption that first recorded it.
     operationId: `linear-push:${bindingId}:${localId}:${keepProof ? "adopt-confirm" : "adopt-apply"}:${externalId}${keepProof ? "" : `:${generation}`}`,
+    ...(options.runId === undefined ? {} : { runId: options.runId }),
   });
 }
 

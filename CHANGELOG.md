@@ -8,6 +8,18 @@ Package-specific histories: [`packages/cli/CHANGELOG.md`](packages/cli/CHANGELOG
 
 ## [Unreleased]
 
+## [4.1.6] - 2026-11-03
+
+### Changed
+
+- Added **`renderReviewMarkdown(review, { surface })`** to the engine: one layout owner for the `mstar.review/v1` envelope's body (verdict head, tally table, incomplete fact pair, `## 📋 Review`, `### Findings` in the envelope's impact order). Both `surface` values render that same template body — the option exists for caller compatibility, not to select a layout, because § Local report archive keeps the archived body identical to the posted one.
+- The engine no longer **fabricates** a review summary. `summary_md` is an optional seat narrative: absent means no seat produced one, and a caller-supplied narrative is published verbatim — the engine neither strips nor duplicates it. A supplied value that is blank or not a string is a `TypeError` rather than a silent drop.
+- Renamed the blank-narrative violation code **`review.missing-summary` → `review.blank-summary`**: a missing `summary_md` is legal now, so the code names the only condition it still reports (a present-but-empty value). Machine consumers keyed on the old code must switch.
+
+### Version alignment
+
+- Bump monorepo root, `@mstar-harness/opencode`, `@mstar-harness/opencode-v2`, `@mstar-harness/cli`, `@mstar-harness/engine`, `@mstar-harness/dsh`, Cursor/Codex/Kimi/ZCode/omp/Claude plugin manifests, the portable Agent Plugins manifest, and both marketplace manifests: **→ 4.1.6**.
+
 ## [4.1.5] - 2026-11-02
 
 ### Harness
