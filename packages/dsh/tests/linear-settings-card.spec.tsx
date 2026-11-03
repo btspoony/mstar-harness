@@ -33,7 +33,7 @@ import {
   type LinearSettingsConnection,
   type LinearSettingsState,
 } from '../src/client/linear-settings-store.ts'
-import { en, NS, zh, type LinearSettingsKey } from '../src/client/linear-settings-locale.ts'
+import { en, zh, type LinearSettingsKey } from '../src/client/linear-settings-locale.ts'
 import {
   LINEAR_AUTHORIZE_BEGIN_ENDPOINT,
   LINEAR_AUTHORIZE_CANCEL_ENDPOINT,
@@ -179,7 +179,10 @@ interface CapturedRegistration {
   readonly key?: string
   readonly locale?: string
   readonly component: unknown
-  readonly inject?: () => { controller: LinearSettingsStore }
+  readonly inject?: () => {
+    controller: LinearSettingsStore
+    hooks: { snapshot: LinearSettingsStore['snapshot'] }
+  }
 }
 
 /** A client ctx carrying only the faces the plugin entry touches. */
@@ -238,27 +241,36 @@ function pluginContext(connection: unknown): {
 }
 
 describe('the linear-mcp Settings row card', () => {
-  it('registers one plugins.row.config entry keyed @mstar-harness/dsh#linear-mcp with its own locale', () => {
+  it("the card the plugin registers renders this row's state from what the registration injects", async () => {
     const { connection } = stubConnection(() => READY_DISABLED)
-    const { ctx, registrations, dicts } = pluginContext(connection)
+    const { ctx, registrations } = pluginContext(connection)
     apply(ctx as never)
 
+    // One card, on the linear-mcp row: the key is the exported constant the
+    // bundle patch declares, not a second copy of the literal.
     const rowCards = registrations.filter((entry) => entry.name === 'plugins.row.config')
     expect(rowCards).toHaveLength(1)
-    expect(rowCards[0]!.key).toBe('@mstar-harness/dsh#linear-mcp')
-    expect(LINEAR_SETTINGS_ROW_KEY).toBe('@mstar-harness/dsh#linear-mcp')
-    expect(rowCards[0]!.locale).toBe(NS)
-    expect(rowCards[0]!.component).toBe(LinearSettingsCard)
-    // The dictionaries are the plugin's own namespace, zh and en.
-    expect(dicts.get(NS)).toEqual({ zh, en })
-    // The renderer receives the store plus the snapshot source it binds as
-    // the card's `useSnapshot` hook; the transport stays plugin-level.
-    const injected = rowCards[0]!.inject?.() as {
-      controller: LinearSettingsStore
-      hooks: { snapshot: { getSnapshot(): unknown } }
-    }
-    expect(injected.controller).toBeInstanceOf(LinearSettingsStore)
-    expect(injected.hooks.snapshot.getSnapshot()).toEqual({ read: { status: 'idle' }, attempt: null, outcome: null })
+    expect(rowCards[0]!.key).toBe(LINEAR_SETTINGS_ROW_KEY)
+
+    // What the host actually does: render the registered component with the
+    // props the registration injects. This is the behaviour; the entry record's
+    // remaining fields are the host's to own.
+    const registered = rowCards[0]!
+    const { controller, hooks } = registered.inject!()
+    await controller.refresh()
+    const Card = registered.component as typeof LinearSettingsCard
+    const html = renderToStaticMarkup(createElement(Card, {
+      view: 'page',
+      t: translate('en'),
+      controller,
+      useSnapshot: <S,>(selector: (state: LinearSettingsState) => S): S => selector(hooks.snapshot.getSnapshot()),
+    }))
+
+    // The row's own bit reaches the card: disabled explains the toggle and
+    // offers no Authorize.
+    expect(html).toContain('data-ms-linear-state="disabled"')
+    expect(html).toContain(translate('en')('state.disabled.title'))
+    expect(html).not.toContain('data-ms-linear-action="authorize"')
   })
 })
 

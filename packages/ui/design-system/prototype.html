@@ -811,6 +811,7 @@ select.ctl { cursor: pointer; max-width: 180px; }
       <button class="nav-btn" data-dest="workflows" data-t="nav.workflows">Workflows</button>
       <button class="nav-btn" data-dest="iterations" data-t="nav.iterations">Iterations</button>
       <button class="nav-btn" data-dest="projects" data-t="nav.projects">Projects</button>
+      <button class="nav-btn" data-dest="sync-binding" data-t="screen.syncBinding">Sync binding</button>
     </nav>
     <div class="header-right">
       <select class="ctl" aria-label="Project scope" data-t-aria="header.scope">
@@ -3335,7 +3336,7 @@ select.ctl { cursor: pointer; max-width: 180px; }
   var SCREEN_DEST = {
     overview: "overview", issues: "issues", "issue-detail": "issues", workflows: "workflows",
     "workflow-detail": "workflows", iterations: "iterations", "iteration-detail": "iterations",
-    projects: "projects", "project-detail": "projects", focus: "focus"
+    projects: "projects", "project-detail": "projects", "sync-binding": "sync-binding", focus: "focus"
   };
 
   function bySelector(sel, root) { return Array.prototype.slice.call((root || document).querySelectorAll(sel)); }

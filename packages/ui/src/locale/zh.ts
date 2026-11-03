@@ -493,5 +493,7 @@ export const zh: Copy = {
     bindingsCount: (n) => `${n} 条绑定`,
     correspondenceNote: "直接来自 project_bindings 的绑定行 —— 操作者写入的远端标识，不是抓取来的 Linear 项目标题。",
     bindingErrorLabel: "bindingError",
+    /** 空绑定的读取未附带消息时使用的句子。 */
+    bindingAbsent: "本仓库的 .mstarc 未声明 [linear] 段。",
   },
 }
