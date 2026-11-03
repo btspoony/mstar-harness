@@ -367,9 +367,10 @@ export class MstarLinearAuth extends Service {
     before: Extract<LinearCredentialState, { kind: 'present' }>,
     fresh: TokenSet,
   ): 'refreshed' | 'adopted' {
-    // One critical section: the superseded check and the rename cannot be
-    // separated by a `mstar linear logout` in another process, so the
-    // operator's deletion is never overwritten by this attempt's grant.
+    // The superseded check sees a `mstar linear logout` or a newer grant that
+    // landed during the refresh's round trip, so this attempt's older lineage
+    // is declined. A write landing inside the final read→rename window is
+    // accepted (see `commitLinearCredential`).
     const written = commitLinearCredential((current) => {
       if (supersededBy(current, before.credential)) return null
       return {

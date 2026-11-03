@@ -1209,12 +1209,10 @@ export type { LinearCredential, LinearCredentialState } from "./linear-credentia
 export {
   clearLinearCredential,
   commitLinearCredential,
-  linearCredentialLockPath,
   linearCredentialPath,
   readLinearCredential,
   REFRESH_WINDOW_MS,
   supersededBy,
-  withLinearCredentialLock,
   writeLinearCredential,
 } from "./linear-credential.js";
 
