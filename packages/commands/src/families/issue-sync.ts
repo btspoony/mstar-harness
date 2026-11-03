@@ -4,7 +4,6 @@
  *
  *   mstar issue-sync import --project <project_id> [--max-pages <n>]
  *   mstar issue-sync push   --project <project_id> [--adopt <localId>=<ref>...]
- *                                                  [--force-create <localId>...]
  *                                                  [--release <localId>...]
  *
  * `import` refuses — before any write — when the binding cannot run, and
@@ -21,10 +20,12 @@
  * replaced has its later writes refused instead of applied, but a request the
  * predecessor already sent may still land — which is why reconcile-by-marker is
  * the first recovery, and why taking over a live holder is unsafe. The run
- * refuses the whole of itself before any write when the stored credential's
- * scope cannot create or update issues, discovers the workspace's real label
- * set, reconciles any ambiguous create by correlation marker, and records only
- * what a confirmed receipt (or an explicit `--adopt`) proved.
+ * refuses the whole of itself before any write when the credential it will
+ * actually authenticate with cannot create or update issues, discovers the
+ * workspace's real label set, reconciles any ambiguous create by correlation
+ * marker, and records only what a confirmed receipt (or an explicit `--adopt`)
+ * proved. Every operator verb is validated against the ledger before the first
+ * write, so a bad `--release` cannot land after an `--adopt` already did.
  * `--release` is the one exit for a create whose remote absence reconciliation's
  * own full scan proved: the residue drops to the retryable `failed` edge, so the
  * same run may create. It never deletes, never creates a label, and never sends
@@ -42,8 +43,11 @@ import { engineErrorFacts } from "./family-refusal.js";
 import {
   acquireRun,
   adoptItem,
+  assertReleaseTargets,
   createLinearProvider,
   DEFAULT_PROBE_DEADLINE_MS,
+  externalIdOf,
+  identityConflict,
   IMPORT_DIRECTION,
   PUSH_DIRECTION,
   importPage,
@@ -155,7 +159,6 @@ const pushSchema = z.object({
   project: z.string().optional(),
   adopt: z.array(z.string()).optional(),
   forceAdopt: z.array(z.string()).optional(),
-  forceCreate: z.array(z.string()).optional(),
   release: z.array(z.string()).optional(),
   takeRun: z.boolean().optional(),
   harness: z.string().optional(),
@@ -189,24 +192,23 @@ const flags: Record<keyof Input, string> = {
   harness: "--harness <root>",
   adopt: "--adopt <localId>=<issueUrl|externalId>",
   forceAdopt: "--force-adopt <localId>",
-  forceCreate: "--force-create <localId>",
   release: "--release <localId>",
   takeRun: "--take-run",
 };
 
 const options: Record<Verb, (keyof Input)[]> = {
   import: ["project", "maxPages", "harness"],
-  push: ["project", "adopt", "forceAdopt", "forceCreate", "release", "takeRun", "harness"],
+  push: ["project", "adopt", "forceAdopt", "release", "takeRun", "harness"],
 };
 const required: Record<Verb, (keyof Input)[]> = { import: ["project"], push: ["project"] };
 
 /**
- * `--adopt` / `--force-adopt` / `--force-create` / `--release` name one item
+ * `--adopt` / `--force-adopt` / `--release` name one item
  * each. Declared variadic so an operator can pass several (`--adopt A=LIN-1
  * --adopt B=LIN-2` or one `--adopt A=LIN-1 --adopt` list) without the CLI
  * refusing the repetition.
  */
-const variadicOptions: Partial<Record<keyof Input, true>> = { adopt: true, forceAdopt: true, forceCreate: true, release: true };
+const variadicOptions: Partial<Record<keyof Input, true>> = { adopt: true, forceAdopt: true, release: true };
 
 class UsageError extends Error {}
 
@@ -240,11 +242,11 @@ const RECOVERY: Record<string, string> = {
   "store.not-initialized":
     'Create and activate the store: `mstar harness scaffold` then `mstar store init`; retrying cannot create it.',
   "linear.scope-insufficient":
-    "The stored Linear credential cannot create or update issues. Reauthorize explicitly: open the dsh plugin Settings and press Authorize on the linear-mcp row, or run `mstar linear auth login` — both request read + issues:create and present the provider's consent screen. A refresh never widens an existing read-only grant.",
+    "The Linear credential this run authenticates with cannot create or update issues. Reauthorize explicitly: open the dsh plugin Settings and press Authorize on the linear-mcp row, or run `mstar linear auth login` — both request read + issues:create and present the provider's consent screen. A refresh never widens an existing read-only grant.",
   "linear.write-refused":
-    "The provider refused this write, so nothing was written and the item is failed for a safe retry. Read the cause: a request-level rejection (HTTP 4xx) and a schema missing `removeLabels` are both refused this way. Re-run `mstar issue-sync push --project <project-id>` after addressing it.",
+    "The provider refused this write before the mutation ran, so nothing was written and the item is failed for a safe retry. Read the cause: a request-level rejection (an HTTP 4xx other than 408/425) and a schema missing `removeLabels` are both refused this way; a 408 or 425 is reported as `unresolved` instead, because the mutation may already have run. Re-run `mstar issue-sync push --project <project-id>` after addressing it.",
   "linear.write-ambiguous":
-    "The write was sent but not confirmed, so delivery is unknown and the item stays pending with no external id. The next run reconciles it by correlation marker — exactly one match adopts that issue — and `--adopt <localId>=<issueUrl|externalId>` records the identity when you can see it yourself. `--force-create` cannot help here: it asserts absent content, not that a previous create never landed, so it refuses instead of risking a second issue. When the next run's reconcile scan reports that no remote issue carries the marker and you can confirm the issue is gone, release the residue with `--release <localId>`: that clears it to a retryable failure, so the same run creates it.",
+    "The write was sent but not confirmed, so delivery is unknown and the item stays pending with no external id. The next run reconciles it by correlation marker — exactly one match adopts that issue — and `--adopt <localId>=<issueUrl|externalId>` records the identity when you can see it yourself. When the next run's reconcile scan reports that no remote issue carries the marker and you can confirm the issue is gone, release the residue with `--release <localId>`: that clears it to a retryable failure, so the same run creates it.",
   "linear.label-unresolved":
     "The mapped kind label does not exist in this Linear workspace and push never creates labels. Create that label in Linear's UI, or redirect it in `.mstarc` with `[linear.mapping] kind.<kind>=<label>`; other items still push.",
   "linear.state-unresolved":
@@ -537,7 +539,6 @@ function adoptPairs(values: readonly string[] | undefined): Array<{ localId: str
 async function runPush(id: string, input: Input, invocation: InvocationContext): Promise<CommandEnvelope> {
   const projectId = requireValue(input.project, "--project");
   const adoptions = adoptPairs(input.adopt);
-  const forced = new Set((input.forceCreate ?? []).map((value) => value.trim()).filter((value) => value !== ""));
   const forcedAdopt = new Set((input.forceAdopt ?? []).map((value) => value.trim()).filter((value) => value !== ""));
   const released = new Set((input.release ?? []).map((value) => value.trim()).filter((value) => value !== ""));
   const takeRun = input.takeRun === true;
@@ -545,18 +546,28 @@ async function runPush(id: string, input: Input, invocation: InvocationContext):
     resolveProcessHarnessDir(invocation.cwd, input.harness) ?? input.harness ?? invocation.controlRoot ?? invocation.cwd;
   const context = { harnessDir };
 
-  // 1. SCOPE PREFLIGHT, before anything is resolved or written. A credential
-  //    that cannot create/update issues refuses the whole run here: no probe, no
-  //    listing, no ledger write. An absent credential is not this preflight's
-  //    call — a host may hold the transport, and the probe reports the truth.
+  // 1. SCOPE PREFLIGHT, before anything is resolved or written. Only the
+  //    credential this run will actually authenticate with decides, and that is
+  //    `resolveStoredToken`'s precedence: a usable access token is used, an
+  //    expired one is refreshed (a refresh never widens a grant, so its stored
+  //    scope still decides), and a run that can do neither falls through to an
+  //    exported LINEAR_API_KEY — whose capability, not this file's scope, is
+  //    what applies. An absent credential is not this preflight's call either: a
+  //    host may hold the transport, and the probe reports the truth.
   const stored = readLinearCredential();
-  if (stored.kind === "present" && !linearScopeCanWrite(stored.credential.scope)) {
-    throw Object.assign(
-      new Error(
-        `[linear.scope-insufficient] the stored Linear credential's scope is ${JSON.stringify(stored.credential.scope ?? "absent")}, which cannot create or update issues; nothing was written`,
-      ),
-      { code: "linear.scope-insufficient" },
-    );
+  if (stored.kind === "present") {
+    const { credential } = stored;
+    const refreshable =
+      invocation.effects.linearRefresh !== undefined && credential.refreshToken !== null && credential.clientId !== null;
+    const usable = credential.expiresAt === null || credential.expiresAt > Date.now();
+    if ((usable || refreshable) && !linearScopeCanWrite(credential.scope)) {
+      throw Object.assign(
+        new Error(
+          `[linear.scope-insufficient] the Linear credential this run will use has scope ${JSON.stringify(credential.scope ?? "absent")}, which cannot create or update issues; nothing was written`,
+        ),
+        { code: "linear.scope-insufficient" },
+      );
+    }
   }
 
   // 2. The binding declarations, read before any store or provider work.
@@ -680,6 +691,19 @@ async function runPush(id: string, input: Input, invocation: InvocationContext):
       states: [...states].sort(),
     };
 
+    // 3c. EVERY operator verb is validated against the ledger BEFORE the first
+    //     write. Adoptions and releases arrive together, and a bad `--release`
+    //     discovered after an `--adopt` had already been recorded left the run
+    //     half-applied behind a usage refusal. Either every named item is legal
+    //     or nothing is touched.
+    for (const { localId, reference } of adoptions) {
+      const externalId = externalIdOf(reference);
+      const existing = readItem(db, { bindingId, direction: PUSH_DIRECTION, localId });
+      const conflict = identityConflict(existing, localId, externalId);
+      if (conflict !== null && !forcedAdopt.has(localId)) throw conflict;
+    }
+    assertReleaseTargets(db, bindingId, released);
+
     // 4. Operator-confirmed adoptions. These are ordinary ledger verbs: the row
     //    takes the identity and FORGETS the proof that belonged to the previous
     //    one, so the candidate loop below converges this item's content onto the
@@ -704,12 +728,7 @@ async function runPush(id: string, input: Input, invocation: InvocationContext):
 
     // 6. One write per candidate, classified by its receipt.
     for (const candidate of selectPushCandidates(db, bindingId)) {
-      const outcome: PushOutcome = await pushItem(
-        db,
-        provider,
-        forced.has(candidate.localId) ? { ...pushContext, forceCreate: true } : pushContext,
-        candidate,
-      );
+      const outcome: PushOutcome = await pushItem(db, provider, pushContext, candidate);
       report[outcome.outcome]++;
       report.items.push({
         localId: outcome.localId,
@@ -742,7 +761,7 @@ export function getIssueSyncCommandDefinitions(): readonly CommandDefinition[] {
     import:
       "Import the bound Linear project's issues into this store, read-only toward Linear; a second run with unchanged remote state imports nothing. --max-pages bounds one run (default 20 pages of 50) and the reported cursor resumes it. An issue Linear returns without a usable title/identifier is reported as stranded and the scan continues; repair it in Linear's UI and the next full scan picks it up.",
     push:
-      "Push this project's local issues to the bound Linear team: create when no remote identity is known, update when a confirmed one exists, skip when the payload is unchanged. ONE push run per binding: a second is refused, naming the holder and both exits - wait, or --take-run. An unconfirmed create stays pending and the next run reconciles it by correlation marker — never by title/description — so nothing creates again while that attempt is unresolved. --adopt <localId>=<issueUrl|externalId> records an identity you confirmed yourself and, when that replaces a different recorded id, clears the old identity's proof; --force-adopt <localId> allows replacing an identity that is already recorded; --force-create <localId> says the remote issue does not exist, and is refused while an unresolved create attempt stands (reconcile, --adopt or --release first); --release <localId> releases a pending create with no remote id after this run's reconcile scan found no issue carrying its marker, so the same run creates it - a scan that finds a match refuses the release, because that item's recovery is adoption. Requires a credential granted read + issues:create.",
+      "Push this project's local issues to the bound Linear team: create when no remote identity is known, update when a confirmed one exists, skip when the payload is unchanged. ONE push run per binding: a second is refused, naming the holder and both exits - wait, or --take-run. An unconfirmed create stays pending and the next run reconciles it by correlation marker — never by title/description — so nothing creates again while that attempt is unresolved. --adopt <localId>=<issueUrl|externalId> records an identity you confirmed yourself and, when that replaces a different recorded id, clears the old identity's proof; --force-adopt <localId> allows replacing an identity that is already recorded; --release <localId> releases a pending create with no remote id after this run's reconcile scan found no issue carrying its marker, so the same run creates it - a scan that finds a match refuses the release, because that item's recovery is adoption. Requires a credential granted read + issues:create.",
   };
   return verbs.map((verb) => {
     const id = `issue-sync.${verb}`;
@@ -772,14 +791,6 @@ export function getIssueSyncCommandDefinitions(): readonly CommandDefinition[] {
               required: false,
               constraint:
                 "optional, repeatable: <localId> whose already-recorded remote identity may be replaced by --adopt; without it a different reference is refused",
-            },
-            {
-              name: "forceCreate",
-              ownership: "caller" as const,
-              route,
-              required: false,
-              constraint:
-                "optional, repeatable: <localId> whose remote absence you confirmed. It asserts an item with NO unresolved create attempt and is refused while one stands (reconcile, --adopt or --release first)",
             },
             {
               name: "release",

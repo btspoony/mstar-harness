@@ -12,21 +12,22 @@ packages: engine, commands
   `external_id`, so a hash is never treated as proof the remote issue exists.
 - **An unconfirmed write can never duplicate a create.** The write adapter classifies every outcome as
   `confirmed` / `refused` / `ambiguous`; `refused` is provably not delivered and records `failed` for a safe
-  retry, while `ambiguous` leaves the row `pending` with no id. The next run reconciles such rows by the
+  retry, while `ambiguous` leaves the row `pending` with no id. A 4xx is `refused` only where the server cannot
+  have executed the write: `408 Request Timeout` and `425 Too Early` are `ambiguous`, because a deadline or an
+  early-data refusal can arrive after the mutation ran. The next run reconciles such rows by the
   application-owned correlation marker `<!-- mstar-sync: <workspace>/<team>/<storeId>/<localId> -->`: exactly
   one match adopts that id, zero or several report `unresolved` and write nothing, and a run with no ambiguous
   residue issues zero listing calls. Title+description equality is never adoption evidence, and the marker
   carries the store's own identity so two harnesses mirroring one team never adopt each other's rows.
-  `--force-create` decides that a remote issue is absent. It cannot decide whether an earlier create landed, so
-  while a `pending` row carries no id the flag is REFUSED: a second issue beside that residue could never be
-  reconciled. The refusal names the three recoveries — re-run push so reconcile adopts by marker, record an
-  identity you can see with `--adopt`, or, when the scan proves nothing carries the marker and the issue is
-  genuinely gone, `--release <localId>`. A release drops that `pending` create to the retryable `failed` edge with
-  the operator's judgement as its reason, so the same run may create; a scan that found a match refuses it,
-  because that item's recovery is adoption. The create still takes a send-right claim — binding, item and content
-  hash — as its intent record, but the claim is no longer an arbiter between runs and no longer carries the ledger
-  revision: the run lease below is what separates RUNNING attempts, and a stable per-residue key means a re-run can
-  never mint a new one mid-attempt.
+  No flag can assert that a remote issue is absent: neither an unresolved create attempt nor any earlier request
+  can be proven not to have landed, so while a `pending` row carries no id nothing creates. The three recoveries
+  are re-run push so reconcile adopts by marker, record an identity you can see with `--adopt`, or, when the scan
+  proves nothing carries the marker and the issue is genuinely gone, `--release <localId>`. A release drops that
+  `pending` create to the retryable `failed` edge with the operator's judgement as its reason, so the same run may
+  create; a scan that found a match refuses it, because that item's recovery is adoption. The create still takes
+  a send-right claim — binding, item and content hash — as its intent record, but the claim is no longer an
+  arbiter between runs and no longer carries the ledger revision: the run lease below is what separates RUNNING
+  attempts, and a stable per-residue key means a re-run can never mint a new one mid-attempt.
 - **One push run per binding, with an explicit takeover.** `mstar issue-sync push` is an operator command, not a
   concurrent service, so it now serialises instead of pretending to be concurrency-safe. Migration 18 adds
   `sync_runs`, one row per `(binding, direction)`; the run is claimed before any candidate work by a single
@@ -43,8 +44,8 @@ packages: engine, commands
   may still reach the provider, which is why the reconcile-by-marker scan remains the first recovery and why
   `pending` residue is never created over. Taking the run over from a LIVE holder is therefore unsafe —
   `--take-run` is for a holder the operator confirmed is dead, never a timer or a liveness guess.
-  `--force-create` and `--release` keep their meanings; a release still needs no check for a RUNNING create of that
-  residue, but it can never see one a dead holder already sent.
+  `--release` keeps its meaning; a release still needs no check for a RUNNING create of that residue, but it can
+  never see one a dead holder already sent.
 - **Labels are resolved, never created.** Kind→label is resolved against the workspace's real label set
   discovered through `list_issue_labels`; a mapped name the workspace lacks refuses that item
   (`linear.label-unresolved`) and other items proceed. A changed kind adds the new label and removes every
@@ -58,12 +59,13 @@ packages: engine, commands
   renamed workflow is diagnosed in the run instead of failing every item at the provider. The report carries the
   state set the run resolved against, beside the label set.
 - **Writes need a write scope.** The run refuses with `linear.scope-insufficient` before any provider call when
-  the stored credential's `scope` carries neither `issues:create` nor `write`, naming the explicit
-  reauthorization (`mstar linear auth login` or the dsh Settings Authorize). A refresh never widens a read-only
+  the credential it will actually authenticate with carries neither `issues:create` nor `write`, naming the
+  explicit reauthorization (`mstar linear auth login` or the dsh Settings Authorize). Only the effective
+  credential is gated: a stored grant that is expired and unrefreshable is not the one used, so an exported
+  `LINEAR_API_KEY` supplies the run and decides by its own capability. A refresh never widens a read-only
   grant. Operator recovery beyond automatic reconcile: `--adopt <localId>=<issueUrl|externalId>` records an
-  identity you confirmed, `--force-create <localId>` asserts remote absence — refused while an unresolved
-  create attempt stands, so reconcile, adopt or release first — and `--release <localId>` clears that attempt
-  once reconcile's own scan proves no remote issue carries the item's marker.
+  identity you confirmed, and `--release <localId>` clears a `pending` create once reconcile's own scan proves no
+  remote issue carries the item's marker.
 - **Adoption drops the proof of a REPLACED identity.** `--adopt` records the identity you confirmed and, when that
   is a different issue than the row already pointed at, CLEARS the payload hash and label ownership it held: both
   described the previous issue, so carrying them over would report `skipped` for content the newly adopted issue
@@ -109,9 +111,9 @@ packages: engine, commands
   `<!-- mstar-sync: <workspace>/<team>/<storeId>/<localId> -->` 对账：恰好一个匹配时采纳该 id，零个或多个则报告
   `unresolved` 且不写入任何内容；没有含糊残留时一次列表调用都不发生。title+description 相同从不构成采纳证据，标记
   携带本 store 自身身份，因此两个镜像同一团队的 harness 永不互相采纳对方行。
-  `--force-create` 判定的是远端 issue 不存在。它无法判定先前的创建是否落地，因此当存在不带 id 的 `pending`
-  行时该标志会被拒绝：在那条残留旁边再建一个永远无法对账。
-  拒绝文本会点名三条恢复路径——重跑 push 让对账按标记采纳，用 `--adopt` 记录你已看到的身份，或在扫描证明
+  任何旗标都无法断言远端 issue 不存在：既无法证明未解决的创建尝试没有落地，也无法证明先前的请求没有落地，
+  因此当存在不带 id 的 `pending` 行时不会创建任何内容。
+  三条恢复路径——重跑 push 让对账按标记采纳，用 `--adopt` 记录你已看到的身份，或在扫描证明
   没有任何 issue 携带该标记、且该 issue 确实已不存在时用 `--release <localId>`。释放会把这条 `pending`
   创建落到可重试的 `failed` 边上，并以操作者的判断作为原因，因此同一次运行即可创建；若扫描找到了匹配则会
   拒绝释放，因为那一项的恢复手段是采纳。创建仍会取得一个发送权声明（绑定、条目、内容 hash）作为意图记录，
@@ -129,7 +131,7 @@ packages: engine, commands
   而正常的单次运行路径完全不变。任何守卫都做不到的是召回被接管者**已经发出**的请求：它仍可能到达 provider，
   这正是「按标记对账」依旧是第一恢复手段、以及绝不覆盖 `pending` 残留的原因。因此从**活着的**持有者手中接管
   是不安全的——`--take-run` 只用于操作者确认已死的持有者，绝不是定时器或存活猜测。
-  `--force-create` 与 `--release` 保留原语义：释放仍不需要检查该残留是否有**正在运行**的创建，但它永远看不到
+  `--release` 保留原语义：释放仍不需要检查该残留是否有**正在运行**的创建，但它永远看不到
   已死持有者已经发出的那一个。
 - **标签只解析、绝不创建。** kind→label 会针对通过 `list_issue_labels` 发现的真实工作区标签集解析；工作区没有该
   名称时仅拒绝该项（`linear.label-unresolved`），其余项继续。kind 变化时新增新标签，并通过 `removeLabels` 移除
@@ -140,11 +142,12 @@ packages: engine, commands
   状态解析；团队缺少该名称时仅拒绝该项（`linear.state-unresolved`），并在调用之前指名字段重定向
   `[linear.mapping] disposition.<state>`，因此重命名过的流程会在本次运行里被诊断出来，而不是让每一项都在 provider
   处失败。报告会同时带上本次运行解析所用的状态集与标签集。
-- **写入需要写权限。** 当存储凭据的 `scope` 既无 `issues:create` 也无 `write` 时，运行在任何 provider 调用之前即以
-  `linear.scope-insufficient` 拒绝，并指明显式重新授权（`mstar linear auth login` 或 dsh Settings Authorize）。
-  刷新永远不会扩大只读授权。自动对账之外的操作者恢复手段：`--adopt <localId>=<issueUrl|externalId>` 记录你已确认的
-  身份；`--force-create <localId>` 断言远端不存在，但在存在未解决的创建尝试时会被拒绝，因此先对账、采纳或释放；
-  `--release <localId>` 在对账自身的扫描证明没有任何远端 issue 携带该项标记后，清除该次创建尝试。
+- **写入需要写权限。** 当本次运行**实际用于认证的那份凭据**的 `scope` 既无 `issues:create` 也无 `write` 时，运行在
+  任何 provider 调用之前即以 `linear.scope-insufficient` 拒绝，并指明显式重新授权（`mstar linear auth login` 或
+  dsh Settings Authorize）。只有生效凭据会被门禁：已过期且无法刷新的存储授权并非本次所用，此时导出的
+  `LINEAR_API_KEY` 会承接本次运行并按自身能力判定。刷新永远不会扩大只读授权。
+  自动对账之外的操作者恢复手段：`--adopt <localId>=<issueUrl|externalId>` 记录你已确认的
+  身份；`--release <localId>` 在对账自身的扫描证明没有任何远端 issue 携带该项标记后，清除该次创建尝试。
 - **采纳会丢弃上一身份的证明。** `--adopt` 记录操作者确认的身份，并**清除**该行原有的载荷 hash 与标签归属：
   两者描述的是它此前指向的那个 issue，沿用会让本次运行对新采纳的远端从未收到的内容报告 `skipped`，
   也会让之后的 kind 变更移除属于上一个 issue 的标签。因此内容会在同一次运行内收敛到被采纳的 issue 上。

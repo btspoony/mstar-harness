@@ -217,6 +217,24 @@ describe("the receipt is three-valued and never upgrades doubt to success", () =
     const receipt = await client.write.applyWrite({ kind: "create", payload: payload() });
     expect(receipt).toMatchObject({ kind: "refused", code: "linear.write-refused" });
   });
+
+  test("408 and 425 are ambiguous, because the mutation may already have run", async () => {
+    // A create refused as provably-undelivered would be created AGAIN by the
+    // next run; these two answers can arrive after the server executed it.
+    for (const status of [408, 425]) {
+      const { write } = side([{ kind: "http-status", status }], { team: "ENG" });
+      const receipt = await write.applyWrite({ kind: "create", payload: payload() });
+      if (receipt.kind !== "ambiguous") throw new Error(`HTTP ${status} must be ambiguous, got ${receipt.kind}`);
+      expect(receipt.cause).toContain(`HTTP ${status}`);
+      expect(receipt.cause).toContain("unconfirmed");
+    }
+    // The neighbouring statuses stay provable refusals.
+    for (const status of [400, 401, 403, 404, 409, 429]) {
+      const { write } = side([{ kind: "http-status", status }], { team: "ENG" });
+      const receipt = await write.applyWrite({ kind: "create", payload: payload() });
+      expect(receipt).toMatchObject({ kind: "refused", code: "linear.write-refused" });
+    }
+  });
 });
 
 describe("label discovery", () => {

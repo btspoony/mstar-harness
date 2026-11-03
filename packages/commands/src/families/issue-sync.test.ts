@@ -552,6 +552,58 @@ describe("push — the credential scope preflight", () => {
     expect(provider.calls).toEqual([]);
   });
 
+  test("an expired, unrefreshable stored credential does not refuse a run that uses the environment key", async () => {
+    const provider = writeProvider(["bug"]);
+    const f = await fixture("push-env-key-fallback", null);
+    // Read-only AND expired with no refresh seam: this run cannot use it, so the
+    // provider falls back to the exported key, whose capability decides.
+    storeCredential("read", Date.now() - 60_000);
+    const previousKey = process.env.LINEAR_API_KEY;
+    process.env.LINEAR_API_KEY = ["not", "a", "real", "env", "key"].join("-");
+    try {
+      {
+        const handle = await openStore({ harnessDir: f.harnessDir }, "write");
+        handle.db.prepare(
+          "insert into issues(id, project_id, title, kind, severity, impact, acceptance, created_at, updated_at, identity_key)" +
+            " values ('I-000811', ?, 'Push me', 'bug', 'high', 'impact', 'acceptance', 'now', 'now', 'sync-I-000811')",
+        ).run(PROJECT);
+        handle.close();
+      }
+      const result = (await executeCommand("issue-sync.push", { project: PROJECT }, withProvider(f, provider))) as {
+        status: string;
+        code?: string;
+        data?: { created: number };
+      };
+      expect(result.code).not.toBe("linear.scope-insufficient");
+      expect(result.status).toBe("ok");
+      expect(result.data?.created).toBe(1);
+      // The preflight let the run through: the probe and both discoveries ran.
+      expect(provider.calls).toEqual(["probe", "discoverLabels", "discoverStates", "applyWrite"]);
+    } finally {
+      if (previousKey === undefined) delete process.env.LINEAR_API_KEY;
+      else process.env.LINEAR_API_KEY = previousKey;
+    }
+  });
+
+  test("a live read-only stored credential still refuses when no environment key exists", async () => {
+    const provider = writeProvider();
+    const f = await fixture("push-read-scope-no-key", null);
+    storeCredential("read");
+    const previousKey = process.env.LINEAR_API_KEY;
+    delete process.env.LINEAR_API_KEY;
+    try {
+      const result = (await executeCommand("issue-sync.push", { project: PROJECT }, withProvider(f, provider))) as {
+        status: string;
+        code: string;
+      };
+      expect(result.status).toBe("refused");
+      expect(result.code).toBe("linear.scope-insufficient");
+      expect(provider.calls).toEqual([]);
+    } finally {
+      if (previousKey !== undefined) process.env.LINEAR_API_KEY = previousKey;
+    }
+  });
+
   test("a scope carrying issues:create pushes: discovery runs, then one confirmed create", async () => {
     const provider = writeProvider(["bug"]);
     const f = await fixture("push-write-scope", null);
@@ -788,6 +840,34 @@ describe("push — the credential scope preflight", () => {
     expect(writes.map((write) => write.kind)).toEqual(["create", "update"]);
   });
 
+  test("a bad --release with a valid --adopt writes nothing at all", async () => {
+    const provider = writeProvider(["bug"]);
+    const f = await fixture("push-operator-atomicity", null);
+    storeCredential("read,issues:create");
+    {
+      const handle = await openStore({ harnessDir: f.harnessDir }, "write");
+      handle.db.prepare(
+        "insert into issues(id, project_id, title, kind, severity, impact, acceptance, created_at, updated_at, identity_key)" +
+          " values ('I-000812', ?, 'Adoptable', 'bug', 'high', 'i', 'a', 'now', 'now', 'sync-I-000812')",
+      ).run(PROJECT);
+      handle.close();
+    }
+    const before = await storeSnapshot(f);
+    // `I-000812` is a legal adoption target; the release names an item with no
+    // ledger row, which is a usage error. Deciding it AFTER the adoption had
+    // already written is what made the run half-applied behind a refusal.
+    const result = (await executeCommand(
+      "issue-sync.push",
+      { project: PROJECT, adopt: ["I-000812=LIN-1"], release: ["I-000899"] },
+      withProvider(f, provider),
+    )) as { status: string; code: string };
+    expect(result.status).toBe("refused");
+    expect(result.code).toBe("sync.illegal-transition");
+    // Neither verb landed, and the provider was never written to.
+    expect(await storeSnapshot(f)).toEqual(before);
+    expect(provider.writes).toEqual([]);
+  });
+
   test("--force-adopt back to a previously held issue moves the row and the report together", async () => {
     const writes: Array<{ kind: string; externalId?: string }> = [];
     const provider = {
@@ -849,7 +929,7 @@ describe("push — the credential scope preflight", () => {
     }
   });
 
-  test("--force-create is refused while an unconfirmed create attempt stands, and --release is the exit for proven absence", async () => {
+  test("an unconfirmed create is never created over, and --release is the exit for proven absence", async () => {
     const writes: Array<{ kind: string }> = [];
     const receipts = [{ kind: "ambiguous" as const, cause: "connection closed mid-call" }];
     const provider = {
@@ -870,7 +950,7 @@ describe("push — the credential scope preflight", () => {
         return new Set(["Todo", "Done", "Canceled"]);
       },
     };
-    const f = await fixture("push-force-create-residue", null);
+    const f = await fixture("push-unresolved-residue", null);
     storeCredential("read,issues:create");
     {
       const handle = await openStore({ harnessDir: f.harnessDir }, "write");
@@ -889,18 +969,16 @@ describe("push — the credential scope preflight", () => {
     expect(first.data?.items).toEqual([expect.objectContaining({ localId: "I-000806", outcome: "unresolved" })]);
     expect(writes).toHaveLength(1);
 
-    // 2. `--force-create` cannot establish absence here. The row it reads may
-    //    belong to a create still inside its provider call, so the run refuses
-    //    the flag and names the recoveries instead of sending a second create.
-    const forced = (await executeCommand("issue-sync.push", { project: PROJECT, forceCreate: ["I-000806"] }, context)) as {
+    // 2. A second push reports the SAME unresolved residue and names both
+    //    recoveries instead of sending a second create.
+    const again = (await executeCommand("issue-sync.push", { project: PROJECT }, context)) as {
       status: string;
       data?: { items: Array<{ localId: string; outcome: string; cause?: string }> };
     };
-    expect(forced.status).toBe("ok");
-    expect(forced.data?.items).toEqual([expect.objectContaining({ localId: "I-000806", outcome: "unresolved" })]);
-    expect(forced.data?.items[0]?.cause).toContain("--force-create cannot establish its absence");
-    expect(forced.data?.items[0]?.cause).toContain("--adopt");
-    expect(forced.data?.items[0]?.cause).toContain("--release <localId>");
+    expect(again.status).toBe("ok");
+    expect(again.data?.items).toEqual([expect.objectContaining({ localId: "I-000806", outcome: "unresolved" })]);
+    expect(again.data?.items[0]?.cause).toContain("--adopt");
+    expect(again.data?.items[0]?.cause).toContain("--release <localId>");
     expect(writes).toHaveLength(1);
 
     const db = await f.db();
@@ -1033,7 +1111,7 @@ describe("push — the credential scope preflight", () => {
     }
   });
 
-  test("the CLI spelling declares the push verb with its four repeatable operator flags and the run takeover", async () => {
+  test("the CLI spelling declares the push verb with its three repeatable operator flags and the run takeover", async () => {
     const { getCommandDefinitions } = await import("../definitions.js");
     const definition = getCommandDefinitions().find((entry) => entry.id === "issue-sync.push");
     expect(definition).toBeDefined();
@@ -1042,7 +1120,6 @@ describe("push — the credential scope preflight", () => {
       "--project <id>",
       "--adopt <localId>=<issueUrl|externalId>",
       "--force-adopt <localId>",
-      "--force-create <localId>",
       "--release <localId>",
       "--take-run",
       "--harness <root>",
@@ -1050,7 +1127,6 @@ describe("push — the credential scope preflight", () => {
     expect(definition!.cli.options.filter((option) => option.variadic === true).map((option) => option.key)).toEqual([
       "adopt",
       "forceAdopt",
-      "forceCreate",
       "release",
     ]);
     // Discoverability: both the help text and the machine-readable requirement
