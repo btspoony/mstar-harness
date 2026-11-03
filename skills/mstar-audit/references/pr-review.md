@@ -250,7 +250,7 @@ Presumptive-structural classes: a refactor that relocates complexity instead of 
 Field placement depends on which artifact is being written, and only the stage-2 draft is machine-checked for adjacency:
 
 - **Stage-2 finding draft** (the seat's findings payload / draft file): `- **Merge class**: must-fix | should-fix | nit`, immediately after `Confidence` and before `Fix sketch`. This is what `mstar lint <file.md> --type finding --pr-variant` (equivalently `validateFindingDoc(text, { prVariant: true })`) checks — it enforces presence, enum, and that Merge class sits on the line immediately after `Confidence` (`prreview.finding.merge-class-placement`).
-- **Rendered report body** (§ Report template `####` block): the renderer emits `Evidence` → `Location` → `Category` (when the envelope carries one) → `Merge class` last, and the agent inserts `Impact` / `Confidence` / `Fix sketch` **before** `Merge class` — so the posted body still satisfies the same adjacency rule with `Confidence` immediately above `Merge class`.
+- **Rendered report body** (§ Report template `####` block): the renderer emits `Evidence` → `Location` → `Category` (when the envelope carries one) → `Merge class` **last**. The agent inserts its three lines immediately above that trailing bullet — `Impact`, then `Fix sketch`, then `Confidence` — so the block ends `… Impact / Fix sketch / Confidence / Merge class`: every insertion sits before `Merge class`, and `Merge class` stays immediately after `Confidence`. Do not append an agent line after `Merge class`; that breaks the adjacency rule.
 
 The shared finding template (`references/finding-format.md`) is unchanged — this field is PR-review-only.
 
