@@ -70,10 +70,10 @@ export function apply(ctx: ClientContext): void {
     () => ctx.sidebarRightTabs.register(mstarPanelDefinition(t)),
     'ui-mstar-panel: tab type',
   )
-  // The linear-mcp row's Settings card (plan 20261102-linear-oauth-guidance
-  // Task 3): one keyed `plugins.row.config` entry, keyed by the row the
-  // bundle patch declares. The row's native enable toggle stays the host's;
-  // this card only reads it and offers Authorize after it is on.
+  // The linear-mcp row's Settings card: one keyed `plugins.row.config` entry,
+  // keyed by the row the bundle patch declares. The row's native enable
+  // toggle stays the host's; this card only reads it and offers Authorize
+  // after it is on.
   const linearSettings = new LinearSettingsStore(connection, {
     loopback: connection?.isLoopback ?? true,
   })

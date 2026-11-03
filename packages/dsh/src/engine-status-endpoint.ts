@@ -422,9 +422,9 @@ export function mstarEngineStatusContribution(): TypertContribution {
       mstarMilestoneUpdateInvocation(),
       mstarMilestoneAssignInvocation(),
       mstarMilestoneRemoveInvocation(),
-      // The Linear Settings card (plan 20261102-linear-oauth-guidance Task 3):
-      // the same one contribution carries its four root-scope operations —
-      // one status read plus the host-owned authorization attempt.
+      // The Linear Settings card: the same one contribution carries its four
+      // root-scope operations — one status read plus the host-owned
+      // authorization attempt.
       mstarLinearStatusInvocation(),
       mstarLinearAuthorizeBeginInvocation(),
       mstarLinearAuthorizeStatusInvocation(),

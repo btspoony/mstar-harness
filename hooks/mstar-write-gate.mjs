@@ -16692,6 +16692,10 @@ update issue_sync_state
  where item_state = 'pending'
    and last_remote_updated_at is not null;
 `;
+var MIGRATION_17_SQL = `
+alter table issue_sync_state add column last_request_hash text;
+alter table issue_sync_state add column last_kind_label text;
+`;
 var MIGRATIONS;
 var DSH_HOST_STATE_MIGRATION;
 var EXECUTION_TABLE_NAMES;
@@ -16743,7 +16747,8 @@ var init_store_db = __esm(() => {
     { version: 13, name: "issue-project-moves", sql: MIGRATION_13_SQL },
     { version: 14, name: "compass-plan-membership", sql: MIGRATION_14_SQL },
     { version: 15, name: "sync-ledger", sql: MIGRATION_15_SQL },
-    { version: 16, name: "sync-pending-target", sql: MIGRATION_16_SQL }
+    { version: 16, name: "sync-pending-target", sql: MIGRATION_16_SQL },
+    { version: 17, name: "sync-push-ledger", sql: MIGRATION_17_SQL }
   ];
   DSH_HOST_STATE_MIGRATION = MIGRATIONS.find((migration) => migration.name === "dsh-host-ledgers");
   EXECUTION_TABLE_NAMES = [
@@ -18990,6 +18995,7 @@ var ROADMAP_MIGRATION_VERSION = MIGRATIONS.find((migration) => migration.name ==
 var EXECUTION_COVERAGE_MIGRATION_VERSION = MIGRATIONS.find((migration) => migration.name === "execution-coverage-column")?.version ?? Number.POSITIVE_INFINITY;
 var MILESTONE_MIGRATION_VERSION = MIGRATIONS.find((migration) => migration.name === "project-milestones")?.version ?? Number.POSITIVE_INFINITY;
 var SYNC_PENDING_TARGET_MIGRATION_VERSION = MIGRATIONS.find((migration) => migration.name === "sync-pending-target")?.version ?? Number.POSITIVE_INFINITY;
+var SYNC_PUSH_LEDGER_MIGRATION_VERSION = MIGRATIONS.find((migration) => migration.name === "sync-push-ledger")?.version ?? Number.POSITIVE_INFINITY;
 var PROJECT_MOVES_MIGRATION_VERSION = MIGRATIONS.find((migration) => migration.name === "issue-project-moves")?.version ?? Number.POSITIVE_INFINITY;
 var SYNC_LEDGER_MIGRATION_VERSION = MIGRATIONS.find((migration) => migration.name === "sync-ledger")?.version ?? Number.POSITIVE_INFINITY;
 var DSH_MIGRATION_VERSION = MIGRATIONS.find((migration) => migration.name === "dsh-host-ledgers")?.version ?? Number.POSITIVE_INFINITY;

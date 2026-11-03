@@ -138,7 +138,7 @@ describe("selectPushCandidates", () => {
 });
 
 describe("(a) a confirmed create records identity and hash; a later change updates that id", () => {
-  test("create → applied with external_id and last_request_hash; changed title → update on the same id", async () => {
+  test("create -> applied with external_id and last_request_hash; changed title -> update on the same id", async () => {
     const { db, close } = await openedStore("confirmed-create");
     try {
       addIssue(db, "I-000911");
@@ -814,7 +814,7 @@ describe("(k) two pushes with the same content and revision produce exactly one 
   });
 });
 
-describe("(l) disposition→state names are preflighted against the team, like labels", () => {
+describe("(l) disposition -> state names are preflighted against the team, like labels", () => {
   test("a team without the mapped state refuses that item before the call, naming the mapping key", async () => {
     const { db, close } = await openedStore("state-preflight");
     try {
