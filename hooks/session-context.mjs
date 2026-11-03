@@ -29998,7 +29998,8 @@ function markItem(db, input, target, text6) {
     remoteUpdatedAt: input.remoteUpdatedAt ?? null,
     ...input.externalId == null ? {} : { externalId: input.externalId },
     ...input.requestHash == null ? {} : { requestHash: input.requestHash },
-    ...input.kindLabel == null ? {} : { kindLabel: input.kindLabel }
+    ...input.kindLabel == null ? {} : { kindLabel: input.kindLabel },
+    ...input.clearProof === true ? { clearProof: true } : {}
   });
   return withSyncTransaction(db, () => {
     const replayed = replayOrRefuse(db, operationId, hash2);
@@ -30020,8 +30021,8 @@ function markItem(db, input, target, text6) {
       pending_target: applied ? null : row.pending_target,
       last_error: target === "failed" ? text6 ?? null : null,
       last_skip_reason: target === "skipped" ? text6 ?? null : null,
-      last_request_hash: applied ? input.requestHash ?? row.last_request_hash : row.last_request_hash,
-      last_kind_label: applied ? input.kindLabel == null ? row.last_kind_label : encodeKindLabels([input.kindLabel]) : row.last_kind_label
+      last_request_hash: applied ? input.clearProof === true ? null : input.requestHash ?? row.last_request_hash : row.last_request_hash,
+      last_kind_label: applied ? input.clearProof === true ? null : input.kindLabel == null ? row.last_kind_label : encodeKindLabels([input.kindLabel]) : row.last_kind_label
     }, now2);
     const item = toItem(requireItem(selectRow(db, bindingId, direction, localId)));
     recordOperation2(db, operationId, hash2, item, now2);
@@ -30392,7 +30393,7 @@ function createLinearWrite(deps) {
       }
       let args;
       try {
-        args = argumentsFor(write2, tool, deps.advertisedArguments.bind(deps), deps.scope?.team);
+        args = argumentsFor(write2, tool, deps.advertisedArguments.bind(deps), deps.scope);
       } catch (error) {
         if (error instanceof SyncError)
           return refused2(error.code, stripCode(error.message));
@@ -30439,7 +30440,7 @@ function refused2(code2, cause) {
 function stripCode(message) {
   return message.replace(/^\[[^\]]+\]\s*/, "");
 }
-function argumentsFor(write2, tool, advertised, team) {
+function argumentsFor(write2, tool, advertised, scope) {
   const payload = write2.payload;
   const args = {
     title: payload.title,
@@ -30460,10 +30461,12 @@ function argumentsFor(write2, tool, advertised, team) {
     }
     return args;
   }
-  if (team === undefined || team.trim() === "") {
+  if (scope?.team === undefined || scope.team.trim() === "") {
     throw new SyncError("linear.write-refused", `a create needs the bound team, and this binding names none; nothing was written (set [linear] team=<key> in .mstarc)`);
   }
-  args.team = team;
+  args.team = scope.team;
+  if (scope.project !== undefined && scope.project.trim() !== "")
+    args.project = scope.project;
   return args;
 }
 function classify(outcome) {
@@ -30740,11 +30743,14 @@ function priorityOfSeverity(severity, mapping) {
   const mapped = facet(mapping?.severity, band, PRIORITY_BANDS.map((value) => String(value)));
   return Number(mapped);
 }
-function stateOfDisposition(disposition, mapping) {
+function defaultStateOfDisposition(disposition) {
   if (!Object.hasOwn(STATE_OF_DISPOSITION, disposition)) {
     throw new SyncError("sync.invalid-input", `disposition ${JSON.stringify(disposition)} is not a recognised local disposition`);
   }
-  const state = STATE_OF_DISPOSITION[disposition];
+  return STATE_OF_DISPOSITION[disposition];
+}
+function stateOfDisposition(disposition, mapping) {
+  const state = defaultStateOfDisposition(disposition);
   const mapped = mapping?.disposition[state];
   return mapped === undefined || mapped.trim() === "" ? state : mapped;
 }
@@ -30816,7 +30822,8 @@ async function pushItem(db, provider, context, candidate) {
   const marker = correlationMarker(context.binding, context.storeId, candidate.localId);
   const fields = providerPayloadFields(candidate, context.mapping);
   if (!context.states.has(fields.state)) {
-    return failed(db, context, candidate.localId, "linear.state-unresolved", `the team has no workflow state named ${JSON.stringify(fields.state)}; push never creates states. Create or rename it in Linear's workflow settings, or redirect it through [linear.mapping] disposition.${candidate.disposition}=<name>.`, ledger, undefined, ambiguousResidue);
+    const mappingKey = defaultStateOfDisposition(candidate.disposition);
+    return failed(db, context, candidate.localId, "linear.state-unresolved", `the team has no workflow state named ${JSON.stringify(fields.state)}; push never creates states. Create or rename it in Linear's workflow settings, or redirect it through [linear.mapping] disposition.${mappingKey}=<name>${mappingKey === candidate.disposition ? "" : ` (keyed by the default target, which ${candidate.disposition} maps to)`}.`, ledger, undefined, ambiguousResidue);
   }
   if (!context.labels.has(fields.label)) {
     return failed(db, context, candidate.localId, "linear.label-unresolved", `the workspace has no label named ${JSON.stringify(fields.label)}; push never creates labels. Create it in Linear's UI, or redirect it through [linear.mapping] kind.${candidate.kind}=<name>.`, ledger, undefined, ambiguousResidue);
@@ -30904,12 +30911,14 @@ function failed(db, context, localId, code2, cause, ledger, hash2, ambiguousResi
     }
     const current = ledger ?? readItem(db, { bindingId: context.bindingId, direction: PUSH_DIRECTION, localId });
     if (current !== null) {
-      const operationId = `linear-push:${context.bindingId}:${localId}:${ambiguousResidue ? "refused" : "failed"}:${hash2 ?? "preflight"}:${current.revision}`;
+      const retryable = !ambiguousResidue && current.itemState === "pending";
+      const step = retryable ? "failed" : "refused";
+      const operationId = `linear-push:${context.bindingId}:${localId}:${step}:${hash2 ?? "preflight"}:${current.revision}`;
       const input = { bindingId: context.bindingId, direction: PUSH_DIRECTION, localId, operationId };
-      if (ambiguousResidue)
-        recordRefusal(db, { ...input, error: message });
-      else
+      if (retryable)
         markFailed(db, { ...input, error: message });
+      else
+        recordRefusal(db, { ...input, error: message });
     }
   } catch {}
   return { localId, outcome: "failed", externalId: ledger?.externalId ?? null, cause: message };
@@ -30959,9 +30968,12 @@ async function reconcilePendingCreate(db, provider, context) {
   }
   return report;
 }
-function adoptItem(db, bindingId, localId, reference) {
+function adoptItem(db, bindingId, localId, reference, options = {}) {
   const externalId = externalIdOf2(reference);
   const existing = readItem(db, { bindingId, direction: PUSH_DIRECTION, localId });
+  if (existing !== null && existing.externalId !== null && existing.externalId !== externalId && options.force !== true) {
+    throw new SyncError("sync.identity-conflict", `this item is already adopted as ${JSON.stringify(existing.externalId)}, and replacing an established remote identity is not an ordinary edit. Re-run with --force-adopt ${localId} if ${JSON.stringify(externalId)} is the right issue; nothing was written.`);
+  }
   if (existing === null || existing.itemState === "failed") {
     planItem(db, {
       bindingId,
@@ -30976,6 +30988,7 @@ function adoptItem(db, bindingId, localId, reference) {
     direction: PUSH_DIRECTION,
     localId,
     externalId,
+    clearProof: true,
     operationId: `linear-push:${bindingId}:${localId}:adopt-apply:${externalId}`
   });
 }
