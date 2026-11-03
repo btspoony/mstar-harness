@@ -61,15 +61,19 @@ const evaluate = new Function('ctx', 'expr', 'with (ctx) { return eval(expr) }')
 interface ManualClock extends LinearAuthClock {
   advance(ms: number): void
   pending(): number
+  /** Every `schedule` call, cancelled ones included: a re-arm is visible. */
+  armed(): number
 }
 
 /** Deterministic clock + timer seam: `advance` fires what the service armed. */
 function manualClock(start: number): ManualClock {
   let now = start
+  let arms = 0
   const timers: Array<{ at: number; run: () => void; cancelled: boolean }> = []
   return {
     now: () => now,
     schedule(run, delayMs) {
+      arms += 1
       const timer = { at: now + delayMs, run, cancelled: false }
       timers.push(timer)
       return () => {
@@ -85,6 +89,7 @@ function manualClock(start: number): ManualClock {
       }
     },
     pending: () => timers.filter((timer) => !timer.cancelled).length,
+    armed: () => arms,
   }
 }
 
@@ -475,6 +480,45 @@ describe('the silent refresh loop', () => {
     expect(existsSync(process.env.MSTAR_LINEAR_CREDENTIAL!)).toBe(false)
     expect(service.authorizationHeaders()).toEqual({})
     expect(clock.pending()).toBe(0)
+  })
+})
+
+/* ------------------------------------------------------------------------ *
+ * (c) Host use adopts a credential another process wrote
+ * ------------------------------------------------------------------------ */
+
+/** The fire-and-forget adoption settles within one tick; the clock is manual. */
+const flush = (): Promise<void> => Bun.sleep(0)
+
+describe('the host-use adoption trigger', () => {
+  it('adopts and schedules a credential another process wrote, exactly once', async () => {
+    const provider = providerFetch({})
+    // The host booted with no credential: nothing was armed, and the row
+    // mounted with no bearer.
+    const { service, clock, restarts } = harness({ provider })
+    expect(service.authorizationHeaders()).toEqual({})
+    expect(clock.pending()).toBe(0)
+
+    // `mstar linear auth login` in another process writes the grant.
+    const expiresAt = START + 60 * 60_000
+    writeLinearCredential(credential({ accessToken: 'tok-cli', expiresAt }))
+
+    // The row's headers expression is the host-use seam: reading the bearer
+    // adopts the grant, which arms its one silent refresh and reloads the row.
+    expect(service.authorizationHeaders()).toEqual({ Authorization: 'Bearer tok-cli' })
+    await flush()
+
+    expect(restarts).toEqual(['linear-mcp'])
+    expect(clock.pending()).toBe(1)
+    expect(service.refreshPlan()).toEqual({ kind: 'scheduled', at: expiresAt - 5 * 60_000 })
+
+    // Idempotent: the same credential neither re-arms nor restarts again.
+    const arms = clock.armed()
+    expect(service.authorizationHeaders()).toEqual({ Authorization: 'Bearer tok-cli' })
+    await flush()
+    expect(restarts).toEqual(['linear-mcp'])
+    expect(clock.armed()).toBe(arms)
+    expect(clock.pending()).toBe(1)
   })
 })
 
