@@ -22960,14 +22960,34 @@ function renderFindingLocation(finding) {
   const span = end !== null && end !== start ? `${start}-${end}` : `${start}`;
   return `\`${path2}:${span}\``;
 }
-function renderVerdictHead(review) {
-  const { tally, incomplete } = review;
+function readTally(tally) {
+  if (typeof tally !== "object" || tally === null)
+    return null;
+  const candidate = tally;
+  const counts = candidate.tally;
+  if (typeof counts !== "object" || counts === null)
+    return null;
+  const { mustFix, shouldFix, nit, unverified } = counts;
+  if (![mustFix, shouldFix, nit, unverified].every((value) => typeof value === "number"))
+    return null;
+  if (typeof candidate.scorePct !== "number")
+    return null;
+  const band = PR_SCORE_BANDS.includes(candidate.band) ? candidate.band : scoreBand(candidate.scorePct);
+  return {
+    scorePct: candidate.scorePct,
+    band,
+    mustFix,
+    shouldFix,
+    nit,
+    unverified
+  };
+}
+function renderVerdictHead(review, tally, partial) {
   const token = typeof review.verdict === "string" ? singleLine(review.verdict) : "";
   const emoji = Object.hasOwn(VERDICT_EMOJI, review.verdict) ? VERDICT_EMOJI[review.verdict] : "•";
   let head = `## ${emoji} Verdict: \`${token}\``;
-  if (tally !== undefined) {
-    const band = tally.band ?? scoreBand(tally.scorePct);
-    head += ` · Score ${tally.scorePct}% (${incomplete === undefined ? band : `${band}, partial`})`;
+  if (tally !== null) {
+    head += ` · Score ${tally.scorePct}% (${partial ? `${tally.band}, partial` : tally.band})`;
   }
   return head;
 }
@@ -23009,27 +23029,26 @@ function renderFindings(findings) {
 }
 function renderReviewMarkdown(review, _opts = {}) {
   const sections = [];
-  const { tally, incomplete } = review;
   const narrative = typeof review.summary_md === "string" && review.summary_md.trim() !== "" ? trimBoundaryNewlines(review.summary_md) : null;
-  sections.push(renderVerdictHead(review));
-  if (incomplete !== undefined)
-    sections.push(renderIncompleteFacts(incomplete));
-  if (tally !== undefined) {
-    const { mustFix, shouldFix, nit, unverified } = tally.tally;
+  const tally = readTally(review.tally);
+  sections.push(renderVerdictHead(review, tally, review.incomplete !== undefined));
+  if (review.incomplete !== undefined)
+    sections.push(renderIncompleteFacts(review.incomplete));
+  if (tally !== null) {
     sections.push([
       "| Findings | Count |",
       "| --- | --- |",
-      `| ${REVIEW_EMOJI["must-fix"]} must-fix | ${mustFix} |`,
-      `| ${REVIEW_EMOJI["should-fix"]} should-fix | ${shouldFix} |`,
-      `| ${REVIEW_EMOJI.nit} nit | ${nit} |`,
-      `| ${REVIEW_EMOJI.unverified} unverified | ${unverified} |`
+      `| ${REVIEW_EMOJI["must-fix"]} must-fix | ${tally.mustFix} |`,
+      `| ${REVIEW_EMOJI["should-fix"]} should-fix | ${tally.shouldFix} |`,
+      `| ${REVIEW_EMOJI.nit} nit | ${tally.nit} |`,
+      `| ${REVIEW_EMOJI.unverified} unverified | ${tally.unverified} |`
     ].join(`
 `));
   }
   sections.push(narrative === null ? "## \uD83D\uDCCB Review" : `## \uD83D\uDCCB Review
 
 ${narrative}`);
-  const findings = renderFindings(review.findings);
+  const findings = renderFindings(Array.isArray(review.findings) ? review.findings : []);
   if (findings !== null)
     sections.push(findings);
   return trimBoundaryNewlines(sections.join(`
