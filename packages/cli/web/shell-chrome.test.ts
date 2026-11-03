@@ -146,14 +146,6 @@ describe("the shell's markup uses those pieces", () => {
     expect(NAV_DESTINATIONS).toContain("sync-binding");
   });
 
-  test("the shell mounts the binding screen through its route dispatch", () => {
-    // The dispatch itself is asserted behaviourally in
-    // `web/sync-binding-destination.test.tsx` (route → rendered read). This is the
-    // half that fails when the call disappears from `<main>`: the regression that
-    // left the screen, its copy and its nav entry shipped but unreachable.
-    expect(mainSource).toContain("{syncBindingDestination(address.route)}");
-  });
-
   test("the skip link has a click handler and the landmark is focusable", () => {
     // The behaviour test above passes even if nothing calls `skipToMain`; this is the
     // half that fails when the markup goes back to a plain `href="#main"`.

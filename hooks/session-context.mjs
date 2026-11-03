@@ -30819,7 +30819,7 @@ async function pushItem(db, provider, context, candidate) {
       localId: candidate.localId,
       outcome: "unresolved",
       externalId: null,
-      cause: context.forceCreate ? "a create for this item was never confirmed and may still be in flight, so --force-create cannot establish its absence; nothing was sent. Re-run push without it - reconcile adopts the issue when exactly one remote issue carries the item's correlation marker - or record the identity yourself with --adopt <localId>=<issueUrl|externalId>" : "a previous create was never confirmed; the next run reconciles it by correlation marker, or name its remote issue with --adopt <localId>=<issueUrl|externalId>"
+      cause: context.forceCreate ? "a create for this item was never confirmed and may still be in flight, so --force-create cannot establish its absence; nothing was sent. Re-run push without it - reconcile adopts the issue when exactly one remote issue carries the item's correlation marker - or record the identity yourself with --adopt <localId>=<issueUrl|externalId>; when that scan finds no match, --release <localId> releases the residue so the next push may create" : "a previous create was never confirmed; the next run reconciles it by correlation marker, or name its remote issue with --adopt <localId>=<issueUrl|externalId>. When that scan finds no match, --release <localId> releases the residue so the next push may create"
     };
   }
   const marker = correlationMarker(context.binding, context.storeId, candidate.localId);
@@ -30924,7 +30924,24 @@ function failed(db, context, localId, code2, cause, ledger, hash2) {
   } catch {}
   return { localId, outcome: "failed", externalId: ledger?.externalId ?? null, cause: message };
 }
-async function reconcilePendingCreate(db, provider, context) {
+function releasePendingCreate(db, context, localId) {
+  const current = readItem(db, { bindingId: context.bindingId, direction: PUSH_DIRECTION, localId });
+  markFailed(db, {
+    bindingId: context.bindingId,
+    direction: PUSH_DIRECTION,
+    localId,
+    error: RELEASE_REASON,
+    operationId: `linear-push:${context.bindingId}:${localId}:release:${current?.revision ?? 0}`
+  });
+}
+async function reconcilePendingCreate(db, provider, context, options = {}) {
+  const release = options.release ?? new Set;
+  for (const localId of release) {
+    const item = readItem(db, { bindingId: context.bindingId, direction: PUSH_DIRECTION, localId });
+    if (item === null || item.itemState !== "pending" || item.externalId !== null) {
+      throw new SyncError("sync.illegal-transition", `--release ${localId} names no unresolved create: ` + (item === null ? "the item has no push ledger row" : `its row is '${item.itemState}'${item.externalId === null ? "" : ` as ${item.externalId}`}`) + "; release clears only a pending create with no remote id - name a known issue with --adopt, and let every other item push normally");
+    }
+  }
   const pending = db.prepare("select local_id from issue_sync_state where binding_id = ? and direction = ? and item_state = 'pending' and external_id is null").all(context.bindingId, PUSH_DIRECTION);
   const report = { adopted: [], unresolved: [] };
   if (pending.length === 0)
@@ -30948,12 +30965,22 @@ async function reconcilePendingCreate(db, provider, context) {
     }
     cursor = page.nextCursor;
   } while (cursor !== null);
+  for (const localId of release) {
+    const found = matches.get(localId) ?? [];
+    if (found.length === 0)
+      continue;
+    throw new SyncError("sync.illegal-transition", found.length === 1 ? `--release ${localId} would discard a proved identity: ${found[0]} carries this item's correlation marker. This is adoption, not release - re-run push without the flag and reconcile adopts it` : `--release ${localId} would risk a duplicate: ${found.length} remote issues carry this item's correlation marker; name the right one with --adopt <localId>=<issueUrl|externalId>`);
+  }
   for (const { local_id: localId } of pending) {
+    if (release.has(localId)) {
+      releasePendingCreate(db, context, localId);
+      continue;
+    }
     const found = matches.get(localId) ?? [];
     if (found.length !== 1) {
       report.unresolved.push({
         localId,
-        cause: found.length === 0 ? "no remote issue carries this item's correlation marker; the interrupted create is not confirmed either way" : `${found.length} remote issues carry this item's correlation marker; adopting any of them would be a guess`
+        cause: found.length === 0 ? "no remote issue carries this item's correlation marker; the interrupted create is not confirmed either way - if you can establish the remote absence yourself, re-run push with --release <localId>" : `${found.length} remote issues carry this item's correlation marker; adopting any of them would be a guess`
       });
       continue;
     }
@@ -34551,7 +34578,7 @@ alter table issue_sync_state add column last_kind_label text;
   select issues.registered_at as ts
   union all select o.discovered_at from occurrences o where o.issue_id = issues.id
   union all select t.occurred_at from issue_transitions t where t.issue_id = issues.id
-))`, ISSUE_ORDER_SQL, TERMINAL_DISPOSITIONS = "'resolved', 'waived', 'duplicate', 'superseded'", IDENTITY_COLUMNS = "kind, id, title, description, root_kind, relative_path, document_kind, lifecycle, revision, registered_at, updated_at", completeWitnessGapForTest, workflowWitnessGapForTest, RECOVER_COORDINATOR_OPERATION = "recoverExecutionCoordinator", REOPEN_WORKFLOW_OPERATION = "reopenExecutionWorkflow", PROBE_STATES, SyncError, DIRECTIONS, DEFAULT_PROBE_DEADLINE_MS = 5000, REDACTED = "[redacted]", LINEAR_PAGE_SIZE = 50, LINEAR_ITEM_FIELDS, LINEAR_WRITE_VERBS, LINEAR_LABEL_VERBS, LINEAR_STATE_VERBS, LABEL_PAGE_LIMIT = 250, STATE_PAGE_LIMIT = 250, nextId = 1, LINEAR_LISTING_VERBS, KIND_VALUES, SEVERITY_VALUES2, PRIORITY_BANDS, STATE_OF_DISPOSITION, PRIORITY_OF_SEVERITY, PUSH_DIRECTION = "push", IMPORTED_ROOT_CAUSE_KEY = "linear:external", IMPORTED_ACCEPTANCE_KEY = "linear:external", LINEAR_PROVIDER = "linear", IMPORT_DIRECTION = "import", IMPORT_ACTOR = "sync-import", COMMIT_REGISTRATION_OPERATION = "commitExecutionRegistration", REGISTRATION_SEMANTICS, MAX_DASHBOARD_SEARCH_LENGTH = 200, VIEW_QUERY_FIELDS, DISPOSITIONS3, KINDS2, SEVERITIES2, SYNC_PROBE_STATES, MIGRATION_MANIFEST_VERSION = 1, LEGACY_ISSUE_KIND = "review-obligation", StoreMigrationError, MIGRATION_VOCABULARY, LEGACY_REQUIRED_FIELDS, HISTORY_ONLY_ABSENT_FIELDS, WORKFLOW_NOTES_LEDGER_MAX_BYTES = 4194304, WORKFLOW_NOTES_LEDGER_READ_BYTES = 1048576, WORKFLOW_NOTES_COMPACTION_MARKER_KIND = "workflow-notes-compaction", EXECUTION_LEDGER_ERROR_CODES, ExecutionLedgerError, NOTE_KEYS, NOTE_KEY_ORDER, MARKER_KEYS, MARKER_KEY_ORDER, DROPPED_KEYS, DROPPED_KEY_ORDER, UNRECOGNIZED_LINE, EXECUTION_RECOVERY_PROTOCOL_VERSION = 3, ExecutionRecoveryError, EXECUTION_MIGRATION_VERSION2, CATALOG_MIGRATION_VERSION, PROVENANCE_ORIGIN_MIGRATION_VERSION, ROADMAP_MIGRATION_VERSION, EXECUTION_COVERAGE_MIGRATION_VERSION, MILESTONE_MIGRATION_VERSION, SYNC_PENDING_TARGET_MIGRATION_VERSION, SYNC_PUSH_LEDGER_MIGRATION_VERSION, PROJECT_MOVES_MIGRATION_VERSION, SYNC_LEDGER_MIGRATION_VERSION, DSH_MIGRATION_VERSION, EXECUTION_COORDINATOR_ONLY_MIGRATION_VERSION, DSH_LEGACY_PROVENANCE_MIGRATION_VERSION, AUTHORITY_TABLES, REPLACEMENT_ORDER, DATABASE_HEADER_BYTES2 = 100, WAL_FILE_FORMAT_VERSION2 = 2, RESTORE_SCRATCH_NAME, RESTORE_SCRATCH_SIDECARS, REDACTED_KEYS, REFRESH_WINDOW_MS = 300000, LINEAR_MCP_URL = "https://mcp.linear.app/mcp", LINEAR_MCP_SCOPE = "read,issues:create", LINEAR_WRITE_SCOPES, NETWORK_TIMEOUT_MS = 30000, DEADLINE = () => ({ signal: AbortSignal.timeout(NETWORK_TIMEOUT_MS) });
+))`, ISSUE_ORDER_SQL, TERMINAL_DISPOSITIONS = "'resolved', 'waived', 'duplicate', 'superseded'", IDENTITY_COLUMNS = "kind, id, title, description, root_kind, relative_path, document_kind, lifecycle, revision, registered_at, updated_at", completeWitnessGapForTest, workflowWitnessGapForTest, RECOVER_COORDINATOR_OPERATION = "recoverExecutionCoordinator", REOPEN_WORKFLOW_OPERATION = "reopenExecutionWorkflow", PROBE_STATES, SyncError, DIRECTIONS, DEFAULT_PROBE_DEADLINE_MS = 5000, REDACTED = "[redacted]", LINEAR_PAGE_SIZE = 50, LINEAR_ITEM_FIELDS, LINEAR_WRITE_VERBS, LINEAR_LABEL_VERBS, LINEAR_STATE_VERBS, LABEL_PAGE_LIMIT = 250, STATE_PAGE_LIMIT = 250, nextId = 1, LINEAR_LISTING_VERBS, KIND_VALUES, SEVERITY_VALUES2, PRIORITY_BANDS, STATE_OF_DISPOSITION, PRIORITY_OF_SEVERITY, PUSH_DIRECTION = "push", RELEASE_REASON = "released by the operator after reconciliation's full listing scan found no remote issue carrying this item's correlation marker; the next push may create", IMPORTED_ROOT_CAUSE_KEY = "linear:external", IMPORTED_ACCEPTANCE_KEY = "linear:external", LINEAR_PROVIDER = "linear", IMPORT_DIRECTION = "import", IMPORT_ACTOR = "sync-import", COMMIT_REGISTRATION_OPERATION = "commitExecutionRegistration", REGISTRATION_SEMANTICS, MAX_DASHBOARD_SEARCH_LENGTH = 200, VIEW_QUERY_FIELDS, DISPOSITIONS3, KINDS2, SEVERITIES2, SYNC_PROBE_STATES, MIGRATION_MANIFEST_VERSION = 1, LEGACY_ISSUE_KIND = "review-obligation", StoreMigrationError, MIGRATION_VOCABULARY, LEGACY_REQUIRED_FIELDS, HISTORY_ONLY_ABSENT_FIELDS, WORKFLOW_NOTES_LEDGER_MAX_BYTES = 4194304, WORKFLOW_NOTES_LEDGER_READ_BYTES = 1048576, WORKFLOW_NOTES_COMPACTION_MARKER_KIND = "workflow-notes-compaction", EXECUTION_LEDGER_ERROR_CODES, ExecutionLedgerError, NOTE_KEYS, NOTE_KEY_ORDER, MARKER_KEYS, MARKER_KEY_ORDER, DROPPED_KEYS, DROPPED_KEY_ORDER, UNRECOGNIZED_LINE, EXECUTION_RECOVERY_PROTOCOL_VERSION = 3, ExecutionRecoveryError, EXECUTION_MIGRATION_VERSION2, CATALOG_MIGRATION_VERSION, PROVENANCE_ORIGIN_MIGRATION_VERSION, ROADMAP_MIGRATION_VERSION, EXECUTION_COVERAGE_MIGRATION_VERSION, MILESTONE_MIGRATION_VERSION, SYNC_PENDING_TARGET_MIGRATION_VERSION, SYNC_PUSH_LEDGER_MIGRATION_VERSION, PROJECT_MOVES_MIGRATION_VERSION, SYNC_LEDGER_MIGRATION_VERSION, DSH_MIGRATION_VERSION, EXECUTION_COORDINATOR_ONLY_MIGRATION_VERSION, DSH_LEGACY_PROVENANCE_MIGRATION_VERSION, AUTHORITY_TABLES, REPLACEMENT_ORDER, DATABASE_HEADER_BYTES2 = 100, WAL_FILE_FORMAT_VERSION2 = 2, RESTORE_SCRATCH_NAME, RESTORE_SCRATCH_SIDECARS, REDACTED_KEYS, REFRESH_WINDOW_MS = 300000, LINEAR_MCP_URL = "https://mcp.linear.app/mcp", LINEAR_MCP_SCOPE = "read,issues:create", LINEAR_WRITE_SCOPES, NETWORK_TIMEOUT_MS = 30000, DEADLINE = () => ({ signal: AbortSignal.timeout(NETWORK_TIMEOUT_MS) });
 var init_engine = __esm(() => {
   __defProp2 = Object.defineProperty;
   init_coordination_write = __esm2(() => {

@@ -846,7 +846,7 @@ describe("push — the credential scope preflight", () => {
     }
   });
 
-  test("--force-create is refused while an unconfirmed create attempt stands", async () => {
+  test("--force-create is refused while an unconfirmed create attempt stands, and --release is the exit for proven absence", async () => {
     const writes: Array<{ kind: string }> = [];
     const receipts = [{ kind: "ambiguous" as const, cause: "connection closed mid-call" }];
     const provider = {
@@ -897,6 +897,7 @@ describe("push — the credential scope preflight", () => {
     expect(forced.data?.items).toEqual([expect.objectContaining({ localId: "I-000806", outcome: "unresolved" })]);
     expect(forced.data?.items[0]?.cause).toContain("--force-create cannot establish its absence");
     expect(forced.data?.items[0]?.cause).toContain("--adopt");
+    expect(forced.data?.items[0]?.cause).toContain("--release <localId>");
     expect(writes).toHaveLength(1);
 
     const db = await f.db();
@@ -911,9 +912,32 @@ describe("push — the credential scope preflight", () => {
     } finally {
       db.close();
     }
+
+    // 3. The remote genuinely lacks the issue. One push names the item;
+    //    reconcile's full scan finds no marker (this provider lists nothing),
+    //    so the release runs and THAT SAME run creates exactly one issue.
+    const released = (await executeCommand("issue-sync.push", { project: PROJECT, release: ["I-000806"] }, context)) as {
+      status: string;
+      data?: { items: Array<{ localId: string; outcome: string; externalId: string | null }> };
+    };
+    expect(released.status).toBe("ok");
+    expect(released.data?.items).toEqual([
+      expect.objectContaining({ localId: "I-000806", outcome: "created", externalId: "LIN-999" }),
+    ]);
+    expect(writes).toHaveLength(2);
+
+    const after = await f.db();
+    try {
+      expect(after.prepare("select item_state, external_id from issue_sync_state").get()).toEqual({
+        item_state: "applied",
+        external_id: "LIN-999",
+      });
+    } finally {
+      after.close();
+    }
   });
 
-  test("the CLI spelling declares the push verb with its three repeatable operator flags", async () => {
+  test("the CLI spelling declares the push verb with its four repeatable operator flags", async () => {
     const { getCommandDefinitions } = await import("../definitions.js");
     const definition = getCommandDefinitions().find((entry) => entry.id === "issue-sync.push");
     expect(definition).toBeDefined();
@@ -923,12 +947,18 @@ describe("push — the credential scope preflight", () => {
       "--adopt <localId>=<issueUrl|externalId>",
       "--force-adopt <localId>",
       "--force-create <localId>",
+      "--release <localId>",
       "--harness <root>",
     ]);
     expect(definition!.cli.options.filter((option) => option.variadic === true).map((option) => option.key)).toEqual([
       "adopt",
       "forceAdopt",
       "forceCreate",
+      "release",
     ]);
+    // Discoverability: both the help text and the machine-readable requirement
+    // name the flag, so the recovery is executable from what the CLI prints.
+    expect(definition!.description).toContain("--release <localId>");
+    expect(definition!.requirements?.some((entry) => entry.name === "release")).toBe(true);
   });
 });

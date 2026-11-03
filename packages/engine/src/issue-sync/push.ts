@@ -185,7 +185,9 @@ export async function pushItem(db: StoreDb, provider: IssueProvider, context: Pu
     // An unresolved create. Adopting it is reconcile's job; creating again
     // could duplicate the remote issue, which is the one thing this direction
     // must never do. Checked before the label preflight so a preflight failure
-    // for THIS attempt cannot erase a historical ambiguity.
+    // for THIS attempt cannot erase a historical ambiguity. When the operator's
+    // own reconcile scan finds no match, `--release <localId>` clears the row to
+    // the retryable `failed` edge, which is the one exit for proven absence.
     //
     // `--force-create` does not lift this guard. The run that wrote this row may
     // still be inside its provider call — its claim is what advanced the
@@ -198,8 +200,8 @@ export async function pushItem(db: StoreDb, provider: IssueProvider, context: Pu
       outcome: "unresolved",
       externalId: null,
       cause: context.forceCreate
-        ? "a create for this item was never confirmed and may still be in flight, so --force-create cannot establish its absence; nothing was sent. Re-run push without it - reconcile adopts the issue when exactly one remote issue carries the item's correlation marker - or record the identity yourself with --adopt <localId>=<issueUrl|externalId>"
-        : "a previous create was never confirmed; the next run reconciles it by correlation marker, or name its remote issue with --adopt <localId>=<issueUrl|externalId>",
+        ? "a create for this item was never confirmed and may still be in flight, so --force-create cannot establish its absence; nothing was sent. Re-run push without it - reconcile adopts the issue when exactly one remote issue carries the item's correlation marker - or record the identity yourself with --adopt <localId>=<issueUrl|externalId>; when that scan finds no match, --release <localId> releases the residue so the next push may create"
+        : "a previous create was never confirmed; the next run reconciles it by correlation marker, or name its remote issue with --adopt <localId>=<issueUrl|externalId>. When that scan finds no match, --release <localId> releases the residue so the next push may create",
     };
   }
   const marker = correlationMarker(context.binding, context.storeId, candidate.localId);
@@ -412,11 +414,41 @@ export type ReconcileReport = {
 };
 
 /**
+ * The reason a release records: the operator's judgement in the one state the
+ * ledger cannot decide, stated as such so it is never read as a failed attempt.
+ */
+const RELEASE_REASON =
+  "released by the operator after reconciliation's full listing scan found no remote issue carrying this item's correlation marker; the next push may create";
+
+/**
+ * A `pending` row with no id can be released only by the operator, and only
+ * from the scan that proved absence: `failed` is the ledger's retryable edge, so
+ * the next push claims the create again. The revision joins the operation id so
+ * a later ambiguity for the same item is a new release, not a replay.
+ */
+function releasePendingCreate(db: StoreDb, context: PushContext, localId: string): void {
+  const current = readItem(db, { bindingId: context.bindingId, direction: PUSH_DIRECTION, localId });
+  markFailed(db, {
+    bindingId: context.bindingId,
+    direction: PUSH_DIRECTION,
+    localId,
+    error: RELEASE_REASON,
+    operationId: `linear-push:${context.bindingId}:${localId}:release:${current?.revision ?? 0}`,
+  });
+}
+
+/**
  * Adopt ambiguous creates by correlation marker.
  *
  * Runs a full listing scan and adopts a row ONLY when exactly one remote issue
  * carries its exact marker. Zero or several matches stay `unresolved`; this
  * function never creates, and prose equality is never evidence.
+ *
+ * `options.release` names `pending`-without-id rows the operator has released
+ * after this same scan found nothing: they drop to `failed`, the retryable edge,
+ * so the next push may create. A release is REFUSED when reconciliation found a
+ * match — that row's recovery is adoption, or `--adopt` naming the right issue —
+ * and the refusal is decided over the whole scan before the first write.
  *
  * A run with no ambiguous residue short-circuits: zero listing calls.
  */
@@ -424,7 +456,24 @@ export async function reconcilePendingCreate(
   db: StoreDb,
   provider: IssueProvider,
   context: PushContext,
+  options: { release?: ReadonlySet<string> } = {},
 ): Promise<ReconcileReport> {
+  const release = options.release ?? new Set<string>();
+  // Only the row shape a release exists for can be released. Anything else is
+  // an operator error about the ledger, reported before the scan and any write.
+  for (const localId of release) {
+    const item = readItem(db, { bindingId: context.bindingId, direction: PUSH_DIRECTION, localId });
+    if (item === null || item.itemState !== "pending" || item.externalId !== null) {
+      throw new SyncError(
+        "sync.illegal-transition",
+        `--release ${localId} names no unresolved create: ` +
+          (item === null
+            ? "the item has no push ledger row"
+            : `its row is '${item.itemState}'${item.externalId === null ? "" : ` as ${item.externalId}`}`) +
+          "; release clears only a pending create with no remote id - name a known issue with --adopt, and let every other item push normally",
+      );
+    }
+  }
   const pending = db
     .prepare(
       "select local_id from issue_sync_state where binding_id = ? and direction = ? and item_state = 'pending' and external_id is null",
@@ -451,14 +500,31 @@ export async function reconcilePendingCreate(
     cursor = page.nextCursor;
   } while (cursor !== null);
 
+  // A match is evidence of an identity, so releasing over it would discard what
+  // the scan just proved. Decided over the whole scan, before any adoption write.
+  for (const localId of release) {
+    const found = matches.get(localId) ?? [];
+    if (found.length === 0) continue;
+    throw new SyncError(
+      "sync.illegal-transition",
+      found.length === 1
+        ? `--release ${localId} would discard a proved identity: ${found[0]} carries this item's correlation marker. This is adoption, not release - re-run push without the flag and reconcile adopts it`
+        : `--release ${localId} would risk a duplicate: ${found.length} remote issues carry this item's correlation marker; name the right one with --adopt <localId>=<issueUrl|externalId>`,
+    );
+  }
+
   for (const { local_id: localId } of pending) {
+    if (release.has(localId)) {
+      releasePendingCreate(db, context, localId);
+      continue;
+    }
     const found = matches.get(localId) ?? [];
     if (found.length !== 1) {
       report.unresolved.push({
         localId,
         cause:
           found.length === 0
-            ? "no remote issue carries this item's correlation marker; the interrupted create is not confirmed either way"
+            ? "no remote issue carries this item's correlation marker; the interrupted create is not confirmed either way - if you can establish the remote absence yourself, re-run push with --release <localId>"
             : `${found.length} remote issues carry this item's correlation marker; adopting any of them would be a guess`,
       });
       continue;
