@@ -34,6 +34,7 @@ export type SyncErrorCode =
   | "sync.invalid-input"
   | "sync.local-issue-missing"
   | "sync.identity-conflict"
+  | "sync.operator-conflict"
   | "sync.run-held"
   | "sync.run-taken"
   | "linear.query-failed"
