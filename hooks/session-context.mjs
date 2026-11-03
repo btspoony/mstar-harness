@@ -22929,13 +22929,15 @@ function synthesizeReview(input) {
     unmetAc: input.unmetAc,
     ...input.incomplete === undefined ? {} : { incomplete: input.incomplete }
   });
-  const narrative = typeof input.summary_md === "string" && input.summary_md.trim() !== "" ? input.summary_md : undefined;
+  if (input.summary_md !== undefined && (typeof input.summary_md !== "string" || input.summary_md.trim() === "")) {
+    throw new TypeError(`synthesizeReview: summary_md must be a non-empty string when present - got ${JSON.stringify(input.summary_md)}`);
+  }
   return {
     schema: "mstar.review/v1",
     verdict: tally.verdict,
     tally,
     findings: input.findings,
-    ...narrative === undefined ? {} : { summary_md: narrative },
+    ...input.summary_md === undefined ? {} : { summary_md: input.summary_md },
     ...input.incomplete === undefined ? {} : { incomplete: input.incomplete },
     ...input.target !== undefined ? { target: input.target } : {}
   };
@@ -22947,9 +22949,10 @@ function singleLine(text4) {
   return text4.replace(/\r\n|\r|\n/g, " ");
 }
 function renderFindingLocation(finding) {
-  if (finding.file_path === undefined || finding.file_path === null || finding.file_path === "")
+  const rawPath = typeof finding.file_path === "string" ? finding.file_path : "";
+  if (rawPath === "")
     return "repo-wide";
-  const path2 = singleLine(finding.file_path);
+  const path2 = singleLine(rawPath);
   const start = typeof finding.line_start === "number" ? finding.line_start : null;
   const end = typeof finding.line_end === "number" ? finding.line_end : null;
   if (start === null)
@@ -22959,7 +22962,7 @@ function renderFindingLocation(finding) {
 }
 function renderVerdictHead(review) {
   const { tally, incomplete } = review;
-  const token = singleLine(review.verdict);
+  const token = typeof review.verdict === "string" ? singleLine(review.verdict) : "";
   const emoji = Object.hasOwn(VERDICT_EMOJI, review.verdict) ? VERDICT_EMOJI[review.verdict] : "•";
   let head = `## ${emoji} Verdict: \`${token}\``;
   if (tally !== undefined) {
@@ -22969,14 +22972,18 @@ function renderVerdictHead(review) {
   return head;
 }
 function renderIncompleteFacts(incomplete) {
-  const unscanned = incomplete.unscanned.length === 0 ? "none" : incomplete.unscanned.map((entry) => singleLine(entry).trim()).join(", ");
-  return `cause: ${singleLine(incomplete.reason).trim()}
+  const reason = typeof incomplete.reason === "string" ? singleLine(incomplete.reason).trim() : "";
+  const scopes = Array.isArray(incomplete.unscanned) ? incomplete.unscanned.filter((entry) => typeof entry === "string").map((entry) => singleLine(entry).trim()) : [];
+  const unscanned = scopes.length === 0 ? "none" : scopes.join(", ");
+  return `cause: ${reason}
 unscanned: ${unscanned}`;
 }
 function renderFindingBlock(finding) {
-  const body = trimBoundaryNewlines(finding.body ?? "");
+  const rawBody = typeof finding.body === "string" ? finding.body : "";
+  const body = trimBoundaryNewlines(rawBody);
   const emoji = Object.hasOwn(REVIEW_EMOJI, finding.mergeClass) ? REVIEW_EMOJI[finding.mergeClass] : "•";
-  const lines = [`#### ${emoji} ${singleLine(finding.title)}`, ""];
+  const title = typeof finding.title === "string" ? singleLine(finding.title) : "";
+  const lines = [`#### ${emoji} ${title}`.trimEnd(), ""];
   if (body === "") {
     lines.push("- **Evidence**: none");
   } else if (!body.includes(`
@@ -22987,21 +22994,16 @@ function renderFindingBlock(finding) {
 `).map((line) => line === "" ? "" : `  ${line}`));
   }
   lines.push(`- **Location**: ${renderFindingLocation(finding)}`);
-  if (finding.category !== undefined)
+  if (typeof finding.category === "string")
     lines.push(`- **Category**: ${singleLine(finding.category)}`);
-  lines.push(`- **Merge class**: ${singleLine(finding.mergeClass)}`);
+  lines.push(`- **Merge class**: ${typeof finding.mergeClass === "string" ? singleLine(finding.mergeClass) : ""}`.trimEnd());
   return lines.join(`
 `);
 }
 function renderFindings(findings) {
   if (findings.length === 0)
     return null;
-  const rank = (finding) => {
-    const index2 = MERGE_CLASSES.indexOf(finding.mergeClass);
-    return index2 === -1 ? MERGE_CLASSES.length : index2;
-  };
-  const ordered = findings.map((finding, index2) => ({ finding, index: index2, rank: rank(finding) })).sort((a, b) => a.rank - b.rank || a.index - b.index).map((entry) => entry.finding);
-  return ["### Findings", ...ordered.map(renderFindingBlock)].join(`
+  return ["### Findings", ...findings.map(renderFindingBlock)].join(`
 
 `);
 }
