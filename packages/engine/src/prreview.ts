@@ -905,7 +905,9 @@ export function synthesizeReview(input: {
  * template body, because the archive keeps the posted body verbatim. */
 export type ReviewRenderSurface = "github-comment" | "local-report";
 
-export type ReviewRenderOptions = { surface: ReviewRenderSurface };
+/** All fields optional: the layout does not vary by surface, so a caller that
+ * already renders the one body may omit the options entirely. */
+export type ReviewRenderOptions = { surface?: ReviewRenderSurface };
 
 /** Verdict emoji for the verdict head on both surfaces (module-private). */
 const VERDICT_EMOJI: Record<PrVerdict, string> = {
@@ -929,12 +931,17 @@ function singleLine(text: string): string {
   return text.replace(/\r\n|\r|\n/g, " ");
 }
 
-/** One finding's location: `file:line` when a path is known, else repo-wide.
- * A renderer-owned single-line slot, so a newline-bearing path collapses. */
+/** One finding's location: `file:start-end` for a line range, `file:start` for
+ * a single line, the bare path otherwise, and `repo-wide` when no path is known.
+ * A renderer-owned single-line slot, so every part collapses. */
 function renderFindingLocation(finding: MstarReviewFinding): string {
   if (finding.file_path === undefined || finding.file_path === null || finding.file_path === "") return "repo-wide";
-  const line = typeof finding.line_start === "number" ? `:${finding.line_start}` : "";
-  return `\`${singleLine(finding.file_path)}${line}\``;
+  const path = singleLine(finding.file_path);
+  const start = typeof finding.line_start === "number" ? finding.line_start : null;
+  const end = typeof finding.line_end === "number" ? finding.line_end : null;
+  if (start === null) return `\`${path}\``;
+  const span = end !== null && end !== start ? `${start}-${end}` : `${start}`;
+  return `\`${path}:${span}\``;
 }
 
 /** The verdict head recognized by the Thread-lifecycle candidate set
@@ -944,8 +951,9 @@ function renderFindingLocation(finding: MstarReviewFinding): string {
  * through the prototype chain (a bundled renderer would print function source). */
 function renderVerdictHead(review: MstarReviewV1): string {
   const { tally, incomplete } = review;
+  const token = singleLine(review.verdict);
   const emoji = Object.hasOwn(VERDICT_EMOJI, review.verdict) ? VERDICT_EMOJI[review.verdict] : "\u2022";
-  let head = `## ${emoji} Verdict: \`${review.verdict}\``;
+  let head = `## ${emoji} Verdict: \`${token}\``;
   if (tally !== undefined) {
     const band = tally.band ?? scoreBand(tally.scorePct);
     head += ` \u00b7 Score ${tally.scorePct}% (${incomplete === undefined ? band : `${band}, partial`})`;
@@ -990,7 +998,7 @@ function renderFindingBlock(finding: MstarReviewFinding): string {
   }
   lines.push(`- **Location**: ${renderFindingLocation(finding)}`);
   if (finding.category !== undefined) lines.push(`- **Category**: ${singleLine(finding.category)}`);
-  lines.push(`- **Merge class**: ${finding.mergeClass}`);
+  lines.push(`- **Merge class**: ${singleLine(finding.mergeClass)}`);
   return lines.join("\n");
 }
 
@@ -1011,14 +1019,17 @@ function renderFindings(findings: readonly MstarReviewFinding[]): string | null 
 }
 
 /**
- * Render the review **body** for one presentation surface from the
- * `mstar.review/v1` envelope — the engine's only review-body layout owner.
- * Both surfaces render the same pr-review.md § Report template body: verdict
- * head, the `incomplete` fact pair, the four-class tally table, the mandatory
- * `## 📋 Review` section, and `### Findings` with one `#### <emoji> <title>`
- * block per finding. `surface` is layout-neutral and exists for caller
- * compatibility; the local archive keeps the posted body verbatim, so a
- * per-surface layout would break that contract.
+ * Render the review **body** from the `mstar.review/v1` envelope — the engine's
+ * only review-body layout owner. Every surface renders the same pr-review.md
+ * § Report template body: verdict head, the `incomplete` fact pair, the
+ * four-class tally table, the mandatory `## 📋 Review` section, and
+ * `### Findings` with one `#### <emoji> <title>` block per finding.
+ *
+ * `opts` (and its `surface`) is optional and **layout-neutral**: it exists only
+ * for caller compatibility with the two-surface signature callers already
+ * write. It cannot select a layout, because § Local report archive requires the
+ * archived body to be the posted body verbatim — a per-surface layout would
+ * break that contract. Omit it freely.
  *
  * Envelope-dependent facts: the ` · Score <n>% (<band>)` segment on the verdict
  * head and the tally table appear only when the envelope carries a `tally`;
@@ -1043,7 +1054,7 @@ function renderFindings(findings: readonly MstarReviewFinding[]): string | null 
  * single-line slots lose every line break. Sections join with one blank line;
  * no trailing newline.
  */
-export function renderReviewMarkdown(review: MstarReviewV1, _opts: ReviewRenderOptions): string {
+export function renderReviewMarkdown(review: MstarReviewV1, _opts: ReviewRenderOptions = {}): string {
   const sections: string[] = [];
   const { tally, incomplete } = review;
   const narrative =

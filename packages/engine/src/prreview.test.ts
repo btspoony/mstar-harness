@@ -213,6 +213,38 @@ describe("renderReviewMarkdown: surface is layout-neutral", () => {
       expect(body).not.toContain("undefined");
     }
   });
+
+  test("(r) Location renders a line range, a single line, or the bare path", () => {
+    const findings = [
+      { mergeClass: "should-fix" as const, file_path: "src/a.ts", line_start: 3, line_end: 9, title: "Range", body: "x" },
+      { mergeClass: "nit" as const, file_path: "src/b.ts", line_start: 7, title: "Single", body: "x" },
+      { mergeClass: "nit" as const, file_path: "src/c.ts", line_start: 4, line_end: 4, title: "Degenerate", body: "x" },
+      { mergeClass: "nit" as const, file_path: "src/d.ts", title: "Path only", body: "x" },
+    ];
+    const body = renderReviewMarkdown({ schema: "mstar.review/v1", verdict: "needs fixes", findings }, {});
+    expect(body).toContain("- **Location**: `src/a.ts:3-9`");
+    expect(body).toContain("- **Location**: `src/b.ts:7`");
+    expect(body).toContain("- **Location**: `src/c.ts:4`");
+    expect(body).toContain("- **Location**: `src/d.ts`");
+  });
+
+  test("(s) a newline-bearing verdict and merge class collapse inside their backticked slots", () => {
+    const review = {
+      schema: "mstar.review/v1",
+      verdict: "needs\nfixes",
+      findings: [{ mergeClass: "must\nfix", title: "T", body: "x" }],
+    } as unknown as MstarReviewV1;
+    const body = renderReviewMarkdown(review, { surface: "github-comment" });
+    expect(body.split("\n")[0]).toBe("## \u2022 Verdict: `needs fixes`");
+    expect(body).toContain("- **Merge class**: must fix");
+    expect(body.split("\n").filter((line) => line.startsWith("## "))).toHaveLength(2); // verdict + Review
+  });
+
+  test("(t) the options argument is optional and cannot select a layout", () => {
+    const bare = renderReviewMarkdown(SETTLED_REVIEW);
+    expect(bare).toBe(renderReviewMarkdown(SETTLED_REVIEW, {}));
+    expect(bare).toBe(renderReviewMarkdown(SETTLED_REVIEW, { surface: "local-report" }));
+  });
 });
 
 describe("renderReviewMarkdown: boundary line breaks in free-form Markdown", () => {
