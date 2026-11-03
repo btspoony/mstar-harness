@@ -494,13 +494,21 @@ export function adoptItem(
       `this item is already adopted as ${JSON.stringify(existing.externalId)}, and replacing an established remote identity is not an ordinary edit. Re-run with --force-adopt ${localId} if ${JSON.stringify(externalId)} is the right issue; nothing was written.`,
     );
   }
+  // The row's revision is the generation this adoption is applied OVER, and it
+  // joins the operation id. Going back to an issue this row held earlier repeats
+  // every other fact of the adoption that first recorded it (same binding, local
+  // id, external id, `clearProof`), so without it that receipt is replayed —
+  // `markApplied` never runs and the row stays on the id being replaced while the
+  // caller reports the new one. The revision advances on every apply, so each
+  // re-point is a distinct operation.
+  const generation = existing?.revision ?? 0;
   if (existing === null || existing.itemState === "failed") {
     planItem(db, {
       bindingId,
       direction: PUSH_DIRECTION,
       localId,
       externalId,
-      operationId: `linear-push:${bindingId}:${localId}:adopt-plan:${externalId}`,
+      operationId: `linear-push:${bindingId}:${localId}:adopt-plan:${externalId}:${generation}`,
     });
   }
   // Re-confirming the recorded id is not an identity change: its hash and label
@@ -517,7 +525,9 @@ export function adoptItem(
     ...(keepProof ? {} : { clearProof: true as const }),
     // A confirm and a re-point are different requests, so they cannot share one
     // receipt; re-reading the SAME receipt would refuse the second as a conflict.
-    operationId: `linear-push:${bindingId}:${localId}:${keepProof ? "adopt-confirm" : "adopt-apply"}:${externalId}`,
+    // Only a re-point needs the generation: going back to an issue this row held
+    // earlier repeats every other fact of the adoption that first recorded it.
+    operationId: `linear-push:${bindingId}:${localId}:${keepProof ? "adopt-confirm" : "adopt-apply"}:${externalId}${keepProof ? "" : `:${generation}`}`,
   });
 }
 

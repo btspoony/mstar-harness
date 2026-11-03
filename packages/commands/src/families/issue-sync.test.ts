@@ -785,6 +785,67 @@ describe("push — the credential scope preflight", () => {
     expect(writes.map((write) => write.kind)).toEqual(["create", "update"]);
   });
 
+  test("--force-adopt back to a previously held issue moves the row and the report together", async () => {
+    const writes: Array<{ kind: string; externalId?: string }> = [];
+    const provider = {
+      async probe() {
+        return { state: "ready" as const, cause: "ready: fixture handshake" };
+      },
+      async listIssues() {
+        return { items: [], nextCursor: null };
+      },
+      async applyWrite(write: { kind: string; externalId?: string }) {
+        writes.push(write);
+        return write.kind === "update"
+          ? { kind: "confirmed" as const, externalId: write.externalId!, updatedAt: "2026-11-02T00:10:00.000Z" }
+          : { kind: "confirmed" as const, externalId: "LIN-1", updatedAt: "2026-11-02T00:10:00.000Z" };
+      },
+      async discoverLabels() {
+        return new Set(["bug"]);
+      },
+      async discoverStates() {
+        return new Set(["Todo", "Done", "Canceled"]);
+      },
+    };
+    const f = await fixture("push-adopt-repoint", null);
+    storeCredential("read,issues:create");
+    {
+      const handle = await openStore({ harnessDir: f.harnessDir }, "write");
+      handle.db.prepare(
+        "insert into issues(id, project_id, title, kind, severity, impact, acceptance, created_at, updated_at, identity_key)" +
+          " values ('I-000806', ?, 'Repointed', 'bug', 'high', 'i', 'a', 'now', 'now', 'sync-I-000806')",
+      ).run(PROJECT);
+      handle.close();
+    }
+    const context = { ...f.context, effects: { ...f.context.effects, issueProvider: () => provider as never } };
+
+    const repoint = async (externalId: string) =>
+      (await executeCommand(
+        "issue-sync.push",
+        { project: PROJECT, adopt: [`I-000806=${externalId}`], forceAdopt: ["I-000806"] },
+        context,
+      )) as { status: string; data?: { items: Array<{ localId: string; outcome: string; externalId: string | null }> } };
+
+    // LIN-1 is recorded by an ADOPTION, so that adoption's receipt is on record.
+    expect((await repoint("LIN-1")).data?.items[0]).toMatchObject({ outcome: "adopted", externalId: "LIN-1" });
+    expect((await repoint("LIN-2")).data?.items[0]).toMatchObject({ outcome: "adopted", externalId: "LIN-2" });
+    // Back to LIN-1: the adoption request repeats every fact of the first one
+    // (binding, local id, external id, proof clearing), so a shared operation id
+    // would replay that receipt and the row would stay on LIN-2 while this report
+    // claimed LIN-1.
+    const back = await repoint("LIN-1");
+    expect(back.data?.items[0]).toMatchObject({ outcome: "adopted", externalId: "LIN-1" });
+    const db = await f.db();
+    try {
+      expect(db.prepare("select item_state, external_id from issue_sync_state").get()).toEqual({
+        item_state: "applied",
+        external_id: "LIN-1",
+      });
+    } finally {
+      db.close();
+    }
+  });
+
   test("--force-create with a missing label keeps the pending residue reconcilable", async () => {
     const writes: Array<{ kind: string }> = [];
     const receipts = [{ kind: "ambiguous" as const, cause: "connection closed mid-call" }];
