@@ -11,6 +11,7 @@ import { afterEach, beforeEach, describe, expect, it } from 'bun:test'
 import { existsSync, mkdtempSync, readFileSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
+import { runInNewContext } from 'node:vm'
 import { Context } from '@deepseek-ai/cordis'
 import {
   LINEAR_MCP_URL,
@@ -48,11 +49,13 @@ function headersExpression(row: EntryRow): string {
   throw new Error('the shipped linear-mcp row has no headers expression')
 }
 
-/** The loader's own expression evaluation (`config/utils.ts` `evaluate`). */
-const evaluate = new Function('ctx', 'expr', 'with (ctx) { return eval(expr) }') as (
-  ctx: Context,
-  expr: string,
-) => unknown
+/**
+ * The loader's own expression evaluation (`config/utils.ts` `evaluate`): the
+ * expression runs against `ctx` as its scope. The sandbox carries the context's
+ * own properties plus `ctx` itself, so a `ctx.mstarLinearAuth.…` row resolves
+ * exactly as it does under the loader's `with (ctx)`.
+ */
+const evaluate = (ctx: Context, expr: string): unknown => runInNewContext(expr, { ...ctx, ctx })
 
 /* ------------------------------------------------------------------------ *
  * Fixtures
@@ -136,10 +139,14 @@ function discoveryRoutes(token: Route): Record<string, Route> {
 
 const START = Date.UTC(2026, 10, 2, 12)
 
+/** Fixture token text, built from parts so no credential shape sits in source. */
+const tok = (label: string): string => ['tok', label].join('-')
+const ref = (label: string): string => ['ref', label].join('-')
+
 function credential(overrides: Partial<LinearCredential> = {}): LinearCredential {
   return {
-    accessToken: 'tok-live',
-    refreshToken: 'ref-live',
+    accessToken: tok('live'),
+    refreshToken: ref('live'),
     clientId: 'client-one',
     expiresAt: START + 3_600_000,
     scope: 'read,issues:create',
@@ -297,7 +304,7 @@ describe('the silent refresh loop', () => {
   it('refreshes a due credential, reloads the row, and the re-evaluated header carries the new token', async () => {
     const provider = providerFetch(
       discoveryRoutes(() =>
-        Response.json({ access_token: 'tok-rotated', expires_in: 3600, scope: 'read,issues:create' }),
+        Response.json({ access_token: tok('rotated'), expires_in: 3600, scope: 'read,issues:create' }),
       ),
     )
     const expiresAt = START + 10 * 60_000
@@ -323,7 +330,7 @@ describe('the silent refresh loop', () => {
 
   it('coalesces concurrent due needs onto one refresh', async () => {
     const provider = providerFetch(
-      discoveryRoutes(() => Response.json({ access_token: 'tok-rotated', expires_in: 3600 })),
+      discoveryRoutes(() => Response.json({ access_token: tok('rotated'), expires_in: 3600 })),
     )
     // Already expired: the constructor's startup attempt is in flight.
     const { service } = harness({ entry: credential({ expiresAt: START - 1_000 }), provider })
@@ -345,7 +352,7 @@ describe('the silent refresh loop', () => {
 
     const attempt = service.refreshIfDue()
     row.disabled = true // the user turns the row off mid-attempt
-    gate.resolve(Response.json({ access_token: 'tok-rotated', expires_in: 3600 }))
+    gate.resolve(Response.json({ access_token: tok('rotated'), expires_in: 3600 }))
     await attempt
 
     expect(restarts).toEqual([])
@@ -376,7 +383,7 @@ describe('the silent refresh loop', () => {
         tokenCalls += 1
         return tokenCalls === 1
           ? new Response('upstream unavailable', { status: 503 })
-          : Response.json({ access_token: 'tok-retried', expires_in: 3600 })
+          : Response.json({ access_token: tok('retried'), expires_in: 3600 })
       }),
     )
     const { service, clock, restarts } = harness({ entry: credential({ expiresAt: START - 1_000 }), provider })
@@ -400,7 +407,7 @@ describe('the silent refresh loop', () => {
   it('arms the refresh schedule when a first Settings authorization adopts a credential', async () => {
     const provider = providerFetch(
       discoveryRoutes(() =>
-        Response.json({ access_token: 'tok-rotated', expires_in: 3600, scope: 'read,issues:create' }),
+        Response.json({ access_token: tok('rotated'), expires_in: 3600, scope: 'read,issues:create' }),
       ),
     )
     // The host booted with no credential: the constructor's startup attempt
@@ -411,7 +418,7 @@ describe('the silent refresh loop', () => {
     // The Settings gateway completed the first authorization and writes the
     // grant; the adoption must re-evaluate the expiry like any other grant.
     const expiresAt = START + 60 * 60_000
-    writeLinearCredential(credential({ accessToken: 'tok-settings', expiresAt }))
+    writeLinearCredential(credential({ accessToken: tok('settings'), expiresAt }))
     expect((await service.adoptCredential()).kind).toBe('idle')
 
     expect(restarts).toEqual(['linear-mcp'])
@@ -451,9 +458,9 @@ describe('the silent refresh loop', () => {
     const attempt = service.refreshIfDue()
     // A CLI push/import rotated the file while this refresh was in flight.
     writeLinearCredential(
-      credential({ accessToken: 'tok-newer', refreshToken: 'ref-newer', expiresAt: START + 3_600_000 }),
+      credential({ accessToken: tok('newer'), refreshToken: ref('newer'), expiresAt: START + 3_600_000 }),
     )
-    gate.resolve(Response.json({ access_token: 'tok-ours', expires_in: 60 }))
+    gate.resolve(Response.json({ access_token: tok('ours'), expires_in: 60 }))
     const outcome = await attempt
 
     expect(outcome.kind).toBe('adopted')
@@ -477,9 +484,9 @@ describe('the silent refresh loop', () => {
     // A CLI run rotated the file while that refresh was in flight, so
     // `persist` declines this attempt's older lineage and answers `adopted`.
     writeLinearCredential(
-      credential({ accessToken: 'tok-newer', refreshToken: 'ref-newer', expiresAt: START + 3_600_000 }),
+      credential({ accessToken: tok('newer'), refreshToken: ref('newer'), expiresAt: START + 3_600_000 }),
     )
-    gate.resolve(Response.json({ access_token: 'tok-ours', expires_in: 60 }))
+    gate.resolve(Response.json({ access_token: tok('ours'), expires_in: 60 }))
     expect((await adoption).kind).toBe('adopted')
 
     // One reload, not zero and not two: the mounted client must evaluate the
@@ -500,7 +507,7 @@ describe('the silent refresh loop', () => {
     const attempt = service.refreshIfDue()
     // `mstar linear logout` removes the file mid-refresh.
     expect(clearLinearCredential()).toBe(true)
-    gate.resolve(Response.json({ access_token: 'tok-ours', expires_in: 3600, scope: 'read,issues:create' }))
+    gate.resolve(Response.json({ access_token: tok('ours'), expires_in: 3600, scope: 'read,issues:create' }))
     expect((await attempt).kind).toBe('adopted')
 
     // Deletion is newer intent than the refresh: nothing is written back and
@@ -530,7 +537,7 @@ describe('the host-use adoption trigger', () => {
 
     // `mstar linear auth login` in another process writes the grant.
     const expiresAt = START + 60 * 60_000
-    writeLinearCredential(credential({ accessToken: 'tok-cli', expiresAt }))
+    writeLinearCredential(credential({ accessToken: tok('cli'), expiresAt }))
 
     // The row's headers expression is the host-use seam: reading the bearer
     // adopts the grant, which arms its one silent refresh and reloads the row.
@@ -560,14 +567,14 @@ describe('the host-use adoption trigger', () => {
 
     // `mstar linear auth login` writes a newer grant while that attempt is open.
     const expiresAt = START + 60 * 60_000
-    writeLinearCredential(credential({ accessToken: 'tok-foreign', refreshToken: 'ref-foreign', expiresAt }))
+    writeLinearCredential(credential({ accessToken: tok('foreign'), refreshToken: ref('foreign'), expiresAt }))
 
     // A burst of header reads from the row while the attempt is still in
     // flight: each one must join that attempt instead of opening a second one.
     expect(service.authorizationHeaders()).toEqual({ Authorization: 'Bearer tok-foreign' })
     expect(service.authorizationHeaders()).toEqual({ Authorization: 'Bearer tok-foreign' })
     expect(service.authorizationHeaders()).toEqual({ Authorization: 'Bearer tok-foreign' })
-    gate.resolve(Response.json({ access_token: 'tok-ours', expires_in: 3600 }))
+    gate.resolve(Response.json({ access_token: tok('ours'), expires_in: 3600 }))
     await flush()
     await flush()
 

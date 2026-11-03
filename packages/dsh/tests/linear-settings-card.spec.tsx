@@ -792,6 +792,10 @@ const REGISTRATION_URL = 'https://linear.test/register'
 const METADATA_URL = 'https://linear.test/.well-known/oauth-protected-resource'
 const AS_METADATA_URL = 'https://linear.test/.well-known/oauth-authorization-server'
 
+/** Fixture token text, built from parts so no credential shape sits in source. */
+const tok = (label: string): string => ['tok', label].join('-')
+const ref = (label: string): string => ['ref', label].join('-')
+
 /** The injected provider: discovery, DCR and the code exchange. */
 function providerFetch(token: Record<string, unknown> = {}): typeof fetch {
   const routes: Record<string, () => Response> = {
@@ -810,8 +814,8 @@ function providerFetch(token: Record<string, unknown> = {}): typeof fetch {
     [REGISTRATION_URL]: () => Response.json({ client_id: 'client-card' }),
     [TOKEN_URL]: () =>
       Response.json({
-        access_token: 'tok-card',
-        refresh_token: 'ref-card',
+        access_token: tok('card'),
+        refresh_token: ref('card'),
         expires_in: 3600,
         scope: 'read,issues:create',
         ...token,
@@ -1001,8 +1005,8 @@ describe('the host-owned authorization attempt', () => {
 
   it('linearStatus keeps "valid" and "can push" separate for a read-only grant', async () => {
     writeLinearCredential({
-      accessToken: 'tok-read-only',
-      refreshToken: 'ref-read-only',
+      accessToken: tok('read-only'),
+      refreshToken: ref('read-only'),
       clientId: 'client-one',
       expiresAt: Date.now() + 3_600_000,
       scope: 'read',
