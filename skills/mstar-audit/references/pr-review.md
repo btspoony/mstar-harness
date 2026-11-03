@@ -254,6 +254,8 @@ Field placement depends on which artifact is being written, and only the stage-2
 
 The shared finding template (`references/finding-format.md`) is unchanged — this field is PR-review-only.
 
+**Evidence slot.** In the rendered report body, `- **Evidence**:` carries the finding's **free-text body** from the `mstar.review/v1` envelope (the renderer's `body`; `none` when it is empty), wrapped in the block's list item. It is **not** the stage-2 draft's evidence line: that one is the backtick-quoted `path:line` citation chain `validateFindingDoc({ prVariant: true })` checks (`prreview.finding.evidence-shape` / `evidence-path-line`). The two artifacts share a label, not a shape — never copy a rendered `Evidence` block into a findings draft, or a draft citation into a report body, and expect the other checker (or the renderer) to accept it.
+
 > **Engine check (when available):** run `mstar lint <file.md>` with `--type finding` (add `--pr-variant` for the PR Merge-class contract) — or `import { validateFindingDoc } from "@mstar-harness/engine"` in a host hook — to machine-check a findings document: `### [CATEGORY-NN]` numbering, category / effort / risk / confidence enums, evidence `path:line` shape, and the Merge-class presence/enum/placement rule. On `fail` -> do not proceed; fix and re-run. Skill text below remains authoritative when the runtime is absent.
 
 ## Tally and derived score
@@ -464,9 +466,9 @@ unscanned: <csv | none>
 
 #### <class-emoji> <finding title>
 
-- **Evidence**: `file:line` — what the code does
-- **Location**: `file:line` | repo-wide
-- **Category**: <short category>
+- **Evidence**: <the finding's free-text body — not the stage-2 draft line>
+- **Location**: `file:start-end` | `file:start` | `file` | repo-wide
+- **Category**: <short category — only when the envelope carries one>
 - **Impact**: why it matters
 - **Fix sketch**: one-line suggestion
 - **Confidence**: HIGH | MEDIUM | LOW
@@ -502,7 +504,7 @@ unscanned: <csv | none>
 - **Verdict**: render the band bare (`mergeable` | `good` | `pass` | `fail`). For `incomplete` only, render it as `<band>, partial` and keep the `cause:` / `unscanned:` lines under the heading — `cause` is why the run stopped, `unscanned` the comma-joined scope it never reached (`none` when nothing was left unscanned). Every other verdict deletes both lines, so a settled body keeps its exact shape.
 - **What this PR does**: from the PR description plus your own read of the changed files, not copied marketing text.
 - **Revalidated findings**: the § Re-review pass — one row per prior accepted finding and prior `- unverified:` item, `<state>` being exactly one of `fixed` / `still present` / `regressed` / `not verifiable`, with the evidence that decided it; a prior `not verifiable` item counts in the `unverified` tally. A first review (no prior report) writes `none` here, and a re-review does not repeat these states inside `✅ Verified`.
-- **Findings**: ranked by impact-if-shipped (§ Verdict synthesis); every accepted finding listed, nothing truncated; repeat the `#### <class-emoji> <title>` block per finding. When the renderer is available it supplies `Evidence`, `Location`, `Category` (only when the envelope carries one) and `Merge class` — Merge class closes the block, so `Impact` / `Confidence` / `Fix sketch` are agent-owned insertions above it and `Confidence` ends up immediately before `Merge class` (§ Merge class field placement). **Body soft cap ~150 lines**: past the cap, take degradation ③ (§ Time budget & degradation ladder) — nits fold into the summary body (display only: findings are never dropped — every accepted finding stays listed in some form), and the fold is declared in the report under `- notes:`.
+- **Findings**: ranked by impact-if-shipped (§ Verdict synthesis); every accepted finding listed, nothing truncated; repeat the `#### <class-emoji> <title>` block per finding. When the renderer is available it supplies `Evidence`, `Location`, `Category` (only when the envelope carries one — delete the whole line otherwise) and `Merge class` — Merge class closes the block, so `Impact` / `Fix sketch` / `Confidence` are agent-owned insertions above it, in that order, and `Confidence` ends up immediately before `Merge class` (§ Merge class field placement). The rendered `Evidence` slot is the envelope's free-text body, never the draft's `path:line` citation chain (§ Merge class — Evidence slot). **Body soft cap ~150 lines**: past the cap, take degradation ③ (§ Time budget & degradation ladder) — nits fold into the summary body (display only: findings are never dropped — every accepted finding stays listed in some form), and the fold is declared in the report under `- notes:`.
 - **Linked-issue AC**: fill only when § Linked-issue hygiene applied; otherwise a bare `none`.
 - **Verified**: the smallest runtime checks actually run and what they showed; unverified leads as `❓` lines here, never in the findings table.
 - **Considered & rejected**: one bullet per rejected candidate from the three-way attack / vet pass (§ Attack and vet), so the next reviewer does not re-chase it; bare `none` when nothing was rejected.
