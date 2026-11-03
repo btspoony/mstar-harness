@@ -981,8 +981,9 @@ function renderLocalFindings(findings: readonly MstarReviewFinding[]): string {
  * findings); the consumer owns what surrounds the body (upsert markers,
  * round headers, byte-budget clamping). `summary_md`, when a seat produced
  * one, is rendered as the seat's narrative — never as a header copy — and is
- * never read for facts. Sections join with one blank line; no trailing
- * newline.
+ * never read for facts. Free-form narrative and evidence keep their internal
+ * Markdown but lose boundary line breaks. Sections join with one blank line;
+ * no trailing newline.
  */
 export function renderReviewMarkdown(review: MstarReviewV1, opts: ReviewRenderOptions): string {
   const sections: string[] = [];
