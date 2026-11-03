@@ -180,6 +180,8 @@ export class MstarLinearAuth extends Service {
   private readonly clock: LinearAuthClock
   private inflight: Promise<LinearRefreshOutcome> | undefined
   private cancelTimer: (() => void) | undefined
+  /** The grant this host already scheduled; a different one is adopted once. */
+  private observed: string | undefined
   /** Consecutive attempts that ended without a fresh grant; drives the retry backoff. */
   private failures = 0
   private refusal: { code: string; message: string } | null = null
@@ -213,14 +215,33 @@ export class MstarLinearAuth extends Service {
    * produces an access-denied that names nothing, while the refresh loop is
    * already replacing it. A credential merely inside the refresh window is
    * still usable and is returned.
+   *
+   * This read is also the host-use seam: a credential another process wrote
+   * (`mstar linear auth login`) is adopted here, once, so the running host
+   * gets its silent refresh and its row reload without a restart.
    */
   authorizationHeaders(): Record<string, string> {
     const now = this.clock.now()
     const state = readLinearCredential(now)
     if (state.kind !== 'present') return {}
+    this.adoptIfUnseen(state)
     const { accessToken, expiresAt } = state.credential
     if (expiresAt !== null && now >= expiresAt) return {}
     return { Authorization: `Bearer ${accessToken}` }
+  }
+
+  /**
+   * The host-use trigger: a grant this host never scheduled is routed through
+   * the existing adoption path — one schedule armed, one row reload. Identity
+   * is the token, so an unchanged, already-scheduled grant re-arms, restarts
+   * and logs nothing.
+   */
+  private adoptIfUnseen(state: Extract<LinearCredentialState, { kind: 'present' }>): void {
+    const { accessToken } = state.credential
+    if (this.disposed || accessToken === this.observed) return
+    // Recorded before the async path so a burst of header reads adopts once.
+    this.observed = accessToken
+    void this.adoptCredential()
   }
 
   /** The observed refresh refusal (`linear.reauth-required`), or null. */
@@ -346,8 +367,10 @@ export class MstarLinearAuth extends Service {
       this.refusal = null
       this.failures = 0
       this.log('info', `linear credential refreshed (${outcome}); reloading the ${LINEAR_MCP_ENTRY_ID} row`)
-      await this.reloadRow()
+      // Armed before the reload: that restart evaluates the headers expression,
+      // which must see this grant as already scheduled, not as a new one.
       this.schedule(readLinearCredential(this.clock.now()))
+      await this.reloadRow()
       return { kind: outcome }
     } catch (error) {
       const code = errorCodeOf(error) ?? 'linear.auth-unavailable'
@@ -393,6 +416,9 @@ export class MstarLinearAuth extends Service {
   private schedule(state: LinearCredentialState): void {
     this.cancelTimer?.()
     this.cancelTimer = undefined
+    // What the one slot now reflects, and the identity the host-use trigger
+    // compares against: the credential this host already knows about.
+    this.observed = state.kind === 'present' ? state.credential.accessToken : undefined
     if (this.disposed || state.kind !== 'present' || state.credential.expiresAt === null) {
       this.failures = 0
       return
