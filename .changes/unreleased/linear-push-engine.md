@@ -34,11 +34,13 @@ packages: engine, commands
   reauthorization (`mstar linear auth login` or the dsh Settings Authorize). A refresh never widens a read-only
   grant. Operator recovery beyond automatic reconcile: `--adopt <localId>=<issueUrl|externalId>` and
   `--force-create <localId>`.
-- **Adoption drops the previous identity's proof.** `--adopt` records the identity you confirmed and CLEARS the
-  payload hash and label ownership the row held: both described the issue it pointed at before, so carrying
-  them over would report `skipped` for content the newly adopted issue never received and let a later kind
-  change remove a label recorded for the previous one. Content therefore converges onto the adopted issue in
-  the same run. Replacing an identity that is already recorded is refused as `sync.identity-conflict` unless
+- **Adoption drops the proof of a REPLACED identity.** `--adopt` records the identity you confirmed and, when that
+  is a different issue than the row already pointed at, CLEARS the payload hash and label ownership it held: both
+  described the previous issue, so carrying them over would report `skipped` for content the newly adopted issue
+  never received and let a later kind change remove a label recorded for the previous one. Content therefore
+  converges onto the adopted issue in the same run. Re-confirming the id already recorded is not a replacement:
+  its hash and ownership still describe that same remote issue, so they are kept and a later kind change removes
+  the label it owns. Replacing an identity that is already recorded is refused as `sync.identity-conflict` unless
   `--force-adopt <localId>` names that item.
 - **A refused update is visible on the row.** A push whose write the provider refuses reports `failed`; when the
   row already holds an identity, `applied → failed` is not a legal edge, so the cause is recorded through the

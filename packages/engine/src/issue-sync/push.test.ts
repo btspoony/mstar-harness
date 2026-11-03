@@ -496,6 +496,37 @@ describe("(f3) adopting a different issue drops the previous issue's proof", () 
     }
   });
 
+  test("re-adopting the SAME issue keeps its recorded proof, so the kind change still removes the old label", async () => {
+    const { db, close } = await openedStore("adopt-same-issue");
+    try {
+      addIssue(db, "I-000984", { kind: "bug" });
+      await pushItem(db, provider(), context(), candidates(db)[0]!);
+      const before = row(db, "I-000984")!;
+      expect(before.externalId).toBe("LIN-1");
+      expect(before.lastKindLabels).toEqual(["bug"]);
+      const hashBefore = before.lastRequestHash;
+      expect(hashBefore).not.toBeNull();
+
+      // The operator re-confirms the SAME issue after changing the kind. That
+      // recorded ownership still describes this remote issue, so the update that
+      // adds `risk` has to remove `bug` too.
+      db.prepare("update issues set kind = 'risk' where id = ?").run("I-000984");
+      const adopted = adoptItem(db, BINDING, "I-000984", "LIN-1");
+      expect(adopted).toMatchObject({ itemState: "applied", externalId: "LIN-1", lastRequestHash: hashBefore });
+      expect(adopted.lastKindLabels).toEqual(["bug"]);
+
+      const fake = provider();
+      const outcome = await pushItem(db, fake, context(), candidates(db)[0]!);
+      expect(outcome).toMatchObject({ outcome: "updated", externalId: "LIN-1" });
+      const update = writeOf(fake, 0, "update").payload;
+      expect(update.labels).toEqual(["risk"]);
+      expect(update.removeLabels).toEqual(["bug"]);
+      expect(row(db, "I-000984")!.lastKindLabels).toEqual(["risk"]);
+    } finally {
+      close();
+    }
+  });
+
   test("a later kind change removes only labels this identity owns", async () => {
     const { db, close } = await openedStore("adopt-ownership");
     try {
