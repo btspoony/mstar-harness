@@ -29844,7 +29844,7 @@ function writePlan(db, input, mode) {
     const row = selectRow(db, bindingId, direction, localId);
     if (row === undefined) {
       db.prepare("insert into issue_sync_state(binding_id, direction, local_id, external_id, item_state, last_remote_updated_at, pending_target, last_error, last_skip_reason, revision, updated_at) values (?, ?, ?, ?, 'pending', null, ?, null, null, 1, ?)").run(bindingId, direction, localId, externalId, remoteUpdatedAt, now2);
-    } else if (row.item_state === "failed" || row.item_state === "unbound") {
+    } else if (mode === "claim" && row.item_state === "pending") {} else if (row.item_state === "failed" || row.item_state === "unbound") {
       casUpdate(db, { bindingId, direction, localId }, row.revision, {
         item_state: "pending",
         external_id: externalId ?? row.external_id,
@@ -30847,21 +30847,20 @@ async function pushItem(db, provider, context, candidate) {
     return apply(db, provider, context, candidate.localId, { kind: "update", externalId, payload }, hash2, fields.label, ledger, ambiguousResidue);
   }
   const entryRevision = ledger?.revision ?? 0;
-  if (ledger === null || ledger.itemState === "failed") {
-    const claim = claimItem(db, {
-      bindingId: context.bindingId,
-      direction: PUSH_DIRECTION,
+  const step = context.forceCreate === true ? "force-plan" : "plan";
+  const claim = claimItem(db, {
+    bindingId: context.bindingId,
+    direction: PUSH_DIRECTION,
+    localId: candidate.localId,
+    operationId: `linear-push:${context.bindingId}:${candidate.localId}:${step}:${hash2}:${entryRevision}`
+  });
+  if (!claim.claimed) {
+    return {
       localId: candidate.localId,
-      operationId: `linear-push:${context.bindingId}:${candidate.localId}:plan:${hash2}:${entryRevision}`
-    });
-    if (!claim.claimed) {
-      return {
-        localId: candidate.localId,
-        outcome: "unresolved",
-        externalId: claim.item.externalId,
-        cause: "another push already claimed this create for the same content and revision; this attempt sent nothing and the ledger's row decides the outcome"
-      };
-    }
+      outcome: "unresolved",
+      externalId: claim.item.externalId,
+      cause: "another push already claimed this create for the same content and revision; this attempt sent nothing and the ledger's row decides the outcome"
+    };
   }
   return apply(db, provider, context, candidate.localId, { kind: "create", payload }, hash2, fields.label, ledger, ambiguousResidue);
 }
@@ -30974,13 +30973,14 @@ function adoptItem(db, bindingId, localId, reference, options = {}) {
   if (existing !== null && existing.externalId !== null && existing.externalId !== externalId && options.force !== true) {
     throw new SyncError("sync.identity-conflict", `this item is already adopted as ${JSON.stringify(existing.externalId)}, and replacing an established remote identity is not an ordinary edit. Re-run with --force-adopt ${localId} if ${JSON.stringify(externalId)} is the right issue; nothing was written.`);
   }
+  const generation = existing?.revision ?? 0;
   if (existing === null || existing.itemState === "failed") {
     planItem(db, {
       bindingId,
       direction: PUSH_DIRECTION,
       localId,
       externalId,
-      operationId: `linear-push:${bindingId}:${localId}:adopt-plan:${externalId}`
+      operationId: `linear-push:${bindingId}:${localId}:adopt-plan:${externalId}:${generation}`
     });
   }
   const keepProof = existing?.externalId === externalId;
@@ -30990,7 +30990,7 @@ function adoptItem(db, bindingId, localId, reference, options = {}) {
     localId,
     externalId,
     ...keepProof ? {} : { clearProof: true },
-    operationId: `linear-push:${bindingId}:${localId}:${keepProof ? "adopt-confirm" : "adopt-apply"}:${externalId}`
+    operationId: `linear-push:${bindingId}:${localId}:${keepProof ? "adopt-confirm" : "adopt-apply"}:${externalId}${keepProof ? "" : `:${generation}`}`
   });
 }
 function externalIdOf2(reference) {
@@ -33639,7 +33639,14 @@ function writeLinearCredential(credential) {
   const temporary = `${path2}.${process.pid}.tmp`;
   writeFileSync6(temporary, JSON.stringify(payload, null, 2), { mode: 384 });
   chmodSync(temporary, 384);
-  renameSync4(temporary, path2);
+  try {
+    renameSync4(temporary, path2);
+  } catch (error) {
+    try {
+      rmSync3(temporary, { force: true });
+    } catch {}
+    throw error;
+  }
   return path2;
 }
 function supersededBy(state, base) {

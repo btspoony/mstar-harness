@@ -8,7 +8,7 @@ repository root is the summary of it.
 
 | File | What it is | Who reads it |
 | --- | --- | --- |
-| `prototype.html` | The design prototype: one document, one `<style>` block, nine `<section data-screen>` screens | Humans; the diff scripts |
+| `prototype.html` | The design prototype: one document, one `<style>` block, ten `<section data-screen>` screens | Humans; the diff scripts |
 | `snapshot.ts` | Derives the fixture from `prototype.html` | `check:snapshot`, `snapshot:write` |
 | `snapshot.json` | **Committed** fixture: screen frame values and reflow breakpoints | `src/styles/tokens.test.ts`, CI |
 
@@ -48,7 +48,7 @@ one kind of drift this directory cannot catch for you.**
 
 ## What the fixture does not cover
 
-The nine screens' structure — panel headings, column headings, each table's
+The screens' structure — panel headings, column headings, each table's
 `data-narrow-cols`. Extracting those from the HTML was attempted and abandoned: the section
 boundary logic produced 0 panels for `workflows` and `iterations` and 16 for `project-detail`. A
 fixture that is wrong is worse than none, because it looks authoritative.

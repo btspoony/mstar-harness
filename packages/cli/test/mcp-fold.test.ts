@@ -26,15 +26,22 @@ import { FAMILY_PURPOSE, actionOf, familyOf, familyToolName, foldFamilyTools } f
  * output schemas, so the after figure was 33,274 characters of description +
  * input schema (~9.2k tokens; the payload schemas published for `plan.issue-add`
  * and `workflow.execution-policy` are sanctioned contract detail, not
- * per-command republishing): 33,500 keeps a small but real margin while a
- * regression that starts republishing per-command contracts inside family
- * descriptions — or that lets per-action tools creep back — reddens here. A
- * published discovery example must carry every field the tool REQUIRES
- * (`"action":"schema"`), and a family that publishes an identity selector also
- * publishes the per-action `x-mstar-selectors` index a host-side injector reads,
- * so the margin absorbs both.
+ * per-command republishing).
+ *
+ * The 33,539 this ceiling now states is that probe's 33,274 plus the two
+ * one-way-push obligations, measured per contribution and nothing else: the
+ * `issue-sync.push` action's published member line and its fields add 187
+ * characters, and the `issue-sync` family purpose's push sentence — which states
+ * what the family now does — adds 80. The margin the previous figure kept is
+ * spent on those, so a further publication does not fit and its author must
+ * re-measure before raising this again: a regression that starts republishing
+ * per-command contracts inside family descriptions — or that lets per-action
+ * tools creep back — reddens here. A published discovery example must carry
+ * every field the tool REQUIRES (`"action":"schema"`), and a family that
+ * publishes an identity selector also publishes the per-action
+ * `x-mstar-selectors` index a host-side injector reads.
  */
-const PUBLISHED_SURFACE_CEILING_CHARS = 33_500;
+const PUBLISHED_SURFACE_CEILING_CHARS = 33_539;
 
 type PublishedTool = Readonly<{
   name: string;

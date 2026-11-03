@@ -103,7 +103,19 @@ export function writeLinearCredential(credential: LinearCredential): string {
   const temporary = `${path}.${process.pid}.tmp`;
   writeFileSync(temporary, JSON.stringify(payload, null, 2), { mode: 0o600 });
   chmodSync(temporary, 0o600);
-  renameSync(temporary, path);
+  try {
+    renameSync(temporary, path);
+  } catch (error) {
+    // The temp file is a complete, valid second copy of the token, and
+    // `clearLinearCredential` only knows `path`: leaving it behind would survive
+    // sign-out. Cleanup must not mask the rename's own cause.
+    try {
+      rmSync(temporary, { force: true });
+    } catch {
+      // The copy stays; the rename failure below is still the reported cause.
+    }
+    throw error;
+  }
   return path;
 }
 

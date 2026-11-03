@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
@@ -96,6 +96,33 @@ describe("linear credential store", () => {
     writeLinearCredential(credential({ accessToken: fake("second") }));
     const raw = readFileSync(process.env.MSTAR_LINEAR_CREDENTIAL!, "utf8");
     expect(JSON.parse(raw).access_token).toBe(fake("second"));
+  });
+
+  test("a failed rename removes its temp copy instead of leaving a second credential", () => {
+    // A first write lands, then the rename is made to fail the way an unusual
+    // mount does (EXDEV) — after the temp file is a complete, valid copy of the
+    // token. `clearLinearCredential` only knows the real path, so a leftover
+    // `.tmp` would survive sign-out with a live bearer in it.
+    const path = writeLinearCredential(credential({ accessToken: fake("first") }));
+    const dir = join(root, "nested");
+    const tempNames = () => readdirSync(dir).filter((name) => name.endsWith(".tmp"));
+    expect(tempNames()).toEqual([]);
+
+    // A non-empty DIRECTORY at the credential path: the rename cannot replace
+    // it, which is the failure this test is about (a file already occupies the
+    // temp name below, so nothing else can be blamed).
+    const blocked = join(dir, "blocked");
+    mkdirSync(blocked);
+    writeFileSync(join(blocked, "held"), "");
+    process.env.MSTAR_LINEAR_CREDENTIAL = blocked;
+    expect(() => writeLinearCredential(credential({ accessToken: fake("second") }))).toThrow();
+    // The temp copy is gone; only the directory this test created remains.
+    expect(readdirSync(dir).filter((name) => name.endsWith(".tmp"))).toEqual([]);
+
+    // The previous credential is untouched, as the function promises.
+    process.env.MSTAR_LINEAR_CREDENTIAL = path;
+    const state = readLinearCredential(Date.UTC(2026, 10, 1));
+    expect(state.kind === "present" && state.credential.accessToken).toBe(fake("first"));
   });
 
   test("clear removes the file and reports whether anything was there", () => {
