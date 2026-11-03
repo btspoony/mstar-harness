@@ -22949,13 +22949,19 @@ function singleLine(text4) {
 function renderFindingLocation(finding) {
   if (finding.file_path === undefined || finding.file_path === null || finding.file_path === "")
     return "repo-wide";
-  const line = typeof finding.line_start === "number" ? `:${finding.line_start}` : "";
-  return `\`${singleLine(finding.file_path)}${line}\``;
+  const path2 = singleLine(finding.file_path);
+  const start = typeof finding.line_start === "number" ? finding.line_start : null;
+  const end = typeof finding.line_end === "number" ? finding.line_end : null;
+  if (start === null)
+    return `\`${path2}\``;
+  const span = end !== null && end !== start ? `${start}-${end}` : `${start}`;
+  return `\`${path2}:${span}\``;
 }
 function renderVerdictHead(review) {
   const { tally, incomplete } = review;
+  const token = singleLine(review.verdict);
   const emoji = Object.hasOwn(VERDICT_EMOJI, review.verdict) ? VERDICT_EMOJI[review.verdict] : "•";
-  let head = `## ${emoji} Verdict: \`${review.verdict}\``;
+  let head = `## ${emoji} Verdict: \`${token}\``;
   if (tally !== undefined) {
     const band = tally.band ?? scoreBand(tally.scorePct);
     head += ` · Score ${tally.scorePct}% (${incomplete === undefined ? band : `${band}, partial`})`;
@@ -22983,7 +22989,7 @@ function renderFindingBlock(finding) {
   lines.push(`- **Location**: ${renderFindingLocation(finding)}`);
   if (finding.category !== undefined)
     lines.push(`- **Category**: ${singleLine(finding.category)}`);
-  lines.push(`- **Merge class**: ${finding.mergeClass}`);
+  lines.push(`- **Merge class**: ${singleLine(finding.mergeClass)}`);
   return lines.join(`
 `);
 }
@@ -22999,7 +23005,7 @@ function renderFindings(findings) {
 
 `);
 }
-function renderReviewMarkdown(review, _opts) {
+function renderReviewMarkdown(review, _opts = {}) {
   const sections = [];
   const { tally, incomplete } = review;
   const narrative = typeof review.summary_md === "string" && review.summary_md.trim() !== "" ? trimBoundaryNewlines(review.summary_md) : null;
