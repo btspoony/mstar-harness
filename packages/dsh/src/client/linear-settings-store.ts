@@ -211,6 +211,18 @@ export function parseLinearAuthorizeStatus(value: unknown): LinearAuthorizeStatu
   }
 }
 
+/**
+ * Whether the row's grant differs from the one the watch began with. No
+ * baseline means this card showed no grant when the watch began, so the first
+ * authorized row is the live attempt's result.
+ */
+function credentialChangedSince(before: LinearCredentialView | null, now: LinearCredentialView): boolean {
+  return before === null ||
+    before.display !== now.display ||
+    before.scope !== now.scope ||
+    before.expiresAt !== now.expiresAt
+}
+
 /** The card's transport: four one-shot calls, one pending poll, no other scheduling. */
 export class LinearSettingsStore {
   private state: LinearSettingsState = { read: { status: 'idle' }, attempt: null, outcome: null }
@@ -221,6 +233,10 @@ export class LinearSettingsStore {
   private pollFailures = 0
   /** Polls still owed to a live attempt this store does not own. */
   private inFlightProbesLeft = 0
+  /** Consecutive in-flight probes that produced no usable host facts. */
+  private inFlightProbeFailures = 0
+  /** The credential the row already showed when the watch began. */
+  private inFlightBaseline: LinearCredentialView | null = null
   /** The observation budget for one such attempt, derived from the poll cadence. */
   private readonly inFlightProbeLimit: number
   /**
@@ -329,6 +345,8 @@ export class LinearSettingsStore {
     this.clearTimer()
     this.pollFailures = 0
     this.inFlightProbesLeft = 0
+    this.inFlightProbeFailures = 0
+    this.inFlightBaseline = null
     const answer = parseLinearAuthorizeBegin(await this.call(LINEAR_AUTHORIZE_BEGIN_ENDPOINT, {}))
     if (this.disposed) return answer
     if (answer.status === 'attempt-active' && this.state.attempt !== null) {
@@ -347,7 +365,10 @@ export class LinearSettingsStore {
       })
       if (answer.status === 'attempt-active') {
         // No id came back, so the host row is the only observable: keep
-        // reading it while that attempt may still complete.
+        // reading it while that attempt may still complete. The grant this
+        // card already showed is not that attempt's result, so only a grant
+        // that changed from here ends the watch.
+        this.inFlightBaseline = this.state.read.status === 'ready' ? this.state.read.credential : null
         this.inFlightProbesLeft = this.inFlightProbeLimit
         this.scheduleInFlightProbe()
       }
@@ -399,9 +420,9 @@ export class LinearSettingsStore {
   /**
    * A live attempt this store did not start carries no id here, so the row the
    * host writes on success is the only observable. The probe reads the facts
-   * directly (no `loading` flip under the pending card) and ends at a grant, at
-   * a row that can no longer complete, or at the host's attempt window, where
-   * Authorize becomes reachable again.
+   * directly (no `loading` flip under the pending card) and ends at a grant
+   * that changed since the watch began, at a row that can no longer complete,
+   * at the host's attempt window, or after a bounded run of no answers.
    */
   private scheduleInFlightProbe(): void {
     this.clearTimer()
@@ -417,10 +438,27 @@ export class LinearSettingsStore {
     const read = parseLinearStatusRead(await this.call(LINEAR_STATUS_ENDPOINT, {}))
     if (this.disposed || this.state.outcome?.status !== 'in-flight') return
     this.inFlightProbesLeft -= 1
+    if (read.status !== 'ready') {
+      // No usable answer (transport wedge, deadline, malformed) is NOT a
+      // verdict on the attempt: the consent may still be completing on the
+      // host, so keep observing — bounded, then end honestly at `unreachable`
+      // and re-read the facts, the same shape `poll()` uses. Writing the
+      // degraded read here would flip the card into an `unavailable` alert.
+      this.inFlightProbeFailures += 1
+      if (this.inFlightProbeFailures < LINEAR_SETTINGS_POLL_FAILURE_LIMIT && this.inFlightProbesLeft > 0) {
+        this.scheduleInFlightProbe()
+        return
+      }
+      this.inFlightProbeFailures = 0
+      this.update({ ...this.state, outcome: { status: 'unreachable' } })
+      await this.refresh()
+      return
+    }
+    this.inFlightProbeFailures = 0
     const settled =
-      read.status !== 'ready' ||
       !read.rowEnabled ||
-      read.credential.display === 'authorized' ||
+      (read.credential.display === 'authorized' &&
+        credentialChangedSince(this.inFlightBaseline, read.credential)) ||
       this.inFlightProbesLeft <= 0
     this.update({ ...this.state, read, ...(settled ? { outcome: null } : {}) })
     if (!settled) this.scheduleInFlightProbe()

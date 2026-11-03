@@ -659,6 +659,112 @@ describe('the card learns an outcome from a slow consent', () => {
     store.dispose()
   })
 
+  it('a failed status read during the in-flight watch keeps observing, then ends unreachable', async () => {
+    let wedged = false
+    let failedReads = 0
+    const { connection } = stubConnection((endpoint) => {
+      if (endpoint === LINEAR_STATUS_ENDPOINT) {
+        if (wedged) {
+          failedReads += 1
+          throw new Error('transport wedged')
+        }
+        return READY_ABSENT
+      }
+      if (endpoint === LINEAR_AUTHORIZE_BEGIN_ENDPOINT) return { status: 'attempt-active' }
+      throw new Error(`unexpected ${endpoint}`)
+    })
+    const timers = manualTimers()
+    const store = storeFor(connection, { openBrowser: () => {}, schedule: timers.schedule, cancelSchedule: timers.cancel })
+    await store.refresh()
+    await store.begin()
+
+    // The first render after the in-flight outcome is the loading frame; its
+    // queued read is what lands the in-flight section.
+    expect(render(store)).toContain('data-ms-linear-state="loading"')
+    await flush()
+    expect(render(store)).toContain('data-ms-linear-outcome="in-flight"')
+
+    // One no-answer is a transport wedge, not a verdict on the attempt: the
+    // watch keeps observing instead of flipping the card to `unavailable`.
+    wedged = true
+    for (let i = 0; i < 4; i += 1) {
+      timers.fire()
+      await flush()
+    }
+    expect(store.snapshot.getSnapshot().outcome?.status).toBe('in-flight')
+    expect(timers.pending()).toBe(1)
+
+    // The fifth consecutive no-answer is the limit; the facts re-read that
+    // follows it answers, so the bounded end is honest about what happened.
+    timers.fire()
+    wedged = false
+    await flush()
+
+    expect(failedReads).toBe(5)
+    expect(store.snapshot.getSnapshot().outcome?.status).toBe('unreachable')
+    expect(store.snapshot.getSnapshot().read.status).toBe('ready')
+    expect(timers.pending()).toBe(0)
+    const html = render(store)
+    expect(html).toContain('data-ms-linear-outcome="unreachable"')
+    expect(html).toContain('data-ms-linear-action="authorize"')
+    // The degenerate `unavailable` alert is not where a transport wedge lands.
+    expect(html).not.toContain('data-ms-linear-state="unavailable"')
+    store.dispose()
+  })
+
+  it('a pre-existing grant neither hides nor ends the in-flight watch, and a landing grant is seen', async () => {
+    const cases = [
+      // The scope-insufficient card the finding is about, and a full grant
+      // whose only change is the replacement token's expiry.
+      { before: READY_READ_ONLY, landing: READY_AUTHORIZED },
+      {
+        before: READY_AUTHORIZED,
+        landing: { ...READY_AUTHORIZED, credential: { ...READY_AUTHORIZED.credential, expiresAt: START + 7_200_000 } },
+      },
+    ] as const
+    for (const testCase of cases) {
+      let landed = false
+      const { connection } = stubConnection((endpoint) => {
+        if (endpoint === LINEAR_STATUS_ENDPOINT) return landed ? testCase.landing : testCase.before
+        if (endpoint === LINEAR_AUTHORIZE_BEGIN_ENDPOINT) return { status: 'attempt-active' }
+        throw new Error(`unexpected ${endpoint}`)
+      })
+      const timers = manualTimers()
+      const store = storeFor(connection, { openBrowser: () => {}, schedule: timers.schedule, cancelSchedule: timers.cancel })
+      await store.refresh()
+      // Pre-watch: the grant is on file and the card shows it.
+      expect(render(store)).toContain('data-ms-linear-state="authorized"')
+
+      expect(await store.begin()).toEqual({ status: 'attempt-active' })
+      expect(render(store)).toContain('data-ms-linear-state="loading"')
+      await flush()
+      // Pending and visible: the in-flight state outranks the grant it already showed.
+      const pending = render(store)
+      expect(pending).toContain('data-ms-linear-outcome="in-flight"')
+      expect(pending).not.toContain('data-ms-linear-state="authorized"')
+
+      // The very same grant on the next probe is not this attempt's result, so
+      // it does not settle the watch.
+      timers.fire()
+      await flush()
+      expect(store.snapshot.getSnapshot().outcome?.status).toBe('in-flight')
+      expect(timers.pending()).toBe(1)
+
+      // A changed grant landing on the host ends the watch and renders its facts.
+      landed = true
+      timers.fire()
+      await flush()
+      const html = render(store)
+      expect(html).toContain('data-ms-linear-state="authorized"')
+      expect(html).toContain('data-ms-linear-push="ready"')
+      expect(html).toContain(new Date(testCase.landing.credential.expiresAt).toISOString())
+      expect(html).toContain(String(testCase.landing.credential.scope))
+      expect(html).not.toContain('data-ms-linear-outcome="in-flight"')
+      expect(timers.pending()).toBe(0)
+      store.dispose()
+    }
+  })
+
   it('a transport failure on one status poll keeps observing instead of collapsing into denied', async () => {
     let polls = 0
     const { connection } = stubConnection((endpoint) => {
