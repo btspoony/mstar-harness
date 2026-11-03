@@ -216,6 +216,62 @@ describe("renderReviewMarkdown: local-report surface", () => {
     expect(body).toContain("cause: Seat timed out\nunscanned: src/c.ts");
     expect(body).not.toContain("## \u{1F4CB} Review");
   });
+
+  test("a band-less legacy tally derives the band from scorePct", () => {
+    const body = renderReviewMarkdown(LEGACY_ENVELOPE, { surface: "local-report" });
+    expect(body.split("\n")[0]).toBe("## \u26A0\uFE0F Verdict: `needs fixes` \u00b7 Score 86% (good)");
+  });
+
+  test("a finding without a path renders `repo-wide` on both surfaces", () => {
+    const review: MstarReviewV1 = {
+      schema: "mstar.review/v1",
+      verdict: "ship it",
+      findings: [{ mergeClass: "nit", title: "Scattered TODOs", body: "Three TODO markers across the repo." }],
+    };
+    const github = renderReviewMarkdown(review, { surface: "github-comment" });
+    expect(github).toContain("1. **Scattered TODOs** \u2014 repo-wide");
+    const local = renderReviewMarkdown(review, { surface: "local-report" });
+    expect(local).toContain("| \u{1F535} nit | Scattered TODOs | repo-wide |");
+    expect(local).not.toContain("undefined");
+  });
+});
+
+describe("renderReviewMarkdown: boundary line breaks in free-form Markdown", () => {
+  const SURFACES = ["github-comment", "local-report"] as const;
+
+  test("(h) narrative boundary newlines before findings do not add blank lines", () => {
+    const noisy: MstarReviewV1 = { ...SETTLED_REVIEW, summary_md: `\r\n${NARRATIVE}\n\n` };
+    for (const surface of SURFACES) {
+      const body = renderReviewMarkdown(noisy, { surface });
+      expect(body).toBe(renderReviewMarkdown(SETTLED_REVIEW, { surface }));
+      expect(body).not.toMatch(/\n{3,}/);
+      expect(body.endsWith("\n")).toBe(false);
+    }
+  });
+
+  test("(i) a narrative as the last section leaves no trailing newline", () => {
+    const review: MstarReviewV1 = { ...SETTLED_REVIEW, findings: [], summary_md: `${NARRATIVE}\n` };
+    for (const surface of SURFACES) {
+      const body = renderReviewMarkdown(review, { surface });
+      expect(body.split(NARRATIVE).length).toBe(2);
+      expect(body.endsWith(NARRATIVE)).toBe(true);
+      expect(body).not.toMatch(/\n{3,}/);
+    }
+  });
+
+  test("(j) a final finding body ending in a newline keeps the section boundary clean", () => {
+    const findings = [{ ...RENDER_FINDINGS[1], body: "Rename the helper.\n" }];
+    const tally = computePrTally({ findings });
+    const review: MstarReviewV1 = { ...SETTLED_REVIEW, verdict: tally.verdict, tally, findings };
+    const github = renderReviewMarkdown(review, { surface: "github-comment" });
+    expect(github.endsWith("Rename the helper.")).toBe(true);
+    expect(github).not.toMatch(/\n{3,}/);
+
+    const local = renderReviewMarkdown(review, { surface: "local-report" });
+    expect(local.endsWith("- **Evidence**: Rename the helper.")).toBe(true);
+    expect(local).not.toMatch(/\n{3,}/);
+    expect(validateMstarReviewV1(review).ok).toBe(true);
+  });
 });
 
 describe("summary_md is an optional seat narrative", () => {
@@ -229,5 +285,12 @@ describe("summary_md is an optional seat narrative", () => {
     const gate = validateMstarReviewV1({ ...SETTLED_REVIEW, summary_md: "   " });
     expect(gate.ok).toBe(false);
     expect(gate.violations.map((v) => v.code)).toContain("review.missing-summary");
+  });
+
+  test("synthesizeReview turns a blank supplied summary into no narrative at all", () => {
+    const synthesized = synthesizeReview({ findings: [], summary_md: " \n\t" });
+    expect("summary_md" in synthesized).toBe(false);
+    expect(validateMstarReviewV1(synthesized).ok).toBe(true);
+    expect(renderReviewMarkdown(synthesized, { surface: "local-report" })).not.toContain("\u{1F4CB} Review");
   });
 });

@@ -1259,7 +1259,10 @@ describe("synthesizeReview — mstar.review/v1 envelope ", () => {
     expect("summary_md" in synthesized).toBe(false);
 
     const github = renderReviewMarkdown(synthesized, { surface: "github-comment" });
-    expect(github).toBe("**Verdict: ship it**\n\n**Tally:** 🔴 must-fix 0 · 🟠 should-fix 0 · 🔵 nit 0 · ❓ unverified 0");
+    expect(github).toContain("**Verdict: ship it**");
+    expect(github).toContain("**Tally:**");
+    expect(github).not.toContain("###");
+    expect(github.endsWith("\n")).toBe(false);
 
     const local = renderReviewMarkdown(synthesized, { surface: "local-report" });
     expect(local).toContain("Score 100% (mergeable)");

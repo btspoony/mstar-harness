@@ -882,12 +882,13 @@ export function synthesizeReview(input: {
     unmetAc: input.unmetAc,
     ...(input.incomplete === undefined ? {} : { incomplete: input.incomplete }),
   });
+  const blankSummary = input.summary_md === undefined || input.summary_md.trim() === "";
   return {
     schema: "mstar.review/v1",
     verdict: tally.verdict,
     tally,
     findings: input.findings,
-    ...(input.summary_md === undefined ? {} : { summary_md: input.summary_md }),
+    ...(blankSummary ? {} : { summary_md: input.summary_md }),
     ...(input.incomplete === undefined ? {} : { incomplete: input.incomplete }),
     ...(input.target !== undefined ? { target: input.target } : {}),
   };
@@ -912,6 +913,13 @@ const VERDICT_EMOJI: Record<PrVerdict, string> = {
   incomplete: "\u23F8\uFE0F", // ⏸️
 };
 
+/** Free-form Markdown (narrative, evidence) may legally arrive with boundary
+ * line breaks; strip only those so renderer-owned spacing survives. Internal
+ * blank lines, indentation and list structure stay verbatim. */
+function trimBoundaryNewlines(text: string): string {
+  return text.replace(/^[\r\n]+/, "").replace(/[\r\n]+$/, "");
+}
+
 /** One finding's location: `file:line` when a path is known, else repo-wide. */
 function renderFindingLocation(finding: MstarReviewFinding): string {
   if (finding.file_path === undefined || finding.file_path === null || finding.file_path === "") return "repo-wide";
@@ -935,8 +943,9 @@ function renderGithubFindings(findings: readonly MstarReviewFinding[]): string[]
     if (group.length === 0) continue;
     const entries = group.map((finding, index) => {
       const category = finding.category === undefined ? "" : ` (${finding.category})`;
-      const body = finding.body ? `\n\n${finding.body}` : "";
-      return `${index + 1}. **${finding.title}**${category} \u2014 ${renderFindingLocation(finding)}${body}`;
+      const body = trimBoundaryNewlines(finding.body ?? "");
+      const bodyBlock = body === "" ? "" : `\n\n${body}`;
+      return `${index + 1}. **${finding.title}**${category} \u2014 ${renderFindingLocation(finding)}${bodyBlock}`;
     });
     sections.push([`### ${REVIEW_EMOJI[mergeClass]} ${mergeClass}`, "", entries.join("\n\n")].join("\n"));
   }
@@ -957,7 +966,8 @@ function renderLocalFindings(findings: readonly MstarReviewFinding[]): string {
       `- **Merge class**: ${finding.mergeClass}`,
     ];
     if (finding.category !== undefined) lines.push(`- **Category**: ${finding.category}`);
-    if (finding.body) lines.push(`- **Evidence**: ${finding.body}`);
+    const body = trimBoundaryNewlines(finding.body ?? "");
+    if (body !== "") lines.push(`- **Evidence**: ${body}`);
     return lines.join("\n");
   });
   const table = ["| Merge class | Finding | Location |", "| --- | --- | --- |", ...rows].join("\n");
@@ -978,7 +988,7 @@ export function renderReviewMarkdown(review: MstarReviewV1, opts: ReviewRenderOp
   const sections: string[] = [];
   const { tally, incomplete } = review;
   const narrative =
-    review.summary_md !== undefined && review.summary_md.trim() !== "" ? review.summary_md : null;
+    review.summary_md !== undefined && review.summary_md.trim() !== "" ? trimBoundaryNewlines(review.summary_md) : null;
   const hasFindings = review.findings.length > 0;
 
   if (opts.surface === "github-comment") {
@@ -1020,7 +1030,7 @@ export function renderReviewMarkdown(review: MstarReviewV1, opts: ReviewRenderOp
     if (hasFindings) sections.push(renderLocalFindings(review.findings));
   }
 
-  return sections.join("\n\n");
+  return trimBoundaryNewlines(sections.join("\n\n"));
 }
 
 // ---------------------------------------------------------------------------
