@@ -501,6 +501,8 @@ export type {
   ReviewChangesetMode,
   ReviewInlineComment,
   ReviewPostPlan,
+  ReviewRenderOptions,
+  ReviewRenderSurface,
   ValidateFindingDocOptions,
 } from "./prreview.js";
 export {
@@ -517,6 +519,7 @@ export {
   prReviewReportPath,
   prReviewSeatPrompt,
   prReviewSizing,
+  renderReviewMarkdown,
   resolvePrReviewSettlement,
   resolvePrReviewTier,
   scoreBand,

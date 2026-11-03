@@ -1,5 +1,10 @@
 import { describe, expect, test } from "bun:test";
-import { computePrTally, validateMstarReviewV1 } from "./prreview.js";
+import {
+  computePrTally,
+  renderReviewMarkdown,
+  synthesizeReview,
+  validateMstarReviewV1,
+} from "./prreview.js";
 import type { MstarReviewTally, MstarReviewV1 } from "./prreview.js";
 
 /**
@@ -77,5 +82,152 @@ describe("MstarReviewV1 envelope shape: keys outside the documented set are refu
     // Inherited members are not envelope keys: only own properties are enumerated.
     const inherited = Object.assign(Object.create({ ghost: 1 }), BAND_ENVELOPE);
     expect(validateMstarReviewV1(inherited).ok).toBe(true);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// renderReviewMarkdown \u2014 one layout owner for both surfaces
+// ---------------------------------------------------------------------------
+
+const RENDER_FINDINGS = [
+  {
+    mergeClass: "should-fix" as const,
+    category: "Correctness",
+    file_path: "src/a.ts",
+    line_start: 12,
+    title: "Off-by-one",
+    body: "The loop skips the last element.",
+  },
+  {
+    mergeClass: "nit" as const,
+    file_path: "src/b.ts",
+    title: "Naming",
+    body: "Rename the helper.",
+  },
+];
+
+const NARRATIVE = "Two issues found; both are local to the renderer.";
+
+const SETTLED_REVIEW: MstarReviewV1 = {
+  schema: "mstar.review/v1",
+  verdict: "needs fixes",
+  summary_md: NARRATIVE,
+  tally: computePrTally({ findings: RENDER_FINDINGS }),
+  findings: RENDER_FINDINGS,
+};
+
+describe("renderReviewMarkdown: github-comment surface", () => {
+  test("(a) settled review renders verdict, tally line, narrative and findings by class", () => {
+    expect(renderReviewMarkdown(SETTLED_REVIEW, { surface: "github-comment" })).toBe(
+      [
+        "**Verdict: needs fixes**",
+        "",
+        "**Tally:** \u{1F534} must-fix 0 \u00b7 \u{1F7E0} should-fix 1 \u00b7 \u{1F535} nit 1 \u00b7 \u2753 unverified 0",
+        "",
+        NARRATIVE,
+        "",
+        "### \u{1F7E0} should-fix",
+        "",
+        "1. **Off-by-one** (Correctness) \u2014 `src/a.ts:12`",
+        "",
+        "The loop skips the last element.",
+        "",
+        "### \u{1F535} nit",
+        "",
+        "1. **Naming** \u2014 `src/b.ts`",
+        "",
+        "Rename the helper.",
+      ].join("\n"),
+    );
+  });
+
+  test("(b) no tally and no narrative renders the verdict head only", () => {
+    const review: MstarReviewV1 = { schema: "mstar.review/v1", verdict: "ship it", findings: [] };
+    const body = renderReviewMarkdown(review, { surface: "github-comment" });
+    expect(body).toBe("**Verdict: ship it**");
+    expect(body).not.toContain("**Tally:**");
+    expect(body).not.toContain("###");
+  });
+
+  test("(c) incomplete with an empty unscanned list states cause and `none`, no narrative", () => {
+    const review: MstarReviewV1 = {
+      schema: "mstar.review/v1",
+      verdict: "incomplete",
+      findings: [],
+      incomplete: { reason: "Seat timed out", unscanned: [] },
+    };
+    expect(renderReviewMarkdown(review, { surface: "github-comment" })).toBe(
+      "**Verdict: incomplete**\n\ncause: Seat timed out\nunscanned: none",
+    );
+  });
+});
+
+describe("renderReviewMarkdown: local-report surface", () => {
+  test("(d) settled review renders emoji verdict head, Score/band, tally table, narrative and findings", () => {
+    expect(renderReviewMarkdown(SETTLED_REVIEW, { surface: "local-report" })).toBe(
+      [
+        "## \u26A0\uFE0F Verdict: `needs fixes` \u00b7 Score 86% (good)",
+        "",
+        "| Findings | Count |",
+        "| --- | --- |",
+        "| \u{1F534} must-fix | 0 |",
+        "| \u{1F7E0} should-fix | 1 |",
+        "| \u{1F535} nit | 1 |",
+        "| \u2753 unverified | 0 |",
+        "",
+        "## \u{1F4CB} Review",
+        "",
+        NARRATIVE,
+        "",
+        "## Findings",
+        "",
+        "| Merge class | Finding | Location |",
+        "| --- | --- | --- |",
+        "| \u{1F7E0} should-fix | Off-by-one | `src/a.ts:12` |",
+        "| \u{1F535} nit | Naming | `src/b.ts` |",
+        "",
+        "#### \u{1F7E0} Off-by-one",
+        "",
+        "- **Merge class**: should-fix",
+        "- **Category**: Correctness",
+        "- **Evidence**: The loop skips the last element.",
+        "",
+        "#### \u{1F535} Naming",
+        "",
+        "- **Merge class**: nit",
+        "- **Evidence**: Rename the helper.",
+      ].join("\n"),
+    );
+  });
+
+  test("(e) incomplete marks the band partial inside the parens", () => {
+    const review: MstarReviewV1 = {
+      schema: "mstar.review/v1",
+      verdict: "incomplete",
+      tally: computePrTally({
+        findings: RENDER_FINDINGS,
+        incomplete: { reason: "Seat timed out", unscanned: ["src/c.ts"] },
+      }),
+      findings: RENDER_FINDINGS,
+      incomplete: { reason: "Seat timed out", unscanned: ["src/c.ts"] },
+    };
+    const body = renderReviewMarkdown(review, { surface: "local-report" });
+    expect(body.split("\n")[0]).toBe("## \u23F8\uFE0F Verdict: `incomplete` \u00b7 Score 86% (good, partial)");
+    expect(body).toContain("cause: Seat timed out\nunscanned: src/c.ts");
+    expect(body).not.toContain("## \u{1F4CB} Review");
+  });
+});
+
+describe("summary_md is an optional seat narrative", () => {
+  test("(f) synthesizeReview emits no summary_md key and the envelope validates", () => {
+    const synthesized = synthesizeReview({ findings: [] });
+    expect("summary_md" in synthesized).toBe(false);
+    expect(validateMstarReviewV1(synthesized).ok).toBe(true);
+  });
+
+  test("(g) a present-but-blank summary_md is still refused", () => {
+    const gate = validateMstarReviewV1({ ...SETTLED_REVIEW, summary_md: "   " });
+    expect(gate.ok).toBe(false);
+    expect(gate.violations.map((v) => v.code)).toContain("review.missing-summary");
   });
 });

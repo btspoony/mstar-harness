@@ -335,7 +335,12 @@ export type MstarReviewTally = Omit<PrTallyResult, "band"> & { band?: PrScoreBan
 export type MstarReviewV1 = {
   schema: "mstar.review/v1";
   verdict: PrVerdict;
-  summary_md: string;
+  /**
+   * The seat's own review narrative in Markdown. Present = a seat produced
+   * this prose; absent = no narrative was produced. The engine never
+   * fabricates one, and no renderer echoes the envelope's facts back into it.
+   */
+  summary_md?: string;
   tally?: MstarReviewTally;
   findings: MstarReviewFinding[];
   target?: { owner?: string; repo?: string; pr?: number; head_sha?: string };
@@ -699,8 +704,11 @@ export function validateMstarReviewV1(doc: unknown): GateResult {
     ));
   }
 
-  if (doc.summary_md === undefined || typeof doc.summary_md !== "string" || doc.summary_md.trim() === "") {
-    violations.push(violation("high", "review.missing-summary", "summary_md must be a non-empty string"));
+ // `summary_md` is the optional seat narrative: absent is legal (the engine
+ // produces no narrative of its own), while a present-but-blank value is a
+ // claim that cannot be rendered.
+  if (doc.summary_md !== undefined && (typeof doc.summary_md !== "string" || doc.summary_md.trim() === "")) {
+    violations.push(violation("high", "review.missing-summary", "summary_md must be a non-empty string when present"));
   }
 
   if (doc.findings === undefined || !Array.isArray(doc.findings)) {
@@ -849,37 +857,6 @@ export function validateMstarReviewV1(doc: unknown): GateResult {
 // ---------------------------------------------------------------------------
 
 /**
- * Deterministic short Markdown summary for {@link synthesizeReview} when the
- * caller omits `summary_md` (template locked in the
- * engine test; no LLM). Verdict line mirrors the chat display contract
- * (score with its band); each finding contributes one
- * `- <mergeClass>: <title>` bullet. A bounded/stopped run adds the `partial`
- * mark and the two facts the token cannot carry — its cause and the scope it
- * never reached — mirroring pr-review.md § Display contract.
- */
-function defaultReviewSummary(tally: PrTallyResult, findings: MstarReviewV1["findings"]): string {
-  const incomplete = tally.incomplete;
-  const lines = [
-    `## Verdict: ${tally.verdict} \u00b7 ${tally.scorePct}% (${tally.band}${incomplete === undefined ? "" : ", partial"})`,
-    "",
-    `must-fix=${tally.tally.mustFix} should-fix=${tally.tally.shouldFix} nit=${tally.tally.nit} unverified=${tally.tally.unverified}`,
-  ];
-  if (incomplete !== undefined) {
-    lines.push(
-      `cause: ${incomplete.reason}`,
-      `unscanned: ${incomplete.unscanned.length === 0 ? "none" : incomplete.unscanned.join(", ")}`,
-    );
-  }
-  if (findings.length > 0) {
-    lines.push("");
-    for (const finding of findings) {
-      lines.push(`- ${finding.mergeClass}: ${finding.title}`);
-    }
-  }
-  return lines.join("\n");
-}
-
-/**
  * Fold already-vetted findings into a complete `mstar.review/v1` envelope
  * . Pure and synchronous — verdict/tally come ONLY
  * from {@link computePrTally}; no I/O, no GitHub, no store, no seat
@@ -887,8 +864,9 @@ function defaultReviewSummary(tally: PrTallyResult, findings: MstarReviewV1["fin
  * provided. A supplied `incomplete` marks the run stopped-short: the token
  * becomes `incomplete` (with the cause/scope carried on the envelope, since
  * {@link validateMstarReviewV1} requires it for that verdict) while the
- * tally stays the partial count-derived one. When `summary_md` is omitted,
- * {@link defaultReviewSummary} builds the locked deterministic template.
+ * tally stays the partial count-derived one. `summary_md` is the seat's
+ * narrative and stays absent when the caller supplies none — the engine
+ * never fabricates one.
  */
 export function synthesizeReview(input: {
   findings: MstarReviewV1["findings"];
@@ -907,12 +885,142 @@ export function synthesizeReview(input: {
   return {
     schema: "mstar.review/v1",
     verdict: tally.verdict,
-    summary_md: input.summary_md ?? defaultReviewSummary(tally, input.findings),
     tally,
     findings: input.findings,
+    ...(input.summary_md === undefined ? {} : { summary_md: input.summary_md }),
     ...(input.incomplete === undefined ? {} : { incomplete: input.incomplete }),
     ...(input.target !== undefined ? { target: input.target } : {}),
   };
+}
+
+// ---------------------------------------------------------------------------
+// renderReviewMarkdown — the envelope's two presentation surfaces
+// ---------------------------------------------------------------------------
+
+/** Where a review body is published: a GitHub Review comment, or the local
+ * report archive's Markdown body. */
+export type ReviewRenderSurface = "github-comment" | "local-report";
+
+export type ReviewRenderOptions = { surface: ReviewRenderSurface };
+
+/** Verdict emoji for the local surface's heading (module-private: the github
+ * surface states the token alone). */
+const VERDICT_EMOJI: Record<PrVerdict, string> = {
+  "ship it": "\u2705", // ✅
+  "needs fixes": "\u26A0\uFE0F", // ⚠️
+  blocked: "\u26D4", // ⛔
+  incomplete: "\u23F8\uFE0F", // ⏸️
+};
+
+/** One finding's location: `file:line` when a path is known, else repo-wide. */
+function renderFindingLocation(finding: MstarReviewFinding): string {
+  if (finding.file_path === undefined || finding.file_path === null || finding.file_path === "") return "repo-wide";
+  const line = typeof finding.line_start === "number" ? `:${finding.line_start}` : "";
+  return `\`${finding.file_path}${line}\``;
+}
+
+/** The `cause:` / `unscanned:` pair a bounded run must state (pr-review.md
+ * § Display contract) — one blank-line-delimited section. */
+function renderIncompleteFacts(incomplete: PrIncomplete): string {
+  const unscanned = incomplete.unscanned.length === 0 ? "none" : incomplete.unscanned.join(", ");
+  return `cause: ${incomplete.reason}\nunscanned: ${unscanned}`;
+}
+
+/** Findings grouped in MERGE_CLASSES order with empty classes omitted; each
+ * class renders one blank-line-delimited section. */
+function renderGithubFindings(findings: readonly MstarReviewFinding[]): string[] {
+  const sections: string[] = [];
+  for (const mergeClass of MERGE_CLASSES) {
+    const group = findings.filter((finding) => finding.mergeClass === mergeClass);
+    if (group.length === 0) continue;
+    const entries = group.map((finding, index) => {
+      const category = finding.category === undefined ? "" : ` (${finding.category})`;
+      const body = finding.body ? `\n\n${finding.body}` : "";
+      return `${index + 1}. **${finding.title}**${category} \u2014 ${renderFindingLocation(finding)}${body}`;
+    });
+    sections.push([`### ${REVIEW_EMOJI[mergeClass]} ${mergeClass}`, "", entries.join("\n\n")].join("\n"));
+  }
+  return sections;
+}
+
+function renderLocalFindings(findings: readonly MstarReviewFinding[]): string {
+  const ordered = MERGE_CLASSES.flatMap((mergeClass) =>
+    findings.filter((finding) => finding.mergeClass === mergeClass),
+  );
+  const rows = ordered.map(
+    (finding) => `| ${REVIEW_EMOJI[finding.mergeClass]} ${finding.mergeClass} | ${finding.title} | ${renderFindingLocation(finding)} |`,
+  );
+  const details = ordered.map((finding) => {
+    const lines = [
+      `#### ${REVIEW_EMOJI[finding.mergeClass]} ${finding.title}`,
+      "",
+      `- **Merge class**: ${finding.mergeClass}`,
+    ];
+    if (finding.category !== undefined) lines.push(`- **Category**: ${finding.category}`);
+    if (finding.body) lines.push(`- **Evidence**: ${finding.body}`);
+    return lines.join("\n");
+  });
+  const table = ["| Merge class | Finding | Location |", "| --- | --- | --- |", ...rows].join("\n");
+  return ["## Findings", table, ...details].join("\n\n");
+}
+
+/**
+ * Render the complete review body for one presentation surface from the
+ * `mstar.review/v1` envelope — the engine's only review-body layout owner.
+ * The envelope supplies every fact (verdict, tally, incomplete fact pair,
+ * findings); the consumer owns what surrounds the body (upsert markers,
+ * round headers, byte-budget clamping). `summary_md`, when a seat produced
+ * one, is rendered as the seat's narrative — never as a header copy — and is
+ * never read for facts. Sections join with one blank line; no trailing
+ * newline.
+ */
+export function renderReviewMarkdown(review: MstarReviewV1, opts: ReviewRenderOptions): string {
+  const sections: string[] = [];
+  const { tally, incomplete } = review;
+  const narrative =
+    review.summary_md !== undefined && review.summary_md.trim() !== "" ? review.summary_md : null;
+  const hasFindings = review.findings.length > 0;
+
+  if (opts.surface === "github-comment") {
+    sections.push(`**Verdict: ${review.verdict}**`);
+    if (tally !== undefined) {
+      const { mustFix, shouldFix, nit, unverified } = tally.tally;
+      sections.push(
+        `**Tally:** ${REVIEW_EMOJI["must-fix"]} must-fix ${mustFix} \u00b7 ` +
+          `${REVIEW_EMOJI["should-fix"]} should-fix ${shouldFix} \u00b7 ` +
+          `${REVIEW_EMOJI.nit} nit ${nit} \u00b7 ` +
+          `${REVIEW_EMOJI.unverified} unverified ${unverified}`,
+      );
+    }
+    if (incomplete !== undefined) sections.push(renderIncompleteFacts(incomplete));
+    if (narrative !== null) sections.push(narrative);
+    if (hasFindings) sections.push(...renderGithubFindings(review.findings));
+  } else {
+    let head = `## ${VERDICT_EMOJI[review.verdict]} Verdict: \`${review.verdict}\``;
+    if (tally !== undefined) {
+      const band = tally.band ?? scoreBand(tally.scorePct);
+      head += ` \u00b7 Score ${tally.scorePct}% (${incomplete === undefined ? band : `${band}, partial`})`;
+    }
+    sections.push(head);
+    if (tally !== undefined) {
+      const { mustFix, shouldFix, nit, unverified } = tally.tally;
+      sections.push(
+        [
+          "| Findings | Count |",
+          "| --- | --- |",
+          `| ${REVIEW_EMOJI["must-fix"]} must-fix | ${mustFix} |`,
+          `| ${REVIEW_EMOJI["should-fix"]} should-fix | ${shouldFix} |`,
+          `| ${REVIEW_EMOJI.nit} nit | ${nit} |`,
+          `| ${REVIEW_EMOJI.unverified} unverified | ${unverified} |`,
+        ].join("\n"),
+      );
+    }
+    if (incomplete !== undefined) sections.push(renderIncompleteFacts(incomplete));
+    if (narrative !== null) sections.push(`## \u{1F4CB} Review\n\n${narrative}`); // 📋 seat narrative
+    if (hasFindings) sections.push(renderLocalFindings(review.findings));
+  }
+
+  return sections.join("\n\n");
 }
 
 // ---------------------------------------------------------------------------
