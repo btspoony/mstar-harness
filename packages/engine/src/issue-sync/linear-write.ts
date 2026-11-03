@@ -252,6 +252,19 @@ function argumentsFor(
   return args;
 }
 
+/**
+ * The two 4xx answers that do NOT prove the mutation did not run. `408 Request
+ * Timeout` and `425 Too Early` are request-level rejections raised around a
+ * body the server may already have accepted — a deadline or an early-data
+ * refusal can arrive after the write executed — so they belong with the
+ * unconfirmed outcomes: calling them `refused` would make the next run create
+ * the exact duplicate the contract forbids.
+ */
+const LATE_4XX: Record<number, string> = {
+  408: "the request timed out, which can happen after the server already ran the mutation",
+  425: "the server deferred the request as too early, which can happen after the server already ran the mutation",
+};
+
 /** Classify one transport outcome. Only a strict envelope parse is `confirmed`. */
 function classify(outcome: LinearCallOutcome): ProviderWriteReceipt {
   if (outcome.kind === "transport-error") {
@@ -263,7 +276,11 @@ function classify(outcome: LinearCallOutcome): ProviderWriteReceipt {
   }
   if (outcome.kind === "http-status") {
     if (outcome.status >= 400 && outcome.status < 500) {
-      // A request-level rejection is provably not delivered.
+      const late = LATE_4XX[outcome.status];
+      if (late !== undefined) {
+        return { kind: "ambiguous", cause: `the write answered HTTP ${outcome.status}: ${late}; delivery is unconfirmed` };
+      }
+      // Every other request-level rejection happened before the mutation ran.
       return refused("linear.write-refused", `the provider rejected the write with HTTP ${outcome.status}; nothing was written`);
     }
     return { kind: "ambiguous", cause: `the write answered HTTP ${outcome.status}; delivery is unconfirmed` };

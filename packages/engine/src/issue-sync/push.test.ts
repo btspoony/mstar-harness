@@ -509,20 +509,6 @@ describe("(f) the operator verbs reach the ledger through the same verbs", () =>
     }
   });
 
-  test("--force-create still creates where it can assert absence, and classifies the receipt", async () => {
-    const { db, close } = await openedStore("force-create");
-    try {
-      addIssue(db, "I-000972");
-      // No row, so no unresolved attempt contradicts the operator's assertion.
-      const fake = provider();
-      const forced = await pushItem(db, fake, context({ forceCreate: true }), candidates(db)[0]!);
-      expect(forced).toMatchObject({ outcome: "created", externalId: "LIN-1" });
-      expect(fake.writes).toHaveLength(1);
-    } finally {
-      close();
-    }
-  });
-
   test("a reference that is not a Linear URL is refused by name", () => {
     expect(externalIdOf("LIN-5")).toBe("LIN-5");
     expect(() => externalIdOf("https://example.test/acme/issue/LIN-5")).toThrow(/not a Linear host/);
@@ -907,8 +893,8 @@ describe("(i) an ambiguous update drops the payload proof but keeps the identity
 });
 
 describe("(j) an unresolved create blocks every later create until reconcile attributes it", () => {
-  test("a forced run over the residue sends nothing, names its recoveries, and leaves reconcile able to adopt", async () => {
-    const { db, close } = await openedStore("force-create-residue");
+  test("a run over the residue sends nothing, names its recoveries, and leaves reconcile able to adopt", async () => {
+    const { db, close } = await openedStore("unresolved-residue");
     try {
       addIssue(db, "I-001031", { kind: "risk" });
       const ctx = context();
@@ -917,17 +903,17 @@ describe("(j) an unresolved create blocks every later create until reconcile att
       await pushItem(db, ambiguous, ctx, candidates(db)[0]!);
       expect(row(db, "I-001031")).toMatchObject({ itemState: "pending", externalId: null });
 
-      // 2. `--force-create` cannot act on it. The row it reads may belong to a
-      //    create still inside its provider call — its claim is what advanced the
-      //    revision — so "the remote issue does not exist" is not an assertion
-      //    anybody can establish from this state. The refusal names the two
-      //    recoveries instead of sending a second create.
-      const forced = provider();
-      const blocked = await pushItem(db, forced, context({ forceCreate: true }), candidates(db)[0]!);
+      // 2. Nothing can act on it. The row it reads may belong to a create still
+      //    inside its provider call — its claim is what advanced the revision — so
+      //    "the remote issue does not exist" is not an assertion anybody can
+      //    establish from this state. The report names the recoveries instead of
+      //    sending a second create.
+      const again = provider();
+      const blocked = await pushItem(db, again, context(), candidates(db)[0]!);
       expect(blocked.outcome).toBe("unresolved");
-      expect(blocked.cause).toContain("--force-create cannot establish its absence");
       expect(blocked.cause).toContain("--adopt <localId>=<issueUrl|externalId>");
-      expect(forced.writes).toEqual([]);
+      expect(blocked.cause).toContain("--release <localId>");
+      expect(again.writes).toEqual([]);
       // The residue survives as an AMBIGUITY: still pending, still no id.
       expect(row(db, "I-001031")).toMatchObject({ itemState: "pending", externalId: null });
 
@@ -1120,8 +1106,8 @@ describe("(l) disposition -> state names are preflighted against the team, like 
 });
 
 describe("(m) one claim key arbitrates every create for a content and revision", () => {
-  test("a forced run that starts while an ordinary create awaits its write sends nothing", async () => {
-    const { db, close } = await openedStore("force-create-window");
+  test("a run that starts while another run's create awaits its write sends nothing", async () => {
+    const { db, close } = await openedStore("in-flight-window");
     try {
       addIssue(db, "I-001071");
       const candidate = candidates(db)[0]!;
@@ -1130,7 +1116,7 @@ describe("(m) one claim key arbitrates every create for a content and revision",
       // `pending` row at revision 1 — and then stands inside its provider call:
       // the network-sized window another process enters.
       const { fake: ordinary, started, release } = writeInFlight();
-      const forced = provider();
+      const second = provider();
       const ordinaryRun = pushItem(db, ordinary, context(), candidate);
       await started;
       expect(ordinary.writes).toHaveLength(1);
@@ -1138,23 +1124,23 @@ describe("(m) one claim key arbitrates every create for a content and revision",
 
       // Started inside that window. The residue it reads IS the in-flight
       // attempt, so a create here would land beside the first one's.
-      const forcedRun = await pushItem(db, forced, context({ forceCreate: true }), candidate);
-      expect(forced.writes).toEqual([]);
-      expect(forcedRun.outcome).toBe("unresolved");
-      expect(forcedRun.cause).toContain("--force-create cannot establish its absence");
+      const secondRun = await pushItem(db, second, context(), candidate);
+      expect(second.writes).toEqual([]);
+      expect(secondRun.outcome).toBe("unresolved");
+      expect(secondRun.cause).toContain("--adopt <localId>=<issueUrl|externalId>");
 
       release();
       expect(await ordinaryRun).toMatchObject({ outcome: "created", externalId: "LIN-1" });
       // One local item, exactly one remote create.
-      expect([...ordinary.writes, ...forced.writes].filter((write) => write.kind === "create")).toHaveLength(1);
+      expect([...ordinary.writes, ...second.writes].filter((write) => write.kind === "create")).toHaveLength(1);
       expect(row(db, "I-001071")).toMatchObject({ itemState: "applied", externalId: "LIN-1" });
     } finally {
       close();
     }
   });
 
-  test("a forced run that follows an ordinary create over the same content sends nothing", async () => {
-    const { db, close } = await openedStore("mixed-claim-loser");
+  test("a run that follows a confirmed create over the same content sends nothing", async () => {
+    const { db, close } = await openedStore("confirmed-then-same-content");
     try {
       addIssue(db, "I-001072");
       const candidate = candidates(db)[0]!;
@@ -1162,11 +1148,10 @@ describe("(m) one claim key arbitrates every create for a content and revision",
       const plainProvider = provider();
       expect((await pushItem(db, plainProvider, context(), candidate)).outcome).toBe("created");
 
-      // A forced run over the same content sends nothing: the skip rule answers
-      // first (the confirmed write's hash still matches), and `--force-create`
-      // says the remote issue is absent, never that two runs may each create it.
+      // A second run over the same content sends nothing: the skip rule answers
+      // first, because the confirmed write's hash still matches.
       const straggler = provider();
-      const replayed = await pushItem(db, straggler, context({ forceCreate: true }), candidate);
+      const replayed = await pushItem(db, straggler, context(), candidate);
       expect(straggler.writes).toEqual([]);
       expect(replayed.outcome).toBe("skipped");
       expect(row(db, "I-001072")).toMatchObject({ itemState: "applied", externalId: "LIN-1" });
@@ -1175,8 +1160,8 @@ describe("(m) one claim key arbitrates every create for a content and revision",
     }
   });
 
-  test("a sequential forced retry after a failure still creates", async () => {
-    const { db, close } = await openedStore("force-create-sequential-retry");
+  test("a sequential retry after a provable refusal still creates", async () => {
+    const { db, close } = await openedStore("sequential-retry");
     try {
       addIssue(db, "I-001062");
       const candidate = candidates(db)[0]!;
@@ -1188,12 +1173,12 @@ describe("(m) one claim key arbitrates every create for a content and revision",
       expect((await pushItem(db, refused, context(), candidate)).outcome).toBe("failed");
       expect(row(db, "I-001062")).toMatchObject({ itemState: "failed", externalId: null, revision: 2 });
 
-      // The operator confirms the remote absence: the forced retry arbitrates on
-      // a key no earlier attempt used, so the ordinary receipt cannot shadow it.
-      const forced = provider();
-      const outcome = await pushItem(db, forced, context({ forceCreate: true }), candidates(db)[0]!);
+      // The retry arbitrates on a key no earlier attempt used, so the refusal's
+      // receipt cannot shadow it.
+      const retried = provider();
+      const outcome = await pushItem(db, retried, context(), candidates(db)[0]!);
       expect(outcome.outcome).toBe("created");
-      expect(forced.writes.filter((write) => write.kind === "create")).toHaveLength(1);
+      expect(retried.writes.filter((write) => write.kind === "create")).toHaveLength(1);
     } finally {
       close();
     }
@@ -1262,6 +1247,44 @@ describe("(n) an operator release clears a pending create only when reconciliati
       // Refused over the whole scan, before the adoption write: the row is still
       // the unresolved create that the next run can adopt.
       expect(row(db, "I-001082")).toMatchObject({ itemState: "pending", externalId: null });
+    } finally {
+      close();
+    }
+  });
+
+  test("one matched release refuses the whole run before ANY release or adopt-by-marker write", async () => {
+    const { db, close } = await openedStore("release-partial");
+    try {
+      // Two residues of the same run: one the operator released, one it did not.
+      await residue(db, "I-001085");
+      addIssue(db, "I-001086");
+      const ambiguous = provider({ receipts: [{ kind: "ambiguous", cause: "connection closed mid-call" }] });
+      await pushItem(db, ambiguous, context(), candidates(db)[1]!);
+      expect(row(db, "I-001086")).toMatchObject({ itemState: "pending", externalId: null });
+
+      const adopted = correlationMarker({ workspace: "acme", team: "ENG" }, STORE_ID, "I-001085");
+      const released = correlationMarker({ workspace: "acme", team: "ENG" }, STORE_ID, "I-001086");
+      const scanning = provider({
+        pages: [
+          {
+            items: [
+              // Would be adopted by marker if the run got that far.
+              { externalId: "LIN-85", title: "I-001085", description: adopted, state: "Todo", priority: "High", labels: [], updatedAt: "2026-11-02T00:00:00.000Z", url: "https://linear.app/acme/issue/LIN-85" },
+              // The match that refuses the release.
+              { externalId: "LIN-86", title: "I-001086", description: released, state: "Todo", priority: "High", labels: [], updatedAt: "2026-11-02T00:00:00.000Z", url: "https://linear.app/acme/issue/LIN-86" },
+            ],
+            nextCursor: null,
+          },
+        ],
+      });
+      await expect(reconcilePendingCreate(db, scanning, context(), { release: new Set(["I-001086"]) })).rejects.toThrow(
+        /adoption, not release/,
+      );
+      // Zero ledger change: the refused release never landed, and neither did the
+      // adoption the scan had already proved for the OTHER row.
+      expect(scanning.writes).toEqual([]);
+      expect(row(db, "I-001085")).toMatchObject({ itemState: "pending", externalId: null });
+      expect(row(db, "I-001086")).toMatchObject({ itemState: "pending", externalId: null });
     } finally {
       close();
     }

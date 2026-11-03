@@ -813,8 +813,10 @@ export type {
 export {
   PUSH_DIRECTION,
   adoptItem,
+  assertReleaseTargets,
   correlationMarker,
   externalIdOf,
+  identityConflict,
   pushItem,
   reconcilePendingCreate,
   requestHash,

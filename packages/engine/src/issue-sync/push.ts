@@ -74,8 +74,6 @@ export type PushContext = {
    * at the provider.
    */
   states: ReadonlySet<string>;
-  /** Operator confirmed remote absence for this one item (`--force-create`). */
-  forceCreate?: boolean;
   /**
    * The run lease this push holds (`RunLease.runId`). Every ledger write this
    * run performs carries it, so a run that `--take-run` replaced mid-flight has
@@ -215,18 +213,17 @@ export async function pushItem(db: StoreDb, provider: IssueProvider, context: Pu
     // own reconcile scan finds no match, `--release <localId>` clears the row to
     // the retryable `failed` edge, which is the one exit for proven absence.
     //
-    // `--force-create` does not lift this guard. The lease means no RUNNING
-    // create can be in flight beside this one, so the row is a CRASHED attempt's
-    // residue — and a request that crashed attempt already sent may still land:
-    // the flag still cannot assert that no remote issue exists, which is the only
-    // thing that would make a second create safe.
+    // Nothing lifts this guard. The lease means no RUNNING create can be in
+    // flight beside this one, so the row is a CRASHED attempt's residue — and a
+    // request that crashed attempt already sent may still land, so no flag can
+    // assert that no remote issue exists, which is the only thing that would
+    // make a second create safe.
     return {
       localId: candidate.localId,
       outcome: "unresolved",
       externalId: null,
-      cause: context.forceCreate
-        ? "a create for this item was never confirmed, so --force-create cannot establish its absence; nothing was sent. Re-run push without it - reconcile adopts the issue when exactly one remote issue carries the item's correlation marker - or record the identity yourself with --adopt <localId>=<issueUrl|externalId>; when that scan finds no match, --release <localId> releases the residue so the next push may create"
-        : "a previous create was never confirmed; the next run reconciles it by correlation marker, or name its remote issue with --adopt <localId>=<issueUrl|externalId>. When that scan finds no match, --release <localId> releases the residue so the next push may create",
+      cause:
+        "a previous create was never confirmed; the next run reconciles it by correlation marker, or name its remote issue with --adopt <localId>=<issueUrl|externalId>. When that scan finds no match, --release <localId> releases the residue so the next push may create",
     };
   }
   const marker = correlationMarker(context.binding, context.storeId, candidate.localId);
@@ -486,6 +483,28 @@ function releasePendingCreate(db: StoreDb, context: PushContext, localId: string
 }
 
 /**
+ * Only the row shape a release exists for can be released. Anything else is an
+ * operator error about the ledger, reported before the scan and any write — and
+ * the command calls this before its own first write, so a bad `--release` cannot
+ * land after an `--adopt` already did.
+ */
+export function assertReleaseTargets(db: StoreDb, bindingId: string, release: ReadonlySet<string>): void {
+  for (const localId of release) {
+    const item = readItem(db, { bindingId, direction: PUSH_DIRECTION, localId });
+    if (item === null || item.itemState !== "pending" || item.externalId !== null) {
+      throw new SyncError(
+        "sync.illegal-transition",
+        `--release ${localId} names no unresolved create: ` +
+          (item === null
+            ? "the item has no push ledger row"
+            : `its row is '${item.itemState}'${item.externalId === null ? "" : ` as ${item.externalId}`}`) +
+          "; release clears only a pending create with no remote id - name a known issue with --adopt, and let every other item push normally",
+      );
+    }
+  }
+}
+
+/**
  * Adopt ambiguous creates by correlation marker.
  *
  * Runs a full listing scan and adopts a row ONLY when exactly one remote issue
@@ -507,21 +526,7 @@ export async function reconcilePendingCreate(
   options: { release?: ReadonlySet<string> } = {},
 ): Promise<ReconcileReport> {
   const release = options.release ?? new Set<string>();
-  // Only the row shape a release exists for can be released. Anything else is
-  // an operator error about the ledger, reported before the scan and any write.
-  for (const localId of release) {
-    const item = readItem(db, { bindingId: context.bindingId, direction: PUSH_DIRECTION, localId });
-    if (item === null || item.itemState !== "pending" || item.externalId !== null) {
-      throw new SyncError(
-        "sync.illegal-transition",
-        `--release ${localId} names no unresolved create: ` +
-          (item === null
-            ? "the item has no push ledger row"
-            : `its row is '${item.itemState}'${item.externalId === null ? "" : ` as ${item.externalId}`}`) +
-          "; release clears only a pending create with no remote id - name a known issue with --adopt, and let every other item push normally",
-      );
-    }
-  }
+  assertReleaseTargets(db, context.bindingId, release);
   const pending = db
     .prepare(
       "select local_id from issue_sync_state where binding_id = ? and direction = ? and item_state = 'pending' and external_id is null",
@@ -626,12 +631,8 @@ export function adoptItem(
 ): SyncItem {
   const externalId = externalIdOf(reference);
   const existing = readItem(db, { bindingId, direction: PUSH_DIRECTION, localId });
-  if (existing !== null && existing.externalId !== null && existing.externalId !== externalId && options.force !== true) {
-    throw new SyncError(
-      "sync.identity-conflict",
-      `this item is already adopted as ${JSON.stringify(existing.externalId)}, and replacing an established remote identity is not an ordinary edit. Re-run with --force-adopt ${localId} if ${JSON.stringify(externalId)} is the right issue; nothing was written.`,
-    );
-  }
+  const conflict = identityConflict(existing, localId, externalId);
+  if (conflict !== null && options.force !== true) throw conflict;
   // The row's revision is the generation this adoption is applied OVER, and it
   // joins the operation id. Going back to an issue this row held earlier repeats
   // every other fact of the adoption that first recorded it (same binding, local
@@ -669,6 +670,23 @@ export function adoptItem(
     operationId: `linear-push:${bindingId}:${localId}:${keepProof ? "adopt-confirm" : "adopt-apply"}:${externalId}${keepProof ? "" : `:${generation}`}`,
     ...(options.runId === undefined ? {} : { runId: options.runId }),
   });
+}
+
+/**
+ * The `--adopt` replacement refusal, or null when this adoption is allowed
+ * without `--force-adopt`. Shared by the write path and the pre-write preflight,
+ * so a run never starts writing against an adoption it will refuse.
+ */
+export function identityConflict(
+  existing: SyncItem | null,
+  localId: string,
+  externalId: string,
+): SyncError | null {
+  if (existing === null || existing.externalId === null || existing.externalId === externalId) return null;
+  return new SyncError(
+    "sync.identity-conflict",
+    `this item is already adopted as ${JSON.stringify(existing.externalId)}, and replacing an established remote identity is not an ordinary edit. Re-run with --force-adopt ${localId} if ${JSON.stringify(externalId)} is the right issue; nothing was written.`,
+  );
 }
 
 /**
