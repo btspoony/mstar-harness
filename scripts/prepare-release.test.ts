@@ -3,27 +3,35 @@
  * routing, the prepare-time published-version gate, and the release-surface
  * version helpers it shares with `release:validate`.
  */
-import { mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import {
+  LOCKFILE_SYNC_TIMEOUT_MS,
   type RegistryFetch,
   bumpJsonVersion,
   bumpVersion,
   checkVersionCollision,
   parseFragment,
   publishedPackageNames,
+  syncLockfile,
   syncRootDependencySpecs,
   validateFragmentPackages,
 } from "./prepare-release.ts";
 import {
-  DEFAULT_VERSION_PATH,
   CHANGELOGS,
+  DEFAULT_VERSION_PATH,
   RELEASE_VERSION_RE,
+  RELEASED_WORKSPACES,
   VERSION_SURFACES,
   compareSemver,
   isPrereleaseVersion,
+  lockfileHasWorkspacesSection,
+  lockfileReleaseGate,
+  lockfileRootRangeDrift,
+  lockfileWorkspaceDrift,
   readVersionAt,
+  workspaceVersionsFromLockfile,
 } from "./release-surfaces.ts";
 
 describe("validateFragmentPackages (release packages enum)", () => {
@@ -105,6 +113,298 @@ describe("syncRootDependencySpecs (hosted root manifest)", () => {
   test("rewrites stale ranges to stable and prerelease release ranges", () => {
     expect(syncRootDependencySpecs(manifest("^3.4.0"), "3.5.0")).not.toContain("^3.4.0");
     expect(syncRootDependencySpecs(manifest("workspace:*"), "3.6.0-alpha.1")).toContain('"@mstar-harness/engine": "^3.6.0-alpha.1"');
+  });
+});
+
+describe("workspaceVersionsFromLockfile (lockfile workspace facts)", () => {
+  test("reads each workspace entry and skips the versionless root entry", () => {
+    const lock = `{
+  "lockfileVersion": 2,
+  "workspaces": {
+    "": { "name": "root" },
+    "packages/a": { "name": "a", "version": "1.0.2" },
+    "packages/b": {
+      "name": "b",
+      "version": "1.0.2",
+      "dependencies": { "x": "1" },
+    },
+  },
+}
+`;
+    expect(workspaceVersionsFromLockfile(lock)).toEqual([
+      { path: "packages/a", version: "1.0.2" },
+      { path: "packages/b", version: "1.0.2" },
+    ]);
+  });
+
+  test("returns nothing (never throws) for a lockfile without a workspaces section", () => {
+    const noSection = `{\n  "lockfileVersion": 2,\n}\n`;
+    expect(workspaceVersionsFromLockfile(noSection)).toEqual([]);
+    expect(workspaceVersionsFromLockfile("")).toEqual([]);
+    expect(lockfileHasWorkspacesSection(noSection)).toBe(false);
+    expect(lockfileHasWorkspacesSection("")).toBe(false);
+  });
+
+  test("an empty workspaces section is present but yields no entries", () => {
+    const empty = `{\n  "workspaces": {},\n}\n`;
+    expect(workspaceVersionsFromLockfile(empty)).toEqual([]);
+    expect(lockfileHasWorkspacesSection(empty)).toBe(true);
+  });
+
+  test("root range drift: match, mismatch, missing name, and an absent section", () => {
+    const lock = `{
+  "workspaces": {
+    "": { "name": "root", "dependencies": { "@mstar-harness/engine": "^1.0.2" } },
+    "packages/cli": { "version": "1.0.2" },
+  },
+}
+`;
+    expect(lockfileRootRangeDrift(lock, { "@mstar-harness/engine": "^1.0.2" })).toEqual([]);
+    expect(lockfileRootRangeDrift(lock, { "@mstar-harness/engine": "^1.0.1" })).toEqual([
+      { name: "@mstar-harness/engine", expected: "^1.0.1", recorded: "^1.0.2" },
+    ]);
+    expect(lockfileRootRangeDrift(lock, { "@mstar-harness/engine": "^1.0.2", "@mstar-harness/cli": "^1.0.2" })).toEqual([
+      { name: "@mstar-harness/cli", expected: "^1.0.2", recorded: "<missing>" },
+    ]);
+    expect(lockfileRootRangeDrift(`{\n  "lockfileVersion": 2,\n}\n`, { "@mstar-harness/engine": "^1.0.2" })).toEqual([
+      { name: "@mstar-harness/engine", expected: "^1.0.2", recorded: "<missing>" },
+    ]);
+  });
+
+  test("drift lists only bumped workspaces whose recorded version differs", () => {
+    const lock = `{
+  "workspaces": {
+    "packages/engine": { "version": "1.0.1" },
+    "packages/cli": { "version": "1.0.2" },
+    "packages/judgment": { "version": "0.0.0" },
+  },
+}
+`;
+    const drift = lockfileWorkspaceDrift(lock, "1.0.2").map((d) => d.path);
+    // Every released surface except the one recorded at the release version, and
+    // never the private workspace that no release bumps.
+    expect(drift).not.toContain("packages/cli");
+    expect(drift).toContain("packages/engine");
+    expect(drift).not.toContain("packages/judgment");
+    expect(drift).toEqual(RELEASED_WORKSPACES.filter((p) => p !== "packages/cli"));
+  });
+
+  test("the release gate names every branch without reading files", () => {
+    const lock = (at: (path: string) => string, range: string) => `{
+  "workspaces": {
+    "": { "name": "root", "dependencies": { "@mstar-harness/engine": ${JSON.stringify(range)} } },
+${[...RELEASED_WORKSPACES, "packages/judgment"]
+  .map((path) => `    "${path}": { "version": ${JSON.stringify(at(path))} },`)
+  .join("\n")}
+  },
+}
+`;
+    const all = (version: string) => (path: string) => (path === "packages/judgment" ? "0.0.0" : version);
+
+    expect(lockfileReleaseGate(undefined, "1.0.2", "v1.0.2")).toEqual({
+      status: "skipped",
+      lines: ["OK lockfile: none (skipped)"],
+    });
+    expect(lockfileReleaseGate(`{\n  "lockfileVersion": 2,\n}\n`, "1.0.2", "v1.0.2")).toEqual({
+      status: "skipped",
+      lines: ["OK lockfile: bun.lock has no workspaces section (skipped)"],
+    });
+    expect(lockfileReleaseGate(`{\n  "workspaces": {},\n}\n`, "1.0.2", "v1.0.2")).toEqual({
+      status: "drift",
+      lines: [
+        "MISMATCH bun.lock workspace entries: bun.lock has a workspaces section with no readable versioned entries; cannot prove the release alignment",
+      ],
+      recovery: expect.stringContaining("bun install --lockfile-only --force"),
+    });
+    expect(lockfileReleaseGate(lock(all("1.0.2"), "^1.0.2"), "1.0.2", "v1.0.2")).toEqual({
+      status: "ok",
+      lines: [
+        `OK lockfile: bun.lock (${RELEASED_WORKSPACES.length} released workspaces at 1.0.2, root ranges @mstar-harness/engine ^1.0.2)`,
+      ],
+    });
+
+    const workspaceDrift = lockfileReleaseGate(lock(all("1.0.1"), "^1.0.2"), "1.0.2", "v1.0.2");
+    expect(workspaceDrift.status).toBe("drift");
+    expect(workspaceDrift.lines).toHaveLength(RELEASED_WORKSPACES.length);
+    expect(workspaceDrift.lines).toContain(
+      "MISMATCH bun.lock workspace version (packages/engine): tag v1.0.2 => 1.0.2, lockfile has 1.0.1",
+    );
+    expect(workspaceDrift.lines.join("\n")).not.toContain("packages/judgment");
+
+    const rangeDrift = lockfileReleaseGate(lock(all("1.0.2"), "^1.0.1"), "1.0.2", "v1.0.2");
+    expect(rangeDrift).toEqual({
+      status: "drift",
+      lines: ["MISMATCH bun.lock root range (@mstar-harness/engine): expected ^1.0.2, lockfile has ^1.0.1"],
+      recovery: expect.stringContaining("bun install --lockfile-only --force"),
+    });
+  });
+});
+
+describe("syncLockfile (workspace versions)", () => {
+  /**
+   * One lockfile member per released workspace plus the never-bumped private, and a
+   * root `""` entry carrying the shipped engine range. `at(path)` returns the version
+   * to record; `range` returns the root range.
+   */
+  const lockfile = (at: (path: string) => string, range: string) =>
+    `{\n  "lockfileVersion": 2,\n  "configVersion": 1,\n  "workspaces": {\n    "": {\n      "name": "root",\n      "dependencies": {\n        "@mstar-harness/engine": ${JSON.stringify(range)},\n      },\n    },\n${[
+      ...RELEASED_WORKSPACES,
+      "packages/judgment",
+    ]
+      .map(
+        (path) =>
+          `    "${path}": {\n      "name": "@mstar-harness/${path.split("/").pop()}",\n      "version": ${JSON.stringify(at(path))},\n    },\n`,
+      )
+      .join("")}  },\n}\n`;
+  const atVersion = (version: string) => (path: string) => (path === "packages/judgment" ? "0.0.0" : version);
+  /** Injected runner: no spawn, no network — it only decides what the sync sees. */
+  const runner =
+    (outcome: Partial<{ exitCode: number | null; signalCode: string | null; stdout: string; stderr: string }>) =>
+    () => ({ exitCode: 0, signalCode: null, stdout: "", stderr: "", ...outcome });
+  const dir = () => mkdtempSync(join(tmpdir(), "mstar-lockfile-"));
+
+  test("reports synced once every bumped workspace records the release version", async () => {
+    const tmp = dir();
+    try {
+      writeFileSync(join(tmp, "bun.lock"), lockfile(atVersion("1.0.1"), "^1.0.1"));
+      const result = await syncLockfile("1.0.2", tmp, () => {
+        writeFileSync(join(tmp, "bun.lock"), lockfile(atVersion("1.0.2"), "^1.0.2"));
+        return runner({})();
+      });
+      expect(result).toEqual({
+        status: "synced",
+        message: expect.stringContaining(
+          `${RELEASED_WORKSPACES.length} released workspaces at 1.0.2, root ranges @mstar-harness/engine ^1.0.2`,
+        ),
+      });
+      const written = readFileSync(join(tmp, "bun.lock"), "utf8");
+      expect(
+        workspaceVersionsFromLockfile(written).every((e) => e.version === "1.0.2" || e.path === "packages/judgment"),
+      ).toBe(true);
+      expect(lockfileRootRangeDrift(written, { "@mstar-harness/engine": "^1.0.2" })).toEqual([]);
+    } finally {
+      rmSync(tmp, { recursive: true, force: true });
+    }
+  });
+
+  test("rejects when one bumped workspace still records the old version", async () => {
+    const tmp = dir();
+    try {
+      writeFileSync(join(tmp, "bun.lock"), lockfile(atVersion("1.0.1"), "^1.0.1"));
+      const stale = (path: string) => (path === "packages/engine" ? "1.0.1" : "1.0.2");
+      await expect(
+        syncLockfile("1.0.2", tmp, () => {
+          writeFileSync(join(tmp, "bun.lock"), lockfile(stale, "^1.0.2"));
+          return runner({})();
+        }),
+      ).rejects.toThrow(/still records packages\/engine version 1\.0\.1: bun declined/);
+    } finally {
+      rmSync(tmp, { recursive: true, force: true });
+    }
+  });
+
+  test("rejects when bun exits 0 but nothing moved", async () => {
+    const tmp = dir();
+    try {
+      writeFileSync(join(tmp, "bun.lock"), lockfile(atVersion("1.0.1"), "^1.0.1"));
+      await expect(syncLockfile("1.0.2", tmp, runner({}))).rejects.toThrow(/oven-sh\/bun#18906/);
+    } finally {
+      rmSync(tmp, { recursive: true, force: true });
+    }
+  });
+
+  test("rejects with the captured output when bun install exits non-zero", async () => {
+    const tmp = dir();
+    try {
+      writeFileSync(join(tmp, "bun.lock"), lockfile(atVersion("1.0.1"), "^1.0.1"));
+      await expect(syncLockfile("1.0.2", tmp, runner({ exitCode: 3, stderr: "boom" }))).rejects.toThrow(
+        /bun install --lockfile-only failed:\nboom/,
+      );
+    } finally {
+      rmSync(tmp, { recursive: true, force: true });
+    }
+  });
+
+  test("names a signal kill that is not the configured timeout", async () => {
+    const tmp = dir();
+    try {
+      writeFileSync(join(tmp, "bun.lock"), lockfile(atVersion("1.0.1"), "^1.0.1"));
+      await expect(syncLockfile("1.0.2", tmp, runner({ exitCode: null, signalCode: "SIGKILL" }))).rejects.toThrow(
+        /failed \(did not exit normally: SIGKILL\):/,
+      );
+      await expect(syncLockfile("1.0.2", tmp, runner({ exitCode: null, signalCode: "SIGTERM" }))).rejects.toThrow(
+        new RegExp(`failed \\(timed out after ${LOCKFILE_SYNC_TIMEOUT_MS}ms\\):`),
+      );
+    } finally {
+      rmSync(tmp, { recursive: true, force: true });
+    }
+  });
+
+  test("skips a repo without a lockfile instead of creating one", async () => {
+    const tmp = dir();
+    try {
+      let spawned = false;
+      const result = await syncLockfile("1.0.1", tmp, () => {
+        spawned = true;
+        return runner({})();
+      });
+      expect(result.status).toBe("skipped");
+      expect(result.message).toContain("skipped");
+      expect(spawned).toBe(false);
+      expect(existsSync(join(tmp, "bun.lock"))).toBe(false);
+    } finally {
+      rmSync(tmp, { recursive: true, force: true });
+    }
+  });
+
+  /**
+   * One real-bun case keeps the delegate-to-bun claim end-to-end. Manifests use the
+   * production shape: plain `dependencies` ranges plus `workspace:*` links inside
+   * packages. The dev+peer pair on `@mstar-harness/omp` is a measured bun-1.4.0
+   * trigger for this fixture only (the repo root has no such pair) — bun 1.4.0
+   * leaves workspace metadata alone when only versions moved (oven-sh/bun#18906).
+   */
+  test("rewrites the real lockfile's workspace versions through bun", async () => {
+    const tmp = dir();
+    const root = (version: string) =>
+      JSON.stringify({
+        name: "root",
+        version,
+        private: true,
+        workspaces: ["packages/*"],
+        dependencies: { "@mstar-harness/engine": `^${version}` },
+        devDependencies: { "@mstar-harness/omp": "workspace:*" },
+        peerDependencies: { "@mstar-harness/omp": ">=1.0.0" },
+      });
+    const write = (version: string) => {
+      writeFileSync(join(tmp, "package.json"), root(version));
+      for (const path of [...RELEASED_WORKSPACES, "packages/judgment"]) {
+        mkdirSync(join(tmp, path), { recursive: true });
+        writeFileSync(
+          join(tmp, path, "package.json"),
+          JSON.stringify({ name: `@mstar-harness/${path.split("/").pop()}`, version: path === "packages/judgment" ? "0.0.0" : version }),
+        );
+      }
+    };
+    try {
+      write("1.0.1");
+      const seeded = Bun.spawnSync([process.execPath, "install", "--lockfile-only", "--ignore-scripts"], {
+        cwd: tmp,
+        timeout: LOCKFILE_SYNC_TIMEOUT_MS,
+      });
+      expect(seeded.exitCode).toBe(0);
+
+      write("1.0.2");
+      const result = await syncLockfile("1.0.2", tmp);
+      expect(result.status).toBe("synced");
+
+      const lock = readFileSync(join(tmp, "bun.lock"), "utf8");
+      expect(lock).toContain(`"@mstar-harness/engine": "^1.0.2"`);
+      expect(lock.match(/"version": "1\.0\.2"/g)).toHaveLength(RELEASED_WORKSPACES.length);
+      expect(lock).not.toContain("1.0.1");
+    } finally {
+      rmSync(tmp, { recursive: true, force: true });
+    }
   });
 });
 

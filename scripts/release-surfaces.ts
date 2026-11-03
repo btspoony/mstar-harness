@@ -154,6 +154,57 @@ export function locateVersionSpan(text: string, versionPath: string): [number, n
   return undefined;
 }
 
+/** True iff the lockfile text carries a `"workspaces"` key (even an empty one). */
+export function lockfileHasWorkspacesSection(lockText: string): boolean {
+  return lockText.includes('"workspaces"');
+}
+
+/**
+ * Workspace entries recorded in a bun lockfile: one `{ path, version }` per
+ * `"workspaces"` member that carries a `version` (the root `""` entry does not).
+ * A small structural scan keeps this free of a JSONC parser; a lockfile without
+ * a `workspaces` section yields an empty list, so callers state a skip, never a pass.
+ */
+export function workspaceVersionsFromLockfile(lockText: string): { path: string; version: string }[] {
+  const key = lockText.indexOf('"workspaces"');
+  if (key === -1) return [];
+  const open = lockText.indexOf("{", key);
+  if (open === -1) return [];
+  const end = matchBrace(lockText, open);
+  if (end === -1) return [];
+
+  const entries: { path: string; version: string }[] = [];
+  const member = /"([^"]*)"\s*:\s*\{/g;
+  member.lastIndex = open + 1;
+  for (let m = member.exec(lockText); m && m.index < end; m = member.exec(lockText)) {
+    const bodyStart = m.index + m[0].length - 1;
+    const bodyEnd = matchBrace(lockText, bodyStart);
+    if (bodyEnd === -1) break;
+    const version = /"version"\s*:\s*"([^"]*)"/.exec(lockText.slice(bodyStart, bodyEnd))?.[1];
+    if (m[1] !== "" && version !== undefined) entries.push({ path: m[1], version });
+    member.lastIndex = bodyEnd + 1;
+  }
+  return entries;
+}
+
+/** Index of the `}` closing the `{` at `open`, or -1 when unbalanced. */
+function matchBrace(text: string, open: number): number {
+  let depth = 0;
+  let inString = false;
+  for (let i = open; i < text.length; i++) {
+    const ch = text[i];
+    if (inString) {
+      if (ch === "\\") i++;
+      else if (ch === '"') inString = false;
+      continue;
+    }
+    if (ch === '"') inString = true;
+    else if (ch === "{") depth++;
+    else if (ch === "}" && --depth === 0) return i;
+  }
+  return -1;
+}
+
 /** Every manifest/package.json that must carry the harness release version. */
 export const VERSION_SURFACES: readonly VersionSurface[] = [
   { label: "monorepo root", path: "package.json" },
@@ -196,6 +247,132 @@ export const CHANGELOGS: readonly ChangelogTarget[] = [
   { path: "packages/dsh/CHANGELOG.md", lang: "en", pkg: "dsh" },
   { path: "packages/omp/CHANGELOG.md", lang: "en", pkg: "omp" },
 ] as const;
+
+/**
+ * Root runtime dependencies that must track the release version as a plain semver
+ * range. `@mstar-harness/commands` is internal (workspace devDependency, inlined
+ * into the CLI bundle), so it stays a `workspace:*` build link, and other
+ * devDependencies remain build-time workspace links too.
+ */
+export const ROOT_VERSIONED_DEPENDENCIES = ["@mstar-harness/engine"] as const;
+
+/**
+ * Workspaces a release bumps, as lockfile workspace keys: one per `packages/*`
+ * version surface. Private workspaces outside the surface list (`packages/judgment`
+ * stays at `0.0.0`) are deliberately excluded — they are never bumped, so their
+ * recorded version is not drift.
+ */
+export const RELEASED_WORKSPACES: readonly string[] = VERSION_SURFACES.filter(
+  (s) => s.path.startsWith("packages/") && s.path.endsWith("/package.json") && !s.versionPath,
+).map((s) => s.path.slice(0, -"/package.json".length));
+
+/**
+ * Root workspace dependency ranges recorded in a bun lockfile, read from the `""`
+ * workspace entry only. Returns `[]` when the section or that entry is absent.
+ */
+export function rootRangesFromLockfile(lockText: string): Record<string, string> {
+  const key = lockText.indexOf('"workspaces"');
+  if (key === -1) return {};
+  const open = lockText.indexOf("{", key);
+  if (open === -1) return {};
+  const end = matchBrace(lockText, open);
+  if (end === -1) return {};
+  const root = /"":\s*\{/.exec(lockText.slice(open, end));
+  if (!root) return {};
+  const rootStart = open + root.index + root[0].length - 1;
+  const rootEnd = matchBrace(lockText, rootStart);
+  if (rootEnd === -1) return {};
+  const depsStart = lockText.indexOf('"dependencies"', rootStart);
+  if (depsStart === -1 || depsStart > rootEnd) return {};
+  const depsOpen = lockText.indexOf("{", depsStart);
+  if (depsOpen === -1) return {};
+  const depsEnd = matchBrace(lockText, depsOpen);
+  if (depsEnd === -1) return {};
+
+  const ranges: Record<string, string> = {};
+  const pair = /"([^"]+)"\s*:\s*"([^"]*)"/g;
+  pair.lastIndex = depsOpen + 1;
+  for (let m = pair.exec(lockText); m && m.index < depsEnd; m = pair.exec(lockText)) {
+    ranges[m[1]] = m[2];
+  }
+  return ranges;
+}
+
+/**
+ * Root range drift for the shipped runtime dependencies: every requested name whose
+ * recorded range differs from `specs`, with a missing recording reported as such.
+ */
+export function lockfileRootRangeDrift(
+  lockText: string,
+  specs: Record<string, string>,
+): { name: string; expected: string; recorded: string }[] {
+  const ranges = rootRangesFromLockfile(lockText);
+  return Object.entries(specs)
+    .filter(([name, expected]) => ranges[name] !== expected)
+    .map(([name, expected]) => ({ name, expected, recorded: ranges[name] ?? "<missing>" }));
+}
+
+/**
+ * Lockfile drift against `version` for the workspaces this release bumps: empty
+ * means every one is recorded at `version`; otherwise each offending path with the
+ * version the lockfile records (`undefined` = the workspace is not in the lockfile).
+ */
+export function lockfileWorkspaceDrift(lockText: string, version: string): { path: string; recorded?: string }[] {
+  const recorded = new Map(workspaceVersionsFromLockfile(lockText).map((e) => [e.path, e.version]));
+  return RELEASED_WORKSPACES.filter((path) => recorded.get(path) !== version).map((path) => ({
+    path,
+    recorded: recorded.get(path),
+  }));
+}
+
+
+/** Operator-facing lockfile verdict for the tag gate; `lines` are already formatted. */
+export type LockfileReleaseGate = {
+  status: "ok" | "skipped" | "drift";
+  lines: string[];
+  recovery?: string;
+};
+
+/**
+ * Decide whether a release tag's lockfile records what it promises. `lockText` is
+ * `undefined` when the checkout has no `bun.lock`; a lockfile without a workspaces
+ * section is a stated skip (not every checkout is bun-managed), but a section that
+ * exists with nothing readable is drift — the gate must never pass unproven facts.
+ */
+export function lockfileReleaseGate(lockText: string | undefined, version: string, tag: string): LockfileReleaseGate {
+  const recovery =
+    "Recovery: run `bun install --lockfile-only --force` in the repo root; if that still lags, upgrade bun (oven-sh/bun#41302) and re-run `bun install --lockfile-only`, then commit bun.lock.";
+  if (lockText === undefined) return { status: "skipped", lines: ["OK lockfile: none (skipped)"] };
+  if (!lockfileHasWorkspacesSection(lockText)) {
+    return { status: "skipped", lines: ["OK lockfile: bun.lock has no workspaces section (skipped)"] };
+  }
+  if (workspaceVersionsFromLockfile(lockText).length === 0) {
+    return {
+      status: "drift",
+      lines: [
+        "MISMATCH bun.lock workspace entries: bun.lock has a workspaces section with no readable versioned entries; cannot prove the release alignment",
+      ],
+      recovery,
+    };
+  }
+
+  const lines = [
+    ...lockfileWorkspaceDrift(lockText, version).map(
+      (d) => `MISMATCH bun.lock workspace version (${d.path}): tag ${tag} => ${version}, lockfile has ${d.recorded ?? "<missing>"}`,
+    ),
+    ...lockfileRootRangeDrift(
+      lockText,
+      Object.fromEntries(ROOT_VERSIONED_DEPENDENCIES.map((name) => [name, `^${version}`])),
+    ).map((d) => `MISMATCH bun.lock root range (${d.name}): expected ${d.expected}, lockfile has ${d.recorded}`),
+  ];
+  if (lines.length > 0) return { status: "drift", lines, recovery };
+
+  const proven = ROOT_VERSIONED_DEPENDENCIES.map((name) => `${name} ${`^${version}`}`).join(", ");
+  return {
+    status: "ok",
+    lines: [`OK lockfile: bun.lock (${RELEASED_WORKSPACES.length} released workspaces at ${version}, root ranges ${proven})`],
+  };
+}
 
 /**
  * Release version regex — `X.Y.Z` with an optional semver prerelease suffix

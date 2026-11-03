@@ -16,6 +16,7 @@
  *      (under `## [Unreleased]`), auto-appending a Version-alignment block.
  *   5. Bumps all version surfaces (including the portable Agent Plugins manifest and both marketplace manifests).
  *   6. Moves consumed fragments to `.changes/archive/<version>/`.
+ *   7. Rewrites `bun.lock` so the workspace versions it records match the bumped manifests.
  *
  * Fragment format (`.changes/unreleased/<slug>.md`):
  *   ---
@@ -32,14 +33,19 @@
  * (the `release-prep` workflow commits and opens the `release vX.Y.Z` PR).
  */
 import { existsSync, mkdirSync, readdirSync, renameSync } from "node:fs";
+import { join } from "node:path";
 import {
   CHANGELOGS,
   DEFAULT_VERSION_PATH,
   RELEASE_VERSION_RE,
+  RELEASED_WORKSPACES,
+  ROOT_VERSIONED_DEPENDENCIES,
   VERSION_SURFACES,
   compareSemver,
   isPrereleaseVersion,
   locateVersionSpan,
+  lockfileRootRangeDrift,
+  lockfileWorkspaceDrift,
   readVersionAt,
 } from "./release-surfaces.ts";
 
@@ -81,6 +87,8 @@ const DEFAULT_CATEGORY: Record<string, string> = {
 const REGISTRY_URL = "https://registry.npmjs.org";
 /** Bound on the whole published-version probe; a hung registry must never stall prepare. */
 export const REGISTRY_TIMEOUT_MS = 10_000;
+/** Bound on the lockfile sync spawn; a stalled `bun install` must never stall prepare either. */
+export const LOCKFILE_SYNC_TIMEOUT_MS = 60_000;
 
 /** Registry read, status only — injected by tests so the check is offline and deterministic. */
 export type RegistryFetch = (url: string, init: { signal: AbortSignal }) => Promise<{ status: number }>;
@@ -365,14 +373,9 @@ export async function bumpJsonVersion(
 
 /**
  * Rewrite root runtime dependency specs for workspace packages published with
- * this release. `@mstar-harness/commands` is internal (workspace devDependency,
- * inlined into the CLI bundle), so it stays a `workspace:*` build link and is
- * never rewritten to a registry range. Other devDependencies remain build-time
- * workspace links too.
+ * this release (the shared `ROOT_VERSIONED_DEPENDENCIES` list): each shipped range
+ * must stay resolvable outside the workspace.
  */
-const ROOT_VERSIONED_DEPENDENCIES = ["@mstar-harness/engine"] as const;
-
-/** Keep shipped root dependencies resolvable outside the workspace. */
 export function syncRootDependencySpecs(text: string, version: string): string {
   let synced = text;
   for (const name of ROOT_VERSIONED_DEPENDENCIES) {
@@ -382,6 +385,94 @@ export function syncRootDependencySpecs(text: string, version: string): string {
     synced = synced.replace(re, `$1^${version}$2`);
   }
   return synced;
+}
+
+/**
+ * Outcome of one lockfile sync; each status carries the operator-facing line the
+ * caller prints, so a skip is never mistaken for a normal prepare step.
+ */
+export type LockfileSync =
+  | { status: "synced"; message: string }
+  | { status: "skipped"; message: string };
+
+/** Result of the bounded spawn; injected by tests so the sync is offline and deterministic. */
+export type LockfileRunner = (cwd: string) => {
+  exitCode: number | null;
+  signalCode: string | null;
+  stdout: string;
+  stderr: string;
+};
+
+const defaultLockfileRunner: LockfileRunner = (cwd) => {
+  const proc = Bun.spawnSync([process.execPath, "install", "--lockfile-only", "--ignore-scripts"], {
+    cwd,
+    stdout: "pipe",
+    stderr: "pipe",
+    timeout: LOCKFILE_SYNC_TIMEOUT_MS,
+  });
+  return {
+    exitCode: proc.exitCode,
+    signalCode: proc.signalCode ?? null,
+    stdout: proc.stdout.toString(),
+    stderr: proc.stderr.toString(),
+  };
+};
+
+/**
+ * Rewrite the lockfile facts the version bump changed (workspace versions and
+ * the root workspace's dependency ranges), then prove it moved. Bun owns its
+ * lockfile format, so the rewrite is delegated to `bun install --lockfile-only`
+ * instead of hand-edited.
+ */
+export async function syncLockfile(
+  version: string,
+  cwd: string = process.cwd(),
+  run: LockfileRunner = defaultLockfileRunner,
+): Promise<LockfileSync> {
+  const lockPath = join(cwd, "bun.lock");
+  if (!existsSync(lockPath)) {
+    return {
+      status: "skipped",
+      message: `lockfile: none in ${cwd} (skipped — nothing to sync, not a bun-managed checkout)`,
+    };
+  }
+  const result = run(cwd);
+  if (result.exitCode !== 0) {
+    // A killed child reports `exitCode: null`; only the SIGTERM we configured is a timeout.
+    const detail =
+      result.exitCode !== null
+        ? ""
+        : result.signalCode === "SIGTERM"
+          ? ` (timed out after ${LOCKFILE_SYNC_TIMEOUT_MS}ms)`
+          : ` (did not exit normally: ${result.signalCode ?? "unknown signal"})`;
+    throw new Error(
+      `bun install --lockfile-only failed${detail}:\n${result.stdout}${result.stderr}\nFix the cause, then run \`bun install --lockfile-only\` in the repo root and commit bun.lock.`,
+    );
+  }
+  // A zero exit is not proof of a rewrite: bun 1.4.0 skips workspace metadata when
+  // only versions moved (oven-sh/bun#18906), so both mirrored facts are checked.
+  const lockText = await Bun.file(lockPath).text();
+  const workspaces = lockfileWorkspaceDrift(lockText, version);
+  const ranges = lockfileRootRangeDrift(
+    lockText,
+    Object.fromEntries(ROOT_VERSIONED_DEPENDENCIES.map((name) => [name, `^${version}`])),
+  );
+  if (workspaces.length > 0 || ranges.length > 0) {
+    const stale = [
+      ...workspaces.map((d) => `${d.path} version ${d.recorded ?? "<missing>"}`),
+      ...ranges.map((d) => `${d.name} range ${d.recorded} (expected ${d.expected})`),
+    ].join(", ");
+    throw new Error(
+      `bun.lock still records ${stale}: bun declined to rewrite it (see oven-sh/bun#18906)\nRun \`bun install --lockfile-only --force\` in the repo root; if that still lags, upgrade bun (oven-sh/bun#41302) and re-run \`bun install --lockfile-only\`, then commit bun.lock.`,
+    );
+  }
+  // Only the bumped workspaces are proven; a private, never-released workspace
+  // (`packages/judgment`) is not part of the count.
+  const rangesProven = ROOT_VERSIONED_DEPENDENCIES.map((n) => `${n} ^${version}`).join(", ");
+  return {
+    status: "synced",
+    message: `lockfile: bun.lock (${RELEASED_WORKSPACES.length} released workspaces at ${version}, root ranges ${rangesProven})`,
+  };
 }
 
 function archiveFragments(version: string, frags: Fragment[]): void {
@@ -444,6 +535,10 @@ async function main(): Promise<void> {
   }
 
   archiveFragments(version, frags);
+
+  // Both the workspace versions and the root dependency ranges the lockfile
+  // mirrors now differ from it, so refresh the lockfile inside the release prep.
+  console.log((await syncLockfile(version)).message);
 
   console.log(`\nDone. Next: commit and open PR "release v${version}".`);
   console.log(`Validate with: bun run release:validate -- v${version}`);
