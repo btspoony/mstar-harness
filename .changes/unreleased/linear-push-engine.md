@@ -25,20 +25,26 @@ packages: engine, commands
   the operator's judgement as its reason, so the same run may create; a scan that found a match refuses it,
   because that item's recovery is adoption. The create still takes a send-right claim — binding, item and content
   hash — as its intent record, but the claim is no longer an arbiter between runs and no longer carries the ledger
-  revision: one run per binding below is what separates attempts, and a stable per-residue key means a re-run can
+  revision: the run lease below is what separates RUNNING attempts, and a stable per-residue key means a re-run can
   never mint a new one mid-attempt.
 - **One push run per binding, with an explicit takeover.** `mstar issue-sync push` is an operator command, not a
   concurrent service, so it now serialises instead of pretending to be concurrency-safe. Migration 18 adds
   `sync_runs`, one row per `(binding, direction)`; the run is claimed before any candidate work by a single
   insert that fails when a row exists, and released in a `finally` on every exit — completion, refusal and throw.
-  The store's own write transaction is the arbiter: no file lock, no advisory lock, no staleness timer. A second
-  run is refused with `sync.run-held`, naming the current holder's start time, pid and host so an operator can
-  judge whether it is alive, plus both exits: wait for it to finish, or `--take-run` to take it over after
+  A second run is refused with `sync.run-held`, naming the current holder's start time, pid and host so an operator
+  can judge whether it is alive, plus both exits: wait for it to finish, or `--take-run` to take it over after
   confirming the holder is dead. `--take-run` REPLACES the row (it never coexists with it), records the takeover as
   the run's reason, and a taken-over run's own release matches nothing because it names its own run token, so it
-  cannot free its successor. A scripted parallel push is not supported. `--force-create` and `--release` keep
-  their meanings and lose their concurrency caveats: `--release` needs no in-flight check, because an in-flight
-  create of that residue cannot coexist with a running release.
+  cannot free its successor. A scripted parallel push is not supported.
+  **What the lease actually arbitrates is acquisition, not the whole run.** The run token is carried into every
+  ledger write, so a run that a takeover replaced has its LATER writes refused with `sync.run-taken` instead of
+  applied — the successor is unaffected (its own id is the one the row holds) and the ordinary single-run path is
+  unchanged. What no guard can do is recall a request the predecessor had ALREADY sent when the takeover landed: it
+  may still reach the provider, which is why the reconcile-by-marker scan remains the first recovery and why
+  `pending` residue is never created over. Taking the run over from a LIVE holder is therefore unsafe —
+  `--take-run` is for a holder the operator confirmed is dead, never a timer or a liveness guess.
+  `--force-create` and `--release` keep their meanings; a release still needs no check for a RUNNING create of that
+  residue, but it can never see one a dead holder already sent.
 - **Labels are resolved, never created.** Kind→label is resolved against the workspace's real label set
   discovered through `list_issue_labels`; a mapped name the workspace lacks refuses that item
   (`linear.label-unresolved`) and other items proceed. A changed kind adds the new label and removes every
@@ -109,17 +115,22 @@ packages: engine, commands
   没有任何 issue 携带该标记、且该 issue 确实已不存在时用 `--release <localId>`。释放会把这条 `pending`
   创建落到可重试的 `failed` 边上，并以操作者的判断作为原因，因此同一次运行即可创建；若扫描找到了匹配则会
   拒绝释放，因为那一项的恢复手段是采纳。创建仍会取得一个发送权声明（绑定、条目、内容 hash）作为意图记录，
-  但它不再是运行之间的仲裁者，也不再携带账本 revision：运行之间的隔离由下面的「每绑定单次运行」承担，
+  但它不再是运行之间的仲裁者，也不再携带账本 revision：运行之间的隔离由下面的「每绑定一次运行」租约承担，
   而按残留固定的键意味着重跑永远不会在尝试中途造出新键。
 - **每绑定一次 push 运行，并提供显式接管。** `mstar issue-sync push` 是操作者命令，不是并发服务，因此改为
   串行化，而不是假装并发安全。迁移 18 新增 `sync_runs`：每个 `(binding, direction)` 一行；任何候选工作之前
   以单条 insert 取得运行权（已存在行时即失败），并在 `finally` 中随每次退出释放——完成、拒绝与抛错都包括。
-  仲裁者是 store 自身的写事务：没有文件锁、没有咨询锁、没有陈旧超时。第二次运行会以 `sync.run-held` 被拒绝，
+  第二次运行会以 `sync.run-held` 被拒绝，
   并点明当前持有者的开始时间、pid 与 host，供操作者判断其是否存活，同时给出两条出路：等它结束，或在确认
   持有者已死之后用 `--take-run` 接管。`--take-run` 是**替换**该行（绝不并存），并把接管记录为该次运行的原因；
   被接管者的释放会因为运行令牌不匹配而删不掉任何东西，因此无法释放其继任者。脚本化的并行 push 不受支持。
-  `--force-create` 与 `--release` 保留原语义而去掉并发告警：`--release` 不再需要飞行中检查，因为该残留的
-  飞行中创建不可能与正在执行的释放并存。
+  **租约真正仲裁的是「取得运行权」，而不是整个运行。** 运行令牌会随本次运行的每一次账本写入传递，因此被接管
+  的运行的**后续**写入会以 `sync.run-taken` 被拒绝而不是被应用——继任者不受影响（行上记录的就是它自己的 id），
+  而正常的单次运行路径完全不变。任何守卫都做不到的是召回被接管者**已经发出**的请求：它仍可能到达 provider，
+  这正是「按标记对账」依旧是第一恢复手段、以及绝不覆盖 `pending` 残留的原因。因此从**活着的**持有者手中接管
+  是不安全的——`--take-run` 只用于操作者确认已死的持有者，绝不是定时器或存活猜测。
+  `--force-create` 与 `--release` 保留原语义：释放仍不需要检查该残留是否有**正在运行**的创建，但它永远看不到
+  已死持有者已经发出的那一个。
 - **标签只解析、绝不创建。** kind→label 会针对通过 `list_issue_labels` 发现的真实工作区标签集解析；工作区没有该
   名称时仅拒绝该项（`linear.label-unresolved`），其余项继续。kind 变化时新增新标签，并通过 `removeLabels` 移除
   全部已记录的候选标签；没有记录标签的行只做新增，全量替换的 `labels` 参数永不发送，握手 schema 未声明

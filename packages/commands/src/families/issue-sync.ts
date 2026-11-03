@@ -13,13 +13,18 @@
  * stopped. A retryable ledger failure holds the cursor for the next run; an
  * adapter-unmappable item is reported as stranded and the scan continues.
  *
- * `push` is the only WRITE surface, and it is ONE run per binding: the run lease
- * (migration 18) is claimed before any candidate work, released on every exit,
- * and a second run is refused by name with both recoveries rather than racing
- * per-item claims. It refuses the whole run before any write when the stored
- * credential's scope cannot create or update issues, discovers the workspace's
- * real label set, reconciles any ambiguous create by correlation marker, and
- * records only what a confirmed receipt (or an explicit `--adopt`) proved.
+ * `push` is the only WRITE surface, and it holds ONE run per binding: the run
+ * lease (migration 18) is claimed before any candidate work, released on every
+ * exit, and a second run is refused by name with both recoveries rather than
+ * racing per-item claims. That excludes a RUNNING second run, not a delivered
+ * request: the run token rides into every ledger write, so a run a takeover
+ * replaced has its later writes refused instead of applied, but a request the
+ * predecessor already sent may still land — which is why reconcile-by-marker is
+ * the first recovery, and why taking over a live holder is unsafe. The run
+ * refuses the whole of itself before any write when the stored credential's
+ * scope cannot create or update issues, discovers the workspace's real label
+ * set, reconciles any ambiguous create by correlation marker, and records only
+ * what a confirmed receipt (or an explicit `--adopt`) proved.
  * `--release` is the one exit for a create whose remote absence reconciliation's
  * own full scan proved: the residue drops to the retryable `failed` edge, so the
  * same run may create. It never deletes, never creates a label, and never sends
@@ -250,6 +255,8 @@ const RECOVERY: Record<string, string> = {
     "`--release` names a `pending` push row with no remote id and nothing else. Re-run `mstar issue-sync push --project <project-id>` without it: reconcile adopts the issue when exactly one carries the item's correlation marker, and `--adopt <localId>=<issueUrl|externalId>` records an identity you confirmed.",
   "sync.run-held":
     "Another push run holds this binding. Its start time, pid and host are in the message: wait for it to finish, then re-run `mstar issue-sync push --project <project-id>`. Only after confirming that holder is dead, take the run over with `mstar issue-sync push --project <project-id> --take-run`.",
+  "sync.run-taken":
+    "This push run was taken over while it was working, so it wrote nothing further and stopped. Its earlier writes stand, and a create it had already sent may still land at the provider: re-run `mstar issue-sync push --project <project-id>` (the holder that replaced it, or the next run), which reconciles any unconfirmed create by correlation marker before creating anything.",
 };
 
 function refusalFor(id: string, code: string, message: string, details?: Record<string, unknown>): CommandEnvelope<never> {
@@ -630,11 +637,18 @@ async function runPush(id: string, input: Input, invocation: InvocationContext):
       });
     }
     // 3b. THE RUN. `push` is an operator command, not a concurrent service: one
-    //     run per binding is claimed here, before any candidate work, and the
-    //     store's own write transaction is the arbiter. A second run is refused
-    //     by name (holder + both exits) instead of racing per-item claims; the
-    //     lease is released in the `finally` below, including on refusal and on
-    //     throw. `--take-run` is explicit operator intent, never a timer.
+    //     run per binding is claimed here, before any candidate work. The claim is
+    //     an insert inside the store's write transaction, so a second run is refused
+    //     by name (holder + both exits) instead of racing per-item claims; the lease
+    //     is released in the `finally` below, including on refusal and on throw.
+    //     `--take-run` is explicit operator intent, never a timer.
+    //
+    //     The arbitrated fact is ACQUISITION, not the whole run: the run token is
+    //     carried into every ledger write below (`PushContext.runId`), so a run
+    //     that a takeover replaced has those writes refused (`sync.run-taken`)
+    //     rather than applied. A request it had already sent may still land — which
+    //     is why reconcile-by-marker is still the first recovery — and taking over
+    //     a LIVE holder therefore remains unsafe.
     run = acquireRun(db, {
       bindingId,
       direction: PUSH_DIRECTION,
@@ -650,6 +664,7 @@ async function runPush(id: string, input: Input, invocation: InvocationContext):
       mapping: repo.binding.mapping,
       labels,
       states,
+      runId: run.runId,
     };
     const report: PushReport = {
       projectId,
@@ -671,7 +686,7 @@ async function runPush(id: string, input: Input, invocation: InvocationContext):
     //    adopted issue in this same run instead of reporting `skipped` for
     //    content that remote never received.
     for (const { localId, reference } of adoptions) {
-      const adopted = adoptItem(db, bindingId, localId, reference, { force: forcedAdopt.has(localId) });
+      const adopted = adoptItem(db, bindingId, localId, reference, { force: forcedAdopt.has(localId), runId: run.runId });
       report.items.push({ localId, outcome: "adopted", externalId: adopted.externalId });
     }
 

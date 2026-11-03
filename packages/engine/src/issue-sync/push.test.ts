@@ -12,7 +12,7 @@ import { join } from "node:path";
 import { afterAll, describe, expect, test } from "bun:test";
 import { initializeStore, type StoreDb } from "../store-db.js";
 import type { IssueKind, Severity } from "../issue.js";
-import { claimItem, planItem, readItem } from "../issue-sync.js";
+import { acquireRun, claimItem, planItem, readItem, releaseRun } from "../issue-sync.js";
 import type { IssueProvider, ProviderPage, ProviderWrite, ProviderWriteReceipt } from "./provider.js";
 import {
   adoptItem,
@@ -1281,6 +1281,197 @@ describe("(n) an operator release clears a pending create only when reconciliati
       );
       expect(scanning.listings).toEqual([]);
       expect(row(db, "I-001083")).toMatchObject({ itemState: "applied", externalId: "LIN-1" });
+    } finally {
+      close();
+    }
+  });
+
+  test("a pending row that already carries an id is refused before the scan, and keeps that id", async () => {
+    const { db, close } = await openedStore("release-pending-with-id");
+    try {
+      await residue(db, "I-001084");
+      // The shape `--release` must not touch: `pending` WITH an identity is a
+      // cycle nobody closed, not an unresolved create. Forced into place directly
+      // because no push path produces it (an ambiguous create never records an id).
+      db.prepare("update issue_sync_state set external_id = ? where binding_id = ? and direction = 'push' and local_id = ?").run(
+        "LIN-84",
+        BINDING,
+        "I-001084",
+      );
+      const scanning = provider();
+      await expect(reconcilePendingCreate(db, scanning, context(), { release: new Set(["I-001084"]) })).rejects.toThrow(
+        /as LIN-84/,
+      );
+      // Refused before ANY listing call: the row's shape is the operator's error,
+      // and a scan that cannot change the answer is not run.
+      expect(scanning.listings).toEqual([]);
+      expect(row(db, "I-001084")).toMatchObject({ itemState: "pending", externalId: "LIN-84" });
+    } finally {
+      close();
+    }
+  });
+
+  test("a release naming a local id that has no ledger row is refused, naming the absence", async () => {
+    const { db, close } = await openedStore("release-missing-row");
+    try {
+      addIssue(db, "I-001085");
+      const scanning = provider();
+      await expect(reconcilePendingCreate(db, scanning, context(), { release: new Set(["I-001085"]) })).rejects.toThrow(
+        /has no push ledger row/,
+      );
+      expect(scanning.listings).toEqual([]);
+      expect(row(db, "I-001085")).toBeNull();
+    } finally {
+      close();
+    }
+  });
+
+  test("a scan that finds SEVERAL marker matches refuses the release as a duplicate risk", async () => {
+    const { db, close } = await openedStore("release-multi-match");
+    try {
+      await residue(db, "I-001086");
+      const marker = correlationMarker({ workspace: "acme", team: "ENG" }, STORE_ID, "I-001086");
+      const duplicates = ["LIN-201", "LIN-202"].map((externalId) => ({
+        externalId,
+        title: "Issue I-001086",
+        description: `body\n\n${marker}`,
+        state: "Todo",
+        priority: "High",
+        labels: [],
+        updatedAt: "2026-11-02T00:00:00.000Z",
+        url: `https://linear.app/acme/issue/${externalId}`,
+      }));
+      const scanning = provider({ pages: [{ items: duplicates, nextCursor: null }] });
+      await expect(reconcilePendingCreate(db, scanning, context(), { release: new Set(["I-001086"]) })).rejects.toThrow(
+        /would risk a duplicate: 2 remote issues carry this item's correlation marker/,
+      );
+      expect(scanning.writes).toEqual([]);
+      // Nothing adopted either: the row is still the unresolved create, so the
+      // operator names the right issue with --adopt instead of the tool guessing.
+      expect(row(db, "I-001086")).toMatchObject({ itemState: "pending", externalId: null });
+    } finally {
+      close();
+    }
+  });
+
+  test("a listing that ADOPTS the row mid-scan makes the release throw from applied and keeps the identity", async () => {
+    const { db, close } = await openedStore("release-adopted-mid-scan");
+    try {
+      await residue(db, "I-001087");
+      // The listing is where a concurrent `--adopt` (exported, lease-free) lands.
+      // The scan itself finds nothing, so the run decides to release — and by the
+      // time it writes, the row is `applied` with an identity somebody proved. A
+      // release over that stale read would drop the proved identity back to
+      // `failed` and let the next push create a second remote issue beside it.
+      const adopting = provider();
+      const listIssues = adopting.listIssues.bind(adopting);
+      adopting.listIssues = async (cursor) => {
+        const page = await listIssues(cursor);
+        adoptItem(db, BINDING, "I-001087", "https://linear.app/acme/issue/LIN-301/slug");
+        return page;
+      };
+      await expect(reconcilePendingCreate(db, adopting, context(), { release: new Set(["I-001087"]) })).rejects.toThrow(
+        /from 'applied' is not in the contract/,
+      );
+      expect(adopting.writes).toEqual([]);
+      // The release wrote nothing: the mid-scan adoption stands.
+      expect(row(db, "I-001087")).toMatchObject({ itemState: "applied", externalId: "LIN-301" });
+    } finally {
+      close();
+    }
+  });
+});
+
+describe("(o) a taken-over run's later write is refused, and its successor is not", () => {
+  const RUN = { bindingId: BINDING, direction: "push" as const, holderPid: 4242, holderHost: "builder-1" };
+
+  test("a holder taken over mid-call has its confirmed write refused instead of applied", async () => {
+    const { db, close } = await openedStore("lease-taken-mid-call");
+    try {
+      addIssue(db, "I-001091");
+      const candidate = candidates(db)[0]!;
+      // The run that will be taken over: it holds the lease, sends its create, and
+      // parks inside the provider call — the window a takeover enters.
+      const holder = acquireRun(db, { ...RUN, reason: "issue-sync push" });
+      const { fake: held, started, release: land } = writeInFlight();
+      const heldRun = pushItem(db, held, context({ runId: holder.runId }), candidate);
+      await started;
+      expect(row(db, "I-001091")).toMatchObject({ itemState: "pending", externalId: null });
+
+      // The operator judged that holder hung (not dead) and took the run over.
+      // Nothing at acquisition can stop the request already in flight, so the
+      // guard has to be on the WRITE the predecessor records afterwards.
+      const taken = acquireRun(db, { ...RUN, holderPid: 5000, holderHost: "builder-2", reason: "operator took the run over with --take-run", takeRun: true });
+      land();
+      await expect(heldRun).rejects.toThrow(/sync\.run-taken/);
+      // The confirmed remote write was NOT recorded as this run's apply: the row
+      // stays the unresolved create with no id, which is exactly what the marker
+      // scan recovers. Recording it would be a write by a run that no longer holds
+      // the direction.
+      expect(row(db, "I-001091")).toMatchObject({ itemState: "pending", externalId: null });
+
+      // The successor inherits the residue, not a second create: its own id passes
+      // the guard, and the residue guard answers before any send.
+      const successor = provider();
+      const blocked = await pushItem(db, successor, context({ runId: taken.runId }), candidate);
+      expect(blocked).toMatchObject({ outcome: "unresolved", externalId: null });
+      expect(successor.writes).toEqual([]);
+      expect(releaseRun(db, { ...RUN, runId: taken.runId })).toBe(true);
+    } finally {
+      close();
+    }
+  });
+
+  test("a takeover leaves the successor free to write: only the predecessor's token is refused", async () => {
+    const { db, close } = await openedStore("lease-successor-unaffected");
+    try {
+      addIssue(db, "I-001094");
+      const dead = acquireRun(db, { ...RUN, reason: "issue-sync push" });
+      const taken = acquireRun(db, { ...RUN, holderPid: 5000, holderHost: "builder-2", reason: "operator took the run over with --take-run", takeRun: true });
+      // The dead run's own release deletes nothing; the successor still owns it.
+      expect(releaseRun(db, { ...RUN, runId: dead.runId })).toBe(false);
+      const fake = provider();
+      const outcome = await pushItem(db, fake, context({ runId: taken.runId }), candidates(db)[0]!);
+      expect(outcome).toMatchObject({ outcome: "created", externalId: "LIN-1" });
+      expect(fake.writes.filter((write) => write.kind === "create")).toHaveLength(1);
+      expect(row(db, "I-001094")).toMatchObject({ itemState: "applied", externalId: "LIN-1" });
+    } finally {
+      close();
+    }
+  });
+
+  test("a run whose lease was released underneath it sends nothing further", async () => {
+    const { db, close } = await openedStore("lease-gone-before-send");
+    try {
+      addIssue(db, "I-001092");
+      const candidate = candidates(db)[0]!;
+      const lease = acquireRun(db, { ...RUN, reason: "issue-sync push" });
+      // The row is gone by the time this run would send: checked BEFORE the
+      // request leaves, so no provider call happens at all.
+      expect(releaseRun(db, { ...RUN, runId: lease.runId })).toBe(true);
+      const fake = provider();
+      await expect(pushItem(db, fake, context({ runId: lease.runId }), candidate)).rejects.toThrow(
+        /its run row is gone/,
+      );
+      expect(fake.writes).toEqual([]);
+      expect(row(db, "I-001092")).toBeNull();
+    } finally {
+      close();
+    }
+  });
+
+  test("a normal single run takes today's path: its own lease token passes the guard", async () => {
+    const { db, close } = await openedStore("lease-own-token");
+    try {
+      addIssue(db, "I-001093");
+      const lease = acquireRun(db, { ...RUN, reason: "issue-sync push" });
+      const fake = provider();
+      const outcome = await pushItem(db, fake, context({ runId: lease.runId }), candidates(db)[0]!);
+      expect(outcome).toMatchObject({ outcome: "created", externalId: "LIN-1" });
+      expect(row(db, "I-001093")).toMatchObject({ itemState: "applied", externalId: "LIN-1", lastRequestHash: expect.any(String) });
+      // Same behaviour as a caller that names no lease at all (import), which is
+      // the path every pre-existing push test exercises.
+      expect(releaseRun(db, { ...RUN, runId: lease.runId })).toBe(true);
     } finally {
       close();
     }

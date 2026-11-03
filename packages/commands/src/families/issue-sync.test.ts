@@ -1058,4 +1058,65 @@ describe("push — the credential scope preflight", () => {
     expect(definition!.description).toContain("--release <localId>");
     expect(definition!.requirements?.some((entry) => entry.name === "release")).toBe(true);
   });
+
+  test("a push whose run is taken over mid-flight refuses the write with `sync.run-taken` and records nothing", async () => {
+    const f = await fixture("push-run-taken", null);
+    storeCredential("read,issues:create");
+    const bindingId = `linear:${PROJECT}`;
+    {
+      const handle = await openStore({ harnessDir: f.harnessDir }, "write");
+      handle.db.prepare(
+        "insert into issues(id, project_id, title, kind, severity, impact, acceptance, created_at, updated_at, identity_key)" +
+          " values ('I-000811', ?, 'Taken', 'bug', 'high', 'i', 'a', 'now', 'now', 'sync-I-000811')",
+      ).run(PROJECT);
+      handle.close();
+    }
+
+    // The takeover happens INSIDE the write's provider call: exactly the window
+    // the acquisition-time check cannot cover. The write comes back confirmed,
+    // and the run must still refuse to record it.
+    const base = writeProvider(["bug"]);
+    let takenRunId: string | null = null;
+    const provider = {
+      ...base,
+      async applyWrite(write: unknown) {
+        const handle = await openStore({ harnessDir: f.harnessDir }, "write");
+        const taken = acquireRun(handle.db, {
+          bindingId,
+          direction: PUSH_DIRECTION,
+          holderPid: 777_777,
+          holderHost: "other-builder",
+          reason: "operator took the run over with --take-run",
+          takeRun: true,
+        });
+        takenRunId = taken.runId;
+        handle.close();
+        return base.applyWrite(write);
+      },
+    };
+    const refused = (await executeCommand("issue-sync.push", { project: PROJECT }, withProvider(f, provider))) as {
+      status: string;
+      code: string;
+      details?: { recovery?: string };
+    };
+    expect(refused.status).toBe("refused");
+    expect(refused.code).toBe("sync.run-taken");
+    // The recovery names the next action an operator can take, and the delivery
+    // caveat that makes marker reconciliation the first one.
+    const recovery = refused.details?.recovery ?? "";
+    expect(recovery).toContain("mstar issue-sync push --project");
+    expect(recovery).toContain("correlation marker");
+
+    // The row never took the identity this run's request produced: it stays the
+    // unresolved create that the next run's marker scan recovers.
+    const after = await openStore({ harnessDir: f.harnessDir }, "read");
+    try {
+      const row = after.db.prepare("select item_state, external_id from issue_sync_state where local_id = 'I-000811'").get();
+      expect(row).toEqual({ item_state: "pending", external_id: null });
+      // The successor's row survives the predecessor's exit.
+      expect(readRun(after.db, { bindingId, direction: PUSH_DIRECTION })?.runId).toBe(takenRunId!);
+    } finally {
+      after.close();
+    }
+  });
 });
