@@ -109,9 +109,9 @@ export async function resolveStoredToken(invocation: InvocationContext): Promise
     );
   }
   // The refresh waited on the network, so the file may have changed meanwhile.
-  // Deciding inside the commit's lock makes that change win: a sign-out stays
-  // deleted, and a grant `mstar linear auth` stored while this round trip was
-  // in flight is not replaced by this older lineage's token (whose
+  // The commit's lineage check makes that change win: a sign-out stays deleted,
+  // and a grant `mstar linear auth` stored while this round trip was in flight
+  // is not replaced by this older lineage's token (whose
   // `scope ?? credential.scope` fallback could also restore its narrower scope).
   // This run still uses the token it obtained.
   commitLinearCredential((current) => {

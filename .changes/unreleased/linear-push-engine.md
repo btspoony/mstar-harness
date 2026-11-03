@@ -39,12 +39,12 @@ packages: engine, commands
   abandoned while it keeps holding its socket. The caller still observes the same single
   `unreachable: Linear MCP handshake timed out after <n>ms` cause; a transport that reports the abort as its own
   error cannot turn that into a transport failure.
-- **A refresh commit cannot undo a sign-out.** Every credential write and the sign-out now share one
-  cross-process lock (`credential.json.lock`), and the refresh decides-and-commits inside it
-  (`commitLinearCredential`). `mstar linear logout` landing between the refresh's final read and its rename is
-  therefore honoured instead of being overwritten by the refreshed grant — the remaining microsecond window, on
-  top of the network window the earlier fix closed. The dsh refresh and the CLI `issue-sync` refresh both commit
-  through that seam. A lock left by a dead process is taken over after 5s, so a crash cannot block later writes.
+- **A refresh commit honours a newer sign-out or grant.** Every writer decides inside `commitLinearCredential`,
+  whose lineage check re-reads the file and declines when a `mstar linear logout` or a re-authorization landed
+  during the refresh's network round trip — the long window that used to be overwritten. The remaining
+  microsecond window between that final read and the rename is accepted: a sign-out landing exactly there can be
+  overwritten by the refresh it raced, and the operator clears the stale grant by signing out again. The dsh
+  refresh and the CLI `issue-sync` refresh both commit through that seam.
 
 <!-- CN -->
 - **单向推送到 Linear。** `mstar issue-sync push --project <id>` 把本项目本地 issue 推送至绑定的 Linear 团队：
@@ -74,7 +74,7 @@ packages: engine, commands
   `AbortSignal`：卡在飞行中的传输会被真正取消，而不是被丢下继续占用 socket。调用方观察到的仍是同一条
   `unreachable: Linear MCP handshake timed out after <n>ms` 原因；传输把中止当成自己的错误上报也无法把它
   变成 transport 失败。
-- **刷新提交无法撤销登出。** 现在每一次凭据写入与登出共用同一把跨进程锁（`credential.json.lock`），刷新在锁内
-  完成「判断 + 提交」（`commitLinearCredential`）。因此落在刷新最后一次读取与其 rename 之间的
-  `mstar linear logout` 会被尊重，而不会被刷新后的授权覆盖——这是此前修复已关掉的网络窗口之外，剩下的那微秒级窗口。
-  dsh 的刷新与 CLI `issue-sync` 的刷新都经此接缝提交。崩溃进程留下的锁在 5 秒后被接管，所以进程死亡不会永久阻塞后续写入。
+- **刷新提交会尊重更晚的登出或新授权。** 每个写入方都在 `commitLinearCredential` 内做判断：它的血缘检查会重新读取
+  文件，并在刷新等待网络的往返期间发生了 `mstar linear logout` 或重新授权时拒绝本次写入——这正是过去会被覆盖的
+  长窗口。最后一次读取与 rename 之间剩下的微秒级窗口为已接受限制：恰好落在此处的登出可能被与之竞争的刷新覆盖，
+  操作者再次登出即可清除这条陈旧授权。dsh 的刷新与 CLI `issue-sync` 的刷新都经此接缝提交。
