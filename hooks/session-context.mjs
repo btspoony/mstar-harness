@@ -29844,7 +29844,7 @@ function writePlan(db, input, mode) {
     const row = selectRow(db, bindingId, direction, localId);
     if (row === undefined) {
       db.prepare("insert into issue_sync_state(binding_id, direction, local_id, external_id, item_state, last_remote_updated_at, pending_target, last_error, last_skip_reason, revision, updated_at) values (?, ?, ?, ?, 'pending', null, ?, null, null, 1, ?)").run(bindingId, direction, localId, externalId, remoteUpdatedAt, now2);
-    } else if (mode === "claim" && row.item_state === "pending") {} else if (row.item_state === "failed" || row.item_state === "unbound") {
+    } else if (row.item_state === "failed" || row.item_state === "unbound") {
       casUpdate(db, { bindingId, direction, localId }, row.revision, {
         item_state: "pending",
         external_id: externalId ?? row.external_id,
@@ -30814,22 +30814,22 @@ async function pushItem(db, provider, context, candidate) {
   const ledger = readItem(db, { bindingId: context.bindingId, direction: PUSH_DIRECTION, localId: candidate.localId });
   const externalId = ledger?.externalId ?? null;
   const ambiguousResidue = externalId === null && ledger?.itemState === "pending";
-  if (ambiguousResidue && !context.forceCreate) {
+  if (ambiguousResidue) {
     return {
       localId: candidate.localId,
       outcome: "unresolved",
       externalId: null,
-      cause: "a previous create was never confirmed; the item awaits marker reconciliation (or an explicit --adopt / --force-create)"
+      cause: context.forceCreate ? "a create for this item was never confirmed and may still be in flight, so --force-create cannot establish its absence; nothing was sent. Re-run push without it — reconcile adopts the issue when exactly one remote issue carries the item's correlation marker — or record the identity yourself with --adopt <localId>=<issueUrl|externalId>" : "a previous create was never confirmed; the next run reconciles it by correlation marker, or name its remote issue with --adopt <localId>=<issueUrl|externalId>"
     };
   }
   const marker = correlationMarker(context.binding, context.storeId, candidate.localId);
   const fields = providerPayloadFields(candidate, context.mapping);
   if (!context.states.has(fields.state)) {
     const mappingKey = defaultStateOfDisposition(candidate.disposition);
-    return failed(db, context, candidate.localId, "linear.state-unresolved", `the team has no workflow state named ${JSON.stringify(fields.state)}; push never creates states. Create or rename it in Linear's workflow settings, or redirect it through [linear.mapping] disposition.${mappingKey}=<name>${mappingKey === candidate.disposition ? "" : ` (keyed by the default target, which ${candidate.disposition} maps to)`}.`, ledger, undefined, ambiguousResidue);
+    return failed(db, context, candidate.localId, "linear.state-unresolved", `the team has no workflow state named ${JSON.stringify(fields.state)}; push never creates states. Create or rename it in Linear's workflow settings, or redirect it through [linear.mapping] disposition.${mappingKey}=<name>${mappingKey === candidate.disposition ? "" : ` (keyed by the default target, which ${candidate.disposition} maps to)`}.`, ledger, undefined);
   }
   if (!context.labels.has(fields.label)) {
-    return failed(db, context, candidate.localId, "linear.label-unresolved", `the workspace has no label named ${JSON.stringify(fields.label)}; push never creates labels. Create it in Linear's UI, or redirect it through [linear.mapping] kind.${candidate.kind}=<name>.`, ledger, undefined, ambiguousResidue);
+    return failed(db, context, candidate.localId, "linear.label-unresolved", `the workspace has no label named ${JSON.stringify(fields.label)}; push never creates labels. Create it in Linear's UI, or redirect it through [linear.mapping] kind.${candidate.kind}=<name>.`, ledger, undefined);
   }
   const payload = {
     title: candidate.title,
@@ -30847,7 +30847,7 @@ async function pushItem(db, provider, context, candidate) {
     const stale = recorded.filter((label) => label !== fields.label);
     if (stale.length > 0)
       payload.removeLabels = stale;
-    return apply(db, provider, context, candidate.localId, { kind: "update", externalId, payload }, hash2, fields.label, ledger, ambiguousResidue);
+    return apply(db, provider, context, candidate.localId, { kind: "update", externalId, payload }, hash2, fields.label, ledger);
   }
   const entryRevision = ledger?.revision ?? 0;
   const claim = claimItem(db, {
@@ -30864,15 +30864,15 @@ async function pushItem(db, provider, context, candidate) {
       cause: "another push already claimed this create for the same content and revision; this attempt sent nothing and the ledger's row decides the outcome"
     };
   }
-  return apply(db, provider, context, candidate.localId, { kind: "create", payload }, hash2, fields.label, ledger, ambiguousResidue);
+  return apply(db, provider, context, candidate.localId, { kind: "create", payload }, hash2, fields.label, ledger);
 }
-async function apply(db, provider, context, localId, write2, hash2, kindLabel, ledger, ambiguousResidue) {
+async function apply(db, provider, context, localId, write2, hash2, kindLabel, ledger) {
   const entryRevision = ledger?.revision ?? 0;
   const opId = (step) => `linear-push:${context.bindingId}:${localId}:${step}:${hash2}:${entryRevision}`;
   const receipt = await provider.applyWrite(write2);
   if (receipt.kind === "refused") {
     const current = readItem(db, { bindingId: context.bindingId, direction: PUSH_DIRECTION, localId }) ?? ledger;
-    return failed(db, context, localId, receipt.code, receipt.cause, current, hash2, ambiguousResidue);
+    return failed(db, context, localId, receipt.code, receipt.cause, current, hash2);
   }
   if (receipt.kind === "ambiguous") {
     if (write2.kind === "create") {
@@ -30899,7 +30899,7 @@ async function apply(db, provider, context, localId, write2, hash2, kindLabel, l
   });
   return { localId, outcome: write2.kind === "create" ? "created" : "updated", externalId: receipt.externalId };
 }
-function failed(db, context, localId, code2, cause, ledger, hash2, ambiguousResidue = false) {
+function failed(db, context, localId, code2, cause, ledger, hash2) {
   const message = `[${code2}] ${cause}`;
   try {
     if (ledger === null) {
@@ -30912,7 +30912,7 @@ function failed(db, context, localId, code2, cause, ledger, hash2, ambiguousResi
     }
     const current = ledger ?? readItem(db, { bindingId: context.bindingId, direction: PUSH_DIRECTION, localId });
     if (current !== null) {
-      const retryable = !ambiguousResidue && current.itemState === "pending";
+      const retryable = current.itemState === "pending";
       const step = retryable ? "failed" : "refused";
       const operationId = `linear-push:${context.bindingId}:${localId}:${step}:${hash2 ?? "preflight"}:${current.revision}`;
       const input = { bindingId: context.bindingId, direction: PUSH_DIRECTION, localId, operationId };
