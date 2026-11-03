@@ -247,10 +247,11 @@ Tie-break: unsafe to ship **and reachable in this change** → `must-fix`; shoul
 
 Presumptive-structural classes: a refactor that relocates complexity instead of reducing it · a change pushing a file past the size boundary with no decomposition · feature logic added to a shared module · a near-duplicate of an existing canonical helper · a silent fallback hiding an unclear invariant → default `should-fix`; downgrade to `nit` only with a stated reason; never `must-fix` on shape alone without correctness/security evidence.
 
-Field placement depends on which artifact is being written, and only the stage-2 draft is machine-checked for adjacency:
+Field placement has one rule and one enforced artifact:
 
-- **Stage-2 finding draft** (the seat's findings payload / draft file): `- **Merge class**: must-fix | should-fix | nit`, immediately after `Confidence` and before `Fix sketch`. This is what `mstar lint <file.md> --type finding --pr-variant` (equivalently `validateFindingDoc(text, { prVariant: true })`) checks — it enforces presence, enum, and that Merge class sits on the line immediately after `Confidence` (`prreview.finding.merge-class-placement`).
-- **Rendered report body** (§ Report template `####` block): the renderer emits `Evidence` → `Location` → `Category` (when the envelope carries one) → `Merge class` **last**. The agent inserts its three lines immediately above that trailing bullet — `Impact`, then `Fix sketch`, then `Confidence` — so the block ends `… Impact / Fix sketch / Confidence / Merge class`: every insertion sits before `Merge class`, and `Merge class` stays immediately after `Confidence`. Do not append an agent line after `Merge class`; that breaks the adjacency rule.
+- **The rule** — `- **Merge class**: must-fix | should-fix | nit` sits immediately after `Confidence` (and before `Fix sketch` in the draft form).
+- **What is machine-checked** — only the **stage-2 finding draft** (the seat's findings payload / draft file): `mstar lint <file.md> --type finding --pr-variant` (equivalently `validateFindingDoc(text, { prVariant: true })`) enforces presence, enum, and the line immediately after `Confidence` (`prreview.finding.merge-class-placement`).
+- **What is not machine-checked** — the **rendered report body** (§ Report template `####` block). Nothing lints it. It keeps the same ordering by construction: the renderer emits `Evidence` → `Location` → `Category` (when the envelope carries one) → `Merge class` **last**, and the agent inserts `Impact`, `Fix sketch`, `Confidence` above that trailing bullet, so the block ends `… Impact / Fix sketch / Confidence / Merge class` and the rule still holds. An agent line appended after `Merge class` would break the stated order, but no checker would flag it — which is precisely why the insertion point is the trailing bullet.
 
 The shared finding template (`references/finding-format.md`) is unchanged — this field is PR-review-only.
 
