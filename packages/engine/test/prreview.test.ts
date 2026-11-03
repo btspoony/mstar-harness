@@ -22,7 +22,7 @@
  * budgets, finding lint.
  */
 import { describe, expect, test } from "bun:test";
-import { computePrTally, PR_SCORE_BANDS, resolvePrReviewSettlement, scoreBand, synthesizeReview } from "../src/prreview.js";
+import { computePrTally, PR_SCORE_BANDS, renderReviewMarkdown, resolvePrReviewSettlement, scoreBand, synthesizeReview } from "../src/prreview.js";
 import type { GateResult } from "../src/core.js";
 import type { MstarReviewFinding, PrReviewRunFacts, PrScoreBand, PrTallyInput, PrTallyResult, PrVerdict } from "../src/prreview.js";
 
@@ -1163,7 +1163,9 @@ describe("validateMstarReviewV1 — mstar.review/v1 envelope ", () => {
     expect(synthesized.schema).toBe("mstar.review/v1");
     expect(synthesized.findings).toEqual([]);
     expect(synthesized.tally.tally).toEqual({ mustFix: 0, shouldFix: 0, nit: 0, unverified: 0 });
-    expect(typeof synthesized.summary_md).toBe("string");
+    // An absent summary_md is the contract now, not a violation.
+    expect("summary_md" in synthesized).toBe(false);
+    expect(validateMstarReviewV1(synthesized).ok).toBe(true);
   });
 
   test("genuine computePrTally output round-trips for every check-table fixture (greptile P1)", () => {
@@ -1197,15 +1199,6 @@ function fullFindings(findings: PrTallyInput["findings"]): MstarReviewFinding[] 
   }));
 }
 
-/** The locked deterministic summary template — exact bytes for
- * {1 should-fix, 1 nit} ⇒ 86, needs fixes (good band). */
-const LOCKED_SUMMARY = `## Verdict: needs fixes \u00b7 86% (good)
-
-must-fix=0 should-fix=1 nit=1 unverified=0
-
-- should-fix: Unhandled null deref
-- nit: Typo in comment`;
-
 describe("synthesizeReview — mstar.review/v1 envelope ", () => {
   test("check table: same verdict/score/band/tally as computePrTally", () => {
     for (const row of CHECK_TABLE) {
@@ -1226,7 +1219,7 @@ describe("synthesizeReview — mstar.review/v1 envelope ", () => {
     }
   });
 
-  test("omitted summary_md uses the locked deterministic template", () => {
+  test("omitted summary_md publishes no header copy and renders each finding once", () => {
     const findings: MstarReviewFinding[] = [
       {
         mergeClass: "should-fix",
@@ -1245,17 +1238,36 @@ describe("synthesizeReview — mstar.review/v1 envelope ", () => {
       },
     ];
     const synthesized = synthesizeReview({ findings });
-    expect(synthesized.summary_md).toBe(LOCKED_SUMMARY);
+    expect("summary_md" in synthesized).toBe(false);
+
+    for (const surface of ["github-comment", "local-report"] as const) {
+      const body = renderReviewMarkdown(synthesized, { surface });
+      // The Thread-lifecycle candidate set keeps only bodies starting with the head.
+      expect(body.startsWith("## ")).toBe(true);
+      expect(body.split("Verdict").length).toBe(2);
+      expect(body.split("Unhandled null deref")).toHaveLength(2);
+      expect(body.split("Typo in comment")).toHaveLength(2);
+      expect(body).toContain("Score 86% (good)");
+      // The Review section is mandated and has no narrative beneath it here.
+      expect(body.split("\n").filter((line) => line === "## \u{1F4CB} Review")).toHaveLength(1);
+      expect(body).not.toMatch(/\n{3,}/);
+    }
   });
 
-  test("empty findings lock the no-findings summary form", () => {
+  test("empty findings render no findings section on either surface", () => {
     const synthesized = synthesizeReview({ findings: [] });
-    expect(synthesized.summary_md).toBe(`## Verdict: ship it \u00b7 100% (mergeable)
+    expect("summary_md" in synthesized).toBe(false);
 
-must-fix=0 should-fix=0 nit=0 unverified=0`);
+    for (const surface of ["github-comment", "local-report"] as const) {
+      const body = renderReviewMarkdown(synthesized, { surface });
+      expect(body).toContain("Score 100% (mergeable)");
+      expect(body).toContain("| \u{1F534} must-fix | 0 |");
+      expect(body).not.toContain("### Findings");
+      expect(body.endsWith("\n")).toBe(false);
+    }
   });
 
-  test("an incomplete run states the partial mark, cause and unscanned scope in the omitted summary", () => {
+  test("an incomplete run states the partial mark, cause and unscanned scope once", () => {
     const findings: MstarReviewFinding[] = [
       { mergeClass: "must-fix", title: "Unbounded retry", body: "the retry loop has no cap" },
       { mergeClass: "nit", title: "Typo in comment", body: "s/recieve/receive/" },
@@ -1265,22 +1277,19 @@ must-fix=0 should-fix=0 nit=0 unverified=0`);
       findings,
       incomplete: { reason: "budget spent before the security domain", unscanned: ["src/auth.ts", "packages/engine"] },
     });
-    expect(partial.summary_md).toBe(`## Verdict: incomplete \u00b7 53% (fail, partial)
+    expect("summary_md" in partial).toBe(false);
 
-must-fix=1 should-fix=0 nit=1 unverified=0
-cause: budget spent before the security domain
-unscanned: src/auth.ts, packages/engine
-
-- must-fix: Unbounded retry
-- nit: Typo in comment`);
+    for (const surface of ["github-comment", "local-report"] as const) {
+      const body = renderReviewMarkdown(partial, { surface });
+      expect(body.split("cause: budget spent before the security domain")).toHaveLength(2);
+      expect(body.split("unscanned: src/auth.ts, packages/engine")).toHaveLength(2);
+      expect(body).toContain("Score 53% (fail, partial)");
+    }
 
     // An empty scope renders the explicit none marker, exactly as the chat header does.
     const none = synthesizeReview({ findings: [], incomplete: { reason: "operator cancelled the run", unscanned: [] } });
-    expect(none.summary_md).toBe(`## Verdict: incomplete \u00b7 100% (mergeable, partial)
-
-must-fix=0 should-fix=0 nit=0 unverified=0
-cause: operator cancelled the run
-unscanned: none`);
+    expect(renderReviewMarkdown(none, { surface: "github-comment" })).toContain("unscanned: none");
+    expect(renderReviewMarkdown(none, { surface: "local-report" })).toContain("Score 100% (mergeable, partial)");
   });
 
   test("explicit summary_md is preserved verbatim", () => {
