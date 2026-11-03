@@ -124,7 +124,7 @@ export function createLinearWrite(deps: LinearWriteDeps): LinearWriteSide {
       }
       let args: Record<string, unknown>;
       try {
-        args = argumentsFor(write, tool, deps.advertisedArguments.bind(deps), deps.scope?.team);
+        args = argumentsFor(write, tool, deps.advertisedArguments.bind(deps), deps.scope);
       } catch (error) {
         // A refusal the adapter raised BEFORE sending: provably not delivered.
         if (error instanceof SyncError) return refused(error.code, stripCode(error.message));
@@ -209,7 +209,7 @@ function argumentsFor(
   write: ProviderWrite,
   tool: string,
   advertised: (tool: string) => readonly string[] | null,
-  team: string | undefined,
+  scope: { team?: string; project?: string } | undefined,
 ): Record<string, unknown> {
   const payload: ProviderWritePayload = write.payload;
   const args: Record<string, unknown> = {
@@ -237,13 +237,18 @@ function argumentsFor(
     // `addLabels` with a team change.
     return args;
   }
-  if (team === undefined || team.trim() === "") {
+  if (scope?.team === undefined || scope.team.trim() === "") {
     throw new SyncError(
       "linear.write-refused",
       `a create needs the bound team, and this binding names none; nothing was written (set [linear] team=<key> in .mstarc)`,
     );
   }
-  args.team = team;
+  args.team = scope.team;
+  // The bound PROJECT, so the create lands where the binding says. Push recovery
+  // reads are filtered by this project, so an issue created outside it could
+  // never be found again. Updates never carry it: the save schema treats
+  // `project` as a move, and a confirmed identity already lives where it belongs.
+  if (scope.project !== undefined && scope.project.trim() !== "") args.project = scope.project;
   return args;
 }
 

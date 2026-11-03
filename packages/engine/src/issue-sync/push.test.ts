@@ -389,6 +389,44 @@ describe("(e) a refused write is a retryable failure", () => {
       close();
     }
   });
+
+  test("a refused UPDATE records its cause on the applied row without wedging the retry", async () => {
+    const { db, close } = await openedStore("refused-update");
+    try {
+      addIssue(db, "I-000962");
+      const ctx = context();
+      // A confirmed create first, so the row is `applied` WITH an identity.
+      await pushItem(db, provider(), ctx, candidates(db)[0]!);
+      expect(row(db, "I-000962")).toMatchObject({ itemState: "applied", externalId: "LIN-1" });
+
+      // A changed title turns the next attempt into an update; the provider
+      // refuses it (an HTTP 4xx is provably not delivered).
+      db.prepare("update issues set title = 'Retitled' where id = ?").run("I-000962");
+      const fake = provider({ receipts: [{ kind: "refused", code: "linear.write-refused", cause: "HTTP 400" }] });
+      const refused = await pushItem(db, fake, ctx, candidates(db)[0]!);
+      expect(refused.outcome).toBe("failed");
+      expect(refused.cause).toContain("linear.write-refused");
+
+      // `applied → failed` is not in the contract, so the row keeps its state,
+      // its identity and its proof — but the cause is now ON the row instead of
+      // existing only in that run's stdout.
+      const afterRefusal = row(db, "I-000962")!;
+      expect(afterRefusal).toMatchObject({ itemState: "applied", externalId: "LIN-1" });
+      expect(afterRefusal.lastError).toContain("linear.write-refused");
+
+      // And the retry succeeds instead of throwing `sync.illegal-transition`.
+      const retried = await pushItem(db, fake, ctx, candidates(db)[0]!);
+      expect(retried).toMatchObject({ outcome: "updated", externalId: "LIN-1" });
+      const settled = row(db, "I-000962")!;
+      expect(settled.itemState).toBe("applied");
+      expect(settled.lastError).toBeNull();
+      // The refusal was the first write this provider saw; the retry is the second.
+      expect(fake.writes.map((write) => write.kind)).toEqual(["update", "update"]);
+      expect(writeOf(fake, 1, "update").payload.title).toBe("Retitled");
+    } finally {
+      close();
+    }
+  });
 });
 
 describe("(f) the operator verbs reach the ledger through the same verbs", () => {
@@ -426,6 +464,77 @@ describe("(f) the operator verbs reach the ledger through the same verbs", () =>
   test("a reference that is not a Linear URL is refused by name", () => {
     expect(externalIdOf("LIN-5")).toBe("LIN-5");
     expect(() => externalIdOf("https://example.test/acme/issue/LIN-5")).toThrow(/not a Linear host/);
+  });
+});
+
+describe("(f3) adopting a different issue drops the previous issue's proof", () => {
+  test("unchanged content is NOT skipped after adopting an applied row onto another issue", async () => {
+    const { db, close } = await openedStore("adopt-other-issue");
+    try {
+      addIssue(db, "I-000981");
+      // A confirmed create leaves an applied row whose hash proves what LIN-1 says.
+      const first = provider();
+      await pushItem(db, first, context(), candidates(db)[0]!);
+      const applied = row(db, "I-000981")!;
+      expect(applied).toMatchObject({ itemState: "applied", externalId: "LIN-1" });
+      const hashBefore = applied.lastRequestHash;
+      expect(hashBefore).not.toBeNull();
+
+      // The operator points the item at LIN-2 instead. Nothing local changed, so
+      // carrying the hash forward would let this run report `skipped` for content
+      // LIN-2 never received.
+      const adopted = adoptItem(db, BINDING, "I-000981", "LIN-2", { force: true });
+      expect(adopted).toMatchObject({ itemState: "applied", externalId: "LIN-2", lastRequestHash: null });
+
+      const second = provider();
+      const outcome = await pushItem(db, second, context(), candidates(db)[0]!);
+      expect(outcome).toMatchObject({ outcome: "updated", externalId: "LIN-2" });
+      expect(second.writes.map((write) => write.kind)).toEqual(["update"]);
+      expect(row(db, "I-000981")!.lastRequestHash).toBe(hashBefore);
+    } finally {
+      close();
+    }
+  });
+
+  test("a later kind change removes only labels this identity owns", async () => {
+    const { db, close } = await openedStore("adopt-ownership");
+    try {
+      addIssue(db, "I-000982");
+      await pushItem(db, provider(), context(), candidates(db)[0]!);
+      expect(row(db, "I-000982")!.lastKindLabels).toEqual(["bug"]);
+
+      // Adoption onto a different issue forgets that ownership too: the old
+      // label belongs to LIN-1, so replacing the kind must not remove it from
+      // LIN-2.
+      adoptItem(db, BINDING, "I-000982", "LIN-2", { force: true });
+      expect(row(db, "I-000982")!.lastKindLabels).toEqual([]);
+
+      db.prepare("update issues set kind = 'risk' where id = ?").run("I-000982");
+      const fake = provider();
+      await pushItem(db, fake, context(), candidates(db)[0]!);
+      const update = writeOf(fake, 0, "update");
+      expect(update.payload.removeLabels).toBeUndefined();
+      expect(update.payload.labels).toEqual(["risk"]);
+      expect(row(db, "I-000982")!.lastKindLabels).toEqual(["risk"]);
+    } finally {
+      close();
+    }
+  });
+
+  test("replacing an already-recorded identity is refused unless the operator forces it", async () => {
+    const { db, close } = await openedStore("adopt-fresh");
+    try {
+      addIssue(db, "I-000983");
+      const first = adoptItem(db, BINDING, "I-000983", "LIN-1");
+      expect(first.externalId).toBe("LIN-1");
+      expect(() => adoptItem(db, BINDING, "I-000983", "LIN-2")).toThrow(/sync\.identity-conflict/);
+      expect(row(db, "I-000983")!.externalId).toBe("LIN-1");
+      // Re-adopting the SAME id is not a replacement.
+      expect(adoptItem(db, BINDING, "I-000983", "LIN-1").externalId).toBe("LIN-1");
+      expect(adoptItem(db, BINDING, "I-000983", "LIN-2", { force: true }).externalId).toBe("LIN-2");
+    } finally {
+      close();
+    }
   });
 });
 
@@ -829,13 +938,38 @@ describe("(l) disposition -> state names are preflighted against the team, like 
       expect(refused.outcome).toBe("failed");
       expect(refused.cause).toContain("linear.state-unresolved");
       expect(refused.cause).toContain('"Todo"');
-      expect(refused.cause).toContain("disposition.open");
+      expect(refused.cause).toContain("disposition.Todo");
       expect(fake.writes).toEqual([]);
 
       // The item whose state DOES exist proceeds: an unknown name refuses one item only.
       const ok = await pushItem(db, fake, ctx, second!);
       expect(ok.outcome).toBe("created");
       expect(writeOf(fake, 0, "create").payload.state).toBe("Done");
+    } finally {
+      close();
+    }
+  });
+
+  test("the remediation key is the one the resolver reads, and the collapsed dispositions say so", async () => {
+    const { db, close } = await openedStore("state-collapsed-key");
+    try {
+      // `waived` maps to the default `Canceled`; a team with no such state must
+      // name `disposition.Canceled`, NOT `disposition.waived` — the resolver looks
+      // up the default target, so the local spelling would be a key nobody reads.
+      addIssue(db, "I-001054", { disposition: "waived" });
+      const refused = await pushItem(db, provider(), context({ states: new Set(["Todo", "Done"]) }), candidates(db)[0]!);
+      expect(refused.cause).toContain("[linear.mapping] disposition.Canceled=<name>");
+      expect(refused.cause).not.toContain("disposition.waived");
+      expect(refused.cause).toContain("waived maps to");
+      // And the printed advice is what resolves: the refusal above named
+      // `disposition.Canceled`, the key this mapping would have to set.
+      db.prepare("update issues set disposition = 'open' where id = ?").run("I-001054");
+      const fake = provider();
+      const mapped = context({
+        states: new Set(["Ready for Dev", "Done"]),
+        mapping: { disposition: { Todo: "Ready for Dev" }, kind: {}, severity: {} },
+      });
+      expect((await pushItem(db, fake, mapped, candidates(db)[0]!)).outcome).toBe("created");
     } finally {
       close();
     }

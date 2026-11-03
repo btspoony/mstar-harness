@@ -33,6 +33,7 @@ export type SyncErrorCode =
   | "sync.operation-conflict"
   | "sync.invalid-input"
   | "sync.local-issue-missing"
+  | "sync.identity-conflict"
   | "linear.query-failed"
   | "linear.identity-collision"
   | "linear.list-unimplemented"
@@ -106,6 +107,14 @@ export type MarkItemInput = {
    * remote now carries.
    */
   kindLabel?: string | null;
+  /**
+   * Drop the payload proof and the label ownership instead of carrying them
+   * forward. Only an identity CHANGE sets this: the recorded hash proves what the
+   * PREVIOUS remote issue says and the recorded labels say what it carries, so
+   * neither survives a different id (`--adopt`). An omitted `requestHash` still
+   * means "carry forward", so this is the only way to say "no proof".
+   */
+  clearProof?: true;
   /**
    * The remote identity a CONFIRMED write established (push) or a re-plan
    * learned. Absent means "keep what the row already holds" — never "clear it",
@@ -644,6 +653,7 @@ function markItem(
     ...(input.externalId == null ? {} : { externalId: input.externalId }),
     ...(input.requestHash == null ? {} : { requestHash: input.requestHash }),
     ...(input.kindLabel == null ? {} : { kindLabel: input.kindLabel }),
+    ...(input.clearProof === true ? { clearProof: true } : {}),
   });
   return withSyncTransaction(db, () => {
     const replayed = replayOrRefuse<SyncItem>(db, operationId, hash);
@@ -684,9 +694,15 @@ function markItem(
       // confirmed apply updates them, anything else carries them forward. A
       // confirmed update carries exactly the label it wrote, so ownership
       // narrows to that one label; the removal it sent already took the rest.
-      last_request_hash: applied ? (input.requestHash ?? row.last_request_hash) : row.last_request_hash,
+      // `clearProof` is the identity-CHANGE case: both facts described the
+      // previous remote issue, so neither may survive the new id.
+      last_request_hash: applied ? (input.clearProof === true ? null : (input.requestHash ?? row.last_request_hash)) : row.last_request_hash,
       last_kind_label: applied
-        ? (input.kindLabel == null ? row.last_kind_label : encodeKindLabels([input.kindLabel]))
+        ? input.clearProof === true
+          ? null
+          : input.kindLabel == null
+            ? row.last_kind_label
+            : encodeKindLabels([input.kindLabel])
         : row.last_kind_label,
     }, now);
     const item = toItem(requireItem(selectRow(db, bindingId, direction, localId)));

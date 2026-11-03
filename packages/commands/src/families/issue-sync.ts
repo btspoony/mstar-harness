@@ -139,6 +139,7 @@ const importSchema = z.object({
 const pushSchema = z.object({
   project: z.string().optional(),
   adopt: z.array(z.string()).optional(),
+  forceAdopt: z.array(z.string()).optional(),
   forceCreate: z.array(z.string()).optional(),
   harness: z.string().optional(),
 });
@@ -170,21 +171,22 @@ const flags: Record<keyof Input, string> = {
   maxPages: "--max-pages <n>",
   harness: "--harness <root>",
   adopt: "--adopt <localId>=<issueUrl|externalId>",
+  forceAdopt: "--force-adopt <localId>",
   forceCreate: "--force-create <localId>",
 };
 
 const options: Record<Verb, (keyof Input)[]> = {
   import: ["project", "maxPages", "harness"],
-  push: ["project", "adopt", "forceCreate", "harness"],
+  push: ["project", "adopt", "forceAdopt", "forceCreate", "harness"],
 };
 const required: Record<Verb, (keyof Input)[]> = { import: ["project"], push: ["project"] };
 
 /**
- * `--adopt` / `--force-create` name one item each. Declared variadic so an
- * operator can pass several (`--adopt A=LIN-1 --adopt B=LIN-2` or one
- * `--adopt A=LIN-1 --adopt` list) without the CLI refusing the repetition.
+ * `--adopt` / `--force-adopt` / `--force-create` name one item each. Declared
+ * variadic so an operator can pass several (`--adopt A=LIN-1 --adopt B=LIN-2` or
+ * one `--adopt A=LIN-1 --adopt` list) without the CLI refusing the repetition.
  */
-const variadicOptions: Partial<Record<keyof Input, true>> = { adopt: true, forceCreate: true };
+const variadicOptions: Partial<Record<keyof Input, true>> = { adopt: true, forceAdopt: true, forceCreate: true };
 
 class UsageError extends Error {}
 
@@ -226,7 +228,9 @@ const RECOVERY: Record<string, string> = {
   "linear.label-unresolved":
     "The mapped kind label does not exist in this Linear workspace and push never creates labels. Create that label in Linear's UI, or redirect it in `.mstarc` with `[linear.mapping] kind.<kind>=<label>`; other items still push.",
   "linear.state-unresolved":
-    "The mapped workflow state does not exist in this Linear team and push never creates or renames states. Rename it in Linear's workflow settings, or redirect it in `.mstarc` with `[linear.mapping] disposition.<state>=<name>`; other items still push.",
+    "The mapped workflow state does not exist in this Linear team and push never creates or renames states. Rename it in Linear's workflow settings, or redirect it in `.mstarc` with `[linear.mapping] disposition.<key>=<name>`, where <key> is the DEFAULT target state (Todo/Done/Canceled) that the local disposition maps to; other items still push.",
+  "sync.identity-conflict":
+    "This item already points at a remote issue and `--adopt` named a different one. Replacing an established identity is not an ordinary edit: re-run `mstar issue-sync push --project <project-id> --force-adopt <localId> --adopt <localId>=<issueUrl>` only if the new reference is the right one. Nothing was written.",
 };
 
 function refusalFor(id: string, code: string, message: string, details?: Record<string, unknown>): CommandEnvelope<never> {
@@ -508,6 +512,7 @@ async function runPush(id: string, input: Input, invocation: InvocationContext):
   const projectId = requireValue(input.project, "--project");
   const adoptions = adoptPairs(input.adopt);
   const forced = new Set((input.forceCreate ?? []).map((value) => value.trim()).filter((value) => value !== ""));
+  const forcedAdopt = new Set((input.forceAdopt ?? []).map((value) => value.trim()).filter((value) => value !== ""));
   const harnessDir =
     resolveProcessHarnessDir(invocation.cwd, input.harness) ?? input.harness ?? invocation.controlRoot ?? invocation.cwd;
   const context = { harnessDir };
@@ -625,9 +630,12 @@ async function runPush(id: string, input: Input, invocation: InvocationContext):
     };
 
     // 4. Operator-confirmed adoptions. These are ordinary ledger verbs: the row
-    //    takes the identity, and its content converges on the next changed push.
+    //    takes the identity and FORGETS the proof that belonged to the previous
+    //    one, so the candidate loop below converges this item's content onto the
+    //    adopted issue in this same run instead of reporting `skipped` for
+    //    content that remote never received.
     for (const { localId, reference } of adoptions) {
-      const adopted = adoptItem(db, bindingId, localId, reference);
+      const adopted = adoptItem(db, bindingId, localId, reference, { force: forcedAdopt.has(localId) });
       report.items.push({ localId, outcome: "adopted", externalId: adopted.externalId });
     }
 
@@ -668,7 +676,7 @@ export function getIssueSyncCommandDefinitions(): readonly CommandDefinition[] {
     import:
       "Import the bound Linear project's issues into this store, read-only toward Linear; a second run with unchanged remote state imports nothing. --max-pages bounds one run (default 20 pages of 50) and the reported cursor resumes it. An issue Linear returns without a usable title/identifier is reported as stranded and the scan continues; repair it in Linear's UI and the next full scan picks it up.",
     push:
-      "Push this project's local issues to the bound Linear team: create when no remote identity is known, update when a confirmed one exists, skip when the payload is unchanged. An unconfirmed create stays pending and the next run reconciles it by correlation marker — never by title/description. --adopt <localId>=<issueUrl|externalId> records an identity you confirmed yourself; --force-create <localId> says the remote issue does not exist. Requires a credential granted read + issues:create.",
+      "Push this project's local issues to the bound Linear team: create when no remote identity is known, update when a confirmed one exists, skip when the payload is unchanged. An unconfirmed create stays pending and the next run reconciles it by correlation marker — never by title/description. --adopt <localId>=<issueUrl|externalId> records an identity you confirmed yourself and clears the previous identity's proof; --force-adopt <localId> allows replacing an identity that is already recorded; --force-create <localId> says the remote issue does not exist. Requires a credential granted read + issues:create.",
   };
   return verbs.map((verb) => {
     const id = `issue-sync.${verb}`;
@@ -690,6 +698,14 @@ export function getIssueSyncCommandDefinitions(): readonly CommandDefinition[] {
               route,
               required: false,
               constraint: "optional, repeatable: <localId>=<issueUrl|externalId> for a remote issue you confirmed belongs to that local issue",
+            },
+            {
+              name: "forceAdopt",
+              ownership: "caller" as const,
+              route,
+              required: false,
+              constraint:
+                "optional, repeatable: <localId> whose already-recorded remote identity may be replaced by --adopt; without it a different reference is refused",
             },
             {
               name: "forceCreate",
