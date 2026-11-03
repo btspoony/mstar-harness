@@ -13,14 +13,17 @@
  * stopped. A retryable ledger failure holds the cursor for the next run; an
  * adapter-unmappable item is reported as stranded and the scan continues.
  *
- * `push` is the only WRITE surface. It refuses the whole run before any write
- * when the stored credential's scope cannot create or update issues, discovers
- * the workspace's real label set, reconciles any ambiguous create by
- * correlation marker, and records only what a confirmed receipt (or an explicit
- * `--adopt`) proved. `--release` is the one exit for a create whose remote
- * absence reconciliation's own full scan proved: the residue drops to the
- * retryable `failed` edge, so the same run may create. It never deletes, never
- * creates a label, and never sends the full-replace `labels` argument.
+ * `push` is the only WRITE surface, and it is ONE run per binding: the run lease
+ * (migration 18) is claimed before any candidate work, released on every exit,
+ * and a second run is refused by name with both recoveries rather than racing
+ * per-item claims. It refuses the whole run before any write when the stored
+ * credential's scope cannot create or update issues, discovers the workspace's
+ * real label set, reconciles any ambiguous create by correlation marker, and
+ * records only what a confirmed receipt (or an explicit `--adopt`) proved.
+ * `--release` is the one exit for a create whose remote absence reconciliation's
+ * own full scan proved: the residue drops to the retryable `failed` edge, so the
+ * same run may create. It never deletes, never creates a label, and never sends
+ * the full-replace `labels` argument.
  *
  * Refusal vocabulary is the frozen contract's (sync-ledger-contract §4): the
  * retired names `linear.binding-not-ready` / `linear.project-unbound` are never
@@ -28,9 +31,11 @@
  * its cause in the message; "mirrors nothing" is the named absence
  * `linear.binding-absent`.
  */
+import { hostname } from "node:os";
 import { refusalEnvelope } from "../envelope.js";
 import { engineErrorFacts } from "./family-refusal.js";
 import {
+  acquireRun,
   adoptItem,
   createLinearProvider,
   DEFAULT_PROBE_DEADLINE_MS,
@@ -49,6 +54,7 @@ import {
   commitLinearCredential,
   supersededBy,
   readRepoLinearBinding,
+  releaseRun,
   resolveRepoRoot,
   resetCursor,
   resolveProcessHarnessDir,
@@ -57,6 +63,7 @@ import {
   type IssueProvider,
   type PushContext,
   type PushOutcome,
+  type RunLease,
 } from "@mstar-harness/engine";
 import { z } from "zod";
 import { commandEnvelopeSchema } from "../envelope.js";
@@ -145,6 +152,7 @@ const pushSchema = z.object({
   forceAdopt: z.array(z.string()).optional(),
   forceCreate: z.array(z.string()).optional(),
   release: z.array(z.string()).optional(),
+  takeRun: z.boolean().optional(),
   harness: z.string().optional(),
 });
 const schemas = { import: importSchema, push: pushSchema } as const;
@@ -178,11 +186,12 @@ const flags: Record<keyof Input, string> = {
   forceAdopt: "--force-adopt <localId>",
   forceCreate: "--force-create <localId>",
   release: "--release <localId>",
+  takeRun: "--take-run",
 };
 
 const options: Record<Verb, (keyof Input)[]> = {
   import: ["project", "maxPages", "harness"],
-  push: ["project", "adopt", "forceAdopt", "forceCreate", "release", "harness"],
+  push: ["project", "adopt", "forceAdopt", "forceCreate", "release", "takeRun", "harness"],
 };
 const required: Record<Verb, (keyof Input)[]> = { import: ["project"], push: ["project"] };
 
@@ -230,7 +239,7 @@ const RECOVERY: Record<string, string> = {
   "linear.write-refused":
     "The provider refused this write, so nothing was written and the item is failed for a safe retry. Read the cause: a request-level rejection (HTTP 4xx) and a schema missing `removeLabels` are both refused this way. Re-run `mstar issue-sync push --project <project-id>` after addressing it.",
   "linear.write-ambiguous":
-    "The write was sent but not confirmed, so delivery is unknown and the item stays pending with no external id. The next run reconciles it by correlation marker — exactly one match adopts that issue — and `--adopt <localId>=<issueUrl>` records the identity when you can see it yourself. `--force-create` cannot help here: an unresolved attempt may still be in flight, so it refuses instead of risking a second issue. When the next run's reconcile scan reports that no remote issue carries the marker and you can confirm the issue is gone, release the residue with `--release <localId>`: that clears it to a retryable failure, so the same run creates it.",
+    "The write was sent but not confirmed, so delivery is unknown and the item stays pending with no external id. The next run reconciles it by correlation marker — exactly one match adopts that issue — and `--adopt <localId>=<issueUrl|externalId>` records the identity when you can see it yourself. `--force-create` cannot help here: it asserts absent content, not that a previous create never landed, so it refuses instead of risking a second issue. When the next run's reconcile scan reports that no remote issue carries the marker and you can confirm the issue is gone, release the residue with `--release <localId>`: that clears it to a retryable failure, so the same run creates it.",
   "linear.label-unresolved":
     "The mapped kind label does not exist in this Linear workspace and push never creates labels. Create that label in Linear's UI, or redirect it in `.mstarc` with `[linear.mapping] kind.<kind>=<label>`; other items still push.",
   "linear.state-unresolved":
@@ -239,6 +248,8 @@ const RECOVERY: Record<string, string> = {
     "This item already points at a remote issue and `--adopt` named a different one. Replacing an established identity is not an ordinary edit: re-run `mstar issue-sync push --project <project-id> --force-adopt <localId> --adopt <localId>=<issueUrl>` only if the new reference is the right one. Nothing was written.",
   "sync.illegal-transition":
     "`--release` names a `pending` push row with no remote id and nothing else. Re-run `mstar issue-sync push --project <project-id>` without it: reconcile adopts the issue when exactly one carries the item's correlation marker, and `--adopt <localId>=<issueUrl|externalId>` records an identity you confirmed.",
+  "sync.run-held":
+    "Another push run holds this binding. Its start time, pid and host are in the message: wait for it to finish, then re-run `mstar issue-sync push --project <project-id>`. Only after confirming that holder is dead, take the run over with `mstar issue-sync push --project <project-id> --take-run`.",
 };
 
 function refusalFor(id: string, code: string, message: string, details?: Record<string, unknown>): CommandEnvelope<never> {
@@ -522,6 +533,7 @@ async function runPush(id: string, input: Input, invocation: InvocationContext):
   const forced = new Set((input.forceCreate ?? []).map((value) => value.trim()).filter((value) => value !== ""));
   const forcedAdopt = new Set((input.forceAdopt ?? []).map((value) => value.trim()).filter((value) => value !== ""));
   const released = new Set((input.release ?? []).map((value) => value.trim()).filter((value) => value !== ""));
+  const takeRun = input.takeRun === true;
   const harnessDir =
     resolveProcessHarnessDir(invocation.cwd, input.harness) ?? input.harness ?? invocation.controlRoot ?? invocation.cwd;
   const context = { harnessDir };
@@ -608,6 +620,7 @@ async function runPush(id: string, input: Input, invocation: InvocationContext):
 
   const bindingId = `linear:${projectId}`;
   const handle = await openStore(context, "write");
+  let run: RunLease | null = null;
   try {
     const db = handle.db;
     const storeRow = db.prepare("select store_id from store_meta where id = 1").get() as { store_id: string } | undefined;
@@ -616,6 +629,20 @@ async function runPush(id: string, input: Input, invocation: InvocationContext):
         code: "store.not-initialized",
       });
     }
+    // 3b. THE RUN. `push` is an operator command, not a concurrent service: one
+    //     run per binding is claimed here, before any candidate work, and the
+    //     store's own write transaction is the arbiter. A second run is refused
+    //     by name (holder + both exits) instead of racing per-item claims; the
+    //     lease is released in the `finally` below, including on refusal and on
+    //     throw. `--take-run` is explicit operator intent, never a timer.
+    run = acquireRun(db, {
+      bindingId,
+      direction: PUSH_DIRECTION,
+      holderPid: process.pid,
+      holderHost: hostname(),
+      reason: takeRun ? "operator took the run over with --take-run" : "issue-sync push",
+      takeRun,
+    });
     const pushContext: PushContext = {
       bindingId,
       binding: { workspace: repo.binding.workspace ?? "", team: repo.binding.team ?? binding.binding.team ?? "" },
@@ -678,6 +705,19 @@ async function runPush(id: string, input: Input, invocation: InvocationContext):
     }
     return envelope(id, report);
   } finally {
+    // The run is released on EVERY exit — a completed push, a refused item, or a
+    // throw — and only when this run still holds it: a run taken over by
+    // `--take-run` names a token the successor does not carry, so its own
+    // `finally` deletes nothing and the next run's claim cannot report two
+    // holders.
+    if (run !== null) {
+      try {
+        releaseRun(handle.db, { bindingId, direction: PUSH_DIRECTION, runId: run.runId });
+      } catch {
+        // A release that cannot land must not mask the outcome that produced it;
+        // the row stays and the next run reports it as the holder.
+      }
+    }
     handle.close();
   }
 }
@@ -687,7 +727,7 @@ export function getIssueSyncCommandDefinitions(): readonly CommandDefinition[] {
     import:
       "Import the bound Linear project's issues into this store, read-only toward Linear; a second run with unchanged remote state imports nothing. --max-pages bounds one run (default 20 pages of 50) and the reported cursor resumes it. An issue Linear returns without a usable title/identifier is reported as stranded and the scan continues; repair it in Linear's UI and the next full scan picks it up.",
     push:
-      "Push this project's local issues to the bound Linear team: create when no remote identity is known, update when a confirmed one exists, skip when the payload is unchanged. An unconfirmed create stays pending and the next run reconciles it by correlation marker — never by title/description — so nothing creates again while that attempt is unresolved. --adopt <localId>=<issueUrl|externalId> records an identity you confirmed yourself and, when that replaces a different recorded id, clears the old identity's proof; --force-adopt <localId> allows replacing an identity that is already recorded; --force-create <localId> says the remote issue does not exist, and is refused while an unresolved create attempt stands (reconcile, --adopt or --release first); --release <localId> releases a pending create with no remote id after this run's reconcile scan found no issue carrying its marker, so the same run creates it - a scan that finds a match refuses the release, because that item's recovery is adoption. Requires a credential granted read + issues:create.",
+      "Push this project's local issues to the bound Linear team: create when no remote identity is known, update when a confirmed one exists, skip when the payload is unchanged. ONE push run per binding: a second is refused, naming the holder and both exits - wait, or --take-run. An unconfirmed create stays pending and the next run reconciles it by correlation marker — never by title/description — so nothing creates again while that attempt is unresolved. --adopt <localId>=<issueUrl|externalId> records an identity you confirmed yourself and, when that replaces a different recorded id, clears the old identity's proof; --force-adopt <localId> allows replacing an identity that is already recorded; --force-create <localId> says the remote issue does not exist, and is refused while an unresolved create attempt stands (reconcile, --adopt or --release first); --release <localId> releases a pending create with no remote id after this run's reconcile scan found no issue carrying its marker, so the same run creates it - a scan that finds a match refuses the release, because that item's recovery is adoption. Requires a credential granted read + issues:create.",
   };
   return verbs.map((verb) => {
     const id = `issue-sync.${verb}`;
@@ -733,6 +773,13 @@ export function getIssueSyncCommandDefinitions(): readonly CommandDefinition[] {
               required: false,
               constraint:
                 "optional, repeatable: <localId> whose `pending` create with no remote id you are releasing after this run's reconcile scan found no issue carrying its marker; a scan that finds a match refuses it (that is adoption)",
+            },
+            {
+              name: "takeRun",
+              ownership: "caller" as const,
+              route,
+              required: false,
+              constraint: "optional: take the push run over from the holder a `sync.run-held` refusal named, once you confirmed it dead",
             },
           ]),
     ]);

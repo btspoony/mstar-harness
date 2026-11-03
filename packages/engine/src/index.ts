@@ -738,6 +738,7 @@ export { PROBE_STATES } from "./issue-sync/provider.js";
 // Sync ledger (migration 15): the per-item state machine and its read path.
 // Every mutation owns its transaction; a caller composes the verbs sequentially.
 export type {
+  AcquireRunInput,
   CursorInput,
   LedgerSummary,
   MarkFailedInput,
@@ -748,12 +749,14 @@ export type {
   ReadItemInput,
   SyncDirection,
   SyncErrorCode,
+  RunLease,
   SyncItem,
   SyncItemState,
   WriteCursorInput,
 } from "./issue-sync.js";
 export {
   SyncError,
+  acquireRun,
   claimItem,
   markApplied,
   markFailed,
@@ -763,7 +766,9 @@ export {
   readCursor,
   readItem,
   readLedgerSummary,
+  readRun,
   recordRefusal,
+  releaseRun,
   replanItem,
   resetCursor,
   writeCursor,

@@ -9,6 +9,7 @@ import { join } from "node:path";
 import { afterAll, describe, expect, test } from "bun:test";
 import { initializeStore, type StoreContext, type StoreDb } from "./store-db.js";
 import {
+  acquireRun,
   claimItem,
   markApplied,
   markFailed,
@@ -18,7 +19,9 @@ import {
   readCursor,
   readItem,
   readLedgerSummary,
+  readRun,
   recordRefusal,
+  releaseRun,
   replanItem,
   SyncError,
   writeCursor,
@@ -648,6 +651,74 @@ describe("recordRefusal records the error and moves nothing", () => {
     const first = recordRefusal(db, { ...KEY, operationId: "op-refusal-2", error: "one" });
     expect(recordRefusal(db, { ...KEY, operationId: "op-refusal-2", error: "one" })).toEqual(first);
     expect(codeOf(() => recordRefusal(db, { ...KEY, operationId: "op-refusal-2", error: "two" }))).toBe("sync.operation-conflict");
+    close();
+  });
+});
+
+describe("the run lease serialises one direction, with an explicit takeover", () => {
+  const RUN = { bindingId: "linear:p-t", direction: "push" as const, holderPid: 4242, holderHost: "builder-1" };
+
+  test("a second acquisition is refused naming the holder, its start time and both exits", async () => {
+    const { db, close } = await openedStore("run-held");
+    const held = acquireRun(db, { ...RUN, reason: "issue-sync push" });
+    expect(held).toMatchObject({ holderPid: 4242, holderHost: "builder-1", reason: "issue-sync push" });
+    const error = errorOf(() => acquireRun(db, { ...RUN, holderPid: 4243, holderHost: "builder-2", reason: "issue-sync push" }));
+    // The operator judging liveness needs the holder's facts, not "already running".
+    expect(error.message).toContain(held.startedAt);
+    expect(error.message).toContain("4242");
+    expect(error.message).toContain('"builder-1"');
+    // Both exits are named, and both are executable: wait, or take it over.
+    expect(error.message).toContain("--take-run");
+    expect(error.message).toContain("mstar issue-sync push --project <project-id>");
+    // Nothing was replaced: the first holder still owns the direction.
+    expect(readRun(db, RUN)).toEqual(held);
+    close();
+  });
+
+  test("a crashed holder is recoverable: the residue still refuses, and --take-run replaces it", async () => {
+    const { db, close } = await openedStore("run-crash-residue");
+    // A run killed inside its provider call leaves its row behind - the exact
+    // failure mode no timer is allowed to resolve on its own.
+    const dead = acquireRun(db, { ...RUN, reason: "issue-sync push" });
+    expect(readRun(db, RUN)).toEqual(dead);
+
+    const refused = errorOf(() => acquireRun(db, { ...RUN, holderPid: 5000, reason: "issue-sync push" }));
+    expect(refused.message).toContain(dead.startedAt);
+    expect(refused.message).toContain("--take-run");
+
+    // The operator confirms the holder is dead and says so explicitly.
+    const taken = acquireRun(db, { ...RUN, holderPid: 5000, holderHost: "builder-2", reason: "operator took the run over with --take-run", takeRun: true });
+    expect(taken.runId).not.toBe(dead.runId);
+    expect(taken).toMatchObject({ holderPid: 5000, holderHost: "builder-2", reason: "operator took the run over with --take-run" });
+    // REPLACED, never coexisting: one row, and it is the taker's.
+    const rows = db.prepare("select run_id from sync_runs where binding_id = ? and direction = ?").all(RUN.bindingId, RUN.direction) as Array<{ run_id: string }>;
+    expect(rows).toEqual([{ run_id: taken.runId }]);
+    expect(readRun(db, RUN)).toEqual(taken);
+    close();
+  });
+
+  test("the taken-over run's own release deletes nothing, so it cannot free its successor", async () => {
+    const { db, close } = await openedStore("run-release-stale");
+    const dead = acquireRun(db, { ...RUN, reason: "issue-sync push" });
+    const taken = acquireRun(db, { ...RUN, holderPid: 5000, reason: "operator took the run over with --take-run", takeRun: true });
+    // The predecessor's `finally` runs late: its token no longer matches.
+    expect(releaseRun(db, { ...RUN, runId: dead.runId })).toBe(false);
+    expect(readRun(db, RUN)).toEqual(taken);
+
+    // The holder's own release does free the direction, and the next run acquires it.
+    expect(releaseRun(db, { ...RUN, runId: taken.runId })).toBe(true);
+    expect(readRun(db, RUN)).toBeNull();
+    const next = acquireRun(db, { ...RUN, holderPid: 6000, holderHost: "builder-3", reason: "issue-sync push" });
+    expect(next.holderPid).toBe(6000);
+    close();
+  });
+
+  test("the lease is per binding and per direction", async () => {
+    const { db, close } = await openedStore("run-scope");
+    acquireRun(db, { ...RUN, reason: "issue-sync push" });
+    // Another binding, and the import direction of the same binding, are free.
+    expect(acquireRun(db, { ...RUN, bindingId: "linear:p-other", reason: "issue-sync push" }).bindingId).toBe("linear:p-other");
+    expect(acquireRun(db, { ...RUN, direction: "import", reason: "issue-sync import" }).direction).toBe("import");
     close();
   });
 });
