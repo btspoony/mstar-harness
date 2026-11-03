@@ -24,6 +24,8 @@ import { backupStore } from "./store-activation.js";
 import {
   MIGRATION_15_SQL,
   MIGRATION_16_SQL,
+  MIGRATION_17_SQL,
+  MIGRATION_18_SQL,
   MIGRATIONS,
   migrationChecksum,
   SCHEMA_VERSION_TABLE_SQL,
@@ -1718,6 +1720,79 @@ describe("migration 16 - the open cycle survives the upgrade", () => {
       pending_target: string | null;
     };
     expect(row).toEqual({ last_remote_updated_at: "2026-11-01T00:00:00Z", pending_target: null });
+    db.close();
+  });
+});
+
+describe("migration 17 - the push ledger facts", () => {
+  test("both columns arrive nullable, and an existing row keeps working with them null", async () => {
+    const { Database } = await import("bun:sqlite");
+    const db = new Database(":memory:");
+    db.exec(MIGRATION_15_SQL);
+    db.exec(MIGRATION_16_SQL);
+    db.exec(
+      "insert into issue_sync_state(binding_id, direction, local_id, external_id, item_state, last_remote_updated_at, pending_target, last_error, last_skip_reason, revision, updated_at)" +
+        " values ('b', 'push', 'I-1', null, 'pending', null, null, null, null, 1, '2026-11-02T00:00:00Z')",
+    );
+    db.exec(MIGRATION_17_SQL);
+    const row = db.query("select item_state, last_request_hash, last_kind_label from issue_sync_state").get() as {
+      item_state: string;
+      last_request_hash: string | null;
+      last_kind_label: string | null;
+    };
+    // The upgrade adds no fact: a row that never confirmed a write has neither
+    // a skip-rule hash nor a label ownership, and it stays a valid pending row.
+    expect(row).toEqual({ item_state: "pending", last_request_hash: null, last_kind_label: null });
+    db.close();
+  });
+
+  test("a confirmed push records both facts and an import row leaves them null", async () => {
+    const { Database } = await import("bun:sqlite");
+    const db = new Database(":memory:");
+    db.exec(MIGRATION_15_SQL);
+    db.exec(MIGRATION_16_SQL);
+    db.exec(MIGRATION_17_SQL);
+    db.exec(
+      "insert into issue_sync_state(binding_id, direction, local_id, external_id, item_state, last_remote_updated_at, pending_target, last_error, last_skip_reason, revision, updated_at)" +
+        " values ('b', 'push', 'I-1', 'LIN-1', 'applied', '2026-11-02T00:00:00Z', null, null, null, 1, '2026-11-02T00:00:00Z')",
+    );
+    db.exec("update issue_sync_state set last_request_hash = 'h', last_kind_label = 'bug' where local_id = 'I-1'");
+    db.exec(
+      "insert into issue_sync_state(binding_id, direction, local_id, external_id, item_state, last_remote_updated_at, pending_target, last_error, last_skip_reason, revision, updated_at)" +
+        " values ('b', 'import', 'I-2', 'LIN-2', 'applied', '2026-11-02T00:00:00Z', null, null, null, 1, '2026-11-02T00:00:00Z')",
+    );
+    const rows = db
+      .query("select direction, last_request_hash, last_kind_label from issue_sync_state order by direction")
+      .all() as Array<{ direction: string; last_request_hash: string | null; last_kind_label: string | null }>;
+    expect(rows).toEqual([
+      { direction: "import", last_request_hash: null, last_kind_label: null },
+      { direction: "push", last_request_hash: "h", last_kind_label: "bug" },
+    ]);
+    db.close();
+  });
+});
+
+describe("migration 18 - the run lease", () => {
+  test("one row per binding and direction, and it holds the holder's own facts", async () => {
+    const { Database } = await import("bun:sqlite");
+    const db = new Database(":memory:");
+    db.exec(MIGRATION_15_SQL);
+    db.exec(MIGRATION_16_SQL);
+    db.exec(MIGRATION_17_SQL);
+    db.exec(MIGRATION_18_SQL);
+    const insert = db.prepare(
+      "insert into sync_runs(binding_id, direction, run_id, holder_pid, holder_host, started_at, reason) values (?, ?, ?, ?, ?, ?, ?)",
+    );
+    insert.run("linear:p", "push", "run-1", 42, "host-a", "2026-11-03T00:00:00.000Z", "issue-sync push");
+    // The primary key is the whole arbitration: a second row cannot exist.
+    expect(() => insert.run("linear:p", "push", "run-2", 43, "host-b", "2026-11-03T00:00:01.000Z", "issue-sync push")).toThrow();
+    // Another direction of the same binding is a different run.
+    insert.run("linear:p", "import", "run-3", 44, "host-a", "2026-11-03T00:00:02.000Z", "issue-sync import");
+    const rows = db.query("select direction, run_id, holder_pid from sync_runs order by direction").all() as Array<{ direction: string; run_id: string; holder_pid: number }>;
+    expect(rows).toEqual([
+      { direction: "import", run_id: "run-3", holder_pid: 44 },
+      { direction: "push", run_id: "run-1", holder_pid: 42 },
+    ]);
     db.close();
   });
 });

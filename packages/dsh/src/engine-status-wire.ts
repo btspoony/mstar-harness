@@ -38,6 +38,11 @@ export const MSTAR_SELECT_WORKFLOW_METHOD = 'selectWorkflow'
 /** The endpoint path the client calls for a workflow pick. */
 export const SELECT_WORKFLOW_ENDPOINT = `${MSTAR_ENGINE_STATUS_NAMESPACE}/${MSTAR_SELECT_WORKFLOW_METHOD}`
 /**
+ * The contributing dsh package id — the `package` of the ONE host typert
+ * contribution and the prefix of every invocation id it declares.
+ */
+export const MSTAR_CONTRIBUTING_PACKAGE = '@mstar-harness/dsh'
+/**
  * Wire namespace of the panel-snapshot read. The panel keeps the `mstar`
  * namespace (one plugin, one address family) while serving the snapshot from
  * its own host service, so the retired engine-status read path could not
@@ -78,3 +83,20 @@ export const MILESTONE_ADD_ENDPOINT = `${MSTAR_PANEL_SNAPSHOT_NAMESPACE}/${MSTAR
 export const MILESTONE_UPDATE_ENDPOINT = `${MSTAR_PANEL_SNAPSHOT_NAMESPACE}/${MSTAR_MILESTONE_UPDATE_METHOD}`
 export const MILESTONE_ASSIGN_ENDPOINT = `${MSTAR_PANEL_SNAPSHOT_NAMESPACE}/${MSTAR_MILESTONE_ASSIGN_METHOD}`
 export const MILESTONE_REMOVE_ENDPOINT = `${MSTAR_PANEL_SNAPSHOT_NAMESPACE}/${MSTAR_MILESTONE_REMOVE_METHOD}`
+
+/**
+ * Wire methods of the Linear credential card (root scope, no session): one
+ * read of the host's file/row facts, then one host-owned authorization
+ * attempt. The multi-minute consent NEVER rides one RPC — `begin` returns the
+ * attempt id and the authorization URL immediately, and `status` is polled
+ * under its own short deadline.
+ */
+export const MSTAR_LINEAR_STATUS_METHOD = 'linearStatus'
+export const MSTAR_LINEAR_AUTHORIZE_BEGIN_METHOD = 'linearAuthorizeBegin'
+export const MSTAR_LINEAR_AUTHORIZE_STATUS_METHOD = 'linearAuthorizeStatus'
+export const MSTAR_LINEAR_AUTHORIZE_CANCEL_METHOD = 'linearAuthorizeCancel'
+/** The endpoint paths the card calls for its four operations. */
+export const LINEAR_STATUS_ENDPOINT = `${MSTAR_PANEL_SNAPSHOT_NAMESPACE}/${MSTAR_LINEAR_STATUS_METHOD}`
+export const LINEAR_AUTHORIZE_BEGIN_ENDPOINT = `${MSTAR_PANEL_SNAPSHOT_NAMESPACE}/${MSTAR_LINEAR_AUTHORIZE_BEGIN_METHOD}`
+export const LINEAR_AUTHORIZE_STATUS_ENDPOINT = `${MSTAR_PANEL_SNAPSHOT_NAMESPACE}/${MSTAR_LINEAR_AUTHORIZE_STATUS_METHOD}`
+export const LINEAR_AUTHORIZE_CANCEL_ENDPOINT = `${MSTAR_PANEL_SNAPSHOT_NAMESPACE}/${MSTAR_LINEAR_AUTHORIZE_CANCEL_METHOD}`

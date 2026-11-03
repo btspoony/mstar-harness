@@ -103,8 +103,71 @@ export function writeLinearCredential(credential: LinearCredential): string {
   const temporary = `${path}.${process.pid}.tmp`;
   writeFileSync(temporary, JSON.stringify(payload, null, 2), { mode: 0o600 });
   chmodSync(temporary, 0o600);
-  renameSync(temporary, path);
+  try {
+    renameSync(temporary, path);
+  } catch (error) {
+    // The temp file is a complete, valid second copy of the token, and
+    // `clearLinearCredential` only knows `path`: leaving it behind would survive
+    // sign-out. Cleanup must not mask the rename's own cause.
+    try {
+      rmSync(temporary, { force: true });
+    } catch {
+      // The copy stays; the rename failure below is still the reported cause.
+    }
+    throw error;
+  }
   return path;
+}
+
+/**
+ * Whether the file changed under an in-flight refresh in a way that attempt
+ * must not overwrite — another process stored a newer grant to adopt, or the
+ * operator removed the credential (`mstar linear logout`) and deleting it is
+ * the newest intent. An unreadable file is overwritten: its credential is
+ * unusable, and the fresh grant is the recovery.
+ *
+ * One implementation for every writer: the dsh refresh loop and the CLI's
+ * `resolveStoredToken` both decide inside {@link commitLinearCredential}, and a
+ * second copy of this rule is how a re-auth landed by `mstar linear auth` gets
+ * replaced by an older lineage's refreshed token (including its narrower scope).
+ *
+ * `base` is the credential the attempt started from, read before its round trip.
+ */
+export function supersededBy(state: LinearCredentialState, base: LinearCredential): boolean {
+  if (state.kind === "absent") return true;
+  if (state.kind !== "present") return false;
+  const candidate = state.credential;
+  if (candidate.accessToken === base.accessToken) return false;
+  if (candidate.clientId !== base.clientId) return true;
+  return candidate.expiresAt !== null && (base.expiresAt === null || candidate.expiresAt > base.expiresAt);
+}
+
+/**
+ * Check the file, then commit what `decide` returned. `decide` sees the file as
+ * it is at this instant, so a sign-out or a re-authorization that landed during
+ * the refresh's round trip — the long, network-width window — is seen and the
+ * stale grant is declined.
+ *
+ * Accepted limitation, not a bug to rediscover: this check and the rename below
+ * are two statements, so a `logout` or reauthorization landing inside that
+ * microsecond window, after `decide` read the file and before the rename, can
+ * be overwritten by the refresh it raced. The consequence is a stale grant that
+ * the operator clears by signing out again. A hand-rolled cross-process lock
+ * closed that window and was removed because each attempt to make it safe
+ * widened it (three-writer races, a dangling-symlink spin, probabilistic
+ * regressions) — a larger hazard than the window it removed.
+ *
+ * `decide` must only read: it has no side effects, so a write there cannot
+ * interleave with the rename this function performs.
+ *
+ * Returns the written path, or `null` when `decide` declined.
+ */
+export function commitLinearCredential(
+  decide: (state: LinearCredentialState) => LinearCredential | null,
+  now: number = Date.now(),
+): string | null {
+  const next = decide(readLinearCredential(now));
+  return next === null ? null : writeLinearCredential(next);
 }
 
 /** Remove the stored credential (sign-out). Returns whether anything was there. */

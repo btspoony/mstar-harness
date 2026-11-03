@@ -9,13 +9,19 @@ import { join } from "node:path";
 import { afterAll, describe, expect, test } from "bun:test";
 import { initializeStore, type StoreContext, type StoreDb } from "./store-db.js";
 import {
+  acquireRun,
+  claimItem,
   markApplied,
   markFailed,
   markSkipped,
+  markUnconfirmed,
   planItem,
   readCursor,
   readItem,
   readLedgerSummary,
+  readRun,
+  recordRefusal,
+  releaseRun,
   replanItem,
   SyncError,
   writeCursor,
@@ -200,6 +206,27 @@ describe("sync state machine transitions", () => {
     close();
   });
 
+  test("markUnconfirmed invalidates the payload hash and keeps the identity", async () => {
+    const { db, close } = await openedStore("unconfirmed");
+    const push = { ...KEY, direction: "push" as const };
+    planItem(db, { ...PLAN, ...push, operationId: "op-push-plan" });
+    markApplied(db, { ...push, operationId: "op-push-apply", externalId: "EXT-9", requestHash: "hash-b", kindLabel: "bug" });
+    const dropped = markUnconfirmed(db, { ...push, operationId: "op-unconfirmed", kindLabel: "risk" });
+    // An ambiguous replacement proves neither the removal nor the addition, so
+    // BOTH candidates stay owned and either may still be on the remote.
+    expect(dropped).toMatchObject({ itemState: "applied", externalId: "EXT-9", lastRequestHash: null, lastKindLabels: ["bug", "risk"] });
+    // The identity is still there, so the row is still update-addressable.
+    expect(readItem(db, push)?.externalId).toBe("EXT-9");
+    // Without a payload proof the skip rule cannot match.
+    expect(readItem(db, push)?.lastRequestHash).toBeNull();
+    // A row with no identity is an ambiguous CREATE: reconciliation owns it.
+    planItem(db, { ...PLAN, ...push, localId: "I-000302", externalId: null, operationId: "op-push-2" });
+    expect(codeOf(() => markUnconfirmed(db, { ...push, localId: "I-000302", operationId: "op-unconfirmed-2" }))).toBe(
+      "sync.illegal-transition",
+    );
+    close();
+  });
+
   test("a localId absent from issues is refused sync.local-issue-missing", async () => {
     const { db, close } = await openedStore("missing-local");
     const ghost = { ...PLAN, localId: "I-999999" };
@@ -219,6 +246,13 @@ describe("transaction ownership (one transaction per verb)", () => {
     expect(log).toEqual(["begin immediate", "commit"]);
     log.length = 0;
     markApplied(logged, { ...KEY, operationId: "op-tx-apply" });
+    expect(log).toEqual(["begin immediate", "commit"]);
+    log.length = 0;
+    const pushKey = { ...KEY, direction: "push" as const };
+    planItem(logged, { ...PLAN, ...pushKey, operationId: "op-tx-push-plan" });
+    markApplied(logged, { ...pushKey, operationId: "op-tx-push-apply", externalId: "EXT-2" });
+    log.length = 0;
+    markUnconfirmed(logged, { ...pushKey, operationId: "op-tx-unconfirmed" });
     expect(log).toEqual(["begin immediate", "commit"]);
     log.length = 0;
     writeCursor(logged, { ...KEY, cursor: "cur-tx", operationId: "op-tx-cur" });
@@ -506,6 +540,28 @@ describe("ledger read path (task 3)", () => {
     close();
   });
 
+  test("a store holding both directions summarises each one separately", async () => {
+    const { db, close } = await openedStore("ledger-directions");
+    const push = { bindingId: KEY.bindingId, direction: "push" as const, localId: KEY.localId };
+    planItem(db, { ...PLAN, operationId: "op-dir-imp-p" });
+    markApplied(db, { ...KEY, operationId: "op-dir-imp-a" });
+    writeCursor(db, { ...KEY, cursor: "cur-import", operationId: "op-dir-imp-c" });
+    planItem(db, { ...push, externalId: null, remoteUpdatedAt: null, operationId: "op-dir-push-p" });
+    markFailed(db, { ...push, operationId: "op-dir-push-f", error: "push failed" });
+    writeCursor(db, { ...push, cursor: "cur-push", operationId: "op-dir-push-c" });
+
+    const imported = readLedgerSummary(db, KEY);
+    expect(imported.counts).toEqual({ unbound: 0, pending: 0, applied: 1, failed: 0, skipped: 0 });
+    expect(imported.lastCursor).toBe("cur-import");
+    expect(imported.lastError).toBeNull();
+
+    const pushed = readLedgerSummary(db, { bindingId: KEY.bindingId, direction: "push" });
+    expect(pushed.counts).toEqual({ unbound: 0, pending: 0, applied: 0, failed: 1, skipped: 0 });
+    expect(pushed.lastCursor).toBe("cur-push");
+    expect(pushed.lastError).toBe("push failed");
+    close();
+  });
+
   test("the read path mutates nothing", async () => {
     const { db, close } = await openedStore("ledger-readonly");
     planItem(db, PLAN);
@@ -533,6 +589,136 @@ describe("sync error shape", () => {
     expect((error as SyncError).code).toBe("sync.not-found");
     expect(error.name).toBe("SyncError");
     expect(error.message.startsWith("[sync.not-found] ")).toBe(true);
+    close();
+  });
+});
+
+describe("claimItem distinguishes a new send right from a historical replay", () => {
+  test("the same request claimed twice yields the right exactly once", async () => {
+    const { db, close } = await openedStore("claim-right");
+    const first = claimItem(db, PLAN);
+    const second = claimItem(db, { ...PLAN, operationId: PLAN.operationId });
+    expect(first.claimed).toBe(true);
+    expect(second.claimed).toBe(false);
+    // The loser sees the CURRENT row, which is what it must act on.
+    expect(second.item).toEqual(first.item);
+    close();
+  });
+
+  test("a claim still refuses a conflicting request on the same id, like planItem", async () => {
+    const { db, close } = await openedStore("claim-conflict");
+    claimItem(db, PLAN);
+    expect(codeOf(() => claimItem(db, { ...PLAN, externalId: "EXT-OTHER" }))).toBe("sync.operation-conflict");
+    close();
+  });
+
+  test("a fresh claim after a refusal opens the retry cycle", async () => {
+    const { db, close } = await openedStore("claim-retry");
+    claimItem(db, PLAN);
+    markFailed(db, { ...KEY, operationId: "op-claim-fail", error: "boom" });
+    const retried = claimItem(db, { ...KEY, operationId: "op-claim-retry" });
+    expect(retried.claimed).toBe(true);
+    expect(retried.item.itemState).toBe("pending");
+    close();
+  });
+});
+
+describe("recordRefusal records the error and moves nothing", () => {
+  test("a pending residue keeps its state, identity and payload proof, and stays reconcilable", async () => {
+    const { db, close } = await openedStore("refusal-residue");
+    claimItem(db, { ...KEY, externalId: null, remoteUpdatedAt: null, operationId: "op-refusal-plan" });
+    const before = readItem(db, KEY)!;
+    const after = recordRefusal(db, { ...KEY, operationId: "op-refusal-1", error: "[linear.label-unresolved] nope" });
+    expect(after.itemState).toBe("pending");
+    expect(after.externalId).toBeNull();
+    expect(after.lastError).toBe("[linear.label-unresolved] nope");
+    // Everything that makes the row an ambiguity survives: a `failed` row would
+    // be invisible to the marker scan.
+    expect(after.pendingTarget).toBe(before.pendingTarget);
+    expect(after.lastRequestHash).toBe(before.lastRequestHash);
+    expect(after.lastKindLabels).toEqual(before.lastKindLabels);
+    expect(after.revision).toBe(before.revision + 1);
+    const stillPending = db
+      .prepare("select local_id from issue_sync_state where binding_id = ? and direction = 'import' and item_state = 'pending' and external_id is null")
+      .all(KEY.bindingId) as Array<{ local_id: string }>;
+    expect(stillPending).toEqual([{ local_id: KEY.localId }]);
+    close();
+  });
+
+  test("the verb replays its receipt and conflicts on a different request", async () => {
+    const { db, close } = await openedStore("refusal-replay");
+    claimItem(db, { ...KEY, externalId: null, remoteUpdatedAt: null, operationId: "op-refusal-plan-2" });
+    const first = recordRefusal(db, { ...KEY, operationId: "op-refusal-2", error: "one" });
+    expect(recordRefusal(db, { ...KEY, operationId: "op-refusal-2", error: "one" })).toEqual(first);
+    expect(codeOf(() => recordRefusal(db, { ...KEY, operationId: "op-refusal-2", error: "two" }))).toBe("sync.operation-conflict");
+    close();
+  });
+});
+
+describe("the run lease serialises one direction, with an explicit takeover", () => {
+  const RUN = { bindingId: "linear:p-t", direction: "push" as const, holderPid: 4242, holderHost: "builder-1" };
+
+  test("a second acquisition is refused naming the holder, its start time and both exits", async () => {
+    const { db, close } = await openedStore("run-held");
+    const held = acquireRun(db, { ...RUN, reason: "issue-sync push" });
+    expect(held).toMatchObject({ holderPid: 4242, holderHost: "builder-1", reason: "issue-sync push" });
+    const error = errorOf(() => acquireRun(db, { ...RUN, holderPid: 4243, holderHost: "builder-2", reason: "issue-sync push" }));
+    // The operator judging liveness needs the holder's facts, not "already running".
+    expect(error.message).toContain(held.startedAt);
+    expect(error.message).toContain("4242");
+    expect(error.message).toContain('"builder-1"');
+    // Both exits are named, and both are executable: wait, or take it over.
+    expect(error.message).toContain("--take-run");
+    expect(error.message).toContain("mstar issue-sync push --project <project-id>");
+    // Nothing was replaced: the first holder still owns the direction.
+    expect(readRun(db, RUN)).toEqual(held);
+    close();
+  });
+
+  test("a crashed holder is recoverable: the residue still refuses, and --take-run replaces it", async () => {
+    const { db, close } = await openedStore("run-crash-residue");
+    // A run killed inside its provider call leaves its row behind - the exact
+    // failure mode no timer is allowed to resolve on its own.
+    const dead = acquireRun(db, { ...RUN, reason: "issue-sync push" });
+    expect(readRun(db, RUN)).toEqual(dead);
+
+    const refused = errorOf(() => acquireRun(db, { ...RUN, holderPid: 5000, reason: "issue-sync push" }));
+    expect(refused.message).toContain(dead.startedAt);
+    expect(refused.message).toContain("--take-run");
+
+    // The operator confirms the holder is dead and says so explicitly.
+    const taken = acquireRun(db, { ...RUN, holderPid: 5000, holderHost: "builder-2", reason: "operator took the run over with --take-run", takeRun: true });
+    expect(taken.runId).not.toBe(dead.runId);
+    expect(taken).toMatchObject({ holderPid: 5000, holderHost: "builder-2", reason: "operator took the run over with --take-run" });
+    // REPLACED, never coexisting: one row, and it is the taker's.
+    const rows = db.prepare("select run_id from sync_runs where binding_id = ? and direction = ?").all(RUN.bindingId, RUN.direction) as Array<{ run_id: string }>;
+    expect(rows).toEqual([{ run_id: taken.runId }]);
+    expect(readRun(db, RUN)).toEqual(taken);
+    close();
+  });
+
+  test("the taken-over run's own release deletes nothing, so it cannot free its successor", async () => {
+    const { db, close } = await openedStore("run-release-stale");
+    const dead = acquireRun(db, { ...RUN, reason: "issue-sync push" });
+    const taken = acquireRun(db, { ...RUN, holderPid: 5000, reason: "operator took the run over with --take-run", takeRun: true });
+    // The predecessor's `finally` runs late: its token no longer matches.
+    expect(releaseRun(db, { ...RUN, runId: dead.runId })).toBe(false);
+    expect(readRun(db, RUN)).toEqual(taken);
+
+    // The holder's own release does free the direction, and the next run acquires it.
+    expect(releaseRun(db, { ...RUN, runId: taken.runId })).toBe(true);
+    expect(readRun(db, RUN)).toBeNull();
+    const next = acquireRun(db, { ...RUN, holderPid: 6000, holderHost: "builder-3", reason: "issue-sync push" });
+    expect(next.holderPid).toBe(6000);
+    close();
+  });
+
+  test("the lease is per binding and per direction", async () => {
+    const { db, close } = await openedStore("run-scope");
+    acquireRun(db, { ...RUN, reason: "issue-sync push" });
+    // Another binding, and the import direction of the same binding, are free.
+    expect(acquireRun(db, { ...RUN, bindingId: "linear:p-other", reason: "issue-sync push" }).bindingId).toBe("linear:p-other");
+    expect(acquireRun(db, { ...RUN, direction: "import", reason: "issue-sync import" }).direction).toBe("import");
     close();
   });
 });

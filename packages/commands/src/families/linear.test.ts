@@ -1,8 +1,8 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { writeLinearCredential, readLinearCredential } from "@mstar-harness/engine";
+import { clearLinearCredential, writeLinearCredential, readLinearCredential } from "@mstar-harness/engine";
 import { getLinearCommandDefinitions } from "./linear.js";
 import type { InvocationContext } from "../types.js";
 
@@ -40,7 +40,7 @@ describe("mstar linear auth", () => {
     const result = await command.execute({ operation: "status" }, context());
     expect(result.status).toBe("ok");
     const data = dataOf(result);
-    expect(data.authorized).toBe(false);
+    expect(data.display).toBe("absent");
     expect(String(data.credentialPath)).toBe(process.env.MSTAR_LINEAR_CREDENTIAL!);
   });
 
@@ -51,7 +51,7 @@ describe("mstar linear auth", () => {
 
     const status = await command.execute({ operation: "status" }, context());
     const data = dataOf(status);
-    expect(data.authorized).toBe(true);
+    expect(data.display).toBe("authorized");
     expect(data.hasRefreshToken).toBe(true);
   });
 
@@ -85,14 +85,68 @@ describe("mstar linear auth", () => {
     // reachability lint refuses a host-supplied string it cannot evaluate.
     expect(JSON.stringify(result)).toMatch(/mstar linear auth/);
     const status = await command.execute({ operation: "status" }, context());
-    expect(JSON.stringify(status)).toMatch(/"authorized":false/);
+    expect(JSON.stringify(status)).toMatch(/"display":"absent"/);
   });
 
   test("an authorization that did not complete is a refusal, not a stored empty token", async () => {
     const result = await command.execute({ operation: "login" }, context({ linearAuthorize: async () => null }));
     expect(result.code).toBe("linear.auth-denied");
     const status = await command.execute({ operation: "status" }, context());
-    expect(dataOf(status).authorized).toBe(false);
+    expect(dataOf(status).display).toBe("absent");
+  });
+});
+
+describe("the status word comes from the expiry instant", () => {
+  const status = async (): Promise<Record<string, unknown>> =>
+    dataOf(await command.execute({ operation: "status" }, context()));
+
+  test("a credential inside the refresh window is still authorized", async () => {
+    // Inside REFRESH_WINDOW_MS but not yet expired: the token still works.
+    writeLinearCredential({ ...tokens, expiresAt: Date.now() + 60_000 });
+    const data = await status();
+    expect(data.display).toBe("authorized");
+    expect(data.refreshDue).toBe(true);
+  });
+
+  test("no expiry is authorized, not guessed", async () => {
+    writeLinearCredential({ ...tokens, expiresAt: null });
+    const data = await status();
+    expect(data.display).toBe("authorized");
+    expect(data.expiresAt).toBeNull();
+  });
+
+  test("expired with a refresh token stays expired, says refresh is attempted, and promises nothing", async () => {
+    writeLinearCredential({ ...tokens, expiresAt: Date.now() - 60_000 });
+    const data = await status();
+    expect(data.display).toBe("expired");
+    expect(JSON.stringify(data)).not.toContain("revoked");
+    expect(String(data.detail)).toMatch(/refresh/);
+    expect(String(data.detail)).toMatch(/not a guarantee|no guarantee/);
+  });
+
+  test("expired without a refresh token names the command that re-authorizes", async () => {
+    writeLinearCredential({ ...tokens, refreshToken: null, expiresAt: Date.now() - 60_000 });
+    const data = await status();
+    expect(data.display).toBe("expired");
+    expect(JSON.stringify(data)).not.toContain("revoked");
+    expect(String(data.detail)).toContain("mstar linear auth");
+  });
+
+  test("absent and unreadable are their own words, never revoked", async () => {
+    const absent = await status();
+    expect(absent.display).toBe("absent");
+    writeLinearCredential({ ...tokens, expiresAt: Date.now() + 60_000 });
+    writeFileSync(process.env.MSTAR_LINEAR_CREDENTIAL!, "{not json");
+    const unreadable = await status();
+    expect(unreadable.display).toBe("unreadable");
+    expect(JSON.stringify(unreadable)).not.toContain("revoked");
+  });
+
+  test("status carries no access token, refresh token or client id", async () => {
+    writeLinearCredential(tokens);
+    const json = JSON.stringify(await status());
+    for (const secret of [tokens.accessToken, tokens.refreshToken, tokens.clientId]) expect(json).not.toContain(secret);
+    expect(json).not.toMatch(/access_token|refresh_token|client_id/);
   });
 });
 
@@ -113,6 +167,22 @@ describe("an expired credential is refreshed before use", () => {
     const state = readLinearCredential();
     expect(state.kind === "present" && state.credential.accessToken).toBe(fake("renewed"));
     expect(state.kind === "present" && state.credential.refreshToken).toBe(fake("rotated"));
+  });
+
+  test("a sign-out during the refresh round trip is never undone", async () => {
+    const { resolveStoredToken } = await import("./issue-sync.js");
+    writeLinearCredential({ accessToken: fake("expired"), refreshToken: fake("refresh"), expiresAt: Date.now() - 60_000, scope: "read", clientId: fake("client") });
+    const token = await resolveStoredToken(context({
+      linearRefresh: async (_url, clientId) => {
+        // The operator signs out while this refresh waits on the provider.
+        expect(clearLinearCredential()).toBe(true);
+        return { accessToken: fake("renewed"), refreshToken: fake("rotated"), expiresAt: Date.now() + 3_600_000, scope: "read", clientId };
+      },
+    }));
+    // This run still uses the grant it obtained; it must not write a credential
+    // back over the deletion the operator just performed.
+    expect(token).toBe(fake("renewed"));
+    expect(readLinearCredential()).toEqual({ kind: "absent" });
   });
 
   test("a host that cannot refresh refuses with the command to re-run", async () => {
@@ -154,5 +224,41 @@ describe("an expired credential is refreshed before use", () => {
     }));
     expect(token).toBe(fake("live"));
     expect(called).toBe(false);
+  });
+
+  test("a re-auth landing during the refresh round trip is not overwritten by the old lineage", async () => {
+    const { resolveStoredToken } = await import("./issue-sync.js");
+    writeLinearCredential({
+      accessToken: fake("expired"),
+      refreshToken: fake("refresh"),
+      expiresAt: Date.now() - 60_000,
+      scope: "read",
+      clientId: fake("client"),
+    });
+    const reauthorized = {
+      accessToken: fake("fresh-grant"),
+      refreshToken: fake("fresh-refresh"),
+      expiresAt: Date.now() + 7_200_000,
+      scope: "read,write",
+      clientId: fake("client"),
+    };
+    const token = await resolveStoredToken(context({
+      linearRefresh: async () => {
+        // `mstar linear auth` in another process stores a newer grant while
+        // this refresh waits on the provider — a re-authorization, not a logout.
+        const result = await command.execute({ operation: "login" }, context({ linearAuthorize: async () => reauthorized }));
+        expect(result.status).toBe("ok");
+        return { accessToken: fake("stale-lineage"), refreshToken: fake("stale-refresh"), expiresAt: Date.now() + 3_600_000, scope: "read", clientId: fake("client") };
+      },
+    }));
+
+    // This run still uses the token its round trip obtained...
+    expect(token).toBe(fake("stale-lineage"));
+    // ...but the operator's newer grant stays on disk: replacing it would also
+    // restore the older grant's narrower scope through the `?? credential.scope`.
+    const state = readLinearCredential();
+    expect(state.kind === "present" && state.credential.accessToken).toBe(fake("fresh-grant"));
+    expect(state.kind === "present" && state.credential.refreshToken).toBe(fake("fresh-refresh"));
+    expect(state.kind === "present" && state.credential.scope).toBe("read,write");
   });
 });

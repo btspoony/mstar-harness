@@ -49,6 +49,7 @@ import type { HarnessResolver } from './gates/_shared.ts'
 import { readExecutionWorkflowSource, type SessionHint } from './gates/workflow-selection.ts'
 import { readWorkflowSessionBinding, updateWorkflowSessionBinding } from './engine-status-store.ts'
 import {
+  MSTAR_CONTRIBUTING_PACKAGE,
   MSTAR_ENGINE_STATUS_NAMESPACE,
   MSTAR_SELECT_WORKFLOW_METHOD,
 } from './engine-status-wire.ts'
@@ -64,14 +65,18 @@ import {
   mstarMilestoneUpdateInvocation,
   mstarPanelSnapshotInvocation,
 } from './panel/panel-snapshot-endpoint.ts'
+import {
+  mstarLinearAuthorizeBeginInvocation,
+  mstarLinearAuthorizeCancelInvocation,
+  mstarLinearAuthorizeStatusInvocation,
+  mstarLinearStatusInvocation,
+} from './linear-settings.ts'
 
 // The wire address is declared ONCE for both halves (`./engine-status-wire.ts`)
 // and re-exported here for the host-side consumers that already import this
 // module; a rename can therefore never land on one side only.
 export { MSTAR_ENGINE_STATUS_NAMESPACE, MSTAR_SELECT_WORKFLOW_METHOD }
 
-/** The contributing package identity (also the invocation id prefix). */
-const CONTRIBUTING_PACKAGE = '@mstar-harness/dsh'
 /** Logger label for the endpoint's own degradation lines. */
 const ENDPOINT_LOGGER = 'mstar-engine-status-endpoint'
 
@@ -386,13 +391,13 @@ export class MstarEngineStatusGateway extends TypertRemoteService {
  */
 export function mstarEngineStatusContribution(): TypertContribution {
   return {
-    package: CONTRIBUTING_PACKAGE,
+    package: MSTAR_CONTRIBUTING_PACKAGE,
     face: 'host',
     schemas: [],
     model: { services: [], events: [], objects: [] },
     invocations: [
       {
-        id: `${CONTRIBUTING_PACKAGE}#${MSTAR_ENGINE_STATUS_NAMESPACE}/${MSTAR_SELECT_WORKFLOW_METHOD}`,
+        id: `${MSTAR_CONTRIBUTING_PACKAGE}#${MSTAR_ENGINE_STATUS_NAMESPACE}/${MSTAR_SELECT_WORKFLOW_METHOD}`,
         service: MSTAR_ENGINE_STATUS_NAMESPACE,
         namespace: MSTAR_ENGINE_STATUS_NAMESPACE,
         method: MSTAR_SELECT_WORKFLOW_METHOD,
@@ -417,6 +422,13 @@ export function mstarEngineStatusContribution(): TypertContribution {
       mstarMilestoneUpdateInvocation(),
       mstarMilestoneAssignInvocation(),
       mstarMilestoneRemoveInvocation(),
+      // The Linear Settings card: the same one contribution carries its four
+      // root-scope operations — one status read plus the host-owned
+      // authorization attempt.
+      mstarLinearStatusInvocation(),
+      mstarLinearAuthorizeBeginInvocation(),
+      mstarLinearAuthorizeStatusInvocation(),
+      mstarLinearAuthorizeCancelInvocation(),
     ],
   }
 }

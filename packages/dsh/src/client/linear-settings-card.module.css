@@ -1,0 +1,111 @@
+/* The Linear OAuth card inside the host Plugins page's row-configuration
+ * page. Flat, like the official settings forms: the page already draws the
+ * row title/icon, so the card only paces its own state block. Every colour
+ * resolves through a `--dsw-alias-*` token so it follows the host theme. */
+
+.card {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 12px 0;
+  font-size: 13px;
+  line-height: 1.5;
+  color: var(--dsw-alias-label-primary);
+}
+
+.title {
+  margin: 0;
+  font-size: 13px;
+  font-weight: 500;
+}
+
+.body {
+  margin: 0;
+  color: var(--dsw-alias-label-secondary);
+}
+
+.notice {
+  margin: 0;
+  color: var(--dsw-alias-state-warn-label);
+}
+
+.note {
+  margin: 0;
+  font-size: 12px;
+  color: var(--dsw-alias-label-tertiary);
+}
+
+.pill {
+  display: inline-block;
+  padding: 1px 8px;
+  border-radius: var(--dsw-radius-md);
+  font-size: 12px;
+  font-weight: 500;
+}
+
+.ok {
+  color: var(--dsw-alias-state-success-primary);
+  background: var(--dsw-alias-bg-layer-3);
+}
+
+.warn {
+  color: var(--dsw-alias-state-warn-label);
+  background: var(--dsw-alias-bg-layer-3);
+}
+
+.bad {
+  color: var(--dsw-alias-state-error-primary);
+  background: var(--dsw-alias-bg-layer-3);
+}
+
+.metaRow {
+  display: flex;
+  gap: 12px;
+  font-size: 12px;
+}
+
+.metaLabel {
+  min-width: 96px;
+  color: var(--dsw-alias-label-tertiary);
+}
+
+.metaValue {
+  color: var(--dsw-alias-label-primary);
+  word-break: break-all;
+}
+
+.actions {
+  display: flex;
+  gap: 8px;
+  padding-top: 4px;
+}
+
+.button {
+  height: 32px;
+  padding: 0 14px;
+  border: 0.5px solid var(--dsw-alias-brand-primary);
+  border-radius: var(--dsw-radius-md);
+  background: var(--dsw-alias-brand-primary);
+  color: var(--dsw-alias-bg-layer-3);
+  font: inherit;
+  font-size: 13px;
+  cursor: pointer;
+}
+
+.buttonSecondary {
+  height: 32px;
+  padding: 0 14px;
+  border: 0.5px solid var(--dsw-alias-border-l4);
+  border-radius: var(--dsw-radius-md);
+  background: transparent;
+  color: var(--dsw-alias-label-secondary);
+  font: inherit;
+  font-size: 13px;
+  cursor: pointer;
+}
+
+.button:focus-visible,
+.buttonSecondary:focus-visible {
+  outline: 2px solid var(--dsw-alias-brand-primary);
+  outline-offset: 2px;
+}

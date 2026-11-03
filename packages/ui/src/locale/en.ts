@@ -62,6 +62,7 @@ export const en = {
       workflows: "Workflows",
       iterations: "Iterations",
       projects: "Projects",
+      "sync-binding": "Sync binding",
     },
     skipLink: "Skip to content",
     footer: "Read-only · Make changes with the CLI",
@@ -505,6 +506,28 @@ export const en = {
       label: (projectId: string) => `project: ${projectId}`,
       clear: "Clear the project scope",
     },
+  },
+
+  syncBinding: {
+    pageTitle: "Sync binding",
+    subtitle: "repository → Linear workspace, read-only",
+    identityHeading: "Binding identity",
+    identitySource: ".mstarc [linear]",
+    fields: { enabled: "Enabled", mode: "Mode", workspace: "Workspace", team: "Team" },
+    identityNote:
+      "The declared connection identity, never a live listing: this panel does not call Linear to confirm it.",
+    readinessHeading: "Sync readiness",
+    stateLabel: "State",
+    causeLabel: "Cause",
+    readinessNote:
+      "State and cause are one pair. A state never renders without the cause the read supplied, and no cause is invented here.",
+    correspondenceHeading: "Project correspondence",
+    bindingsCount: (n: number) => `${n} ${n === 1 ? "binding" : "bindings"}`,
+    correspondenceNote:
+      "The stored binding rows, verbatim from project_bindings — the operator's remote identifier, not a fetched Linear project title.",
+    bindingErrorLabel: "bindingError",
+    /** The sentence used when a null binding arrives without the reader's message. */
+    bindingAbsent: "No .mstarc at the repo root declares a [linear] section.",
   },
 } as const;
 

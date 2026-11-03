@@ -1,5 +1,13 @@
 import { describe, expect, test } from "bun:test";
-import { beginAuthorization, discoverAuthorizationServer, exchangeCode, refreshToken, registerClient } from "./linear-auth.js";
+import {
+  beginAuthorization,
+  discoverAuthorizationServer,
+  exchangeCode,
+  LINEAR_MCP_SCOPE,
+  linearScopeCanWrite,
+  refreshToken,
+  registerClient,
+} from "./linear-auth.js";
 
 /**
  * Assembled at run time: a literal shaped like issued credential material is
@@ -107,6 +115,53 @@ describe("the callback leg", () => {
   });
 });
 
+describe("the shared scope", () => {
+  test("dynamic client registration requests read and issue creation", async () => {
+    let body: Record<string, unknown> = {};
+    const fetchImpl = (async (_input: RequestInfo | URL, init?: RequestInit) => {
+      body = JSON.parse(String(init?.body)) as Record<string, unknown>;
+      return json({ client_id: "cid" });
+    }) as unknown as typeof fetch;
+    await registerClient(AS, "http://127.0.0.1:1/callback", fetchImpl);
+    expect(body.scope).toBe("read,issues:create");
+    expect(LINEAR_MCP_SCOPE).toBe("read,issues:create");
+  });
+
+  test("the authorization URL a caller opens requests the same scope", async () => {
+    const pending = await beginAuthorization(AS, async (redirectUri) => ({ clientId: "cid", redirectUri }));
+    expect(new URL(pending.url).searchParams.get("scope")).toBe("read,issues:create");
+    pending.close();
+  });
+
+  test("a refreshed credential echoes the ORIGINAL read grant: refresh never widens", async () => {
+    // The documented refresh response repeats the grant it was issued for. The
+    // parser keeps exactly what came back, so a read-only credential refreshed
+    // into a new access token is still read-only — the push preflight reads
+    // this same `scope` fact and refuses.
+    const fetchImpl = (async () => json({ access_token: fake("access"), expires_in: 3600, scope: "read" })) as unknown as typeof fetch;
+    const refreshed = await refreshToken(AS, "cid", fake("refresh"), fetchImpl);
+    expect(refreshed.scope).toBe("read");
+    expect(refreshed.scope).not.toContain("issues:create");
+    expect(refreshed.scope).not.toContain("write");
+    // The one constant both surfaces request is the ONLY place a write scope is
+    // named, and a refresh never reads it.
+    expect(LINEAR_MCP_SCOPE).toBe("read,issues:create");
+  });
+
+  test("a refresh carries no scope and no redirect, so it never widens a grant", async () => {
+    let body: URLSearchParams | null = null;
+    const fetchImpl = (async (_input: RequestInfo | URL, init?: RequestInit) => {
+      body = new URLSearchParams(String(init?.body));
+      return json({ access_token: fake("access"), expires_in: 3600 });
+    }) as unknown as typeof fetch;
+    await refreshToken(AS, "cid", fake("refresh"), fetchImpl);
+    expect(body!.has("scope")).toBe(false);
+    // The authorization request's redirect is the live loopback listener; a
+    // refresh has no callback, so it must not invent one.
+    expect(body!.has("redirect_uri")).toBe(false);
+  });
+});
+
 describe("token exchange and refresh", () => {
   test("an exchange carries the verifier and the registered redirect", async () => {
     let body: URLSearchParams | null = null;
@@ -124,9 +179,31 @@ describe("token exchange and refresh", () => {
 
   test("a rejected refresh names re-authorization, not a bare 401", async () => {
     const fetchImpl = (async () => json({}, 400)) as unknown as typeof fetch;
-    await expect(refreshToken(AS, { clientId: "cid", redirectUri: "http://localhost:1/callback" }, fake("refresh"), fetchImpl)).rejects.toThrow(
+    await expect(refreshToken(AS, "cid", fake("refresh"), fetchImpl)).rejects.toThrow(
       /linear\.reauth-required/,
     );
+  });
+
+  test("a provider 5xx is a retryable attempt failure, not a rejected grant", async () => {
+    // The grant was never judged: sending the operator through consent again
+    // would not help, and the host's bounded retry can.
+    for (const status of [500, 503, 429, 408]) {
+      const fetchImpl = (async () => json({}, status)) as unknown as typeof fetch;
+      await expect(refreshToken(AS, "cid", fake("refresh"), fetchImpl)).rejects.toThrow(
+        /linear\.auth-unavailable/,
+      );
+    }
+  });
+
+  test("push capability is read from the grant's own scope", () => {
+    // The scope Linear documents for creating AND updating issues, plus the
+    // broader scope an operator may already hold.
+    expect(linearScopeCanWrite(LINEAR_MCP_SCOPE)).toBe(true);
+    expect(linearScopeCanWrite("read write")).toBe(true);
+    // Read-only and unknown grants are never assumed push-capable.
+    expect(linearScopeCanWrite("read")).toBe(false);
+    expect(linearScopeCanWrite("read admin")).toBe(false);
+    expect(linearScopeCanWrite(null)).toBe(false);
   });
 
   test("a token response without an access_token is refused", async () => {

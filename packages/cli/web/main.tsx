@@ -102,7 +102,6 @@ import {
   type WorkflowsOutcome,
 } from "./workflows-data";
 import {
-  LIST_DESTINATIONS,
   detailReturnTarget,
   escapeTarget,
   initialAddress,
@@ -113,7 +112,15 @@ import {
   type Address,
   type Route,
 } from "./route";
-import { navItemFor, scopedIssuesTarget, shellChrome, skipToMain } from "./shell-chrome";
+import {
+  isNavDestination,
+  navItemFor,
+  navRoute,
+  scopedIssuesTarget,
+  shellChrome,
+  skipToMain,
+} from "./shell-chrome";
+import { syncBindingDestination } from "./sync-binding-destination";
 
 /**
  * Push a destination, or replace the current entry when only the filters changed.
@@ -911,7 +918,9 @@ function Shell(props: {
           activeId={activeId}
           onSelect={(id) => {
             // A destination change is a push: Back returns to where the reader was.
-            navigate({ name: id as (typeof LIST_DESTINATIONS)[number] }, "", "push");
+            // `Nav` is shared with the dsh host and hands back a plain string; an id
+            // outside this host's table has no route here.
+            if (isNavDestination(id)) navigate(navRoute(id), "", "push");
           }}
           label={copy.shell.nav.primary}
         />
@@ -978,6 +987,7 @@ function Shell(props: {
           <IterationDetailDestination id={address.route.id} address={address} />
         ) : null}
         {address.route.name === "projects" ? <ProjectsDestination outcome={projects} /> : null}
+        {syncBindingDestination(address.route)}
         {address.route.name === "project" ? (
           <ProjectDetailDestination
             address={address}

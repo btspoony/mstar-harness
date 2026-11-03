@@ -22,6 +22,13 @@ describe("every destination in the table", () => {
     expect(parseRoute("#projects").route).toEqual({ name: "projects" });
   });
 
+  test("the binding panel is an addressable destination", () => {
+    // The regression: the screen and its copy shipped with no route, so nothing
+    // could reach it and `#sync-binding` fell through to the landing page.
+    expect(parseRoute("#sync-binding").route).toEqual({ name: "sync-binding" });
+    expect(routeHash({ name: "sync-binding" })).toBe("#sync-binding");
+  });
+
   test("details keep a singular resource segment and an id", () => {
     expect(parseRoute("#issue/I-000870").route).toEqual({ name: "issue", id: "I-000870" });
     expect(parseRoute("#workflow/issue-project-move").route).toEqual({ name: "workflow", id: "issue-project-move" });

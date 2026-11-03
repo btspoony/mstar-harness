@@ -733,33 +733,45 @@ export type {
   ProviderItem,
   ProviderItemFailure,
   ProviderPage,
+  ProviderWrite,
+  ProviderWritePayload,
+  ProviderWriteReceipt,
 } from "./issue-sync/provider.js";
 export { PROBE_STATES } from "./issue-sync/provider.js";
 // Sync ledger (migration 15): the per-item state machine and its read path.
 // Every mutation owns its transaction; a caller composes the verbs sequentially.
 export type {
+  AcquireRunInput,
   CursorInput,
   LedgerSummary,
   MarkFailedInput,
   MarkItemInput,
   MarkSkippedInput,
+  MarkUnconfirmedInput,
   PlanItemInput,
   ReadItemInput,
   SyncDirection,
   SyncErrorCode,
+  RunLease,
   SyncItem,
   SyncItemState,
   WriteCursorInput,
 } from "./issue-sync.js";
 export {
   SyncError,
+  acquireRun,
+  claimItem,
   markApplied,
   markFailed,
   markSkipped,
+  markUnconfirmed,
   planItem,
   readCursor,
   readItem,
   readLedgerSummary,
+  readRun,
+  recordRefusal,
+  releaseRun,
   replanItem,
   resetCursor,
   writeCursor,
@@ -770,14 +782,46 @@ export type { ImportPageResult } from "./issue-sync/import.js";
 // Linear MCP adapter: the host-neutral read-only handshake and listing
 // implementation of the provider contract. Moved here from a single host so any
 // host (CLI, dsh, omp) can wire it rather than each writing its own.
-export type { LinearMcpEntry, LinearProbeDeps, RpcOutcome } from "./issue-sync/linear-probe.js";
+export type { LinearMcpEntry, LinearProbeDeps, RpcOutcome, ToolArguments } from "./issue-sync/linear-probe.js";
 export { createLinearProbe, DEFAULT_PROBE_DEADLINE_MS, listingVerbIn, redactTransportMessage } from "./issue-sync/linear-probe.js";
 export type { LinearAdapterEntry, LinearCallOutcome, LinearListDeps, LinearListSide } from "./issue-sync/linear-adapter.js";
 export { createLinearAdapter, LINEAR_PAGE_SIZE } from "./issue-sync/linear-adapter.js";
 // Provider assembly + streamable-HTTP transport: what makes the import runnable
 // without a host wiring the probe and the adapter together.
 export type { LinearProviderOptions, LinearTransportOptions } from "./issue-sync/linear-provider.js";
-export { createLinearProvider, LINEAR_LISTING_VERBS } from "./issue-sync/linear-provider.js";
+export {
+  createLinearProvider,
+  LINEAR_LABEL_VERBS,
+  LINEAR_LISTING_VERBS,
+  LINEAR_STATE_VERBS,
+  LINEAR_WRITE_VERBS,
+} from "./issue-sync/linear-provider.js";
+// Write side of the Linear adapter: the save verb, the strict fixture envelope
+// and the workspace label discovery the push direction resolves labels against.
+export type { LinearWriteDeps, LinearWriteSide } from "./issue-sync/linear-write.js";
+export { createLinearWrite } from "./issue-sync/linear-write.js";
+// One-way push (M1): candidates, the payload hash, the ledger protocol and
+// ambiguous-create recovery by correlation marker.
+export type {
+  PushBinding,
+  PushCandidate,
+  PushContext,
+  PushOutcome,
+  PushOutcomeKind,
+  ReconcileReport,
+} from "./issue-sync/push.js";
+export {
+  PUSH_DIRECTION,
+  adoptItem,
+  assertReleaseTargets,
+  correlationMarker,
+  externalIdOf,
+  identityConflict,
+  pushItem,
+  reconcilePendingCreate,
+  requestHash,
+  selectPushCandidates,
+} from "./issue-sync/push.js";
 export { linearCall, linearRpc } from "./issue-sync/linear-transport.js";
 
 export {
@@ -973,6 +1017,9 @@ export type {
   RoadmapDTO,
   StoreReadErrorCode,
   StoreReadQuery,
+  SyncBindingDTO,
+  SyncBindingProject,
+  SyncBindingReadiness,
   WorkflowDTO,
   WorkflowListDTO,
   WorkflowPlanDTO,
@@ -1171,8 +1218,27 @@ export {
 export type { LinearCredential, LinearCredentialState } from "./linear-credential.js";
 export {
   clearLinearCredential,
+  commitLinearCredential,
   linearCredentialPath,
   readLinearCredential,
   REFRESH_WINDOW_MS,
+  supersededBy,
   writeLinearCredential,
 } from "./linear-credential.js";
+
+// The one OAuth flow: discovery, dynamic registration, PKCE, the code exchange
+// and refresh. The CLI's login and the dsh Settings Authorize both call this,
+// so there is never a second implementation to drift. `LINEAR_MCP_SCOPE` is the
+// single constant both surfaces request.
+export type { AuthorizationServer, PendingAuthorization, RegisteredClient, TokenSet } from "./linear-auth.js";
+export {
+  beginAuthorization,
+  createPkce,
+  discoverAuthorizationServer,
+  exchangeCode,
+  LINEAR_MCP_SCOPE,
+  LINEAR_MCP_URL,
+  linearScopeCanWrite,
+  refreshToken,
+  registerClient,
+} from "./linear-auth.js";

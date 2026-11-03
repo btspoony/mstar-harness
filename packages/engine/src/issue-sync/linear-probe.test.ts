@@ -111,6 +111,59 @@ describe("createLinearProbe", () => {
     expect(result.cause).toContain("timed out after 20ms");
   });
 
+  test("I-000950: the deadline ABORTS the in-flight call instead of only abandoning it", async () => {
+    let injected: AbortSignal | undefined;
+    const hang: LinearProbeDeps = {
+      findLinearEntry: () => ENTRY,
+      listingVerbs: LISTING_VERBS,
+      deadlineMs: 20,
+      rpc: (_entry, _method, signal) => {
+        injected = signal;
+        return new Promise<RpcOutcome>(() => {});
+      },
+    };
+    const result = await createLinearProbe(hang).probe();
+    expect(injected).toBeInstanceOf(AbortSignal);
+    expect(injected?.aborted).toBe(true);
+    expect(result.state).toBe("unreachable");
+    expect(result.cause).toBe("unreachable: Linear MCP handshake timed out after 20ms");
+  });
+
+  test("I-000950: the abort covers the second handshake call too", async () => {
+    const signals: AbortSignal[] = [];
+    let call = 0;
+    const d: LinearProbeDeps = {
+      findLinearEntry: () => ENTRY,
+      listingVerbs: LISTING_VERBS,
+      deadlineMs: 20,
+      rpc: (_entry, _method, signal) => {
+        call += 1;
+        if (signal !== undefined) signals.push(signal);
+        return call === 1 ? Promise.resolve(OK_INIT) : new Promise<RpcOutcome>(() => {});
+      },
+    };
+    await createLinearProbe(d).probe();
+    expect(signals).toHaveLength(2);
+    expect(signals[0]?.aborted).toBe(false);
+    expect(signals[1]?.aborted).toBe(true);
+  });
+
+  test("I-000950: a transport that rejects because of the abort still yields the timeout cause", async () => {
+    const d: LinearProbeDeps = {
+      findLinearEntry: () => ENTRY,
+      listingVerbs: LISTING_VERBS,
+      deadlineMs: 20,
+      rpc: (_entry, _method, signal) => {
+        const { promise, reject } = Promise.withResolvers<RpcOutcome>();
+        signal?.addEventListener("abort", () => reject(new Error("The operation was aborted.")));
+        return promise;
+      },
+    };
+    const result = await createLinearProbe(d).probe();
+    expect(result.state).toBe("unreachable");
+    expect(result.cause).toBe("unreachable: Linear MCP handshake timed out after 20ms");
+  });
+
   test("F2: a credential in the transport message is redacted out of the cause", async () => {
     const leaky = `request failed: Authorization: Bearer ${FAKE_KEY} headers accepted, token=supersecretvalue`;
     const d = deps([{ kind: "transport-error", message: leaky }]);

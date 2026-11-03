@@ -67,7 +67,7 @@ export const FAMILY_PURPOSE: Readonly<Record<string, string>> = {
   issue: "Issue store: capture, triage, closure and links.",
   milestone: "Project milestones: add, update, assign issues and read rollups.",
   project: "Project-to-provider correspondence: bind a store project to the external project it mirrors, and read it back.",
-  "issue-sync": "Import the bound external project's issues into this store, read-only toward the provider; a second run with unchanged remote state imports nothing.",
+  "issue-sync": "Import the bound external project's issues into this store, and push local issues out to it; import is read-only toward the provider, push records only confirmed writes and reconciles an unconfirmed create by correlation marker.",
   catalog: "Catalog rows: discover, import, register, link, reconcile and purge.",
   roadmap: "Project roadmap: reviewed Markdown import, export and replace.",
   store: "Execution store: init, upgrade, migrate, backup, restore and export.",

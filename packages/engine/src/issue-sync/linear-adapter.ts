@@ -106,16 +106,25 @@ export function createLinearAdapter(deps: LinearListDeps): LinearListSide {
       const listed = deps.listedVerbs();
       const tool = listingVerbIn(listed ?? undefined, deps.listingVerbs);
       if (tool === null) {
+        // I-000949: "this host has no usable service" and "this service exposes
+        // no listing verb" need different operator actions, so they never share
+        // a code. An absent handshake is a host-side gap, resolved in the host's
+        // MCP configuration; a completed handshake without the verb is a
+        // capability the host cannot provide at all.
+        if (listed === null) {
+          throw new SyncError(
+            "linear.host-unavailable",
+            `this host has not completed the Linear handshake, so the listing verb is unknown (candidates: ${deps.listingVerbs.join(", ")})`,
+          );
+        }
         throw new SyncError(
           "linear.list-unimplemented",
-          listed === null
-            ? `this host has not completed the Linear handshake, so the listing verb is unknown (candidates: ${deps.listingVerbs.join(", ")})`
-            : `the Linear handshake listed none of ${deps.listingVerbs.join(", ")}, so no page can be requested`,
+          `the Linear handshake listed none of ${deps.listingVerbs.join(", ")}, so no page can be requested`,
         );
       }
       const entry = deps.findLinearEntry();
       if (entry === null) {
-        throw new SyncError("linear.query-failed", "no Linear MCP entry is configured for this host; nothing was listed");
+        throw new SyncError("linear.host-unavailable", "no Linear MCP entry is configured for this host; nothing was listed");
       }
       const scope = deps.scope ?? {};
       const outcome = await deps.call(entry, {
@@ -150,7 +159,8 @@ export function createLinearAdapter(deps: LinearListDeps): LinearListSide {
 
 type Payload = Record<string, unknown>;
 
-function isRecord(value: unknown): value is Payload {
+/** The package's one record guard; the write side imports it rather than repeating it. */
+export function isRecord(value: unknown): value is Payload {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
@@ -289,13 +299,13 @@ function nextCursorOf(payload: Payload): string | null {
   return cursor;
 }
 
-/** A missing required field is a page failure: no field is invented. */
+/** A missing required field fails THAT item: no field is invented. */
 function required(item: Payload, field: string, index: number): string {
   const value = item[field];
   if (typeof value !== "string" || value.trim() === "") {
     throw new SyncError(
       "linear.query-failed",
-      `issue at page index ${index} has no usable "${field}"; the page was refused rather than ingested with a guessed value`,
+      `issue at page index ${index} has no usable "${field}"; that issue was reported as stranded and the rest of the page was ingested`,
     );
   }
   return value;
@@ -328,12 +338,12 @@ function labelsOf(item: Payload): string[] {
   const labels = item.labels;
   if (labels === undefined || labels === null) return [];
   if (!Array.isArray(labels)) {
-    throw new SyncError("linear.query-failed", "an issue carried a non-array `labels` field; the page was refused");
+    throw new SyncError("linear.query-failed", "an issue carried a non-array `labels` field; that issue was reported as stranded");
   }
   return labels.map((label) => {
     if (typeof label === "string") return label;
     if (isRecord(label) && typeof label.name === "string") return label.name;
-    throw new SyncError("linear.query-failed", "an issue carried an unusable label entry; the page was refused");
+    throw new SyncError("linear.query-failed", "an issue carried an unusable label entry; that issue was reported as stranded");
   });
 }
 
@@ -351,7 +361,7 @@ function stateOf(item: Payload): string {
 
 function mapItem(entry: unknown, index: number): ProviderItem {
   if (!isRecord(entry)) {
-    throw new SyncError("linear.query-failed", `issue at page index ${index} is not an object; the page was refused`);
+    throw new SyncError("linear.query-failed", `issue at page index ${index} is not an object; that issue was reported as stranded`);
   }
   // Linear lists the human key as `identifier` and the API id as `id`; the
   // identifier is stable across runs and is what the ledger keys on.

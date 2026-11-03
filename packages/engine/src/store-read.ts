@@ -133,12 +133,24 @@ export type SyncBindingReadiness = {
   cause: string;
 };
 
+/** One stored correspondence row (`project_bindings`, migration 15) as the panel shows it. */
+export type SyncBindingProject = { projectId: string; remoteProject: string };
+
 /** The read-only binding DTO: connection summary + readiness with its cause. */
 export type SyncBindingDTO = {
   /** The `[linear]` summary, or `null` when no section is declared. */
   binding: { enabled: boolean; mode: string; workspace: string; team: string } | null;
   /** The `parseLinearBinding` refusal message when the section is invalid. */
   bindingError: string | null;
+  /** The stored `project_id` → `remote_project` correspondence, read-only. */
+  projectBindings: SyncBindingProject[];
+  /**
+   * The read's own failure when `project_bindings` could not be read, or `null`
+   * when it could. A store that cannot answer is not a store with no rows: the
+   * panel renders `unavailable` with this message rather than claiming the
+   * correspondence is empty.
+   */
+  projectBindingsError: string | null;
   readiness: SyncBindingReadiness;
 };
 
@@ -688,12 +700,13 @@ export function queryIssueFlow(projectId?: string): StoreReadQuery<IssueFlow> {
 }
 
 /**
- * The `sync-binding` view (contract §6): the `.mstarc` `[linear]` summary plus
- * the readiness state with its cause. Assembled at query-build time from the
- * config file and the host-supplied probe filters — the run reads no store
- * rows and opens no file, so the view stays read-only end to end. Readiness is
- * never guessed: with no host-supplied probe result it is honestly
- * `not-probed`.
+ * The `sync-binding` view (contract §6): the `.mstarc` `[linear]` summary, the
+ * store's read-only `project_bindings` correspondence, and the readiness state
+ * with its cause. The summary and readiness are assembled at query-build time
+ * from the config file and the host-supplied probe filters; the run reads only
+ * the correspondence rows and writes nothing, so the view stays read-only end
+ * to end. Readiness is never guessed: with no host-supplied probe result it is
+ * honestly `not-probed`.
  */
 /**
  * The parent directory counts as the declaring repository ONLY when it actually
@@ -707,15 +720,43 @@ function parentThatDeclares(harnessDir: string): string | null {
   return existsSync(join(parent, MSTARC_FILE)) ? parent : null;
 }
 
+/**
+ * The stored correspondence rows, or the read's own failure.
+ *
+ * A store that cannot answer (it predates migration 15, so there is no
+ * `project_bindings` table, or the database refuses the read) has NOT answered
+ * "there are no rows", and the two must not render alike. The `.mstarc` summary
+ * answers regardless; the failure travels beside the rows in
+ * `projectBindingsError` so the panel can render `unavailable` with the
+ * reader's reason instead of `empty`. `project_bindings` is never written.
+ */
+function readSyncBindingProjects(handle: StoreHandle): {
+  rows: SyncBindingProject[];
+  error: string | null;
+} {
+  try {
+    const rows = handle.db
+      .prepare("select project_id, remote_project from project_bindings order by project_id")
+      .all() as Array<{ project_id: string; remote_project: string }>;
+    return { rows: rows.map((row) => ({ projectId: row.project_id, remoteProject: row.remote_project })), error: null };
+  } catch (cause) {
+    return {
+      rows: [],
+      error: `sync-binding.correspondence-unreadable: ${cause instanceof Error ? cause.message : String(cause)}`,
+    };
+  }
+}
+
 export function querySyncBinding(harnessDir: string, filters: DashboardFilters): StoreReadQuery<SyncBindingDTO> {
   // The repo's own `.mstarc` is the authority — a parent directory's
-  // configuration never becomes this repo's connection identity (F4).
-  // The reader takes the repository root; this query is given the harness
-  // directory. When the path is inside a checkout the root is the answer; when
-  // it is not, there is no repository to name and the harness directory itself
-  // is used — NOT its parent, which for `harness_dir = /var/mstar/state` would
-  // silently read `/var/mstar` and, if that happened to hold a `.mstarc`,
-  // another repository's settings.
+  // configuration never becomes this repo's connection identity (F4). The reader
+  // takes the repository root; this query is given the harness directory, so the
+  // order is: a checkout root above it, then a parent that itself DECLARES a
+  // `.mstarc` (`<repo>/.mstar` is the normal layout), then the harness directory.
+  // That last fallback is why `parentThatDeclares` tests for the file: for
+  // `harness_dir = /var/mstar/state`, `/var/mstar` is used only if it really
+  // holds its own `.mstarc`; a bare parent is never substituted, which is how
+  // another repository's settings would get read.
   const repo: RepoLinearBinding = readRepoLinearBinding(
     resolveRepoRoot(harnessDir) ?? parentThatDeclares(harnessDir) ?? resolve(harnessDir),
   );
@@ -731,7 +772,20 @@ export function querySyncBinding(harnessDir: string, filters: DashboardFilters):
     filters.probeState === undefined
       ? { state: "not-probed", cause: "not-probed: readiness is host-owned; no probe result was supplied" }
       : { state: filters.probeState, cause: filters.probeCause as string };
-  return { view: "sync-binding", needsProjection: false, run: () => ({ binding, bindingError, readiness }) };
+  return {
+    view: "sync-binding",
+    needsProjection: false,
+    run: (handle) => {
+      const correspondence = readSyncBindingProjects(handle);
+      return {
+        binding,
+        bindingError,
+        projectBindings: correspondence.rows,
+        projectBindingsError: correspondence.error,
+        readiness,
+      };
+    },
+  };
 }
 
 function dashboardView(view: DashboardView, handle: StoreHandle, filters: DashboardFilters): unknown {

@@ -18,8 +18,6 @@ import {
   captureIssueOn,
   computeIdentityKey,
   type CaptureInput,
-  type IssueKind,
-  type Severity,
 } from "../issue.js";
 import type { LinearFacetMapping } from "../mstarc.js";
 import {
@@ -34,6 +32,7 @@ import {
   type SyncDirection,
 } from "../issue-sync.js";
 import type { StoreDb } from "../store-db.js";
+import { kindOfItem, severityOfPriority } from "./field-mapping.js";
 import type { ProviderItem } from "./provider.js";
 
 /**
@@ -147,7 +146,7 @@ export function importPage(
         });
       }
       // `pending` needs no transition: a previous run already opened this cycle.
-      mirrorRemoteFields(db, localId, externalId, item);
+      const wrote = mirrorRemoteFields(db, localId, externalId, item);
       // Fields are copied FIRST; the watermark rides the applied commit, so a
       // crash between the two leaves a pending row on the old revision instead
       // of a newer timestamp over stale content.
@@ -158,7 +157,12 @@ export function importPage(
         remoteUpdatedAt: item.updatedAt,
         operationId: operationId(bindingId, item, "applied"),
       });
-      result.updated++;
+      // I-000946: a newer remote revision that changed nothing the row reflects
+      // (a `state` edit, say) leaves the row untouched, so the counter says
+      // `skipped` — while the watermark above still advances past the revision
+      // the run has now seen.
+      if (wrote) result.updated++;
+      else result.skipped++;
     } catch (error) {
       result.failed++;
       if (localId !== undefined) recordFailure(db, bindingId, localId, error);
@@ -293,6 +297,8 @@ function captureImportedIssue(db: StoreDb, projectId: string, item: ProviderItem
  * Mirror the remote fields the local row reflects (title, description, link).
  * Writes only when something differs, so a resumed run is a no-op rather than a
  * second `updated_at` bump; the row's `revision` advances with a real change.
+ * Returns whether it wrote, so the caller counts `skipped` when a newer remote
+ * revision changed nothing the row reflects (I-000946).
  *
  * Receipt decision (QC F11): this is a raw-SQL field mirror with no
  * `store_operations` receipt of its own, and its RECEIPT IS THE SURROUNDING
@@ -302,8 +308,9 @@ function captureImportedIssue(db: StoreDb, projectId: string, item: ProviderItem
  * keyed by `(bindingId, localId, updatedAt)`: that operation id is what a resumed
  * run replays, and it is written after the mirror in the same item cycle.
  */
-function mirrorRemoteFields(db: StoreDb, localId: string, externalId: string, item: ProviderItem): void {
+function mirrorRemoteFields(db: StoreDb, localId: string, externalId: string, item: ProviderItem): boolean {
   const description = impactOf(item);
+  let wrote = false;
   db.exec("begin immediate");
   try {
     const row = db
@@ -320,6 +327,7 @@ function mirrorRemoteFields(db: StoreDb, localId: string, externalId: string, it
         new Date().toISOString(),
         localId,
       );
+      wrote = true;
     }
     db.exec("commit");
   } catch (error) {
@@ -333,6 +341,7 @@ function mirrorRemoteFields(db: StoreDb, localId: string, externalId: string, it
   // `externalId` is the ledger's own key; the row's copy is written at capture
   // time, so a mirror never re-points it.
   void externalId;
+  return wrote;
 }
 
 /** Best-effort: record the failure on a pending row so the next run retries it. */
@@ -363,38 +372,14 @@ function impactOf(item: ProviderItem): string {
   return description === "" ? item.title : description;
 }
 
-/**
- * Apply one `[linear.mapping]` facet. The override is keyed by the value the
- * default mapping produced, so an operator can retarget a facet without
- * restating the whole correspondence; an unmapped value passes through.
- */
-function facet<T extends string>(
-  overrides: Record<string, string> | undefined,
-  value: T,
-  allowed: readonly T[],
-): T {
-  const mapped = overrides?.[value];
-  if (mapped === undefined || mapped.trim() === "") return value;
-  // A correspondence that targets a value the local enum does not have is
-  // refused by name: storing it would fail validation later with a message that
-  // no longer points at the .mstarc line that caused it.
-  if (!allowed.includes(mapped as T)) {
-    throw new SyncError(
-      "sync.invalid-input",
-      `[linear.mapping] maps ${JSON.stringify(value)} to ${JSON.stringify(mapped)}, which is not a recognised value`,
-    );
-  }
-  return mapped as T;
-}
-
 function captureInput(projectId: string, item: ProviderItem, mapping?: LinearFacetMapping): CaptureInput {
   const externalId = requireField(item.externalId, "externalId");
   const identity = sourceIdentity(externalId);
   return {
     projectId,
     title: requireField(item.title, "title"),
-    kind: facet(mapping?.kind, kindOf(item), KIND_VALUES),
-    severity: facet(mapping?.severity, severityOf(item.priority), SEVERITY_VALUES),
+    kind: kindOfItem(item, mapping),
+    severity: severityOfPriority(item.priority, mapping),
     impact: impactOf(item),
     acceptance: `Mirror of Linear issue ${externalId}; the remote item owns its own acceptance.`,
     sourceIdentity: identity,
@@ -407,44 +392,4 @@ function captureInput(projectId: string, item: ProviderItem, mapping?: LinearFac
     evidence: [item.url],
     discoveredAt: item.updatedAt,
   };
-}
-
-const KIND_VALUES: readonly IssueKind[] = ["bug", "risk", "improvement", "request", "decision", "review-obligation"];
-const SEVERITY_VALUES: readonly Severity[] = ["critical", "high", "medium", "low", "nit"];
-
-/**
- * Compass D4's default correspondence: a label naming a local kind selects it,
- * otherwise the lossy fallback `request` (a remote item carries no local kind
- * of its own; the `[linear.mapping]` override is the supported way to change it).
- */
-function kindOf(item: ProviderItem): IssueKind {
-  for (const label of item.labels ?? []) {
-    const candidate = label.trim().toLowerCase();
-    const match = KIND_VALUES.find((kind) => kind === candidate);
-    if (match !== undefined) return match;
-  }
-  return "request";
-}
-
-/**
- * Compass D4's fixed lossy `priority → severity` mapping. The local enum has no
- * "unset", so a missing or unrecognised priority lands on the neutral `medium`.
- */
-function severityOf(priority: string | null): Severity {
-  switch ((priority ?? "").trim().toLowerCase()) {
-    case "urgent":
-    case "1":
-      return "critical";
-    case "high":
-    case "2":
-      return "high";
-    case "low":
-    case "4":
-      return "low";
-    case "medium":
-    case "normal":
-    case "3":
-    default:
-      return "medium";
-  }
 }

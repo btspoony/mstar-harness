@@ -216,6 +216,23 @@ describe("page failures (never an empty page)", () => {
     expect(page.failures?.[0]?.cause).toContain("updatedAt");
   });
 
+  test("a title-less item fails that item alone and the page still maps the rest (I-000948)", async () => {
+    // A missing required field can never be fixed by retrying the same page, so
+    // it fails its OWN index instead of refusing the whole page.
+    const d = deps([
+      {
+        kind: "ok",
+        payload: { issues: [issue("LIN-1"), issue("LIN-2", { title: undefined }), issue("LIN-3")], hasNextPage: true, cursor: "c-2" },
+      },
+    ]);
+    const page = await createLinearAdapter(d).listIssues(null);
+    expect(page.items.map((item) => item.externalId)).toEqual(["LIN-1", "LIN-3"]);
+    expect(page.nextCursor).toBe("c-2");
+    expect(page.failures).toHaveLength(1);
+    expect(page.failures?.[0]).toMatchObject({ index: 1, externalId: "LIN-2" });
+    expect(page.failures?.[0]?.cause).toContain("title");
+  });
+
   test("a poisoned item with no identity is still reported by index", async () => {
     const d = deps([{ kind: "ok", payload: { issues: ["not-an-object", issue("LIN-2")] } }]);
     const page = await createLinearAdapter(d).listIssues(null);
@@ -232,16 +249,26 @@ describe("page failures (never an empty page)", () => {
     );
   });
 
-  test("no configured entry or no listing verb refuses, never lists", async () => {
-    expect(
-      await codeOf(() => createLinearAdapter(deps([], { findLinearEntry: () => null })).listIssues(null)),
-    ).toBe("linear.query-failed");
-    expect(await codeOf(() => createLinearAdapter(deps([], { listingVerbs: [], listedVerbs: () => [] })).listIssues(null))).toBe(
-      "linear.list-unimplemented",
+  test("an absent handshake and a handshake without the verb are different codes", async () => {
+    // "this host has no usable service" and "this service exposes no listing
+    // verb" are different operator conditions: the first is fixed in the host's
+    // MCP configuration, the second needs a different adapter. One code for both
+    // (I-000949) sent the operator to the wrong recovery.
+    const notHandshaked = await codeOf(() =>
+      createLinearAdapter(deps([], { listedVerbs: () => null })).listIssues(null),
     );
-    expect(await codeOf(() => createLinearAdapter(deps([], { listedVerbs: () => null })).listIssues(null))).toBe(
-      "linear.list-unimplemented",
+    const listedWithoutTheVerb = await codeOf(() =>
+      createLinearAdapter(deps([], { listingVerbs: [], listedVerbs: () => [] })).listIssues(null),
     );
+    expect(notHandshaked).toBe("linear.host-unavailable");
+    expect(listedWithoutTheVerb).toBe("linear.list-unimplemented");
+    expect(notHandshaked).not.toBe(listedWithoutTheVerb);
+  });
+
+  test("no configured entry refuses linear.host-unavailable, not a page failure", async () => {
+    const d = deps([], { findLinearEntry: () => null });
+    expect(await codeOf(() => createLinearAdapter(d).listIssues(null))).toBe("linear.host-unavailable");
+    expect(d.requests).toEqual([]);
   });
 });
 

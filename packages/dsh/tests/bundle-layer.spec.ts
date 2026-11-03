@@ -18,26 +18,11 @@ import { spawn } from 'node:child_process'
 import { existsSync, mkdtempSync, readFileSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { load } from 'js-yaml'
 import * as plugin from '../src/index.ts'
+import { readBundlePatch, type EntryRow, type PatchOp } from './bundle-patch.ts'
 
 /** Package root of `@mstar-harness/dsh` (the bundle package). */
 const PKG_DIR = join(import.meta.dir, '..')
-
-/** Row shape of a cordis entry list (the dsh-bundle patch row contract). */
-interface EntryRow {
-  id?: string
-  name?: string
-  config?: unknown
-  disabled?: boolean | null
-}
-
-/** One patch op: `- insert:` lists or an id-targeted override. */
-interface PatchOp {
-  id?: string
-  insert?: EntryRow[]
-  config?: unknown
-}
 
 /**
  * Minimal mirror of the include patch semantics the dsh profile loader
@@ -66,13 +51,15 @@ function applyPatch(entries: EntryRow[], patches: PatchOp[]): EntryRow[] {
 const patchPath = (pkg: { dsh?: { bundle?: { patch?: string } } }): string =>
   join(PKG_DIR, pkg.dsh?.bundle?.patch ?? '')
 
-/** Parse the shipped `bundle/cordis.patch.yml` as a patch-op list. */
+/**
+ * Parse the shipped `bundle/cordis.patch.yml` as a patch-op list, in the
+ * loader's `!!js` dialect (`bundle-patch.ts` — the one parse contract for
+ * every test that reads this file).
+ */
 function loadBundlePatch(): PatchOp[] {
   const pkg = JSON.parse(readFileSync(join(PKG_DIR, 'package.json'), 'utf8'))
   expect(pkg.dsh?.bundle?.patch).toBe('./bundle/cordis.patch.yml')
-  const parsed = load(readFileSync(patchPath(pkg), 'utf8'))
-  expect(Array.isArray(parsed)).toBe(true)
-  return parsed as PatchOp[]
+  return readBundlePatch()
 }
 
 /** The `mstar` plugin row and the `mstar-mcp` MCP client row the bundle inserts. */
@@ -143,6 +130,11 @@ describe('profile bundle layer (Task 4)', () => {
     expect(linearConfig.serverName).toBe('linear')
     expect(linearConfig.transport).toBe('streamable-http')
     expect(String(linearConfig.url)).toBe('https://mcp.linear.app/mcp')
+    // The row consumes the machine credential through the mstar service: the
+    // row injects it, and `headers` stays the loader expression — never a
+    // literal bearer in the shipped config.
+    expect(linear?.inject).toEqual(['mstarLinearAuth'])
+    expect(linearConfig.headers).toEqual({ __jsExpr: 'ctx.mstarLinearAuth.authorizationHeaders()' })
     // The plugin never declares the client as its own dependency: it mounts no
     // MCP instance, the Loader mounts the row.
     expect(pkg.dependencies?.['@deepseek-ai/dsh-mcp-client']).toBeUndefined()

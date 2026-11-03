@@ -49,6 +49,7 @@ export const zh: Copy = {
       workflows: "工作流",
       iterations: "迭代",
       projects: "项目",
+      "sync-binding": "同步绑定",
     },
     skipLink: "跳到主要内容",
     footer: "只读 · 请通过 CLI 进行修改",
@@ -475,5 +476,24 @@ export const zh: Copy = {
       label: (projectId) => `项目：${projectId}`,
       clear: "清除项目范围",
     },
+  },
+
+  syncBinding: {
+    pageTitle: "同步绑定",
+    subtitle: "本仓库 → Linear 工作区，只读",
+    identityHeading: "绑定身份",
+    identitySource: ".mstarc [linear]",
+    fields: { enabled: "已启用", mode: "模式", workspace: "工作区", team: "团队" },
+    identityNote: "这里显示的是声明的连接身份，不是实时列举结果：面板不会调用 Linear 去确认它。",
+    readinessHeading: "同步就绪状态",
+    stateLabel: "状态",
+    causeLabel: "原因",
+    readinessNote: "状态与原因是一对。缺少读取给出的原因时状态不单独渲染，此处也绝不臆造原因。",
+    correspondenceHeading: "项目对应关系",
+    bindingsCount: (n) => `${n} 条绑定`,
+    correspondenceNote: "直接来自 project_bindings 的绑定行 —— 操作者写入的远端标识，不是抓取来的 Linear 项目标题。",
+    bindingErrorLabel: "bindingError",
+    /** 空绑定的读取未附带消息时使用的句子。 */
+    bindingAbsent: "本仓库的 .mstarc 未声明 [linear] 段。",
   },
 }

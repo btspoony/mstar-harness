@@ -16,6 +16,32 @@ import { createServer } from "node:http";
 /** The hosted endpoint; a deployment may point at its own. */
 export const LINEAR_MCP_URL = "https://mcp.linear.app/mcp";
 
+/**
+ * The one scope both authorization surfaces request: read plus issue creation,
+ * which the issue-create/update tool needs. Narrow on purpose — `write` and
+ * `admin` are never asked for, and a refresh never re-sends a scope, so an
+ * existing grant is neither widened nor narrowed by refreshing.
+ */
+export const LINEAR_MCP_SCOPE = "read,issues:create";
+
+/**
+ * The scopes a grant can carry that let it create or update issues. `write` is
+ * broader than the scope requested above and is accepted if an operator already
+ * holds it; `admin` is never inferred from either.
+ */
+const LINEAR_WRITE_SCOPES = ["issues:create", "write"] as const;
+
+/**
+ * Whether a stored grant's scope can write. Separate from "is the credential
+ * valid": a read-only grant keeps working for reads, and a refresh only echoes
+ * the original grant, so this can never turn false into true on its own.
+ */
+export function linearScopeCanWrite(scope: string | null): boolean {
+  if (scope === null) return false;
+  const granted = scope.split(/[\s,]+/).filter((part) => part !== "");
+  return LINEAR_WRITE_SCOPES.some((needed) => granted.includes(needed));
+}
+
 export type AuthorizationServer = {
   issuer: string;
   authorizationEndpoint: string;
@@ -130,7 +156,7 @@ export async function registerClient(
       grant_types: ["authorization_code", "refresh_token"],
       response_types: ["code"],
       token_endpoint_auth_method: "none",
-      scope: "read",
+      scope: LINEAR_MCP_SCOPE,
     }),
   });
   if (!response.ok) {
@@ -176,7 +202,7 @@ export type PendingAuthorization = {
 export async function beginAuthorization(
   as: AuthorizationServer,
   register: (redirectUri: string) => Promise<RegisteredClient>,
-  scope = "read",
+  scope = LINEAR_MCP_SCOPE,
 ): Promise<PendingAuthorization> {
   const pkce = createPkce();
   const state = base64url(crypto.getRandomValues(new Uint8Array(12)));
@@ -296,10 +322,18 @@ export async function exchangeCode(
   return toTokenSet((await response.json()) as Record<string, unknown>, client.clientId);
 }
 
-/** Refresh an expired access token without a browser. */
+/**
+ * Refresh an expired access token without a browser.
+ *
+ * The refresh body carries no `redirect_uri`: the authorization request's
+ * redirect is the live loopback listener (an ephemeral port that no longer
+ * exists here), so there is no stable value a refresh could echo. A refresh
+ * therefore takes the registered client id only — one spelling, no placeholder
+ * redirect that could disagree with the authorization request.
+ */
 export async function refreshToken(
   as: AuthorizationServer,
-  client: RegisteredClient,
+  clientId: string,
   refresh: string,
   fetchImpl: typeof fetch = fetch,
 ): Promise<TokenSet> {
@@ -310,13 +344,21 @@ export async function refreshToken(
     body: new URLSearchParams({
       grant_type: "refresh_token",
       refresh_token: refresh,
-      client_id: client.clientId,
+      client_id: clientId,
     }).toString(),
   });
   if (!response.ok) {
+    // A 5xx, 429 or 408 is the provider or the path failing, not the grant: a
+    // fresh consent would not fix it, and a host that retries can. Only a
+    // rejection of the grant itself names re-authorization.
+    if (response.status >= 500 || response.status === 429 || response.status === 408) {
+      throw new Error(
+        `[linear.auth-unavailable] the refresh attempt failed with HTTP ${response.status}; the grant was not rejected, so the attempt is retryable`,
+      );
+    }
     throw new Error(
       `[linear.reauth-required] the refresh was rejected with HTTP ${response.status}; run \`mstar linear auth\` again`,
     );
   }
-  return toTokenSet((await response.json()) as Record<string, unknown>, client.clientId);
+  return toTokenSet((await response.json()) as Record<string, unknown>, clientId);
 }

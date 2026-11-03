@@ -1740,7 +1740,53 @@ update issue_sync_state
  where item_state = 'pending'
    and last_remote_updated_at is not null;
 `;
-
+/**
+ * Migration 17 - the push ledger's two facts.
+ *
+ * `last_request_hash` is the push skip rule's storage: a row whose normalized
+ * payload hash is unchanged since its last confirmed write is `skipped` without
+ * a single write call. It is a skip rule only - never proof the remote issue
+ * exists - so it is recorded on `applied` from a confirmed receipt, never on
+ * intent.
+ *
+ * `last_kind_label` is the ownership fact the kind->label replace rule reads.
+ * It holds the CANDIDATE labels this tool may have written, as a JSON array: an
+ * ambiguous update proves neither that the old label was removed nor that the
+ * new one was added, so both stay removable and nothing else is ever touched.
+ *
+ * Both are nullable and left null by the import direction, which has neither
+ * fact: an existing row keeps working, and its next changed push backfills the
+ * hash while the first recorded label fills the ownership column only when the
+ * write actually carried one.
+ */
+export const MIGRATION_17_SQL = `
+alter table issue_sync_state add column last_request_hash text;
+alter table issue_sync_state add column last_kind_label text;
+`;
+/**
+ * Migration 18 - the run lease.
+ *
+ * One row per (binding, direction) is the whole arbitration: an insert that
+ * finds a row means another run holds the direction, and the store's own write
+ * transaction decides it - no file lock, no timer, no staleness window. The
+ * holder's facts are recorded so a refusal can name WHO holds it and an
+ * operator can judge whether that process is still alive; `--take-run` replaces
+ * the row, which is why the run's own token (`run_id`) is what a release names
+ * and not the key: a takeover's predecessor can no longer release its
+ * successor.
+ */
+export const MIGRATION_18_SQL = `
+create table sync_runs(
+  binding_id text not null,
+  direction text not null,
+  run_id text not null,
+  holder_pid integer not null,
+  holder_host text not null,
+  started_at text not null,
+  reason text not null,
+  primary key (binding_id, direction)
+);
+`;
 
 /** Ordered immutable migrations. Never mutate an applied entry - append only. */
 export const MIGRATIONS: readonly Migration[] = [
@@ -1760,6 +1806,8 @@ export const MIGRATIONS: readonly Migration[] = [
   { version: 14, name: "compass-plan-membership", sql: MIGRATION_14_SQL },
   { version: 15, name: "sync-ledger", sql: MIGRATION_15_SQL },
   { version: 16, name: "sync-pending-target", sql: MIGRATION_16_SQL },
+  { version: 17, name: "sync-push-ledger", sql: MIGRATION_17_SQL },
+  { version: 18, name: "sync-run-lease", sql: MIGRATION_18_SQL },
 ];
 const DSH_HOST_STATE_MIGRATION = MIGRATIONS.find((migration) => migration.name === "dsh-host-ledgers");
 
