@@ -137,12 +137,11 @@ describe("a project's Issues feature keeps its own state", () => {
 });
 
 describe("the shell's markup uses those pieces", () => {
-  test("the binding screen is mounted: route, nav entry, and a rendered destination", () => {
-    // The regression: the screen, its copy and the `shell.nav` entry all shipped
-    // while nothing mounted them — the feature was unreachable and the nav key dead.
+  test("the binding screen is a navigation destination", () => {
+    // The mount that renders it is behaviour — a destination that resolves and
+    // mounts nothing reads fine as text — so `test/render-gate.test.ts` asserts it
+    // against a real page. `NAV_DESTINATIONS` is product data and stays here.
     expect(NAV_DESTINATIONS).toContain("sync-binding");
-    expect(mainSource).toMatch(/address\.route\.name === "sync-binding" \? <SyncBindingDestination \/> : null/);
-    expect(mainSource).toContain("readSyncBinding");
   });
 
   test("the skip link has a click handler and the landmark is focusable", () => {

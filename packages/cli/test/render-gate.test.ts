@@ -606,6 +606,26 @@ describe.skipIf(!browserAvailable)("the render gate", () => {
     expect(screen.isoInDocument).toBe(false);
   }, 60_000);
 
+  test("the binding destination renders from its own address", async () => {
+    // The regression: the screen, its copy and the `shell.nav` entry all shipped while
+    // nothing mounted them, so the feature was unreachable and the nav key dead. Source
+    // text cannot see that — the mount reads the same whether or not its element reaches
+    // the page — so this asks the page itself: `#sync-binding` must paint the screen.
+    const screen = await visit("sync-binding", "sync-binding");
+    sharedAnchors(screen);
+    // Identity, readiness, and the correspondence's own arm: three panels, so none of the
+    // three blocks went missing behind a screen that mounted and rendered nothing.
+    expect(screen.cards).toBe(3);
+    // And the screen carries the read's answer, not just its frame: the fixture root
+    // declares no `.mstarc`, so the identity block prints the engine's refusal verbatim —
+    // an engine-owned, locale-independent string. A destination that stopped calling
+    // `readSyncBinding` would sit on its loading arm and paint no panel at all.
+    const painted = await evalJson(
+      `JSON.stringify({ text: (document.querySelector('[data-ms-screen="sync-binding"]')?.textContent ?? "").trim() })`,
+    );
+    expect(String(painted.text)).toContain("linear.binding-absent");
+  }, 60_000);
+
   test("the pager's controls sit on the foot's trailing edge and its line", async () => {
     const screen = await visit("issues", "issues");
     const pager = screen.pager as Record<string, number | null>;
