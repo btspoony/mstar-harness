@@ -30983,13 +30983,14 @@ function adoptItem(db, bindingId, localId, reference, options = {}) {
       operationId: `linear-push:${bindingId}:${localId}:adopt-plan:${externalId}`
     });
   }
+  const keepProof = existing?.externalId === externalId;
   return markApplied(db, {
     bindingId,
     direction: PUSH_DIRECTION,
     localId,
     externalId,
-    clearProof: true,
-    operationId: `linear-push:${bindingId}:${localId}:adopt-apply:${externalId}`
+    ...keepProof ? {} : { clearProof: true },
+    operationId: `linear-push:${bindingId}:${localId}:${keepProof ? "adopt-confirm" : "adopt-apply"}:${externalId}`
   });
 }
 function externalIdOf2(reference) {
