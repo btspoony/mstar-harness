@@ -142,6 +142,16 @@ export function requestHash(payload: ProviderWritePayload): string {
     .digest("hex");
 }
 
+/**
+ * The send-right key for one create: binding, item, content hash and the ledger
+ * revision the attempt read. Revision is the ONLY discriminator between
+ * attempts, so a sequential retry is distinct (its predecessor bumped it) while
+ * an ordinary and a forced concurrent run share one key and arbitrate.
+ */
+function createClaimId(bindingId: string, localId: string, hash: string, entryRevision: number): string {
+  return `linear-push:${bindingId}:${localId}:create:${hash}:${entryRevision}`;
+}
+
 /** Markdown description: the two local sections that have no remote field, then the marker. */
 function descriptionFor(candidate: PushCandidate, marker: string): string {
   return `## Impact\n\n${candidate.impact}\n\n## Acceptance\n\n${candidate.acceptance}\n\n${marker}`;
@@ -253,15 +263,16 @@ export async function pushItem(db: StoreDb, provider: IssueProvider, context: Pu
   //
   // EVERY create claims, the forced one included: operator intent says the
   // remote issue is absent, not that two concurrent runs may each create it.
-  // The step carries that intent, so a forced retry is not refused by an
-  // ordinary create's receipt for the same content and revision.
+  // The key carries NO intent segment, so an ordinary and a forced run that
+  // read the same content and revision arbitrate on ONE id — the revision
+  // component alone separates a sequential retry, because every refusal,
+  // failure and apply advances it.
   const entryRevision = ledger?.revision ?? 0;
-  const step = context.forceCreate === true ? "force-plan" : "plan";
   const claim = claimItem(db, {
     bindingId: context.bindingId,
     direction: PUSH_DIRECTION,
     localId: candidate.localId,
-    operationId: `linear-push:${context.bindingId}:${candidate.localId}:${step}:${hash}:${entryRevision}`,
+    operationId: createClaimId(context.bindingId, candidate.localId, hash, entryRevision),
   });
   if (!claim.claimed) {
     return {

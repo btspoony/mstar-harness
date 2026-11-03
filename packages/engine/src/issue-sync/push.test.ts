@@ -1041,7 +1041,69 @@ describe("(l) disposition -> state names are preflighted against the team, like 
   });
 });
 
-describe("(m) --force-create over an ambiguous residue holds the same send right", () => {
+describe("(m) one claim key arbitrates every create for a content and revision", () => {
+  /** Every push operation id one store recorded, which IS the derived key set. */
+  function pushOperationIds(db: StoreDb): string[] {
+    return (db.prepare("select operation_id from store_operations where operation_id like 'linear-push:%' order by operation_id").all() as Array<{
+      operation_id: string;
+    }>).map((entry) => entry.operation_id);
+  }
+
+  test("an ordinary and a forced run derive the SAME claim key for one content and revision", async () => {
+    // The pair this arbitrates is cross-process: each run reads the ledger
+    // before either claim commits, so both see the same revision. Two stores at
+    // that same revision make the derived keys observable; while force intent
+    // sat in the id they differed (`plan:` vs `force-plan:`) and both runs
+    // claimed, so both sent a create — two remote issues with one marker, which
+    // `reconcilePendingCreate` then refuses as ambiguous.
+    const plain = await openedStore("mixed-claim-plain");
+    const forcedRun = await openedStore("mixed-claim-forced");
+    try {
+      for (const handle of [plain, forcedRun]) {
+        addIssue(handle.db, "I-001071");
+        expect(row(handle.db, "I-001071")).toBeNull();
+      }
+      const plainProvider = provider();
+      const forcedProvider = provider();
+      expect((await pushItem(plain.db, plainProvider, context(), candidates(plain.db)[0]!)).outcome).toBe("created");
+      expect(
+        (await pushItem(forcedRun.db, forcedProvider, context({ forceCreate: true }), candidates(forcedRun.db)[0]!)).outcome,
+      ).toBe("created");
+
+      // Same content, same revision, same binding and item therefore ONE key
+      // set: intent contributes nothing, so the two derivations name the same
+      // ids and a cross-process pair contends on one of them.
+      const plainIds = pushOperationIds(plain.db);
+      expect(plainIds.length).toBeGreaterThan(1); // the claim plus its receipt
+      expect(pushOperationIds(forcedRun.db)).toEqual(plainIds);
+    } finally {
+      plain.close();
+      forcedRun.close();
+    }
+  });
+
+  test("a forced run that follows an ordinary create over the same content sends nothing", async () => {
+    const { db, close } = await openedStore("mixed-claim-loser");
+    try {
+      addIssue(db, "I-001072");
+      const candidate = candidates(db)[0]!;
+      // The ordinary run wins the create for revision 0 of this content.
+      const plainProvider = provider();
+      expect((await pushItem(db, plainProvider, context(), candidate)).outcome).toBe("created");
+
+      // A forced run over the same content sends nothing: the skip rule answers
+      // first (the confirmed write's hash still matches), and `--force-create`
+      // says the remote issue is absent, never that two runs may each create it.
+      const straggler = provider();
+      const replayed = await pushItem(db, straggler, context({ forceCreate: true }), candidate);
+      expect(straggler.writes).toEqual([]);
+      expect(replayed.outcome).toBe("skipped");
+      expect(row(db, "I-001072")).toMatchObject({ itemState: "applied", externalId: "LIN-1" });
+    } finally {
+      close();
+    }
+  });
+
   test("two forced runs with the same content and revision produce exactly one create", async () => {
     const { db, close } = await openedStore("force-create-claim");
     try {
@@ -1054,7 +1116,6 @@ describe("(m) --force-create over an ambiguous residue holds the same send right
       const first = provider({ receipts: [{ kind: "ambiguous", cause: "connection closed mid-call" }] });
       await pushItem(db, first, ctx, candidate);
       expect(row(db, "I-001061")).toMatchObject({ itemState: "pending", externalId: null });
-      const forcedPlanRevision = row(db, "I-001061")!.revision;
 
       // 2. Two concurrent forced runs derive the SAME content hash and read the
       //    SAME revision, so they derive the same operation id. Both read the
@@ -1076,34 +1137,26 @@ describe("(m) --force-create over an ambiguous residue holds the same send right
       // The loser's view is the row as it stood at claim time (still no id);
       // the winner's confirmed write is what the ledger ends up holding.
       expect(row(db, "I-001061")).toMatchObject({ itemState: "applied", externalId: "LIN-1" });
-
-      // 4. The force intent is part of the claim key, so a LATER legitimate
-      //    forced retry is not refused by the ordinary create's receipt.
-      db.prepare("update issues set title = 'Retitled' where id = ?").run("I-001061");
-      db.prepare("update issue_sync_state set item_state = 'pending', external_id = null where local_id = ?").run("I-001061");
-      expect(row(db, "I-001061")!.revision).not.toBe(forcedPlanRevision);
-      const retry = provider();
-      const forced = await pushItem(db, retry, ctx, candidates(db)[0]!);
-      expect(forced.outcome).toBe("created");
-      expect(retry.writes.filter((write) => write.kind === "create")).toHaveLength(1);
     } finally {
       close();
     }
   });
 
-  test("an ordinary create's receipt does not refuse a forced retry on the same content", async () => {
-    const { db, close } = await openedStore("force-create-distinct-step");
+  test("a sequential forced retry after a failure still creates", async () => {
+    const { db, close } = await openedStore("force-create-sequential-retry");
     try {
       addIssue(db, "I-001062");
       const candidate = candidates(db)[0]!;
-      // A plain create claims `plan`; it fails for a reason that proves nothing
-      // was delivered, so the row is retryable.
+      // The ordinary attempt claims, then fails for a reason that proves nothing
+      // was delivered. `markFailed` advances the revision, which is the only
+      // discriminator the claim key needs: the retry's key differs without any
+      // intent segment.
       const refused = provider({ receipts: [{ kind: "refused", code: "linear.write-refused", cause: "HTTP 400" }] });
       expect((await pushItem(db, refused, context(), candidate)).outcome).toBe("failed");
-      expect(row(db, "I-001062")).toMatchObject({ itemState: "failed", externalId: null });
+      expect(row(db, "I-001062")).toMatchObject({ itemState: "failed", externalId: null, revision: 2 });
 
-      // The operator confirms the remote absence: the forced step's claim is a
-      // different operation id, so the ordinary receipt cannot shadow it.
+      // The operator confirms the remote absence: the forced retry arbitrates on
+      // a key no earlier attempt used, so the ordinary receipt cannot shadow it.
       const forced = provider();
       const outcome = await pushItem(db, forced, context({ forceCreate: true }), candidates(db)[0]!);
       expect(outcome.outcome).toBe("created");
