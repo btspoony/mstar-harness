@@ -1249,8 +1249,8 @@ describe("synthesizeReview — mstar.review/v1 envelope ", () => {
 
     const local = renderReviewMarkdown(synthesized, { surface: "local-report" });
     expect(local).toContain("Score 86% (good)");
-    // No narrative ⇒ no seat-narrative section at all.
-    expect(local).not.toContain("📋 Review");
+    // No narrative ⇒ the mandated Review section is empty; the findings follow it.
+    expect(local.split("\n\n## \u{1F4CB} Review\n\n### Findings")).toHaveLength(2);
   });
 
   test("empty findings render no findings section on either surface", () => {

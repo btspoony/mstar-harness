@@ -5,7 +5,7 @@ import {
   synthesizeReview,
   validateMstarReviewV1,
 } from "./prreview.js";
-import type { MstarReviewTally, MstarReviewV1 } from "./prreview.js";
+import type { MergeClass, MstarReviewTally, MstarReviewV1 } from "./prreview.js";
 
 /**
  * Compile-level regression: `MstarReviewV1.tally` keeps `band` OPTIONAL, so a
@@ -137,23 +137,23 @@ describe("renderReviewMarkdown: the template body", () => {
       "#### \u{1F7E0} Off-by-one",
       "",
       "- **Evidence**: The loop skips the last element.",
-      "- **Merge class**: should-fix",
       "- **Location**: `src/a.ts:12`",
       "- **Category**: Correctness",
+      "- **Merge class**: should-fix",
       "",
       "#### \u{1F535} Naming",
       "",
       "- **Evidence**: Rename the helper.",
-      "- **Merge class**: nit",
       "- **Location**: `src/b.ts`",
+      "- **Merge class**: nit",
     ].join("\n");
     expect(renderReviewMarkdown(SETTLED_REVIEW, { surface: "github-comment" })).toBe(expected);
   });
 
-  test("(b) no tally and no narrative renders the verdict head only", () => {
+  test("(b) no tally, no narrative and no findings renders the verdict head and the Review anchor", () => {
     const review: MstarReviewV1 = { schema: "mstar.review/v1", verdict: "ship it", findings: [] };
     const body = renderReviewMarkdown(review, { surface: "github-comment" });
-    expect(body).toBe("## \u2705 Verdict: `ship it`");
+    expect(body).toBe("## \u2705 Verdict: `ship it`\n\n## \u{1F4CB} Review");
     expect(body).not.toContain("| Findings |");
     expect(body).not.toContain("###");
   });
@@ -166,7 +166,7 @@ describe("renderReviewMarkdown: the template body", () => {
       incomplete: { reason: "Seat timed out", unscanned: [] },
     };
     expect(renderReviewMarkdown(review, { surface: "github-comment" })).toBe(
-      "## \u23F8\uFE0F Verdict: `incomplete`\n\ncause: Seat timed out\nunscanned: none",
+      "## \u23F8\uFE0F Verdict: `incomplete`\n\ncause: Seat timed out\nunscanned: none\n\n## \u{1F4CB} Review",
     );
   });
 });
@@ -191,7 +191,9 @@ describe("renderReviewMarkdown: surface is layout-neutral", () => {
     const body = renderReviewMarkdown(review, { surface: "local-report" });
     expect(body.split("\n")[0]).toBe("## \u23F8\uFE0F Verdict: `incomplete` \u00b7 Score 86% (good, partial)");
     expect(body).toContain("cause: Seat timed out\nunscanned: src/c.ts");
-    expect(body).not.toContain("## \u{1F4CB} Review");
+    // The section is mandated by the template; only the narrative is optional.
+    expect(body.split("\n").filter((line) => line === "## \u{1F4CB} Review")).toHaveLength(1);
+    expect(body.split("## \u{1F4CB} Review")[1].trimStart().startsWith("### Findings")).toBe(true);
   });
 
   test("a band-less legacy tally derives the band from scorePct", () => {
@@ -297,7 +299,31 @@ describe("renderReviewMarkdown: free-form finding bodies and titles", () => {
       .join("\n")}`;
     expect(rendered).toContain(expected);
     // The body stays inside the list item: the bullets that follow are siblings.
-    expect(rendered).toContain(`${expected}\n- **Merge class**: should-fix`);
+    expect(rendered).toContain(`${expected}\n- **Location**: repo-wide\n- **Merge class**: should-fix`);
+  });
+
+  test("(n) Merge class closes the renderer's bullets, so an inserted Confidence lands immediately above it", () => {
+    const block = renderReviewMarkdown(SETTLED_REVIEW, { surface: "github-comment" }).split("\n\n#### ")[1];
+    const lines = block.split("\n");
+    expect(lines[lines.length - 1]).toBe("- **Merge class**: should-fix");
+    // The place an agent inserts `- **Confidence**:` is immediately above it —
+    // the adjacency `validateFindingDoc({ prVariant: true })` requires.
+    const withConfidence = [...lines.slice(0, -1), "- **Confidence**: HIGH", lines[lines.length - 1]];
+    expect(withConfidence.indexOf("- **Merge class**: should-fix")).toBe(
+      withConfidence.indexOf("- **Confidence**: HIGH") + 1,
+    );
+  });
+
+  test("(o) a class outside MERGE_CLASSES still renders, after the known classes", () => {
+    const findings = [
+      { mergeClass: "blocker" as unknown as MergeClass, title: "Unknown class", body: "still published" },
+      { mergeClass: "nit" as const, title: "Known class", body: "x" },
+    ];
+    const review: MstarReviewV1 = { schema: "mstar.review/v1", verdict: "needs fixes", findings };
+    const body = renderReviewMarkdown(review, { surface: "github-comment" });
+    expect(body).toContain("#### Unknown class");
+    expect(body).toContain("- **Merge class**: blocker");
+    expect(body.indexOf("#### \u{1F535} Known class")).toBeLessThan(body.indexOf("#### Unknown class"));
   });
 });
 
@@ -324,6 +350,9 @@ describe("summary_md is an optional seat narrative", () => {
     const synthesized = synthesizeReview({ findings: [], summary_md: " \n\t" });
     expect("summary_md" in synthesized).toBe(false);
     expect(validateMstarReviewV1(synthesized).ok).toBe(true);
-    expect(renderReviewMarkdown(synthesized, { surface: "local-report" })).not.toContain("\u{1F4CB} Review");
+    // The heading is mandatory; the narrative beneath it is what a blank value drops.
+    expect(renderReviewMarkdown(synthesized, { surface: "local-report" }).endsWith("\n\n## \u{1F4CB} Review")).toBe(
+      true,
+    );
   });
 });

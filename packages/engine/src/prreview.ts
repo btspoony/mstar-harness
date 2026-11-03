@@ -955,16 +955,17 @@ function renderIncompleteFacts(incomplete: PrIncomplete): string {
   return `cause: ${incomplete.reason}\nunscanned: ${unscanned}`;
 }
 
-/** Continuation lines of a finding's evidence keep the `- **Evidence**: `
- * content column, so the block stays inside the list item. */
-const EVIDENCE_INDENT = " ".repeat("- **Evidence**: ".length);
-
-/** One finding's template block: heading, then the slot bullets. The envelope
- * carries Evidence / Merge class / Location / Category; Impact, Confidence and
- * Fix sketch are agent-owned additions inside the same block. */
+/** One finding's template block: heading, then the slot bullets in the order
+ * the report body uses — Evidence, Location, Category, Merge class last, so an
+ * agent-inserted `- **Confidence**:` immediately above Merge class satisfies
+ * `validateFindingDoc({ prVariant: true })`. The envelope carries Evidence /
+ * Location / Category / Merge class; Impact, Confidence and Fix sketch are
+ * agent-owned additions inside the same block. */
 function renderFindingBlock(finding: MstarReviewFinding): string {
   const body = trimBoundaryNewlines(finding.body ?? "");
-  const lines = [`#### ${REVIEW_EMOJI[finding.mergeClass]} ${singleLine(finding.title)}`, ""];
+  // A class outside MERGE_CLASSES has no emoji; the heading still publishes it.
+  const emoji: string | undefined = (REVIEW_EMOJI as Record<string, string | undefined>)[finding.mergeClass];
+  const lines = [`#### ${emoji === undefined ? "" : `${emoji} `}${singleLine(finding.title)}`, ""];
   if (body === "") {
     lines.push("- **Evidence**: none");
   } else if (!body.includes("\n")) {
@@ -972,20 +973,28 @@ function renderFindingBlock(finding: MstarReviewFinding): string {
   } else {
     // A body opening a fence, a list or indented code must start its own line
     // and stay at the bullet's content column, or it leaves the list item.
-    lines.push("- **Evidence**:", ...body.split("\n").map((line) => (line === "" ? "" : `${EVIDENCE_INDENT}${line}`)));
+    const indent = " ".repeat("- **Evidence**: ".length);
+    lines.push("- **Evidence**:", ...body.split("\n").map((line) => (line === "" ? "" : `${indent}${line}`)));
   }
-  lines.push(`- **Merge class**: ${finding.mergeClass}`, `- **Location**: ${renderFindingLocation(finding)}`);
+  lines.push(`- **Location**: ${renderFindingLocation(finding)}`);
   if (finding.category !== undefined) lines.push(`- **Category**: ${singleLine(finding.category)}`);
+  lines.push(`- **Merge class**: ${finding.mergeClass}`);
   return lines.join("\n");
 }
 
-/** Findings in MERGE_CLASSES order, then document order; empty classes render
- * nothing, and zero findings renders no findings section at all. */
+/** Findings grouped by class: the MERGE_CLASSES enum order first, then any
+ * class outside the enum, then document order — every accepted finding renders.
+ * Zero findings render no findings section at all. */
 function renderFindings(findings: readonly MstarReviewFinding[]): string | null {
-  const ordered = MERGE_CLASSES.flatMap((mergeClass) =>
-    findings.filter((finding) => finding.mergeClass === mergeClass),
-  );
-  if (ordered.length === 0) return null;
+  if (findings.length === 0) return null;
+  const rank = (finding: MstarReviewFinding): number => {
+    const index = (MERGE_CLASSES as readonly string[]).indexOf(finding.mergeClass);
+    return index === -1 ? MERGE_CLASSES.length : index;
+  };
+  const ordered = findings
+    .map((finding, index) => ({ finding, index, rank: rank(finding) }))
+    .sort((a, b) => a.rank - b.rank || a.index - b.index)
+    .map((entry) => entry.finding);
   return ["### Findings", ...ordered.map(renderFindingBlock)].join("\n\n");
 }
 
@@ -993,18 +1002,28 @@ function renderFindings(findings: readonly MstarReviewFinding[]): string | null 
  * Render the review **body** for one presentation surface from the
  * `mstar.review/v1` envelope — the engine's only review-body layout owner.
  * Both surfaces render the same pr-review.md § Report template body: verdict
- * head, the four-class tally table, the `incomplete` fact pair, the seat
- * narrative under `## 📋 Review`, and `### Findings` with one
- * `#### <emoji> <title>` block per finding. `surface` is layout-neutral and
- * exists for caller compatibility; the local archive keeps the posted body
- * verbatim, so a per-surface layout would break that contract.
+ * head, the `incomplete` fact pair, the four-class tally table, the mandatory
+ * `## 📋 Review` section, and `### Findings` with one `#### <emoji> <title>`
+ * block per finding. `surface` is layout-neutral and exists for caller
+ * compatibility; the local archive keeps the posted body verbatim, so a
+ * per-surface layout would break that contract.
  *
- * The renderer supplies Evidence, Merge class, Location and Category; the
- * main agent inserts `### Revalidated findings` immediately **before**
- * `### Findings`, adds `**What this PR does**` under `## 📋 Review`, then
- * appends `### Linked-issue AC`, `### ✅ Verified`,
- * `### 🗑️ Considered & rejected` and `## 🛠️ Plan to fix`. Frontmatter,
- * `- notes:` and the output-shape bullets stay the agent's duty.
+ * Envelope-dependent facts: the ` · Score <n>% (<band>)` segment on the verdict
+ * head and the tally table appear only when the envelope carries a `tally`;
+ * the `cause:` / `unscanned:` pair only for `incomplete`; `### Findings` only
+ * when at least one finding exists. `## 📋 Review` is always present — the
+ * template mandates it and the agent anchors `**What this PR does**` there —
+ * with the seat narrative beneath it when `summary_md` carries one.
+ *
+ * The renderer supplies Evidence, Location, Category (when present) and Merge
+ * class, in that order, so an agent-inserted `- **Confidence**:` immediately
+ * above Merge class satisfies `validateFindingDoc({ prVariant: true })`.
+ * Impact, Confidence and Fix sketch are agent-owned insertions in the same
+ * block; the main agent also inserts `### Revalidated findings` immediately
+ * **before** `### Findings` (and adds an empty findings section when the
+ * envelope carries no findings), then appends `### Linked-issue AC`,
+ * `### ✅ Verified`, `### 🗑️ Considered & rejected` and `## 🛠️ Plan to fix`.
+ * Frontmatter, `- notes:` and the output-shape bullets stay the agent's duty.
  *
  * `summary_md`, when a seat produced one, is the seat's narrative — never a
  * header copy — and is never read for facts. Free-form narrative and evidence
@@ -1035,7 +1054,8 @@ export function renderReviewMarkdown(review: MstarReviewV1, _opts: ReviewRenderO
       ].join("\n"),
     );
   }
-  if (narrative !== null) sections.push(`## \u{1F4CB} Review\n\n${narrative}`); // 📋 seat narrative
+  // Mandatory template section: the agent's `**What this PR does**` anchor.
+  sections.push(narrative === null ? "## \u{1F4CB} Review" : `## \u{1F4CB} Review\n\n${narrative}`); // 📋
   const findings = renderFindings(review.findings);
   if (findings !== null) sections.push(findings);
 
