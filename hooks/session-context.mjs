@@ -22929,13 +22929,13 @@ function synthesizeReview(input) {
     unmetAc: input.unmetAc,
     ...input.incomplete === undefined ? {} : { incomplete: input.incomplete }
   });
-  const blankSummary = input.summary_md === undefined || input.summary_md.trim() === "";
+  const narrative = typeof input.summary_md === "string" && input.summary_md.trim() !== "" ? input.summary_md : undefined;
   return {
     schema: "mstar.review/v1",
     verdict: tally.verdict,
     tally,
     findings: input.findings,
-    ...blankSummary ? {} : { summary_md: input.summary_md },
+    ...narrative === undefined ? {} : { summary_md: narrative },
     ...input.incomplete === undefined ? {} : { incomplete: input.incomplete },
     ...input.target !== undefined ? { target: input.target } : {}
   };
@@ -22954,7 +22954,8 @@ function renderFindingLocation(finding) {
 }
 function renderVerdictHead(review) {
   const { tally, incomplete } = review;
-  let head = `## ${VERDICT_EMOJI[review.verdict]} Verdict: \`${review.verdict}\``;
+  const emoji = Object.hasOwn(VERDICT_EMOJI, review.verdict) ? VERDICT_EMOJI[review.verdict] : "•";
+  let head = `## ${emoji} Verdict: \`${review.verdict}\``;
   if (tally !== undefined) {
     const band = tally.band ?? scoreBand(tally.scorePct);
     head += ` · Score ${tally.scorePct}% (${incomplete === undefined ? band : `${band}, partial`})`;
@@ -22962,23 +22963,22 @@ function renderVerdictHead(review) {
   return head;
 }
 function renderIncompleteFacts(incomplete) {
-  const unscanned = incomplete.unscanned.length === 0 ? "none" : incomplete.unscanned.join(", ");
-  return `cause: ${incomplete.reason}
+  const unscanned = incomplete.unscanned.length === 0 ? "none" : incomplete.unscanned.map((entry) => singleLine(entry).trim()).join(", ");
+  return `cause: ${singleLine(incomplete.reason).trim()}
 unscanned: ${unscanned}`;
 }
 function renderFindingBlock(finding) {
   const body = trimBoundaryNewlines(finding.body ?? "");
-  const emoji = REVIEW_EMOJI[finding.mergeClass];
-  const lines = [`#### ${emoji === undefined ? "" : `${emoji} `}${singleLine(finding.title)}`, ""];
+  const emoji = Object.hasOwn(REVIEW_EMOJI, finding.mergeClass) ? REVIEW_EMOJI[finding.mergeClass] : "•";
+  const lines = [`#### ${emoji} ${singleLine(finding.title)}`, ""];
   if (body === "") {
     lines.push("- **Evidence**: none");
   } else if (!body.includes(`
 `)) {
     lines.push(`- **Evidence**: ${body}`);
   } else {
-    const indent2 = " ".repeat("- **Evidence**: ".length);
     lines.push("- **Evidence**:", ...body.split(`
-`).map((line) => line === "" ? "" : `${indent2}${line}`));
+`).map((line) => line === "" ? "" : `  ${line}`));
   }
   lines.push(`- **Location**: ${renderFindingLocation(finding)}`);
   if (finding.category !== undefined)
@@ -23002,7 +23002,7 @@ function renderFindings(findings) {
 function renderReviewMarkdown(review, _opts) {
   const sections = [];
   const { tally, incomplete } = review;
-  const narrative = review.summary_md !== undefined && review.summary_md.trim() !== "" ? trimBoundaryNewlines(review.summary_md) : null;
+  const narrative = typeof review.summary_md === "string" && review.summary_md.trim() !== "" ? trimBoundaryNewlines(review.summary_md) : null;
   sections.push(renderVerdictHead(review));
   if (incomplete !== undefined)
     sections.push(renderIncompleteFacts(incomplete));
