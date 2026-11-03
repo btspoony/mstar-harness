@@ -22,10 +22,15 @@ import type { Resolved } from "./state.ts";
 import { resolveRead } from "./state.ts";
 import type { Tone } from "./status.ts";
 
-/** The identity block: the declared connection, or the reader's own refusal. */
+/**
+ * The identity block: the declared connection, or the reader's own refusal.
+ * `message` is the reader's sentence when it supplied one; a null binding with
+ * no message leaves the wording to the dictionary, so no locale's sentence is
+ * composed here.
+ */
 export type SyncBindingIdentity =
   | { readonly kind: "bound"; readonly enabled: boolean; readonly mode: string; readonly workspace: string; readonly team: string }
-  | { readonly kind: "unbound"; readonly message: string };
+  | { readonly kind: "unbound"; readonly message: string | null };
 
 /**
  * The readiness block: the state with its cause, or the refusal of a state
@@ -45,8 +50,11 @@ export type SyncBindingModel = {
  * State → tone, in the prototype's own names: `tone-done` for ready,
  * `tone-warning` for both not-yet-answered states, `tone-danger` for a refusal
  * of access, `tone-neutral` for the unasked question.
+ *
+ * Every state of the DTO's closed union has a case and there is no `default`:
+ * a sixth state is a compile error here, not a silent `neutral`.
  */
-export function readinessTone(state: string): Tone {
+export function readinessTone(state: SyncBindingDTO["readiness"]["state"]): Tone {
   switch (state) {
     case "ready":
       return "success";
@@ -55,7 +63,7 @@ export function readinessTone(state: string): Tone {
       return "warning";
     case "access-denied":
       return "danger";
-    default:
+    case "not-probed":
       return "neutral";
   }
 }
@@ -67,8 +75,9 @@ export function syncBindingModel(data: SyncBindingDTO): SyncBindingModel {
       ? {
           kind: "unbound",
           // The reader's message, verbatim. The DTO pairs a null binding with it;
-          // the transport boundary is where that stops being guaranteed.
-          message: data.bindingError ?? "linear.binding-absent: .mstarc declares no [linear] section",
+          // the transport boundary is where that stops being guaranteed, and a
+          // missing message stays null so the dictionary supplies the wording.
+          message: data.bindingError,
         }
       : { kind: "bound", ...data.binding };
 

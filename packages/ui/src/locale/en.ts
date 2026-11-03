@@ -526,6 +526,8 @@ export const en = {
     correspondenceNote:
       "The stored binding rows, verbatim from project_bindings — the operator's remote identifier, not a fetched Linear project title.",
     bindingErrorLabel: "bindingError",
+    /** The sentence used when a null binding arrives without the reader's message. */
+    bindingAbsent: "No .mstarc at the repo root declares a [linear] section.",
   },
 } as const;
 

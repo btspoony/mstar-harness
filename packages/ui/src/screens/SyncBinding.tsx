@@ -39,6 +39,8 @@ export type SyncBindingCopy = {
   correspondenceNote: string;
   /** The field label for the reader's refusal when the binding is null. */
   bindingErrorLabel: string;
+  /** The sentence rendered when that refusal arrived without the reader's message. */
+  bindingAbsent: string;
   /** The shared absence families, for a correspondence the resolver could not populate. */
   state: {
     "not-applicable": { labelWord: string; body: string };
@@ -138,9 +140,11 @@ export function SyncBinding(props: SyncBindingProps) {
                   </Field>
                 </>
               ) : (
-                /* The reader's refusal, in the identity block's place. */
+                /* The reader's refusal, in the identity block's place. A refusal
+                   that arrived without a message renders the dictionary's own
+                   sentence, so no locale's wording lives in the transform. */
                 <Field label={copy.bindingErrorLabel} mono={true}>
-                  {identity.message}
+                  {identity.message ?? copy.bindingAbsent}
                 </Field>
               )}
             </dl>

@@ -66,6 +66,16 @@ test("identity: a null binding renders the reader's refusal verbatim", () => {
   expect(html).not.toContain(en.syncBinding.fields.workspace);
 });
 
+test("identity: a refusal that arrived without a message renders the dictionary's own sentence", () => {
+  // The DTO pairs a null binding with `bindingError`; a transport that drops the
+  // message leaves the wording to the copy, so each locale supplies its own.
+  for (const copy of [en, zh]) {
+    const html = render(dto({ binding: null, bindingError: null }), copy);
+    expect(html).toContain(copy.syncBinding.bindingAbsent);
+    expect(html).toContain(copy.syncBinding.bindingErrorLabel);
+  }
+});
+
 test("correspondence: one row per stored binding, verbatim", () => {
   const html = render(dto());
   for (const cell of ["_default", "MST-BACKLOG", "engine", "MST-ENGINE"]) expect(html).toContain(cell);

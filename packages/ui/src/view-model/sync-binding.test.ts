@@ -41,6 +41,15 @@ describe("identity", () => {
     // question are two different answers and stay two different records.
     expect(model.readiness).toEqual({ kind: "probed", state: "not-probed", cause: notProbed, tone: "neutral" });
   });
+
+  test("a null binding with no message stays null here, so the copy owns the sentence", () => {
+    // The transform composes no sentence: one locale's wording would then be
+    // baked into every locale's render.
+    expect(syncBindingModel(dto({ binding: null, bindingError: null })).identity).toEqual({
+      kind: "unbound",
+      message: null,
+    });
+  });
 });
 
 describe("correspondence", () => {
