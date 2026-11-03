@@ -194,6 +194,22 @@ export function LinearSettingsCard(props: LinearSettingsCardProps): ReactNode {
   }
 
   const credential = facts.credential
+
+  if (state.outcome?.status === 'in-flight') {
+    // Another attempt is live on the host, this card holds no id for it and
+    // cannot cancel it: pending, not a refusal. It outranks the grant already
+    // on file — that grant is not this attempt's result — and the watch ends
+    // when a changed grant lands or its window ends.
+    return (
+      <section className={css.card} data-ms-linear-state="authorizing" data-ms-linear-outcome="in-flight" aria-live="polite">
+        <p className={css.title}>
+          <span className={`${css.pill} ${css.warn}`} role="status">{t('state.authorizing.title')}</span>
+        </p>
+        <p className={css.body}>{t('outcome.in-flight')}</p>
+      </section>
+    )
+  }
+
   const banner = outcomeCopy(state.outcome, t)
 
   if (credential.display === 'authorized') {
@@ -222,20 +238,6 @@ export function LinearSettingsCard(props: LinearSettingsCardProps): ReactNode {
         )}
         {canWrite ? null : <div className={css.actions}>{authorizeButton(controller, t)}</div>}
         <p className={css.note}>{t('note.no-secret')}</p>
-      </section>
-    )
-  }
-
-  if (state.outcome?.status === 'in-flight') {
-    // Another attempt is live on the host and this card holds no id for it and
-    // cannot cancel it: pending, not a refusal. It keeps reading the row until
-    // that attempt lands or its window ends.
-    return (
-      <section className={css.card} data-ms-linear-state="authorizing" data-ms-linear-outcome="in-flight" aria-live="polite">
-        <p className={css.title}>
-          <span className={`${css.pill} ${css.warn}`} role="status">{t('state.authorizing.title')}</span>
-        </p>
-        <p className={css.body}>{t('outcome.in-flight')}</p>
       </section>
     )
   }
