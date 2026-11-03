@@ -957,6 +957,28 @@ describe("push — the credential scope preflight", () => {
     expect(provider.writes).toEqual([]);
   });
 
+  test("--force-adopt naming no --adopt target is refused before any write", async () => {
+    const provider = writeProvider(["bug"]);
+    const f = await fixture("push-orphan-force-adopt", null);
+    storeCredential("read,issues:create");
+    const before = await storeSnapshot(f);
+    // The flag is a modifier of one `--adopt` entry; alone it authorizes
+    // nothing, so it used to be dropped silently behind an `ok` exit.
+    const result = (await executeCommand(
+      "issue-sync.push",
+      { project: PROJECT, forceAdopt: ["I-000899"] },
+      withProvider(f, provider),
+    )) as { status: string; code: string; exitCode: number; message: string };
+    expect(result.status).toBe("refused");
+    expect(result.exitCode).toBe(1);
+    expect(result.code).toBe("sync.operator-conflict");
+    expect(result.message).toContain("I-000899");
+    expect(result.message).toContain("--adopt");
+    // Nothing was resolved or written, and not one provider call was made.
+    expect(provider.calls).toEqual([]);
+    expect(await storeSnapshot(f)).toEqual(before);
+  });
+
   test("--force-adopt back to a previously held issue moves the row and the report together", async () => {
     const writes: Array<{ kind: string; externalId?: string }> = [];
     const provider = {

@@ -255,7 +255,7 @@ const RECOVERY: Record<string, string> = {
   "sync.identity-conflict":
     "This item already points at a remote issue and `--adopt` named a different one. Replacing an established identity is not an ordinary edit: re-run `mstar issue-sync push --project <project-id> --force-adopt <localId> --adopt <localId>=<issueUrl>` only if the new reference is the right one. Nothing was written.",
   "sync.operator-conflict":
-    "The run's own flags contradict each other: one local item cannot be adopted and released in the same run, and `--adopt` names one identity per local id. Re-run `mstar issue-sync push --project <project-id>` with one verb per item — `--adopt <localId>=<issueUrl|externalId>` when you can see the remote issue, `--release <localId>` only when reconcile's scan proved no remote issue carries the item's marker. Nothing was written.",
+    "The run's own flags contradict each other: one local item cannot be adopted and released in the same run, `--adopt` names one identity per local id, and a `--force-adopt` id must also appear in `--adopt` because the flag only relaxes that entry's replacement. Re-run `mstar issue-sync push --project <project-id>` with one verb per item — `--adopt <localId>=<issueUrl|externalId>` when you can see the remote issue (add `--force-adopt <localId>` only to replace an identity it already records), `--release <localId>` only when reconcile's scan proved no remote issue carries the item's marker. Nothing was written.",
   "sync.illegal-transition":
     "`--release` names a `pending` push row with no remote id and nothing else. Re-run `mstar issue-sync push --project <project-id>` without it: reconcile adopts the issue when exactly one carries the item's correlation marker, and `--adopt <localId>=<issueUrl|externalId>` records an identity you confirmed.",
   "sync.run-held":
@@ -551,6 +551,7 @@ function adoptPairs(values: readonly string[] | undefined): Array<{ localId: str
 function assertOperatorVerbsAgree(
   adoptions: ReadonlyArray<{ localId: string; reference: string }>,
   released: ReadonlySet<string>,
+  forcedAdopt: ReadonlySet<string>,
 ): void {
   const adopted = new Map<string, string>();
   for (const { localId, reference } of adoptions) {
@@ -574,6 +575,19 @@ function assertOperatorVerbsAgree(
       );
     }
   }
+  // `--force-adopt` is a modifier of one `--adopt` entry, never a verb of its
+  // own; an id outside that pairing would be dropped without a word and the
+  // operator would believe an established identity could be replaced.
+  for (const localId of forcedAdopt) {
+    if (!adopted.has(localId)) {
+      throw new SyncError(
+        "sync.operator-conflict",
+        `--force-adopt names ${localId}, but --adopt does not; the flag only relaxes the identity replacement for ` +
+          `one --adopt entry, so on its own it authorizes nothing. Add --adopt ${localId}=<issueUrl|externalId> ` +
+          "with the reference that is really right, or drop --force-adopt, and re-run; nothing was written",
+      );
+    }
+  }
 }
 
 async function runPush(id: string, input: Input, invocation: InvocationContext): Promise<CommandEnvelope> {
@@ -585,7 +599,7 @@ async function runPush(id: string, input: Input, invocation: InvocationContext):
 
   // 0. Verbs that contradict each other are refused before anything is resolved
   //    or written; each is otherwise checked only against its own ledger row.
-  assertOperatorVerbsAgree(adoptions, released);
+  assertOperatorVerbsAgree(adoptions, released, forcedAdopt);
   const harnessDir =
     resolveProcessHarnessDir(invocation.cwd, input.harness) ?? input.harness ?? invocation.controlRoot ?? invocation.cwd;
   const context = { harnessDir };
@@ -834,7 +848,7 @@ export function getIssueSyncCommandDefinitions(): readonly CommandDefinition[] {
               route,
               required: false,
               constraint:
-                "optional, repeatable: <localId> whose already-recorded remote identity may be replaced by --adopt; without it a different reference is refused",
+                "optional, repeatable: <localId> that must also appear in --adopt, allowing the already-recorded remote identity to be replaced by that entry; without it a different reference is refused",
             },
             {
               name: "release",

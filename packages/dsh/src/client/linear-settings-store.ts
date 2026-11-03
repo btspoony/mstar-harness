@@ -35,6 +35,13 @@ export const LINEAR_SETTINGS_POLL_MS = 1_000
 /** Consecutive polls without a host answer before the attempt stops observing. */
 export const LINEAR_SETTINGS_POLL_FAILURE_LIMIT = 5
 
+/**
+ * How long a live attempt this store did not start stays watched through the
+ * host row. The host's own attempt deadline, so a consent that is still open
+ * has time to land before the card offers Authorize again.
+ */
+export const LINEAR_SETTINGS_IN_FLIGHT_WINDOW_MS = 300_000
+
 /** The display words the host derives from the credential file (Task 4's shared vocabulary). */
 export type LinearCredentialDisplay = 'authorized' | 'expired' | 'absent' | 'unreadable'
 
@@ -72,8 +79,13 @@ export type LinearAuthorizeBegin =
   | { readonly status: 'attempt-active' }
   | { readonly status: 'unavailable'; readonly reason: string }
 
-/** The card's own failure vocabulary (the RPC unions plus a transport failure). */
+/** The card's own outcome vocabulary (the RPC unions plus a transport failure). */
 export type LinearSettingsOutcome =
+  /**
+   * Another attempt is live on the host and this store holds no id for it, so
+   * nothing failed: the card watches the row that attempt writes on success.
+   */
+  | { readonly status: 'in-flight'; readonly reason: 'attempt-active' }
   | { readonly status: 'denied'; readonly reason: string }
   | { readonly status: 'timeout' }
   | { readonly status: 'cancelled' }
@@ -207,6 +219,10 @@ export class LinearSettingsStore {
   private disposed = false
   /** Consecutive polls that produced no host answer (reset by any real answer). */
   private pollFailures = 0
+  /** Polls still owed to a live attempt this store does not own. */
+  private inFlightProbesLeft = 0
+  /** The observation budget for one such attempt, derived from the poll cadence. */
+  private readonly inFlightProbeLimit: number
   /**
    * The snapshot no render has consumed yet. A render may decide from the
    * current facts only while it is this snapshot: facts the host re-renders
@@ -245,6 +261,7 @@ export class LinearSettingsStore {
       clearTimeout(timer as Parameters<typeof clearTimeout>[0])
     })
     this.pollMs = options.pollMs ?? LINEAR_SETTINGS_POLL_MS
+    this.inFlightProbeLimit = Math.max(1, Math.ceil(LINEAR_SETTINGS_IN_FLIGHT_WINDOW_MS / this.pollMs))
   }
 
   /**
@@ -311,16 +328,29 @@ export class LinearSettingsStore {
   async begin(): Promise<LinearAuthorizeBegin> {
     this.clearTimer()
     this.pollFailures = 0
+    this.inFlightProbesLeft = 0
     const answer = parseLinearAuthorizeBegin(await this.call(LINEAR_AUTHORIZE_BEGIN_ENDPOINT, {}))
     if (this.disposed) return answer
+    if (answer.status === 'attempt-active' && this.state.attempt !== null) {
+      // A second click raced this store's own begin: the attempt it already
+      // observes is the live one, so keep polling it instead of replacing it.
+      this.schedulePoll()
+      return answer
+    }
     if (answer.status !== 'started') {
       this.update({
         ...this.state,
         attempt: null,
         outcome: answer.status === 'attempt-active'
-          ? { status: 'denied', reason: 'attempt-active' }
+          ? { status: 'in-flight', reason: 'attempt-active' }
           : { status: 'unavailable', reason: answer.reason },
       })
+      if (answer.status === 'attempt-active') {
+        // No id came back, so the host row is the only observable: keep
+        // reading it while that attempt may still complete.
+        this.inFlightProbesLeft = this.inFlightProbeLimit
+        this.scheduleInFlightProbe()
+      }
       return answer
     }
     this.update({ ...this.state, attempt: { id: answer.attemptId }, outcome: null })
@@ -364,6 +394,36 @@ export class LinearSettingsStore {
       this.timer = undefined
       void this.poll()
     }, this.pollMs)
+  }
+
+  /**
+   * A live attempt this store did not start carries no id here, so the row the
+   * host writes on success is the only observable. The probe reads the facts
+   * directly (no `loading` flip under the pending card) and ends at a grant, at
+   * a row that can no longer complete, or at the host's attempt window, where
+   * Authorize becomes reachable again.
+   */
+  private scheduleInFlightProbe(): void {
+    this.clearTimer()
+    if (this.disposed) return
+    this.timer = this.schedule(() => {
+      this.timer = undefined
+      void this.probeInFlight()
+    }, this.pollMs)
+  }
+
+  private async probeInFlight(): Promise<void> {
+    if (this.disposed || this.state.outcome?.status !== 'in-flight') return
+    const read = parseLinearStatusRead(await this.call(LINEAR_STATUS_ENDPOINT, {}))
+    if (this.disposed || this.state.outcome?.status !== 'in-flight') return
+    this.inFlightProbesLeft -= 1
+    const settled =
+      read.status !== 'ready' ||
+      !read.rowEnabled ||
+      read.credential.display === 'authorized' ||
+      this.inFlightProbesLeft <= 0
+    this.update({ ...this.state, read, ...(settled ? { outcome: null } : {}) })
+    if (!settled) this.scheduleInFlightProbe()
   }
 
   private async poll(): Promise<void> {

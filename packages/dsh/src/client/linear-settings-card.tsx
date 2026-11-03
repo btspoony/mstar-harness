@@ -56,10 +56,10 @@ function outcomeCopy(
 ): { key: LinearSettingsKey; params?: Record<string, unknown> } | null {
   if (outcome === null) return null
   switch (outcome.status) {
+    case 'in-flight':
+      return { key: 'outcome.in-flight' }
     case 'denied':
-      return outcome.reason === 'attempt-active'
-        ? { key: 'outcome.attempt-active' }
-        : { key: 'outcome.denied', params: { reason: outcome.reason } }
+      return { key: 'outcome.denied', params: { reason: outcome.reason } }
     case 'timeout':
       return { key: 'outcome.timeout' }
     case 'cancelled':
@@ -90,7 +90,7 @@ function summaryText(
   if (facts === null) return t('state.loading')
   if (facts.status === 'unavailable') return t('state.unavailable', { reason: facts.reason })
   if (!facts.rowEnabled) return t('state.disabled.title')
-  if (state.attempt !== null) return t('state.authorizing.title')
+  if (state.attempt !== null || state.outcome?.status === 'in-flight') return t('state.authorizing.title')
   switch (facts.credential.display) {
     case 'authorized':
       return facts.credential.canWrite ? t('state.authorized.title') : t('state.scope-insufficient.title')
@@ -222,6 +222,20 @@ export function LinearSettingsCard(props: LinearSettingsCardProps): ReactNode {
         )}
         {canWrite ? null : <div className={css.actions}>{authorizeButton(controller, t)}</div>}
         <p className={css.note}>{t('note.no-secret')}</p>
+      </section>
+    )
+  }
+
+  if (state.outcome?.status === 'in-flight') {
+    // Another attempt is live on the host and this card holds no id for it and
+    // cannot cancel it: pending, not a refusal. It keeps reading the row until
+    // that attempt lands or its window ends.
+    return (
+      <section className={css.card} data-ms-linear-state="authorizing" data-ms-linear-outcome="in-flight" aria-live="polite">
+        <p className={css.title}>
+          <span className={`${css.pill} ${css.warn}`} role="status">{t('state.authorizing.title')}</span>
+        </p>
+        <p className={css.body}>{t('outcome.in-flight')}</p>
       </section>
     )
   }
