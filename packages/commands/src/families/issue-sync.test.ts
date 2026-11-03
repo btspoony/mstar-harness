@@ -846,7 +846,7 @@ describe("push — the credential scope preflight", () => {
     }
   });
 
-  test("--force-create with a missing label keeps the pending residue reconcilable", async () => {
+  test("--force-create is refused while an unconfirmed create attempt stands", async () => {
     const writes: Array<{ kind: string }> = [];
     const receipts = [{ kind: "ambiguous" as const, cause: "connection closed mid-call" }];
     const provider = {
@@ -861,14 +861,13 @@ describe("push — the credential scope preflight", () => {
         return receipts.shift() ?? { kind: "confirmed" as const, externalId: "LIN-999", updatedAt: "2026-11-02T00:10:00.000Z" };
       },
       async discoverLabels() {
-        // `risk` is genuinely absent, so the risk item's preflight refuses.
-        return new Set(["bug"]);
+        return new Set(["bug", "risk"]);
       },
       async discoverStates() {
         return new Set(["Todo", "Done", "Canceled"]);
       },
     };
-    const f = await fixture("push-force-create-refusal", null);
+    const f = await fixture("push-force-create-residue", null);
     storeCredential("read,issues:create");
     {
       const handle = await openStore({ harnessDir: f.harnessDir }, "write");
@@ -880,40 +879,35 @@ describe("push — the credential scope preflight", () => {
     }
     const context = { ...f.context, effects: { ...f.context.effects, issueProvider: () => provider as never } };
 
-    // 1. The ambiguous create, on a kind the workspace CAN label at the time.
-    provider.discoverLabels = async () => new Set(["bug", "risk"]);
+    // 1. The ambiguous create: one write went out, the item has no identity.
     const first = (await executeCommand("issue-sync.push", { project: PROJECT }, context)) as {
       data?: { items: Array<{ localId: string; outcome: string }> };
     };
     expect(first.data?.items).toEqual([expect.objectContaining({ localId: "I-000806", outcome: "unresolved" })]);
     expect(writes).toHaveLength(1);
 
-    // 2. `--force-create` while the label is gone: the refusal must not take
-    //    the ambiguity with it. Before the fix the row became `failed`, which
-    //    `reconcilePendingCreate` never scans, so the residue was lost.
-    provider.discoverLabels = async () => new Set(["bug"]);
+    // 2. `--force-create` cannot establish absence here. The row it reads may
+    //    belong to a create still inside its provider call, so the run refuses
+    //    the flag and names the recoveries instead of sending a second create.
     const forced = (await executeCommand("issue-sync.push", { project: PROJECT, forceCreate: ["I-000806"] }, context)) as {
       status: string;
-      data?: { failed: number; items: Array<{ localId: string; outcome: string; cause?: string }> };
+      data?: { items: Array<{ localId: string; outcome: string; cause?: string }> };
     };
     expect(forced.status).toBe("ok");
-    expect(forced.data?.items).toEqual([
-      expect.objectContaining({ localId: "I-000806", outcome: "failed" }),
-    ]);
-    expect(forced.data?.items[0]?.cause).toContain("linear.label-unresolved");
+    expect(forced.data?.items).toEqual([expect.objectContaining({ localId: "I-000806", outcome: "unresolved" })]);
+    expect(forced.data?.items[0]?.cause).toContain("--force-create cannot establish its absence");
+    expect(forced.data?.items[0]?.cause).toContain("--adopt");
     expect(writes).toHaveLength(1);
 
     const db = await f.db();
     try {
-      // Still the ambiguous residue, with the diagnostic on the row.
-      const ledger = db.prepare("select item_state, external_id, last_error from issue_sync_state").get() as {
+      // Still the ambiguous residue: reconcile still scans it.
+      const ledger = db.prepare("select item_state, external_id from issue_sync_state").get() as {
         item_state: string;
         external_id: string | null;
-        last_error: string | null;
       };
       expect(ledger.item_state).toBe("pending");
       expect(ledger.external_id).toBeNull();
-      expect(ledger.last_error).toContain("linear.label-unresolved");
     } finally {
       db.close();
     }

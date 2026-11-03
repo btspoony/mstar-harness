@@ -139,9 +139,19 @@ describe("a project's Issues feature keeps its own state", () => {
 describe("the shell's markup uses those pieces", () => {
   test("the binding screen is a navigation destination", () => {
     // The mount that renders it is behaviour — a destination that resolves and
-    // mounts nothing reads fine as text — so `test/render-gate.test.ts` asserts it
-    // against a real page. `NAV_DESTINATIONS` is product data and stays here.
+    // mounts nothing reads fine as text. `web/sync-binding-destination.test.tsx`
+    // asserts the route → rendered read chain on every run, and
+    // `test/render-gate.test.ts` checks it against a real page where a browser
+    // exists. `NAV_DESTINATIONS` is product data and stays here.
     expect(NAV_DESTINATIONS).toContain("sync-binding");
+  });
+
+  test("the shell mounts the binding screen through its route dispatch", () => {
+    // The dispatch itself is asserted behaviourally in
+    // `web/sync-binding-destination.test.tsx` (route → rendered read). This is the
+    // half that fails when the call disappears from `<main>`: the regression that
+    // left the screen, its copy and its nav entry shipped but unreachable.
+    expect(mainSource).toContain("{syncBindingDestination(address.route)}");
   });
 
   test("the skip link has a click handler and the landmark is focusable", () => {

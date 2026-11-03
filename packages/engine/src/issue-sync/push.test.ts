@@ -123,6 +123,40 @@ function writeOf(fake: Fake, index: number, kind: ProviderWrite["kind"]): Provid
   return write;
 }
 
+/**
+ * A provider whose create stays inside the provider call until `release()`.
+ *
+ * `started` settles once the write is captured and the call is about to wait, so
+ * a test observes the in-flight attempt by awaiting a real signal instead of a
+ * guessed delay. That state — the write sent, nothing confirmed yet — is the
+ * network-sized window another run can enter.
+ */
+function writeInFlight(): { fake: Fake; started: Promise<void>; release: () => void } {
+  const writes: ProviderWrite[] = [];
+  const { promise: started, resolve: markStarted } = Promise.withResolvers<void>();
+  const { promise: held, resolve: release } = Promise.withResolvers<void>();
+  return {
+    started,
+    release,
+    fake: {
+      writes,
+      listings: [],
+      async probe() {
+        return { state: "ready", cause: "ready: fixture" };
+      },
+      async listIssues() {
+        return { items: [], nextCursor: null };
+      },
+      async applyWrite(write) {
+        writes.push(write);
+        markStarted();
+        await held;
+        return { kind: "confirmed", externalId: "LIN-1", updatedAt: "2026-11-02T00:00:00.000Z" };
+      },
+    },
+  };
+}
+
 describe("selectPushCandidates", () => {
   test("only this project's local captures are candidates; imported mirrors never echo back", async () => {
     const { db, close } = await openedStore("candidates");
@@ -446,16 +480,15 @@ describe("(f) the operator verbs reach the ledger through the same verbs", () =>
     }
   });
 
-  test("--force-create bypasses the reconcile guard for that one item and still classifies the receipt", async () => {
+  test("--force-create still creates where it can assert absence, and classifies the receipt", async () => {
     const { db, close } = await openedStore("force-create");
     try {
       addIssue(db, "I-000972");
-      const fake = provider({ receipts: [{ kind: "ambiguous", cause: "dropped" }] });
-      await pushItem(db, fake, context(), candidates(db)[0]!);
-      expect(row(db, "I-000972")!.itemState).toBe("pending");
+      // No row, so no unresolved attempt contradicts the operator's assertion.
+      const fake = provider();
       const forced = await pushItem(db, fake, context({ forceCreate: true }), candidates(db)[0]!);
       expect(forced).toMatchObject({ outcome: "created", externalId: "LIN-1" });
-      expect(fake.writes).toHaveLength(2);
+      expect(fake.writes).toHaveLength(1);
     } finally {
       close();
     }
@@ -844,36 +877,33 @@ describe("(i) an ambiguous update drops the payload proof but keeps the identity
   });
 });
 
-describe("(j) a pre-send refusal under --force-create keeps the ambiguous residue reconcilable", () => {
-  test("pending residue + missing label: the row stays pending with the error recorded, and reconcile still sees it", async () => {
-    const { db, close } = await openedStore("force-create-refusal");
+describe("(j) an unresolved create blocks every later create until reconcile attributes it", () => {
+  test("a forced run over the residue sends nothing, names its recoveries, and leaves reconcile able to adopt", async () => {
+    const { db, close } = await openedStore("force-create-residue");
     try {
       addIssue(db, "I-001031", { kind: "risk" });
       const ctx = context();
       // 1. An ambiguous create leaves the residue: pending, no id.
       const ambiguous = provider({ receipts: [{ kind: "ambiguous", cause: "connection closed mid-call" }] });
       await pushItem(db, ambiguous, ctx, candidates(db)[0]!);
-      expect(row(db, "I-001031")).toMatchObject({ itemState: "pending", externalId: null, lastError: null });
-      const writesBefore = ambiguous.writes.length;
+      expect(row(db, "I-001031")).toMatchObject({ itemState: "pending", externalId: null });
 
-      // 2. --force-create with a label the workspace does not have. The refusal
-      //    provably sent nothing, but the row it would have written `failed` on
-      //    is the ONLY record that a remote issue may already exist.
-      const missingLabel = context({ labels: new Set(["bug"]), forceCreate: true });
-      const blocked = await pushItem(db, ambiguous, missingLabel, candidates(db)[0]!);
-      expect(blocked.outcome).toBe("failed");
-      expect(blocked.cause).toContain("linear.label-unresolved");
-      // Nothing was sent for this attempt.
-      expect(ambiguous.writes).toHaveLength(writesBefore);
+      // 2. `--force-create` cannot act on it. The row it reads may belong to a
+      //    create still inside its provider call — its claim is what advanced the
+      //    revision — so "the remote issue does not exist" is not an assertion
+      //    anybody can establish from this state. The refusal names the two
+      //    recoveries instead of sending a second create.
+      const forced = provider();
+      const blocked = await pushItem(db, forced, context({ forceCreate: true }), candidates(db)[0]!);
+      expect(blocked.outcome).toBe("unresolved");
+      expect(blocked.cause).toContain("--force-create cannot establish its absence");
+      expect(blocked.cause).toContain("--adopt <localId>=<issueUrl|externalId>");
+      expect(forced.writes).toEqual([]);
+      // The residue survives as an AMBIGUITY: still pending, still no id.
+      expect(row(db, "I-001031")).toMatchObject({ itemState: "pending", externalId: null });
 
-      // The residue is untouched as an AMBIGUITY: still pending, still no id,
-      // and the diagnostic is recorded on the row.
-      const afterRefusal = row(db, "I-001031")!;
-      expect(afterRefusal).toMatchObject({ itemState: "pending", externalId: null });
-      expect(afterRefusal.lastError).toContain("linear.label-unresolved");
-
-      // 3. Reconciliation still finds it: that is what `failed` would have
-      //    destroyed. One marker match adopts the interrupted create.
+      // 3. Reconciliation still finds it: one marker match adopts the interrupted
+      //    create, which is the recovery the refusal named.
       const marker = correlationMarker({ workspace: "acme", team: "ENG" }, STORE_ID, "I-001031");
       const scanning = provider({
         pages: [
@@ -1042,43 +1072,36 @@ describe("(l) disposition -> state names are preflighted against the team, like 
 });
 
 describe("(m) one claim key arbitrates every create for a content and revision", () => {
-  /** Every push operation id one store recorded, which IS the derived key set. */
-  function pushOperationIds(db: StoreDb): string[] {
-    return (db.prepare("select operation_id from store_operations where operation_id like 'linear-push:%' order by operation_id").all() as Array<{
-      operation_id: string;
-    }>).map((entry) => entry.operation_id);
-  }
-
-  test("an ordinary and a forced run derive the SAME claim key for one content and revision", async () => {
-    // The pair this arbitrates is cross-process: each run reads the ledger
-    // before either claim commits, so both see the same revision. Two stores at
-    // that same revision make the derived keys observable; while force intent
-    // sat in the id they differed (`plan:` vs `force-plan:`) and both runs
-    // claimed, so both sent a create — two remote issues with one marker, which
-    // `reconcilePendingCreate` then refuses as ambiguous.
-    const plain = await openedStore("mixed-claim-plain");
-    const forcedRun = await openedStore("mixed-claim-forced");
+  test("a forced run that starts while an ordinary create awaits its write sends nothing", async () => {
+    const { db, close } = await openedStore("force-create-window");
     try {
-      for (const handle of [plain, forcedRun]) {
-        addIssue(handle.db, "I-001071");
-        expect(row(handle.db, "I-001071")).toBeNull();
-      }
-      const plainProvider = provider();
-      const forcedProvider = provider();
-      expect((await pushItem(plain.db, plainProvider, context(), candidates(plain.db)[0]!)).outcome).toBe("created");
-      expect(
-        (await pushItem(forcedRun.db, forcedProvider, context({ forceCreate: true }), candidates(forcedRun.db)[0]!)).outcome,
-      ).toBe("created");
+      addIssue(db, "I-001071");
+      const candidate = candidates(db)[0]!;
+      // Both runs share ONE store, so this is arbitration and not key
+      // derivation. The ordinary run claims first — that claim is what writes the
+      // `pending` row at revision 1 — and then stands inside its provider call:
+      // the network-sized window another process enters.
+      const { fake: ordinary, started, release } = writeInFlight();
+      const forced = provider();
+      const ordinaryRun = pushItem(db, ordinary, context(), candidate);
+      await started;
+      expect(ordinary.writes).toHaveLength(1);
+      expect(row(db, "I-001071")).toMatchObject({ itemState: "pending", externalId: null });
 
-      // Same content, same revision, same binding and item therefore ONE key
-      // set: intent contributes nothing, so the two derivations name the same
-      // ids and a cross-process pair contends on one of them.
-      const plainIds = pushOperationIds(plain.db);
-      expect(plainIds.length).toBeGreaterThan(1); // the claim plus its receipt
-      expect(pushOperationIds(forcedRun.db)).toEqual(plainIds);
+      // Started inside that window. The residue it reads IS the in-flight
+      // attempt, so a create here would land beside the first one's.
+      const forcedRun = await pushItem(db, forced, context({ forceCreate: true }), candidate);
+      expect(forced.writes).toEqual([]);
+      expect(forcedRun.outcome).toBe("unresolved");
+      expect(forcedRun.cause).toContain("--force-create cannot establish its absence");
+
+      release();
+      expect(await ordinaryRun).toMatchObject({ outcome: "created", externalId: "LIN-1" });
+      // One local item, exactly one remote create.
+      expect([...ordinary.writes, ...forced.writes].filter((write) => write.kind === "create")).toHaveLength(1);
+      expect(row(db, "I-001071")).toMatchObject({ itemState: "applied", externalId: "LIN-1" });
     } finally {
-      plain.close();
-      forcedRun.close();
+      close();
     }
   });
 
@@ -1099,44 +1122,6 @@ describe("(m) one claim key arbitrates every create for a content and revision",
       expect(straggler.writes).toEqual([]);
       expect(replayed.outcome).toBe("skipped");
       expect(row(db, "I-001072")).toMatchObject({ itemState: "applied", externalId: "LIN-1" });
-    } finally {
-      close();
-    }
-  });
-
-  test("two forced runs with the same content and revision produce exactly one create", async () => {
-    const { db, close } = await openedStore("force-create-claim");
-    try {
-      addIssue(db, "I-001061");
-      const candidate = candidates(db)[0]!;
-      const ctx = context({ forceCreate: true });
-
-      // 1. An interrupted create leaves the residue the operator is about to
-      //    force past: `pending`, no id. The row records the send intent.
-      const first = provider({ receipts: [{ kind: "ambiguous", cause: "connection closed mid-call" }] });
-      await pushItem(db, first, ctx, candidate);
-      expect(row(db, "I-001061")).toMatchObject({ itemState: "pending", externalId: null });
-
-      // 2. Two concurrent forced runs derive the SAME content hash and read the
-      //    SAME revision, so they derive the same operation id. Both read the
-      //    residue before either write lands, which is exactly the interleaving
-      //    a claim exists to arbitrate: only one may send the create.
-      const winner = provider();
-      const loser = provider();
-      const [won, lost] = await Promise.all([
-        pushItem(db, winner, ctx, candidate),
-        pushItem(db, loser, ctx, candidate),
-      ]);
-      const created = [...winner.writes, ...loser.writes].filter((write) => write.kind === "create");
-      expect(created).toHaveLength(1);
-      expect(won.outcome).toBe("created");
-      // A duplicate here is permanent: both remote issues would carry the
-      // marker, and `reconcilePendingCreate` refuses to adopt two matches.
-      expect(lost.outcome).toBe("unresolved");
-      expect(lost.cause).toContain("already claimed this create");
-      // The loser's view is the row as it stood at claim time (still no id);
-      // the winner's confirmed write is what the ledger ends up holding.
-      expect(row(db, "I-001061")).toMatchObject({ itemState: "applied", externalId: "LIN-1" });
     } finally {
       close();
     }

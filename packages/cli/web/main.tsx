@@ -37,7 +37,6 @@ import {
   Overview,
   ProjectDetail,
   Projects,
-  SyncBinding,
   WorkflowDetail,
   Workflows,
   DEFAULT_ITERATION_FILTERS,
@@ -121,12 +120,7 @@ import {
   shellChrome,
   skipToMain,
 } from "./shell-chrome";
-import {
-  readSyncBinding,
-  syncBindingCopy,
-  syncBindingOutcome,
-  type SyncBindingOutcome,
-} from "./sync-binding-data";
+import { syncBindingDestination } from "./sync-binding-destination";
 
 /**
  * Push a destination, or replace the current entry when only the filters changed.
@@ -818,45 +812,6 @@ const DEFAULT_ISSUES: IssueQuery = {
   offset: 0,
 };
 
-/**
- * The binding view, behind its own read.
- *
- * The dashboard is the host and has no Linear probe result to attach, so it sends
- * no `probe_state`: readiness arrives as `not-probed` with the cause the engine
- * sets. Composing a probe here would make the panel claim an observation nobody
- * made — the one thing it refuses to do.
- */
-function SyncBindingDestination() {
-  const [outcome, setOutcome] = useState<SyncBindingOutcome>({ kind: "loading" });
-  const copy = useCopy();
-  useEffect(() => {
-    const controller = new AbortController();
-    let current = true;
-    void readSyncBinding(fetch, controller.signal).then((result) => {
-      if (current) setOutcome(syncBindingOutcome(result));
-    });
-    return () => {
-      current = false;
-      controller.abort();
-    };
-  }, []);
-
-  if (outcome.kind === "loading") return null;
-  if (outcome.kind === "failed") {
-    return (
-      <EmptyState
-        arm="unavailable"
-        labelWord={copy.state.unavailable.labelWord}
-        heading={copy.syncBinding.pageTitle}
-        body={copy.state.unavailable.body}
-        reason={outcome.message}
-      />
-    );
-  }
-
-  return <SyncBinding model={outcome.model} copy={syncBindingCopy(copy)} />;
-}
-
 /** The shell: skip link, header with the shared navigation, the main region, footer. */
 function Shell(props: {
   locale: Locale;
@@ -1032,7 +987,7 @@ function Shell(props: {
           <IterationDetailDestination id={address.route.id} address={address} />
         ) : null}
         {address.route.name === "projects" ? <ProjectsDestination outcome={projects} /> : null}
-        {address.route.name === "sync-binding" ? <SyncBindingDestination /> : null}
+        {syncBindingDestination(address.route)}
         {address.route.name === "project" ? (
           <ProjectDetailDestination
             address={address}
