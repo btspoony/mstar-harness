@@ -520,6 +520,45 @@ describe('the host-use adoption trigger', () => {
     expect(clock.armed()).toBe(arms)
     expect(clock.pending()).toBe(1)
   })
+
+  it('adopts a grant another process wrote while the refresh is in flight, once', async () => {
+    const gate = Promise.withResolvers<Response>()
+    const provider = providerFetch(discoveryRoutes(() => gate.promise))
+    // A due credential: booting the host starts one attempt, which parks on the
+    // gated discovery probe before any token exchange happens.
+    const { service, clock, restarts } = harness({ entry: credential({ expiresAt: START + 60_000 }), provider })
+    expect(provider.calls).toEqual([`POST ${LINEAR_MCP_URL}`])
+
+    // `mstar linear auth login` writes a newer grant while that attempt is open.
+    const expiresAt = START + 60 * 60_000
+    writeLinearCredential(credential({ accessToken: 'tok-foreign', refreshToken: 'ref-foreign', expiresAt }))
+
+    // A burst of header reads from the row while the attempt is still in
+    // flight: each one must join that attempt instead of opening a second one.
+    expect(service.authorizationHeaders()).toEqual({ Authorization: 'Bearer tok-foreign' })
+    expect(service.authorizationHeaders()).toEqual({ Authorization: 'Bearer tok-foreign' })
+    expect(service.authorizationHeaders()).toEqual({ Authorization: 'Bearer tok-foreign' })
+    gate.resolve(Response.json({ access_token: 'tok-ours', expires_in: 3600 }))
+    await flush()
+    await flush()
+
+    // Exactly one discovery + token exchange for the whole burst.
+    expect(provider.calls).toEqual([
+      `POST ${LINEAR_MCP_URL}`,
+      `GET ${METADATA_URL}`,
+      `GET ${AS_METADATA_URL}`,
+      `POST ${TOKEN_URL}`,
+    ])
+    // The attempt declined its older lineage, so the foreign grant survives…
+    expect(readFileSync(process.env.MSTAR_LINEAR_CREDENTIAL!, 'utf8')).toContain('tok-foreign')
+    expect(service.authorizationHeaders()).toEqual({ Authorization: 'Bearer tok-foreign' })
+    // …and the row restarts once and arms the one slot twice, not once per
+    // header read: an adoption recorded after the async path would arm again.
+    expect(restarts).toEqual(['linear-mcp'])
+    expect(clock.pending()).toBe(1)
+    expect(clock.armed()).toBe(2)
+    expect(service.refreshPlan()).toEqual({ kind: 'scheduled', at: expiresAt - 5 * 60_000 })
+  })
 })
 
 describe('the reload failure classification', () => {
