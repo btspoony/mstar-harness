@@ -86,7 +86,7 @@ describe("MstarReviewV1 envelope shape: keys outside the documented set are refu
 });
 
 // ---------------------------------------------------------------------------
-// renderReviewMarkdown \u2014 one layout owner for both surfaces
+// renderReviewMarkdown — one layout owner for both surfaces
 // ---------------------------------------------------------------------------
 
 const RENDER_FINDINGS = [
@@ -240,6 +240,34 @@ describe("renderReviewMarkdown: surface is layout-neutral", () => {
     expect(body.split("\n").filter((line) => line.startsWith("## "))).toHaveLength(2); // verdict + Review
   });
 
+  test("(u) a non-string title, body, category or path renders an empty slot instead of throwing", () => {
+    const review = {
+      schema: "mstar.review/v1",
+      verdict: "needs fixes",
+      findings: [
+        { mergeClass: "nit", title: 42, body: { text: "x" }, category: 7, file_path: ["a.ts"], line_start: 3 },
+      ],
+    } as unknown as MstarReviewV1;
+    const body = renderReviewMarkdown(review, { surface: "github-comment" });
+    expect(body).toContain("#### \u{1F535}");
+    expect(body).toContain("- **Evidence**: none");
+    expect(body).toContain("- **Location**: repo-wide");
+    expect(body).not.toContain("- **Category**:");
+    expect(body).toContain("- **Merge class**: nit");
+  });
+
+  test("(v) a supplied narrative is published verbatim and findings keep document order", () => {
+    const findings = [
+      { mergeClass: "nit" as const, title: "Second", body: "b" },
+      { mergeClass: "must-fix" as const, title: "First", body: "a" },
+    ];
+    const narrative = "## Verdict: needs fixes\n\nSeat prose kept as written.";
+    const body = renderReviewMarkdown({ schema: "mstar.review/v1", verdict: "needs fixes", summary_md: narrative, findings });
+    // Nothing inside a supplied narrative is rewritten or stripped.
+    expect(body).toContain(narrative);
+    expect(body.indexOf("#### \u{1F535} Second")).toBeLessThan(body.indexOf("#### \u{1F534} First"));
+  });
+
   test("(t) the options argument is optional and cannot select a layout", () => {
     const bare = renderReviewMarkdown(SETTLED_REVIEW);
     expect(bare).toBe(renderReviewMarkdown(SETTLED_REVIEW, {}));
@@ -336,19 +364,25 @@ describe("renderReviewMarkdown: free-form finding bodies and titles", () => {
     expect(rendered).not.toContain("                ```ts");
   });
 
-  test("(n) Merge class closes the renderer's bullets, so an inserted Confidence lands immediately above it", () => {
-    const block = renderReviewMarkdown(SETTLED_REVIEW, { surface: "github-comment" }).split("\n\n#### ")[1];
-    const lines = block.split("\n");
-    expect(lines[lines.length - 1]).toBe("- **Merge class**: should-fix");
-    // The place an agent inserts `- **Confidence**:` is immediately above it —
-    // the adjacency `validateFindingDoc({ prVariant: true })` requires.
-    const withConfidence = [...lines.slice(0, -1), "- **Confidence**: HIGH", lines[lines.length - 1]];
-    expect(withConfidence.indexOf("- **Merge class**: should-fix")).toBe(
-      withConfidence.indexOf("- **Confidence**: HIGH") + 1,
-    );
+  test("(n) Merge class closes the rendered block, so an inserted Confidence lands immediately above it", () => {
+    const rendered = renderReviewMarkdown(SETTLED_REVIEW, { surface: "github-comment" });
+    // Merge class is the last bullet the renderer emits in the block.
+    const block = rendered.slice(rendered.indexOf("\n\n### Findings"));
+    const bullets = block.split("\n").filter((line) => line.startsWith("- **"));
+    expect(bullets[bullets.length - 1]).toBe("- **Merge class**: nit");
+
+    // Simulate the agent's insertion point: immediately above the trailing
+    // Merge class line, the adjacency `validateFindingDoc({ prVariant: true })`
+    // requires. The rendered block itself proves the insertion point is the
+    // last bullet, so Confidence ends up directly above Merge class.
+    const withConfidence = rendered.replace("- **Merge class**: nit", "- **Confidence**: HIGH\n- **Merge class**: nit");
+    const lines = withConfidence.split("\n");
+    const mergeAt = lines.indexOf("- **Merge class**: nit");
+    expect(lines[mergeAt - 1]).toBe("- **Confidence**: HIGH");
+    expect(lines.filter((line) => line.startsWith("- **Confidence**:"))).toHaveLength(1);
   });
 
-  test("(o) a class outside MERGE_CLASSES still renders, after the known classes", () => {
+  test("(o) an off-enum class still renders, in document order", () => {
     const findings = [
       { mergeClass: "blocker" as unknown as MergeClass, title: "Unknown class", body: "still published" },
       { mergeClass: "nit" as const, title: "Known class", body: "x" },
@@ -357,7 +391,8 @@ describe("renderReviewMarkdown: free-form finding bodies and titles", () => {
     const body = renderReviewMarkdown(review, { surface: "github-comment" });
     expect(body).toContain("#### \u2022 Unknown class");
     expect(body).toContain("- **Merge class**: blocker");
-    expect(body.indexOf("#### \u{1F535} Known class")).toBeLessThan(body.indexOf("#### \u2022 Unknown class"));
+    // Impact ranking lives in the envelope's order; a class re-sort would override it.
+    expect(body.indexOf("#### \u2022 Unknown class")).toBeLessThan(body.indexOf("#### \u{1F535} Known class"));
   });
 
   test("(p) an off-enum verdict and class fall back to the neutral marker, not a prototype member", () => {
@@ -404,11 +439,17 @@ describe("summary_md is an optional seat narrative", () => {
     expect(gate.violations.map((v) => v.code)).toContain("review.blank-summary");
   });
 
-  test("(g3) a non-string summary_md never throws \u2014 the synthesizer drops it", () => {
-    const synthesized = synthesizeReview({ findings: [], summary_md: 42 } as unknown as Parameters<typeof synthesizeReview>[0]);
-    expect("summary_md" in synthesized).toBe(false);
-    expect(validateMstarReviewV1(synthesized).ok).toBe(true);
-    // The renderer tolerates the same value on an envelope handed to it directly.
+  test("(g3) a non-string or blank summary_md is a TypeError \u2014 the blank-summary gate stays reachable", () => {
+    expect(() =>
+      synthesizeReview({ findings: [], summary_md: 42 } as unknown as Parameters<typeof synthesizeReview>[0]),
+    ).toThrow(/summary_md must be a non-empty string when present/);
+    expect(() => synthesizeReview({ findings: [], summary_md: " \n\t" })).toThrow(TypeError);
+    // The validator refuses the same value, so nothing is publishable that the
+    // synthesizer let through.
+    const gate = validateMstarReviewV1({ ...SETTLED_REVIEW, summary_md: 42 } as unknown as MstarReviewV1);
+    expect(gate.violations.map((v) => v.code)).toContain("review.blank-summary");
+    // A hand-built envelope handed straight to the renderer still degrades to
+    // the empty mandated section instead of throwing.
     const rendered = renderReviewMarkdown(
       { ...SETTLED_REVIEW, summary_md: 42 } as unknown as MstarReviewV1,
       { surface: "github-comment" },
@@ -416,13 +457,12 @@ describe("summary_md is an optional seat narrative", () => {
     expect(rendered.split("\n").filter((line) => line === "## \u{1F4CB} Review")).toHaveLength(1);
   });
 
-  test("synthesizeReview turns a blank supplied summary into no narrative at all", () => {
-    const synthesized = synthesizeReview({ findings: [], summary_md: " \n\t" });
-    expect("summary_md" in synthesized).toBe(false);
-    expect(validateMstarReviewV1(synthesized).ok).toBe(true);
-    // The heading is mandatory; the narrative beneath it is what a blank value drops.
-    expect(renderReviewMarkdown(synthesized, { surface: "local-report" }).endsWith("\n\n## \u{1F4CB} Review")).toBe(
-      true,
-    );
+  test("a blank supplied summary is a TypeError, not a silent drop", () => {
+    expect(() => synthesizeReview({ findings: [], summary_md: " \n\t" })).toThrow(TypeError);
+    // An absent value stays legal — that is the optional-narrative contract.
+    const absent = synthesizeReview({ findings: [] });
+    expect("summary_md" in absent).toBe(false);
+    expect(validateMstarReviewV1(absent).ok).toBe(true);
+    expect(renderReviewMarkdown(absent, { surface: "local-report" }).endsWith("\n\n## \u{1F4CB} Review")).toBe(true);
   });
 });

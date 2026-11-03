@@ -866,7 +866,10 @@ export function validateMstarReviewV1(doc: unknown): GateResult {
  * {@link validateMstarReviewV1} requires it for that verdict) while the
  * tally stays the partial count-derived one. `summary_md` is the seat's
  * narrative and stays absent when the caller supplies none — the engine
- * never fabricates one.
+ * never fabricates one. A supplied value that is not a non-empty string is a
+ * TypeError (same boundary posture as {@link computePrTally}'s `incomplete`
+ * guards): dropping it silently would leave the documented
+ * `review.blank-summary` refusal unreachable.
  */
 export function synthesizeReview(input: {
   findings: MstarReviewV1["findings"];
@@ -882,15 +885,23 @@ export function synthesizeReview(input: {
     unmetAc: input.unmetAc,
     ...(input.incomplete === undefined ? {} : { incomplete: input.incomplete }),
   });
-  // Only a string can be a narrative. A non-string value is refused by
-  // validateMstarReviewV1, so it is dropped here rather than thrown on.
-  const narrative = typeof input.summary_md === "string" && input.summary_md.trim() !== "" ? input.summary_md : undefined;
+  // Engine boundary guard: a blank or non-string narrative is exactly what
+  // validateMstarReviewV1 refuses (`review.blank-summary`), so the caller
+  // learns it here instead of publishing an envelope its own gate rejects.
+  if (
+    input.summary_md !== undefined &&
+    (typeof input.summary_md !== "string" || input.summary_md.trim() === "")
+  ) {
+    throw new TypeError(
+      `synthesizeReview: summary_md must be a non-empty string when present - got ${JSON.stringify(input.summary_md)}`,
+    );
+  }
   return {
     schema: "mstar.review/v1",
     verdict: tally.verdict,
     tally,
     findings: input.findings,
-    ...(narrative === undefined ? {} : { summary_md: narrative }),
+    ...(input.summary_md === undefined ? {} : { summary_md: input.summary_md }),
     ...(input.incomplete === undefined ? {} : { incomplete: input.incomplete }),
     ...(input.target !== undefined ? { target: input.target } : {}),
   };
@@ -935,8 +946,9 @@ function singleLine(text: string): string {
  * a single line, the bare path otherwise, and `repo-wide` when no path is known.
  * A renderer-owned single-line slot, so every part collapses. */
 function renderFindingLocation(finding: MstarReviewFinding): string {
-  if (finding.file_path === undefined || finding.file_path === null || finding.file_path === "") return "repo-wide";
-  const path = singleLine(finding.file_path);
+  const rawPath = typeof finding.file_path === "string" ? finding.file_path : "";
+  if (rawPath === "") return "repo-wide";
+  const path = singleLine(rawPath);
   const start = typeof finding.line_start === "number" ? finding.line_start : null;
   const end = typeof finding.line_end === "number" ? finding.line_end : null;
   if (start === null) return `\`${path}\``;
@@ -951,7 +963,7 @@ function renderFindingLocation(finding: MstarReviewFinding): string {
  * through the prototype chain (a bundled renderer would print function source). */
 function renderVerdictHead(review: MstarReviewV1): string {
   const { tally, incomplete } = review;
-  const token = singleLine(review.verdict);
+  const token = typeof review.verdict === "string" ? singleLine(review.verdict) : "";
   const emoji = Object.hasOwn(VERDICT_EMOJI, review.verdict) ? VERDICT_EMOJI[review.verdict] : "\u2022";
   let head = `## ${emoji} Verdict: \`${token}\``;
   if (tally !== undefined) {
@@ -965,11 +977,12 @@ function renderVerdictHead(review: MstarReviewV1): string {
  * § Display contract) — one blank-line-delimited section. Both values are
  * renderer-owned slots, so a newline-bearing reason or scope collapses. */
 function renderIncompleteFacts(incomplete: PrIncomplete): string {
-  const unscanned =
-    incomplete.unscanned.length === 0
-      ? "none"
-      : incomplete.unscanned.map((entry) => singleLine(entry).trim()).join(", ");
-  return `cause: ${singleLine(incomplete.reason).trim()}\nunscanned: ${unscanned}`;
+  const reason = typeof incomplete.reason === "string" ? singleLine(incomplete.reason).trim() : "";
+  const scopes = Array.isArray(incomplete.unscanned)
+    ? incomplete.unscanned.filter((entry) => typeof entry === "string").map((entry) => singleLine(entry).trim())
+    : [];
+  const unscanned = scopes.length === 0 ? "none" : scopes.join(", ");
+  return `cause: ${reason}\nunscanned: ${unscanned}`;
 }
 
 /** One finding's template block: heading, then the slot bullets in the order
@@ -979,13 +992,17 @@ function renderIncompleteFacts(incomplete: PrIncomplete): string {
  * Location / Category / Merge class; Impact, Confidence and Fix sketch are
  * agent-owned additions inside the same block. */
 function renderFindingBlock(finding: MstarReviewFinding): string {
-  const body = trimBoundaryNewlines(finding.body ?? "");
+  // Renderer reads tolerate a hand-built envelope: a non-string title or body
+  // renders an empty slot instead of throwing on .trim()/.split().
+  const rawBody = typeof finding.body === "string" ? finding.body : "";
+  const body = trimBoundaryNewlines(rawBody);
   // Own-property lookup: an off-enum class gets the neutral marker, never a
   // prototype member (a bundled renderer would print function source).
   const emoji = Object.hasOwn(REVIEW_EMOJI, finding.mergeClass)
     ? REVIEW_EMOJI[finding.mergeClass as MergeClass]
     : "\u2022";
-  const lines = [`#### ${emoji} ${singleLine(finding.title)}`, ""];
+  const title = typeof finding.title === "string" ? singleLine(finding.title) : "";
+  const lines = [`#### ${emoji} ${title}`.trimEnd(), ""];
   if (body === "") {
     lines.push("- **Evidence**: none");
   } else if (!body.includes("\n")) {
@@ -997,25 +1014,18 @@ function renderFindingBlock(finding: MstarReviewFinding): string {
     lines.push("- **Evidence**:", ...body.split("\n").map((line) => (line === "" ? "" : `  ${line}`)));
   }
   lines.push(`- **Location**: ${renderFindingLocation(finding)}`);
-  if (finding.category !== undefined) lines.push(`- **Category**: ${singleLine(finding.category)}`);
-  lines.push(`- **Merge class**: ${singleLine(finding.mergeClass)}`);
+  if (typeof finding.category === "string") lines.push(`- **Category**: ${singleLine(finding.category)}`);
+  lines.push(`- **Merge class**: ${typeof finding.mergeClass === "string" ? singleLine(finding.mergeClass) : ""}`.trimEnd());
   return lines.join("\n");
 }
 
-/** Findings grouped by class: the MERGE_CLASSES enum order first, then any
- * class outside the enum, then document order — every accepted finding renders.
+/** Findings render in the envelope's own order — the seats rank them by
+ * impact-if-shipped (§ Verdict synthesis), so a class re-sort would override
+ * that ranking. Every accepted finding renders, off-enum classes included.
  * Zero findings render no findings section at all. */
 function renderFindings(findings: readonly MstarReviewFinding[]): string | null {
   if (findings.length === 0) return null;
-  const rank = (finding: MstarReviewFinding): number => {
-    const index = (MERGE_CLASSES as readonly string[]).indexOf(finding.mergeClass);
-    return index === -1 ? MERGE_CLASSES.length : index;
-  };
-  const ordered = findings
-    .map((finding, index) => ({ finding, index, rank: rank(finding) }))
-    .sort((a, b) => a.rank - b.rank || a.index - b.index)
-    .map((entry) => entry.finding);
-  return ["### Findings", ...ordered.map(renderFindingBlock)].join("\n\n");
+  return ["### Findings", ...findings.map(renderFindingBlock)].join("\n\n");
 }
 
 /**
@@ -1023,7 +1033,9 @@ function renderFindings(findings: readonly MstarReviewFinding[]): string | null 
  * only review-body layout owner. Every surface renders the same pr-review.md
  * § Report template body: verdict head, the `incomplete` fact pair, the
  * four-class tally table, the mandatory `## 📋 Review` section, and
- * `### Findings` with one `#### <emoji> <title>` block per finding.
+ * `### Findings` with one `#### <emoji> <title>` block per finding, in the
+ * envelope's own order (the seats rank by impact-if-shipped; a class re-sort
+ * would override that ranking).
  *
  * `opts` (and its `surface`) is optional and **layout-neutral**: it exists only
  * for caller compatibility with the two-surface signature callers already
@@ -1048,11 +1060,11 @@ function renderFindings(findings: readonly MstarReviewFinding[]): string | null 
  * `### ✅ Verified`, `### 🗑️ Considered & rejected` and `## 🛠️ Plan to fix`.
  * Frontmatter, `- notes:` and the output-shape bullets stay the agent's duty.
  *
- * `summary_md`, when a seat produced one, is the seat's narrative — never a
- * header copy — and is never read for facts. Free-form narrative and evidence
- * keep their internal Markdown but lose boundary line breaks; renderer-owned
- * single-line slots lose every line break. Sections join with one blank line;
- * no trailing newline.
+ * `summary_md`, when a seat produced one, is the seat's narrative: it is
+ * published verbatim (only boundary line breaks are trimmed — nothing inside
+ * it is rewritten or stripped) and is never read for facts. Free-form narrative
+ * and evidence keep their internal Markdown; renderer-owned single-line slots
+ * lose every line break. Sections join with one blank line; no trailing newline.
  */
 export function renderReviewMarkdown(review: MstarReviewV1, _opts: ReviewRenderOptions = {}): string {
   const sections: string[] = [];
