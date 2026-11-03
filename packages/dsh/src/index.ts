@@ -950,9 +950,9 @@ export function apply(ctx: Context, config: Config): void {
     // acknowledged binding (the other sessions' keys stay untouched).
     invalidateSelection: (harnessDir, sessionId) => catalogInvalidation.invalidateSession(harnessDir, sessionId),
   })
-  // The Linear Settings card's host service (plan 20261102-linear-oauth-guidance
-  // Task 3). Its four invocation descriptors ride the contribution above;
-  // this call only provides the `linear-settings` service they name.
+  // The Linear Settings card's host service. Its four invocation descriptors
+  // ride the contribution above; this call only provides the
+  // `linear-settings` service they name.
   installLinearSettingsEndpoint(ctx, { auth: linearAuth })
   // The panel's store-backed read: its own service under the shared `mstar`
   // wire namespace (its descriptor rides the contribution above — typert admits

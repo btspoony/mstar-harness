@@ -26,13 +26,13 @@
  * grant is not retried; a transient attempt failure is, on a bounded backoff,
  * so one bad round trip cannot leave the host unauthenticated.
  *
- * This module also serves the row's Settings card (plan
- * 20261102-linear-oauth-guidance Task 3): `MstarLinearSettingsGateway` answers
- * the card's four `mstar` operations, and owns the one authorization attempt.
- * The attempt, its PKCE verifier and the loopback listener stay on the host;
- * `linearAuthorizeBegin` answers with the attempt id and URL immediately, and
- * the card polls `linearAuthorizeStatus` until a terminal answer. One begin
- * while an attempt is live is refused (`attempt-active`), never forked.
+ * This module also serves the row's Settings card: `MstarLinearSettingsGateway`
+ * answers the card's four `mstar` operations, and owns the one authorization
+ * attempt. The attempt, its PKCE verifier and the loopback listener stay on
+ * the host; `linearAuthorizeBegin` answers with the attempt id and URL
+ * immediately, and the card polls `linearAuthorizeStatus` until a terminal
+ * answer. One begin while an attempt is live is refused (`attempt-active`),
+ * never forked.
  */
 import { randomUUID } from 'node:crypto'
 import { Service, type Context } from '@deepseek-ai/cordis'

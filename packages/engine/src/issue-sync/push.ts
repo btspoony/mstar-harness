@@ -493,7 +493,7 @@ export function externalIdOf(reference: string): string {
   const issueAt = segments.indexOf("issue");
   const identifier = issueAt === -1 ? undefined : segments[issueAt + 1];
   if (identifier === undefined) {
-    throw new Error(`[sync.invalid-input] ${raw} is not a Linear issue URL (expected /<workspace>/issue/<identifier>/…); pass the issue identifier instead`);
+    throw new Error(`[sync.invalid-input] ${raw} is not a Linear issue URL (expected /<workspace>/issue/<identifier>/...); pass the issue identifier instead`);
   }
   return identifier;
 }
