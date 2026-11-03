@@ -30974,13 +30974,14 @@ function adoptItem(db, bindingId, localId, reference, options = {}) {
   if (existing !== null && existing.externalId !== null && existing.externalId !== externalId && options.force !== true) {
     throw new SyncError("sync.identity-conflict", `this item is already adopted as ${JSON.stringify(existing.externalId)}, and replacing an established remote identity is not an ordinary edit. Re-run with --force-adopt ${localId} if ${JSON.stringify(externalId)} is the right issue; nothing was written.`);
   }
+  const generation = existing?.revision ?? 0;
   if (existing === null || existing.itemState === "failed") {
     planItem(db, {
       bindingId,
       direction: PUSH_DIRECTION,
       localId,
       externalId,
-      operationId: `linear-push:${bindingId}:${localId}:adopt-plan:${externalId}`
+      operationId: `linear-push:${bindingId}:${localId}:adopt-plan:${externalId}:${generation}`
     });
   }
   const keepProof = existing?.externalId === externalId;
@@ -30990,7 +30991,7 @@ function adoptItem(db, bindingId, localId, reference, options = {}) {
     localId,
     externalId,
     ...keepProof ? {} : { clearProof: true },
-    operationId: `linear-push:${bindingId}:${localId}:${keepProof ? "adopt-confirm" : "adopt-apply"}:${externalId}`
+    operationId: `linear-push:${bindingId}:${localId}:${keepProof ? "adopt-confirm" : "adopt-apply"}:${externalId}${keepProof ? "" : `:${generation}`}`
   });
 }
 function externalIdOf2(reference) {
