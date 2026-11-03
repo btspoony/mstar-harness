@@ -198,7 +198,7 @@ export async function pushItem(db: StoreDb, provider: IssueProvider, context: Pu
       outcome: "unresolved",
       externalId: null,
       cause: context.forceCreate
-        ? "a create for this item was never confirmed and may still be in flight, so --force-create cannot establish its absence; nothing was sent. Re-run push without it — reconcile adopts the issue when exactly one remote issue carries the item's correlation marker — or record the identity yourself with --adopt <localId>=<issueUrl|externalId>"
+        ? "a create for this item was never confirmed and may still be in flight, so --force-create cannot establish its absence; nothing was sent. Re-run push without it - reconcile adopts the issue when exactly one remote issue carries the item's correlation marker - or record the identity yourself with --adopt <localId>=<issueUrl|externalId>"
         : "a previous create was never confirmed; the next run reconciles it by correlation marker, or name its remote issue with --adopt <localId>=<issueUrl|externalId>",
     };
   }
