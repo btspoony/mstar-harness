@@ -65,7 +65,10 @@ packages: engine, commands
   `LINEAR_API_KEY` supplies the run and decides by its own capability. A refresh never widens a read-only
   grant. Operator recovery beyond automatic reconcile: `--adopt <localId>=<issueUrl|externalId>` records an
   identity you confirmed, and `--release <localId>` clears a `pending` create once reconcile's own scan proves no
-  remote issue carries the item's marker.
+  remote issue carries the item's marker. The two verbs are also checked against each other before any write:
+  naming one local item under both `--adopt` and `--release`, or under two `--adopt` entries, is refused as
+  `sync.operator-conflict` — each entry alone passed its own ledger check, so the adoption used to land before
+  reconcile refused the release.
 - **Adoption drops the proof of a REPLACED identity.** `--adopt` records the identity you confirmed and, when that
   is a different issue than the row already pointed at, CLEARS the payload hash and label ownership it held: both
   described the previous issue, so carrying them over would report `skipped` for content the newly adopted issue
@@ -148,6 +151,9 @@ packages: engine, commands
   `LINEAR_API_KEY` 会承接本次运行并按自身能力判定。刷新永远不会扩大只读授权。
   自动对账之外的操作者恢复手段：`--adopt <localId>=<issueUrl|externalId>` 记录你已确认的
   身份；`--release <localId>` 在对账自身的扫描证明没有任何远端 issue 携带该项标记后，清除该次创建尝试。
+  两个动词还会在**任何写入之前**互相校验：同一个本地项同时出现在 `--adopt` 与 `--release`，或出现在两次
+  `--adopt` 中，都会被拒绝为 `sync.operator-conflict`——单独看每一项都通过了各自的账本检查，于是采纳曾在对账
+  拒绝 release 之前就已落账。
 - **采纳会丢弃上一身份的证明。** `--adopt` 记录操作者确认的身份，并**清除**该行原有的载荷 hash 与标签归属：
   两者描述的是它此前指向的那个 issue，沿用会让本次运行对新采纳的远端从未收到的内容报告 `skipped`，
   也会让之后的 kind 变更移除属于上一个 issue 的标签。因此内容会在同一次运行内收敛到被采纳的 issue 上。

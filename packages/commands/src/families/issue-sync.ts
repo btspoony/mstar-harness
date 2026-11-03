@@ -24,8 +24,9 @@
  * actually authenticate with cannot create or update issues, discovers the
  * workspace's real label set, reconciles any ambiguous create by correlation
  * marker, and records only what a confirmed receipt (or an explicit `--adopt`)
- * proved. Every operator verb is validated against the ledger before the first
- * write, so a bad `--release` cannot land after an `--adopt` already did.
+ * proved. Every operator verb is validated against the ledger, and against the
+ * other verbs, before the first write, so a bad or self-contradicting `--release`
+ * cannot land after an `--adopt` already did.
  * `--release` is the one exit for a create whose remote absence reconciliation's
  * own full scan proved: the residue drops to the retryable `failed` edge, so the
  * same run may create. It never deletes, never creates a label, and never sends
@@ -253,6 +254,8 @@ const RECOVERY: Record<string, string> = {
     "The mapped workflow state does not exist in this Linear team and push never creates or renames states. Rename it in Linear's workflow settings, or redirect it in `.mstarc` with `[linear.mapping] disposition.<key>=<name>`, where <key> is the DEFAULT target state (Todo/Done/Canceled) that the local disposition maps to; other items still push.",
   "sync.identity-conflict":
     "This item already points at a remote issue and `--adopt` named a different one. Replacing an established identity is not an ordinary edit: re-run `mstar issue-sync push --project <project-id> --force-adopt <localId> --adopt <localId>=<issueUrl>` only if the new reference is the right one. Nothing was written.",
+  "sync.operator-conflict":
+    "The run's own flags contradict each other: one local item cannot be adopted and released in the same run, and `--adopt` names one identity per local id. Re-run `mstar issue-sync push --project <project-id>` with one verb per item — `--adopt <localId>=<issueUrl|externalId>` when you can see the remote issue, `--release <localId>` only when reconcile's scan proved no remote issue carries the item's marker. Nothing was written.",
   "sync.illegal-transition":
     "`--release` names a `pending` push row with no remote id and nothing else. Re-run `mstar issue-sync push --project <project-id>` without it: reconcile adopts the issue when exactly one carries the item's correlation marker, and `--adopt <localId>=<issueUrl|externalId>` records an identity you confirmed.",
   "sync.run-held":
@@ -536,12 +539,53 @@ function adoptPairs(values: readonly string[] | undefined): Array<{ localId: str
   });
 }
 
+/**
+ * Operator verbs are validated against the ledger one by one, so two of them
+ * could still contradict each other: `--adopt I-1=LIN-9 --release I-1` passed
+ * both single-verb checks on a pending residue, wrote the adoption, and only
+ * then had reconcile refuse the release; naming one local id under two
+ * `--adopt` entries broke the same guarantee the other way, via
+ * `sync.identity-conflict` from the second adoption. Both are contradictions in
+ * the request itself, so they are refused before the first write.
+ */
+function assertOperatorVerbsAgree(
+  adoptions: ReadonlyArray<{ localId: string; reference: string }>,
+  released: ReadonlySet<string>,
+): void {
+  const adopted = new Map<string, string>();
+  for (const { localId, reference } of adoptions) {
+    const first = adopted.get(localId);
+    if (first !== undefined) {
+      throw new SyncError(
+        "sync.operator-conflict",
+        `--adopt names ${localId} twice (${first}, ${reference}), but one local item has one remote identity; ` +
+          "keep the pair that is the right issue and re-run; nothing was written",
+      );
+    }
+    adopted.set(localId, reference);
+  }
+  for (const localId of adopted.keys()) {
+    if (released.has(localId)) {
+      throw new SyncError(
+        "sync.operator-conflict",
+        `--adopt and --release both name ${localId}; adopting records a remote identity for the item, releasing ` +
+          "clears a pending create that has none, so they cannot describe one item in one run. Keep the verb that " +
+          "matches what you saw (the issue in Linear, or its proven absence) and re-run; nothing was written",
+      );
+    }
+  }
+}
+
 async function runPush(id: string, input: Input, invocation: InvocationContext): Promise<CommandEnvelope> {
   const projectId = requireValue(input.project, "--project");
   const adoptions = adoptPairs(input.adopt);
   const forcedAdopt = new Set((input.forceAdopt ?? []).map((value) => value.trim()).filter((value) => value !== ""));
   const released = new Set((input.release ?? []).map((value) => value.trim()).filter((value) => value !== ""));
   const takeRun = input.takeRun === true;
+
+  // 0. Verbs that contradict each other are refused before anything is resolved
+  //    or written; each is otherwise checked only against its own ledger row.
+  assertOperatorVerbsAgree(adoptions, released);
   const harnessDir =
     resolveProcessHarnessDir(invocation.cwd, input.harness) ?? input.harness ?? invocation.controlRoot ?? invocation.cwd;
   const context = { harnessDir };

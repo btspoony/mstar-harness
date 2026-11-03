@@ -868,6 +868,95 @@ describe("push — the credential scope preflight", () => {
     expect(provider.writes).toEqual([]);
   });
 
+  test("--adopt and --release naming one local id is refused before any write", async () => {
+    const writes: Array<{ kind: string }> = [];
+    const provider = {
+      async probe() {
+        return { state: "ready" as const, cause: "ready: fixture handshake" };
+      },
+      async listIssues() {
+        return { items: [], nextCursor: null };
+      },
+      async applyWrite(write: { kind: string }) {
+        writes.push(write);
+        return { kind: "ambiguous" as const, cause: "connection closed mid-call" };
+      },
+      async discoverLabels() {
+        return new Set(["bug"]);
+      },
+      async discoverStates() {
+        return new Set(["Todo", "Done", "Canceled"]);
+      },
+    };
+    const f = await fixture("push-adopt-release-collision", null);
+    storeCredential("read,issues:create");
+    {
+      const handle = await openStore({ harnessDir: f.harnessDir }, "write");
+      handle.db.prepare(
+        "insert into issues(id, project_id, title, kind, severity, impact, acceptance, created_at, updated_at, identity_key)" +
+          " values ('I-000813', ?, 'Collision', 'bug', 'high', 'i', 'a', 'now', 'now', 'sync-I-000813')",
+      ).run(PROJECT);
+      handle.close();
+    }
+    const context = { ...f.context, effects: { ...f.context.effects, issueProvider: () => provider as never } };
+
+    // One ambiguous create leaves the pending residue that BOTH verbs are legal
+    // against on their own: adopting records the identity, releasing clears the
+    // residue. Together they contradict each other, and the refusal must land
+    // before either is written.
+    await executeCommand("issue-sync.push", { project: PROJECT }, context);
+    expect(writes).toHaveLength(1);
+    const before = await storeSnapshot(f);
+
+    const result = (await executeCommand(
+      "issue-sync.push",
+      { project: PROJECT, adopt: ["I-000813=LIN-9"], release: ["I-000813"] },
+      context,
+    )) as { status: string; code: string; message: string };
+    expect(result.status).toBe("refused");
+    expect(result.code).toBe("sync.operator-conflict");
+    expect(result.message).toContain("I-000813");
+    expect(await storeSnapshot(f)).toEqual(before);
+    const db = await f.db();
+    try {
+      expect(db.prepare("select item_state, external_id from issue_sync_state").get()).toEqual({
+        item_state: "pending",
+        external_id: null,
+      });
+    } finally {
+      db.close();
+    }
+    expect(writes).toHaveLength(1);
+  });
+
+  test("naming one local id twice under --adopt is refused before any write", async () => {
+    const provider = writeProvider(["bug"]);
+    const f = await fixture("push-duplicate-adopt", null);
+    storeCredential("read,issues:create");
+    {
+      const handle = await openStore({ harnessDir: f.harnessDir }, "write");
+      handle.db.prepare(
+        "insert into issues(id, project_id, title, kind, severity, impact, acceptance, created_at, updated_at, identity_key)" +
+          " values ('I-000814', ?, 'Twice', 'bug', 'high', 'i', 'a', 'now', 'now', 'sync-I-000814')",
+      ).run(PROJECT);
+      handle.close();
+    }
+    const before = await storeSnapshot(f);
+    // Each entry is legal on its own against a row with no identity; the second
+    // identity is what the run cannot honour, and it used to be written before
+    // the refusal.
+    const result = (await executeCommand(
+      "issue-sync.push",
+      { project: PROJECT, adopt: ["I-000814=LIN-9", "I-000814=LIN-10"] },
+      withProvider(f, provider),
+    )) as { status: string; code: string; message: string };
+    expect(result.status).toBe("refused");
+    expect(result.code).toBe("sync.operator-conflict");
+    expect(result.message).toContain("I-000814");
+    expect(await storeSnapshot(f)).toEqual(before);
+    expect(provider.writes).toEqual([]);
+  });
+
   test("--force-adopt back to a previously held issue moves the row and the report together", async () => {
     const writes: Array<{ kind: string; externalId?: string }> = [];
     const provider = {
