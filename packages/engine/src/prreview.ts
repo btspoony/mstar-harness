@@ -704,9 +704,9 @@ export function validateMstarReviewV1(doc: unknown): GateResult {
     ));
   }
 
- // `summary_md` is the optional seat narrative: absent is legal (the engine
- // produces no narrative of its own), while a present-but-blank value is a
- // claim that cannot be rendered.
+  // `summary_md` is the optional seat narrative: absent is legal (the engine
+  // produces no narrative of its own), while a present-but-blank value is a
+  // claim that cannot be rendered.
   if (doc.summary_md !== undefined && (typeof doc.summary_md !== "string" || doc.summary_md.trim() === "")) {
     violations.push(violation("high", "review.missing-summary", "summary_md must be a non-empty string when present"));
   }
