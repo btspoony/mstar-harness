@@ -17,7 +17,13 @@
  * 0 MISSING / all-MISMATCH is the expected pre-release state, not a gate
  * failure.
  */
-import { DEFAULT_VERSION_PATH, RELEASE_VERSION_RE, VERSION_SURFACES, readVersionAt } from "./release-surfaces.ts";
+import {
+  DEFAULT_VERSION_PATH,
+  RELEASE_VERSION_RE,
+  VERSION_SURFACES,
+  lockfileReleaseGate,
+  readVersionAt,
+} from "./release-surfaces.ts";
 
 const tag = process.argv[2] ?? process.env.GITHUB_REF_NAME;
 
@@ -73,6 +79,23 @@ if (engineSpec !== expectedSpec) {
   failed = true;
 } else {
   console.log(`OK root engine dependency: ${engineSpec}`);
+}
+
+// The lockfile records each bumped workspace's version, so a release that skipped
+// the sync leaves every clone dirty on the next `bun i`.
+{
+  const lockPath = "bun.lock";
+  const gate = lockfileReleaseGate(
+    (await Bun.file(lockPath).exists()) ? await Bun.file(lockPath).text() : undefined,
+    version,
+    tag,
+  );
+  for (const line of gate.lines) {
+    if (gate.status === "drift") console.error(line);
+    else console.log(line);
+  }
+  if (gate.recovery) console.error(gate.recovery);
+  if (gate.status === "drift") failed = true;
 }
 
 if (failed) {
