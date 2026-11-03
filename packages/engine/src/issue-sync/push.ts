@@ -459,11 +459,14 @@ export async function reconcilePendingCreate(
  * previous identity.
  *
  * An existing row's payload hash and label ownership describe the issue that row
- * pointed at before. Carrying them onto a different issue makes the skip rule
- * match content the new remote never received (the run would report `skipped`
- * without writing) and lets a later kind change remove a label recorded for the
- * previous issue. So both are cleared here, and content converges on the next
- * push of the same run.
+ * pointed at. Carrying them onto a DIFFERENT issue makes the skip rule match
+ * content the new remote never received (the run would report `skipped` without
+ * writing) and lets a later kind change remove a label recorded for the previous
+ * issue. So a changed identity clears both, and content converges on the next
+ * push of the same run. Re-confirming the id already recorded is not a change:
+ * that hash and that ownership still describe the same remote issue, so they
+ * stay — clearing them would let the update add the new kind label while leaving
+ * the recorded one behind, unowned and unremovable.
  *
  * Replacing an ESTABLISHED identity is refused unless the operator forces it
  * (`--force-adopt`): the recorded id is a fact an earlier confirmed write proved,
@@ -500,6 +503,9 @@ export function adoptItem(
       operationId: `linear-push:${bindingId}:${localId}:adopt-plan:${externalId}`,
     });
   }
+  // Re-confirming the recorded id is not an identity change: its hash and label
+  // ownership still describe this same remote issue.
+  const keepProof = existing?.externalId === externalId;
   return markApplied(db, {
     bindingId,
     direction: PUSH_DIRECTION,
@@ -508,8 +514,10 @@ export function adoptItem(
     // Cleared, not carried: see the docstring above. `clearProof` is the only
     // way to say "this identity has no proof yet", because an omitted hash
     // means "keep the row's".
-    clearProof: true,
-    operationId: `linear-push:${bindingId}:${localId}:adopt-apply:${externalId}`,
+    ...(keepProof ? {} : { clearProof: true as const }),
+    // A confirm and a re-point are different requests, so they cannot share one
+    // receipt; re-reading the SAME receipt would refuse the second as a conflict.
+    operationId: `linear-push:${bindingId}:${localId}:${keepProof ? "adopt-confirm" : "adopt-apply"}:${externalId}`,
   });
 }
 
