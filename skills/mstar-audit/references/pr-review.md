@@ -504,6 +504,8 @@ unscanned: <csv | none>
 - The Verdict section replaces the old two-line tally header on GitHub: the same facts (verdict token + `score_pct` as Score with its band + four-class tally), structured — plus, for `incomplete`, the `partial` mark and its `cause:` / `unscanned:` lines. The chat display contract (§ Display contract) is unchanged.
 - When the fix plan itself contains fenced code blocks, open the outer fence with four backticks so the inner fences survive.
 
+> **Engine check (when available):** use `renderReviewMarkdown(review, { surface: "github-comment" | "local-report" })` (or import `renderReviewMarkdown` from `@mstar-harness/engine` in a CLI-less host hook) to render the complete body for that surface from the `mstar.review/v1` envelope. The engine owns verdict/tally/fact/findings layout; the consumer owns upsert markers, round headers and byte-budget clamping. `summary_md` is the optional seat narrative only, omitted when no seat produced one — never a header copy. The renderer's unit tests own the byte-exact templates.
+
 ### Local report archive
 
 The posted PR comment is the deliverable; the local report is the durable reference copy — the PR thread may be buried, locked, or deleted, and bare-branch/diff reviews have no thread at all. The main agent saves the run's report at Stage 3 — the report it published — as part of the mandatory deliverable, before worktree cleanup:
@@ -541,7 +543,7 @@ The posted PR comment is the deliverable; the local report is the durable refere
 **Posting failure does not skip archival.** The report is saved regardless of the POST outcome: on failure it archives the chat display content plus the `gh` error summary, so a failed POST still leaves the durable copy.
 
 > **Engine check (when available):** run `mstar pr-review report-path [--reviews-dir <dir>] --target pr:<n>|branch:<slug>|diff:<sha>|diff [--stage 1|2 --slug <domain-seat>] [--date <YYYY-MM-DD>]` (`--reviews-dir` defaults to the resolved `{REVIEW_DIR}`) (or `import { prReviewReportPath } from "@mstar-harness/engine"` in a host hook) to resolve the run directory, the report file, and the Evidence-file names above — including the same-day `report-r2`/`report-r3` escalation, which the resolver scans for instead of the agent eyeballing the directory. Pure resolution: it never writes; the main agent still writes the file content. On `fail` -> do not proceed; fix and re-run. Skill text below remains authoritative when the runtime is absent.
-- **Body**: the exact text posted as the GitHub Review body — verbatim, not a paraphrase. When `comments: n/a-no-pr` or posting failed, the body is the chat display content instead (§ Display contract header lines + ranked findings + leftover AC), so the local copy is still complete.
+- **Body**: when the renderer is available, the local `report.md` body is `renderReviewMarkdown(review, { surface: "local-report" })`; otherwise, use the exact text posted as the GitHub Review body — verbatim, not a paraphrase. When `comments: n/a-no-pr` or posting failed and the renderer is unavailable, the body is the chat display content instead (§ Display contract header lines + ranked findings + leftover AC), so the local copy is still complete.
 
 ## Output shape
 
