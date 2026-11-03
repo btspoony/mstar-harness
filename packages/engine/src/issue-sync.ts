@@ -34,6 +34,7 @@ export type SyncErrorCode =
   | "sync.invalid-input"
   | "sync.local-issue-missing"
   | "sync.identity-conflict"
+  | "sync.run-held"
   | "linear.query-failed"
   | "linear.identity-collision"
   | "linear.list-unimplemented"
@@ -199,8 +200,16 @@ function replayOrRefuse<T>(db: StoreDb, operationId: string, hash: string): T | 
   return JSON.parse(existing.result_json) as T;
 }
 
+/**
+ * Upsert, not insert: a claim's key is stable per residue, so the retry that
+ * opens the next cycle necessarily reuses it. Every other verb returns on its
+ * replay before reaching here, so this only ever rewrites that one receipt.
+ */
 function recordOperation(db: StoreDb, operationId: string, hash: string, receipt: unknown, at: string): void {
-  db.prepare("insert into store_operations(operation_id, request_hash, result_json, committed_at) values (?, ?, ?, ?)").run(
+  db.prepare(
+    "insert into store_operations(operation_id, request_hash, result_json, committed_at) values (?, ?, ?, ?)" +
+      " on conflict(operation_id) do update set request_hash = excluded.request_hash, result_json = excluded.result_json, committed_at = excluded.committed_at",
+  ).run(
     operationId,
     hash,
     JSON.stringify(receipt),
@@ -363,21 +372,157 @@ export function planItem(db: StoreDb, input: PlanItemInput): SyncItem {
 /**
  * The SEND RIGHT for one create, not merely the intent to send one.
  *
- * `planItem` is idempotent by replay: two callers that derive the same
- * operationId both receive the same receipt, and the second one is
- * indistinguishable from a resume — which is exactly how two concurrent pushes
- * both concluded they owned the create. This verb answers the other question:
- * `claimed` is true only for the caller whose transaction was the one that
- * opened the cycle. A replay reports `claimed: false` and the row as it now
- * stands, so a caller that did not win sends nothing.
+ * `planItem` is idempotent by replay: every caller that derives the same
+ * operationId receives the same receipt, so a replay cannot be told apart from
+ * a resume. This verb answers the other question: `claimed` is true only for the
+ * caller that actually opened the cycle. A recorded receipt answers "no" only
+ * while the cycle it opened is still open — a `pending` row — and the row is
+ * reported as it now stands, so a caller that did not open it sends nothing.
  *
- * Only a row that has no send in flight can be claimed: absence opens a cycle,
- * `failed` retries one. A `pending` row already holds it, so it refuses
- * `sync.illegal-transition` — the send right over an unresolved attempt is what
- * a second create must never take.
+ * Concurrency between RUNS is not this verb's job: one push run per binding is
+ * the run lease below. What the claim still does is record the intent before the
+ * write, so an ambiguous create leaves a durable residue that reconciliation
+ * finds instead of a second create nobody can adopt.
  */
 export function claimItem(db: StoreDb, input: PlanItemInput): { claimed: boolean; item: SyncItem } {
   return writePlan(db, input, "claim");
+}
+
+// ---------------------------------------------------------------------------
+// The run lease: ONE push run per binding, arbitrated by this store's writes
+// ---------------------------------------------------------------------------
+//
+// `mstar issue-sync push` is an operator command, not a concurrent service, so
+// the direction is serialized instead of being made safe under concurrency.
+// Every attempt to harden a per-item claim against a second run failed for one
+// structural reason: the claim key can only describe a candidate (content), and
+// any bypass or recovery mints a different key, so the keys could not be made to
+// collide. One row per (binding, direction) can: an insert that finds a row
+// means somebody already holds the direction, and no key derivation is involved.
+
+export type RunLease = {
+  bindingId: string;
+  direction: SyncDirection;
+  /** This run's own token: what a release names, so a taken-over run cannot release its successor. */
+  runId: string;
+  holderPid: number;
+  holderHost: string;
+  startedAt: string;
+  /** Why this run holds the direction; a takeover records itself here. */
+  reason: string;
+};
+
+export type AcquireRunInput = {
+  bindingId: string;
+  direction: SyncDirection;
+  /** The holder facts a refusal reports, so an operator can judge liveness. */
+  holderPid: number;
+  holderHost: string;
+  /** What this run is for (`push` names the binding's push here). */
+  reason: string;
+  /**
+   * Explicit operator intent (`--take-run`): replace the held run. Never a
+   * timer — a staleness window would reproduce exactly the race this removes.
+   */
+  takeRun?: boolean;
+};
+
+type RunRow = {
+  binding_id: string;
+  direction: string;
+  run_id: string;
+  holder_pid: number;
+  holder_host: string;
+  started_at: string;
+  reason: string;
+};
+
+function toLease(row: RunRow): RunLease {
+  return {
+    bindingId: row.binding_id,
+    direction: row.direction as SyncDirection,
+    runId: row.run_id,
+    holderPid: row.holder_pid,
+    holderHost: row.holder_host,
+    startedAt: row.started_at,
+    reason: row.reason,
+  };
+}
+
+export function readRun(db: StoreDb, input: CursorInput): RunLease | null {
+  const bindingId = requireNonblank("bindingId", input.bindingId);
+  const direction = requireDirection(input.direction);
+  const row = db.prepare("select * from sync_runs where binding_id = ? and direction = ?").get(bindingId, direction) as
+    | RunRow
+    | undefined;
+  return row === undefined ? null : toLease(row);
+}
+
+/**
+ * Take the direction's run right, or refuse naming its holder and BOTH exits.
+ *
+ * The claim is one statement: `insert … on conflict do nothing` reports zero
+ * changes exactly when another run holds the row, and the row it collides with
+ * is read back for the refusal inside the same transaction. `takeRun` turns the
+ * same statement into a replacement, so the previous holder's row is GONE
+ * rather than coexisting — a leftover row would let two runs each believe they
+ * hold the direction.
+ */
+export function acquireRun(db: StoreDb, input: AcquireRunInput): RunLease {
+  const bindingId = requireNonblank("bindingId", input.bindingId);
+  const direction = requireDirection(input.direction);
+  const holderHost = requireNonblank("holderHost", input.holderHost);
+  const reason = requireNonblank("reason", input.reason);
+  if (!Number.isSafeInteger(input.holderPid) || input.holderPid <= 0) {
+    throw new SyncError("sync.invalid-input", "holderPid must be a positive process id");
+  }
+  return withSyncTransaction(db, () => {
+    const now = new Date().toISOString();
+    // The run token names THIS acquisition, which is what a release checks: a
+    // taken-over run's `finally` then matches nothing and cannot delete its
+    // successor's row.
+    const runId = createHash("sha256")
+      .update(`${bindingId}\u0000${direction}\u0000${input.holderPid}\u0000${holderHost}\u0000${now}`)
+      .digest("hex")
+      .slice(0, 32);
+    const result = db
+      .prepare(
+        "insert into sync_runs(binding_id, direction, run_id, holder_pid, holder_host, started_at, reason) values (?, ?, ?, ?, ?, ?, ?)" +
+          (input.takeRun === true
+            ? " on conflict(binding_id, direction) do update set run_id = excluded.run_id, holder_pid = excluded.holder_pid," +
+              " holder_host = excluded.holder_host, started_at = excluded.started_at, reason = excluded.reason"
+            : " on conflict(binding_id, direction) do nothing"),
+      )
+      .run(bindingId, direction, runId, input.holderPid, holderHost, now, reason) as { changes: number };
+    if (result.changes === 0) {
+      const held = readRun(db, { bindingId, direction })!;
+      throw new SyncError(
+        "sync.run-held",
+        `another ${direction} run holds ${bindingId}: run ${held.runId} started at ${held.startedAt} as pid ` +
+          `${held.holderPid} on host ${JSON.stringify(held.holderHost)}. Nothing was written by this run. Wait for it to finish, then ` +
+          `run \`mstar issue-sync push --project <project-id>\` again; or, after confirming that holder is dead, take the run over with ` +
+          `\`mstar issue-sync push --project <project-id> --take-run\`.`,
+      );
+    }
+    return readRun(db, { bindingId, direction })!;
+  });
+}
+
+/**
+ * Release the direction IF this run still holds it. Naming the `runId` is what
+ * keeps a taken-over run's `finally` from deleting its successor's row: the
+ * delete simply matches nothing.
+ */
+export function releaseRun(db: StoreDb, input: CursorInput & { runId: string }): boolean {
+  const bindingId = requireNonblank("bindingId", input.bindingId);
+  const direction = requireDirection(input.direction);
+  const runId = requireNonblank("runId", input.runId);
+  return withSyncTransaction(db, () => {
+    const result = db
+      .prepare("delete from sync_runs where binding_id = ? and direction = ? and run_id = ?")
+      .run(bindingId, direction, runId) as { changes: number };
+    return result.changes > 0;
+  });
 }
 
 function writePlan(
@@ -399,7 +544,13 @@ function writePlan(
       // claim answers "may I send", so a receipt already on record means
       // somebody else did — the CURRENT row is what that caller must act on.
       if (mode === "replay") return { claimed: false, item: replayed };
-      return { claimed: false, item: toItem(requireItem(selectRow(db, bindingId, direction, localId))) };
+      const current = selectRow(db, bindingId, direction, localId);
+      // The claim key is stable per residue, not per attempt, so a recorded claim
+      // outlives the cycle that recorded it. It is an answer only while that
+      // cycle is still open: a `failed` row means the attempt ended (a refused
+      // write, a pre-send refusal), and the retry opens a new cycle under the
+      // SAME key. Only a `pending` row holds the send right.
+      if (current !== undefined && current.item_state === "pending") return { claimed: false, item: toItem(current) };
     }
     requireLocalIssue(db, localId);
     const now = new Date().toISOString();

@@ -11,11 +11,14 @@ import { afterAll, afterEach, beforeEach, describe, expect, test } from "bun:tes
 import {
   IMPORTED_ACCEPTANCE_KEY,
   IMPORTED_ROOT_CAUSE_KEY,
+  PUSH_DIRECTION,
+  acquireRun,
   bindProject,
   computeIdentityKey,
   initializeStore,
   openStore,
   readLedgerSummary,
+  readRun,
   writeLinearCredential,
   type IssueProvider,
   type ProbeResult,
@@ -937,7 +940,100 @@ describe("push — the credential scope preflight", () => {
     }
   });
 
-  test("the CLI spelling declares the push verb with its four repeatable operator flags", async () => {
+  test("a second push on the same binding is refused by name while the first holds the run, and --take-run takes a dead holder's run over", async () => {
+    const provider = writeProvider(["bug"]);
+    const f = await fixture("push-run-lease", null);
+    storeCredential("read,issues:create");
+    {
+      const handle = await openStore({ harnessDir: f.harnessDir }, "write");
+      handle.db.prepare(
+        "insert into issues(id, project_id, title, kind, severity, impact, acceptance, created_at, updated_at, identity_key)" +
+          " values ('I-000807', ?, 'Held', 'bug', 'high', 'i', 'a', 'now', 'now', 'sync-I-000807')",
+      ).run(PROJECT);
+      handle.close();
+    }
+    const context = withProvider(f, provider);
+    const bindingId = `linear:${PROJECT}`;
+
+    // A run that died inside its provider call leaves its row behind: the crash
+    // residue the lease must always have an exit for.
+    const holder = await openStore({ harnessDir: f.harnessDir }, "write");
+    const dead = acquireRun(holder.db, {
+      bindingId,
+      direction: PUSH_DIRECTION,
+      holderPid: 987654,
+      holderHost: "gone-builder",
+      reason: "issue-sync push",
+    });
+    holder.close();
+
+    const refused = (await executeCommand("issue-sync.push", { project: PROJECT }, context)) as {
+      status: string;
+      code: string;
+      message: string;
+      recovery?: string;
+      details?: Record<string, unknown>;
+    };
+    expect(refused.status).toBe("refused");
+    expect(refused.code).toBe("sync.run-held");
+    // The operator must be able to judge whether that holder is alive.
+    expect(refused.message).toContain(dead.startedAt);
+    expect(refused.message).toContain("987654");
+    expect(refused.message).toContain("gone-builder");
+    // BOTH recoveries are named, and the takeover is a documented, reachable flag.
+    expect(refused.message).toContain("--take-run");
+    expect(JSON.stringify(refused)).toContain("--take-run");
+    // Refused before any write: the provider was never called.
+    expect(provider.writes).toEqual([]);
+
+    // The row stayed put, so the refusal is repeatable rather than self-clearing.
+    const stillHeld = await openStore({ harnessDir: f.harnessDir }, "read");
+    expect(readRun(stillHeld.db, { bindingId, direction: PUSH_DIRECTION })).toEqual(dead);
+    stillHeld.close();
+
+    // Explicit operator intent replaces the dead holder's run and the push proceeds.
+    const taken = (await executeCommand("issue-sync.push", { project: PROJECT, takeRun: true }, context)) as {
+      status: string;
+      data?: { items: Array<{ localId: string; outcome: string }> };
+    };
+    expect(taken.status).toBe("ok");
+    expect(taken.data?.items).toEqual([expect.objectContaining({ localId: "I-000807", outcome: "created" })]);
+
+    // REPLACED, not coexisting, and released once the run ended: the next push
+    // takes the run normally instead of meeting two holders.
+    const after = await openStore({ harnessDir: f.harnessDir }, "read");
+    expect(readRun(after.db, { bindingId, direction: PUSH_DIRECTION })).toBeNull();
+    after.close();
+
+    const next = (await executeCommand("issue-sync.push", { project: PROJECT }, context)) as {
+      status: string;
+      data?: { items: Array<{ localId: string; outcome: string }> };
+    };
+    expect(next.status).toBe("ok");
+    expect(next.data?.items).toEqual([expect.objectContaining({ localId: "I-000807", outcome: "skipped" })]);
+  });
+
+  test("a completed push releases the run, so the next push acquires it instead of being refused", async () => {
+    const provider = writeProvider(["bug"]);
+    const f = await fixture("push-run-release", null);
+    storeCredential("read,issues:create");
+    const context = withProvider(f, provider);
+
+    // Two pushes in sequence: the first takes and releases the run, so the
+    // second meets no holder and is not refused.
+    const first = (await executeCommand("issue-sync.push", { project: PROJECT }, context)) as { status: string; code: string };
+    expect(first.status).toBe("ok");
+    const second = (await executeCommand("issue-sync.push", { project: PROJECT }, context)) as { status: string; code: string };
+    expect(second.status).toBe("ok");
+    const db = await f.db();
+    try {
+      expect(db.prepare("select count(*) as n from sync_runs").get()).toEqual({ n: 0 });
+    } finally {
+      db.close();
+    }
+  });
+
+  test("the CLI spelling declares the push verb with its four repeatable operator flags and the run takeover", async () => {
     const { getCommandDefinitions } = await import("../definitions.js");
     const definition = getCommandDefinitions().find((entry) => entry.id === "issue-sync.push");
     expect(definition).toBeDefined();
@@ -948,6 +1044,7 @@ describe("push — the credential scope preflight", () => {
       "--force-adopt <localId>",
       "--force-create <localId>",
       "--release <localId>",
+      "--take-run",
       "--harness <root>",
     ]);
     expect(definition!.cli.options.filter((option) => option.variadic === true).map((option) => option.key)).toEqual([

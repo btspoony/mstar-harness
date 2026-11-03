@@ -25,6 +25,7 @@ import {
   MIGRATION_15_SQL,
   MIGRATION_16_SQL,
   MIGRATION_17_SQL,
+  MIGRATION_18_SQL,
   MIGRATIONS,
   migrationChecksum,
   SCHEMA_VERSION_TABLE_SQL,
@@ -1766,6 +1767,31 @@ describe("migration 17 - the push ledger facts", () => {
     expect(rows).toEqual([
       { direction: "import", last_request_hash: null, last_kind_label: null },
       { direction: "push", last_request_hash: "h", last_kind_label: "bug" },
+    ]);
+    db.close();
+  });
+});
+
+describe("migration 18 - the run lease", () => {
+  test("one row per binding and direction, and it holds the holder's own facts", async () => {
+    const { Database } = await import("bun:sqlite");
+    const db = new Database(":memory:");
+    db.exec(MIGRATION_15_SQL);
+    db.exec(MIGRATION_16_SQL);
+    db.exec(MIGRATION_17_SQL);
+    db.exec(MIGRATION_18_SQL);
+    const insert = db.prepare(
+      "insert into sync_runs(binding_id, direction, run_id, holder_pid, holder_host, started_at, reason) values (?, ?, ?, ?, ?, ?, ?)",
+    );
+    insert.run("linear:p", "push", "run-1", 42, "host-a", "2026-11-03T00:00:00.000Z", "issue-sync push");
+    // The primary key is the whole arbitration: a second row cannot exist.
+    expect(() => insert.run("linear:p", "push", "run-2", 43, "host-b", "2026-11-03T00:00:01.000Z", "issue-sync push")).toThrow();
+    // Another direction of the same binding is a different run.
+    insert.run("linear:p", "import", "run-3", 44, "host-a", "2026-11-03T00:00:02.000Z", "issue-sync import");
+    const rows = db.query("select direction, run_id, holder_pid from sync_runs order by direction").all() as Array<{ direction: string; run_id: string; holder_pid: number }>;
+    expect(rows).toEqual([
+      { direction: "import", run_id: "run-3", holder_pid: 44 },
+      { direction: "push", run_id: "run-1", holder_pid: 42 },
     ]);
     db.close();
   });

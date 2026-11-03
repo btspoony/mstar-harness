@@ -17,16 +17,28 @@ packages: engine, commands
   one match adopts that id, zero or several report `unresolved` and write nothing, and a run with no ambiguous
   residue issues zero listing calls. Title+description equality is never adoption evidence, and the marker
   carries the store's own identity so two harnesses mirroring one team never adopt each other's rows.
-  `--force-create` decides that a remote issue is absent. It cannot decide that an attempt already in flight was
-  never sent, so while a `pending` row carries no id the flag is REFUSED: the row may belong to a create still
-  inside its provider call, and a second one beside it could never be reconciled. The refusal names the three
-  recoveries — re-run push so reconcile adopts by marker, record an identity you can see with `--adopt`, or, when
-  the scan proves nothing carries the marker and the issue is genuinely gone, `--release <localId>`. A release
-  drops that `pending` create to the retryable `failed` edge with the operator's judgement as its reason, so the
-  same run may create; a scan that found a match refuses it, because that item's recovery is adoption. Where no
-  unresolved attempt stands, a create takes the send-right claim under one shared key — binding, item, content
-  hash and the ledger revision — so two runs that read the same revision contend for exactly one create, while a
-  sequential retry stays distinct because every refusal, failure and apply advances that revision.
+  `--force-create` decides that a remote issue is absent. It cannot decide whether an earlier create landed, so
+  while a `pending` row carries no id the flag is REFUSED: a second issue beside that residue could never be
+  reconciled. The refusal names the three recoveries — re-run push so reconcile adopts by marker, record an
+  identity you can see with `--adopt`, or, when the scan proves nothing carries the marker and the issue is
+  genuinely gone, `--release <localId>`. A release drops that `pending` create to the retryable `failed` edge with
+  the operator's judgement as its reason, so the same run may create; a scan that found a match refuses it,
+  because that item's recovery is adoption. The create still takes a send-right claim — binding, item and content
+  hash — as its intent record, but the claim is no longer an arbiter between runs and no longer carries the ledger
+  revision: one run per binding below is what separates attempts, and a stable per-residue key means a re-run can
+  never mint a new one mid-attempt.
+- **One push run per binding, with an explicit takeover.** `mstar issue-sync push` is an operator command, not a
+  concurrent service, so it now serialises instead of pretending to be concurrency-safe. Migration 18 adds
+  `sync_runs`, one row per `(binding, direction)`; the run is claimed before any candidate work by a single
+  insert that fails when a row exists, and released in a `finally` on every exit — completion, refusal and throw.
+  The store's own write transaction is the arbiter: no file lock, no advisory lock, no staleness timer. A second
+  run is refused with `sync.run-held`, naming the current holder's start time, pid and host so an operator can
+  judge whether it is alive, plus both exits: wait for it to finish, or `--take-run` to take it over after
+  confirming the holder is dead. `--take-run` REPLACES the row (it never coexists with it), records the takeover as
+  the run's reason, and a taken-over run's own release matches nothing because it names its own run token, so it
+  cannot free its successor. A scripted parallel push is not supported. `--force-create` and `--release` keep
+  their meanings and lose their concurrency caveats: `--release` needs no in-flight check, because an in-flight
+  create of that residue cannot coexist with a running release.
 - **Labels are resolved, never created.** Kind→label is resolved against the workspace's real label set
   discovered through `list_issue_labels`; a mapped name the workspace lacks refuses that item
   (`linear.label-unresolved`) and other items proceed. A changed kind adds the new label and removes every
@@ -91,14 +103,23 @@ packages: engine, commands
   `<!-- mstar-sync: <workspace>/<team>/<storeId>/<localId> -->` 对账：恰好一个匹配时采纳该 id，零个或多个则报告
   `unresolved` 且不写入任何内容；没有含糊残留时一次列表调用都不发生。title+description 相同从不构成采纳证据，标记
   携带本 store 自身身份，因此两个镜像同一团队的 harness 永不互相采纳对方行。
-  `--force-create` 判定的是远端 issue 不存在。它无法判定一次仍在飞行中的尝试从未发送，因此当存在不带 id 的
-  `pending` 行时该标志会被拒绝：该行可能属于仍在 provider 调用中的创建，而在它旁边再建一个永远无法对账。
+  `--force-create` 判定的是远端 issue 不存在。它无法判定先前的创建是否落地，因此当存在不带 id 的 `pending`
+  行时该标志会被拒绝：在那条残留旁边再建一个永远无法对账。
   拒绝文本会点名三条恢复路径——重跑 push 让对账按标记采纳，用 `--adopt` 记录你已看到的身份，或在扫描证明
   没有任何 issue 携带该标记、且该 issue 确实已不存在时用 `--release <localId>`。释放会把这条 `pending`
   创建落到可重试的 `failed` 边上，并以操作者的判断作为原因，因此同一次运行即可创建；若扫描找到了匹配则会
-  拒绝释放，因为那一项的恢复手段是采纳。在不存在未解决尝试的情况下，创建同样需要取得发送权，且共用同一个键：
-  绑定、条目、内容 hash 与账本 revision——读过同一 revision 的两次运行只会争到一次创建，而顺序重试仍能区分，
-  因为每次拒绝、失败与应用都会推进该 revision。
+  拒绝释放，因为那一项的恢复手段是采纳。创建仍会取得一个发送权声明（绑定、条目、内容 hash）作为意图记录，
+  但它不再是运行之间的仲裁者，也不再携带账本 revision：运行之间的隔离由下面的「每绑定单次运行」承担，
+  而按残留固定的键意味着重跑永远不会在尝试中途造出新键。
+- **每绑定一次 push 运行，并提供显式接管。** `mstar issue-sync push` 是操作者命令，不是并发服务，因此改为
+  串行化，而不是假装并发安全。迁移 18 新增 `sync_runs`：每个 `(binding, direction)` 一行；任何候选工作之前
+  以单条 insert 取得运行权（已存在行时即失败），并在 `finally` 中随每次退出释放——完成、拒绝与抛错都包括。
+  仲裁者是 store 自身的写事务：没有文件锁、没有咨询锁、没有陈旧超时。第二次运行会以 `sync.run-held` 被拒绝，
+  并点明当前持有者的开始时间、pid 与 host，供操作者判断其是否存活，同时给出两条出路：等它结束，或在确认
+  持有者已死之后用 `--take-run` 接管。`--take-run` 是**替换**该行（绝不并存），并把接管记录为该次运行的原因；
+  被接管者的释放会因为运行令牌不匹配而删不掉任何东西，因此无法释放其继任者。脚本化的并行 push 不受支持。
+  `--force-create` 与 `--release` 保留原语义而去掉并发告警：`--release` 不再需要飞行中检查，因为该残留的
+  飞行中创建不可能与正在执行的释放并存。
 - **标签只解析、绝不创建。** kind→label 会针对通过 `list_issue_labels` 发现的真实工作区标签集解析；工作区没有该
   名称时仅拒绝该项（`linear.label-unresolved`），其余项继续。kind 变化时新增新标签，并通过 `removeLabels` 移除
   全部已记录的候选标签；没有记录标签的行只做新增，全量替换的 `labels` 参数永不发送，握手 schema 未声明

@@ -980,7 +980,7 @@ describe("(j) an unresolved create blocks every later create until reconcile att
   });
 });
 
-describe("(k) two pushes with the same content and revision produce exactly one create", () => {
+describe("(k) a stale ledger read cannot mint a second create for the same content", () => {
   const PLAN_OP = `linear-push:${BINDING}:I-001041:plan:hash:0`;
   const planInput = { bindingId: BINDING, direction: "push" as const, localId: "I-001041", operationId: PLAN_OP };
 
@@ -1005,15 +1005,14 @@ describe("(k) two pushes with the same content and revision produce exactly one 
     }
   });
 
-  test("a push that loses the create claim to a run already in flight sends nothing", async () => {
+  test("a push holding a stale ledger view cannot create beside an in-flight attempt", async () => {
     const { db, close } = await openedStore("claim-lost");
     try {
       addIssue(db, "I-001042");
       const ctx = context();
       const candidate = candidates(db)[0]!;
 
-      // A provably-undelivered attempt leaves the retryable `failed` edge: the
-      // state a later run may claim over, at the revision its key will carry.
+      // A provably-undelivered attempt leaves the retryable `failed` edge.
       const refused = provider({ receipts: [{ kind: "refused", code: "linear.write-refused", cause: "HTTP 400" }] });
       expect((await pushItem(db, refused, ctx, candidate)).outcome).toBe("failed");
       const preClaim = db
@@ -1021,19 +1020,20 @@ describe("(k) two pushes with the same content and revision produce exactly one 
         .get(BINDING, "push", "I-001042");
       expect(row(db, "I-001042")).toMatchObject({ itemState: "failed", externalId: null, revision: 2 });
 
-      // The winner claims that revision and parks inside its provider call. The
-      // store now holds its claim receipt AND the pending row it wrote.
+      // The attempt claims and parks inside its provider call.
       const { fake: winner, started, release } = writeInFlight();
       const winnerRun = pushItem(db, winner, ctx, candidate);
       await started;
 
-      // The loser read the ledger BEFORE that claim committed, so the row it
-      // sees is the failed one and it derives the SAME claim key. The store
-      // answers with the taken claim instead of a send right.
+      // A caller holding the PRE-claim view derives the same claim key — the key
+      // is a stable per-residue identity, not a per-attempt one — and the store
+      // answers with the row that attempt already opened instead of a send
+      // right. That is the residue guard's own backstop inside one process: the
+      // run lease is what stops a second process from getting this far.
       const loser = provider();
       const lost = await pushItem(staleFirstLedgerRead(db, preClaim), loser, ctx, candidate);
       expect(lost).toMatchObject({ outcome: "unresolved", externalId: null });
-      expect(lost.cause).toContain("another push already claimed this create");
+      expect(lost.cause).toContain("could not take the send right");
       expect(loser.writes).toEqual([]);
       // Nothing else moved: the row is still the winner's unresolved create.
       expect(row(db, "I-001042")).toMatchObject({ itemState: "pending", externalId: null });

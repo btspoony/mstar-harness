@@ -303,6 +303,7 @@ describe("issue project move", () => {
     legacyHandle.db.exec("drop table if exists issue_sync_state");
     legacyHandle.db.exec("drop table if exists sync_cursor");
     legacyHandle.db.exec("drop table if exists project_bindings");
+    legacyHandle.db.exec("drop table if exists sync_runs");
     legacyHandle.db.prepare("delete from schema_version where version >= 13").run();
     legacyHandle.close();
 

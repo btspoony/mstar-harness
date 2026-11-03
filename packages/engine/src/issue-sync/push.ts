@@ -143,16 +143,19 @@ export function requestHash(payload: ProviderWritePayload): string {
 }
 
 /**
- * The send-right key for one create: binding, item, content hash and the ledger
- * revision the attempt read. Revision is the ONLY discriminator between
- * attempts, so a sequential retry is distinct (its predecessor bumped it) while
- * two runs that read the same revision share one key and arbitrate. It cannot
- * cover the window where the predecessor's own claim is what advanced the
- * revision — that attempt is unresolved, and `pushItem` refuses to create at
- * all while one is (see the residue guard).
+ * The send-right key for one create: binding, item and content hash.
+ *
+ * Deliberately NOT keyed on the ledger revision, which every refusal, failure
+ * and apply advances. Revision keying existed only to discriminate attempts by
+ * making a bypass mint a different key — and it could not cover the window where
+ * the predecessor's own claim advanced it, which is the wedge three review rounds
+ * found. One run per binding (the run lease) is what separates attempts now, so
+ * the key is a stable per-residue identity: a re-run of the same item can never
+ * mint a new key mid-attempt, and `claimItem` re-opens the cycle under this same
+ * key when the previous attempt ended.
  */
-function createClaimId(bindingId: string, localId: string, hash: string, entryRevision: number): string {
-  return `linear-push:${bindingId}:${localId}:create:${hash}:${entryRevision}`;
+function createClaimId(bindingId: string, localId: string, hash: string): string {
+  return `linear-push:${bindingId}:${localId}:create:${hash}`;
 }
 
 /** Markdown description: the two local sections that have no remote field, then the marker. */
@@ -189,18 +192,16 @@ export async function pushItem(db: StoreDb, provider: IssueProvider, context: Pu
     // own reconcile scan finds no match, `--release <localId>` clears the row to
     // the retryable `failed` edge, which is the one exit for proven absence.
     //
-    // `--force-create` does not lift this guard. The run that wrote this row may
-    // still be inside its provider call — its claim is what advanced the
-    // revision, so a forced run would claim a DIFFERENT key and both would send
-    // a create over the whole network wait — and a crashed attempt leaves the
-    // same row. The two are indistinguishable from the ledger, so the flag
-    // asserts only what an operator can establish: no unresolved attempt.
+    // `--force-create` does not lift this guard. One run per binding means no
+    // create can be in flight beside this one, so the row is a CRASHED attempt's
+    // residue: the flag still cannot assert that no remote issue exists, which is
+    // the only thing that would make a second create safe.
     return {
       localId: candidate.localId,
       outcome: "unresolved",
       externalId: null,
       cause: context.forceCreate
-        ? "a create for this item was never confirmed and may still be in flight, so --force-create cannot establish its absence; nothing was sent. Re-run push without it - reconcile adopts the issue when exactly one remote issue carries the item's correlation marker - or record the identity yourself with --adopt <localId>=<issueUrl|externalId>; when that scan finds no match, --release <localId> releases the residue so the next push may create"
+        ? "a create for this item was never confirmed, so --force-create cannot establish its absence; nothing was sent. Re-run push without it - reconcile adopts the issue when exactly one remote issue carries the item's correlation marker - or record the identity yourself with --adopt <localId>=<issueUrl|externalId>; when that scan finds no match, --release <localId> releases the residue so the next push may create"
         : "a previous create was never confirmed; the next run reconciles it by correlation marker, or name its remote issue with --adopt <localId>=<issueUrl|externalId>. When that scan finds no match, --release <localId> releases the residue so the next push may create",
     };
   }
@@ -266,29 +267,25 @@ export async function pushItem(db: StoreDb, provider: IssueProvider, context: Pu
   // the write so an ambiguous result leaves a durable residue to reconcile
   // against.
   //
-  // The claim is what separates "I now hold the send right" from "someone else
-  // already took it for this exact content and revision": an idempotent replay
-  // returns the historical receipt, which two concurrent runs both treated as
-  // permission to create. A caller that did not WIN the claim sends nothing.
-  //
-  // EVERY create claims, `--force-create` included: the flag says the remote
-  // issue is absent, not that two concurrent runs may each create it. The key
-  // carries NO intent segment, so two runs that read the same content and
-  // revision arbitrate on ONE id — the revision component alone separates a
-  // sequential retry, because every refusal, failure and apply advances it.
-  const entryRevision = ledger?.revision ?? 0;
+  // The claim is the intent record, not the concurrency arbiter: one run per
+  // binding (the run lease) means no second run exists to race this create, so
+  // the key is a stable per-residue identity — binding, item, content — and a
+  // re-run of the same item opens the cycle under that same key rather than
+  // minting a new one. A `pending` claim is still refused here (the residue
+  // guard above answers first), so a crashed attempt's send right is never
+  // silently taken twice.
   const claim = claimItem(db, {
     bindingId: context.bindingId,
     direction: PUSH_DIRECTION,
     localId: candidate.localId,
-    operationId: createClaimId(context.bindingId, candidate.localId, hash, entryRevision),
+    operationId: createClaimId(context.bindingId, candidate.localId, hash),
   });
   if (!claim.claimed) {
     return {
       localId: candidate.localId,
       outcome: "unresolved",
       externalId: claim.item.externalId,
-      cause: "another push already claimed this create for the same content and revision; this attempt sent nothing and the ledger's row decides the outcome",
+      cause: "this create could not take the send right; the ledger's row decides the outcome and reconciliation resolves it",
     };
   }
   return apply(db, provider, context, candidate.localId, { kind: "create", payload }, hash, fields.label, ledger);
@@ -425,6 +422,10 @@ const RELEASE_REASON =
  * from the scan that proved absence: `failed` is the ledger's retryable edge, so
  * the next push claims the create again. The revision joins the operation id so
  * a later ambiguity for the same item is a new release, not a replay.
+ *
+ * No in-flight check is needed and none exists: this run holds the binding's
+ * only run (the run lease), so no create for that residue can be inside a
+ * provider call while this release runs.
  */
 function releasePendingCreate(db: StoreDb, context: PushContext, localId: string): void {
   const current = readItem(db, { bindingId: context.bindingId, direction: PUSH_DIRECTION, localId });

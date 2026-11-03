@@ -1763,7 +1763,30 @@ export const MIGRATION_17_SQL = `
 alter table issue_sync_state add column last_request_hash text;
 alter table issue_sync_state add column last_kind_label text;
 `;
-
+/**
+ * Migration 18 - the run lease.
+ *
+ * One row per (binding, direction) is the whole arbitration: an insert that
+ * finds a row means another run holds the direction, and the store's own write
+ * transaction decides it - no file lock, no timer, no staleness window. The
+ * holder's facts are recorded so a refusal can name WHO holds it and an
+ * operator can judge whether that process is still alive; `--take-run` replaces
+ * the row, which is why the run's own token (`run_id`) is what a release names
+ * and not the key: a takeover's predecessor can no longer release its
+ * successor.
+ */
+export const MIGRATION_18_SQL = `
+create table sync_runs(
+  binding_id text not null,
+  direction text not null,
+  run_id text not null,
+  holder_pid integer not null,
+  holder_host text not null,
+  started_at text not null,
+  reason text not null,
+  primary key (binding_id, direction)
+);
+`;
 
 /** Ordered immutable migrations. Never mutate an applied entry - append only. */
 export const MIGRATIONS: readonly Migration[] = [
@@ -1784,6 +1807,7 @@ export const MIGRATIONS: readonly Migration[] = [
   { version: 15, name: "sync-ledger", sql: MIGRATION_15_SQL },
   { version: 16, name: "sync-pending-target", sql: MIGRATION_16_SQL },
   { version: 17, name: "sync-push-ledger", sql: MIGRATION_17_SQL },
+  { version: 18, name: "sync-run-lease", sql: MIGRATION_18_SQL },
 ];
 const DSH_HOST_STATE_MIGRATION = MIGRATIONS.find((migration) => migration.name === "dsh-host-ledgers");
 
