@@ -18,8 +18,10 @@ packages: engine, commands
   residue issues zero listing calls. Title+description equality is never adoption evidence, and the marker
   carries the store's own identity so two harnesses mirroring one team never adopt each other's rows.
   `--force-create` decides that a remote issue is absent; it does not decide that two concurrent runs may
-  each create one, so a forced create takes the same send-right claim as an ordinary one, under its own
-  operation step so a legitimate forced retry is not refused by an ordinary create's receipt.
+  each create one, so a forced create takes the same send-right claim as an ordinary one, under one shared
+  key — binding, item, content hash and the ledger revision — so an ordinary and a forced run that read the
+  same revision contend for exactly one create, while a sequential retry stays distinct because every
+  refusal, failure and apply advances that revision.
 - **Labels are resolved, never created.** Kind→label is resolved against the workspace's real label set
   discovered through `list_issue_labels`; a mapped name the workspace lacks refuses that item
   (`linear.label-unresolved`) and other items proceed. A changed kind adds the new label and removes every
@@ -83,7 +85,8 @@ packages: engine, commands
   `unresolved` 且不写入任何内容；没有含糊残留时一次列表调用都不发生。title+description 相同从不构成采纳证据，标记
   携带本 store 自身身份，因此两个镜像同一团队的 harness 永不互相采纳对方行。
   `--force-create` 判定的是远端 issue 不存在，而不是两个并发运行可以各自创建一个，因此强制创建与普通创建一样需要
-  取得发送权；它使用自己的 operation 步骤，合法强制重试不会被普通创建的回执拒绝。
+  取得发送权，且共用同一个键：绑定、条目、内容 hash 与账本 revision——读过同一 revision 的普通运行与强制运行只会
+  争到一次创建，而顺序重试仍能区分，因为每次拒绝、失败与应用都会推进该 revision。
 - **标签只解析、绝不创建。** kind→label 会针对通过 `list_issue_labels` 发现的真实工作区标签集解析；工作区没有该
   名称时仅拒绝该项（`linear.label-unresolved`），其余项继续。kind 变化时新增新标签，并通过 `removeLabels` 移除
   全部已记录的候选标签；没有记录标签的行只做新增，全量替换的 `labels` 参数永不发送，握手 schema 未声明

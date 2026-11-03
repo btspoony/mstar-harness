@@ -30796,6 +30796,9 @@ function requestHash4(payload) {
     payload.labels ?? []
   ])).digest("hex");
 }
+function createClaimId(bindingId, localId, hash2, entryRevision) {
+  return `linear-push:${bindingId}:${localId}:create:${hash2}:${entryRevision}`;
+}
 function descriptionFor(candidate, marker) {
   return `## Impact
 
@@ -30847,12 +30850,11 @@ async function pushItem(db, provider, context, candidate) {
     return apply(db, provider, context, candidate.localId, { kind: "update", externalId, payload }, hash2, fields.label, ledger, ambiguousResidue);
   }
   const entryRevision = ledger?.revision ?? 0;
-  const step = context.forceCreate === true ? "force-plan" : "plan";
   const claim = claimItem(db, {
     bindingId: context.bindingId,
     direction: PUSH_DIRECTION,
     localId: candidate.localId,
-    operationId: `linear-push:${context.bindingId}:${candidate.localId}:${step}:${hash2}:${entryRevision}`
+    operationId: createClaimId(context.bindingId, candidate.localId, hash2, entryRevision)
   });
   if (!claim.claimed) {
     return {
