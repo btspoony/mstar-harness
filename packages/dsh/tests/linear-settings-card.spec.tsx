@@ -593,6 +593,72 @@ describe('the card learns an outcome from a slow consent', () => {
     }
   })
 
+  it('an attempt already live on the host renders in-flight, not denied, and keeps observing', async () => {
+    let authorized = false
+    const { connection, calls } = stubConnection((endpoint) => {
+      if (endpoint === LINEAR_STATUS_ENDPOINT) return authorized ? READY_AUTHORIZED : READY_ABSENT
+      if (endpoint === LINEAR_AUTHORIZE_BEGIN_ENDPOINT) return { status: 'attempt-active' }
+      throw new Error(`unexpected ${endpoint}`)
+    })
+    const timers = manualTimers()
+    const store = storeFor(connection, { openBrowser: () => {}, schedule: timers.schedule, cancelSchedule: timers.cancel })
+    await store.refresh()
+
+    // Another tab owns the live attempt: this store gets no id, so the row the
+    // host writes on success is the only observable it can watch.
+    expect(await store.begin()).toEqual({ status: 'attempt-active' })
+    expect(render(store)).toContain('data-ms-linear-state="loading"')
+    await flush()
+    const pending = render(store)
+    expect(pending).toContain('data-ms-linear-state="authorizing"')
+    expect(pending).toContain('data-ms-linear-outcome="in-flight"')
+    expect(pending).not.toContain('data-ms-linear-outcome="denied"')
+    expect(timers.pending()).toBe(1)
+
+    authorized = true
+    timers.fire()
+    await flush()
+    const html = render(store)
+    expect(html).toContain('data-ms-linear-state="authorized"')
+    expect(html).not.toContain('data-ms-linear-outcome="in-flight"')
+    // It never asked the host for another attempt's status (it has no id), and
+    // the row it could read is what ended the observation.
+    expect(calls.filter((call) => call.endpoint === LINEAR_AUTHORIZE_STATUS_ENDPOINT)).toHaveLength(0)
+    expect(calls.filter((call) => call.endpoint === LINEAR_STATUS_ENDPOINT).length).toBeGreaterThanOrEqual(2)
+    store.dispose()
+  })
+
+  it('stops watching a live attempt that never lands, so Authorize is reachable again', async () => {
+    const { connection } = stubConnection((endpoint) => {
+      if (endpoint === LINEAR_STATUS_ENDPOINT) return READY_ABSENT
+      if (endpoint === LINEAR_AUTHORIZE_BEGIN_ENDPOINT) return { status: 'attempt-active' }
+      throw new Error(`unexpected ${endpoint}`)
+    })
+    // Two probes make the host's attempt window at this cadence.
+    const timers = manualTimers()
+    const store = storeFor(connection, {
+      pollMs: 150_000,
+      openBrowser: () => {},
+      schedule: timers.schedule,
+      cancelSchedule: timers.cancel,
+    })
+    await store.refresh()
+    await store.begin()
+
+    timers.fire()
+    await flush()
+    expect(timers.pending()).toBe(1)
+    timers.fire()
+    await flush()
+    expect(timers.pending()).toBe(0)
+
+    const html = render(store)
+    expect(html).not.toContain('data-ms-linear-outcome="in-flight"')
+    expect(html).toContain('data-ms-linear-state="unauthorized"')
+    expect(html).toContain('data-ms-linear-action="authorize"')
+    store.dispose()
+  })
+
   it('a transport failure on one status poll keeps observing instead of collapsing into denied', async () => {
     let polls = 0
     const { connection } = stubConnection((endpoint) => {

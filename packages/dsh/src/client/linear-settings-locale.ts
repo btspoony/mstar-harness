@@ -36,7 +36,7 @@ export type LinearSettingsKey =
   | 'expiry.unknown'
   | 'action.authorize'
   | 'action.cancel'
-  | 'outcome.attempt-active'
+  | 'outcome.in-flight'
   | 'outcome.denied'
   | 'outcome.timeout'
   | 'outcome.cancelled'
@@ -75,7 +75,7 @@ export const zh: LocaleDictOf<'ui-mstar-linear-settings'> = {
   'expiry.unknown': '未知',
   'action.authorize': 'Authorize',
   'action.cancel': '取消本次授权',
-  'outcome.attempt-active': '此 host 上已有一次授权正在进行。请在已打开的浏览器中完成它，或先取消再开始新的授权。',
+  'outcome.in-flight': '此 host 上已有一次授权正在进行。请在已打开的浏览器中完成它；本卡片会持续观察它是否完成，期间不会把它当作失败。',
   'outcome.denied': '授权未完成（{reason}）。',
   'outcome.timeout': '未收到授权回调。若当前浏览器不在 host 机器上，回环回调无法返回——请改在 host 本机授权，或在 host 终端运行 mstar linear auth。',
   'outcome.cancelled': '已取消本次授权，可以重新开始。',
@@ -109,7 +109,7 @@ export const en: LocaleDictOf<'ui-mstar-linear-settings'> = {
   'expiry.unknown': 'unknown',
   'action.authorize': 'Authorize',
   'action.cancel': 'Cancel this authorization',
-  'outcome.attempt-active': 'An authorization is already in progress on this host. Finish it in the browser that opened, or cancel it before starting another.',
+  'outcome.in-flight': 'An authorization is already in progress on this host. Finish it in the browser that opened; this card keeps watching for it to complete and does not treat it as a failure.',
   'outcome.denied': 'Authorization did not complete ({reason}).',
   'outcome.timeout': 'No authorization callback arrived. If this browser is not on the host machine, the loopback callback cannot return — authorize from a browser on the host, or run mstar linear auth in the host terminal.',
   'outcome.cancelled': 'Authorization cancelled. You can start again.',
