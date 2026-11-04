@@ -6,6 +6,18 @@
 
 ## [Unreleased]
 
+## [4.2.0] - 2026-11-04
+
+### Harness
+
+- **PR review 分类下限：** 文档措辞、示例与格式问题上限为 `nit`——仅当文档内容本身错误到改变读者行为时才可上浮；要求新增校验、门禁、限制、回退或极端条件处理的 finding 必须证明该条件可达，否则进入 considered & rejected，而不是 `should-fix`。
+- 更新 `mstar-audit` 的 `pr-review.md` § Merge class、`finding-format.md` § What disqualifies a finding 与 `audit-playbook.md` §5。
+- **发布准备现在会重写 `bun.lock`**：`bun run release:prepare` 同步锁文件记录的各 workspace 版本与根 `@mstar-harness/engine` 版本范围，`release:validate` 也会在锁文件仍记录其他 workspace 版本或 engine 版本范围时判失败。发布后执行 `bun i` 不再留下脏改动。
+
+### 版本对齐
+
+- 提升 monorepo 根、`@mstar-harness/opencode`、`@mstar-harness/opencode-v2`、`@mstar-harness/cli`、`@mstar-harness/engine`、`@mstar-harness/dsh`、Cursor/Codex/Kimi/ZCode/omp/Claude 插件清单、便携式 Agent Plugins 清单及两份 marketplace 清单：**→ 4.2.0**。
+
 ## [4.1.6] - 2026-11-03
 
 ### Changed

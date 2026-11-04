@@ -6,6 +6,116 @@ The monorepo root [CHANGELOG.md](../../CHANGELOG.md) summarizes cross-surface re
 
 ## [Unreleased]
 
+## [4.2.0] - 2026-11-04
+
+### Harness
+
+- **One-way push to Linear.** `mstar issue-sync push --project <id>` sends this project's local issues to the
+  bound Linear team: create when no remote identity is known, update the confirmed id when a field changed,
+  skip with zero write calls when the normalized payload hash is unchanged. Migration 17 adds the ledger's two
+  nullable push facts, `last_request_hash` (the skip rule) and `last_kind_label` (the labels mstar may have
+  written, kept as a candidate set because an unconfirmed update leaves more than one possible); the import
+  direction leaves both null. Only a confirmed receipt or an explicit `--adopt` ever records an
+  `external_id`, so a hash is never treated as proof the remote issue exists.
+- **An unconfirmed write can never duplicate a create.** The write adapter classifies every outcome as
+  `confirmed` / `refused` / `ambiguous`; `refused` is provably not delivered and records `failed` for a safe
+  retry, while `ambiguous` leaves the row `pending` with no id. A 4xx is `refused` only where the server cannot
+  have executed the write: `408 Request Timeout` and `425 Too Early` are `ambiguous`, because a deadline or an
+  early-data refusal can arrive after the mutation ran. The next run reconciles such rows by the
+  application-owned correlation marker `<!-- mstar-sync: <workspace>/<team>/<storeId>/<localId> -->`: exactly
+  one match adopts that id, zero or several report `unresolved` and write nothing, and a run with no ambiguous
+  residue issues zero listing calls. Title+description equality is never adoption evidence, and the marker
+  carries the store's own identity so two harnesses mirroring one team never adopt each other's rows.
+  No flag can assert that a remote issue is absent: neither an unresolved create attempt nor any earlier request
+  can be proven not to have landed, so while a `pending` row carries no id nothing creates. The three recoveries
+  are re-run push so reconcile adopts by marker, record an identity you can see with `--adopt`, or, when the scan
+  proves nothing carries the marker and the issue is genuinely gone, `--release <localId>`. A release drops that
+  `pending` create to the retryable `failed` edge with the operator's judgement as its reason, so the same run may
+  create; a scan that found a match refuses it, because that item's recovery is adoption. The create still takes
+  a send-right claim — binding, item and content hash — as its intent record, but the claim is no longer an
+  arbiter between runs and no longer carries the ledger revision: the run lease below is what separates RUNNING
+  attempts, and a stable per-residue key means a re-run can never mint a new one mid-attempt.
+- **One push run per binding, with an explicit takeover.** `mstar issue-sync push` is an operator command, not a
+  concurrent service, so it now serialises instead of pretending to be concurrency-safe. Migration 18 adds
+  `sync_runs`, one row per `(binding, direction)`; the run is claimed before any candidate work by a single
+  insert that fails when a row exists, and released in a `finally` on every exit — completion, refusal and throw.
+  A second run is refused with `sync.run-held`, naming the current holder's start time, pid and host so an operator
+  can judge whether it is alive, plus both exits: wait for it to finish, or `--take-run` to take it over after
+  confirming the holder is dead. `--take-run` REPLACES the row (it never coexists with it), records the takeover as
+  the run's reason, and a taken-over run's own release matches nothing because it names its own run token, so it
+  cannot free its successor. A scripted parallel push is not supported.
+  **What the lease actually arbitrates is acquisition, not the whole run.** The run token is carried into every
+  ledger write, so a run that a takeover replaced has its LATER writes refused with `sync.run-taken` instead of
+  applied — the successor is unaffected (its own id is the one the row holds) and the ordinary single-run path is
+  unchanged. What no guard can do is recall a request the predecessor had ALREADY sent when the takeover landed: it
+  may still reach the provider, which is why the reconcile-by-marker scan remains the first recovery and why
+  `pending` residue is never created over. Taking the run over from a LIVE holder is therefore unsafe —
+  `--take-run` is for a holder the operator confirmed is dead, never a timer or a liveness guess.
+  `--release` keeps its meaning; a release still needs no check for a RUNNING create of that residue, but it can
+  never see one a dead holder already sent.
+- **Labels are resolved, never created.** Kind→label is resolved against the workspace's real label set
+  discovered through `list_issue_labels`; a mapped name the workspace lacks refuses that item
+  (`linear.label-unresolved`) and other items proceed. A changed kind adds the new label and removes every
+  recorded candidate via `removeLabels` — a row with no recorded label only adds, the full-replace `labels`
+  argument is never sent, and a host handshake whose schema does not advertise `removeLabels` refuses that
+  update before any write. An update whose receipt is unconfirmed keeps BOTH the old and the attempted label as
+  candidates, so the retry removes whichever one the remote actually kept.
+- **Workflow states are resolved the same way.** Disposition→state is resolved against the bound team's real
+  workflow states discovered through `list_issue_statuses`; a mapped name the team lacks refuses that item
+  (`linear.state-unresolved`) before the call and names the `[linear.mapping] disposition.<state>` redirect, so a
+  renamed workflow is diagnosed in the run instead of failing every item at the provider. The report carries the
+  state set the run resolved against, beside the label set.
+- **Writes need a write scope.** The run refuses with `linear.scope-insufficient` before any provider call when
+  the credential it will actually authenticate with carries neither `issues:create` nor `write`, naming the
+  explicit reauthorization (`mstar linear auth login` or the dsh Settings Authorize). Only the effective
+  credential is gated: a stored grant that is expired and unrefreshable is not the one used, so an exported
+  `LINEAR_API_KEY` supplies the run and decides by its own capability. A refresh never widens a read-only
+  grant. Operator recovery beyond automatic reconcile: `--adopt <localId>=<issueUrl|externalId>` records an
+  identity you confirmed, and `--release <localId>` clears a `pending` create once reconcile's own scan proves no
+  remote issue carries the item's marker. The two verbs are also checked against each other before any write:
+  naming one local item under both `--adopt` and `--release`, or under two `--adopt` entries, is refused as
+  `sync.operator-conflict` — each entry alone passed its own ledger check, so the adoption used to land before
+  reconcile refused the release.
+- **Adoption drops the proof of a REPLACED identity.** `--adopt` records the identity you confirmed and, when that
+  is a different issue than the row already pointed at, CLEARS the payload hash and label ownership it held: both
+  described the previous issue, so carrying them over would report `skipped` for content the newly adopted issue
+  never received and let a later kind change remove a label recorded for the previous one. Content therefore
+  converges onto the adopted issue in the same run. Re-confirming the id already recorded is not a replacement:
+  its hash and ownership still describe that same remote issue, so they are kept and a later kind change removes
+  the label it owns. Replacing an identity that is already recorded is refused as `sync.identity-conflict` unless
+  `--force-adopt <localId>` names that item.
+- **A refused update is visible on the row.** A push whose write the provider refuses reports `failed`; when the
+  row already holds an identity, `applied → failed` is not a legal edge, so the cause is recorded through the
+  error-only verb instead. The row keeps its state, identity and proof, the dashboard shows the cause, and the
+  changed hash still makes the next run retry the write. A `pending` row with no id is untouched as before, so
+  reconciliation can still find it.
+- **A create lands in the bound project.** `save_issue` is called with the bound `project` as well as the
+  `team`, so a created issue sits where the binding says and the marker-based recovery reads (which filter by
+  that project) can find it. An update never sends `project`: the recorded identity already lives in the right
+  project, and the argument would move it.
+- **The state refusal names the key the resolver reads.** `linear.state-unresolved` points at
+  `[linear.mapping] disposition.<key>`, where `<key>` is the DEFAULT target state the local disposition maps to
+  (`Todo`/`Done`/`Canceled`), because that is the key `stateOfDisposition` looks up. `waived`, `duplicate` and
+  `superseded` all collapse onto `Canceled`, and the message says so instead of printing a local disposition
+  name no resolver reads.
+- **The probe deadline aborts the call it timed out.** `LinearProbeDeps.rpc` now receives an `AbortSignal` that
+  fires when the handshake deadline expires, so a transport stuck in flight is cancelled instead of being
+  abandoned while it keeps holding its socket. The caller still observes the same single
+  `unreachable: Linear MCP handshake timed out after <n>ms` cause; a transport that reports the abort as its own
+  error cannot turn that into a transport failure.
+- **A refresh commit honours a newer sign-out or grant.** Every writer decides inside `commitLinearCredential`,
+  whose lineage check re-reads the file and declines when a `mstar linear logout` or a re-authorization landed
+  during the refresh's network round trip — the long window that used to be overwritten. The remaining
+  microsecond window between that final read and the rename is accepted: a sign-out landing exactly there can be
+  overwritten by the refresh it raced, and the operator clears the stale grant by signing out again. The dsh
+  refresh and the CLI `issue-sync` refresh both commit through that seam.
+- **Stored project correspondence on the read.** `SyncBindingDTO` gains two fields: `projectBindings` — the `project_id` → `remote_project` rows from `project_bindings`, read-only and ordered by project id — and `projectBindingsError`, the read's own failure or `null`. A store that opens but cannot answer (it predates migration 15, so there is no `project_bindings` table, or the database refuses the read) answers `[]` **plus** that error rather than pretending the correspondence is empty; the panel renders `unavailable` with the reader's reason. A store that cannot be opened at all still fails the view before the row read runs (`store.not-initialized`), so `projectBindingsError` covers the readable-store failure only. The binding view model turns the payload into three display records (identity, correspondence, readiness): a readiness state that arrives without a cause is refused rather than rendered, `not-probed` keeps its own cause so an unasked question stays distinct from a missing `[linear]` declaration, and no record carries a credential field.
+- **Sync-binding screen.** The design system's `sync-binding` panel is now a product screen: `SyncBinding` renders the `.mstarc [linear]` identity, one correspondence row per stored binding (with an explicit empty state when the store holds none), and the probe's readiness state paired with the cause the read supplied. A null binding renders the reader's refusal (`bindingError`) verbatim in place of the identity fields; the readiness panel keeps its own pair, which is `not-probed` with the cause the read supplies when no probe result arrives. No issue row, no failure counter and no token reaches the panel. Exported from `@mstar-harness/ui`, with both locales complete.
+
+- Version alignment with harness **4.2.0**.
+
+See root [CHANGELOG.md](../../CHANGELOG.md) **4.2.0**.
+
 ## [4.1.6] - 2026-11-03
 
 ### Changed

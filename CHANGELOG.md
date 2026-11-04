@@ -8,6 +8,18 @@ Package-specific histories: [`packages/cli/CHANGELOG.md`](packages/cli/CHANGELOG
 
 ## [Unreleased]
 
+## [4.2.0] - 2026-11-04
+
+### Harness
+
+- **PR review class floors:** documentation wording, examples and formatting are capped at `nit` — a docs finding rises only when the content is itself wrong enough to change what a reader does; a finding asking for new validation, gates, limits, fallbacks or extreme-condition handling must prove the condition reachable, otherwise it is a rejected candidate rather than `should-fix`.
+- Updated `mstar-audit` `pr-review.md` § Merge class, `finding-format.md` § What disqualifies a finding, and `audit-playbook.md` §5.
+- **Release prep now rewrites `bun.lock`**: `bun run release:prepare` syncs the workspace versions the lockfile records and the root `@mstar-harness/engine` range, then `release:validate` fails a tag whose lockfile still records another workspace version or engine range. A post-release `bun i` leaves the tree clean.
+
+### Version alignment
+
+- Bump monorepo root, `@mstar-harness/opencode`, `@mstar-harness/opencode-v2`, `@mstar-harness/cli`, `@mstar-harness/engine`, `@mstar-harness/dsh`, Cursor/Codex/Kimi/ZCode/omp/Claude plugin manifests, the portable Agent Plugins manifest, and both marketplace manifests: **→ 4.2.0**.
+
 ## [4.1.6] - 2026-11-03
 
 ### Changed

@@ -6,6 +6,17 @@ The monorepo root [CHANGELOG.md](../../CHANGELOG.md) summarizes cross-surface re
 
 ## [Unreleased]
 
+## [4.2.0] - 2026-11-04
+
+### Harness
+
+- **PR review class floors:** documentation wording, examples and formatting are capped at `nit` — a docs finding rises only when the content is itself wrong enough to change what a reader does; a finding asking for new validation, gates, limits, fallbacks or extreme-condition handling must prove the condition reachable, otherwise it is a rejected candidate rather than `should-fix`.
+- Updated `mstar-audit` `pr-review.md` § Merge class, `finding-format.md` § What disqualifies a finding, and `audit-playbook.md` §5.
+
+- Version alignment with harness **4.2.0** (no OpenCode package API change).
+
+See root [CHANGELOG.md](../../CHANGELOG.md) **4.2.0**.
+
 ## [4.1.6] - 2026-11-03
 
 ### Bundled harness skills (`harness-skills/` at publish)
