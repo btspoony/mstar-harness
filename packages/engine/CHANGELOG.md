@@ -6,6 +6,16 @@ The monorepo root [CHANGELOG.md](../../CHANGELOG.md) summarizes cross-surface re
 
 ## [Unreleased]
 
+## [4.2.1] - 2026-11-04
+
+### Harness
+
+- **PR review gains a fourth merge class, `may-fix`, with a surface gate.** Test and documentation findings are capped at `may-fix` however serious the underlying gap reads — a review contract rather than a lint rule: lint only checks class presence, enum membership and placement, and the merge-class assignment itself stays a seat/PM judgement. `may-fix` is counted, listed in full, captured as an issue and deducted from the score, but it never selects a verdict — a review whose only findings are tests or docs still returns `ship it`. A leftover unmet acceptance criterion obeys the same cap: a test or docs AC increments `may-fix` and can never select `needs fixes` or `blocked`, while an implementation AC keeps the unsafe/safe split. Implementation findings keep the previous bands above the small-impact tier (`critical` → `must-fix`; `high` / `medium` → `should-fix`), while `low` moves from `nit` to `may-fix`. The locked deduction schedule gains `may-fix` `max(6 − 2·(n−1), 1)` → 6,4,2,1,1… with a class cap of 15. The chat header and report tally gain the `may-fix` count; a report or envelope written before the class existed stays valid and reads `may-fix` as 0.
+
+- Version alignment with harness **4.2.1**.
+
+See root [CHANGELOG.md](../../CHANGELOG.md) **4.2.1**.
+
 ## [4.2.0] - 2026-11-04
 
 ### Harness
