@@ -491,7 +491,7 @@ describe("Merge-class refusal — pr-review.md § Tally and derived score", () =
     ["a misspelled class", "mustfix"],
     ["an underscore class", "must_fix"],
     ["an empty class", ""],
-    ["a missing class", {}],
+    ["an object-valued class", {}],
     ["a non-string class", 42],
   ] as const)("an off-enum mergeClass (%s) is a TypeError", (_label, mergeClass) => {
     expect(() =>
@@ -503,6 +503,12 @@ describe("Merge-class refusal — pr-review.md § Tally and derived score", () =
     expect(() =>
       computePrTally({ findings: [{ mergeClass: "mustfix" }] as unknown as PrTallyInput["findings"] }),
     ).toThrow("computePrTally: findings[0].mergeClass must be one of must-fix | should-fix | may-fix | nit - got \"mustfix\"");
+  });
+
+  test("a finding with no mergeClass property is refused, not counted as nit", () => {
+    expect(() =>
+      computePrTally({ findings: [{}] as unknown as PrTallyInput["findings"] }),
+    ).toThrow("computePrTally: findings[0].mergeClass must be one of must-fix | should-fix | may-fix | nit - got undefined");
   });
 });
 
