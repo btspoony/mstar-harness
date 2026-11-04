@@ -47,7 +47,7 @@ const CHECK_TABLE: Array<{
 }> = [
   {
     row: 1,
-    label: "0 / 0 / 0 / 0 (clean)",
+    label: "0 / 0 / 0 / 0 / 0 (clean)",
     input: { findings: [], unverifiedCount: 0 },
     expected: {
       scorePct: 100,
@@ -59,7 +59,7 @@ const CHECK_TABLE: Array<{
   },
   {
     row: 2,
-    label: "0 / 0 / 0 / 0 + 1 leftover unmet AC (safe)",
+    label: "0 / 0 / 0 / 0 / 0 + 1 leftover unmet AC (safe)",
     input: { findings: [], unverifiedCount: 0, unmetAc: [{ unsafeToShip: false }] },
     expected: {
       scorePct: 88,
@@ -71,7 +71,7 @@ const CHECK_TABLE: Array<{
   },
   {
     row: 3,
-    label: "0 / 0 / 0 / 0 + 1 leftover unmet AC (unsafe-to-ship)",
+    label: "0 / 0 / 0 / 0 / 0 + 1 leftover unmet AC (unsafe-to-ship)",
     input: { findings: [], unverifiedCount: 0, unmetAc: [{ unsafeToShip: true }] },
     expected: {
       scorePct: 55,
@@ -83,7 +83,7 @@ const CHECK_TABLE: Array<{
   },
   {
     row: 4,
-    label: "0 / 0 / 2 / 0",
+    label: "0 / 0 / 0 / 2 / 0",
     input: { findings: [{ mergeClass: "nit" }, { mergeClass: "nit" }], unverifiedCount: 0 },
     expected: {
       scorePct: 97,
@@ -95,7 +95,7 @@ const CHECK_TABLE: Array<{
   },
   {
     row: 5,
-    label: "0 / 0 / 0 / 2",
+    label: "0 / 0 / 0 / 0 / 2",
     input: { findings: [], unverifiedCount: 2 },
     expected: {
       scorePct: 90,
@@ -107,7 +107,7 @@ const CHECK_TABLE: Array<{
   },
   {
     row: 6,
-    label: "0 / 1 / 0 / 0",
+    label: "0 / 1 / 0 / 0 / 0",
     input: { findings: [{ mergeClass: "should-fix" }], unverifiedCount: 0 },
     expected: {
       scorePct: 88,
@@ -119,7 +119,7 @@ const CHECK_TABLE: Array<{
   },
   {
     row: 7,
-    label: "0 / 1 / 1 / 0",
+    label: "0 / 1 / 0 / 1 / 0",
     input: {
       findings: [{ mergeClass: "should-fix" }, { mergeClass: "nit" }],
       unverifiedCount: 0,
@@ -134,7 +134,7 @@ const CHECK_TABLE: Array<{
   },
   {
     row: 8,
-    label: "0 / 0 / 2 / 0 (may-fix only, still shippable)",
+    label: "0 / 0 / 2 / 0 / 0 (may-fix only, still shippable)",
     input: { findings: [{ mergeClass: "may-fix" }, { mergeClass: "may-fix" }], unverifiedCount: 0 },
     expected: {
       scorePct: 90, // 6 + 4 = 10 deducted; may-fix never selects a verdict
@@ -146,7 +146,7 @@ const CHECK_TABLE: Array<{
   },
   {
     row: 9,
-    label: "0 / 0 / 6 / 0 (may-fix class cap 15)",
+    label: "0 / 0 / 6 / 0 / 0 (may-fix class cap 15)",
     input: { findings: Array.from({ length: 6 }, () => ({ mergeClass: "may-fix" as const })), unverifiedCount: 0 },
     expected: {
       scorePct: 85, // 6 + 4 + 2 + 1 + 1 + 1 = 15, exactly the class cap
@@ -158,7 +158,7 @@ const CHECK_TABLE: Array<{
   },
   {
     row: 10,
-    label: "1 / 0 / 0 / 0",
+    label: "1 / 0 / 0 / 0 / 0",
     input: { findings: [{ mergeClass: "must-fix" }], unverifiedCount: 0 },
     expected: {
       scorePct: 55,
@@ -170,7 +170,7 @@ const CHECK_TABLE: Array<{
   },
   {
     row: 11,
-    label: "1 / 2 / 1 / 1",
+    label: "1 / 2 / 0 / 1 / 1",
     input: {
       findings: [
         { mergeClass: "must-fix" },
@@ -190,7 +190,7 @@ const CHECK_TABLE: Array<{
   },
   {
     row: 12,
-    label: "3 / 0 / 0 / 0",
+    label: "3 / 0 / 0 / 0 / 0",
     input: {
       findings: [
         { mergeClass: "must-fix" },
@@ -209,7 +209,7 @@ const CHECK_TABLE: Array<{
   },
   {
     row: 13,
-    label: "0 / 0 / 10 / 0 (nit class cap 8)",
+    label: "0 / 0 / 0 / 10 / 0 (nit class cap 8)",
     input: { findings: Array.from({ length: 10 }, () => ({ mergeClass: "nit" as const })), unverifiedCount: 0 },
     expected: {
       scorePct: 92, // 2 + 9 = 11 uncapped → capped at 8
@@ -221,7 +221,7 @@ const CHECK_TABLE: Array<{
   },
   {
     row: 14,
-    label: "0 / 0 / 0 / 3 (unverified cap 15)",
+    label: "0 / 0 / 0 / 0 / 3 (unverified cap 15)",
     input: { findings: [], unverifiedCount: 3 },
     expected: {
       scorePct: 85, // 3 * 5 = 15, exactly the class cap
@@ -233,7 +233,7 @@ const CHECK_TABLE: Array<{
   },
   {
     row: 15,
-    label: "7 / 0 / 0 / 0 (floor)",
+    label: "7 / 0 / 0 / 0 / 0 (floor)",
     input: { findings: Array.from({ length: 7 }, () => ({ mergeClass: "must-fix" as const })), unverifiedCount: 0 },
     expected: {
       scorePct: 0, // 45 + 6*15 = 135 would be -35
@@ -245,7 +245,7 @@ const CHECK_TABLE: Array<{
   },
   {
     row: 16,
-    label: "0 / 0 / 0 / 100 (unverified cap, not 0)",
+    label: "0 / 0 / 0 / 0 / 100 (unverified cap, not 0)",
     input: { findings: [], unverifiedCount: 100 },
     expected: {
       scorePct: 85,
@@ -772,6 +772,22 @@ describe("validatePrReviewReport — arithmetic drift flags", () => {
     const gate = validatePrReviewReport(bad);
     expect(gate.ok).toBe(false);
     expect(codes(gate)).toContain("prreview.report.verdict-mismatch");
+  });
+
+  test("may-fix counts enter the recompute — 0 / 0 / 2 / 0 / 0 scores 90, not the may-fix-blind 100", () => {
+    const mayFixReport = report("")
+      .replace(
+        "tally: { must-fix: 0, should-fix: 1, nit: 2, unverified: 0 }",
+        "tally: { must-fix: 0, should-fix: 0, may-fix: 2, nit: 0, unverified: 0 }",
+      )
+      .replace("score_pct: 85", "score_pct: 90")
+      .replace("verdict: needs fixes", "verdict: ship it");
+    expect(validatePrReviewReport(mayFixReport).ok).toBe(true);
+
+    const ignoringMayFix = mayFixReport.replace("score_pct: 90", "score_pct: 100");
+    const gate = validatePrReviewReport(ignoringMayFix);
+    expect(gate.ok).toBe(false);
+    expect(codes(gate)).toContain("prreview.report.score-mismatch");
   });
 
   test("must-fix tally with ship-it verdict is flagged even at matching score", () => {

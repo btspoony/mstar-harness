@@ -151,6 +151,23 @@ describe("renderReviewMarkdown: the template body", () => {
     expect(renderReviewMarkdown(SETTLED_REVIEW, { surface: "github-comment" })).toBe(expected);
   });
 
+  test("(a2) a non-zero may-fix count reaches the rendered tally row", () => {
+    const findings = [
+      { mergeClass: "may-fix" as const, file_path: "src/c.ts", title: "Missing test", body: "No coverage." },
+      { mergeClass: "may-fix" as const, file_path: "src/d.ts", title: "Stale docs", body: "Comment drift." },
+    ];
+    const review: MstarReviewV1 = {
+      schema: "mstar.review/v1",
+      verdict: "ship it",
+      summary_md: "Both are non-blocking.",
+      tally: computePrTally({ findings }),
+      findings,
+    };
+    const body = renderReviewMarkdown(review, { surface: "github-comment" });
+    expect(body).toContain("| \u{1F7E1} may-fix | 2 |");
+    expect(body).not.toContain("| \u{1F7E1} may-fix | 0 |");
+  });
+
   test("(b) no tally, no narrative and no findings renders the verdict head and the Review anchor", () => {
     const review: MstarReviewV1 = { schema: "mstar.review/v1", verdict: "ship it", findings: [] };
     const body = renderReviewMarkdown(review, { surface: "github-comment" });

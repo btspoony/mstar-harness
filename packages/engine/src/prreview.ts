@@ -12,7 +12,7 @@
  * counts, leftover unmet-AC increments, verdict precedence, the locked
  * diminishing deduction schedule (must-fix 45 then 15 each · should-fix
  * `max(12 - 3*(n-1), 2)` → 12,9,6,3,2,2… · may-fix `max(6 - 2*(n-1), 1)`,
- * class cap 20 · nit 2 then 1 each, class cap 8 · unverified 5 each, class
+ * class cap 15 · nit 2 then 1 each, class cap 8 · unverified 5 each, class
  * cap 15; `score_pct = max(0, 100 - sum)`, integer, floor 0), the score
  * bands (mergeable >= 90 · good 80-89 · pass 60-79 · fail < 60) and the
  * override invariant (score and band never override verdict).
