@@ -71,6 +71,27 @@ describe("MstarReviewV1 envelope shape: keys outside the documented set are refu
     expect(gate.violations.map((v) => v.message).join("\n")).toContain("tally.declaredScopes");
   });
 
+  test("an unknown key inside tally.tally is refused as a malformed tally", () => {
+    // A misspelled optional count would otherwise read as 0 and render as may-fix | 0.
+    const doc = {
+      ...BAND_ENVELOPE,
+      tally: { ...COMPUTED_TALLY, tally: { ...COMPUTED_TALLY.tally, mayfix: 0 } },
+    };
+    const gate = validateMstarReviewV1(doc);
+    expect(gate.ok).toBe(false);
+    const refusal = gate.violations.map((v) => `${v.code}: ${v.message}`).join("\n");
+    expect(refusal).toContain('review.tally-malformed: unknown key "tally.tally.mayfix"');
+  });
+
+  test("tally.tally accepts the four legacy counts and the five-key form", () => {
+    expect(validateMstarReviewV1(LEGACY_ENVELOPE).ok).toBe(true);
+    const fiveKey = {
+      ...COMPUTED_TALLY,
+      tally: { mustFix: 0, shouldFix: 1, mayFix: 0, nit: 1, unverified: 0 },
+    };
+    expect(validateMstarReviewV1({ ...BAND_ENVELOPE, tally: fiveKey }).ok).toBe(true);
+  });
+
   test("every unknown key is named in one refusal, own keys only", () => {
     const doc = { ...BAND_ENVELOPE, declaredScopes: ["docs"], severity: "critical" };
     const gate = validateMstarReviewV1(doc);

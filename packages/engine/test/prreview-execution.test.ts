@@ -562,7 +562,7 @@ describe("validateFindingDoc — Merge class gated on prVariant (pr-review.md §
   test("non-prVariant: Merge class neither required nor inspected", () => {
     const noClass = finding(PR_FIELDS.slice(0, 5)); // five fields, no Merge class
     expect(validateFindingDoc(noClass).ok).toBe(true);
-    // Even a fourth-class invention goes unchecked outside the PR flow.
+    // Even an off-enum class goes unchecked outside the PR flow.
     const weird = finding([...PR_FIELDS.slice(0, 5), ["Merge class", "somewhat-broken"]]);
     expect(validateFindingDoc(weird).ok).toBe(true);
   });

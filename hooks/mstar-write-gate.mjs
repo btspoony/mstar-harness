@@ -17159,6 +17159,8 @@ var NIT_CAP = 8;
 var UNVERIFIED_EACH = 5;
 var UNVERIFIED_CAP = 15;
 var PR_SCORE_SCHEDULE_HINT = `the locked diminishing schedule (must-fix ${MUST_FIX_FIRST} then ${MUST_FIX_EACH_ADDITIONAL} each; ` + `should-fix max(${SHOULD_FIX_FIRST}-${SHOULD_FIX_STEP}*(n-1), ${SHOULD_FIX_MIN}); ` + `may-fix max(${MAY_FIX_FIRST}-${MAY_FIX_STEP}*(n-1), ${MAY_FIX_MIN}), cap ${MAY_FIX_CAP}; ` + `nit ${NIT_FIRST} then ${NIT_EACH_ADDITIONAL} each, cap ${NIT_CAP}; ` + `unverified ${UNVERIFIED_EACH} each, cap ${UNVERIFIED_CAP}; floor 0)`;
+var TALLY_COUNT_KEYS = ["mustFix", "shouldFix", "nit", "unverified"];
+var ENVELOPE_TALLY_COUNT_KEYS = [...TALLY_COUNT_KEYS, "mayFix"];
 var PR_REVIEW_TIER_BUDGETS = Object.freeze({
   quick: Object.freeze({ wallClockMinutes: 5, maxSeats: 1, perSeatFindingsCap: 5, evidenceTokensCap: 600, fileOpenCap: 12 }),
   default: Object.freeze({ wallClockMinutes: 10, maxSeats: 2, perSeatFindingsCap: 6, evidenceTokensCap: 900, fileOpenCap: 20 }),

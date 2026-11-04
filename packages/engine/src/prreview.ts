@@ -373,6 +373,10 @@ export type MstarReviewV1 = {
  * present-or-valid instead. */
 const TALLY_COUNT_KEYS = ["mustFix", "shouldFix", "nit", "unverified"] as const;
 
+/** Keys a provided `tally.tally` may carry: the four required counts plus the
+ * optional, legacy-compatible `mayFix` (present-or-valid, never required). */
+const ENVELOPE_TALLY_COUNT_KEYS = [...TALLY_COUNT_KEYS, "mayFix"] as const;
+
 /**
  * The `mstar.review/v1` key set, derived from what this validator reads and
  * what {@link synthesizeReview} produces — never widened for a caller. A key
@@ -394,12 +398,13 @@ function checkUnknownKeys(
   allowed: readonly string[],
   label: string,
   violations: ValidationResult[],
+  code = "review.unknown-key",
 ): void {
   for (const key of Object.keys(value)) {
     if (!allowed.includes(key)) {
       violations.push(violation(
         "high",
-        "review.unknown-key",
+        code,
         `unknown key "${label}${key}" is not part of the review envelope - accepted keys: ${allowed.join(", ")}`,
         `remove ${label}${key}, or use one of: ${allowed.join(" | ")}`,
       ));
@@ -460,7 +465,8 @@ function checkIncompleteShape(fact: unknown, label: string, violations: Validati
  * present tally must carry the full produced field set — `verdict` in
  * PR_VERDICTS, `scorePct` an integer in [0, 100], the required class counts
  * non-negative integers (`mayFix` optional -- absent on pre-existing
- * envelopes), `chatHeader` a string, and the optional `band`
+ * envelopes), no key outside that count set, `chatHeader` a string, and the
+ * optional `band`
  * must be a valid token when present (absent = legacy-valid envelope).
  * The tally's own `incomplete` echo obeys the same presence rule as the
  * envelope's top-level fact — required by the `incomplete` verdict, absent
@@ -499,6 +505,13 @@ function checkProvidedTallyShape(tally: Record<string, unknown>, violations: Val
       "tally.tally must be an object carrying the class counts",
     ));
   } else {
+    checkUnknownKeys(
+      tally.tally,
+      ENVELOPE_TALLY_COUNT_KEYS,
+      "tally.tally.",
+      violations,
+      "review.tally-malformed",
+    );
     for (const key of TALLY_COUNT_KEYS) {
       const count = tally.tally[key];
       if (typeof count !== "number" || !Number.isInteger(count) || count < 0) {
