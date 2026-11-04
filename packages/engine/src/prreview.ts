@@ -95,7 +95,9 @@ const UNMET_AC_SURFACES = ["implementation", "tests", "docs"] as const;
 
 /**
  * Input to {@link computePrTally}. `findings` are the post-vet accepted
- * findings only; `unverifiedCount` is the count of residual items under
+ * findings only, each carrying a `mergeClass` from {@link MERGE_CLASSES} —
+ * an off-enum value is refused with a TypeError rather than tallied;
+ * `unverifiedCount` is the count of residual items under
  * `- unverified:` (0 when absent / `none`); `unmetAc` is the leftover
  * unmet acceptance criteria (not met, not cut) — each increments the tally
  * (§ Linked-issue hygiene), it is not a merge class and not a second
@@ -211,7 +213,11 @@ const PR_SCORE_SCHEDULE_HINT =
  * A malformed entry (not an object, non-boolean `unsafeToShip`, unknown
  * `surface`) is a TypeError — the same boundary posture as
  * `unverifiedCount` and `incomplete`, because a silent fallthrough would
- * re-enable verdict selection from a tests/docs AC.
+ * re-enable verdict selection from a tests/docs AC. An accepted finding
+ * whose `mergeClass` is not in {@link MERGE_CLASSES} is a TypeError too:
+ * the tally loop's final `else` is the nit bucket, so an unknown class
+ * would otherwise land silently in the only bucket that never selects a
+ * verdict.
  * Verdict precedence: any must_fix ≥ 1 → `blocked`; else any
  * should_fix ≥ 1 → `needs fixes`; else `ship it`. The score follows the
  * locked diminishing deduction schedule via {@link prScoreDeduction} and
@@ -286,6 +292,17 @@ export function computePrTally(input: PrTallyInput): PrTallyResult {
       throw new TypeError(
         `computePrTally: unmetAc[${index}].surface must be one of ${UNMET_AC_SURFACES.join(" | ")} when present - ` +
           `got ${JSON.stringify(entry.surface)}`,
+      );
+    }
+  }
+  // Engine boundary guard: the tally loop's final `else` is the nit bucket,
+  // so an off-enum class would silently land in the only bucket that never
+  // selects a verdict instead of being refused.
+  for (let index = 0; index < input.findings.length; index += 1) {
+    const { mergeClass } = input.findings[index];
+    if (!(MERGE_CLASSES as readonly unknown[]).includes(mergeClass)) {
+      throw new TypeError(
+        `findings[${index}].mergeClass must be one of ${MERGE_CLASSES.join(" | ")} - got ${JSON.stringify(mergeClass)}`,
       );
     }
   }
