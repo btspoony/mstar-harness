@@ -103,7 +103,7 @@ When capturing an issue from a QC report:
 
 The blocking judgement is decided **once**, on the §3 axis. Each chain's label set is a different projection of that one decision — map by **axis band**, never by label shape:
 
-| Blocking judgement (§3 axis) | issue `severity` | audit Merge class | plan-QC report section | L2 task review |
+| Blocking judgement (§3 axis) | issue `severity` | PR-review merge class | plan-QC report section | L2 task review |
 | ---------------------------- | ------------------- | ----------------- | ---------------------- | -------------- |
 | **Blocking** — unsafe outcome reachable on this change/merge | `critical` | `must-fix` (implementation) · `may-fix` (tests / docs) | **Critical** | `Critical` |
 | High impact, non-blocking — unsafe but not reachable here, or significant tech debt | `high` | `should-fix` (implementation) · `may-fix` (tests / docs) | **Warning** | `Important` |

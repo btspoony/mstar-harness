@@ -239,14 +239,14 @@ Classify each **accepted** finding (after vet) as exactly one class. Do not inve
 | --- | --- | --- |
 | `must-fix` | An implementation finding whose unsafe outcome is reachable in the reviewed change: correctness bug, security hole, data loss, auth/authz bypass, or a broken public contract. This is the same class the store.db issue severity vocabulary records as `critical` (class pointer below). | Any count ≥ 1 → `blocked` |
 | `should-fix` | An implementation finding that should be addressed before merge but is not itself a ship-stopper: unsafe but **not** reachable in this change, significant tech debt, or otherwise substantive non-blocking — the issue severity vocabulary's `high` / `medium` bands. | Else if count ≥ 1 → `needs fixes` |
-| `may-fix` | A real issue the review registers but does not spend merge time on: any test finding, a documentation finding at `high` / `medium` (documentation at `low` / `nit` is `nit`), or an implementation finding at the `low` band (surface gate below). Captured as an issue and listed in full; it never selects a verdict. | Does not change verdict |
+| `may-fix` | A real issue the review registers but does not spend merge time on: a test finding above `nit` (a `nit`-band test finding is `nit`), a documentation finding at `high` / `medium` (`low` / `nit` documentation is `nit`), or an implementation finding at the `low` band (surface gate below). Captured as an issue and listed in full; it never selects a verdict. | Does not change verdict |
 | `nit` | Optional cleanup, naming, comment, or small suggestion that does **not** change merge-readiness. Lint-covered cosmetics stay ignored (existing lens rule) — they are not findings. | Does not change verdict |
 
 **Surface gate — tests and docs never hold the merge.** Decide the finding's surface before its impact band. A finding about tests or documentation is capped at `may-fix` and can never be `must-fix` or `should-fix`, however serious the underlying gap reads. Test and documentation work is real work, but it is not what the merge gate protects: letting a missing test, a stale comment or a typo select `blocked` / `needs fixes` stalls a correct change behind work that can ship afterwards.
 
 | Surface (decided by what the fix changes) | `critical` | `high` / `medium` | `low` | `nit` |
 | --- | --- | --- | --- | --- |
-| Implementation — product code, build, API, config | `must-fix` | `should-fix` | `may-fix` | `nit` |
+| Implementation — product code, build, API, config | `must-fix` — unsafe **and** reachable here | `should-fix` | `may-fix` | `nit` |
 | Tests — test code, fixtures, test tooling | `may-fix` | `may-fix` | `may-fix` | `nit` |
 | Documentation — prose, comments, examples, changelog | `may-fix` | `may-fix` | `nit` | `nit` |
 
@@ -386,7 +386,7 @@ When an originating spec exists (§ Originating spec discovery — a tracked iss
 
 - Mark each: met / unmet / cut.
 
-Leftover `unmet` criteria count against the verdict: they are **tally increments**, not extra findings (do not also emit a Merge-class finding for the same leftover — that would double-count). Each leftover AC marked `unmet` (not `met`, not `cut`) increments `should_fix` by 1, or `must_fix` by 1 when that leftover is itself a broken public contract / unsafe-to-ship. The increment lives in the tally procedure (§ Tally and derived score); apply Verdict-from-tally **after** it, so leftover `unmet` ACs cannot yield `ship it`. Score uses the locked deduction schedule only (`should_fix` deducts 12 on the first finding and less thereafter, `must_fix` deducts 45 on the first — no second formula, no new tally key). Leftovers are already mentioned in the review `body` (§ Comment posting) — no fourth merge class.
+Leftover `unmet` criteria count against the verdict: they are **tally increments**, not extra findings (do not also emit a Merge-class finding for the same leftover — that would double-count). Each leftover AC marked `unmet` (not `met`, not `cut`) increments `should_fix` by 1, or `must_fix` by 1 when that leftover is itself a broken public contract / unsafe-to-ship. The increment lives in the tally procedure (§ Tally and derived score); apply Verdict-from-tally **after** it, so leftover `unmet` ACs cannot yield `ship it`. Score uses the locked deduction schedule only (`should_fix` deducts 12 on the first finding and less thereafter, `must_fix` deducts 45 on the first — no second formula, no new tally key). Leftovers are already mentioned in the review `body` (§ Comment posting) — the increment is not a merge class. The surface gate (§ Merge class) does **not** apply to it: a leftover AC is a **delivery obligation**, not a review finding, so a plan that required test coverage and did not deliver it still increments `should_fix` / `must_fix` by the rule above, while a *test finding* about the same gap would be capped at `may-fix`.
 - Do not invent a follow-up when all criteria landed.
 
 ## CI attribution

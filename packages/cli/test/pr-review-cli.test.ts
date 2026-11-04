@@ -132,6 +132,20 @@ describe("mstar pr-review tally", () => {
     });
   });
 
+  test("a may-fix finding is accepted and counted end to end (exit 0)", () => {
+    withTempDir((dir) => {
+      const findings = join(dir, "findings.json");
+      writeFileSync(findings, JSON.stringify([{ mergeClass: "may-fix" }]));
+      const result = runCli(["pr-review", "tally", "--findings", findings, ...settled]);
+      expect(result.exitCode).toBe(0);
+      // A class outside MERGE_CLASSES is a usage refusal (see the bad-mergeClass
+      // case below), so exit 0 here proves the enum still carries `may-fix`.
+      const resultData = data(result);
+      expect(resultData.tally).toMatchObject({ mayFix: 1 });
+      expect(resultData.verdict).toBe("ship it");
+    });
+  });
+
   test("bad mergeClass exits 1 with the offending index named", () => {
     withTempDir((dir) => {
       const findings = join(dir, "findings.json");
