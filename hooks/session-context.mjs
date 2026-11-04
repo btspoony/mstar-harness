@@ -23638,7 +23638,7 @@ function validateFindingDoc(text4, opts = {}) {
       continue;
     }
     if (!MERGE_CLASS_ENUM_RE.test(mergeClass.value)) {
-      violations.push(findingViolation("medium", "prreview.finding.invalid-merge-class", `${where}: Merge class "${mergeClass.value}" is not one of ${JSON.stringify(MERGE_CLASSES)}`, "do not invent a fourth class (§ Merge class)"));
+      violations.push(findingViolation("medium", "prreview.finding.invalid-merge-class", `${where}: Merge class "${mergeClass.value}" is not one of ${JSON.stringify(MERGE_CLASSES)}`, `use one of: ${MERGE_CLASSES.join(" | ")}`));
     }
     if (confidenceOk && confidenceField !== undefined && mergeClass.lineNo !== confidenceField.lineNo + 1) {
       violations.push(findingViolation("medium", "prreview.finding.merge-class-placement", `${where}: Merge class (line ${mergeClass.lineNo}) is not immediately after Confidence (line ${confidenceField.lineNo})`, "place Merge class directly after Confidence, before Fix sketch"));

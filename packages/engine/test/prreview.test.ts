@@ -8,11 +8,11 @@
  * row's input → expected score_pct + band + verdict, verbatim. The table
  * is the SSOT; these fixtures mirror it row-for-row.
  * - Tally/score schedule: pr-review.md § Tally and derived score — integer
- * arithmetic only, floor at 0, no second formula (nit cap 8, unverified
- * cap 15).
+ * arithmetic only, floor at 0, no second formula (nit cap 8, may-fix cap 15,
+ * unverified cap 15).
  * - Leftover unmet-AC increments: pr-review.md § Tally and derived score —
  * unsafe-to-ship → must_fix + 1, else should_fix + 1; a tally increment,
- * not a fourth class, not a second finding.
+ * not a merge class, not a second finding.
  * - Override invariant: pr-review.md § Override invariant — score never
  * overrides verdict.
  * - Display contract: pr-review.md § Display contract (chat output) — the

@@ -128,7 +128,7 @@ describe("mstar pr-review tally", () => {
       const resultData = data(result);
       expect(resultData.verdict).toBe("blocked");
       expect(resultData.scorePct).toBe(34);
-      expect((resultData.tally as { mustFix: number; shouldFix: number; nit: number; unverified: number })).toEqual({ mustFix: 1, shouldFix: 2, mayFix: 0, nit: 0, unverified: 0 });
+      expect((resultData.tally as { mustFix: number; shouldFix: number; mayFix: number; nit: number; unverified: number })).toEqual({ mustFix: 1, shouldFix: 2, mayFix: 0, nit: 0, unverified: 0 });
     });
   });
 

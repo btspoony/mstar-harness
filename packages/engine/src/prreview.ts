@@ -94,7 +94,7 @@ export type PrIncomplete = {
  * findings only; `unverifiedCount` is the count of residual items under
  * `- unverified:` (0 when absent / `none`); `unmetAc` is the leftover
  * unmet acceptance criteria (not met, not cut) — each increments the tally
- * (§ Linked-issue hygiene), it is not a fourth class and not a second
+ * (§ Linked-issue hygiene), it is not a merge class and not a second
  * finding. `incomplete` marks a bounded/stopped run: the verdict becomes
  * `incomplete` while the score and band stay the count-derived ones.
  */
@@ -261,7 +261,7 @@ export function computePrTally(input: PrTallyInput): PrTallyResult {
     else if (finding.mergeClass === "may-fix") mayFix += 1;
     else nit += 1;
   }
- // Leftover unmet ACs — tally increment, not a fourth class (§ Linked-issue hygiene):
+ // Leftover unmet ACs — tally increment, not a merge class (§ Linked-issue hygiene):
   for (const ac of input.unmetAc ?? []) {
     if (ac.unsafeToShip) mustFix += 1;
     else shouldFix += 1;
@@ -1377,11 +1377,11 @@ function parseTallyCounts(raw: string | undefined): Record<"mustFix" | "shouldFi
 /**
  * Cap each tally bucket when reconstructing computePrTally inputs. Sound by
  * monotonicity: every class deduction grows with its count and is already
- * class-capped where the schedule caps it (nit 8, unverified 15), so a
- * capped penalty <= true penalty. If the capped input already reaches the 0
- * floor both score at 0; below the floor no bucket was capped (identical
- * penalty). Verdict sees the same zero/nonzero buckets (positive counts
- * stay positive through the cap).
+ * class-capped where the schedule caps it (nit 8, may-fix 15, unverified
+ * 15), so a capped penalty <= true penalty. If the capped input already
+ * reaches the 0 floor both score at 0; below the floor no bucket was capped
+ * (identical penalty). Verdict sees the same zero/nonzero buckets (positive
+ * counts stay positive through the cap).
  */
 const TALLY_CAP = 50;
 
@@ -2353,7 +2353,7 @@ export function validateFindingDoc(text: string, opts: ValidateFindingDocOptions
         "medium",
         "prreview.finding.invalid-merge-class",
         `${where}: Merge class "${mergeClass.value}" is not one of ${JSON.stringify(MERGE_CLASSES)}`,
-        "do not invent a fourth class (\u00a7 Merge class)",
+        `use one of: ${MERGE_CLASSES.join(" | ")}`,
       ));
     }
     if (
