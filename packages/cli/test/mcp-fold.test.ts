@@ -666,7 +666,7 @@ describe("folded MCP command families", () => {
     });
   });
 
-  test("the whole published surface stays inside the approved ceiling", async () => {
+  test("the whole published surface matches the pinned measurement", async () => {
     await withClient(async (_client, tools) => {
       const surface = tools.reduce((total, tool) =>
         total + JSON.stringify(tool.inputSchema).length + (tool.description ?? "").length, 0);
