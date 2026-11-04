@@ -85,6 +85,7 @@ For the deep method behind this category — value bar, authoring gate (used bot
 - Abstraction mismatches: premature abstractions with a single implementation, or missing abstractions where the same change always requires touching N files in lockstep.
 - Public-but-one-caller: a public method on a generic service with a single internal caller is a private-capability closure candidate.
 - Unjustified defaults/public options: flag defaults or public operations/formats with no current-consumer evidence or prior art.
+- Speculative hardening: validation, gates, limits, fallbacks, or options added for conditions the declared expected load or an existing contract cannot reach — delete back to the requirement (admissibility → `finding-format.md` § What disqualifies a finding — speculative hardening); a production caller or declared contract that reaches the condition makes it behavior, not debt.
 
 ### Prove-or-reject before reporting DEBT (`simplify` scope)
 
