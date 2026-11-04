@@ -287,7 +287,7 @@ may_fix    = count of accepted findings with Merge class: may-fix
 nit        = count of accepted findings with Merge class: nit
 unverified = count of residual items under `- unverified:` (0 when `none`)
 
-# leftover unmet ACs (§ Linked-issue hygiene) — tally increment, not a fourth class, not a second finding:
+# leftover unmet ACs (§ Linked-issue hygiene) — tally increment, not a merge class, not a second finding:
 for each leftover AC marked unmet (not met, not cut):
     if that leftover is itself unsafe-to-ship / a broken public contract:
         must_fix += 1

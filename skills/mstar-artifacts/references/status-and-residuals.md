@@ -113,7 +113,7 @@ The blocking judgement is decided **once**, on the §3 axis. Each chain's label 
 
 `may-fix` is not a band of its own: it is the PR-review projection's surface-capped class. The surface cap changes **only** the PR-review class — it never lowers the `severity` the issue is captured at, so a documentation finding at the blocking band is recorded as `critical` even though the PR-review chain classes it `may-fix`. Capture the issue at the band the finding earns, not at the class label.
 
-**A cross-chain translation never changes the judgement** — a label is a projection of the axis, so moving a finding between chains must not promote or demote it.
+**A cross-chain translation never changes the judgement** — a label is a projection of the axis, so moving a finding between chains must not promote or demote it. What never changes is the axis band: the PR-review class may be surface-capped to `may-fix`, and that cap is a projection rule, not a demotion.
 
 Legacy severity read mapping → **`mstar-engine-legacy`** `references/migration-source-shapes.md`.
 
