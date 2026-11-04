@@ -251,7 +251,7 @@ describe("pr-review command family", () => {
     expect(settled.status).toBe("ok");
     expect(settled.data).toMatchObject({
       verdict: "blocked",
-      chatHeader: "blocked \u00b7 53% (fail)\nmust-fix=1 should-fix=0 nit=1 unverified=0",
+      chatHeader: "blocked \u00b7 53% (fail)\nmust-fix=1 should-fix=0 may-fix=0 nit=1 unverified=0",
     });
     expect(settled.data).not.toMatchObject({ incomplete: expect.anything() });
   });
@@ -272,7 +272,7 @@ describe("pr-review command family", () => {
       band: "fail",
       incomplete: { reason: "required domain seat(s) never opened: security", unscanned: ["security"] },
       chatHeader:
-        "incomplete \u00b7 53% (fail, partial)\nmust-fix=1 should-fix=0 nit=1 unverified=0\n" +
+        "incomplete \u00b7 53% (fail, partial)\nmust-fix=1 should-fix=0 may-fix=0 nit=1 unverified=0\n" +
         "cause: required domain seat(s) never opened: security\nunscanned: security",
     });
   });
@@ -465,7 +465,7 @@ describe("pr-review command family", () => {
       const text = refusal.status === "ok" ? "" : refusal.message;
       expect(text).toContain("Rejected diffBasis: expected present; received undefined");
       expect(text).toContain("--unverified must be a non-negative integer no greater than 50");
-      expect(text).toContain("findings[0].mergeClass must be one of must-fix | should-fix | nit");
+      expect(text).toContain("findings[0].mergeClass must be one of must-fix | should-fix | may-fix | nit");
     }
   });
 
@@ -538,7 +538,7 @@ describe("pr-review command family", () => {
       expect(text).toContain("--diff-basis must be readable or unreadable");
       expect(text).toContain("Rejected requiredDomains: expected present; received undefined");
       expect(text).toContain("--unverified must be a non-negative integer no greater than 50");
-      expect(text).toContain("findings[0].mergeClass must be one of must-fix | should-fix | nit");
+      expect(text).toContain("findings[0].mergeClass must be one of must-fix | should-fix | may-fix | nit");
     }
   });
 
@@ -598,7 +598,7 @@ describe("pr-review command family", () => {
         expect.objectContaining({ path: "stopped", code: "invalid" }),
       ]));
       const text = refusal.status === "ok" ? "" : refusal.message;
-      expect(text).toContain("findings[0].mergeClass must be one of must-fix | should-fix | nit");
+      expect(text).toContain("findings[0].mergeClass must be one of must-fix | should-fix | may-fix | nit");
       expect(text).toContain("--stopped must be a single line of non-blank text");
     }
 

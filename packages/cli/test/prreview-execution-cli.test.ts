@@ -330,7 +330,7 @@ describe("mstar pr-review seat-prompt", () => {
       expect(result.exitCode).toBe(0);
       expect(prompt(result)).toContain("Stage 2 (security)");
       expect(prompt(result)).toContain("security-review.md");
-      expect(prompt(result)).toContain("**Merge class**: must-fix | should-fix | nit");
+      expect(prompt(result)).toContain("**Merge class**: must-fix | should-fix | may-fix | nit");
       expect(prompt(result)).toContain("`auth-sec`");
     });
   });

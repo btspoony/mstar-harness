@@ -125,6 +125,7 @@ describe("renderReviewMarkdown: the template body", () => {
       "| --- | --- |",
       "| \u{1F534} must-fix | 0 |",
       "| \u{1F7E0} should-fix | 1 |",
+      "| \u{1F7E1} may-fix | 0 |",
       "| \u{1F535} nit | 1 |",
       "| \u2753 unverified | 0 |",
       "",

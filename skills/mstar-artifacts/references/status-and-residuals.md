@@ -107,8 +107,11 @@ The blocking judgement is decided **once**, on the §3 axis. Each chain's label 
 | ---------------------------- | ------------------- | ----------------- | ---------------------- | -------------- |
 | **Blocking** — unsafe outcome reachable on this change/merge | `critical` | `must-fix` | **Critical** | `Critical` |
 | High impact, non-blocking — unsafe but not reachable here, or significant tech debt | `high` | `should-fix` | **Warning** | `Important` |
-| Substantive, non-blocking — below the above | `medium` | `should-fix` | **Warning** | `Important` |
-| Small and cheap or style / naming / wording | `low` or `nit` | `nit` | **Suggestion** | `Minor` |
+| Substantive, non-blocking — below the above | `medium` | `should-fix` (implementation) · `may-fix` (tests / docs) | **Warning** | `Important` |
+| Small and cheap | `low` | `may-fix` (implementation or tests) · `nit` (docs) | **Suggestion** | `Minor` |
+| Style / naming / wording | `nit` | `nit` | **Suggestion** | `Minor` |
+
+`may-fix` is not a band of its own: it is the PR-review projection's surface-capped class, so the same `medium` judgement lands on `should-fix` for implementation work and on `may-fix` for test or documentation work. Capture the issue at the band the finding earns, not at the class label.
 
 **A cross-chain translation never changes the judgement** — a label is a projection of the axis, so moving a finding between chains must not promote or demote it.
 

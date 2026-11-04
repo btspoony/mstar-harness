@@ -61,7 +61,7 @@ Written to `REPORT_FILE` (`${SDD_DIR}/task-N-review.md`):
 | `Important` | High-impact but non-blocking: unsafe but **not** reachable in this diff, significant tech debt, or otherwise substantive. | Drives the per-task fix loop (same). |
 | `Minor` | Small and cheap, or style / naming / wording only. | Not a fix-loop driver — handed to `## Minor (for plan QC)` in the same ledger file (`mstar-sdd` SKILL.md). |
 
-Mode B (audit) does not use this vocabulary either — it reports with the audit finding format (`Impact` / `Effort` / `Risk` / `Confidence` per finding, no severity class; `mstar-audit` `references/finding-format.md`) and ranks findings by `Priority` in the review report (`mstar-audit` `references/codebase-audit.md` § Output format). Mode C (PR review) is the only mode that classifies with the **Merge class** (`must-fix` / `should-fix` / `nit`; `mstar-audit` `references/pr-review.md` § Merge class — PR findings only). Never mix label sets in one report.
+Mode B (audit) does not use this vocabulary either — it reports with the audit finding format (`Impact` / `Effort` / `Risk` / `Confidence` per finding, no severity class; `mstar-audit` `references/finding-format.md`) and ranks findings by `Priority` in the review report (`mstar-audit` `references/codebase-audit.md` § Output format). Mode C (PR review) is the only mode that classifies with the **Merge class** (`must-fix` / `should-fix` / `may-fix` / `nit`; `mstar-audit` `references/pr-review.md` § Merge class — PR findings only). Never mix label sets in one report.
 
 ## Mode B — Audit Executor (`Task category: audit`)
 

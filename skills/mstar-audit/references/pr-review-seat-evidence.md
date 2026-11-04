@@ -25,7 +25,7 @@ Read-only seat contract for the `pr` variant's three-stage pipeline — Stage 1 
     - **Effort**: XS | S | M | L | XL
     - **Risk**: LOW | MED | HIGH — plus one line why
     - **Confidence**: HIGH | MED | LOW
-    - **Merge class**: must-fix | should-fix | nit
+    - **Merge class**: must-fix | should-fix | may-fix | nit
     - **Fix sketch**: one line
     ```
 

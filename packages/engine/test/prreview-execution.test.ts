@@ -354,7 +354,7 @@ describe("prReviewSeatPrompt — ingredient skeleton (pr-review.md § Seat promp
   test("Stage 2 adds finding-format.md and the Merge-class instruction; Return-ONLY-findings, no fixes", () => {
     const prompt = prReviewSeatPrompt(SEAT);
     expect(prompt).toContain("finding-format.md");
-    expect(prompt).toContain("- **Merge class**: must-fix | should-fix | nit` immediately after `- **Confidence**`");
+    expect(prompt).toContain("- **Merge class**: must-fix | should-fix | may-fix | nit` immediately after `- **Confidence**`");
     expect(prompt).toContain("Return ONLY findings \u2014 no fixes");
     // Stage 1 collects EVIDENCE — no findings table, no verdict.
     const stage1 = prReviewSeatPrompt({ ...SEAT, stage: 1, tier: "deep" });
@@ -551,6 +551,12 @@ describe("validateFindingDoc — Merge class gated on prVariant (pr-review.md §
     expect(codes(validateFindingDoc(noClass, { prVariant: true }))).toContain(
       "prreview.finding.missing-merge-class",
     );
+
+    // Every class in the enum is accepted, the surface-capped one included.
+    for (const mergeClass of ["must-fix", "should-fix", "may-fix", "nit"]) {
+      const accepted = finding(PR_FIELDS.map(([n, v]) => [n, n === "Merge class" ? mergeClass : v]));
+      expect(validateFindingDoc(accepted, { prVariant: true }).ok).toBe(true);
+    }
   });
 
   test("non-prVariant: Merge class neither required nor inspected", () => {

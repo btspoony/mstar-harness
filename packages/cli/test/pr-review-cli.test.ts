@@ -104,7 +104,7 @@ describe("mstar pr-review tally", () => {
       expect(resultData.verdict).toBe("needs fixes");
       expect(resultData.scorePct).toBe(80);
       expect(resultData.band).toBe("good");
-      expect(resultData.chatHeader).toBe("needs fixes · 80% (good)\nmust-fix=0 should-fix=1 nit=2 unverified=1");
+      expect(resultData.chatHeader).toBe("needs fixes · 80% (good)\nmust-fix=0 should-fix=1 may-fix=0 nit=2 unverified=1");
     });
   });
 
@@ -128,7 +128,7 @@ describe("mstar pr-review tally", () => {
       const resultData = data(result);
       expect(resultData.verdict).toBe("blocked");
       expect(resultData.scorePct).toBe(34);
-      expect((resultData.tally as { mustFix: number; shouldFix: number; nit: number; unverified: number })).toEqual({ mustFix: 1, shouldFix: 2, nit: 0, unverified: 0 });
+      expect((resultData.tally as { mustFix: number; shouldFix: number; nit: number; unverified: number })).toEqual({ mustFix: 1, shouldFix: 2, mayFix: 0, nit: 0, unverified: 0 });
     });
   });
 
@@ -296,7 +296,7 @@ describe("mstar pr-review tally", () => {
       expect(body).toContain("--diff-basis must be readable or unreadable");
       expect(body).toContain("Rejected requiredDomains: expected present; received undefined");
       expect(body).toContain("--unverified must be a non-negative integer no greater than 50");
-      expect(body).toContain("findings[0].mergeClass must be one of must-fix | should-fix | nit");
+      expect(body).toContain("findings[0].mergeClass must be one of must-fix | should-fix | may-fix | nit");
     });
   });
 
@@ -361,7 +361,7 @@ describe("mstar pr-review tally", () => {
       expect(result.exitCode).toBe(2);
       expect(envelope(result)).toMatchObject({ status: "usage", code: "command.invalid-input" });
       const body = message(result);
-      expect(body).toContain("findings[0].mergeClass must be one of must-fix | should-fix | nit");
+      expect(body).toContain("findings[0].mergeClass must be one of must-fix | should-fix | may-fix | nit");
       expect(body).toContain("--stopped must be a single line of non-blank text");
     });
   });
@@ -413,7 +413,7 @@ describe("mstar pr-review tally", () => {
         unscanned: ["persist", "security"],
       });
       expect(resultData.chatHeader).toBe(
-        "incomplete \u00b7 100% (mergeable, partial)\nmust-fix=0 should-fix=0 nit=0 unverified=0\n" +
+        "incomplete \u00b7 100% (mergeable, partial)\nmust-fix=0 should-fix=0 may-fix=0 nit=0 unverified=0\n" +
           "cause: required domain seat(s) never opened: persist, security\nunscanned: persist, security",
       );
     });
@@ -468,7 +468,7 @@ describe("mstar pr-review tally", () => {
       const resultData = data(result);
       expect(resultData.verdict).toBe("needs fixes");
       expect(resultData.band).toBe("good");
-      expect(resultData.chatHeader).toBe("needs fixes \u00b7 86% (good)\nmust-fix=0 should-fix=1 nit=1 unverified=0");
+      expect(resultData.chatHeader).toBe("needs fixes \u00b7 86% (good)\nmust-fix=0 should-fix=1 may-fix=0 nit=1 unverified=0");
       expect(resultData.incomplete).toBeUndefined();
     });
   });
@@ -672,7 +672,7 @@ function report(frontmatter: string): string {
 type: pr-review
 verdict: needs fixes
 score_pct: 85
-tally: { must-fix: 0, should-fix: 1, nit: 2, unverified: 0 }
+tally: { must-fix: 0, should-fix: 1, may-fix: 0, nit: 2, unverified: 0 }
 comments: posted
 review_url: https://github.com/example/repo/pull/134#pullrequestreview-1
 generated_at: 2026-08-24
