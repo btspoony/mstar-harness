@@ -6,6 +6,17 @@ The monorepo root [CHANGELOG.md](../../CHANGELOG.md) summarizes cross-surface re
 
 ## [Unreleased]
 
+## [4.2.0] - 2026-11-04
+
+### Harness
+
+- **Stored project correspondence on the read.** `SyncBindingDTO` gains two fields: `projectBindings` — the `project_id` → `remote_project` rows from `project_bindings`, read-only and ordered by project id — and `projectBindingsError`, the read's own failure or `null`. A store that opens but cannot answer (it predates migration 15, so there is no `project_bindings` table, or the database refuses the read) answers `[]` **plus** that error rather than pretending the correspondence is empty; the panel renders `unavailable` with the reader's reason. A store that cannot be opened at all still fails the view before the row read runs (`store.not-initialized`), so `projectBindingsError` covers the readable-store failure only. The binding view model turns the payload into three display records (identity, correspondence, readiness): a readiness state that arrives without a cause is refused rather than rendered, `not-probed` keeps its own cause so an unasked question stays distinct from a missing `[linear]` declaration, and no record carries a credential field.
+- **Sync-binding screen.** The design system's `sync-binding` panel is now a product screen: `SyncBinding` renders the `.mstarc [linear]` identity, one correspondence row per stored binding (with an explicit empty state when the store holds none), and the probe's readiness state paired with the cause the read supplied. A null binding renders the reader's refusal (`bindingError`) verbatim in place of the identity fields; the readiness panel keeps its own pair, which is `not-probed` with the cause the read supplies when no probe result arrives. No issue row, no failure counter and no token reaches the panel. Exported from `@mstar-harness/ui`, with both locales complete.
+
+- Version alignment with harness **4.2.0**.
+
+See root [CHANGELOG.md](../../CHANGELOG.md) **4.2.0**.
+
 ## [4.1.6] - 2026-11-03
 
 ### Changed
