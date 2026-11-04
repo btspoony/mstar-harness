@@ -216,8 +216,8 @@ const PR_SCORE_SCHEDULE_HINT =
  * re-enable verdict selection from a tests/docs AC. An accepted finding
  * whose `mergeClass` is not in {@link MERGE_CLASSES} is a TypeError too:
  * the tally loop's final `else` is the nit bucket, so an unknown class
- * would otherwise land silently in the only bucket that never selects a
- * verdict.
+ * would otherwise land silently in a bucket that never selects a verdict
+ * (the final else is `nit`).
  * Verdict precedence: any must_fix ≥ 1 → `blocked`; else any
  * should_fix ≥ 1 → `needs fixes`; else `ship it`. The score follows the
  * locked diminishing deduction schedule via {@link prScoreDeduction} and
@@ -296,13 +296,13 @@ export function computePrTally(input: PrTallyInput): PrTallyResult {
     }
   }
   // Engine boundary guard: the tally loop's final `else` is the nit bucket,
-  // so an off-enum class would silently land in the only bucket that never
-  // selects a verdict instead of being refused.
+  // so an off-enum class would silently land in the nit bucket, one that
+  // never selects a verdict, instead of being refused.
   for (let index = 0; index < input.findings.length; index += 1) {
     const { mergeClass } = input.findings[index];
     if (!(MERGE_CLASSES as readonly unknown[]).includes(mergeClass)) {
       throw new TypeError(
-        `findings[${index}].mergeClass must be one of ${MERGE_CLASSES.join(" | ")} - got ${JSON.stringify(mergeClass)}`,
+        `computePrTally: findings[${index}].mergeClass must be one of ${MERGE_CLASSES.join(" | ")} - got ${JSON.stringify(mergeClass)}`,
       );
     }
   }

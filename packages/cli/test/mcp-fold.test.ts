@@ -39,12 +39,11 @@ import { FAMILY_PURPOSE, actionOf, familyOf, familyToolName, foldFamilyTools } f
  * surface is 33,629 through `tools/list` in this suite's own harness; the
  * may-fix surface gate added the two tally properties `unmetAcTests` (33
  * characters) and `unmetAcDocs` (32 characters) — 65 together. An earlier
- * revision of this note read that step as 33,621 → 33,629 (+8) and named
- * `unmetAcUnsafe` and `unmetAcSafe` as the added pair; the delta was wrong and
- * those two fields pre-date the gate, so no pre-change total is asserted here.
- * The ceiling states the measured 33,629; a further publication does not fit
- * and its author must
- * re-measure before raising this again: a regression that starts
+ * revision of this note recorded that step as 33,621 → 33,629 (+8); a
+ * 65-character contribution cannot produce an 8-character delta, so that line
+ * is withdrawn, and no pre-change total is asserted here.
+ * The guard pins that measured value exactly — growth and silent shrinkage
+ * each require a re-measure and an argued re-pin: a regression that starts
  * republishing per-command contracts inside family descriptions — or that lets
  * per-action tools creep back — reddens here. A published discovery example must
  * carry every field the tool REQUIRES (`"action":"schema"`), and a family that
@@ -671,7 +670,7 @@ describe("folded MCP command families", () => {
     await withClient(async (_client, tools) => {
       const surface = tools.reduce((total, tool) =>
         total + JSON.stringify(tool.inputSchema).length + (tool.description ?? "").length, 0);
-      expect(surface).toBeLessThanOrEqual(PUBLISHED_SURFACE_CEILING_CHARS);
+      expect(surface).toBe(PUBLISHED_SURFACE_CEILING_CHARS);
     });
   });
 });

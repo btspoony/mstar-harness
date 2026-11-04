@@ -500,7 +500,7 @@ describe("Merge-class refusal — pr-review.md § Tally and derived score", () =
   test("the mergeClass refusal names the finding, the accepted values and the received value", () => {
     expect(() =>
       computePrTally({ findings: [{ mergeClass: "mustfix" }] as unknown as PrTallyInput["findings"] }),
-    ).toThrow("findings[0].mergeClass must be one of must-fix | should-fix | may-fix | nit - got \"mustfix\"");
+    ).toThrow("computePrTally: findings[0].mergeClass must be one of must-fix | should-fix | may-fix | nit - got \"mustfix\"");
   });
 });
 
