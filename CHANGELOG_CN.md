@@ -6,6 +6,16 @@
 
 ## [Unreleased]
 
+## [4.2.1] - 2026-11-04
+
+### Harness
+
+- **PR 评审新增第四类合并等级 `may-fix`，并引入表面门禁。** 测试类与文档类 finding 的上限一律为 `may-fix`，无论底层缺口看起来多严重——这是评审契约而非 lint 强制：lint 只检查类字段是否存在、取值是否合法、位置是否正确，等级归属本身仍由席位/PM 判断。`may-fix` 会计数、完整列出、落为 issue 并从分数中扣分，但**不参与 verdict 推导**——一次评审若只有测试/文档类 finding，结论仍是 `ship it`。未完成的验收标准（leftover AC）同样受该上限约束：测试/文档类 AC 计入 `may-fix`，永远不会选出 `needs fixes` 或 `blocked`；实现类 AC 仍按 unsafe/safe 分流。实现类 finding 在低影响档以上沿用原有档位（`critical` → `must-fix`；`high` / `medium` → `should-fix`），而 `low` 由 `nit` 改为 `may-fix`。锁定扣分表新增 `may-fix` `max(6 − 2·(n−1), 1)` → 6,4,2,1,1…，类上限 15。聊天头部与报告 tally 增加 `may-fix` 计数；该类出现之前写下的报告与 envelope 仍然有效，读取为 0。
+
+### 版本对齐
+
+- 提升 monorepo 根、`@mstar-harness/opencode`、`@mstar-harness/opencode-v2`、`@mstar-harness/cli`、`@mstar-harness/engine`、`@mstar-harness/dsh`、Cursor/Codex/Kimi/ZCode/omp/Claude 插件清单、便携式 Agent Plugins 清单及两份 marketplace 清单：**→ 4.2.1**。
+
 ## [4.2.0] - 2026-11-04
 
 ### Harness
