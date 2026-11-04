@@ -103,14 +103,17 @@ When capturing an issue from a QC report:
 
 The blocking judgement is decided **once**, on the §3 axis. Each chain's label set is a different projection of that one decision — map by **axis band**, never by label shape:
 
-| Blocking judgement (§3 axis) | issue `severity` | audit Merge class | plan-QC report section | L2 task review |
+| Blocking judgement (§3 axis) | issue `severity` | PR-review merge class | plan-QC report section | L2 task review |
 | ---------------------------- | ------------------- | ----------------- | ---------------------- | -------------- |
-| **Blocking** — unsafe outcome reachable on this change/merge | `critical` | `must-fix` | **Critical** | `Critical` |
-| High impact, non-blocking — unsafe but not reachable here, or significant tech debt | `high` | `should-fix` | **Warning** | `Important` |
-| Substantive, non-blocking — below the above | `medium` | `should-fix` | **Warning** | `Important` |
-| Small and cheap or style / naming / wording | `low` or `nit` | `nit` | **Suggestion** | `Minor` |
+| **Blocking** — unsafe outcome reachable on this change/merge | `critical` | `must-fix` (implementation) · `may-fix` (tests / docs) | **Critical** | `Critical` |
+| High impact, non-blocking — unsafe but not reachable here, or significant tech debt | `high` | `should-fix` (implementation) · `may-fix` (tests / docs) | **Warning** | `Important` |
+| Substantive, non-blocking — below the above | `medium` | `should-fix` (implementation) · `may-fix` (tests / docs) | **Warning** | `Important` |
+| Small and cheap | `low` | `may-fix` (implementation or tests) · `nit` (docs) | **Suggestion** | `Minor` |
+| Style / naming / wording | `nit` | `nit` (implementation, tests or docs) | **Suggestion** | `Minor` |
 
-**A cross-chain translation never changes the judgement** — a label is a projection of the axis, so moving a finding between chains must not promote or demote it.
+`may-fix` is not a band of its own: it is the PR-review projection's surface-capped class. The surface cap changes **only** the PR-review class — it never lowers the `severity` the issue is captured at, so a documentation finding at the blocking band is recorded as `critical` even though the PR-review chain classes it `may-fix`. Capture the issue at the band the finding earns, not at the class label.
+
+**A cross-chain translation never changes the judgement** — a label is a projection of the axis, so moving a finding between chains must not promote or demote it; the PR-review `may-fix` surface cap is a projection rule, not a demotion.
 
 Legacy severity read mapping → **`mstar-engine-legacy`** `references/migration-source-shapes.md`.
 

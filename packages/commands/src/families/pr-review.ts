@@ -3,7 +3,7 @@ import path from "node:path";
 import {
   computePrTally, planReviewPost, prReviewReportPath, prReviewSeatPrompt, prReviewSizing,
   resolvePrReviewSettlement, resolvePrReviewTier, resolveReviewDir, PR_REVIEW_NUDGE_CADENCE, PR_REVIEW_TIER_BUDGETS, validatePrReviewReport,
-  type MergeClass, type PrReportTarget, type ReviewPostPlan,
+  MERGE_CLASSES, type MergeClass, type PrReportTarget, type ReviewPostPlan,
 } from "@mstar-harness/engine";
 import { randomUUID } from "node:crypto";
 import { z } from "zod";
@@ -19,6 +19,7 @@ const verbs = ["tally", "report-path", "validate-report", "post", "worktree-clea
 type Verb = (typeof verbs)[number];
 type Input = {
   findings?: string; unverified?: string; unmetAcUnsafe?: string; unmetAcSafe?: string;
+  unmetAcTests?: string; unmetAcDocs?: string;
   stopped?: string; requiredDomains?: string; openedDomains?: string; diffBasis?: string; partialScope?: string[];
   reviewsDir?: string; target?: string; stage?: string; slug?: string; date?: string; reportFile?: string;
   pr?: string; bodyFile?: string; body?: string; worktreePath?: string; branch?: string; reportSaved?: boolean;
@@ -27,6 +28,7 @@ type Input = {
 };
 const inputSchema = z.object({
   findings: z.string().optional(), unverified: z.string().optional(), unmetAcUnsafe: z.string().optional(), unmetAcSafe: z.string().optional(),
+  unmetAcTests: z.string().optional(), unmetAcDocs: z.string().optional(),
   stopped: z.string().optional(), requiredDomains: z.string().optional(), openedDomains: z.string().optional(), diffBasis: z.string().optional(), partialScope: z.array(z.string()).optional(),
   reviewsDir: z.string().optional(), target: z.string().optional(), stage: z.string().optional(), slug: z.string().optional(), date: z.string().optional(), reportFile: z.string().optional(),
   pr: z.string().optional(), bodyFile: z.string().optional(), body: z.string().optional(), worktreePath: z.string().optional(), branch: z.string().optional(), reportSaved: z.boolean().optional(),
@@ -34,7 +36,7 @@ const inputSchema = z.object({
   security: z.boolean().optional(), skillRoot: z.string().optional(), recon: z.array(z.string()).optional(), tier: z.string().optional(), diffFile: z.string().optional(), collectFolded: z.boolean().optional(), remainingMinutes: z.string().optional(),
 });
 const contracts: Record<Verb, { args: { key: string; required: boolean; variadic: boolean }[]; options: { key: string; flags: string; required: boolean; help?: string; defaultValue?: unknown }[]; effects: readonly CommandDefinition["effects"][number][]; description: string }> = {
-  tally: { args: [], options: [{ key: "findings", flags: "--findings <file.json>", required: true, help: "Required; path to a JSON array of {mergeClass: must-fix | should-fix | nit}." }, { key: "unverified", flags: "--unverified <n>", required: false, defaultValue: "0", help: "Optional; non-negative integer no greater than 50; defaults to 0." }, { key: "unmetAcUnsafe", flags: "--unmet-ac-unsafe <n>", required: false, defaultValue: "0", help: "Optional; non-negative integer no greater than 50; defaults to 0." }, { key: "unmetAcSafe", flags: "--unmet-ac-safe <n>", required: false, defaultValue: "0", help: "Optional; non-negative integer no greater than 50; defaults to 0." }, { key: "stopped", flags: "--stopped <text>", required: false, help: "Optional; non-blank single line naming why the run stopped before synthesis; presence derives the incomplete verdict." }, { key: "requiredDomains", flags: "--required-domains <d,d,...>", required: false, help: "Required; comma-separated single-line domain names, one entry per required seat (a domain with two seats appears twice); at least one; omitted is refused, never inferred." }, { key: "openedDomains", flags: "--opened-domains <d,d,...>", required: false, help: "Required; comma-separated single-line domain names, one entry per seat that returned evidence (a domain with two seats needs two matching entries when both returned); an explicitly empty value means none, omission is refused." }, { key: "diffBasis", flags: "--diff-basis <readable|unreadable>", required: false, help: "Required; one of readable | unreadable; omitted is refused, never defaulted." }, { key: "partialScope", flags: "--partial-scope <scope...>", required: false, defaultValue: [], help: "Optional; repeat once per scope a seat declared as truncated coverage; when the run is unsettled these join the derived unscanned list, and when it settles they are echoed as declaredScopes." }], effects: ["read", "validate"], description: "Compute PR-review tally from a JSON array of {mergeClass: must-fix|should-fix|nit}; the incomplete verdict is derived from the run facts (--stopped, --required-domains/--opened-domains as one entry per seat, --diff-basis, and --partial-scope for scopes seats declared as truncated), never elapsed time; the three coverage/basis facts are required, so a run that does not report its coverage is refused; the count options default to zero and are limited to 0–50." },
+  tally: { args: [], options: [{ key: "findings", flags: "--findings <file.json>", required: true, help: "Required; path to a JSON array of {mergeClass: must-fix | should-fix | may-fix | nit}." }, { key: "unverified", flags: "--unverified <n>", required: false, defaultValue: "0", help: "Optional; non-negative integer no greater than 50; defaults to 0; increments the unverified count." }, { key: "unmetAcUnsafe", flags: "--unmet-ac-unsafe <n>", required: false, defaultValue: "0", help: "Optional; non-negative integer no greater than 50; defaults to 0; implementation-surface leftover ACs, increments must-fix." }, { key: "unmetAcSafe", flags: "--unmet-ac-safe <n>", required: false, defaultValue: "0", help: "Optional; non-negative integer no greater than 50; defaults to 0; implementation-surface leftover ACs, increments should-fix." }, { key: "unmetAcTests", flags: "--unmet-ac-tests <n>", required: false, defaultValue: "0", help: "Optional; non-negative integer no greater than 50; defaults to 0; tests-surface leftover ACs increment may-fix only." }, { key: "unmetAcDocs", flags: "--unmet-ac-docs <n>", required: false, defaultValue: "0", help: "Optional; non-negative integer no greater than 50; defaults to 0; docs-surface leftover ACs increment may-fix only." }, { key: "stopped", flags: "--stopped <text>", required: false, help: "Optional; non-blank single line naming why the run stopped before synthesis; presence derives the incomplete verdict." }, { key: "requiredDomains", flags: "--required-domains <d,d,...>", required: false, help: "Required; comma-separated single-line domain names, one entry per required seat (a domain with two seats appears twice); at least one; omitted is refused, never inferred." }, { key: "openedDomains", flags: "--opened-domains <d,d,...>", required: false, help: "Required; comma-separated single-line domain names, one entry per seat that returned evidence (a domain with two seats needs two matching entries when both returned); an explicitly empty value means none, omission is refused." }, { key: "diffBasis", flags: "--diff-basis <readable|unreadable>", required: false, help: "Required; one of readable | unreadable; omitted is refused, never defaulted." }, { key: "partialScope", flags: "--partial-scope <scope...>", required: false, defaultValue: [], help: "Optional; repeat once per scope a seat declared as truncated coverage; when the run is unsettled these join the derived unscanned list, and when it settles they are echoed as declaredScopes." }], effects: ["read", "validate"], description: "Compute the PR-review tally from a JSON array of {mergeClass: must-fix|should-fix|may-fix|nit}. The incomplete verdict is derived from run facts (--stopped, --required-domains/--opened-domains one entry per seat, --diff-basis, --partial-scope for truncated scopes), never elapsed time; the three coverage/basis facts are required. --unverified, --unmet-ac-unsafe, --unmet-ac-safe, --unmet-ac-tests and --unmet-ac-docs default to 0, cap at 50, and split by surface: tests/docs increment may-fix and never select a verdict, implementation increments must-fix (unsafe) or should-fix (safe)." },
   "report-path": { args: [], options: [{ key: "reviewsDir", flags: "--reviews-dir <dir>", required: false, help: "Review root; defaults to {REVIEW_DIR} under the harness dir." }, { key: "target", flags: "--target <spec>", required: true }, { key: "stage", flags: "--stage <1|2>", required: false, help: "Optional, but if supplied it requires --slug; stage must be 1 or 2." }, { key: "slug", flags: "--slug <domain-seat>", required: false, help: "Optional, but if supplied it requires --stage." }, { key: "date", flags: "--date <YYYY-MM-DD>", required: false, help: "Defaults to the local calendar date; no report file is written or reserved." }], effects: ["read"], description: "Compute the report path inside the target's run directory under {REVIEW_DIR} from the PR/branch/diff target, optional paired stage/slug, and local-date default. This command does not write the report, inspect collision state, or add a revision suffix." },
   "validate-report": { args: [{ key: "reportFile", required: true, variadic: false }], options: [], effects: ["read", "validate"], description: "Validate a saved PR-review report and return its structured violations." },
   post: { args: [], options: [{ key: "pr", flags: "--pr <n>", required: true }, { key: "bodyFile", flags: "--body-file <path>", required: true }, { key: "findings", flags: "--findings <file.json>", required: false }], effects: ["read", "validate", "process", "service"], description: "Post a body and optional parsed inline findings to the requested PR's resolved current head. If GitHub returns 422 for inline comments, retry once with those comments folded into the review body. A failed final response has unknown outcome: inspect the PR before retrying." },
@@ -126,7 +128,7 @@ async function execute(verb: Verb, input: Input, context: InvocationContext): Pr
  // `resolvePrReviewSettlement`; nothing about elapsed time is an input, so a
  // run past its tier clock with complete coverage still settles.
       const diagnostics: RefusalDiagnostic[] = [...(unnamedFindings?.diagnostics ?? [])];
-      const allowed: readonly string[] = ["must-fix", "should-fix", "nit"];
+      const allowed: readonly string[] = MERGE_CLASSES;
       let findings: { mergeClass: MergeClass }[] = [];
       const file = input.findings === undefined || input.findings === "" ? undefined : abs(context.cwd, input.findings);
       if (file === undefined || unnamedFindings !== undefined) {
@@ -221,6 +223,11 @@ async function execute(verb: Verb, input: Input, context: InvocationContext): Pr
       });
       const unmetAcUnsafe = count(input.unmetAcUnsafe, "--unmet-ac-unsafe", "unmetAcUnsafe");
       const unmetAcSafe = count(input.unmetAcSafe, "--unmet-ac-safe", "unmetAcSafe");
+      // A leftover AC's surface decides its bucket: tests/docs land in
+      // may_fix, which never selects a verdict (pr-review.md § Linked-issue
+      // hygiene). Only implementation ACs carry the unsafe/safe split.
+      const unmetAcTests = count(input.unmetAcTests, "--unmet-ac-tests", "unmetAcTests");
+      const unmetAcDocs = count(input.unmetAcDocs, "--unmet-ac-docs", "unmetAcDocs");
       if (diagnostics.length > 0) throw new UsageError(diagnostics[0]!.message, diagnostics, unnamedFindings?.recovery);
       // The trigger list lives in the engine (one implementation): the CLI
       // only reports the run's facts, and the derived cause/scope travels in
@@ -235,7 +242,12 @@ async function execute(verb: Verb, input: Input, context: InvocationContext): Pr
       const result = computePrTally({
         findings,
         unverifiedCount,
-        unmetAc: [...Array.from({ length: unmetAcUnsafe }, () => ({ unsafeToShip: true })), ...Array.from({ length: unmetAcSafe }, () => ({ unsafeToShip: false }))],
+        unmetAc: [
+          ...Array.from({ length: unmetAcUnsafe }, () => ({ unsafeToShip: true, surface: "implementation" as const })),
+          ...Array.from({ length: unmetAcSafe }, () => ({ unsafeToShip: false, surface: "implementation" as const })),
+          ...Array.from({ length: unmetAcTests }, () => ({ unsafeToShip: false, surface: "tests" as const })),
+          ...Array.from({ length: unmetAcDocs }, () => ({ unsafeToShip: false, surface: "docs" as const })),
+        ],
         ...(settlement.settled ? {} : { incomplete: settlement.incomplete }),
       });
       // A settled run records a declared truncated seat scope under

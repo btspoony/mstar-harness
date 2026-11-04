@@ -10,7 +10,7 @@ Deep PR review is a **three-stage pipeline**: collect → domain review → synt
 
 - **Stage 1 — Collect**: PM fans out lightweight read-only agents by **domain** — business domain / change surface / tech stack; use the host's lightest read-only agent (`scout` / `explorer` / `general` — whatever the host offers). Each collect seat reads the changed files in its domain plus related context and returns **evidence in its result payload** (any seat may be **write-blocked** — read-only sandbox / EPERM; the main agent extracts the payload and writes the evidence file — § Local report archive / `references/pr-review-seat-evidence.md`): `file:line` observations, potential issue surfaces, and security-surface observations (the seat carries a security lens per `security-review.md` §2/§3 **research** discipline — trace origin, never invent an attacker, never record secret values — and still records MEDIUM / unverified items as **leads** in its evidence payload; the HIGH-only filter applies to formal findings, not leads). Collect seats produce **no** findings table, compute **no** verdict, and publish **nothing**. **Kept-wave only**: by default (pack exists) this wave folds into Stage 2 and **no collect seats are dispatched**; it runs as its own wave only when kept — **no snapshot** (`--diff` / `--working-tree` modes write no diff snapshot; `worktree-setup` prints `diffFile: null` there) or **PM judgment** (unfamiliar sprawling surface). Either way is declared in the report `- notes:` — `collect wave folded (pack)` / `collect wave kept (no pack / PM judgment: <reason>)`.
 - **Stage 2 — Domain review**: mstar built-in roles (`code-reviewer` / `fullstack-dev` / `frontend-dev`) split along the same domain framing, each reviewing code + security in its domain (security via the `security-review.md` lens) and producing findings with **Merge class** (§ Merge class). By default (pack exists) these seats are dispatched with the **`collectFolded`** option (CLI: `mstar pr-review seat-prompt --collect-folded`) — a fold bullet after the `## Budget` block tells each seat to do its own collection: pinned diff pack first, then changed files in its domain (§ Seat prompts) — so no separate collect wave precedes them. Each domain seat returns its findings in the **result payload** — any seat may be **write-blocked**; the main agent writes the Stage 2 evidence file (§ Local report archive / `references/pr-review-seat-evidence.md`). A large PR (>~300 changed lines, or spanning multiple change surfaces/domains) or a security-sensitive surface (auth, LLM, supply chain, data — `security-review.md` §9 extended surfaces) adds an **independent cross-domain security seat**. The fold removes only the collect wave — the **independent cross-domain security seat is never folded**.
-- **Stage 3 — Synthesis (main agent)**: the main agent (the command's orchestrator) collects all domain findings + evidence files → **dedupe** → **tiered three-way vet** (full for must-fix/should-fix; evidence-verify for nits — open the cited file; `file:line` must genuinely support the claim) → **tally** (§ Tally and derived score — locked deduction schedule + bands) → **verdict** → report + **publish GitHub Review** (§ Comment posting — publishing authority belongs to the main agent). The main agent does not backfill uncollected / unreviewed domains: an unopened **required** domain leaves the run unsettled and derives the single `incomplete` fact through § Verdict synthesis's trigger list — a per-item residual the vet could not verify is not that case and stays a settled run's `- unverified:` entry. **The envelope is mandatory**: after the tally, the main agent **must** fold the accepted findings into a `mstar.review/v1` envelope (`synthesizeReview` — or the equivalent engine call) and persist it via `mstar-harness persist review --key <pr-or-review-id> --stdin` (or `getArtifactStore().put`); the Markdown archive is an optional human copy, **not** a substitute for the envelope.
+- **Stage 3 — Synthesis (main agent)**: the main agent (the command's orchestrator) collects all domain findings + evidence files → **dedupe** → **tiered three-way vet** (full for must-fix/should-fix; evidence-verify for may-fix and nits — open the cited file; `file:line` must genuinely support the claim) → **tally** (§ Tally and derived score — locked deduction schedule + bands) → **verdict** → report + **publish GitHub Review** (§ Comment posting — publishing authority belongs to the main agent). The main agent does not backfill uncollected / unreviewed domains: an unopened **required** domain leaves the run unsettled and derives the single `incomplete` fact through § Verdict synthesis's trigger list — a per-item residual the vet could not verify is not that case and stays a settled run's `- unverified:` entry. **The envelope is mandatory**: after the tally, the main agent **must** fold the accepted findings into a `mstar.review/v1` envelope (`synthesizeReview` — or the equivalent engine call) and persist it via `mstar-harness persist review --key <pr-or-review-id> --stdin` (or `getArtifactStore().put`); the Markdown archive is an optional human copy, **not** a substitute for the envelope.
 - A domain whose seat returned **no evidence** (crashed / Blocked / empty output) is an **uncollected domain**: the run is not settled, so the report carries the single override `incomplete`, derived from the run facts with its cause and unscanned scope (§ Verdict synthesis). Per-item unverifiability is a different case — a settled run keeps that residual under `- unverified:`.
 - **Capture duty (Stage 3, main agent)**: every seat — collect, domain, security — **returns findings as evidence and never writes the store**; at synthesis the **main agent captures the confirmed findings** as issues in `{HARNESS_DIR}/store.db` per the single-authority contract in **`mstar-project-governance`「Issue capture」** (plan-scoped `mstar plan issue-add`, unscoped `mstar issue add`; a recurrence of the same finding **appends an occurrence** to the existing issue — never a second issue). Capture records evidence only; a disposition is a **separate authorized act** (§4 closure authority). The canonical duty is not restated here.
 
@@ -88,7 +88,7 @@ The ladder reuses the existing ~100 / ~300 / ~1000 sizing bands — no second se
 
 **Cuttable vs never-cut**:
 - **Cuttable by tier**: seat count, stage-as-wave (Stage 1 as a separate wave), domain-split granularity, the independent security seat, the lens set, the seat-prompt ingredient set.
-- **Never cut (any tier)**: the verdict-from-tally formula (one formula, all tiers), merge-class assignment + tiered three-way vet (full for must-fix/should-fix; evidence-verify for nits), posting ownership (sole main agent), evidence discipline (`file:line` + self-check), Hard Rules 4/5, seats read-only, worktree isolation, the batch contract (first-only + deferred-PR issue tracking), the capture duty (seats return evidence, main agent captures), the local report archive contract incl. frontmatter, linked-issue AC counting.
+- **Never cut (any tier)**: the verdict-from-tally formula (one formula, all tiers), merge-class assignment + tiered three-way vet (full for must-fix/should-fix; evidence-verify for may-fix and nits), posting ownership (sole main agent), evidence discipline (`file:line` + self-check), Hard Rules 4/5, seats read-only, worktree isolation, the batch contract (first-only + deferred-PR issue tracking), the capture duty (seats return evidence, main agent captures), the local report archive contract incl. frontmatter, linked-issue AC counting.
 - **Stage 3 is never skipped in any tier** — `quick` just feeds it the smallest input; one verdict / one Review / main-agent posting is the product contract.
 
 **Report `tier` declaration**: report frontmatter gains an optional `tier: quick | default | deep` (absent = `default` semantics, valid — old reports stay valid). `quick` MUST declare its reduced coverage under `- notes:` (what did not run: independent security seat / Stage 1 wave / domain split); any announced upgrade or downgrade (e.g. PM announces deep-upgrade, or a downgraded cut happens) is declared the same way. Report template structure, tally counts, and the display contract are unchanged; tier never enters the report filename.
@@ -192,7 +192,7 @@ Conditional lenses:
 - Middle Man — class mostly delegates → fold or inline the pass-through.
 - Refused Bequest — subclass inherits more than it wants → replace with composition.
 
-Three binding rules: repo-documented standards override the baseline — a standards finding cites the standard's file + rule; anything tooling already enforces is skipped (existing `general` rule); smells are judgement calls — a smell alone is never `must-fix`, and a LOW-confidence smell without evidence is not a finding (existing disqualify rule): it goes on `- unverified:` per the § Merge class rule, never `nit`; an **evidenced** judgement-call smell may surface as `nit` with the smell label. No new lens row: repo-guidance conformance stays the `general` lens's job.
+Three binding rules: repo-documented standards override the baseline — a standards finding cites the standard's file + rule; anything tooling already enforces is skipped (existing `general` rule); smells are judgement calls — a smell alone is never `must-fix`, and a LOW-confidence smell without evidence is not a finding (existing disqualify rule): it goes on `- unverified:` per the § Merge class rule, never `nit`; an **evidenced** judgement-call smell may surface as `may-fix` (or `nit` when purely cosmetic) with the smell label. No new lens row: repo-guidance conformance stays the `general` lens's job.
 
 Smell remedies are candidates, not automatic demands for new abstractions; select the smallest evidenced repair per **`references/finding-format.md`** § Structural remedies.
 
@@ -218,12 +218,12 @@ Before writing a finding, run the three-way attack from `mstar-audit`:
 
 Each **domain seat** runs the three-way attack on its own findings, opens the cited code itself, and disposes by-design / mis-attributed / duplicate before presenting.
 
-The **main agent** is the final vet layer, and the synthesis vet is **tiered**: must-fix / should-fix findings run the full three-way attack (counter-example, simpler explanation, evidence verifiability); nits run **evidence-verify** only — open the cited file and confirm `file:line` genuinely supports the claim. At synthesis the main agent dedupes **all** findings across domains (cross-domain duplicates, mis-attribution), applies the same by-design / duplicate disposition with the `cited code yourself` discipline, and records every rejection in the report's **Considered & rejected** section. Tiering applies to the main-agent synthesis pass only — the domain seats' three-way attack above stays full (it is cheap per-finding at the seat). Subagents over-report; vet before presenting.
+The **main agent** is the final vet layer, and the synthesis vet is **tiered**: must-fix / should-fix findings run the full three-way attack (counter-example, simpler explanation, evidence verifiability); may-fix and nit findings run **evidence-verify** only — open the cited file and confirm `file:line` genuinely supports the claim. At synthesis the main agent dedupes **all** findings across domains (cross-domain duplicates, mis-attribution), applies the same by-design / duplicate disposition with the `cited code yourself` discipline, and records every rejection in the report's **Considered & rejected** section. Tiering applies to the main-agent synthesis pass only — the domain seats' three-way attack above stays full (it is cheap per-finding at the seat). Subagents over-report; vet before presenting.
 
 ## Verdict synthesis
 
 - Order findings by impact-if-shipped; no padding, no invented requirements, no style grading (both limits → § Merge class **Class floors**).
-- List **every** accepted finding — `must-fix`, `should-fix`, and nits alike; nothing is truncated.
+- List **every** accepted finding — `must-fix`, `should-fix`, `may-fix`, and nits alike; nothing is truncated.
 - The verdict is **derived from the tally, not chosen**: classify every accepted finding (§ Merge class) → apply leftover `unmet` AC increments if any (§ Linked-issue hygiene) → apply **Verdict-from-tally** (§ Tally and derived score) → emit that one token. The reviewer does not pick a verdict by vibe. That derived token is what a **settled** run publishes; the one derived override below replaces the token without re-deriving it.
 - Exactly one verdict:
   - `ship it` — evidence-backed, safe to ship.
@@ -233,28 +233,40 @@ The **main agent** is the final vet layer, and the synthesis vet is **tiered**: 
 
 ## Merge class (PR findings only)
 
-Classify each **accepted** finding (after vet) as exactly one class. Do not invent a fourth class. Do not derive class from `Confidence`.
+Classify each **accepted** finding (after vet) as exactly one class. Do not invent a class outside this table. Do not derive class from `Confidence`.
 
 | Class | Use when | Verdict effect |
 | --- | --- | --- |
-| `must-fix` | Shipping this issue is unsafe **and** the unsafe outcome is reachable in the reviewed change: correctness bug, security hole, data loss, auth/authz bypass, or a broken public contract. This is the same class the store.db issue severity vocabulary records as `critical` (class pointer below). Same meaning as today's `blocked` gloss ("a must-fix issue stands in the way of shipping"). | Any count ≥ 1 → `blocked` |
-| `should-fix` | A real issue that should be addressed before merge but is not itself a ship-stopper: unsafe but **not** reachable in this change, significant tech debt, or otherwise substantive non-blocking — the issue severity vocabulary's `high` / `medium` bands. Same meaning as today's middle gloss ("issues found; address before merge"). | Else if count ≥ 1 → `needs fixes` |
+| `must-fix` | An implementation finding whose unsafe outcome is reachable in the reviewed change: correctness bug, security hole, data loss, auth/authz bypass, or a broken public contract. This is the same class the store.db issue severity vocabulary records as `critical` (class pointer below). | Any count ≥ 1 → `blocked` |
+| `should-fix` | An implementation finding that should be addressed before merge but is not itself a ship-stopper: unsafe but **not** reachable in this change, significant tech debt, or otherwise substantive non-blocking — the issue severity vocabulary's `high` / `medium` bands. | Else if count ≥ 1 → `needs fixes` |
+| `may-fix` | A real issue the review registers but does not spend merge time on: a test finding above `nit` (a `nit`-band test finding is `nit`), a documentation finding at `high` / `medium` (`low` / `nit` documentation is `nit`), or an implementation finding at the `low` band (surface gate below). Captured as an issue and listed in full; it never selects a verdict. | Does not change verdict |
 | `nit` | Optional cleanup, naming, comment, or small suggestion that does **not** change merge-readiness. Lint-covered cosmetics stay ignored (existing lens rule) — they are not findings. | Does not change verdict |
 
-**Class ↔ issue severity:** these three classes are this chain's projection of the one blocking judgement — the store.db issue `severity` value, plan-QC report section, and L2 task-review label sitting at each band are tabulated in `mstar-artifacts` `references/status-and-residuals.md` § Residual findings: `severity` → §5 Cross-chain vocabulary. Translate by band; never re-grade on translation.
+**Surface gate — tests and docs never hold the merge.** Decide the finding's surface before its impact band. A finding about tests or documentation is capped at `may-fix` and can never be `must-fix` or `should-fix`, however serious the underlying gap reads. Test and documentation work is real work, but it is not what the merge gate protects: letting a missing test, a stale comment or a typo select `blocked` / `needs fixes` stalls a correct change behind work that can ship afterwards.
 
-Tie-break: unsafe to ship **and reachable in this change** → `must-fix`; should be addressed before merge but ship-safe → `should-fix`; otherwise `nit`. A LOW-confidence smell that fails evidence rules is **not** a finding (existing disqualify rules) — put it on `- unverified:` if it must be mentioned.
+| Surface (decided by what the fix changes) | `critical` | `high` / `medium` | `low` | `nit` |
+| --- | --- | --- | --- | --- |
+| Implementation — product code, build, API, config | `must-fix` — unsafe **and** reachable here | `should-fix` | `may-fix` | `nit` |
+| Tests — test code, fixtures, test tooling | `may-fix` | `may-fix` | `may-fix` | `nit` |
+| Documentation — prose, comments, examples, changelog | `may-fix` | `may-fix` | `nit` | `nit` |
 
-**Class floors** — two limits apply before the class is final:
+A finding's surface is what its fix would change, not where the citation points: a documented command that would make a reader destroy data is still a documentation finding (`may-fix` at most — capture it, do not block), while a comment that misstates a shipped contract is documentation too.
 
-- **Documentation detail is `nit`.** Wording, structure, examples, formatting, stale prose, or comment accuracy → at most `nit`; it never produces `needs fixes` on its own. A docs finding rises above `nit` only when the documented content is itself wrong in a way that changes what a reader does — a command that cannot run, a contract stated backwards, a destructive instruction — and it cites the evidence for that consequence. Name the edit; do not grade doc polish as a merge blocker.
+**Class ↔ issue severity:** these four classes are this chain's projection of the one blocking judgement — the store.db issue `severity` value, plan-QC report section, and L2 task-review label sitting at each band are tabulated in `mstar-artifacts` `references/status-and-residuals.md` § Residual findings: `severity` → §5 Cross-chain vocabulary. Surface decides which class a band projects onto: `must-fix` ↔ implementation `critical`; `should-fix` ↔ implementation `high` / `medium`; `may-fix` is the surface-capped class and is **not** a band of its own, so its captured issue keeps the band the finding actually earns (`critical` / `high` / `medium` / `low`) — capture by that band rather than by the class label; `nit` ↔ `nit`, plus documentation `low`. The surface gate changes only the class, never the captured band: a `critical` documentation finding is captured as `critical`. Translate by band; never re-grade on translation.
+
+Tie-break: unsafe to ship **and reachable in this change** → `must-fix`; should be addressed before merge but ship-safe → `should-fix`; real but not worth holding the merge → `may-fix`; otherwise `nit`. The surface gate overrides the tie-break: a test or documentation finding never lands above `may-fix`. A LOW-confidence smell that fails evidence rules is **not** a finding (existing disqualify rules) — put it on `- unverified:` if it must be mentioned.
+
+**Class floors** — three limits apply before the class is final:
+
+- **Documentation detail is `nit`; a wrong document is `may-fix`, never more.** Wording, structure, examples, formatting, stale prose, or comment accuracy → at most `nit`; it never produces `needs fixes` on its own. A docs finding rises above `nit` only when the documented content is itself wrong in a way that changes what a reader does — a command that cannot run, a contract stated backwards, a destructive instruction — and it cites the evidence for that consequence; that ceiling is `may-fix` (surface gate above), never `should-fix`. Name the edit; do not grade doc polish as a merge blocker.
+- **Test findings are capped at `may-fix`.** A missing, weak or broken test is a real finding and stays listed and captured, but it never selects `blocked` or `needs fixes`: the shipped behavior it fails to protect is the implementation finding, and that is where a reachable defect belongs. Classify a test finding by the surface gate, not by how much risk the untested path would carry.
 - **Hardening nobody needs is not a finding.** A finding that asks the change to add validation, a gate, a limit, a fallback, an option, or handling for an extreme condition must show that condition is reachable under the declared expected load or an existing contract (including a caller the reviewed work introduces) — the shared admissibility test is `references/finding-format.md` § What disqualifies a finding (speculative hardening), within `mstar-coding-behavior` § Requirement-first simplicity. Without that evidence it belongs in **Considered & rejected**; keep it under `- unverified:` only when it is plausibly reachable and one check would settle it. Never propose a new layer or option "to be safe", and prefer the smallest evidenced repair (`references/finding-format.md` § Structural remedies). **The mirror direction is graded too**: machinery the change adds for conditions nothing can reach is `nit`, rising to `should-fix` only when it materially widens a boundary, public surface, or configuration.
 
-Presumptive-structural classes: a refactor that relocates complexity instead of reducing it · a change pushing a file past the size boundary with no decomposition · feature logic added to a shared module · a near-duplicate of an existing canonical helper · a silent fallback hiding an unclear invariant → default `should-fix`; downgrade to `nit` only with a stated reason; never `must-fix` on shape alone without correctness/security evidence.
+Presumptive-structural classes: a refactor that relocates complexity instead of reducing it · a change pushing a file past the size boundary with no decomposition · feature logic added to a shared module · a near-duplicate of an existing canonical helper · a silent fallback hiding an unclear invariant → default `should-fix`; downgrade to `may-fix` (or `nit` when purely cosmetic) only with a stated reason; never `must-fix` on shape alone without correctness/security evidence.
 
 Field placement has one rule and one enforced artifact:
 
-- **The rule** — `- **Merge class**: must-fix | should-fix | nit` sits immediately after `Confidence` (and before `Fix sketch` in the draft form).
+- **The rule** — `- **Merge class**: must-fix | should-fix | may-fix | nit` sits immediately after `Confidence` (and before `Fix sketch` in the draft form).
 - **What is machine-checked** — only the **stage-2 finding draft** (the seat's findings payload / draft file): `mstar lint <file.md> --type finding --pr-variant` (equivalently `validateFindingDoc(text, { prVariant: true })`) enforces presence, enum, and the line immediately after `Confidence` (`prreview.finding.merge-class-placement`).
 - **What is not machine-checked** — the **rendered report body** (§ Report template `####` block). Nothing lints it. It keeps the same ordering by construction: the renderer emits `Evidence` → `Location` → `Category` (when the envelope carries one) → `Merge class` **last**, and the agent inserts `Impact`, `Fix sketch`, `Confidence` above that trailing bullet, so the block ends `… Impact / Fix sketch / Confidence / Merge class` and the rule still holds. An agent line appended after `Merge class` would break the stated order, but no checker would flag it — which is precisely why the insertion point is the trailing bullet.
 
@@ -271,12 +283,16 @@ Verbatim, applied after the vet pass to **accepted** findings, then leftover unm
 ```
 must_fix   = count of accepted findings with Merge class: must-fix
 should_fix = count of accepted findings with Merge class: should-fix
+may_fix    = count of accepted findings with Merge class: may-fix
 nit        = count of accepted findings with Merge class: nit
 unverified = count of residual items under `- unverified:` (0 when `none`)
 
-# leftover unmet ACs (§ Linked-issue hygiene) — tally increment, not a fourth class, not a second finding:
+# leftover unmet ACs (§ Linked-issue hygiene) — tally increment, not a merge class, not a second finding.
+# The AC's surface picks the bucket: tests/docs land in may_fix, which never selects a verdict.
 for each leftover AC marked unmet (not met, not cut):
-    if that leftover is itself unsafe-to-ship / a broken public contract:
+    if that AC's surface is tests or docs:
+        may_fix += 1
+    else if that leftover is itself unsafe-to-ship / a broken public contract:
         must_fix += 1
     else:
         should_fix += 1
@@ -286,15 +302,18 @@ if must_fix >= 1:
 else if should_fix >= 1:
     verdict = needs fixes
 else:
-    verdict = ship it
+    verdict = ship it            # may_fix and nit never select a verdict
 ```
 
-`score_pct` — integer arithmetic only. Floor at 0. No decimals. No second formula. Deductions diminish per finding within a class, and two classes carry a cap:
+`may_fix` is counted and deducted but **never enters verdict derivation** — the surface gate's whole point is that test and documentation work cannot hold a merge.
+
+`score_pct` — integer arithmetic only. Floor at 0. No decimals. No second formula. Deductions diminish per finding within a class, and three classes carry a cap:
 
 | class      | nth-finding deduction                | class cap |
 | ---------- | ------------------------------------ | --------- |
 | must-fix   | 45, then 15 each additional          | none      |
 | should-fix | max(12 − 3·(n−1), 2) → 12,9,6,3,2,2… | none      |
+| may-fix    | max(6 − 2·(n−1), 1) → 6,4,2,1,1…     | 15        |
 | nit        | 2 first, then 1 each                 | 8         |
 | unverified | 5 each                               | 15        |
 
@@ -302,7 +321,7 @@ else:
 score_pct = max(0, 100 - Σ class deductions)
 ```
 
-Property: nits and unverified alone can never drop the score below 77, so a PR with no must-fix/should-fix can never enter the `fail` band.
+Property: may-fix, nits and unverified alone can never drop the score below 62 (15 + 8 + 15), so a PR with no must-fix/should-fix never enters the `fail` band on non-blocking findings alone.
 
 **Score bands** — a display annotation derived from `score_pct` (never stored in the report frontmatter; `score_pct` is the only score key):
 
@@ -319,39 +338,41 @@ Property: nits and unverified alone can never drop the score below 77, so a PR w
 Score and band never override verdict.
 blocked + any score_pct       → not shippable
 needs fixes + any score_pct   → still address findings before merge
-ship it + score_pct < 100    → allowed (nits and/or unverified deducted)
+ship it + score_pct < 100    → allowed (may-fix, nits and/or unverified deducted)
 incomplete + any score_pct   → still not a pass and still not mergeable; the grade is a partial one
 High score_pct never means APPROVE. Low score_pct never means REQUEST_CHANGES.
 A band grades the finding load only — `ship it` + `good` (e.g. 3 unverified) is legal.
 ```
 
-**An unsettled run derives the override; it is the only one.** The tally cannot express "the review is not whole" — that is a fact about the run, not about the change — so the declaration replaces the emitted verdict token and nothing else: `computePrTally` keeps the count-derived `scorePct`, `band` and four counts, and the band renders as `partial` (§ Display contract). What makes a run unsettled is § Verdict synthesis's three run facts — derived once by `resolvePrReviewSettlement` and supplied to `mstar pr-review tally` as `--required-domains`, `--opened-domains` and `--diff-basis` (all three required; omitting one is refused, never inferred) plus the optional `--stopped` and `--partial-scope` — never its clock: a maxed wall clock with complete coverage keeps the tally-derived verdict and declares the overrun under `- notes:`. The fact is rejected on every other verdict, so the token is never published bare and a settled report never carries it: the `mstar.review/v1` envelope requires `incomplete: { reason, unscanned }` on that verdict (its own `synthesizeReview` echoes the same facts onto `tally.incomplete`), and the local report frontmatter requires `incomplete_reason` plus `unscanned` (§ Local report archive).
+**An unsettled run derives the override; it is the only one.** The tally cannot express "the review is not whole" — that is a fact about the run, not about the change — so the declaration replaces the emitted verdict token and nothing else: `computePrTally` keeps the count-derived `scorePct`, `band` and all class counts, and the band renders as `partial` (§ Display contract). What makes a run unsettled is § Verdict synthesis's three run facts — derived once by `resolvePrReviewSettlement` and supplied to `mstar pr-review tally` as `--required-domains`, `--opened-domains` and `--diff-basis` (all three required; omitting one is refused, never inferred) plus the optional `--stopped` and `--partial-scope` — never its clock: a maxed wall clock with complete coverage keeps the tally-derived verdict and declares the overrun under `- notes:`. The fact is rejected on every other verdict, so the token is never published bare and a settled report never carries it: the `mstar.review/v1` envelope requires `incomplete: { reason, unscanned }` on that verdict (its own `synthesizeReview` echoes the same facts onto `tally.incomplete`), and the local report frontmatter requires `incomplete_reason` plus `unscanned` (§ Local report archive).
 
 > **Engine check (when available):** the invariant is enforced structurally — `computePrTally` derives the verdict from the tally before the score is computed, and `mstar pr-review validate-report` flags a `verdict` that does not follow from the report's own tally (`prreview.report.verdict-mismatch`, severity high); that check is skipped for the derived `incomplete` token alone, while its `score_pct` recompute still runs. On `fail` -> do not proceed; fix and re-run. Skill text below remains authoritative when the runtime is absent.
 
 ### Worked examples (check table)
 
-| must / should / nit / unverified | score_pct | band | verdict | Display line |
+| must / should / may / nit / unverified | score_pct | band | verdict | Display line |
 | --- | --- | --- | --- | --- |
-| 0 / 0 / 0 / 0 (clean) | 100 | `mergeable` | `ship it` | `ship it · 100% (mergeable)` |
-| 0 / 0 / 0 / 0 + 1 leftover unmet AC | 88 | `good` | `needs fixes` | `needs fixes · 88% (good)` |
-| 0 / 0 / 0 / 0 + 1 leftover unmet AC (unsafe-to-ship) | 55 | `fail` | `blocked` | `blocked · 55% (fail)` |
-| 0 / 0 / 2 / 0 | 97 | `mergeable` | `ship it` | `ship it · 97% (mergeable)` |
-| 0 / 0 / 0 / 2 | 90 | `mergeable` | `ship it` | `ship it · 90% (mergeable)` |
-| 0 / 1 / 0 / 0 | 88 | `good` | `needs fixes` | `needs fixes · 88% (good)` |
-| 0 / 1 / 1 / 0 | 86 | `good` | `needs fixes` | `needs fixes · 86% (good)` |
-| 1 / 0 / 0 / 0 | 55 | `fail` | `blocked` | `blocked · 55% (fail)` |
-| 1 / 2 / 1 / 1 | 27 | `fail` | `blocked` | `blocked · 27% (fail)` |
-| 3 / 0 / 0 / 0 | 25 | `fail` | `blocked` | `blocked · 25% (fail)` |
-| 0 / 0 / 10 / 0 (nit class cap) | 92 | `mergeable` | `ship it` | `ship it · 92% (mergeable)` |
-| 0 / 0 / 0 / 3 (unverified cap boundary) | 85 | `good` | `ship it` | `ship it · 85% (good)` |
-| 7 / 0 / 0 / 0 (floor) | 0 | `fail` | `blocked` | `blocked · 0% (fail)` |
-| 0 / 0 / 0 / 100 (unverified class cap) | 85 | `good` | `ship it` | `ship it · 85% (good)` |
-| 1 / 0 / 1 / 0 + derived `incomplete` (run-fact override) | 53 | `fail` | `incomplete` | `incomplete · 53% (fail, partial)` |
+| 0 / 0 / 0 / 0 / 0 (clean) | 100 | `mergeable` | `ship it` | `ship it · 100% (mergeable)` |
+| 0 / 0 / 0 / 0 / 0 + 1 leftover unmet AC | 88 | `good` | `needs fixes` | `needs fixes · 88% (good)` |
+| 0 / 0 / 0 / 0 / 0 + 1 leftover unmet AC (unsafe-to-ship) | 55 | `fail` | `blocked` | `blocked · 55% (fail)` |
+| 0 / 0 / 0 / 2 / 0 | 97 | `mergeable` | `ship it` | `ship it · 97% (mergeable)` |
+| 0 / 0 / 0 / 0 / 2 | 90 | `mergeable` | `ship it` | `ship it · 90% (mergeable)` |
+| 0 / 1 / 0 / 0 / 0 | 88 | `good` | `needs fixes` | `needs fixes · 88% (good)` |
+| 0 / 1 / 0 / 1 / 0 | 86 | `good` | `needs fixes` | `needs fixes · 86% (good)` |
+| 0 / 0 / 2 / 0 / 0 (may-fix only, still shippable) | 90 | `mergeable` | `ship it` | `ship it · 90% (mergeable)` |
+| 0 / 0 / 6 / 0 / 0 (may-fix class cap) | 85 | `good` | `ship it` | `ship it · 85% (good)` |
+| 1 / 0 / 0 / 0 / 0 | 55 | `fail` | `blocked` | `blocked · 55% (fail)` |
+| 1 / 2 / 0 / 1 / 1 | 27 | `fail` | `blocked` | `blocked · 27% (fail)` |
+| 3 / 0 / 0 / 0 / 0 | 25 | `fail` | `blocked` | `blocked · 25% (fail)` |
+| 0 / 0 / 0 / 10 / 0 (nit class cap) | 92 | `mergeable` | `ship it` | `ship it · 92% (mergeable)` |
+| 0 / 0 / 0 / 0 / 3 (unverified cap boundary) | 85 | `good` | `ship it` | `ship it · 85% (good)` |
+| 7 / 0 / 0 / 0 / 0 (floor) | 0 | `fail` | `blocked` | `blocked · 0% (fail)` |
+| 0 / 0 / 0 / 0 / 100 (unverified class cap) | 85 | `good` | `ship it` | `ship it · 85% (good)` |
+| 1 / 0 / 0 / 1 / 0 + derived `incomplete` (run-fact override) | 53 | `fail` | `incomplete` | `incomplete · 53% (fail, partial)` |
 
-`blocked · 55%` is still not shippable. `needs fixes · 88%` still means address findings. `ship it · 85% (good)` is legal — the band grades the finding load, the verdict governs mergeability. This table is mirrored row-for-row as the engine test fixture (`packages/engine/test/prreview.test.ts`) — the table text is the SSOT anchor. Rows 1–14 are the **count-derived** rows and mirror the fixture's check-table array; the `incomplete` row is the one **run-fact override** — identical counts and identical 53 / `fail` grade, token derived from the run facts by `resolvePrReviewSettlement` — and the fixture covers that case in its own `computePrTally — incomplete verdict` block plus the `resolvePrReviewSettlement` block above it. An override display continues past its first line with the `cause:` and `unscanned:` lines (§ Display contract).
+`blocked · 55%` is still not shippable. `needs fixes · 88%` still means address findings. `ship it · 85% (good)` is legal — the band grades the finding load, the verdict governs mergeability. This table is mirrored row-for-row as the engine test fixture (`packages/engine/test/prreview.test.ts`) — the table text is the SSOT anchor. Rows 1–16 are the **count-derived** rows and mirror the fixture's check-table array; the `incomplete` row is the one **run-fact override** — identical counts and identical 53 / `fail` grade, token derived from the run facts by `resolvePrReviewSettlement` — and the fixture covers that case in its own `computePrTally — incomplete verdict` block plus the `resolvePrReviewSettlement` block above it. An override display continues past its first line with the `cause:` and `unscanned:` lines (§ Display contract).
 
-> **Engine check (when available):** run `mstar pr-review tally --findings <file.json> [--unverified <n>] [--unmet-ac-unsafe <n>] [--unmet-ac-safe <n>] [--stopped <text>] --required-domains <d,d,...> --opened-domains <d,d,...> --diff-basis <readable|unreadable> [--partial-scope <scope...>]` (or `import { computePrTally, resolvePrReviewSettlement } from "@mstar-harness/engine"` in a host hook) to compute this tally, verdict and score from the accepted findings JSON — the run facts are fed to `resolvePrReviewSettlement`, which derives the `incomplete` fact (there is no time input, so an overrun cannot select the token). Both domain lists are **seat occurrences**: `--required-domains` / `--opened-domains` take one entry per required seat, so a domain with two seats appears twice and needs two matching `--opened-domains` entries when both returned. A **settled** run carries no `unscanned`, so a declared truncated seat scope is recorded by the report under `- unverified:` / `- notes:` and the `tally` output echoes it as `declaredScopes` (an unsettled run keeps it in `incomplete.unscanned`). `declaredScopes` is a **tally-output fact** feeding the report's `- unverified:` / `- notes:`; it is **not part of `mstar.review/v1`** and is not a declared report-frontmatter field, so copying it into either surface is **outside the contract** — the envelope tolerates unknown keys silently and the frontmatter parser accepts arbitrary scalar keys, but **tolerance is not permission**. The three coverage/basis facts are **required** on both surfaces: omitting `--required-domains`, `--opened-domains` or `--diff-basis` (or the matching `PrReviewRunFacts` member) is refused rather than defaulted, because the CLI never infers coverage — an unreported fact is never read as complete coverage; the check table above is the SSOT the engine fixture mirrors (`packages/engine/test/prreview.test.ts`); never hand-compute when the CLI is available. On `fail` -> do not proceed; fix and re-run. Skill text below remains authoritative when the runtime is absent.
+> **Engine check (when available):** run `mstar pr-review tally --findings <file.json> [--unverified <n>] [--unmet-ac-unsafe <n>] [--unmet-ac-safe <n>] [--unmet-ac-tests <n>] [--unmet-ac-docs <n>] [--stopped <text>] --required-domains <d,d,...> --opened-domains <d,d,...> --diff-basis <readable|unreadable> [--partial-scope <scope...>]` (or `import { computePrTally, resolvePrReviewSettlement } from "@mstar-harness/engine"` in a host hook) to compute this tally, verdict and score from the accepted findings JSON — the run facts are fed to `resolvePrReviewSettlement`, which derives the `incomplete` fact (there is no time input, so an overrun cannot select the token). Both domain lists are **seat occurrences**: `--required-domains` / `--opened-domains` take one entry per required seat, so a domain with two seats appears twice and needs two matching `--opened-domains` entries when both returned. A **settled** run carries no `unscanned`, so a declared truncated seat scope is recorded by the report under `- unverified:` / `- notes:` and the `tally` output echoes it as `declaredScopes` (an unsettled run keeps it in `incomplete.unscanned`). `declaredScopes` is a **tally-output fact** feeding the report's `- unverified:` / `- notes:`; it is **not part of `mstar.review/v1`** and is not a declared report-frontmatter field, so copying it into either surface is **outside the contract** — the envelope tolerates unknown keys silently and the frontmatter parser accepts arbitrary scalar keys, but **tolerance is not permission**. The three coverage/basis facts are **required** on both surfaces: omitting `--required-domains`, `--opened-domains` or `--diff-basis` (or the matching `PrReviewRunFacts` member) is refused rather than defaulted, because the CLI never infers coverage — an unreported fact is never read as complete coverage; the check table above is the SSOT the engine fixture mirrors (`packages/engine/test/prreview.test.ts`); never hand-compute when the CLI is available. On `fail` -> do not proceed; fix and re-run. Skill text below remains authoritative when the runtime is absent.
 
 ## Originating spec discovery
 
@@ -368,7 +389,7 @@ When an originating spec exists (§ Originating spec discovery — a tracked iss
 
 - Mark each: met / unmet / cut.
 
-Leftover `unmet` criteria count against the verdict: they are **tally increments**, not extra findings (do not also emit a Merge-class finding for the same leftover — that would double-count). Each leftover AC marked `unmet` (not `met`, not `cut`) increments `should_fix` by 1, or `must_fix` by 1 when that leftover is itself a broken public contract / unsafe-to-ship. The increment lives in the tally procedure (§ Tally and derived score); apply Verdict-from-tally **after** it, so leftover `unmet` ACs cannot yield `ship it`. Score uses the locked deduction schedule only (`should_fix` deducts 12 on the first finding and less thereafter, `must_fix` deducts 45 on the first — no second formula, no new tally key). Leftovers are already mentioned in the review `body` (§ Comment posting) — no fourth merge class.
+Leftover `unmet` criteria count against the verdict: they are **tally increments**, not extra findings (do not also emit a Merge-class finding for the same leftover — that would double-count). Each leftover AC marked `unmet` (not `met`, not `cut`) carries a `surface` — `implementation`, `tests` or `docs`, where absent means `implementation` — and increments the bucket that surface selects: a **tests** or **docs** AC increments `may_fix` by 1 — the surface cap (§ Merge class) applies exactly as it does to a finding, whatever the AC's unsafe-to-ship marking, so it can **never** select `needs fixes` or `blocked`; an **implementation** AC increments `must_fix` by 1 when that leftover is itself a broken public contract / unsafe-to-ship, else `should_fix` by 1. A leftover AC is a delivery obligation rather than a review finding, but that does not lift the cap: an undelivered test or documentation criterion is a `may_fix` fact, not a merge blocker. The increment lives in the tally procedure (§ Tally and derived score); apply Verdict-from-tally **after** it, so an implementation leftover `unmet` AC cannot yield `ship it`. Score uses the locked deduction schedule only (`should_fix` deducts 12 on the first finding and less thereafter, `must_fix` deducts 45 on the first — no second formula, no new tally key). Leftovers are already mentioned in the review `body` (§ Comment posting) — the increment is not a merge class.
 - Do not invent a follow-up when all criteria landed.
 
 ## CI attribution
@@ -443,7 +464,7 @@ EOF
 
 The posted review body is a three-section report. Section order fixed; omit a subsection only when its content is genuinely empty (write `none`, never delete the heading). The block below shows only **fill-in slots**: a `<...>` that wraps descriptive text (`<verdict>`, `<n>`, `<finding title>`, …) is a slot — replace the whole bracket pair with real content and never render those brackets. The literal HTML tags in the template (`<details>`, `<summary>`, `<br>`) are **structural** — keep them verbatim so the collapsible block survives. The Slot rules below the template are guidance — never copy them into the posted body.
 
-**Section emoji map** — verdict: `ship it` ✅ · `needs fixes` ⚠️ · `blocked` ⛔ · `incomplete` ⏸️. Finding classes: 🔴 must-fix · 🟠 should-fix · 🔵 nit · ❓ unverified.
+**Section emoji map** — verdict: `ship it` ✅ · `needs fixes` ⚠️ · `blocked` ⛔ · `incomplete` ⏸️. Finding classes: 🔴 must-fix · 🟠 should-fix · 🟡 may-fix · 🔵 nit · ❓ unverified.
 
 ````markdown
 ## <verdict-emoji> Verdict: `<verdict>` · Score <score_pct>% (<band>)
@@ -455,6 +476,7 @@ unscanned: <csv | none>
 | --- | --- |
 | 🔴 must-fix | <n> |
 | 🟠 should-fix | <n> |
+| 🟡 may-fix | <n> |
 | 🔵 nit | <n> |
 | ❓ unverified | <n> |
 
@@ -478,7 +500,7 @@ unscanned: <csv | none>
 - **Impact**: why it matters
 - **Fix sketch**: one-line suggestion
 - **Confidence**: HIGH | MEDIUM | LOW
-- **Merge class**: must-fix | should-fix | nit
+- **Merge class**: must-fix | should-fix | may-fix | nit
 
 ### Linked-issue AC
 
@@ -516,7 +538,7 @@ unscanned: <csv | none>
 - **Considered & rejected**: one bullet per rejected candidate from the three-way attack / vet pass (§ Attack and vet), so the next reviewer does not re-chase it; bare `none` when nothing was rejected.
 - **Plan to fix**: fix plan in markdown (ordered steps per finding, files touched, verification gates); when there is no fix plan, replace the whole `<details>` block with a single line `none`.
 
-- The Verdict section replaces the old two-line tally header on GitHub: the same facts (verdict token + `score_pct` as Score with its band + four-class tally), structured — plus, for `incomplete`, the `partial` mark and its `cause:` / `unscanned:` lines. The chat display contract (§ Display contract) is unchanged.
+- The Verdict section replaces the old two-line tally header on GitHub: the same facts (verdict token + `score_pct` as Score with its band + class tally), structured — plus, for `incomplete`, the `partial` mark and its `cause:` / `unscanned:` lines. The chat display contract (§ Display contract) is unchanged.
 - When the fix plan itself contains fenced code blocks, open the outer fence with four backticks so the inner fences survive.
 
 > **Engine check (when available):** use `renderReviewMarkdown(review, { surface: "github-comment" | "local-report" })` (or import `renderReviewMarkdown` from `@mstar-harness/engine` in a CLI-less host hook) to render this § Report template's body from the `mstar.review/v1` envelope — verdict head, the tally table (only when the envelope carries a tally; with no tally the head also drops its ` · Score <n>% (<band>)` segment), the `incomplete` fact pair, the **always-present** `## 📋 Review` section (empty without a seat narrative), and `### Findings` with one `#### <emoji> <title>` block per finding carrying `- **Evidence**:`, `- **Location**:`, `- **Category**:` (when the envelope has one) and `- **Merge class**:` last. `surface` is layout-neutral: both values render that one body, because § Local report archive keeps the archived body identical to the posted one. The renderer supplies Evidence, Location, Category and Merge class; the main agent completes the body around it — add `**What this PR does**` under `## 📋 Review`, insert `### Revalidated findings` immediately **before** the renderer's `### Findings` (and add an empty `### Findings` section itself when the envelope carries no findings, so the anchor exists), then append `### Linked-issue AC`, `### ✅ Verified`, `### 🗑️ Considered & rejected` and `## 🛠️ Plan to fix`. The frontmatter, `- notes:` and the § Output shape bullets remain the agent's duty. The engine owns verdict/tally/fact/findings layout; the consumer owns upsert markers, round headers and byte-budget clamping. `summary_md` is the optional seat narrative only: the engine does not generate one, does not rewrite or strip anything from a supplied one (it is published verbatim, headings included), and omits the section's prose when no seat produced any. The renderer's unit tests own the byte-exact templates. On `fail` -> do not proceed; fix and re-run. Skill text below remains authoritative when the runtime is absent.
@@ -542,7 +564,7 @@ The posted PR comment is the deliverable; the local report is the durable refere
   base: <base ref>
   verdict: ship it | needs fixes | blocked | incomplete
   score_pct: <n>         # band is derived from this (mergeable | good | pass | fail) — never stored
-  tally: { must-fix: <n>, should-fix: <n>, nit: <n>, unverified: <n> }
+  tally: { must-fix: <n>, should-fix: <n>, may-fix: <n>, nit: <n>, unverified: <n> }   # may-fix optional: a report written before the class existed reads it as 0
   incomplete_reason: <why the run stopped>   # required exactly when verdict: incomplete (non-empty); rejected for every other verdict
   unscanned: <csv>                          # required exactly when verdict: incomplete — comma-separated scope the run never reached, or none; rejected for every other verdict
   comments: posted | n/a-no-pr | failed   # posting tri-state — never collapse failed into n/a-no-pr ("yes" = posted alias)
@@ -568,6 +590,7 @@ The posted PR comment is the deliverable; the local report is the durable refere
 - `- tally:`
   - `- must-fix: <n>`
   - `- should-fix: <n>`
+  - `- may-fix: <n>`
   - `- nit: <n>`
   - `- unverified: <n>`
 - `- evidence:` — concise what-checks-proved summary.
@@ -594,14 +617,14 @@ First two lines of the **chat** display — verbatim, for a settled run:
 
 ```
 {verdict} · {score_pct}% ({band})
-must-fix=<n> should-fix=<n> nit=<n> unverified=<n>
+must-fix=<n> should-fix=<n> may-fix=<n> nit=<n> unverified=<n>
 ```
 
 A run that stopped short prints **four** lines instead — the same facts plus the `partial` mark and the two facts the token cannot carry:
 
 ```
 incomplete · {score_pct}% ({band}, partial)
-must-fix=<n> should-fix=<n> nit=<n> unverified=<n>
+must-fix=<n> should-fix=<n> may-fix=<n> nit=<n> unverified=<n>
 cause: {reason}
 unscanned: {csv | none}
 ```
@@ -610,5 +633,5 @@ unscanned: {csv | none}
 
 Then ranked findings / leftover AC summary. Do not put `score_pct%` on the `- verdict:` token line.
 
-The GitHub Review `body` no longer uses the two-line header — it follows § Report template, whose Verdict section carries the same facts structured (verdict token + Score with its band + four-class emoji tally table) and, for `incomplete`, the partial mark plus the `cause:` / `unscanned:` lines.
+The GitHub Review `body` no longer uses the two-line header — it follows § Report template, whose Verdict section carries the same facts structured (verdict token + Score with its band + class emoji tally table) and, for `incomplete`, the partial mark plus the `cause:` / `unscanned:` lines.
 

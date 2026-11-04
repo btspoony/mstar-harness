@@ -71,6 +71,27 @@ describe("MstarReviewV1 envelope shape: keys outside the documented set are refu
     expect(gate.violations.map((v) => v.message).join("\n")).toContain("tally.declaredScopes");
   });
 
+  test("an unknown key inside tally.tally is refused as a malformed tally", () => {
+    // A misspelled optional count would otherwise read as 0 and render as may-fix | 0.
+    const doc = {
+      ...BAND_ENVELOPE,
+      tally: { ...COMPUTED_TALLY, tally: { ...COMPUTED_TALLY.tally, mayfix: 0 } },
+    };
+    const gate = validateMstarReviewV1(doc);
+    expect(gate.ok).toBe(false);
+    const refusal = gate.violations.map((v) => `${v.code}: ${v.message}`).join("\n");
+    expect(refusal).toContain('review.tally-malformed: unknown key "tally.tally.mayfix"');
+  });
+
+  test("tally.tally accepts the four legacy counts and the five-key form", () => {
+    expect(validateMstarReviewV1(LEGACY_ENVELOPE).ok).toBe(true);
+    const fiveKey = {
+      ...COMPUTED_TALLY,
+      tally: { mustFix: 0, shouldFix: 1, mayFix: 0, nit: 1, unverified: 0 },
+    };
+    expect(validateMstarReviewV1({ ...BAND_ENVELOPE, tally: fiveKey }).ok).toBe(true);
+  });
+
   test("every unknown key is named in one refusal, own keys only", () => {
     const doc = { ...BAND_ENVELOPE, declaredScopes: ["docs"], severity: "critical" };
     const gate = validateMstarReviewV1(doc);
@@ -125,6 +146,7 @@ describe("renderReviewMarkdown: the template body", () => {
       "| --- | --- |",
       "| \u{1F534} must-fix | 0 |",
       "| \u{1F7E0} should-fix | 1 |",
+      "| \u{1F7E1} may-fix | 0 |",
       "| \u{1F535} nit | 1 |",
       "| \u2753 unverified | 0 |",
       "",
@@ -148,6 +170,23 @@ describe("renderReviewMarkdown: the template body", () => {
       "- **Merge class**: nit",
     ].join("\n");
     expect(renderReviewMarkdown(SETTLED_REVIEW, { surface: "github-comment" })).toBe(expected);
+  });
+
+  test("(a2) a non-zero may-fix count reaches the rendered tally row", () => {
+    const findings = [
+      { mergeClass: "may-fix" as const, file_path: "src/c.ts", title: "Missing test", body: "No coverage." },
+      { mergeClass: "may-fix" as const, file_path: "src/d.ts", title: "Stale docs", body: "Comment drift." },
+    ];
+    const review: MstarReviewV1 = {
+      schema: "mstar.review/v1",
+      verdict: "ship it",
+      summary_md: "Both are non-blocking.",
+      tally: computePrTally({ findings }),
+      findings,
+    };
+    const body = renderReviewMarkdown(review, { surface: "github-comment" });
+    expect(body).toContain("| \u{1F7E1} may-fix | 2 |");
+    expect(body).not.toContain("| \u{1F7E1} may-fix | 0 |");
   });
 
   test("(b) no tally, no narrative and no findings renders the verdict head and the Review anchor", () => {

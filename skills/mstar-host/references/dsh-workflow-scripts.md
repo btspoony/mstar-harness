@@ -416,7 +416,7 @@ const SEAT = {
           effort: { type: 'string', enum: ['XS', 'S', 'M', 'L', 'XL'] },
           risk: { type: 'string', enum: ['LOW', 'MED', 'HIGH'] },
           confidence: { type: 'string', enum: ['HIGH', 'MED', 'LOW'] },
-          mergeClass: { type: 'string', enum: ['must-fix', 'should-fix', 'nit'] },
+          mergeClass: { type: 'string', enum: ['must-fix', 'should-fix', 'may-fix', 'nit'] },
           fix: { type: 'string', description: 'One line.' },
         },
       },
@@ -444,7 +444,7 @@ Read-only audit seat in the three-stage PR review pipeline; the main agent synth
 
 Load in order: skill mstar-audit then SKILL.md and references/pr-review-seat-evidence.md; ${a.auditRef}/pr-review.md sections "Review pipeline", "Merge class" and "Verdict synthesis"; ${a.auditRef}/finding-format.md for the finding fields. Then read ${diffHint}. Open the cited code yourself — a relayed claim from another seat is not evidence.
 
-Conclude ONLY on your own domain (${domain}).${extra} Return findings with merge class must-fix | should-fix | nit, an XS-XL effort, a risk level, a confidence and a one-line fix sketch. Cross-domain boundary issues go to notes, not findings. Do not edit the worktree, do not run project-wide suites, never reproduce secret values.
+Conclude ONLY on your own domain (${domain}).${extra} Return findings with merge class must-fix | should-fix | may-fix | nit, an XS-XL effort, a risk level, a confidence and a one-line fix sketch. Cross-domain boundary issues go to notes, not findings. Do not edit the worktree, do not run project-wide suites, never reproduce secret values.
 
 Return ONLY the JSON object matching the provided schema (domain, findings, leads, notes). No verdict.`
 

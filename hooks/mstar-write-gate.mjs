@@ -17143,17 +17143,24 @@ var DATED_SLUG_TOKEN_SOURCE = "\\b20\\d{6}-[a-z0-9][a-z0-9-]*\\b(?!\\.\\d)";
 var DATED_SLUG_TOKEN_RE = new RegExp(DATED_SLUG_TOKEN_SOURCE, "g");
 init_path();
 init_audit();
+var MERGE_CLASSES = ["must-fix", "should-fix", "may-fix", "nit"];
 var MUST_FIX_FIRST = 45;
 var MUST_FIX_EACH_ADDITIONAL = 15;
 var SHOULD_FIX_FIRST = 12;
 var SHOULD_FIX_STEP = 3;
 var SHOULD_FIX_MIN = 2;
+var MAY_FIX_FIRST = 6;
+var MAY_FIX_STEP = 2;
+var MAY_FIX_MIN = 1;
+var MAY_FIX_CAP = 15;
 var NIT_FIRST = 2;
 var NIT_EACH_ADDITIONAL = 1;
 var NIT_CAP = 8;
 var UNVERIFIED_EACH = 5;
 var UNVERIFIED_CAP = 15;
-var PR_SCORE_SCHEDULE_HINT = `the locked diminishing schedule (must-fix ${MUST_FIX_FIRST} then ${MUST_FIX_EACH_ADDITIONAL} each; ` + `should-fix max(${SHOULD_FIX_FIRST}-${SHOULD_FIX_STEP}*(n-1), ${SHOULD_FIX_MIN}); ` + `nit ${NIT_FIRST} then ${NIT_EACH_ADDITIONAL} each, cap ${NIT_CAP}; ` + `unverified ${UNVERIFIED_EACH} each, cap ${UNVERIFIED_CAP}; floor 0)`;
+var PR_SCORE_SCHEDULE_HINT = `the locked diminishing schedule (must-fix ${MUST_FIX_FIRST} then ${MUST_FIX_EACH_ADDITIONAL} each; ` + `should-fix max(${SHOULD_FIX_FIRST}-${SHOULD_FIX_STEP}*(n-1), ${SHOULD_FIX_MIN}); ` + `may-fix max(${MAY_FIX_FIRST}-${MAY_FIX_STEP}*(n-1), ${MAY_FIX_MIN}), cap ${MAY_FIX_CAP}; ` + `nit ${NIT_FIRST} then ${NIT_EACH_ADDITIONAL} each, cap ${NIT_CAP}; ` + `unverified ${UNVERIFIED_EACH} each, cap ${UNVERIFIED_CAP}; floor 0)`;
+var TALLY_COUNT_KEYS = ["mustFix", "shouldFix", "nit", "unverified"];
+var ENVELOPE_TALLY_COUNT_KEYS = [...TALLY_COUNT_KEYS, "mayFix"];
 var PR_REVIEW_TIER_BUDGETS = Object.freeze({
   quick: Object.freeze({ wallClockMinutes: 5, maxSeats: 1, perSeatFindingsCap: 5, evidenceTokensCap: 600, fileOpenCap: 12 }),
   default: Object.freeze({ wallClockMinutes: 10, maxSeats: 2, perSeatFindingsCap: 6, evidenceTokensCap: 900, fileOpenCap: 20 }),
@@ -17166,6 +17173,7 @@ var PR_REVIEW_NUDGE_CADENCE = Object.freeze({
 var EFFORT_ENUM_RE = new RegExp(`^(?:${AUDIT_EFFORTS.join("|")})(?:\\s*\\(|$)`);
 var RISK_ENUM_RE = new RegExp(`^(?:${AUDIT_RISKS.join("|")})(?:\\b|$)`);
 var CONFIDENCE_ENUM_RE = new RegExp(`^(${[...AUDIT_CONFIDENCES, "MEDIUM"].join("|")})\\b`, "i");
+var MERGE_CLASS_ENUM_RE = new RegExp(`^(${MERGE_CLASSES.join("|")})$`);
 init_qcreview_schema();
 init_coordination();
 init_core();

@@ -3,7 +3,7 @@
  * contracts, lifted from LLM hand-computation into tested code.
  *
  * Spec source (embedded as constants — no runtime skill-file reads):
- * - mstar-audit/references/pr-review.md § Merge class: the three merge
+ * - mstar-audit/references/pr-review.md § Merge class: the four merge
  * classes and their verdict effects.
  * - mstar-audit/references/pr-review.md § Verdict synthesis: the verdict is
  * derived from the tally, not chosen; exactly one of ship it / needs fixes
@@ -11,16 +11,16 @@
  * - mstar-audit/references/pr-review.md § Tally and derived score: tally
  * counts, leftover unmet-AC increments, verdict precedence, the locked
  * diminishing deduction schedule (must-fix 45 then 15 each · should-fix
- * `max(12 - 3*(n-1), 2)` → 12,9,6,3,2,2… · nit 2 then 1 each, class cap 8
- * · unverified 5 each, class cap 15; `score_pct = max(0, 100 - sum)`,
- * integer, floor 0), the score bands (mergeable >= 90 · good 80-89 · pass
- * 60-79 · fail < 60) and the override invariant (score and band never
- * override verdict).
+ * `max(12 - 3*(n-1), 2)` → 12,9,6,3,2,2… · may-fix `max(6 - 2*(n-1), 1)`,
+ * class cap 15 · nit 2 then 1 each, class cap 8 · unverified 5 each, class
+ * cap 15; `score_pct = max(0, 100 - sum)`, integer, floor 0), the score
+ * bands (mergeable >= 90 · good 80-89 · pass 60-79 · fail < 60) and the
+ * override invariant (score and band never override verdict).
  * - mstar-audit/references/pr-review.md § Display contract: the two-line
  * chat header, verbatim.
  * - mstar-audit/references/pr-review.md § Section emoji map: 🔴 must-fix ·
- * 🟠 should-fix · 🔵 nit · ❓ unverified (escaped as \u{...} per
- * lint:ascii-literals — bun misdecodes raw UTF-8 in the CLI bundle).
+ * 🟠 should-fix · 🟡 may-fix · 🔵 nit · ❓ unverified (escaped as \u{...}
+ * per lint:ascii-literals — bun misdecodes raw UTF-8 in the CLI bundle).
  */
 import { lstatSync, readdirSync, type Dirent, type Stats } from "node:fs";
 import { isAbsolute, join } from "node:path";
@@ -29,7 +29,7 @@ import { resolveReviewRunDir } from "./path.js";
 import { AUDIT_CATEGORIES, AUDIT_CONFIDENCES, AUDIT_EFFORTS, AUDIT_RISKS } from "./audit.js";
 
 /** Merge classes for accepted PR-review findings (pr-review.md § Merge class). */
-export const MERGE_CLASSES = ["must-fix", "should-fix", "nit"] as const;
+export const MERGE_CLASSES = ["must-fix", "should-fix", "may-fix", "nit"] as const;
 export type MergeClass = (typeof MERGE_CLASSES)[number];
 
 /**
@@ -67,11 +67,12 @@ export function scoreBand(scorePct: number): PrScoreBand {
 
 /**
  * Emoji per merge class (+ the unverified bucket) — pr-review.md § Section
- * emoji map: 🔴 must-fix · 🟠 should-fix · 🔵 nit · ❓ unverified.
+ * emoji map: 🔴 must-fix · 🟠 should-fix · 🟡 may-fix · 🔵 nit · ❓ unverified.
  */
 export const REVIEW_EMOJI: Record<MergeClass | "unverified", string> = {
   "must-fix": "\u{1F534}", // 🔴
   "should-fix": "\u{1F7E0}", // 🟠
+  "may-fix": "\u{1F7E1}", // 🟡
   nit: "\u{1F535}", // 🔵
   unverified: "\u2753", // ❓
 };
@@ -88,13 +89,19 @@ export type PrIncomplete = {
   unscanned: readonly string[];
 };
 
+/** Surfaces a leftover unmet AC can carry — the vocabulary the routing and
+ * the boundary guard share. Absent on the entry means `implementation`. */
+const UNMET_AC_SURFACES = ["implementation", "tests", "docs"] as const;
+
 /**
  * Input to {@link computePrTally}. `findings` are the post-vet accepted
  * findings only; `unverifiedCount` is the count of residual items under
  * `- unverified:` (0 when absent / `none`); `unmetAc` is the leftover
  * unmet acceptance criteria (not met, not cut) — each increments the tally
- * (§ Linked-issue hygiene), it is not a fourth class and not a second
- * finding. `incomplete` marks a bounded/stopped run: the verdict becomes
+ * (§ Linked-issue hygiene), it is not a merge class and not a second
+ * finding; the AC's `surface` decides which bucket it lands in, so a
+ * tests/docs AC can never select a verdict. `incomplete` marks a
+ * bounded/stopped run: the verdict becomes
  * `incomplete` while the score and band stay the count-derived ones.
  */
 export type PrTallyInput = {
@@ -102,8 +109,8 @@ export type PrTallyInput = {
   findings: readonly { mergeClass: MergeClass }[];
  /** Count of residual `- unverified:` items; 0 default. */
   unverifiedCount?: number;
- /** Leftover unmet ACs (not met, not cut). */
-  unmetAc?: readonly { unsafeToShip: boolean }[];
+  /** Leftover unmet ACs (not met, not cut). `surface` absent = `implementation`. */
+  unmetAc?: readonly { unsafeToShip: boolean; surface?: (typeof UNMET_AC_SURFACES)[number] }[];
  /** Declared cause + unscanned scope of a bounded/stopped run; absent = the run completed. */
   incomplete?: PrIncomplete;
 };
@@ -121,7 +128,7 @@ export type PrTallyResult = {
   scorePct: number;
   /** Display band for `scorePct` (§ Tally and derived score) — never changes the verdict. */
   band: PrScoreBand;
-  tally: { mustFix: number; shouldFix: number; nit: number; unverified: number };
+  tally: { mustFix: number; shouldFix: number; mayFix: number; nit: number; unverified: number };
   /** Two-line chat display header, verbatim per pr-review.md § Display contract. */
   chatHeader: string;
   /** Echo of {@link PrTallyInput.incomplete}; absent when the run completed. */
@@ -138,6 +145,10 @@ const MUST_FIX_EACH_ADDITIONAL = 15;
 const SHOULD_FIX_FIRST = 12;
 const SHOULD_FIX_STEP = 3;
 const SHOULD_FIX_MIN = 2;
+const MAY_FIX_FIRST = 6;
+const MAY_FIX_STEP = 2;
+const MAY_FIX_MIN = 1;
+const MAY_FIX_CAP = 15;
 const NIT_FIRST = 2;
 const NIT_EACH_ADDITIONAL = 1;
 const NIT_CAP = 8;
@@ -148,13 +159,15 @@ const UNVERIFIED_CAP = 15;
  * Total score deduction for one tally — the single source of the locked
  * diminishing schedule (§ Tally and derived score): must-fix 45 then 15
  * each (no cap) · should-fix `max(12 - 3*(n-1), 2)` → 12,9,6,3,2,2… (no
- * cap) · nit 2 then 1 each (class cap 8) · unverified 5 each (class cap
- * 15). {@link computePrTally} and the report recompute share this helper —
- * there is no second formula.
+ * cap) · may-fix `max(6 - 2*(n-1), 1)` → 6,4,2,1,1… (class cap 15) · nit 2
+ * then 1 each (class cap 8) · unverified 5 each (class cap 15).
+ * {@link computePrTally} and the report recompute share this helper — there
+ * is no second formula.
  */
 function prScoreDeduction(counts: {
   mustFix: number;
   shouldFix: number;
+  mayFix: number;
   nit: number;
   unverified: number;
 }): number {
@@ -164,10 +177,14 @@ function prScoreDeduction(counts: {
   for (let n = 1; n <= counts.shouldFix; n++) {
     shouldFix += Math.max(SHOULD_FIX_FIRST - SHOULD_FIX_STEP * (n - 1), SHOULD_FIX_MIN);
   }
+  let mayFix = 0;
+  for (let n = 1; n <= counts.mayFix; n++) {
+    mayFix += Math.max(MAY_FIX_FIRST - MAY_FIX_STEP * (n - 1), MAY_FIX_MIN);
+  }
   const nit =
     counts.nit === 0 ? 0 : Math.min(NIT_FIRST + NIT_EACH_ADDITIONAL * (counts.nit - 1), NIT_CAP);
   const unverified = Math.min(counts.unverified * UNVERIFIED_EACH, UNVERIFIED_CAP);
-  return mustFix + shouldFix + nit + unverified;
+  return mustFix + shouldFix + Math.min(mayFix, MAY_FIX_CAP) + nit + unverified;
 }
 
 /**
@@ -178,6 +195,7 @@ function prScoreDeduction(counts: {
 const PR_SCORE_SCHEDULE_HINT =
   `the locked diminishing schedule (must-fix ${MUST_FIX_FIRST} then ${MUST_FIX_EACH_ADDITIONAL} each; ` +
   `should-fix max(${SHOULD_FIX_FIRST}-${SHOULD_FIX_STEP}*(n-1), ${SHOULD_FIX_MIN}); ` +
+  `may-fix max(${MAY_FIX_FIRST}-${MAY_FIX_STEP}*(n-1), ${MAY_FIX_MIN}), cap ${MAY_FIX_CAP}; ` +
   `nit ${NIT_FIRST} then ${NIT_EACH_ADDITIONAL} each, cap ${NIT_CAP}; ` +
   `unverified ${UNVERIFIED_EACH} each, cap ${UNVERIFIED_CAP}; floor 0)`;
 
@@ -186,9 +204,15 @@ const PR_SCORE_SCHEDULE_HINT =
  * findings, leftover unmet ACs and unverified residuals (pr-review.md
  * § Tally and derived score).
  *
- * Leftover unmet ACs increment the tally (unsafe-to-ship → must_fix + 1,
- * else should_fix + 1) BEFORE verdict derivation, so they cannot yield
- * `ship it`. Verdict precedence: any must_fix ≥ 1 → `blocked`; else any
+ * Leftover unmet ACs increment the tally BEFORE verdict derivation, so they
+ * cannot yield `ship it`. The bucket follows the AC's surface: `tests` /
+ * `docs` → `may_fix + 1` (never a verdict selector), `implementation` (or
+ * absent) → `must_fix + 1` when unsafe-to-ship, else `should_fix + 1`.
+ * A malformed entry (not an object, non-boolean `unsafeToShip`, unknown
+ * `surface`) is a TypeError — the same boundary posture as
+ * `unverifiedCount` and `incomplete`, because a silent fallthrough would
+ * re-enable verdict selection from a tests/docs AC.
+ * Verdict precedence: any must_fix ≥ 1 → `blocked`; else any
  * should_fix ≥ 1 → `needs fixes`; else `ship it`. The score follows the
  * locked diminishing deduction schedule via {@link prScoreDeduction} and
  * the band is its display annotation — neither overrides the verdict
@@ -239,28 +263,60 @@ export function computePrTally(input: PrTallyInput): PrTallyResult {
       );
     }
   }
+  // Engine boundary guard: `unmetAc` is reachable from host hooks, so an
+  // unrecognised surface (or a missing/malformed `unsafeToShip`) would fall
+  // through to the implementation branch and select the very verdict the
+  // surface cap exists to prevent. Absent `surface` stays legal — it means
+  // `implementation`, so existing callers keep their behaviour.
+  const unmetAcEntries: readonly unknown[] = input.unmetAc ?? [];
+  for (let index = 0; index < unmetAcEntries.length; index += 1) {
+    const entry = unmetAcEntries[index];
+    if (!isPlainObject(entry)) {
+      throw new TypeError(
+        `computePrTally: unmetAc[${index}] must be an object with a boolean unsafeToShip and an optional surface of ` +
+          `${UNMET_AC_SURFACES.join(" | ")} - got ${JSON.stringify(entry)}`,
+      );
+    }
+    if (typeof entry.unsafeToShip !== "boolean") {
+      throw new TypeError(
+        `computePrTally: unmetAc[${index}].unsafeToShip must be a boolean - got ${JSON.stringify(entry.unsafeToShip)}`,
+      );
+    }
+    if (entry.surface !== undefined && !(UNMET_AC_SURFACES as readonly unknown[]).includes(entry.surface)) {
+      throw new TypeError(
+        `computePrTally: unmetAc[${index}].surface must be one of ${UNMET_AC_SURFACES.join(" | ")} when present - ` +
+          `got ${JSON.stringify(entry.surface)}`,
+      );
+    }
+  }
   let mustFix = 0;
   let shouldFix = 0;
+  let mayFix = 0;
   let nit = 0;
   for (const finding of input.findings) {
     if (finding.mergeClass === "must-fix") mustFix += 1;
     else if (finding.mergeClass === "should-fix") shouldFix += 1;
+    else if (finding.mergeClass === "may-fix") mayFix += 1;
     else nit += 1;
   }
- // Leftover unmet ACs — tally increment, not a fourth class (§ Linked-issue hygiene):
+  // Leftover unmet ACs — tally increment, not a merge class (§ Linked-issue
+  // hygiene). The surface picks the bucket: a tests/docs AC is capped at
+  // `may_fix`, which never selects a verdict, so it cannot block a merge or
+  // demand a fix round regardless of its unsafe-to-ship marking.
   for (const ac of input.unmetAc ?? []) {
-    if (ac.unsafeToShip) mustFix += 1;
+    if (ac.surface === "tests" || ac.surface === "docs") mayFix += 1;
+    else if (ac.unsafeToShip) mustFix += 1;
     else shouldFix += 1;
   }
   const unverified = input.unverifiedCount ?? 0;
 
-  const tally = { mustFix, shouldFix, nit, unverified };
+  const tally = { mustFix, shouldFix, mayFix, nit, unverified };
   const scorePct = Math.max(0, 100 - prScoreDeduction(tally));
   const verdict: PrVerdict = input.incomplete !== undefined
     ? "incomplete"
     : mustFix >= 1 ? "blocked" : shouldFix >= 1 ? "needs fixes" : "ship it";
   const band = scoreBand(scorePct);
-  const tallyLine = `must-fix=${mustFix} should-fix=${shouldFix} nit=${nit} unverified=${unverified}`;
+  const tallyLine = `must-fix=${mustFix} should-fix=${shouldFix} may-fix=${mayFix} nit=${nit} unverified=${unverified}`;
  // The incomplete header keeps the same score/band/tally facts, marks the
  // grade `partial` (it is not a whole-review grade) and states the two
  // facts the token alone cannot carry: why the run stopped and what it
@@ -322,7 +378,11 @@ export type MstarReviewFinding = {
  * assignable to {@link MstarReviewV1} (and valid) while a computed
  * `PrTallyResult` (band present) remains assignable too.
  */
-export type MstarReviewTally = Omit<PrTallyResult, "band"> & { band?: PrScoreBand };
+export type MstarReviewTally = Omit<PrTallyResult, "band" | "tally"> & {
+  band?: PrScoreBand;
+  /** `mayFix` is absent on envelopes written before the class existed; readers treat absent as 0. */
+  tally: Omit<PrTallyResult["tally"], "mayFix"> & { mayFix?: number };
+};
 
 /**
  * The `mstar.review/v1` envelope (the review envelope schema) — a parseable review
@@ -348,9 +408,16 @@ export type MstarReviewV1 = {
   incomplete?: PrIncomplete;
 };
 
-/** The four count keys inside a `PrTallyResult` (pr-review.md § Tally and
- * derived score — must/should/nit/unverified, no fourth class). */
+/** The count keys every `PrTallyResult` must carry (pr-review.md § Tally and
+ * derived score — must/should/nit/unverified). `mayFix` is deliberately
+ * absent: it is optional for envelopes written before the class existed, so
+ * the loop below would make it required. It is validated separately as
+ * present-or-valid instead. */
 const TALLY_COUNT_KEYS = ["mustFix", "shouldFix", "nit", "unverified"] as const;
+
+/** Keys a provided `tally.tally` may carry: the four required counts plus the
+ * optional, legacy-compatible `mayFix` (present-or-valid, never required). */
+const ENVELOPE_TALLY_COUNT_KEYS = [...TALLY_COUNT_KEYS, "mayFix"] as const;
 
 /**
  * The `mstar.review/v1` key set, derived from what this validator reads and
@@ -367,19 +434,24 @@ const ENVELOPE_TALLY_KEYS = ["verdict", "scorePct", "tally", "chatHeader", "band
 
 /** Report one violation per own key of `value` outside `allowed`, named by
  * its full path (`label` is empty for the envelope, `tally.` inside a tally).
- * Own enumerable keys only: an inherited member is not part of the document. */
+ * The message names the object the key must be removed from — the bare label
+ * without its trailing dot — so a nested refusal points at that level rather
+ * than at the envelope. Own enumerable keys only: an inherited member is not
+ * part of the document. */
 function checkUnknownKeys(
   value: Record<string, unknown>,
   allowed: readonly string[],
   label: string,
   violations: ValidationResult[],
+  code = "review.unknown-key",
 ): void {
+  const scope = label === "" ? "the review envelope" : label.replace(/\.$/, "");
   for (const key of Object.keys(value)) {
     if (!allowed.includes(key)) {
       violations.push(violation(
         "high",
-        "review.unknown-key",
-        `unknown key "${label}${key}" is not part of the review envelope - accepted keys: ${allowed.join(", ")}`,
+        code,
+        `unknown key "${label}${key}" is not part of ${scope} - accepted keys: ${allowed.join(", ")}`,
         `remove ${label}${key}, or use one of: ${allowed.join(" | ")}`,
       ));
     }
@@ -437,8 +509,10 @@ function checkIncompleteShape(fact: unknown, label: string, violations: Validati
  * shape {@link computePrTally} produces (Greptile P1 on PR #159): the
  * persist gate's threat model includes hand-authored envelopes, so a
  * present tally must carry the full produced field set — `verdict` in
- * PR_VERDICTS, `scorePct` an integer in [0, 100], all four class counts
- * non-negative integers, `chatHeader` a string, and the optional `band`
+ * PR_VERDICTS, `scorePct` an integer in [0, 100], the required class counts
+ * non-negative integers (`mayFix` optional -- absent on pre-existing
+ * envelopes), no key outside that count set, `chatHeader` a string, and the
+ * optional `band`
  * must be a valid token when present (absent = legacy-valid envelope).
  * The tally's own `incomplete` echo obeys the same presence rule as the
  * envelope's top-level fact — required by the `incomplete` verdict, absent
@@ -474,9 +548,16 @@ function checkProvidedTallyShape(tally: Record<string, unknown>, violations: Val
     violations.push(violation(
       "high",
       "review.tally-malformed",
-      "tally.tally must be an object carrying the four class counts",
+      "tally.tally must be an object carrying the class counts",
     ));
   } else {
+    checkUnknownKeys(
+      tally.tally,
+      ENVELOPE_TALLY_COUNT_KEYS,
+      "tally.tally.",
+      violations,
+      "review.tally-malformed",
+    );
     for (const key of TALLY_COUNT_KEYS) {
       const count = tally.tally[key];
       if (typeof count !== "number" || !Number.isInteger(count) || count < 0) {
@@ -486,6 +567,18 @@ function checkProvidedTallyShape(tally: Record<string, unknown>, violations: Val
           `tally.tally.${key} must be a non-negative integer - got ${String(count)}`,
         ));
       }
+    }
+    // `mayFix` is absent on envelopes written before the class existed
+    // (legacy-valid), so it is optional here — but a supplied value obeys the
+    // same rule as its siblings: a malformed one would pass this gate and then
+    // make `readTally` drop the whole table.
+    const mayFix = tally.tally.mayFix;
+    if (mayFix !== undefined && (typeof mayFix !== "number" || !Number.isInteger(mayFix) || mayFix < 0)) {
+      violations.push(violation(
+        "high",
+        "review.tally-malformed",
+        `tally.tally.mayFix must be a non-negative integer when present - got ${String(mayFix)}`,
+      ));
     }
   }
   if (typeof tally.chatHeader !== "string") {
@@ -654,7 +747,7 @@ export function resolvePrReviewSettlement(facts: PrReviewRunFacts): PrReviewSett
  * `critical|warning|suggestion|info`, or a stray `severity` key) is
  * rejected with `review.inspector-vocab`; a provided `tally` is
  * shape-checked against the `PrTallyResult` {@link computePrTally} produces
- * (verdict vocab, integer `scorePct` in [0, 100], four non-negative-integer
+ * (verdict vocab, integer `scorePct` in [0, 100], non-negative-integer class
  * counts, string `chatHeader`, optional `band` valid when present) and a
  * malformed one is rejected with `review.tally-malformed` (shape only — no
  * arithmetic consistency); a `tally.verdict` disagreeing with the top-level
@@ -724,7 +817,7 @@ export function validateMstarReviewV1(doc: unknown): GateResult {
           "high",
           "review.inspector-vocab",
           `findings[${index}] carries inspector M1 field "severity" - harness merge classes are ${JSON.stringify(MERGE_CLASSES)}`,
-          "use mergeClass: must-fix | should-fix | nit",
+          `use mergeClass: ${MERGE_CLASSES.join(" | ")}`,
         ));
       }
       if (finding.mergeClass === undefined) {
@@ -956,12 +1049,13 @@ function renderFindingLocation(finding: MstarReviewFinding): string {
   return `\`${path}:${span}\``;
 }
 
-/** A tally the renderer can publish: score, band and the four counts. */
+/** A tally the renderer can publish: score, band and the class counts. */
 type RenderedTally = {
   scorePct: number;
   band: PrScoreBand;
   mustFix: number;
   shouldFix: number;
+  mayFix: number;
   nit: number;
   unverified: number;
 };
@@ -974,8 +1068,10 @@ function readTally(tally: unknown): RenderedTally | null {
   const candidate = tally as { scorePct?: unknown; band?: unknown; tally?: unknown };
   const counts = candidate.tally;
   if (typeof counts !== "object" || counts === null) return null;
-  const { mustFix, shouldFix, nit, unverified } = counts as Record<string, unknown>;
+  const { mustFix, shouldFix, mayFix, nit, unverified } = counts as Record<string, unknown>;
   if (![mustFix, shouldFix, nit, unverified].every((value) => typeof value === "number")) return null;
+  // `mayFix` is absent on envelopes written before the class existed (legacy-valid, read as 0).
+  if (mayFix !== undefined && typeof mayFix !== "number") return null;
   if (typeof candidate.scorePct !== "number") return null;
   const band = (PR_SCORE_BANDS as readonly string[]).includes(candidate.band as string)
     ? (candidate.band as PrScoreBand)
@@ -985,6 +1081,7 @@ function readTally(tally: unknown): RenderedTally | null {
     band,
     mustFix: mustFix as number,
     shouldFix: shouldFix as number,
+    mayFix: (mayFix as number | undefined) ?? 0,
     nit: nit as number,
     unverified: unverified as number,
   };
@@ -1065,7 +1162,7 @@ function renderFindings(findings: readonly MstarReviewFinding[]): string | null 
  * Render the review **body** from the `mstar.review/v1` envelope — the engine's
  * only review-body layout owner. Every surface renders the same pr-review.md
  * § Report template body: verdict head, the `incomplete` fact pair, the
- * four-class tally table, the mandatory `## 📋 Review` section, and
+ * class tally table, the mandatory `## 📋 Review` section, and
  * `### Findings` with one `#### <emoji> <title>` block per finding, in the
  * envelope's own order (the seats rank by impact-if-shipped; a class re-sort
  * would override that ranking).
@@ -1118,6 +1215,7 @@ export function renderReviewMarkdown(review: MstarReviewV1, _opts: ReviewRenderO
         "| --- | --- |",
         `| ${REVIEW_EMOJI["must-fix"]} must-fix | ${tally.mustFix} |`,
         `| ${REVIEW_EMOJI["should-fix"]} should-fix | ${tally.shouldFix} |`,
+        `| ${REVIEW_EMOJI["may-fix"]} may-fix | ${tally.mayFix} |`,
         `| ${REVIEW_EMOJI.nit} nit | ${tally.nit} |`,
         `| ${REVIEW_EMOJI.unverified} unverified | ${tally.unverified} |`,
       ].join("\n"),
@@ -1305,9 +1403,18 @@ export function parseReportFrontmatter(text: string): { doc: Record<string, stri
   return { doc, unreadable };
 }
 
+/** The count keys a report's `tally:` flow map may carry — the four required
+ * classes plus the optional `may-fix`. A key outside this set is refused
+ * rather than dropped: silently ignoring it would recompute the score against
+ * a count the author never wrote. */
+const REPORT_TALLY_COUNT_KEYS = ["must-fix", "should-fix", "may-fix", "nit", "unverified"] as const;
+
 /** Parse the flow-map tally (`tally: { must-fix: 1, ... }`) into counts;
- * null unless all four classes are present, non-negative integers. */
-function parseTallyCounts(raw: string | undefined): Record<"mustFix" | "shouldFix" | "nit" | "unverified", number> | null {
+ * null unless every required class is present as a non-negative integer, no
+ * key outside {@link REPORT_TALLY_COUNT_KEYS} appears, and no key repeats.
+ * `may-fix` is optional — a report written before the class existed stays
+ * valid and reads as 0. */
+function parseTallyCounts(raw: string | undefined): Record<"mustFix" | "shouldFix" | "mayFix" | "nit" | "unverified", number> | null {
   if (raw === undefined) return null;
   const inner = /^\{(.*)\}$/.exec(raw.trim());
   if (inner === null) return null;
@@ -1315,14 +1422,17 @@ function parseTallyCounts(raw: string | undefined): Record<"mustFix" | "shouldFi
   const seen = new Set<string>();
   for (const pair of inner[1].split(",")) {
     const kv = pair.split(":");
-    if (kv.length !== 2 || !/^\d+$/.test(kv[1].trim()) || !/^[A-Za-z0-9_-]+$/.test(kv[0].trim())) return null;
-    if (seen.has(kv[0].trim())) return null;
-    seen.add(kv[0].trim());
-    counts[kv[0].trim()] = Number(kv[1]);
+    if (kv.length !== 2 || !/^\d+$/.test(kv[1].trim())) return null;
+    const key = kv[0].trim();
+    if (!(REPORT_TALLY_COUNT_KEYS as readonly string[]).includes(key)) return null;
+    if (seen.has(key)) return null;
+    seen.add(key);
+    counts[key] = Number(kv[1]);
   }
   const out = {
     mustFix: counts["must-fix"],
     shouldFix: counts["should-fix"],
+    mayFix: counts["may-fix"] ?? 0,
     nit: counts["nit"],
     unverified: counts["unverified"],
   };
@@ -1335,17 +1445,20 @@ function parseTallyCounts(raw: string | undefined): Record<"mustFix" | "shouldFi
 /**
  * Cap each tally bucket when reconstructing computePrTally inputs. Sound by
  * monotonicity: every class deduction grows with its count and is already
- * class-capped where the schedule caps it (nit 8, unverified 15), so a
- * capped penalty <= true penalty. If the capped input already reaches the 0
- * floor both score at 0; below the floor no bucket was capped (identical
- * penalty). Verdict sees the same zero/nonzero buckets (positive counts
- * stay positive through the cap).
+ * class-capped where the schedule caps it (nit 8, may-fix 15, unverified
+ * 15), so a capped penalty <= true penalty. If the capped input already
+ * reaches the 0 floor both score at 0; below the floor no bucket was capped
+ * (identical penalty). Verdict sees the same zero/nonzero buckets (positive
+ * counts stay positive through the cap).
  */
 const TALLY_CAP = 50;
 
-function recomputeFromTally(counts: Record<"mustFix" | "shouldFix" | "nit" | "unverified", number>): PrTallyResult {
+function recomputeFromTally(counts: Record<"mustFix" | "shouldFix" | "mayFix" | "nit" | "unverified", number>): PrTallyResult {
   return computePrTally({
-    findings: Array.from({ length: Math.min(counts.nit, TALLY_CAP) }, () => ({ mergeClass: "nit" as MergeClass })),
+    findings: [
+      ...Array.from({ length: Math.min(counts.nit, TALLY_CAP) }, () => ({ mergeClass: "nit" as MergeClass })),
+      ...Array.from({ length: Math.min(counts.mayFix, TALLY_CAP) }, () => ({ mergeClass: "may-fix" as MergeClass })),
+    ],
     unmetAc: [
       ...Array.from({ length: Math.min(counts.mustFix, TALLY_CAP) }, () => ({ unsafeToShip: true })),
       ...Array.from({ length: Math.min(counts.shouldFix, TALLY_CAP) }, () => ({ unsafeToShip: false })),
@@ -1379,7 +1492,8 @@ function parseCommentsState(raw: string | undefined): PrCommentsState | null {
  * document's own tally via {@link computePrTally} (locked diminishing
  * schedule — mismatch = hand-arithmetic drift, the exact defect class this
  * gate exists to catch).
- * - `tally` flow map with the four classes.
+ * - `tally` flow map with the class counts (`may-fix` optional, absent = 0);
+ *   any key outside that class set is refused rather than ignored.
  * - `comments` tri-state: `posted` (alias `yes`) | `n/a-no-pr` | `failed`.
  * The states are distinct: a FAILED POST IS `FAILED`, never
  * `n/a-no-pr`; `review_url` must pair accordingly (`http(s)://` for
@@ -1462,8 +1576,8 @@ export function validatePrReviewReport(text: string): GateResult {
       violations.push(violation(
         "medium",
         "prreview.report.invalid-tally",
-        `tally ${JSON.stringify(doc.tally)} must be a flow map with non-negative integer counts for all four classes`,
-        'use e.g. tally: { must-fix: 0, should-fix: 1, nit: 2, unverified: 0 }',
+        `tally ${JSON.stringify(doc.tally)} must be a flow map with non-negative integer counts for every class and no other keys (accepted: ${REPORT_TALLY_COUNT_KEYS.join(", ")})`,
+        'use e.g. tally: { must-fix: 0, should-fix: 1, may-fix: 0, nit: 2, unverified: 0 }',
       ));
     }
   } else {
@@ -2098,7 +2212,7 @@ export function prReviewSeatPrompt(opts: PrReviewSeatPromptOptions): string {
     lines.push("- NO findings table. NO verdict. Collect evidence only.");
   } else {
     lines.push("- Return FINDINGS in your result payload following finding-format.md, each citing code you OPENED YOURSELF.");
-    lines.push('- Every accepted finding carries `- **Merge class**: must-fix | should-fix | nit` immediately after `- **Confidence**`.');
+    lines.push(`- Every accepted finding carries \`- **Merge class**: ${MERGE_CLASSES.join(" | ")}\` immediately after \`- **Confidence**\`.`);
     lines.push("- Return ONLY findings \u2014 no fixes, no refactors, no patches.");
   }
   lines.push("- Your sandbox may be WRITE-BLOCKED (read-only / EPERM): NEVER depend on writing files. Writable seats may best-effort write their evidence file; the contract never requires it \u2014 the MAIN AGENT writes and consolidates all evidence files from seat payloads.");
@@ -2135,8 +2249,8 @@ const RISK_ENUM_RE = new RegExp(`^(?:${AUDIT_RISKS.join("|")})(?:\\b|$)`);
  * MEDIUM tolerated as the MED alias; free-text gloss after a separator
  * is allowed — only the leading token is validated. */
 const CONFIDENCE_ENUM_RE = new RegExp(`^(${[...AUDIT_CONFIDENCES, "MEDIUM"].join("|")})\\b`, "i");
-/** Merge class value — the exact three-class enum, nothing else. */
-const MERGE_CLASS_ENUM_RE = /^(must-fix|should-fix|nit)$/;
+/** Merge class value — the exact class enum, nothing else. */
+const MERGE_CLASS_ENUM_RE = new RegExp(`^(${MERGE_CLASSES.join("|")})$`);
 
 /**
  * Heading category CODE → `AUDIT_CATEGORIES` member, per finding-format.md
@@ -2176,7 +2290,7 @@ function findingViolation(severity: Severity, code: string, message: string, fix
  * - Each Evidence citation matches `path:line` (`\S+:\d+` — the path may
  * but need not carry an extension).
  * - `prVariant` (default false): every finding additionally carries
- * **Merge class** ∈ {must-fix, should-fix, nit} placed IMMEDIATELY after
+ * **Merge class** ∈ {must-fix, should-fix, may-fix, nit} placed IMMEDIATELY after
  * Confidence.
  */
 export function validateFindingDoc(text: string, opts: ValidateFindingDocOptions = {}): GateResult {
@@ -2299,7 +2413,7 @@ export function validateFindingDoc(text: string, opts: ValidateFindingDocOptions
         "medium",
         "prreview.finding.missing-merge-class",
         `${where}: missing **Merge class** - PR findings classify as exactly one class (\u00a7 Merge class)`,
-        "add `- **Merge class**: must-fix | should-fix | nit`",
+        `add \`- **Merge class**: ${MERGE_CLASSES.join(" | ")}\``,
       ));
       continue;
     }
@@ -2308,7 +2422,7 @@ export function validateFindingDoc(text: string, opts: ValidateFindingDocOptions
         "medium",
         "prreview.finding.invalid-merge-class",
         `${where}: Merge class "${mergeClass.value}" is not one of ${JSON.stringify(MERGE_CLASSES)}`,
-        "do not invent a fourth class (\u00a7 Merge class)",
+        `use one of: ${MERGE_CLASSES.join(" | ")}`,
       ));
     }
     if (
