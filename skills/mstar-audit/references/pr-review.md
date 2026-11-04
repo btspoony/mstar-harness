@@ -256,7 +256,7 @@ A finding's surface is what its fix would change, not where the citation points:
 
 Tie-break: unsafe to ship **and reachable in this change** → `must-fix`; should be addressed before merge but ship-safe → `should-fix`; real but not worth holding the merge → `may-fix`; otherwise `nit`. The surface gate overrides the tie-break: a test or documentation finding never lands above `may-fix`. A LOW-confidence smell that fails evidence rules is **not** a finding (existing disqualify rules) — put it on `- unverified:` if it must be mentioned.
 
-**Class floors** — two limits apply before the class is final:
+**Class floors** — three limits apply before the class is final:
 
 - **Documentation detail is `nit`; a wrong document is `may-fix`, never more.** Wording, structure, examples, formatting, stale prose, or comment accuracy → at most `nit`; it never produces `needs fixes` on its own. A docs finding rises above `nit` only when the documented content is itself wrong in a way that changes what a reader does — a command that cannot run, a contract stated backwards, a destructive instruction — and it cites the evidence for that consequence; that ceiling is `may-fix` (surface gate above), never `should-fix`. Name the edit; do not grade doc polish as a merge blocker.
 - **Test findings are capped at `may-fix`.** A missing, weak or broken test is a real finding and stays listed and captured, but it never selects `blocked` or `needs fixes`: the shipped behavior it fails to protect is the implementation finding, and that is where a reachable defect belongs. Classify a test finding by the surface gate, not by how much risk the untested path would carry.

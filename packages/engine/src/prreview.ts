@@ -366,8 +366,11 @@ export type MstarReviewV1 = {
   incomplete?: PrIncomplete;
 };
 
-/** The count keys inside a `PrTallyResult` (pr-review.md § Tally and
- * derived score — must/should/may/nit/unverified). */
+/** The count keys every `PrTallyResult` must carry (pr-review.md § Tally and
+ * derived score — must/should/nit/unverified). `mayFix` is deliberately
+ * absent: it is optional for envelopes written before the class existed, so
+ * the loop below would make it required. It is validated separately as
+ * present-or-valid instead. */
 const TALLY_COUNT_KEYS = ["mustFix", "shouldFix", "nit", "unverified"] as const;
 
 /**
