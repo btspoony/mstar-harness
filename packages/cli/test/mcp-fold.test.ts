@@ -35,12 +35,15 @@ import { FAMILY_PURPOSE, actionOf, familyOf, familyToolName, foldFamilyTools } f
  * what the family now does — adds 80. The measured surface at that point was
  * 33,592, already 53 over the approved figure. The single-run push change adds 29
  * more: the `takeRun` boolean field and its requirement card (33,592 → 33,621,
- * both measured through `tools/list` in this suite's own harness). The two
- * tally fields `unmetAcUnsafe` (34 characters) and `unmetAcSafe` (32
- * characters) — 66 together — are part of the measured surface, which is
- * 33,629 through `tools/list` in this suite's own harness (the flags' help text
- * is CLI-only and does not reach the published surface). The ceiling states
- * that measurement; a further publication does not fit and its author must
+ * both measured through `tools/list` in this suite's own harness). The measured
+ * surface is 33,629 through `tools/list` in this suite's own harness; the
+ * may-fix surface gate added the two tally properties `unmetAcTests` (33
+ * characters) and `unmetAcDocs` (32 characters) — 65 together. An earlier
+ * revision of this note read that step as 33,621 → 33,629 (+8) and named
+ * `unmetAcUnsafe` and `unmetAcSafe` as the added pair; the delta was wrong and
+ * those two fields pre-date the gate, so no pre-change total is asserted here.
+ * The ceiling states the measured 33,629; a further publication does not fit
+ * and its author must
  * re-measure before raising this again: a regression that starts
  * republishing per-command contracts inside family descriptions — or that lets
  * per-action tools creep back — reddens here. A published discovery example must
