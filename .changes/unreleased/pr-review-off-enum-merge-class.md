@@ -1,6 +1,6 @@
 ---
 category: Harness
-packages: root, engine
+packages: root, engine, cli
 ---
 
 - **PR review refuses an off-enum merge class instead of silently counting it as `nit`.** `computePrTally` now throws a `TypeError` for a finding whose `mergeClass` is not one of the four harness classes, matching the boundary posture of its other input guards; a misspelled class previously lost a blocking finding while the tally still looked consistent.

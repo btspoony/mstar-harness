@@ -10,44 +10,39 @@ import { inputFields } from "../src/schema-branches";
 import { FAMILY_PURPOSE, actionOf, familyOf, familyToolName, foldFamilyTools } from "../src/mcp/fold";
 
 /**
- * The approved CEILING for the whole published surface: every folded tool's
- * description plus its input JSON schema, read back from `tools/list`.
+ * The literal below is the exact measured surface of the folded MCP command
+ * families: every folded tool's description plus its input JSON schema, read
+ * back from `tools/list`. This suite recomputes that surface and fails on any
+ * difference, so the number is a measurement of this tree, not a free-standing
+ * approval.
  *
- * This literal is an APPROVED CEILING, not a measurement of this tree: nothing
- * derives it from the repository, and it is not a figure any suite recomputes.
- * `tools/list` is paid on every request of every session, so the number is a
- * design limit a change must argue for, not a value to edit until the suite is
- * green again; a raise belongs with a re-measured before/after in the same
- * change. For reference, on the probe that set it the per-command surface this
- * replaces measured 173,340 characters of description + input schema (189,881
- * for the payload-composed input view) and also published 154,471 characters of
- * output schemas — 327,811 characters in total, over 90k tokens. The fold
- * publishes the descriptor field index instead of payload composition and drops
- * output schemas, so the after figure was 33,274 characters of description +
- * input schema (~9.2k tokens; the payload schemas published for `plan.issue-add`
- * and `workflow.execution-policy` are sanctioned contract detail, not
- * per-command republishing).
+ * Why it is pinned: `tools/list` is paid on every request of every session, so
+ * the number is a design limit a change must argue for. Growth — and equally
+ * silent shrinkage, which hides contracts that stopped being published — each
+ * require a re-measure of the affected tools and an argued re-pin in the same
+ * change; the value is never edited until the suite is green again.
  *
- * The 33,539 this ceiling stated was that probe's 33,274 plus the two
- * one-way-push obligations, measured per contribution and nothing else: the
- * `issue-sync.push` action's published member line and its fields add 187
- * characters, and the `issue-sync` family purpose's push sentence — which states
- * what the family now does — adds 80. The measured surface at that point was
- * 33,592, already 53 over the approved figure. The single-run push change adds 29
- * more: the `takeRun` boolean field and its requirement card (33,592 → 33,621,
- * both measured through `tools/list` in this suite's own harness). The measured
- * surface is 33,629 through `tools/list` in this suite's own harness; the
- * may-fix surface gate added the two tally properties `unmetAcTests` (33
- * characters) and `unmetAcDocs` (32 characters) — 65 together. An earlier
- * revision of this note recorded that step as 33,621 → 33,629 (+8); a
- * 65-character contribution cannot produce an 8-character delta, so that line
- * is withdrawn, and no pre-change total is asserted here.
- * The guard pins that measured value exactly — growth and silent shrinkage
- * each require a re-measure and an argued re-pin: a regression that starts
- * republishing per-command contracts inside family descriptions — or that lets
- * per-action tools creep back — reddens here. A published discovery example must
- * carry every field the tool REQUIRES (`"action":"schema"`), and a family that
- * publishes an identity selector also publishes the per-action
+ * The fold's origin figure, as one comparison: the per-command surface it
+ * replaced measured 327,811 characters in total — 173,340 of description +
+ * input schema, 189,881 for the payload-composed input view, and 154,471 of
+ * output schemas. The fold publishes the descriptor field index instead of
+ * payload composition and drops output schemas; the payload schemas published
+ * for `plan.issue-add` and `workflow.execution-policy` are sanctioned contract
+ * detail, not per-command republishing.
+ *
+ * The current measurement is 33,629. The may-fix surface gate added the two
+ * tally properties `unmetAcTests` (33 characters) and `unmetAcDocs` (32
+ * characters) — 65 together — so the surface immediately before that gate was
+ * 33,564 (the current measurement minus those 65). Earlier revisions of this
+ * note recorded intermediate values (33,274, 33,539, 33,592, 33,621) for the
+ * push and issue-sync steps; those are superseded and this note re-asserts
+ * none of them, because they do not reconcile with the 33,564 the surface held
+ * before the gate.
+ *
+ * The regression the guard catches: republishing per-command contracts inside
+ * family descriptions, or per-action tools creeping back. A published discovery
+ * example must carry every field the tool REQUIRES (`"action":"schema"`), and a
+ * family that publishes an identity selector also publishes the per-action
  * `x-mstar-selectors` index a host-side injector reads.
  */
 const PUBLISHED_SURFACE_CEILING_CHARS = 33_629;
