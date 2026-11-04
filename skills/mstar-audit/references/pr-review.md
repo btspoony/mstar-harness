@@ -248,7 +248,7 @@ Classify each **accepted** finding (after vet) as exactly one class. Do not inve
 | --- | --- | --- | --- | --- |
 | Implementation — product code, build, API, config | `must-fix` — unsafe **and** reachable here | `should-fix` | `may-fix` | `nit` |
 | Tests — test code, fixtures, test tooling | `may-fix` | `may-fix` | `may-fix` | `nit` |
-| Documentation — prose, comments, examples, changelog | `may-fix` | `may-fix` | `nit` | `nit` |
+| Documentation — prose, comments, examples, changelog | `may-fix` | `may-fix` | `nit` — `may-fix` when the documented content is wrong (floor below) | `nit` |
 
 A finding's surface is what its fix would change, not where the citation points: a documented command that would make a reader destroy data is still a documentation finding (`may-fix` at most — capture it, do not block), while a comment that misstates a shipped contract is documentation too.
 
@@ -304,6 +304,8 @@ else if should_fix >= 1:
 else:
     verdict = ship it            # may_fix and nit never select a verdict
 ```
+
+**AC entry shape.** Each entry that leftover block consumes is `{ unsafeToShip: boolean; surface?: "implementation" | "tests" | "docs" }` — `unsafeToShip` is **required**, `surface` is optional and absent means `implementation`, and a non-object entry, a missing or non-boolean `unsafeToShip`, or an unrecognized `surface` is a `TypeError` (`computePrTally: unmetAc[<i>]…`), never a silent bucket.
 
 `may_fix` is counted and deducted but **never enters verdict derivation** — the surface gate's whole point is that test and documentation work cannot hold a merge.
 
