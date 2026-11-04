@@ -89,6 +89,10 @@ export type PrIncomplete = {
   unscanned: readonly string[];
 };
 
+/** Surfaces a leftover unmet AC can carry — the vocabulary the routing and
+ * the boundary guard share. Absent on the entry means `implementation`. */
+const UNMET_AC_SURFACES = ["implementation", "tests", "docs"] as const;
+
 /**
  * Input to {@link computePrTally}. `findings` are the post-vet accepted
  * findings only; `unverifiedCount` is the count of residual items under
@@ -106,7 +110,7 @@ export type PrTallyInput = {
  /** Count of residual `- unverified:` items; 0 default. */
   unverifiedCount?: number;
   /** Leftover unmet ACs (not met, not cut). `surface` absent = `implementation`. */
-  unmetAc?: readonly { unsafeToShip: boolean; surface?: "implementation" | "tests" | "docs" }[];
+  unmetAc?: readonly { unsafeToShip: boolean; surface?: (typeof UNMET_AC_SURFACES)[number] }[];
  /** Declared cause + unscanned scope of a bounded/stopped run; absent = the run completed. */
   incomplete?: PrIncomplete;
 };
@@ -204,6 +208,10 @@ const PR_SCORE_SCHEDULE_HINT =
  * cannot yield `ship it`. The bucket follows the AC's surface: `tests` /
  * `docs` → `may_fix + 1` (never a verdict selector), `implementation` (or
  * absent) → `must_fix + 1` when unsafe-to-ship, else `should_fix + 1`.
+ * A malformed entry (not an object, non-boolean `unsafeToShip`, unknown
+ * `surface`) is a TypeError — the same boundary posture as
+ * `unverifiedCount` and `incomplete`, because a silent fallthrough would
+ * re-enable verdict selection from a tests/docs AC.
  * Verdict precedence: any must_fix ≥ 1 → `blocked`; else any
  * should_fix ≥ 1 → `needs fixes`; else `ship it`. The score follows the
  * locked diminishing deduction schedule via {@link prScoreDeduction} and
@@ -252,6 +260,32 @@ export function computePrTally(input: PrTallyInput): PrTallyResult {
       throw new TypeError(
         "computePrTally: incomplete.unscanned must be an array of single-line non-empty strings - " +
           `got ${JSON.stringify(input.incomplete.unscanned)}`,
+      );
+    }
+  }
+  // Engine boundary guard: `unmetAc` is reachable from host hooks, so an
+  // unrecognised surface (or a missing/malformed `unsafeToShip`) would fall
+  // through to the implementation branch and select the very verdict the
+  // surface cap exists to prevent. Absent `surface` stays legal — it means
+  // `implementation`, so existing callers keep their behaviour.
+  const unmetAcEntries: readonly unknown[] = input.unmetAc ?? [];
+  for (let index = 0; index < unmetAcEntries.length; index += 1) {
+    const entry = unmetAcEntries[index];
+    if (!isPlainObject(entry)) {
+      throw new TypeError(
+        `computePrTally: unmetAc[${index}] must be an object with a boolean unsafeToShip and an optional surface of ` +
+          `${UNMET_AC_SURFACES.join(" | ")} - got ${JSON.stringify(entry)}`,
+      );
+    }
+    if (typeof entry.unsafeToShip !== "boolean") {
+      throw new TypeError(
+        `computePrTally: unmetAc[${index}].unsafeToShip must be a boolean - got ${JSON.stringify(entry.unsafeToShip)}`,
+      );
+    }
+    if (entry.surface !== undefined && !(UNMET_AC_SURFACES as readonly unknown[]).includes(entry.surface)) {
+      throw new TypeError(
+        `computePrTally: unmetAc[${index}].surface must be one of ${UNMET_AC_SURFACES.join(" | ")} when present - ` +
+          `got ${JSON.stringify(entry.surface)}`,
       );
     }
   }

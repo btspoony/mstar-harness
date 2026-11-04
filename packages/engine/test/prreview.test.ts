@@ -436,6 +436,43 @@ describe("Leftover unmet-AC increments — pr-review.md § Tally and derived sco
     expect(result.verdict).toBe("needs fixes");
   });
 
+  test.each([
+    ['surface: "documentation"', { unsafeToShip: false, surface: "documentation" }],
+    ['surface: "test"', { unsafeToShip: true, surface: "test" }],
+    ["a non-object entry", "tests"],
+    ["a missing unsafeToShip", { surface: "tests" }],
+    ["a non-boolean unsafeToShip", { unsafeToShip: "no", surface: "docs" }],
+  ] as Array<[string, unknown]>)("an invalid unmetAc entry (%s) is a TypeError", (_label, entry) => {
+    expect(() => computePrTally({ findings: [], unmetAc: [entry] as unknown as PrTallyInput["unmetAc"] }))
+      .toThrow(TypeError);
+  });
+
+  test("the refusal names the field and its accepted values", () => {
+    expect(() =>
+      computePrTally({
+        findings: [],
+        unmetAc: [{ unsafeToShip: false, surface: "documentation" }] as unknown as PrTallyInput["unmetAc"],
+      }),
+    ).toThrow("unmetAc[0].surface must be one of implementation | tests | docs");
+    expect(() =>
+      computePrTally({ findings: [], unmetAc: [{ surface: "tests" }] as unknown as PrTallyInput["unmetAc"] }),
+    ).toThrow("unmetAc[0].unsafeToShip must be a boolean");
+    expect(() =>
+      computePrTally({ findings: [], unmetAc: ["tests"] as unknown as PrTallyInput["unmetAc"] }),
+    ).toThrow("unmetAc[0] must be an object");
+  });
+
+  test("the three accepted surfaces route, and an absent surface means implementation", () => {
+    expect(computePrTally({ findings: [], unmetAc: [{ unsafeToShip: true }] }).tally)
+      .toEqual({ mustFix: 1, shouldFix: 0, mayFix: 0, nit: 0, unverified: 0 });
+    expect(computePrTally({ findings: [], unmetAc: [{ unsafeToShip: false, surface: "implementation" }] }).tally)
+      .toEqual({ mustFix: 0, shouldFix: 1, mayFix: 0, nit: 0, unverified: 0 });
+    expect(computePrTally({ findings: [], unmetAc: [{ unsafeToShip: true, surface: "tests" }] }).tally)
+      .toEqual({ mustFix: 0, shouldFix: 0, mayFix: 1, nit: 0, unverified: 0 });
+    expect(computePrTally({ findings: [], unmetAc: [{ unsafeToShip: false, surface: "docs" }] }).tally)
+      .toEqual({ mustFix: 0, shouldFix: 0, mayFix: 1, nit: 0, unverified: 0 });
+  });
+
   test("AC increments are additive to accepted findings, not a replacement", () => {
     const result = computePrTally({
       findings: [{ mergeClass: "nit" }],
