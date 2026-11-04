@@ -222,7 +222,7 @@ The **main agent** is the final vet layer, and the synthesis vet is **tiered**: 
 
 ## Verdict synthesis
 
-- Order findings by impact-if-shipped; no padding, no invented requirements, no style grading.
+- Order findings by impact-if-shipped; no padding, no invented requirements, no style grading (both limits → § Merge class **Class floors**).
 - List **every** accepted finding — `must-fix`, `should-fix`, and nits alike; nothing is truncated.
 - The verdict is **derived from the tally, not chosen**: classify every accepted finding (§ Merge class) → apply leftover `unmet` AC increments if any (§ Linked-issue hygiene) → apply **Verdict-from-tally** (§ Tally and derived score) → emit that one token. The reviewer does not pick a verdict by vibe. That derived token is what a **settled** run publishes; the one derived override below replaces the token without re-deriving it.
 - Exactly one verdict:
@@ -244,6 +244,11 @@ Classify each **accepted** finding (after vet) as exactly one class. Do not inve
 **Class ↔ issue severity:** these three classes are this chain's projection of the one blocking judgement — the store.db issue `severity` value, plan-QC report section, and L2 task-review label sitting at each band are tabulated in `mstar-artifacts` `references/status-and-residuals.md` § Residual findings: `severity` → §5 Cross-chain vocabulary. Translate by band; never re-grade on translation.
 
 Tie-break: unsafe to ship **and reachable in this change** → `must-fix`; should be addressed before merge but ship-safe → `should-fix`; otherwise `nit`. A LOW-confidence smell that fails evidence rules is **not** a finding (existing disqualify rules) — put it on `- unverified:` if it must be mentioned.
+
+**Class floors** — two limits apply before the class is final:
+
+- **Documentation detail is `nit`.** Wording, structure, examples, formatting, stale prose, or comment accuracy → at most `nit`; it never produces `needs fixes` on its own. A docs finding rises above `nit` only when the documented content is itself wrong in a way that changes what a reader does — a command that cannot run, a contract stated backwards, a destructive instruction — and it cites the evidence for that consequence. Name the edit; do not grade doc polish as a merge blocker.
+- **Hardening nobody needs is not a finding.** A finding that asks the change to add validation, a gate, a limit, a fallback, an option, or handling for an extreme condition must show that condition is reachable under the declared expected load or an existing contract (including a caller the change introduces) — `mstar-coding-behavior` § Requirement-first simplicity. Without that evidence it belongs in **Considered & rejected**; keep it under `- unverified:` only when it is plausibly reachable and one check would settle it. Never propose a new layer or option "to be safe", and prefer the smallest evidenced repair (`references/finding-format.md` § Structural remedies).
 
 Presumptive-structural classes: a refactor that relocates complexity instead of reducing it · a change pushing a file past the size boundary with no decomposition · feature logic added to a shared module · a near-duplicate of an existing canonical helper · a silent fallback hiding an unclear invariant → default `should-fix`; downgrade to `nit` only with a stated reason; never `must-fix` on shape alone without correctness/security evidence.
 
