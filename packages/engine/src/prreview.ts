@@ -95,7 +95,9 @@ export type PrIncomplete = {
  * `- unverified:` (0 when absent / `none`); `unmetAc` is the leftover
  * unmet acceptance criteria (not met, not cut) — each increments the tally
  * (§ Linked-issue hygiene), it is not a merge class and not a second
- * finding. `incomplete` marks a bounded/stopped run: the verdict becomes
+ * finding; the AC's `surface` decides which bucket it lands in, so a
+ * tests/docs AC can never select a verdict. `incomplete` marks a
+ * bounded/stopped run: the verdict becomes
  * `incomplete` while the score and band stay the count-derived ones.
  */
 export type PrTallyInput = {
@@ -103,8 +105,8 @@ export type PrTallyInput = {
   findings: readonly { mergeClass: MergeClass }[];
  /** Count of residual `- unverified:` items; 0 default. */
   unverifiedCount?: number;
- /** Leftover unmet ACs (not met, not cut). */
-  unmetAc?: readonly { unsafeToShip: boolean }[];
+  /** Leftover unmet ACs (not met, not cut). `surface` absent = `implementation`. */
+  unmetAc?: readonly { unsafeToShip: boolean; surface?: "implementation" | "tests" | "docs" }[];
  /** Declared cause + unscanned scope of a bounded/stopped run; absent = the run completed. */
   incomplete?: PrIncomplete;
 };
@@ -198,9 +200,11 @@ const PR_SCORE_SCHEDULE_HINT =
  * findings, leftover unmet ACs and unverified residuals (pr-review.md
  * § Tally and derived score).
  *
- * Leftover unmet ACs increment the tally (unsafe-to-ship → must_fix + 1,
- * else should_fix + 1) BEFORE verdict derivation, so they cannot yield
- * `ship it`. Verdict precedence: any must_fix ≥ 1 → `blocked`; else any
+ * Leftover unmet ACs increment the tally BEFORE verdict derivation, so they
+ * cannot yield `ship it`. The bucket follows the AC's surface: `tests` /
+ * `docs` → `may_fix + 1` (never a verdict selector), `implementation` (or
+ * absent) → `must_fix + 1` when unsafe-to-ship, else `should_fix + 1`.
+ * Verdict precedence: any must_fix ≥ 1 → `blocked`; else any
  * should_fix ≥ 1 → `needs fixes`; else `ship it`. The score follows the
  * locked diminishing deduction schedule via {@link prScoreDeduction} and
  * the band is its display annotation — neither overrides the verdict
@@ -261,9 +265,13 @@ export function computePrTally(input: PrTallyInput): PrTallyResult {
     else if (finding.mergeClass === "may-fix") mayFix += 1;
     else nit += 1;
   }
- // Leftover unmet ACs — tally increment, not a merge class (§ Linked-issue hygiene):
+  // Leftover unmet ACs — tally increment, not a merge class (§ Linked-issue
+  // hygiene). The surface picks the bucket: a tests/docs AC is capped at
+  // `may_fix`, which never selects a verdict, so it cannot block a merge or
+  // demand a fix round regardless of its unsafe-to-ship marking.
   for (const ac of input.unmetAc ?? []) {
-    if (ac.unsafeToShip) mustFix += 1;
+    if (ac.surface === "tests" || ac.surface === "docs") mayFix += 1;
+    else if (ac.unsafeToShip) mustFix += 1;
     else shouldFix += 1;
   }
   const unverified = input.unverifiedCount ?? 0;
@@ -392,7 +400,10 @@ const ENVELOPE_TALLY_KEYS = ["verdict", "scorePct", "tally", "chatHeader", "band
 
 /** Report one violation per own key of `value` outside `allowed`, named by
  * its full path (`label` is empty for the envelope, `tally.` inside a tally).
- * Own enumerable keys only: an inherited member is not part of the document. */
+ * The message names the object the key must be removed from — the bare label
+ * without its trailing dot — so a nested refusal points at that level rather
+ * than at the envelope. Own enumerable keys only: an inherited member is not
+ * part of the document. */
 function checkUnknownKeys(
   value: Record<string, unknown>,
   allowed: readonly string[],
@@ -400,12 +411,13 @@ function checkUnknownKeys(
   violations: ValidationResult[],
   code = "review.unknown-key",
 ): void {
+  const scope = label === "" ? "the review envelope" : label.replace(/\.$/, "");
   for (const key of Object.keys(value)) {
     if (!allowed.includes(key)) {
       violations.push(violation(
         "high",
         code,
-        `unknown key "${label}${key}" is not part of the review envelope - accepted keys: ${allowed.join(", ")}`,
+        `unknown key "${label}${key}" is not part of ${scope} - accepted keys: ${allowed.join(", ")}`,
         `remove ${label}${key}, or use one of: ${allowed.join(" | ")}`,
       ));
     }
@@ -1357,8 +1369,15 @@ export function parseReportFrontmatter(text: string): { doc: Record<string, stri
   return { doc, unreadable };
 }
 
+/** The count keys a report's `tally:` flow map may carry — the four required
+ * classes plus the optional `may-fix`. A key outside this set is refused
+ * rather than dropped: silently ignoring it would recompute the score against
+ * a count the author never wrote. */
+const REPORT_TALLY_COUNT_KEYS = ["must-fix", "should-fix", "may-fix", "nit", "unverified"] as const;
+
 /** Parse the flow-map tally (`tally: { must-fix: 1, ... }`) into counts;
- * null unless every required class is present as a non-negative integer.
+ * null unless every required class is present as a non-negative integer, no
+ * key outside {@link REPORT_TALLY_COUNT_KEYS} appears, and no key repeats.
  * `may-fix` is optional — a report written before the class existed stays
  * valid and reads as 0. */
 function parseTallyCounts(raw: string | undefined): Record<"mustFix" | "shouldFix" | "mayFix" | "nit" | "unverified", number> | null {
@@ -1369,10 +1388,12 @@ function parseTallyCounts(raw: string | undefined): Record<"mustFix" | "shouldFi
   const seen = new Set<string>();
   for (const pair of inner[1].split(",")) {
     const kv = pair.split(":");
-    if (kv.length !== 2 || !/^\d+$/.test(kv[1].trim()) || !/^[A-Za-z0-9_-]+$/.test(kv[0].trim())) return null;
-    if (seen.has(kv[0].trim())) return null;
-    seen.add(kv[0].trim());
-    counts[kv[0].trim()] = Number(kv[1]);
+    if (kv.length !== 2 || !/^\d+$/.test(kv[1].trim())) return null;
+    const key = kv[0].trim();
+    if (!(REPORT_TALLY_COUNT_KEYS as readonly string[]).includes(key)) return null;
+    if (seen.has(key)) return null;
+    seen.add(key);
+    counts[key] = Number(kv[1]);
   }
   const out = {
     mustFix: counts["must-fix"],
@@ -1437,7 +1458,8 @@ function parseCommentsState(raw: string | undefined): PrCommentsState | null {
  * document's own tally via {@link computePrTally} (locked diminishing
  * schedule — mismatch = hand-arithmetic drift, the exact defect class this
  * gate exists to catch).
- * - `tally` flow map with the class counts (`may-fix` optional, absent = 0).
+ * - `tally` flow map with the class counts (`may-fix` optional, absent = 0);
+ *   any key outside that class set is refused rather than ignored.
  * - `comments` tri-state: `posted` (alias `yes`) | `n/a-no-pr` | `failed`.
  * The states are distinct: a FAILED POST IS `FAILED`, never
  * `n/a-no-pr`; `review_url` must pair accordingly (`http(s)://` for
@@ -1520,7 +1542,7 @@ export function validatePrReviewReport(text: string): GateResult {
       violations.push(violation(
         "medium",
         "prreview.report.invalid-tally",
-        `tally ${JSON.stringify(doc.tally)} must be a flow map with non-negative integer counts for every class`,
+        `tally ${JSON.stringify(doc.tally)} must be a flow map with non-negative integer counts for every class and no other keys (accepted: ${REPORT_TALLY_COUNT_KEYS.join(", ")})`,
         'use e.g. tally: { must-fix: 0, should-fix: 1, may-fix: 0, nit: 2, unverified: 0 }',
       ));
     }

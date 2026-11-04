@@ -256,6 +256,47 @@ describe("pr-review command family", () => {
     expect(settled.data).not.toMatchObject({ incomplete: expect.anything() });
   });
 
+  test("tests/docs-surface AC counts feed may-fix and never select a verdict", async () => {
+    const { cwd, context } = fixture();
+    const findings = path.join(cwd, "findings.json");
+    writeFileSync(findings, "[]");
+    const facts = { findings, requiredDomains: "persist", openedDomains: "persist", diffBasis: "readable" };
+
+    const surfaceOnly = await command("pr-review.tally").execute(
+      { ...facts, unmetAcTests: "1", unmetAcDocs: "1" },
+      context,
+    );
+    expect(surfaceOnly.status).toBe("ok");
+    // 6 + 4 deducted; a tests/docs leftover AC can neither block nor demand a fix round.
+    expect(surfaceOnly.data).toMatchObject({
+      verdict: "ship it",
+      scorePct: 90,
+      tally: { mustFix: 0, shouldFix: 0, mayFix: 2, nit: 0, unverified: 0 },
+    });
+
+    const withImplementation = await command("pr-review.tally").execute(
+      { ...facts, unmetAcTests: "3", unmetAcSafe: "1" },
+      context,
+    );
+    expect(withImplementation.status).toBe("ok");
+    expect(withImplementation.data).toMatchObject({
+      verdict: "needs fixes",
+      tally: { mustFix: 0, shouldFix: 1, mayFix: 3, nit: 0, unverified: 0 },
+    });
+  });
+
+  test("tally help documents every count input and the bucket it feeds", () => {
+    const tally = command("pr-review.tally");
+    const help = (key: string) => tally.cli.options.find((option) => option.key === key)?.help ?? "";
+    for (const key of ["unverified", "unmetAcUnsafe", "unmetAcSafe", "unmetAcTests", "unmetAcDocs"]) {
+      expect(help(key)).toContain("Optional; non-negative integer no greater than 50; defaults to 0;");
+    }
+    expect(help("unmetAcUnsafe")).toContain("must-fix");
+    expect(help("unmetAcSafe")).toContain("should-fix");
+    expect(help("unmetAcTests")).toContain("may-fix");
+    expect(help("unmetAcDocs")).toContain("may-fix");
+  });
+
   test("tally derives incomplete from a required domain that never opened", async () => {
     const { cwd, context } = fixture();
     const findings = path.join(cwd, "findings.json");

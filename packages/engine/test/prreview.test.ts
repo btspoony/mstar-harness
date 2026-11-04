@@ -403,6 +403,39 @@ describe("Leftover unmet-AC increments — pr-review.md § Tally and derived sco
     expect(result.scorePct).toBe(43); // 100 - 45 (must-fix) - 12 (should-fix)
   });
 
+  test("tests- and docs-surface ACs increment may_fix and never select a verdict", () => {
+    const result = computePrTally({
+      findings: [],
+      // The unsafe marking is irrelevant on these surfaces: the cap wins.
+      unmetAc: [
+        { unsafeToShip: true, surface: "tests" },
+        { unsafeToShip: false, surface: "docs" },
+      ],
+    });
+    expect(result.tally).toEqual({ mustFix: 0, shouldFix: 0, mayFix: 2, nit: 0, unverified: 0 });
+    expect(result.verdict).toBe("ship it");
+    expect(result.scorePct).toBe(90); // 100 - (6 + 4)
+  });
+
+  test("an explicit implementation surface keeps the unsafe/safe split", () => {
+    const unsafe = computePrTally({ findings: [], unmetAc: [{ unsafeToShip: true, surface: "implementation" }] });
+    expect(unsafe.tally).toEqual({ mustFix: 1, shouldFix: 0, mayFix: 0, nit: 0, unverified: 0 });
+    expect(unsafe.verdict).toBe("blocked");
+
+    const safe = computePrTally({ findings: [], unmetAc: [{ unsafeToShip: false, surface: "implementation" }] });
+    expect(safe.tally).toEqual({ mustFix: 0, shouldFix: 1, mayFix: 0, nit: 0, unverified: 0 });
+    expect(safe.verdict).toBe("needs fixes");
+  });
+
+  test("mixed surfaces: only the implementation AC selects the verdict", () => {
+    const result = computePrTally({
+      findings: [],
+      unmetAc: [{ unsafeToShip: true, surface: "tests" }, { unsafeToShip: false, surface: "implementation" }],
+    });
+    expect(result.tally).toEqual({ mustFix: 0, shouldFix: 1, mayFix: 1, nit: 0, unverified: 0 });
+    expect(result.verdict).toBe("needs fixes");
+  });
+
   test("AC increments are additive to accepted findings, not a replacement", () => {
     const result = computePrTally({
       findings: [{ mergeClass: "nit" }],
@@ -799,6 +832,34 @@ describe("validatePrReviewReport — arithmetic drift flags", () => {
     expect(gate.ok).toBe(false);
     expect(codes(gate)).toContain("prreview.report.verdict-mismatch");
     expect(codes(gate)).not.toContain("prreview.report.score-mismatch"); // score itself is arithmetically right
+  });
+});
+
+describe("validatePrReviewReport — closed tally key set", () => {
+  const TALLY_LINE = "tally: { must-fix: 0, should-fix: 1, nit: 2, unverified: 0 }";
+
+  test("a misspelled count key is refused instead of silently dropped", () => {
+    const typo = report("").replace(TALLY_LINE, "tally: { must-fix: 0, should-fix: 1, nti: 2, unverified: 0 }");
+    const gate = validatePrReviewReport(typo);
+    expect(gate.ok).toBe(false);
+    expect(codes(gate)).toContain("prreview.report.invalid-tally");
+    // The refusal names the accepted key set, so a typo is fixable from it.
+    expect(gate.violations.find((violation) => violation.code === "prreview.report.invalid-tally")?.message)
+      .toContain("must-fix, should-fix, may-fix, nit, unverified");
+  });
+
+  test("a stray key is refused even when every required count is present", () => {
+    const stray = report("").replace(TALLY_LINE, "tally: { must-fix: 0, should-fix: 1, nit: 2, unverified: 0, score: 85 }");
+    expect(codes(validatePrReviewReport(stray))).toContain("prreview.report.invalid-tally");
+  });
+
+  test("a duplicated count key is refused", () => {
+    const duplicate = report("").replace(TALLY_LINE, "tally: { must-fix: 0, should-fix: 1, should-fix: 1, nit: 2, unverified: 0 }");
+    expect(codes(validatePrReviewReport(duplicate))).toContain("prreview.report.invalid-tally");
+  });
+
+  test("omitting the optional may-fix stays legal (reads as 0)", () => {
+    expect(validatePrReviewReport(VALID_MINIMAL).ok).toBe(true);
   });
 });
 
