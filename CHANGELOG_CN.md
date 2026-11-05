@@ -6,6 +6,17 @@
 
 ## [Unreleased]
 
+## [4.2.2] - 2026-11-05
+
+### Harness
+
+- **PR 评审对非法合并等级直接拒绝，不再静默计入 `nit`。** `computePrTally` 现对不属于四个 harness 等级的 `mergeClass` 抛出 `TypeError`，与其它输入守卫一致；此前拼错的等级会丢失一个阻断性 finding，而 tally 表面仍然自洽。
+- 修正 PR 评审参考文档的表面矩阵，使错误的 `low` 档文档归为 `may-fix`；在 tally 旁说明 AC 条目形状（`unsafeToShip` 必填布尔、`surface` 可选）；重新测量 MCP 已发布表面并钉定为 33,629。
+
+### 版本对齐
+
+- 提升 monorepo 根、`@mstar-harness/opencode`、`@mstar-harness/opencode-v2`、`@mstar-harness/cli`、`@mstar-harness/engine`、`@mstar-harness/dsh`、Cursor/Codex/Kimi/ZCode/omp/Claude 插件清单、便携式 Agent Plugins 清单及两份 marketplace 清单：**→ 4.2.2**。
+
 ## [4.2.1] - 2026-11-04
 
 ### Harness
