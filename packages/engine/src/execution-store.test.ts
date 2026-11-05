@@ -27,7 +27,6 @@ import { registerCatalogEntity, updateCatalogEntity } from "./catalog.js";
 import { ExecutionPinConflictError, executionInputHash, type CatalogExecutionPin } from "./coordination.js";
 import {
   ExecutionError,
-  RUNNING_WORKFLOW_OPERATION_RECEIPT_LIMIT,
   assertExecutionToken,
   bindExecutionSession,
   createExecutionWorkflow,
@@ -48,7 +47,8 @@ import {
   type ExecutionToken,
   type ExecutionTransaction,
 } from "./execution-store.js";
-import { mutateExecutionWorkflow, recoverExecutionCoordinator } from "./execution-workflow.js";
+import { mutateExecutionPlan } from "./execution-coordination.js";
+import { mutateExecutionWorkflow } from "./execution-workflow.js";
 import type { WorkflowEntry } from "./status.js";
 import {
   MIGRATIONS,
@@ -1808,8 +1808,15 @@ describe("execution-domain: \u00A73 workflow creation, sealed input and authorit
 });
 
 /* ------------------------------------------------------------------------ *
- * §3.1 receipt retention — a running workflow's receipts stay bounded
+ * §3.1 receipt retention — a running workflow keeps every receipt it commits
  * ------------------------------------------------------------------------ */
+
+/**
+ * The retained count a running workflow used to be refused at. A fixture input,
+ * not a bound the engine states: the assertions below are that ordinary work
+ * continues past it and that every retained receipt stays replayable.
+ */
+const FORMER_RECEIPT_CEILING = 256;
 
 /** One committed receipt envelope for a running workflow, as the ONE writer stores it. */
 function receiptEnvelope(tx: ExecutionTransaction, workflowId: string) {
@@ -1853,8 +1860,8 @@ function replayOf(
   return withExecutionTransaction(context, (tx) => readOperationReplay(tx, { operationId, requestHash, workflowId, planId: null, token }));
 }
 
-describe("execution-receipts: \u00A73.1 a running workflow's retained receipts stay bounded", () => {
-  test("the receipt cap refuses overflow with its recovery while every retained receipt still replays", async () => {
+describe("execution-receipts: \u00A73.1 a running workflow's retained receipts all stay replayable", () => {
+  test("ordinary plan work continues past the former receipt ceiling and every retained receipt keeps its replay and conflict behavior", async () => {
     const { context } = await freshStore("receipt-retention");
     const initialized = await readExecutionState(context);
     await registerPlan(context, "p-1");
@@ -1871,7 +1878,8 @@ describe("execution-receipts: \u00A73.1 a running workflow's retained receipts s
       expected: workflowToken,
       operationId: "bind-wf-1",
     });
-    // Creation and the bind each wrote the workflow's receipt; the cap counts them.
+    // Creation and the bind each wrote the workflow's receipt; the fills bring a
+    // RUNNING workflow to the count it used to be refused at.
     const retainedRows = (): Array<{ operation_id: string; request_hash: string }> => {
       const db = rawDb(storePath(context));
       try {
@@ -1883,120 +1891,58 @@ describe("execution-receipts: \u00A73.1 a running workflow's retained receipts s
         db.close();
       }
     };
-    await fillRunningReceipts(context, "wf-1", RUNNING_WORKFLOW_OPERATION_RECEIPT_LIMIT - (await retainedRows()).length);
-
-    const retained = await retainedRows();
-    expect(retained).toHaveLength(RUNNING_WORKFLOW_OPERATION_RECEIPT_LIMIT);
-    const first = retained[0]!;
-    const last = retained[retained.length - 1]!;
-    // Both ends of the retained window replay their recorded receipt unchanged:
-    // the workflow's own first receipt (creation, committed under the root) and
-    // the newest one this cap filled.
+    await fillRunningReceipts(context, "wf-1", FORMER_RECEIPT_CEILING - (await retainedRows()).length);
+    expect(await retainedRows()).toHaveLength(FORMER_RECEIPT_CEILING);
+    const first = (await retainedRows())[0]!;
+    // The earliest retained key still replays its recorded receipt unchanged:
+    // the workflow's own creation receipt, committed under the root.
     expect(await replayOf(context, "wf-1", first.operation_id, first.request_hash, { kind: "root", key: [] })).toMatchObject({
       operationId: first.operation_id,
       replayed: true,
     });
-    expect(await replayOf(context, "wf-1", last.operation_id, last.request_hash)).toMatchObject({
-      operationId: last.operation_id,
-      replayed: true,
+
+    // Ordinary plan work past that count is ACCEPTED: the progress commits its
+    // own receipt, and a retry of the same id serves the recorded replay.
+    const progress = {
+      kind: "progress" as const,
+      progress: { status: "InProgress" as const, summary: "work continues past the former ceiling", evidence_paths: [] },
+    };
+    const applied = await mutateExecutionPlan(domainContext(context, domainCaller("wf-1")), {
+      planId: "p-1",
+      operationId: "progress-past-ceiling",
+      operation: progress,
     });
+    expect(applied.replayed).toBe(false);
+    expect(applied.data.plan.status).toBe("InProgress");
+    expect(await retainedRows()).toHaveLength(FORMER_RECEIPT_CEILING + 1);
+    const retried = await mutateExecutionPlan(domainContext(context, domainCaller("wf-1")), {
+      planId: "p-1",
+      operationId: "progress-past-ceiling",
+      operation: progress,
+    });
+    expect(retried.replayed).toBe(true);
     // A retained operation id reused for a different intent still conflicts.
-    await expect(replayOf(context, "wf-1", last.operation_id, "a-different-intent")).rejects.toMatchObject({
-      code: "execution.operation-conflict",
-    });
-
-    // The next NEW non-terminal id refuses inside the append transaction, and
-    // the refusal names both the cause and the recovery.
-    const overflow = await withExecutionTransaction(context, (tx) =>
-      writeOperationReceipt(tx, {
-        operationId: "fill-overflow",
-        requestHash: "fill-fingerprint-overflow",
-        workflowId: "wf-1",
-        planId: null,
-        receipt: receiptEnvelope(tx, "wf-1"),
-        now: TS,
+    await expect(
+      mutateExecutionPlan(domainContext(context, domainCaller("wf-1")), {
+        planId: "p-1",
+        operationId: "progress-past-ceiling",
+        operation: { kind: "progress", progress: { status: "InProgress", summary: "a different intent", evidence_paths: [] } },
       }),
-    ).then(
-      () => null,
-      (error: unknown) => error as ExecutionError,
-    );
-    expect(overflow).toBeInstanceOf(ExecutionError);
-    expect(overflow!.code).toBe("execution.receipt-retention-exhausted");
-    expect(overflow!.message).toContain(String(RUNNING_WORKFLOW_OPERATION_RECEIPT_LIMIT));
-    expect(overflow!.message).toMatch(/adopt or close|adopt|close/i);
-    expect(overflow!.message).toContain("new workflow");
-    expect(await retainedRows()).toEqual(retained);
-    expect(await replayOf(context, "wf-1", "fill-overflow", "fill-fingerprint-overflow")).toBeNull();
+    ).rejects.toMatchObject({ code: "execution.operation-conflict" });
 
-    // A terminal mutation at the cap is exempt: the close succeeds and its
-    // terminal prune keeps exactly its own receipt.
+    // The terminal close stays ordinary: it commits, and its prune keeps exactly
+    // its own receipt.
+    const running = await readExecutionState(context);
     const closed = await mutateExecutionWorkflow(domainContext(context, domainCaller("wf-1")), {
       operationId: "close-wf-1",
       session: bound.data,
-      expected: workflowToken,
+      expected: running.data.workflows[0]!.workflowToken,
       workflowId: "wf-1",
-      operation: { kind: "lifecycle", status: "stopped", reason: "retention cap reached" },
+      operation: { kind: "lifecycle", status: "stopped", reason: "work finished" },
     });
     expect(closed.replayed).toBe(false);
     expect((await retainedRows()).map((row) => row.operation_id)).toEqual(["close-wf-1"]);
-    expect(await replayOf(context, "wf-1", last.operation_id, last.request_hash)).toBeNull();
-  });
-
-  test("a workflow at the cap still recovers its coordinator and then closes", async () => {
-    // The same real graph as the cap case above, driven to the bound.
-    const { context } = await freshStore("receipt-retention-recovery");
-    const initialized = await readExecutionState(context);
-    await registerPlan(context, "p-1");
-    const created = await createExecutionWorkflow(domainContext(context, domainCaller("wf-1")), {
-      ...creationInput("wf-1", [planRow("p-1")]),
-      expected: initialized.token,
-      operationId: "create-wf-1",
-    });
-    await bindExecutionSession(domainContext(context, domainCaller("wf-1")), {
-      workflowId: "wf-1",
-      expected: created.data.workflows[0]!.workflowToken,
-      operationId: "bind-wf-1",
-    });
-    const retainedCount = (): number => {
-      const db = rawDb(storePath(context));
-      try {
-        return Number(scalar(db, "select count(*) as n from execution_operations where workflow_id = 'wf-1'"));
-      } finally {
-        db.close();
-      }
-    };
-    await fillRunningReceipts(context, "wf-1", RUNNING_WORKFLOW_OPERATION_RECEIPT_LIMIT - retainedCount());
-    expect(retainedCount()).toBe(RUNNING_WORKFLOW_OPERATION_RECEIPT_LIMIT);
-
-    // The prior coordinator is stopped; a distinct replacement recovers it. Its
-    // own receipt is the ONE exempt non-terminal write: without it the workflow
-    // holds no live binding, so nothing could close it either.
-    const replacement = domainCaller("wf-1", { sessionId: "session-wf-1-next" });
-    const recovered = await recoverExecutionCoordinator(domainContext(context, replacement), {
-      operationId: "recover-wf-1",
-      priorSessionId: "session-wf-1",
-      reason: "prior coordinator stopped at the retention bound",
-    });
-    expect(recovered.replayed).toBe(false);
-    expect(recovered.data.sessionId).toBe("session-wf-1-next");
-    expect(retainedCount()).toBe(RUNNING_WORKFLOW_OPERATION_RECEIPT_LIMIT + 1);
-
-    // The recovered binding is live, so the terminal close succeeds and its
-    // prune collapses the set back to exactly the close receipt.
-    const closed = await mutateExecutionWorkflow(domainContext(context, replacement), {
-      operationId: "close-wf-1",
-      session: recovered.data,
-      workflowId: "wf-1",
-      operation: { kind: "lifecycle", status: "stopped", reason: "recovered at the retention bound, then closed" },
-    });
-    expect(closed.replayed).toBe(false);
-    const db = rawDb(storePath(context));
-    try {
-      expect(all(db, "select operation_id from execution_operations where workflow_id = 'wf-1'").map((row) => row.operation_id))
-        .toEqual(["close-wf-1"]);
-    } finally {
-      db.close();
-    }
+    expect(await replayOf(context, "wf-1", first.operation_id, first.request_hash, { kind: "root", key: [] })).toBeNull();
   });
 });
 
