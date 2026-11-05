@@ -11,8 +11,10 @@
  * arithmetic only, floor at 0, no second formula (nit cap 8, may-fix cap 15,
  * unverified cap 15).
  * - Leftover unmet-AC increments: pr-review.md § Tally and derived score —
- * unsafe-to-ship → must_fix + 1, else should_fix + 1; a tally increment,
- * not a merge class, not a second finding.
+ * the AC's `surface` picks the bucket: `tests` / `docs` → `may_fix + 1`
+ * (never a verdict selector); absent or `implementation` → `must_fix + 1`
+ * when `unsafeToShip`, else `should_fix + 1`. A tally increment, not a
+ * merge class, not a second finding.
  * - Override invariant: pr-review.md § Override invariant — score never
  * overrides verdict.
  * - Display contract: pr-review.md § Display contract (chat output) — the
@@ -481,6 +483,32 @@ describe("Leftover unmet-AC increments — pr-review.md § Tally and derived sco
     expect(result.tally).toEqual({ mustFix: 0, shouldFix: 1, mayFix: 0, nit: 1, unverified: 0 });
     expect(result.verdict).toBe("needs fixes");
     expect(result.scorePct).toBe(86);
+  });
+});
+
+describe("Merge-class refusal — pr-review.md § Tally and derived score", () => {
+  test.each([
+    ["a misspelled class", "mustfix"],
+    ["an underscore class", "must_fix"],
+    ["an empty class", ""],
+    ["an object-valued class", {}],
+    ["a non-string class", 42],
+  ] as const)("an off-enum mergeClass (%s) is a TypeError", (_label, mergeClass) => {
+    expect(() =>
+      computePrTally({ findings: [{ mergeClass }] as unknown as PrTallyInput["findings"] }),
+    ).toThrow(TypeError);
+  });
+
+  test("the mergeClass refusal names the finding, the accepted values and the received value", () => {
+    expect(() =>
+      computePrTally({ findings: [{ mergeClass: "mustfix" }] as unknown as PrTallyInput["findings"] }),
+    ).toThrow("computePrTally: findings[0].mergeClass must be one of must-fix | should-fix | may-fix | nit - got \"mustfix\"");
+  });
+
+  test("a finding with no mergeClass property is refused, not counted as nit", () => {
+    expect(() =>
+      computePrTally({ findings: [{}] as unknown as PrTallyInput["findings"] }),
+    ).toThrow("computePrTally: findings[0].mergeClass must be one of must-fix | should-fix | may-fix | nit - got undefined");
   });
 });
 

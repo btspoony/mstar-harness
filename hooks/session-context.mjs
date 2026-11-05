@@ -22707,6 +22707,12 @@ function computePrTally(input) {
       throw new TypeError(`computePrTally: unmetAc[${index2}].surface must be one of ${UNMET_AC_SURFACES.join(" | ")} when present - ` + `got ${JSON.stringify(entry.surface)}`);
     }
   }
+  for (let index2 = 0;index2 < input.findings.length; index2 += 1) {
+    const { mergeClass } = input.findings[index2];
+    if (!MERGE_CLASSES.includes(mergeClass)) {
+      throw new TypeError(`computePrTally: findings[${index2}].mergeClass must be one of ${MERGE_CLASSES.join(" | ")} - got ${JSON.stringify(mergeClass)}`);
+    }
+  }
   let mustFix = 0;
   let shouldFix = 0;
   let mayFix = 0;
