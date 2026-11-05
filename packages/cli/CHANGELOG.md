@@ -6,6 +6,17 @@ The monorepo root [CHANGELOG.md](../../CHANGELOG.md) summarizes cross-surface re
 
 ## [Unreleased]
 
+## [4.2.2] - 2026-11-05
+
+### Harness
+
+- **PR review refuses an off-enum merge class instead of silently counting it as `nit`.** `computePrTally` now throws a `TypeError` for a finding whose `mergeClass` is not one of the four harness classes, matching the boundary posture of its other input guards; a misspelled class previously lost a blocking finding while the tally still looked consistent.
+- Corrected the PR-review reference's surface matrix so a wrong `low`-band document is `may-fix`, stated the AC entry shape (`unsafeToShip` required boolean, optional `surface`) beside the tally, and re-measured the published MCP surface to pin it at 33,629.
+
+- Version alignment with harness **4.2.2**.
+
+See root [CHANGELOG.md](../../CHANGELOG.md) **4.2.2**.
+
 ## [4.2.1] - 2026-11-04
 
 ### Changed
