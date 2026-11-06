@@ -1814,7 +1814,8 @@ describe("execution-domain: \u00A73 workflow creation, sealed input and authorit
 /**
  * The retained count a running workflow used to be refused at. A fixture input,
  * not a bound the engine states: the assertions below are that ordinary work
- * continues past it and that every retained receipt stays replayable.
+ * continues past it and that the earliest and newest retained keys still replay
+ * and conflict — not that every retained receipt is replayed.
  */
 const FORMER_RECEIPT_CEILING = 256;
 
@@ -1943,6 +1944,13 @@ describe("execution-receipts: \u00A73.1 a running workflow keeps old and new ret
         operationId: first.operation_id,
       }),
     ).rejects.toMatchObject({ code: "execution.operation-conflict" });
+    // The refused reuse left the anchor intact: after the conflict the oldest
+    // key still serves its recorded receipt, so the refusal is not merely an
+    // error code but a preserved replay source.
+    expect(await replayOf(context, "wf-1", first.operation_id, first.request_hash, { kind: "root", key: [] })).toMatchObject({
+      operationId: first.operation_id,
+      replayed: true,
+    });
 
     // The terminal close stays ordinary: it commits, and its prune keeps exactly
     // its own receipt.
