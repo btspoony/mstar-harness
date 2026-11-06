@@ -6,6 +6,16 @@ The monorepo root [CHANGELOG.md](../../CHANGELOG.md) summarizes cross-surface re
 
 ## [Unreleased]
 
+## [4.2.3] - 2026-11-06
+
+### Harness
+
+- **A running workflow's operation receipts are no longer count-capped.** `execution.receipt-retention-exhausted` and the exported `RUNNING_WORKFLOW_OPERATION_RECEIPT_LIMIT` constant are gone, with no compatibility shim: a RUNNING workflow refused its next ordinary plan or workflow operation once it retained 256 receipts, and the only recovery it named was to close or adopt the workflow and start a new one — a route an unfinished lifecycle cannot take without discarding the work it still holds. Every receipt the current epoch can replay is a replay anchor, so the engine never evicts one to make room. Retention is therefore logical and lifecycle-scoped rather than numeric: each committed operation of the active lifecycle keeps one receipt row — its persisted replay metadata plus the recorded result payload where the writer stored one, while slim receipts persist the replay address and reconstruct the live state under the same epoch instead of recording a full result. That set grows with the operation count and the payloads actually stored until the workflow terminates, at which point the terminal mutation prunes it to exactly its own receipt. No supported in-place epoch advance bounds a running lifecycle's receipts: restore deliberately preserves prior-epoch receipt rows as history, outside the current epoch's replay scope, and the epoch delete in the create-only initializer can never remove receipts because that transaction refuses a non-empty execution domain. The terminal prune is a SQL `DELETE` that bounds what the store serves; it promises neither constant space nor a smaller SQLite file on disk. Exact replay, changed-intent conflicts, CAS, authorization and normal terminal behavior are unchanged.
+
+- Version alignment with harness **4.2.3**.
+
+See root [CHANGELOG.md](../../CHANGELOG.md) **4.2.3**.
+
 ## [4.2.2] - 2026-11-05
 
 ### Changed
