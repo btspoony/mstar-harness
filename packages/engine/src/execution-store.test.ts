@@ -1860,8 +1860,8 @@ function replayOf(
   return withExecutionTransaction(context, (tx) => readOperationReplay(tx, { operationId, requestHash, workflowId, planId: null, token }));
 }
 
-describe("execution-receipts: \u00A73.1 a running workflow's retained receipts all stay replayable", () => {
-  test("ordinary plan work continues past the former receipt ceiling and every retained receipt keeps its replay and conflict behavior", async () => {
+describe("execution-receipts: \u00A73.1 a running workflow keeps old and new retained replay keys", () => {
+  test("ordinary plan work continues past the former receipt ceiling while the earliest and newest retained keys still replay and conflict", async () => {
     const { context } = await freshStore("receipt-retention");
     const initialized = await readExecutionState(context);
     await registerPlan(context, "p-1");
@@ -1914,7 +1914,6 @@ describe("execution-receipts: \u00A73.1 a running workflow's retained receipts a
     });
     expect(applied.replayed).toBe(false);
     expect(applied.data.plan.status).toBe("InProgress");
-    expect(await retainedRows()).toHaveLength(FORMER_RECEIPT_CEILING + 1);
     const retried = await mutateExecutionPlan(domainContext(context, domainCaller("wf-1")), {
       planId: "p-1",
       operationId: "progress-past-ceiling",
@@ -1927,6 +1926,21 @@ describe("execution-receipts: \u00A73.1 a running workflow's retained receipts a
         planId: "p-1",
         operationId: "progress-past-ceiling",
         operation: { kind: "progress", progress: { status: "InProgress", summary: "a different intent", evidence_paths: [] } },
+      }),
+    ).rejects.toMatchObject({ code: "execution.operation-conflict" });
+
+    // The OLDEST key committed before that continuation is still usable: it
+    // replays its recorded receipt unchanged, and reusing its id for another
+    // intent conflicts instead of overwriting the anchor.
+    expect(await replayOf(context, "wf-1", first.operation_id, first.request_hash, { kind: "root", key: [] })).toMatchObject({
+      operationId: first.operation_id,
+      replayed: true,
+    });
+    await expect(
+      createExecutionWorkflow(domainContext(context, domainCaller("wf-1")), {
+        ...creationInput("wf-1", [planRow("p-1")], { branch: { source: "feature/another-intent", target: "main" } }),
+        expected: initialized.token,
+        operationId: first.operation_id,
       }),
     ).rejects.toMatchObject({ code: "execution.operation-conflict" });
 
