@@ -6,6 +6,20 @@ The monorepo root [CHANGELOG.md](../../CHANGELOG.md) summarizes cross-surface re
 
 ## [Unreleased]
 
+## [4.2.3] - 2026-11-06
+
+### Changed
+
+- Raised the `@deepseek-ai/dsh-*` corridor from `^0.2.1-rc.5` to `^0.2.2-rc.1` (63 `peerDependencies` entries plus five dev-only helper packages), and added `@deepseek-ai/dsh-tool-executor-native@0.2.2-rc.1` as a test-only dev dependency.
+- Raised the `@deepseek-ai/cordis` peer from `^4.0.5` to `~4.1.0` (the range every `0.2.2-rc.1` package now declares); the lockfile resolves `cordis@4.1.0` with `cordis-plugin-loader`/`cordis-plugin-include` at `1.1.0`. Consumers still pinning `cordis@4.0.x` must upgrade.
+- Adapted the test harness to the rewritten tool-execution layer: every boot composition mounts the native tool executor, and the five affected specs execute tool calls through the `ToolBatchInput`/`ToolBatchResult` contract via one shared helper instead of the removed single-call API.
+- Updated the client-bundle test loader shim for the new upstream bundle surface (`require.asset(...)` plus the chat bundle's `ctx.get("connection")` read at `apply` time), so the first-party transcript-row spec keeps rendering the real upstream chat bundle.
+- Read the optional `agentPresets` registry through a local structural view, since `0.2.2-rc.1` no longer merges the agent-preset registry's `Context` augmentation into this package.
+
+- Version alignment with harness **4.2.3**.
+
+See root [CHANGELOG.md](../../CHANGELOG.md) **4.2.3**.
+
 ## [4.2.2] - 2026-11-05
 
 ### Changed

@@ -8,6 +8,22 @@ Package-specific histories: [`packages/cli/CHANGELOG.md`](packages/cli/CHANGELOG
 
 ## [Unreleased]
 
+## [4.2.3] - 2026-11-06
+
+### Harness
+
+- Added **`pr_merge_policy: reviewed-bot`**, a second review path beside `reviewed-auto`: an attached review bot (mstar-inspector, Greptile, Bugbot or equivalent) reviews each push on its own per its trigger mode, so Phase 5 receives and monitors that review instead of starting a local loop. The bot's newest review on the current head reaching its own gate — for mstar-inspector the `mstar-inspector review` check concluding `success` — is the merge authorization; a missing bot is a configuration failure that returns to Phase 1, not `N/A`.
+- **The bot path has an executable evidence loop.** Phase 5 step 4 reads all three bot artifacts — the check conclusion, the overall review comment (verdict, tally, every finding including a disclosed omitted set, and the full reviewed `sha=`), and the anchored line comments — instead of treating unresolved threads as the whole finding set. The pre-merge head reconciliation compares `check.head_sha` and the comment's `publication:v1 … sha=` against `gh pr view --json headRefOid`; a `failure`, `neutral`, in-progress or missing run is never a pass, and `reviewed-bot` has no delta ack.
+- **The bot is identified by its check-run name and publication marker, never by its bot login,** and its comment body is the ordinary PR review report: verdict token, tally by merge class, `## 📋 Review` and per-finding blocks are read through `mstar-audit` → `references/pr-review.md` rather than a bot-only parser.
+- **An empty increment inherits instead of stalling.** When the bot acks a head with nothing new, its check on that head terminalizes to the reviewed head's result while no new review is published, so the comment still carries the older `sha=`. Phase 5 accepts that pair only when the two heads carry identical content — `compare/<comment-sha>...<head>` with `files == 0` and `status` `identical`/`ahead` — and records both heads.
+- **`mstar-pr-loop` now belongs to the `reviewed-auto` path only.** Under `reviewed-bot` the loop never starts; the bot's findings are triaged like any third-party reviewer's through Phase 5 step 4.
+- Updated `mstar-iteration` Phase 1 selection, Phase 4/5 review-path and merge-authorization sections, helper discovery, `mstar-harness-core`, `mstar-roles`, the iteration commands, `docs/runtime-reference.md` and both READMEs.
+- **A running workflow's operation receipts are no longer count-capped.** `execution.receipt-retention-exhausted` and the exported `RUNNING_WORKFLOW_OPERATION_RECEIPT_LIMIT` constant are gone, with no compatibility shim: a RUNNING workflow refused its next ordinary plan or workflow operation once it retained 256 receipts, and the only recovery it named was to close or adopt the workflow and start a new one — a route an unfinished lifecycle cannot take without discarding the work it still holds. Every receipt the current epoch can replay is a replay anchor, so the engine never evicts one to make room. Retention is therefore logical and lifecycle-scoped rather than numeric: each committed operation of the active lifecycle keeps one receipt row — its persisted replay metadata plus the recorded result payload where the writer stored one, while slim receipts persist the replay address and reconstruct the live state under the same epoch instead of recording a full result. That set grows with the operation count and the payloads actually stored until the workflow terminates, at which point the terminal mutation prunes it to exactly its own receipt. No supported in-place epoch advance bounds a running lifecycle's receipts: restore deliberately preserves prior-epoch receipt rows as history, outside the current epoch's replay scope, and the epoch delete in the create-only initializer can never remove receipts because that transaction refuses a non-empty execution domain. The terminal prune is a SQL `DELETE` that bounds what the store serves; it promises neither constant space nor a smaller SQLite file on disk. Exact replay, changed-intent conflicts, CAS, authorization and normal terminal behavior are unchanged.
+
+### Version alignment
+
+- Bump monorepo root, `@mstar-harness/opencode`, `@mstar-harness/opencode-v2`, `@mstar-harness/cli`, `@mstar-harness/engine`, `@mstar-harness/dsh`, Cursor/Codex/Kimi/ZCode/omp/Claude plugin manifests, the portable Agent Plugins manifest, and both marketplace manifests: **→ 4.2.3**.
+
 ## [4.2.2] - 2026-11-05
 
 ### Harness

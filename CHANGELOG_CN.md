@@ -6,6 +6,22 @@
 
 ## [Unreleased]
 
+## [4.2.3] - 2026-11-06
+
+### Harness
+
+- 新增 **`pr_merge_policy: reviewed-bot`**，作为 `reviewed-auto` 之外的第二条 review 路径：挂载的 review bot（mstar-inspector、Greptile、Bugbot 或等价物）会按其触发模式跟随每次 push 自行 review，Phase 5 只接收并监控该 review，不再自起本地 loop。该 bot 在当前 head 上最新一次 review 达到其自身门——mstar-inspector 为 `mstar-inspector review` check 判定 `success`——即构成 merge 授权；无 bot 挂载属于配置失效并回到 Phase 1，而不是记 `N/A`。
+- **`mstar-pr-loop` 现在只属于 `reviewed-auto` 路径。** `reviewed-bot` 下该 loop 不启动；bot 的 findings 与其他第三方 reviewer 一样，经 Phase 5 第 4 步 triage 处理。
+- **bot 路径具备可执行证据闭环。** Phase 5 第 4 步读取 bot 的三处产物——check 结论、整体 review comment（verdict、tally、全部 finding 含被折叠的 omitted 集合、以及完整的 reviewed `sha=`）、anchored line comments——不再把未解决线程当作全部 findings。merge 前的 head 对账比较 `check.head_sha` 与 comment 的 `publication:v1 … sha=` 是否都等于 `gh pr view --json headRefOid`；`failure`、`neutral`、进行中或缺 run 都不算通过，且 `reviewed-bot` 下没有 delta ack。
+- **bot 以 check-run 名与发布 marker 识别，绝不按 bot 登录名**，其 comment 正文即普通 PR review 报告：verdict token、按 merge class 的 tally、`## 📋 Review` 与逐条 finding 块，均按 `mstar-audit` → `references/pr-review.md` 读取，而不是另造 bot 专用解析器。
+- **空增量走继承而不是卡死。** bot 对没有新内容的 head 只 ack：该 head 上的 check 以被审 head 的结果 terminalize，但不发布新 review，因此 comment 仍带旧的 `sha=`。Phase 5 仅在两 head 内容完全相同时接受这一对——`compare/<comment-sha>...<head>` 的 `files == 0` 且 `status` 为 `identical`/`ahead`——并同时记录两个 head。
+- 更新 `mstar-iteration` 的 Phase 1 选择项、Phase 4/5 的 review 路径与 merge 授权、helper 发现、`mstar-harness-core`、`mstar-roles`、迭代命令、`docs/runtime-reference.md` 与两份 README。
+- **运行中工作流的操作回执不再有数量上限。** `execution.receipt-retention-exhausted` 与导出的 `RUNNING_WORKFLOW_OPERATION_RECEIPT_LIMIT` 常量均已移除，且不提供兼容层：此前 RUNNING 工作流在保留 256 条回执后，会拒绝其下一条普通计划或工作流级操作，且给出的唯一恢复路径是关闭或收养该工作流再新建——未完成的生命周期无法采用，因为那会丢弃它仍然持有的工作。当前 epoch 可重放的每条回执都是重放锚点，引擎绝不会为腾空间丢弃任何一条。因此保留是逻辑上的、按生命周期界定的，而非按数量：活动生命周期中每个已提交操作保留一行回执——写入方持久化的重放元数据，以及在写入方保存了完整结果时的记录结果载荷；其中 slim 回执只持久化重放地址，并在同一 epoch 下重建实时状态，而不保存完整结果。该集合随操作数量与实际保存的载荷增长，直到工作流进入终态——终态变更会把集合裁剪为恰好它自己的回执。没有任何受支持的就地 epoch 推进能为运行中的生命周期界定回执数量：restore 会刻意把先前 epoch 的回执行作为历史保留，且位于当前 epoch 的重放范围之外；而仅用于创建空域的初始化事务中的 epoch 删除也不可能移除回执，因为该事务在任何回执行存在时即以非空域拒绝。终态裁剪是 SQL `DELETE`，只界定 store 对外提供的内容，既不承诺常数空间，也不承诺 SQLite 文件在磁盘上变小。精确重放、变更意图冲突、CAS、授权与正常终态行为完全不变。
+
+### 版本对齐
+
+- 提升 monorepo 根、`@mstar-harness/opencode`、`@mstar-harness/opencode-v2`、`@mstar-harness/cli`、`@mstar-harness/engine`、`@mstar-harness/dsh`、Cursor/Codex/Kimi/ZCode/omp/Claude 插件清单、便携式 Agent Plugins 清单及两份 marketplace 清单：**→ 4.2.3**。
+
 ## [4.2.2] - 2026-11-05
 
 ### Harness
