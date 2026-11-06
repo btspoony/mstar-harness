@@ -30,6 +30,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import type { Context } from '@deepseek-ai/cordis'
 import type { ToolCallId } from '@deepseek-ai/dsh-llm'
+import type { ToolExecutionResult } from '@deepseek-ai/dsh-tools'
 import {
   bindExecutionSession,
   createExecutionWorkflow,
@@ -61,7 +62,7 @@ import {
 import { adoptionRecoveryText, postCommitAdoptionRefusal } from '../src/gates/native-commands.ts'
 import { readWorkflowSessionBinding, updateWorkflowSessionBinding } from '../src/engine-status-store.ts'
 import type { WorkflowSessionBinding } from '../src/engine-status-store.ts'
-import { bootApp, restartSeam, rootTableOf, seamDisposers, type BootResult } from './harness.ts'
+import { bootApp, executeToolCall, restartSeam, rootTableOf, seamDisposers, type BootResult } from './harness.ts'
 
 const TS = '2026-09-21T00:00:00.000Z'
 const WORKFLOW_ID = 'wf-native-surface'
@@ -139,12 +140,12 @@ function agentOf(id: string, cwd: string, header: Record<string, unknown> = {}):
 }
 
 /** Run one tool call through the composed registry as one specific agent. */
-function run(ctx: BootResult['ctx'], name: string, agent: unknown, args: Record<string, unknown>) {
-  return ctx.tools.execute({ callId, name, arguments: args, agent: agent as never, signal })
+function run(ctx: BootResult['ctx'], name: string, agent: unknown, args: Record<string, unknown>): Promise<ToolExecutionResult> {
+  return executeToolCall(ctx, { callId, name, arguments: args, agent: agent as never, signal })
 }
 
 /** Narrow one successful tool result to its canonical value (the command envelope). */
-function envelopeOf(result: Awaited<ReturnType<BootResult['ctx']['tools']['execute']>>): Record<string, unknown> {
+function envelopeOf(result: ToolExecutionResult): Record<string, unknown> {
   if (result.isError) throw new Error(`tool call failed: ${result.error?.message ?? 'unknown error'}`)
   return result.value as Record<string, unknown>
 }

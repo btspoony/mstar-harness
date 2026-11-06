@@ -44,7 +44,7 @@ import type { UserMessage } from '@deepseek-ai/dsh-llm'
 import { createUserMessage } from '@deepseek-ai/dsh-llm'
 import type { DispatchGateAdvisory, SeamLintAdvisory, SkillLintAdvisory } from '../src/index.ts'
 import { DshHostAdapter, readAgentFlow } from '../src/index.ts'
-import { bootApp, isCiEnvironment, LOCAL_SKILL_MOUNT_SKIP_REASON, seedActiveWorkflow, seedHarness, type BootResult } from './harness.ts'
+import { bootApp, executeToolCall, isCiEnvironment, LOCAL_SKILL_MOUNT_SKIP_REASON, seedActiveWorkflow, seedHarness, type BootResult } from './harness.ts'
 import { buildCatalogPayloadWithStore } from '../src/gates/catalog.ts'
 import { ENGINE_VERSION } from './engine-version.ts'
 
@@ -536,7 +536,7 @@ describe('agent-flow — real settle pairing (real call through the composed reg
     }))
 
     // REAL subagent call through the composed registry (agent-bound).
-    const result = await booted.ctx.tools.execute({
+    const result = await executeToolCall(booted.ctx, {
       callId,
       name: 'subagent',
       arguments: { description: 'probe', prompt: fixture('assignments/valid.md') },

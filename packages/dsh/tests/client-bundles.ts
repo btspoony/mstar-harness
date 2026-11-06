@@ -21,7 +21,8 @@ import { createRequire } from 'node:module'
 
 const nodeRequire = createRequire(import.meta.url)
 
-type BundleFactory = (require: (id: string) => unknown) => { exports: unknown }
+type BundleRequire = ((id: string) => unknown) & { asset(reference: string): string }
+type BundleFactory = (require: BundleRequire) => { exports: unknown }
 
 const factories = new Map<string, BundleFactory>()
 
@@ -71,7 +72,10 @@ if ((globalThis as unknown as Record<string, unknown>).localStorage === undefine
 export function clientExports(id: string, overrides?: Readonly<Record<string, unknown>>): Record<string, unknown> {
   const factory = factories.get(id)
   if (factory === undefined) throw new Error(`no captured client bundle for ${id} (import the bundle through this module first)`)
-  return factory((dep: string) => bundleRequire(dep, overrides)) as unknown as Record<string, unknown>
+  const requireShim = ((dep: string) => bundleRequire(dep, overrides)) as BundleRequire
+  // dsh's loader resolves a package-asset reference through its carrier, defaulting to the reference unchanged.
+  requireShim.asset = (reference: string) => reference
+  return factory(requireShim) as unknown as Record<string, unknown>
 }
 
 /** Resolve one browser-bundle dependency: bundles recurse, everything else resolves as Node ESM. */

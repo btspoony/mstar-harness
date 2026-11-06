@@ -281,7 +281,7 @@ function captureDispatchWarns(ctx: BootResult['ctx']): string[] {
  * not volatile (no live reference was created).
  */
 function writeLiveDispatchBinding(app: BootResult, role: string): void {
-  const config = app.pluginFiber?.config as { dispatchBinding?: Record<symbol, unknown> } | undefined
+  const config = app.pluginFiber?.effectiveConfig as { dispatchBinding?: Record<symbol, unknown> } | undefined
   const write = config?.dispatchBinding?.[Symbol.for('cosmokit.volatile.write')]
   expect(typeof write, 'the plugin config must carry a live volatile dispatchBinding reference').toBe('function')
   ;(write as (value: unknown) => void)(role)
