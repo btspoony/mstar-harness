@@ -12270,7 +12270,6 @@ var init_store_activation = __esm(() => {
 var exports_execution_store = {};
 __export(exports_execution_store, {
   ExecutionError: () => ExecutionError,
-  RUNNING_WORKFLOW_OPERATION_RECEIPT_LIMIT: () => RUNNING_WORKFLOW_OPERATION_RECEIPT_LIMIT,
   adoptTerminalWorkflow: () => adoptTerminalWorkflow,
   advancePlanOperationRevisions: () => advancePlanOperationRevisions,
   advanceWorkflowHeaderRevision: () => advanceWorkflowHeaderRevision,
@@ -13819,32 +13818,7 @@ function receiptFacts(receipt) {
     ...receipt.holder_live_warning === undefined ? {} : { holder_live_warning: receipt.holder_live_warning }
   };
 }
-function assertWorkflowOperationReceiptCapacity(tx, workflowId, exemptFromRetentionCap) {
-  const header = tx.db.prepare("select state_json from execution_workflows where workflow_id = ?").get(workflowId);
-  if (header !== undefined) {
-    const status = storedJsonObject(header.state_json, `execution_workflows(${workflowId}).state_json`).status;
-    if (WORKFLOW_TERMINAL_STATUSES.includes(String(status)))
-      return;
-  }
-  if (exemptFromRetentionCap)
-    return;
-  const retained = tx.db.prepare("select count(*) as n from execution_operations where workflow_id = ? and epoch = ?").get(workflowId, tx.epoch);
-  const count = typeof retained.n === "number" ? retained.n : 0;
-  if (count < RUNNING_WORKFLOW_OPERATION_RECEIPT_LIMIT)
-    return;
-  throw new ExecutionError("execution.receipt-retention-exhausted", `workflow ${workflowId} already retains ${count} operation receipts at its current epoch, the cap a running ` + `workflow may hold (${RUNNING_WORKFLOW_OPERATION_RECEIPT_LIMIT}). This receipt is not written: every retained ` + `receipt is a replay anchor, so the engine never discards one to make room. Adopt or close the workflow under a ` + `new operation id (its terminal prune keeps that close receipt only), then start a new workflow for further work.`, {
-    workflow_id: workflowId,
-    epoch: tx.epoch,
-    retained_receipts: count,
-    receipt_limit: RUNNING_WORKFLOW_OPERATION_RECEIPT_LIMIT,
-    available_work: [
-      `adopt or close workflow ${workflowId} under a new operation id`,
-      "start a new workflow for further work"
-    ]
-  });
-}
 function writeOperationReceipt(tx, input) {
-  assertWorkflowOperationReceiptCapacity(tx, input.workflowId, input.exemptFromRetentionCap === true);
   tx.db.prepare("insert into execution_operations(epoch, operation_id, request_hash, store_id, workflow_id, plan_id, result_json, committed_at) " + "values (?, ?, ?, ?, ?, ?, ?, ?)").run(tx.epoch, input.operationId, input.requestHash, tx.storeId, input.workflowId, input.planId, JSON.stringify(input.slim === true ? { slim: true, token: input.receipt.token, storeId: tx.storeId, epoch: tx.epoch, ...receiptFacts(input.receipt) } : input.receipt), input.now);
 }
 function pruneWorkflowOperationReceipts(tx, workflowId, keepOperationId) {
@@ -14186,7 +14160,6 @@ var OPERATION_ID_RE;
 var CREATE_WORKFLOW_OPERATION = "createExecutionWorkflow";
 var BIND_SESSION_OPERATION = "bindExecutionSession";
 var EXECUTION_SESSION_STATES;
-var RUNNING_WORKFLOW_OPERATION_RECEIPT_LIMIT = 256;
 var init_execution_store = __esm(() => {
   init_coordination();
   init_coordination_write();
