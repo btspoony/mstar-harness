@@ -1,6 +1,6 @@
 ---
 name: mstar-pr-loop
-description: "Opt-in skill loaded when the user explicitly asks for a review → fix loop on an existing ready PR, or when iteration Phase 1 selects it as that iteration's `pr_merge_policy: reviewed-auto` review path. It never activates for routine review requests or on its own initiative."
+description: "Opt-in skill loaded when the user explicitly asks for a review → fix loop on an existing ready PR, or when iteration Phase 1 records `pr_merge_policy: reviewed-auto` as that iteration's review path. Never selected under `reviewed-bot`, where an attached review bot owns PR review. It never activates for routine review requests or on its own initiative."
 ---
 
 # PR Review-Fix Loop
@@ -19,7 +19,7 @@ The project-manager orchestrates; implementers fix; review seats remain read-onl
 
 ## Scope
 
-Enter only on the user's explicit request to loop review → fix on an existing ready PR, or when the active iteration recorded `pr_merge_policy: reviewed-auto` at its Phase 1. This is not routine review, and the loop never starts on its own initiative.
+Enter only on the user's explicit request to loop review → fix on an existing ready PR, or when the active iteration recorded `pr_merge_policy: reviewed-auto` at its Phase 1. Not under `reviewed-bot`: that policy makes an attached review bot the PR's review producer, so this loop must not start, and its findings are triaged by iteration Phase 5 like any third-party reviewer's. This is not routine review, and the loop never starts on its own initiative.
 
 Under a recorded `reviewed-auto` this loop is that iteration's Phase 5 review gate, and its `ship it` row is the merge authorization `mstar-iteration` → `references/phase-4-5-pr-delivery.md` §5.3 reads. Outside such a recorded policy a `ship it` exit authorizes nothing: no merge, no lifecycle Done.
 
