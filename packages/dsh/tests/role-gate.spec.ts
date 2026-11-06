@@ -102,7 +102,7 @@ class FakeWorkingDirectory extends Service {
  * loud when the field is not volatile (no live reference was created).
  */
 function writeLiveRoleGate(app: BootResult, mode: 'off' | 'warn' | 'hard'): void {
-  const config = app.pluginFiber?.config as { roleGate?: Record<symbol, unknown> } | undefined
+  const config = app.pluginFiber?.effectiveConfig as { roleGate?: Record<symbol, unknown> } | undefined
   const write = (config?.roleGate as Record<symbol, unknown> | undefined)?.[Symbol.for('cosmokit.volatile.write')]
   expect(typeof write, 'the plugin config must carry a live volatile roleGate reference').toBe('function')
   ;(write as (value: unknown) => void)(mode)

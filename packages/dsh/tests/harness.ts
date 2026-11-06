@@ -501,7 +501,7 @@ interface VolatileConfigRef {
  * This fake models that CONSUMED contract: `update` patch-merges the write
  * into the entry's live volatile cell — resolved per write through
  * {@link FakeSettingsRegistry.entryResolver}, which `bootApp` installs over
- * the mounted fallbacks row's `fiber.config` (the real `SettingsForms.update`
+ * the mounted fallbacks row's `fiber.effectiveConfig` (the real `SettingsForms.update`
  * edits the entry config through the config editor) — and emits
  * `settings/document-updated` (ns first, revision second — the real service's
  * emit shape). Writes whose entry ref is not resolvable (a fallbacks row
@@ -518,7 +518,7 @@ interface VolatileConfigRef {
 export class FakeSettingsRegistry extends Service {
   /**
    * The live entry-config resolver for the current boot: returns the
-   * fallbacks row's volatile config ref (`fiber.config`). `bootApp` installs
+   * fallbacks row's volatile config ref (`fiber.effectiveConfig`). `bootApp` installs
    * it before the row loop and resets it per boot — the resolver must be in
    * place before the rows activate, because the seeds writes fire inside the
    * fallbacks/settings activation window.
@@ -1306,7 +1306,7 @@ export async function bootApp(options: BootOptions = {}): Promise<BootResult> {
   const fallbacksFiberBox: { fiber?: unknown } = {}
   FakeSettingsRegistry.entryResolver =
     options.settingsService !== undefined
-      ? () => (fallbacksFiberBox.fiber as { config?: unknown } | undefined)?.config
+      ? () => (fallbacksFiberBox.fiber as { effectiveConfig?: unknown } | undefined)?.effectiveConfig
       : undefined
   // Module seams, keyed by row name. The seam packages export their plugin
   // function as `default` (CJS-style); the mstar plugin is named-only.
