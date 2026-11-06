@@ -76,7 +76,7 @@
     "zod": "^4.2.0"
   },
   "peerDependencies": {
-    "@deepseek-ai/cordis": "^4.0.5",
+    "@deepseek-ai/cordis": "~4.1.0",
     "@deepseek-ai/dsh-agent": "^0.2.2-rc.1",
     "@deepseek-ai/dsh-agent-default-model": "^0.2.2-rc.1",
     "@deepseek-ai/dsh-agent-preset": "^0.2.2-rc.1",
