@@ -34,7 +34,7 @@ import {
 } from '../src/index.ts'
 import type { ToolCallId } from '@deepseek-ai/dsh-llm'
 import type { ToolExecutionResult } from '@deepseek-ai/dsh-tools'
-import { bootApp, FakeLoaderRegistry, seedHarness, valueOf, type BootResult } from './harness.ts'
+import { bootApp, executeToolCall, FakeLoaderRegistry, seedHarness, valueOf, type BootResult } from './harness.ts'
 
 let booted: BootResult | undefined
 
@@ -822,7 +822,7 @@ const signal = new AbortController().signal
 
 /** Run one tool call through the composed registry. */
 function run(ctx: BootResult['ctx'], name: string, args: Record<string, unknown>): Promise<ToolExecutionResult> {
-  return ctx.tools.execute({ callId, name, arguments: args, signal })
+  return executeToolCall(ctx, { callId, name, arguments: args, signal })
 }
 
 /** Assert the generic-card presentCall contract (title / kind / rawInput). */

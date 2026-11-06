@@ -42,7 +42,7 @@ import { readAgentFlow, recordDispatch, SETTLE_SEAM } from '../src/index.ts'
 import type { AgentFlowView } from '../src/index.ts'
 import { registerSettleListener, setAgentFlowLogger } from '../src/gates/agent-flow.ts'
 import type { AgentFlowPairing } from '../src/gates/agent-flow.ts'
-import { FakeJobRegistry, FakeSubagentProvider, FakeSubagentService, bootApp, seedActiveWorkflow, selectedGenerationFor, startActivationViaNativeChannel, type BootResult } from './harness.ts'
+import { FakeJobRegistry, FakeSubagentProvider, FakeSubagentService, bootApp, executeToolCall, seedActiveWorkflow, selectedGenerationFor, startActivationViaNativeChannel, type BootResult } from './harness.ts'
 
 let booted: BootResult | undefined
 
@@ -242,7 +242,7 @@ describe('fork settle — ledger records fork dispatch + settle (dispatchTools-d
       execute: async () => ({ kind: 'background' as const, jobId: 'fork-1' }),
     }))
 
-    const result = await app.ctx.tools.execute({
+    const result = await executeToolCall(app.ctx, {
       callId: 'fork-1' as ToolCallId,
       name: 'subagent_fork',
       arguments: { description: 'fork probe', prompt: VALID_FORK },

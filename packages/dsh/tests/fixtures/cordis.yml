@@ -18,5 +18,6 @@
 - name: '@deepseek-ai/dsh-skill'
 - name: '@deepseek-ai/dsh-system-prompt'
 - name: '@deepseek-ai/dsh-tools'
+- name: '@deepseek-ai/dsh-tool-executor-native'
 - name: '@deepseek-ai/dsh-commands'
 - name: '@mstar-harness/dsh'

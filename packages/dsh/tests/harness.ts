@@ -24,7 +24,8 @@ import { load as parseYaml } from 'js-yaml'
 import { createScope } from '@deepseek-ai/dsh-scope'
 import type { PromptContext, PromptSection } from '@deepseek-ai/dsh-system-prompt'
 import { Session, SessionId, SessionSeq } from '@deepseek-ai/dsh-session'
-import { MessageId } from '@deepseek-ai/dsh-llm'
+import { MessageId, type ToolCallId } from '@deepseek-ai/dsh-llm'
+import type { ToolExecutionResult } from '@deepseek-ai/dsh-tools'
 import {
   captureIssue,
   bindExecutionSession,
@@ -1203,6 +1204,11 @@ export async function bootApp(options: BootOptions = {}): Promise<BootResult> {
     // when the v2 seams register their model-facing tools (the real dsh app
     // always composes dsh-tools).
     { name: '@deepseek-ai/dsh-tools' },
+    // The native tool executor row: `ToolsService.execute` delegates the whole
+    // batch to the mounted executor, and the real dsh app composes this row
+    // after the registry (without one, every execute throws
+    // TOOL_EXECUTOR_UNAVAILABLE).
+    { name: '@deepseek-ai/dsh-tool-executor-native' },
     // The command registry row mounts before the plugin so `ctx.commands`
     // exists when the bundled mstar commands register (the real dsh app
     // always composes dsh-commands).
@@ -1328,6 +1334,9 @@ export async function bootApp(options: BootOptions = {}): Promise<BootResult> {
     // default export provides the ToolRegistry service (the host app provides
     // it at runtime via peerDependencies).
     ['@deepseek-ai/dsh-tools', await import('@deepseek-ai/dsh-tools')],
+    // The executor row: `apply` calls `ctx.tools.setExecutor(new
+    // NativeToolExecutor(ctx))`, the only thing that makes `execute` runnable.
+    ['@deepseek-ai/dsh-tool-executor-native', await import('@deepseek-ai/dsh-tool-executor-native')],
     // The fake `subagents` service (only mounted when `subagents: 'fake'` is
     // set, see the row list) — a `{ default }` module so the seam unwrap
     // resolves the class.
@@ -1398,6 +1407,40 @@ export async function bootApp(options: BootOptions = {}): Promise<BootResult> {
   }
 }
 
+/* ------------------------ single tool call through the executor ------------------------ */
+
+/** Distinguishes the default call ids of concurrent single-call batches. */
+let singleCallSeq = 0
+
+/**
+ * Execute exactly one tool call through the mounted native executor and return
+ * its settled `ToolExecutionResult`. The registry API is batch-shaped, so every
+ * one-call spec site funnels through here instead of re-wrapping a batch.
+ */
+export async function executeToolCall(
+  ctx: BootResult['ctx'],
+  call: {
+    name: string
+    arguments: Record<string, unknown>
+    callId?: ToolCallId
+    agent?: Agent
+    signal?: AbortSignal
+  },
+): Promise<ToolExecutionResult> {
+  const batch = await ctx.tools.execute({
+    calls: [{
+      type: 'tool-call',
+      id: call.callId ?? (`single-call-${++singleCallSeq}` as ToolCallId),
+      name: call.name,
+      arguments: JSON.stringify(call.arguments),
+    }],
+    signal: call.signal ?? new AbortController().signal,
+    ...(call.agent === undefined ? {} : { agent: call.agent }),
+  })
+  if (batch.results.length !== 1) throw new Error(`single-call batch settled ${batch.results.length} results`)
+  return batch.results[0]!.result
+}
+
 /**
  * Canonical value of one `mstar_*_validate` / `mstar_sdd_*` / seam tool
  * result. The dsh-tools seam types the successful `value` as lossless
@@ -1418,7 +1461,7 @@ export interface ToolResultValue {
 }
 
 /** Narrow one successful tool result to its canonical value (throws on failure). */
-export function valueOf(result: import('@deepseek-ai/dsh-tools').ToolExecutionResult): ToolResultValue {
+export function valueOf(result: ToolExecutionResult): ToolResultValue {
   if (result.isError) throw new Error(`tool call failed: ${result.error?.message ?? 'unknown error'}`)
   return result.value as ToolResultValue
 }

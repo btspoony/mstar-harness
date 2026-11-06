@@ -45,7 +45,7 @@
 import { afterEach, describe, expect, it } from 'bun:test'
 import type { ToolCallId } from '@deepseek-ai/dsh-llm'
 import { defineTool, type PreToolDecision } from '@deepseek-ai/dsh-tools'
-import { bootApp, type BootResult } from './harness.ts'
+import { bootApp, executeToolCall, type BootResult } from './harness.ts'
 import type { DispatchGateAdvisory } from '../src/index.ts'
 
 let booted: BootResult | undefined
@@ -137,7 +137,7 @@ function registerSubagentTool(app: BootResult): void {
 
 /** One real registry call through the full pre-execute → body pipeline. */
 function callTool(app: BootResult, name: string, args: Record<string, unknown>) {
-  return app.ctx.tools.execute({
+  return executeToolCall(app.ctx, {
     callId: `cap-${++seq}` as ToolCallId,
     name,
     arguments: args,

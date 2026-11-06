@@ -73,6 +73,7 @@
         "@deepseek-ai/dsh-client-ui-sidebar": "^0.2.2-rc.1",
         "@deepseek-ai/dsh-client-ui-theme": "^0.2.2-rc.1",
         "@deepseek-ai/dsh-session-format-v3-to-v4": "0.2.2-rc.1",
+        "@deepseek-ai/dsh-tool-executor-native": "0.2.2-rc.1",
         "@deepseek-ai/dsh-util-code-language": "0.2.2-rc.1",
         "@mstar-harness/commands": "workspace:*",
         "@mstar-harness/engine": "workspace:*",
@@ -472,6 +473,8 @@
     "@deepseek-ai/dsh-system-prompt": ["@deepseek-ai/dsh-system-prompt@0.2.2-rc.1", "", { "dependencies": { "@deepseek-ai/schemastery": "~3.19.0" }, "peerDependencies": { "@deepseek-ai/cordis": "~4.1.0", "@deepseek-ai/dsh-llm": "0.2.2-rc.1", "@deepseek-ai/dsh-scope": "0.2.2-rc.1" } }, "sha512-1p9imdrenPnJTkLb6Coq+ELBDjngblM/YGP1Pa/xf1oisjLHcCoK2n9kkOUTIfgvoFtqWfxZJNZeKef71ZmlrA=="],
 
     "@deepseek-ai/dsh-timeout": ["@deepseek-ai/dsh-timeout@0.2.2-rc.1", "", { "peerDependencies": { "@deepseek-ai/cordis": "~4.1.0" } }, "sha512-dn5eQbPjdQIH2WrVXyQjxgsxkB006+O8OhclMQZtIZnUjWaqxtBmot0wSdyrPxrULyXxiHmmdRCeLruZBO0n0Q=="],
+
+    "@deepseek-ai/dsh-tool-executor-native": ["@deepseek-ai/dsh-tool-executor-native@0.2.2-rc.1", "", { "peerDependencies": { "@deepseek-ai/cordis": "~4.1.0", "@deepseek-ai/dsh-tools": "0.2.2-rc.1" } }, "sha512-GOpzjU0igQpQKTnup7lg6Vn1275yn8vcVAli0S7y1ZnkIMucsmcKTEY/tT0dPR3Bg1gca+XRcFidWKjuxVTfPw=="],
 
     "@deepseek-ai/dsh-tool-subagent": ["@deepseek-ai/dsh-tool-subagent@0.2.2-rc.1", "", { "dependencies": { "@deepseek-ai/schemastery": "~3.19.0", "zod": "4.4.3" }, "peerDependencies": { "@deepseek-ai/cordis": "~4.1.0", "@deepseek-ai/dsh-agent": "0.2.2-rc.1", "@deepseek-ai/dsh-agent-preset-registry": "0.2.2-rc.1", "@deepseek-ai/dsh-llm": "0.2.2-rc.1", "@deepseek-ai/dsh-session": "0.2.2-rc.1", "@deepseek-ai/dsh-session-projection": "0.2.2-rc.1", "@deepseek-ai/dsh-subagent": "0.2.2-rc.1", "@deepseek-ai/dsh-system-prompt": "0.2.2-rc.1", "@deepseek-ai/dsh-tools": "0.2.2-rc.1" }, "optionalPeers": ["@deepseek-ai/dsh-agent-preset-registry"] }, "sha512-q0bq6taXvKjEH4Q1gSkMBSLsnL9+FtzKgViw5gs780BHmmPXVIm/daWxs7hagvn78tpjsux5J8VMqf11vqncIw=="],
 
