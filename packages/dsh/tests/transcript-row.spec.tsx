@@ -102,6 +102,10 @@ function harvestChatBundle(): {
         return () => {}
       },
     },
+    // rc.1's chat bundle reads the connection store at `apply(ctx)` time
+    // (`ctx.get("connection").state`); the capture-only context returns the
+    // callable stand-in for every service face this spec does not exercise.
+    get: (_name: string) => anything,
     effect: (fn: () => unknown) => { const disposer = fn(); return typeof disposer === 'function' ? disposer : () => {} },
     locale: {
       register: (ns: string, dict: Record<string, Record<string, string>>) => { dicts.set(ns, dict); return () => {} },
