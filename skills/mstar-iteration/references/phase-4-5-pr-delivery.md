@@ -80,14 +80,14 @@ The bot publishes **three** artifacts for one head; a transition reads all three
 
 ```bash
 SHA=$(gh pr view <n> --repo <owner>/<repo> --json headRefOid --jq .headRefOid)
-# 1. Check conclusion — same name can carry several runs; the newest on this head is authoritative
-gh api "repos/<owner>/<repo>/commits/$SHA/check-runs?check_name=mstar-inspector%20review&per_page=100" \
-  --jq '[.check_runs[]] | sort_by(.completed_at // .started_at) | last | {status, conclusion, head_sha, completed_at, summary: .output.summary}'
+# 1. Check conclusion — same name can carry several runs; page through and take the newest completed run for this head
+gh api --paginate "repos/<owner>/<repo>/commits/$SHA/check-runs?check_name=mstar-inspector%20review&per_page=100" \
+  --jq '.check_runs[] | {status, conclusion, head_sha, completed_at, summary: .output.summary}'
 # 2. Overall review comment — full findings, tally, and the exact reviewed head in `publication:v1 … sha=`
-gh api "repos/<owner>/<repo>/issues/<n>/comments?per_page=100" \
+gh api --paginate "repos/<owner>/<repo>/issues/<n>/comments?per_page=100" \
   --jq '.[] | select(.body|startswith("<!-- mstar-inspector:review:v1")) | {updated_at, head: (.body|capture("sha=(?<s>[0-9a-f]+)").s), verdict: (.body|capture("Verdict: `(?<v>[^`]*)`").v), body}'
 # 3. Anchored line comments — the findings that also exist as resolvable threads on this head
-gh api "repos/<owner>/<repo>/pulls/<n>/comments?per_page=100" \
+gh api --paginate "repos/<owner>/<repo>/pulls/<n>/comments?per_page=100" \
   --jq '.[] | select(.commit_id == "'"$SHA"'") | {path, line, body}'
 ```
 

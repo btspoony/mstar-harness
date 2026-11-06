@@ -32,7 +32,7 @@ Morning Star 为你在用的 AI 编程工具带来一套交付流程 —— 支�
 - **从请求到 PR** —— 描述一次需求即可：PM 维护计划、召集合适的专职角色，并推进到 PR；工作中断时，计划里记录了进度，方便之后继续。
 - **由专职角色分工，而不是一段超长 prompt** —— PM 负责编排；需求、架构、实现、QC、验收、审计、运维各有专属角色与明确边界。
 - **留下可审计的轨迹** —— 计划、发现、审查报告与决策都记录在仓库的 harness 目录里，而不只是留在对话中。
-- **边界都是明确的** —— 流程负责开 PR，并在迭代启动时记录 merge policy。`reviewed-auto` 下跑本地 review loop，只有一份 settled、已 posted、且 `head` 等于当前 PR head 的 `ship it` 报告才构成合并授权；`reviewed-bot` 下由挂载的 review bot 对每次 push 自动给出 review，其在该 head 上最新一次通过的 review 即构成授权；`owner-gated` 下停在 merge-ready 等你书面批准。从未记录 policy 的迭代会回到 Phase 1 补齐，而不是默认取任一值。审计只读并给出报告；任何触及真实环境的操作都需要你的明确授权。
+- **边界都是明确的** —— 流程负责开 PR，并在迭代启动时记录 merge policy。`reviewed-auto` 下跑本地 review loop，只有一份 settled、已 posted、且 `head` 等于当前 PR head 的 `ship it` 报告才构成合并授权；`reviewed-bot` 下由挂载的 review bot 按其触发模式对每次 push 自动给出 review，其在该 head 上最新一次通过的 review 即构成授权；`owner-gated` 下停在 merge-ready 等你书面批准。从未记录 policy 的迭代会回到 Phase 1 补齐，而不是默认取任一值。审计只读并给出报告；任何触及真实环境的操作都需要你的明确授权。
 
 ## 安装
 
