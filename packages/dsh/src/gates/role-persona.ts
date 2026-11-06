@@ -122,10 +122,6 @@
  */
 import { isAbsolute, resolve } from 'node:path'
 import type { Context } from '@deepseek-ai/cordis'
-// Type-only: loads the registry's `Context` augmentation (the `agentPresets`
-// service name) without a runtime dependency — the plugin consumes the host
-// service structurally.
-import type {} from '@deepseek-ai/dsh-agent-preset-registry'
 import { assignmentHeaderRegion, parseAssignmentFields, resolveHarnessDir } from '@mstar-harness/engine'
 import {
   isLiveConfigRef,
@@ -291,6 +287,17 @@ interface ChannelState {
 }
 
 /**
+ * Structural view of the OPTIONAL `agentPresets` registry the host mounts from
+ * `dsh-agent-preset-registry`. The plugin reads it by shape: the registry's
+ * `Context` augmentation does not reach this package's `Context`, and
+ * `readDocument` is the only member ever used.
+ */
+interface AgentPresetsView {
+  /** Read one deployed preset document; rejects when the id is unknown. */
+  readDocument(agentPreset: string): Promise<unknown>
+}
+
+/**
  * Read the OPTIONAL `agentPresets` registry for one start — through the
  * accessor (`ctx.get`), not a service property: cordis refuses to READ a
  * service the reading context does not inject ("cannot get property
@@ -302,8 +309,8 @@ interface ChannelState {
  * @param ctx - the registrant context the wrapper was created for.
  * @returns the registry, or `undefined` when this composition mounts none.
  */
-function agentPresetsService(ctx: Context): Context['agentPresets'] | undefined {
-  return ctx.get('agentPresets')
+function agentPresetsService(ctx: Context): AgentPresetsView | undefined {
+  return ctx.get('agentPresets') as AgentPresetsView | undefined
 }
 
 /**
@@ -414,7 +421,7 @@ export function registerRolePersonaChannel(ctx: Context, config: Config): void {
  * @param rolePresets - the configured role → preset mapping, when any.
  */
 function bindAgentPresetRegistry(ctx: Context, rolePresets: Config['rolePresets']): void {
-  const validate = async (presets: Context['agentPresets']): Promise<void> => {
+  const validate = async (presets: AgentPresetsView): Promise<void> => {
     for (const [role, presetId] of Object.entries(rolePresets ?? {})) {
       try {
         await presets.readDocument(presetId)
@@ -426,7 +433,7 @@ function bindAgentPresetRegistry(ctx: Context, rolePresets: Config['rolePresets'
   if (rolePresets === undefined || Object.keys(rolePresets).length === 0) return
   try {
     ctx.inject([AGENT_PRESETS_SERVICE], (sctx) => {
-      void validate(sctx.agentPresets).catch(() => {})
+      void validate(sctx.get('agentPresets') as AgentPresetsView).catch(() => {})
     })
   } catch (error) {
     // Contained: validation is advisory — a context that cannot register the
@@ -1199,7 +1206,7 @@ function wrapSubagentsService(
  * 9. hit → merge (one debug log naming the role and the preset).
  */
 function withRolePreset(
-  presets: Context['agentPresets'] | undefined,
+  presets: AgentPresetsView | undefined,
   state: ChannelState,
   service: SubagentsServiceView,
   providerName: string,
