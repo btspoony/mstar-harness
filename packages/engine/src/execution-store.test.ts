@@ -1930,13 +1930,8 @@ describe("execution-receipts: \u00A73.1 a running workflow keeps old and new ret
       }),
     ).rejects.toMatchObject({ code: "execution.operation-conflict" });
 
-    // The OLDEST key committed before that continuation is still usable: it
-    // replays its recorded receipt unchanged, and reusing its id for another
-    // intent conflicts instead of overwriting the anchor.
-    expect(await replayOf(context, "wf-1", first.operation_id, first.request_hash, { kind: "root", key: [] })).toMatchObject({
-      operationId: first.operation_id,
-      replayed: true,
-    });
+    // Reusing the OLDEST key for another intent conflicts instead of
+    // overwriting the anchor.
     await expect(
       createExecutionWorkflow(domainContext(context, domainCaller("wf-1")), {
         ...creationInput("wf-1", [planRow("p-1")], { branch: { source: "feature/another-intent", target: "main" } }),
@@ -1944,9 +1939,8 @@ describe("execution-receipts: \u00A73.1 a running workflow keeps old and new ret
         operationId: first.operation_id,
       }),
     ).rejects.toMatchObject({ code: "execution.operation-conflict" });
-    // The refused reuse left the anchor intact: after the conflict the oldest
-    // key still serves its recorded receipt, so the refusal is not merely an
-    // error code but a preserved replay source.
+    // The anchor is still served after the refusal: re-reading the oldest key
+    // returns its recorded receipt, not a conflict or a rewritten one.
     expect(await replayOf(context, "wf-1", first.operation_id, first.request_hash, { kind: "root", key: [] })).toMatchObject({
       operationId: first.operation_id,
       replayed: true,
