@@ -1,10 +1,11 @@
 /**
  * scripts/rule-duplication.ts — Guard 10 semantics. Pins the cross-file
  * duplicate HARD-rule contract: a rule sentence stated in two files fails with
- * both sites named; a one-line pointer into the canonical skill is exempt;
- * Markdown-only variation (markers, indentation, backticks) does not defeat
- * normalization; an allowlisted site is reported as exempt instead of failing;
- * and ordinary repeated prose is never a rule fingerprint.
+ * both sites named; a line that *is* a pointer into the canonical skill is
+ * exempt while retaining the wording and appending a pointer is not;
+ * Markdown-only variation (markers, indentation, backticks) and a leading BOM
+ * do not defeat normalization; an allowlisted site is reported as exempt
+ * instead of failing; and ordinary repeated prose is never a rule fingerprint.
  */
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -63,35 +64,76 @@ describe("rule duplication", () => {
     }
   });
 
-  test("a one-line pointer into the canonical skill is exempt", () => {
-    const repo = fixture({
+  test("only a line that is the pointer is exempt", () => {
+    // A pointer line replaces the wording, so there is nothing left to duplicate.
+    const pointerOnly = fixture({
+      "skills/a/SKILL.md": `# Rules\n\n${RULE}\n`,
+      "skills/b/SKILL.md": `# Rules\n\n→ \`other-skill\` § Section\n`,
+    });
+    try {
+      const result = checkRuleDuplication(pointerOnly.root, [
+        "skills/a/SKILL.md",
+        "skills/b/SKILL.md",
+      ]);
+      expect(result.duplicates).toEqual([]);
+    } finally {
+      pointerOnly.close();
+    }
+
+    // Retaining the wording and appending a pointer exempts nothing: the second
+    // file still states the rule, so the group is a duplicate.
+    const appended = fixture({
       "skills/a/SKILL.md": `# Rules\n\n${RULE}\n`,
       "skills/b/SKILL.md": `# Rules\n\n${RULE} → \`other-skill\` § Section\n`,
+    });
+    try {
+      const result = checkRuleDuplication(appended.root, [
+        "skills/a/SKILL.md",
+        "skills/b/SKILL.md",
+      ]);
+      expect(result.duplicates).toHaveLength(1);
+      expect(result.duplicates[0].hits).toEqual([
+        { file: "skills/a/SKILL.md", line: 3 },
+        { file: "skills/b/SKILL.md", line: 3 },
+      ]);
+    } finally {
+      appended.close();
+    }
+
+    // An arrow-first line that states a rule of its own is not a pointer either.
+    const ruleAfterArrow = "→ `other-skill` § Section — NEVER widen scope without an approved plan.";
+    const arrowRule = fixture({
+      "skills/a/SKILL.md": `${ruleAfterArrow}\n`,
+      "skills/b/SKILL.md": `${ruleAfterArrow}\n`,
+    });
+    try {
+      const result = checkRuleDuplication(arrowRule.root, [
+        "skills/a/SKILL.md",
+        "skills/b/SKILL.md",
+      ]);
+      expect(result.duplicates).toHaveLength(1);
+    } finally {
+      arrowRule.close();
+    }
+  });
+
+  test("a leading BOM does not change line 1's fingerprint", () => {
+    const repo = fixture({
+      "skills/a/SKILL.md": `\uFEFF${RULE}\n`,
+      "skills/b/SKILL.md": `${RULE}\n`,
     });
     try {
       const result = checkRuleDuplication(repo.root, [
         "skills/a/SKILL.md",
         "skills/b/SKILL.md",
       ]);
-      expect(result.duplicates).toEqual([]);
+      expect(result.duplicates).toHaveLength(1);
+      expect(result.duplicates[0].hits).toEqual([
+        { file: "skills/a/SKILL.md", line: 1 },
+        { file: "skills/b/SKILL.md", line: 1 },
+      ]);
     } finally {
       repo.close();
-    }
-
-    // Control: without the pointer the same wording is a real duplicate, so
-    // the exemption above is the arrow + section marker doing the work.
-    const repeated = fixture({
-      "skills/a/SKILL.md": `# Rules\n\n${RULE}\n`,
-      "skills/b/SKILL.md": `# Rules\n\n${RULE}\n`,
-    });
-    try {
-      const result = checkRuleDuplication(repeated.root, [
-        "skills/a/SKILL.md",
-        "skills/b/SKILL.md",
-      ]);
-      expect(result.duplicates).toHaveLength(1);
-    } finally {
-      repeated.close();
     }
   });
 

@@ -6,6 +6,11 @@
  * of re-vendoring it, because a copy is what drifts (a bilingual variant, a
  * stale tail) once nobody owns the original sentence.
  *
+ * A pointer is exempt only when the line *is* the pointer: the callout is
+ * removed before fingerprinting, so wording retained around it still registers
+ * as a rule site and appending a token can never silence a duplicate. Only a
+ * line left with no wording of its own ends a run as a pointer.
+ *
  * The fingerprint matches a candidate when either holds:
  * - a tight block of >=3 consecutive lines carries a rule signal; or
  * - a single line carries a rule signal and is >=8 words long.
@@ -37,10 +42,22 @@ const BLOCK_MIN_LINES = 3;
 /** Word count at which a single rule line fingerprints on its own. */
 const LINE_MIN_WORDS = 8;
 
-/** Upper-case rule tokens only: a lower-case `must` is prose, not a rule signal. */
+/**
+ * Upper-case rule tokens only: a lower-case `must` is prose, not a rule signal.
+ * Both signals are ASCII and case-shaped (the second is "every word is
+ * upper-case"), so a HARD rule written in a caseless script — the Chinese rules
+ * this corpus carries most of — has no rule signal at all and is structurally
+ * invisible to this guard.
+ */
 const RULE_TOKEN = /\b(?:NEVER|MUST(?: NOT)?|HARD)\b/;
-/** One-line pointer into another skill's section: never a rule site of its own. */
-const POINTER = /→\s*\S+\s*§/;
+/**
+ * A pointer callout: arrow, target, section marker, section name. It is a
+ * citation token, not wording, so it is removed before fingerprinting; what
+ * surrounds it decides whether the line is a pointer at all. Deliberately
+ * narrow — removing everything from the first `→` would also eat prose arrows
+ * such as `Relocate → Condense → Raise`.
+ */
+const POINTER_CALLOUT = /→\s*\S+\s*§\s*\S+/;
 /** One word that belongs to an all-upper-case line. */
 const UPPER_WORD = /^[\p{Lu}][\p{Lu}\d'’.-]*$/u;
 
@@ -93,6 +110,19 @@ export function hasRuleSignal(line: string): boolean {
   return words.length >= 2 && words.every((word) => UPPER_WORD.test(word));
 }
 
+/**
+ * The rule wording of a normalized line, excluding any pointer callout and
+ * whatever follows it. Empty means the line is a pointer, not a rule site; a
+ * line that leads with a callout but states a rule after it keeps that rule.
+ */
+function ruleContent(normalized: string): string {
+  const at = normalized.search(POINTER_CALLOUT);
+  if (at < 0) return normalized;
+  const head = normalized.slice(0, at).trim();
+  const tail = normalized.slice(at).replace(POINTER_CALLOUT, "").trim();
+  return head === "" && hasRuleSignal(tail) ? tail : head;
+}
+
 /** Stable allowlist key for one normalized rule text. */
 export function ruleFingerprintHash(normalized: string): string {
   return createHash("sha256").update(normalized).digest("hex").slice(0, 12);
@@ -118,16 +148,18 @@ export function collectRuleCandidates(text: string): RuleCandidate[] {
     run = [];
   };
 
-  text.split(/\r?\n/).forEach((raw, index) => {
-    const normalized = normalizeRuleLine(raw);
-    if (normalized === "" || POINTER.test(normalized)) {
+  // A leading BOM is not content: strip it (parity with markdown-wrap.ts) so
+  // line 1 of a BOM-prefixed file fingerprints like the same line without one.
+  text.replace(/^\uFEFF/, "").split(/\r?\n/).forEach((raw, index) => {
+    const content = ruleContent(normalizeRuleLine(raw));
+    if (content === "") {
       flush();
       return;
     }
     const line = index + 1;
-    run.push({ normalized, line });
-    if (hasRuleSignal(normalized) && normalized.split(" ").length >= LINE_MIN_WORDS) {
-      candidates.push({ normalized, line });
+    run.push({ normalized: content, line });
+    if (hasRuleSignal(content) && content.split(" ").length >= LINE_MIN_WORDS) {
+      candidates.push({ normalized: content, line });
     }
   });
   flush();
@@ -192,6 +224,9 @@ export function checkRuleDuplication(root: string, files: string[]): RuleDuplica
     const hash = ruleFingerprintHash(normalized);
     const exempt = allHits.filter((hit) => allowed.has(`${hit.file}\u0000${hash}`));
     const hits = allHits.filter((hit) => !allowed.has(`${hit.file}\u0000${hash}`));
+    // One entry silences its whole group: exempting one site drops the group
+    // below two active files, so it leaves `duplicates` entirely and the
+    // remaining copies appear only in the exemptGroups advisory row.
     if (new Set(hits.map((hit) => hit.file)).size < 2) {
       if (exempt.length > 0) exemptGroups.push({ normalized, hits, exempt });
       continue;
