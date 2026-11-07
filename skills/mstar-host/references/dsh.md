@@ -203,9 +203,7 @@ discipline, capacity, and worktree hand-off — → **`references/dsh-agent-team
 
 ## Gates and enforcement
 
-Gate wiring, enforcement semantics and the execution read route →
-`packages/dsh/README.md` § Gates; the native command surface → the same file
-§ Native command surface. What a refusal means here:
+Gate wiring, enforcement semantics and the execution read route → `packages/dsh/README.md` § Gates; the native command surface → the same file § Native command surface. What a refusal means here:
 
 - A store-authority refusal on a coordination write is repaired with a store
   command (`mstar store init|upgrade|migrate`), never by rewriting the document.
@@ -219,14 +217,9 @@ Gate wiring, enforcement semantics and the execution read route →
 
 ## Agent-flow ledger
 
-Ledger rows, record identity, settle pairing, the child-identity join and its
-bounds → `packages/dsh/README.md` § Agent-flow ledger.
+Ledger rows, record identity, settle pairing, the child-identity join and its bounds → `packages/dsh/README.md` § Agent-flow ledger.
 
-The orchestration-level fact: attribution resolves through the native
-`mstar_plan_bind` adoption receipt — a session that bound through the MCP
-`bind` action has no dsh-local attribution, and the clear finds no binding of
-its own to remove. The ledger is advisory evidence: a failing write never
-blocks a dispatch or a settle.
+The orchestration-level fact: attribution resolves through the native `mstar_plan_bind` adoption receipt — a session that bound through the MCP `bind` action has no dsh-local attribution, and the clear finds no binding of its own to remove. The ledger is advisory evidence: a failing write never blocks a dispatch or a settle.
 
 ## PM dispatch
 
