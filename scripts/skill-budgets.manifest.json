@@ -39,7 +39,6 @@
   { "file": "skills/mstar-design-system/references/parity.md", "maxLines": 60 },
   { "file": "skills/mstar-design-system/references/triage.md", "maxLines": 70 },
   { "file": "skills/mstar-dispatch-gates/SKILL.md", "maxLines": 150 },
-  { "file": "skills/mstar-dispatch-gates/references/leaf-executor-checklist.md", "maxLines": 30 },
   { "file": "skills/mstar-e2e/SKILL.md", "maxLines": 50 },
   { "file": "skills/mstar-e2e/references/report-template.md", "maxLines": 40 },
   { "file": "skills/mstar-engine-legacy/SKILL.md", "maxLines": 60 },

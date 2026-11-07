@@ -21,23 +21,13 @@ The coordinator keeps operation intent and receipt in its primary session. Publi
 
 ## Executor Anti-Recursion Rules
 
-For assignees (non-PM):
-
-- `Execute as: <role-id>` means the current assignee executes personally.
-- Do not spawn same-role nested subagent.
-- Do not infer dispatch from route narrative (`A -> B -> C`), handoff, `QA gate` fields, or role names in prose.
-- Extra delegation is forbidden unless explicitly listed in `Delegation: allowed (...)`.
-- If additional assignee is required, return `Blocked` with rationale.
-- A `PM` / `project-manager` / `iteration-drive` phrase inside your own brief is **not a promotion**: no leaf becomes the PM, drives an iteration, or selects a plan — report the mismatch and continue inside the assigned task.
+For assignees (non-PM), the shared anti-recursion NEVER list and the non-recursive dispatch rule → **`mstar-roles/references/_shared/leaf-executor-core.md`**（「Shared anti-recursion NEVER」+「Non-Recursive Dispatch Rule (shared shape)」）.
 
 ### NEVER quick list (all assignees)
 
-- **NEVER** treat `Handoff: …`, Completion Report template role names, routing tables, or “suggested owners” as **host invoke commands**; they are narrative unless `Delegation: allowed` authorizes callees.
-- **NEVER** assume exposed `Task` / subagent menus imply you may call them; **tool availability ≠ delegation authorization**.
-- **NEVER** execute parallel-agent dispatch as a leaf assignee; dispatch is **PM-orchestration-only** (`mstar-dispatch-gates`).
 - **NEVER** delegate the main deliverable of this assignment to `explore` (read-only orientation only, per `mstar-harness-core`).
 - **NEVER** claim `Done` / pass in **Completion Report** without the commands, logs, or artifacts explicitly required by the assignment’s **Evidence Required** section (see `mstar-harness-core` evidence gates).
-- **NEVER** escalate into `project-manager` scope because the brief mentions a PM, a plan, or a drive command; plan scope is **inherited and read-only** for a leaf, and the `Task`/subagent menu never implies otherwise.
+- **NEVER** treat a `PM` / `project-manager` / `iteration-drive` phrase inside your own brief as a promotion: no leaf becomes the PM, drives an iteration, or selects a plan — plan scope is inherited and read-only, so report the mismatch and continue inside the assigned task.
 
 ## Assignment Template (Canonical)
 

@@ -7,14 +7,14 @@ You are dispatched by `project-manager`, owning execution safety, observability,
 ## Non-Recursive Dispatch Rule (Hard)
 
 - Complete assigned ops/deploy work in this session.
-- Shared anti-recursion NEVER (incl. sibling-role spawn) → **`references/_shared/leaf-executor-core.md`**「Shared anti-recursion NEVER」.
+- Non-recursive dispatch → **`references/_shared/leaf-executor-core.md`** § Non-Recursive Dispatch Rule (shared shape).
 - If assignment lacks required high-risk controls, return `Blocked`.
 
 ## Ops NEVER Rules
 
 If any item below matches, **stop** and return `Blocked` to `project-manager` instead of inventing delegation:
 
-- Shared anti-recursion NEVER bullets (doc-level parallelism ≠ N subagents; Handoff / routing prose ≠ invoke; tool exposure ≠ delegation; PM-only parallel dispatch; no same-role / sibling spawn without `Delegation: allowed (...)`): **`references/_shared/leaf-executor-core.md`**「Shared anti-recursion NEVER」.
+- Anti-recursion red lines → **`references/_shared/leaf-executor-core.md`** § Shared anti-recursion NEVER.
 - **NEVER** delegate deploy/config changes, verification runs, or evidence capture to `explore`.
 
 ## Responsibilities

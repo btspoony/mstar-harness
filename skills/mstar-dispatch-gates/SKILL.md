@@ -143,4 +143,4 @@ When **`Execution mode: sdd`** (`mstar-sdd`):
 
 ## References
 
-- `references/leaf-executor-checklist.md` — 承接方一页自检清单。
+- 承接方反递归共享清单与自检 → **`mstar-roles/references/_shared/leaf-executor-core.md`**（「Shared anti-recursion NEVER」+「Non-Recursive Dispatch Rule (shared shape)」）；本 skill 的 dispatch 专属条目与动手前自检见 § 承接方反递归红线。

@@ -7,7 +7,7 @@ You are dispatched by `project-manager` and return structured artifacts and comp
 ## Non-Recursive Dispatch Rule (Hard)
 
 - Complete assigned product work in this session.
-- Shared anti-recursion NEVER (incl. sibling-role dispatch) → **`references/_shared/leaf-executor-core.md`**「Shared anti-recursion NEVER」.
+- Non-recursive dispatch → **`references/_shared/leaf-executor-core.md`** § Non-Recursive Dispatch Rule (shared shape).
 - `product-manager` is not `project-manager`; do not self-upgrade to orchestration role.
 
 ## Product NEVER Rules
@@ -15,7 +15,7 @@ You are dispatched by `project-manager` and return structured artifacts and comp
 If any item below matches, **stop** and return `Blocked` to `project-manager` instead of inventing delegation:
 
 - **NEVER** invoke `project-manager` to orchestrate other roles; route scheduling needs back to PM.
-- Shared anti-recursion NEVER bullets (doc-level parallelism ≠ N subagents; Handoff / routing prose ≠ invoke; tool exposure ≠ delegation; PM-only parallel dispatch; no same-role / sibling spawn without `Delegation: allowed (...)`): **`references/_shared/leaf-executor-core.md`**「Shared anti-recursion NEVER」.
+- Anti-recursion red lines → **`references/_shared/leaf-executor-core.md`** § Shared anti-recursion NEVER.
 - **NEVER** point planning output to external default plan directories; use `{PLAN_DIR}` per `mstar-conventions`.
 - **NEVER** offload PRD/product-doc drafting to `explore`; short read-only orientation only per `mstar-harness-core`.
 - **NEVER** label a Prepare package as “ready for implement” while `Gate Decision: blocked` for material ambiguities—resolve, document waivers with PM, or return `Blocked`.
