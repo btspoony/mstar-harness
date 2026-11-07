@@ -364,9 +364,8 @@ emission. The host half composes five engine dashboard views — `workflow-detai
 `iteration-detail`, `roadmap`, `issues`, `projects` — **sequentially** (the
 store read layer may refresh projections, so two views never overlap) into one
 `PanelSnapshot`, served on `/api/mstar/panelSnapshot`; the browser half polls it
-while the tab is visible. The retired `mstar/engineStatus` read method is gone —
-the `mstar` gateway keeps only the picker's durable write
-(`mstar/selectWorkflow`).
+while the tab is visible. The `mstar` gateway keeps only the picker's durable
+write (`mstar/selectWorkflow`).
 
 **Poll contract** (`panel-snapshot-client.ts`): 5 s while the tab is visible, at
 most **one** request in flight (a slow answer never stacks a queue), a 5 s
@@ -504,6 +503,12 @@ otherwise;
 the current step follows the TTL-refreshed `compassStatus` — up to one catalog
 interval (60 s) behind a mid-session `active`→`locked` flip (bounded,
 documented staleness, never a wrong verdict);
+the agent-entity status is derived by PAIRING a settle to its dispatch identity
+(`agent`, `role`, `planId`, `taskId`) — an unpaired dispatch stays `running`,
+never guessed; with no steering compass the current-iteration filter infers the
+iteration from plan ids (8-digit date prefix) + `doneAt`, a deterministic
+documented heuristic that drops only provably cross-iteration events and never
+back-scans a resumed long log;
 a store read happens every 5 s while the tab is visible (five sequential
 dashboard views on the host; a collapsed tab reads nothing); a cold or expired
 catalog cache makes the panel REBUILD the payload — the pre-step's own rule,
@@ -518,10 +523,10 @@ only when the row changed); the sidebar chip title is captured at open time (a
 mid-session locale switch does not flip it — accepted for glyph parity with
 first-party chips); a docked body renders nothing while the column is
 collapsed or another pane tab is active (`tab.visible === false` — no
-projection, no DOM, zero per-snapshot cost while hidden). Panel acceptance is
-dual-track: in-loop browser harness
-verification against the rebuilt bundle plus user-restart final GUI acceptance —
-rerun steps in the install-verification guide §8.
+projection, no DOM, zero per-snapshot cost while hidden). Routine panel QA uses
+affected unit evidence only; real-browser rebuilt-bundle verification and
+user-restart GUI acceptance belong to an explicitly requested independent
+**`mstar-e2e`** workflow (`/amazing-e2e-check`), never an iteration QA gate.
 
 ## Development
 
