@@ -6,7 +6,7 @@ Templates for the dsh **`workflow`** tool (`@deepseek-ai/dsh-tool-workflow`, mou
 
 One `workflow` tool call carries three parameters:
 
-- `script` — the shipped file's body, passed **verbatim**: read `packages/dsh/workflows/<name>.js` and hand its text over unchanged. It is plain JavaScript (native TypeScript is not accepted), it declares no `export const meta` statement, and it ends with `return <JSON value>`. `scripts/dsh-workflow-files-hash.test.ts` pins each file's SHA-256, so an edit to a body is a deliberate contract change, never a silent drift.
+- `script` — the shipped file's body, passed **verbatim**: read the file at the dsh package root — `@mstar-harness/dsh/workflows/<name>.js` in an installed host, `packages/dsh/workflows/<name>.js` in this repo's checkout — and hand its text over unchanged. It is plain JavaScript (native TypeScript is not accepted), it declares no `export const meta` statement, and it ends with `return <JSON value>`. `scripts/dsh-workflow-files-hash.test.ts` pins each file's SHA-256, so an edit to a body is a deliberate contract change, never a silent drift.
 - `meta` — plain JSON identity: `name` (short kebab-case, the allowlist key of the host's `workflowGate`), `description`, optional `whenToUse`, optional `phases[] = { title, detail? }`. `phase()` calls and `agent({ phase })` strings match `phases[].title` by exact string. Each section below carries its `meta` as one JSON line.
 - `args` — plain JSON object, exposed to the script verbatim as the `args` global.
 
@@ -14,7 +14,7 @@ Script hooks: `agent(prompt, opts?)`, `parallel(thunks)`, `pipeline(items, ...st
 
 Supported `schema` subset (object-rooted): `type`, `properties`, `required`, `additionalProperties`, `items`, `enum`, `const`, `oneOf`, plus the ignored annotations `description` / `title` / `default` / `examples`. Anything else (`pattern`, `format`, numeric bounds) is fatal.
 
-**Read-only guarantee.** Every seat is a delegated child with approval pinned to `never`: a seat can depend on no file write, so each script returns its whole payload in the result and the caller persists anything durable. Each prompt opens with the Assignment header below — header first, because the engine reads only the header region and resolves the role persona from `Execute as` (`packages/dsh/src/gates/role-persona.ts`):
+**Read-only guarantee.** Every seat is a delegated child with approval pinned to `never`: a seat can depend on no file write, so each script returns its whole payload in the result and the caller persists anything durable. Each prompt opens with the Assignment header below — header first, because the engine reads only the header region and resolves the role persona from `Execute as` (the dsh gate compiled into the package's `dist/`; its source is `src/gates/role-persona.ts` at the package root):
 
 ```markdown
 ## Assignment
