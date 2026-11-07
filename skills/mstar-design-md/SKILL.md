@@ -21,7 +21,6 @@ description: DESIGN.md 设计系统规范：创建/审计/维护 design tokens�
 |-------|-----|
 | Normative spec: section definitions, token naming, light/dark rules, **YAML frontmatter structure** | `references/design-md-spec.md` |
 | Three-level completeness checklist (MVP / Standard / Production) | `references/completeness-checklist.md` |
-| Vercel Geist DESIGN.md as annotated reference | `references/vercel-example.md` |
 | Full template with YAML frontmatter and Level 2/3 placeholders | `templates/DESIGN.md.template` |
 | Dark theme template (same token names, different values) | `templates/DESIGN.dark.md.template` |
 
@@ -147,7 +146,6 @@ gray-1000: #000   gray-1000: #eee
 
 - `references/design-md-spec.md` — normative spec: section definitions, token naming conventions, light/dark contract
 - `references/completeness-checklist.md` — three-level audit checklist with detailed criteria per level
-- `references/vercel-example.md` — Vercel Geist DESIGN.md as annotated reference (read when creating from scratch or needing design inspiration)
 
 **Templates (this skill):**
 - `templates/DESIGN.md.template` — full template including all Level 1-3 sections with placeholder comments
