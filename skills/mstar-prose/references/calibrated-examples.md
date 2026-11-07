@@ -14,16 +14,16 @@ The `Survives:` line under each triple names the propositions the balanced form 
 
 A buffer replaced a per-frame disk write, and the file has to state what the buffer now does.
 
-**over-trimmed** — 3 words
+**over-trimmed** — 13 words
 
 ```text
-Frames are flushed.
+Frames are buffered in memory and flushed to the spool file on shutdown.
 ```
 
-**over-detailed** — 40 words
+**over-detailed** — 57 words
 
 ```text
-Frames used to reach the spool file one at a time, but after the review round the writer no longer does that: the old per-frame path is gone and frames now sit in memory until shutdown, when they are flushed.
+Frames used to reach the spool file one at a time, but after the review round the writer no longer does that: the old per-frame path is gone and frames now sit in memory, flushed to the spool file on shutdown or once the buffer holds 512 frames, and no frame reaches the disk before that flush.
 ```
 
 **balanced** — 28 words
@@ -44,10 +44,10 @@ A bounds-checked read follows the parser, and the comment has to say why the rea
 The width read here is safe.
 ```
 
-**over-detailed** — 30 words
+**over-detailed** — 40 words
 
 ```text
-This cast is correct because the parser has already rejected every frame whose declared width exceeds the buffer, which is the argument the last review round asked for and settled.
+This cast is correct because the parser has already rejected every frame whose declared width exceeds the 200-byte buffer, so the width read here is always in range, which is the argument the last review round asked for and settled.
 ```
 
 **balanced** — 21 words
@@ -68,10 +68,10 @@ Attempts are capped, nobody measured the cap, and the number is a choice rather 
 Retries stop after three attempts.
 ```
 
-**over-detailed** — 27 words
+**over-detailed** — 34 words
 
 ```text
-Retries currently stop after three attempts, which is probably fine for now; we can revisit the number later if the queue gets deeper or if someone complains.
+Retries currently stop after three attempts, which nobody has measured and is probably fine for now; the queue owner can revisit the number later if the printer queue gets deeper or if someone complains.
 ```
 
 **balanced** — 17 words
@@ -95,7 +95,7 @@ A suppression is required prose on every surface; the balanced form keeps the re
 **over-detailed** — 37 words
 
 ```text
-// oxlint-disable-next-line no-await-in-loop -- the queue must drain one label at a time. This came up in the last review round, when the parallel version reordered jobs and the reviewer asked for the loop to be serialised.
+// oxlint-disable-next-line no-await-in-loop -- the queue must drain one label per open call. This came up in the last review round, when the parallel version reordered jobs and the reviewer asked for the loop to be serialised.
 ```
 
 **balanced** — 17 words
