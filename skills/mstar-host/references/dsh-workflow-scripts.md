@@ -40,7 +40,7 @@ Task category: audit
 
 ## 1. `mstar-qc-tri` — plan QC tri-review
 
-**File** `packages/dsh/workflows/mstar-qc-tri.js` · **Use** the changed-scope plan QC tri on a dsh host instead of three `subagent` dispatches; legal only when the Assignment declares **conversation-only review** (`QC report path: N/A`) — the caller persists `{SDD_DIR}/review/qc1.md` … `qc3.md` from the returned envelopes. A plan-backed QC seat that must write its own report routes through a writable channel (`dsh.md` § QC default). Three seats are within the child pool (`maxActiveSubagents`, default 8) by construction — no chunking.
+**File** `@mstar-harness/dsh/workflows/mstar-qc-tri.js` (this repo: `packages/dsh/workflows/mstar-qc-tri.js`) · **Use** the changed-scope plan QC tri on a dsh host instead of three `subagent` dispatches; legal only when the Assignment declares **conversation-only review** (`QC report path: N/A`) — the caller persists `{SDD_DIR}/review/qc1.md` … `qc3.md` from the returned envelopes. A plan-backed QC seat that must write its own report routes through a writable channel (`dsh.md` § QC default). Three seats are within the child pool (`maxActiveSubagents`, default 8) by construction — no chunking.
 
 **`meta`**
 ```json
@@ -58,7 +58,7 @@ Task category: audit
 
 ## 2. `mstar-audit-fanout` — large-repo category fan-out
 
-**File** `packages/dsh/workflows/mstar-audit-fanout.js` · **Use** `/codebase-audit` on a repo large enough to need per-category read-only fan-out; a Team-only profile runs it at two `categories`. Reconciling, vetting and the review report stay with the audit executor (main agent).
+**File** `@mstar-harness/dsh/workflows/mstar-audit-fanout.js` (this repo: `packages/dsh/workflows/mstar-audit-fanout.js`) · **Use** `/codebase-audit` on a repo large enough to need per-category read-only fan-out; a Team-only profile runs it at two `categories`. Reconciling, vetting and the review report stay with the audit executor (main agent).
 
 **`meta`**
 ```json
@@ -78,7 +78,7 @@ Task category: audit
 
 ## 3. `mstar-pr-seats` — `/amazing-pr-review deep` seats
 
-**File** `packages/dsh/workflows/mstar-pr-seats.js` · **Use** the `deep` tier (3–4 seats) once the review worktree and diff basis are resolved; on a Team-only profile it IS the `default`-tier carrier, run with the tier's two domain lenses. Do not use it for the `default` tier while `subagent` is available, nor for `quick`. Its 3–4 seats sit within the child pool by construction.
+**File** `@mstar-harness/dsh/workflows/mstar-pr-seats.js` (this repo: `packages/dsh/workflows/mstar-pr-seats.js`) · **Use** the `deep` tier (3–4 seats) once the review worktree and diff basis are resolved; on a Team-only profile it IS the `default`-tier carrier, run with the tier's two domain lenses. Do not use it for the `default` tier while `subagent` is available, nor for `quick`. Its 3–4 seats sit within the child pool by construction.
 
 **`meta`**
 ```json
@@ -96,7 +96,7 @@ Task category: audit
 
 ## 4. `mstar-review-single` — one read-only task-review seat
 
-**File** `packages/dsh/workflows/mstar-review-single.js` · **Use** one fresh-context SDD task reviewer that must not consume a Team roster slot (a teammate is a durable seat and the roster is finite). The run costs one `workflow-run` node instead of a subagent card — the price of keeping the reviewer off the roster; one seat is far below the child pool, so no chunking applies.
+**File** `@mstar-harness/dsh/workflows/mstar-review-single.js` (this repo: `packages/dsh/workflows/mstar-review-single.js`) · **Use** one fresh-context SDD task reviewer that must not consume a Team roster slot (a teammate is a durable seat and the roster is finite). The run costs one `workflow-run` node instead of a subagent card — the price of keeping the reviewer off the roster; one seat is far below the child pool, so no chunking applies.
 
 **This is Mode A, the SDD task reviewer, and the only mode it has.** The argument guard requires the task fields, so a PR or audit review cannot be routed here; the header's `Task category` is therefore not `audit` (an `audit` category selects `code-reviewer` Mode B and would run the wrong workflow). Writable work never uses this route.
 
