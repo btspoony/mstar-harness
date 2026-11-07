@@ -252,7 +252,7 @@ mstar 技能通过 dsh skill-filesystem 提供者以**单一规范挂载**接入
 
 ## Workflow scripts
 
-模型交给 dsh **`workflow`** 工具的四个只读扇出脚本以包相对的普通 JavaScript 放在 `workflows/`——不是 TypeScript，也没有 `export const meta` 语句——因此脚本可被原样读取、diff 与回传。`scripts/dsh-workflow-files-hash.test.ts`（仓库根）校验的是交付面而非摘要：每个已发布正文可解析、`package.json` 会发布 `workflows` 目录、且 skill 的 `meta` 身份与 `**File**` 锚点正好指向磁盘上的这些文件——重命名、新增脚本或目录未发布都会失败，而一次刻意的改写不会。何时使用、其 `meta` 身份、参数规则、席位数守卫与失败面见 skill `mstar-host` → `references/dsh-workflow-scripts.md`；本表是文件清单。
+模型交给 dsh **`workflow`** 工具的四个只读扇出脚本以包相对的普通 JavaScript 放在 `workflows/`——不是 TypeScript，也没有 `export const meta` 语句——因此脚本可被原样读取、diff 与回传。`scripts/dsh-workflow-files-contract.test.ts`（仓库根）校验的是交付面而非摘要：每个已发布正文可解析、`package.json` 会发布 `workflows` 目录、且 skill 的 `meta` 身份与 `**File**` 锚点正好指向磁盘上的这些文件——重命名、新增脚本或目录未发布都会失败，而一次刻意的改写不会。何时使用、其 `meta` 身份、参数规则、席位数守卫与失败面见 skill `mstar-host` → `references/dsh-workflow-scripts.md`；本表是文件清单。
 
 | 文件 | 用途 | 必需 `args` |
 | --- | --- | --- |
