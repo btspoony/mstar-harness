@@ -201,151 +201,19 @@ discipline, capacity, and worktree hand-off — → **`references/dsh-agent-team
 
 ## Gates and enforcement
 
-The plugin wires the engine gates on dsh seams (all in-process):
+Gate wiring, enforcement semantics and the execution read route →
+`packages/dsh/README.md` § Gates; the native command surface → the same file
+§ Native command surface. What a refusal means here:
 
-| Gate | Seam | Hard-mode channel |
-|------|------|-------------------|
-| Status gate | `fs/write-intent` + `fs/edit-intent` on `{HARNESS_DIR}/status.json` | repair-escape advisory (never vetoes the repairing write) — **except** the store-authority refusal class below |
-| Store authority in the status gate | inside the status gate's document classification (register kind, snapshot cleanup extension) | **typed veto under hard, and no repair escape**: when the findings-cleanup verdict cannot be read because the issue authority is missing (`store.not-initialized`), staged (`store.not-active`), corrupt, below-floor or busy, the write is vetoed (`status.veto` / `findings.cleanup-authority-unavailable`) — the repair is a store command (`mstar store init|upgrade|migrate`), never a document write |
-| Dispatch gate | `tools/pre-execute` on every delegation carrier — the configured `dispatchTools` (`subagent` / `subagent_fork` by default) **and** the Agent Teams carriers (`spawn_teammate`, `team_task_create`, `team_task_update`, `send_message`) | `PreToolDecision { kind: 'deny', reason }` |
-| Lease gate | inside the dispatch gate (SDD / InProgress dispatches) | deny under hard |
-| Worktree L1/L2 | inside the dispatch gate | deny under hard |
-| Skill-authoring lint | `fs/write-intent` on `SKILL.md` under mounted roots | repair-escape advisory |
-| Seam lints | `fs/write-intent` on DESIGN.md / audit / compound / roles | repair-escape advisory |
-
-**Enforcement semantics**: warn-only by default. `Enforcement: hard` —
-resolved from the plugin Config (`enforcement: hard`), the Assignment header
-flag, the repo `.mstarc` `[config] enforcement`, or the iteration compass
-frontmatter — escalates dispatch violations to
-a real veto; status/skill-lint writes are never hard-vetoed because the intent
-waterfall is content-blind (an already-invalid document is allowed as a
-repair escape) — **except** the status gate's store-authority refusal class,
-whose veto rests on the authority being unreadable rather than on the
-document's content, so no content can repair it. The register kind itself
-stays synchronous shape validation: a project register is migration history,
-and a retired path is not a lookup. Config / `.mstarc` `soft` are the local
-rollbacks. Hard gates are never a global default.
-
-A composed agent step carries ONE **`<mstar_engine_status>`** catalog
-message when the row is emitted. The row is a compact DELTA, not a snapshot:
-ONE delta line carrying the selected `workflow`, its non-Done `plans`, the
-`branch` anchors, and — when a steering compass resolved — the iteration phase
-`gate` verdict with its transition and violation codes. A `workflow warning:
-<code> <message>` line follows that delta line when the selection carries a
-warning (the registration-less fallback adds the watermark trio above it), so
-the block is one delta line plus those disclosures. `plans:` distinguishes an
-empty registry (`plans: none registered`) from a workflow whose every plan row
-is Done (`plans: all done`); the non-Done rows are listed otherwise. When no
-lifecycle is selected it renders `workflow selection: ERROR (<code>) <message>`
-in place of that line, and that message names the execution authority plus a
-real recovery (`mstar workflow register` / `mstar iteration register`, or
-picking a registered lifecycle for this session) rather than a retired
-`status.json` path.
-
-Everything else the payload carries — the open-issue rollup and its detail
-rows, the branch policy, the spec-integration branch anchor, plan row scopes (a
-recorded scope, never a lease), the knowledge digest, the compass direction and
-the agent-flow ledger — is deliberately NOT in the row. Those facts stay in
-`MstarEngineStatusPayload` (the panel reads the store; the emission row is the model-side anchor)
-and in the engine authorities behind it; there is no single `status` command
-that serves them, so read the concrete one per fact: `mstar status tech-debt`
-for the open-issue rollup, `mstar roadmap show` and the compass document
-(`{ITERATION_DIR}/<id>/delivery-compass.md`) for direction, branch policy and
-the spec-integration anchor, `mstar plan show` for plan rows and their recorded
-scopes, `{KNOWLEDGE_DIR}` for the knowledge documents, and the persisted
-`dsh_status_emissions` snapshot for the agent-flow ledger. The row is a
-projection of the payload, never the authority for it: treat the row as a
-change notice and re-read the authority when a decision needs the full state.
-
-Emission is change-driven per session+workspace, and the two sides are gated
-separately. The MODEL row is keyed on its own rendered text: first emission,
-then only when that line changes — so a residual count, a ledger event, a
-knowledge digest or a row scope moving does not append an identical-looking
-row, and a long unchanged session does not accumulate stale copies. The PANEL
-is keyed on the full payload projection: a change to any payload-only fact
-still persists the new payload for the panel (the freshness footer keeps the
-turn the model last saw a row). The start of a turn is neither trigger, and a
-workspace with no resolved `{HARNESS_DIR}` composes no row at all.
-
-The block is a projection of the payload: the version / harness dir /
-enforcement watermark stays in the payload (the panel meta dock renders
-version + harness dir from it) and stays model-visible once in the always-on
-system prompt (`mstar:engine-status` digest + `mstar:harness-rules`), never
-repeated in the row. The one exception is a composition without
-`dsh-system-prompt`: the registration fails open and neither prompt section
-exists, so the row falls back to re-rendering the trio itself (the listener's
-`showWatermark` option, taken from that registration verdict) — the watermark
-is never absent from the model's context. The newest per-session emission
-persists in the control-root `store.db` (`dsh_status_emissions`); its
-freshness footer `turn` / `at` name the last MODEL-row emission, so a
-panel-only persist updates the payload without claiming the model saw a new
-row. The row is not periodically re-anchored, so after host-side context
-compaction it may be absent until the next rendered change — the system-prompt
-digest still carries the version, the active workflow, its non-Done plans, the
-`branch` anchors (when the payload resolved both) and the phase-`gate` verdict
-(when a steering compass gated the iteration). The remaining facts are read on
-demand: `mstar status tech-debt` for the open-issue rollup,
-`mstar iteration gate --workflow <id> --compass <path>` for a fresh gate
-evaluation, and the compass / plan documents for direction, policy and row
-scopes. The build behind it is one per-workspace TTL cache (`catalogTtlMs`,
-default 60 s).
-
-### Execution authority in this host (source state)
-
-The engine's own route (`resolveExecutionReadRoute`) decides which authority
-answers, and no tool argument or config key selects one:
-
-- While the control harness's execution authority is **ACTIVE**, the plugin's
-  gates select the lifecycle they are about from the **DB authority** with
-  explicit identities — never a newest/only guess, never a fallback to the
-  retired `status.json` / snapshot bytes — and a write to a retired
-  coordination document is refused **unconditionally** (`execution.direct-write-refused`),
-  canonical path and symlink alias alike. A register write while an active store
-  answers is refused as migration history; a register write while the authority
-  cannot be read at all fails closed.
-- A missing (`store.not-initialized`) or staged (`store.not-active`) store is not
-  an execution route: coordination documents have no file fallback there
-  (`execution.not-active` — the file route is retired), and the
-  register kind stays under its own document validator.
-- The host-native execution entry is the **shared MCP connection**, not a command and
-  not a native duplicate: the writable mstar commands arrive as MCP tools
-  (`mcp__mstar__mstar_<family>` with an `action`). Three dsh-native tools ride
-  beside them, and only for what the MCP route cannot do — `mstar_plan_bind`
-  (the durable-slot producer), `mstar_audit_validate` (no MCP twin) and
-  `mstar_execution_clear` (no shared command); the rule is in § The native
-  command surface below.
-
-### Concurrent lifecycles and workflow selection
-
-**Several ACTIVE lifecycles at once is the normal state**, not an error: each
-plan, worktree, and PR advances on its own lifecycle, and nothing in the host
-caps how many run concurrently. A session only has to answer "which lifecycle
-does THIS operation belong to", and the resolver answers it from the operation
-itself before it ever asks the operator. The order below is the resolver's own:
-
-1. **A plan row's recorded worktree** contains the session cwd.
-2. **A lifecycle's integration worktree** contains the session cwd.
-3. **The session's explicit pick** (the panel selection or `mstar plan bind`).
-4. **The plan row the operation names** — an Assignment's `Plan Path` / `SDD dir`,
-   a `--plan` argument. A plan row belongs to exactly one lifecycle, so naming it
-   identifies its owner even when the cwd matches several.
-5. **The only active entry.**
-
-Every automatic rung (1, 2, 4) needs **exactly one distinct** lifecycle: zero or
-several matches fall through to the next rung, and nothing is ever decided by
-registry order, recency, or a longest-prefix guess.
-
-An explicit pick outranks rung 4 on purpose: a pick that names a lifecycle
-WITHOUT the requested plan row is a contradiction the caller must see
-(`lease.dispatch.plan-not-found`), never a silent switch of lifecycle. A pick
-naming a lifecycle that is no longer active has expired, so the operation's own
-plan row may resolve it (rung 4) — the pick named nothing the store can confirm.
-
-Only when none of the five applies does a write report
-`workflow.selection.unbound-multi-active`, and that refusal is scoped to the one
-operation: it lists the active ids and the ways to name one. It is not a session
-pause — every other operation keeps working, and the same session can drive
-several lifecycles by naming the plan each call.
+- A store-authority refusal on a coordination write is repaired with a store
+  command (`mstar store init|upgrade|migrate`), never by rewriting the document.
+- `execution.direct-write-refused` is unconditional — a retired coordination
+  document is refused on its canonical path and its symlink alias alike.
+- `workflow.selection.unbound-multi-active` is scoped to the one operation that
+  could not name a lifecycle: it is not a session pause, and naming the plan on
+  a later call resolves it.
+- A coordinating session that wants dsh-local ledger attribution binds through
+  the native `mstar_plan_bind`, not the MCP `bind` action.
 
 ### The native command surface
 
