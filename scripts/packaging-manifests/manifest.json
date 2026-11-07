@@ -93,7 +93,7 @@
         "files": [
           {
             "path": "packages/dsh/package.json",
-            "sha256": "619c766b4bc255ac2259234d9ae3c95df1ca39a68dc810993109706205e6e48a"
+            "sha256": "bd0f335c342ccaeb16c390f7c6080f1d6ffaca827af89f79a14772e22c17bde6"
           },
           {
             "path": "packages/dsh/tsconfig.json",
