@@ -37,7 +37,7 @@ When **`QA mode: acceptance-only`**:
 Retained check logs are consumed read-only: QA reads the `{SDD_DIR}/evidence/<task-id>.log` the task report cites and maps it to ACs — it never re-runs the cited command (route and citation rule → `mstar-sdd/references/file-handoffs.md` § Retained check output). Map every AC with all columns of the report's AC table (**`references/qa-engineer.md`** § QA Report Landing and Template); for a retained log each column carries:
 
 - **Run/manual reference**: the cited `{SDD_DIR}/evidence/<task-id>.log` path with its verification-round heading — or the manual report/CI citation with provenance.
-- **Original input identity**: the command and Git HEAD the report records beside the citation — the basis any reuse comparison uses.
+- **Original input identity**: the command the report records beside the citation — the basis any reuse comparison uses.
 - **Integrity**: the reviewer confirms the log belongs to the cited command, task and range; a clean exit line or unchanged bytes never proves it.
 - **Outcome**: the exit code/result the report states beside the citation; the redirect itself records no exit status.
 - **Target applicability and reason**: whether the cited run's inputs still match the current `Review range`, and why; `n/a` when no reuse comparison applies.

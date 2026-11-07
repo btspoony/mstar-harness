@@ -76,10 +76,13 @@ An already-authorized check runs **once**; its raw output is retained in canonic
 
 ```bash
 mkdir -p "$SDD_DIR/evidence"
-<authorized check argv> > "$SDD_DIR/evidence/task-N.log" 2>&1
+log="$SDD_DIR/evidence/task-N.log"
+<authorized check argv> > "$log" 2>&1
+{ echo "## Verification round: <concrete label>"; <authorized check argv>; } >> "$log" 2>&1
 ```
 
-- A fix round appends its own output to the same `{SDD_DIR}/evidence/<task-id>.log` under its `## Verification round: <concrete label>` heading; it never creates a second log for the same task.
+- `$SDD_DIR` is the Assignment's absolute SDD dir: write that path literally in place of the variable when the shell does not export it.
+- The first block form creates the log; a fix round appends its own output to the same `{SDD_DIR}/evidence/<task-id>.log` under its `## Verification round: <concrete label>` heading, echoing that heading into the log; it never creates a second log for the same task.
 - The redirect does not record the exit status: state the observed exit code/result beside the citation in the report.
 - The log records what ran and what it printed — it is not a pass/fail or coverage seal. Whether the log belongs to the cited command and range (**integrity**) and whether it covers the AC (**coverage judgment**) stay with the reviewer.
 - Reviewers (L2, QC, QA) read the cited log and never re-run the command. Retaining output authorizes no dispatch, test/full-suite/E2E permission, or report-byte seal.
