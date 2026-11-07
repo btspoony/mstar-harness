@@ -1,7 +1,7 @@
 /**
  * The shared leaf-seat predicate of the dsh identity chain — the ONE shape
  * every dsh-side enforcement reads (ADR
- * `docs/adr/dsh-native-identity-channels.md`): a known leaf seat
+ * `docs/adr/implemented/architecture/2026-10-19-dsh-native-identity-channels.md`): a known leaf seat
  * (`header.origin === 'subagent'`, or a numeric `delegationDepth > 0`) can
  * never own an execution binding or hold a coordinator session.
  *

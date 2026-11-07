@@ -1,17 +1,21 @@
 # ADR: DSH native identity and channel constraints
 
-- **Status:** Accepted (records upstream constraints from [issue #529](https://github.com/btspoony/mstar-harness/issues/529)); supersedes the `/mstar-execution` rationale (see below)
+Status: implemented — records upstream dsh identity/channel constraints (issue #529)
 - **Date:** 2026-10-19
 - **Scope:** `packages/dsh` (the dsh host adapter) and every future contribution that touches identity, tool gating, or command channels on the dsh host
-- **Document:** `docs/adr/dsh-native-identity-channels.md` (first ADR in `docs/adr/`)
+- **Document:** `docs/adr/implemented/architecture/2026-10-19-dsh-native-identity-channels.md` (first ADR in `docs/adr/`)
 
-## Context
+## Problem
 
 The dsh adapter once invented a human command (`/mstar-execution`) where a native
 channel would have been the correct design. The upstream constraints that force
 the native design are scattered across dsh runtime packages and are easy to
 rediscover wrongly. This record fixes them, each with its source, so a future
 contribution cannot reintroduce a bypass without confronting them.
+
+## Decision
+
+Identity on the dsh host flows only through native channels: a tool reads the calling session from `exec.agent.id`, and plugin-local state is reached through a native tool surface registered over `ctx.tools.register`, which injects that same identity. No model-supplied argument, environment key, or MCP bridge carries or overrides an execution identity — a `tools/pre-execute` gate cannot rewrite arguments, the generic MCP client forwards only raw arguments, and `ctx.shellEnv` contributes only `DSH_*` keys. A command that needs a caller-declared `sessionId` reads it only on a connection whose launcher opted in with `mstar mcp --trust-caller-session-id`, where the value is a bearer identity and authorization stays that caller's own coordinator binding.
 
 ## Constraints (upstream facts, with sources)
 
@@ -50,7 +54,7 @@ packages not vendored in this repository (`@deepseek-ai/dsh-shell-env`,
 `@deepseek-ai/dsh-tool-bash`, `@deepseek-ai/dsh-mcp-client`) live in the dsh
 host distribution, not in this checkout.
 
-## Superseded rationale: `/mstar-execution`
+## Alternatives considered
 
 `/mstar-execution` was a plugin-owned human command (`ctx.commands` entry, hint
 `{operation JSON}`) whose closed `adopt | clear | run` union carried an
