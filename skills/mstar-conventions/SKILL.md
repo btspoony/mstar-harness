@@ -29,7 +29,7 @@ description: harness 路径约定：`{HARNESS_DIR}`/`{PLAN_DIR}`/`{SDD_DIR}`/`{I
 | `{ITERATION_DIR}` | `{HARNESS_DIR}/iterations/` |
 | `{KNOWLEDGE_DIR}` | `{HARNESS_DIR}/knowledge/`（默认；`.mstarc` `knowledge_dir` 声明时用声明值） |
 | `{SPECS_DIR}` | `{HARNESS_DIR}/specs/`（默认）；解析见下文「`{SPECS_DIR}` 解析」 |
-| `{WORKFLOW_DIR}` | `{HARNESS_DIR}/workflows/` (default; `.mstarc` `workflow_dir` overrides it) — retained ordinary bodies, append-only `notes.jsonl` and workflow-owned `reports/` (e.g. `<workflow-id>/reports/e2e.md`); historical snapshot shape → **`mstar-engine-legacy`** `references/migration-source-shapes.md` |
+| `{WORKFLOW_DIR}` | `{HARNESS_DIR}/workflows/` (default; `.mstarc` `workflow_dir` overrides it) — retained ordinary bodies, append-only `notes.jsonl` and workflow-owned `reports/` (e.g. `<workflow-id>/reports/e2e.md`) |
 | `{PROJECT_DIR}` | `{HARNESS_DIR}/projects/`（默认；`.mstarc` `project_dir` 声明时用声明值）——project 层目录；旧 `roadmap.md` 仅作文件 transport/history |
 | `{REVIEW_DIR}` | `{HARNESS_DIR}/reviews/`（默认；`.mstarc` `review_dir` 声明时用声明值）——review 运行目录树（codebase audit / PR / branch / diff review 的 report 与 evidence；`mstar audit scaffold` 写入，`mstar pr-review report-path` 解析；gitignored） |
 | `{HARNESS_DIR}/store.db` | 进程/control harness 根下的 issue/catalog/roadmap/milestone 与 **execution_* 执行权威** SQLite（`resolveProcessHarnessDir` 后 `<resolved root>/store.db`；尊重 `.mstarc`）。功能/集成 worktree **不**在 cwd 建库；roadmap 规则 → `mstar-project-governance`。 |
@@ -109,7 +109,7 @@ enforcement=hard
 
 ## Issue/catalog store 路径与权威分界
 
-Issue/catalog/roadmap and ACTIVE execution authority live in control-root `{HARNESS_DIR}/store.db`; roadmap/milestone rules → `mstar-project-governance`. ACTIVE root register, workflow/plan rows, coordinator sessions, registered inputs and workflow merge exclusion live in `execution_*` tables. Coordinator source metadata/configuration/progress/completion and merge exclusion are domain-written; no per-row session or sealed Assignment. Historical execution files are read-only direct `mstar store upgrade` inputs, preserving original bytes; no staging writer or runtime file-state fallback remains. Shapes → **`mstar-engine-legacy`** `references/migration-source-shapes.md`. Retained ordinary artifacts stay with `ArtifactStore`; notes and docs never become transactional authority.
+Issue/catalog/roadmap and ACTIVE execution authority live in control-root `{HARNESS_DIR}/store.db`; roadmap/milestone rules → `mstar-project-governance`. ACTIVE root register, workflow/plan rows, coordinator sessions, registered inputs and workflow merge exclusion live in `execution_*` tables. Coordinator source metadata/configuration/progress/completion and merge exclusion are domain-written; no per-row session or sealed Assignment. Historical execution files are read-only direct `mstar store upgrade` inputs, preserving original bytes; no staging writer or runtime file-state fallback remains. Retained ordinary artifacts stay with `ArtifactStore`; notes and docs never become transactional authority.
 
 ### Catalog 字段权威（contract §1）
 
@@ -174,9 +174,9 @@ PM 在需要持久化追踪时：
 - `iterations/`
 - `plans/`
 - `sdd/`
-- `status.json` — historical input only; shape → **`mstar-engine-legacy`** `references/migration-source-shapes.md`.
-- `workflows/` — retained ordinary bodies/notes; historical snapshot shape → **`mstar-engine-legacy`** `references/migration-source-shapes.md`.
-- `projects/` — project files; historical register shape → **`mstar-engine-legacy`** `references/migration-source-shapes.md`; roadmap transport rules → `mstar-project-governance`.
+- `status.json` — historical input only.
+- `workflows/` — retained ordinary bodies/notes.
+- `projects/` — project files; roadmap transport rules → `mstar-project-governance`.
 - `reviews/`（review 运行目录树：codebase audit / PR / branch / diff review 的 report 与 evidence；进程产物）
 - `store.db`（issue/catalog/roadmap/milestone 与 execution_* 权威；默认随 `{HARNESS_DIR}` 忽略）
 
@@ -262,4 +262,4 @@ Plans are written to **`{PLAN_DIR}`** when persistent plan tracking is enabled. 
 - `references/artifact-storage-paths.md` — **产物存储路径 SSOT**（知识文档、CONCEPTS.md、STRATEGY.md 等落盘位置；`mstar-compound`、`mstar-compound-refresh`、`mstar-strategy` 等技能引用此表，不得本地重定义）
 - **`mstar-engine-legacy`** `references/migration-source-shapes.md` — historical execution/register file shapes; no execution route or live writer
 
-**Current artifact details** (main plans, review bundles / durable summaries, execution/issue fields, knowledge and templates) → **`mstar-artifacts`**; migration-source file shapes → **`mstar-engine-legacy`** `references/migration-source-shapes.md`.
+**Current artifact details** (main plans, review bundles / durable summaries, execution/issue fields, knowledge and templates) → **`mstar-artifacts`**.
