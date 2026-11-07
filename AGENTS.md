@@ -59,6 +59,7 @@ Edit canonical sources, not generated `harness-skills/` or `harness-agents/` cop
 - Before repeating a fix, inspect relevant history for duplicate or rejected attempts. Keep changes appropriate to the harness; project-specific behavior belongs in a separate extension.
 - Follow [core verification boundaries](skills/mstar-harness-core/SKILL.md#定向执行与验证边界): run checks mapped to the changed behavior and reuse still-valid evidence. Full local suites require explicit user authorization; CI owns routine full-suite coverage.
 - For executable changes, run affected unit tests and relevant scoped lint/type checks. For docs/policy changes, use targeted static checks and before/after evidence; do not manufacture tests or claim static checks prove model compliance.
+- For `skills/**` changes, `bun run validation:drift` is the enforcement surface: per-file line ceilings live in `scripts/skill-budgets.manifest.json`, and the corpus rules it applies are stated in [mstar-skill-authoring](skills/mstar-skill-authoring/SKILL.md).
 - Fix failures caused by the change. Report unresolved failures or missing evidence precisely; do not claim completion while required verification remains outstanding.
 - Before delivery, review the diff for scope, accidental generated edits, local-artifact disclosures, and the required changelog fragment. Report what changed, why, actual verification results, and material limitations.
 
