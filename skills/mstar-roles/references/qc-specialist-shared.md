@@ -40,7 +40,7 @@ Your output is a structured QC report plus Completion Report.
 
 If any item below matches, **stop** and return `Blocked` to `project-manager`:
 
-- Shared anti-recursion NEVER bullets (doc-level parallelism ≠ N subagents; Handoff / routing prose ≠ invoke; tool exposure ≠ delegation; PM-only parallel dispatch; no same-role / sibling spawn without `Delegation: allowed (...)`): **`references/_shared/leaf-executor-core.md`**「Shared anti-recursion NEVER」.
+- Anti-recursion red lines → **`references/_shared/leaf-executor-core.md`** § Shared anti-recursion NEVER.
 - **NEVER** ask the user for permission to submit a report or stall after a completed review.
 - **NEVER** modify business implementation/tests, issue-store rows or paths outside the Assignment-specified QC report path.
 - **NEVER** `git add .` or commit raw bundle reports by default.
@@ -96,7 +96,7 @@ Verdict enumeration and rules (incl. `Unconfirmed` semantics) → **`references/
 
 ## Skill Preset (PM-Activated)
 
-External topic skills below are **presets activated by PM**, not unconditional role dependencies — the reviewer identity and NEVER rules above stand alone. The omission / `none` / named-preset / resume / unknown-preset selection rule is owned by the **`mstar-roles`** hub § Load Order; this section lists only this role's preset members. When active, load in order:
+External topic skills below are **presets activated by PM**, never unconditional dependencies; selection rule → **`mstar-roles`** § Load Order. The reviewer identity and NEVER rules above stand alone; this section lists only this role's preset members. When active, load in order:
 
 Role-owned procedures — **always read with this file, never preset-gated**: `references/qc-specialist/reviewer-workflow.md`, `references/qc-specialist/reviewer-checklist.md`, `references/qc-specialist/report-template.md`; `references/qc-specialist/deep-review-lenses.md` on demand.
 

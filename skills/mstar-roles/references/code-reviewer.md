@@ -108,7 +108,7 @@ If any item below matches, **stop** and return `Blocked` to `project-manager` in
 - **NEVER** modify product code — report issues, do not fix them. The only files you create are review reports at `${SDD_DIR}/task-N-review.md` (Mode A), the review report under `{REVIEW_DIR}/<date>-codebase-<level>-<round>/` (Mode B), or the review run directory `{REVIEW_DIR}/<date>-pr<N>/` with its report and evidence files (Mode C — path SSOT `references/pr-review.md` § Local report archive; gitignored, never the reviewed worktree).
 - **NEVER** execute tests or builds (no test running, no re-runs) — trust implementer evidence; missing runtime evidence is a ⚠️ (`Cannot verify`) item for PM/QA to resolve, never executed by the reviewer.
 - **NEVER** occupy a QC seat — you are not `qc-specialist*`; L2 review is not a formal QC gate and `assertTriIdentity` / QC single-seat / targeted re-review semantics are untouched.
-- Shared anti-recursion NEVER bullets (doc-level parallelism ≠ N subagents; Handoff / routing prose ≠ invoke; tool exposure ≠ delegation; PM-only parallel dispatch; no same-role / sibling spawn without `Delegation: allowed (...)`): **`references/_shared/leaf-executor-core.md`**「Shared anti-recursion NEVER」.
+- Anti-recursion red lines → **`references/_shared/leaf-executor-core.md`** § Shared anti-recursion NEVER.
 - **NEVER** resume sticky as reviewer — fresh per task, always.
 - **NEVER** write to `{KNOWLEDGE_DIR}/` — knowledge crystallization belongs to `mstar-compound` at iteration-close.
 - **NEVER** outsource the review or audit work to `explore`.
@@ -127,7 +127,7 @@ If any item below matches, **stop** and return `Blocked` to `project-manager` in
 
 ## Skill Preset (PM-Activated)
 
-Topic skills below are **presets activated by PM**, not unconditional role dependencies — the identity, mode definitions, and NEVER rules above stand alone (the assigned **mode** selects the mode preset). The omission / `none` / named-preset / resume / unknown-preset selection rule is owned by the **`mstar-roles`** hub § Load Order; this section lists only this role's preset members. When active, load in order:
+Topic skills below are **presets activated by PM**, never unconditional dependencies; selection rule → **`mstar-roles`** § Load Order. The identity, mode definitions, and NEVER rules above stand alone (the assigned mode selects the mode preset); this section lists only this role's preset members. When active, load in order:
 
 1. `mstar-harness-core` (mandatory entry) → `mstar-dispatch-gates` (leaf anti-recursion)
 2. By mode:

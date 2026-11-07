@@ -26,10 +26,8 @@ If legacy plan directories already exist, reuse them; avoid dual-structure dupli
 
 ## Git Tracking Policy
 
-**Principle:** process stays local; results are shared with the team. Full rules → `mstar-conventions` SKILL.md「Git 跟踪策略」.
+**Principle:** process stays local; results are shared with the team — the default-tracked and default-gitignored sets, and the canonical snippet, are enumerated once → `mstar-conventions` SKILL.md「Git 跟踪策略」.
 
-- **Default tracked** under `{HARNESS_DIR}`: `AGENTS.md`, `{KNOWLEDGE_DIR}/**`, `{SPECS_DIR}/**` (resolved specs path; default `{HARNESS_DIR}/specs/`).
-- **Default gitignored** (local coordination): `store.db`, `archived/`, `iterations/`, `plans/`, `sdd/`, `workflows/`, `projects/`; `status.json` is migration staging only (never a live write target).
 - Under **ACTIVE** execution authority, root registry, workflow/plan rows, sessions, leases and frozen inputs live in `{HARNESS_DIR}/store.db`; read via `mstar status validate` / `mstar plan show`, mutate only through public workflow/plan verbs. `status.json` / snapshot / session files are refused for reads and writes (`execution.consumer-not-ready` / `execution.direct-write-refused`); they are migration sources only (written engine-internally by the kept `mstar` migration tooling), never execution state. Keep authored main plan markdown current on disk, but do not default `git add` / `git commit` for cross-clone handoff. Open findings are store issues; project registers are migration history, never write targets. Promote durable decisions into tracked knowledge/specs/`AGENTS.md`.
 - If a project explicitly opts into tracking process artifacts, record that policy in `{HARNESS_DIR}/AGENTS.md` and ensure team alignment.
 

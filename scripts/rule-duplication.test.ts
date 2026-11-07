@@ -7,7 +7,8 @@
  * do not defeat normalization; an allowlisted site is reported as exempt
  * instead of failing; and ordinary repeated prose is never a rule fingerprint.
  */
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { execFileSync } from "node:child_process";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { describe, expect, test } from "bun:test";
@@ -231,6 +232,107 @@ describe("rule duplication", () => {
       expect(result.exemptGroups).toEqual([]);
     } finally {
       repo.close();
+    }
+  });
+});
+
+describe("Guard 10 blocking (drift-lint executable)", () => {
+  const REPO_ROOT = join(import.meta.dir, "..");
+  const SCRIPT = join(REPO_ROOT, "scripts/drift-lint.ts");
+  /** Inputs the executable reads before Guard 10 runs; a missing one aborts the run. */
+  const REQUIRED_INPUTS = [
+    "packages/engine/src/index.ts",
+    "packages/cli/package.json",
+    "packages/cli/src/command-adapter.ts",
+    "README.md",
+    "README_CN.md",
+  ];
+
+  /** Run the guard executable over a temp repo carrying only Guard 10 inputs. */
+  function runGuard10(
+    allowlist: unknown[],
+    populate: (dir: string) => void,
+  ): { status: number; stderr: string } {
+    const dir = mkdtempSync(join(tmpdir(), "drift-guard10-"));
+    try {
+      for (const rel of [...REQUIRED_INPUTS, RULE_DUPLICATION_ALLOWLIST]) {
+        const dest = join(dir, rel);
+        mkdirSync(dirname(dest), { recursive: true });
+        writeFileSync(
+          dest,
+          rel === RULE_DUPLICATION_ALLOWLIST
+            ? `${JSON.stringify(allowlist, null, 2)}\n`
+            : readFileSync(join(REPO_ROOT, rel), "utf8"),
+        );
+      }
+      populate(dir);
+      try {
+        execFileSync("bun", [SCRIPT], { cwd: dir, encoding: "utf8", stdio: ["pipe", "pipe", "pipe"] });
+        return { status: 0, stderr: "" };
+      } catch (error) {
+        const err = error as { status?: number; stderr?: string };
+        return { status: err.status ?? 0, stderr: String(err.stderr ?? "") };
+      }
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  }
+
+  function writeSkill(dir: string, skill: string, content: string): void {
+    const dest = join(dir, "skills", skill, "SKILL.md");
+    mkdirSync(dirname(dest), { recursive: true });
+    writeFileSync(dest, content);
+  }
+
+  test("a duplicated rule group exits non-zero and names both sites", () => {
+    const { status, stderr } = runGuard10([], (dir) => {
+      for (const skill of ["mstar-alpha", "mstar-beta"]) writeSkill(dir, skill, `${RULE}\n`);
+    });
+    expect(status).toBe(1);
+    // A failure row (not the old `advisory:` notice) is what enters `failures` and exits non-zero.
+    expect(stderr).toMatch(/✗ Guard 10 duplicate HARD rules/);
+    expect(stderr).toContain("skills/mstar-alpha/SKILL.md:1");
+    expect(stderr).toContain("skills/mstar-beta/SKILL.md:1");
+  });
+
+  test("a partially allowlisted group names its exempt sites on the failure row", () => {
+    const { status, stderr } = runGuard10(
+      [
+        {
+          file: "skills/mstar-gamma/SKILL.md",
+          normalizedHash: ruleFingerprintHash(normalizeRuleLine(RULE)),
+          reason: "skills/mstar-gamma/SKILL.md keeps a frozen copy; mstar-alpha owns the rule",
+        },
+      ],
+      (dir) => {
+        for (const skill of ["mstar-alpha", "mstar-beta", "mstar-gamma"]) {
+          writeSkill(dir, skill, `${RULE}\n`);
+        }
+      },
+    );
+    expect(status).toBe(1);
+    const row = stderr.split("\n").find((line) => line.includes("Guard 10 duplicate HARD rules")) ?? "";
+    expect(row).toContain("skills/mstar-alpha/SKILL.md:1");
+    expect(row).toContain("skills/mstar-beta/SKILL.md:1");
+    expect(row).toContain("1 exempt: skills/mstar-gamma/SKILL.md:1");
+  });
+
+  test("a symlinked skill file is skipped, not read into the guards", () => {
+    const outside = mkdtempSync(join(tmpdir(), "drift-symlink-target-"));
+    try {
+      const target = join(outside, "SKILL.md");
+      writeFileSync(target, `${RULE}\n`);
+      // Were the symlink collected, it would pair with mstar-alpha and fail as
+      // a duplicate group; the regular copy alone must not.
+      const { stderr } = runGuard10([], (dir) => {
+        writeSkill(dir, "mstar-alpha", `${RULE}\n`);
+        const link = join(dir, "skills", "mstar-beta", "SKILL.md");
+        mkdirSync(dirname(link), { recursive: true });
+        symlinkSync(target, link);
+      });
+      expect(stderr).not.toMatch(/✗ Guard 10 duplicate HARD rules/);
+    } finally {
+      rmSync(outside, { recursive: true, force: true });
     }
   });
 });

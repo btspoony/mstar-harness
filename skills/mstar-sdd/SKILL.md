@@ -88,7 +88,7 @@ Detail: **`references/file-handoffs.md`**.
 ## After all tasks
 
 1. `mstar sdd review-package MERGE_BASE HEAD` → branch diff in `{SDD_DIR}/review/`
-2. PM dispatches **plan QC tri-review (L3)** — **`QC mode: full tri-review`**, **N=3** — with branch review-package path and report paths under `{SDD_DIR}/review/` → **`mstar-review-qc`** · **`mstar-dispatch-gates`**. Layer SSOT → **`mstar-review-qc/references/review-responsibility-boundaries.md`**. PM writes `{SDD_DIR}/review/qc-consolidated.md` and durable main-plan gate summary. **Mandatory whenever `Execution mode: sdd`** (single-plan or iteration).
+2. PM dispatches **plan QC tri-review (L3)** — **`QC mode: full tri-review`**, mandatory whenever `Execution mode: sdd` (single-plan or iteration) — with branch review-package path and report paths under `{SDD_DIR}/review/`; seat count → **`mstar-review-qc`** § 分派时机. Layer SSOT → **`mstar-review-qc/references/review-responsibility-boundaries.md`**. PM writes `{SDD_DIR}/review/qc-consolidated.md` and durable main-plan gate summary.
 3. Critical/Important QC findings → fix assignments partitioned by ownership/dependency, then targeted re-review. Independent fixes run concurrently; PM retains the complete findings ledger. Fix rounds run on four mechanics — the per-task fix loop applies the same (`references/file-handoffs.md`):
     - **Unverified rounds count**: a fix round without verification evidence (reviewer not confirmed / report not on disk) is **not clean** — re-check and count the round; never enter the convergence branch.
     - **Complete ledger, scoped dispatch**: PM retains every open finding, including unverified items; each fix assignment carries only its owned findings and relevant fix delta. Unrelated findings do not expand a leaf task.

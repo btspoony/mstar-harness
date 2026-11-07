@@ -6,13 +6,11 @@ The concise gate summary remains in `references/project-manager.md`.
 ## Core Dispatch Invariants
 
 - Only `project-manager` dispatches subagents.
-- Each independent Assignment requires one matching host invoke.
-- In tool hosts (OpenCode / Cursor Task / Codex with callable multi-agent tools), Markdown-only Assignment is not dispatch.
-- For parallel batch with `N >= 2`, dispatch turn must emit all `N` invokes in one message when host supports it.
+- Each independent Assignment needs one matching host invoke: counting, dispatch-turn ordering, batch-readiness and the paste-only failure → **`mstar-host`** → `references/parallel-dispatch.md` § Mandatory order / § Hard rules.
 - **Same-repo writable parallel tracks**: tool concurrency and worktree isolation are **separate gates**. Before implement invokes, complete **`mstar-branch-worktree`** → **`references/parallel-writable-pre-dispatch.md`**.
 - **Scope and stopping are explicit**: apply `mstar-harness-core` § 定向执行与验证边界. Give each leaf one result, owned paths/symbols, relevant inputs, named checks/selectors, and an evidence-based stopping condition. Reuse unaffected evidence; do not inject a suite merely because the repo exposes it. Independent ready assignments run concurrently after their dependency/isolation checks.
 - **Review/QC rounds are quantitative, not adjectival**: a read-only review / QC dispatch states a `Budget` (expansion cap) and a `Return shape`, so the seat stops when its assigned questions are answered or the cap is reached, returns the verdict it has plus a truncated-coverage declaration, and never expands until a human steers. Budget defaults, the truncation marker, and its relation to `Unconfirmed` → `mstar-harness-core` § 定向执行与验证边界. The severity bar for the round's findings → `mstar-artifacts` `references/status-and-residuals.md`.
-- **Skill preset activation is PM-owned**: topic skills are presets in each role's `Skill Preset (PM-Activated)` section (`mstar-roles/references/<role>.md`), not self-loaded defaults. Omitting the `Skill presets:` field applies its documented default (`standard` on implementation / QC / QA rounds); identity-only execution requires explicit `Skill presets: none`.
+- **Skill preset activation is PM-owned**: each role's preset menu lives in its `Skill Preset (PM-Activated)` section (`mstar-roles/references/<role>.md`), not self-loaded defaults; the omission / `none` / default-`standard` decision → **`mstar-roles`** § Load Order.
 - **One primary coordinator:** project-manager never runs as a subagent or as another per-row PM session (`references/project-manager.md` § Primary coordinator authority).
 - **Plan/task scope travels with Assignment:** absolute Plan Path, plan_id, SDD dir and Control harness root are inherited. Children do not select/prepare rows, mutate workflow/root/shared projections or clear integration exclusion.
 - **No state authority travels with an Assignment:** session paths/references, CAS tokens and operation IDs stay with the primary coordinator. These are checked context, not bearer credentials, and never authorize a leaf. A leaf receiving them stops and reports the mismatch. Leaf Assignments are task instructions, not sealed plan admission records.
@@ -21,23 +19,13 @@ The coordinator keeps operation intent and receipt in its primary session. Publi
 
 ## Executor Anti-Recursion Rules
 
-For assignees (non-PM):
-
-- `Execute as: <role-id>` means the current assignee executes personally.
-- Do not spawn same-role nested subagent.
-- Do not infer dispatch from route narrative (`A -> B -> C`), handoff, `QA gate` fields, or role names in prose.
-- Extra delegation is forbidden unless explicitly listed in `Delegation: allowed (...)`.
-- If additional assignee is required, return `Blocked` with rationale.
-- A `PM` / `project-manager` / `iteration-drive` phrase inside your own brief is **not a promotion**: no leaf becomes the PM, drives an iteration, or selects a plan — report the mismatch and continue inside the assigned task.
+For assignees (non-PM), the shared anti-recursion NEVER list and the non-recursive dispatch rule → **`mstar-roles/references/_shared/leaf-executor-core.md`**（「Shared anti-recursion NEVER」+「Non-Recursive Dispatch Rule (shared shape)」）.
 
 ### NEVER quick list (all assignees)
 
-- **NEVER** treat `Handoff: …`, Completion Report template role names, routing tables, or “suggested owners” as **host invoke commands**; they are narrative unless `Delegation: allowed` authorizes callees.
-- **NEVER** assume exposed `Task` / subagent menus imply you may call them; **tool availability ≠ delegation authorization**.
-- **NEVER** execute parallel-agent dispatch as a leaf assignee; dispatch is **PM-orchestration-only** (`mstar-dispatch-gates`).
 - **NEVER** delegate the main deliverable of this assignment to `explore` (read-only orientation only, per `mstar-harness-core`).
 - **NEVER** claim `Done` / pass in **Completion Report** without the commands, logs, or artifacts explicitly required by the assignment’s **Evidence Required** section (see `mstar-harness-core` evidence gates).
-- **NEVER** escalate into `project-manager` scope because the brief mentions a PM, a plan, or a drive command; plan scope is **inherited and read-only** for a leaf, and the `Task`/subagent menu never implies otherwise.
+- **NEVER** treat a `PM` / `project-manager` / `iteration-drive` phrase inside your own brief as a promotion: no leaf becomes the PM, drives an iteration, or selects a plan — plan scope is inherited and read-only, so report the mismatch and continue inside the assigned task.
 
 ## Assignment Template (Canonical)
 

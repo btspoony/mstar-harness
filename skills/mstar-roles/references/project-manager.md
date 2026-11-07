@@ -101,20 +101,12 @@ Detailed conflict priority and dev allocation:
 
 ## Host Dispatch Rule (Critical)
 
-In invoke-based hosts (any host whose active reference exposes a callable invoke / delegation tool):
-
-- Assignment markdown alone is not dispatch.
-- Each independent Assignment needs one matching invoke.
-- For parallel `N >= 2`, emit all `N` invokes in one dispatch turn when host supports it.
-- Do not claim dispatch completion without matching invokes.
-
-Host invoke/dispatch details: `mstar-host` → active host reference and `references/parallel-dispatch.md`.
+In invoke-based hosts (any host whose active reference exposes a callable invoke / delegation tool), an Assignment Markdown block alone is not dispatch and a dispatch turn is not complete without its matching invokes: the counting rule, dispatch-turn ordering, batch-readiness and the paste-only failure → **`mstar-host`** → `references/parallel-dispatch.md` § Mandatory order / § Hard rules.
 
 > **On dsh:** the mounted layer decides the channel, not the shape of one task — **Agent Teams** is the default whenever `spawn_teammate` is mounted (one teammate per writable track, each handed its own absolute checkout path in the prompt; which scope the board may carry → `references/dsh-agent-teams.md` § Worktree hand-off and write isolation), **`subagent`** is the fallback when it is absent, and **`workflow`** carries read-only fan-out only. Board protocol, seat budget and wake discipline are not restated here → **`mstar-host`** → `references/dsh.md` § Delegation channels + `references/dsh-agent-teams.md`.
 
 **Native-workflow hosts:** when the active host reference declares a native workflow driver instead of a goal loop, iteration progress is that workflow (workflow snapshot phases + dispatch gates + child **settle notifications**), never a goal-round loop. Phase 2 progression is then the **`Rescheduling checkpoint`** (a child settle is a `result-settled` one): dispatch the ready independent work before any wait; waiting is right when a dispatched child already owns that work — **never** a duplicate unit of work against the same worktree. Procedure → `mstar-iteration` `references/phase-2-worktree-lease.md` §2.4; host declaration and its per-step rules → the active `mstar-host` reference.
-Dispatch mechanics and templates:
-`references/project-manager/dispatch-and-assignment.md`.
+Dispatch mechanics and templates → `references/project-manager/dispatch-and-assignment.md`.
 
 ---
 
@@ -144,8 +136,8 @@ If any item below matches, fix the dispatch/plan state or mark `Blocked`—do **
 - **NEVER** steal an active workflow's actual write/merge exclusion by age, idle status or labels (no TTL, age, or inactivity authority). Explicit current-turn user-directed recovery still uses the selected authority's supported public recovery path and append-only `notes.jsonl` audit; user instruction and audit alone never bypass ACTIVE foreign-exclusion, transaction/token guards or the cross-plan safety gate below. Ordinary coordinator operations manage exclusion inside their transaction; no leaf claim, per-plan bind or transfer is required.
 - **NEVER** writable-dispatch without validating actual source metadata/checkouts and L1/L2 isolation (distinct feature worktree per writable track).
 - **NEVER** run or dispatch parallel integration merges into `spec_integration_branch`; the workflow's `integration_merge_lease` serializes the recorded integration checkout, and direct complete verifies the actual result (`mstar-iteration` §2.6 · `mstar-branch-worktree` L1).
-- **NEVER** bypass atomic coordination safety for cross-plan writes. ACTIVE requires shared control-store transaction and execution-token CAS arbitration; when that arbitration is unavailable, use **`Plan parallelism: serial`** or **Blocked** if Assignment still claims parallel. **`Worktree mode: waived`** changes neither gate, and serial policy does not waive checkout isolation.
-- **NEVER** set `Worktree mode: waived` because default-gitignored `plans/` are missing under a feature worktree — keep feature worktrees; put absolute control **`Plan Path`** / **`SDD dir`** / **`Control harness root`** on Assignments (`mstar-branch-worktree` 「Harness path SSOT under default gitignore」). Missing shared coordination authority defaults to serial scheduling, not worktree waiver; the control store's transaction/CAS is the arbitration.
+- **NEVER** bypass atomic coordination safety for cross-plan writes. ACTIVE requires shared control-store transaction and execution-token CAS arbitration; when that arbitration is unavailable, use **`Plan parallelism: serial`** or **Blocked** if Assignment still claims parallel. **`Worktree mode: waived`** changes neither gate → **`mstar-branch-worktree`** § Worktree mode: waived.
+- **NEVER** set `Worktree mode: waived` because default-gitignored `plans/` are missing under a feature worktree → **`mstar-branch-worktree`** § Worktree mode: waived; missing shared coordination authority defaults to serial scheduling, not waiver.
 
 ---
 

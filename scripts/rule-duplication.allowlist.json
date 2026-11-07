@@ -1,1 +1,22 @@
-[]
+[
+  {
+    "file": "skills/mstar-roles/references/fullstack-dev-shared.md",
+    "normalizedHash": "d544a8489336",
+    "reason": "skills/mstar-roles/references/fullstack-dev-shared.md carries its own visible Repo-write Git discipline line because each role file stands alone for its reader, while skills/mstar-roles/references/_shared/leaf-executor-core.md owns that body (Git NEVER + Plan & Documentation Rules); the exemption ends when skills/mstar-roles/references/fullstack-dev-shared.md, skills/mstar-roles/references/frontend-dev.md and skills/mstar-roles/references/ops-engineer.md no longer each carry that line and point at the one owner instead — drop all three entries in that round's commit."
+  },
+  {
+    "file": "skills/mstar-roles/references/frontend-dev.md",
+    "normalizedHash": "d544a8489336",
+    "reason": "skills/mstar-roles/references/frontend-dev.md carries its own visible Repo-write Git discipline line because each role file stands alone for its reader, while skills/mstar-roles/references/_shared/leaf-executor-core.md owns that body (Git NEVER + Plan & Documentation Rules); the exemption ends when skills/mstar-roles/references/frontend-dev.md, skills/mstar-roles/references/fullstack-dev-shared.md and skills/mstar-roles/references/ops-engineer.md no longer each carry that line and point at the one owner instead — drop all three entries in that round's commit."
+  },
+  {
+    "file": "skills/mstar-roles/references/ops-engineer.md",
+    "normalizedHash": "d544a8489336",
+    "reason": "skills/mstar-roles/references/ops-engineer.md carries its own visible Repo-write Git discipline line because each role file stands alone for its reader, while skills/mstar-roles/references/_shared/leaf-executor-core.md owns that body (Git NEVER + Plan & Documentation Rules); the exemption ends when skills/mstar-roles/references/ops-engineer.md, skills/mstar-roles/references/fullstack-dev-shared.md and skills/mstar-roles/references/frontend-dev.md no longer each carry that line and point at the one owner instead — drop all three entries in that round's commit."
+  },
+  {
+    "file": "skills/mstar-engine-legacy/references/anti-recursion-checklists.md",
+    "normalizedHash": "cd86ebe41f51",
+    "reason": "skills/mstar-engine-legacy/references/anti-recursion-checklists.md is the engine-absent archive, which may not name a runtime topic skill, so it keeps its own copy of the blocked-dispatch self-check line owned by skills/mstar-dispatch-gates/SKILL.md; the archive file is slated for deletion by the host-reference extraction plan, and that deletion must drop this entry in the same commit."
+  }
+]

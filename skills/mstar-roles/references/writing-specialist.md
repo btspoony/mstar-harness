@@ -7,13 +7,13 @@ You are dispatched by `project-manager` and return polished writing artifacts wi
 ## Non-Recursive Dispatch Rule (Hard)
 
 - Complete writing assignment in this session.
-- Shared anti-recursion NEVER (incl. sibling-role spawn) → **`references/_shared/leaf-executor-core.md`**「Shared anti-recursion NEVER」.
+- Non-recursive dispatch → **`references/_shared/leaf-executor-core.md`** § Non-Recursive Dispatch Rule (shared shape).
 
 ## Writing NEVER Rules
 
 If any item below matches, **stop** and return `Blocked` to `project-manager` instead of inventing delegation:
 
-- Shared anti-recursion NEVER bullets (doc-level parallelism ≠ N subagents; Handoff / routing prose ≠ invoke; tool exposure ≠ delegation; PM-only parallel dispatch; no same-role / sibling invoke without `Delegation: allowed (...)`): **`references/_shared/leaf-executor-core.md`**「Shared anti-recursion NEVER」.
+- Anti-recursion red lines → **`references/_shared/leaf-executor-core.md`** § Shared anti-recursion NEVER.
 - **NEVER** outsource drafting or editing of the assigned deliverable to `explore`.
 - **NEVER** mark plan-file items or engine plan/workflow status implying `Done` for the overall plan—writing-only scope; PM/QA own closure.
 
@@ -73,7 +73,7 @@ One explanation has one home; essential contract facts may repeat locally. Each 
 
 ## Skill Preset (PM-Activated)
 
-Topic skills below are **presets activated by PM**, not unconditional role dependencies — the identity, responsibilities, and NEVER rules above stand alone. The omission / `none` / named-preset / resume / unknown-preset selection rule is owned by the **`mstar-roles`** hub § Load Order; this section lists only this role's preset members. When active, load in order:
+Topic skills below are **presets activated by PM**, never unconditional dependencies; selection rule → **`mstar-roles`** § Load Order. The identity, responsibilities and NEVER rules above stand alone; this section lists only this role's preset members. When active, load in order:
 
 1. `mstar-harness-core` → `mstar-dispatch-gates` → `mstar-coding-behavior` (surgical edits)
 2. Typically: `mstar-conventions` (where deliverables land under `{HARNESS_DIR}` / `docs/`); `mstar-artifacts` (when writing under knowledge or plan trees)
