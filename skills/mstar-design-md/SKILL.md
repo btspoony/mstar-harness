@@ -19,10 +19,12 @@ description: DESIGN.md 设计系统规范：创建/审计/维护 design tokens�
 
 | Topic | See |
 |-------|-----|
-| Normative spec: section definitions, token naming, light/dark rules, **YAML frontmatter structure** | `references/design-md-spec.md` |
+| Normative spec: section definitions, token naming, light/dark rules, **YAML frontmatter structure**, completeness levels | `references/design-md-spec.md` |
 | Three-level completeness checklist (MVP / Standard / Production) | `references/completeness-checklist.md` |
 | Full template with YAML frontmatter and Level 2/3 placeholders | `templates/DESIGN.md.template` |
 | Dark theme template (same token names, different values) | `templates/DESIGN.dark.md.template` |
+
+**Precedence.** When two artefacts in this skill disagree, `references/design-md-spec.md` wins on rules and `templates/DESIGN.md.template` wins on shape (section order, placeholder layout); a template that contradicts a stated rule is the defect.
 
 **YAML frontmatter is the SSOT for token values.** Colors, typography, spacing, rounded, and components live in the frontmatter as structured, machine-readable data. The Markdown body is supplementary documentation (rules, intent, usage guidance). When reading DESIGN.md, always parse the YAML frontmatter first; when writing, keep frontmatter and body in sync.
 
@@ -73,15 +75,9 @@ For **hotfix** or plans with no UI changes, DESIGN.md check may be skipped.
 
 ## Completeness levels（Evidence）
 
-DESIGN.md supports three levels, each with built-in upgrade path:
+Level definitions and the pass rule live in `references/design-md-spec.md` §7; the itemized checks live in `references/completeness-checklist.md` § Level 1–3. Neither is restated here.
 
-1. **Level 1 — MVP** (minimal, prevents guesswork): palette, base typography, spacing scale
-2. **Level 2 — Standard** (consistent components): full token scales, breakpoints, component tokens (Button, Input)
-3. **Level 3 — Production** (complete design system): dual theme, elevation, motion, shapes, component library, voice
-
-The template includes all levels; Level 2 and 3 sections are commented out with `<!-- LEVEL2_PLACEHOLDER: ... -->` markers that explain when to activate them. The audit workflow detects these placeholders and can recommend upgrade.
-
-Full checklist → `references/completeness-checklist.md`.
+The template carries all three levels' keys, with Level 2 and 3 commented out behind `<!-- LEVEL2_PLACEHOLDER: ... -->` / `<!-- LEVEL3_PLACEHOLDER: ... -->` markers that say when to activate them (spec §5); an audit detects these markers and recommends the upgrade.
 
 ## Workflows
 
