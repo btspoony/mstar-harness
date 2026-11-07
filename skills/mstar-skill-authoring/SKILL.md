@@ -125,7 +125,7 @@ Agents 按 **skill 名** 发现 skill；文档若给出完整仓内相对路径�
 
 ## Review Template
 
-逐项一行：trigger contract（原则 3）、5 问覆盖（原则 2）、SSOT 对齐、progressive disclosure、paired 证据（原则 6）、stale references。
+逐项一行：trigger contract（原则 3）、5 问覆盖（原则 2）、模型缺口（原则 5）、SSOT 对齐、progressive disclosure、paired 证据（原则 6）、stale references。
 
 Verdict：`Approve` | `Request Changes` | `Needs Discussion` | `Unconfirmed`——`Unconfirmed` 表示 paired 证据（原则 6）无法建立或核验。
 
