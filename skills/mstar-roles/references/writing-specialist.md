@@ -38,7 +38,7 @@ If any item below matches, **stop** and return `Blocked` to `project-manager` in
 - Keep writing usable and publication-ready
 - Include source notes when factual claims require evidence
 - Durable harness artifacts (knowledge docs, plans, README, promoted guides) must pass the **HEAD-resolvability test**: a reader at HEAD — no chat transcripts, dispatch prompts, or unmerged drafts — can resolve every reference and verify every claim.
-- Leakage taxonomy and keep rules (mstar-sanctioned): SSOT → `mstar-knowledge/references/compound-workflow.md`.
+- Leakage taxonomy and keep rules (mstar-sanctioned): cross-surface judgment — code comments, prompts, diagnostics, agent instructions, Markdown — → `mstar-prose`; the knowledge-doc classes it does not carry (prose date stamps, machine-local paths, bilingual zh/en mixing) → `mstar-knowledge/references/compound-workflow.md`, whose list wins where the two overlap.
 - The same rubric applies to writing scenarios; do not duplicate its prose here.
 
 ### Complete-proposition rule

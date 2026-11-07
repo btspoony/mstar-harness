@@ -11,7 +11,7 @@ Write enough to preserve the contract, then remove the reasoning transcript arou
 
 Read `mstar-harness-core` before the first pass — lifecycle, authorization and conflict authority. Load this skill for any passage being drafted, reviewed, trimmed or audited, on any surface: Markdown documents, code and test comments, JSDoc, module comments, prompts, descriptions, diagnostics, CLI and UI strings, agent instructions and skill bodies.
 
-Two neighbours own different tests of the same file: `mstar-skill-authoring` judges whether a skill is well formed (name, description shape, five-question body, progressive disclosure), and `mstar-coding-behavior` judges implementation behavior. Whether the prose inside is resolvable at HEAD is this skill's judgment; neither restates it.
+Two neighbours own different tests of the same file: `mstar-skill-authoring` judges whether a skill is well formed (name, description shape, five-question body, progressive disclosure), and `mstar-coding-behavior` judges implementation behavior. Whether the prose inside is resolvable at HEAD is this skill's judgment; neither restates it. Durable knowledge documents carry three classes this file does not list — prose date stamps, machine-local paths and bilingual zh/en mixing — owned by `mstar-knowledge/references/compound-workflow.md`; where a knowledge document is in scope both lists apply, and that specific list wins on overlap.
 
 ## Scope
 
