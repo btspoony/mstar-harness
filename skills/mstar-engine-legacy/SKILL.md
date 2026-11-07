@@ -13,13 +13,8 @@ description: "Engine-absent safety and historical-field archive: field history, 
 
 ## Scope
 
-- 归档**被承接的完整契约散文**（Task 2 displaced prose 的单一收容处）：
-  1. `status.json` v1→v2 字段历史表（字段、severity、lifecycle、jq/flock 示例）与 `references/migration-source-shapes.md`（root/snapshot/register 历史形状；无执行路径或 live writer）
-  2. Concurrent-write and checkout safety without recreated claim/bind/transfer APIs
-  3. 各宿主 QC 座次 N=3/N=1 重述（omp / opencode / cursor / codex / kimi / zcode / dsh）
-  4. 反递归完整清单（leaf executor checklist、红线、NEVER 规则）
-  5. Engine-check 样板含义（运行时 skills 中 `Engine check (when available)` blockquote 的语义与 standalone guarantee 规则）
-- **执行状态边界**：engine-absent 宿主无文件执行路径——执行状态 = 对话追踪（no-plan mode），门禁（QC/QA）仍适用；本归档不重建任何文件执行面。
+- 归档**被承接的完整契约散文**（Task 2 displaced prose 的单一收容处）：`status.json` v1→v2 字段历史表（字段、severity、lifecycle、jq/flock 示例）与 `references/migration-source-shapes.md`（root/snapshot/register 历史形状；无执行路径或 live writer）
+  - **执行状态边界**：engine-absent 宿主无文件执行路径——执行状态 = 对话追踪（no-plan mode），门禁（QC/QA）仍适用；本归档不重建任何文件执行面。
 - 运行时 skills 只保留短指针 + engine-check 命令；完整全文一律在本 skill 的 `references/` 中（避免全仓重复）。
 
 ## Workflow
@@ -32,10 +27,6 @@ description: "Engine-absent safety and historical-field archive: field history, 
 |------|------|
 | status 字段 / severity / lifecycle / 迁移 / jq-flock 示例 | `references/status-field-history.md` |
 | Historical root/snapshot/register shapes, provenance, closure, read aliases and retired rollups | `references/migration-source-shapes.md` |
-| Checkout/atomic safety; no supported writer means report capability, never edit protected state | `references/lease-protocol.md` |
-| 各宿主 QC 座次 N=3/N=1 重述 | `references/qc-seat-n-restatements.md` |
-| 反递归完整清单（leaf checklist + 红线） | `references/anti-recursion-checklists.md` |
-| Engine-check 样板含义与 standalone guarantee 规则 | `references/engine-check-boilerplate.md` |
 
 ## Decision Rules
 
