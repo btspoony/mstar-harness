@@ -51,7 +51,7 @@ or a custom profile).
 
 - **Runtime**: Bun-hosted host — the plugin, its gates and its in-process engine all run under dsh's Bun, which is **not version-gated**: the store's Node floor applies to Node entrypoints only, and `engines.bun` declares the development toolchain. Release-surface `enforcement` / `.mstarc` settings (see § Configuration) are gates, not a runtime floor: a runtime without the native `node:sqlite` capability refuses actionably instead of degrading to a transport or JSON.
 - **Upgrade / reload**: `dsh plugin --profile web add <spec>` against the published version, or re-run `npx @mstar-harness/cli init --target dsh`; then reload the profile so the composed rows pick up the new build. The bundled `harness-skills/` mirror is a build-time sync — a checkout that has not run `bundle-assets` mounts no skills.
-- **Readiness, not an action**: refreshing an *installed* copy is a bounded, authorized ops act — an authority flip first quiesces, then reloads/upgrades (or explicitly excludes) every installed reader/writer and attests the versions it saw. Editing harness docs or source performs none of it. If this host cannot reload safely, stop at the exact manual-restart step, have the user restart, then re-verify entrypoint/runtime/version/session identity read-only before the flip.
+- **Readiness, not an action** → `_shared/host-runtime-contract.md` § Readiness, not an action: the flip's prerequisites, the "editing source performs none of it" boundary and the manual-restart fallback are stated once there.
 
 ## MCP delivery
 
