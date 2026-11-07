@@ -58,9 +58,7 @@ description: "Dispatch gates: PM-only leaf dispatch, executor/delegation identit
 
 当 PM 声明「并发分派」时，须同时满足**文案并发**与**工具并发**；宿主封装限制不构成串行理由，无法真实并发时如实报告限制。批调用与逐次异步启动的差异、count 自检、角色绑定字段自检、准备回合与派发回合分离、未齐不发 → **`mstar-host`** → `references/parallel-dispatch.md` § Mandatory order / § Hard rules / § Self-check before send / § Prerequisite vs dispatch turn。
 
-- **QC tri-review（SDD 强制）**：`Execution mode: sdd` 且全部 task 完成后 → `qc-specialist` / `qc-specialist-2` / `qc-specialist-3` 同条消息 **N=3**（写 `{SDD_DIR}/review/qc1.md`…`qc3.md`；PM 汇总 `qc-consolidated.md` + durable plan summary）。Assignment 须含 branch **review-package** 路径与 report paths。适用于**单 plan 与 iteration**。
-- **QC 单席（例外）**：`Execution mode: inline`（hotfix 等），或 Assignment 显式 `QC mode: single` / `QC mode: single — override: <reason>` → `qc-specialist` ×1，`N=1`，写 `{SDD_DIR}/review/qc.md`。
-- **QC targeted re-review**：Assignment 含 **`QC re-review: targeted — reviewers: …`** 时，**N** = 所列席位数（1–3），同条消息发满 **N**。
+- **QC 席位（分派侧）**：`Execution mode: sdd` 且全部 task 完成后 → `qc-specialist` / `qc-specialist-2` / `qc-specialist-3` 三席**同一条消息**发出，写 `{SDD_DIR}/review/qc1.md`…`qc3.md`；`inline`（hotfix 等）或 Assignment 显式 `QC mode: single` / `QC mode: single — override: <reason>` → `qc-specialist` ×1 写 `{SDD_DIR}/review/qc.md`；`QC re-review: targeted — reviewers: …` → 同条消息发满所列席位数（1–3）。席位计数与模式映射 → **`mstar-review-qc`** § 分派时机。Assignment 须含 branch **review-package** 路径与 report paths；PM 汇总 `qc-consolidated.md` + durable plan summary。
 
 ### 具名 subagent 宿主：文案分派 ≠ 调度完成
 
@@ -79,7 +77,7 @@ When **`Execution mode: sdd`** (`mstar-sdd`):
 - File handoffs only — no pasted plan/diff/history in dispatch prompts.
 - **scope 与凭据边界**：`{SDD_DIR}/task-N-brief.md` 携带继承的 plan 作用域（plan id + 绝对路径）；**不下发** session JSON、`--expect <revision>` 等写凭据，也不得让 implementer/reviewer 自选 plan（见 § Plan 作用域与 credential 不下发）。leaf 不持有行级执行 lease；integration merge lease 由 coordinator 持有。
 - Record per-task BASE SHA; use `review-package` for diffs — **never `HEAD~1`**.
-- After all tasks: branch `review-package` in `{SDD_DIR}/review/` → **mandatory tri-review N=3** when `Execution mode: sdd`; **N=1** only for `inline` / explicit single override.
+- After all tasks: branch `review-package` in `{SDD_DIR}/review/` → plan QC tri (seat count per `Execution mode` → **`mstar-review-qc`** § 分派时机).
 
 > **QC seats Engine-check 唯一规范体：** `mstar-review-qc` `SKILL.md`（Engine-check seats 行）。
 
@@ -97,10 +95,10 @@ When **`Execution mode: sdd`** (`mstar-sdd`):
 - **Cross-plan versus within-plan concurrency:** ready rows may implement in parallel through ordinary leaf dispatch with distinct recorded source checkouts and safe atomic coordination (ACTIVE: control DB transactions/CAS). Without that shared coordination safety choose serial scheduling; an unresolved unsafe parallel Assignment is blocked with that recovery. No missing plans under gitignore, serial policy or worktree waiver waives the parallel safety gate or actual checkout isolation. Procedure → `mstar-iteration` §2.0/§2.4; write-domain ownership → `mstar-branch-worktree` “Harness path SSOT under default gitignore”.
 - **`integration_merge_lease`**：`spec_integration_branch` 上的 merge **始终串行**（一次仅一 holder）→ **`mstar-iteration`** · **`mstar-artifacts`**。
 - **`Plan parallelism: serial`** constrains scheduling, not actual checkout isolation, atomic writers or serial integration safety.
-- **Plan QC tri** after SDD task loop（`Execution mode: sdd`）；**单席**仅 `inline` / hotfix。共用 `Review cwd` / `Working branch` / `plan_id` / `Review range`（**`mstar-branch-worktree`**）。
+- **Plan QC tri** after SDD task loop；席位与 `inline` 单席例外 → **`mstar-review-qc`** § 分派时机。共用 `Review cwd` / `Working branch` / `plan_id` / `Review range`（**`mstar-branch-worktree`**）。
 - **Tri 同消息规则**：plan QC tri（SDD 或 Assignment 显式 `QC mode: full tri-review`）时三席 **同一条消息**、**同一套** scope 字段。
 
-> **Engine check (when available):** run `mstar worktree check <plan-id> --workflow <id>` (L1) / `mstar worktree check --l2 --tracks <json>` (L2) (or `import { l1PreDispatchCheck, l2PreDispatchCheck } from "@mstar-harness/engine"` in a host hook) to verify the 同仓写隔离 gate above (per-track feature worktree, branch alignment) before parallel dispatch. On `fail` -> do not proceed; fix and re-run. Skill text below remains authoritative when the runtime is absent.
+> **Engine check (when available):** run `mstar worktree check --workflow <id> --plan <plan-id>` (L1) / `mstar worktree check --l2 --tracks <json>` (L2) (or `import { l1PreDispatchCheck, l2PreDispatchCheck } from "@mstar-harness/engine"` in a host hook) to verify the 同仓写隔离 gate above (per-track feature worktree, branch alignment) before parallel dispatch. On `fail` -> do not proceed; fix and re-run. Skill text below remains authoritative when the runtime is absent.
 
 ## Specialist review-and-edit dispatch
 
@@ -121,7 +119,7 @@ When **`Execution mode: sdd`** (`mstar-sdd`):
 共享反递归红线全清单见 **`mstar-roles/references/_shared/leaf-executor-core.md`**「Shared anti-recursion NEVER」；lease / worktree / Phase 相关反模式见 **`mstar-branch-worktree`** 与 **`mstar-iteration`**。本节仅列派发机制专属：
 
 - 宿主支持批调用却把 QC 三审拆成等待完成的串行轮次（tri 模式），或单席未附 review-package 路径。
-- 仅 1 次 invoke 却声称「tri-review 已并行启动」（tri 模式 N=3）。
+- 仅 1 次 invoke 却声称「tri-review 已并行启动」（tri 模式三席）。
 - SDD 并行 implementer 未隔离 worktree / ownership / session；把任务独立当作跳过 L1/L2 安全闸的理由。
 - 递归同角色 subagent；把 Handoff / 多轨编排措辞当 invoke。
 - Review-and-edit 链未完成即 commit integration 分支；PM 代做专业角色编辑而不 invoke。
@@ -132,7 +130,7 @@ When **`Execution mode: sdd`** (`mstar-sdd`):
 
 ## Workflow
 
-派发检查顺序：承接方先读 Assignment 顶部 **IDENTITY / 反模式块**确认 leaf 身份（反递归红线）→ PM 核对字段契约（`Execute as` / `Delegation` / 角色绑定字段；**先自检字段再发送**）→ 同一条消息**一次性发满 N 次** invoke（工具并发；N 按 `Execution mode` 映射）→ 派发前完成同仓写隔离（L1/L2 worktree）→ SDD 按 ready-task 依赖并行 implement + fresh reviewer → task 全完成后 `{SDD_DIR}/review/` review-package → **强制 tri-review N=3**（或 inline 单席 N=1）。准备用 read/bash 不计入 N，且与派发回合分离（**未齐不发**）。
+派发检查顺序：承接方先读 Assignment 顶部 **IDENTITY / 反模式块**确认 leaf 身份（反递归红线）→ PM 核对字段契约（`Execute as` / `Delegation` / 角色绑定字段；**先自检字段再发送**）→ 同一条消息**一次性发满 N 次** invoke（工具并发；N 按 `Execution mode` 映射）→ 派发前完成同仓写隔离（L1/L2 worktree）→ SDD 按 ready-task 依赖并行 implement + fresh reviewer → task 全完成后 `{SDD_DIR}/review/` review-package → **强制 tri-review**（`inline` 单席例外；席位 → **`mstar-review-qc`** § 分派时机）。准备用 read/bash 不计入 N，且与派发回合分离（**未齐不发**）。
 
 ## References
 

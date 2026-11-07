@@ -245,13 +245,13 @@ mstar worktree cleanup --workflow <id> [--harness <path>] [--apply] [--remote] [
 | 文件交接 | brief / report / diff / `progress.md` 在 `{SDD_DIR}`；dispatch prompt **只给路径**，不贴 plan 全文或 task 历史 |
 | Assignment fields | Every implement dispatch includes `Execution mode: sdd`, absolute `SDD dir`, source Worktree path/Working branch and inherited control-root Plan Path. |
 | 大包 inline | **禁止**把 T1–Tn 或整份 plan 写进 **一个** `fullstack-dev` leaf Assignment 冒充 SDD |
-| 分支 diff | 全部 task 完成后 `mstar sdd review-package MERGE_BASE HEAD` → `{SDD_DIR}/review/` branch diff → plan QC tri（N=3） |
+| 分支 diff | 全部 task 完成后 `mstar sdd review-package MERGE_BASE HEAD` → `{SDD_DIR}/review/` branch diff → plan QC tri（席位 → **`mstar-review-qc`** § 分派时机） |
 
 Iteration Phase 2 附加：
 
 - PM **NEVER** 在 PM 线程实现产品代码（delegate dev；hotfix 例外见 **`mstar-phase-gates`**）
 - `Subagent invokes issued: 0` 而 Assignment 已写出 → **`dispatch incomplete`**；下一条补发 invoke，禁止 PM 顶替
-- QC 初轮：**SDD → N=3**；**inline → N=1**；plan QC tri 三席 **同条消息 N=3**（非 implement 轨数）
+- QC 初轮：SDD / inline 的席位与同条消息要求 → **`mstar-review-qc`** § 分派时机（plan QC tri 三席不随 implement 轨数变化）
 - **`Findings cleanup: allow-residual`（默认）**：open finding 经 `mstar plan issue-add` 捕获为 store issue，并在各决策面披露 id / issue severity / 跟踪位置；`zero-residual` 显式 opt-in。处置、blocker-defer 与披露规则 → **`mstar-artifacts`**「Findings cleanup modes」，不使用退役 project register。
 
 ## Feature worktree (per plan)
