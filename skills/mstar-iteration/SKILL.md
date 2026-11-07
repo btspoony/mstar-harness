@@ -31,9 +31,7 @@ Phase 3: iteration-close
 Phase 4: PR delivery（开 PR）
      ↓
 Phase 5: PR merge-ready loop —— 至 mergeable + CI 全绿 + reviews resolved
-         ├ reviewed-auto：跑 PR 级本地 review loop（mstar-pr-loop）→ 当前 head 上 settled、已 posted 的 ship it，**并且**（仅当存在挂载的外部 review bot；无 bot 时记 N/A）外部 AI review（§5.1b）在当前 head 达到其通过线（如 Greptile 5/5、mstar-inspector check success）、不失败、无 blocking finding = merge 授权
-         ├ reviewed-bot：**不**起本地 loop；挂载的 review bot（如 mstar-inspector）跟随每个新 commit 自动产出 review → 监控其在当前 head 的最新 review 达到自身门（mstar-inspector：`mstar-inspector review` check success）、无 blocking finding = merge 授权；无 bot 挂载 = 配置失效，回 Phase 1
-         └ owner-gated：停在 merge-ready → 等人类 owner 对当前 PR head 的书面批准
+         └ merge 授权按 compass `pr_merge_policy` 的三分支谓词（`reviewed-auto` / `reviewed-bot` / `owner-gated` → `references/phase-4-5-pr-delivery.md` § 5.3）
      ↓
 Phase 6: post-merge close —— merge 授权完成、PR merged 后 §6.1–§6.4
      ↓
@@ -123,7 +121,7 @@ Phase 6: post-merge close —— merge 授权完成、PR merged 后 §6.1–§6.
 - **不要将 Phase 4 开 PR 等同于迭代交付完成** — 必须完成 Phase 5 §5.2 merge-ready loop
 - **不要将 §5.2 merge-ready exit 或 PR merge 当作生命周期终点** — merged 后必须进入 Phase 6（`references/phase-6-post-merge-close.md` §6.1–§6.4）；禁止为通过 close 释放 lease 或伪造 Done/关闭 residual
 - **不要在 Phase 5 CI 仍跑或 AI review 波次未结束时 push**（§5.1a）— 本地可提前修，push 等 idle
-- **不要在缺 §5.3 授权时 merge PR** — merge-ready / CI 绿 / QC Approve / review `ship it` 各自都不构成 merge 授权；`reviewed-auto` 下须**同时**满足 settled、已 posted、`head` 等于当前 PR head 的 `ship it`，**以及**（仅在挂载了外部 review bot 时；无 bot 记 N/A）§5.1b 的外部 AI review 在当前 head 达到其通过线且无 blocking finding；`reviewed-bot` 下只认挂载 bot 在当前 head 的最新 review 达到其自身门（mstar-inspector 为 `mstar-inspector review` check `success`），**不得**另起本地 loop 顶替、也不得因无 bot 就视为通过；`owner-gated` 只认**人类 owner**（操作者/用户，不是 coordinator 席位）的书面批准；不得因为自家 review 通过就忽略外部 bot 的 P1 或未达标的分数
+- **不要在缺 §5.3 授权时 merge PR** — merge-ready / CI 绿 / QC Approve / review `ship it` 各自都不构成 merge 授权；三分支完整谓词、外部 bot 的 P1/未达标分数与 `pr_merge_policy` 缺失时的 STOP → **`references/phase-4-5-pr-delivery.md`** § 5.3
 - **不要在 integration worktree 或主 checkout（control root）上直接编辑产品代码** — Phase 5 修复走 fix feature worktree，review 后 merge 回 integration worktree（`phase-4-5-pr-delivery.md` §5.0）
 - **不要在缺 `iteration_base_branch` / `target_branch` 时默认 `main` / `master`**（门禁、例外写法与 base 解析 → **`mstar-branch-worktree`** § Git 功能分支门禁（业务仓库））
 - **不要在 Phase 1 §1.6 由 product/architect 向 `{KNOWLEDGE_DIR}/` 新增**（知识 → iteration-close **`mstar-compound`**）
