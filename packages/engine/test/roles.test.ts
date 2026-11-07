@@ -636,14 +636,13 @@ describe("legacy archive corpus helpers", () => {
     }
   });
 
-  test.skipIf(CORPUS === null)("collect reads every shipped archive reference file", () => {
+  test.skipIf(CORPUS === null)("the shipped corpus carries no archive reference directory", () => {
+    // The archive was converged to its SKILL.md alone: its reference files were
+    // folded into `mstar-project-governance/references/migration-source-shapes.md`.
+    // The helper stays best-effort, so the shipped corpus must now yield nothing.
     const corpus = CORPUS as string;
-    const texts = collectLegacyArchiveReferenceTexts(corpus);
-    const shipped = readdirSync(join(corpus, LEGACY_ARCHIVE_SKILL, "references")).filter((name) =>
-      name.endsWith(".md"),
-    );
-    expect(texts).toHaveLength(shipped.length);
-    expect(texts.some((text) => text.includes("# Status v1→v2 field history"))).toBe(true);
+    expect(existsSync(join(corpus, LEGACY_ARCHIVE_SKILL, "references"))).toBe(false);
+    expect(collectLegacyArchiveReferenceTexts(corpus)).toEqual([]);
   });
 
   test.skipIf(CORPUS === null)("collect resolves nothing for a root without the archive", () => {
