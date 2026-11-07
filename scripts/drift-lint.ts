@@ -67,6 +67,12 @@
  * file over its ceiling fails, and so does manifest drift in either
  * direction (`manifest-stale` for a ceiling whose file is gone,
  * `budget-missing` for a shipped file with no ceiling).
+ * 10. skills corpus — duplicate HARD rules: the same rule wording may live in
+ * one file only; a second file points at it (arrow -> backticked skill ->
+ * section marker) instead of re-vendoring it. Report-only for now: the
+ * current corpus copies are pruned by plan
+ * `skill-pointerization`, which flips this guard to blocking when it
+ * lands.
  *
  * The forward callout citation check also validates the **binary prefix**
  * of every backticked CLI
@@ -90,6 +96,11 @@ import { join, relative } from "node:path";
 import { getCommandDefinitions } from "../packages/commands/src/definitions.ts";
 import { commentMask } from "./ascii-literal-utils.ts";
 import { checkMarkdownLinks } from "./markdown-links.ts";
+import {
+  checkRuleDuplication,
+  ruleFingerprintHash,
+  type RuleDuplicationResult,
+} from "./rule-duplication.ts";
 import {
   SKILL_BUDGETS_MANIFEST,
   checkSkillBudgets,
@@ -1030,6 +1041,28 @@ function reportOversizedTests(): void {
   }
 }
 
+/**
+ * Advisory inventory of Guard 10 duplicate groups. Report-only until plan
+ * `skill-pointerization` prunes the known corpus copies and flips
+ * this guard to blocking; each row names its fingerprint so an accepted
+ * exception can be allowlisted verbatim.
+ */
+function reportRuleDuplication(result: RuleDuplicationResult): void {
+  if (result.duplicates.length === 0 && result.exemptGroups.length === 0) return;
+  console.warn(
+    `advisory: Guard 10 duplicate HARD rules ${result.duplicates.length} duplicate groups across ${result.duplicates.reduce(
+      (sum, group) => sum + group.hits.length,
+      0,
+    )} sites (${result.exemptGroups.length} allowlisted groups) - advisory until plan skill-pointerization lands; that plan prunes the known corpus copies`,
+  );
+  for (const group of [...result.duplicates, ...result.exemptGroups]) {
+    const sites = [...group.hits, ...group.exempt].map((hit) => `${hit.file}:${hit.line}`).join(", ");
+    console.warn(
+      `advisory:   [${ruleFingerprintHash(group.normalized)}] ${group.hits.length} active, ${group.exempt.length} exempt - ${sites}`,
+    );
+  }
+}
+
 
 if (import.meta.main) {
  /* ------------------------------------------------------------------ */
@@ -1378,6 +1411,26 @@ if (import.meta.main) {
   }
 
 /* ------------------------------------------------------------------ */
+/* Guard 10: skills corpus — duplicate HARD rules (advisory) */
+/* ------------------------------------------------------------------ */
+
+  let ruleDuplication: RuleDuplicationResult = {
+    filesChecked: 0,
+    duplicates: [],
+    exemptGroups: [],
+    allowlistFailures: [],
+  };
+  try {
+    ruleDuplication = checkRuleDuplication(
+      root,
+      skillFiles.map((file) => relative(root, file)),
+    );
+  } catch (error) {
+    fail(`Guard 10 rule duplication: ${(error as Error).message}`);
+  }
+  for (const row of ruleDuplication.allowlistFailures) fail(row);
+
+/* ------------------------------------------------------------------ */
 
  // Guard 4 footer fragment: report each check's own verdict + count so a
  // load-order-only failure is never misstated as a combined/OK status.
@@ -1395,17 +1448,22 @@ if (import.meta.main) {
     skillBudgets.failures.filter((failure) => failure.kind === "over-budget").length
   } over budget`;
 
+  const ruleDuplicationSummary = `Guard 10 duplicate HARD rules ${ruleDuplication.duplicates.length} groups (${
+    ruleDuplication.exemptGroups.length
+  } allowlisted; advisory until skill-pointerization)`;
+
   reportOversizedTests();
+  reportRuleDuplication(ruleDuplication);
   if (failures.length > 0) {
     console.error(`drift-lint: ${failures.length} violation(s) found\n`);
     for (const f of failures) console.error(`  ✗ ${f}`);
     console.error(
-      `\nchecked ${calloutsChecked} Engine-check callouts (${cliCitationsChecked} CLI citations prefix-checked against ${binNames.length} declared bins; ${useCliScan.filesScanned} use-cli skill files with ${useCliScan.cliCitationsChecked} full-text citations) against ${engineExports.size} engine exports and ${cliCommands.size} CLI commands; ${categoryTokensChecked} audit category tokens; README bilingual pairing ${bilingualStatus}; ${ephemeralFilesScanned} skill files (${ephemeralCitationsFound} ephemeral citations); ${rolesSummary}; ${fiveQuestion.checked} runtime mstar-* skills pass five-question lint (${fiveQuestion.failures.length} violations); provenance scan ${provenance.filesScanned} repo text files (${provenance.citationsFound} provenance citations); ${markdownLinksSummary}; ${skillBudgetsSummary}`,
+      `\nchecked ${calloutsChecked} Engine-check callouts (${cliCitationsChecked} CLI citations prefix-checked against ${binNames.length} declared bins; ${useCliScan.filesScanned} use-cli skill files with ${useCliScan.cliCitationsChecked} full-text citations) against ${engineExports.size} engine exports and ${cliCommands.size} CLI commands; ${categoryTokensChecked} audit category tokens; README bilingual pairing ${bilingualStatus}; ${ephemeralFilesScanned} skill files (${ephemeralCitationsFound} ephemeral citations); ${rolesSummary}; ${fiveQuestion.checked} runtime mstar-* skills pass five-question lint (${fiveQuestion.failures.length} violations); provenance scan ${provenance.filesScanned} repo text files (${provenance.citationsFound} provenance citations); ${markdownLinksSummary}; ${skillBudgetsSummary}; ${ruleDuplicationSummary}`,
     );
     process.exit(1);
   }
 
   console.log(
-    `drift-lint: OK — ${calloutsChecked} Engine-check callouts reference real exports (${engineExports.size}) and CLI commands (${cliCommands.size}); ${cliCitationsChecked} CLI citations prefix-checked against ${binNames.length} declared bins (${useCliScan.filesScanned} use-cli skill files, ${useCliScan.cliCitationsChecked} full-text citations); engine spec citations resolve; ${categoryTokensChecked} audit category tokens match AUDIT_CATEGORIES; README bilingual pairing ${bilingualStatus}; ${ephemeralFilesScanned} skill files clean of ephemeral citations; ${rolesSummary}; ${fiveQuestion.checked} runtime mstar-* skills pass five-question lint (${fiveQuestion.failures.length} violations); provenance scan ${provenance.filesScanned} repo text files (${provenance.citationsFound} provenance citations); ${markdownLinksSummary}; ${skillBudgetsSummary}`,
+    `drift-lint: OK — ${calloutsChecked} Engine-check callouts reference real exports (${engineExports.size}) and CLI commands (${cliCommands.size}); ${cliCitationsChecked} CLI citations prefix-checked against ${binNames.length} declared bins (${useCliScan.filesScanned} use-cli skill files, ${useCliScan.cliCitationsChecked} full-text citations); engine spec citations resolve; ${categoryTokensChecked} audit category tokens match AUDIT_CATEGORIES; README bilingual pairing ${bilingualStatus}; ${ephemeralFilesScanned} skill files clean of ephemeral citations; ${rolesSummary}; ${fiveQuestion.checked} runtime mstar-* skills pass five-question lint (${fiveQuestion.failures.length} violations); provenance scan ${provenance.filesScanned} repo text files (${provenance.citationsFound} provenance citations); ${markdownLinksSummary}; ${skillBudgetsSummary}; ${ruleDuplicationSummary}`,
   );
 }

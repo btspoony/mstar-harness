@@ -106,4 +106,23 @@ describe("skill budgets", () => {
       repo.close();
     }
   });
+
+  // countLines counts logical lines, so a file with no trailing newline reports
+  // one more line than `wc -l`. AGENTS.md requires exactly one trailing newline,
+  // so a ceiling derived from `wc -l` can only ever be conservative here — never
+  // permissive. Pin that direction; do not silently re-derive ceilings from `wc`.
+  test("a file with no trailing newline counts one line more than wc -l", () => {
+    const repo = fixture(
+      { "skills/no-final-newline/SKILL.md": "line 1\nline 2\nline 3" },
+      [{ file: "skills/no-final-newline/SKILL.md", maxLines: 2 }],
+    );
+    try {
+      const result = checkSkillBudgets(repo.root, readSkillBudgets(repo.root));
+      expect(result.failures).toEqual([
+        { kind: "over-budget", file: "skills/no-final-newline/SKILL.md", lines: 3, maxLines: 2 },
+      ]);
+    } finally {
+      repo.close();
+    }
+  });
 });
