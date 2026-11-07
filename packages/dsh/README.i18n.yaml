@@ -2,5 +2,5 @@
 # Blob hashes (git hash-object) of each side as of the last confirmation that
 # both languages say the same thing (dsh i18n contract: a pair is three
 # sibling files; editing either side obligates re-confirming and re-recording).
-README.md: ba3afbe7c3bc10f8d410e0dda7c59b24f621b70b
-README.zh.md: 654c047198bd69be2c55120242b35d6ce2ff1653
+README.md: 1c69b504648ecdb80e42d4db2801c9ed50ccd28a
+README.zh.md: 5be42b88a68181558665164627dd0592dbaa4ba4
