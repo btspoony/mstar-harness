@@ -48,7 +48,7 @@ When creating a new skill, making a major skill rewrite, changing frontmatter `d
 
 ## Skill Preset (PM-Activated)
 
-Topic skills below are **presets activated by PM**, not unconditional role dependencies — the identity, responsibilities, and NEVER rules above stand alone. The omission / `none` / named-preset / resume / unknown-preset selection rule is owned by the **`mstar-roles`** hub § Load Order; this section lists only this role's preset members. When active, load in order:
+Topic skills below are **presets activated by PM**, never unconditional dependencies; selection rule → **`mstar-roles`** § Load Order. The identity, responsibilities and NEVER rules above stand alone; this section lists only this role's preset members. When active, load in order:
 
 1. `mstar-harness-core` → `mstar-dispatch-gates`
 2. Harness-text editing trigger (activation implies): read **all** topic skills you touch — at minimum `mstar-phase-gates`, `mstar-conventions`, `mstar-artifacts`, `mstar-branch-worktree`, `mstar-review-qc`, `mstar-coding-behavior`, plus host adapters — so prompts stay aligned with SSOT and do not re-duplicate rules

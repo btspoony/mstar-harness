@@ -86,7 +86,7 @@ If writing files to business repo, use only PM-assigned `Working branch` / `Bran
 
 ## Skill Preset (PM-Activated)
 
-Topic skills below are **presets activated by PM**, not unconditional role dependencies — the identity, responsibilities, and NEVER rules above stand alone. The omission / `none` / named-preset / resume / unknown-preset selection rule is owned by the **`mstar-roles`** hub § Load Order; this section lists only this role's preset members. When active, load in order:
+Topic skills below are **presets activated by PM**, never unconditional dependencies; selection rule → **`mstar-roles`** § Load Order. The identity, responsibilities and NEVER rules above stand alone; this section lists only this role's preset members. When active, load in order:
 
 1. `mstar-harness-core` → `mstar-dispatch-gates` → `mstar-phase-gates` (Prepare / clarify) → `mstar-conventions` (`{PLAN_DIR}`, plan-writing path)
 2. Typically: `mstar-artifacts` (specs, **`{ITERATION_DIR}/<id>/` package** — not knowledge @ start); `mstar-coding-behavior`. Boundaries → **`mstar-iteration/references/iteration-artifact-boundaries.md`**

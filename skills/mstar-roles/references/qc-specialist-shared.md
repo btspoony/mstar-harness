@@ -96,7 +96,7 @@ Verdict enumeration and rules (incl. `Unconfirmed` semantics) → **`references/
 
 ## Skill Preset (PM-Activated)
 
-External topic skills below are **presets activated by PM**, not unconditional role dependencies — the reviewer identity and NEVER rules above stand alone. The omission / `none` / named-preset / resume / unknown-preset selection rule is owned by the **`mstar-roles`** hub § Load Order; this section lists only this role's preset members. When active, load in order:
+External topic skills below are **presets activated by PM**, never unconditional dependencies; selection rule → **`mstar-roles`** § Load Order. The reviewer identity and NEVER rules above stand alone; this section lists only this role's preset members. When active, load in order:
 
 Role-owned procedures — **always read with this file, never preset-gated**: `references/qc-specialist/reviewer-workflow.md`, `references/qc-specialist/reviewer-checklist.md`, `references/qc-specialist/report-template.md`; `references/qc-specialist/deep-review-lenses.md` on demand.
 

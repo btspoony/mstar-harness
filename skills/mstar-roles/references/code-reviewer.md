@@ -127,7 +127,7 @@ If any item below matches, **stop** and return `Blocked` to `project-manager` in
 
 ## Skill Preset (PM-Activated)
 
-Topic skills below are **presets activated by PM**, not unconditional role dependencies — the identity, mode definitions, and NEVER rules above stand alone (the assigned **mode** selects the mode preset). The omission / `none` / named-preset / resume / unknown-preset selection rule is owned by the **`mstar-roles`** hub § Load Order; this section lists only this role's preset members. When active, load in order:
+Topic skills below are **presets activated by PM**, never unconditional dependencies; selection rule → **`mstar-roles`** § Load Order. The identity, mode definitions, and NEVER rules above stand alone (the assigned mode selects the mode preset); this section lists only this role's preset members. When active, load in order:
 
 1. `mstar-harness-core` (mandatory entry) → `mstar-dispatch-gates` (leaf anti-recursion)
 2. By mode:
