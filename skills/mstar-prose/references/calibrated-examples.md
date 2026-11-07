@@ -74,13 +74,13 @@ Retries stop after three attempts.
 Retries currently stop after three attempts, which nobody has measured and is probably fine for now; the queue owner can revisit the number later if the printer queue gets deeper or if someone complains.
 ```
 
-**balanced** — 17 words
+**balanced** — 25 words
 
 ```text
-Retries stop after three attempts. The cap is unmeasured; `TODO(queue-owner):` calibrate it against observed printer queue depth.
+Retries stop after three attempts. The cap is unmeasured; the queue owner can revisit it if the printer queue gets deeper or if someone complains.
 ```
 
-Survives: the cap, the admission that it is unmeasured, and the owner who owes the measurement. The hedge words and the revisiting promise were vantage, and the over-trimmed form is the trap here — it keeps the number and drops the admission, making an arbitrary policy read as derived.
+Survives: the cap, the admission that it is unmeasured, the owner, and the owner's optional renegotiation under both of its triggers. The hedge words, the version stamp and the revisit's timing were vantage; the over-trimmed form is the trap here — it keeps the number and drops the admission, making an arbitrary policy read as derived.
 
 ## 4. Suppression justification that must be kept
 
@@ -92,19 +92,19 @@ A suppression is required prose on every surface; the balanced form keeps the re
 // oxlint-disable-next-line no-await-in-loop
 ```
 
-**over-detailed** — 37 words
+**over-detailed** — 51 words
 
 ```text
-// oxlint-disable-next-line no-await-in-loop -- the queue must drain one label per open call. This came up in the last review round, when the parallel version reordered jobs and the reviewer asked for the loop to be serialised.
+// oxlint-disable-next-line no-await-in-loop -- the queue must drain one label per open call, and the disable is a false positive: the awaits in this loop are independent. This came up in the last review round, when the parallel version reordered jobs and the reviewer asked for the loop to be serialised.
 ```
 
-**balanced** — 17 words
+**balanced** — 18 words
 
 ```text
-// oxlint-disable-next-line no-await-in-loop -- the queue drains one label per open call; concurrent awaits reorder printer jobs.
+// oxlint-disable-next-line no-await-in-loop -- the queue must drain one label per open call; concurrent awaits reorder printer jobs.
 ```
 
-Survives: which rule is suppressed and the ordering invariant that forces the sequential await. The review round and who asked were vantage. A false reason is corrected in place — deleting the suppression or its reason is the one failure this class never earns.
+Survives: which rule is suppressed, the obligation that forces the sequential await, and the ordering consequence of concurrent awaits. The review round and who asked were vantage; the claim that these awaits are independent is the one proposition replaced rather than dropped — the suppression and a true reason both stay, and deleting either is the one failure this class never earns.
 
 ## Delete/keep pairs
 
