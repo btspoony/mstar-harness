@@ -4,11 +4,11 @@
  * fenced block of `skills/mstar-host/references/dsh-workflow-scripts.md`
  * before the files were created; these are those bodies' SHA-256 digests.
  *
- * The contract is the bytes: the skill documents how to call a script and
- * which parameters it takes, while the script itself is the shipped artifact.
- * An edit to a shipped file must therefore fail here, so the reviewed body and
- * the documented contract can never drift apart silently. Editing a script on
- * purpose means recording its new digest in this table in the same change.
+ * Those bytes are the deliverable, not implementation detail: the host passes
+ * the shipped body verbatim as the `workflow` tool's `script` argument, so this
+ * pins what a caller actually executes — a BEHAVIOUR assertion, not a
+ * source-shape one. A deliberate script edit records its new digest here in the
+ * same change; that is the design intent, not a maintenance burden.
  *
  * Run: `bun test scripts/dsh-workflow-files-hash.test.ts` (repo root).
  */
