@@ -1,9 +1,8 @@
 import { describe, expect, test } from "bun:test";
 import { execFileSync } from "node:child_process";
-import { mkdtempSync, readFileSync, rmSync, writeFileSync, existsSync, mkdirSync, readdirSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync, writeFileSync, existsSync, mkdirSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { captureSddEvidenceFromFile, verifySddEvidence } from "../../cli/src/sdd-evidence.js";
 import {
   createExecutionWorkflow,
   initializeStore,
@@ -19,7 +18,7 @@ import type { InvocationContext } from "../src/types.js";
 function tempDir(prefix: string): string {
   return mkdtempSync(join(tmpdir(), prefix));
 }
-function invocation(cwd: string, evidence = false): InvocationContext {
+function invocation(cwd: string): InvocationContext {
   return {
     cwd,
     controlRoot: null,
@@ -30,10 +29,6 @@ function invocation(cwd: string, evidence = false): InvocationContext {
       async spawn() { return { exitCode: 1, signal: null, stdout: "", stderr: "" }; },
       async startDashboard() { throw new Error("dashboard effect unavailable"); },
       async openBrowser() { throw new Error("browser effect unavailable"); },
-      ...(evidence ? {
-        captureSddEvidence: captureSddEvidenceFromFile,
-        verifySddEvidence,
-      } : {}),
     },
   };
 }
@@ -126,25 +121,6 @@ async function seedResolvedAuthority(harness: string): Promise<void> {
   );
 }
 
-function integrityOk(result: unknown): boolean | null {
-  if (result === null || typeof result !== "object" || !("data" in result)) return null;
-  const data = result.data;
-  if (data === null || typeof data !== "object" || !("integrity" in data)) return null;
-  const integrity = data.integrity;
-  if (integrity === null || typeof integrity !== "object" || !("ok" in integrity)) return null;
-  return typeof integrity.ok === "boolean" ? integrity.ok : null;
-}
-
-function evidenceRunId(result: unknown): string | null {
-  if (result === null || typeof result !== "object" || !("data" in result)) return null;
-  const data = result.data;
-  if (data === null || typeof data !== "object" || !("record" in data)) return null;
-  const record = data.record;
-  return record !== null && typeof record === "object" && "runId" in record && typeof record.runId === "string"
-    ? record.runId
-    : null;
-}
-
 describe("SDD command family", () => {
   test("SDD refusal preserves engine code and verbatim first line", () => {
     const result = failed("sdd.check-context", Object.assign(new Error("engine SDD refusal detail"), { code: "sdd.engine-refused" }));
@@ -174,17 +150,11 @@ describe("SDD command family", () => {
     });
   });
 
-  test("registers six identities and excludes sdd exec", () => {
+  test("registers the four remaining identities and excludes sdd exec", () => {
     const definitions = getSddCommandDefinitions();
     expect(definitions.map(({ id }) => id)).toEqual([
       "sdd.workspace", "sdd.task-brief", "sdd.review-package", "sdd.check-context",
-      "sdd.evidence.capture", "sdd.evidence.verify",
     ]);
-  });
-  test("evidence capture descriptor admits only literal argv arrays", () => {
-    const argv = command("sdd.evidence.capture").payloads?.argv?.schema;
-    expect(argv?.safeParse(["bun", "test", "packages/commands/test/sdd.test.ts"]).success).toBe(true);
-    expect(argv?.safeParse({ executable: "bun" }).success).toBe(false);
   });
 
   test("derived context copy ignores unrelated caller fields", async () => {
@@ -280,72 +250,5 @@ describe("SDD command family", () => {
       rmSync(root, { recursive: true, force: true });
     }
   });
-
-  test("verify rejects stale-versioned records without mutation and accepts valid evidence", async () => {
-    const root = tempDir("commands-sdd-evidence-");
-    const previousCwd = process.cwd();
-    try {
-      const contextFile = join(root, "context.json");
-      writeFileSync(contextFile, JSON.stringify({ planId: "plan", workingBranch: "feature/old", controlHarnessRoot: root }));
-      const contextResult = await command("sdd.check-context").execute({ context: contextFile, kind: "source" }, invocation(root));
-      expect(contextResult.status).not.toBe("ok");
-      expect(contextResult.exitCode).not.toBe(0);
-
-      const staleSddDir = join(root, ".mstar", "sdd", "stale-plan");
-      const staleRun = "0b9e6c1e-7a1b-4c2a-9d3e-1f2a3b4c5d6e";
-      const staleRecordPath = join(staleSddDir, "evidence", staleRun, "record.json");
-      mkdirSync(join(staleSddDir, "evidence", staleRun), { recursive: true });
-      const staleBytes = JSON.stringify({ schema: "mstar.sdd-evidence/v2", runId: staleRun });
-      writeFileSync(staleRecordPath, staleBytes);
-      const staleRunDir = join(staleSddDir, "evidence", staleRun);
-      const staleEntries = readdirSync(staleRunDir).sort();
-      const stale = await command("sdd.evidence.verify").execute({
-        sddDir: staleSddDir, plan: "stale-plan", task: "task-1", run: staleRun,
-      }, invocation(root, true));
-      expect(stale.status).toBe("ok");
-      expect(integrityOk(stale)).toBe(false);
-      expect(readFileSync(staleRecordPath, "utf8")).toBe(staleBytes);
-      expect(readdirSync(staleRunDir).sort()).toEqual(staleEntries);
-
-      const fixture = evidenceWorkspace(root);
-      await seedResolvedAuthority(fixture.harness);
-      process.chdir(fixture.feature);
-      const captured = await command("sdd.evidence.capture").execute({
-        request: fixture.requestPath,
-        argv: [process.execPath, "-e", "process.stdout.write('verified')"],
-      }, invocation(fixture.feature, true));
-      expect(captured.status).toBe("ok");
-      const runId = evidenceRunId(captured);
-      expect(runId).not.toBeNull();
-      const verified = await command("sdd.evidence.verify").execute({
-        sddDir: fixture.sddDir, plan: "plan", task: "task-1", run: runId!,
-      }, invocation(fixture.feature, true));
-      expect(verified.status).toBe("ok");
-      expect(integrityOk(verified)).toBe(true);
-
-      const failedCapture = await command("sdd.evidence.capture").execute({
-        request: fixture.requestPath,
-        argv: [process.execPath, "-e", "process.exit(3)"],
-      }, invocation(fixture.feature, true));
-      expect(failedCapture.status).toBe("error");
-      expect(failedCapture.exitCode).toBe(3);
-      // The failed run still leaves a record; verifying it must NOT read as
-      // assessmentPassed even though there is no target (applicability
-      // "not-assessed") — the recorded outcome gates the flag.
-      const failedDetails = (failedCapture as { details?: { record?: { runId?: string } } }).details;
-      const failedRunId = failedDetails?.record !== null && typeof failedDetails?.record === "object"
-        ? (failedDetails.record as { runId?: string }).runId
-        : undefined;
-      expect(failedRunId).toBeString();
-      const failedVerify = await command("sdd.evidence.verify").execute({
-        sddDir: fixture.sddDir, plan: "plan", task: "task-1", run: failedRunId!,
-      }, invocation(fixture.feature, true));
-      expect(failedVerify.status).toBe("ok");
-      expect((failedVerify.data as { outcome: string }).outcome).toBe("failed");
-      expect((failedVerify.data as { assessmentPassed: boolean }).assessmentPassed).toBe(false);
-    } finally {
-      process.chdir(previousCwd);
-      rmSync(root, { recursive: true, force: true });
-    }
-  });
 });
+

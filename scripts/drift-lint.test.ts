@@ -311,9 +311,10 @@ describe("checkCliCitationsInText — depth-aware nested command validation (Gre
     "persist",
     "persist get",
     "sdd",
-    "sdd evidence",
-    "sdd evidence capture",
-    "sdd evidence verify",
+    "sdd workspace",
+    "sdd task-brief",
+    "sdd review-package",
+    "sdd check-context",
     "plan handoff",
   ]);
 

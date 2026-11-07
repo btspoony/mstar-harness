@@ -108,14 +108,6 @@ export interface CommandEffects {
     clientId: string | null;
   } | null>;
   writeStderr?(message: string): void;
-  captureSddEvidence?(requestPath: string, argv: readonly string[]): Promise<unknown>;
-  verifySddEvidence?(request: {
-    sddDir: string;
-    planId: string;
-    taskId: string;
-    runId: string;
-    targetPath?: string;
-  }): Promise<unknown>;
   /**
    * The installed Morning Star plugin version for one host target, detected by
    * the transport that owns per-host discovery (the CLI probes package caches

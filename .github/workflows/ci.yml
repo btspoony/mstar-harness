@@ -71,8 +71,8 @@ permissions:
 #     wall clock. Re-split into six shards; measured/expected balance:
 #   • test-cli-coordination — `test/plan-coordination.test.ts` alone, the
 #     single largest file.
-#   • test-cli-ops-a — sdd-evidence 63.1, worktree-cleanup 43.3, issue 22.3
-#     (~129s combined, run 37791505748).
+#   • test-cli-ops-a — worktree-cleanup 43.3, issue 22.3
+#     (~66s combined, run 37791505748).
 #   • test-cli-ops-b — execution-session 37.6, prreview-execution-cli 29.8,
 #     persist 22.5, audit-cli 22.2, sdd-cli 19.6 (~132s combined).
 #   • test-cli-suite-a / test-cli-suite-b — the dynamic remainder split by
@@ -380,12 +380,11 @@ jobs:
       - name: Build CLI
         run: bun run cli:build
 
-      # Shard 2/6 — the 3 heaviest files after plan-coordination.
+      # Shard 2/6 — the 2 heaviest files after plan-coordination.
       - name: Test CLI (ops-a shard)
         working-directory: packages/cli
         run: |
           bun test \
-            test/sdd-evidence.test.ts \
             test/worktree-cleanup.test.ts \
             test/issue.test.ts
 
@@ -557,7 +556,6 @@ jobs:
               | sed 's|^\./||' \
               | grep -vxFf <(printf '%s\n' \
                 test/plan-coordination.test.ts \
-                test/sdd-evidence.test.ts \
                 test/worktree-cleanup.test.ts \
                 test/issue.test.ts \
                 test/execution-session.test.ts \
@@ -646,7 +644,6 @@ jobs:
               | sed 's|^\./||' \
               | grep -vxFf <(printf '%s\n' \
                 test/plan-coordination.test.ts \
-                test/sdd-evidence.test.ts \
                 test/worktree-cleanup.test.ts \
                 test/issue.test.ts \
                 test/execution-session.test.ts \

@@ -67,7 +67,7 @@ The CLI publishes each command's owning skill itself: a refusal envelope carries
 | Check workflow-entry facts (branch anchors, main residency, integration checkout cleanliness, integration merge lease) or the L1 / L2 pre-dispatch worktree topology | `mstar worktree check` (L1 per-plan gains the lease fact; `--entry` is the workflow-level form) |
 | Assert QC / QA checkout alignment across seat files | `mstar worktree qc-alignment` |
 | Post-merge worktree and branch cleanup (dry-run first) | `mstar worktree cleanup` |
-| SDD helpers: workspace, brief, branch diff package, bound launch, evidence capture | `mstar sdd workspace`, `mstar sdd task-brief`, `mstar sdd review-package`, `mstar sdd check-context`, `mstar sdd exec`, `mstar sdd evidence` |
+| SDD helpers: workspace, brief, branch diff package, bound launch, evidence capture | `mstar sdd workspace`, `mstar sdd task-brief`, `mstar sdd review-package`, `mstar sdd check-context`, `mstar sdd exec` |
 | Evaluate a phase-transition gate; probe push cadence | `mstar iteration gate`, `mstar iteration push-cadence` |
 | Resolve the harness / plan / SDD / workflow / project dirs | `mstar path resolve` |
 | Read/export or mutate issues in `{HARNESS_DIR}/store.db` (`add` / `list` / `show` / `occurrence` / `triage` / `close` / `move` / `waive` / `duplicate` / `supersede` / `link` / `export`) | `mstar issue …` |

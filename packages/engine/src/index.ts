@@ -34,10 +34,7 @@
  * lints frontmatter +
  * 5-question bodies and resolves skill-relative asset paths, and
  * `cleanup` is the pure worktree/branch cleanup planner (immutable facts
- * in, stable `cleanup.*` remove/keep/refuse decisions out), and `evidence`
- * is the pure SDD test-evidence contract (record schema validation,
- * artifact verification, input fingerprinting and reuse assessment —
- * values in, decisions out).
+ * in, stable `cleanup.*` remove/keep/refuse decisions out).
  */
 export type {
   RoadmapContent,
@@ -186,28 +183,6 @@ export type {
   CleanupTargetKind,
 } from "./cleanup.js";
 export { planWorktreeCleanup } from "./cleanup.js";
-export type {
-  EvidenceArtifactFact,
-  EvidenceAssessment,
-  EvidenceCaptureRequest,
-  EvidenceCoverage,
-  EvidenceEnvironmentKey,
-  EvidenceExpectation,
-  EvidenceInputEntry,
-  EvidenceInputSnapshot,
-  EvidenceInputSpec,
-  EvidenceLimits,
-  EvidenceLog,
-  EvidenceOutcome,
-  EvidenceToolFingerprint,
-  SddEvidenceRecord,
-} from "./evidence.js";
-export {
-  assessSddEvidenceReuse,
-  evidenceInputDigest,
-  validateSddEvidenceRecord,
-  verifySddEvidence,
-} from "./evidence.js";
 export type {
   AssignmentBranchForms,
   AssignmentFields,
