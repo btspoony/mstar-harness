@@ -149,7 +149,7 @@ Default process artifacts are **gitignored** (`mstar-conventions`「Git 跟踪�
 - Plan Path and SDD dir are absolute control-root paths; do not resolve a feature checkout's ignored harness as process SSOT.
 - Validate the actual source checkout/branch and atomic coordination authority, not a per-plan session/holder or ceremonial prepare record.
 
-**Anti-pattern (forbidden)**
+**Worktree mode: waived — anti-pattern (forbidden)**
 
 - Inferring `Worktree mode: waived` because “feature worktree has no plans” under default gitignore. Correct response: keep feature worktrees; route harness I/O through control absolute paths. Missing shared safe coordination authority → **`Plan parallelism: serial`** only — that is a **separate** gate and does **not** waive worktree isolation.
 

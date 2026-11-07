@@ -127,10 +127,7 @@ Phase/gate 转换按 **`mstar-host`**「Phase-transition todo refresh (host-agno
 
 The coordinator refreshes the authoritative control-root workflow view before a plan mutation or integration action. Public verbs re-read state and merge exclusion in the DB transaction and check scope CAS. No row claim/release/transfer step is introduced.
 
-**Do not** set `Worktree mode: waived` because a feature worktree lacks
-`plans/` under default gitignore — keep feature worktrees and pass absolute
-control **`Plan Path`** / **`SDD dir`** in Assignments
-(`mstar-branch-worktree` 「Harness path SSOT under default gitignore」).
+**Do not** infer `Worktree mode: waived` from a feature worktree's missing gitignored `plans/` → **`mstar-branch-worktree`** § Worktree mode: waived.
 
 <!-- host-hook: phase-1-lock -->
 > Execute the active host reference's `## Host hooks` declaration for `phase-1-lock`; this file defines no host action.
@@ -274,7 +271,7 @@ Row state writes use coordinator transaction/CAS/receipts and validated source m
 
 ## Multi-plan parallelism
 
-The **Cross-plan parallel safety gate** above applies whether or not `Worktree mode: waived` is in effect. Feature checkouts/branches and write ownership remain distinct; waiver never silently authorizes lockless cross-host writes. Integration into `spec_integration_branch` stays serial.
+The **Cross-plan parallel safety gate** above applies whether or not `Worktree mode: waived` is in effect: feature checkouts/branches and write ownership remain distinct, waiver never silently authorizes lockless cross-host writes (scope → § Waiver), and integration into `spec_integration_branch` stays serial.
 
 ## Serial integration safety
 
