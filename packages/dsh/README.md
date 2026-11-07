@@ -253,7 +253,7 @@ The plugin registers the bundled mstar commands (omp/opencode parity surface) on
 
 ## Workflow scripts
 
-The four read-only fan-out scripts the model hands to the dsh **`workflow`** tool live in `workflows/` as plain, package-relative JavaScript — not TypeScript and with no `export const meta` statement — so a script can be read, diffed and passed over verbatim. `scripts/dsh-workflow-files-hash.test.ts` (repo root) pins each body's SHA-256, so editing a shipped script is a deliberate, reviewed act, never a silent drift. When to use each one, its `meta` identity, the argument rules, the seat-count guard and the failure surface live in skill `mstar-host` → `references/dsh-workflow-scripts.md`; this table is the file inventory.
+The four read-only fan-out scripts the model hands to the dsh **`workflow`** tool live in `workflows/` as plain, package-relative JavaScript — not TypeScript and with no `export const meta` statement — so a script can be read, diffed and passed over verbatim. `scripts/dsh-workflow-files-hash.test.ts` (repo root) checks the delivery surface instead of a digest: every shipped body parses, `package.json` ships the `workflows` directory, and the skill's `meta` identities and `**File**` anchors name exactly the files on disk — a rename, an added script or an unshipped directory fails, while a deliberate edit does not. When to use each one, its `meta` identity, the argument rules, the seat-count guard and the failure surface live in skill `mstar-host` → `references/dsh-workflow-scripts.md`; this table is the file inventory.
 
 | File | Purpose | Required `args` |
 | --- | --- | --- |
