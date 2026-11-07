@@ -6,7 +6,7 @@
 
 ## Harness 子树内（`{HARNESS_DIR}/` 下）
 
-这些是 agent handoff 用的结构化产物。**Git 跟踪**遵循 `mstar-conventions` SKILL.md「Git 跟踪策略」：**进程本地、结果共享** — `plans/`、`iterations/`、`status.json`、`workflows/`、`projects/`、`sdd/` 等默认 gitignored；`AGENTS.md`、`knowledge/`、`specs/` 默认 tracked。
+这些是 agent handoff 用的结构化产物。**Git 跟踪**遵循 `mstar-conventions` SKILL.md「Git 跟踪策略」：**进程本地、结果共享** — `plans/`、`iterations/`、`status.json`、`workflows/`、`projects/`、`sdd/` 等默认 gitignored；`AGENTS.md`、`knowledge/`、`specs/` 默认 tracked。 Historical execution/register file shapes (`status.json`, workflow `snapshot.json`, project `residuals.json`) are archive-only — no execution route, no live writer → **`mstar-engine-legacy`** `references/migration-source-shapes.md`.
 
 | 产物 | 解析后路径（默认 `.mstar/`） | 读写的技能 |
 |------|---------------------------|-----------|
