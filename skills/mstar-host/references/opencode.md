@@ -53,7 +53,7 @@ This host's write hook cannot refuse a call (`tool.execute.before` returns `Prom
 ## MCP delivery
 
 - **Native install and loading**: install `@mstar-harness/opencode` through OpenCode's plugin configuration. The plugin injects the official `mcp` top-level config dynamically through its `config` hook; `packages/opencode/mcp.json` is the matching reference template, not a separate static user-config requirement. The V1 plugin no longer provides native MCP tools. The supported `@opencode-ai/plugin` version remains pinned to **1.4.8**; do not migrate to V2. Launch, context boundary and doctor semantics → `_shared/host-runtime-contract.md` § MCP delivery.
-- **Doctor and evidence**: `mstar-harness doctor --target opencode` → same file § Doctor and evidence.
+- **Doctor and evidence**: `mstar-harness doctor --target opencode` → `_shared/host-runtime-contract.md` § MCP delivery.
 
 
 ## PM dispatch (task tool + subagent)

@@ -26,7 +26,7 @@ Parallel PM dispatch: read **`parallel-dispatch.md`** when dispatching **N ≥ 2
 ## MCP delivery
 
 - **Native install and loading**: install **morning-star-harness** from the `mstar-local` marketplace; `.zcode-plugin/mcp.json` carries the `npx` launch → same file § MCP delivery (including the context boundary this host shares).
-- **Doctor and evidence**: `mstar-harness doctor --target zcode` → same file § Doctor and evidence; the config-launched package smoke is superseded by the in-CLI server.
+- **Doctor and evidence**: `mstar-harness doctor --target zcode` → `_shared/host-runtime-contract.md` § MCP delivery; the config-launched package smoke is superseded by the in-CLI server.
 
 ## Coordination transport (no host-native seat)
 

@@ -23,7 +23,7 @@ Parallel PM dispatch: read **`parallel-dispatch.md`** only when Codex exposes an
 ## MCP delivery
 
 - **Native install and loading**: add the repo marketplace (`codex plugin marketplace add btspoony/mstar-harness --ref main`) and install `morning-star-harness@mstar-repo`; `init --target codex` is optional maintainer setup. `.codex-plugin/mcp.json` carries the `npx` launch → same file § MCP delivery (including the context boundary this host shares).
-- **Doctor and evidence**: `mstar-harness doctor --target codex --scope <global|project>` → same file § Doctor and evidence.
+- **Doctor and evidence**: `mstar-harness doctor --target codex --scope <global|project>` → `_shared/host-runtime-contract.md` § MCP delivery.
 
 ## Coordination transport (no host-native seat)
 

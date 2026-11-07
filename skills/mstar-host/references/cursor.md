@@ -18,7 +18,7 @@ Parallel PM dispatch: **`parallel-dispatch.md`** (Task tool uses same turn model
 ## MCP delivery
 
 - **Native install and loading**: install the Morning Star Cursor plugin; `.cursor-plugin/mcp.json` carries the `npx` launch → same file § MCP delivery (including the context boundary this host shares).
-- **Doctor and evidence**: `mstar-harness doctor --target cursor` (global or project scope); what an aligned config does and does not prove → same file § Doctor and evidence.
+- **Doctor and evidence**: `mstar-harness doctor --target cursor` (global or project scope); what an aligned config does and does not prove → `_shared/host-runtime-contract.md` § MCP delivery.
 
 ## Coordination transport (no host-native seat)
 

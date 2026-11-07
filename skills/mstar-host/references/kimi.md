@@ -25,7 +25,7 @@ Parallel PM dispatch: read **`parallel-dispatch.md`** when dispatching **N ≥ 2
 ## MCP delivery
 
 - **Native install and loading**: in Kimi TUI run `/plugins install https://github.com/btspoony/mstar-harness`, then `/plugins reload`. `.kimi-plugin/mcp.json` carries the `npx` launch → same file § MCP delivery (including the context boundary this host shares).
-- **Doctor and evidence**: `mstar-harness doctor --target kimi` → same file § Doctor and evidence.
+- **Doctor and evidence**: `mstar-harness doctor --target kimi` → `_shared/host-runtime-contract.md` § MCP delivery.
 
 ## Coordination transport (no host-native seat)
 
