@@ -191,6 +191,7 @@ function buildFixture(options: FixtureOptions = {}): string {
   write(root, "packages/dsh/src/invariant.ts", "export const invariant = 1;\n");
   write(root, "packages/dsh/scripts/bundle-harness-assets.ts", "export const bundle = 1;\n");
   write(root, "packages/dsh/scripts/build-client-bundle.ts", "export const client = 1;\n");
+  write(root, "packages/dsh/workflows/example.js", "return null;\n");
   write(root, "packages/dsh/dist/index.js", "// dsh bundle\n");
   write(root, "packages/dsh/dist/invariant.js", "// dsh invariant bundle\n");
   write(root, "packages/dsh/dist/client.js", "// dsh client bundle\n");
@@ -358,6 +359,7 @@ describe("execution-consumer-manifest — canonical collection", () => {
     expect(dsh?.sources.trees.map((tree) => tree.root)).toEqual([
       "packages/dsh/scripts",
       "packages/dsh/src",
+      "packages/dsh/workflows",
     ]);
     // ...and engine's declaration output is inside the recorded dist tree.
     const engineDist = manifest.consumers

@@ -51,7 +51,7 @@
           {
             "root": "packages/cli/dist",
             "files": 1,
-            "sha256": "fadc72392b51641fd3ee3dadfd9391c5ede21c5d15e7fdf9350eaa926d960cc8",
+            "sha256": "693839b0d03fbcf542cbf5767cf4bdd36198c7dc205c5040d9fb9373b0314f24",
             "exclude": [
               "execution-consumer.json"
             ]
@@ -60,7 +60,7 @@
         "files": [
           {
             "path": "packages/cli/dist/mstar-harness.js",
-            "sha256": "cd9f34cbb50448f14b3c7783158b7ce9ffd04d6bbc93ee26d99240db1bc90047"
+            "sha256": "b8ff71c389f011e86cff5e75c9140346071847a4740731ea80caa3a710537617"
           }
         ]
       },
@@ -87,7 +87,12 @@
           {
             "root": "packages/dsh/src",
             "files": 64,
-            "sha256": "b47d014a6ad6a27ffde315e78f87adbedeab5f482b11d5d7d5a04cefd5c2c023"
+            "sha256": "431c0a80ca5d028edcce882e2f222ad812a01ebfbea6f48b749aac3ed6f023a6"
+          },
+          {
+            "root": "packages/dsh/workflows",
+            "files": 4,
+            "sha256": "767dfa58dd3a5a9e331fe9e5a0a74d8e03a78979f996a9db7000eea53ff1c9af"
           }
         ],
         "files": [
@@ -106,7 +111,7 @@
           {
             "root": "packages/dsh/dist",
             "files": 63,
-            "sha256": "abb3b79ae7c797c34dbc4cf78f5a4f5f827aa5f925b33eee8fc29e1e868647c8",
+            "sha256": "bea556ea41779a2904a0de10f2d42252a5c1101ec4539306528a685c436111fd",
             "exclude": [
               "client.js",
               "execution-consumer.json"
@@ -116,7 +121,7 @@
         "files": [
           {
             "path": "packages/dsh/dist/index.js",
-            "sha256": "728b224bcb368171b8f0a429d74557a29075a741f1b5303afad5f3a17a237463"
+            "sha256": "3dcec286831f800e0ee20207419a365401dadf8ebb232daddbde6937b4b7f12b"
           },
           {
             "path": "packages/dsh/dist/invariant.js",
@@ -144,7 +149,7 @@
           "targetRoot": "packages/dsh/harness-skills",
           "mode": "copy",
           "files": 125,
-          "sha256": "5886fc3e3fd8e07b4bee10dbd5b356d6451d6a86bdbbe7fa7c9d9b833c685819"
+          "sha256": "7e2f84208a884ed942451167eaa55e183f25515ba014bfc091d823c0d97a695f"
         }
       ]
     },
@@ -169,7 +174,7 @@
           {
             "root": "packages/engine/src",
             "files": 131,
-            "sha256": "d8a21bcaab10082f91c55f938802257b46508f360364942e6b756c9f38f6f9df"
+            "sha256": "a3c957ac46b9cb12350bc5a97b84cd40db65880aa49c8707104e1e307c96d4ab"
           }
         ],
         "files": [
@@ -188,7 +193,7 @@
           {
             "root": "packages/engine/dist",
             "files": 133,
-            "sha256": "fae975b9c1715f80a6b67af4d5fe6d0f914e87cf669bc067a92603a8f16e10ee",
+            "sha256": "5c7c33844c5c78185386cf320e416bc4d8769182af85d4ccf253eaaa34b55c90",
             "exclude": [
               "execution-consumer.json"
             ]
@@ -201,7 +206,7 @@
           },
           {
             "path": "packages/engine/dist/engine.js",
-            "sha256": "7ee0906d362d0e8e89f01730a81c46932a7e48a7c999e7cb981926acffaac80b"
+            "sha256": "78bf4485aba49d9fdb1e988bd430823fe6ce6de9b8602f88894582b4e4344cee"
           }
         ]
       },
@@ -255,7 +260,7 @@
           {
             "root": "packages/omp/dist",
             "files": 4,
-            "sha256": "e62df06375a5a6baa7a108c34f693bbcda508327f17655861439957ac6287c88",
+            "sha256": "0e52c18d3bd7e638c178ef23d94c9a95793797d5dbc6a7bf2e03757f18fc231e",
             "exclude": [
               "execution-consumer.json"
             ]
@@ -271,7 +276,7 @@
           {
             "root": "packages/omp/hooks",
             "files": 1,
-            "sha256": "3e36d3c884d01d30ea39a8e798b1da3f8ac0de6f8850f0a08fc4b6d69e668b61",
+            "sha256": "577cad1571559bdf405ffd6b0aecc0d7305c910caed570e764fd3c3a64255624",
             "exclude": [
               "execution-consumer.json"
             ]
@@ -288,7 +293,7 @@
           },
           {
             "path": "packages/omp/dist/hooks/pre/mstar-gates.js",
-            "sha256": "8b421a324f1c57a17c6fc7a9265895ceef9684274c866115ac7de35d689a214b"
+            "sha256": "22da2ec83b379198323acd6d906f1bef1d7c639e5aa152e9f4dec8d8d290b374"
           },
           {
             "path": "packages/omp/mcp.json",
@@ -341,14 +346,14 @@
           "targetRoot": "packages/omp/harness-skills",
           "mode": "copy",
           "files": 125,
-          "sha256": "5886fc3e3fd8e07b4bee10dbd5b356d6451d6a86bdbbe7fa7c9d9b833c685819"
+          "sha256": "7e2f84208a884ed942451167eaa55e183f25515ba014bfc091d823c0d97a695f"
         },
         {
           "sourceRoot": "skills",
           "targetRoot": "packages/omp/skills",
           "mode": "copy",
           "files": 125,
-          "sha256": "5886fc3e3fd8e07b4bee10dbd5b356d6451d6a86bdbbe7fa7c9d9b833c685819"
+          "sha256": "7e2f84208a884ed942451167eaa55e183f25515ba014bfc091d823c0d97a695f"
         }
       ]
     },
@@ -392,7 +397,7 @@
           {
             "root": "packages/opencode/dist",
             "files": 1,
-            "sha256": "1da1085ed614d44922f79f04720b482d2a614a865900fa6add6c5aefb656ab8c",
+            "sha256": "df1fddeca9d0fa7812d340450806f84a8b3b1acf1a09f5c9363e59b06c9698f3",
             "exclude": [
               "execution-consumer.json"
             ]
@@ -401,7 +406,7 @@
         "files": [
           {
             "path": "packages/opencode/dist/mstar.js",
-            "sha256": "8092e758b5b5f5947c3c96f0f75a75bd91dff37f7ce05b4f20579d31d76c4211"
+            "sha256": "3d53a08e9ab575639f359401d504684bf492a504b8d4d3e345a5782836df5e2a"
           }
         ]
       },
@@ -432,7 +437,7 @@
           "targetRoot": "packages/opencode/harness-skills",
           "mode": "copy",
           "files": 125,
-          "sha256": "5886fc3e3fd8e07b4bee10dbd5b356d6451d6a86bdbbe7fa7c9d9b833c685819"
+          "sha256": "7e2f84208a884ed942451167eaa55e183f25515ba014bfc091d823c0d97a695f"
         }
       ]
     },
@@ -457,7 +462,7 @@
           {
             "root": "packages/engine/src",
             "files": 131,
-            "sha256": "d8a21bcaab10082f91c55f938802257b46508f360364942e6b756c9f38f6f9df"
+            "sha256": "a3c957ac46b9cb12350bc5a97b84cd40db65880aa49c8707104e1e307c96d4ab"
           }
         ],
         "files": [
