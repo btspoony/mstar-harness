@@ -51,7 +51,7 @@ task(context: "<shared batch context>",
      tasks: [{ name: "CamelCaseId", agent: "<Execute as role-id>", task: "<full Assignment body>" }])
 ```
 
-Prefer the live schema every session (single-task shorthand may exist). Parallel **N** assignees ⇒ **one** `task` call with **N** `tasks[]` entries **or** **N** `task` calls in one assistant message; count emitted dispatches = **N**. **Envelope-first**: write `agent` + `name` as the first fields of each entry — the long body crowds them out and `agent` gets silently dropped (omp defaults to generic `task`, no error) → `parallel-dispatch.md` § Mandatory order.
+Prefer the live schema every session (single-task shorthand may exist). Parallel **N** assignees ⇒ **one** `task` call with **N** `tasks[]` entries **or** **N** `task` calls in one assistant message; count emitted dispatches = **N**. **Envelope-first**: write `agent` + `name` as the first fields of each entry — the long body crowds them out and `agent` gets silently dropped (omp defaults to generic `task`, no error) → `parallel-dispatch.md` § Mandatory order. Which `agent` value to send, and the prompt binding that travels with it → **§ Role agents and binding** (the single body; nothing else in this file restates it).
 
 ## Role agents and binding (C5 / C5b — single body)
 
