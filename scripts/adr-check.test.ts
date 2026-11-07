@@ -204,3 +204,24 @@ describe("checkAdrTree — Status line shapes", () => {
     expect(failure.recovery).toContain('before the first "## " heading');
   });
 });
+
+// An unterminated fence runs to the end of the document, so every later heading
+// would silently disappear from the check: a banned section escapes and required
+// sections read as missing. The record must fail on the fence instead.
+describe("checkAdrTree — an unterminated fence", () => {
+  test("adr.fence-unclosed: the tail is not scanned, so the record fails on the fence", () => {
+    const rel = `${ADR_ROOT}/implemented/architecture/2026-01-12-unclosed.md`;
+    const body = record("implemented", IMPLEMENTED_SECTIONS).replace(
+      "## Decision\n",
+      "```markdown\n## Decision\n\nQuoted shape with no closing fence.\n",
+    );
+    const fenceLine = body.split("\n").findIndex((line) => line.startsWith("```")) + 1;
+    const result = withTree({ "implemented/architecture/2026-01-12-unclosed.md": body }, checkAdrTree);
+    expect(result.failures.map((f) => f.code)).toEqual(["adr.fence-unclosed"]);
+    const [failure] = result.failures;
+    expect(failure.file).toBe(rel);
+    expect(failure.message).toContain(`${rel}:${fenceLine}`);
+    expect(failure.message).toContain("unbalanced fences (1 fence lines)");
+    expect(failure.recovery).toContain("closing fence");
+  });
+});

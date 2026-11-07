@@ -12,7 +12,7 @@
  */
 import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { basename, join, relative } from "node:path";
-import { fencedBlocks } from "./dsh-contract-lint.ts";
+import { fencedBlocks, scanFences } from "./dsh-contract-lint.ts";
 
 export const ADR_BUCKETS = ["proposed", "implemented", "rejected"] as const;
 export const ADR_CLASSES = [
@@ -33,7 +33,8 @@ export type AdrFailureCode =
   | "adr.section-missing"
   | "adr.section-banned"
   | "adr.index-forbidden"
-  | "adr.name-shape";
+  | "adr.name-shape"
+  | "adr.fence-unclosed";
 
 export type AdrFailure = {
   /** Repo-relative path, e.g. `docs/adr/implemented/...`. */
@@ -136,6 +137,22 @@ function checkRecord(
   }
 
   const text = readFileSync(path, "utf8");
+
+  // An unterminated fence runs to the document end, so every later heading would
+  // vanish from the check below — a banned section escapes and required sections
+  // read as missing. Refuse the record instead of scanning a truncated document.
+  const { fences } = scanFences(text);
+  if (fences.length % 2 === 1) {
+    push({
+      file: relPath,
+      code: "adr.fence-unclosed",
+      message: `${relPath}:${fences[fences.length - 1]!} unbalanced fences (${fences.length} fence lines) - the record's tail is hidden from every heading check`,
+      recovery:
+        "add the closing fence on its own line (the same fence character, at least as long), or indent the quoted example as a four-space code block",
+    });
+    return;
+  }
+
   const statusLines = headerLines(text).filter((line) => line.startsWith("Status:"));
   if (statusLines.length !== 1) {
     push({
