@@ -82,7 +82,7 @@ The audit reports one of four values, matching the engine's `CompletenessLevel`:
 | `Standard` | Level 1 and 2 complete, Level 3 incomplete or body-unconfirmed |
 | `Production` | Levels 1–3 complete, body items included |
 
-A `Standard` file missing a few Level 2 items is still usable — expect component-level inconsistencies until they land.
+A file missing Level 2 items remains `MVP` — expect component-level inconsistencies until they land.
 
 ## Audit workflow
 
