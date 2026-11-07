@@ -227,7 +227,7 @@ Legacy `.agents/` 等价：
 - **Spec 集成分支**：从 `iteration_base_branch` 创建；各 Plan 实现 merge 回此线后再视为 Spec 在代码侧集成。
 - **Plan 实现分支**：每 `plan_id` 一条（PM 书面）。
 - **PR target**：全部 Plans 与 iteration-close 完成后，向显式 `target_branch` 提 PR（窄例外见 Assignment `Branch policy`）。
-- **Standalone development plan**：单 plan 交付不经迭代集成序列——交付分支上完成 compound disposition（步骤 → **`mstar-compound/references/compound-workflow.md`**）后向显式 target 提交 PR，PR 身份（repo/head/target）在提交时记录；序列与语义 → `mstar-artifacts/references/plan-workflow-lifecycle-contract.md`（迭代序列不变，见上）。
+- **Standalone development plan**：单 plan 交付不经迭代集成序列——交付分支上完成 compound disposition（步骤 → **`mstar-knowledge/references/compound-workflow.md`**）后向显式 target 提交 PR，PR 身份（repo/head/target）在提交时记录；序列与语义 → `mstar-artifacts/references/plan-workflow-lifecycle-contract.md`（迭代序列不变，见上）。
 - Git 操作与 QC 单一 `HEAD` → **`mstar-branch-worktree`**。
 - ACTIVE workflow 行（DB）登记顶层 `branch.base`（`iteration_base_branch`）/ `branch.target`（`target_branch`）/ `branch.integration`（`spec_integration_branch`），以及 plan 行 `metadata.spec_integration_branch` / `merge_target` → **`mstar-artifacts`**。
 
@@ -259,7 +259,7 @@ Plans are written to **`{PLAN_DIR}`** when persistent plan tracking is enabled. 
 
 - `references/harness-bootstrap-and-agents-layering.md` — 新仓 harness + AGENTS 分层
 - `references/effort-estimation.md` — agent-oriented 工期（禁人天/FTE）
-- `references/artifact-storage-paths.md` — **产物存储路径 SSOT**（知识文档、CONCEPTS.md、STRATEGY.md 等落盘位置；`mstar-compound`、`mstar-compound-refresh`、`mstar-strategy` 等技能引用此表，不得本地重定义）
+- `references/artifact-storage-paths.md` — **产物存储路径 SSOT**（知识文档、CONCEPTS.md、STRATEGY.md 等落盘位置；`mstar-knowledge` 等技能引用此表，不得本地重定义）
 - **`mstar-project-governance`** `references/migration-source-shapes.md` — historical execution/register file shapes; no execution route or live writer
 
 **Current artifact details** (main plans, review bundles / durable summaries, execution/issue fields, knowledge and templates) → **`mstar-artifacts`**.

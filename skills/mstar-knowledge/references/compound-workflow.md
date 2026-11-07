@@ -1,6 +1,6 @@
-# mstar-compound — 工作流详情
+# mstar-knowledge — Capture 工作流详情
 
-> Loaded by `mstar-compound` SKILL.md at the self-check and Phase 1–7 steps. **Read `mstar-harness-core` first.** Path symbols → `mstar-conventions`.
+> Loaded by `mstar-knowledge` SKILL.md (`## Workflow — Capture`) at the self-check and Phase 1–7 steps. **Read `mstar-harness-core` first.** Path symbols → `mstar-conventions`.
 >
 > **接口边界（HARD）**：本文件是 compound **执行步骤**的唯一 SSOT。触发时机、cwd、写入面与结果记录面属于**调用方流程**，由调用方自身声明并引用本文件 —— 本文件**不复述、也不维护调用方清单**。
 
@@ -14,7 +14,7 @@
 4. **Phase 3 Write** — 结构化重写进 `{KNOWLEDGE_DIR}/<category>/<slug>.md`（**禁止**整文件复制）；frontmatter 过 schema 校验。
 5. **Phase 4 Discoverability** / **Phase 5 CONCEPTS.md** — 按需；被拒绝的编辑不阻塞文档写入。
 6. **Phase 6 Catalog** — 每篇新 doc 登记 `kind=document` / `document_kind=knowledge`。
-7. **Phase 7 Refresh trigger** — 仅 flag `mstar-compound-refresh`，不自动运行。
+7. **Phase 7 Refresh trigger** — 仅 flag 本 skill 的 `## Workflow — Maintain`，不自动运行。
 
 产出判据（与调用方无关）：catalog 登记完成；高重叠时更新既有文档；无结晶时以 reasoned `skipped` 结束（记录到哪由调用方承载）。
 
@@ -59,7 +59,7 @@ Q8: No  — 只涉及一个 model
 
 ## Phase 1: Gather context
 
-Read the conversation history **and**, when `iteration_id` is known, scan **`{ITERATION_DIR}/<iteration-id>/`** package per **Iteration package promotion** (SKILL.md).
+Read the conversation history **and**, when `iteration_id` is known, scan **`{ITERATION_DIR}/<iteration-id>/`** package per **Iteration package promotion** (SKILL.md `## Workflow — Capture`).
 
 Understand:
 - What problem was solved (the concrete issue)
@@ -84,7 +84,7 @@ Before creating a new doc, check if an existing doc covers the same ground:
 | Overlap | Action |
 |---------|--------|
 | **High** (4-5 dimensions match) | **Update** the existing doc with fresher context instead of creating a new one. Add `last_updated` field. |
-| **Moderate** (2-3 dimensions match) | Create new doc; flag for consolidation review (potential `mstar-compound-refresh` trigger) |
+| **Moderate** (2-3 dimensions match) | Create new doc; flag for consolidation review (potential `## Workflow — Maintain` trigger) |
 | **Low/None** | Create new doc normally |
 
 ## Phase 3: Write the document
@@ -99,22 +99,21 @@ Filename: `<sanitized-slug>.md` (lowercase, hyphen-separated, no date prefix).
 
 ### 3.2 Frontmatter
 
-Required fields for both tracks (SSOT: `references/schema.yaml`):
+Canonical: `references/schema.yaml` (this skill's only field enumeration). At a glance:
 
-```yaml
----
-module: <area>
-date: YYYY-MM-DD
-problem_type: <enum value>
-category: <directory name>
-severity: critical|high|medium|low
-plan_id: <optional, link to the registered workflow/plan identity>
-tags: [<keywords>]
----
-```
-
-Bug-track adds: `symptoms`, `root_cause`, `resolution_type`.
-Knowledge-track adds: `applies_when` (optional).
+| Field | Kind | Note |
+|---|---|---|
+| `module` | string | module / component / area affected |
+| `date` | `YYYY-MM-DD` | date documented |
+| `problem_type` | enum | determines the track (bug vs knowledge) |
+| `category` | string | directory under `{KNOWLEDGE_DIR}` (`references/category-mapping.md`) |
+| `severity` | enum | `critical` / `high` / `medium` / `low` |
+| `plan_id` | string, optional | registered workflow/plan identity |
+| `tags` | array, optional | search keywords, max 8 |
+| `symptoms`, `root_cause`, `resolution_type` | bug track | required on the bug track |
+| `applies_when` | knowledge track | optional conditions where the guidance applies |
+| `last_updated` | `YYYY-MM-DD`, optional | added when updating an existing doc |
+| `related_components` | array, optional | other components involved |
 
 ### 3.3 Body
 
@@ -167,7 +166,7 @@ Read `references/concepts-vocabulary.md` for inclusion rules. Only propose when 
 - Its meaning in this project is precise enough that a new engineer would need it defined
 - It is not general programming vocabulary
 
-If `CONCEPTS.md` doesn't exist yet, ask whether to seed it. A seed populates the core domain nouns of the area the learning touches; a full repo-wide bootstrap is the job of `mstar-compound-refresh`.
+If `CONCEPTS.md` doesn't exist yet, ask whether to seed it. A seed populates the core domain nouns of the area the learning touches; a full repo-wide bootstrap is the job of `## Workflow — Maintain` (`references/project-knowledge-bootstrap.md`).
 
 ## Phase 6: Catalog registration
 

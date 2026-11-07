@@ -1,508 +1,176 @@
 # DESIGN.md Normative Spec
 
-This document defines the normative structure, token naming conventions, and rules for a properly formed `DESIGN.md` file. It is the single source of truth for what each section means and how tokens should be defined.
+Normative contract for a `DESIGN.md`: file format, frontmatter token schema, section meaning, token naming, dual-theme rules, and the completeness levels. These are the rules `validateDesignTokenFrontmatter`, `assertLightDarkParity` and `completenessLevel` enforce; the itemized audit lives in `references/completeness-checklist.md`, the working shape in `templates/DESIGN.md.template`.
 
 ## 1. File format
 
-- Markdown (`.md`) with YAML frontmatter in project root
-- UTF-8 encoding
-- **YAML frontmatter** (`---` delimited block at top) contains structured, machine-readable token values
-- **Markdown body** (everything after the `---` closing delimiter) contains human/agent-readable documentation, usage rules, and design intent
-- Multi-theme: `DESIGN.md` (light/default) + `DESIGN.dark.md` (dark variant, same token names)
+- Markdown in the project root, UTF-8 encoded, opening with a `---`-fenced YAML frontmatter block. A file without that block fails validation.
+- The **YAML frontmatter** is the single source of truth for token values; tools and agents MUST parse it for token resolution.
+- The **Markdown body** (everything after the closing delimiter) documents intent, rules and usage; it never restates a token value.
+- Multi-theme: `DESIGN.md` (light/default) plus `DESIGN.dark.md` (dark variant, same token names).
 
-## 1.5. YAML Frontmatter — Structured Token Store
+## 1.5. YAML frontmatter — token store
 
-The YAML frontmatter is the **single source of truth** for token values. The Markdown body is supplementary documentation. Tools and agents MUST parse the frontmatter for token resolution; the body prose explains intent and rules.
+The frontmatter is a YAML map. `colors`, `typography`, `spacing` and `rounded` are required and each must be a non-empty map — a scalar value or an empty group fails. `components` is optional below Level 2, but must be a map whenever present.
 
-### Version field
+| Field | Contract |
+|-------|----------|
+| `version` | Format version string; current value `0.1.0`. |
+| `name`, `description` | Concrete strings; the description notes the light/dark relationship. |
+| `colors` | Flat map of token names to values (§2.2). No sub-grouping by family. |
+| `typography` | Map of token names to the five-property object below. |
+| `spacing` | Map of `base` plus numeric multiplier keys to px lengths. |
+| `rounded` | Map of semantic keys to px lengths. |
+| `components` | Map of variant names to property maps; values are literals or `{path}` refs (§6). |
 
-```yaml
-version: 0.1.0
-```
+**Typography shape.** Every typography token has exactly the five properties `fontFamily`, `fontSize`, `fontWeight`, `lineHeight`, `letterSpacing` — a missing or an extra property fails validation — and `fontFamily` / `fontSize` must be non-empty.
 
-Format version identifier. Current value: `0.1.0`.
+**Spacing keys.** `base` declares the base unit (typically `4px` or `8px`); every other key is a numeric multiplier on it. Any key that is neither `base` nor numeric fails, and every value must be a px length.
 
-### Name and description
+**Rounded values.** px lengths only: `sm: 6px`, `md: 12px`, `lg: 16px`, `full: 9999px`.
 
-```yaml
-name: "[Design System Name]"
-description: "[Brief description, noting light/dark theme relationship]"
-```
+**Placeholders.** A `"[...]"` value is a template placeholder, never a concrete token: validation reports it and no completeness item counts it. Deferred Level 2+ keys stay YAML-commented and tagged `# LEVEL2_PLACEHOLDER:` (§5).
 
-### Colors (`colors:`)
-
-Flat map of token names to hex (or `oklch()` for P3) values. All scales are flat — not nested:
-
-```yaml
-colors:
-  background-100: "#ffffff"
-  gray-1000: "#171717"
-  blue-700: "#006bff"
-  blue-700-p3: "oklch(57.61% 0.2508 258.23)"
-```
-
-- Color token names follow the `{namespace}-{step}` convention (see §3)
-- `*-p3` variants are optional wide-gamut equivalents in `oklch()` for Display P3 screens
-- Alpha tokens use `#rrggbbaa` hex-with-alpha format (8 hex digits)
-- All tokens are at the top level of `colors:` — no sub-grouping by family
-
-### Typography (`typography:`)
-
-Map of tokens to structured sub-objects:
-
-```yaml
-typography:
-  copy-16:
-    fontFamily: Geist Sans
-    fontSize: 16px
-    fontWeight: 400
-    lineHeight: 1.6
-    letterSpacing: 0
-```
-
-Each typography token sub-object contains exactly five properties: `fontFamily`, `fontSize`, `fontWeight`, `lineHeight`, `letterSpacing`. Typography token names follow the `{role}-{size}` convention (see §3).
-
-### Spacing (`spacing:`)
-
-Flat map of numeric keys to pixel values:
-
-```yaml
-spacing:
-  base: 4px
-  1: 4px
-  2: 8px
-  3: 12px
-  4: 16px
-  6: 24px
-  8: 32px
-  10: 40px
-  16: 64px
-  24: 96px
-```
-
-- `base` declares the base unit (typically `4px` or `8px`)
-- Numeric keys are multipliers on the base unit
-
-### Border radius (`rounded:`)
-
-Flat map of semantic keys to pixel values:
-
-```yaml
-rounded:
-  sm: 6px
-  md: 12px
-  lg: 16px
-  full: 9999px
-```
-
-### Components (`components:`)
-
-Map of component variant names to structured sub-objects. Values reference other frontmatter keys using `{path}` syntax:
-
-```yaml
-components:
-  button-primary:
-    backgroundColor: "{colors.gray-1000}"
-    textColor: "{colors.background-100}"
-    typography: "{typography.button-14}"
-    rounded: "{rounded.sm}"
-    padding: "0 10px"
-    height: 40px
-```
-
-- `{colors.X}` resolves to the value of `colors.X` in the same file's frontmatter
-- `{typography.X}` resolves to the typography object (not a single value — consumers use the full object)
-- `{rounded.X}` resolves to the border-radius value
-- Direct values (like `"#ffffff"` or `40px`) are literal and do not reference other keys
-
-### Completeness level in frontmatter
-
-The frontmatter always contains the full key structure for every level. Level 2+ keys that are not yet filled are YAML-commented out with `# LEVEL2_PLACEHOLDER:` comments. The audit workflow (see `completeness-checklist.md`) checks which keys are active (uncommented) vs. placeholder (commented or containing `[LEVEL` / placeholder values).
-
-### Frontmatter vs. body contract
-
-| Aspect | Frontmatter (YAML) | Body (Markdown) |
-|--------|-------------------|-----------------|
-| Token values | **SSOT** — parse here | Descriptive prose referencing tokens |
-| Color hex values | All active tokens here | Explanation of scale intent, usage rules |
-| Typography specs | Exact CSS properties | Role descriptions, intent encoding |
-| Spacing scale | Exact pixel values | Rhythm rules, usage patterns |
-| Component tokens | Variants with references | State rules, size descriptions, focus patterns |
-| Elevation | N/A (body-only) | box-shadow values per element |
-| Motion | N/A (body-only) | Duration and easing tables |
-| Voice rules | N/A (body-only) | Copy conventions and examples |
+**Frontmatter vs body.** Token values, color hexes, typography specs, spacing steps and component variants live in the frontmatter. Elevation, motion, breakpoints and voice rules are body-only — they have no frontmatter field.
 
 ## 2. Section definitions
 
-Each section below maps to one heading in `DESIGN.md`. Sections are ordered as shown in Vercel Geist (recommended), but projects may omit sections not yet relevant. Where a section has corresponding YAML frontmatter fields, the frontmatter holds the canonical values and the body provides documentation.
+Each section below maps to one body heading. The order shown is recommended; a project may omit a section that does not yet apply. Where the frontmatter holds a value, the body documents intent and does not repeat the number.
 
 ### 2.1 Overview
 
-**Purpose:** Declare the design system's identity — a short statement that grounds all downstream decisions.
-
-**What to include:**
-- Name of the design system
-- Core aesthetic principles (e.g., minimal, high-contrast, playful)
-- Primary audience (developer tools, consumer app, dashboard, etc.)
-- Note whether this is a light theme, dark theme, or references another file for the opposite theme
-
-**Example (minimal):**
-
-```
-# Acme Design
-
-Acme Design is a minimal, high-contrast design system for our developer dashboard.
-Prioritize readability and signal state through color and iconography, not decoration.
-
-This is the Light theme. The Dark theme lives at `/DESIGN.dark.md`.
-```
-
-**Level relevance:** Level 1+
+The design system's name, core aesthetic principles, primary audience, and a statement of which file carries the opposite theme.
 
 ### 2.2 Colors
 
-**Purpose:** Define every color used in the UI, organized into scales.
+**Values.** sRGB hex — `#rgb`, `#rgba`, `#rrggbb`, `#rrggbbaa` — or `oklch(...)`. A wide-gamut equivalent takes a `*-p3` suffix key. Alpha tokens use 8-digit hex. Any other format fails validation.
 
-**SSOT:** All concrete color values live in the frontmatter `colors:` map. The body prose below explains scale conventions and usage intent.
+**Scale intent.** A color scale has ten steps, `100`–`1000`, with fixed meaning:
 
-**Conventions:**
-- Each color scale has 10 steps (`100`–`1000`), encoding intent:
-  - `100`: default background
-  - `200`: hover background
-  - `300`: active background
-  - `400`: default border
-  - `500`: hover border
-  - `600`: active border
-  - `700`: solid fill
-  - `800`: solid fill hover
-  - `900`: secondary text/icons
-  - `1000`: primary text/icons
-- **Background scales** (`background-100`, `background-200`): page/card surfaces
-- **Alpha scales** (`gray-alpha-*`): translucent overlays, borders, dividers — layer over any background; use `#rrggbbaa` hex-with-alpha or `rgba()` notation
-- **Solid scales** (`gray-*`): text, opaque fills — hold contrast on any surface
-- **Accent scales** (`blue`, `red`, `amber`, `green`, `teal`, `purple`, `pink`): carry meaning — success, error, warning, links, focus
-- Accent scales may use fewer steps if not all needed
+| Step | Intent |
+|------|--------|
+| `100` / `200` / `300` | default / hover / active background |
+| `400` / `500` / `600` | default / hover / active border |
+| `700` / `800` | solid fill / solid fill hover |
+| `900` / `1000` | secondary text and icons / primary text and icons |
 
-**Values:** sRGB hex (`#ffffff`), optionally with wide-gamut equivalents in `oklch()` as `*-p3` suffix keys.
+**Families.** Names encode the family (`{namespace}-{step}`, §3):
 
-**Example frontmatter:**
-
-```yaml
-colors:
-  background-100: "#ffffff"
-  background-200: "#f5f5f5"
-  gray-100: "#f5f5f5"
-  gray-700: "#333333"
-  gray-1000: "#111111"
-  blue-700: "#0066ff"
-  red-700: "#e60000"
-```
-
-**Level relevance:** Level 1+ requires at least background, text (gray-900/1000), and one accent (blue-700, red-700, amber-700) active in frontmatter. Level 2+ requires all color scales uncommented and filled.
+- **Background** (`background-*`): page and card surfaces.
+- **Solid** (`gray-*`): text and opaque fills; **alpha** (`gray-alpha-*`): translucent overlays, borders and dividers that layer over any surface.
+- **Accent** (`blue`, `red`, `amber`, `green`, `teal`, `purple`, `pink`): carries meaning — success, error, warning, links, focus. A scale may carry fewer steps than ten when the design needs fewer.
 
 ### 2.3 Typography
 
-**Purpose:** Define font families, sizes, weights, line heights, and letter spacing for every text role.
-
-**SSOT:** All concrete typography values live in the frontmatter `typography:` map. The body prose explains role semantics and usage intent.
-
-**Conventions:**
-- **Heading tokens** (`heading-72` through `heading-14`): title pages and section headings
-- **Label tokens** (`label-20` through `label-12`): single-line scannable text — navigation, form labels, table headers
-- **Copy tokens** (`copy-24` through `copy-13`): multi-line body text with taller line height
-- **Button tokens** (`button-16` through `button-12`): medium-weight labels for buttons
-- **Mono tokens**: same metrics with monospace font for code/data
-- Each token carries: `fontFamily`, `fontSize`, `fontWeight`, `lineHeight`, `letterSpacing`
-- Token name encodes intended font size (e.g., `copy-14` ≈ 14px body copy)
-- Use tabular figures for numbers that need alignment
-
-**Example frontmatter (minimal):**
-
-```yaml
-typography:
-  heading-32:
-    fontFamily: Inter
-    fontSize: 32px
-    fontWeight: 600
-    lineHeight: 1.2
-    letterSpacing: -0.02em
-  copy-16:
-    fontFamily: Inter
-    fontSize: 16px
-    fontWeight: 400
-    lineHeight: 1.6
-    letterSpacing: 0
-```
-
-**Level relevance:** Level 1+ requires at least one copy and one heading token active in frontmatter. Level 2+ requires heading, label, copy, and button typography tokens.
+- **Roles:** `heading-*` for titles and section headings, `label-*` for single-line scannable text (navigation, form labels, table headers), `copy-*` for multi-line body text with a taller line height, `button-*` for medium-weight button labels, and a `-mono` suffix for code and data.
+- **Naming:** a token name encodes its intended font size — `copy-14` is body copy at about 14px.
+- **Numbers:** use tabular figures where numbers must align.
 
 ### 2.4 Spacing & Layout
 
-**Purpose:** Define the spatial grid and responsive breakpoints.
-
-**SSOT:** Spacing scale values live in the frontmatter `spacing:` map. Border radius values live in `rounded:`. Breakpoints are documented in the body.
-
-**Conventions:**
-- Base unit: 4px or 8px (declared as `spacing.base` in frontmatter)
-- Scale: `4, 8, 12, 16, 24, 32, 40, 64, 96` (on 4px) or equivalent on 8px
-- Three-step rhythm: small inside group → medium between groups → large between sections
-- Card padding: 24px default, 16px compact, 32px hero
-- Content max-width with responsive side padding
-- Breakpoints: provide explicit pixel values and names
-
-**Example frontmatter:**
-
-```yaml
-spacing:
-  base: 4px
-  1: 4px
-  2: 8px
-  3: 12px
-  4: 16px
-  6: 24px
-  8: 32px
-  10: 40px
-  16: 64px
-  24: 96px
-
-rounded:
-  sm: 6px
-  md: 12px
-  lg: 16px
-  full: 9999px
-```
-
-**Level relevance:** Level 1+ requires `spacing.base` and at least 5 scale steps in frontmatter, plus at least 2 breakpoints in body.
+- Base unit 4px or 8px, declared as `spacing.base`; the scale is `4, 8, 12, 16, 24, 32, 40, 64, 96` on a 4px base (or the 8px equivalent).
+- Three-step rhythm: small inside a group, medium between groups, large between sections.
+- Card padding: 24px default, 16px compact, 32px hero.
+- Content has a max-width with responsive side padding.
+- Breakpoints are body-only: give each a name and an explicit pixel value.
 
 ### 2.5 Elevation & Depth
 
-**Purpose:** Define shadow values for layered UI elements.
-
-**Conventions:**
-- Use tonal surfaces first, shadows second — keep shadows subtle
-- Define shadow values per elevation level: cards, popovers, modals
-- Pair each elevation with a matching border radius
-
-**Example:**
-
-```
-## Elevation
-
-### Shadows
-| Level | Value |
-|-------|-------|
-| Card | 0 2px 2px rgba(0,0,0,0.04) |
-| Popover | 0 1px 1px rgba(0,0,0,0.02), 0 4px 8px -4px rgba(0,0,0,0.04), 0 16px 24px -8px rgba(0,0,0,0.06) |
-| Modal | 0 1px 1px rgba(0,0,0,0.02), 0 8px 16px -4px rgba(0,0,0,0.04), 0 24px 32px -8px rgba(0,0,0,0.06) |
-```
-
-**Level relevance:** Level 3 only.
+- Use tonal surfaces first and shadows second; keep shadows subtle.
+- Define one shadow value per elevation level — card, popover, modal.
+- Pair each elevation with its matching border radius.
 
 ### 2.6 Motion
 
-**Purpose:** Define animation durations and easing curves.
-
-**Conventions:**
-- Motion clarifies change, never decorates
-- Default: 0ms (instant) is often the best choice
-- When needed: short, physical easing — roughly 150ms state, 200ms popover, 300ms modal
-- Honor `prefers-reduced-motion`
-- No looping or attention-grabbing animations
-
-**Example:**
-
-```
-## Motion
-
-### Easing
-Default: cubic-bezier(0.175, 0.885, 0.32, 1.1)
-
-### Durations
-| Context | Duration |
-|---------|----------|
-| State change | 150ms |
-| Popover/Tooltip | 200ms |
-| Modal/Overlay | 300ms |
-```
-
-**Level relevance:** Level 3 only.
+- Motion clarifies a change; it never decorates.
+- 0ms — instant — is often the right default; when motion is used, keep it short and physical: roughly 150ms for a state change, 200ms for a popover, 300ms for a modal.
+- Honor `prefers-reduced-motion`.
+- No looping or attention-grabbing animation.
 
 ### 2.7 Shapes
 
-**Purpose:** Define border radius values.
+- Keep radii tight and consistent; one radius family per view, never mixing rounded and sharp corners.
 
-**Conventions:**
-- Keep radii tight and consistent
-- One radius family per view, never mix rounded and sharp corners
-- Common values: 6px (surfaces), 12px (menus/modals), 16px (fullscreen), 9999px (pills)
-
-**Example:**
-
-```
-## Shapes
-
-### Border Radius
-| Context | Value |
-|---------|-------|
-| Surface, Input, Button | 6px |
-| Menu, Modal, Popover | 12px |
+| Context | Radius |
+|---------|--------|
+| Surface, input, button | 6px |
+| Menu, modal, popover | 12px |
 | Fullscreen | 16px |
-| Pill, Avatar | 9999px |
-```
-
-**Level relevance:** Level 3 only.
+| Pill, avatar | 9999px |
 
 ### 2.8 Components
 
-**Purpose:** Define ready-to-use token values for common components.
-
-**SSOT:** Component variant tokens live in the frontmatter `components:` map. Values reference other frontmatter keys using `{colors.X}`, `{typography.X}`, `{rounded.X}` syntax. The body prose documents state rules (hover/active/disabled/focus) and size variants.
-
-**Conventions:**
-- Each component variant gets: `backgroundColor`, `textColor`, `typography`, `rounded`, `height` (and `padding`, `borderColor` where applicable)
-- Size variants: default (40px), small (32px), large (48px) — override only typography/padding/height
-- State mappings: hover steps foreground up one, active steps up two; border from 400→500→600
-- Focus ring: two-layer box-shadow (surface gap + accent ring)
-- Disabled: 100 fill + 700 text + not-allowed cursor
-
-**Example frontmatter:**
-
-```yaml
-components:
-  button-primary:
-    backgroundColor: "{colors.gray-1000}"
-    textColor: "{colors.background-100}"
-    typography: "{typography.button-14}"
-    rounded: "{rounded.sm}"
-    padding: "0 10px"
-    height: 40px
-  button-secondary:
-    backgroundColor: "{colors.background-100}"
-    textColor: "{colors.gray-1000}"
-    typography: "{typography.button-14}"
-    rounded: "{rounded.sm}"
-    padding: "0 10px"
-    height: 40px
-  input:
-    backgroundColor: "{colors.background-100}"
-    textColor: "{colors.gray-1000}"
-    typography: "{typography.label-14}"
-    rounded: "{rounded.sm}"
-    padding: "0 12px"
-    height: 40px
-```
-
-**Level relevance:** Level 2+ requires at least Button (primary, secondary) and Input tokens in frontmatter. Level 3 requires full component library.
+- Each variant declares `backgroundColor`, `textColor`, `typography`, `rounded`, `height`, plus `padding` and `borderColor` where applicable; values are `{path}` references (§6) or literals.
+- Size variants — default 40px, small 32px, large 48px — override typography, padding and height only.
+- State mapping: hover steps the foreground scale up one step, active up two; borders move `400 → 500 → 600`.
+- Focus ring: a two-layer box-shadow — surface gap plus accent ring.
+- Disabled: `100` fill, `700` text, `not-allowed` cursor.
+- The body documents the state rules (hover / active / disabled / focus) behind these tokens.
 
 ### 2.9 Voice & Content
 
-**Purpose:** Define content writing rules for the UI.
-
-**Conventions:**
-- Title Case for labels, buttons, titles, tabs
-- Sentence case for body, helper text, toasts
-- Verb + Noun for actions (`Deploy Project`, never `Confirm`)
-- Errors: what happened + what to do
-- Toasts: specific thing + no trailing period + no `successfully`
-- Empty states: describe the first action
-- In-progress: present participle + ellipsis (`Deploying…`)
-- Use numerals, curly quotes, the ellipsis character
-
-**Example:**
-
-```
-## Voice & Content
-
-- Use Title Case for labels, buttons, titles, and tabs
-- Sentence case for body, helper text, and toasts
-- Name actions with a verb and a noun: `Deploy Project`, `Delete Member`
-- Write errors as what happened plus what to do next
-- Toasts name the specific thing that changed, drop the trailing period
-- Empty states point to the first action: `No deployments yet. Push to your Git repository to create one.`
-```
-
-**Level relevance:** Level 3 only.
+- Title Case for labels, buttons, titles and tabs; sentence case for body, helper text and toasts.
+- Actions are verb plus noun — `Deploy Project`, never `Confirm`.
+- Errors state what happened plus what to do next.
+- Toasts name the specific thing that changed, drop the trailing period, and never say `successfully`.
+- Empty states describe the first action.
+- In-progress states are a present participle plus the ellipsis character — `Deploying…`.
+- Use numerals, curly quotes and the ellipsis character.
 
 ## 3. Token naming conventions
 
-### Color tokens
-
-```
-{namespace}-{step}
-```
-
-- `namespace`: `background`, `gray`, `gray-alpha`, `blue`, `red`, `amber`, `green`, `teal`, `purple`, `pink`
-- `step`: `100`–`1000` (10-step scale encoding intent as defined in §2.2)
-
-### Typography tokens
-
-```
-{role}-{size}
-```
-
-- `role`: `heading`, `label`, `copy`, `button`
-- `size`: approximate font size in pixels
-- Mono variant: `{role}-{size}-mono`
-
-### Breakpoint tokens
-
-Lowercase short names: `sm`, `md`, `lg`, `xl`, `2xl`
+- **Color:** `{namespace}-{step}`, where `namespace` is `background`, `gray`, `gray-alpha`, `blue`, `red`, `amber`, `green`, `teal`, `purple` or `pink`, and `step` is `100`–`1000` with the intent fixed in §2.2.
+- **Typography:** `{role}-{size}`, where `role` is `heading`, `label`, `copy` or `button` and `size` is the approximate pixel size; a mono variant appends `-mono`.
+- **Breakpoints:** lowercase short names — `sm`, `md`, `lg`, `xl`, `2xl`.
 
 ## 4. Light/Dark dual-theme rules
 
-### Contract
+Dual theme means the **same token names with different values** in two separate files: `DESIGN.md` (light or default) and `DESIGN.dark.md` (dark). Both files carry the frontmatter block of §1.5; a missing block in either fails the parity check.
 
-Dual theme uses **same token names with different values** in two separate files:
+1. Token names are identical across both files.
+2. Only the values differ — a light `background-100: #ffffff` becomes dark `background-100: #111111`.
+3. Both files define the same active token set across all five groups (`colors`, `typography`, `spacing`, `rounded`, `components`); no token may exist in only one file.
+4. `DESIGN.md` is always the SSOT for token names; `DESIGN.dark.md` copies the structure.
+5. A token with no dark-mode role (a light-only accent, say) still appears in `DESIGN.dark.md` with a sensible dark-equivalent value.
+6. The `DESIGN.md` Overview names the `DESIGN.dark.md` path.
 
-- `DESIGN.md` — light (or default) theme
-- `DESIGN.dark.md` — dark theme
-
-### Rules
-
-1. **Token names are identical** across both files
-2. **Only the values differ** — a light `background-100: #ffffff` becomes dark `background-100: #111111`
-3. **Both files define the same token set** — no token can exist in only one file
-4. **DESIGN.md is always the SSOT for token names** — DESIGN.dark.md copies the structure
-5. If a token isn't relevant to dark mode (e.g., a light-only accent), include it in DESIGN.dark.md anyway with a sensible dark-equivalent value
-6. Add `DESIGN.dark.md` path reference in DESIGN.md Overview
-
-### Naming
-
-Dark theme file must be named `DESIGN.dark.md` (not `design-dark.md` or `DESIGN_DARK.md`).
+The dark file MUST be named `DESIGN.dark.md` — not `design-dark.md` or `DESIGN_DARK.md`.
 
 ## 5. Upgrade placeholders
 
-Sections not yet filled should use HTML comment markers:
+A section not yet filled carries an HTML-comment marker instead of silently empty content: `<!-- LEVEL2_PLACEHOLDER: <what is deferred and when to revisit> -->`, likewise `LEVEL3_PLACEHOLDER` (the template ships real instances). An agent reading one understands that:
 
-```
-<!-- LEVEL2_PLACEHOLDER: Complete the 10-step color scales and add alpha scale when the design matures. See `references/completeness-checklist.md` § Level 2. -->
-```
-
-```
-<!-- LEVEL3_PLACEHOLDER: Add Elevation, Motion, Shapes, Voice & Content, and full Component library when ready for production design system. See `references/completeness-checklist.md` § Level 3. -->
-```
-
-Agents encountering these placeholders understand that:
-- The section is intentionally deferred, not accidentally empty
-- The placeholder describes what's missing and when to revisit
-- An upgrade workflow can detect these markers and recommend progression
+- the section is intentionally deferred, not accidentally empty;
+- the marker states what is missing and when to revisit it;
+- an audit detects the marker and recommends the level it would unlock.
 
 ## 6. Mapping to implementation
 
-DESIGN.md tokens should map to implementation as follows:
-
 | DESIGN.md | Implementation |
-|-----------|---------------|
-| Frontmatter `colors:` | CSS custom properties (`--color-gray-100`) or theme object |
-| Frontmatter `typography:` | CSS classes or Tailwind prose config |
-| Frontmatter `spacing:` | CSS custom properties or Tailwind spacing config |
-| Frontmatter `rounded:` | CSS custom properties or Tailwind radius config |
-| Body breakpoints | CSS media queries or Tailwind screens |
+|-----------|----------------|
+| Frontmatter `colors:` | CSS custom properties (`--color-gray-100`) or a theme object |
+| Frontmatter `typography:` | CSS classes or a Tailwind prose config |
+| Frontmatter `spacing:` / `rounded:` | CSS custom properties or Tailwind spacing / radius config |
 | Frontmatter `components:` | Component prop defaults or CSS classes |
-| Body elevation | `box-shadow` or Tailwind shadow config |
-| Body motion | `transition` or animation library config |
-| Body voice rules | Linter rules or prompt context for copy generation |
+| Body breakpoints | CSS media queries or Tailwind screens |
+| Body elevation | `box-shadow` or a Tailwind shadow config |
+| Body motion | `transition` or animation-library config |
+| Body voice rules | Linter rules or prompt context for generated copy |
 
-**Frontmatter references** in `components:` (e.g., `"{colors.gray-1000}"`) MUST be resolved by tracing the `{path}` back to the frontmatter key. For example, `"{colors.gray-1000}"` → `colors.gray-1000` → `"#171717"`.
+A `{path}` reference in `components:` (`"{colors.gray-1000}"`, `"{typography.button-14}"`, `"{rounded.sm}"`) MUST trace back to an active key in the same file's frontmatter — `{colors.gray-1000}` → `colors.gray-1000` → `"#171717"`. Only `colors`, `typography` and `rounded` are referenceable groups, and an unresolved reference fails validation.
 
-The agent consuming DESIGN.md is responsible for frontmatter parsing and reference resolution, not DESIGN.md itself. DESIGN.md stays implementation-agnostic.
+Resolving references is the consuming agent's job, not DESIGN.md's: the document stays implementation-agnostic.
+
+## 7. Completeness levels
+
+A DESIGN.md is at **Level N** when every item at Level N and below passes. Only concrete frontmatter values count — a commented-out key, a `"[...]"` placeholder, or a value missing its required properties is not a pass. `completeness-checklist.md` § Level 1–3 is the normative item list and holds the exact thresholds; this section defines what each level certifies.
+
+- **Level 1 — MVP**: the minimum that lets an agent build UI without inventing color, type or spacing — a frontmatter declaring `version`, `name` and `description`; a palette (a background, primary and secondary text, one accent, plus error and warning); at least one complete `copy-*` and one complete `heading-*` typography token; a spacing scale on `base`; a small radius; and the breakpoints stated in the body.
+- **Level 2 — Standard**: consistent reusable components — the full background, solid, alpha and accent scales; the full typography role set; the complete spacing and radius scales; Button (primary, secondary, small) and Input component tokens; and, in the body, four breakpoints plus the component states and the spacing rhythm.
+- **Level 3 — Production**: a complete design system — a component library (Card, Modal, Tooltip, Menu/Dropdown), `DESIGN.dark.md` at full token parity, and Elevation, Motion, Shapes and Voice & Content documented in the body.
+
+**Verdict vocabulary.** The audit reports `BELOW_MVP` (Level 1 items missing), `MVP`, `Standard` or `Production`.
+
+**Body confirmation.** Level 3 is dominated by body and dual-theme items, which no frontmatter scan can certify: an audit that passes no body checklist tops out at Level 2.
+
+**Upgrade path.** A `LEVEL2_PLACEHOLDER` / `LEVEL3_PLACEHOLDER` marker (§5) is an intentional deferral, not a defect; the audit names the level each marker would unlock.

@@ -1,19 +1,9 @@
-# Resolution templates for mstar-compound
+# Resolution templates for mstar-knowledge
 
 ## Bug track template
 
 ```markdown
----
-module: <area>
-date: YYYY-MM-DD
-problem_type: <enum>
-category: <directory>
-severity: <critical|high|medium|low>
-symptoms: ["<symptom 1>", "<symptom 2>"]
-root_cause: <fundamental cause>
-resolution_type: <enum>
-tags: [<keyword1>, <keyword2>]
----
+<!-- frontmatter fields: see references/schema.yaml (bug track adds symptoms/root_cause/resolution_type) -->
 
 # <Title>
 
@@ -51,15 +41,7 @@ tags: [<keyword1>, <keyword2>]
 ## Knowledge track template
 
 ```markdown
----
-module: <area>
-date: YYYY-MM-DD
-problem_type: <enum>
-category: <directory>
-severity: <critical|high|medium|low>
-applies_when: ["<condition 1>", "<condition 2>"]
-tags: [<keyword1>, <keyword2>]
----
+<!-- frontmatter fields: see references/schema.yaml (knowledge track optional applies_when) -->
 
 # <Title>
 

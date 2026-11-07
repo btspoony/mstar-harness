@@ -34,7 +34,7 @@
 | 结果（跨 clone handoff） | `{HARNESS_DIR}/AGENTS.md`、`{KNOWLEDGE_DIR}/**`、`{SPECS_DIR}/**` | — |
 | 进程（执行权威在 store；plan 是 authored artifact） | — | `store.db`、`plans/`、`iterations/`、迁移源 `status.json`、`workflows/` retained bodies 与 legacy 文件、`projects/`、`sdd/`、`archived/` |
 
-跨 clone 须持久的 residual 或决策：经 **`mstar-compound`** 提升入 `{KNOWLEDGE_DIR}/`、写入 `{SPECS_DIR}/`，或记入 tracked `{HARNESS_DIR}/AGENTS.md` — **勿**默认 `git add` 迁移源 `status.json` / `plans/`。
+跨 clone 须持久的 residual 或决策：经 **`mstar-knowledge`** 提升入 `{KNOWLEDGE_DIR}/`、写入 `{SPECS_DIR}/`，或记入 tracked `{HARNESS_DIR}/AGENTS.md` — **勿**默认 `git add` 迁移源 `status.json` / `plans/`。
 
 ## 三层 `AGENTS.md` 职责切分
 

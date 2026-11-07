@@ -31,7 +31,7 @@ Who advances this plan row's engine state, and what records each transition:
   - **standalone report-only:** record fulfilment matching registered completion_policy before Done, then complete with QC/QA. No invented Git, integration, compound-before-PR, PR or merge. Mismatching, empty or missing fulfilment refuses completion; QA pass alone never supplies it. Evidence-backed terminal close remains.
 - **Evidence order** — `compound` disposition, and on the iteration/development routes PR identity and merge evidence, are recorded **after** the row is `Done`; the engine refuses those writes while any plan row is not `Done`. The report-only fulfilment is the declared exception: it is recorded **before** the row is marked `Done`. The delivery tail runs on a completed row, never ahead of it.
 
-Semantics, routes, and failure behavior → `mstar-artifacts/references/plan-workflow-lifecycle-contract.md`; PM step sequence → `mstar-roles/references/project-manager/plan-management.md`.
+Semantics, routes, and failure behavior → `mstar-artifacts/references/plan-workflow-lifecycle-contract.md` §3–§5; PM step sequence → `mstar-roles/references/project-manager/plan-management.md`.
 
 ---
 

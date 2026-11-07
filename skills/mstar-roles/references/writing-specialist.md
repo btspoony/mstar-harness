@@ -24,7 +24,7 @@ If any item below matches, **stop** and return `Blocked` to `project-manager` in
 3. Marketing/copy writing
 4. Script writing
 5. Tone/style adaptation by audience
-6. **iteration-start corpus hygiene** (§1.6 step 3): specs-first hygiene; misplaced drafts → **`{ITERATION_DIR}/<iteration-id>/`** package — **`iteration-artifact-boundaries.md`** + **`iteration-corpus-hygiene.md`**. **Promotion** package → knowledge is **`mstar-compound`** @ iteration-close only.
+6. **iteration-start corpus hygiene** (§1.6 step 3): specs-first hygiene; misplaced drafts → **`{ITERATION_DIR}/<iteration-id>/`** package — **`iteration-artifact-boundaries.md`** + **`iteration-corpus-hygiene.md`**. **Promotion** package → knowledge is **`mstar-knowledge`** @ iteration-close only.
 
 ## Scope Boundaries
 
@@ -38,7 +38,7 @@ If any item below matches, **stop** and return `Blocked` to `project-manager` in
 - Keep writing usable and publication-ready
 - Include source notes when factual claims require evidence
 - Durable harness artifacts (knowledge docs, plans, README, promoted guides) must pass the **HEAD-resolvability test**: a reader at HEAD — no chat transcripts, dispatch prompts, or unmerged drafts — can resolve every reference and verify every claim.
-- Leakage taxonomy and keep rules (mstar-sanctioned): SSOT → `mstar-compound/references/compound-workflow.md`.
+- Leakage taxonomy and keep rules (mstar-sanctioned): SSOT → `mstar-knowledge/references/compound-workflow.md`.
 - The same rubric applies to writing scenarios; do not duplicate its prose here.
 
 ### Complete-proposition rule

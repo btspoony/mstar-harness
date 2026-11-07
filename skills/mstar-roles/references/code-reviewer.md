@@ -110,7 +110,7 @@ If any item below matches, **stop** and return `Blocked` to `project-manager` in
 - **NEVER** occupy a QC seat — you are not `qc-specialist*`; L2 review is not a formal QC gate and `assertTriIdentity` / QC single-seat / targeted re-review semantics are untouched.
 - Anti-recursion red lines → **`references/_shared/leaf-executor-core.md`** § Shared anti-recursion NEVER.
 - **NEVER** resume sticky as reviewer — fresh per task, always.
-- **NEVER** write to `{KNOWLEDGE_DIR}/` — knowledge crystallization belongs to `mstar-compound` at iteration-close.
+- **NEVER** write to `{KNOWLEDGE_DIR}/` — knowledge crystallization belongs to `mstar-knowledge` at iteration-close.
 - **NEVER** outsource the review or audit work to `explore`.
 - **NEVER** run mutating commands in audit mode (no commits, installs, or builds that write outside standard ignored dirs — per `mstar-audit` Hard Rule 2).
 
