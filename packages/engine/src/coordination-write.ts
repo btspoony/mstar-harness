@@ -433,11 +433,16 @@ function validateCompletionRecord(value: unknown, what: string, route: RowValida
   for (const key of ["completed_by", "completed_at"]) {
     if (!isNonEmptyString(value[key])) violations.push(invalid("coordination.row.completion-field", `${what}.${key} is required`));
   }
-  for (const key of ["source_sha", "review_base", "review_head"]) {
+  for (const key of ["source_sha", "review_head"]) {
     const item = value[key];
     if (!(reportOnly && item === null) && (typeof item !== "string" || !GIT_SHA.test(item))) {
       violations.push(invalid("coordination.row.completion-field", `${what}.${key} must be a full Git object id${reportOnly ? " or null" : ""}`));
     }
+  }
+  // The reviewed base is optional provenance on every route; the engine never
+  // fabricates a merge-base to fill it.
+  if (value.review_base !== null && (typeof value.review_base !== "string" || !GIT_SHA.test(value.review_base))) {
+    violations.push(invalid("coordination.row.completion-field", `${what}.review_base must be a full Git object id or null`));
   }
   if (!(reportOnly && value.worktree_path === null) && (!isNonEmptyString(value.worktree_path) || !isAbsolute(value.worktree_path))) {
     violations.push(invalid("coordination.row.completion-field", `${what}.worktree_path must be an absolute source checkout${reportOnly ? " or null" : ""}`));

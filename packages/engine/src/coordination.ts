@@ -1256,9 +1256,11 @@ export function revalidateGitProofWitness(witness: GitProofWitness): void {
  * worktree has checked out, the worktree is clean, and no Git operation is
  * half-finished. Required at handoff, accept and integration-start. The
  * worktree is the persisted plan scope — never an evidence field — so both
- * transports hand this rule the scope their own authority records.
+ * transports hand this rule the scope their own authority records. A null pin
+ * means the caller derives the source commit FROM this checkout and skips the
+ * comparison; the returned checkout is that observation either way.
  */
-export function assertFeatureCheckout(worktreePath: string, sourceSha: string, what: string, planId: string): void {
+export function assertFeatureCheckout(worktreePath: string, sourceSha: string | null, what: string, planId: string): GitCheckout {
   const checkout = gitCheckout(worktreePath);
   if (checkout === undefined) {
     throw new CoordinationError(
@@ -1279,12 +1281,13 @@ export function assertFeatureCheckout(worktreePath: string, sourceSha: string, w
       head: checkout.head,
     });
   }
-  if (checkout.head !== sourceSha) {
+  if (sourceSha !== null && checkout.head !== sourceSha) {
     throw gitProof(
       "The plan worktree HEAD does not match the pinned source. Restore the pinned commit before retrying.",
       { plan_id: planId, expected: sourceSha, actual: checkout.head },
     );
   }
+  return checkout;
 }
 
 /* ------------------------------------------------------------------------ *

@@ -1476,29 +1476,32 @@ function applyCompletion(input: {
 
 /**
  * §E the recorded source proof of one plan's own delivery, from the ROW's
- * recorded scope: the checkout is a clean Git worktree, its HEAD is the pinned
- * source commit, it is on the recorded/registered source branch, that branch's
- * tip is the same commit, and the reviewed range is an ancestry of it. Used by
+ * recorded scope: the checkout is a clean Git worktree whose HEAD is the source
+ * commit, it is on the recorded/registered source branch, that branch's tip is
+ * the same commit, and a SUPPLIED reviewed base is an ancestry of it. Used by
  * BOTH the standalone development route and the iteration (integration) route,
  * so a row can never complete against a merge of a commit unrelated to its own
  * feature branch or its reviewed commit. `worktreePath` is always the row's own
  * recorded scope — never a caller-supplied path.
+ *
+ * The source commit and the review head are one fact: the reviewed tree is the
+ * checked-out commit, so an omitted pair is derived from HEAD and a supplied
+ * value is only accepted when it agrees. `review_base` is optional provenance —
+ * the engine does not invent a merge-base, because after the target is merged
+ * into the branch that merge-base is not the reviewed base.
  */
 function assertSourceReviewProof(
   worktreePath: string,
   shas: { source_sha: string | null; review_base: string | null; review_head: string | null },
   sourceBranch: string,
   planId: string,
-): { source_sha: string; review_base: string; review_head: string } {
-  const sourceSha = shas.source_sha;
+): { source_sha: string; review_base: string | null; review_head: string } {
+  const checkout = assertFeatureCheckout(worktreePath, shas.source_sha, "complete", planId);
+  const sourceSha = checkout.head;
   const reviewBase = shas.review_base;
-  const reviewHead = shas.review_head;
-  if (sourceSha === null || reviewBase === null || reviewHead === null) {
-    throw invalidPlanInput("Complete on this route requires evidence.source_sha, review_base, and review_head; retry through mstar workflow evidence.");
-  }
-  assertFeatureCheckout(worktreePath, sourceSha, "complete", planId);
+  const reviewHead = shas.review_head ?? sourceSha;
   if (reviewHead !== sourceSha) {
-    throw gitProof(`complete requires review_head to be the pinned source ${sourceSha} \u2014 got ${reviewHead}`, {
+    throw gitProof(`complete requires review_head to be the checked-out source ${sourceSha} \u2014 got ${reviewHead}`, {
       plan_id: planId,
       source_sha: sourceSha,
       review_head: reviewHead,
@@ -1514,23 +1517,25 @@ function assertSourceReviewProof(
   const refTip = gitRead(worktreePath, ["rev-parse", `refs/heads/${sourceBranch}`]);
   if (refTip !== sourceSha) {
     throw gitProof(
-      `complete requires refs/heads/${sourceBranch} to resolve to the pinned source ${sourceSha} \u2014 got ${refTip || "missing"}`,
+      `complete requires refs/heads/${sourceBranch} to resolve to the checked-out source ${sourceSha} \u2014 got ${refTip || "missing"}`,
       { plan_id: planId, expected: sourceSha, actual: refTip },
     );
   }
-  if (!gitObjectExists(worktreePath, reviewBase)) {
-    throw gitProof(`complete review base ${reviewBase} is not a commit of ${worktreePath}`, {
-      plan_id: planId,
-      review_base: reviewBase,
-    });
-  }
-  const ancestry = gitRead(worktreePath, ["merge-base", "--is-ancestor", reviewBase, reviewHead]);
-  if (ancestry === undefined) {
-    throw gitProof(`complete review range ${reviewBase}..${reviewHead} is not an ancestry`, {
-      plan_id: planId,
-      review_base: reviewBase,
-      review_head: reviewHead,
-    });
+  if (reviewBase !== null) {
+    if (!gitObjectExists(worktreePath, reviewBase)) {
+      throw gitProof(`complete review base ${reviewBase} is not a commit of ${worktreePath}`, {
+        plan_id: planId,
+        review_base: reviewBase,
+      });
+    }
+    const ancestry = gitRead(worktreePath, ["merge-base", "--is-ancestor", reviewBase, reviewHead]);
+    if (ancestry === undefined) {
+      throw gitProof(`complete review range ${reviewBase}..${reviewHead} is not an ancestry`, {
+        plan_id: planId,
+        review_base: reviewBase,
+        review_head: reviewHead,
+      });
+    }
   }
   return { source_sha: sourceSha, review_base: reviewBase, review_head: reviewHead };
 }
@@ -1774,8 +1779,7 @@ async function captureCompletionWitnesses(
     );
   }
   assertNoIntegrationContamination({ snapshot, planId: read.planId, integration: operation.integration, what: "complete" });
-  const row = before.data.plan as unknown as PlanRow;
-  const evidence = readCompletionEvidence(operation.evidence, rowValidationRoute(snapshot, row));
+  const evidence = readCompletionEvidence(operation.evidence);
   const prepared = effectivePrepareConfig(before.data);
   assertCompletionReviewDecision(evidence, read.planId, prepared.qa_gate);
   const planAreas = planAreaRoots(controlHarnessRoot(context), read.planId);
@@ -1839,8 +1843,7 @@ function completeInTransaction(
     );
   }
   assertNoIntegrationContamination({ snapshot, planId, integration: operation.integration, what: "complete" });
-  const row = witness.view.plan as unknown as PlanRow;
-  const evidence = readCompletionEvidence(operation.evidence, rowValidationRoute(snapshot, row));
+  const evidence = readCompletionEvidence(operation.evidence);
   const prepared = effectivePrepareConfig(witness.view);
   assertCompletionReviewDecision(evidence, planId, prepared.qa_gate);
   // Revalidate aliases/existence after the proof gap, before committing captured

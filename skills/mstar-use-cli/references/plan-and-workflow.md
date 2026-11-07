@@ -40,15 +40,12 @@ Supply one complete evidence document:
 
 ```json
 {
-  "source_sha": "<actual source SHA>",
-  "review_base": "<actual review base SHA>",
-  "review_head": "<actual reviewed head SHA>",
   "qc": {"decision": "Approve", "reports": ["<absolute report path>"], "consolidated": "<absolute summary path>"},
   "qa": {"gate": "mandatory", "decision": "pass", "report": "<absolute report path>"}
 }
 ```
 
-Use actual reports/source facts, not placeholders. The integration CLI pair must be supplied together, or the document may carry `integration: {base_sha,result_sha}`. Evidence paths are existing absolute files; hashes are informational provenance, not resealing requirements.
+Use actual reports, not placeholders. The three commit fields are optional and derived from the recorded source checkout: `source_sha` and `review_head` are its clean `HEAD` (one fact — the reviewed tree is the checked-out commit), and `review_base` stays `null` unless supplied. Supply a commit only to assert it: the engine verifies a supplied `source_sha`/`review_head` equals the checkout HEAD, a supplied `review_base` is a commit of that checkout and an ancestor of the head, and refuses a disagreement. The integration CLI pair must be supplied together, or the document may carry `integration: {base_sha,result_sha}`. Evidence paths are existing absolute files; hashes are informational provenance, not resealing requirements.
 
 | Engine-selected route | Proof before direct complete | After row Done |
 |---|---|---|
