@@ -128,15 +128,11 @@ The integration checkout is established at Phase 2 entry; the bounded Phase 1 un
 | **Integration worktree** | Resolved `spec_integration_branch` (same across active plans) | `integration_worktree_path` (ACTIVE store-backed workflow view) — canonical **repository root** (not `{HARNESS_DIR}`) | Sole merge cwd for serial integration merges (`integration_merge_lease`) + tracked-result close commits (Phase 3 compound); **no product-source edits** — Phase-5 fixes use a feature worktree |
 | **Feature worktree** (per plan) | Plan's Working branch | Row `metadata.worktree_path` (ACTIVE plan view) | **Required cwd** for product/source edits |
 
-### Harness path SSOT under default gitignore (L1) — the three-domain table
+### Harness path SSOT under default gitignore (L1) — three write domains
 
-Default process artifacts are **gitignored** (`mstar-conventions`「Git 跟踪策略」); `git worktree add` does **not** copy them into a new checkout. A worktree's `.mstar/` is **not categorically non-writable** — writability is decided per domain. This is the **sole** three-domain table in the skill corpus; other skills point here instead of restating it.
+Default process artifacts are **gitignored** (`mstar-conventions`「Git 跟踪策略」); `git worktree add` does **not** copy them into a new checkout. A worktree's `.mstar/` is **not** categorically non-writable — writability is decided per domain. This is the **sole** three-domain statement in the skill corpus; other skills point here instead of restating it.
 
-| Domain | Contents | Home | Writable from a worktree? |
-|---|---|---|---|
-| **Process SSOT** (gitignored) | `store.db`, retained `workflows/` bodies, `projects/`, authored `plans/`, `sdd/`, `iterations/`, `archived/` (`status.json` / workflow snapshots / legacy session JSON: read-only import/history only) | control root = the **primary checkout** (main worktree) | **No.** Always addressed via absolute control-root paths; a second process-SSOT copy must never be bootstrapped under any worktree. |
-| **Tracked results** (Git-following) | `{KNOWLEDGE_DIR}`, `{SPECS_DIR}`, `{HARNESS_DIR}/AGENTS.md`, `CONCEPTS.md` | whichever checkout holds the target branch | **Yes.** Readable from any worktree; written where the target branch is checked out (iteration Phase 3 compound → the integration worktree), then committed on that branch. |
-| **Product source** | repository code | feature worktree on `Working branch` | feature worktree only. |
+**Process SSOT** (gitignored: `store.db`, retained `workflows/` bodies, `projects/`, authored `plans/`, `sdd/`, `iterations/`, `archived/`; `status.json` / workflow snapshots / legacy session JSON are read-only import/history) lives at the control root = the **primary checkout** (main worktree) and is **never** writable from a worktree: address it only through absolute control-root paths, and never bootstrap a second process-SSOT copy under any worktree. **Tracked results** (Git-following: `{KNOWLEDGE_DIR}`, `{SPECS_DIR}`, `{HARNESS_DIR}/AGENTS.md`, `CONCEPTS.md`) are readable from any worktree and written where the target branch is checked out (iteration Phase 3 compound → the integration worktree), then committed on that branch. **Product source** (repository code) is writable in the feature worktree on `Working branch` only.
 
 **Control harness root** = `<main-repo-root>/{HARNESS_DIR}/` — resolved from Git (the main worktree), never from a recorded state field. Discover it instead of guessing: `mstar path resolve` reports `controlRoot` / `controlHarnessDir` / `linkedWorktree` (resolution order → **`mstar-conventions`**「`{HARNESS_DIR}` 解析顺序」). A linked checkout without `.mstar/` is **not** an uninitialized harness.
 

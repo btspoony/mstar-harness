@@ -8,6 +8,7 @@
 
 ## 与公开文档目录的分工（典型为 `docs/`）
 
+**本表是产物边界表的唯一权威**（哪个区域放什么、受众与权威）；三写域（process SSOT / tracked results / product source）的可写性 → **`mstar-branch-worktree`** § Harness path SSOT under default gitignore。
 
 | 区域 | 典型内容 | 受众 / 权威 |
 |------|----------|-------------|

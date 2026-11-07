@@ -197,13 +197,7 @@ ACTIVE 的中途增减范围先经 `mstar plan bind --execution --workflow <id> 
 
 ## 1.5.5 产物边界（specs · iterations · knowledge）
 
-Phase 1 与 §1.6 须遵守 **`references/iteration-artifact-boundaries.md`**（HARD）：
-
-| 树 | Phase 1（start）主责 | 说明 |
-|----|---------------------|------|
-| **`{SPECS_DIR}/`** | **Phase 3 iteration-close** specs 提升流程 | **长期**规范性产出：锁定规格、ADR、契约；plan `primary_spec` / `spec_refs` 主要挂此处 |
-| **`{ITERATION_DIR}/`** | PM; selected product-manager / architect; mandatory writer | **`<iteration-id>/` package** (`prototypes/`, `delivery-compass.md`, iteration specs/guides) |
-| **`{KNOWLEDGE_DIR}/`** | **非** start/execute 直写；**`mstar-compound`** @ iteration-close（含 package **提升**） | 可复用实施 SSOT |
+Phase 1 与 §1.6 须遵守 **`references/iteration-artifact-boundaries.md`**（HARD）；三棵树的落点、长期价值与写者 → **`mstar-artifacts`** `references/knowledge-and-designs.md` § 与公开文档目录的分工。
 
 **写入边界**：Phase 1（含 §1.6）的规格落在 `<iteration-id>/specs/`；全局 `{SPECS_DIR}/` 在 Phase 3 iteration-close 提升时写入；`{KNOWLEDGE_DIR}/` 由 **`mstar-compound`** @ iteration-close 写入。
 

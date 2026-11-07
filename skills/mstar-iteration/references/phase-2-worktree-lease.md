@@ -95,14 +95,7 @@ Phase/gate 转换按 **`mstar-host`**「Phase-transition todo refresh (host-agno
 5. Verify the recorded integration checkout — exists, on `spec_integration_branch`, working tree clean
    before merge operations — via the `--entry` integration-checkout fact (`mstar worktree check
    --workflow <id> --entry`).
-6. 从 **control root** 解析协调面：
-   - ACTIVE authority: `<main-repo-root>/{HARNESS_DIR}/store.db` (root register, workflow/plan rows, coordinator sessions, registered inputs and workflow-wide merge exclusion)
-   - authored plans: `<main-repo-root>/{PLAN_DIR}/`
-   - authored iteration package: `<main-repo-root>/{ITERATION_DIR}/`
-   - SDD tree: `<main-repo-root>/{HARNESS_DIR}/sdd/<plan-id>/`
-   - retained append-only notes: `<main-repo-root>/{WORKFLOW_DIR}/<id>/notes.jsonl`
-   - migration staging only (never a coordinated surface): root `status.json` / workflow `snapshot.json` / session envelopes — runtime consumer 读写被拒
-   - project `residuals.json` 无条件退役为迁移历史；findings 权威始终是 store issues
+6. 从 **control root** 解析协调面：所有协调面产物（ACTIVE authority、authored plans、iteration package、SDD tree、retained notes）都在 `<main-repo-root>/{HARNESS_DIR}/` 下，逐项路径 → **`mstar-conventions`** `references/artifact-storage-paths.md`。迁移源 root `status.json` / workflow `snapshot.json` / session envelopes **不是**协调面（runtime consumer 读写被拒）；project `residuals.json` 无条件退役为迁移历史，findings 权威始终是 store issues。
 7. **Phase 1 route — push the branch.** Push the newly created
    `spec_integration_branch` (`git push -u origin <branch>` — upstream setup
    only). Phase 1 writes only default-gitignored paths: compass / plans / the
