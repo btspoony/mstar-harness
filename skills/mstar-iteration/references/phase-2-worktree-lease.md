@@ -190,7 +190,7 @@ Phase 2 缺的不是新调度器，而是一个**具名的重新评估时刻** �
 
 对每个本轮要推进的 active `plan_id`（**可交错 / 并行**是默认读法：非强制 plan A 全 Done 再 plan B，plan 编号或 task 编号本身都不是串行理由）：
 
-1. **Configure/source facts:** use `show` for the explicitly selected workflow/plan. Create or verify the feature checkout/branch (the engine-verifiable form: per-plan L1 `mstar worktree check --workflow <id> --plan <plan-id>`) and record missing or corrected facts with revisable `prepare`; QA defaults to mandatory, cleanup to allow-residual. No prepare record is required when defaults and recorded metadata suffice.
+1. **Configure/source facts:** use `show` for the explicitly selected workflow/plan. Create or verify the feature checkout/branch (the engine-verifiable form: per-plan L1 `mstar worktree check --workflow <id> --plan <plan-id>`) and record missing or corrected facts with revisable `prepare`; `QA gate` 的分级默认与 `findings cleanup` → **`mstar-roles/references/project-manager/qa-trigger-matrix.md`**（`prepare` 未配置时记录 `mandatory` / `allow-residual`）。No prepare record is required when defaults and recorded metadata suffice.
 2. **Start:** record `Todo → InProgress` through ordinary `progress` before writable dispatch. Leaf Assignments include absolute Worktree path, Working branch and control-root Plan Path/SDD dir; parallel tracks additionally satisfy L2 isolation.
 3. **Implement → InReview** (product edits in the feature worktree; authored plans, iteration package and SDD use absolute control paths; execution state uses public domain verbs):
    - **默认 `Execution mode: sdd`**（多 task plan；hotfix 可 `inline`）。
