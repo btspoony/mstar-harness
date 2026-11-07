@@ -1,8 +1,8 @@
 /**
- * scripts/adr-check.ts — ADR tree validator semantics, one case per failure
- * code in the ADR contract §8 plus a well-formed positive control. Each case
- * asserts the code (not just failure) and that the recovery names a fix a
- * reader can actually perform.
+ * scripts/adr-check.ts — ADR tree validator semantics, one case per
+ * `AdrFailureCode` in `scripts/adr-check.ts` plus a well-formed positive
+ * control. Each case asserts the code (not just failure) and that the recovery
+ * names a fix a reader can actually perform.
  */
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";

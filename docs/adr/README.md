@@ -30,7 +30,7 @@ The first line is `# ADR: <title>`. The header block also carries one bare line 
 - `implemented/TEMPLATE.md` — `Problem`, `Decision`, `Alternatives considered`, `Consequences`. `Decision` is present tense ("identity flows through native channels"), never "we will".
 - `rejected/` has no third template: it reuses the proposed skeleton with a **frozen body**. After rejection, problem, proposal and alternatives are never rewritten — only the Status line says why the proposal died.
 
-`Plan`, `Migration plan` and `Acceptance criteria` are banned as sections of an implemented record: they are proposal-era scaffolding, and a promotion that keeps them is half-finished. Extra sections that are neither required nor banned stay — the contract fixes required and banned, not the whole skeleton.
+`Proposal`, `Plan`, `Migration plan` and `Acceptance criteria` are banned as sections of an implemented record: they are proposal-era scaffolding, and a promotion that keeps them is half-finished. Extra sections that are neither required nor banned stay — the contract fixes required and banned, not the whole skeleton.
 
 ## Lifecycle
 
@@ -51,7 +51,7 @@ An `implemented` record is a live statement of the system, not history: the same
 
 ## What the gate checks, and what it cannot
 
-`bun run validation:drift` (Guard 12) checks membership, filename shape, `Status` agreeing with the directory, and the required and banned sections per bucket. Two rules no tree walk can check, and both stay review duties:
+`bun run validation:drift` (Guard 12) checks membership, filename shape, `Status` agreeing with the directory, and the required and banned sections per bucket. It walks `{bucket}/{class}/` only, so a stray `.md` directly under `docs/adr/` or directly under a bucket root is invisible to it, and review catches those rather than CI. Two rules no tree walk can check, and both stay review duties:
 
 1. **Why the decision mattered** — `Problem` carries real stakes (what breaks or re-breaks without it), not a restatement of the change. A present heading proves nothing.
 2. **Whether the alternatives were real** — `Alternatives considered` lists options genuinely weighed and why each lost, not strawmen built after the fact.

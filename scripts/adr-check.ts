@@ -2,7 +2,7 @@
  * adr-check.ts — ADR tree validator: bucket/class membership, Status ↔
  * directory, required sections, banned sections, filename shape, no INDEX.md.
  *
- * Contract: the ADR record contract — `docs/adr/` shape, the required and
+ * Contract: `docs/adr/README.md` — the `docs/adr/` tree shape, the required and
  * banned sections per lifecycle, the bare Status line, and the seven failure
  * codes with their recoveries. Wired as drift-lint Guard 12.
  *
@@ -44,10 +44,10 @@ export type AdrFailure = {
 
 export type AdrCheckResult = { records: number; failures: AdrFailure[] };
 
-/** `yyyy-mm-dd-topic.md` — shape only, no calendar math (contract §1). */
+/** `yyyy-mm-dd-topic.md` — shape only, no calendar math (`docs/adr/README.md` § Directory shape). */
 const RECORD_NAME = /^\d{4}-\d{2}-\d{2}-[a-z0-9]+(?:-[a-z0-9]+)*\.md$/;
 
-/** Bare Status line with the U+2014 em dash (contract §4). */
+/** Bare Status line with the U+2014 em dash (`docs/adr/README.md` § Header and skeletons). */
 const STATUS_LINE = /^Status: (proposed|implemented|rejected) \u2014 .+$/;
 
 const SECTIONS: Record<AdrBucket, { required: string[]; banned: string[] }> = {
@@ -65,7 +65,7 @@ const SECTIONS: Record<AdrBucket, { required: string[]; banned: string[] }> = {
   },
 };
 
-/** Where a banned implemented section's content belongs instead (contract §6). */
+/** Where a banned implemented section's content belongs instead (`docs/adr/README.md` § Lifecycle). */
 const BANNED_RECOVERY: Record<string, string> = {
   Proposal: 'fold its text into "## Decision" in present tense, then delete the "## Proposal" heading',
   Plan: 'delete the "## Plan" section — plan text dies with the proposal',
@@ -86,7 +86,7 @@ function walkFiles(dir: string): string[] {
   return out;
 }
 
-/** Every line before the first level-2 ATX heading (contract §4). */
+/** Every line before the first level-2 ATX heading (`docs/adr/README.md` § Header and skeletons). */
 function headerLines(text: string): string[] {
   const lines = text.split(/\r?\n/);
   const end = lines.findIndex((line) => line.startsWith("## "));
@@ -100,8 +100,10 @@ function headingNames(text: string): string[] {
     .map((line) => line.slice(3));
 }
 
-/** `^## <Name>\b` (contract §3): the character after the name is not a word
- * character, so `## Proposal: x` still counts while `## Proposals` does not. */
+/** `^## <Name>\b` against the required and banned names that
+ * `docs/adr/README.md` § Header and skeletons declares: the character after the
+ * name is not a word character, so `## Proposal: x` still counts while
+ * `## Proposals` does not. */
 function hasSection(headings: string[], name: string): boolean {
   return headings.some((heading) => heading.startsWith(name) && !/\w/.test(heading.charAt(name.length)));
 }
@@ -204,7 +206,9 @@ export function checkAdrTree(repoRoot: string): AdrCheckResult {
 
     const bucket = bucketEntry.name;
     for (const classEntry of readdirSync(bucketDir, { withFileTypes: true })) {
-      // TEMPLATE.md and strays directly under a bucket are out of scope (§1).
+      // TEMPLATE.md and strays directly under a bucket are out of scope: the
+      // walk covers {bucket}/{class}/ only.
+      // See `docs/adr/README.md` § What the gate checks, and what it cannot.
       if (!classEntry.isDirectory()) continue;
       const classDir = join(bucketDir, classEntry.name);
       if (!(ADR_CLASSES as readonly string[]).includes(classEntry.name)) {
