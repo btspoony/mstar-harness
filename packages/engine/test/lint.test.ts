@@ -193,51 +193,10 @@ Output:
 \`\`\`
 `;
 
-const TRIPLE_NO_TESTS = `
-## Task 1 report
-Implemented the linter module.
-Command run: \`bun test\`
-Output:
-\`\`\`
- 12 pass
- 0 fail
-\`\`\`
-`;
-
-const TRIPLE_NO_COMMAND = `
-## Task 1 report
-Implemented the linter module.
-Covering test file(s): packages/engine/test/lint.test.ts
-Output:
-\`\`\`
- 12 pass
- 0 fail
-\`\`\`
-`;
-
-const TRIPLE_NO_OUTPUT = `
-## Task 1 report
-Implemented the linter module.
-Covering test file(s): packages/engine/test/lint.test.ts
-Command run: \`bun test\`
-`;
-
-/** Prose that mentions running tests and output but carries none of the
- * triple's evidence shapes (no test file, no runnable command, no output). */
+/** Prose that mentions running tests and output but carries no evidence shape. */
 const TRIPLE_PROSE_ONLY = `
 ## Task 1 report
 Implemented the linter module. I ran the tests and the output looked good.
-`;
-
-/** Alternate evidence forms: spec-style file list, `$` prompt command,
- * check-mark output. */
-const TRIPLE_ALT_FORMS = `
-## Task 2 report
-Tests: test/sdd.test.ts, test/iteration.test.ts
-$ bun run test -- filter
-\`\`\`
-✓ 23 tests passed
-\`\`\`
 `;
 
 /** Plan with placeholder tokens: TBD, TODO, TBA, prose ellipsis. */
@@ -643,7 +602,7 @@ describe("findProvenanceCitations", () => {
 
 // ---------------------------------------------------------------------------
 // assertSddTddTriple — mstar-sdd/references/file-handoffs.md
-// § Verification evidence (test file(s) + command + output)
+// § Verification evidence (declared structure only; execution is PM/QC's)
 // ---------------------------------------------------------------------------
 
 describe("assertSddTddTriple", () => {
@@ -671,10 +630,11 @@ Check result: exit 0; the changed rule and referenced boundary are present.
     expect(assertSddTddTriple(report).ok).toBe(false);
   });
 
-  test("incomplete active round cannot borrow historical fields or test evidence", () => {
-    for (const active of ["", "Reason: changed a policy", scopedReport.replace("Check command: rg -n 'scoped rule' skills/example/SKILL.md\n", ""), scopedReport.replace("Verification mode: scoped-check\n", "")]) {
+  test("active round validates only its own declared fields", () => {
+    for (const active of [scopedReport.replace("Check command: rg -n 'scoped rule' skills/example/SKILL.md\n", ""), scopedReport.replace("Verification mode: scoped-check\n", "")]) {
       expect(assertSddTddTriple(`${TRIPLE_COMPLETE}\n${scopedReport}\n## Verification round: fix 1\n${active}`).ok).toBe(false);
     }
+    expect(assertSddTddTriple(`${scopedReport}\n## Verification round: fix 1\n`).ok).toBe(true);
   });
 
   test("malformed active round label cannot reuse a completed historical report", () => {
@@ -723,79 +683,21 @@ Check result: exit 0; the changed rule and referenced boundary are present.
     expect(assertSddTddTriple("Covering test file(s): N/A\nCommand run: bun test\n12 pass / 0 fail").ok).toBe(false);
   });
 
-  test("ok for a report with test file reference + command + output", () => {
+  test("accepts a report carrying no mode declaration", () => {
     const result = assertSddTddTriple(TRIPLE_COMPLETE);
     expect(result.ok).toBe(true);
     expect(result.violations).toEqual([]);
   });
 
-  test("missing-tests violation when no test file reference is present", () => {
-    const result = assertSddTddTriple(TRIPLE_NO_TESTS);
+  test("prose without any evidence shape passes — the lint no longer certifies execution", () => {
+    expect(assertSddTddTriple(TRIPLE_PROSE_ONLY)).toEqual({ ok: true, violations: [] });
+    expect(assertSddTddTriple("")).toEqual({ ok: true, violations: [] });
+  });
+
+  test("rejects a bare Tests: N/A claim outside scoped-check", () => {
+    const result = assertSddTddTriple("## Task 1 report\nTests: N/A\nDid the work.\n");
     expect(result.ok).toBe(false);
-    expect(result.violations.map((v) => v.code)).toEqual(["lint.sdd-tdd.missing-tests"]);
-  });
-
-  test("missing-command violation when no runnable command is present", () => {
-    const result = assertSddTddTriple(TRIPLE_NO_COMMAND);
-    expect(result.ok).toBe(false);
-    expect(result.violations.map((v) => v.code)).toEqual(["lint.sdd-tdd.missing-command"]);
-  });
-
-  test("missing-output violation when no output evidence is present", () => {
-    const result = assertSddTddTriple(TRIPLE_NO_OUTPUT);
-    expect(result.ok).toBe(false);
-    expect(result.violations.map((v) => v.code)).toEqual(["lint.sdd-tdd.missing-output"]);
-  });
-
-  test("prose-only report ('ran the tests, output looked good') yields all three violations", () => {
-    const result = assertSddTddTriple(TRIPLE_PROSE_ONLY);
-    expect(result.ok).toBe(false);
-    expect(result.violations.map((v) => v.code).sort()).toEqual([
-      "lint.sdd-tdd.missing-command",
-      "lint.sdd-tdd.missing-output",
-      "lint.sdd-tdd.missing-tests",
-    ]);
-  });
-
-  test("empty report yields all three violations", () => {
-    const result = assertSddTddTriple("");
-    expect(result.ok).toBe(false);
-    expect(result.violations).toHaveLength(3);
-  });
-
-  test("accepts alternate evidence forms: file list, $ prompt command, check marks", () => {
-    const result = assertSddTddTriple(TRIPLE_ALT_FORMS);
-    expect(result.ok).toBe(true);
-  });
-
-  test("prose 'OK' alone is not output evidence", () => {
-    const result = assertSddTddTriple(`## Task 1 report
-Covering test file(s): packages/engine/test/lint.test.ts
-Command run: \`bun test packages/engine/test/lint.test.ts\`
-OK, moving on — everything looks fine.
-`);
-    expect(result.ok).toBe(false);
-    expect(result.violations.map((v) => v.code)).toEqual(["lint.sdd-tdd.missing-output"]);
-  });
-
-  test("'N ok' verdicts count as output evidence", () => {
-    const result = assertSddTddTriple(`## Task 1 report
-Covering test file(s): packages/engine/test/lint.test.ts
-Command run: \`bun test packages/engine/test/lint.test.ts\`
-\`\`\`
-12 ok
-\`\`\`
-`);
-    expect(result.ok).toBe(true);
-  });
-
-  test("TAP-style 'ok N - name' lines count as output evidence", () => {
-    const result = assertSddTddTriple(`## Task 1 report
-Covering test file(s): test/lint.test.ts
-Command run: bun test test/lint.test.ts
-ok 1 - findSimplifyMarkers
-`);
-    expect(result.ok).toBe(true);
+    expect(result.violations.map((v) => v.code)).toEqual(["lint.sdd-evidence.bare-tests-na"]);
   });
 });
 

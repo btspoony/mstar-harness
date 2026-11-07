@@ -16,11 +16,6 @@ type ProcessResult = {
   signal: string | null;
   stdout: string;
   stderr: string;
-  stdoutBytes: Buffer;
-  stderrBytes: Buffer;
-  stdoutTruncated: boolean;
-  stderrTruncated: boolean;
-  spawnError: string | null;
 };
 type InputState = { stdin: string | undefined; consumed: boolean; cwd: string; signal: AbortSignal };
 export type McpEffects = CommandEffects & {
@@ -55,11 +50,7 @@ export function createMcpEffects(services: Array<{ close(): Promise<void> }>): M
       return state.stdin;
     },
     async spawn(request: ProcessRequest) {
-      const result = await spawnBounded({ ...request, stdinMode: "ignore" });
-      if (result.stdoutTruncated || result.stderrTruncated) {
-        throw Object.assign(new Error(`child output exceeded ${MAX_STREAM_BYTES} bytes`), { code: "command.effect-unavailable" });
-      }
-      return { exitCode: result.exitCode, signal: result.signal, stdout: result.stdout, stderr: result.stderr };
+      return spawnBounded({ ...request, stdinMode: "ignore" });
     },
     async startDashboard(request) {
       const running = await startDashboard(request);
@@ -81,7 +72,7 @@ export function createMcpEffects(services: Array<{ close(): Promise<void> }>): M
     },
   };
 }
-function spawnBounded(request: ProcessRequest, allowTruncation = false, maxStreamBytes = MAX_STREAM_BYTES): Promise<ProcessResult> {
+function spawnBounded(request: ProcessRequest): Promise<ProcessResult> {
   if (request.signal.aborted) return Promise.reject(Object.assign(new Error("process admission cancelled"), { code: "command.cancelled" }));
   if (request.argv.length === 0) return Promise.reject(new TypeError("process argv must include an executable"));
   if (request.stdin !== undefined && Buffer.byteLength(request.stdin) > MAX_STREAM_BYTES) {
@@ -125,9 +116,9 @@ function spawnBounded(request: ProcessRequest, allowTruncation = false, maxStrea
       const next = (which === "stdout" ? stdoutTotal : stderrTotal) + chunk.byteLength;
       if (which === "stdout") stdoutTotal = next;
       else stderrTotal = next;
-      const accepted = Math.min(chunk.byteLength, Math.max(0, maxStreamBytes - (next - chunk.byteLength)));
+      const accepted = Math.min(chunk.byteLength, Math.max(0, MAX_STREAM_BYTES - (next - chunk.byteLength)));
       if (accepted > 0) target.push(chunk.subarray(0, accepted));
-      if (next > maxStreamBytes && !overflow) {
+      if (next > MAX_STREAM_BYTES && !overflow) {
         overflow = true;
         terminate();
       }
@@ -138,41 +129,22 @@ function spawnBounded(request: ProcessRequest, allowTruncation = false, maxStrea
       if (settled) return;
       settled = true;
       cleanup();
-      if (allowTruncation) {
-        resolve({
-          exitCode: error.code === "ENOENT" ? 127 : 1,
-          signal: null,
-          stdout: "",
-          stderr: "",
-          stdoutBytes: Buffer.alloc(0),
-          stderrBytes: Buffer.alloc(0),
-          stdoutTruncated: false,
-          stderrTruncated: false,
-          spawnError: error.code ?? "UNKNOWN",
-        });
-      } else if (error.code === "ENOENT") reject(Object.assign(error, { code: "process.not-found", exitCode: 127 }));
+      if (error.code === "ENOENT") reject(Object.assign(error, { code: "process.not-found", exitCode: 127 }));
       else reject(error);
     });
     child.once("close", (exitCode, signal) => {
       if (settled) return;
       settled = true;
       cleanup();
-      if (overflow && !allowTruncation) {
-        reject(Object.assign(new Error(`child ${stdoutTotal > maxStreamBytes ? "stdout" : "stderr"} exceeded ${maxStreamBytes} bytes`), { code: "command.effect-unavailable" }));
+      if (overflow) {
+        reject(Object.assign(new Error(`child ${stdoutTotal > MAX_STREAM_BYTES ? "stdout" : "stderr"} exceeded ${MAX_STREAM_BYTES} bytes`), { code: "command.effect-unavailable" }));
         return;
       }
-      const stdoutBytes = Buffer.concat(stdout);
-      const stderrBytes = Buffer.concat(stderr);
       resolve({
         exitCode: exitCode ?? (signal ? 128 + ((constants.signals as Record<string, number>)[signal] ?? 0) : 1),
         signal,
-        stdout: stdoutBytes.toString("utf8"),
-        stderr: stderrBytes.toString("utf8"),
-        stdoutBytes,
-        stderrBytes,
-        stdoutTruncated: stdoutTotal > stdoutBytes.byteLength,
-        stderrTruncated: stderrTotal > stderrBytes.byteLength,
-        spawnError: null,
+        stdout: Buffer.concat(stdout).toString("utf8"),
+        stderr: Buffer.concat(stderr).toString("utf8"),
       });
     });
     // A child that exits before draining stdin makes this write fail with EPIPE;

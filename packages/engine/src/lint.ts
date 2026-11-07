@@ -363,56 +363,27 @@ export function findProvenanceCitations(text: string): ProvenanceCitation[] {
   return citations;
 }
 
-/** Test-file reference: a path ending in `.test.<ext>` / `.spec.<ext>`
- * (mstar-sdd/references/file-handoffs.md "Covering test file(s)"). */
-const TEST_FILE_PATH_RE = /[\w./-]+\.(?:test|spec)\.[a-z0-9]+/i;
-/** Test-file reference: the template phrase "test file(s)". */
-const TEST_FILE_PHRASE_RE = /\btest file(?:s|\(s\))?\s*:[ \t]*(.+)/i;
-
-/** Command evidence: a `$`-prefixed shell line with content. */
-const COMMAND_PROMPT_RE = /^\s*[$>]\s*\S/;
-/** Command evidence: a known package-manager runner invocation
- * (`bun test`, `pnpm run …`), a `npx`/`bunx` exec, or a direct test runner
- * (`tsc`, `vitest`, `jest`, `mocha`, `pytest`, `go test`, `cargo test`). */
-const RUNNER_RE =
-  /\b(?:bun|pnpm|npm|yarn|npx|bunx)\s+(?:test|run|exec)\b|\b(?:npx|bunx)\s+[\w./-]+\b|\b(?:tsc|vitest|jest|mocha|pytest)\b|\bgo\s+test\b|\bcargo\s+test\b/i;
-
-/** Output evidence: check marks, PASS/FAIL tokens, result counts ("12
- * pass", "0 fail", "23 tests passed"), `N ok` / TAP `ok N` / "all ok"
- * verdicts, or exit-code statements. Bare `OK`/`ERROR` prose ("OK, moving
- * on") deliberately does NOT count — output-shaped forms only */const OUTPUT_TOKEN_RE =
-  /[\u2713\u2714\u2717\u2718]|\b(?:PASS|FAIL)\b|\b\d+\s+(?:pass(?:es|ed)?|fail(?:s|ed|ing)?|skipped|tests?|ok)\b|\bok\s+\d+\b|\ball\s+ok\b|exit(?:ed)?\s+(?:with\s+)?(?:code\s+)?\d+/i;
-
 function hasEvidenceDetail(value: string): boolean {
   const detail = value.trim().replace(/^`+|`+$/g, "").trim();
   return detail.length > 0 && !/^(?:n\/a|none|tbd|todo|tba|unknown|skipped|not[- ]run|\.\.\.|\u2026|<[^>]+>)$/i.test(detail);
 }
 
 /**
- * Validate task report evidence: an explicit scoped-check declaration for
- * document/policy checks, otherwise the executable-change TDD triple.
- * This checks structure, not whether the declared mode fits the actual diff
- * or a command ran. PM/QC own applicability and evidence authenticity.
- * Scoped check results may be arbitrary concrete static-tool output; the
- * output-token heuristic below applies only to executable test triples.
+ * Validate the declared structure of a task report's verification evidence in
+ * the active (last delimited) verification round:
  *
- * One violation per missing part:
- * - `lint.sdd-tdd.missing-tests` — no test file reference
- * - `lint.sdd-tdd.missing-command` — no runnable command
- * - `lint.sdd-tdd.missing-output` — no output evidence
+ * - A malformed `## Verification round:` label is invalid.
+ * - At most one `Verification mode: scoped-check` declaration, carrying exactly
+ *   one concrete `Changed files`, `Reason`, `Check command` and `Check result`
+ *   field and `Tests: N/A`.
+ * - Outside that declaration, a bare `Tests: N/A` (or `Covering test file(s):
+ *   N/A`) claim is invalid.
+ * - A report that declares no mode and makes no bare-N/A claim is accepted.
  *
- * Heuristics (documented, conservative — tuned so prose alone never counts):
- * - tests: a `.test.<ext>` / `.spec.<ext>` path, or a non-placeholder
- * "test file(s): <reference>" field. Bare N/A is not test evidence.
- * - command: a `$`-prefixed line, or a known runner invocation (bun/pnpm/
- * npm/yarn/npx/bunx test|run|exec, npx/bunx exec, tsc/vitest/jest/mocha/
- * pytest/go test/cargo test). Prose "run the tests" names no runner and
- * does not count (plan-quality-bar marks it a weak step anyway).
- * - output: check marks, PASS/FAIL tokens, counts ("12 pass"), `N ok` /
- * TAP `ok N` / "all ok" verdicts, exit-code statements. Bare prose
- * `OK`/`ERROR` ("OK, moving on") does NOT count — output evidence must
- * look like output. Line-based and fence-insensitive: real output usually
- * lives in fenced blocks, so fence content is scanned too.
+ * This checks declared structure only: it does not establish that a command
+ * ran, that the declared mode fits the actual diff, or that the evidence is
+ * authentic. PM/QC own applicability and evidence truth
+ * (mstar-sdd/references/file-handoffs.md § Verification evidence).
  */
 export function assertSddTddTriple(reportText: string): GateResult {
   const violations: ValidationResult[] = [];
@@ -458,49 +429,10 @@ export function assertSddTddTriple(reportText: string): GateResult {
   if (lines.some((line) => /^\s*(?:Tests|(?:Covering )?test file(?:s|\(s\))?):\s*`?N\/A`?\s*$/i.test(line))) {
     return {
       ok: false,
-      violations: [violation("medium", "lint.sdd-tdd.missing-tests", "Bare N/A is not test evidence; document/policy checks need an explicit, complete scoped-check declaration.")],
+      violations: [violation("medium", "lint.sdd-evidence.bare-tests-na", "Bare N/A is not test evidence; document/policy checks need an explicit, complete scoped-check declaration.")],
     };
   }
-  let hasTests = false;
-  let hasCommand = false;
-  let hasOutput = false;
-  for (const line of lines) {
-    if (!hasTests && (TEST_FILE_PATH_RE.test(line) || hasEvidenceDetail(line.match(TEST_FILE_PHRASE_RE)?.[1] ?? ""))) hasTests = true;
-    if (!hasCommand && (COMMAND_PROMPT_RE.test(line) || RUNNER_RE.test(line))) hasCommand = true;
-    if (!hasOutput && OUTPUT_TOKEN_RE.test(line)) hasOutput = true;
-    if (hasTests && hasCommand && hasOutput) break;
-  }
-  if (!hasTests) {
-    violations.push(
-      violation(
-        "medium",
-        "lint.sdd-tdd.missing-tests",
-        "task report carries no test file reference \u2014 the TDD triple needs covering test file(s) (mstar-sdd/references/file-handoffs.md \u00a7 Verification evidence)",
-        'add a "Covering test file(s): <path>.test.ts" line or a `.test.<ext>` path to the report',
-      ),
-    );
-  }
-  if (!hasCommand) {
-    violations.push(
-      violation(
-        "medium",
-        "lint.sdd-tdd.missing-command",
-        "task report carries no command \u2014 the TDD triple needs the exact command run (mstar-sdd/references/file-handoffs.md \u00a7 Verification evidence)",
-        'add a "Command run: `bun test <file>`" line to the report',
-      ),
-    );
-  }
-  if (!hasOutput) {
-    violations.push(
-      violation(
-        "medium",
-        "lint.sdd-tdd.missing-output",
-        "task report carries no output evidence \u2014 the TDD triple needs the run output (pass/fail counts or exit code) (mstar-sdd/references/file-handoffs.md \u00a7 Verification evidence)",
-        "paste the test-run output (e.g. \"12 pass / 0 fail\") into the report",
-      ),
-    );
-  }
-  return { ok: violations.length === 0, violations };
+  return { ok: true, violations };
 }
 
 /**
