@@ -52,7 +52,7 @@
   { "file": "skills/mstar-host/references/cursor.md", "maxLines": 200 },
   { "file": "skills/mstar-host/references/dsh-agent-teams.md", "maxLines": 270 },
   { "file": "skills/mstar-host/references/dsh-workflow-scripts.md", "maxLines": 120 },
-  { "file": "skills/mstar-host/references/dsh.md", "maxLines": 1040 },
+  { "file": "skills/mstar-host/references/dsh.md", "maxLines": 600 },
   { "file": "skills/mstar-host/references/kimi-plan-mode-bridge.md", "maxLines": 40 },
   { "file": "skills/mstar-host/references/kimi.md", "maxLines": 160 },
   { "file": "skills/mstar-host/references/omp-plan-mode-bridge.md", "maxLines": 40 },
