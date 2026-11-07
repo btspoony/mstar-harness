@@ -66,8 +66,7 @@ Topic skills, grouped by what they own:
 | `mstar-coding-behavior` | Implementation discipline, diagnosis, review practice |
 | `mstar-design-md` | DESIGN.md design tokens and the UI plan gate |
 | `mstar-design-system` | Baseline-driven parity: baseline kinds, machine fixtures, layer parity, difference triage |
-| `mstar-knowledge` | Knowledge capture and maintenance for `{KNOWLEDGE_DIR}` |
-| `mstar-strategy` | `STRATEGY.md` direction |
+| `mstar-knowledge` | Knowledge capture and maintenance for `{KNOWLEDGE_DIR}`, plus the project-knowledge bootstrap and the `STRATEGY.md` contract |
 | `mstar-skill-authoring` | Skill authoring gate |
 | `mstar-audit` | Read-only audit variants: codebase, tests, PR review |
 | `mstar-pr-loop` | Opt-in PR review → fix loop until `ship it`; also the local iteration Phase 5 review path under a recorded `reviewed-auto` (never under `reviewed-bot`) |

@@ -218,6 +218,7 @@ If `CONCEPTS.md` doesn't exist but knowledge docs contain qualifying domain term
 - Do not create CONCEPTS.md entries for general programming vocabulary
 - Do not modify product code — this skill writes documentation only
 - Do not delete docs without checking for inbound links
+- Do not "archive" — delete instead
 - Do not ask PM about mechanical updates (path fixes, renamed modules)
 - Do not change code to match outdated docs — update docs to match code
 - Do not run without PM approval for destructive actions (Delete, Replace)

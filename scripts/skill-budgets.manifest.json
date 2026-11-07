@@ -118,7 +118,6 @@
   { "file": "skills/mstar-skill-authoring/SKILL.md", "maxLines": 190 },
   { "file": "skills/mstar-skill-authoring/references/regression-fixation.md", "maxLines": 50 },
   { "file": "skills/mstar-skill-authoring/references/skillsbench-authoring.md", "maxLines": 160 },
-  { "file": "skills/mstar-strategy/SKILL.md", "maxLines": 120 },
   { "file": "skills/mstar-use-cli/SKILL.md", "maxLines": 140 },
   { "file": "skills/mstar-use-cli/references/checks-and-lints.md", "maxLines": 80 },
   { "file": "skills/mstar-use-cli/references/plan-and-workflow.md", "maxLines": 120 },

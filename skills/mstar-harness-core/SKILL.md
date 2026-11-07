@@ -45,7 +45,7 @@ description: "Lifecycle and authorization authority: delivery loop, state machin
 | 角色 | 始终 | 按任务追加（典型） |
 |------|------|-------------------|
 | **All harness roles** | Load selection → **`mstar-roles`** (§ Load Order); this skill owns lifecycle/authorization. The hub bootstraps role selection without requiring core-first. | — |
-| **`@project-manager`** | 本 skill | `mstar-dispatch-gates`、`mstar-phase-gates`、`mstar-conventions`、`mstar-roles`；implement 波次 `mstar-sdd`；派 QC 前 `mstar-review-qc`；并行/审查 `mstar-branch-worktree`；plan/status/review bundle `mstar-artifacts`；UI 类 plan Prepare 阶段 `mstar-design-md`（DESIGN.md 门禁）；新建/大改 skill 时 `mstar-skill-authoring`；迭代管理 `mstar-iteration`（Phase 1–5）；战略性工作 `mstar-strategy`；`audit` 类请求 `mstar-audit`（执行归 `@code-reviewer`）；跑/解读 CLI 命令时 `mstar-use-cli`。**不**读 `mstar-coding-behavior` |
+| **`@project-manager`** | 本 skill | `mstar-dispatch-gates`、`mstar-phase-gates`、`mstar-conventions`、`mstar-roles`；implement 波次 `mstar-sdd`；派 QC 前 `mstar-review-qc`；并行/审查 `mstar-branch-worktree`；plan/status/review bundle `mstar-artifacts`；UI 类 plan Prepare 阶段 `mstar-design-md`（DESIGN.md 门禁）；新建/大改 skill 时 `mstar-skill-authoring`；迭代管理 `mstar-iteration`（Phase 1–5）；战略性工作 / 项目知识 bootstrap `mstar-knowledge`；`audit` 类请求 `mstar-audit`（执行归 `@code-reviewer`）；跑/解读 CLI 命令时 `mstar-use-cli`。**不**读 `mstar-coding-behavior` |
 | **实现/审查/运维** | 本 skill + `mstar-coding-behavior` + 角色 ref | 有 git 写：`mstar-branch-worktree`；有 plan 路径：`mstar-conventions`；**PM** 派 QC 前：`mstar-review-qc`；**`qc-specialist*`**：`mstar-roles` → `references/qc-specialist/`；`qa-engineer`：`references/qa-engineer/`；改 status/residual：`mstar-artifacts`；UI：`mstar-design-md`；知识库：`mstar-knowledge`（PM）；跑/解读 CLI 命令时（各 leaf 角色按任务）：`mstar-use-cli` |
 | **leaf 承接方** | 上栏 + **`mstar-dispatch-gates`**（反递归节） | — |
 
@@ -107,8 +107,7 @@ PM 在 Assignment 写 **`Task category`**（主类 + 可选 `secondary`）：
 | `mstar-design-system` | 收敛既有 baseline 的方法 —— baseline 定位与机器化、结构/外观/行为三层 parity、defect/decision/phantom 分诊、coverage 证据（契约本体仍属 `mstar-design-md`） |
 | `mstar-review-qc` | PM：QC tri 编排、residual 留档、四层边界；leaf 执行 → `mstar-roles/references/qc-specialist/` |
 | `mstar-coding-behavior` | Requirement-first simplicity, surgical diagnosis/review, agent-facing interfaces, and scoped evidence |
-| `mstar-knowledge` | 知识结晶与维护 —— 已解决问题→结构化知识文档（双轨 Bug/Knowledge、「是否值得结晶」自检清单、重叠检测、可发现性检查、CONCEPTS.md 协同、迭代收口 package 提升）＋审查/更新/合并/删除既有文档；**项目知识 bootstrap**（无/残旧 STRATEGY.md、CONCEPTS.md、`{KNOWLEDGE_DIR}`）→ `references/project-knowledge-bootstrap.md` |
-| `mstar-strategy` | `STRATEGY.md` 全局战略方向 —— 产品愿景、技术方向、决策原则 |
+| `mstar-knowledge` | 知识结晶与维护 —— 已解决问题→结构化知识文档（双轨 Bug/Knowledge、「是否值得结晶」自检清单、重叠检测、可发现性检查、CONCEPTS.md 协同、迭代收口 package 提升）＋审查/更新/合并/删除既有文档；**项目知识 bootstrap**（无/残旧 STRATEGY.md、CONCEPTS.md、`{KNOWLEDGE_DIR}`）→ `references/project-knowledge-bootstrap.md`（`STRATEGY.md` 契约 → `references/strategy-document.md`） |
 | `mstar-skill-authoring` | 通用 skill 撰写门控（SkillsBench 六原则）：trigger 契约、紧凑 5 问 body、渐进披露、paired 证据 |
 | `mstar-audit` | Variant carrier：common core（hard rules、recon、vet、variant dispatch）+ SKILL.md `## Output format`（review report 运行目录 `<date>-codebase-<level>-<round>/`、findings、coverage、leads）+ `references/codebase-audit.md`（full-audit 变体：9 类别 fan-out、effort、scope variants、Phase 4 excerpt/reconcile、audit index 模板）+ `references/security-review.md`（security 深查：exploitability 门槛、FP 纪律、LLM/供应链面）+ `references/pr-review.md`（`pr` 变体）；`audit-playbook` + `finding-format` |
 | `mstar-pr-loop` | Opt-in PR review → fix loop until the review verdict is `ship it`; also selectable at iteration Phase 1 as the local `reviewed-auto` review path, whose `ship it` row the iteration merge authorization reads. Never selected under `reviewed-bot` |

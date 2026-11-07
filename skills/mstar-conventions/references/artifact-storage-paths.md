@@ -41,8 +41,8 @@
 | 产物 | 解析后路径 | 读写的技能 |
 |------|----------|-----------|
 | **CONCEPTS.md** | `<repo-root>/CONCEPTS.md` | `mstar-knowledge`（Capture 写/协同；Maintain reconciliation/bootstrapping） |
-| **STRATEGY.md** | `<repo-root>/STRATEGY.md` | `mstar-strategy`（读写） |
-| **AGENTS.md 更新** | `<repo-root>/AGENTS.md`（或 `CLAUDE.md`） | `mstar-knowledge`（可发现性检查编辑）、`mstar-strategy`（索引编辑） |
+| **STRATEGY.md** | `<repo-root>/STRATEGY.md` | `mstar-knowledge`（bootstrap Phase 2 读写） |
+| **AGENTS.md 更新** | `<repo-root>/AGENTS.md`（或 `CLAUDE.md`） | `mstar-knowledge`（可发现性检查与索引编辑） |
 
 ## 禁止操作区域
 
