@@ -314,11 +314,12 @@ bundle 补丁只插入**一行** `mstar-mcp`，而这一行就是整个宿主的
 
 agent-flow 账本位于现有 control-root `store.db` 的 host 域，不再使用 workflow JSONL 文件。catalog 和面板窗口只是有界读取投影，不裁剪存储的事件。ACTIVE 权威建立之前，dsh 原生会话日志继续记录，authority 持久化如实报告 unavailable/degraded，并提供 `store init` / `store upgrade` 恢复路径；绝不伪造成功或回退到旧文件。真实派发与结算证据仍为咨询式、try/catch 包裹：账本不可用不阻断派发或结算。
 
+- **记录点（单一核心）**——`DshHostAdapter.dispatchGate` 是两条派发面背后**唯一**的记录路径：`tools/pre-execute` 监听器（exec 绑定；租约闸门在此汇入）与宿主 `beforeDispatch` 钩子（无 exec）。凡是到达闸门的 Assignment 形态派发都会记录，包括 hard 拒绝（判定 `ok` / `advisory` / `denied`）；形状守卫在共享核心，故非 Assignment 文本在**两面**都保持静默。记录为 try/catch 包裹的咨询行为。已知取舍：同一次派发若同时经过两面（宿主 `beforeDispatch` 之后又以相同文本走 in-loop subagent 工具调用）会记录两条事件——两面按设计互斥，双记录如实记录、不去重。
 - **记录身份**——已核实的原生 workflow 事件保留 `{sessionId, streamId, seq}` 与 `wfe1:<kind>:<sessionId>:<streamId>:<seq>`。流化身来自持久原生会话头部，绝不是 store epoch 或文件 mtime。实时工具调用行在两个 ID 均已知时可带 `wfc1:<sessionId>:<callId>:<kind>` 作关联；不伪造缺失 ID，实时行允许重复。
 - **派发（dispatch）**——每个 Assignment 形态的派发一行，记录派发身份：`role`（在写入边界归一化——去首尾空白并剥掉**一个**前导 `@`，故 `@explore` 与 `explore` 是同一 actor 而非两个角色）、`planId`、Assignment 的 `Task N` 标签记为 `taskId`、`taskCategory` 与判定。
-- **结算（settle）**——仅为**真实配对**的完成记录。前台调用在 `tools/post-execute` 监听器结算；`{ kind: 'background', jobId }` 结果按注册表 **`jobId`** 配对（jobs 注册表键，绝非子会话 id），待 `ctx.inject(['jobs'])` → `jobs.events.subscribe` 发出终态 `settled` 事件时结算（`completed → ok` / `killed → denied` / `failed → error`，可用时附 `durationMs`）。每条配对结算都携带派发身份（`Task N` 标签仍是 `taskId`；`taskRef` 专用于注册表 job id，仅后台结算携带）外加**可选** `childId`——前台 `runId`，或 catalog 关联已提供的后台子会话 id。可选 id 缺失或超长时**只省略该字段**：真实完成照常记录，id 绝不截断、绝不重键。未配对载荷**不记录任何东西**——绝不伪造结算。
-- **`subagent-link`（非终态）**——从父会话自有的 `subagent/catalog` 事件观测子会话 ID，并在派发的 apply 作用域调用窗口内关联。它记录身份而非完成，不伪造 `outcome`、`verdict` 或 `paired`；catalog 证据缺失时不产生 link 行。
-- **原生存储**——事件、已接受来源身份、单调扫描下界、会话绑定与最新状态发射分别使用 `dsh_ledger_events`、`dsh_accepted_identities`、`dsh_scan_bounds`、`dsh_session_bindings`、`dsh_status_emissions`。不再有共享 JSONL tail/index/cursor/cache 权威、文件压缩、冻结或锁。旧文件字节保留为只读一次性 upgrade 输入/历史。
+- **结算（settle）**——仅为**真实配对**的完成记录。前台调用在 `tools/post-execute` 监听器结算；`{ kind: 'background', jobId }` 结果按注册表 **`jobId`** 配对（jobs 注册表键，绝非子会话 id），待 `ctx.inject(['jobs'])` → `jobs.events.subscribe` 发出终态 `settled` 事件时结算（`completed → ok` / `killed → denied` / `failed → error`，可用时附 `durationMs`）。每条配对结算都携带派发身份（`Task N` 标签仍是 `taskId`；`taskRef` 专用于注册表 job id，仅后台结算携带）外加**可选** `childId`——前台 `runId`，或 catalog 关联已提供的后台子会话 id。可选 id 缺失或超长时**只省略该字段**：真实完成照常记录，id 绝不截断、绝不重键。未配对载荷**不记录任何东西**——绝不伪造结算。`{ kind: 'continuable', subagentId }` 结果本轮没有终态信号，因此不记录结算（子会话拥有自己的轮次），只为子身份关联武装；其它任何成功值结算为 `ok`，失败结果（`isError` 或 `error` payload）结算为 `error`——返回的前台 `runId` 无论结果如何都仍是该结算的 `childId`。
+- **`subagent-link`（非终态）**——从父会话自有的 `subagent/catalog` 事件观测子会话 ID，并在派发的 apply 作用域调用窗口内关联。它记录身份而非完成，不伪造 `outcome`、`verdict` 或 `paired`；catalog 证据缺失时不产生 link 行。关联在按派发的调用窗口内进行：pre-execute 在活跃父 Session 上保留首个原始 label 槽位并以其实 `seq` 作为窗口起点，`tools/post-execute` 处有效的 `background` / `continuable` 结果使该候选转为 eligible，随后由**一个**根上下文 `session/event` 观察器对后续到达者沿会话向前跟踪（补偿扫描冻结在捕获的端点）。当 label 缺失/为空、派发未配对、后台结果无有效 `jobId`、catalog 版本未知、mode 与结果 kind 不符、continuable catalog 指向的并非工具返回的子会话、槽位图达到容量（每个父 Session 500 个 label）或该槽位已被消费时，**不产生任何行**——而 apply 之前写入的 catalog（构造期 seeds）永远无法标记新派发。重复 label 为确定性 best-effort（首个保留 + 首个匹配 catalog 胜出），不构成唯一所有权证明；不发出 catalog 的提供者（无 `localAgent` 的远程运行）会让派发合法地没有 link 行。
+- **原生存储**——事件、已接受来源身份、单调扫描下界、会话绑定与最新状态发射分别使用 `dsh_ledger_events`、`dsh_accepted_identities`、`dsh_scan_bounds`、`dsh_session_bindings`、`dsh_status_emissions`。不再有共享 JSONL tail/index/cursor/cache 权威、文件压缩、冻结或锁。旧文件字节保留为只读一次性 upgrade 输入/历史。一条账本记录（dispatch/settle/link）会**立即**失效受影响工作区的 TTL 缓存条目，故下一次 pre-step 重建并持久化 payload，且仅在**渲染事实**变化时才重新注入模型行；60 秒 TTL 只约束非账本陈旧度。
 
 ### Workflow 行
 
@@ -334,7 +335,7 @@ agent-flow 账本位于现有 control-root `store.db` 的 host 域，不再使�
 
 **第四种类型 `workflow-verdict`** 由 workflow/ralph 闸门（而非本消费者）写入——每个被把关的调用一行（`tool`、`workflow`/`objective`、`mode`、判定 `ok`/`advisory`/`denied`/`ask`、违规 `code`）——见 Gates → Workflow / ralph gate。展示身份字段（`workflow` / `objective`）同样带 1024 字符上限；判定的违规码绝不猜测（P-a `workflow.name.unknown` vs P-b `workflow.lease.uncovered`）。
 
-**已接受来源回放。** 已核实的原生 workflow 事件 ID 经数据库身份/摘要域只接受一次，覆盖冷热重叠与插件重启；同一已接受 ID 携不同字节会被拒绝而非覆写。扫描下界在已核实的流化身内单调推进。会话头部不可读时不接受事件，也不臆造化身。构造期带种子日志的会话在 `session/created` 上扫描；分叉从 `inheritedEventCount` 之后开始，保留父会话归属。实时 dispatch/settle/link/verdict 行允许重复，关联 ID 不使它们成为 accepted-operation 权威。缺失、staged、损坏或 schema 拒绝的 authority 如实保持 unavailable；真实的定址无记录仍与这些状态区分，并保留原生拒绝原因和恢复路径。
+**已接受来源回放。** 已核实的原生 workflow 事件 ID 经数据库身份/摘要域只接受一次，覆盖冷热重叠与插件重启；同一已接受 ID 携不同字节会被拒绝而非覆写。扫描下界在已核实的流化身内单调推进。会话头部不可读时不接受事件，也不臆造化身。构造期带种子日志的会话在 `session/created` 上扫描；分叉从 `inheritedEventCount` 之后开始，保留父会话归属。实时 dispatch/settle/link/verdict 行允许重复，关联 ID 不使它们成为 accepted-operation 权威。缺失、staged、损坏或 schema 拒绝的 authority 如实保持 unavailable；真实的定址无记录仍与这些状态区分，并保留原生拒绝原因和恢复路径。每个事件边界都会解析会话选定的原生目标并校验其当前 store 身份、epoch 与 workflow 作用域：缺失、过期、撤销、损坏或不匹配的权威不记录任何已接受事实，也绝不回退到 newest/only 的 workflow、root 文件或 legacy 目标；原生会话日志记录与权威持久化是否可用相互独立。
 
 **childId 关联 + 成员计数。** `workflow-agent` 行保留已发布成员的 `childId`（子会话 id）；运行的展示 `name` 只存在于 `workflow-run` 行，面板为 agent/end 行经窗口查找解析（同一 `runId`——成员行本身不带名称）。面板把成员 COUNT 挂到 `workflow-run` 行（窗口内该 `runId` 的 `workflow-agent` 行数；窗口有界——被 ≤50 事件窗口截掉的成员如实缺席，绝不猜 0）。
 
@@ -345,6 +346,8 @@ agent-flow 账本位于现有 control-root `store.db` 的 host 域，不再使�
 **挂载顺序说明。** 消费者只在 apply 时 `sessions` 服务可用时激活——**dsh-session 行必须先于 mstar 行挂载**（标准 `web` profile 顺序即如此）。dsh-session 后于插件挂载（或缺失）的组合**静默**降级：一条 debug 日志（`sessions service absent — workflow-ledger consumer disabled`）且不记录任何行——绝不是错误，绝不是运行损坏。
 
 **面板可见性。** 三种 workflow 行经现有事件行样式（无重设计）渲染在 **事件记录（Event Log）tab** 的 Agent 流转事件分区：摘要身份是运行 NAME（agent/end 行经窗口查找解析；回退 runId → 「未知」），详情体新增四个 workflow 字段——run-id / name / members / stop-reason（缺失 → 「—」）——expected/settled 席位渲染「—」（workflow 行不是角色派发——不存在 settle 配对，与 settle 行同先例）。未知 kind 字符串渲染为**通用行**（kind 原文、无 workflow 字段）——绝不丢弃、绝不猜测。catalog 摘要把 workflow 行计为**独立** `workflow` 桶（模型行 `by role: workflow N`）——绝不并入派发角色计数。
+
+**维护者视角。** 改变账本形态（事件 schema、边界、settle 接缝）必须同步更新投影：`gates/agent-flow.ts`（记录 / 读取 / settle / catalog 关联监听器）、`gates/catalog.ts`（`agentFlow` payload 视图 + 面板投影的发射键）与 `client/panel/graph/project-graph.ts`（ZoneView flow/agents 投影）——面板只渲染证据展示的内容。
 
 ## Web 客户端插件（工作流面板）
 
