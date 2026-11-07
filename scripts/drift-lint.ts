@@ -96,6 +96,7 @@ import { join, relative } from "node:path";
 import { getCommandDefinitions } from "../packages/commands/src/definitions.ts";
 import { commentMask } from "./ascii-literal-utils.ts";
 import { checkMarkdownLinks } from "./markdown-links.ts";
+import { checkParagraphAnchoring, type ParagraphAnchoringResult } from "./markdown-wrap.ts";
 import {
   checkRuleDuplication,
   ruleFingerprintHash,
@@ -1063,6 +1064,29 @@ function reportRuleDuplication(result: RuleDuplicationResult): void {
   }
 }
 
+/** Advisory rows printed for Guard 11 before the tail line takes over. */
+const PARAGRAPH_ADVISORY_SAMPLES = 20;
+
+/**
+ * Advisory inventory of Guard 11 multi-line paragraphs. Report-only: the rule
+ * binds new and modified paragraphs now, and existing wrapped paragraphs are
+ * reflowed when their file is next edited, so the count shrinks without a
+ * whole-corpus reformat commit.
+ */
+function reportParagraphAnchoring(result: ParagraphAnchoringResult): void {
+  if (result.violations.length === 0) return;
+  const files = new Set(result.violations.map((violation) => violation.file)).size;
+  console.warn(
+    `advisory: Guard 11 paragraph anchoring ${result.violations.length} multi-line paragraphs across ${files} of ${result.filesChecked} skill files - new and modified paragraphs must be single-line; existing paragraphs are reflowed when their file is next edited`,
+  );
+  for (const violation of result.violations.slice(0, PARAGRAPH_ADVISORY_SAMPLES)) {
+    console.warn(`advisory:   ${violation.file}:${violation.startLine}-${violation.endLine}`);
+  }
+  if (result.violations.length > PARAGRAPH_ADVISORY_SAMPLES) {
+    console.warn(`advisory:   ... ${result.violations.length - PARAGRAPH_ADVISORY_SAMPLES} more`);
+  }
+}
+
 
 if (import.meta.main) {
  /* ------------------------------------------------------------------ */
@@ -1431,6 +1455,20 @@ if (import.meta.main) {
   for (const row of ruleDuplication.allowlistFailures) fail(row);
 
 /* ------------------------------------------------------------------ */
+/* Guard 11: skills corpus — paragraph anchoring (advisory) */
+/* ------------------------------------------------------------------ */
+
+  let paragraphAnchoring: ParagraphAnchoringResult = { filesChecked: 0, violations: [] };
+  try {
+    paragraphAnchoring = checkParagraphAnchoring(
+      root,
+      skillFiles.map((file) => relative(root, file)),
+    );
+  } catch (error) {
+    fail(`Guard 11 paragraph anchoring: ${(error as Error).message}`);
+  }
+
+/* ------------------------------------------------------------------ */
 
  // Guard 4 footer fragment: report each check's own verdict + count so a
  // load-order-only failure is never misstated as a combined/OK status.
@@ -1452,18 +1490,21 @@ if (import.meta.main) {
     ruleDuplication.exemptGroups.length
   } allowlisted; advisory until skill-pointerization)`;
 
+  const paragraphAnchoringSummary = `Guard 11 paragraph anchoring ${paragraphAnchoring.filesChecked} files checked, ${paragraphAnchoring.violations.length} multi-line paragraphs (advisory; new and modified paragraphs must be single-line)`;
+
   reportOversizedTests();
   reportRuleDuplication(ruleDuplication);
+  reportParagraphAnchoring(paragraphAnchoring);
   if (failures.length > 0) {
     console.error(`drift-lint: ${failures.length} violation(s) found\n`);
     for (const f of failures) console.error(`  ✗ ${f}`);
     console.error(
-      `\nchecked ${calloutsChecked} Engine-check callouts (${cliCitationsChecked} CLI citations prefix-checked against ${binNames.length} declared bins; ${useCliScan.filesScanned} use-cli skill files with ${useCliScan.cliCitationsChecked} full-text citations) against ${engineExports.size} engine exports and ${cliCommands.size} CLI commands; ${categoryTokensChecked} audit category tokens; README bilingual pairing ${bilingualStatus}; ${ephemeralFilesScanned} skill files (${ephemeralCitationsFound} ephemeral citations); ${rolesSummary}; ${fiveQuestion.checked} runtime mstar-* skills pass five-question lint (${fiveQuestion.failures.length} violations); provenance scan ${provenance.filesScanned} repo text files (${provenance.citationsFound} provenance citations); ${markdownLinksSummary}; ${skillBudgetsSummary}; ${ruleDuplicationSummary}`,
+      `\nchecked ${calloutsChecked} Engine-check callouts (${cliCitationsChecked} CLI citations prefix-checked against ${binNames.length} declared bins; ${useCliScan.filesScanned} use-cli skill files with ${useCliScan.cliCitationsChecked} full-text citations) against ${engineExports.size} engine exports and ${cliCommands.size} CLI commands; ${categoryTokensChecked} audit category tokens; README bilingual pairing ${bilingualStatus}; ${ephemeralFilesScanned} skill files (${ephemeralCitationsFound} ephemeral citations); ${rolesSummary}; ${fiveQuestion.checked} runtime mstar-* skills pass five-question lint (${fiveQuestion.failures.length} violations); provenance scan ${provenance.filesScanned} repo text files (${provenance.citationsFound} provenance citations); ${markdownLinksSummary}; ${skillBudgetsSummary}; ${ruleDuplicationSummary}; ${paragraphAnchoringSummary}`,
     );
     process.exit(1);
   }
 
   console.log(
-    `drift-lint: OK — ${calloutsChecked} Engine-check callouts reference real exports (${engineExports.size}) and CLI commands (${cliCommands.size}); ${cliCitationsChecked} CLI citations prefix-checked against ${binNames.length} declared bins (${useCliScan.filesScanned} use-cli skill files, ${useCliScan.cliCitationsChecked} full-text citations); engine spec citations resolve; ${categoryTokensChecked} audit category tokens match AUDIT_CATEGORIES; README bilingual pairing ${bilingualStatus}; ${ephemeralFilesScanned} skill files clean of ephemeral citations; ${rolesSummary}; ${fiveQuestion.checked} runtime mstar-* skills pass five-question lint (${fiveQuestion.failures.length} violations); provenance scan ${provenance.filesScanned} repo text files (${provenance.citationsFound} provenance citations); ${markdownLinksSummary}; ${skillBudgetsSummary}; ${ruleDuplicationSummary}`,
+    `drift-lint: OK — ${calloutsChecked} Engine-check callouts reference real exports (${engineExports.size}) and CLI commands (${cliCommands.size}); ${cliCitationsChecked} CLI citations prefix-checked against ${binNames.length} declared bins (${useCliScan.filesScanned} use-cli skill files, ${useCliScan.cliCitationsChecked} full-text citations); engine spec citations resolve; ${categoryTokensChecked} audit category tokens match AUDIT_CATEGORIES; README bilingual pairing ${bilingualStatus}; ${ephemeralFilesScanned} skill files clean of ephemeral citations; ${rolesSummary}; ${fiveQuestion.checked} runtime mstar-* skills pass five-question lint (${fiveQuestion.failures.length} violations); provenance scan ${provenance.filesScanned} repo text files (${provenance.citationsFound} provenance citations); ${markdownLinksSummary}; ${skillBudgetsSummary}; ${ruleDuplicationSummary}; ${paragraphAnchoringSummary}`,
   );
 }
