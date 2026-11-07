@@ -118,7 +118,7 @@ never replace a running child with a second spawn because you could not see it.
 |----------|-------------|
 | **`subagent`** / **`subagent_fork`** | Direct-delegation channel — one Assignment per invoke, returned at activation start (default `toolName`; a renamed instance must be declared via Config `dispatchTools`). The default channel on a profile WITHOUT the Team layer; also a one-off seat the board does not track. `subagent_fork` is the variant that seeds the child with the completed conversation (§ Delegation channels) |
 | **`spawn_teammate`** / **`team_task_create`** / `team_task_list` / `team_task_get` / `team_task_update` / **`wait_agent`** / **`send_message`** / `list_agents` / `interrupt_agent` | Agent Teams — the DEFAULT dispatch channel whenever the Team layer is mounted (one board task per Assignment, one teammate per track). Protocol → `references/dsh-agent-teams.md` |
-| **`workflow`** | Read-only fan-out — one run, one conversation `workflow-run` node. N≥3 is its design width; a one-seat read-only run is supported when no direct delegation can carry it (§ Read-only fan-out via the `workflow` tool; scripts → `references/dsh-workflow-scripts.md`) |
+| **`workflow`** | Read-only fan-out — one run, one conversation `workflow-run` node. N≥3 is its design width; a one-seat read-only run is supported when no direct delegation can carry it (§ Read-only fan-out via the `workflow` tool; script files under `workflows/`, call contract → `references/dsh-workflow-scripts.md`) |
 | **`mcp__mstar__mstar_<family>`** | The writable mstar command surface — one MCP tool per command family with an `action` argument (`mstar_plan` → `bind`/`prepare`/`progress`/`complete`, `mstar_workflow` → `register`, `mstar_issue` → `add`/`close`, `mstar_sdd` → `workspace`/`task-brief`, `mstar_iteration` → `gate`, `mstar_design_md` / `mstar_compound` / `mstar_roles` → `validate`, `mstar_audit` → `scaffold`/`secret-scan`/`supply-chain`). The one shared connection carries no identity of its own; the shipped row passes `--trust-caller-session-id`, so the per-call `sessionId` selector is published there (a connection launched without the flag publishes none and refuses a supplied one). A call may name the control root through `harness` when the connection is unpinned. An operation needing a session identity passes `sessionId` on an opted-in connection, or uses the native tool where one exists (plan bind, audit validate, execution clear), or the CLI (`packages/dsh/README.md` § Native command surface) |
 | **`mstar_plan_bind`** | Native bind — the only producer of the dsh-local durable record: it binds the engine coordinator row AND writes the session's `executionBinding` slot plus the adoption receipt that ledger attribution reads (`packages/dsh/README.md` § Native command surface). A coordinating session that wants dsh-local ledger attribution uses this tool, not the MCP action |
 | **`mstar_audit_validate`** | Native report validator — the review-report credential scan (`mstar-audit` Hard Rule 4); the `mstar_audit` family publishes no report validator, so this capability has no MCP action |
@@ -391,7 +391,9 @@ run is recorded as durable `tool-workflow/*` session events and the stock dsh UI
 (`dsh-client-ui-workflow-run`) folds them into one conversation **`workflow-run`**
 node the operator expands by phase and member. Use it for **read-only fan-out of
 N ≥ 3 seats** — plan QC tri, large-repo audit categories, `/amazing-pr-review
-deep` seats — and copy the `script` + `meta` + `args` from this skill →
+deep` seats — with the shipped file's body as `script`, passed verbatim
+(package root `workflows/<name>.js`; checkout `packages/dsh/workflows/<name>.js`),
+and `meta` + `args` from the call contract in
 `references/dsh-workflow-scripts.md`. For **1–2** seats **`subagent`** is the
 carrier — read-only fan-out never takes a teammate at any N. Following the tool's
 own guidance, while `subagent` is available the two-seat default tier of
@@ -419,8 +421,9 @@ width — one `workflow-run` node, one child per named category.
 **One read-only seat is supported when nothing else can carry it.** On a Team
 profile the direct `subagent` rows are disabled, and a task review needs a fresh
 context without taking a roster seat — so a **one-seat `workflow` run** is the
-supported route there, with its executable form in
-`references/dsh-workflow-scripts.md` § 4 `mstar-review-single`. It costs one
+supported route there, with the shipped `workflows/mstar-review-single.js`
+passed as `script` and its call contract in `references/dsh-workflow-scripts.md`
+§ 4. It costs one
 `workflow-run` node instead of a subagent card; that is the price of keeping the
 reviewer off the finite roster, not an unsupported workaround.
 
