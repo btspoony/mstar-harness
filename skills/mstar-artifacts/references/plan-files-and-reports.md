@@ -64,6 +64,8 @@ Raw bundle files may disappear after the working context is gone. Before Done, P
 
 The durable summary is not a paste of raw reports. It is a small gate record sufficient for handoff after `{SDD_DIR}` is unavailable.
 
+Decision rationale that must outlive the plan is not a durable-summary field: it is written as an ADR under `docs/adr/` (that tree's `README.md` states the contract), and the summary keeps a pointer to the record.
+
 ## Residual findings（R#）：权威在哪、和主 plan 谁先谁后？
 
 - **Open 条目的单一事实来源（SSOT）**是 **`{HARNESS_DIR}/store.db` 的 plan-linked issues**（canonical → `mstar-artifacts` SKILL.md；字段 → `references/status-and-residuals.md`）。会话 handoff、关闭流程以 issue 状态为准；project register 数组仅作迁移历史，任何 authority 状态下都不是写目标。**跨 clone** 须持久的 finding 须提升入 tracked `{KNOWLEDGE_DIR}/` / `{SPECS_DIR}/` 等。
