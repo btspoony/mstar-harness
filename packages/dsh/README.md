@@ -253,13 +253,13 @@ The plugin registers the bundled mstar commands (omp/opencode parity surface) on
 
 ## Workflow scripts
 
-The four read-only fan-out scripts the model hands to the dsh **`workflow`** tool live in `workflows/` as plain, package-relative JavaScript — not TypeScript and with no `export const meta` statement — so a script can be read, diffed and passed over verbatim. `scripts/dsh-workflow-files-hash.test.ts` (repo root) pins each body's SHA-256, so editing a shipped script is a deliberate, reviewed act, never a silent drift. When to use each one, its `meta` identity, the argument rules, the seat-count guard and the failure surface live in skill `mstar-host` → `references/dsh-workflow-scripts.md`; this table is the file inventory.
+The four read-only fan-out scripts the model hands to the dsh **`workflow`** tool live in `workflows/` as plain, package-relative JavaScript — not TypeScript and with no `export const meta` statement — so a script can be read, diffed and passed over verbatim. `scripts/dsh-workflow-files-contract.test.ts` (repo root) checks the delivery surface instead of a digest: every shipped body parses, `package.json` ships the `workflows` directory, and the skill's `meta` identities and `**File**` anchors name exactly the files on disk — a rename, an added script or an unshipped directory fails, while a deliberate edit does not. When to use each one, its `meta` identity, the argument rules, the seat-count guard and the failure surface live in skill `mstar-host` → `references/dsh-workflow-scripts.md`; this table is the file inventory.
 
 | File | Purpose | Required `args` |
 | --- | --- | --- |
 | `workflows/mstar-qc-tri.js` | Plan QC tri-review: three independent read-only QC seats, each returning a verdict envelope | `planId`, `planPath`, `range`, `reviewCwd`, `branch`, `sddDir` |
 | `workflows/mstar-audit-fanout.js` | Codebase audit: one read-only seat per category, batched to the 8-seat subagent pool | `repo`, `auditRef`, `recon` (+ optional `categories`, default all nine) |
-| `workflows/mstar-pr-seats.js` | PR review seats: 2-3 domain seats plus an optional cross-domain security seat, findings only | `worktree`, `target`, `diffBase`, `reportsDir`, `auditRef`, `budgetLine` (+ `domains`, `security`, `diffFile`) |
+| `workflows/mstar-pr-seats.js` | PR review seats: 2-3 domain seats plus an optional cross-domain security seat, findings only | `worktree`, `target`, `diffBase`, `auditRef`, `budgetLine` (+ `domains`, `security`, `diffFile`) |
 | `workflows/mstar-review-single.js` | One fresh-context SDD task reviewer that takes no Team roster seat | `planId`, `taskId`, `reviewCwd`, `branch`, `briefPath`, `implementerReport`, `diffFile`, `diffBase`, `diffHead`, `globalConstraints` |
 
 ## Native command surface

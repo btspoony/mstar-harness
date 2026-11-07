@@ -252,13 +252,13 @@ mstar 技能通过 dsh skill-filesystem 提供者以**单一规范挂载**接入
 
 ## Workflow scripts
 
-模型交给 dsh **`workflow`** 工具的四个只读扇出脚本以包相对的普通 JavaScript 放在 `workflows/`——不是 TypeScript，也没有 `export const meta` 语句——因此脚本可被原样读取、diff 与回传。`scripts/dsh-workflow-files-hash.test.ts`（仓库根）钉住每个正文的 SHA-256，改动已发布脚本因此是一次显式、可审的动作，而非静默漂移。何时使用、其 `meta` 身份、参数规则、席位数守卫与失败面见 skill `mstar-host` → `references/dsh-workflow-scripts.md`；本表是文件清单。
+模型交给 dsh **`workflow`** 工具的四个只读扇出脚本以包相对的普通 JavaScript 放在 `workflows/`——不是 TypeScript，也没有 `export const meta` 语句——因此脚本可被原样读取、diff 与回传。`scripts/dsh-workflow-files-contract.test.ts`（仓库根）校验的是交付面而非摘要：每个已发布正文可解析、`package.json` 会发布 `workflows` 目录、且 skill 的 `meta` 身份与 `**File**` 锚点正好指向磁盘上的这些文件——重命名、新增脚本或目录未发布都会失败，而一次刻意的改写不会。何时使用、其 `meta` 身份、参数规则、席位数守卫与失败面见 skill `mstar-host` → `references/dsh-workflow-scripts.md`；本表是文件清单。
 
 | 文件 | 用途 | 必需 `args` |
 | --- | --- | --- |
 | `workflows/mstar-qc-tri.js` | Plan QC 三席复审：三个独立的只读 QC 席位，各自返回 verdict envelope | `planId`, `planPath`, `range`, `reviewCwd`, `branch`, `sddDir` |
 | `workflows/mstar-audit-fanout.js` | 代码库审计：每个类别一个只读席位，按 8 席 subagent 池分批 | `repo`, `auditRef`, `recon`（可选 `categories`，缺省为全部九类） |
-| `workflows/mstar-pr-seats.js` | PR 审查席位：2-3 个域席位加可选的跨域安全席位，只出 findings | `worktree`, `target`, `diffBase`, `reportsDir`, `auditRef`, `budgetLine`（另有 `domains`, `security`, `diffFile`） |
+| `workflows/mstar-pr-seats.js` | PR 审查席位：2-3 个域席位加可选的跨域安全席位，只出 findings | `worktree`, `target`, `diffBase`, `auditRef`, `budgetLine`（另有 `domains`, `security`, `diffFile`） |
 | `workflows/mstar-review-single.js` | 单席 SDD task 审查者，不占用 Team roster 席位 | `planId`, `taskId`, `reviewCwd`, `branch`, `briefPath`, `implementerReport`, `diffFile`, `diffBase`, `diffHead`, `globalConstraints` |
 
 ## Native command surface

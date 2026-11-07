@@ -15,7 +15,7 @@
  * the source is written. The shipped set comes from `readdirSync`, so a
  * rename, an added script or an unshipped directory fails with no edit here.
  *
- * Run: `bun test scripts/dsh-workflow-files-hash.test.ts` (repo root).
+ * Run: `bun test scripts/dsh-workflow-files-contract.test.ts` (repo root).
  */
 import { describe, expect, test } from "bun:test";
 import { readdirSync, readFileSync } from "node:fs";

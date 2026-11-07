@@ -180,7 +180,7 @@ Every new doc must complete this phase; do not skip for lightweight captures.
 After capturing, check if the new learning suggests an older doc may now be stale (contradicted, superseded, or in a refactored domain). If so, recommend:
 
 ```
-Consider: /pm compound-refresh <scope hint>
+Consider: mstar-knowledge `## Workflow — Maintain` for <scope hint>
 ```
 
 Do not automatically run refresh — only flag when there's a concrete reason.

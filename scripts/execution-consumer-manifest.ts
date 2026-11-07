@@ -311,7 +311,13 @@ export const CONSUMER_LAYOUTS: readonly ConsumerLayout[] = [
     runtime: { target: "bun", declaration: "package-engines" },
     packageJson: "packages/dsh/package.json",
     entrypoint: "packages/dsh/dist/index.js",
-    sourceTrees: [{ root: "packages/dsh/src" }, { root: "packages/dsh/scripts" }],
+    // `workflows/` ships verbatim (the host executes the files the skill tells
+    // it to read), so an edited or missing body is a build input, not output.
+    sourceTrees: [
+      { root: "packages/dsh/src" },
+      { root: "packages/dsh/scripts" },
+      { root: "packages/dsh/workflows" },
+    ],
     sourceFiles: ["packages/dsh/package.json", "packages/dsh/tsconfig.json"],
     // `dist/client.js` is the one artifact this manifest does NOT pin: it is
     // built from a declared producer + declared mode, so its bytes belong to

@@ -30,7 +30,7 @@ One artifact family (`{KNOWLEDGE_DIR}` 文档 + `<repo-root>/CONCEPTS.md`), one 
 | Capture Phase 7 flag（本 skill，`## Workflow — Maintain`） | "Two docs cover N+1 queries — consider refresh" |
 | Scheduled maintenance | "It's been a quarter, let's audit knowledge" |
 | Domain refactored | After a major module rewrite |
-| Explicit user request | `/pm compound-refresh performance-issues` |
+| Explicit user request | `/pm` + "audit the knowledge docs" — Maintain runs as this skill `## Workflow — Maintain` |
 | **Project knowledge bootstrap** | No/stale/partial `STRATEGY.md`, `CONCEPTS.md`, or `{KNOWLEDGE_DIR}` — see 「Bootstrap vs refresh」 |
 
 **Landing here mid-iteration**: neither workflow's entry condition holds. Per-plan `Done` is **not** a capture trigger, and a mid-iteration moment is not a close, not a delivery tail, and carries no staleness signal — such a reader does nothing with this skill beyond continuing assigned work. One bounded exception: when current work hits the Capture Phase 2 overlap condition (an existing doc already covers the ground), **update that doc** (add `last_updated`) rather than deferring to a Maintain audit; that single-doc update is Capture-phase behaviour, not a licence to start a Maintain library sweep. A full Maintain audit (inventory → five outcomes → catalog reconcile) runs only from its own entries above.
@@ -95,7 +95,7 @@ Full mode dispatches research subagents through the host's task tool. PM selects
 4. **Discoverability** — 若 root `AGENTS.md`/`CLAUDE.md` 未提 `{KNOWLEDGE_DIR}`，提议最小补充（需用户同意；拒绝则仅跳过该编辑，doc 仍写）
 5. **CONCEPTS.md** — 项目特定领域词满足 qualifying bar 时提议入 `CONCEPTS.md`（规则见 `references/concepts-vocabulary.md`）；全仓 bootstrap 归本 skill `## Workflow — Maintain`
 6. **Catalog** — 新文档在 `{HARNESS_DIR}/store.db` 的 catalog 中登记为 `kind=document`（`document_kind=knowledge`）：单行 `mstar catalog register`，或 reviewed `mstar catalog discover` + `mstar catalog import`；provenance/supersession 用 `mstar catalog link`（`derived-from` / `supersedes` 关系）；生命周期变更用 `mstar catalog update`（`active` / `archived` / `superseded`；revision 守卫见 help）。**不再**要求 `{KNOWLEDGE_DIR}/README.md` 索引行（README 是散文，不是登记表）。知识关联载体是 catalog relations（`mstar catalog link`）；snapshot `plans[].metadata.knowledge_refs` 仅 legacy 只读，不是写入面。每篇新 doc 必须完成本 Phase
-7. **Refresh trigger** — 新知识暗示旧 doc 过时 → 推荐 `/pm compound-refresh <scope>`（不自动跑，仅 flag；维护执行 → `## Workflow — Maintain`）
+7. **Refresh trigger** — 新知识暗示旧 doc 过时 → 推荐本 skill 的 `## Workflow — Maintain`（经 `/pm` 并指明 scope；不自动跑，仅 flag）
 
 > **Engine check (when available):** run `mstar compound validate <doc-path> [--knowledge-dir <dir>]` (or `import { validateSchemaYaml, assertKnowledgeCatalogCompleteness } from "@mstar-harness/engine"` in a host hook) to validate the frontmatter against `references/schema.yaml` (Phase 3 Write) and assert that every knowledge body under `{KNOWLEDGE_DIR}` has a catalog row (Phase 6 Catalog, contract §4). The `assertIndexRows` export refuses actionably (`compound.index.retired`) instead of passing, and the `mstar compound validate --knowledge-dir` index-row check fails for the same reason. On `fail` -> do not proceed; fix and re-run. Skill text below remains authoritative when the runtime is absent.
 
