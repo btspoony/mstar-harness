@@ -162,3 +162,45 @@ describe("checkAdrTree — headings inside fenced code blocks", () => {
     expect(failure.message).toContain("## Decision");
   });
 });
+
+// The status-mismatch code has three branches: no single Status line, a
+// malformed line, and a bucket disagreement. The cross-bucket case above
+// disagrees with its directory; these pin the disagreement whose body and
+// directory agree, plus the two line-shape branches.
+describe("checkAdrTree — Status line shapes", () => {
+  test("a Status line naming another bucket under the right directory offers both repairs", () => {
+    const result = withTree(
+      { "implemented/architecture/2026-01-09-status.md": record("rejected", IMPLEMENTED_SECTIONS) },
+      checkAdrTree,
+    );
+    expect(result.failures.map((f) => f.code)).toEqual(["adr.status-mismatch"]);
+    const [failure] = result.failures;
+    expect(failure.message).toContain("Status says rejected but the record sits under implemented/");
+    expect(failure.recovery).toContain("rejected/architecture");
+    expect(failure.recovery).toContain('change the Status line to "Status: implemented');
+  });
+
+  test("an ASCII hyphen instead of the em dash is malformed and names the rewrite", () => {
+    const body = record("implemented", IMPLEMENTED_SECTIONS).replace(
+      "Status: implemented — because",
+      "Status: implemented - because",
+    );
+    const result = withTree({ "implemented/architecture/2026-01-10-malformed.md": body }, checkAdrTree);
+    expect(result.failures.map((f) => f.code)).toEqual(["adr.status-mismatch"]);
+    const [failure] = result.failures;
+    expect(failure.message).toContain('malformed Status line "Status: implemented - because"');
+    expect(failure.recovery).toContain("U+2014 em dash");
+  });
+
+  test("two Status lines fail the count with the one-bare-line recovery", () => {
+    const body = record("implemented", IMPLEMENTED_SECTIONS).replace(
+      "Status: implemented — because",
+      "Status: implemented — because\nStatus: implemented — again",
+    );
+    const result = withTree({ "implemented/architecture/2026-01-11-duplicate.md": body }, checkAdrTree);
+    expect(result.failures.map((f) => f.code)).toEqual(["adr.status-mismatch"]);
+    const [failure] = result.failures;
+    expect(failure.message).toContain("found 2");
+    expect(failure.recovery).toContain('before the first "## " heading');
+  });
+});
