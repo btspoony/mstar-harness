@@ -1,0 +1,140 @@
+/**
+ * scripts/adr-check.ts — ADR tree validator semantics, one case per failure
+ * code in the ADR contract §8 plus a well-formed positive control. Each case
+ * asserts the code (not just failure) and that the recovery names a fix a
+ * reader can actually perform.
+ */
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { dirname, join } from "node:path";
+import { describe, expect, test } from "bun:test";
+import { ADR_BUCKETS, ADR_CLASSES, checkAdrTree } from "./adr-check.ts";
+
+const ADR_ROOT = "docs/adr";
+
+/** Write `files` (path under docs/adr -> text) into a fresh temp repo and
+ * hand the repo root to `run`. */
+function withTree<T>(files: Record<string, string>, run: (repoRoot: string) => T): T {
+  const dir = mkdtempSync(join(tmpdir(), "adr-check-"));
+  try {
+    for (const [path, text] of Object.entries(files)) {
+      const target = join(dir, ADR_ROOT, path);
+      mkdirSync(dirname(target), { recursive: true });
+      writeFileSync(target, text);
+    }
+    return run(dir);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+}
+
+/** A record body with the given sections, a Status line agreeing with
+ * `status`, and nothing else. */
+function record(status: string, sections: string[], why = "because"): string {
+  const body = sections.flatMap((name) => [`## ${name}`, "", "Body text.", ""]);
+  return ["# ADR: Example record", "", `Status: ${status} — ${why}`, "", ...body].join("\n");
+}
+
+const IMPLEMENTED_SECTIONS = ["Problem", "Decision", "Alternatives considered", "Consequences"];
+const PROPOSED_SECTIONS = ["Problem", "Proposal", "Alternatives considered", "Acceptance criteria", "Risks"];
+const REJECTED_SECTIONS = ["Problem", "Proposal", "Alternatives considered"];
+
+describe("checkAdrTree — positive control", () => {
+  test("well-formed implemented/architecture record passes with 1 record and no failures", () => {
+    const result = withTree(
+      { "implemented/architecture/2026-01-01-example.md": record("implemented", IMPLEMENTED_SECTIONS) },
+      checkAdrTree,
+    );
+    expect(result.records).toBe(1);
+    expect(result.failures).toEqual([]);
+  });
+});
+
+describe("checkAdrTree — failure codes", () => {
+  test("adr.bucket-unknown: a directory outside the three buckets fails and names all three", () => {
+    const result = withTree(
+      { "archive/architecture/2026-01-02-old.md": record("implemented", IMPLEMENTED_SECTIONS) },
+      checkAdrTree,
+    );
+    expect(result.failures.map((f) => f.code)).toEqual(["adr.bucket-unknown"]);
+    const [failure] = result.failures;
+    expect(failure.message).toContain(`${ADR_ROOT}/archive`);
+    for (const bucket of ADR_BUCKETS) expect(failure.recovery).toContain(`${bucket}/`);
+  });
+
+  test("adr.class-unknown: an unknown class directory fails and lists all six classes", () => {
+    const result = withTree(
+      { "proposed/refactor/2026-01-03-refactor.md": record("proposed", PROPOSED_SECTIONS) },
+      checkAdrTree,
+    );
+    expect(result.failures.map((f) => f.code)).toEqual(["adr.class-unknown"]);
+    const [failure] = result.failures;
+    expect(failure.message).toContain(`${ADR_ROOT}/proposed/refactor`);
+    for (const cls of ADR_CLASSES) expect(failure.recovery).toContain(`${cls}/`);
+  });
+
+  test("adr.status-mismatch: an implemented record under rejected/ fails and the recovery names the move", () => {
+    const result = withTree(
+      { "rejected/architecture/2026-01-04-moved.md": record("implemented", REJECTED_SECTIONS) },
+      checkAdrTree,
+    );
+    expect(result.failures.map((f) => f.code)).toEqual(["adr.status-mismatch"]);
+    const [failure] = result.failures;
+    expect(failure.message).toContain(`${ADR_ROOT}/rejected/architecture/2026-01-04-moved.md`);
+    expect(failure.recovery).toContain("implemented/architecture");
+  });
+
+  test("adr.section-missing: a proposed record without ## Alternatives considered names that heading", () => {
+    const result = withTree(
+      {
+        "proposed/feature/2026-01-05-missing.md": record("proposed", [
+          "Problem",
+          "Proposal",
+          "Acceptance criteria",
+          "Risks",
+        ]),
+      },
+      checkAdrTree,
+    );
+    expect(result.failures.map((f) => f.code)).toEqual(["adr.section-missing"]);
+    const [failure] = result.failures;
+    expect(failure.message).toContain("## Alternatives considered");
+    expect(failure.recovery).toContain("## Alternatives considered");
+  });
+
+  test("adr.section-banned: an implemented record carrying ## Proposal fails with the fold/delete recovery", () => {
+    const result = withTree(
+      {
+        "implemented/architecture/2026-01-06-banned.md": record("implemented", [
+          ...IMPLEMENTED_SECTIONS,
+          "Proposal",
+        ]),
+      },
+      checkAdrTree,
+    );
+    expect(result.failures.map((f) => f.code)).toEqual(["adr.section-banned"]);
+    const [failure] = result.failures;
+    expect(failure.message).toContain("## Proposal");
+    expect(failure.recovery).toContain("## Decision");
+  });
+
+  test("adr.index-forbidden: an INDEX.md under docs/adr/ fails and names the path as the index", () => {
+    const result = withTree({ "INDEX.md": "# Index\n" }, checkAdrTree);
+    expect(result.failures.map((f) => f.code)).toEqual(["adr.index-forbidden"]);
+    const [failure] = result.failures;
+    expect(failure.message).toContain(`${ADR_ROOT}/INDEX.md`);
+    expect(failure.recovery).toContain("path + directory is the index");
+  });
+
+  test("adr.name-shape: a record named example.md fails with the required shape and an example", () => {
+    const result = withTree(
+      { "implemented/architecture/example.md": record("implemented", IMPLEMENTED_SECTIONS) },
+      checkAdrTree,
+    );
+    expect(result.failures.map((f) => f.code)).toEqual(["adr.name-shape"]);
+    const [failure] = result.failures;
+    expect(failure.message).toContain(`${ADR_ROOT}/implemented/architecture/example.md`);
+    expect(failure.recovery).toContain("yyyy-mm-dd-topic.md");
+    expect(failure.recovery).toContain("2026-01-01-example-topic.md");
+  });
+});
