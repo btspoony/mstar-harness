@@ -248,7 +248,11 @@ describe("Guard 10 blocking (drift-lint executable)", () => {
     "README_CN.md",
   ];
 
-  test("a duplicated rule group exits non-zero and names both sites", () => {
+  /** Run the guard executable over a temp repo carrying only Guard 10 inputs. */
+  function runGuard10(
+    allowlist: unknown[],
+    populate: (dir: string) => void,
+  ): { status: number; stderr: string } {
     const dir = mkdtempSync(join(tmpdir(), "drift-guard10-"));
     try {
       for (const rel of [...REQUIRED_INPUTS, RULE_DUPLICATION_ALLOWLIST]) {
@@ -256,30 +260,60 @@ describe("Guard 10 blocking (drift-lint executable)", () => {
         mkdirSync(dirname(dest), { recursive: true });
         writeFileSync(
           dest,
-          rel === RULE_DUPLICATION_ALLOWLIST ? "[]\n" : readFileSync(join(REPO_ROOT, rel), "utf8"),
+          rel === RULE_DUPLICATION_ALLOWLIST
+            ? `${JSON.stringify(allowlist, null, 2)}\n`
+            : readFileSync(join(REPO_ROOT, rel), "utf8"),
         );
       }
-      for (const skill of ["mstar-alpha", "mstar-beta"]) {
-        const dest = join(dir, "skills", skill, "SKILL.md");
-        mkdirSync(dirname(dest), { recursive: true });
-        writeFileSync(dest, `${RULE}\n`);
-      }
-      let status = 0;
-      let stderr = "";
+      populate(dir);
       try {
         execFileSync("bun", [SCRIPT], { cwd: dir, encoding: "utf8", stdio: ["pipe", "pipe", "pipe"] });
+        return { status: 0, stderr: "" };
       } catch (error) {
         const err = error as { status?: number; stderr?: string };
-        status = err.status ?? 0;
-        stderr = String(err.stderr ?? "");
+        return { status: err.status ?? 0, stderr: String(err.stderr ?? "") };
       }
-      expect(status).toBe(1);
-      // A failure row (not the old `advisory:` notice) is what enters `failures` and exits non-zero.
-      expect(stderr).toMatch(/✗ Guard 10 duplicate HARD rules/);
-      expect(stderr).toContain("skills/mstar-alpha/SKILL.md:1");
-      expect(stderr).toContain("skills/mstar-beta/SKILL.md:1");
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
+  }
+
+  function writeSkill(dir: string, skill: string, content: string): void {
+    const dest = join(dir, "skills", skill, "SKILL.md");
+    mkdirSync(dirname(dest), { recursive: true });
+    writeFileSync(dest, content);
+  }
+
+  test("a duplicated rule group exits non-zero and names both sites", () => {
+    const { status, stderr } = runGuard10([], (dir) => {
+      for (const skill of ["mstar-alpha", "mstar-beta"]) writeSkill(dir, skill, `${RULE}\n`);
+    });
+    expect(status).toBe(1);
+    // A failure row (not the old `advisory:` notice) is what enters `failures` and exits non-zero.
+    expect(stderr).toMatch(/✗ Guard 10 duplicate HARD rules/);
+    expect(stderr).toContain("skills/mstar-alpha/SKILL.md:1");
+    expect(stderr).toContain("skills/mstar-beta/SKILL.md:1");
+  });
+
+  test("a partially allowlisted group names its exempt sites on the failure row", () => {
+    const { status, stderr } = runGuard10(
+      [
+        {
+          file: "skills/mstar-gamma/SKILL.md",
+          normalizedHash: ruleFingerprintHash(normalizeRuleLine(RULE)),
+          reason: "skills/mstar-gamma/SKILL.md keeps a frozen copy; mstar-alpha owns the rule",
+        },
+      ],
+      (dir) => {
+        for (const skill of ["mstar-alpha", "mstar-beta", "mstar-gamma"]) {
+          writeSkill(dir, skill, `${RULE}\n`);
+        }
+      },
+    );
+    expect(status).toBe(1);
+    const row = stderr.split("\n").find((line) => line.includes("Guard 10 duplicate HARD rules")) ?? "";
+    expect(row).toContain("skills/mstar-alpha/SKILL.md:1");
+    expect(row).toContain("skills/mstar-beta/SKILL.md:1");
+    expect(row).toContain("1 exempt: skills/mstar-gamma/SKILL.md:1");
   });
 });

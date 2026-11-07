@@ -1452,10 +1452,18 @@ if (import.meta.main) {
   }
   for (const row of ruleDuplication.allowlistFailures) fail(row);
   for (const group of ruleDuplication.duplicates) {
+    // A partially allowlisted group fails on its active sites only; name the
+    // exempt ones too, or the row reads as if nothing were exempt.
+    const exempt =
+      group.exempt.length === 0
+        ? ""
+        : `; ${group.exempt.length} exempt: ${group.exempt
+            .map((hit) => `${hit.file}:${hit.line}`)
+            .join(", ")}`;
     fail(
       `Guard 10 duplicate HARD rules [${ruleFingerprintHash(group.normalized)}] ${group.hits
         .map((hit) => `${hit.file}:${hit.line}`)
-        .join(", ")} - state the rule in one file and point at that owner (→ <skill> § <Section>); a genuine exception goes in ${RULE_DUPLICATION_ALLOWLIST} with a reason naming the file it covers`,
+        .join(", ")}${exempt} - state the rule in one file and point at that owner (→ <skill> § <Section>); a genuine exception goes in ${RULE_DUPLICATION_ALLOWLIST} with a reason naming the file it covers`,
     );
   }
 
