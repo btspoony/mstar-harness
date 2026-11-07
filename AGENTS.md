@@ -14,6 +14,8 @@ This repository contains the Morning Star runtime skills, workflow engine, CLI, 
 - **Test layout.** Module-unit suites colocate as `src/<module>.test.ts` (unit mirror of one module); cross-module behavior suites live in `test/`. Test-support helpers live with the package that owns them. Engine note: the engine build compiles `src/**`, so colocated suites are typechecked and their declarations land in `dist/`.
 - **Tests derive volatile facts, never pin them.** A test that asserts a repository fact — the release version, an inventory of packages/roles/skills or its count, a checkout path — MUST read it from the source that owns it (the manifest, a directory listing, the CLI). A literal is acceptable only as a synthetic fixture input that nothing compares against reality: `"4.0.0"` as input is fine, `version === "4.0.0"` is not. This class has been cleaned up across the engine, dsh and CLI suites before and came back, because a one-off cleanup leaves no rule behind. A pinned release version reddens every release branch while `main` stays green, so ordinary PR CI cannot surface it — derive the value, or the failure lands on whoever prepares the next release.
 
+- **Durable decision rationale has one home: `docs/adr/`.** A decision that must outlive the plan or PR that produced it is written as a record there, following [its contract](docs/adr/README.md); the plan, PR, and knowledge doc keep a pointer, never the reason.
+
 ## Git and local artifacts
 
 - Develop in a task worktree under the sibling root `<parent-of-repo-root>/{repo-basename}.worktrees/`, where repo root is the realpath of the Git top-level. Keep the primary checkout on `main`: skills and commands may be symlinked to it. Changes reach `main` through PRs; never make direct feature commits there.
@@ -35,6 +37,7 @@ This repository contains the Morning Star runtime skills, workflow engine, CLI, 
 | Install/link adapters | `packages/cli/`; follow its local `AGENTS.md` |
 | Host plugin implementation and packaging | `packages/opencode/`, `packages/dsh/`, `packages/omp/`; follow applicable local `AGENTS.md` files |
 | Plugin metadata | Host plugin/marketplace manifests; release surfaces are listed in `scripts/release-surfaces.ts` |
+| Decision rationale that outlives the plan | `docs/adr/`; the record contract is [its README](docs/adr/README.md) |
 
 Edit canonical sources, not generated `harness-skills/` or `harness-agents/` copies. Use the affected package's bundle command when validating packaged assets. OpenCode's primary `project-manager` shell lives in `packages/opencode/agents/`; shared `agents/` contains subagent shells. Installed plugins must resolve bundled assets from their package, not the consumer's working directory.
 

@@ -205,7 +205,7 @@ If `CONCEPTS.md` doesn't exist but knowledge docs contain qualifying domain term
 3. **Match docs to reality.** When code differs from doc, update the doc — not ask whether the code change was "intentional."
 4. **Be decisive.** When evidence is clear (file renamed, class moved), apply. Only ask PM when genuinely ambiguous.
 5. **Avoid low-value churn.** Don't edit for typos, polish, or cosmetic changes that don't improve accuracy.
-6. **Delete, don't archive** — **except** formal **iteration-start** §1.6 corpus hygiene (`mstar-iteration/references/iteration-corpus-hygiene.md`), which **moves** superseded/redundant knowledge/specs to `{HARNESS_DIR}/archived/knowledge|specs/`. Outside that gate, git history is the archive; `git log --diff-filter=D -- <path>` finds deleted docs.
+6. **Delete, don't archive** — **except** formal **iteration-start** §1.6 corpus hygiene (`mstar-iteration/references/iteration-corpus-hygiene.md`), which **moves** superseded/redundant knowledge/specs to `{HARNESS_DIR}/archived/knowledge|specs/`. Outside that gate, git history is the archive; `git log --diff-filter=D -- <path>` finds deleted docs. Durable decision *reason* — why an alternative lost, or what a choice cost — has its home in the ADR tree (`docs/adr/`), not in a kept knowledge doc.
    > **Not adopted:** frozen-archive seal machinery, `Archived:` triplets, or a verifier — they contradict rule 6 (delete, don't archive; git history is the archive); do not reintroduce.
 7. **Evaluate document-set design.** Check whether two+ docs overlap and should be consolidated. Redundant docs silently drift apart.
 
