@@ -9,9 +9,13 @@
  * Only `paragraph` nodes are judged. Lists are skipped (an mdast list item's
  * content is a `paragraph` node too, but a list is never judged), and
  * headings, tables, fenced code and YAML frontmatter produce no reported
- * node. Width is not judged: a long single line passes. A hard break (`\` or
- * two trailing spaces) is content, not a paragraph boundary, so a paragraph
- * carrying one still reports as multi-line.
+ * node. A well-formed frontmatter block is blanked line-preserving before
+ * parsing and is never reported; a block that never closes falls back to plain
+ * Markdown parsing, so its body can report as a paragraph — that file has a
+ * frontmatter defect, and the row still points at the offending lines. Width is
+ * not judged: a long single line passes. A hard break (`\` or two trailing
+ * spaces) is content, not a paragraph boundary, so a paragraph carrying one
+ * still reports as multi-line.
  */
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
