@@ -506,6 +506,8 @@ describe("consultDeliveryEvidence — pure delivery rules", () => {
     const code = "workflow.snapshot.invalid-delivery-evidence";
     expect(deliveryEvidenceViolations({ pr: legacyPr }, "patch").map((entry) => entry.code)).toContain(code);
     expect(deliveryEvidenceViolations({ merge: { provider: "x", evidence: "y" } }, "patch").map((entry) => entry.code)).toContain(code);
+    // An EMPTY merge records nothing: the member exists to carry its commit.
+    expect(deliveryEvidenceViolations({ merge: {} }, "patch").map((entry) => entry.code)).toContain(code);
     expect(deliveryEvidenceViolations({ merge: { commit: "1".repeat(40) } }, "patch")).toEqual([]);
   });
 

@@ -463,12 +463,12 @@ const DELIVERY_COMMIT_RE = /^[0-9a-f]{40}(?:[0-9a-f]{24})?$/;
 /**
  * Validate the optional `delivery` block (contract §3/§4c/§4f): known
  * members only, `compound`/`completion` exact-key objects of non-empty strings,
- * `merge` an exact-key object whose optional `commit` is a full lowercase
- * 40/64-hex Git object id, the compound outcome inside the recorded enum and
- * `skipped` carrying its mandatory reason. Structural validation only - WHICH
- * members the declared delivery kind requires is the consultation's rule
- * (`consultDeliveryEvidence`), so a partially filled block stays writable
- * while it is being collected.
+ * `merge` a `{commit}` object carrying a full lowercase 40/64-hex Git object id
+ * (the member is optional, an empty one is not), the compound outcome inside
+ * the recorded enum, and `skipped` carrying its mandatory reason. Structural
+ * validation only - WHICH members the declared delivery kind requires is the
+ * consultation's rule (`consultDeliveryEvidence`), so a partially filled block
+ * stays writable while it is being collected.
  *
  * Exported (pure, read-only) for the ACTIVE transport's workflow-level `delivery`
  * transition. The transport applies this shared structural rule before recording
@@ -509,7 +509,12 @@ export function deliveryEvidenceViolations(value: unknown, what: string): Valida
     else {
       const unknown = Object.keys(merge).filter((key) => key !== "commit");
       if (unknown.length > 0) invalid(`merge has unknown key(s) ${unknown.join(", ")} \u2014 expected commit`);
-      if (merge.commit !== undefined && (typeof merge.commit !== "string" || !DELIVERY_COMMIT_RE.test(merge.commit))) {
+      // The member records ONE fact; an empty block is not evidence.
+      else if (merge.commit === undefined) {
+        invalid(
+          "merge must record its commit \u2014 an empty merge carries no fact; record a full commit id, or omit the member when the delivery branch tip is contained in the registered target",
+        );
+      } else if (typeof merge.commit !== "string" || !DELIVERY_COMMIT_RE.test(merge.commit)) {
         invalid(`merge.commit must be a full lowercase 40- or 64-hex Git object id \u2014 got ${JSON.stringify(merge.commit)}`);
       }
     }
@@ -547,10 +552,14 @@ export function deliveryEvidenceMembers(kind: WorkflowDeliveryKind): readonly st
  */
 function storedDeliveryEvidence(value: unknown): unknown {
   if (!isPlainObject(value)) return value;
-  const { pr: _legacyPr, ...members } = value;
-  if (!isPlainObject(members.merge)) return members;
-  const commit = members.merge.commit;
-  return { ...members, merge: commit === undefined ? {} : { commit } };
+  const { pr: _legacyPr, merge, ...members } = value;
+  // A non-object merge is not the retired spelling: leave it for the shape rule
+  // to name instead of silently discarding structured state.
+  if (!isPlainObject(merge)) return merge === undefined ? members : { ...members, merge };
+  // The pre-§4f member was free text (`{provider, evidence}`) and an empty one
+  // carries nothing, so both are history without the one fact this member
+  // records: read them as absent (the member is optional).
+  return merge.commit === undefined ? members : { ...members, merge: { commit: merge.commit } };
 }
 
 /**

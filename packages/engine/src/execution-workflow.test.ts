@@ -795,6 +795,15 @@ describe("execution-workflow: \u00A73 workflow-level phase, lifecycle, policy, c
       }),
     );
     expect(providerShape.code).toBe("coordination.invalid-input");
+    // An EMPTY merge is not a fact: the member's whole content is its commit.
+    const emptyMerge = await refusalOf(() =>
+      workflowMutation(fixture, "op-delivery-empty-merge", {
+        kind: "delivery",
+        delivery: { merge: {} } as never,
+      }),
+    );
+    expect(emptyMerge.code).toBe("coordination.invalid-input");
+    expect(JSON.stringify(emptyMerge.details)).toContain("merge must record its commit");
   });
 
   test("a terminal close refuses an unfinished row, incomplete evidence and outstanding ownership", async () => {
@@ -941,6 +950,28 @@ describe("execution-workflow: \u00A74f the delivery merge proof", () => {
       reason: "the squash merge was verified",
     });
     expect(closed.data.workflows.some((workflow) => workflow.state.id === WORKFLOW_ID)).toBe(false);
+  });
+
+  test("a recorded merge commit that is not a commit in the checkout refuses with that cause", async () => {
+    const fixture = await workflowFixture("merge-absent-commit");
+    setRowStatus(fixture.context, PLAN_ID, "Done");
+    await workflowMutation(fixture, "op-absent-tail", { kind: "delivery", delivery: DELIVERY_TAIL });
+    // The delivery tip stays outside `main`, so the proof reaches the recorded
+    // commit: a well-formed id that is no object in this checkout.
+    commitDelivery(fixture, "work the target never received");
+    const absent = "0".repeat(40);
+    await workflowMutation(fixture, "op-absent-commit", { kind: "delivery", delivery: { merge: { commit: absent } } });
+    const before = await workflowFootprint(fixture.context);
+    const refused = await refusalOf(() =>
+      workflowMutation(fixture, "op-absent-close", { kind: "lifecycle", status: "completed", reason: "done" }),
+    );
+    expect(refused.code).toBe("coordination.invalid-transition");
+    expect(refused.details.code).toBe("PHASE6_DELIVERY_MERGE_UNPROVEN");
+    // The dedicated cause, not the generic "not contained" wording.
+    const stated = JSON.stringify(refused.details);
+    expect(stated).toContain(`records delivery.merge.commit ${absent}, which is not a commit in the plan checkout`);
+    expect(stated).toContain("Fetch that commit into the plan checkout");
+    expect(await workflowFootprint(fixture.context)).toEqual(before);
   });
 });
 
