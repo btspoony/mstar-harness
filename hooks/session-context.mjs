@@ -18027,10 +18027,14 @@ function deliveryMergeViolations(snapshot) {
   } else {
     const cherry = gitRead(checkout, ["cherry", target, tip]);
     if (cherry !== undefined && cherry !== "" && cherry.split(`
-`).every((line) => line.startsWith("-")))
-      return [];
-    unproven.push(cherry === undefined || cherry === "" ? `${fork}..${tip} carries no commit to associate with ${targetBranch} (${target})` : `${deliveryBranch} tip ${tip} is not contained in ${targetBranch} (${target}), and ${cherry.split(`
+`).every((line) => line.startsWith("-"))) {
+      if (gitRead(checkout, ["rev-list", "--merges", `${target}..${tip}`]) === "")
+        return [];
+      unproven.push(`${deliveryBranch} tip ${tip} is not contained in ${targetBranch} (${target}), and its history carries merge commits in ${target}..${tip} that 'git cherry' does not report`);
+    } else {
+      unproven.push(cherry === undefined || cherry === "" ? `${fork}..${tip} carries no commit to associate with ${targetBranch} (${target})` : `${deliveryBranch} tip ${tip} is not contained in ${targetBranch} (${target}), and ${cherry.split(`
 `).filter((line) => !line.startsWith("-")).length} of ${fork}..${tip}'s commits have no patch-equivalent commit there`);
+    }
   }
   if (mergeCommit === undefined) {
     unproven.push("no delivery.merge.commit is recorded");

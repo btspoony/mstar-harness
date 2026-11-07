@@ -1351,7 +1351,8 @@ function deliveryRef(cwd: string, branch: string, remoteFirst: boolean): string 
  *    merge commit or fast-forward;
  * 3. otherwise every commit in `fork..tip` patch-equivalent upstream
  *    (`git cherry <target> <tip>` all `-`) proves a rebase, or a squash of one
- *    delivery commit, with no recorded value;
+ *    delivery commit, with no recorded value — but only while `<target>..<tip>`
+ *    holds no merge commit, which `git cherry` never reports;
  * 4. otherwise a recorded `delivery.merge.commit` proves a squash when it exists
  *    as a commit, is an ancestor of the target, AND carries the delivery's own
  *    diff: `git patch-id --stable` of `<commit>^..<commit>` equals that of
@@ -1433,20 +1434,31 @@ function deliveryMergeViolations(snapshot: WorkflowSnapshot): ValidationResult[]
   const deliveryPatch = tip === undefined || fork === undefined ? undefined : gitPatchId(checkout, fork, tip);
   const unproven: string[] = [];
 
-  // A rebase (or a squash of one delivery commit) needs no recorded value: every
-  // delivery commit keeps its patch id, so `git cherry` marks each one `-`.
+  // A merge-free rebase (or a squash of one delivery commit) needs no recorded
+  // value: every delivery commit keeps its patch id, so `git cherry` marks each
+  // one `-`.
   if (tip === undefined) {
     unproven.push(`${deliveryBranch} has no ref in ${checkout}, so its commits cannot be associated with ${targetBranch}`);
   } else if (fork === undefined || deliveryPatch === undefined) {
     unproven.push(`${deliveryBranch} tip ${tip} shares no readable diff with ${targetBranch} (${target})`);
   } else {
     const cherry = gitRead(checkout, ["cherry", target, tip]);
-    if (cherry !== undefined && cherry !== "" && cherry.split("\n").every((line) => line.startsWith("-"))) return [];
-    unproven.push(
-      cherry === undefined || cherry === ""
-        ? `${fork}..${tip} carries no commit to associate with ${targetBranch} (${target})`
-        : `${deliveryBranch} tip ${tip} is not contained in ${targetBranch} (${target}), and ${cherry.split("\n").filter((line) => !line.startsWith("-")).length} of ${fork}..${tip}'s commits have no patch-equivalent commit there`,
-    );
+    if (cherry !== undefined && cherry !== "" && cherry.split("\n").every((line) => line.startsWith("-"))) {
+      // `git cherry` omits merge commits, so an all-`-` result only proves a
+      // merge-free delivery history: content that exists only in a merge would
+      // not be reported. A merge-bearing history falls through to the recorded
+      // commit proof or the refusal below.
+      if (gitRead(checkout, ["rev-list", "--merges", `${target}..${tip}`]) === "") return [];
+      unproven.push(
+        `${deliveryBranch} tip ${tip} is not contained in ${targetBranch} (${target}), and its history carries merge commits in ${target}..${tip} that 'git cherry' does not report`,
+      );
+    } else {
+      unproven.push(
+        cherry === undefined || cherry === ""
+          ? `${fork}..${tip} carries no commit to associate with ${targetBranch} (${target})`
+          : `${deliveryBranch} tip ${tip} is not contained in ${targetBranch} (${target}), and ${cherry.split("\n").filter((line) => !line.startsWith("-")).length} of ${fork}..${tip}'s commits have no patch-equivalent commit there`,
+      );
+    }
   }
 
   // A recorded squash commit proves the delivery only by carrying its content.

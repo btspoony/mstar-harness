@@ -1026,6 +1026,45 @@ describe("execution-workflow: \u00A74f the delivery merge proof", () => {
     expect(closed.data.workflows.some((workflow) => workflow.state.id === WORKFLOW_ID)).toBe(false);
   });
 
+  test("the cherry shortcut refuses the A/C/M delivery: a merge commit carries content `git cherry` hides", async () => {
+    const fixture = await workflowFixture("merge-cherry-merge-commit");
+    setRowStatus(fixture.context, PLAN_ID, "Done");
+    await workflowMutation(fixture, "op-acm-tail", { kind: "delivery", delivery: DELIVERY_TAIL });
+    // A and C are independent delivery commits off the common base; M merges C
+    // into A and adds Z — content that exists ONLY in the merge commit.
+    const a = commitDelivery(fixture, "delivery commit A");
+    runGit(["checkout", "-q", "-b", "side", "main"], fixture.repoRoot);
+    writeText(join(fixture.repoRoot, "c.txt"), "delivery commit C\n");
+    runGit(["add", "-A"], fixture.repoRoot);
+    runGit(["-c", "user.email=t@t", "-c", "user.name=t", "commit", "-q", "-m", "delivery commit C"], fixture.repoRoot);
+    const c = headOf(fixture.repoRoot);
+    runGit(["merge", "-q", "--no-ff", "--no-commit", "side"], fixture.planPath);
+    writeText(join(fixture.planPath, "z.txt"), "merge-only content\n");
+    runGit(["add", "-A"], fixture.planPath);
+    runGit(["-c", "user.email=t@t", "-c", "user.name=t", "commit", "-q", "-m", "merge C into A"], fixture.planPath);
+    const mergeTip = headOf(fixture.planPath);
+    // The target received patch-equivalent A' and C' and nothing else: Z, which
+    // only M introduced, is absent and M is not an ancestor of `main`.
+    runGit(["checkout", "-q", "main"], fixture.repoRoot);
+    runGit(["cherry-pick", a], fixture.repoRoot);
+    runGit(["cherry-pick", c], fixture.repoRoot);
+    const cherry = execFileSync("git", ["cherry", "main", SOURCE_BRANCH], { cwd: fixture.repoRoot, encoding: "utf8" }).trim();
+    expect(cherry.split("\n").every((line) => line.startsWith("-"))).toBe(true);
+    expect(execFileSync("git", ["rev-list", "--merges", `main..${SOURCE_BRANCH}`], { cwd: fixture.repoRoot, encoding: "utf8" }).trim()).not.toBe("");
+    expect(() => execFileSync("git", ["cat-file", "-e", "main:z.txt"], { cwd: fixture.repoRoot, stdio: "ignore" })).toThrow();
+    expect(() => execFileSync("git", ["merge-base", "--is-ancestor", mergeTip, "main"], { cwd: fixture.repoRoot, stdio: "ignore" })).toThrow();
+
+    const before = await workflowFootprint(fixture.context);
+    const refused = await refusalOf(() =>
+      workflowMutation(fixture, "op-acm-close", { kind: "lifecycle", status: "completed", reason: "done" }),
+    );
+    expect(refused.code).toBe("coordination.invalid-transition");
+    expect(refused.details.code).toBe("PHASE6_DELIVERY_MERGE_UNPROVEN");
+    // The named cause: the merge-bearing history, not only the missing record.
+    expect(JSON.stringify(refused.details)).toContain("carries merge commits");
+    expect(await workflowFootprint(fixture.context)).toEqual(before);
+  });
+
   test("a multi-commit squash needs its recorded commit, and patch equality accepts it", async () => {
     const fixture = await workflowFixture("merge-multi-squash");
     setRowStatus(fixture.context, PLAN_ID, "Done");
