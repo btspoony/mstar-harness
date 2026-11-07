@@ -70,23 +70,22 @@ For appended fixes, begin each new block with `## Verification round: <concrete 
 
 Replace every placeholder with actual evidence. Unknown or duplicate modes within the active round, missing/empty/placeholder fields, and bare `Tests: N/A` fail; do not copy the template as a report. `assertSddTddTriple` / `mstar lint <task-report>` validate structure only. PM/QC check the actual changed range, applicability and evidence honesty; the checker cannot establish that commands ran or intercept arbitrary shell execution. For policy changes, record the before/after expectation and triggering scenario alongside the concrete check; no broad model-eval matrix is implied.
 
-### Captured check evidence (`sdd evidence`)
+### Retained check output
 
-An already-authorized check can run **once** and retain raw evidence plus provenance digests in canonical SDD for read-only review, rather than repeating the child command. **PM publishes the task capture request** (task-specific JSON naming context, coverage declaration, declared inputs and selected environment keys); the **developer captures** the authorized check; QC/QA inspect it without repeating the child. The request is separate from rotating `context.json` and is not a checkout selector. Capture authorizes no dispatch, test/full-suite/E2E permission, or report-byte seal.
+An already-authorized check runs **once**; its raw output is retained in canonical SDD so reviewers read it instead of repeating the command. The developer redirects the check's stdout and stderr to `{SDD_DIR}/evidence/<task-id>.log` and cites that path in the task report as the evidence link — never paraphrased output.
 
-Exact public command shapes (angle-bracket terms are required CLI values):
-
-```text
-mstar sdd evidence capture --request <absolute-task-request.json> -- <executable> [args...]
-mstar sdd evidence verify --sdd-dir <absolute-dir> --plan <id> --task <id> --run <uuid> [--target <absolute-target.json>]
+```bash
+mkdir -p "$SDD_DIR/evidence"
+<authorized check argv> > "$SDD_DIR/evidence/task-N.log" 2>&1
 ```
 
-- Capture runs the child once (literal argv, no shell), POSIX linux/darwin only (unsupported hosts refuse before spawn), and retains `{SDD_DIR}/evidence/<run-uuid>/` with fixed `record.json`, `stdout.log`, `stderr.log`; every retry is a fresh run UUID. Capture exits: child exit code preserved; missing executable 127; timeout 124; signal 128+n (parent SIGINT 130 / SIGTERM 143); gate/IO refusal 1; usage 2. Cite the raw log paths as evidence links — not paraphrased output.
-- `verify` is read-only and portable: it never runs the recorded child, discovery or version probes, writes no assessment artifact, and emits exactly one JSON assessment. Without `--target`, exit 0 means complete **integrity only** — a retained failed run still verifies with outcome `failed` (stderr: `integrity only; outcome=<value>; acceptance not assessed`). With `--target`, exit 0 means reuse **candidate** (stderr adds `reuse candidate; coverage review required`); every non-candidate exits 1; usage 2.
-- Four outputs stay separate — **integrity** (bundle completeness and valid semantic record/path structure, not unchanged bytes), **outcome** (recorded process result), **target applicability** (`not-assessed`/`candidate`/`changed`/`uncertain`), **coverage judgment** (always `review-required` in v1). Recorded hashes/byte counts are provenance only; equality or drift cannot decide integrity or reuse. There is no parser promise, pass/fail count or automatic coverage inference (`counts` stays null); the reviewer judges coverage.
-- Reuse uses current declared semantic applicability: repository identity, path/existence/state, selected environment and semantic tool metadata, outcome and before/after observations. Digest-only input/tool/artifact movement remains eligible; relevant field/path/state or environment/tool observation changes identify an affected gap or uncertainty. Failed/incomplete proof, unknown scope or different repository remains `uncertain`; pre-fix failure stays `failed`, never a pre-feature baseline. Without a target, applicability is `not-assessed`. Empty environment allowlists and lockfile-only declarations remain reviewed assumptions, not automatic completeness.
-- Non-executable documentation/policy never manufactures capture evidence — it uses `Verification mode: scoped-check` above. Historical manual evidence stays manual/unverified: cite it with provenance and reviewer reasoning; NEVER retrofit it into a v1 runner record.
-- The old `mstar sdd exec` entry is unchanged and stays PM-only serialized launch (§ Bound child launch); hosted leaves never use it for their assigned checks.
+- A fix round appends its own output to the same `{SDD_DIR}/evidence/<task-id>.log` under its `## Verification round: <concrete label>` heading; it never creates a second log for the same task.
+- The redirect does not record the exit status: state the observed exit code/result beside the citation in the report.
+- The log records what ran and what it printed — it is not a pass/fail or coverage seal. Whether the log belongs to the cited command and range (**integrity**) and whether it covers the AC (**coverage judgment**) stay with the reviewer.
+- Reviewers (L2, QC, QA) read the cited log and never re-run the command. Retaining output authorizes no dispatch, test/full-suite/E2E permission, or report-byte seal.
+- Reuse an existing log when its covered behavior is unchanged after a later commit; a changed shared runtime/config/fixture/dependency input names the affected gap instead of rerunning everything. A pre-fix failing run keeps its observed failure and is never relabeled a pre-feature baseline.
+- Non-executable documentation/policy never manufactures a log — it uses `Verification mode: scoped-check` above. Historical manual evidence stays manual/unverified: cite it with provenance and reviewer reasoning, never as a retained log.
+- The `mstar sdd exec` entry is unchanged and stays PM-only serialized launch (§ Bound child launch); hosted leaves never use it for their assigned checks.
 
 ## After implementer DONE
 

@@ -158,7 +158,6 @@ Context and limits:
 
 - Optional `host` selects a supported host context; it is not a role or authority grant. `sessionId` selects the main conversation session, not a spawned child-agent session, and child-agent attribution is neither required nor performed.
 - Existing workflow ownership, path, state-transition, and CAS checks still decide whether a request is allowed; the MCP route does not bypass them.
-- MCP-side SDD evidence capture does not fingerprint the runner executable or collect repository/declared-input snapshots, so those records are marked `stable: false`. CLI capture does not have that limitation.
 - `mstar-harness doctor --target <host>` reports each host's MCP config as **aligned**, **mismatch**, or **unavailable**. It reads the host configuration (for dsh, the composed profile dump) and checks the runtime floor; it does not start the server, open the issue store, or prove that a host loaded the plugin. An aligned config is not an installed-host success claim.
 
 ## Runtime and enforcement

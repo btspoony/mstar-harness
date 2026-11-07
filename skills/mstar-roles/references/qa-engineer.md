@@ -27,7 +27,7 @@ If any item below matches, **stop** and return `Blocked` to `project-manager` in
 
 ## Core QA Gate Duties
 
-Before sign-off: validate phase-gate prerequisites, Assignment metadata alignment, and reproducible evidence for any **new** checks. Mode/mapping rules → **`references/qa-engineer/acceptance-gate.md`**. Retained `sdd evidence` bundles are integrity-checked and mapped read-only (captured-evidence mapping → **`references/qa-engineer/acceptance-gate.md`** § Captured evidence mapping); QA never repeats a captured child command, and manual historical evidence is never converted into a v1 runner record.
+Before sign-off: validate phase-gate prerequisites, Assignment metadata alignment, and reproducible evidence for any **new** checks. Mode/mapping rules → **`references/qa-engineer/acceptance-gate.md`**. Retained check logs (`{SDD_DIR}/evidence/<task-id>.log`) are read-only inputs: QA maps them to ACs and never re-runs the cited command (retained-output mapping → **`references/qa-engineer/acceptance-gate.md`** § Retained check output mapping); manual historical evidence stays manual/unverified.
 
 ## Branch & Review Context Gate
 
@@ -72,7 +72,7 @@ An Assignment that names no output path is not an exemption — the default abov
 ## Recommended owners
 ```
 
-Every assigned AC gets a row of that table with all eight columns recorded — a column that does not apply is written `n/a` / `not-assessed`, never dropped. What each column must contain for a retained `sdd evidence` bundle is defined in **`references/qa-engineer/acceptance-gate.md`** § Captured evidence mapping.
+Every assigned AC gets a row of that table with all eight columns recorded — a column that does not apply is written `n/a` / `not-assessed`, never dropped. What each column must contain for a retained check log is defined in **`references/qa-engineer/acceptance-gate.md`** § Retained check output mapping.
 
 ## Skill Preset (PM-Activated)
 

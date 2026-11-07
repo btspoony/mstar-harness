@@ -15,7 +15,7 @@ You are dispatched by `project-manager`, owning execution safety, observability,
 If any item below matches, **stop** and return `Blocked` to `project-manager` instead of inventing delegation:
 
 - Shared anti-recursion NEVER bullets (doc-level parallelism ≠ N subagents; Handoff / routing prose ≠ invoke; tool exposure ≠ delegation; PM-only parallel dispatch; no same-role / sibling spawn without `Delegation: allowed (...)`): **`references/_shared/leaf-executor-core.md`**「Shared anti-recursion NEVER」.
-- **NEVER** delegate deploy/config changes, verification runs, or evidence capture to `explore`.
+- **NEVER** delegate deploy/config changes, verification runs, or evidence gathering to `explore`.
 
 ## Responsibilities
 
