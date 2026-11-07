@@ -9,7 +9,7 @@ Distill a coherent knowledge baseline from the current project — useful when t
 1. `mstar-harness-core`
 2. `mstar-knowledge` (this skill; `## Workflow — Maintain`)
 3. `mstar-conventions`（路径符号）
-4. `mstar-strategy` → **§ STRATEGY.md structure** + **§ Creating STRATEGY.md**
+4. This skill's **references/strategy-document.md**（STRATEGY.md 形状、六节校验、访谈、维护触发）
 5. This skill's **references/concepts-vocabulary.md**（CONCEPTS.md 规则）
 6. This reference — **§ Decision Rules / Core rules** in `mstar-knowledge/SKILL.md`（知识维护基线）
 
@@ -53,23 +53,25 @@ For each primary module / package identified in 1.1:
 
 ## Phase 2: Distill STRATEGY.md
 
-Use `mstar-strategy` skill to produce `<repo-root>/STRATEGY.md`.
+Produce `<repo-root>/STRATEGY.md`; this phase owns the flow, `references/strategy-document.md` owns the artifact contract.
 
-### If STRATEGY.md is absent
+### STRATEGY.md shape
 
-1. Gather context from Phase 1 survey
-2. Ask the user the 5 interview questions（`mstar-strategy` § Phase 2）
-3. Draft and review: keep each section 1-3 sentences
+Six required sections — Vision / What we build / What we don't build / Guiding Principles / Technology Direction / Decision Log — plus three optional ones; opinionated, one screen, 1–3 sentences each → `references/strategy-document.md` § Shape.
 
-### If STRATEGY.md exists but is stale/partial
+### Six-section validation
 
-1. Present specific findings: "Section X contradicts current code / is outdated because Y changed"
-2. Ask whether to update in-place or rewrite
-3. Apply edits, keeping the Decision Log for historical context
+`mstar lint <STRATEGY.md>` (`lintStrategySections`) must pass the six required headings before this phase reports done → `references/strategy-document.md` § Validation.
 
-### If STRATEGY.md is current
+### Creation interview
 
-Skip, note in report.
+Ask the five questions one at a time — one-sentence vision, primary users and what they need, permanent non-goals, 2–3 decision principles, technology bets and why → `references/strategy-document.md` § Interview.
+
+### Maintenance triggers
+
+Re-review after a major architectural decision, when a plan introduces a new technology stack, or quarterly (PM-scheduled); replace a superseded direction, never keep both → `references/strategy-document.md` § Maintenance.
+
+Handle the observed state: **absent** → gather from the Phase 1 survey, run the interview, draft and review (1–3 sentences per section); **stale/partial** → present the specific finding ("Section X contradicts current code / is outdated because Y changed"), ask in-place vs rewrite, apply while keeping the Decision Log for historical context; **current** → skip, note in report.
 
 ## Phase 3: Seed CONCEPTS.md
 
