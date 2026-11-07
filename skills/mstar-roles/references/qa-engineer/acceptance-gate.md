@@ -34,14 +34,14 @@ When **`QA mode: acceptance-only`**:
 
 ### Retained check output mapping
 
-Retained check logs are consumed read-only: QA reads the `{SDD_DIR}/evidence/<task-id>.log` the task report cites and maps it to ACs — it never re-runs the cited command (route and citation rule → `mstar-sdd/references/file-handoffs.md` § Retained check output). Map every AC with all columns of the report's AC table (**`references/qa-engineer.md`** § QA Report Landing and Template); for a retained log each column carries:
+Retained check logs are consumed read-only when the task report cites one: QA reads the `{SDD_DIR}/evidence/<task-id>.log` and maps it to ACs — it never re-runs the cited command (route and citation rule → `mstar-sdd/references/file-handoffs.md` § Optional retained output). With no cited log, the report's command + observed result and CI evidence are the mapping input. Map every AC with all columns of the report's AC table (**`references/qa-engineer.md`** § QA Report Landing and Template); for a retained log each column carries:
 
-- **Run/manual reference**: the cited `{SDD_DIR}/evidence/<task-id>.log` path with its verification-round heading — or the manual report/CI citation with provenance.
-- **Original input identity**: the command the report records beside the citation — the basis any reuse comparison uses.
+- **Run/manual reference**: the cited `{SDD_DIR}/evidence/<task-id>.log` path with its verification-round heading; when no log is retained, the task report's command + observed result; manual evidence takes the manual report/CI citation with provenance.
+- **Original input identity**: the command the report records for this evidence — the basis any reuse comparison uses.
 - **Integrity**: the reviewer confirms the log belongs to the cited command, task and range; a clean exit line or unchanged bytes never proves it.
-- **Outcome**: the exit code/result the report states beside the citation; the redirect itself records no exit status.
+- **Outcome**: the exit code/result the report states with the evidence; a redirect records no exit status.
 - **Target applicability and reason**: whether the cited run's inputs still match the current `Review range`, and why; `n/a` when no reuse comparison applies.
-- **Coverage judgment** is reviewer reasoning from the log and code: the log supplies no pass/fail counts and no automatic coverage inference; skips and behavior coverage need raw-log/code review when material.
+- **Coverage judgment** is reviewer reasoning from the evidence and code: the log supplies no pass/fail counts and no automatic coverage inference; skips and behavior coverage need raw evidence/code review when material.
 - Evaluate candidate assumptions, never inherit them: a stated environment allowlist or a lockfile-only dependency rationale is the caller's assumption, not automatic completeness — name the unverified scope as the targeted gap when material.
 - Reuse outcomes: tested bytes equal after a later commit → reuse, no rerun; docs-only change → reuse; a changed shared runtime/config/fixture/dependency input → name the affected gap instead of rerunning everything; failed/incomplete or unknown-scope evidence stays unverified.
 - A pre-fix failing run keeps its observed failure and is never relabeled a pre-feature baseline; the fix needs its own passing evidence for the affected AC.

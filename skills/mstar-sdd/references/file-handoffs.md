@@ -70,9 +70,9 @@ For appended fixes, begin each new block with `## Verification round: <concrete 
 
 Replace every placeholder with actual evidence. Unknown or duplicate modes within the active round, missing/empty/placeholder fields, and bare `Tests: N/A` fail; do not copy the template as a report. `assertSddTddTriple` / `mstar lint <task-report>` validate structure only. PM/QC check the actual changed range, applicability and evidence honesty; the checker cannot establish that commands ran or intercept arbitrary shell execution. For policy changes, record the before/after expectation and triggering scenario alongside the concrete check; no broad model-eval matrix is implied.
 
-### Retained check output
+### Optional retained output
 
-An already-authorized check runs **once**; its raw output is retained in canonical SDD so reviewers read it instead of repeating the command. The developer redirects the check's stdout and stderr to `{SDD_DIR}/evidence/<task-id>.log` and cites that path in the task report as the evidence link — never paraphrased output.
+An already-authorized check runs **once**, and the task report states the command and its observed result — that report record is the default evidence. Retaining the raw output in `{SDD_DIR}/evidence/<task-id>.log` is **optional**: it is worth doing when the Assignment asks for it, or when the raw text is material to the review because it is long, truncated, or disputed. When a log is retained, redirect the check's stdout and stderr into it and cite that path in the task report as the evidence link.
 
 ```bash
 mkdir -p "$SDD_DIR/evidence"
@@ -83,9 +83,9 @@ log="$SDD_DIR/evidence/task-N.log"
 
 - `$SDD_DIR` is the Assignment's absolute SDD dir: write that path literally in place of the variable when the shell does not export it.
 - The first block form creates the log; a fix round appends its own output to the same `{SDD_DIR}/evidence/<task-id>.log` under its `## Verification round: <concrete label>` heading, echoing that heading into the log; it never creates a second log for the same task.
-- The redirect does not record the exit status: state the observed exit code/result beside the citation in the report.
+- The redirect does not record the exit status: the report states the observed exit code/result — beside the citation when a log exists.
 - The log records what ran and what it printed — it is not a pass/fail or coverage seal. Whether the log belongs to the cited command and range (**integrity**) and whether it covers the AC (**coverage judgment**) stay with the reviewer.
-- Reviewers (L2, QC, QA) read the cited log and never re-run the command. Retaining output authorizes no dispatch, test/full-suite/E2E permission, or report-byte seal.
+- Reviewers (L2, QC, QA) read the cited log when one exists and never re-run the command. Retaining output authorizes no dispatch, test/full-suite/E2E permission, or report-byte seal.
 - Reuse an existing log when its covered behavior is unchanged after a later commit; a changed shared runtime/config/fixture/dependency input names the affected gap instead of rerunning everything. A pre-fix failing run keeps its observed failure and is never relabeled a pre-feature baseline.
 - Non-executable documentation/policy never manufactures a log — it uses `Verification mode: scoped-check` above. Historical manual evidence stays manual/unverified: cite it with provenance and reviewer reasoning, never as a retained log.
 - The `mstar sdd exec` entry is unchanged and stays PM-only serialized launch (§ Bound child launch); hosted leaves never use it for their assigned checks.

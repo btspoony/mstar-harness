@@ -132,7 +132,7 @@ The SDD helpers are engine-backed commands under **`mstar sdd`**（引擎 CLI；
 | `mstar sdd review-package` | `BASE HEAD [OUTFILE]` |
 | `mstar sdd check-context` | Action-seam gate against resolved SDD context; arguments and refusal recovery → command `--help` |
 
-Developer check evidence: run the already-authorized check once with its stdout/stderr redirected to `{SDD_DIR}/evidence/<task-id>.log` and cite that path in the task report; reviewers read the log and never re-run the command. Route, citation rule and role boundaries → **`references/file-handoffs.md`** § Verification evidence. `mstar sdd exec` stays PM-only.
+Developer check evidence: record the already-authorized check's command and observed result in the task report — that is the default. Retaining its raw output in `{SDD_DIR}/evidence/<task-id>.log` is optional, worth doing when the Assignment asks or the output is material to review (long, truncated, disputed); cite the path when you retain one. Reviewers read what the report records and never re-run the command. Route, citation rule and role boundaries → **`references/file-handoffs.md`** § Verification evidence. `mstar sdd exec` stays PM-only.
 
 ## References
 

@@ -53,7 +53,7 @@ Dispatch:
 
     1. Implement exactly what the brief specifies
     2. Before creating or keeping tests, apply `mstar-coding-behavior` § Evidence: keep product-behaviour assertions and fails-first regression defences; delete incidental / source-shape / wiring / environment-constant assertions — deleted, never renamed or re-pinned. Report the non-product-assertion class and conclude "delete, or replace with a product-behaviour assertion". PR #280 counter-examples: manifest parity guard, platform build-byte pins, raw-SQLite fixture, test-only header regression; judge assertions against production-owner contracts, not names.
-    3. Run only the assigned affected unit tests; for non-executable docs/policy, use the scoped-check evidence per file-handoffs.md § Verification evidence. Run an authorized check once with stdout/stderr redirected to `{SDD_DIR}/evidence/<task-id>.log` and cite that path (route → file-handoffs.md § Retained check output)
+    3. Run only the assigned affected unit tests; for non-executable docs/policy, use the scoped-check evidence per file-handoffs.md § Verification evidence. Record the command and its observed result in the report; retain the raw output in `{SDD_DIR}/evidence/<task-id>.log` only when the Assignment asks or the output is material to review (route → file-handoffs.md § Optional retained output)
     4. Commit on Working branch
        Use the configured identity for this task's commit; missing/failing identity is Blocked, never fabricate or use `-c` identity overrides → `mstar-roles/references/_shared/leaf-executor-core.md` § Git NEVER (repo writes).
     5. Self-review only the task diff and directly affected contracts
@@ -67,7 +67,7 @@ Dispatch:
 
     - Status: DONE | DONE_WITH_CONCERNS | NEEDS_CONTEXT | BLOCKED
     - Implemented / attempted
-    - Verification: affected test files, command, actual output (red/green for executable bug fixes), OR the complete scoped-check block from file-handoffs.md for non-executable docs/policy; cite the retained `{SDD_DIR}/evidence/<task-id>.log` path with the observed exit code
+    - Verification: affected test files, command, actual output (red/green for executable bug fixes), OR the complete scoped-check block from file-handoffs.md for non-executable docs/policy; state the observed exit code, and when a log is retained cite its `{SDD_DIR}/evidence/<task-id>.log` path
     - Reused evidence: original range and reason it remains applicable
     - Files changed
     - Residuals disclosure: open R# list — id + severity + tracking location (`N/A — none open` when none); duty → `mstar-artifacts` Findings cleanup modes
