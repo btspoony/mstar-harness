@@ -94,6 +94,7 @@ import { execFileSync } from "node:child_process";
 import { readdirSync, readFileSync, statSync, type Dirent } from "node:fs";
 import { join, relative } from "node:path";
 import { getCommandDefinitions } from "../packages/commands/src/definitions.ts";
+import { checkAdrTree, summarizeAdrCheck, type AdrCheckResult } from "./adr-check.ts";
 import { commentMask } from "./ascii-literal-utils.ts";
 import { checkMarkdownLinks } from "./markdown-links.ts";
 import { checkParagraphAnchoring, type ParagraphAnchoringResult } from "./markdown-wrap.ts";
@@ -1484,6 +1485,20 @@ if (import.meta.main) {
   }
 
 /* ------------------------------------------------------------------ */
+/* Guard 12: ADR tree format (docs/adr/ contract) */
+/* ------------------------------------------------------------------ */
+
+  let adr: AdrCheckResult = { records: 0, failures: [] };
+  try {
+    adr = checkAdrTree(root);
+  } catch (error) {
+    fail(`Guard 12 ADR format: ${(error as Error).message}`);
+  }
+  for (const failure of adr.failures) {
+    fail(`Guard 12 ${failure.code} ${failure.file}: ${failure.message} - ${failure.recovery}`);
+  }
+
+/* ------------------------------------------------------------------ */
 
  // Guard 4 footer fragment: report each check's own verdict + count so a
  // load-order-only failure is never misstated as a combined/OK status.
@@ -1507,6 +1522,8 @@ if (import.meta.main) {
 
   const paragraphAnchoringSummary = `Guard 11 paragraph anchoring ${paragraphAnchoring.filesChecked} files checked, ${paragraphAnchoring.violations.length} multi-line paragraphs (advisory; new and modified paragraphs must be single-line)`;
 
+  const adrSummary = summarizeAdrCheck(adr);
+
   reportOversizedTests();
   reportRuleDuplication(ruleDuplication);
   reportParagraphAnchoring(paragraphAnchoring);
@@ -1514,12 +1531,12 @@ if (import.meta.main) {
     console.error(`drift-lint: ${failures.length} violation(s) found\n`);
     for (const f of failures) console.error(`  ✗ ${f}`);
     console.error(
-      `\nchecked ${calloutsChecked} Engine-check callouts (${cliCitationsChecked} CLI citations prefix-checked against ${binNames.length} declared bins; ${useCliScan.filesScanned} use-cli skill files with ${useCliScan.cliCitationsChecked} full-text citations) against ${engineExports.size} engine exports and ${cliCommands.size} CLI commands; ${categoryTokensChecked} audit category tokens; README bilingual pairing ${bilingualStatus}; ${ephemeralFilesScanned} skill files (${ephemeralCitationsFound} ephemeral citations); ${rolesSummary}; ${fiveQuestion.checked} runtime mstar-* skills pass five-question lint (${fiveQuestion.failures.length} violations); provenance scan ${provenance.filesScanned} repo text files (${provenance.citationsFound} provenance citations); ${markdownLinksSummary}; ${skillBudgetsSummary}; ${ruleDuplicationSummary}; ${paragraphAnchoringSummary}`,
+      `\nchecked ${calloutsChecked} Engine-check callouts (${cliCitationsChecked} CLI citations prefix-checked against ${binNames.length} declared bins; ${useCliScan.filesScanned} use-cli skill files with ${useCliScan.cliCitationsChecked} full-text citations) against ${engineExports.size} engine exports and ${cliCommands.size} CLI commands; ${categoryTokensChecked} audit category tokens; README bilingual pairing ${bilingualStatus}; ${ephemeralFilesScanned} skill files (${ephemeralCitationsFound} ephemeral citations); ${rolesSummary}; ${fiveQuestion.checked} runtime mstar-* skills pass five-question lint (${fiveQuestion.failures.length} violations); provenance scan ${provenance.filesScanned} repo text files (${provenance.citationsFound} provenance citations); ${markdownLinksSummary}; ${skillBudgetsSummary}; ${ruleDuplicationSummary}; ${paragraphAnchoringSummary}; ${adrSummary}`,
     );
     process.exit(1);
   }
 
   console.log(
-    `drift-lint: OK — ${calloutsChecked} Engine-check callouts reference real exports (${engineExports.size}) and CLI commands (${cliCommands.size}); ${cliCitationsChecked} CLI citations prefix-checked against ${binNames.length} declared bins (${useCliScan.filesScanned} use-cli skill files, ${useCliScan.cliCitationsChecked} full-text citations); engine spec citations resolve; ${categoryTokensChecked} audit category tokens match AUDIT_CATEGORIES; README bilingual pairing ${bilingualStatus}; ${ephemeralFilesScanned} skill files clean of ephemeral citations; ${rolesSummary}; ${fiveQuestion.checked} runtime mstar-* skills pass five-question lint (${fiveQuestion.failures.length} violations); provenance scan ${provenance.filesScanned} repo text files (${provenance.citationsFound} provenance citations); ${markdownLinksSummary}; ${skillBudgetsSummary}; ${ruleDuplicationSummary}; ${paragraphAnchoringSummary}`,
+    `drift-lint: OK — ${calloutsChecked} Engine-check callouts reference real exports (${engineExports.size}) and CLI commands (${cliCommands.size}); ${cliCitationsChecked} CLI citations prefix-checked against ${binNames.length} declared bins (${useCliScan.filesScanned} use-cli skill files, ${useCliScan.cliCitationsChecked} full-text citations); engine spec citations resolve; ${categoryTokensChecked} audit category tokens match AUDIT_CATEGORIES; README bilingual pairing ${bilingualStatus}; ${ephemeralFilesScanned} skill files clean of ephemeral citations; ${rolesSummary}; ${fiveQuestion.checked} runtime mstar-* skills pass five-question lint (${fiveQuestion.failures.length} violations); provenance scan ${provenance.filesScanned} repo text files (${provenance.citationsFound} provenance citations); ${markdownLinksSummary}; ${skillBudgetsSummary}; ${ruleDuplicationSummary}; ${paragraphAnchoringSummary}; ${adrSummary}`,
   );
 }

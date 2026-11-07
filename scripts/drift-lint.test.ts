@@ -37,6 +37,9 @@
  * - readDeclaredBins (F-S2) — Guard 1's manifest read is guard-or-clear:
  * missing / corrupt / bin-less manifests each return one explicit
  * failure row (never a silent skip that would flood every citation).
+ * - Guard 12 (`scripts/adr-check.ts`) footer fragment — a real walk of a temp
+ * ADR tree yields the exact `Guard 12 ADR format N records, M failures` line;
+ * the per-code semantics are pinned in `scripts/adr-check.test.ts`.
  */
 import { execFileSync } from "node:child_process";
 import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
@@ -44,6 +47,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, test } from "bun:test";
 import { AUDIT_CATEGORIES } from "../packages/engine/src/index.ts";
+import { checkAdrTree, summarizeAdrCheck } from "./adr-check.ts";
 import {
   AUDIT_CATEGORY_DOC,
   buildCanonicalCommandInventory,
@@ -1314,6 +1318,43 @@ describe("checkProvenanceScan — Guard 7 repo text-face provenance scan", () =>
         { file: "packages/sample/test/over.test.ts", lines: 2001 },
         { file: "packages/dsh/tests/over.spec.tsx", lines: 2001 },
       ]);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+});
+
+describe("Guard 12 — ADR format footer summary", () => {
+  test("a real walk of a temp ADR tree yields the exact footer fragment", () => {
+    const dir = mkdtempSync(join(tmpdir(), "drift-adr-"));
+    try {
+      mkdirSync(join(dir, "docs/adr/implemented/architecture"), { recursive: true });
+      writeFileSync(
+        join(dir, "docs/adr/implemented/architecture/2026-01-01-example.md"),
+        [
+          "# ADR: Example record",
+          "",
+          "Status: implemented — accepted for the sample",
+          "",
+          "## Problem",
+          "",
+          "p",
+          "",
+          "## Decision",
+          "",
+          "d",
+          "",
+          "## Alternatives considered",
+          "",
+          "a",
+          "",
+          "## Consequences",
+          "",
+          "c",
+          "",
+        ].join("\n"),
+      );
+      expect(summarizeAdrCheck(checkAdrTree(dir))).toBe("Guard 12 ADR format 1 records, 0 failures");
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
